@@ -1,0 +1,13 @@
+[project]
+name = "simple-sailing-game"
+version = "0.1.0"
+description = "Minimal 2D top-down sailing prototype"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pygame>=2.5.0",
+    "pymunk>=6.6.0",
+]
+
+[dependency-groups]
+dev = []
