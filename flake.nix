@@ -8,6 +8,7 @@
 		pkgs = import nixpkgs { system = "x86_64-linux"; };
 	in {
 		devShells.x86_64-linux.default = pkgs.mkShell {
+			LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:${pkgs.zlib}/lib:${pkgs.stdenv.cc.cc.lib}/lib";
 			packages = [
 				# Python + tooling
 				pkgs.python314
