@@ -8,6 +8,8 @@ import pymunk
 WIDTH, HEIGHT = 1280, 720
 PIXELS_PER_METER = 60
 FLOW_PIXELS_PER_METER_SECOND = 20
+FORCE_PIXELS_PER_NEWTON = 0.35
+INTENT_VECTOR_LENGTH_PX = 100
 DT_SECONDS = 1 / 60
 
 AIR_DENSITY_KG_M3 = 1.225  # Dry air at sea level and 15 °C.
@@ -48,6 +50,7 @@ TILLER_LENGTH_M = 1
 TARGET_TURN_RATE_RAD_S = math.radians(20)
 HEADING_TO_YAW_RATE_GAIN_PER_S = 1.5
 YAW_RATE_TO_RUDDER_GAIN_S = 1.5
+ANALOG_STICK_DEADZONE = 0.15
 
 MAX_SAIL_ANGLE_RAD = math.radians(90)
 MAX_RUDDER_ANGLE_RAD = math.radians(30)
@@ -74,14 +77,13 @@ class SailingState:
 	sail_angular_velocity_rad_s: float = 0
 	rudder_angle_rad: float = 0
 	rudder_angular_velocity_rad_s: float = 0
-	held_heading_rad: float | None = None
 
 
 @dataclass(frozen=True)
-class SailorIntent:
-	forward: bool = False
-	turn: int = 0
-	stop: bool = False
+class MotionIntent:
+	direction_world_rad: float | None = None
+	throttle: float = 0
+	brake: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,76 @@ class HingeLoad:
 	force_n: pymunk.Vec2d
 	center_local_m: pymunk.Vec2d
 	torque_n_m: float
+
+
+@dataclass(frozen=True)
+class SimulationTelemetry:
+	apparent_wind_m_s: pymunk.Vec2d
+	apparent_water_m_s: pymunk.Vec2d
+	sail_force_n: pymunk.Vec2d
+	keel_force_n: pymunk.Vec2d
+	hull_drag_n: pymunk.Vec2d
+	rudder_force_n: pymunk.Vec2d
+	target_sail_angle_rad: float | None
+	target_rudder_angle_rad: float | None
+
+
+def intent_vector(intent: MotionIntent) -> pymunk.Vec2d:
+	if intent.direction_world_rad is None:
+		return pymunk.Vec2d(0, 0)
+	return pymunk.Vec2d(intent.throttle, 0).rotated(intent.direction_world_rad)
+
+
+def resolve_motion_intent(
+	boat_heading_rad: float,
+	intent: MotionIntent,
+) -> tuple[float | None, int]:
+	if intent.direction_world_rad is None:
+		return None, 0
+	heading_error_rad = math.remainder(
+		intent.direction_world_rad - boat_heading_rad,
+		2 * math.pi,
+	)
+	if abs(heading_error_rad) <= math.pi / 2:
+		return intent.direction_world_rad, 1
+	return math.remainder(intent.direction_world_rad + math.pi, 2 * math.pi), -1
+
+
+def keyboard_motion_intent(
+	boat_heading_rad: float,
+	forward: bool,
+	backward: bool,
+	left: bool,
+	right: bool,
+	brake: bool,
+) -> MotionIntent:
+	if brake:
+		return MotionIntent(boat_heading_rad, brake=True)
+
+	longitudinal = int(forward) - int(backward)
+	turn = int(left) - int(right)
+	motion = pymunk.Vec2d(longitudinal, -turn).rotated(boat_heading_rad)
+	if not motion.length:
+		return MotionIntent()
+	return MotionIntent(motion.angle, min(1, motion.length))
+
+
+def analog_motion_intent(
+	boat_heading_rad: float,
+	stick_x: float,
+	stick_y: float,
+	brake: bool,
+) -> MotionIntent:
+	if brake:
+		return MotionIntent(boat_heading_rad, brake=True)
+
+	magnitude = min(1.0, math.hypot(stick_x, stick_y))
+	if magnitude <= ANALOG_STICK_DEADZONE:
+		return MotionIntent()
+
+	throttle = (magnitude - ANALOG_STICK_DEADZONE) / (1 - ANALOG_STICK_DEADZONE)
+	desired_heading_rad = math.atan2(stick_y, stick_x)
+	return MotionIntent(desired_heading_rad, throttle)
 
 
 def apparent_flow(
@@ -203,23 +275,31 @@ def integrate_hinge(
 	return limited_angle_rad, angular_velocity_rad_s
 
 
-def optimal_sail_angle(boat_angle_rad: float, apparent_wind_m_s: pymunk.Vec2d) -> float:
+def optimal_sail_angle_for_drive(
+	boat_angle_rad: float,
+	apparent_wind_m_s: pymunk.Vec2d,
+	drive_direction: int,
+) -> float:
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 
-	def forward_force(sail_angle_rad: float) -> float:
+	def desired_force(sail_angle_rad: float) -> float:
 		force = force_on_foil(
 			apparent_wind_m_s,
 			boat_angle_rad + sail_angle_rad,
 			AIR_DENSITY_KG_M3,
 			SAIL_AREA_M2,
 		)
-		return force.dot(boat_forward)
+		return force.dot(boat_forward) * drive_direction
 
 	candidates_rad = (
 		math.radians(degrees)
 		for degrees in range(-90, 91, SAIL_TRIM_RESOLUTION_DEG)
 	)
-	return max(candidates_rad, key=forward_force)
+	return max(candidates_rad, key=desired_force)
+
+
+def optimal_sail_angle(boat_angle_rad: float, apparent_wind_m_s: pymunk.Vec2d) -> float:
+	return optimal_sail_angle_for_drive(boat_angle_rad, apparent_wind_m_s, 1)
 
 
 def luffing_sail_angle(boat_angle_rad: float, apparent_wind_m_s: pymunk.Vec2d) -> float:
@@ -232,39 +312,63 @@ def luffing_sail_angle(boat_angle_rad: float, apparent_wind_m_s: pymunk.Vec2d) -
 def intended_actuator_angles(
 	boat_angle_rad: float,
 	boat_angular_velocity_rad_s: float,
-	held_heading_rad: float | None,
-	intent: SailorIntent,
+	intent: MotionIntent,
 	apparent_wind_m_s: pymunk.Vec2d,
-) -> tuple[float | None, float | None, float | None]:
-	controlled = intent.forward or intent.stop or bool(intent.turn)
-	if not controlled:
-		return None, None, None
+	apparent_water_m_s: pymunk.Vec2d,
+) -> tuple[float | None, float | None]:
+	desired_boat_heading_rad, drive_direction = resolve_motion_intent(
+		boat_angle_rad,
+		intent,
+	)
+	if desired_boat_heading_rad is None:
+		return None, None
 
-	if held_heading_rad is None:
-		held_heading_rad = boat_angle_rad
-	if intent.turn:
-		held_heading_rad = boat_angle_rad
-		target_yaw_rate_rad_s = -intent.turn * TARGET_TURN_RATE_RAD_S
-	else:
-		heading_error_rad = math.remainder(
-			held_heading_rad - boat_angle_rad,
-			2 * math.pi,
-		)
-		target_yaw_rate_rad_s = heading_error_rad * HEADING_TO_YAW_RATE_GAIN_PER_S
+	heading_error_rad = math.remainder(
+		desired_boat_heading_rad - boat_angle_rad,
+		2 * math.pi,
+	)
+	maximum_yaw_rate_rad_s = TARGET_TURN_RATE_RAD_S
+	if not intent.brake:
+		maximum_yaw_rate_rad_s *= intent.throttle
+	target_yaw_rate_rad_s = max(
+		-maximum_yaw_rate_rad_s,
+		min(
+			maximum_yaw_rate_rad_s,
+			heading_error_rad * HEADING_TO_YAW_RATE_GAIN_PER_S,
+		),
+	)
 	yaw_rate_error_rad_s = target_yaw_rate_rad_s - boat_angular_velocity_rad_s
+	water_flow_along_boat_m_s = apparent_water_m_s.rotated(-boat_angle_rad).x
+	rudder_direction = (
+		int(water_flow_along_boat_m_s > 0)
+		- int(water_flow_along_boat_m_s < 0)
+	)
 	target_rudder_angle_rad = max(
 		-MAX_RUDDER_ANGLE_RAD,
 		min(
 			MAX_RUDDER_ANGLE_RAD,
-			-yaw_rate_error_rad_s * YAW_RATE_TO_RUDDER_GAIN_S,
+			yaw_rate_error_rad_s * YAW_RATE_TO_RUDDER_GAIN_S * rudder_direction,
 		),
 	)
 
-	if intent.stop:
+	if intent.brake:
 		target_sail_angle_rad = luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
 	else:
-		target_sail_angle_rad = optimal_sail_angle(boat_angle_rad, apparent_wind_m_s)
-	return held_heading_rad, target_sail_angle_rad, target_rudder_angle_rad
+		luffing_angle_rad = luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
+		driving_angle_rad = optimal_sail_angle_for_drive(
+			boat_angle_rad,
+			apparent_wind_m_s,
+			drive_direction,
+		)
+		target_sail_angle_rad = luffing_angle_rad + math.remainder(
+			driving_angle_rad - luffing_angle_rad,
+			math.pi,
+		) * intent.throttle
+	target_sail_angle_rad = max(
+		-MAX_SAIL_ANGLE_RAD,
+		min(MAX_SAIL_ANGLE_RAD, target_sail_angle_rad),
+	)
+	return target_sail_angle_rad, target_rudder_angle_rad
 
 
 def create_simulation() -> SailingState:
@@ -283,9 +387,9 @@ def create_simulation() -> SailingState:
 def step(
 	state: SailingState,
 	environment: Environment,
-	intent: SailorIntent,
+	intent: MotionIntent,
 	dt_seconds: float = DT_SECONDS,
-) -> None:
+) -> SimulationTelemetry:
 	apparent_water_m_s = apparent_flow(
 		environment.true_water_velocity_m_s,
 		state.boat.velocity,
@@ -294,14 +398,12 @@ def step(
 		environment.true_wind_velocity_m_s,
 		state.boat.velocity,
 	)
-	state.held_heading_rad, target_sail_angle_rad, target_rudder_angle_rad = (
-		intended_actuator_angles(
-			state.boat.angle,
-			state.boat.angular_velocity,
-			state.held_heading_rad,
-			intent,
-			apparent_wind_m_s,
-		)
+	target_sail_angle_rad, target_rudder_angle_rad = intended_actuator_angles(
+		state.boat.angle,
+		state.boat.angular_velocity,
+		intent,
+		apparent_wind_m_s,
+		apparent_water_m_s,
 	)
 	sail_load = hinged_foil_load(
 		state.boat,
@@ -394,6 +496,16 @@ def step(
 		MAX_RUDDER_ANGLE_RAD,
 		dt_seconds,
 	)
+	return SimulationTelemetry(
+		apparent_wind_m_s,
+		apparent_water_m_s,
+		sail_load.force_n,
+		keel_force_n,
+		hull_drag_n,
+		rudder_load.force_n,
+		target_sail_angle_rad,
+		target_rudder_angle_rad,
+	)
 
 
 def draw_arrow(
@@ -403,8 +515,11 @@ def draw_arrow(
 	vector: pymunk.Vec2d,
 	color: tuple[int, int, int],
 	label: str,
+	scale: float,
+	unit: str,
+	label_x: int,
 ) -> None:
-	end = start + vector * FLOW_PIXELS_PER_METER_SECOND
+	end = start + vector * scale
 	pygame.draw.circle(screen, color, start, 4)
 	pygame.draw.line(screen, color, start, end, 3)
 	if vector.length:
@@ -416,8 +531,8 @@ def draw_arrow(
 			end - direction * 10 - normal * 5,
 		]
 		pygame.draw.polygon(screen, color, arrowhead)
-	text = font.render(f"{label}: {vector.length:.1f} m/s", True, color)
-	screen.blit(text, (30, start.y - 10))
+	text = font.render(f"{label}: {vector.length:.1f} {unit}", True, color)
+	screen.blit(text, (label_x, start.y - 10))
 
 
 def draw(
@@ -425,6 +540,8 @@ def draw(
 	font: pygame.font.Font,
 	state: SailingState,
 	environment: Environment,
+	intent: MotionIntent,
+	telemetry: SimulationTelemetry,
 ) -> None:
 	center = pymunk.Vec2d(WIDTH / 2, HEIGHT / 2)
 	boat = state.boat
@@ -472,19 +589,12 @@ def draw(
 		4,
 	)
 
-	apparent_wind_m_s = apparent_flow(
-		environment.true_wind_velocity_m_s,
-		boat.velocity,
-	)
-	apparent_water_m_s = apparent_flow(
-		environment.true_water_velocity_m_s,
-		boat.velocity,
-	)
 	flows = (
 		("true wind", environment.true_wind_velocity_m_s, (80, 180, 255)),
-		("apparent wind", apparent_wind_m_s, (220, 220, 255)),
+		("apparent wind", telemetry.apparent_wind_m_s, (220, 220, 255)),
 		("true water", environment.true_water_velocity_m_s, (80, 110, 230)),
-		("apparent water", apparent_water_m_s, (80, 220, 180)),
+		("apparent water", telemetry.apparent_water_m_s, (80, 220, 180)),
+		("boat velocity", boat.velocity, (130, 230, 130)),
 	)
 	for row, (label, vector, color) in enumerate(flows):
 		draw_arrow(
@@ -494,12 +604,60 @@ def draw(
 			vector,
 			color,
 			label,
+			FLOW_PIXELS_PER_METER_SECOND,
+			"m/s",
+			30,
 		)
 
+	forces = (
+		("sail force", telemetry.sail_force_n, (235, 205, 100)),
+		("keel force", telemetry.keel_force_n, (80, 220, 180)),
+		("hull drag", telemetry.hull_drag_n, (180, 150, 120)),
+		("rudder force", telemetry.rudder_force_n, (220, 220, 230)),
+	)
+	for row, (label, vector, color) in enumerate(forces):
+		draw_arrow(
+			screen,
+			font,
+			pymunk.Vec2d(1040, 45 + row * 55),
+			vector,
+			color,
+			label,
+			FORCE_PIXELS_PER_NEWTON,
+			"N",
+			810,
+		)
+
+	intent_direction = intent_vector(intent)
+	draw_arrow(
+		screen,
+		font,
+		center,
+		intent_direction,
+		(240, 100, 220),
+		"intent",
+		INTENT_VECTOR_LENGTH_PX,
+		"throttle",
+		30,
+	)
+
+	control_status = "brake" if intent.brake else "neutral"
+	if intent.direction_world_rad is not None and not intent.brake:
+		_, drive_direction = resolve_motion_intent(boat.angle, intent)
+		drive_name = "drive" if drive_direction > 0 else "backwind"
+		control_status = f"{drive_name} {intent.throttle:.0%}"
+	target_sail = "free"
+	if telemetry.target_sail_angle_rad is not None:
+		target_sail = f"{math.degrees(telemetry.target_sail_angle_rad):+.0f}°"
+	target_rudder = "free"
+	if telemetry.target_rudder_angle_rad is not None:
+		target_rudder = f"{math.degrees(telemetry.target_rudder_angle_rad):+.0f}°"
+
 	status = font.render(
-		f"speed through water {apparent_water_m_s.length:.1f} m/s    "
-		f"sail {math.degrees(state.sail_angle_rad):+.0f}°    "
-		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}°",
+		f"{control_status}    "
+		f"speed through water {telemetry.apparent_water_m_s.length:.1f} m/s    "
+		f"sail {math.degrees(state.sail_angle_rad):+.0f}° target {target_sail}    "
+		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}° target {target_rudder}",
 		True,
 		(220, 220, 230),
 	)
@@ -509,25 +667,54 @@ def draw(
 def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((WIDTH, HEIGHT))
-	pygame.display.set_caption("Sailboat — W go, A/D turn, S stop")
+	pygame.display.set_caption(
+		"Sailboat — WASD motion, Space brake; left stick moves, button 0 brakes"
+	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
+	joystick = None
+	if pygame.joystick.get_count():
+		joystick = pygame.joystick.Joystick(0)
+		joystick.init()
 	running = True
 
 	while running:
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				running = False
+			elif event.type == pygame.JOYDEVICEADDED and joystick is None:
+				joystick = pygame.joystick.Joystick(event.device_index)
+				joystick.init()
+			elif (
+				event.type == pygame.JOYDEVICEREMOVED
+				and joystick is not None
+				and event.instance_id == joystick.get_instance_id()
+			):
+				joystick = None
 
 		keys = pygame.key.get_pressed()
-		intent = SailorIntent(
+		keyboard_intent = keyboard_motion_intent(
+			state.boat.angle,
 			forward=keys[pygame.K_w],
-			turn=int(keys[pygame.K_a]) - int(keys[pygame.K_d]),
-			stop=keys[pygame.K_s],
+			backward=keys[pygame.K_s],
+			left=keys[pygame.K_a],
+			right=keys[pygame.K_d],
+			brake=keys[pygame.K_SPACE],
 		)
-		step(state, DEFAULT_ENVIRONMENT, intent)
-		draw(screen, font, state, DEFAULT_ENVIRONMENT)
+		controller_intent = MotionIntent()
+		if joystick is not None:
+			controller_intent = analog_motion_intent(
+				state.boat.angle,
+				joystick.get_axis(0),
+				joystick.get_axis(1),
+				joystick.get_numbuttons() > 0 and joystick.get_button(0),
+			)
+		intent = controller_intent
+		if controller_intent == MotionIntent():
+			intent = keyboard_intent
+		telemetry = step(state, DEFAULT_ENVIRONMENT, intent)
+		draw(screen, font, state, DEFAULT_ENVIRONMENT, intent, telemetry)
 		pygame.display.flip()
 		clock.tick(round(1 / DT_SECONDS))
 
