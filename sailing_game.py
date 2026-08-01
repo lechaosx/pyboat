@@ -82,7 +82,7 @@ class SailingState:
 @dataclass(frozen=True)
 class MotionIntent:
 	direction_world_rad: float | None = None
-	throttle: float = 0
+	intensity: float = 0
 	brake: bool = False
 
 
@@ -108,7 +108,7 @@ class SimulationTelemetry:
 def intent_vector(intent: MotionIntent) -> pymunk.Vec2d:
 	if intent.direction_world_rad is None:
 		return pymunk.Vec2d(0, 0)
-	return pymunk.Vec2d(intent.throttle, 0).rotated(intent.direction_world_rad)
+	return pymunk.Vec2d(intent.intensity, 0).rotated(intent.direction_world_rad)
 
 
 def resolve_motion_intent(
@@ -158,9 +158,9 @@ def analog_motion_intent(
 	if magnitude <= ANALOG_STICK_DEADZONE:
 		return MotionIntent()
 
-	throttle = (magnitude - ANALOG_STICK_DEADZONE) / (1 - ANALOG_STICK_DEADZONE)
+	intensity = (magnitude - ANALOG_STICK_DEADZONE) / (1 - ANALOG_STICK_DEADZONE)
 	desired_heading_rad = math.atan2(stick_y, stick_x)
-	return MotionIntent(desired_heading_rad, throttle)
+	return MotionIntent(desired_heading_rad, intensity)
 
 
 def apparent_flow(
@@ -247,11 +247,12 @@ def actuator_control_torque(
 	stiffness_n_m_rad: float,
 	damping_n_m_s_rad: float,
 	max_torque_n_m: float,
+	intensity: float = 1,
 ) -> float:
 	torque_n_m = (
 		(target_angle_rad - angle_rad) * stiffness_n_m_rad
 		- angular_velocity_rad_s * damping_n_m_s_rad
-	)
+	) * intensity
 	return max(-max_torque_n_m, min(max_torque_n_m, torque_n_m))
 
 
@@ -328,8 +329,6 @@ def intended_actuator_angles(
 		2 * math.pi,
 	)
 	maximum_yaw_rate_rad_s = TARGET_TURN_RATE_RAD_S
-	if not intent.brake:
-		maximum_yaw_rate_rad_s *= intent.throttle
 	target_yaw_rate_rad_s = max(
 		-maximum_yaw_rate_rad_s,
 		min(
@@ -354,16 +353,11 @@ def intended_actuator_angles(
 	if intent.brake:
 		target_sail_angle_rad = luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
 	else:
-		luffing_angle_rad = luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
-		driving_angle_rad = optimal_sail_angle_for_drive(
+		target_sail_angle_rad = optimal_sail_angle_for_drive(
 			boat_angle_rad,
 			apparent_wind_m_s,
 			drive_direction,
 		)
-		target_sail_angle_rad = luffing_angle_rad + math.remainder(
-			driving_angle_rad - luffing_angle_rad,
-			math.pi,
-		) * intent.throttle
 	target_sail_angle_rad = max(
 		-MAX_SAIL_ANGLE_RAD,
 		min(MAX_SAIL_ANGLE_RAD, target_sail_angle_rad),
@@ -439,6 +433,7 @@ def step(
 	)
 
 	sailor_sail_torque_n_m = 0.0
+	control_intensity = 1 if intent.brake else intent.intensity
 	if target_sail_angle_rad is not None:
 		sailor_sail_torque_n_m = actuator_control_torque(
 			state.sail_angle_rad,
@@ -447,6 +442,7 @@ def step(
 			SAIL_CONTROL_STIFFNESS_N_M_RAD,
 			SAIL_CONTROL_DAMPING_N_M_S_RAD,
 			SAILOR_MAX_SHEET_FORCE_N * SAIL_SHEET_LEVER_ARM_M,
+			control_intensity,
 		)
 	sailor_rudder_torque_n_m = 0.0
 	if target_rudder_angle_rad is not None:
@@ -457,6 +453,7 @@ def step(
 			RUDDER_CONTROL_STIFFNESS_N_M_RAD,
 			RUDDER_CONTROL_DAMPING_N_M_S_RAD,
 			SAILOR_MAX_TILLER_FORCE_N * TILLER_LENGTH_M,
+			control_intensity,
 		)
 
 	state.boat.apply_force_at_local_point(
@@ -637,7 +634,7 @@ def draw(
 		(240, 100, 220),
 		"intent",
 		INTENT_VECTOR_LENGTH_PX,
-		"throttle",
+		"intensity",
 		30,
 	)
 
@@ -645,7 +642,7 @@ def draw(
 	if intent.direction_world_rad is not None and not intent.brake:
 		_, drive_direction = resolve_motion_intent(boat.angle, intent)
 		drive_name = "drive" if drive_direction > 0 else "backwind"
-		control_status = f"{drive_name} {intent.throttle:.0%}"
+		control_status = f"{drive_name} {intent.intensity:.0%}"
 	target_sail = "free"
 	if telemetry.target_sail_angle_rad is not None:
 		target_sail = f"{math.degrees(telemetry.target_sail_angle_rad):+.0f}°"
