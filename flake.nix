@@ -8,7 +8,19 @@
 		pkgs = import nixpkgs { system = "x86_64-linux"; };
 	in {
 		devShells.x86_64-linux.default = pkgs.mkShell {
-			LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:${pkgs.zlib}/lib:${pkgs.stdenv.cc.cc.lib}/lib";
+			LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath [
+				pkgs.zlib
+				pkgs.stdenv.cc.cc.lib
+				pkgs.xorg.libX11
+				pkgs.xorg.libXcursor
+				pkgs.xorg.libXext
+				pkgs.xorg.libXfixes
+				pkgs.xorg.libXrandr
+				pkgs.xorg.libXinerama
+				pkgs.xorg.libXi
+				pkgs.xorg.libXxf86vm
+				pkgs.alsa-lib
+			]}";
 			packages = [
 				# Python + tooling
 				pkgs.python314
@@ -31,6 +43,8 @@
 				# Runtime libs pygame probes for
 				pkgs.xorg.libX11
 				pkgs.xorg.libXcursor
+				pkgs.xorg.libXext
+				pkgs.xorg.libXfixes
 				pkgs.xorg.libXrandr
 				pkgs.xorg.libXinerama
 				pkgs.xorg.libXi

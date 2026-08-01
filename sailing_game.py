@@ -1,148 +1,343 @@
 import math
+from dataclasses import dataclass
+
 import pygame
 import pymunk
 
 
-def lift(angle_of_attack: float) -> float:
-	return math.sin(angle_of_attack * 2)
-
-
-def drag(angle_of_attack: float) -> float:
-	return 1 - math.cos(angle_of_attack * 2)
-
-
-def foil_force(apparent_flow_speed: float, angle_of_attack: float) -> pymunk.vec2d.Vec2d:
-	lift_force_mag = lift(angle_of_attack) * apparent_flow_speed * apparent_flow_speed
-	drag_force_mag = drag(angle_of_attack) * apparent_flow_speed * apparent_flow_speed
-
-	return pymunk.vec2d.Vec2d(drag_force_mag, -lift_force_mag)
-
-
 WIDTH, HEIGHT = 1280, 720
-DT = 1 / 60.0
+PIXELS_PER_METER = 60
+FLOW_PIXELS_PER_METER_SECOND = 20
+DT_SECONDS = 1 / 60
 
-PROPER_WIND = pymunk.vec2d.Vec2d(1, 0)
-PROPER_WATER = pymunk.vec2d.Vec2d(0, 0)
+AIR_DENSITY_KG_M3 = 1.225  # Dry air at sea level and 15 °C.
+WATER_DENSITY_KG_M3 = 1025  # Representative seawater.
 
-SAIL_STRENGTH = 1.0
-KEEL_STRENGTH = 1.0
-HULL_STRENGTH = 0.1
-RUDDER_STRENGTH = 1.0
+# Representative dimensions for a small centerboard dinghy.
+BOAT_MASS_KG = 250
+BOAT_LENGTH_M = 4
+BOAT_BEAM_M = 1.5
+BOAT_BOW_LENGTH_M = 0.7
+SAIL_AREA_M2 = 8
+BOOM_LENGTH_M = 2
+KEEL_AREA_M2 = 0.6
+RUDDER_AREA_M2 = 0.12
+RUDDER_DRAW_LENGTH_M = 0.5
+HULL_REFERENCE_AREA_M2 = 0.3
+HULL_DRAG_COEFFICIENT = 0.08
+FOIL_BASE_DRAG_COEFFICIENT = 0.02
+SAIL_TRIM_RESOLUTION_DEG = 1
 
-RUDDER_ROT_SPEED = math.pi
+RUDDER_RATE_RAD_S = math.radians(60)
+MAX_RUDDER_ANGLE_RAD = math.radians(30)
+RUDDER_POSITION_M = (-1.8, 0)
 
-MAX_RUDDER_ANGLE = math.radians(30)
+
+@dataclass(frozen=True)
+class Environment:
+	true_wind_velocity_m_s: pymunk.Vec2d
+	true_water_velocity_m_s: pymunk.Vec2d
 
 
-pygame.init()
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-clock = pygame.time.Clock()
+DEFAULT_ENVIRONMENT = Environment(
+	true_wind_velocity_m_s=pymunk.Vec2d(6, 0),
+	true_water_velocity_m_s=pymunk.Vec2d(0, 0),
+)
 
-space = pymunk.Space()
 
-mass = 1.0
-size = (60, 20)
-moment = pymunk.moment_for_box(mass, size)
-boat = pymunk.Body(mass, moment)
-boat.angle = 135 * math.pi / 180
+@dataclass
+class SailingState:
+	space: pymunk.Space
+	boat: pymunk.Body
+	sail_angle_rad: float = 0
+	rudder_angle_rad: float = 0
 
-shape = pymunk.Poly.create_box(boat, size)
 
-space.add(boat, shape)
+def apparent_flow(
+	medium_velocity_m_s: pymunk.Vec2d,
+	point_velocity_m_s: pymunk.Vec2d,
+) -> pymunk.Vec2d:
+	return medium_velocity_m_s - point_velocity_m_s
 
-sail_angle = 0.0
-rudder_angle = 0.0
 
-running = True
-while running:
-	for event in pygame.event.get():
-		if event.type == pygame.QUIT:
-			running = False
+def lift_coefficient(angle_of_attack_rad: float) -> float:
+	"""Approximate a symmetric flat plate, including loss of lift past 45 degrees."""
+	return math.sin(2 * angle_of_attack_rad)
 
-	keys = pygame.key.get_pressed()
 
-	if keys[pygame.K_a]:
-		rudder_angle += RUDDER_ROT_SPEED * DT
-	elif keys[pygame.K_d]:
-		rudder_angle -= RUDDER_ROT_SPEED * DT
+def drag_coefficient(angle_of_attack_rad: float) -> float:
+	"""Combine a small profile drag with flat-plate pressure drag."""
+	return FOIL_BASE_DRAG_COEFFICIENT + 1 - math.cos(2 * angle_of_attack_rad)
+
+
+def force_on_foil(
+	apparent_flow_m_s: pymunk.Vec2d,
+	foil_angle_rad: float,
+	fluid_density_kg_m3: float,
+	area_m2: float,
+) -> pymunk.Vec2d:
+	angle_of_attack_rad = foil_angle_rad - math.pi - apparent_flow_m_s.angle
+	dynamic_pressure_pa = 0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length**2
+	lift_n = dynamic_pressure_pa * area_m2 * lift_coefficient(angle_of_attack_rad)
+	drag_n = dynamic_pressure_pa * area_m2 * drag_coefficient(angle_of_attack_rad)
+	return pymunk.Vec2d(drag_n, -lift_n).rotated(apparent_flow_m_s.angle)
+
+
+def drag_force(
+	apparent_flow_m_s: pymunk.Vec2d,
+	fluid_density_kg_m3: float,
+	reference_area_m2: float,
+	coefficient: float,
+) -> pymunk.Vec2d:
+	return (
+		apparent_flow_m_s
+		* apparent_flow_m_s.length
+		* 0.5
+		* fluid_density_kg_m3
+		* reference_area_m2
+		* coefficient
+	)
+
+
+def recentered_rudder_angle(angle_rad: float, direction: int, dt_seconds: float) -> float:
+	if direction:
+		angle_rad += direction * RUDDER_RATE_RAD_S * dt_seconds
 	else:
-		rudder_angle *= 0.9  # relax to center
-
-	rudder_angle = max(-MAX_RUDDER_ANGLE, min(MAX_RUDDER_ANGLE, rudder_angle))
-
-	apparent_water = PROPER_WATER - boat.velocity
-	apparent_wind = PROPER_WIND - boat.velocity
-
-	def compute_force(apparent_flow, angle_offset, strength):
-		aoa = boat.angle + angle_offset - math.pi - apparent_flow.angle
-		return foil_force(apparent_flow.length, aoa).rotated(apparent_flow.angle) * strength
-
-	if keys[pygame.K_w]:
-		def sail_effort_at_angle(foil_angle):
-			s_force = compute_force(apparent_wind, foil_angle, SAIL_STRENGTH)
-			k_force = compute_force(apparent_water, 0, KEEL_STRENGTH)
-			h_force = compute_force(apparent_water, 0, HULL_STRENGTH)
-			total_force = s_force + k_force + h_force
-			boat_forward = pymunk.vec2d.Vec2d(1, 0).rotated(boat.angle)
-			return total_force.dot(boat_forward)
-
-		sail_angle = max((i * math.pi / 180 for i in range(-90, 91)), key=sail_effort_at_angle)
-
-	sail_force = compute_force(apparent_wind, sail_angle, SAIL_STRENGTH)
-	keel_force = compute_force(apparent_water, 0, KEEL_STRENGTH)
-	hull_force = compute_force(apparent_water, 0, HULL_STRENGTH)
-
-	boat.apply_force_at_local_point((sail_force + keel_force + hull_force).rotated(-boat.angle), (0, 0))
-
-	rudder_force = compute_force(apparent_water, rudder_angle, RUDDER_STRENGTH)
-
-	boat.apply_force_at_local_point(rudder_force.rotated(-boat.angle), (-30, 0))
-
-	space.step(DT)
+		recenter_rad = min(abs(angle_rad), RUDDER_RATE_RAD_S * dt_seconds)
+		angle_rad -= math.copysign(recenter_rad, angle_rad)
+	return max(-MAX_RUDDER_ANGLE_RAD, min(MAX_RUDDER_ANGLE_RAD, angle_rad))
 
 
+def optimal_sail_angle(boat_angle_rad: float, apparent_wind_m_s: pymunk.Vec2d) -> float:
+	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
+
+	def forward_force(sail_angle_rad: float) -> float:
+		force = force_on_foil(
+			apparent_wind_m_s,
+			boat_angle_rad + sail_angle_rad,
+			AIR_DENSITY_KG_M3,
+			SAIL_AREA_M2,
+		)
+		return force.dot(boat_forward)
+
+	candidates_rad = (
+		math.radians(degrees)
+		for degrees in range(-90, 91, SAIL_TRIM_RESOLUTION_DEG)
+	)
+	return max(candidates_rad, key=forward_force)
+
+
+def create_simulation() -> SailingState:
+	space = pymunk.Space()
+	moment_kg_m2 = pymunk.moment_for_box(
+		BOAT_MASS_KG,
+		(BOAT_LENGTH_M, BOAT_BEAM_M),
+	)
+	boat = pymunk.Body(BOAT_MASS_KG, moment_kg_m2)
+	boat.angle = math.radians(135)
+	shape = pymunk.Poly.create_box(boat, (BOAT_LENGTH_M, BOAT_BEAM_M))
+	space.add(boat, shape)
+	return SailingState(space, boat)
+
+
+def step(
+	state: SailingState,
+	environment: Environment,
+	trim: bool,
+	rudder_direction: int,
+	dt_seconds: float = DT_SECONDS,
+) -> None:
+	state.rudder_angle_rad = recentered_rudder_angle(
+		state.rudder_angle_rad,
+		rudder_direction,
+		dt_seconds,
+	)
+
+	apparent_water_m_s = apparent_flow(
+		environment.true_water_velocity_m_s,
+		state.boat.velocity,
+	)
+	apparent_wind_m_s = apparent_flow(
+		environment.true_wind_velocity_m_s,
+		state.boat.velocity,
+	)
+	if trim:
+		state.sail_angle_rad = optimal_sail_angle(state.boat.angle, apparent_wind_m_s)
+
+	sail_force_n = force_on_foil(
+		apparent_wind_m_s,
+		state.boat.angle + state.sail_angle_rad,
+		AIR_DENSITY_KG_M3,
+		SAIL_AREA_M2,
+	)
+	keel_force_n = force_on_foil(
+		apparent_water_m_s,
+		state.boat.angle,
+		WATER_DENSITY_KG_M3,
+		KEEL_AREA_M2,
+	)
+	hull_drag_n = drag_force(
+		apparent_water_m_s,
+		WATER_DENSITY_KG_M3,
+		HULL_REFERENCE_AREA_M2,
+		HULL_DRAG_COEFFICIENT,
+	)
+	rudder_velocity_m_s = state.boat.velocity_at_local_point(RUDDER_POSITION_M)
+	apparent_rudder_water_m_s = apparent_flow(
+		environment.true_water_velocity_m_s,
+		rudder_velocity_m_s,
+	)
+	rudder_force_n = force_on_foil(
+		apparent_rudder_water_m_s,
+		state.boat.angle + state.rudder_angle_rad,
+		WATER_DENSITY_KG_M3,
+		RUDDER_AREA_M2,
+	)
+
+	state.boat.apply_force_at_world_point(
+		sail_force_n + keel_force_n + hull_drag_n,
+		state.boat.position,
+	)
+	state.boat.apply_force_at_local_point(
+		rudder_force_n.rotated(-state.boat.angle),
+		RUDDER_POSITION_M,
+	)
+	state.space.step(dt_seconds)
+
+
+def draw_arrow(
+	screen: pygame.Surface,
+	font: pygame.font.Font,
+	start: pymunk.Vec2d,
+	vector: pymunk.Vec2d,
+	color: tuple[int, int, int],
+	label: str,
+) -> None:
+	end = start + vector * FLOW_PIXELS_PER_METER_SECOND
+	pygame.draw.circle(screen, color, start, 4)
+	pygame.draw.line(screen, color, start, end, 3)
+	if vector.length:
+		direction = vector.normalized()
+		normal = direction.perpendicular()
+		arrowhead = [
+			end,
+			end - direction * 10 + normal * 5,
+			end - direction * 10 - normal * 5,
+		]
+		pygame.draw.polygon(screen, color, arrowhead)
+	text = font.render(f"{label}: {vector.length:.1f} m/s", True, color)
+	screen.blit(text, (30, start.y - 10))
+
+
+def draw(
+	screen: pygame.Surface,
+	font: pygame.font.Font,
+	state: SailingState,
+	environment: Environment,
+) -> None:
+	center = pymunk.Vec2d(WIDTH / 2, HEIGHT / 2)
+	boat = state.boat
 	screen.fill((30, 30, 40))
 
-	center = pymunk.vec2d.Vec2d(WIDTH / 2, HEIGHT / 2)
-	boat_points = [p.rotated(boat.angle) + center for p in shape.get_vertices()]
-	pygame.draw.polygon(screen, (200, 200, 220), boat_points, 2)
+	grid_spacing_px = PIXELS_PER_METER
+	x_offset = -boat.position.x * PIXELS_PER_METER % grid_spacing_px
+	y_offset = -boat.position.y * PIXELS_PER_METER % grid_spacing_px
+	for x in range(round(x_offset), WIDTH, grid_spacing_px):
+		pygame.draw.line(screen, (38, 46, 58), (x, 0), (x, HEIGHT))
+	for y in range(round(y_offset), HEIGHT, grid_spacing_px):
+		pygame.draw.line(screen, (38, 46, 58), (0, y), (WIDTH, y))
 
-	sail_dir_local = pymunk.vec2d.Vec2d(-1, 0).rotated(boat.angle + sail_angle)
-	pygame.draw.line(screen, (200, 200, 220), center, center + sail_dir_local * 40, 2)
+	half_length_px = BOAT_LENGTH_M * PIXELS_PER_METER / 2
+	half_beam_px = BOAT_BEAM_M * PIXELS_PER_METER / 2
+	bow_base_px = (BOAT_LENGTH_M / 2 - BOAT_BOW_LENGTH_M) * PIXELS_PER_METER
+	hull_points = [
+		pymunk.Vec2d(half_length_px, 0),
+		pymunk.Vec2d(bow_base_px, -half_beam_px),
+		pymunk.Vec2d(-half_length_px, -half_beam_px),
+		pymunk.Vec2d(-half_length_px, half_beam_px),
+		pymunk.Vec2d(bow_base_px, half_beam_px),
+	]
+	hull_points = [point.rotated(boat.angle) + center for point in hull_points]
+	pygame.draw.polygon(screen, (205, 205, 220), hull_points, 3)
 
-	# Rudder (visual) - relative to boat
-	rudder_pos_local = pymunk.vec2d.Vec2d(-30, 0).rotated(boat.angle) + center
-	rudder_dir_local = pymunk.vec2d.Vec2d(-1, 0).rotated(boat.angle + rudder_angle)
-	pygame.draw.line(screen, (200, 200, 220), rudder_pos_local, rudder_pos_local + rudder_dir_local * 20, 2)
+	sail_direction = pymunk.Vec2d(-1, 0).rotated(boat.angle + state.sail_angle_rad)
+	pygame.draw.line(
+		screen,
+		(235, 205, 100),
+		center,
+		center + sail_direction * BOOM_LENGTH_M * PIXELS_PER_METER,
+		4,
+	)
+	rudder_position = (
+		pymunk.Vec2d(*RUDDER_POSITION_M).rotated(boat.angle) * PIXELS_PER_METER
+		+ center
+	)
+	rudder_direction = pymunk.Vec2d(-1, 0).rotated(boat.angle + state.rudder_angle_rad)
+	pygame.draw.line(
+		screen,
+		(220, 220, 230),
+		rudder_position,
+		rudder_position + rudder_direction * RUDDER_DRAW_LENGTH_M * PIXELS_PER_METER,
+		4,
+	)
 
-	# Velocit (visual)
-	velocity_scale = 50.0
+	apparent_wind_m_s = apparent_flow(
+		environment.true_wind_velocity_m_s,
+		boat.velocity,
+	)
+	apparent_water_m_s = apparent_flow(
+		environment.true_water_velocity_m_s,
+		boat.velocity,
+	)
+	flows = (
+		("true wind", environment.true_wind_velocity_m_s, (80, 180, 255)),
+		("apparent wind", apparent_wind_m_s, (220, 220, 255)),
+		("true water", environment.true_water_velocity_m_s, (80, 110, 230)),
+		("apparent water", apparent_water_m_s, (80, 220, 180)),
+	)
+	for row, (label, vector, color) in enumerate(flows):
+		draw_arrow(
+			screen,
+			font,
+			pymunk.Vec2d(240, 45 + row * 55),
+			vector,
+			color,
+			label,
+		)
 
-	wind_indicator_pos = pymunk.vec2d.Vec2d(80, 80)
-	pygame.draw.line(screen, (100, 200, 255), wind_indicator_pos, wind_indicator_pos + PROPER_WIND * velocity_scale, 1)
-	pygame.draw.circle(screen, (100, 200, 255), wind_indicator_pos, 5)
-
-	apparent_wind_indicator_pos = center + pymunk.vec2d.Vec2d(-80, 80)
-	apparent_water_indicator_pos = center + pymunk.vec2d.Vec2d(80, 80)
-	pygame.draw.line(screen, (255, 255, 255), apparent_wind_indicator_pos, apparent_wind_indicator_pos + apparent_wind * velocity_scale, 2)
-	pygame.draw.circle(screen, (255, 255, 255), apparent_wind_indicator_pos, 5)
-	pygame.draw.line(screen, (50, 50, 255), apparent_water_indicator_pos, apparent_water_indicator_pos + apparent_water * velocity_scale, 2)
-	pygame.draw.circle(screen, (50, 50, 255), apparent_water_indicator_pos, 5)
-
-	pygame.draw.line(screen, (100, 255, 100), center, center + boat.velocity * velocity_scale, 1)
-
-	# Forces (visual)
-	force_scale = 50.0
-	pygame.draw.line(screen, (255, 100, 100), center, center + sail_force * force_scale, 2)
-	pygame.draw.line(screen, (100, 255, 100), center, center + keel_force * force_scale, 2)
-	pygame.draw.line(screen, (100, 100, 100), center, center + hull_force * force_scale, 2)
-	pygame.draw.line(screen, (255, 255, 100), center, center + (sail_force + keel_force + hull_force) * force_scale, 4)
-	pygame.draw.line(screen, (100, 100, 255), rudder_pos_local, rudder_pos_local + rudder_force * force_scale, 2)
+	status = font.render(
+		f"speed through water {apparent_water_m_s.length:.1f} m/s    "
+		f"sail {math.degrees(state.sail_angle_rad):+.0f}°    "
+		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}°",
+		True,
+		(220, 220, 230),
+	)
+	screen.blit(status, (30, HEIGHT - 35))
 
 
+def main() -> None:
+	pygame.init()
+	screen = pygame.display.set_mode((WIDTH, HEIGHT))
+	pygame.display.set_caption("Sailboat — hold W to trim, steer with A/D")
+	font = pygame.font.Font(None, 24)
+	clock = pygame.time.Clock()
+	state = create_simulation()
+	running = True
 
-	
-	pygame.display.flip()
-	clock.tick(60)
+	while running:
+		for event in pygame.event.get():
+			if event.type == pygame.QUIT:
+				running = False
 
-pygame.quit()
+		keys = pygame.key.get_pressed()
+		rudder_direction = int(keys[pygame.K_a]) - int(keys[pygame.K_d])
+		step(state, DEFAULT_ENVIRONMENT, keys[pygame.K_w], rudder_direction)
+		draw(screen, font, state, DEFAULT_ENVIRONMENT)
+		pygame.display.flip()
+		clock.tick(round(1 / DT_SECONDS))
+
+	pygame.quit()
+
+
+if __name__ == "__main__":
+	main()
