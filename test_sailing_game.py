@@ -26,11 +26,11 @@ from sailing_game import (
 	draw,
 	force_on_foil,
 	intended_actuator_angles,
+	intent_preference,
 	intent_vector,
 	keyboard_motion_intent,
 	lift_coefficient,
 	optimal_sail_angle,
-	resolve_motion_intent,
 	step,
 )
 
@@ -38,7 +38,6 @@ from sailing_game import (
 def run_simulation(simulation, seconds, keys="w"):
 	for _ in range(round(seconds / DT_SECONDS)):
 		intent = keyboard_motion_intent(
-			simulation.boat.angle,
 			forward="w" in keys,
 			backward="s" in keys,
 			left="a" in keys,
@@ -68,15 +67,20 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
-	def test_intent_vector_contains_direction_and_intensity(self):
-		vector = intent_vector(MotionIntent(math.pi / 2, intensity=0.5))
+	def test_intent_stores_a_local_square_vector(self):
+		intent = MotionIntent(0.5, -0.5)
 
-		self.assertAlmostEqual(vector.x, 0)
+		self.assertEqual(intent.forward, 0.5)
+		self.assertEqual(intent.turn, -0.5)
+
+	def test_visual_intent_vector_preserves_square_components(self):
+		vector = intent_vector(MotionIntent(0.5, 0.5), math.pi / 2)
+
+		self.assertAlmostEqual(vector.x, -0.5)
 		self.assertAlmostEqual(vector.y, 0.5)
 
-	def test_keyboard_turn_points_perpendicular_to_current_heading(self):
+	def test_keyboard_turn_is_a_full_lateral_preference(self):
 		intent = keyboard_motion_intent(
-			boat_heading_rad=1,
 			forward=False,
 			backward=False,
 			left=True,
@@ -84,26 +88,11 @@ class InputAdapterTest(unittest.TestCase):
 			brake=False,
 		)
 
-		self.assertAlmostEqual(intent.direction_world_rad, 1 - math.pi / 2)
-		self.assertEqual(intent.intensity, 1)
+		self.assertEqual(intent, MotionIntent(0, -1))
 		self.assertFalse(intent.brake)
-
-		next_intent = keyboard_motion_intent(
-			boat_heading_rad=0.5,
-			forward=False,
-			backward=False,
-			left=True,
-			right=False,
-			brake=False,
-		)
-		self.assertAlmostEqual(
-			next_intent.direction_world_rad,
-			0.5 - math.pi / 2,
-		)
 
 	def test_keyboard_diagonal_is_a_full_boat_relative_vector(self):
 		intent = keyboard_motion_intent(
-			boat_heading_rad=0.5,
 			forward=True,
 			backward=False,
 			left=True,
@@ -111,20 +100,10 @@ class InputAdapterTest(unittest.TestCase):
 			brake=False,
 		)
 
-		self.assertAlmostEqual(intent.direction_world_rad, 0.5 - math.pi / 4)
-		self.assertEqual(intent.intensity, 1)
+		self.assertEqual(intent, MotionIntent(1, -1))
 
-	def test_keyboard_forward_follows_current_heading(self):
-		keyboard_motion_intent(
-			boat_heading_rad=1,
-			forward=True,
-			backward=False,
-			left=False,
-			right=False,
-			brake=False,
-		)
+	def test_keyboard_forward_is_boat_local(self):
 		intent = keyboard_motion_intent(
-			boat_heading_rad=0.5,
 			forward=True,
 			backward=False,
 			left=False,
@@ -132,11 +111,10 @@ class InputAdapterTest(unittest.TestCase):
 			brake=False,
 		)
 
-		self.assertAlmostEqual(intent.direction_world_rad, 0.5)
+		self.assertEqual(intent, MotionIntent(1, 0))
 
 	def test_keyboard_opposing_motion_and_brake_are_distinct(self):
 		neutral = keyboard_motion_intent(
-			boat_heading_rad=1,
 			forward=False,
 			backward=False,
 			left=False,
@@ -144,7 +122,6 @@ class InputAdapterTest(unittest.TestCase):
 			brake=False,
 		)
 		backwind = keyboard_motion_intent(
-			boat_heading_rad=1,
 			forward=False,
 			backward=True,
 			left=False,
@@ -152,7 +129,6 @@ class InputAdapterTest(unittest.TestCase):
 			brake=False,
 		)
 		braking = keyboard_motion_intent(
-			boat_heading_rad=1,
 			forward=False,
 			backward=False,
 			left=False,
@@ -160,7 +136,6 @@ class InputAdapterTest(unittest.TestCase):
 			brake=True,
 		)
 		cancelled = keyboard_motion_intent(
-			boat_heading_rad=1,
 			forward=True,
 			backward=True,
 			left=False,
@@ -169,68 +144,60 @@ class InputAdapterTest(unittest.TestCase):
 		)
 
 		self.assertEqual(neutral, MotionIntent())
-		self.assertIsNone(neutral.direction_world_rad)
-		self.assertEqual(backwind.intensity, 1)
-		self.assertAlmostEqual(
-			abs(math.remainder(backwind.direction_world_rad - 1, 2 * math.pi)),
-			math.pi,
-		)
+		self.assertEqual(backwind, MotionIntent(-1, 0))
 		self.assertFalse(backwind.brake)
-		self.assertTrue(braking.brake)
-		self.assertEqual(braking.direction_world_rad, 1)
+		self.assertEqual(braking, MotionIntent(1, 0, brake=True))
 		self.assertEqual(cancelled, MotionIntent())
 
-	def test_analog_stick_uses_world_direction_and_amplitude(self):
+	def test_analog_stick_rotates_world_direction_into_boat_coordinates(self):
 		forward = analog_motion_intent(
-			boat_heading_rad=1,
+			boat_heading_rad=math.pi / 2,
 			stick_x=0,
-			stick_y=-1,
+			stick_y=1,
 			brake=False,
 		)
-		left = analog_motion_intent(
-			boat_heading_rad=1,
-			stick_x=-1,
-			stick_y=0,
+
+		self.assertEqual(forward, MotionIntent(1, 0))
+
+	def test_analog_stick_projects_radius_onto_local_square(self):
+		diagonal = 1 / math.sqrt(2)
+		full = analog_motion_intent(
+			boat_heading_rad=0,
+			stick_x=diagonal,
+			stick_y=diagonal,
+			brake=False,
+		)
+		half = analog_motion_intent(
+			boat_heading_rad=0,
+			stick_x=diagonal / 2,
+			stick_y=diagonal / 2,
 			brake=False,
 		)
 		neutral = analog_motion_intent(
-			boat_heading_rad=1,
+			boat_heading_rad=0,
 			stick_x=ANALOG_STICK_DEADZONE / 2,
 			stick_y=0,
 			brake=False,
 		)
 
-		self.assertAlmostEqual(forward.direction_world_rad, -math.pi / 2)
-		self.assertEqual(forward.intensity, 1)
-		self.assertAlmostEqual(
-			abs(left.direction_world_rad),
-			math.pi,
-		)
-		self.assertEqual(left.intensity, 1)
+		self.assertEqual(full, MotionIntent(1, 1))
+		self.assertAlmostEqual(half.forward, 0.5)
+		self.assertAlmostEqual(half.turn, 0.5)
 		self.assertEqual(neutral, MotionIntent())
 
 
 class SailingSimulationTest(unittest.TestCase):
-	def test_rearward_motion_intent_keeps_bow_forward_and_backwinds(self):
-		boat_heading_rad = 1
-		intent = MotionIntent(
-			math.remainder(boat_heading_rad + math.pi, 2 * math.pi),
-			intensity=1,
-		)
+	def test_partial_square_intent_resolves_to_full_preference(self):
+		preference = intent_preference(MotionIntent(-0.5, 0))
 
-		desired_boat_heading_rad, drive_direction = resolve_motion_intent(
-			boat_heading_rad,
-			intent,
-		)
-
-		self.assertAlmostEqual(desired_boat_heading_rad, boat_heading_rad)
-		self.assertEqual(drive_direction, -1)
+		self.assertAlmostEqual(preference.x, -1)
+		self.assertAlmostEqual(preference.y, 0)
 
 	def test_rearward_intent_produces_sternway_when_in_irons(self):
 		simulation = create_simulation()
 		simulation.boat.angle = math.pi
 		initial_forward = pymunk.Vec2d(-1, 0)
-		intent = MotionIntent(direction_world_rad=0, intensity=1)
+		intent = MotionIntent(-1, 0)
 
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 		self.assertGreater(abs(telemetry.target_sail_angle_rad), math.radians(80))
@@ -244,7 +211,7 @@ class SailingSimulationTest(unittest.TestCase):
 
 	def test_draw_renders_intent_and_telemetry(self):
 		simulation = create_simulation()
-		intent = MotionIntent(simulation.boat.angle, intensity=1)
+		intent = MotionIntent(1, 0)
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 		pygame.font.init()
 		screen = pygame.Surface((1280, 720))
@@ -262,7 +229,7 @@ class SailingSimulationTest(unittest.TestCase):
 
 	def test_step_returns_force_and_flow_telemetry(self):
 		simulation = create_simulation()
-		intent = MotionIntent(simulation.boat.angle, intensity=1)
+		intent = MotionIntent(1, 0)
 
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 
@@ -274,8 +241,8 @@ class SailingSimulationTest(unittest.TestCase):
 		boat_angle_rad = 1
 		apparent_wind = pymunk.Vec2d(6, 0)
 		apparent_water = pymunk.Vec2d(-1, 0).rotated(boat_angle_rad)
-		partial_intent = MotionIntent(boat_angle_rad + 0.2, intensity=0.5)
-		full_intent = MotionIntent(boat_angle_rad + 0.2, intensity=1)
+		partial_intent = MotionIntent(0.5, 0.25)
+		full_intent = MotionIntent(1, 0.5)
 
 		partial_targets = intended_actuator_angles(
 			boat_angle_rad,
@@ -293,6 +260,108 @@ class SailingSimulationTest(unittest.TestCase):
 		)
 
 		self.assertEqual(partial_targets, full_targets)
+
+	def test_lateral_intent_uses_sail_for_yaw_without_backwinding(self):
+		boat_angle_rad = 1
+		apparent_wind = pymunk.Vec2d(6, 0)
+		apparent_water = pymunk.Vec2d(-2, 0).rotated(boat_angle_rad)
+		powered_sail_angle_rad, _ = intended_actuator_angles(
+			boat_angle_rad,
+			boat_angular_velocity_rad_s=0,
+			intent=MotionIntent(1, -1),
+			apparent_wind_m_s=apparent_wind,
+			apparent_water_m_s=apparent_water,
+		)
+		sharp_sail_angle_rad, _ = intended_actuator_angles(
+			boat_angle_rad,
+			boat_angular_velocity_rad_s=0,
+			intent=MotionIntent(0, -1),
+			apparent_wind_m_s=apparent_wind,
+			apparent_water_m_s=apparent_water,
+		)
+
+		sharp_sail_force_n = force_on_foil(
+			apparent_wind,
+			boat_angle_rad + sharp_sail_angle_rad,
+			AIR_DENSITY_KG_M3,
+			area_m2=1,
+		)
+		boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
+		self.assertNotEqual(sharp_sail_angle_rad, powered_sail_angle_rad)
+		self.assertGreaterEqual(sharp_sail_force_n.dot(boat_forward), 0)
+
+	def test_rear_diagonal_intent_permits_backwinding(self):
+		boat_angle_rad = 1
+		apparent_wind = pymunk.Vec2d(6, 0)
+		diagonal_sail_angle_rad, _ = intended_actuator_angles(
+			boat_angle_rad,
+			boat_angular_velocity_rad_s=0,
+			intent=MotionIntent(-1, -1),
+			apparent_wind_m_s=apparent_wind,
+			apparent_water_m_s=pymunk.Vec2d(-2, 0).rotated(boat_angle_rad),
+		)
+
+		boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
+		diagonal_force_n = force_on_foil(
+			apparent_wind,
+			boat_angle_rad + diagonal_sail_angle_rad,
+			AIR_DENSITY_KG_M3,
+			area_m2=1,
+		).dot(boat_forward)
+		self.assertLess(diagonal_force_n, 0)
+
+	def test_keyboard_turn_modes_trade_speed_for_tighter_paths(self):
+		def average_turn_radius(keys: str) -> float:
+			simulation = create_simulation()
+			simulation.boat.velocity = pymunk.Vec2d(2, 0).rotated(
+				simulation.boat.angle
+			)
+			initial_angle_rad = simulation.boat.angle
+			previous_position = simulation.boat.position
+			distance_m = 0.0
+			for _ in range(round(5 / DT_SECONDS)):
+				intent = keyboard_motion_intent(
+					forward="w" in keys,
+					backward="s" in keys,
+					left="a" in keys,
+					right="d" in keys,
+					brake=False,
+				)
+				step(simulation, DEFAULT_ENVIRONMENT, intent)
+				distance_m += (simulation.boat.position - previous_position).length
+				previous_position = simulation.boat.position
+			turn_rad = abs(simulation.boat.angle - initial_angle_rad)
+			return distance_m / turn_rad
+
+		for turn_key in ("a", "d"):
+			with self.subTest(turn_key=turn_key):
+				powered_radius_m = average_turn_radius("w" + turn_key)
+				sharp_radius_m = average_turn_radius(turn_key)
+				braking_radius_m = average_turn_radius("s" + turn_key)
+
+				self.assertGreater(powered_radius_m, sharp_radius_m)
+				self.assertGreater(sharp_radius_m, braking_radius_m)
+
+	def test_forward_intent_countersteers_existing_rotation(self):
+		boat_angle_rad = 1
+		intent = MotionIntent(1, 0)
+		apparent_water = pymunk.Vec2d(-2, 0).rotated(boat_angle_rad)
+		_, stationary_rudder_angle_rad = intended_actuator_angles(
+			boat_angle_rad,
+			boat_angular_velocity_rad_s=0,
+			intent=intent,
+			apparent_wind_m_s=pymunk.Vec2d(6, 0),
+			apparent_water_m_s=apparent_water,
+		)
+		_, rotating_rudder_angle_rad = intended_actuator_angles(
+			boat_angle_rad,
+			boat_angular_velocity_rad_s=0.2,
+			intent=intent,
+			apparent_wind_m_s=pymunk.Vec2d(6, 0),
+			apparent_water_m_s=apparent_water,
+		)
+
+		self.assertNotEqual(rotating_rudder_angle_rad, stationary_rudder_angle_rad)
 
 	def test_plot_uses_the_simulation_coefficients(self):
 		self.assertEqual(plot.lift(0), lift_coefficient(0))
@@ -370,7 +439,7 @@ class SailingSimulationTest(unittest.TestCase):
 	def test_controlled_rudder_does_not_snap_to_its_target(self):
 		simulation = create_simulation()
 		maximum_rate_rad_s = 0.0
-		intent = MotionIntent(simulation.boat.angle, intensity=1)
+		intent = MotionIntent(1, 0)
 
 		for _ in range(round(30 / DT_SECONDS)):
 			step(simulation, DEFAULT_ENVIRONMENT, intent)
@@ -383,18 +452,16 @@ class SailingSimulationTest(unittest.TestCase):
 
 	def test_controlled_sail_does_not_snap_to_its_target(self):
 		simulation = create_simulation()
-		maximum_rate_rad_s = 0.0
 		still_air_and_water = Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0))
-		intent = MotionIntent(simulation.boat.angle, intensity=1)
+		intent = MotionIntent(1, 0)
 
-		for _ in range(round(5 / DT_SECONDS)):
-			step(simulation, still_air_and_water, intent)
-			maximum_rate_rad_s = max(
-				maximum_rate_rad_s,
-				abs(simulation.sail_angular_velocity_rad_s),
-			)
+		telemetry = step(simulation, still_air_and_water, intent)
 
-		self.assertLess(maximum_rate_rad_s, math.radians(180))
+		self.assertNotEqual(simulation.sail_angle_rad, telemetry.target_sail_angle_rad)
+		self.assertLess(
+			abs(simulation.sail_angle_rad),
+			abs(telemetry.target_sail_angle_rad),
+		)
 
 	def test_forward_intent_resists_wind_driven_rotation(self):
 		simulation = create_simulation()
@@ -419,14 +486,17 @@ class SailingSimulationTest(unittest.TestCase):
 		heading_error = math.remainder(simulation.boat.angle - new_heading_rad, 2 * math.pi)
 		self.assertLess(abs(heading_error), math.radians(15))
 
-	def test_rudder_changes_heading(self):
+	def test_lateral_intent_turns_more_than_forward_intent(self):
 		straight = create_simulation()
 		turning = create_simulation()
 
 		run_simulation(straight, seconds=10)
 		run_simulation(turning, seconds=10, keys="a")
 
-		self.assertGreater(abs(turning.boat.angle - straight.boat.angle), 0.25)
+		self.assertGreater(
+			abs(turning.boat.angular_velocity),
+			abs(straight.boat.angular_velocity),
+		)
 
 	def test_rudder_turn_rate_remains_bounded(self):
 		simulation = create_simulation()
@@ -468,8 +538,8 @@ class SailingSimulationTest(unittest.TestCase):
 		strong = create_simulation()
 		moderate_environment = DEFAULT_ENVIRONMENT
 		strong_environment = Environment(pymunk.Vec2d(20, 0), pymunk.Vec2d(0, 0))
-		moderate_intent = MotionIntent(moderate.boat.angle, intensity=1)
-		strong_intent = MotionIntent(strong.boat.angle, intensity=1)
+		moderate_intent = MotionIntent(1, 0)
+		strong_intent = MotionIntent(1, 0)
 
 		for _ in range(round(2 / DT_SECONDS)):
 			step(moderate, moderate_environment, moderate_intent)
@@ -492,8 +562,8 @@ class SailingSimulationTest(unittest.TestCase):
 		strong = create_simulation()
 		still_environment = Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0))
 		strong_environment = Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(5, 0))
-		still_intent = MotionIntent(still.boat.angle - math.pi / 2, intensity=1)
-		strong_intent = MotionIntent(strong.boat.angle - math.pi / 2, intensity=1)
+		still_intent = MotionIntent(0, -1)
+		strong_intent = MotionIntent(0, -1)
 
 		for _ in range(round(0.1 / DT_SECONDS)):
 			still_telemetry = step(still, still_environment, still_intent)
@@ -507,7 +577,7 @@ class SailingSimulationTest(unittest.TestCase):
 		simulation = create_simulation()
 		simulation.boat.velocity = (3, 0)
 		still_air_and_water = Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0))
-		intent = MotionIntent(simulation.boat.angle, brake=True)
+		intent = MotionIntent(1, 0, brake=True)
 
 		for _ in range(round(10 / DT_SECONDS)):
 			step(simulation, still_air_and_water, intent)
