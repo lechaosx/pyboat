@@ -149,6 +149,30 @@ def desired_turn(
 	)
 
 
+def distance_from_intent(
+	drive_force_n: float,
+	yaw_moment_n_m: float,
+	intent: game.MotionIntent,
+	angular_velocity_rad_s: float,
+	limits: tuple[float, float, float, float],
+) -> float:
+	negative_drive, positive_drive, negative_moment, positive_moment = limits
+	desired = pymunk.Vec2d(
+		intent.forward,
+		desired_turn(
+			intent.turn,
+			angular_velocity_rad_s,
+			negative_moment,
+			positive_moment,
+		),
+	)
+	normalized = pymunk.Vec2d(
+		normalized_effect(drive_force_n, negative_drive, positive_drive),
+		normalized_effect(yaw_moment_n_m, negative_moment, positive_moment),
+	)
+	return (normalized - desired).length
+
+
 def target_effect(
 	boat_heading_rad: float,
 	angular_velocity_rad_s: float,
@@ -191,29 +215,24 @@ def non_neutral_failure(
 	selected: tuple[game.ControlEffect, game.ControlEffect],
 	effects: tuple[tuple[game.ControlEffect, game.ControlEffect, float, float], ...],
 ) -> str | None:
-	negative_drive, positive_drive, negative_moment, positive_moment = effect_limits(effects)
-	desired = pymunk.Vec2d(
-		intent.forward,
-		desired_turn(
-			intent.turn,
-			angular_velocity_rad_s,
-			negative_moment,
-			positive_moment,
-		),
-	)
-
-	def distance(drive_force_n: float, yaw_moment_n_m: float) -> float:
-		normalized = pymunk.Vec2d(
-			normalized_effect(drive_force_n, negative_drive, positive_drive),
-			normalized_effect(yaw_moment_n_m, negative_moment, positive_moment),
-		)
-		return (normalized - desired).length
-
-	selected_distance = distance(
+	limits = effect_limits(effects)
+	selected_distance = distance_from_intent(
 		selected[0].drive_force_n + selected[1].drive_force_n,
 		selected[0].yaw_moment_n_m + selected[1].yaw_moment_n_m,
+		intent,
+		angular_velocity_rad_s,
+		limits,
 	)
-	best_distance = min(distance(effect[2], effect[3]) for effect in effects)
+	best_distance = min(
+		distance_from_intent(
+			effect[2],
+			effect[3],
+			intent,
+			angular_velocity_rad_s,
+			limits,
+		)
+		for effect in effects
+	)
 	if selected_distance > best_distance + 1e-9:
 		return f"distance {selected_distance:.3f}, best {best_distance:.3f}"
 	return None
@@ -259,6 +278,42 @@ def neutral_failure(
 
 
 class ControlModelSpecificationTest(unittest.TestCase):
+	def test_allocator_refines_beyond_the_best_discrete_angle_pair(self):
+		heading_rad = 0
+		speed_m_s = -1
+		angular_velocity_rad_s = -0.2
+		intent = game.MotionIntent(0.5, 0)
+		wind, water = flow_state(heading_rad, speed_m_s)
+		sails, rudders = control_candidates(heading_rad, speed_m_s)
+		effects = combined_effects(sails, rudders)
+		limits = effect_limits(effects)
+		selected = target_effect(
+			heading_rad,
+			angular_velocity_rad_s,
+			intent,
+			wind,
+			water,
+		)
+		selected_distance = distance_from_intent(
+			selected[0].drive_force_n + selected[1].drive_force_n,
+			selected[0].yaw_moment_n_m + selected[1].yaw_moment_n_m,
+			intent,
+			angular_velocity_rad_s,
+			limits,
+		)
+		best_discrete_distance = min(
+			distance_from_intent(
+				effect[2],
+				effect[3],
+				intent,
+				angular_velocity_rad_s,
+				limits,
+			)
+			for effect in effects
+		)
+
+		self.assertLess(selected_distance, best_discrete_distance - 1e-8)
+
 	def test_representative_sticks_across_characteristic_boat_states(self):
 		failures = []
 		for heading_rad, speed_m_s, angular_velocity_rad_s, local_stick in itertools.product(

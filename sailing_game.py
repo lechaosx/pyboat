@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -392,13 +393,111 @@ def stopping_turn_request(
 	)
 
 
-def select_control_effects(
+def control_error(
+	sail: ControlEffect,
+	rudder: ControlEffect,
+	intent: MotionIntent,
+	desired_turn: float,
+	limits: tuple[float, float, float, float],
+) -> float:
+	negative_drive, positive_drive, negative_moment, positive_moment = limits
+	drive = normalized_control_effect(
+		sail.drive_force_n + rudder.drive_force_n,
+		negative_drive,
+		positive_drive,
+	)
+	moment = normalized_control_effect(
+		sail.yaw_moment_n_m + rudder.yaw_moment_n_m,
+		negative_moment,
+		positive_moment,
+	)
+	return (drive - intent.forward) ** 2 + (moment - desired_turn) ** 2
+
+
+def refine_control_angles(
+	sail_index: int,
+	rudder_index: int,
 	sails: tuple[ControlEffect, ...],
 	rudders: tuple[ControlEffect, ...],
+	errors: np.ndarray,
+	sail_effect_at: Callable[[float], ControlEffect],
+	rudder_effect_at: Callable[[float], ControlEffect],
+	intent: MotionIntent,
+	desired_turn: float,
+	limits: tuple[float, float, float, float],
+) -> tuple[float, float]:
+	sail_angle_rad = sails[sail_index].angle_rad
+	rudder_angle_rad = rudders[rudder_index].angle_rad
+	if (
+		sail_index in (0, len(sails) - 1)
+		or rudder_index in (0, len(rudders) - 1)
+	):
+		return sail_angle_rad, rudder_angle_rad
+
+	angle_step_rad = math.radians(CONTROL_ANGLE_RESOLUTION_DEG)
+	center_error = errors[sail_index, rudder_index]
+	sail_gradient = (
+		errors[sail_index + 1, rudder_index]
+		- errors[sail_index - 1, rudder_index]
+	) / (2 * angle_step_rad)
+	rudder_gradient = (
+		errors[sail_index, rudder_index + 1]
+		- errors[sail_index, rudder_index - 1]
+	) / (2 * angle_step_rad)
+	sail_curvature = (
+		errors[sail_index + 1, rudder_index]
+		- 2 * center_error
+		+ errors[sail_index - 1, rudder_index]
+	) / angle_step_rad**2
+	rudder_curvature = (
+		errors[sail_index, rudder_index + 1]
+		- 2 * center_error
+		+ errors[sail_index, rudder_index - 1]
+	) / angle_step_rad**2
+	cross_curvature = (
+		errors[sail_index + 1, rudder_index + 1]
+		- errors[sail_index + 1, rudder_index - 1]
+		- errors[sail_index - 1, rudder_index + 1]
+		+ errors[sail_index - 1, rudder_index - 1]
+	) / (4 * angle_step_rad**2)
+	determinant = sail_curvature * rudder_curvature - cross_curvature**2
+	if sail_curvature <= 0 or determinant <= 0:
+		return sail_angle_rad, rudder_angle_rad
+
+	sail_offset_rad = (
+		cross_curvature * rudder_gradient
+		- rudder_curvature * sail_gradient
+	) / determinant
+	rudder_offset_rad = (
+		cross_curvature * sail_gradient
+		- sail_curvature * rudder_gradient
+	) / determinant
+	if max(abs(sail_offset_rad), abs(rudder_offset_rad)) > angle_step_rad:
+		return sail_angle_rad, rudder_angle_rad
+
+	refined_sail_angle_rad = sail_angle_rad + sail_offset_rad
+	refined_rudder_angle_rad = rudder_angle_rad + rudder_offset_rad
+	refined_error = control_error(
+		sail_effect_at(refined_sail_angle_rad),
+		rudder_effect_at(refined_rudder_angle_rad),
+		intent,
+		desired_turn,
+		limits,
+	)
+	if refined_error >= center_error:
+		return sail_angle_rad, rudder_angle_rad
+	return refined_sail_angle_rad, refined_rudder_angle_rad
+
+
+def select_control_angles(
+	sails: tuple[ControlEffect, ...],
+	rudders: tuple[ControlEffect, ...],
+	sail_effect_at: Callable[[float], ControlEffect],
+	rudder_effect_at: Callable[[float], ControlEffect],
 	intent: MotionIntent,
 	angular_velocity_rad_s: float,
 	neutral_sail_angle_rad: float,
-) -> tuple[ControlEffect, ControlEffect]:
+) -> tuple[float, float]:
 	if not intent.forward and not intent.turn:
 		sail = min(
 			sails,
@@ -428,12 +527,10 @@ def select_control_effects(
 				abs(candidate.angle_rad),
 			),
 		)
-		return sail, rudder
+		return sail.angle_rad, rudder.angle_rad
 
-	negative_drive, positive_drive, negative_moment, positive_moment = control_limits(
-		sails,
-		rudders,
-	)
+	limits = control_limits(sails, rudders)
+	negative_drive, positive_drive, negative_moment, positive_moment = limits
 	desired_turn = intent.turn
 	if not desired_turn:
 		desired_turn = stopping_turn_request(
@@ -460,26 +557,36 @@ def select_control_effects(
 	if negative_moment:
 		normalized_moments[moments < 0] = moments[moments < 0] / -negative_moment
 
-	error = np.round(
+	errors = (
 		(normalized_drives - intent.forward) ** 2
-		+ (normalized_moments - desired_turn) ** 2,
-		12,
+		+ (normalized_moments - desired_turn) ** 2
 	)
 	sail_angles = np.array([sail.angle_rad for sail in sails])[:, np.newaxis]
 	rudder_angles = np.array([rudder.angle_rad for rudder in rudders])
 	angle_travel = np.abs(sail_angles) + np.abs(rudder_angles)
 	if desired_turn:
-		tie_break = np.broadcast_to(-sail_angles * desired_turn, error.shape)
+		tie_break = np.broadcast_to(-sail_angles * desired_turn, errors.shape)
 	else:
 		tie_break = np.broadcast_to(
 			np.abs(sail_angles - neutral_sail_angle_rad),
-			error.shape,
+			errors.shape,
 		)
 	flat_index = np.lexsort(
-		(tie_break.ravel(), angle_travel.ravel(), error.ravel())
+		(tie_break.ravel(), angle_travel.ravel(), np.round(errors, 12).ravel())
 	)[0]
-	sail_index, rudder_index = np.unravel_index(flat_index, error.shape)
-	return sails[sail_index], rudders[rudder_index]
+	sail_index, rudder_index = np.unravel_index(flat_index, errors.shape)
+	return refine_control_angles(
+		sail_index,
+		rudder_index,
+		sails,
+		rudders,
+		errors,
+		sail_effect_at,
+		rudder_effect_at,
+		intent,
+		desired_turn,
+		limits,
+	)
 
 
 def intended_actuator_angles(
@@ -489,6 +596,28 @@ def intended_actuator_angles(
 	apparent_wind_m_s: pymunk.Vec2d,
 	apparent_water_m_s: pymunk.Vec2d,
 ) -> tuple[float, float]:
+	def sail_effect_at(angle_rad: float) -> ControlEffect:
+		return foil_control_effect(
+			boat_angle_rad,
+			apparent_wind_m_s,
+			MAST_POSITION_M,
+			SAIL_CENTER_OF_EFFORT_FROM_MAST_M,
+			angle_rad,
+			AIR_DENSITY_KG_M3,
+			SAIL_AREA_M2,
+		)
+
+	def rudder_effect_at(angle_rad: float) -> ControlEffect:
+		return foil_control_effect(
+			boat_angle_rad,
+			apparent_water_m_s,
+			RUDDER_POSITION_M,
+			RUDDER_DRAW_LENGTH_M / 2,
+			angle_rad,
+			WATER_DENSITY_KG_M3,
+			RUDDER_AREA_M2,
+		)
+
 	sail_candidates = foil_control_candidates(
 		boat_angle_rad,
 		apparent_wind_m_s,
@@ -508,14 +637,15 @@ def intended_actuator_angles(
 		RUDDER_AREA_M2,
 	)
 
-	sail, rudder = select_control_effects(
+	return select_control_angles(
 		sail_candidates,
 		rudder_candidates,
+		sail_effect_at,
+		rudder_effect_at,
 		intent,
 		boat_angular_velocity_rad_s,
 		luffing_sail_angle(boat_angle_rad, apparent_wind_m_s),
 	)
-	return sail.angle_rad, rudder.angle_rad
 
 
 def create_simulation() -> SailingState:
