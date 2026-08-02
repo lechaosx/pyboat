@@ -261,6 +261,31 @@ class SailingSimulationTest(unittest.TestCase):
 
 		self.assertEqual(partial_targets, full_targets)
 
+	def test_forward_component_controls_powered_sheet_effort(self):
+		partial = create_simulation()
+		full = create_simulation()
+		still_air_and_water = Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0))
+
+		partial_telemetry = step(
+			partial,
+			still_air_and_water,
+			MotionIntent(0.25, 1),
+		)
+		full_telemetry = step(
+			full,
+			still_air_and_water,
+			MotionIntent(1, 1),
+		)
+
+		self.assertEqual(
+			partial_telemetry.target_sail_angle_rad,
+			full_telemetry.target_sail_angle_rad,
+		)
+		self.assertLess(
+			abs(partial.sail_angular_velocity_rad_s),
+			abs(full.sail_angular_velocity_rad_s),
+		)
+
 	def test_lateral_intent_uses_sail_for_yaw_without_backwinding(self):
 		boat_angle_rad = 1
 		apparent_wind = pymunk.Vec2d(6, 0)

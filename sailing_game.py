@@ -112,15 +112,29 @@ class ControlEffect:
 	drive_force_n: float
 
 
-def intent_effort(intent: MotionIntent) -> float:
+def intent_radius(intent: MotionIntent) -> float:
 	return max(abs(intent.forward), abs(intent.turn))
 
 
 def intent_preference(intent: MotionIntent) -> pymunk.Vec2d:
-	effort = intent_effort(intent)
-	if not effort:
+	radius = intent_radius(intent)
+	if not radius:
 		return pymunk.Vec2d(0, 0)
-	return pymunk.Vec2d(intent.forward, intent.turn) / effort
+	return pymunk.Vec2d(intent.forward, intent.turn) / radius
+
+
+def sheet_effort(intent: MotionIntent) -> float:
+	if intent.brake:
+		return 1
+	if intent.forward > 0:
+		return abs(intent.forward)
+	return max(abs(intent.forward), abs(intent.turn))
+
+
+def tiller_effort(intent: MotionIntent) -> float:
+	if intent.brake:
+		return 1
+	return max(abs(intent.forward), abs(intent.turn))
 
 
 def intent_vector(intent: MotionIntent, boat_heading_rad: float) -> pymunk.Vec2d:
@@ -466,7 +480,7 @@ def intended_actuator_angles(
 	apparent_wind_m_s: pymunk.Vec2d,
 	apparent_water_m_s: pymunk.Vec2d,
 ) -> tuple[float | None, float | None]:
-	if not intent.brake and not intent_effort(intent):
+	if not intent.brake and not intent_radius(intent):
 		return None, None
 	preference = intent_preference(intent)
 	rudder_candidates = foil_control_candidates(
@@ -590,7 +604,6 @@ def step(
 	)
 
 	sailor_sail_torque_n_m = 0.0
-	control_intensity = 1 if intent.brake else intent_effort(intent)
 	if target_sail_angle_rad is not None:
 		sailor_sail_torque_n_m = actuator_control_torque(
 			state.sail_angle_rad,
@@ -599,7 +612,7 @@ def step(
 			SAIL_CONTROL_STIFFNESS_N_M_RAD,
 			SAIL_CONTROL_DAMPING_N_M_S_RAD,
 			SAILOR_MAX_SHEET_FORCE_N * SAIL_SHEET_LEVER_ARM_M,
-			control_intensity,
+			sheet_effort(intent),
 		)
 	sailor_rudder_torque_n_m = 0.0
 	if target_rudder_angle_rad is not None:
@@ -610,7 +623,7 @@ def step(
 			RUDDER_CONTROL_STIFFNESS_N_M_RAD,
 			RUDDER_CONTROL_DAMPING_N_M_S_RAD,
 			SAILOR_MAX_TILLER_FORCE_N * TILLER_LENGTH_M,
-			control_intensity,
+			tiller_effort(intent),
 		)
 
 	state.boat.apply_force_at_local_point(
@@ -737,7 +750,8 @@ def draw_intent(
 	)
 	text = font.render(
 		f"intent: forward {intent.forward:+.0%}  turn {intent.turn:+.0%}  "
-		f"effort {intent_effort(intent):.0%}",
+		f"radius {intent_radius(intent):.0%}  sheet {sheet_effort(intent):.0%}  "
+		f"tiller {tiller_effort(intent):.0%}",
 		True,
 		(240, 100, 220),
 	)
@@ -840,14 +854,14 @@ def draw(
 	draw_intent(screen, font, center, boat.angle, intent)
 
 	control_status = "brake" if intent.brake else "neutral"
-	if intent_effort(intent) and not intent.brake:
+	if intent_radius(intent) and not intent.brake:
 		if intent.forward > 0:
 			control_name = "drive"
 		elif intent.forward < 0:
 			control_name = "backwind"
 		else:
 			control_name = "turn"
-		control_status = f"{control_name} {intent_effort(intent):.0%}"
+		control_status = f"{control_name} {intent_radius(intent):.0%}"
 	target_sail = "free"
 	if telemetry.target_sail_angle_rad is not None:
 		target_sail = f"{math.degrees(telemetry.target_sail_angle_rad):+.0f}°"
