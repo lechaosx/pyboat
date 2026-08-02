@@ -276,6 +276,17 @@ def neutral_failure(
 
 
 class ControlModelSpecificationTest(unittest.TestCase):
+	def test_regret_slope_scales_each_control_axis_independently(self):
+		scales = game.regret_slope_scales(
+			regret=4,
+			distance_from_optimum=pymunk.Vec2d(2, 1),
+			objective_gradient=pymunk.Vec2d(-3, 1),
+			distance_resolution=pymunk.Vec2d(0, 0),
+		)
+
+		self.assertAlmostEqual(scales.x, 1.15)
+		self.assertAlmostEqual(scales.y, 0.4)
+
 	def test_optimized_mode_preserves_the_existing_target(self):
 		heading_rad = 0
 		wind, water = flow_state(heading_rad, -1)
@@ -332,6 +343,36 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		self.assertNotEqual(decision.landscape.gradient, (0, 0))
 		self.assertTrue(math.isfinite(decision.landscape.optimum_sail_angle_rad))
 		self.assertTrue(math.isfinite(decision.landscape.optimum_rudder_angle_rad))
+
+	def test_direct_landscape_adds_regret_slope_on_both_control_axes(self):
+		heading_rad = 0
+		wind, water = flow_state(heading_rad, -1)
+		arguments = (
+			heading_rad,
+			-0.2,
+			game.MotionIntent(0.5, 0.5),
+			wind,
+			water,
+			game.MAX_SAIL_ANGLE_RAD,
+			game.MAX_RUDDER_ANGLE_RAD,
+		)
+		base = game.control_decision(*arguments, game.OPTIMIZED_TARGET_CONTROL)
+		direct = game.control_decision(*arguments, game.DIRECT_GRADIENT_CONTROL)
+
+		self.assertEqual(
+			(
+				direct.landscape.optimum_sail_angle_rad,
+				direct.landscape.optimum_rudder_angle_rad,
+			),
+			(
+				base.landscape.optimum_sail_angle_rad,
+				base.landscape.optimum_rudder_angle_rad,
+			),
+		)
+		added_slope = direct.landscape.errors - base.landscape.errors
+		self.assertGreater(max(added_slope[:, 0]) - min(added_slope[:, 0]), 0)
+		self.assertGreater(max(added_slope[0, :]) - min(added_slope[0, :]), 0)
+		self.assertGreaterEqual(added_slope.min(), -1e-12)
 
 	def test_neutral_is_one_landscape_in_direct_gradient_mode(self):
 		heading_rad = math.pi / 2
@@ -397,7 +438,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 
 		self.assertAlmostEqual(torque, -20 - 2 * math.sqrt(75))
 
-	def test_allocator_refines_beyond_the_best_discrete_angle_pair(self):
+	def test_allocator_returns_the_best_discrete_angle_pair(self):
 		heading_rad = 0
 		speed_m_s = -1
 		angular_velocity_rad_s = -0.2
@@ -431,7 +472,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			for effect in effects
 		)
 
-		self.assertLess(selected_distance, best_discrete_distance - 1e-8)
+		self.assertAlmostEqual(selected_distance, best_discrete_distance)
 
 	def test_representative_sticks_across_characteristic_boat_states(self):
 		failures = []

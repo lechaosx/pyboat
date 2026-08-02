@@ -14,6 +14,8 @@ FORCE_PIXELS_PER_NEWTON = 0.35
 INTENT_VECTOR_LENGTH_PX = 100
 DT_SECONDS = 1 / 60
 CONTROL_LANDSCAPE_RECT = pygame.Rect(800, 280, 320, 320)
+CONTROL_GRADIENT_PIXELS_PER_ERROR = 8
+CONTROL_MOTION_PREVIEW_SECONDS = 0.25
 
 AIR_DENSITY_KG_M3 = 1.225  # Dry air at sea level and 15 °C.
 WATER_DENSITY_KG_M3 = 1025  # Representative seawater.
@@ -49,6 +51,7 @@ TILLER_LENGTH_M = 1
 ANALOG_STICK_DEADZONE = 0.15
 OPTIMIZED_TARGET_CONTROL = "optimized target"
 DIRECT_GRADIENT_CONTROL = "direct gradient"
+INITIAL_CONTROL_MODE = DIRECT_GRADIENT_CONTROL
 
 MAX_SAIL_ANGLE_RAD = math.radians(90)
 MAX_RUDDER_ANGLE_RAD = math.radians(30)
@@ -463,71 +466,6 @@ def control_error(
 	return (drive - intent.forward) ** 2 + (moment - desired_turn) ** 2
 
 
-def refine_control_angles(
-	sail_index: int,
-	rudder_index: int,
-	sails: tuple[ControlEffect, ...],
-	rudders: tuple[ControlEffect, ...],
-	errors: np.ndarray,
-	error_at: Callable[[float, float], float],
-) -> tuple[float, float]:
-	sail_angle_rad = sails[sail_index].angle_rad
-	rudder_angle_rad = rudders[rudder_index].angle_rad
-	if (
-		sail_index in (0, len(sails) - 1)
-		or rudder_index in (0, len(rudders) - 1)
-	):
-		return sail_angle_rad, rudder_angle_rad
-
-	angle_step_rad = math.radians(CONTROL_ANGLE_RESOLUTION_DEG)
-	center_error = errors[sail_index, rudder_index]
-	sail_gradient = (
-		errors[sail_index + 1, rudder_index]
-		- errors[sail_index - 1, rudder_index]
-	) / (2 * angle_step_rad)
-	rudder_gradient = (
-		errors[sail_index, rudder_index + 1]
-		- errors[sail_index, rudder_index - 1]
-	) / (2 * angle_step_rad)
-	sail_curvature = (
-		errors[sail_index + 1, rudder_index]
-		- 2 * center_error
-		+ errors[sail_index - 1, rudder_index]
-	) / angle_step_rad**2
-	rudder_curvature = (
-		errors[sail_index, rudder_index + 1]
-		- 2 * center_error
-		+ errors[sail_index, rudder_index - 1]
-	) / angle_step_rad**2
-	cross_curvature = (
-		errors[sail_index + 1, rudder_index + 1]
-		- errors[sail_index + 1, rudder_index - 1]
-		- errors[sail_index - 1, rudder_index + 1]
-		+ errors[sail_index - 1, rudder_index - 1]
-	) / (4 * angle_step_rad**2)
-	determinant = sail_curvature * rudder_curvature - cross_curvature**2
-	if sail_curvature <= 0 or determinant <= 0:
-		return sail_angle_rad, rudder_angle_rad
-
-	sail_offset_rad = (
-		cross_curvature * rudder_gradient
-		- rudder_curvature * sail_gradient
-	) / determinant
-	rudder_offset_rad = (
-		cross_curvature * sail_gradient
-		- sail_curvature * rudder_gradient
-	) / determinant
-	if max(abs(sail_offset_rad), abs(rudder_offset_rad)) > angle_step_rad:
-		return sail_angle_rad, rudder_angle_rad
-
-	refined_sail_angle_rad = sail_angle_rad + sail_offset_rad
-	refined_rudder_angle_rad = rudder_angle_rad + rudder_offset_rad
-	refined_error = error_at(refined_sail_angle_rad, refined_rudder_angle_rad)
-	if refined_error >= center_error:
-		return sail_angle_rad, rudder_angle_rad
-	return refined_sail_angle_rad, refined_rudder_angle_rad
-
-
 def neutral_control_error(
 	sail: ControlEffect,
 	rudder: ControlEffect,
@@ -637,13 +575,46 @@ def control_objective_derivatives(
 	return pymunk.Vec2d(*gradient), pymunk.Vec2d(*curvature)
 
 
+def regret_slope_scales(
+	regret: float,
+	distance_from_optimum: pymunk.Vec2d,
+	objective_gradient: pymunk.Vec2d,
+	distance_resolution: pymunk.Vec2d,
+) -> pymunk.Vec2d:
+	distance_squared = distance_from_optimum.length_squared
+	if not regret or not distance_squared:
+		return pymunk.Vec2d(0, 0)
+
+	def scale(distance: float, gradient: float, resolution: float) -> float:
+		if not distance:
+			return 0
+		# Distance-weighted shares preserve the total regret across both axes.
+		regret_share = regret * distance**2 / distance_squared
+		downhill_progress = gradient * distance
+		return (
+			regret_share + max(0, -downhill_progress)
+		) / (2 * max(distance**2, resolution**2))
+
+	return pymunk.Vec2d(
+		scale(
+			distance_from_optimum.x,
+			objective_gradient.x,
+			distance_resolution.x,
+		),
+		scale(
+			distance_from_optimum.y,
+			objective_gradient.y,
+			distance_resolution.y,
+		),
+	)
+
+
 def select_control_angles(
 	sails: tuple[ControlEffect, ...],
 	rudders: tuple[ControlEffect, ...],
 	desired_turn: float,
 	errors: np.ndarray,
 	neutral_sail_angle_rad: float,
-	error_at: Callable[[float, float], float],
 ) -> tuple[float, float]:
 	sail_angles = np.array([sail.angle_rad for sail in sails])[:, np.newaxis]
 	rudder_angles = np.array([rudder.angle_rad for rudder in rudders])
@@ -659,13 +630,9 @@ def select_control_angles(
 		(tie_break.ravel(), angle_travel.ravel(), np.round(errors, 12).ravel())
 	)[0]
 	sail_index, rudder_index = np.unravel_index(flat_index, errors.shape)
-	return refine_control_angles(
-		sail_index,
-		rudder_index,
-		sails,
-		rudders,
-		errors,
-		error_at,
+	return (
+		sails[sail_index].angle_rad,
+		rudders[rudder_index].angle_rad,
 	)
 
 
@@ -775,19 +742,76 @@ def control_decision(
 			desired_turn,
 			limits,
 		)
-	gradient, curvature = control_objective_derivatives(
-		sail_angle_rad,
-		rudder_angle_rad,
-		error_at,
-	)
 	optimal_sail_angle_rad, optimal_rudder_angle_rad = select_control_angles(
 		sail_candidates,
 		rudder_candidates,
 		desired_turn,
 		errors,
 		neutral_sail_angle_rad,
+	)
+	gradient, curvature = control_objective_derivatives(
+		sail_angle_rad,
+		rudder_angle_rad,
 		error_at,
 	)
+	if mode == DIRECT_GRADIENT_CONTROL:
+		def global_slope_penalty(
+			sail_angle: float | np.ndarray,
+			rudder_angle: float | np.ndarray,
+		) -> float | np.ndarray:
+			return slope_scales.x * (
+				(sail_angle - optimal_sail_angle_rad) / MAX_SAIL_ANGLE_RAD
+			) ** 2 + slope_scales.y * (
+				(rudder_angle - optimal_rudder_angle_rad) / MAX_RUDDER_ANGLE_RAD
+			) ** 2
+
+		regret = max(
+			0,
+			error_at(sail_angle_rad, rudder_angle_rad)
+			- error_at(optimal_sail_angle_rad, optimal_rudder_angle_rad),
+		)
+		distance_from_optimum = pymunk.Vec2d(
+			(
+				sail_angle_rad - optimal_sail_angle_rad
+			) / MAX_SAIL_ANGLE_RAD,
+			(
+				rudder_angle_rad - optimal_rudder_angle_rad
+			) / MAX_RUDDER_ANGLE_RAD,
+		)
+		slope_scales = regret_slope_scales(
+			regret,
+			distance_from_optimum,
+			pymunk.Vec2d(
+				gradient.x * MAX_SAIL_ANGLE_RAD,
+				gradient.y * MAX_RUDDER_ANGLE_RAD,
+			),
+			pymunk.Vec2d(
+				math.radians(CONTROL_ANGLE_RESOLUTION_DEG) / MAX_SAIL_ANGLE_RAD,
+				math.radians(CONTROL_ANGLE_RESOLUTION_DEG) / MAX_RUDDER_ANGLE_RAD,
+			),
+		)
+		if slope_scales != (0, 0):
+			base_error_at = error_at
+
+			def error_at(sail_angle: float, rudder_angle: float) -> float:
+				return base_error_at(sail_angle, rudder_angle) + float(
+					global_slope_penalty(sail_angle, rudder_angle)
+				)
+
+			sail_angles = np.array(
+				[sail.angle_rad for sail in sail_candidates]
+			)[:, np.newaxis]
+			rudder_angles = np.array([rudder.angle_rad for rudder in rudder_candidates])
+			penalty = global_slope_penalty(
+				sail_angles,
+				rudder_angles,
+			)
+			errors = errors + penalty
+			gradient, curvature = control_objective_derivatives(
+				sail_angle_rad,
+				rudder_angle_rad,
+				error_at,
+			)
 	landscape = ControlLandscape(
 		errors,
 		gradient,
@@ -1082,6 +1106,33 @@ def control_landscape_point(
 	)
 
 
+def control_gradient_vector_px(
+	rect: pygame.Rect,
+	gradient: pymunk.Vec2d,
+) -> pymunk.Vec2d:
+	return pymunk.Vec2d(
+		-gradient.x * MAX_SAIL_ANGLE_RAD * CONTROL_GRADIENT_PIXELS_PER_ERROR,
+		gradient.y * MAX_RUDDER_ANGLE_RAD * CONTROL_GRADIENT_PIXELS_PER_ERROR,
+	)
+
+
+def control_motion_vector_px(
+	rect: pygame.Rect,
+	sail_angular_velocity_rad_s: float,
+	rudder_angular_velocity_rad_s: float,
+) -> pymunk.Vec2d:
+	return pymunk.Vec2d(
+		sail_angular_velocity_rad_s
+		* CONTROL_MOTION_PREVIEW_SECONDS
+		* rect.width
+		/ (2 * MAX_SAIL_ANGLE_RAD),
+		-rudder_angular_velocity_rad_s
+		* CONTROL_MOTION_PREVIEW_SECONDS
+		* rect.height
+		/ (2 * MAX_RUDDER_ANGLE_RAD),
+	)
+
+
 def draw_control_quality_landscape(
 	screen: pygame.Surface,
 	font: pygame.font.Font,
@@ -1106,8 +1157,6 @@ def draw_control_quality_landscape(
 	screen.blit(landscape, rect)
 	pygame.draw.rect(screen, (220, 220, 230), rect, 1)
 
-	previous_clip = screen.get_clip()
-	screen.set_clip(rect)
 	current = control_landscape_point(
 		rect,
 		state.sail_angle_rad,
@@ -1133,29 +1182,21 @@ def draw_control_quality_landscape(
 		2,
 	)
 
-	downhill = pymunk.Vec2d(
-		-telemetry.control_landscape.gradient.x
-		* rect.width
-		/ (2 * MAX_SAIL_ANGLE_RAD),
-		telemetry.control_landscape.gradient.y
-		* rect.height
-		/ (2 * MAX_RUDDER_ANGLE_RAD),
+	downhill = control_gradient_vector_px(
+		rect,
+		telemetry.control_landscape.gradient,
 	)
 	if downhill.length:
-		draw_vector(screen, current, downhill.normalized() * 34, (100, 220, 255), 1, 2)
-	motion = pymunk.Vec2d(
-		state.sail_angular_velocity_rad_s
-		* rect.width
-		/ (2 * MAX_SAIL_ANGLE_RAD),
-		-state.rudder_angular_velocity_rad_s
-		* rect.height
-		/ (2 * MAX_RUDDER_ANGLE_RAD),
+		draw_vector(screen, current, downhill, (100, 220, 255), 1, 2)
+	motion = control_motion_vector_px(
+		rect,
+		state.sail_angular_velocity_rad_s,
+		state.rudder_angular_velocity_rad_s,
 	)
 	if motion.length:
-		draw_vector(screen, current, motion.normalized() * 34, (255, 210, 90), 1, 2)
+		draw_vector(screen, current, motion, (255, 210, 90), 1, 2)
 	pygame.draw.circle(screen, (245, 245, 245), current, 5)
 	pygame.draw.circle(screen, (25, 25, 30), current, 5, 1)
-	screen.set_clip(previous_clip)
 	axis = font.render(
 		"sail -90° left / +90° right    rudder +30° top / -30° bottom",
 		True,
@@ -1168,7 +1209,7 @@ def draw_control_quality_landscape(
 		(210, 210, 220),
 	)
 	legend_arrows = font.render(
-		"cyan downhill gradient   yellow physical motion",
+		"cyan normalized downhill gradient   yellow motion over 0.25 s",
 		True,
 		(210, 210, 220),
 	)
@@ -1299,7 +1340,7 @@ def main() -> None:
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
-	control_mode = OPTIMIZED_TARGET_CONTROL
+	control_mode = INITIAL_CONTROL_MODE
 	joystick = None
 	if pygame.joystick.get_count():
 		joystick = pygame.joystick.Joystick(0)

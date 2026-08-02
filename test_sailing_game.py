@@ -66,10 +66,43 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
+	def test_interactive_game_starts_in_direct_gradient_mode(self):
+		self.assertEqual(
+			game.INITIAL_CONTROL_MODE,
+			game.DIRECT_GRADIENT_CONTROL,
+		)
+
 	def test_control_landscape_is_square(self):
 		self.assertEqual(
 			game.CONTROL_LANDSCAPE_RECT.width,
 			game.CONTROL_LANDSCAPE_RECT.height,
+		)
+
+	def test_control_landscape_arrows_preserve_normalized_magnitudes(self):
+		rect = game.CONTROL_LANDSCAPE_RECT
+		gradient = game.control_gradient_vector_px(
+			rect,
+			pymunk.Vec2d(1 / game.MAX_SAIL_ANGLE_RAD, 1 / game.MAX_RUDDER_ANGLE_RAD),
+		)
+		motion = game.control_motion_vector_px(
+			rect,
+			game.MAX_SAIL_ANGLE_RAD,
+			game.MAX_RUDDER_ANGLE_RAD,
+		)
+
+		self.assertEqual(
+			gradient,
+			(
+				-game.CONTROL_GRADIENT_PIXELS_PER_ERROR,
+				game.CONTROL_GRADIENT_PIXELS_PER_ERROR,
+			),
+		)
+		self.assertEqual(
+			motion,
+			(
+				rect.width / 2 * game.CONTROL_MOTION_PREVIEW_SECONDS,
+				-rect.height / 2 * game.CONTROL_MOTION_PREVIEW_SECONDS,
+			),
 		)
 
 	def test_intent_stores_a_local_square_vector(self):
@@ -235,6 +268,21 @@ class SailingSimulationTest(unittest.TestCase):
 
 		self.assertNotEqual(screen.get_at((800, 280)), (30, 30, 40, 255))
 
+	def test_neutral_landscape_does_not_flicker_when_controls_reach_the_optimum(self):
+		simulation = create_simulation()
+		maximum_errors = []
+		for frame in range(round(6 / DT_SECONDS)):
+			telemetry = step(
+				simulation,
+				DEFAULT_ENVIRONMENT,
+				MotionIntent(),
+				control_mode=game.DIRECT_GRADIENT_CONTROL,
+			)
+			if frame >= round(3 / DT_SECONDS):
+				maximum_errors.append(telemetry.control_landscape.errors.max())
+
+		self.assertLess(max(maximum_errors), 8)
+
 	def test_step_returns_force_and_flow_telemetry(self):
 		simulation = create_simulation()
 		intent = MotionIntent(1, 0)
@@ -348,6 +396,63 @@ class SailingSimulationTest(unittest.TestCase):
 
 				self.assertGreater(powered_radius_m, sharp_radius_m)
 				self.assertGreater(sharp_radius_m, braking_radius_m)
+
+	def test_direct_gradient_retrims_after_turning_downwind_to_the_opposite_reach(self):
+		simulation = create_simulation()
+		simulation.boat.angle = math.pi / 2
+		simulation.boat.velocity = pymunk.Vec2d(0, 2)
+		apparent_wind = apparent_flow(
+			DEFAULT_ENVIRONMENT.true_wind_velocity_m_s,
+			simulation.boat.velocity,
+		)
+		apparent_water = apparent_flow(
+			DEFAULT_ENVIRONMENT.true_water_velocity_m_s,
+			simulation.boat.velocity,
+		)
+		simulation.sail_angle_rad, simulation.rudder_angle_rad = intended_actuator_angles(
+			simulation.boat.angle,
+			0,
+			MotionIntent(1, 0),
+			apparent_wind,
+			apparent_water,
+		)
+		initial_sail_angle_rad = simulation.sail_angle_rad
+		initial_heading_rad = simulation.boat.angle
+		sail_crossed = False
+
+		for _ in range(round(20 / DT_SECONDS)):
+			step(
+				simulation,
+				DEFAULT_ENVIRONMENT,
+				MotionIntent(1, -1),
+				control_mode=game.DIRECT_GRADIENT_CONTROL,
+			)
+			sail_crossed |= simulation.sail_angle_rad * initial_sail_angle_rad < 0
+			if simulation.boat.angle - initial_heading_rad <= -math.pi:
+				break
+		else:
+			self.fail("boat did not reach the opposite beam reach")
+
+		forward_speeds_m_s = []
+		for _ in range(round(10 / DT_SECONDS)):
+			telemetry = step(
+				simulation,
+				DEFAULT_ENVIRONMENT,
+				MotionIntent(1, 0),
+				control_mode=game.DIRECT_GRADIENT_CONTROL,
+			)
+			forward = pymunk.Vec2d(1, 0).rotated(simulation.boat.angle)
+			forward_speeds_m_s.append(simulation.boat.velocity.dot(forward))
+			sail_crossed |= simulation.sail_angle_rad * initial_sail_angle_rad < 0
+
+		self.assertTrue(sail_crossed)
+		self.assertGreater(min(forward_speeds_m_s), 0)
+		self.assertLess(simulation.sail_angle_rad * initial_sail_angle_rad, 0)
+		self.assertGreater(
+			simulation.sail_angle_rad
+			* telemetry.control_landscape.optimum_sail_angle_rad,
+			0,
+		)
 
 	def test_forward_intent_countersteers_existing_rotation(self):
 		boat_angle_rad = 1
