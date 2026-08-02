@@ -7,6 +7,7 @@ import unittest
 import pymunk
 import pygame
 import plot
+import sailing_game as game
 
 from sailing_game import (
 	AIR_DENSITY_KG_M3,
@@ -65,6 +66,12 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
+	def test_control_landscape_is_square(self):
+		self.assertEqual(
+			game.CONTROL_LANDSCAPE_RECT.width,
+			game.CONTROL_LANDSCAPE_RECT.height,
+		)
+
 	def test_intent_stores_a_local_square_vector(self):
 		intent = MotionIntent(0.5, -0.5)
 
@@ -204,6 +211,29 @@ class SailingSimulationTest(unittest.TestCase):
 		)
 
 		self.assertNotEqual(screen.get_at((640, 360)), (30, 30, 40, 255))
+
+	def test_draw_renders_direct_control_landscapes_without_a_target(self):
+		simulation = create_simulation()
+		intent = MotionIntent(1, 0)
+		telemetry = step(
+			simulation,
+			DEFAULT_ENVIRONMENT,
+			intent,
+			control_mode=game.DIRECT_GRADIENT_CONTROL,
+		)
+		pygame.font.init()
+		screen = pygame.Surface((1280, 720))
+
+		draw(
+			screen,
+			pygame.font.Font(None, 24),
+			simulation,
+			DEFAULT_ENVIRONMENT,
+			intent,
+			telemetry,
+		)
+
+		self.assertNotEqual(screen.get_at((800, 280)), (30, 30, 40, 255))
 
 	def test_step_returns_force_and_flow_telemetry(self):
 		simulation = create_simulation()

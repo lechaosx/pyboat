@@ -242,42 +242,161 @@ def neutral_failure(
 	selected: tuple[game.ControlEffect, game.ControlEffect],
 	sails: tuple[game.ControlEffect, ...],
 	rudders: tuple[game.ControlEffect, ...],
-	boat_heading_rad: float,
-	apparent_wind_m_s: pymunk.Vec2d,
 	angular_velocity_rad_s: float,
 ) -> str | None:
-	def sail_force(angle_rad: float) -> pymunk.Vec2d:
-		return game.force_on_foil(
-			apparent_wind_m_s,
-			boat_heading_rad + angle_rad,
-			game.AIR_DENSITY_KG_M3,
-			game.SAIL_AREA_M2,
-		)
-
-	selected_force_n = sail_force(selected[0].angle_rad).length
-	minimum_force_n = min(sail_force(sail.angle_rad).length for sail in sails)
-	if selected_force_n > minimum_force_n + 1e-9:
-		return f"sail load {selected_force_n:.3f} N, minimum {minimum_force_n:.3f} N"
-
-	moments = tuple(selected[0].yaw_moment_n_m + rudder.yaw_moment_n_m for rudder in rudders)
+	effects = combined_effects(sails, rudders)
+	moments = tuple(effect[3] for effect in effects)
+	negative_moment_n_m = min(0, min(moments))
+	positive_moment_n_m = max(0, max(moments))
 	turn_request = desired_turn(
 		0,
 		angular_velocity_rad_s,
-		min(0, min(moments)),
-		max(0, max(moments)),
+		negative_moment_n_m,
+		positive_moment_n_m,
 	)
-	if turn_request < 0:
-		target_moment_n_m = turn_request * -min(moments)
-	else:
-		target_moment_n_m = turn_request * max(moments)
-	selected_moment_n_m = selected[0].yaw_moment_n_m + selected[1].yaw_moment_n_m
-	best_error_n_m = min(abs(moment - target_moment_n_m) for moment in moments)
-	if abs(selected_moment_n_m - target_moment_n_m) > best_error_n_m + 1e-9:
-		return "rudder does not apply the closest achievable yaw-stopping moment"
+	maximum_sail_force_n = max(sail.force_magnitude_n for sail in sails)
+
+	def error(sail: game.ControlEffect, moment_n_m: float) -> float:
+		load = sail.force_magnitude_n / maximum_sail_force_n if maximum_sail_force_n else 0
+		yaw = normalized_effect(
+			moment_n_m,
+			negative_moment_n_m,
+			positive_moment_n_m,
+		)
+		return load**2 + (yaw - turn_request) ** 2
+
+	selected_error = error(
+		selected[0],
+		selected[0].yaw_moment_n_m + selected[1].yaw_moment_n_m,
+	)
+	best_error = min(error(effect[0], effect[3]) for effect in effects)
+	if selected_error > best_error + 1e-9:
+		return f"objective {selected_error:.3f}, best {best_error:.3f}"
 	return None
 
 
 class ControlModelSpecificationTest(unittest.TestCase):
+	def test_optimized_mode_preserves_the_existing_target(self):
+		heading_rad = 0
+		wind, water = flow_state(heading_rad, -1)
+		intent = game.MotionIntent(0.5, 0)
+		existing_target = game.intended_actuator_angles(
+			heading_rad,
+			-0.2,
+			intent,
+			wind,
+			water,
+		)
+
+		decision = game.control_decision(
+			heading_rad,
+			-0.2,
+			intent,
+			wind,
+			water,
+			sail_angle_rad=0,
+			rudder_angle_rad=0,
+			mode=game.OPTIMIZED_TARGET_CONTROL,
+		)
+
+		self.assertEqual(
+			(decision.target_sail_angle_rad, decision.target_rudder_angle_rad),
+			existing_target,
+		)
+		self.assertEqual(
+			(decision.target_sail_angle_rad, decision.target_rudder_angle_rad),
+			(
+				decision.landscape.optimum_sail_angle_rad,
+				decision.landscape.optimum_rudder_angle_rad,
+			),
+		)
+
+	def test_direct_gradient_mode_has_a_landscape_but_no_target(self):
+		heading_rad = 0
+		wind, water = flow_state(heading_rad, -1)
+		decision = game.control_decision(
+			heading_rad,
+			-0.2,
+			game.MotionIntent(0.5, 0),
+			wind,
+			water,
+			sail_angle_rad=0,
+			rudder_angle_rad=0,
+			mode=game.DIRECT_GRADIENT_CONTROL,
+		)
+
+		self.assertIsNone(decision.target_sail_angle_rad)
+		self.assertIsNone(decision.target_rudder_angle_rad)
+		self.assertEqual(decision.landscape.errors.shape, (181, 61))
+		self.assertTrue(all(map(math.isfinite, decision.landscape.gradient)))
+		self.assertNotEqual(decision.landscape.gradient, (0, 0))
+		self.assertTrue(math.isfinite(decision.landscape.optimum_sail_angle_rad))
+		self.assertTrue(math.isfinite(decision.landscape.optimum_rudder_angle_rad))
+
+	def test_neutral_is_one_landscape_in_direct_gradient_mode(self):
+		heading_rad = math.pi / 2
+		wind, water = flow_state(heading_rad, 2)
+		decision = game.control_decision(
+			heading_rad,
+			0.2,
+			game.MotionIntent(),
+			wind,
+			water,
+			sail_angle_rad=0,
+			rudder_angle_rad=0,
+			mode=game.DIRECT_GRADIENT_CONTROL,
+		)
+
+		self.assertIsNone(decision.target_sail_angle_rad)
+		self.assertIsNone(decision.target_rudder_angle_rad)
+		self.assertEqual(decision.landscape.errors.shape, (181, 61))
+		self.assertTrue(all(map(math.isfinite, decision.landscape.gradient)))
+		self.assertTrue(math.isfinite(decision.landscape.optimum_sail_angle_rad))
+		self.assertTrue(math.isfinite(decision.landscape.optimum_rudder_angle_rad))
+
+	def test_direct_gradient_uses_full_torque_downhill(self):
+		for gradient, expected_torque in ((2, -75), (-2, 75)):
+			with self.subTest(gradient=gradient):
+				torque = game.direct_gradient_control_torque(
+					objective_gradient=gradient,
+					objective_curvature=1,
+					angular_velocity_rad_s=0,
+					external_torque_n_m=0,
+					moment_of_inertia_kg_m2=1,
+					bearing_damping_n_m_s_rad=0,
+					max_torque_n_m=75,
+					maximum_angle_rad=1,
+				)
+				self.assertEqual(torque, expected_torque)
+
+	def test_direct_gradient_scales_torque_before_full_effort_would_be_useful(self):
+		torque = game.direct_gradient_control_torque(
+			objective_gradient=0.1,
+			objective_curvature=0,
+			angular_velocity_rad_s=0,
+			external_torque_n_m=0,
+			moment_of_inertia_kg_m2=1,
+			bearing_damping_n_m_s_rad=0,
+			max_torque_n_m=75,
+			maximum_angle_rad=1,
+		)
+
+		self.assertAlmostEqual(torque, -7.5)
+
+	def test_direct_gradient_balances_environment_and_damps_at_a_stationary_point(self):
+		torque = game.direct_gradient_control_torque(
+			objective_gradient=0,
+			objective_curvature=1,
+			angular_velocity_rad_s=1,
+			external_torque_n_m=20,
+			moment_of_inertia_kg_m2=1,
+			bearing_damping_n_m_s_rad=0,
+			max_torque_n_m=75,
+			maximum_angle_rad=1,
+		)
+
+		self.assertAlmostEqual(torque, -20 - 2 * math.sqrt(75))
+
 	def test_allocator_refines_beyond_the_best_discrete_angle_pair(self):
 		heading_rad = 0
 		speed_m_s = -1
@@ -346,8 +465,6 @@ class ControlModelSpecificationTest(unittest.TestCase):
 					selected,
 					sails,
 					rudders,
-					heading_rad,
-					apparent_wind_m_s,
 					angular_velocity_rad_s,
 				)
 			else:
