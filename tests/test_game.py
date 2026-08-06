@@ -6,33 +6,81 @@ import unittest
 
 import pymunk
 import pygame
-import plot
-import sailing_game as game
+from simple_sailing_game import boat, controller, plot
+from simple_sailing_game import game
 
-from sailing_game import (
-	AIR_DENSITY_KG_M3,
+from simple_sailing_game.game import (
 	ANALOG_STICK_DEADZONE,
-	DEFAULT_ENVIRONMENT,
+	BOAT_PARAMETERS,
 	DT_SECONDS,
-	Environment,
-	FOIL_BASE_DRAG_COEFFICIENT,
-	MAX_SAIL_ANGLE_RAD,
-	MotionIntent,
+	ENVIRONMENT,
 	SimulationTelemetry,
-	actuator_control_torque,
 	analog_motion_intent,
-	apparent_flow,
 	create_simulation,
-	drag_coefficient,
 	draw,
-	force_on_foil,
-	integrate_hinge,
-	intended_actuator_angles,
 	intent_vector,
 	keyboard_motion_intent,
-	lift_coefficient,
 	step,
 )
+from tests.support import intended_actuator_angles
+
+
+apparent_flow = boat.apparent_flow
+lift_coefficient = boat.lift_coefficient
+integrate_hinge = boat.integrate_hinge
+Environment = boat.Environment
+MotionIntent = controller.MotionIntent
+DEFAULT_ENVIRONMENT = ENVIRONMENT
+MAX_SAIL_ANGLE_RAD = BOAT_PARAMETERS.max_sail_angle_rad
+MAX_RUDDER_ANGLE_RAD = BOAT_PARAMETERS.max_rudder_angle_rad
+
+
+def drag_coefficient(angle_of_attack_rad):
+	return boat.drag_coefficient(
+		angle_of_attack_rad,
+		BOAT_PARAMETERS.foil_base_drag_coefficient,
+	)
+
+
+def force_on_foil(
+	apparent_flow_m_s,
+	foil_angle_rad,
+	fluid_density_kg_m3,
+	area_m2,
+):
+	return boat.force_on_foil(
+		apparent_flow_m_s,
+		foil_angle_rad,
+		fluid_density_kg_m3,
+		area_m2,
+		BOAT_PARAMETERS.foil_base_drag_coefficient,
+	)
+
+
+def actuator_control_torque(
+	angle_rad,
+	angular_velocity_rad_s,
+	target_angle_rad,
+	external_torque_n_m,
+	moment_of_inertia_kg_m2,
+	bearing_damping_n_m_s_rad,
+	max_torque_n_m,
+	dt_seconds,
+):
+	actuator = controller.ActuatorState(
+		angle_rad,
+		angular_velocity_rad_s,
+		external_torque_n_m,
+		moment_of_inertia_kg_m2,
+		bearing_damping_n_m_s_rad,
+		max_torque_n_m,
+		maximum_angle_rad=1,
+	)
+	return controller.actuator_control_torque(
+		actuator,
+		target_angle_rad,
+		dt_seconds,
+	)
 
 
 def run_simulation(simulation, seconds, keys="w"):
@@ -46,6 +94,12 @@ def run_simulation(simulation, seconds, keys="w"):
 		step(simulation, DEFAULT_ENVIRONMENT, intent)
 
 
+def target_angles(telemetry):
+	assert telemetry.decision is not None
+	assert telemetry.decision.target_angles_rad is not None
+	return telemetry.decision.target_angles_rad
+
+
 class StartupTest(unittest.TestCase):
 	def test_import_does_not_start_game(self):
 		environment = os.environ | {
@@ -55,7 +109,7 @@ class StartupTest(unittest.TestCase):
 		}
 
 		result = subprocess.run(
-			[sys.executable, "-c", "import sailing_game"],
+			[sys.executable, "-c", "import simple_sailing_game.game"],
 			capture_output=True,
 			env=environment,
 			text=True,
@@ -68,8 +122,8 @@ class StartupTest(unittest.TestCase):
 class InputAdapterTest(unittest.TestCase):
 	def test_interactive_game_starts_in_direct_gradient_mode(self):
 		self.assertEqual(
-			game.INITIAL_CONTROL_MODE,
-			game.DIRECT_GRADIENT_CONTROL,
+			game.CONTROLLER_SETTINGS.mode,
+			controller.DIRECT_GRADIENT_CONTROL,
 		)
 
 	def test_control_landscape_is_square(self):
@@ -82,12 +136,12 @@ class InputAdapterTest(unittest.TestCase):
 		rect = game.CONTROL_LANDSCAPE_RECT
 		gradient = game.control_gradient_vector_px(
 			rect,
-			pymunk.Vec2d(1 / game.MAX_SAIL_ANGLE_RAD, 1 / game.MAX_RUDDER_ANGLE_RAD),
+			pymunk.Vec2d(1 / MAX_SAIL_ANGLE_RAD, 1 / MAX_RUDDER_ANGLE_RAD),
 		)
 		motion = game.control_motion_vector_px(
 			rect,
-			game.MAX_SAIL_ANGLE_RAD,
-			game.MAX_RUDDER_ANGLE_RAD,
+			MAX_SAIL_ANGLE_RAD,
+			MAX_RUDDER_ANGLE_RAD,
 		)
 
 		self.assertEqual(
@@ -213,18 +267,18 @@ class SailingSimulationTest(unittest.TestCase):
 
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 		target_force_n = force_on_foil(
-			telemetry.apparent_wind_m_s,
-			simulation.boat.angle + telemetry.target_sail_angle_rad,
-			AIR_DENSITY_KG_M3,
+			telemetry.physics.observation.apparent_wind_m_s,
+			simulation.boat.angle + target_angles(telemetry)[0],
+			BOAT_PARAMETERS.air_density_kg_m3,
 			area_m2=1,
 		)
 		self.assertLess(target_force_n.dot(initial_forward), 0)
-		self.assertLessEqual(abs(telemetry.target_sail_angle_rad), MAX_SAIL_ANGLE_RAD)
-		self.assertAlmostEqual(telemetry.target_rudder_angle_rad, 0)
+		self.assertLessEqual(abs(target_angles(telemetry)[0]), MAX_SAIL_ANGLE_RAD)
+		self.assertAlmostEqual(target_angles(telemetry)[1], 0)
 		for _ in range(round(5 / DT_SECONDS) - 1):
 			telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 
-		self.assertLessEqual(abs(telemetry.target_sail_angle_rad), MAX_SAIL_ANGLE_RAD)
+		self.assertLessEqual(abs(target_angles(telemetry)[0]), MAX_SAIL_ANGLE_RAD)
 		self.assertLess(simulation.boat.position.dot(initial_forward), -0.1)
 
 	def test_draw_renders_intent_and_telemetry(self):
@@ -252,7 +306,7 @@ class SailingSimulationTest(unittest.TestCase):
 			simulation,
 			DEFAULT_ENVIRONMENT,
 			intent,
-			control_mode=game.DIRECT_GRADIENT_CONTROL,
+			control_mode=controller.DIRECT_GRADIENT_CONTROL,
 		)
 		pygame.font.init()
 		screen = pygame.Surface((1280, 720))
@@ -276,10 +330,10 @@ class SailingSimulationTest(unittest.TestCase):
 				simulation,
 				DEFAULT_ENVIRONMENT,
 				MotionIntent(),
-				control_mode=game.DIRECT_GRADIENT_CONTROL,
+				control_mode=controller.DIRECT_GRADIENT_CONTROL,
 			)
 			if frame >= round(3 / DT_SECONDS):
-				maximum_errors.append(telemetry.control_landscape.errors.max())
+				maximum_errors.append(telemetry.decision.landscape.errors.max())
 
 		self.assertLess(max(maximum_errors), 8)
 
@@ -290,8 +344,12 @@ class SailingSimulationTest(unittest.TestCase):
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 
 		self.assertIsInstance(telemetry, SimulationTelemetry)
-		self.assertTrue(all(map(math.isfinite, telemetry.sail_force_n)))
-		self.assertTrue(all(map(math.isfinite, telemetry.rudder_force_n)))
+		self.assertTrue(
+			all(map(math.isfinite, telemetry.physics.observation.sail_load.force_n))
+		)
+		self.assertTrue(
+			all(map(math.isfinite, telemetry.physics.observation.rudder_load.force_n))
+		)
 
 	def test_partial_intent_changes_actuator_targets(self):
 		boat_angle_rad = 1
@@ -339,7 +397,7 @@ class SailingSimulationTest(unittest.TestCase):
 		sharp_sail_force_n = force_on_foil(
 			apparent_wind,
 			boat_angle_rad + sharp_sail_angle_rad,
-			AIR_DENSITY_KG_M3,
+			BOAT_PARAMETERS.air_density_kg_m3,
 			area_m2=1,
 		)
 		boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
@@ -361,7 +419,7 @@ class SailingSimulationTest(unittest.TestCase):
 		diagonal_force_n = force_on_foil(
 			apparent_wind,
 			boat_angle_rad + diagonal_sail_angle_rad,
-			AIR_DENSITY_KG_M3,
+			BOAT_PARAMETERS.air_density_kg_m3,
 			area_m2=1,
 		).dot(boat_forward)
 		self.assertLess(diagonal_force_n, 0)
@@ -425,7 +483,7 @@ class SailingSimulationTest(unittest.TestCase):
 				simulation,
 				DEFAULT_ENVIRONMENT,
 				MotionIntent(1, -0.2),
-				control_mode=game.DIRECT_GRADIENT_CONTROL,
+				control_mode=controller.DIRECT_GRADIENT_CONTROL,
 			)
 			sail_crossed |= simulation.sail_angle_rad * initial_sail_angle_rad < 0
 			if simulation.boat.angle - initial_heading_rad <= -math.pi:
@@ -439,7 +497,7 @@ class SailingSimulationTest(unittest.TestCase):
 				simulation,
 				DEFAULT_ENVIRONMENT,
 				MotionIntent(1, 0),
-				control_mode=game.DIRECT_GRADIENT_CONTROL,
+				control_mode=controller.DIRECT_GRADIENT_CONTROL,
 			)
 			forward = pymunk.Vec2d(1, 0).rotated(simulation.boat.angle)
 			forward_speeds_m_s.append(simulation.boat.velocity.dot(forward))
@@ -450,7 +508,7 @@ class SailingSimulationTest(unittest.TestCase):
 		self.assertLess(simulation.sail_angle_rad * initial_sail_angle_rad, 0)
 		self.assertGreater(
 			simulation.sail_angle_rad
-			* telemetry.control_landscape.optimum_sail_angle_rad,
+			* telemetry.decision.landscape.optimum_sail_angle_rad,
 			0,
 		)
 
@@ -463,7 +521,7 @@ class SailingSimulationTest(unittest.TestCase):
 				simulation,
 				DEFAULT_ENVIRONMENT,
 				MotionIntent(1, -1),
-				control_mode=game.DIRECT_GRADIENT_CONTROL,
+				control_mode=controller.DIRECT_GRADIENT_CONTROL,
 			)
 			if frame >= round(30 / DT_SECONDS):
 				rudder_angles_rad.append(simulation.rudder_angle_rad)
@@ -472,7 +530,7 @@ class SailingSimulationTest(unittest.TestCase):
 			abs(after - before)
 			for before, after in zip(rudder_angles_rad, rudder_angles_rad[1:])
 		)
-		self.assertLessEqual(rudder_travel_rad, 2 * game.MAX_RUDDER_ANGLE_RAD)
+		self.assertLessEqual(rudder_travel_rad, 2 * MAX_RUDDER_ANGLE_RAD)
 
 	def test_low_speed_tack_does_not_repeatedly_sweep_the_rudder(self):
 		simulation = create_simulation()
@@ -486,7 +544,7 @@ class SailingSimulationTest(unittest.TestCase):
 				simulation,
 				DEFAULT_ENVIRONMENT,
 				MotionIntent(1, 1),
-				control_mode=game.DIRECT_GRADIENT_CONTROL,
+				control_mode=controller.DIRECT_GRADIENT_CONTROL,
 			)
 			rudder_angles_rad.append(simulation.rudder_angle_rad)
 
@@ -502,8 +560,56 @@ class SailingSimulationTest(unittest.TestCase):
 		self.assertGreater(simulation.boat.angle, math.pi)
 		self.assertLessEqual(
 			maximum_one_second_travel_rad,
-			2 * game.MAX_RUDDER_ANGLE_RAD,
+			2 * MAX_RUDDER_ANGLE_RAD,
 		)
+
+	def test_alternating_powered_turns_complete_tacks_and_retrim(self):
+		simulation = create_simulation()
+		simulation.boat.velocity = pymunk.Vec2d(0.75, 0).rotated(
+			simulation.boat.angle
+		)
+		apparent_wind = apparent_flow(
+			DEFAULT_ENVIRONMENT.true_wind_velocity_m_s,
+			simulation.boat.velocity,
+		)
+		apparent_water = apparent_flow(
+			DEFAULT_ENVIRONMENT.true_water_velocity_m_s,
+			simulation.boat.velocity,
+		)
+		simulation.sail_angle_rad, simulation.rudder_angle_rad = intended_actuator_angles(
+			simulation.boat.angle,
+			0,
+			MotionIntent(1, 0),
+			apparent_wind,
+			apparent_water,
+		)
+		initial_heading_rad = simulation.boat.angle
+		previous_sail_angle_rad = simulation.sail_angle_rad
+
+		for turn, target_heading_rad in (
+			(1, initial_heading_rad + math.pi / 2),
+			(-1, initial_heading_rad),
+		):
+			for _ in range(round(25 / DT_SECONDS)):
+				step(
+					simulation,
+					DEFAULT_ENVIRONMENT,
+					MotionIntent(1, turn),
+					control_mode=controller.DIRECT_GRADIENT_CONTROL,
+				)
+				heading_error_rad = simulation.boat.angle - target_heading_rad
+				if heading_error_rad * turn >= 0:
+					break
+			else:
+				self.fail("boat did not reach the opposite close-hauled heading")
+
+			forward = pymunk.Vec2d(1, 0).rotated(simulation.boat.angle)
+			self.assertGreater(simulation.boat.velocity.dot(forward), 0)
+			self.assertLess(
+				simulation.sail_angle_rad * previous_sail_angle_rad,
+				0,
+			)
+			previous_sail_angle_rad = simulation.sail_angle_rad
 
 	def test_forward_intent_countersteers_existing_rotation(self):
 		boat_angle_rad = 1
@@ -526,6 +632,8 @@ class SailingSimulationTest(unittest.TestCase):
 
 		self.assertNotEqual(rotating_rudder_angle_rad, stationary_rudder_angle_rad)
 
+
+class ModelAndActuatorTest(unittest.TestCase):
 	def test_plot_uses_the_simulation_coefficients(self):
 		self.assertEqual(plot.lift(0), lift_coefficient(0))
 		self.assertEqual(plot.drag(0), drag_coefficient(0))
@@ -543,12 +651,14 @@ class SailingSimulationTest(unittest.TestCase):
 		force = force_on_foil(
 			flow,
 			foil_angle_rad=math.pi,
-			fluid_density_kg_m3=AIR_DENSITY_KG_M3,
+			fluid_density_kg_m3=BOAT_PARAMETERS.air_density_kg_m3,
 			area_m2=area_m2,
 		)
 
-		dynamic_pressure = 0.5 * AIR_DENSITY_KG_M3 * flow.length**2
-		expected_drag = dynamic_pressure * area_m2 * FOIL_BASE_DRAG_COEFFICIENT
+		dynamic_pressure = 0.5 * BOAT_PARAMETERS.air_density_kg_m3 * flow.length**2
+		expected_drag = (
+			dynamic_pressure * area_m2 * BOAT_PARAMETERS.foil_base_drag_coefficient
+		)
 		self.assertAlmostEqual(force.x, expected_drag)
 		self.assertAlmostEqual(force.y, 0)
 
@@ -651,16 +761,18 @@ class SailingSimulationTest(unittest.TestCase):
 
 		self.assertEqual(torque, -75)
 
+
+class SailingDynamicsTest(unittest.TestCase):
 	def test_controlled_sail_does_not_snap_to_its_target(self):
 		simulation = create_simulation()
 		intent = MotionIntent(1, 0)
 
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 
-		self.assertNotEqual(simulation.sail_angle_rad, telemetry.target_sail_angle_rad)
+		self.assertNotEqual(simulation.sail_angle_rad, target_angles(telemetry)[0])
 		self.assertLess(
 			abs(simulation.sail_angle_rad),
-			abs(telemetry.target_sail_angle_rad),
+			abs(target_angles(telemetry)[0]),
 		)
 
 	def test_forward_intent_resists_wind_driven_rotation(self):
@@ -718,8 +830,8 @@ class SailingSimulationTest(unittest.TestCase):
 
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, MotionIntent())
 
-		self.assertIsNotNone(telemetry.target_sail_angle_rad)
-		self.assertIsNotNone(telemetry.target_rudder_angle_rad)
+		self.assertIsNotNone(telemetry.decision)
+		self.assertIsNotNone(telemetry.decision.target_angles_rad)
 
 	def test_strong_wind_makes_sail_control_less_accurate(self):
 		moderate = create_simulation()
@@ -734,9 +846,9 @@ class SailingSimulationTest(unittest.TestCase):
 			strong_telemetry = step(strong, strong_environment, strong_intent)
 
 		moderate_error = abs(
-			moderate.sail_angle_rad - moderate_telemetry.target_sail_angle_rad
+			moderate.sail_angle_rad - target_angles(moderate_telemetry)[0]
 		)
-		strong_error = abs(strong.sail_angle_rad - strong_telemetry.target_sail_angle_rad)
+		strong_error = abs(strong.sail_angle_rad - target_angles(strong_telemetry)[0])
 		self.assertGreater(strong_error, moderate_error)
 
 	def test_strong_current_makes_rudder_control_less_accurate(self):
@@ -751,8 +863,8 @@ class SailingSimulationTest(unittest.TestCase):
 			still_telemetry = step(still, still_environment, still_intent)
 			strong_telemetry = step(strong, strong_environment, strong_intent)
 
-		still_error = abs(still_telemetry.target_rudder_angle_rad - still.rudder_angle_rad)
-		strong_error = abs(strong_telemetry.target_rudder_angle_rad - strong.rudder_angle_rad)
+		still_error = abs(target_angles(still_telemetry)[1] - still.rudder_angle_rad)
+		strong_error = abs(target_angles(strong_telemetry)[1] - strong.rudder_angle_rad)
 		self.assertGreater(strong_error, still_error)
 
 	def test_reverse_intent_reduces_forward_speed_through_water(self):

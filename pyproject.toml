@@ -11,5 +11,10 @@ dependencies = [
     "pymunk>=6.6.0",
 ]
 
-[dependency-groups]
-dev = []
+[project.scripts]
+sailing-game = "simple_sailing_game.game:main"
+sailing-plot = "simple_sailing_game.plot:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"

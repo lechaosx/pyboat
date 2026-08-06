@@ -2,8 +2,18 @@ import math
 
 import matplotlib.pyplot
 
-from sailing_game import drag_coefficient as drag
-from sailing_game import lift_coefficient as lift
+from . import boat
+from .game import BOAT_PARAMETERS
+
+
+lift = boat.lift_coefficient
+
+
+def drag(angle_of_attack_rad: float) -> float:
+	return boat.drag_coefficient(
+		angle_of_attack_rad,
+		BOAT_PARAMETERS.foil_base_drag_coefficient,
+	)
 
 
 def main() -> None:

@@ -6,7 +6,8 @@ from functools import lru_cache
 import numpy as np
 import pymunk
 
-import sailing_game as game
+from simple_sailing_game import boat, controller, game
+from tests.support import controller_input_from_flows, intended_actuator_angles
 
 
 HEADINGS_RAD = tuple(math.radians(degrees) for degrees in (0, 45, 90, 135, 180))
@@ -46,8 +47,61 @@ def flow_state(
 		boat_heading_rad
 	)
 	return (
-		game.apparent_flow(game.DEFAULT_ENVIRONMENT.true_wind_velocity_m_s, boat_velocity_m_s),
-		game.apparent_flow(game.DEFAULT_ENVIRONMENT.true_water_velocity_m_s, boat_velocity_m_s),
+		boat.apparent_flow(game.ENVIRONMENT.true_wind_velocity_m_s, boat_velocity_m_s),
+		boat.apparent_flow(game.ENVIRONMENT.true_water_velocity_m_s, boat_velocity_m_s),
+	)
+
+
+def control_decision(
+	boat_angle_rad,
+	boat_angular_velocity_rad_s,
+	intent,
+	apparent_wind_m_s,
+	apparent_water_m_s,
+	sail_angle_rad,
+	rudder_angle_rad,
+	mode,
+	use_global_slope=True,
+):
+	control_input = controller_input_from_flows(
+		boat_angle_rad,
+		boat_angular_velocity_rad_s,
+		apparent_wind_m_s,
+		apparent_water_m_s,
+		sail_angle_rad,
+		rudder_angle_rad,
+	)
+	settings = controller.ControllerSettings(
+		mode,
+		use_global_slope,
+		game.CONTROL_ANGLE_RESOLUTION_DEG,
+	)
+	return controller.control_decision(control_input, intent, settings)
+
+
+def direct_gradient_control_torque(
+	objective_gradient,
+	objective_curvature,
+	angular_velocity_rad_s,
+	external_torque_n_m,
+	moment_of_inertia_kg_m2,
+	bearing_damping_n_m_s_rad,
+	max_torque_n_m,
+	maximum_angle_rad,
+):
+	actuator = controller.ActuatorState(
+		0,
+		angular_velocity_rad_s,
+		external_torque_n_m,
+		moment_of_inertia_kg_m2,
+		bearing_damping_n_m_s_rad,
+		max_torque_n_m,
+		maximum_angle_rad,
+	)
+	return controller.direct_gradient_control_torque(
+		actuator,
+		objective_gradient,
+		objective_curvature,
 	)
 
 
@@ -57,41 +111,26 @@ def control_candidates(
 	through_water_speed_m_s: float,
 	angular_velocity_rad_s: float,
 ) -> tuple[
-	tuple[game.ControlEffect, ...],
-	tuple[game.ControlEffect, ...],
+	tuple[controller.ControlEffect, ...],
+	tuple[controller.ControlEffect, ...],
 ]:
 	apparent_wind_m_s, apparent_water_m_s = flow_state(
 		boat_heading_rad,
 		through_water_speed_m_s,
 	)
-	return (
-		game.foil_control_candidates(
-			boat_heading_rad,
-			apparent_wind_m_s,
-			game.MAST_POSITION_M,
-			game.SAIL_CENTER_OF_EFFORT_FROM_MAST_M,
-			game.MAX_SAIL_ANGLE_RAD,
-			game.AIR_DENSITY_KG_M3,
-			game.SAIL_AREA_M2,
-			angular_velocity_rad_s,
-		),
-		game.foil_control_candidates(
-			boat_heading_rad,
-			apparent_water_m_s,
-			game.RUDDER_POSITION_M,
-			game.RUDDER_DRAW_LENGTH_M / 2,
-			game.MAX_RUDDER_ANGLE_RAD,
-			game.WATER_DENSITY_KG_M3,
-			game.RUDDER_AREA_M2,
-			angular_velocity_rad_s,
-		),
+	control_input = controller_input_from_flows(
+		boat_heading_rad,
+		angular_velocity_rad_s,
+		apparent_wind_m_s,
+		apparent_water_m_s,
 	)
+	return control_input.sail_candidates, control_input.rudder_candidates
 
 
 def combined_effects(
-	sails: tuple[game.ControlEffect, ...],
-	rudders: tuple[game.ControlEffect, ...],
-) -> tuple[tuple[game.ControlEffect, game.ControlEffect, float, float], ...]:
+	sails: tuple[controller.ControlEffect, ...],
+	rudders: tuple[controller.ControlEffect, ...],
+) -> tuple[tuple[controller.ControlEffect, controller.ControlEffect, float, float], ...]:
 	return tuple(
 		(
 			sail,
@@ -112,7 +151,7 @@ def normalized_effect(value: float, negative_limit: float, positive_limit: float
 
 
 def effect_limits(
-	effects: tuple[tuple[game.ControlEffect, game.ControlEffect, float, float], ...],
+	effects: tuple[tuple[controller.ControlEffect, controller.ControlEffect, float, float], ...],
 ) -> tuple[float, float, float, float]:
 	drives = tuple(effect[2] for effect in effects)
 	moments = tuple(effect[3] for effect in effects)
@@ -137,7 +176,8 @@ def desired_turn(
 	else:
 		yaw_stiffness_n_m_rad = positive_moment_n_m
 	damping_n_m_s_rad = 2 * math.sqrt(
-		yaw_stiffness_n_m_rad * game.BOAT_MOMENT_OF_INERTIA_KG_M2
+		yaw_stiffness_n_m_rad
+		* boat.boat_moment_of_inertia_kg_m2(game.BOAT_PARAMETERS)
 	)
 	required_moment_n_m = -angular_velocity_rad_s * damping_n_m_s_rad
 	return max(
@@ -156,7 +196,7 @@ def desired_turn(
 def distance_from_intent(
 	drive_force_n: float,
 	yaw_moment_n_m: float,
-	intent: game.MotionIntent,
+	intent: controller.MotionIntent,
 	angular_velocity_rad_s: float,
 	limits: tuple[float, float, float, float],
 ) -> float:
@@ -180,11 +220,11 @@ def distance_from_intent(
 def target_effect(
 	boat_heading_rad: float,
 	angular_velocity_rad_s: float,
-	intent: game.MotionIntent,
+	intent: controller.MotionIntent,
 	apparent_wind_m_s: pymunk.Vec2d,
 	apparent_water_m_s: pymunk.Vec2d,
-) -> tuple[game.ControlEffect, game.ControlEffect]:
-	target_sail_angle_rad, target_rudder_angle_rad = game.intended_actuator_angles(
+) -> tuple[controller.ControlEffect, controller.ControlEffect]:
+	target_sail_angle_rad, target_rudder_angle_rad = intended_actuator_angles(
 		boat_heading_rad,
 		angular_velocity_rad_s,
 		intent,
@@ -195,31 +235,31 @@ def target_effect(
 		game.foil_control_effect(
 			boat_heading_rad,
 			apparent_wind_m_s,
-			game.MAST_POSITION_M,
-			game.SAIL_CENTER_OF_EFFORT_FROM_MAST_M,
+			game.BOAT_PARAMETERS.mast_position_m,
+			game.BOAT_PARAMETERS.sail_center_of_effort_from_mast_m,
 			target_sail_angle_rad,
-			game.AIR_DENSITY_KG_M3,
-			game.SAIL_AREA_M2,
+			game.BOAT_PARAMETERS.air_density_kg_m3,
+			game.BOAT_PARAMETERS.sail_area_m2,
 			angular_velocity_rad_s,
 		),
 		game.foil_control_effect(
 			boat_heading_rad,
 			apparent_water_m_s,
-			game.RUDDER_POSITION_M,
-			game.RUDDER_DRAW_LENGTH_M / 2,
+			game.BOAT_PARAMETERS.rudder_position_m,
+			game.BOAT_PARAMETERS.rudder_draw_length_m / 2,
 			target_rudder_angle_rad,
-			game.WATER_DENSITY_KG_M3,
-			game.RUDDER_AREA_M2,
+			game.BOAT_PARAMETERS.water_density_kg_m3,
+			game.BOAT_PARAMETERS.rudder_area_m2,
 			angular_velocity_rad_s,
 		),
 	)
 
 
 def non_neutral_failure(
-	intent: game.MotionIntent,
+	intent: controller.MotionIntent,
 	angular_velocity_rad_s: float,
-	selected: tuple[game.ControlEffect, game.ControlEffect],
-	effects: tuple[tuple[game.ControlEffect, game.ControlEffect, float, float], ...],
+	selected: tuple[controller.ControlEffect, controller.ControlEffect],
+	effects: tuple[tuple[controller.ControlEffect, controller.ControlEffect, float, float], ...],
 ) -> str | None:
 	limits = effect_limits(effects)
 	selected_distance = distance_from_intent(
@@ -245,9 +285,9 @@ def non_neutral_failure(
 
 
 def neutral_failure(
-	selected: tuple[game.ControlEffect, game.ControlEffect],
-	sails: tuple[game.ControlEffect, ...],
-	rudders: tuple[game.ControlEffect, ...],
+	selected: tuple[controller.ControlEffect, controller.ControlEffect],
+	sails: tuple[controller.ControlEffect, ...],
+	rudders: tuple[controller.ControlEffect, ...],
 	angular_velocity_rad_s: float,
 ) -> str | None:
 	effects = combined_effects(sails, rudders)
@@ -262,7 +302,7 @@ def neutral_failure(
 	)
 	maximum_sail_force_n = max(sail.force_magnitude_n for sail in sails)
 
-	def error(sail: game.ControlEffect, moment_n_m: float) -> float:
+	def error(sail: controller.ControlEffect, moment_n_m: float) -> float:
 		load = sail.force_magnitude_n / maximum_sail_force_n if maximum_sail_force_n else 0
 		yaw = normalized_effect(
 			moment_n_m,
@@ -285,8 +325,8 @@ class ControlModelSpecificationTest(unittest.TestCase):
 	def test_optimized_mode_preserves_the_existing_target(self):
 		heading_rad = 0
 		wind, water = flow_state(heading_rad, -1)
-		intent = game.MotionIntent(0.5, 0)
-		existing_target = game.intended_actuator_angles(
+		intent = controller.MotionIntent(0.5, 0)
+		existing_target = intended_actuator_angles(
 			heading_rad,
 			-0.2,
 			intent,
@@ -294,7 +334,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			water,
 		)
 
-		decision = game.control_decision(
+		decision = control_decision(
 			heading_rad,
 			-0.2,
 			intent,
@@ -302,15 +342,15 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			water,
 			sail_angle_rad=0,
 			rudder_angle_rad=0,
-			mode=game.OPTIMIZED_TARGET_CONTROL,
+			mode=controller.OPTIMIZED_TARGET_CONTROL,
 		)
 
 		self.assertEqual(
-			(decision.target_sail_angle_rad, decision.target_rudder_angle_rad),
+			decision.target_angles_rad,
 			existing_target,
 		)
 		self.assertEqual(
-			(decision.target_sail_angle_rad, decision.target_rudder_angle_rad),
+			decision.target_angles_rad,
 			(
 				decision.landscape.optimum_sail_angle_rad,
 				decision.landscape.optimum_rudder_angle_rad,
@@ -320,19 +360,18 @@ class ControlModelSpecificationTest(unittest.TestCase):
 	def test_direct_gradient_mode_has_a_landscape_but_no_target(self):
 		heading_rad = 0
 		wind, water = flow_state(heading_rad, -1)
-		decision = game.control_decision(
+		decision = control_decision(
 			heading_rad,
 			-0.2,
-			game.MotionIntent(0.5, 0),
+			controller.MotionIntent(0.5, 0),
 			wind,
 			water,
 			sail_angle_rad=0,
 			rudder_angle_rad=0,
-			mode=game.DIRECT_GRADIENT_CONTROL,
+			mode=controller.DIRECT_GRADIENT_CONTROL,
 		)
 
-		self.assertIsNone(decision.target_sail_angle_rad)
-		self.assertIsNone(decision.target_rudder_angle_rad)
+		self.assertIsNone(decision.target_angles_rad)
 		self.assertEqual(decision.landscape.errors.shape, (181, 61))
 		self.assertTrue(all(map(math.isfinite, decision.landscape.gradient)))
 		self.assertNotEqual(decision.landscape.gradient, (0, 0))
@@ -345,21 +384,20 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		arguments = (
 			heading_rad,
 			-0.2,
-			game.MotionIntent(0.5, 0.5),
+			controller.MotionIntent(0.5, 0.5),
 			wind,
 			water,
-			game.MAX_SAIL_ANGLE_RAD,
-			game.MAX_RUDDER_ANGLE_RAD,
+			game.BOAT_PARAMETERS.max_sail_angle_rad,
+			game.BOAT_PARAMETERS.max_rudder_angle_rad,
 		)
-		base = game.control_decision(*arguments, game.OPTIMIZED_TARGET_CONTROL)
-		unguided = game.control_decision(
+		base = control_decision(*arguments, controller.OPTIMIZED_TARGET_CONTROL)
+		unguided = control_decision(
 			*arguments,
-			game.DIRECT_GRADIENT_CONTROL,
+			controller.DIRECT_GRADIENT_CONTROL,
 			use_global_slope=False,
 		)
 
-		self.assertIsNone(unguided.target_sail_angle_rad)
-		self.assertIsNone(unguided.target_rudder_angle_rad)
+		self.assertIsNone(unguided.target_angles_rad)
 		np.testing.assert_allclose(unguided.landscape.errors, base.landscape.errors)
 		self.assertEqual(unguided.landscape.gradient, base.landscape.gradient)
 
@@ -369,14 +407,14 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		arguments = (
 			heading_rad,
 			-0.2,
-			game.MotionIntent(0.5, 0.5),
+			controller.MotionIntent(0.5, 0.5),
 			wind,
 			water,
-			game.MAX_SAIL_ANGLE_RAD,
-			game.MAX_RUDDER_ANGLE_RAD,
+			game.BOAT_PARAMETERS.max_sail_angle_rad,
+			game.BOAT_PARAMETERS.max_rudder_angle_rad,
 		)
-		base = game.control_decision(*arguments, game.OPTIMIZED_TARGET_CONTROL)
-		direct = game.control_decision(*arguments, game.DIRECT_GRADIENT_CONTROL)
+		base = control_decision(*arguments, controller.OPTIMIZED_TARGET_CONTROL)
+		direct = control_decision(*arguments, controller.DIRECT_GRADIENT_CONTROL)
 
 		self.assertEqual(
 			(
@@ -403,19 +441,18 @@ class ControlModelSpecificationTest(unittest.TestCase):
 	def test_neutral_is_one_landscape_in_direct_gradient_mode(self):
 		heading_rad = math.pi / 2
 		wind, water = flow_state(heading_rad, 2)
-		decision = game.control_decision(
+		decision = control_decision(
 			heading_rad,
 			0.2,
-			game.MotionIntent(),
+			controller.MotionIntent(),
 			wind,
 			water,
 			sail_angle_rad=0,
 			rudder_angle_rad=0,
-			mode=game.DIRECT_GRADIENT_CONTROL,
+			mode=controller.DIRECT_GRADIENT_CONTROL,
 		)
 
-		self.assertIsNone(decision.target_sail_angle_rad)
-		self.assertIsNone(decision.target_rudder_angle_rad)
+		self.assertIsNone(decision.target_angles_rad)
 		self.assertEqual(decision.landscape.errors.shape, (181, 61))
 		self.assertTrue(all(map(math.isfinite, decision.landscape.gradient)))
 		self.assertTrue(math.isfinite(decision.landscape.optimum_sail_angle_rad))
@@ -424,7 +461,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 	def test_direct_gradient_uses_full_torque_downhill(self):
 		for gradient, expected_torque in ((2, -75), (-2, 75)):
 			with self.subTest(gradient=gradient):
-				torque = game.direct_gradient_control_torque(
+				torque = direct_gradient_control_torque(
 					objective_gradient=gradient,
 					objective_curvature=1,
 					angular_velocity_rad_s=0,
@@ -437,7 +474,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 				self.assertEqual(torque, expected_torque)
 
 	def test_direct_gradient_scales_torque_before_full_effort_would_be_useful(self):
-		torque = game.direct_gradient_control_torque(
+		torque = direct_gradient_control_torque(
 			objective_gradient=0.1,
 			objective_curvature=0,
 			angular_velocity_rad_s=0,
@@ -451,7 +488,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		self.assertAlmostEqual(torque, -7.5)
 
 	def test_direct_gradient_balances_environment_and_damps_at_a_stationary_point(self):
-		torque = game.direct_gradient_control_torque(
+		torque = direct_gradient_control_torque(
 			objective_gradient=0,
 			objective_curvature=1,
 			angular_velocity_rad_s=1,
@@ -468,7 +505,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		heading_rad = 0
 		speed_m_s = -1
 		angular_velocity_rad_s = -0.2
-		intent = game.MotionIntent(0.5, 0)
+		intent = controller.MotionIntent(0.5, 0)
 		wind, water = flow_state(heading_rad, speed_m_s)
 		sails, rudders = control_candidates(
 			heading_rad,
@@ -572,7 +609,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 				stick.y,
 			)
 			wind, water = flow_state(heading_rad, speed_m_s)
-			targets = game.intended_actuator_angles(
+			targets = intended_actuator_angles(
 				heading_rad,
 				angular_velocity_rad_s,
 				intent,
@@ -589,7 +626,7 @@ class ControlModelSpecificationTest(unittest.TestCase):
 				mirrored_stick.y,
 			)
 			mirrored_wind, mirrored_water = flow_state(mirrored_heading_rad, speed_m_s)
-			mirrored_targets = game.intended_actuator_angles(
+			mirrored_targets = intended_actuator_angles(
 				mirrored_heading_rad,
 				-angular_velocity_rad_s,
 				mirrored_intent,
