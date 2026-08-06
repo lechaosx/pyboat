@@ -2,7 +2,8 @@ from dataclasses import replace
 
 import pymunk
 
-from simple_sailing_game import boat, controller, game
+from simple_sailing_game import boat, game
+from simple_sailing_game.controllers import assisted as controller
 
 
 def controller_input_from_flows(

@@ -4,6 +4,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .actuator import (
+	ActuatorState,
+	ActuatorTorques,
+)
+
 
 OPTIMIZED_TARGET_CONTROL = "optimized target"
 DIRECT_GRADIENT_CONTROL = "direct gradient"
@@ -21,17 +26,6 @@ class ControlEffect:
 	yaw_moment_n_m: float
 	drive_force_n: float
 	force_magnitude_n: float
-
-
-@dataclass(frozen=True)
-class ActuatorState:
-	angle_rad: float
-	angular_velocity_rad_s: float
-	external_torque_n_m: float
-	moment_of_inertia_kg_m2: float
-	bearing_damping_n_m_s_rad: float
-	maximum_torque_n_m: float
-	maximum_angle_rad: float
 
 
 @dataclass(frozen=True)
@@ -67,12 +61,6 @@ class ControlLandscape:
 class ControlDecision:
 	target_angles_rad: tuple[float, float] | None
 	landscape: ControlLandscape
-
-
-@dataclass(frozen=True)
-class ActuatorTorques:
-	sail_n_m: float = 0
-	rudder_n_m: float = 0
 
 
 @dataclass(frozen=True)

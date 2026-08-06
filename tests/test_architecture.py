@@ -18,10 +18,32 @@ def isolated_python(code):
 
 
 class ModuleBoundaryTest(unittest.TestCase):
+	def test_assisted_and_manual_controllers_have_separate_modules(self):
+		from simple_sailing_game.controllers import assisted, manual
+
+		self.assertEqual(
+			assisted.control.__module__,
+			"simple_sailing_game.controllers.assisted",
+		)
+		self.assertEqual(
+			manual.control.__module__,
+			"simple_sailing_game.controllers.manual",
+		)
+
+	def test_manual_controller_does_not_load_assisted_optimizer(self):
+		result = isolated_python(
+			"import sys, simple_sailing_game.controllers.manual; "
+			"assert 'simple_sailing_game.controllers.assisted' not in sys.modules; "
+			"assert 'numpy' not in sys.modules"
+		)
+
+		self.assertEqual(result.returncode, 0, result.stderr)
+
 	def test_internal_modules_do_not_import_pygame(self):
 		result = isolated_python(
 			"import sys, simple_sailing_game.boat, "
-			"simple_sailing_game.controller; "
+			"simple_sailing_game.controllers.assisted, "
+			"simple_sailing_game.controllers.manual; "
 			"assert 'pygame' not in sys.modules"
 		)
 
@@ -29,7 +51,8 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 	def test_controller_does_not_depend_on_boat_or_pymunk(self):
 		result = isolated_python(
-			"import sys, simple_sailing_game.controller; "
+			"import sys, simple_sailing_game.controllers.assisted, "
+			"simple_sailing_game.controllers.manual; "
 			"assert 'simple_sailing_game.boat' not in sys.modules; "
 			"assert 'pymunk' not in sys.modules"
 		)
@@ -39,7 +62,7 @@ class ModuleBoundaryTest(unittest.TestCase):
 	def test_boat_does_not_depend_on_controller(self):
 		result = isolated_python(
 			"import sys, simple_sailing_game.boat; "
-			"assert 'simple_sailing_game.controller' not in sys.modules"
+			"assert 'simple_sailing_game.controllers' not in sys.modules"
 		)
 
 		self.assertEqual(result.returncode, 0, result.stderr)
@@ -67,7 +90,8 @@ class ComponentWiringTest(unittest.TestCase):
 		self.assertTrue(math.isfinite(state.boat.angle))
 
 	def test_game_accepts_a_controller_function_or_none(self):
-		from simple_sailing_game import controller, game
+		from simple_sailing_game import game
+		from simple_sailing_game.controllers import assisted as controller
 
 		calls = []
 
@@ -93,7 +117,8 @@ class ComponentWiringTest(unittest.TestCase):
 		self.assertNotEqual(dead.sail_angle_rad, controlled.sail_angle_rad)
 
 	def test_controller_does_not_mutate_boat_observation(self):
-		from simple_sailing_game import boat, controller, game
+		from simple_sailing_game import boat, game
+		from simple_sailing_game.controllers import assisted as controller
 
 		state = game.create_simulation()
 		observation = boat.observe(

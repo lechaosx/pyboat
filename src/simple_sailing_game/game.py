@@ -6,7 +6,8 @@ import numpy as np
 import pygame
 import pymunk
 
-from . import boat, controller
+from . import boat
+from .controllers import assisted as controller, manual
 
 
 WIDTH, HEIGHT = 1280, 720
@@ -24,6 +25,8 @@ CONTROL_ANGLE_RESOLUTION_DEG = 1
 ANALOG_STICK_DEADZONE = 0.15
 SAILOR_MAX_SHEET_FORCE_N = 250
 SAILOR_MAX_TILLER_FORCE_N = 60
+ASSISTED_CONTROL = "assisted"
+MANUAL_CONTROL = "manual"
 
 BOAT_PARAMETERS = boat.BoatParameters(
 	air_density_kg_m3=1.225,
@@ -69,6 +72,7 @@ class SimulationTelemetry:
 	physics: boat.PhysicsTelemetry
 	decision: controller.ControlDecision | None
 	settings: controller.ControllerSettings | None
+	controller_active: bool
 
 
 ControllerComponent = Callable[
@@ -86,6 +90,39 @@ def keyboard_motion_intent(
 	longitudinal = int(forward) - int(backward)
 	turn = int(left) - int(right)
 	return controller.MotionIntent(longitudinal, -turn)
+
+
+def keyboard_manual_input(
+	rudder_left: bool,
+	rudder_right: bool,
+	sail_left: bool,
+	sail_right: bool,
+) -> manual.ManualInput:
+	return manual.ManualInput(
+		sail=int(sail_right) - int(sail_left),
+		rudder=int(rudder_right) - int(rudder_left),
+	)
+
+
+def analog_manual_input(
+	rudder_stick_x: float,
+	sail_stick_x: float,
+) -> manual.ManualInput:
+	def axis(value: float) -> float:
+		if abs(value) <= ANALOG_STICK_DEADZONE:
+			return 0
+		return max(-1, min(1, value))
+
+	return manual.ManualInput(
+		sail=axis(sail_stick_x),
+		rudder=axis(rudder_stick_x),
+	)
+
+
+def toggled_control_mode(mode: str) -> str:
+	if mode == ASSISTED_CONTROL:
+		return MANUAL_CONTROL
+	return ASSISTED_CONTROL
 
 
 def analog_motion_intent(
@@ -244,7 +281,7 @@ def create_simulation() -> boat.SailingState:
 	return boat.create_simulation(BOAT_PARAMETERS, INITIAL_BOAT_ANGLE_RAD)
 
 
-def configured_controller(
+def configured_assisted_controller(
 	settings: controller.ControllerSettings,
 ) -> ControllerComponent:
 	def run_controller(
@@ -253,6 +290,25 @@ def configured_controller(
 		dt_seconds: float,
 	) -> controller.ControlOutput:
 		return controller.control(control_input, intent, dt_seconds, settings)
+
+	return run_controller
+
+
+def configured_manual_controller(
+	manual_input: manual.ManualInput,
+) -> ControllerComponent:
+	def run_controller(
+		control_input: controller.ControlInput,
+		_intent: controller.MotionIntent,
+		dt_seconds: float,
+	) -> controller.ControlOutput:
+		torques = manual.control(
+			control_input.sail,
+			control_input.rudder,
+			manual_input,
+			dt_seconds,
+		)
+		return controller.ControlOutput(torques, None)
 
 	return run_controller
 
@@ -286,7 +342,12 @@ def advance_game(
 		dt_seconds,
 	)
 	decision = control_output.decision if control_output is not None else None
-	return SimulationTelemetry(physics, decision, None)
+	return SimulationTelemetry(
+		physics,
+		decision,
+		None,
+		controller_component is not None,
+	)
 
 
 def step(
@@ -305,7 +366,7 @@ def step(
 	telemetry = advance_game(
 		state,
 		intent,
-		configured_controller(settings),
+		configured_assisted_controller(settings),
 		environment,
 		dt_seconds,
 	)
@@ -604,7 +665,7 @@ def draw(
 		draw_control_quality_landscape(screen, font, state, decision.landscape)
 
 	if decision is None:
-		control_status = "uncontrolled"
+		control_status = "manual control" if telemetry.controller_active else "uncontrolled"
 	else:
 		landscape = decision.landscape
 		helper_status = ""
@@ -634,13 +695,14 @@ def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((WIDTH, HEIGHT))
 	pygame.display.set_caption(
-		"Sailboat — WASD motion; left stick moves; G changes controller; "
-		"H toggles helper; C toggles sailor"
+		"Sailboat — M toggles assisted/manual; manual A/D rudder, Q/E sail; "
+		"left/right sticks rudder/sail; C toggles sailor; G controller; H helper"
 	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
 	settings = CONTROLLER_SETTINGS
+	input_mode = ASSISTED_CONTROL
 	controller_enabled = True
 	joystick = None
 	if pygame.joystick.get_count():
@@ -664,6 +726,8 @@ def main() -> None:
 				)
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_c:
 				controller_enabled = not controller_enabled
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+				input_mode = toggled_control_mode(input_mode)
 			elif event.type == pygame.JOYDEVICEADDED and joystick is None:
 				joystick = pygame.joystick.Joystick(event.device_index)
 				joystick.init()
@@ -675,27 +739,52 @@ def main() -> None:
 				joystick = None
 
 		keys = pygame.key.get_pressed()
-		keyboard_intent = keyboard_motion_intent(
-			forward=keys[pygame.K_w],
-			backward=keys[pygame.K_s],
-			left=keys[pygame.K_a],
-			right=keys[pygame.K_d],
-		)
-		joystick_intent = controller.MotionIntent()
-		if joystick is not None:
-			joystick_intent = analog_motion_intent(
-				state.boat.angle,
-				joystick.get_axis(0),
-				joystick.get_axis(1),
+		intent = controller.MotionIntent()
+		if input_mode == ASSISTED_CONTROL:
+			keyboard_intent = keyboard_motion_intent(
+				forward=keys[pygame.K_w],
+				backward=keys[pygame.K_s],
+				left=keys[pygame.K_a],
+				right=keys[pygame.K_d],
 			)
-		intent = (
-			joystick_intent
-			if joystick_intent != controller.MotionIntent()
-			else keyboard_intent
-		)
-		component = configured_controller(settings) if controller_enabled else None
+			joystick_intent = controller.MotionIntent()
+			if joystick is not None:
+				joystick_intent = analog_motion_intent(
+					state.boat.angle,
+					joystick.get_axis(0),
+					joystick.get_axis(1),
+				)
+			intent = (
+				joystick_intent
+				if joystick_intent != controller.MotionIntent()
+				else keyboard_intent
+			)
+			component = configured_assisted_controller(settings)
+		else:
+			keyboard_input = keyboard_manual_input(
+				rudder_left=keys[pygame.K_a],
+				rudder_right=keys[pygame.K_d],
+				sail_left=keys[pygame.K_q],
+				sail_right=keys[pygame.K_e],
+			)
+			joystick_input = manual.ManualInput()
+			if joystick is not None:
+				right_stick_x = (
+					joystick.get_axis(2) if joystick.get_numaxes() > 2 else 0
+				)
+				joystick_input = analog_manual_input(
+					joystick.get_axis(0),
+					right_stick_x,
+				)
+			manual_input = manual.ManualInput(
+				sail=joystick_input.sail or keyboard_input.sail,
+				rudder=joystick_input.rudder or keyboard_input.rudder,
+			)
+			component = configured_manual_controller(manual_input)
+		if not controller_enabled:
+			component = None
 		telemetry = advance_game(state, intent, component)
-		if controller_enabled:
+		if controller_enabled and input_mode == ASSISTED_CONTROL:
 			telemetry = replace(
 				telemetry,
 				settings=settings,

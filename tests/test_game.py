@@ -6,7 +6,8 @@ import unittest
 
 import pymunk
 import pygame
-from simple_sailing_game import boat, controller, plot
+from simple_sailing_game import boat, plot
+from simple_sailing_game.controllers import assisted as controller, manual
 from simple_sailing_game import game
 
 from simple_sailing_game.game import (
@@ -120,6 +121,42 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
+	def test_manual_keys_control_rudder_and_sail_axes(self):
+		self.assertEqual(
+			game.keyboard_manual_input(
+				rudder_left=True,
+				rudder_right=False,
+				sail_left=False,
+				sail_right=True,
+			),
+			manual.ManualInput(sail=1, rudder=-1),
+		)
+
+	def test_manual_mode_toggle_round_trips(self):
+		manual = game.toggled_control_mode(game.ASSISTED_CONTROL)
+
+		self.assertEqual(manual, game.MANUAL_CONTROL)
+		self.assertEqual(
+			game.toggled_control_mode(manual),
+			game.ASSISTED_CONTROL,
+		)
+
+	def test_manual_sticks_map_left_to_rudder_and_right_to_sail(self):
+		self.assertEqual(
+			game.analog_manual_input(
+				rudder_stick_x=-0.5,
+				sail_stick_x=0.25,
+			),
+			manual.ManualInput(sail=0.25, rudder=-0.5),
+		)
+		self.assertEqual(
+			game.analog_manual_input(
+				rudder_stick_x=game.ANALOG_STICK_DEADZONE / 2,
+				sail_stick_x=0,
+			),
+			manual.ManualInput(),
+		)
+
 	def test_interactive_game_starts_in_direct_gradient_mode(self):
 		self.assertEqual(
 			game.CONTROLLER_SETTINGS.mode,
