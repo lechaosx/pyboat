@@ -424,7 +424,7 @@ class SailingSimulationTest(unittest.TestCase):
 			step(
 				simulation,
 				DEFAULT_ENVIRONMENT,
-				MotionIntent(1, -1),
+				MotionIntent(1, -0.2),
 				control_mode=game.DIRECT_GRADIENT_CONTROL,
 			)
 			sail_crossed |= simulation.sail_angle_rad * initial_sail_angle_rad < 0
@@ -452,6 +452,57 @@ class SailingSimulationTest(unittest.TestCase):
 			simulation.sail_angle_rad
 			* telemetry.control_landscape.optimum_sail_angle_rad,
 			0,
+		)
+
+	def test_continuous_turn_does_not_flicker_when_it_reaches_irons(self):
+		simulation = create_simulation()
+		rudder_angles_rad = []
+
+		for frame in range(round(40 / DT_SECONDS)):
+			step(
+				simulation,
+				DEFAULT_ENVIRONMENT,
+				MotionIntent(1, -1),
+				control_mode=game.DIRECT_GRADIENT_CONTROL,
+			)
+			if frame >= round(30 / DT_SECONDS):
+				rudder_angles_rad.append(simulation.rudder_angle_rad)
+
+		rudder_travel_rad = sum(
+			abs(after - before)
+			for before, after in zip(rudder_angles_rad, rudder_angles_rad[1:])
+		)
+		self.assertLessEqual(rudder_travel_rad, 2 * game.MAX_RUDDER_ANGLE_RAD)
+
+	def test_low_speed_tack_does_not_repeatedly_sweep_the_rudder(self):
+		simulation = create_simulation()
+		simulation.boat.velocity = pymunk.Vec2d(0.3, 0).rotated(
+			simulation.boat.angle
+		)
+		rudder_angles_rad = []
+
+		for _ in range(round(15 / DT_SECONDS)):
+			step(
+				simulation,
+				DEFAULT_ENVIRONMENT,
+				MotionIntent(1, 1),
+				control_mode=game.DIRECT_GRADIENT_CONTROL,
+			)
+			rudder_angles_rad.append(simulation.rudder_angle_rad)
+
+		rudder_movements_rad = [
+			abs(after - before)
+			for before, after in zip(rudder_angles_rad, rudder_angles_rad[1:])
+		]
+		one_second = round(1 / DT_SECONDS)
+		maximum_one_second_travel_rad = max(
+			sum(rudder_movements_rad[start : start + one_second])
+			for start in range(len(rudder_movements_rad) - one_second + 1)
+		)
+		self.assertGreater(simulation.boat.angle, math.pi)
+		self.assertLessEqual(
+			maximum_one_second_travel_rad,
+			2 * game.MAX_RUDDER_ANGLE_RAD,
 		)
 
 	def test_forward_intent_countersteers_existing_rotation(self):

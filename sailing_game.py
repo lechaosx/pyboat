@@ -131,6 +131,7 @@ class SimulationTelemetry:
 	target_rudder_angle_rad: float | None
 	control_landscape: ControlLandscape
 	control_mode: str
+	global_slope_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -346,18 +347,23 @@ def foil_control_effect(
 	angle_rad: float,
 	fluid_density_kg_m3: float,
 	area_m2: float,
+	boat_angular_velocity_rad_s: float = 0,
 ) -> ControlEffect:
-	force_n = force_on_foil(
-		apparent_flow_m_s,
-		boat_angle_rad + angle_rad,
-		fluid_density_kg_m3,
-		area_m2,
-	)
 	center_local_m = (
 		pymunk.Vec2d(*hinge_position_local_m)
 		+ pymunk.Vec2d(-center_distance_m, 0).rotated(angle_rad)
 	)
 	center_world_m = center_local_m.rotated(boat_angle_rad)
+	center_apparent_flow_m_s = (
+		apparent_flow_m_s
+		- center_world_m.perpendicular() * boat_angular_velocity_rad_s
+	)
+	force_n = force_on_foil(
+		center_apparent_flow_m_s,
+		boat_angle_rad + angle_rad,
+		fluid_density_kg_m3,
+		area_m2,
+	)
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 	return ControlEffect(
 		angle_rad,
@@ -375,6 +381,7 @@ def foil_control_candidates(
 	maximum_angle_rad: float,
 	fluid_density_kg_m3: float,
 	area_m2: float,
+	boat_angular_velocity_rad_s: float = 0,
 ) -> tuple[ControlEffect, ...]:
 	maximum_angle_deg = round(math.degrees(maximum_angle_rad))
 	return tuple(
@@ -386,6 +393,7 @@ def foil_control_candidates(
 			math.radians(angle_deg),
 			fluid_density_kg_m3,
 			area_m2,
+			boat_angular_velocity_rad_s,
 		)
 		for angle_deg in range(
 			-maximum_angle_deg,
@@ -575,40 +583,6 @@ def control_objective_derivatives(
 	return pymunk.Vec2d(*gradient), pymunk.Vec2d(*curvature)
 
 
-def regret_slope_scales(
-	regret: float,
-	distance_from_optimum: pymunk.Vec2d,
-	objective_gradient: pymunk.Vec2d,
-	distance_resolution: pymunk.Vec2d,
-) -> pymunk.Vec2d:
-	distance_squared = distance_from_optimum.length_squared
-	if not regret or not distance_squared:
-		return pymunk.Vec2d(0, 0)
-
-	def scale(distance: float, gradient: float, resolution: float) -> float:
-		if not distance:
-			return 0
-		# Distance-weighted shares preserve the total regret across both axes.
-		regret_share = regret * distance**2 / distance_squared
-		downhill_progress = gradient * distance
-		return (
-			regret_share + max(0, -downhill_progress)
-		) / (2 * max(distance**2, resolution**2))
-
-	return pymunk.Vec2d(
-		scale(
-			distance_from_optimum.x,
-			objective_gradient.x,
-			distance_resolution.x,
-		),
-		scale(
-			distance_from_optimum.y,
-			objective_gradient.y,
-			distance_resolution.y,
-		),
-	)
-
-
 def select_control_angles(
 	sails: tuple[ControlEffect, ...],
 	rudders: tuple[ControlEffect, ...],
@@ -645,6 +619,7 @@ def control_decision(
 	sail_angle_rad: float,
 	rudder_angle_rad: float,
 	mode: str,
+	use_global_slope: bool = True,
 ) -> ControlDecision:
 	def sail_effect_at(angle_rad: float) -> ControlEffect:
 		return foil_control_effect(
@@ -655,6 +630,7 @@ def control_decision(
 			angle_rad,
 			AIR_DENSITY_KG_M3,
 			SAIL_AREA_M2,
+			boat_angular_velocity_rad_s,
 		)
 
 	def rudder_effect_at(angle_rad: float) -> ControlEffect:
@@ -666,6 +642,7 @@ def control_decision(
 			angle_rad,
 			WATER_DENSITY_KG_M3,
 			RUDDER_AREA_M2,
+			boat_angular_velocity_rad_s,
 		)
 
 	sail_candidates = foil_control_candidates(
@@ -676,6 +653,7 @@ def control_decision(
 		MAX_SAIL_ANGLE_RAD,
 		AIR_DENSITY_KG_M3,
 		SAIL_AREA_M2,
+		boat_angular_velocity_rad_s,
 	)
 	rudder_candidates = foil_control_candidates(
 		boat_angle_rad,
@@ -685,6 +663,7 @@ def control_decision(
 		MAX_RUDDER_ANGLE_RAD,
 		WATER_DENSITY_KG_M3,
 		RUDDER_AREA_M2,
+		boat_angular_velocity_rad_s,
 	)
 
 	neutral_sail_angle_rad = luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
@@ -754,43 +733,21 @@ def control_decision(
 		rudder_angle_rad,
 		error_at,
 	)
-	if mode == DIRECT_GRADIENT_CONTROL:
-		def global_slope_penalty(
-			sail_angle: float | np.ndarray,
-			rudder_angle: float | np.ndarray,
-		) -> float | np.ndarray:
-			return slope_scales.x * (
-				(sail_angle - optimal_sail_angle_rad) / MAX_SAIL_ANGLE_RAD
-			) ** 2 + slope_scales.y * (
-				(rudder_angle - optimal_rudder_angle_rad) / MAX_RUDDER_ANGLE_RAD
-			) ** 2
-
+	if mode == DIRECT_GRADIENT_CONTROL and use_global_slope:
+		global_error = error_at(optimal_sail_angle_rad, optimal_rudder_angle_rad)
 		regret = max(
 			0,
-			error_at(sail_angle_rad, rudder_angle_rad)
-			- error_at(optimal_sail_angle_rad, optimal_rudder_angle_rad),
+			error_at(sail_angle_rad, rudder_angle_rad) - global_error,
 		)
-		distance_from_optimum = pymunk.Vec2d(
-			(
-				sail_angle_rad - optimal_sail_angle_rad
-			) / MAX_SAIL_ANGLE_RAD,
-			(
-				rudder_angle_rad - optimal_rudder_angle_rad
-			) / MAX_RUDDER_ANGLE_RAD,
-		)
-		slope_scales = regret_slope_scales(
-			regret,
-			distance_from_optimum,
-			pymunk.Vec2d(
-				gradient.x * MAX_SAIL_ANGLE_RAD,
-				gradient.y * MAX_RUDDER_ANGLE_RAD,
-			),
-			pymunk.Vec2d(
-				math.radians(CONTROL_ANGLE_RESOLUTION_DEG) / MAX_SAIL_ANGLE_RAD,
-				math.radians(CONTROL_ANGLE_RESOLUTION_DEG) / MAX_RUDDER_ANGLE_RAD,
-			),
-		)
-		if slope_scales != (0, 0):
+		if regret:
+			def global_slope_penalty(
+				sail_angle: float | np.ndarray,
+				rudder_angle: float | np.ndarray,
+			) -> float | np.ndarray:
+				return regret * (
+					(sail_angle - optimal_sail_angle_rad) / MAX_SAIL_ANGLE_RAD
+				) ** 4
+
 			base_error_at = error_at
 
 			def error_at(sail_angle: float, rudder_angle: float) -> float:
@@ -865,6 +822,7 @@ def step(
 	intent: MotionIntent,
 	dt_seconds: float = DT_SECONDS,
 	control_mode: str = OPTIMIZED_TARGET_CONTROL,
+	use_global_slope: bool = True,
 ) -> SimulationTelemetry:
 	apparent_water_m_s = apparent_flow(
 		environment.true_water_velocity_m_s,
@@ -883,6 +841,7 @@ def step(
 		state.sail_angle_rad,
 		state.rudder_angle_rad,
 		control_mode,
+		use_global_slope,
 	)
 	target_sail_angle_rad = decision.target_sail_angle_rad
 	target_rudder_angle_rad = decision.target_rudder_angle_rad
@@ -1005,6 +964,7 @@ def step(
 		target_rudder_angle_rad,
 		decision.landscape,
 		control_mode,
+		use_global_slope,
 	)
 
 
@@ -1319,8 +1279,13 @@ def draw(
 		"optimal rudder "
 		f"{math.degrees(telemetry.control_landscape.optimum_rudder_angle_rad):+.0f}°"
 	)
+	helper_status = ""
+	if telemetry.control_mode == DIRECT_GRADIENT_CONTROL:
+		helper_status = (
+			"    helper on" if telemetry.global_slope_enabled else "    helper off"
+		)
 	status = font.render(
-		f"{telemetry.control_mode}    "
+		f"{telemetry.control_mode}{helper_status}    "
 		f"water speed {telemetry.apparent_water_m_s.length:.1f} m/s    "
 		f"sail {math.degrees(state.sail_angle_rad):+.0f}°    "
 		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}°    "
@@ -1335,12 +1300,14 @@ def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((WIDTH, HEIGHT))
 	pygame.display.set_caption(
-		"Sailboat — WASD motion; left stick moves; G toggles gradient control"
+		"Sailboat — WASD motion; left stick moves; G toggles gradient control; "
+		"H toggles helper"
 	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
 	control_mode = INITIAL_CONTROL_MODE
+	use_global_slope = True
 	joystick = None
 	if pygame.joystick.get_count():
 		joystick = pygame.joystick.Joystick(0)
@@ -1356,6 +1323,8 @@ def main() -> None:
 					control_mode = DIRECT_GRADIENT_CONTROL
 				else:
 					control_mode = OPTIMIZED_TARGET_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_h:
+				use_global_slope = not use_global_slope
 			elif event.type == pygame.JOYDEVICEADDED and joystick is None:
 				joystick = pygame.joystick.Joystick(event.device_index)
 				joystick.init()
@@ -1388,6 +1357,7 @@ def main() -> None:
 			DEFAULT_ENVIRONMENT,
 			intent,
 			control_mode=control_mode,
+			use_global_slope=use_global_slope,
 		)
 		draw(screen, font, state, DEFAULT_ENVIRONMENT, intent, telemetry)
 		pygame.display.flip()

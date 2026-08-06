@@ -3,6 +3,7 @@ import math
 import unittest
 from functools import lru_cache
 
+import numpy as np
 import pymunk
 
 import sailing_game as game
@@ -54,6 +55,7 @@ def flow_state(
 def control_candidates(
 	boat_heading_rad: float,
 	through_water_speed_m_s: float,
+	angular_velocity_rad_s: float,
 ) -> tuple[
 	tuple[game.ControlEffect, ...],
 	tuple[game.ControlEffect, ...],
@@ -71,6 +73,7 @@ def control_candidates(
 			game.MAX_SAIL_ANGLE_RAD,
 			game.AIR_DENSITY_KG_M3,
 			game.SAIL_AREA_M2,
+			angular_velocity_rad_s,
 		),
 		game.foil_control_candidates(
 			boat_heading_rad,
@@ -80,6 +83,7 @@ def control_candidates(
 			game.MAX_RUDDER_ANGLE_RAD,
 			game.WATER_DENSITY_KG_M3,
 			game.RUDDER_AREA_M2,
+			angular_velocity_rad_s,
 		),
 	)
 
@@ -196,6 +200,7 @@ def target_effect(
 			target_sail_angle_rad,
 			game.AIR_DENSITY_KG_M3,
 			game.SAIL_AREA_M2,
+			angular_velocity_rad_s,
 		),
 		game.foil_control_effect(
 			boat_heading_rad,
@@ -205,6 +210,7 @@ def target_effect(
 			target_rudder_angle_rad,
 			game.WATER_DENSITY_KG_M3,
 			game.RUDDER_AREA_M2,
+			angular_velocity_rad_s,
 		),
 	)
 
@@ -276,17 +282,6 @@ def neutral_failure(
 
 
 class ControlModelSpecificationTest(unittest.TestCase):
-	def test_regret_slope_scales_each_control_axis_independently(self):
-		scales = game.regret_slope_scales(
-			regret=4,
-			distance_from_optimum=pymunk.Vec2d(2, 1),
-			objective_gradient=pymunk.Vec2d(-3, 1),
-			distance_resolution=pymunk.Vec2d(0, 0),
-		)
-
-		self.assertAlmostEqual(scales.x, 1.15)
-		self.assertAlmostEqual(scales.y, 0.4)
-
 	def test_optimized_mode_preserves_the_existing_target(self):
 		heading_rad = 0
 		wind, water = flow_state(heading_rad, -1)
@@ -344,7 +339,31 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		self.assertTrue(math.isfinite(decision.landscape.optimum_sail_angle_rad))
 		self.assertTrue(math.isfinite(decision.landscape.optimum_rudder_angle_rad))
 
-	def test_direct_landscape_adds_regret_slope_on_both_control_axes(self):
+	def test_direct_gradient_global_slope_can_be_disabled(self):
+		heading_rad = 0
+		wind, water = flow_state(heading_rad, -1)
+		arguments = (
+			heading_rad,
+			-0.2,
+			game.MotionIntent(0.5, 0.5),
+			wind,
+			water,
+			game.MAX_SAIL_ANGLE_RAD,
+			game.MAX_RUDDER_ANGLE_RAD,
+		)
+		base = game.control_decision(*arguments, game.OPTIMIZED_TARGET_CONTROL)
+		unguided = game.control_decision(
+			*arguments,
+			game.DIRECT_GRADIENT_CONTROL,
+			use_global_slope=False,
+		)
+
+		self.assertIsNone(unguided.target_sail_angle_rad)
+		self.assertIsNone(unguided.target_rudder_angle_rad)
+		np.testing.assert_allclose(unguided.landscape.errors, base.landscape.errors)
+		self.assertEqual(unguided.landscape.gradient, base.landscape.gradient)
+
+	def test_direct_landscape_adds_a_sail_only_well_that_steepens_with_distance(self):
 		heading_rad = 0
 		wind, water = flow_state(heading_rad, -1)
 		arguments = (
@@ -370,8 +389,15 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			),
 		)
 		added_slope = direct.landscape.errors - base.landscape.errors
-		self.assertGreater(max(added_slope[:, 0]) - min(added_slope[:, 0]), 0)
-		self.assertGreater(max(added_slope[0, :]) - min(added_slope[0, :]), 0)
+		optimum_index = np.argmin(added_slope[:, 0])
+		sail_steps = np.abs(np.diff(added_slope[:, 0]))
+		self.assertGreater(sail_steps[0], sail_steps[optimum_index - 1])
+		self.assertGreater(sail_steps[-1], sail_steps[optimum_index])
+		np.testing.assert_allclose(
+			added_slope,
+			np.broadcast_to(added_slope[:, :1], added_slope.shape),
+			atol=1e-12,
+		)
 		self.assertGreaterEqual(added_slope.min(), -1e-12)
 
 	def test_neutral_is_one_landscape_in_direct_gradient_mode(self):
@@ -444,7 +470,11 @@ class ControlModelSpecificationTest(unittest.TestCase):
 		angular_velocity_rad_s = -0.2
 		intent = game.MotionIntent(0.5, 0)
 		wind, water = flow_state(heading_rad, speed_m_s)
-		sails, rudders = control_candidates(heading_rad, speed_m_s)
+		sails, rudders = control_candidates(
+			heading_rad,
+			speed_m_s,
+			angular_velocity_rad_s,
+		)
 		effects = combined_effects(sails, rudders)
 		limits = effect_limits(effects)
 		selected = target_effect(
@@ -500,7 +530,11 @@ class ControlModelSpecificationTest(unittest.TestCase):
 				f"heading={math.degrees(heading_rad):.0f}°, speed={speed_m_s:+g} m/s, "
 				f"yaw={angular_velocity_rad_s:+g} rad/s, stick={local_stick}"
 			)
-			sails, rudders = control_candidates(heading_rad, speed_m_s)
+			sails, rudders = control_candidates(
+				heading_rad,
+				speed_m_s,
+				angular_velocity_rad_s,
+			)
 			if local_stick == (0, 0):
 				failure = neutral_failure(
 					selected,
