@@ -76,8 +76,8 @@ def sample(
 
 def main() -> None:
 	for physics_mode in (
-		game.DYNAMIC_PHYSICS,
-		game.COUPLED_PHYSICS,
+		game.LUMPED_PHYSICS,
+		game.ARTICULATED_PHYSICS,
 	):
 		points = sample(physics_mode)
 		matplotlib.pyplot.plot(

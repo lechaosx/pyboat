@@ -8,8 +8,8 @@ import pymunk
 
 from . import boat, course
 from .controllers import arcade, assisted as controller, manual
-from .physics import coupled as coupled_model
-from .physics import dynamic as dynamic_model
+from .physics import coupled as articulated_model
+from .physics import dynamic as lumped_model
 
 
 WIDTH, HEIGHT = 1280, 720
@@ -37,8 +37,12 @@ AUTO_SHEET_CONTROL = "auto sheet"
 ARCADE_CONTROL = "arcade"
 ARCADE_STERNWAY_CONTROL = "arcade sternway"
 ARCADE_MOVE_CONTROL = "arcade move intent"
-DYNAMIC_PHYSICS = "dynamic"
-COUPLED_PHYSICS = "coupled"
+LUMPED_PHYSICS = "lumped"
+ARTICULATED_PHYSICS = "articulated"
+# Compatibility names for experiments and callers written before the modes were
+# given names that describe their physical structure.
+DYNAMIC_PHYSICS = LUMPED_PHYSICS
+COUPLED_PHYSICS = ARTICULATED_PHYSICS
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
 
@@ -99,7 +103,7 @@ class SimulationTelemetry:
 	decision: controller.ControlDecision | None
 	controller_active: bool
 	control_mode: str | None = None
-	physics_mode: str = DYNAMIC_PHYSICS
+	physics_mode: str = LUMPED_PHYSICS
 	surface_targets: arcade.SurfaceTargets | None = None
 
 
@@ -132,7 +136,7 @@ def fixed_step_schedule(
 
 
 def next_physics_mode(physics_mode: str) -> str:
-	modes = (DYNAMIC_PHYSICS, COUPLED_PHYSICS)
+	modes = (LUMPED_PHYSICS, ARTICULATED_PHYSICS)
 	return modes[(modes.index(physics_mode) + 1) % len(modes)]
 
 
@@ -490,10 +494,10 @@ def advance_game(
 	controller_component: ControllerComponent | None,
 	environment: boat.Environment = ENVIRONMENT,
 	dt_seconds: float = DT_SECONDS,
-	physics_mode: str = DYNAMIC_PHYSICS,
+	physics_mode: str = LUMPED_PHYSICS,
 ) -> SimulationTelemetry:
-	if physics_mode != COUPLED_PHYSICS:
-		coupled_model.deactivate(state, BOAT_PARAMETERS)
+	if physics_mode != ARTICULATED_PHYSICS:
+		articulated_model.deactivate(state, BOAT_PARAMETERS)
 	observation = boat.observe(state, environment, BOAT_PARAMETERS)
 	control_output = None
 	actuator_input = None
@@ -511,7 +515,7 @@ def advance_game(
 			control_output.torques.rudder_n_m,
 		)
 	if (
-		physics_mode == COUPLED_PHYSICS
+		physics_mode == ARTICULATED_PHYSICS
 		and actuator_input is not None
 		and control_output is not None
 		and control_output.decision is not None
@@ -530,8 +534,8 @@ def advance_game(
 				target_rudder_angle_rad,
 			),
 		)
-	if physics_mode == COUPLED_PHYSICS:
-		physics = coupled_model.step(
+	if physics_mode == ARTICULATED_PHYSICS:
+		physics = articulated_model.step(
 			state,
 			environment,
 			BOAT_PARAMETERS,
@@ -539,7 +543,7 @@ def advance_game(
 			dt_seconds,
 		)
 	else:
-		physics = dynamic_model.step(
+		physics = lumped_model.step(
 			state,
 			environment,
 			BOAT_PARAMETERS,
@@ -563,8 +567,8 @@ def advance_surface_game(
 	environment: boat.Environment = ENVIRONMENT,
 	dt_seconds: float = DT_SECONDS,
 ) -> SimulationTelemetry:
-	if physics_mode != COUPLED_PHYSICS:
-		coupled_model.deactivate(state, BOAT_PARAMETERS)
+	if physics_mode != ARTICULATED_PHYSICS:
+		articulated_model.deactivate(state, BOAT_PARAMETERS)
 	observation = boat.observe(state, environment, BOAT_PARAMETERS)
 	actuator_input = controller_input(observation)
 	surface_input = surface_controller_input(observation, actuator_input)
@@ -599,7 +603,7 @@ def advance_surface_game(
 		)
 	else:
 		sail_target_angle_rad = targets.sail_target_angle_rad
-	if physics_mode == COUPLED_PHYSICS:
+	if physics_mode == ARTICULATED_PHYSICS:
 		torques = boat.ActuatorTorques(
 			controller.damped_actuator_control_torque(
 				actuator_input.sail,
@@ -610,7 +614,7 @@ def advance_surface_game(
 				targets.rudder_target_angle_rad,
 			),
 		)
-		physics = coupled_model.step(
+		physics = articulated_model.step(
 			state,
 			environment,
 			BOAT_PARAMETERS,
@@ -630,7 +634,7 @@ def advance_surface_game(
 				dt_seconds,
 			),
 		)
-		physics = dynamic_model.step(
+		physics = lumped_model.step(
 			state,
 			environment,
 			BOAT_PARAMETERS,
@@ -1090,7 +1094,7 @@ def main() -> None:
 	state = create_simulation()
 	time_trial = course.TimeTrial(COURSE_BUOYS_M, BUOY_RADIUS_M)
 	input_mode = GUIDED_GRADIENT_CONTROL
-	physics_mode = DYNAMIC_PHYSICS
+	physics_mode = LUMPED_PHYSICS
 	controller_enabled = True
 	accumulated_seconds = 0.0
 	telemetry = None
