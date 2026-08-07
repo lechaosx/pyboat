@@ -8,6 +8,9 @@ class PolarSamplingTest(unittest.TestCase):
 	def test_sample_reports_finite_motion_for_each_requested_heading(self):
 		points = polar.sample(
 			game.COUPLED_PHYSICS,
+			game.SIMULATION_SETTINGS,
+			game.ENVIRONMENT,
+			game.DT_SECONDS,
 			headings_from_upwind_deg=(60, 120),
 			settling_seconds=0,
 			sampling_seconds=0.1,

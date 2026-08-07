@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import matplotlib.pyplot
 import pymunk
 
-from . import simulation
+from . import boat, simulation
 from .controllers import arcade
 
 
@@ -18,17 +18,19 @@ class PolarPoint:
 
 def sample(
 	physics_mode: str,
+	settings: simulation.SimulationSettings,
+	environment: boat.Environment,
+	dt_seconds: float,
 	headings_from_upwind_deg: tuple[float, ...] = tuple(range(30, 181, 15)),
 	settling_seconds: float = 20,
 	sampling_seconds: float = 5,
-	dt_seconds: float = simulation.DT_SECONDS,
 ) -> tuple[PolarPoint, ...]:
 	points = []
-	upwind_angle_rad = simulation.ENVIRONMENT.true_wind_velocity_m_s.angle + math.pi
+	upwind_angle_rad = environment.true_wind_velocity_m_s.angle + math.pi
 	for heading_from_upwind_deg in headings_from_upwind_deg:
 		target_heading_rad = upwind_angle_rad + math.radians(heading_from_upwind_deg)
 		target_direction = pymunk.Vec2d(1, 0).rotated(target_heading_rad)
-		state = simulation.create_simulation()
+		state = simulation.create_simulation(settings)
 		state.boat.angle = target_heading_rad
 		for _ in range(round(settling_seconds / dt_seconds)):
 			intent = arcade.HeadingIntent(
@@ -38,8 +40,10 @@ def sample(
 				state,
 				intent,
 				simulation.ARCADE_CONTROL,
+				settings,
+				environment,
+				dt_seconds,
 				physics_mode,
-				dt_seconds=dt_seconds,
 			)
 
 		speeds_m_s = []
@@ -53,12 +57,13 @@ def sample(
 				state,
 				intent,
 				simulation.ARCADE_CONTROL,
+				settings,
+				environment,
+				dt_seconds,
 				physics_mode,
-				dt_seconds=dt_seconds,
 			)
 			through_water_m_s = (
-				state.boat.velocity
-				- simulation.ENVIRONMENT.true_water_velocity_m_s
+				state.boat.velocity - environment.true_water_velocity_m_s
 			)
 			local_velocity_m_s = through_water_m_s.rotated(-state.boat.angle)
 			speeds_m_s.append(through_water_m_s.length)
@@ -76,11 +81,18 @@ def sample(
 
 
 def main() -> None:
+	from . import game
+
 	for physics_mode in (
 		simulation.LUMPED_PHYSICS,
 		simulation.ARTICULATED_PHYSICS,
 	):
-		points = sample(physics_mode)
+		points = sample(
+			physics_mode,
+			game.SIMULATION_SETTINGS,
+			game.ENVIRONMENT,
+			game.DT_SECONDS,
+		)
 		matplotlib.pyplot.plot(
 			[point.heading_from_upwind_deg for point in points],
 			[point.speed_through_water_m_s for point in points],

@@ -6,7 +6,7 @@ import pymunk
 
 from . import boat, course
 from .controllers import arcade, assisted as controller, manual
-from .simulation import BOAT_PARAMETERS, SimulationTelemetry
+from .simulation import SimulationTelemetry
 
 
 WIDTH, HEIGHT = 1280, 720
@@ -170,15 +170,16 @@ def control_landscape_point(
 	rect: pygame.Rect,
 	sail_angle_rad: float,
 	rudder_angle_rad: float,
+	parameters: boat.BoatParameters,
 ) -> pymunk.Vec2d:
 	return pymunk.Vec2d(
 		rect.left
-		+ (sail_angle_rad + BOAT_PARAMETERS.max_sail_angle_rad)
-		/ (2 * BOAT_PARAMETERS.max_sail_angle_rad)
+		+ (sail_angle_rad + parameters.max_sail_angle_rad)
+		/ (2 * parameters.max_sail_angle_rad)
 		* rect.width,
 		rect.top
-		+ (BOAT_PARAMETERS.max_rudder_angle_rad - rudder_angle_rad)
-		/ (2 * BOAT_PARAMETERS.max_rudder_angle_rad)
+		+ (parameters.max_rudder_angle_rad - rudder_angle_rad)
+		/ (2 * parameters.max_rudder_angle_rad)
 		* rect.height,
 	)
 
@@ -186,13 +187,14 @@ def control_landscape_point(
 def control_gradient_vector_px(
 	rect: pygame.Rect,
 	gradient: tuple[float, float] | pymunk.Vec2d,
+	parameters: boat.BoatParameters,
 ) -> pymunk.Vec2d:
 	return pymunk.Vec2d(
 		-gradient[0]
-		* BOAT_PARAMETERS.max_sail_angle_rad
+		* parameters.max_sail_angle_rad
 		* CONTROL_GRADIENT_PIXELS_PER_ERROR,
 		gradient[1]
-		* BOAT_PARAMETERS.max_rudder_angle_rad
+		* parameters.max_rudder_angle_rad
 		* CONTROL_GRADIENT_PIXELS_PER_ERROR,
 	)
 
@@ -201,16 +203,17 @@ def control_motion_vector_px(
 	rect: pygame.Rect,
 	sail_angular_velocity_rad_s: float,
 	rudder_angular_velocity_rad_s: float,
+	parameters: boat.BoatParameters,
 ) -> pymunk.Vec2d:
 	return pymunk.Vec2d(
 		sail_angular_velocity_rad_s
 		* CONTROL_MOTION_PREVIEW_SECONDS
 		* rect.width
-		/ (2 * BOAT_PARAMETERS.max_sail_angle_rad),
+		/ (2 * parameters.max_sail_angle_rad),
 		-rudder_angular_velocity_rad_s
 		* CONTROL_MOTION_PREVIEW_SECONDS
 		* rect.height
-		/ (2 * BOAT_PARAMETERS.max_rudder_angle_rad),
+		/ (2 * parameters.max_rudder_angle_rad),
 	)
 
 
@@ -219,6 +222,7 @@ def draw_control_quality_landscape(
 	font: pygame.font.Font,
 	state: boat.SailingState,
 	landscape: controller.ControlLandscape,
+	parameters: boat.BoatParameters,
 ) -> None:
 	rect = CONTROL_LANDSCAPE_RECT
 	screen.blit(
@@ -236,12 +240,13 @@ def draw_control_quality_landscape(
 	pygame.draw.rect(screen, (220, 220, 230), rect, 1)
 
 	current = control_landscape_point(
-		rect, state.sail_angle_rad, state.rudder_angle_rad
+		rect, state.sail_angle_rad, state.rudder_angle_rad, parameters
 	)
 	optimum = control_landscape_point(
 		rect,
 		landscape.optimum_sail_angle_rad,
 		landscape.optimum_rudder_angle_rad,
+		parameters,
 	)
 	pygame.draw.line(
 		screen, (255, 100, 220), optimum + (-5, -5), optimum + (5, 5), 2
@@ -249,13 +254,14 @@ def draw_control_quality_landscape(
 	pygame.draw.line(
 		screen, (255, 100, 220), optimum + (-5, 5), optimum + (5, -5), 2
 	)
-	downhill = control_gradient_vector_px(rect, landscape.gradient)
+	downhill = control_gradient_vector_px(rect, landscape.gradient, parameters)
 	if downhill.length:
 		draw_vector(screen, current, downhill, (100, 220, 255), 1, 2)
 	motion = control_motion_vector_px(
 		rect,
 		state.sail_angular_velocity_rad_s,
 		state.rudder_angular_velocity_rad_s,
+		parameters,
 	)
 	if motion.length:
 		draw_vector(screen, current, motion, (255, 210, 90), 1, 2)
@@ -294,6 +300,7 @@ def draw(
 	environment: boat.Environment,
 	intent: PlayerIntent,
 	telemetry: SimulationTelemetry,
+	parameters: boat.BoatParameters,
 	time_trial: course.TimeTrial | None = None,
 ) -> None:
 	center = pymunk.Vec2d(WIDTH / 2, HEIGHT / 2)
@@ -328,10 +335,10 @@ def draw(
 			)
 			screen.blit(font.render(str(index + 1), True, color), position + (5, 5))
 
-	half_length_px = BOAT_PARAMETERS.length_m * PIXELS_PER_METER / 2
-	half_beam_px = BOAT_PARAMETERS.beam_m * PIXELS_PER_METER / 2
+	half_length_px = parameters.length_m * PIXELS_PER_METER / 2
+	half_beam_px = parameters.beam_m * PIXELS_PER_METER / 2
 	bow_base_px = (
-		BOAT_PARAMETERS.length_m / 2 - BOAT_PARAMETERS.bow_length_m
+		parameters.length_m / 2 - parameters.bow_length_m
 	) * PIXELS_PER_METER
 	hull_points = [
 		pymunk.Vec2d(half_length_px, 0),
@@ -354,11 +361,11 @@ def draw(
 		screen,
 		(235, 205, 100),
 		center,
-		center + sail_direction * BOAT_PARAMETERS.boom_length_m * PIXELS_PER_METER,
+		center + sail_direction * parameters.boom_length_m * PIXELS_PER_METER,
 		4,
 	)
 	rudder_position = (
-		pymunk.Vec2d(*BOAT_PARAMETERS.rudder_position_m).rotated(body.angle)
+		pymunk.Vec2d(*parameters.rudder_position_m).rotated(body.angle)
 		* PIXELS_PER_METER
 		+ center
 	)
@@ -371,7 +378,7 @@ def draw(
 		rudder_position,
 		rudder_position
 		+ rudder_direction
-		* BOAT_PARAMETERS.rudder_draw_length_m
+		* parameters.rudder_draw_length_m
 		* PIXELS_PER_METER,
 		4,
 	)
@@ -417,7 +424,9 @@ def draw(
 
 	draw_intent(screen, font, center, body.angle, intent)
 	if decision is not None:
-		draw_control_quality_landscape(screen, font, state, decision.landscape)
+		draw_control_quality_landscape(
+			screen, font, state, decision.landscape, parameters
+		)
 
 	if decision is None:
 		if telemetry.control_mode is not None:
@@ -451,7 +460,7 @@ def draw(
 		free_sail_angle_rad = boat.free_sail_angle(
 			body.angle,
 			observation.apparent_wind_m_s,
-			BOAT_PARAMETERS.max_sail_angle_rad,
+			parameters.max_sail_angle_rad,
 		)
 		if telemetry.surface_targets.sail_target_angle_rad is None:
 			target_sail_angle_rad = max(

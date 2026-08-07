@@ -1040,7 +1040,10 @@ class SailingSimulationTest(unittest.TestCase):
 class ModelAndActuatorTest(unittest.TestCase):
 	def test_plot_uses_the_simulation_coefficients(self):
 		self.assertEqual(plot.lift(0), lift_coefficient(0))
-		self.assertEqual(plot.drag(0), drag_coefficient(0))
+		self.assertEqual(
+			plot.drag(0, BOAT_PARAMETERS.sail_base_drag_coefficient),
+			drag_coefficient(0),
+		)
 
 	def test_apparent_flow_is_medium_velocity_relative_to_boat(self):
 		medium_velocity = pymunk.Vec2d(6, 1)

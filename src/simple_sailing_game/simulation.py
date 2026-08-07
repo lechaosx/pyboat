@@ -1,6 +1,6 @@
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pymunk
 
@@ -9,13 +9,6 @@ from .controllers import arcade, assisted as controller, improved_arcade, manual
 from .physics import coupled as articulated_model
 from .physics import dynamic as lumped_model
 
-
-DT_SECONDS = 1 / 60
-INITIAL_BOAT_ANGLE_RAD = math.radians(135)
-CONTROL_ANGLE_RESOLUTION_DEG = 1
-SAILOR_MAX_SHEET_FORCE_N = 250
-SAILOR_MAX_TILLER_FORCE_N = 60
-MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
 
 GUIDED_GRADIENT_CONTROL = "gradient with helper"
 GLOBAL_OPTIMUM_CONTROL = "global optimum"
@@ -29,59 +22,16 @@ IMPROVED_ARCADE_CONTROL = "improved arcade move intent"
 LUMPED_PHYSICS = "lumped"
 ARTICULATED_PHYSICS = "articulated"
 
-BOAT_PARAMETERS = boat.BoatParameters(
-	air_density_kg_m3=1.225,
-	water_density_kg_m3=1025,
-	hull_mass_kg=222,
-	length_m=4,
-	beam_m=1.5,
-	bow_length_m=0.7,
-	sail_area_m2=8,
-	boom_length_m=2,
-	boom_mass_kg=10,
-	mast_position_m=(0.4, 0),
-	sail_center_of_effort_from_mast_m=0.7,
-	sail_mass_kg=12,
-	keel_area_m2=0.6,
-	keel_position_m=(0, 0),
-	rudder_area_m2=0.12,
-	rudder_draw_length_m=0.5,
-	rudder_mass_kg=4,
-	tiller_length_m=1,
-	tiller_mass_kg=2,
-	rudder_position_m=(-1.8, 0),
-	hull_reference_area_m2=0.3,
-	hull_drag_coefficient=0.08,
-	hull_lateral_drag_coefficient=0.02,
-	sail_base_drag_coefficient=0.02,
-	underwater_foil_base_drag_coefficient=0.02,
-	sail_bearing_damping_n_m_s_rad=20,
-	rudder_bearing_damping_n_m_s_rad=2,
-	sail_sheet_lever_arm_m=1.5,
-	max_sail_angle_rad=math.radians(90),
-	max_rudder_angle_rad=math.radians(30),
-)
-ENVIRONMENT = boat.Environment(
-	true_wind_velocity_m_s=pymunk.Vec2d(6, 0),
-	true_water_velocity_m_s=pymunk.Vec2d(0, 0),
-)
-CONTROLLER_SETTINGS = controller.ControllerSettings(
-	mode=controller.DIRECT_GRADIENT_CONTROL,
-	use_global_slope=True,
-	angle_resolution_deg=CONTROL_ANGLE_RESOLUTION_DEG,
-)
-ASSISTED_CONTROL_SETTINGS = {
-	GUIDED_GRADIENT_CONTROL: CONTROLLER_SETTINGS,
-	GLOBAL_OPTIMUM_CONTROL: replace(
-		CONTROLLER_SETTINGS,
-		mode=controller.OPTIMIZED_TARGET_CONTROL,
-		use_global_slope=False,
-	),
-	RAW_GRADIENT_CONTROL: replace(
-		CONTROLLER_SETTINGS,
-		use_global_slope=False,
-	),
-}
+
+@dataclass(frozen=True)
+class SimulationSettings:
+	parameters: boat.BoatParameters
+	initial_boat_angle_rad: float
+	control_angle_resolution_deg: int
+	sailor_max_sheet_force_n: float
+	sailor_max_tiller_force_n: float
+	maximum_yaw_rate_rad_s: float
+	improved_arcade: improved_arcade.Settings
 
 
 @dataclass(frozen=True)
@@ -89,8 +39,8 @@ class SimulationTelemetry:
 	physics: boat.PhysicsTelemetry
 	decision: controller.ControlDecision | None
 	controller_active: bool
+	physics_mode: str
 	control_mode: str | None = None
-	physics_mode: str = LUMPED_PHYSICS
 	surface_targets: arcade.SurfaceTargets | None = None
 
 
@@ -108,8 +58,8 @@ def foil_control_effect(
 	angle_rad: float,
 	fluid_density_kg_m3: float,
 	area_m2: float,
-	boat_angular_velocity_rad_s: float = 0,
-	base_drag_coefficient: float | None = None,
+	boat_angular_velocity_rad_s: float,
+	base_drag_coefficient: float,
 ) -> controller.ControlEffect:
 	center_local_m = (
 		pymunk.Vec2d(*hinge_position_local_m)
@@ -125,11 +75,7 @@ def foil_control_effect(
 		boat_angle_rad + angle_rad,
 		fluid_density_kg_m3,
 		area_m2,
-		(
-			BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
-			if base_drag_coefficient is None
-			else base_drag_coefficient
-		),
+		base_drag_coefficient,
 	)
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 	return controller.ControlEffect(
@@ -143,6 +89,7 @@ def foil_control_effect(
 def sample_control_effects(
 	effect_at: Callable[[float], controller.ControlEffect],
 	maximum_angle_rad: float,
+	angle_resolution_deg: int,
 ) -> tuple[controller.ControlEffect, ...]:
 	maximum_angle_deg = round(math.degrees(maximum_angle_rad))
 	return tuple(
@@ -150,61 +97,74 @@ def sample_control_effects(
 		for angle_deg in range(
 			-maximum_angle_deg,
 			maximum_angle_deg + 1,
-			CONTROL_ANGLE_RESOLUTION_DEG,
+			angle_resolution_deg,
 		)
 	)
 
 
-def controller_input(observation: boat.BoatObservation) -> controller.ControlInput:
+def controller_input(
+	observation: boat.BoatObservation,
+	settings: SimulationSettings,
+) -> controller.ControlInput:
+	parameters = settings.parameters
+
 	def sail_effect_at(angle_rad: float) -> controller.ControlEffect:
 		return foil_control_effect(
 			observation.boat_angle_rad,
 			observation.apparent_wind_m_s,
-			BOAT_PARAMETERS.mast_position_m,
-			BOAT_PARAMETERS.sail_center_of_effort_from_mast_m,
+			parameters.mast_position_m,
+			parameters.sail_center_of_effort_from_mast_m,
 			angle_rad,
-			BOAT_PARAMETERS.air_density_kg_m3,
-			BOAT_PARAMETERS.sail_area_m2,
+			parameters.air_density_kg_m3,
+			parameters.sail_area_m2,
 			observation.boat_angular_velocity_rad_s,
-			BOAT_PARAMETERS.sail_base_drag_coefficient,
+			parameters.sail_base_drag_coefficient,
 		)
 
 	def rudder_effect_at(angle_rad: float) -> controller.ControlEffect:
 		return foil_control_effect(
 			observation.boat_angle_rad,
 			observation.apparent_water_m_s,
-			BOAT_PARAMETERS.rudder_position_m,
-			BOAT_PARAMETERS.rudder_draw_length_m / 2,
+			parameters.rudder_position_m,
+			parameters.rudder_draw_length_m / 2,
 			angle_rad,
-			BOAT_PARAMETERS.water_density_kg_m3,
-			BOAT_PARAMETERS.rudder_area_m2,
+			parameters.water_density_kg_m3,
+			parameters.rudder_area_m2,
 			observation.boat_angular_velocity_rad_s,
-			BOAT_PARAMETERS.underwater_foil_base_drag_coefficient,
+			parameters.underwater_foil_base_drag_coefficient,
 		)
 
 	return controller.ControlInput(
 		observation.boat_angular_velocity_rad_s,
-		boat.lumped_moment_of_inertia_kg_m2(BOAT_PARAMETERS),
+		boat.lumped_moment_of_inertia_kg_m2(parameters),
 		controller.ActuatorState(
 			observation.sail_angle_rad,
 			observation.sail_angular_velocity_rad_s,
 			observation.sail_load.torque_n_m,
-			boat.sail_moment_of_inertia_kg_m2(BOAT_PARAMETERS),
-			BOAT_PARAMETERS.sail_bearing_damping_n_m_s_rad,
-			SAILOR_MAX_SHEET_FORCE_N * BOAT_PARAMETERS.sail_sheet_lever_arm_m,
-			BOAT_PARAMETERS.max_sail_angle_rad,
+			boat.sail_moment_of_inertia_kg_m2(parameters),
+			parameters.sail_bearing_damping_n_m_s_rad,
+			settings.sailor_max_sheet_force_n * parameters.sail_sheet_lever_arm_m,
+			parameters.max_sail_angle_rad,
 		),
 		controller.ActuatorState(
 			observation.rudder_angle_rad,
 			observation.rudder_angular_velocity_rad_s,
 			observation.rudder_load.torque_n_m,
-			boat.rudder_moment_of_inertia_kg_m2(BOAT_PARAMETERS),
-			BOAT_PARAMETERS.rudder_bearing_damping_n_m_s_rad,
-			SAILOR_MAX_TILLER_FORCE_N * BOAT_PARAMETERS.tiller_length_m,
-			BOAT_PARAMETERS.max_rudder_angle_rad,
+			boat.rudder_moment_of_inertia_kg_m2(parameters),
+			parameters.rudder_bearing_damping_n_m_s_rad,
+			settings.sailor_max_tiller_force_n * parameters.tiller_length_m,
+			parameters.max_rudder_angle_rad,
 		),
-		sample_control_effects(sail_effect_at, BOAT_PARAMETERS.max_sail_angle_rad),
-		sample_control_effects(rudder_effect_at, BOAT_PARAMETERS.max_rudder_angle_rad),
+		sample_control_effects(
+			sail_effect_at,
+			parameters.max_sail_angle_rad,
+			settings.control_angle_resolution_deg,
+		),
+		sample_control_effects(
+			rudder_effect_at,
+			parameters.max_rudder_angle_rad,
+			settings.control_angle_resolution_deg,
+		),
 		sail_effect_at,
 		rudder_effect_at,
 		boat.luffing_sail_angle(
@@ -216,20 +176,19 @@ def controller_input(observation: boat.BoatObservation) -> controller.ControlInp
 
 def surface_controller_input(
 	observation: boat.BoatObservation,
-	actuator_input: controller.ControlInput | None = None,
+	actuator_input: controller.ControlInput,
+	parameters: boat.BoatParameters,
 ) -> arcade.ControlInput:
-	if actuator_input is None:
-		actuator_input = controller_input(observation)
 	return arcade.ControlInput(
 		observation.boat_angle_rad,
 		observation.boat_angular_velocity_rad_s,
 		boat.free_sail_angle(
 			observation.boat_angle_rad,
 			observation.apparent_wind_m_s,
-			BOAT_PARAMETERS.max_sail_angle_rad,
+			parameters.max_sail_angle_rad,
 		),
-		BOAT_PARAMETERS.max_sail_angle_rad,
-		BOAT_PARAMETERS.max_rudder_angle_rad,
+		parameters.max_sail_angle_rad,
+		parameters.max_rudder_angle_rad,
 		tuple(
 			arcade.SurfaceEffect(
 				effect.angle_rad,
@@ -249,8 +208,11 @@ def surface_controller_input(
 	)
 
 
-def create_simulation() -> boat.SailingState:
-	return boat.create_simulation(BOAT_PARAMETERS, INITIAL_BOAT_ANGLE_RAD)
+def create_simulation(settings: SimulationSettings) -> boat.SailingState:
+	return boat.create_simulation(
+		settings.parameters,
+		settings.initial_boat_angle_rad,
+	)
 
 
 def configured_assisted_controller(
@@ -320,6 +282,7 @@ def target_control_torques(
 
 def _step_physics(
 	state: boat.SailingState,
+	parameters: boat.BoatParameters,
 	environment: boat.Environment,
 	torques: boat.ActuatorTorques,
 	dt_seconds: float,
@@ -327,11 +290,11 @@ def _step_physics(
 ) -> boat.PhysicsTelemetry:
 	if physics_mode == ARTICULATED_PHYSICS:
 		return articulated_model.step(
-			state, environment, BOAT_PARAMETERS, torques, dt_seconds
+			state, environment, parameters, torques, dt_seconds
 		)
-	articulated_model.deactivate(state, BOAT_PARAMETERS)
+	articulated_model.deactivate(state, parameters)
 	return lumped_model.step(
-		state, environment, BOAT_PARAMETERS, torques, dt_seconds
+		state, environment, parameters, torques, dt_seconds
 	)
 
 
@@ -339,15 +302,18 @@ def advance_game(
 	state: boat.SailingState,
 	intent: controller.MotionIntent,
 	controller_component: ControllerComponent | None,
-	environment: boat.Environment = ENVIRONMENT,
-	dt_seconds: float = DT_SECONDS,
-	physics_mode: str = LUMPED_PHYSICS,
+	settings: SimulationSettings,
+	environment: boat.Environment,
+	dt_seconds: float,
+	physics_mode: str,
 ) -> SimulationTelemetry:
-	observation = boat.observe(state, environment, BOAT_PARAMETERS)
+	if physics_mode != ARTICULATED_PHYSICS:
+		articulated_model.deactivate(state, settings.parameters)
+	observation = boat.observe(state, environment, settings.parameters)
 	control_output = None
 	actuator_input = None
 	if controller_component is not None:
-		actuator_input = controller_input(observation)
+		actuator_input = controller_input(observation, settings)
 		control_output = controller_component(actuator_input, intent, dt_seconds)
 	torques = boat.ActuatorTorques()
 	if control_output is not None:
@@ -368,7 +334,12 @@ def advance_game(
 			dt_seconds,
 		)
 	physics = _step_physics(
-		state, environment, torques, dt_seconds, physics_mode
+		state,
+		settings.parameters,
+		environment,
+		torques,
+		dt_seconds,
+		physics_mode,
 	)
 	decision = control_output.decision if control_output is not None else None
 	return SimulationTelemetry(
@@ -383,33 +354,41 @@ def advance_surface_game(
 	state: boat.SailingState,
 	intent: arcade.AutoSheetIntent | arcade.HeadingIntent | controller.MotionIntent,
 	control_mode: str,
+	settings: SimulationSettings,
+	environment: boat.Environment,
+	dt_seconds: float,
 	physics_mode: str,
-	environment: boat.Environment = ENVIRONMENT,
-	dt_seconds: float = DT_SECONDS,
 ) -> SimulationTelemetry:
-	observation = boat.observe(state, environment, BOAT_PARAMETERS)
-	actuator_input = controller_input(observation)
-	surface_input = surface_controller_input(observation, actuator_input)
+	if physics_mode != ARTICULATED_PHYSICS:
+		articulated_model.deactivate(state, settings.parameters)
+	observation = boat.observe(state, environment, settings.parameters)
+	actuator_input = controller_input(observation, settings)
+	surface_input = surface_controller_input(
+		observation,
+		actuator_input,
+		settings.parameters,
+	)
 	if control_mode == AUTO_SHEET_CONTROL:
 		targets = arcade.auto_sheet_manual_tiller(surface_input, intent)
 	elif control_mode == ARCADE_CONTROL:
 		targets = arcade.heading_control(
-			surface_input, intent, MAXIMUM_YAW_RATE_RAD_S
+			surface_input, intent, settings.maximum_yaw_rate_rad_s
 		)
 	elif control_mode == ARCADE_STERNWAY_CONTROL:
 		targets = arcade.sternway_control(
-			surface_input, intent, MAXIMUM_YAW_RATE_RAD_S
+			surface_input, intent, settings.maximum_yaw_rate_rad_s
 		)
 	elif control_mode == IMPROVED_ARCADE_CONTROL:
 		targets = improved_arcade.control(
 			surface_input,
 			intent,
 			observation.apparent_water_m_s.length,
-			MAXIMUM_YAW_RATE_RAD_S,
+			settings.maximum_yaw_rate_rad_s,
+			settings.improved_arcade,
 		)
 	else:
 		targets = arcade.move_control(
-			surface_input, intent, MAXIMUM_YAW_RATE_RAD_S
+			surface_input, intent, settings.maximum_yaw_rate_rad_s
 		)
 
 	if targets.sail_target_angle_rad is None:
@@ -427,7 +406,12 @@ def advance_surface_game(
 		dt_seconds,
 	)
 	physics = _step_physics(
-		state, environment, torques, dt_seconds, physics_mode
+		state,
+		settings.parameters,
+		environment,
+		torques,
+		dt_seconds,
+		physics_mode,
 	)
 	return SimulationTelemetry(
 		physics=physics,
@@ -443,19 +427,17 @@ def step(
 	state: boat.SailingState,
 	environment: boat.Environment,
 	intent: controller.MotionIntent,
-	dt_seconds: float = DT_SECONDS,
-	control_mode: str = controller.OPTIMIZED_TARGET_CONTROL,
-	use_global_slope: bool = True,
+	settings: SimulationSettings,
+	controller_settings: controller.ControllerSettings,
+	dt_seconds: float,
+	physics_mode: str,
 ) -> SimulationTelemetry:
-	settings = replace(
-		CONTROLLER_SETTINGS,
-		mode=control_mode,
-		use_global_slope=use_global_slope,
-	)
 	return advance_game(
 		state,
 		intent,
-		configured_assisted_controller(settings),
+		configured_assisted_controller(controller_settings),
+		settings,
 		environment,
 		dt_seconds,
+		physics_mode,
 	)

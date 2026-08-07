@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import math
 import os
 import subprocess
@@ -19,6 +20,58 @@ def isolated_python(code):
 
 
 class ModuleBoundaryTest(unittest.TestCase):
+	def test_game_owns_runtime_simulation_configuration(self):
+		from simple_sailing_game import game, simulation
+
+		self.assertIsInstance(game.SIMULATION_SETTINGS, simulation.SimulationSettings)
+		for name in (
+			"BOAT_PARAMETERS",
+			"ENVIRONMENT",
+			"DT_SECONDS",
+			"INITIAL_BOAT_ANGLE_RAD",
+			"CONTROLLER_SETTINGS",
+			"ASSISTED_CONTROL_SETTINGS",
+		):
+			with self.subTest(name=name):
+				self.assertFalse(hasattr(simulation, name))
+
+	def test_simulation_entry_points_require_runtime_inputs(self):
+		from simple_sailing_game import simulation
+
+		required = {
+			simulation.create_simulation: ("settings",),
+			simulation.advance_game: (
+				"settings",
+				"environment",
+				"dt_seconds",
+				"physics_mode",
+			),
+			simulation.advance_surface_game: (
+				"settings",
+				"environment",
+				"dt_seconds",
+				"physics_mode",
+			),
+			simulation.step: (
+				"settings",
+				"environment",
+				"dt_seconds",
+				"physics_mode",
+			),
+		}
+		for function, parameter_names in required.items():
+			with self.subTest(function=function.__name__):
+				parameters = inspect.signature(function).parameters
+				for name in parameter_names:
+					self.assertIs(parameters[name].default, inspect.Parameter.empty)
+
+	def test_rendering_requires_boat_parameters(self):
+		from simple_sailing_game import render
+
+		parameter = inspect.signature(render.draw).parameters["parameters"]
+
+		self.assertIs(parameter.default, inspect.Parameter.empty)
+
 	def test_supported_physics_models_have_separate_modules(self):
 		from simple_sailing_game.physics import coupled, dynamic
 

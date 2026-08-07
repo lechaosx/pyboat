@@ -2,13 +2,20 @@ import math
 from dataclasses import replace
 
 import pygame
+import pymunk
 
-from . import course, input as player_input, render, simulation
-from .controllers import arcade, assisted as controller, manual
+from . import boat, course, input as player_input, render, simulation
+from .controllers import arcade, assisted as controller, improved_arcade, manual
 
 
 MAXIMUM_FRAME_TIME_SECONDS = 0.25
 ANALOG_STICK_DEADZONE = 0.15
+DT_SECONDS = 1 / 60
+INITIAL_BOAT_ANGLE_RAD = math.radians(135)
+CONTROL_ANGLE_RESOLUTION_DEG = 1
+SAILOR_MAX_SHEET_FORCE_N = 250
+SAILOR_MAX_TILLER_FORCE_N = 60
+MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
 
@@ -27,14 +34,73 @@ DEFAULT_PHYSICS_MODE = ARTICULATED_PHYSICS
 DYNAMIC_PHYSICS = LUMPED_PHYSICS
 COUPLED_PHYSICS = ARTICULATED_PHYSICS
 
-DT_SECONDS = simulation.DT_SECONDS
-INITIAL_BOAT_ANGLE_RAD = simulation.INITIAL_BOAT_ANGLE_RAD
-CONTROL_ANGLE_RESOLUTION_DEG = simulation.CONTROL_ANGLE_RESOLUTION_DEG
-MAXIMUM_YAW_RATE_RAD_S = simulation.MAXIMUM_YAW_RATE_RAD_S
-BOAT_PARAMETERS = simulation.BOAT_PARAMETERS
-ENVIRONMENT = simulation.ENVIRONMENT
-CONTROLLER_SETTINGS = simulation.CONTROLLER_SETTINGS
-ASSISTED_CONTROL_SETTINGS = simulation.ASSISTED_CONTROL_SETTINGS
+BOAT_PARAMETERS = boat.BoatParameters(
+	air_density_kg_m3=1.225,
+	water_density_kg_m3=1025,
+	hull_mass_kg=222,
+	length_m=4,
+	beam_m=1.5,
+	bow_length_m=0.7,
+	sail_area_m2=8,
+	boom_length_m=2,
+	boom_mass_kg=10,
+	mast_position_m=(0.4, 0),
+	sail_center_of_effort_from_mast_m=0.7,
+	sail_mass_kg=12,
+	keel_area_m2=0.6,
+	keel_position_m=(0, 0),
+	rudder_area_m2=0.12,
+	rudder_draw_length_m=0.5,
+	rudder_mass_kg=4,
+	tiller_length_m=1,
+	tiller_mass_kg=2,
+	rudder_position_m=(-1.8, 0),
+	hull_reference_area_m2=0.3,
+	hull_drag_coefficient=0.08,
+	hull_lateral_drag_coefficient=0.02,
+	sail_base_drag_coefficient=0.02,
+	underwater_foil_base_drag_coefficient=0.02,
+	sail_bearing_damping_n_m_s_rad=20,
+	rudder_bearing_damping_n_m_s_rad=2,
+	sail_sheet_lever_arm_m=1.5,
+	max_sail_angle_rad=math.radians(90),
+	max_rudder_angle_rad=math.radians(30),
+)
+ENVIRONMENT = boat.Environment(
+	true_wind_velocity_m_s=pymunk.Vec2d(6, 0),
+	true_water_velocity_m_s=pymunk.Vec2d(0, 0),
+)
+IMPROVED_ARCADE_SETTINGS = improved_arcade.Settings(
+	turn_power_reduction=0.35,
+	steering_speed_m_s=1.5,
+	minimum_yaw_rate_scale=0.3,
+)
+SIMULATION_SETTINGS = simulation.SimulationSettings(
+	parameters=BOAT_PARAMETERS,
+	initial_boat_angle_rad=INITIAL_BOAT_ANGLE_RAD,
+	control_angle_resolution_deg=CONTROL_ANGLE_RESOLUTION_DEG,
+	sailor_max_sheet_force_n=SAILOR_MAX_SHEET_FORCE_N,
+	sailor_max_tiller_force_n=SAILOR_MAX_TILLER_FORCE_N,
+	maximum_yaw_rate_rad_s=MAXIMUM_YAW_RATE_RAD_S,
+	improved_arcade=IMPROVED_ARCADE_SETTINGS,
+)
+CONTROLLER_SETTINGS = controller.ControllerSettings(
+	mode=controller.DIRECT_GRADIENT_CONTROL,
+	use_global_slope=True,
+	angle_resolution_deg=CONTROL_ANGLE_RESOLUTION_DEG,
+)
+ASSISTED_CONTROL_SETTINGS = {
+	GUIDED_GRADIENT_CONTROL: CONTROLLER_SETTINGS,
+	GLOBAL_OPTIMUM_CONTROL: replace(
+		CONTROLLER_SETTINGS,
+		mode=controller.OPTIMIZED_TARGET_CONTROL,
+		use_global_slope=False,
+	),
+	RAW_GRADIENT_CONTROL: replace(
+		CONTROLLER_SETTINGS,
+		use_global_slope=False,
+	),
+}
 SimulationTelemetry = simulation.SimulationTelemetry
 ControllerComponent = simulation.ControllerComponent
 
@@ -43,23 +109,11 @@ HEIGHT = render.HEIGHT
 CONTROL_LANDSCAPE_RECT = render.CONTROL_LANDSCAPE_RECT
 CONTROL_GRADIENT_PIXELS_PER_ERROR = render.CONTROL_GRADIENT_PIXELS_PER_ERROR
 CONTROL_MOTION_PREVIEW_SECONDS = render.CONTROL_MOTION_PREVIEW_SECONDS
-draw = render.draw
 draw_intent = render.draw_intent
 intent_vector = render.intent_vector
 heading_intent_vector = render.heading_intent_vector
-control_gradient_vector_px = render.control_gradient_vector_px
-control_motion_vector_px = render.control_motion_vector_px
-
-create_simulation = simulation.create_simulation
 configured_assisted_controller = simulation.configured_assisted_controller
 configured_manual_controller = simulation.configured_manual_controller
-advance_game = simulation.advance_game
-advance_surface_game = simulation.advance_surface_game
-controller_input = simulation.controller_input
-surface_controller_input = simulation.surface_controller_input
-foil_control_effect = simulation.foil_control_effect
-sample_control_effects = simulation.sample_control_effects
-step = simulation.step
 
 CONTROL_MODES_BY_KEY = {
 	pygame.K_1: MANUAL_CONTROL,
@@ -73,6 +127,166 @@ CONTROL_MODES_BY_KEY = {
 	pygame.K_9: RAW_GRADIENT_CONTROL,
 }
 DEFAULT_CONTROL_MODE = IMPROVED_ARCADE_CONTROL
+
+
+def create_simulation() -> boat.SailingState:
+	return simulation.create_simulation(SIMULATION_SETTINGS)
+
+
+def controller_input(observation: boat.BoatObservation) -> controller.ControlInput:
+	return simulation.controller_input(observation, SIMULATION_SETTINGS)
+
+
+def surface_controller_input(
+	observation: boat.BoatObservation,
+	actuator_input: controller.ControlInput | None = None,
+) -> arcade.ControlInput:
+	if actuator_input is None:
+		actuator_input = controller_input(observation)
+	return simulation.surface_controller_input(
+		observation,
+		actuator_input,
+		BOAT_PARAMETERS,
+	)
+
+
+def foil_control_effect(
+	boat_angle_rad: float,
+	apparent_flow_m_s: pymunk.Vec2d,
+	hinge_position_local_m: tuple[float, float],
+	center_distance_m: float,
+	angle_rad: float,
+	fluid_density_kg_m3: float,
+	area_m2: float,
+	boat_angular_velocity_rad_s: float = 0,
+	base_drag_coefficient: float | None = None,
+) -> controller.ControlEffect:
+	return simulation.foil_control_effect(
+		boat_angle_rad,
+		apparent_flow_m_s,
+		hinge_position_local_m,
+		center_distance_m,
+		angle_rad,
+		fluid_density_kg_m3,
+		area_m2,
+		boat_angular_velocity_rad_s,
+		(
+			BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
+			if base_drag_coefficient is None
+			else base_drag_coefficient
+		),
+	)
+
+
+def sample_control_effects(
+	effect_at,
+	maximum_angle_rad: float,
+) -> tuple[controller.ControlEffect, ...]:
+	return simulation.sample_control_effects(
+		effect_at,
+		maximum_angle_rad,
+		CONTROL_ANGLE_RESOLUTION_DEG,
+	)
+
+
+def advance_game(
+	state: boat.SailingState,
+	intent: controller.MotionIntent,
+	controller_component: ControllerComponent | None,
+	environment: boat.Environment = ENVIRONMENT,
+	dt_seconds: float = DT_SECONDS,
+	physics_mode: str = LUMPED_PHYSICS,
+) -> SimulationTelemetry:
+	return simulation.advance_game(
+		state,
+		intent,
+		controller_component,
+		SIMULATION_SETTINGS,
+		environment,
+		dt_seconds,
+		physics_mode,
+	)
+
+
+def advance_surface_game(
+	state: boat.SailingState,
+	intent: arcade.AutoSheetIntent | arcade.HeadingIntent | controller.MotionIntent,
+	control_mode: str,
+	physics_mode: str,
+	environment: boat.Environment = ENVIRONMENT,
+	dt_seconds: float = DT_SECONDS,
+) -> SimulationTelemetry:
+	return simulation.advance_surface_game(
+		state,
+		intent,
+		control_mode,
+		SIMULATION_SETTINGS,
+		environment,
+		dt_seconds,
+		physics_mode,
+	)
+
+
+def step(
+	state: boat.SailingState,
+	environment: boat.Environment,
+	intent: controller.MotionIntent,
+	dt_seconds: float = DT_SECONDS,
+	control_mode: str = controller.OPTIMIZED_TARGET_CONTROL,
+	use_global_slope: bool = True,
+) -> SimulationTelemetry:
+	controller_settings = replace(
+		CONTROLLER_SETTINGS,
+		mode=control_mode,
+		use_global_slope=use_global_slope,
+	)
+	return simulation.step(
+		state,
+		environment,
+		intent,
+		SIMULATION_SETTINGS,
+		controller_settings,
+		dt_seconds,
+		LUMPED_PHYSICS,
+	)
+
+
+def draw(
+	screen,
+	font,
+	state: boat.SailingState,
+	environment: boat.Environment,
+	intent,
+	telemetry: SimulationTelemetry,
+	time_trial: course.TimeTrial | None = None,
+) -> None:
+	render.draw(
+		screen,
+		font,
+		state,
+		environment,
+		intent,
+		telemetry,
+		BOAT_PARAMETERS,
+		time_trial,
+	)
+
+
+def control_gradient_vector_px(rect, gradient) -> pymunk.Vec2d:
+	return render.control_gradient_vector_px(rect, gradient, BOAT_PARAMETERS)
+
+
+def control_motion_vector_px(
+	rect,
+	sail_angular_velocity_rad_s: float,
+	rudder_angular_velocity_rad_s: float,
+) -> pymunk.Vec2d:
+	return render.control_motion_vector_px(
+		rect,
+		sail_angular_velocity_rad_s,
+		rudder_angular_velocity_rad_s,
+		BOAT_PARAMETERS,
+	)
 
 
 def fixed_step_schedule(

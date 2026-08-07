@@ -6,6 +6,13 @@ from simple_sailing_game.controllers.assisted import MotionIntent
 
 
 class ImprovedArcadeControlTest(unittest.TestCase):
+	def settings(self):
+		return improved_arcade.Settings(
+			turn_power_reduction=0.35,
+			steering_speed_m_s=1.5,
+			minimum_yaw_rate_scale=0.3,
+		)
+
 	def control_input(self):
 		return arcade.ControlInput(
 			boat_heading_rad=0,
@@ -27,10 +34,18 @@ class ImprovedArcadeControlTest(unittest.TestCase):
 
 	def test_turning_eases_power(self):
 		straight = improved_arcade.control(
-			self.control_input(), MotionIntent(1, 0), 2, maximum_yaw_rate_rad_s=1
+			self.control_input(),
+			MotionIntent(1, 0),
+			2,
+			maximum_yaw_rate_rad_s=1,
+			settings=self.settings(),
 		)
 		turning = improved_arcade.control(
-			self.control_input(), MotionIntent(1, 1), 2, maximum_yaw_rate_rad_s=1
+			self.control_input(),
+			MotionIntent(1, 1),
+			2,
+			maximum_yaw_rate_rad_s=1,
+			settings=self.settings(),
 		)
 
 		self.assertGreater(
@@ -50,10 +65,18 @@ class ImprovedArcadeControlTest(unittest.TestCase):
 
 	def test_low_water_speed_reduces_the_requested_yaw_rate(self):
 		low_speed = improved_arcade.control(
-			self.control_input(), MotionIntent(1, 0.8), 0, maximum_yaw_rate_rad_s=1
+			self.control_input(),
+			MotionIntent(1, 0.8),
+			0,
+			maximum_yaw_rate_rad_s=1,
+			settings=self.settings(),
 		)
 		steering_speed = improved_arcade.control(
-			self.control_input(), MotionIntent(1, 0.8), 2, maximum_yaw_rate_rad_s=1
+			self.control_input(),
+			MotionIntent(1, 0.8),
+			2,
+			maximum_yaw_rate_rad_s=1,
+			settings=self.settings(),
 		)
 
 		self.assertEqual(low_speed.rudder_target_angle_rad, 0)

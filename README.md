@@ -130,10 +130,12 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 
 ## Code layout
 
-- `game.py` owns the Pygame loop and mode selection.
-- `simulation.py` owns parameters, controller-to-plant adaptation, and stepping.
+- `game.py` owns runtime parameters, controller tuning, mode selection, and the
+  Pygame loop.
+- `simulation.py` receives configuration explicitly and owns controller-to-plant
+  adaptation and stepping.
 - `input.py` converts keyboard and gamepad state to controller intent.
-- `render.py` owns Pygame drawing.
+- `render.py` receives boat parameters explicitly and owns Pygame drawing.
 
 ## Model tuning
 
