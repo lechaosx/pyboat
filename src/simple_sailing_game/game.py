@@ -6,7 +6,7 @@ import numpy as np
 import pygame
 import pymunk
 
-from . import boat, course
+from . import boat, course, input as player_input
 from .controllers import arcade, assisted as controller, improved_arcade, manual
 from .physics import coupled as articulated_model
 from .physics import dynamic as lumped_model
@@ -149,9 +149,7 @@ def keyboard_motion_intent(
 	left: bool,
 	right: bool,
 ) -> controller.MotionIntent:
-	longitudinal = int(forward) - int(backward)
-	turn = int(left) - int(right)
-	return controller.MotionIntent(longitudinal, -turn)
+	return player_input.keyboard_motion(forward, backward, left, right)
 
 
 def keyboard_heading_intent(
@@ -162,13 +160,8 @@ def keyboard_heading_intent(
 	right: bool,
 	explicit_reverse: bool,
 ) -> arcade.HeadingIntent:
-	world_direction = pymunk.Vec2d(
-		int(forward) - int(backward),
-		int(right) - int(left),
-	).rotated(boat_heading_rad)
-	return arcade.HeadingIntent(
-		world_direction=tuple(world_direction),
-		explicit_reverse=explicit_reverse,
+	return player_input.keyboard_heading(
+		boat_heading_rad, forward, backward, left, right, explicit_reverse
 	)
 
 
@@ -177,10 +170,7 @@ def keyboard_auto_sheet_intent(
 	left: bool,
 	right: bool,
 ) -> arcade.AutoSheetIntent:
-	return arcade.AutoSheetIntent(
-		power=int(forward),
-		rudder=int(left) - int(right),
-	)
+	return player_input.keyboard_auto_sheet(forward, left, right)
 
 
 def keyboard_manual_input(
@@ -193,31 +183,15 @@ def keyboard_manual_input(
 	sail_left: bool,
 	sail_right: bool,
 ) -> manual.DirectionInput:
-	def direction(
-		forward: bool,
-		backward: bool,
-		left: bool,
-		right: bool,
-	) -> tuple[float, float]:
-		vector = pymunk.Vec2d(
-			int(forward) - int(backward),
-			int(right) - int(left),
-		)
-		return (0, 0) if not vector.length else tuple(vector.normalized())
-
-	return manual.DirectionInput(
-		sail_direction=direction(
-			sail_forward,
-			sail_backward,
-			sail_left,
-			sail_right,
-		),
-		rudder_direction=direction(
-			rudder_forward,
-			rudder_backward,
-			rudder_left,
-			rudder_right,
-		),
+	return player_input.keyboard_manual(
+		rudder_forward,
+		rudder_backward,
+		rudder_left,
+		rudder_right,
+		sail_forward,
+		sail_backward,
+		sail_left,
+		sail_right,
 	)
 
 
@@ -228,15 +202,13 @@ def analog_manual_input(
 	sail_stick_x: float,
 	sail_stick_y: float,
 ) -> manual.DirectionInput:
-	def direction(x: float, y: float) -> tuple[float, float]:
-		vector = pymunk.Vec2d(x, y)
-		if vector.length <= ANALOG_STICK_DEADZONE:
-			return (0, 0)
-		return tuple(vector.normalized().rotated(-boat_heading_rad))
-
-	return manual.DirectionInput(
-		sail_direction=direction(sail_stick_x, sail_stick_y),
-		rudder_direction=direction(rudder_stick_x, rudder_stick_y),
+	return player_input.analog_manual(
+		boat_heading_rad,
+		rudder_stick_x,
+		rudder_stick_y,
+		sail_stick_x,
+		sail_stick_y,
+		ANALOG_STICK_DEADZONE,
 	)
 
 
@@ -251,19 +223,9 @@ def analog_motion_intent(
 	stick_x: float,
 	stick_y: float,
 ) -> controller.MotionIntent:
-	world_vector = pymunk.Vec2d(stick_x, stick_y)
-	magnitude = min(1.0, world_vector.length)
-	if magnitude <= ANALOG_STICK_DEADZONE:
-		return controller.MotionIntent()
-	if math.isclose(magnitude, 1):
-		magnitude = 1
-	local_direction = world_vector.normalized().rotated(-boat_heading_rad)
-	square_scale = max(abs(local_direction.x), abs(local_direction.y))
-	local_intent = local_direction / square_scale * magnitude
-	zero_tolerance = math.ulp(2 * math.pi)
-	forward = 0 if math.isclose(local_intent.x, 0, abs_tol=zero_tolerance) else local_intent.x
-	turn = 0 if math.isclose(local_intent.y, 0, abs_tol=zero_tolerance) else local_intent.y
-	return controller.MotionIntent(forward, turn)
+	return player_input.analog_motion(
+		boat_heading_rad, stick_x, stick_y, ANALOG_STICK_DEADZONE
+	)
 
 
 def analog_heading_intent(
@@ -271,21 +233,16 @@ def analog_heading_intent(
 	stick_y: float,
 	explicit_reverse: bool,
 ) -> arcade.HeadingIntent:
-	world_vector = pymunk.Vec2d(stick_x, stick_y)
-	world_direction = (0, 0)
-	if world_vector.length > ANALOG_STICK_DEADZONE:
-		world_direction = (stick_x, stick_y)
-	return arcade.HeadingIntent(world_direction, explicit_reverse)
+	return player_input.analog_heading(
+		stick_x, stick_y, explicit_reverse, ANALOG_STICK_DEADZONE
+	)
 
 
 def analog_auto_sheet_intent(
 	power_axis: float,
 	rudder_axis: float,
 ) -> arcade.AutoSheetIntent:
-	return arcade.AutoSheetIntent(
-		power=max(0, min(1, -power_axis)),
-		rudder=max(-1, min(1, rudder_axis)),
-	)
+	return player_input.analog_auto_sheet(power_axis, rudder_axis)
 
 
 def intent_vector(
