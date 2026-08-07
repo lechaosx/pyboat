@@ -41,7 +41,7 @@ MAX_RUDDER_ANGLE_RAD = BOAT_PARAMETERS.max_rudder_angle_rad
 def drag_coefficient(angle_of_attack_rad):
 	return boat.drag_coefficient(
 		angle_of_attack_rad,
-		BOAT_PARAMETERS.foil_base_drag_coefficient,
+		BOAT_PARAMETERS.underwater_foil_base_drag_coefficient,
 	)
 
 
@@ -56,7 +56,7 @@ def force_on_foil(
 		foil_angle_rad,
 		fluid_density_kg_m3,
 		area_m2,
-		BOAT_PARAMETERS.foil_base_drag_coefficient,
+		BOAT_PARAMETERS.underwater_foil_base_drag_coefficient,
 	)
 
 
@@ -1039,7 +1039,7 @@ class ModelAndActuatorTest(unittest.TestCase):
 
 		dynamic_pressure = 0.5 * BOAT_PARAMETERS.air_density_kg_m3 * flow.length**2
 		expected_drag = (
-			dynamic_pressure * area_m2 * BOAT_PARAMETERS.foil_base_drag_coefficient
+			dynamic_pressure * area_m2 * BOAT_PARAMETERS.sail_base_drag_coefficient
 		)
 		self.assertAlmostEqual(force.x, expected_drag)
 		self.assertAlmostEqual(force.y, 0)

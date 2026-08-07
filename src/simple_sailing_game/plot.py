@@ -12,7 +12,7 @@ lift = boat.lift_coefficient
 def drag(angle_of_attack_rad: float) -> float:
 	return boat.drag_coefficient(
 		angle_of_attack_rad,
-		BOAT_PARAMETERS.foil_base_drag_coefficient,
+		BOAT_PARAMETERS.sail_base_drag_coefficient,
 	)
 
 

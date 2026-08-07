@@ -60,6 +60,7 @@ BOAT_PARAMETERS = boat.BoatParameters(
 	sail_center_of_effort_from_mast_m=0.7,
 	sail_mass_kg=12,
 	keel_area_m2=0.6,
+	keel_position_m=(-0.1, 0),
 	rudder_area_m2=0.12,
 	rudder_draw_length_m=0.5,
 	rudder_mass_kg=4,
@@ -68,7 +69,8 @@ BOAT_PARAMETERS = boat.BoatParameters(
 	rudder_position_m=(-1.8, 0),
 	hull_reference_area_m2=0.3,
 	hull_drag_coefficient=0.08,
-	foil_base_drag_coefficient=0.02,
+	sail_base_drag_coefficient=0.02,
+	underwater_foil_base_drag_coefficient=0.02,
 	sail_bearing_damping_n_m_s_rad=20,
 	rudder_bearing_damping_n_m_s_rad=2,
 	sail_sheet_lever_arm_m=1.5,
@@ -312,6 +314,7 @@ def foil_control_effect(
 	fluid_density_kg_m3: float,
 	area_m2: float,
 	boat_angular_velocity_rad_s: float = 0,
+	base_drag_coefficient: float | None = None,
 ) -> controller.ControlEffect:
 	center_local_m = (
 		pymunk.Vec2d(*hinge_position_local_m)
@@ -327,7 +330,11 @@ def foil_control_effect(
 		boat_angle_rad + angle_rad,
 		fluid_density_kg_m3,
 		area_m2,
-		BOAT_PARAMETERS.foil_base_drag_coefficient,
+		(
+			BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
+			if base_drag_coefficient is None
+			else base_drag_coefficient
+		),
 	)
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 	return controller.ControlEffect(
@@ -364,6 +371,7 @@ def controller_input(observation: boat.BoatObservation) -> controller.ControlInp
 			BOAT_PARAMETERS.air_density_kg_m3,
 			BOAT_PARAMETERS.sail_area_m2,
 			observation.boat_angular_velocity_rad_s,
+			BOAT_PARAMETERS.sail_base_drag_coefficient,
 		)
 
 	def rudder_effect_at(angle_rad: float) -> controller.ControlEffect:
@@ -376,6 +384,7 @@ def controller_input(observation: boat.BoatObservation) -> controller.ControlInp
 			BOAT_PARAMETERS.water_density_kg_m3,
 			BOAT_PARAMETERS.rudder_area_m2,
 			observation.boat_angular_velocity_rad_s,
+			BOAT_PARAMETERS.underwater_foil_base_drag_coefficient,
 		)
 
 	sail_candidates = sample_control_effects(

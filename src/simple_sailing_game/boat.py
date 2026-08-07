@@ -19,6 +19,7 @@ class BoatParameters:
 	sail_center_of_effort_from_mast_m: float
 	sail_mass_kg: float
 	keel_area_m2: float
+	keel_position_m: tuple[float, float]
 	rudder_area_m2: float
 	rudder_draw_length_m: float
 	rudder_mass_kg: float
@@ -27,7 +28,8 @@ class BoatParameters:
 	rudder_position_m: tuple[float, float]
 	hull_reference_area_m2: float
 	hull_drag_coefficient: float
-	foil_base_drag_coefficient: float
+	sail_base_drag_coefficient: float
+	underwater_foil_base_drag_coefficient: float
 	sail_bearing_damping_n_m_s_rad: float
 	rudder_bearing_damping_n_m_s_rad: float
 	sail_sheet_lever_arm_m: float
@@ -238,6 +240,24 @@ def drag_force(
 	)
 
 
+def hull_resistance_force(
+	apparent_water_m_s: pymunk.Vec2d,
+	boat_angle_rad: float,
+	fluid_density_kg_m3: float,
+	reference_area_m2: float,
+	coefficient: float,
+) -> pymunk.Vec2d:
+	"""Quadratic resistance along the hull; the keel supplies lateral resistance."""
+	local_flow_m_s = apparent_water_m_s.rotated(-boat_angle_rad)
+	longitudinal_flow_m_s = pymunk.Vec2d(local_flow_m_s.x, 0)
+	return drag_force(
+		longitudinal_flow_m_s,
+		fluid_density_kg_m3,
+		reference_area_m2,
+		coefficient,
+	).rotated(boat_angle_rad)
+
+
 def hinged_foil_load(
 	body: pymunk.Body,
 	medium_velocity_m_s: pymunk.Vec2d,
@@ -328,7 +348,7 @@ def observe(
 		state.sail_angular_velocity_rad_s,
 		parameters.air_density_kg_m3,
 		parameters.sail_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.sail_base_drag_coefficient,
 	)
 	rudder_load = hinged_foil_load(
 		state.boat,
@@ -339,7 +359,7 @@ def observe(
 		state.rudder_angular_velocity_rad_s,
 		parameters.water_density_kg_m3,
 		parameters.rudder_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.underwater_foil_base_drag_coefficient,
 	)
 	return BoatObservation(
 		state.boat.angle,

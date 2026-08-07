@@ -13,10 +13,11 @@ def step_hull(
 		state.boat.angle,
 		parameters.water_density_kg_m3,
 		parameters.keel_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.underwater_foil_base_drag_coefficient,
 	)
-	hull_drag_n = boat.drag_force(
+	hull_drag_n = boat.hull_resistance_force(
 		observation.apparent_water_m_s,
+		state.boat.angle,
 		parameters.water_density_kg_m3,
 		parameters.hull_reference_area_m2,
 		parameters.hull_drag_coefficient,
@@ -27,8 +28,11 @@ def step_hull(
 		observation.sail_load.center_local_m,
 	)
 	state.boat.apply_force_at_local_point(
-		keel_force_n.rotated(-state.boat.angle)
-		+ hull_drag_n.rotated(-state.boat.angle),
+		keel_force_n.rotated(-state.boat.angle),
+		parameters.keel_position_m,
+	)
+	state.boat.apply_force_at_local_point(
+		hull_drag_n.rotated(-state.boat.angle),
 		(0, 0),
 	)
 	state.boat.apply_force_at_local_point(

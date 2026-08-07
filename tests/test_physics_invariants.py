@@ -10,13 +10,47 @@ from simple_sailing_game.physics import coupled, dynamic
 
 
 class ForceInvariantTest(unittest.TestCase):
+	def test_hull_resistance_is_longitudinal_in_boat_coordinates(self):
+		force = boat.hull_resistance_force(
+			pymunk.Vec2d(3, 4),
+			boat_angle_rad=0,
+			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
+			reference_area_m2=game.BOAT_PARAMETERS.hull_reference_area_m2,
+			coefficient=game.BOAT_PARAMETERS.hull_drag_coefficient,
+		)
+
+		self.assertGreater(force.x, 0)
+		self.assertEqual(force.y, 0)
+
+	def test_offset_keel_force_generates_hull_yaw(self):
+		parameters = replace(
+			game.BOAT_PARAMETERS,
+			keel_position_m=(-1, 0),
+			air_density_kg_m3=0,
+			hull_drag_coefficient=0,
+		)
+		state = boat.create_simulation(parameters, 0)
+		state.boat.velocity = pymunk.Vec2d(0, 1)
+
+		dynamic.step(
+			state,
+			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
+			parameters,
+			boat.ActuatorTorques(),
+			game.DT_SECONDS,
+		)
+
+		self.assertGreater(state.boat.angular_velocity, 0)
+
 	def test_zero_flow_produces_zero_foil_force(self):
 		force = boat.force_on_foil(
 			pymunk.Vec2d(0, 0),
 			foil_angle_rad=1,
 			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
 			area_m2=1,
-			base_drag_coefficient=game.BOAT_PARAMETERS.foil_base_drag_coefficient,
+			base_drag_coefficient=(
+				game.BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
+			),
 		)
 
 		self.assertEqual(force, (0, 0))
@@ -31,7 +65,7 @@ class ForceInvariantTest(unittest.TestCase):
 					game.BOAT_PARAMETERS.water_density_kg_m3,
 					area_m2=1,
 					base_drag_coefficient=(
-						game.BOAT_PARAMETERS.foil_base_drag_coefficient
+						game.BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
 					),
 				)
 				self.assertGreaterEqual(force.dot(flow), -1e-9)

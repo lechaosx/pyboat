@@ -266,7 +266,7 @@ def step(
 		parameters.sail_center_of_effort_from_mast_m,
 		parameters.air_density_kg_m3,
 		parameters.sail_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.sail_base_drag_coefficient,
 	)
 	rudder_load = _surface_load(
 		hull,
@@ -276,7 +276,7 @@ def step(
 		parameters.rudder_draw_length_m / 2,
 		parameters.water_density_kg_m3,
 		parameters.rudder_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.underwater_foil_base_drag_coefficient,
 	)
 	observation = boat.BoatObservation(
 		hull.angle,
@@ -296,10 +296,11 @@ def step(
 		hull.angle,
 		parameters.water_density_kg_m3,
 		parameters.keel_area_m2,
-		parameters.foil_base_drag_coefficient,
+		parameters.underwater_foil_base_drag_coefficient,
 	)
-	hull_drag_n = boat.drag_force(
+	hull_drag_n = boat.hull_resistance_force(
 		apparent_water_m_s,
+		hull.angle,
 		parameters.water_density_kg_m3,
 		parameters.hull_reference_area_m2,
 		parameters.hull_drag_coefficient,
@@ -312,7 +313,11 @@ def step(
 		rudder_load.force_n,
 		rudder_center_world_m,
 	)
-	hull.apply_force_at_world_point(keel_force_n + hull_drag_n, hull.position)
+	hull.apply_force_at_local_point(
+		keel_force_n.rotated(-hull.angle),
+		parameters.keel_position_m,
+	)
+	hull.apply_force_at_world_point(hull_drag_n, hull.position)
 	assembly.sail.torque += actuator_torques.sail_n_m
 	hull.torque -= actuator_torques.sail_n_m
 	assembly.rudder.torque += actuator_torques.rudder_n_m
