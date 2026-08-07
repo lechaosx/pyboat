@@ -179,7 +179,7 @@ def desired_turn(
 		yaw_stiffness_n_m_rad = positive_moment_n_m
 	damping_n_m_s_rad = 2 * math.sqrt(
 		yaw_stiffness_n_m_rad
-		* boat.boat_moment_of_inertia_kg_m2(game.BOAT_PARAMETERS)
+		* boat.lumped_moment_of_inertia_kg_m2(game.BOAT_PARAMETERS)
 	)
 	required_moment_n_m = -angular_velocity_rad_s * damping_n_m_s_rad
 	return max(
@@ -645,7 +645,28 @@ class ControlModelSpecificationTest(unittest.TestCase):
 
 
 class ManualControlTest(unittest.TestCase):
-	def test_held_controls_apply_full_sailor_torque(self):
+	def test_surface_direction_converts_to_a_bounded_actuator_angle(self):
+		maximum_angle_rad = math.pi / 6
+
+		self.assertEqual(
+			manual.direction_angle_rad((1, 0), maximum_angle_rad),
+			0,
+		)
+		self.assertAlmostEqual(
+			manual.direction_angle_rad((0, -1), maximum_angle_rad),
+			-maximum_angle_rad,
+		)
+		self.assertAlmostEqual(
+			manual.direction_angle_rad((0, 1), maximum_angle_rad),
+			maximum_angle_rad,
+		)
+		self.assertAlmostEqual(
+			manual.direction_angle_rad((-1, 0), maximum_angle_rad),
+			maximum_angle_rad,
+		)
+		self.assertIsNone(manual.direction_angle_rad((0, 0), maximum_angle_rad))
+
+	def test_desired_directions_drive_surfaces_toward_target_angles(self):
 		control_input = controller_input_from_flows(
 			boat_angle_rad=0,
 			boat_angular_velocity_rad_s=0,
@@ -656,8 +677,10 @@ class ManualControlTest(unittest.TestCase):
 		output = manual.control(
 			control_input.sail,
 			control_input.rudder,
-			manual.ManualInput(sail=-1, rudder=1),
-			game.DT_SECONDS,
+			manual.DirectionInput(
+				sail_direction=(0, -1),
+				rudder_direction=(0, 1),
+			),
 		)
 
 		self.assertEqual(
@@ -669,7 +692,7 @@ class ManualControlTest(unittest.TestCase):
 			control_input.rudder.maximum_torque_n_m,
 		)
 
-	def test_released_controls_brake_and_hold_their_current_angles(self):
+	def test_neutral_directions_release_surfaces_to_fluid_loads(self):
 		control_input = controller_input_from_flows(
 			boat_angle_rad=0,
 			boat_angular_velocity_rad_s=0,
@@ -695,64 +718,11 @@ class ManualControlTest(unittest.TestCase):
 		output = manual.control(
 			control_input.sail,
 			control_input.rudder,
-			manual.ManualInput(),
-			game.DT_SECONDS,
+			manual.DirectionInput(),
 		)
 
-		self.assertEqual(
-			output.sail_n_m,
-			max(
-				-control_input.sail.maximum_torque_n_m,
-				min(
-					control_input.sail.maximum_torque_n_m,
-					-control_input.sail.moment_of_inertia_kg_m2
-					* control_input.sail.angular_velocity_rad_s
-					/ game.DT_SECONDS
-					- control_input.sail.external_torque_n_m
-					+ control_input.sail.angular_velocity_rad_s
-					* control_input.sail.bearing_damping_n_m_s_rad,
-				),
-			),
-		)
-		self.assertEqual(
-			output.rudder_n_m,
-			max(
-				-control_input.rudder.maximum_torque_n_m,
-				min(
-					control_input.rudder.maximum_torque_n_m,
-					-control_input.rudder.moment_of_inertia_kg_m2
-					* control_input.rudder.angular_velocity_rad_s
-					/ game.DT_SECONDS
-					- control_input.rudder.external_torque_n_m
-					+ control_input.rudder.angular_velocity_rad_s
-					* control_input.rudder.bearing_damping_n_m_s_rad,
-				),
-			),
-		)
-
-	def test_analog_deflection_scales_direct_sailor_torque(self):
-		control_input = controller_input_from_flows(
-			boat_angle_rad=0,
-			boat_angular_velocity_rad_s=0,
-			apparent_wind_m_s=pymunk.Vec2d(6, 0),
-			apparent_water_m_s=pymunk.Vec2d(-2, 0),
-		)
-
-		output = manual.control(
-			control_input.sail,
-			control_input.rudder,
-			manual.ManualInput(sail=0.25, rudder=-0.5),
-			game.DT_SECONDS,
-		)
-
-		self.assertEqual(
-			output.sail_n_m,
-			0.25 * control_input.sail.maximum_torque_n_m,
-		)
-		self.assertEqual(
-			output.rudder_n_m,
-			-0.5 * control_input.rudder.maximum_torque_n_m,
-		)
+		self.assertEqual(output.sail_n_m, 0)
+		self.assertEqual(output.rudder_n_m, 0)
 
 
 if __name__ == "__main__":

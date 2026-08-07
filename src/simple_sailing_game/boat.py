@@ -8,7 +8,7 @@ import pymunk
 class BoatParameters:
 	air_density_kg_m3: float
 	water_density_kg_m3: float
-	mass_kg: float
+	hull_mass_kg: float
 	length_m: float
 	beam_m: float
 	bow_length_m: float
@@ -49,6 +49,7 @@ class SailingState:
 	sail_angular_velocity_rad_s: float = 0
 	rudder_angle_rad: float = 0
 	rudder_angular_velocity_rad_s: float = 0
+	coupled_assembly: object | None = None
 
 
 @dataclass(frozen=True)
@@ -81,14 +82,26 @@ class BoatObservation:
 
 @dataclass(frozen=True)
 class PhysicsTelemetry:
+	"""Loads and observation used to advance the most recent physics step."""
+
 	observation: BoatObservation
 	keel_force_n: pymunk.Vec2d
 	hull_drag_n: pymunk.Vec2d
 
 
-def boat_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+def total_mass_kg(parameters: BoatParameters) -> float:
 	return (
-		parameters.mass_kg
+		parameters.hull_mass_kg
+		+ parameters.sail_mass_kg
+		+ parameters.boom_mass_kg
+		+ parameters.rudder_mass_kg
+		+ parameters.tiller_mass_kg
+	)
+
+
+def hull_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+	return (
+		parameters.hull_mass_kg
 		* (parameters.length_m**2 + parameters.beam_m**2)
 		/ 12
 	)
@@ -109,11 +122,73 @@ def rudder_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
 	)
 
 
+def sail_center_from_mast_m(parameters: BoatParameters) -> pymunk.Vec2d:
+	return pymunk.Vec2d(-parameters.boom_length_m / 2, 0)
+
+
+def rudder_center_from_hinge_m(parameters: BoatParameters) -> pymunk.Vec2d:
+	mass_kg = parameters.rudder_mass_kg + parameters.tiller_mass_kg
+	return pymunk.Vec2d(
+		(
+			-parameters.rudder_mass_kg * parameters.rudder_draw_length_m / 2
+			+ parameters.tiller_mass_kg * parameters.tiller_length_m / 2
+		)
+		/ mass_kg,
+		0,
+	)
+
+
+def sail_center_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+	mass_kg = parameters.sail_mass_kg + parameters.boom_mass_kg
+	return sail_moment_of_inertia_kg_m2(parameters) - mass_kg * (
+		sail_center_from_mast_m(parameters).length**2
+	)
+
+
+def rudder_center_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+	mass_kg = parameters.rudder_mass_kg + parameters.tiller_mass_kg
+	return rudder_moment_of_inertia_kg_m2(parameters) - mass_kg * (
+		rudder_center_from_hinge_m(parameters).length**2
+	)
+
+
+def lumped_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+	return (
+		total_mass_kg(parameters)
+		* (parameters.length_m**2 + parameters.beam_m**2)
+		/ 12
+	)
+
+
 def apparent_flow(
 	medium_velocity_m_s: pymunk.Vec2d,
 	point_velocity_m_s: pymunk.Vec2d,
 ) -> pymunk.Vec2d:
 	return medium_velocity_m_s - point_velocity_m_s
+
+
+def luffing_sail_angle(
+	boat_angle_rad: float,
+	apparent_wind_m_s: pymunk.Vec2d,
+) -> float:
+	if not apparent_wind_m_s.length:
+		return 0
+	upstream_angle_rad = apparent_wind_m_s.angle + math.pi
+	return math.remainder(upstream_angle_rad - boat_angle_rad, math.pi)
+
+
+def free_sail_angle(
+	boat_angle_rad: float,
+	apparent_wind_m_s: pymunk.Vec2d,
+	maximum_angle_rad: float,
+) -> float:
+	if not apparent_wind_m_s.length:
+		return 0
+	boom_angle_rad = math.remainder(
+		apparent_wind_m_s.angle - boat_angle_rad - math.pi,
+		2 * math.pi,
+	)
+	return max(-maximum_angle_rad, min(maximum_angle_rad, boom_angle_rad))
 
 
 def lift_coefficient(angle_of_attack_rad: float) -> float:
@@ -222,8 +297,8 @@ def create_simulation(
 ) -> SailingState:
 	space = pymunk.Space()
 	body = pymunk.Body(
-		parameters.mass_kg,
-		boat_moment_of_inertia_kg_m2(parameters),
+		total_mass_kg(parameters),
+		lumped_moment_of_inertia_kg_m2(parameters),
 	)
 	body.angle = initial_angle_rad
 	shape = pymunk.Poly.create_box(body, (parameters.length_m, parameters.beam_m))
@@ -279,61 +354,3 @@ def observe(
 		sail_load,
 		rudder_load,
 	)
-
-
-def step(
-	state: SailingState,
-	environment: Environment,
-	parameters: BoatParameters,
-	actuator_torques: ActuatorTorques,
-	dt_seconds: float,
-) -> PhysicsTelemetry:
-	observation = observe(state, environment, parameters)
-	keel_force_n = force_on_foil(
-		observation.apparent_water_m_s,
-		state.boat.angle,
-		parameters.water_density_kg_m3,
-		parameters.keel_area_m2,
-		parameters.foil_base_drag_coefficient,
-	)
-	hull_drag_n = drag_force(
-		observation.apparent_water_m_s,
-		parameters.water_density_kg_m3,
-		parameters.hull_reference_area_m2,
-		parameters.hull_drag_coefficient,
-	)
-
-	state.boat.apply_force_at_local_point(
-		observation.sail_load.force_n.rotated(-state.boat.angle),
-		observation.sail_load.center_local_m,
-	)
-	state.boat.apply_force_at_local_point(
-		keel_force_n.rotated(-state.boat.angle)
-		+ hull_drag_n.rotated(-state.boat.angle),
-		(0, 0),
-	)
-	state.boat.apply_force_at_local_point(
-		observation.rudder_load.force_n.rotated(-state.boat.angle),
-		observation.rudder_load.center_local_m,
-	)
-	state.space.step(dt_seconds)
-
-	state.sail_angle_rad, state.sail_angular_velocity_rad_s = integrate_hinge(
-		state.sail_angle_rad,
-		state.sail_angular_velocity_rad_s,
-		observation.sail_load.torque_n_m + actuator_torques.sail_n_m,
-		sail_moment_of_inertia_kg_m2(parameters),
-		parameters.sail_bearing_damping_n_m_s_rad,
-		parameters.max_sail_angle_rad,
-		dt_seconds,
-	)
-	state.rudder_angle_rad, state.rudder_angular_velocity_rad_s = integrate_hinge(
-		state.rudder_angle_rad,
-		state.rudder_angular_velocity_rad_s,
-		observation.rudder_load.torque_n_m + actuator_torques.rudder_n_m,
-		rudder_moment_of_inertia_kg_m2(parameters),
-		parameters.rudder_bearing_damping_n_m_s_rad,
-		parameters.max_rudder_angle_rad,
-		dt_seconds,
-	)
-	return PhysicsTelemetry(observation, keel_force_n, hull_drag_n)

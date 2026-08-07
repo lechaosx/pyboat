@@ -3,12 +3,14 @@ import os
 import subprocess
 import sys
 import unittest
+from dataclasses import replace
 
 import pymunk
 import pygame
 from simple_sailing_game import boat, plot
-from simple_sailing_game.controllers import assisted as controller, manual
+from simple_sailing_game.controllers import arcade, assisted as controller, manual
 from simple_sailing_game import game
+from simple_sailing_game.physics import dynamic
 
 from simple_sailing_game.game import (
 	ANALOG_STICK_DEADZONE,
@@ -121,41 +123,177 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
-	def test_manual_keys_control_rudder_and_sail_axes(self):
-		self.assertEqual(
-			game.keyboard_manual_input(
-				rudder_left=True,
-				rudder_right=False,
-				sail_left=False,
-				sail_right=True,
-			),
-			manual.ManualInput(sail=1, rudder=-1),
+	def test_auto_sheet_keyboard_reverses_rudder_keys(self):
+		left = game.keyboard_auto_sheet_intent(
+			forward=False,
+			left=True,
+			right=False,
+		)
+		right = game.keyboard_auto_sheet_intent(
+			forward=False,
+			left=False,
+			right=True,
 		)
 
-	def test_manual_mode_toggle_round_trips(self):
-		manual = game.toggled_control_mode(game.ASSISTED_CONTROL)
+		self.assertEqual(left.rudder, 1)
+		self.assertEqual(right.rudder, -1)
 
-		self.assertEqual(manual, game.MANUAL_CONTROL)
+	def test_physics_toggle_cycles_both_models(self):
 		self.assertEqual(
-			game.toggled_control_mode(manual),
-			game.ASSISTED_CONTROL,
+			game.next_physics_mode(game.DYNAMIC_PHYSICS),
+			game.COUPLED_PHYSICS,
+		)
+		self.assertEqual(
+			game.next_physics_mode(game.COUPLED_PHYSICS),
+			game.DYNAMIC_PHYSICS,
 		)
 
-	def test_manual_sticks_map_left_to_rudder_and_right_to_sail(self):
-		self.assertEqual(
-			game.analog_manual_input(
-				rudder_stick_x=-0.5,
-				sail_stick_x=0.25,
-			),
-			manual.ManualInput(sail=0.25, rudder=-0.5),
+	def test_fixed_step_schedule_carries_partial_time_between_frames(self):
+		steps, remaining_seconds = game.fixed_step_schedule(
+			accumulated_seconds=0,
+			elapsed_seconds=DT_SECONDS * 1.5,
 		)
-		self.assertEqual(
-			game.analog_manual_input(
-				rudder_stick_x=game.ANALOG_STICK_DEADZONE / 2,
-				sail_stick_x=0,
-			),
-			manual.ManualInput(),
+		self.assertEqual(steps, 1)
+		self.assertAlmostEqual(remaining_seconds, DT_SECONDS / 2)
+
+		steps, remaining_seconds = game.fixed_step_schedule(
+			accumulated_seconds=remaining_seconds,
+			elapsed_seconds=DT_SECONDS / 2,
 		)
+		self.assertEqual(steps, 1)
+		self.assertAlmostEqual(remaining_seconds, 0)
+
+	def test_analog_heading_intent_preserves_world_direction(self):
+		intent = game.analog_heading_intent(
+			stick_x=-1,
+			stick_y=0.25,
+			explicit_reverse=False,
+		)
+
+		self.assertEqual(intent.world_direction, (-1, 0.25))
+		self.assertFalse(intent.explicit_reverse)
+
+	def test_arcade_keyboard_rotates_boat_relative_wasd_into_world_direction(self):
+		forward = game.keyboard_heading_intent(
+			boat_heading_rad=math.pi / 2,
+			forward=True,
+			backward=False,
+			left=False,
+			right=False,
+			explicit_reverse=False,
+		)
+		backward = game.keyboard_heading_intent(
+			boat_heading_rad=math.pi / 2,
+			forward=False,
+			backward=True,
+			left=False,
+			right=False,
+			explicit_reverse=False,
+		)
+
+		self.assertAlmostEqual(forward.world_direction[0], 0)
+		self.assertAlmostEqual(forward.world_direction[1], 1)
+		self.assertAlmostEqual(backward.world_direction[0], 0)
+		self.assertAlmostEqual(backward.world_direction[1], -1)
+
+	def test_space_reverse_is_separate_from_keyboard_direction(self):
+		self.assertEqual(
+			game.keyboard_heading_intent(
+				boat_heading_rad=0,
+				forward=False,
+				backward=False,
+				left=False,
+				right=False,
+				explicit_reverse=True,
+			),
+			arcade.HeadingIntent(explicit_reverse=True),
+		)
+
+	def test_heading_visualization_uses_world_direction_without_boat_rotation(self):
+		intent = arcade.HeadingIntent(world_direction=(0.25, -0.5))
+
+		self.assertEqual(game.heading_intent_vector(intent), (0.25, -0.5))
+
+	def test_reverse_modifier_without_direction_draws_no_intent_arrow(self):
+		pygame.font.init()
+		screen = pygame.Surface((800, 600))
+		screen.fill((0, 0, 0))
+		game.draw_intent(
+			screen,
+			pygame.font.Font(None, 24),
+			pymunk.Vec2d(400, 300),
+			boat_heading_rad=0,
+			intent=arcade.HeadingIntent(explicit_reverse=True),
+		)
+
+		self.assertEqual(screen.get_at((450, 300))[:3], (0, 0, 0))
+
+	def test_manual_keys_set_boat_relative_rudder_and_sail_directions(self):
+		manual_input = game.keyboard_manual_input(
+			rudder_forward=True,
+			rudder_backward=False,
+			rudder_left=True,
+			rudder_right=False,
+			sail_forward=False,
+			sail_backward=True,
+			sail_left=False,
+			sail_right=True,
+		)
+
+		root_half = math.sqrt(0.5)
+		self.assertAlmostEqual(manual_input.rudder_direction[0], root_half)
+		self.assertAlmostEqual(manual_input.rudder_direction[1], -root_half)
+		self.assertAlmostEqual(manual_input.sail_direction[0], -root_half)
+		self.assertAlmostEqual(manual_input.sail_direction[1], root_half)
+
+	def test_assisted_controller_modes_have_distinct_strategies(self):
+		guided = game.ASSISTED_CONTROL_SETTINGS[game.GUIDED_GRADIENT_CONTROL]
+		global_optimum = game.ASSISTED_CONTROL_SETTINGS[game.GLOBAL_OPTIMUM_CONTROL]
+		raw = game.ASSISTED_CONTROL_SETTINGS[game.RAW_GRADIENT_CONTROL]
+
+		self.assertEqual(guided.mode, controller.DIRECT_GRADIENT_CONTROL)
+		self.assertTrue(guided.use_global_slope)
+		self.assertEqual(global_optimum.mode, controller.OPTIMIZED_TARGET_CONTROL)
+		self.assertFalse(global_optimum.use_global_slope)
+		self.assertEqual(raw.mode, controller.DIRECT_GRADIENT_CONTROL)
+		self.assertFalse(raw.use_global_slope)
+
+	def test_manual_mode_toggle_accepts_each_assisted_controller(self):
+		for assisted_mode in game.ASSISTED_CONTROL_SETTINGS:
+			with self.subTest(assisted_mode=assisted_mode):
+				self.assertEqual(
+					game.toggled_control_mode(assisted_mode),
+					game.MANUAL_CONTROL,
+				)
+		self.assertEqual(
+			game.toggled_control_mode(game.MANUAL_CONTROL),
+			game.GUIDED_GRADIENT_CONTROL,
+		)
+
+	def test_manual_sticks_map_world_directions_into_boat_space(self):
+		manual_input = game.analog_manual_input(
+			boat_heading_rad=math.pi / 2,
+			rudder_stick_x=1,
+			rudder_stick_y=0,
+			sail_stick_x=0,
+			sail_stick_y=1,
+		)
+
+		self.assertAlmostEqual(manual_input.rudder_direction[0], 0)
+		self.assertAlmostEqual(manual_input.rudder_direction[1], -1)
+		self.assertAlmostEqual(manual_input.sail_direction[0], 1)
+		self.assertAlmostEqual(manual_input.sail_direction[1], 0)
+
+	def test_manual_stick_deadzone_releases_both_surfaces(self):
+		manual_input = game.analog_manual_input(
+			boat_heading_rad=0,
+			rudder_stick_x=game.ANALOG_STICK_DEADZONE / 2,
+			rudder_stick_y=0,
+			sail_stick_x=0,
+			sail_stick_y=game.ANALOG_STICK_DEADZONE / 2,
+		)
+
+		self.assertEqual(manual_input, manual.DirectionInput())
 
 	def test_interactive_game_starts_in_direct_gradient_mode(self):
 		self.assertEqual(
@@ -296,6 +434,200 @@ class InputAdapterTest(unittest.TestCase):
 
 
 class SailingSimulationTest(unittest.TestCase):
+	def test_coupled_auto_sheet_surfaces_settle_without_chatter(self):
+		simulation = create_simulation()
+		angles = []
+		for step_index in range(round(12 / DT_SECONDS)):
+			game.advance_surface_game(
+				simulation,
+				arcade.AutoSheetIntent(power=1, rudder=0),
+				game.AUTO_SHEET_CONTROL,
+				game.COUPLED_PHYSICS,
+			)
+			if step_index >= round(10 / DT_SECONDS):
+				angles.append(
+					(simulation.sail_angle_rad, simulation.rudder_angle_rad)
+				)
+
+		for surface_angles in zip(*angles):
+			self.assertLess(
+				max(surface_angles) - min(surface_angles),
+				math.radians(0.1),
+			)
+
+	def test_coupled_optimized_targets_settle_without_chatter(self):
+		simulation = create_simulation()
+		settings = replace(
+			game.CONTROLLER_SETTINGS,
+			mode=controller.OPTIMIZED_TARGET_CONTROL,
+		)
+		component = game.configured_assisted_controller(settings)
+		angles = []
+		for step_index in range(round(12 / DT_SECONDS)):
+			game.advance_game(
+				simulation,
+				MotionIntent(1, 0),
+				component,
+				physics_mode=game.COUPLED_PHYSICS,
+			)
+			if step_index >= round(10 / DT_SECONDS):
+				angles.append(
+					(simulation.sail_angle_rad, simulation.rudder_angle_rad)
+				)
+
+		for surface_angles in zip(*angles):
+			self.assertLess(
+				max(surface_angles) - min(surface_angles),
+				math.radians(0.1),
+			)
+
+	def test_torque_controllers_run_against_all_physics_models(self):
+		manual_input = manual.DirectionInput(
+			sail_direction=(0, -1),
+			rudder_direction=(0, 1),
+		)
+		controllers = tuple(
+			(
+				control_name,
+				game.configured_assisted_controller(settings),
+				MotionIntent(1, 0),
+			)
+			for control_name, settings in game.ASSISTED_CONTROL_SETTINGS.items()
+		) + (
+			(
+				"manual",
+				game.configured_manual_controller(manual_input),
+				MotionIntent(),
+			),
+		)
+		for control_name, component, intent in controllers:
+			for physics_mode in (
+				game.DYNAMIC_PHYSICS,
+				game.COUPLED_PHYSICS,
+			):
+				with self.subTest(
+					control=control_name,
+					physics=physics_mode,
+				):
+					simulation = create_simulation()
+					for _ in range(60):
+						telemetry = game.advance_game(
+							simulation,
+							intent,
+							component,
+							physics_mode=physics_mode,
+						)
+
+					self.assertEqual(telemetry.physics_mode, physics_mode)
+					self.assertTrue(math.isfinite(simulation.boat.angle))
+					self.assertTrue(
+						all(map(math.isfinite, simulation.boat.velocity))
+					)
+					if control_name == "manual":
+						self.assertLess(simulation.sail_angle_rad, 0)
+						self.assertGreater(simulation.rudder_angle_rad, 0)
+					expected_body_count = (
+						3 if physics_mode == game.COUPLED_PHYSICS else 1
+					)
+					self.assertEqual(
+						len(simulation.space.bodies),
+						expected_body_count,
+					)
+
+	def test_arcade_reverse_input_exits_irons_on_both_physics_models(self):
+		for physics_mode in (game.DYNAMIC_PHYSICS, game.COUPLED_PHYSICS):
+			with self.subTest(physics_mode=physics_mode):
+				backing = create_simulation()
+				neutral = create_simulation()
+				backing.boat.angle = math.pi
+				neutral.boat.angle = math.pi
+				for _ in range(round(20 / DT_SECONDS)):
+					telemetry = game.advance_surface_game(
+						backing,
+						arcade.HeadingIntent(
+							world_direction=(-1, 0),
+							explicit_reverse=True,
+						),
+						control_mode=game.ARCADE_CONTROL,
+						physics_mode=physics_mode,
+					)
+					game.advance_surface_game(
+						neutral,
+						arcade.HeadingIntent(),
+						control_mode=game.ARCADE_CONTROL,
+						physics_mode=physics_mode,
+					)
+
+				forward = pymunk.Vec2d(1, 0).rotated(backing.boat.angle)
+				backing_speed = backing.boat.velocity.dot(forward)
+				neutral_speed = neutral.boat.velocity.dot(forward)
+				self.assertIsNotNone(telemetry.surface_targets.sail_target_angle_rad)
+				self.assertLess(backing_speed, neutral_speed - 0.05)
+
+	def test_surface_controllers_run_against_all_physics_models(self):
+		for control_mode in (
+			game.AUTO_SHEET_CONTROL,
+			game.ARCADE_CONTROL,
+			game.ARCADE_STERNWAY_CONTROL,
+			game.ARCADE_MOVE_CONTROL,
+		):
+			for physics_mode in (
+				game.DYNAMIC_PHYSICS,
+				game.COUPLED_PHYSICS,
+			):
+				with self.subTest(
+					control=control_mode,
+					physics=physics_mode,
+				):
+					simulation = create_simulation()
+					if control_mode == game.AUTO_SHEET_CONTROL:
+						intent = arcade.AutoSheetIntent(power=1, rudder=0)
+					elif control_mode == game.ARCADE_MOVE_CONTROL:
+						intent = MotionIntent(forward=1, turn=0)
+					else:
+						intent = arcade.HeadingIntent(world_direction=(1, 0))
+					for _ in range(60):
+						telemetry = game.advance_surface_game(
+							simulation,
+							intent,
+							control_mode=control_mode,
+							physics_mode=physics_mode,
+						)
+
+					self.assertEqual(telemetry.physics_mode, physics_mode)
+					self.assertEqual(telemetry.control_mode, control_mode)
+					self.assertIsNotNone(telemetry.surface_targets)
+					self.assertTrue(math.isfinite(simulation.boat.angle))
+					self.assertTrue(
+						all(map(math.isfinite, simulation.boat.velocity))
+					)
+
+	def test_switching_from_coupled_restores_the_lumped_body(self):
+		simulation = create_simulation()
+		intent = arcade.HeadingIntent(world_direction=(1, 0))
+
+		game.advance_surface_game(
+			simulation,
+			intent,
+			game.ARCADE_CONTROL,
+			game.COUPLED_PHYSICS,
+		)
+		self.assertEqual(len(simulation.space.bodies), 3)
+
+		game.advance_surface_game(
+			simulation,
+			intent,
+			game.ARCADE_CONTROL,
+			game.DYNAMIC_PHYSICS,
+		)
+
+		self.assertEqual(len(simulation.space.bodies), 1)
+		self.assertEqual(
+			simulation.boat.mass,
+			boat.total_mass_kg(game.BOAT_PARAMETERS),
+		)
+		self.assertTrue(math.isfinite(simulation.boat.angle))
+
 	def test_rearward_intent_produces_sternway_when_in_irons(self):
 		simulation = create_simulation()
 		simulation.boat.angle = math.pi
@@ -323,18 +655,31 @@ class SailingSimulationTest(unittest.TestCase):
 		intent = MotionIntent(1, 0)
 		telemetry = step(simulation, DEFAULT_ENVIRONMENT, intent)
 		pygame.font.init()
-		screen = pygame.Surface((1280, 720))
-
-		draw(
-			screen,
-			pygame.font.Font(None, 24),
-			simulation,
-			DEFAULT_ENVIRONMENT,
+		for display_intent in (
 			intent,
-			telemetry,
-		)
+			manual.DirectionInput(
+				sail_direction=(0, -1),
+				rudder_direction=(0, 1),
+			),
+			arcade.AutoSheetIntent(power=1, rudder=-1),
+			arcade.HeadingIntent(world_direction=(0, -1)),
+			arcade.HeadingIntent(explicit_reverse=True),
+		):
+			with self.subTest(intent=type(display_intent).__name__):
+				screen = pygame.Surface((1280, 720))
+				draw(
+					screen,
+					pygame.font.Font(None, 24),
+					simulation,
+					DEFAULT_ENVIRONMENT,
+					display_intent,
+					telemetry,
+				)
 
-		self.assertNotEqual(screen.get_at((640, 360)), (30, 30, 40, 255))
+				self.assertNotEqual(
+					screen.get_at((640, 360)),
+					(30, 30, 40, 255),
+				)
 
 	def test_draw_renders_direct_control_landscapes_without_a_target(self):
 		simulation = create_simulation()

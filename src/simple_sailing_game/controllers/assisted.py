@@ -7,6 +7,7 @@ import numpy as np
 from .actuator import (
 	ActuatorState,
 	ActuatorTorques,
+	damped_control_torque as damped_actuator_control_torque,
 )
 
 

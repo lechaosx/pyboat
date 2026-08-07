@@ -14,6 +14,7 @@ dependencies = [
 [project.scripts]
 sailing-game = "simple_sailing_game.game:main"
 sailing-plot = "simple_sailing_game.plot:main"
+sailing-polar = "simple_sailing_game.polar:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]

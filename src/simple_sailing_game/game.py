@@ -6,8 +6,10 @@ import numpy as np
 import pygame
 import pymunk
 
-from . import boat
-from .controllers import assisted as controller, manual
+from . import boat, course
+from .controllers import arcade, assisted as controller, manual
+from .physics import coupled as coupled_model
+from .physics import dynamic as dynamic_model
 
 
 WIDTH, HEIGHT = 1280, 720
@@ -20,18 +22,30 @@ CONTROL_GRADIENT_PIXELS_PER_ERROR = 8
 CONTROL_MOTION_PREVIEW_SECONDS = 0.25
 
 DT_SECONDS = 1 / 60
+MAXIMUM_FRAME_TIME_SECONDS = 0.25
 INITIAL_BOAT_ANGLE_RAD = math.radians(135)
 CONTROL_ANGLE_RESOLUTION_DEG = 1
 ANALOG_STICK_DEADZONE = 0.15
 SAILOR_MAX_SHEET_FORCE_N = 250
 SAILOR_MAX_TILLER_FORCE_N = 60
-ASSISTED_CONTROL = "assisted"
+MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
+GUIDED_GRADIENT_CONTROL = "gradient with helper"
+GLOBAL_OPTIMUM_CONTROL = "global optimum"
+RAW_GRADIENT_CONTROL = "gradient without helper"
 MANUAL_CONTROL = "manual"
+AUTO_SHEET_CONTROL = "auto sheet"
+ARCADE_CONTROL = "arcade"
+ARCADE_STERNWAY_CONTROL = "arcade sternway"
+ARCADE_MOVE_CONTROL = "arcade move intent"
+DYNAMIC_PHYSICS = "dynamic"
+COUPLED_PHYSICS = "coupled"
+COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
+BUOY_RADIUS_M = 2
 
 BOAT_PARAMETERS = boat.BoatParameters(
 	air_density_kg_m3=1.225,
 	water_density_kg_m3=1025,
-	mass_kg=250,
+	hull_mass_kg=222,
 	length_m=4,
 	beam_m=1.5,
 	bow_length_m=0.7,
@@ -66,19 +80,60 @@ CONTROLLER_SETTINGS = controller.ControllerSettings(
 	use_global_slope=True,
 	angle_resolution_deg=CONTROL_ANGLE_RESOLUTION_DEG,
 )
+ASSISTED_CONTROL_SETTINGS = {
+	GUIDED_GRADIENT_CONTROL: CONTROLLER_SETTINGS,
+	GLOBAL_OPTIMUM_CONTROL: replace(
+		CONTROLLER_SETTINGS,
+		mode=controller.OPTIMIZED_TARGET_CONTROL,
+		use_global_slope=False,
+	),
+	RAW_GRADIENT_CONTROL: replace(
+		CONTROLLER_SETTINGS,
+		use_global_slope=False,
+	),
+}
 
 @dataclass(frozen=True)
 class SimulationTelemetry:
 	physics: boat.PhysicsTelemetry
 	decision: controller.ControlDecision | None
-	settings: controller.ControllerSettings | None
 	controller_active: bool
+	control_mode: str | None = None
+	physics_mode: str = DYNAMIC_PHYSICS
+	surface_targets: arcade.SurfaceTargets | None = None
 
 
 ControllerComponent = Callable[
 	[controller.ControlInput, controller.MotionIntent, float],
 	controller.ControlOutput,
 ]
+PlayerIntent = (
+	controller.MotionIntent
+	| manual.DirectionInput
+	| arcade.AutoSheetIntent
+	| arcade.HeadingIntent
+)
+
+
+def fixed_step_schedule(
+	accumulated_seconds: float,
+	elapsed_seconds: float,
+	dt_seconds: float = DT_SECONDS,
+) -> tuple[int, float]:
+	total_seconds = accumulated_seconds + min(
+		elapsed_seconds,
+		MAXIMUM_FRAME_TIME_SECONDS,
+	)
+	steps = int(total_seconds / dt_seconds)
+	remaining_seconds = total_seconds - steps * dt_seconds
+	if math.isclose(remaining_seconds, 0, abs_tol=math.ulp(dt_seconds)):
+		remaining_seconds = 0
+	return steps, remaining_seconds
+
+
+def next_physics_mode(physics_mode: str) -> str:
+	modes = (DYNAMIC_PHYSICS, COUPLED_PHYSICS)
+	return modes[(modes.index(physics_mode) + 1) % len(modes)]
 
 
 def keyboard_motion_intent(
@@ -92,37 +147,96 @@ def keyboard_motion_intent(
 	return controller.MotionIntent(longitudinal, -turn)
 
 
+def keyboard_heading_intent(
+	boat_heading_rad: float,
+	forward: bool,
+	backward: bool,
+	left: bool,
+	right: bool,
+	explicit_reverse: bool,
+) -> arcade.HeadingIntent:
+	world_direction = pymunk.Vec2d(
+		int(forward) - int(backward),
+		int(right) - int(left),
+	).rotated(boat_heading_rad)
+	return arcade.HeadingIntent(
+		world_direction=tuple(world_direction),
+		explicit_reverse=explicit_reverse,
+	)
+
+
+def keyboard_auto_sheet_intent(
+	forward: bool,
+	left: bool,
+	right: bool,
+) -> arcade.AutoSheetIntent:
+	return arcade.AutoSheetIntent(
+		power=int(forward),
+		rudder=int(left) - int(right),
+	)
+
+
 def keyboard_manual_input(
+	rudder_forward: bool,
+	rudder_backward: bool,
 	rudder_left: bool,
 	rudder_right: bool,
+	sail_forward: bool,
+	sail_backward: bool,
 	sail_left: bool,
 	sail_right: bool,
-) -> manual.ManualInput:
-	return manual.ManualInput(
-		sail=int(sail_right) - int(sail_left),
-		rudder=int(rudder_right) - int(rudder_left),
+) -> manual.DirectionInput:
+	def direction(
+		forward: bool,
+		backward: bool,
+		left: bool,
+		right: bool,
+	) -> tuple[float, float]:
+		vector = pymunk.Vec2d(
+			int(forward) - int(backward),
+			int(right) - int(left),
+		)
+		return (0, 0) if not vector.length else tuple(vector.normalized())
+
+	return manual.DirectionInput(
+		sail_direction=direction(
+			sail_forward,
+			sail_backward,
+			sail_left,
+			sail_right,
+		),
+		rudder_direction=direction(
+			rudder_forward,
+			rudder_backward,
+			rudder_left,
+			rudder_right,
+		),
 	)
 
 
 def analog_manual_input(
+	boat_heading_rad: float,
 	rudder_stick_x: float,
+	rudder_stick_y: float,
 	sail_stick_x: float,
-) -> manual.ManualInput:
-	def axis(value: float) -> float:
-		if abs(value) <= ANALOG_STICK_DEADZONE:
-			return 0
-		return max(-1, min(1, value))
+	sail_stick_y: float,
+) -> manual.DirectionInput:
+	def direction(x: float, y: float) -> tuple[float, float]:
+		vector = pymunk.Vec2d(x, y)
+		if vector.length <= ANALOG_STICK_DEADZONE:
+			return (0, 0)
+		return tuple(vector.normalized().rotated(-boat_heading_rad))
 
-	return manual.ManualInput(
-		sail=axis(sail_stick_x),
-		rudder=axis(rudder_stick_x),
+	return manual.DirectionInput(
+		sail_direction=direction(sail_stick_x, sail_stick_y),
+		rudder_direction=direction(rudder_stick_x, rudder_stick_y),
 	)
 
 
 def toggled_control_mode(mode: str) -> str:
-	if mode == ASSISTED_CONTROL:
+	if mode in ASSISTED_CONTROL_SETTINGS:
 		return MANUAL_CONTROL
-	return ASSISTED_CONTROL
+	return GUIDED_GRADIENT_CONTROL
 
 
 def analog_motion_intent(
@@ -145,6 +259,28 @@ def analog_motion_intent(
 	return controller.MotionIntent(forward, turn)
 
 
+def analog_heading_intent(
+	stick_x: float,
+	stick_y: float,
+	explicit_reverse: bool,
+) -> arcade.HeadingIntent:
+	world_vector = pymunk.Vec2d(stick_x, stick_y)
+	world_direction = (0, 0)
+	if world_vector.length > ANALOG_STICK_DEADZONE:
+		world_direction = (stick_x, stick_y)
+	return arcade.HeadingIntent(world_direction, explicit_reverse)
+
+
+def analog_auto_sheet_intent(
+	power_axis: float,
+	rudder_axis: float,
+) -> arcade.AutoSheetIntent:
+	return arcade.AutoSheetIntent(
+		power=max(0, min(1, -power_axis)),
+		rudder=max(-1, min(1, rudder_axis)),
+	)
+
+
 def intent_vector(
 	intent: controller.MotionIntent,
 	boat_heading_rad: float,
@@ -152,14 +288,15 @@ def intent_vector(
 	return pymunk.Vec2d(intent.forward, intent.turn).rotated(boat_heading_rad)
 
 
+def heading_intent_vector(intent: arcade.HeadingIntent) -> pymunk.Vec2d:
+	return pymunk.Vec2d(*intent.world_direction)
+
+
 def luffing_sail_angle(
 	boat_angle_rad: float,
 	apparent_wind_m_s: pymunk.Vec2d,
 ) -> float:
-	if not apparent_wind_m_s.length:
-		return 0
-	upstream_angle_rad = apparent_wind_m_s.angle + math.pi
-	return math.remainder(upstream_angle_rad - boat_angle_rad, math.pi)
+	return boat.luffing_sail_angle(boat_angle_rad, apparent_wind_m_s)
 
 
 def foil_control_effect(
@@ -247,7 +384,7 @@ def controller_input(observation: boat.BoatObservation) -> controller.ControlInp
 	)
 	return controller.ControlInput(
 		observation.boat_angular_velocity_rad_s,
-		boat.boat_moment_of_inertia_kg_m2(BOAT_PARAMETERS),
+		boat.lumped_moment_of_inertia_kg_m2(BOAT_PARAMETERS),
 		controller.ActuatorState(
 			observation.sail_angle_rad,
 			observation.sail_angular_velocity_rad_s,
@@ -277,6 +414,41 @@ def controller_input(observation: boat.BoatObservation) -> controller.ControlInp
 	)
 
 
+def surface_controller_input(
+	observation: boat.BoatObservation,
+	actuator_input: controller.ControlInput | None = None,
+) -> arcade.ControlInput:
+	if actuator_input is None:
+		actuator_input = controller_input(observation)
+	return arcade.ControlInput(
+		observation.boat_angle_rad,
+		observation.boat_angular_velocity_rad_s,
+		boat.free_sail_angle(
+			observation.boat_angle_rad,
+			observation.apparent_wind_m_s,
+			BOAT_PARAMETERS.max_sail_angle_rad,
+		),
+		BOAT_PARAMETERS.max_sail_angle_rad,
+		BOAT_PARAMETERS.max_rudder_angle_rad,
+		tuple(
+			arcade.SurfaceEffect(
+				effect.angle_rad,
+				effect.drive_force_n,
+				effect.yaw_moment_n_m,
+			)
+			for effect in actuator_input.sail_candidates
+		),
+		tuple(
+			arcade.SurfaceEffect(
+				effect.angle_rad,
+				effect.drive_force_n,
+				effect.yaw_moment_n_m,
+			)
+			for effect in actuator_input.rudder_candidates
+		),
+	)
+
+
 def create_simulation() -> boat.SailingState:
 	return boat.create_simulation(BOAT_PARAMETERS, INITIAL_BOAT_ANGLE_RAD)
 
@@ -295,18 +467,17 @@ def configured_assisted_controller(
 
 
 def configured_manual_controller(
-	manual_input: manual.ManualInput,
+	manual_input: manual.DirectionInput,
 ) -> ControllerComponent:
 	def run_controller(
 		control_input: controller.ControlInput,
 		_intent: controller.MotionIntent,
-		dt_seconds: float,
+		_dt_seconds: float,
 	) -> controller.ControlOutput:
 		torques = manual.control(
 			control_input.sail,
 			control_input.rudder,
 			manual_input,
-			dt_seconds,
 		)
 		return controller.ControlOutput(torques, None)
 
@@ -319,12 +490,17 @@ def advance_game(
 	controller_component: ControllerComponent | None,
 	environment: boat.Environment = ENVIRONMENT,
 	dt_seconds: float = DT_SECONDS,
+	physics_mode: str = DYNAMIC_PHYSICS,
 ) -> SimulationTelemetry:
+	if physics_mode != COUPLED_PHYSICS:
+		coupled_model.deactivate(state, BOAT_PARAMETERS)
 	observation = boat.observe(state, environment, BOAT_PARAMETERS)
 	control_output = None
+	actuator_input = None
 	if controller_component is not None:
+		actuator_input = controller_input(observation)
 		control_output = controller_component(
-			controller_input(observation),
+			actuator_input,
 			intent,
 			dt_seconds,
 		)
@@ -334,19 +510,140 @@ def advance_game(
 			control_output.torques.sail_n_m,
 			control_output.torques.rudder_n_m,
 		)
-	physics = boat.step(
-		state,
-		environment,
-		BOAT_PARAMETERS,
-		torques,
-		dt_seconds,
-	)
+	if (
+		physics_mode == COUPLED_PHYSICS
+		and actuator_input is not None
+		and control_output is not None
+		and control_output.decision is not None
+		and control_output.decision.target_angles_rad is not None
+	):
+		target_sail_angle_rad, target_rudder_angle_rad = (
+			control_output.decision.target_angles_rad
+		)
+		torques = boat.ActuatorTorques(
+			controller.damped_actuator_control_torque(
+				actuator_input.sail,
+				target_sail_angle_rad,
+			),
+			controller.damped_actuator_control_torque(
+				actuator_input.rudder,
+				target_rudder_angle_rad,
+			),
+		)
+	if physics_mode == COUPLED_PHYSICS:
+		physics = coupled_model.step(
+			state,
+			environment,
+			BOAT_PARAMETERS,
+			torques,
+			dt_seconds,
+		)
+	else:
+		physics = dynamic_model.step(
+			state,
+			environment,
+			BOAT_PARAMETERS,
+			torques,
+			dt_seconds,
+		)
 	decision = control_output.decision if control_output is not None else None
 	return SimulationTelemetry(
 		physics,
 		decision,
-		None,
 		controller_component is not None,
+		physics_mode=physics_mode,
+	)
+
+
+def advance_surface_game(
+	state: boat.SailingState,
+	intent: arcade.AutoSheetIntent | arcade.HeadingIntent | controller.MotionIntent,
+	control_mode: str,
+	physics_mode: str,
+	environment: boat.Environment = ENVIRONMENT,
+	dt_seconds: float = DT_SECONDS,
+) -> SimulationTelemetry:
+	if physics_mode != COUPLED_PHYSICS:
+		coupled_model.deactivate(state, BOAT_PARAMETERS)
+	observation = boat.observe(state, environment, BOAT_PARAMETERS)
+	actuator_input = controller_input(observation)
+	surface_input = surface_controller_input(observation, actuator_input)
+	if control_mode == AUTO_SHEET_CONTROL:
+		targets = arcade.auto_sheet_manual_tiller(surface_input, intent)
+	elif control_mode == ARCADE_CONTROL:
+		targets = arcade.heading_control(
+			surface_input,
+			intent,
+			MAXIMUM_YAW_RATE_RAD_S,
+		)
+	elif control_mode == ARCADE_STERNWAY_CONTROL:
+		targets = arcade.sternway_control(
+			surface_input,
+			intent,
+			MAXIMUM_YAW_RATE_RAD_S,
+		)
+	else:
+		targets = arcade.move_control(
+			surface_input,
+			intent,
+			MAXIMUM_YAW_RATE_RAD_S,
+		)
+
+	if targets.sail_target_angle_rad is None:
+		sail_target_angle_rad = max(
+			-targets.sheet_limit_angle_rad,
+			min(
+				targets.sheet_limit_angle_rad,
+				surface_input.free_sail_angle_rad,
+			),
+		)
+	else:
+		sail_target_angle_rad = targets.sail_target_angle_rad
+	if physics_mode == COUPLED_PHYSICS:
+		torques = boat.ActuatorTorques(
+			controller.damped_actuator_control_torque(
+				actuator_input.sail,
+				sail_target_angle_rad,
+			),
+			controller.damped_actuator_control_torque(
+				actuator_input.rudder,
+				targets.rudder_target_angle_rad,
+			),
+		)
+		physics = coupled_model.step(
+			state,
+			environment,
+			BOAT_PARAMETERS,
+			torques,
+			dt_seconds,
+		)
+	else:
+		torques = boat.ActuatorTorques(
+			controller.actuator_control_torque(
+				actuator_input.sail,
+				sail_target_angle_rad,
+				dt_seconds,
+			),
+			controller.actuator_control_torque(
+				actuator_input.rudder,
+				targets.rudder_target_angle_rad,
+				dt_seconds,
+			),
+		)
+		physics = dynamic_model.step(
+			state,
+			environment,
+			BOAT_PARAMETERS,
+			torques,
+			dt_seconds,
+		)
+	return SimulationTelemetry(
+		physics,
+		None,
+		True,
+		control_mode,
+		physics_mode,
+		targets,
 	)
 
 
@@ -363,16 +660,12 @@ def step(
 		mode=control_mode,
 		use_global_slope=use_global_slope,
 	)
-	telemetry = advance_game(
+	return advance_game(
 		state,
 		intent,
 		configured_assisted_controller(settings),
 		environment,
 		dt_seconds,
-	)
-	return replace(
-		telemetry,
-		settings=settings,
 	)
 
 
@@ -423,8 +716,55 @@ def draw_intent(
 	font: pygame.font.Font,
 	start: pymunk.Vec2d,
 	boat_heading_rad: float,
-	intent: controller.MotionIntent,
+	intent: PlayerIntent,
 ) -> None:
+	if isinstance(intent, arcade.HeadingIntent):
+		world_direction = heading_intent_vector(intent)
+		if world_direction.length > 1:
+			world_direction = world_direction.normalized()
+		draw_vector(
+			screen,
+			start,
+			world_direction,
+			(240, 100, 220),
+			INTENT_VECTOR_LENGTH_PX,
+			3,
+		)
+		reverse = "  reverse modifier" if intent.explicit_reverse else ""
+		text = font.render(
+			f"heading input: {world_direction.x:+.0%}, {world_direction.y:+.0%}{reverse}",
+			True,
+			(240, 100, 220),
+		)
+		screen.blit(text, (30, start.y - 10))
+		return
+
+	if isinstance(intent, arcade.AutoSheetIntent):
+		power = pymunk.Vec2d(intent.power, 0).rotated(boat_heading_rad)
+		rudder = pymunk.Vec2d(0, intent.rudder).rotated(boat_heading_rad)
+		draw_vector(screen, start, power, (100, 220, 140), INTENT_VECTOR_LENGTH_PX, 3)
+		draw_vector(screen, start, rudder, (255, 160, 80), INTENT_VECTOR_LENGTH_PX, 3)
+		text = font.render(
+			f"auto-sheet: power {intent.power:+.0%}  rudder {intent.rudder:+.0%}",
+			True,
+			(240, 100, 220),
+		)
+		screen.blit(text, (30, start.y - 10))
+		return
+
+	if isinstance(intent, manual.DirectionInput):
+		sail = pymunk.Vec2d(*intent.sail_direction).rotated(boat_heading_rad)
+		rudder = pymunk.Vec2d(*intent.rudder_direction).rotated(boat_heading_rad)
+		draw_vector(screen, start, sail, (235, 205, 100), INTENT_VECTOR_LENGTH_PX, 3)
+		draw_vector(screen, start, rudder, (220, 220, 230), INTENT_VECTOR_LENGTH_PX, 3)
+		text = font.render(
+			"manual directions: yellow sail  white rudder",
+			True,
+			(240, 100, 220),
+		)
+		screen.blit(text, (30, start.y - 10))
+		return
+
 	forward_vector = pymunk.Vec2d(intent.forward, 0).rotated(boat_heading_rad)
 	turn_vector = pymunk.Vec2d(0, intent.turn).rotated(boat_heading_rad)
 	forward_end = start + forward_vector * INTENT_VECTOR_LENGTH_PX
@@ -562,8 +902,9 @@ def draw(
 	font: pygame.font.Font,
 	state: boat.SailingState,
 	environment: boat.Environment,
-	intent: controller.MotionIntent,
+	intent: PlayerIntent,
 	telemetry: SimulationTelemetry,
+	time_trial: course.TimeTrial | None = None,
 ) -> None:
 	center = pymunk.Vec2d(WIDTH / 2, HEIGHT / 2)
 	body = state.boat
@@ -578,6 +919,24 @@ def draw(
 		pygame.draw.line(screen, (38, 46, 58), (x, 0), (x, HEIGHT))
 	for y in range(round(y_offset), HEIGHT, grid_spacing_px):
 		pygame.draw.line(screen, (38, 46, 58), (0, y), (WIDTH, y))
+	if time_trial is not None:
+		for index, buoy_m in enumerate(time_trial.buoys_m):
+			position = (
+				pymunk.Vec2d(*buoy_m) - body.position
+			) * PIXELS_PER_METER + center
+			color = (
+				(255, 100, 220)
+				if index == time_trial.next_buoy_index
+				else (240, 180, 70)
+			)
+			pygame.draw.circle(
+				screen,
+				color,
+				position,
+				round(time_trial.buoy_radius_m * PIXELS_PER_METER),
+				3,
+			)
+			screen.blit(font.render(str(index + 1), True, color), position + (5, 5))
 
 	half_length_px = BOAT_PARAMETERS.length_m * PIXELS_PER_METER / 2
 	half_beam_px = BOAT_PARAMETERS.beam_m * PIXELS_PER_METER / 2
@@ -665,19 +1024,15 @@ def draw(
 		draw_control_quality_landscape(screen, font, state, decision.landscape)
 
 	if decision is None:
-		control_status = "manual control" if telemetry.controller_active else "uncontrolled"
+		if telemetry.control_mode is not None:
+			control_status = f"{telemetry.control_mode} / {telemetry.physics_mode} physics"
+		else:
+			control_status = "manual control" if telemetry.controller_active else "uncontrolled"
 	else:
 		landscape = decision.landscape
-		helper_status = ""
-		if telemetry.settings is not None and (
-			telemetry.settings.mode == controller.DIRECT_GRADIENT_CONTROL
-		):
-			helper_status = (
-				" helper on" if telemetry.settings.use_global_slope else " helper off"
-			)
-		control_mode = telemetry.settings.mode if telemetry.settings is not None else "controlled"
+		control_mode = telemetry.control_mode or "controlled"
 		control_status = (
-			f"{control_mode}{helper_status}    "
+			f"{control_mode} / {telemetry.physics_mode} physics    "
 			f"optimal sail {math.degrees(landscape.optimum_sail_angle_rad):+.0f}°    "
 			f"optimal rudder {math.degrees(landscape.optimum_rudder_angle_rad):+.0f}°"
 		)
@@ -689,21 +1044,56 @@ def draw(
 		(220, 220, 230),
 	)
 	screen.blit(status, (30, HEIGHT - 35))
+	upwind_angle_rad = observation.apparent_wind_m_s.angle + math.pi
+	point_of_sail = course.point_of_sail(body.angle - upwind_angle_rad)
+	feedback = f"point of sail: {point_of_sail}"
+	if telemetry.surface_targets is not None:
+		free_sail_angle_rad = boat.free_sail_angle(
+			body.angle,
+			observation.apparent_wind_m_s,
+			BOAT_PARAMETERS.max_sail_angle_rad,
+		)
+		if telemetry.surface_targets.sail_target_angle_rad is None:
+			target_sail_angle_rad = max(
+				-telemetry.surface_targets.sheet_limit_angle_rad,
+				min(
+					telemetry.surface_targets.sheet_limit_angle_rad,
+					free_sail_angle_rad,
+				),
+			)
+		else:
+			target_sail_angle_rad = telemetry.surface_targets.sail_target_angle_rad
+		feedback += f"    trim: {course.trim_feedback(state.sail_angle_rad, target_sail_angle_rad)}"
+	if time_trial is not None:
+		best = (
+			"--"
+			if time_trial.best_time_seconds is None
+			else f"{time_trial.best_time_seconds:.1f} s"
+		)
+		feedback += (
+			f"    mark {time_trial.next_buoy_index + 1}/{len(time_trial.buoys_m)}"
+			f"    time {time_trial.elapsed_seconds:.1f} s    best {best}"
+		)
+	screen.blit(font.render(feedback, True, (220, 220, 230)), (30, HEIGHT - 60))
 
 
 def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((WIDTH, HEIGHT))
 	pygame.display.set_caption(
-		"Sailboat — M toggles assisted/manual; manual A/D rudder, Q/E sail; "
-		"left/right sticks rudder/sail; C toggles sailor; G controller; H helper"
+		"Sailboat — 1 guided gradient, 2 manual, 3 auto-sheet, 4 arcade, "
+		"5 sternway arcade, 6 global optimum, 7 raw gradient, 8 move arcade; "
+		"P physics, R reset; WASD / gamepad, Space reverse modifier"
 	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
-	settings = CONTROLLER_SETTINGS
-	input_mode = ASSISTED_CONTROL
+	time_trial = course.TimeTrial(COURSE_BUOYS_M, BUOY_RADIUS_M)
+	input_mode = GUIDED_GRADIENT_CONTROL
+	physics_mode = DYNAMIC_PHYSICS
 	controller_enabled = True
+	accumulated_seconds = 0.0
+	telemetry = None
 	joystick = None
 	if pygame.joystick.get_count():
 		joystick = pygame.joystick.Joystick(0)
@@ -711,19 +1101,31 @@ def main() -> None:
 	running = True
 
 	while running:
+		elapsed_seconds = clock.tick(round(1 / DT_SECONDS)) / 1000
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				running = False
-			elif event.type == pygame.KEYDOWN and event.key == pygame.K_g:
-				mode = controller.DIRECT_GRADIENT_CONTROL
-				if settings.mode == controller.DIRECT_GRADIENT_CONTROL:
-					mode = controller.OPTIMIZED_TARGET_CONTROL
-				settings = replace(settings, mode=mode)
-			elif event.type == pygame.KEYDOWN and event.key == pygame.K_h:
-				settings = replace(
-					settings,
-					use_global_slope=not settings.use_global_slope,
-				)
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_1:
+				input_mode = GUIDED_GRADIENT_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_2:
+				input_mode = MANUAL_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_3:
+				input_mode = AUTO_SHEET_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_4:
+				input_mode = ARCADE_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_5:
+				input_mode = ARCADE_STERNWAY_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_6:
+				input_mode = GLOBAL_OPTIMUM_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_7:
+				input_mode = RAW_GRADIENT_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_8:
+				input_mode = ARCADE_MOVE_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_p:
+				physics_mode = next_physics_mode(physics_mode)
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+				state = create_simulation()
+				time_trial.reset()
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_c:
 				controller_enabled = not controller_enabled
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
@@ -740,7 +1142,12 @@ def main() -> None:
 
 		keys = pygame.key.get_pressed()
 		intent = controller.MotionIntent()
-		if input_mode == ASSISTED_CONTROL:
+		display_intent: PlayerIntent = intent
+		surface_intent: (
+			arcade.AutoSheetIntent | arcade.HeadingIntent | controller.MotionIntent
+		) = arcade.HeadingIntent()
+		component = None
+		if input_mode in ASSISTED_CONTROL_SETTINGS:
 			keyboard_intent = keyboard_motion_intent(
 				forward=keys[pygame.K_w],
 				backward=keys[pygame.K_s],
@@ -759,39 +1166,150 @@ def main() -> None:
 				if joystick_intent != controller.MotionIntent()
 				else keyboard_intent
 			)
-			component = configured_assisted_controller(settings)
-		else:
+			display_intent = intent
+			component = configured_assisted_controller(
+				ASSISTED_CONTROL_SETTINGS[input_mode]
+			)
+		elif input_mode == MANUAL_CONTROL:
 			keyboard_input = keyboard_manual_input(
+				rudder_forward=keys[pygame.K_w],
+				rudder_backward=keys[pygame.K_s],
 				rudder_left=keys[pygame.K_a],
 				rudder_right=keys[pygame.K_d],
-				sail_left=keys[pygame.K_q],
-				sail_right=keys[pygame.K_e],
+				sail_forward=keys[pygame.K_UP],
+				sail_backward=keys[pygame.K_DOWN],
+				sail_left=keys[pygame.K_LEFT],
+				sail_right=keys[pygame.K_RIGHT],
 			)
-			joystick_input = manual.ManualInput()
+			joystick_input = manual.DirectionInput()
 			if joystick is not None:
 				right_stick_x = (
 					joystick.get_axis(2) if joystick.get_numaxes() > 2 else 0
 				)
-				joystick_input = analog_manual_input(
-					joystick.get_axis(0),
-					right_stick_x,
+				right_stick_y = (
+					joystick.get_axis(3) if joystick.get_numaxes() > 3 else 0
 				)
-			manual_input = manual.ManualInput(
-				sail=joystick_input.sail or keyboard_input.sail,
-				rudder=joystick_input.rudder or keyboard_input.rudder,
+				joystick_input = analog_manual_input(
+					state.boat.angle,
+					joystick.get_axis(0),
+					joystick.get_axis(1),
+					right_stick_x,
+					right_stick_y,
+				)
+			manual_input = manual.DirectionInput(
+				sail_direction=(
+					joystick_input.sail_direction
+					if joystick_input.sail_direction != (0, 0)
+					else keyboard_input.sail_direction
+				),
+				rudder_direction=(
+					joystick_input.rudder_direction
+					if joystick_input.rudder_direction != (0, 0)
+					else keyboard_input.rudder_direction
+				),
 			)
+			display_intent = manual_input
 			component = configured_manual_controller(manual_input)
-		if not controller_enabled:
-			component = None
-		telemetry = advance_game(state, intent, component)
-		if controller_enabled and input_mode == ASSISTED_CONTROL:
-			telemetry = replace(
+		else:
+			if input_mode in (ARCADE_CONTROL, ARCADE_STERNWAY_CONTROL):
+				explicit_reverse_active = (
+					input_mode == ARCADE_CONTROL and keys[pygame.K_SPACE]
+				)
+				surface_intent = keyboard_heading_intent(
+					boat_heading_rad=state.boat.angle,
+					forward=keys[pygame.K_w],
+					backward=keys[pygame.K_s],
+					left=keys[pygame.K_a],
+					right=keys[pygame.K_d],
+					explicit_reverse=explicit_reverse_active,
+				)
+			elif input_mode == ARCADE_MOVE_CONTROL:
+				surface_intent = keyboard_motion_intent(
+					forward=keys[pygame.K_w],
+					backward=keys[pygame.K_s],
+					left=keys[pygame.K_a],
+					right=keys[pygame.K_d],
+				)
+			else:
+				surface_intent = keyboard_auto_sheet_intent(
+					forward=keys[pygame.K_w],
+					left=keys[pygame.K_a],
+					right=keys[pygame.K_d],
+				)
+			if joystick is not None:
+				if input_mode in (ARCADE_CONTROL, ARCADE_STERNWAY_CONTROL):
+					if input_mode == ARCADE_CONTROL and joystick.get_numbuttons():
+						explicit_reverse_active = (
+							explicit_reverse_active or joystick.get_button(0)
+						)
+					joystick_intent = analog_heading_intent(
+						joystick.get_axis(0),
+						joystick.get_axis(1),
+						explicit_reverse_active,
+					)
+					if joystick_intent.world_direction != (0, 0):
+						surface_intent = joystick_intent
+					elif explicit_reverse_active:
+						surface_intent = arcade.HeadingIntent(
+							surface_intent.world_direction,
+							True,
+						)
+				elif input_mode == ARCADE_MOVE_CONTROL:
+					joystick_intent = analog_motion_intent(
+						state.boat.angle,
+						joystick.get_axis(0),
+						joystick.get_axis(1),
+					)
+					if joystick_intent != controller.MotionIntent():
+						surface_intent = joystick_intent
+				else:
+					joystick_intent = analog_auto_sheet_intent(
+						joystick.get_axis(1),
+						joystick.get_axis(0),
+					)
+					if joystick_intent != arcade.AutoSheetIntent():
+						surface_intent = joystick_intent
+			display_intent = surface_intent
+
+		steps, accumulated_seconds = fixed_step_schedule(
+			accumulated_seconds,
+			elapsed_seconds,
+		)
+		for _ in range(steps):
+			if input_mode in (
+				AUTO_SHEET_CONTROL,
+				ARCADE_CONTROL,
+				ARCADE_STERNWAY_CONTROL,
+				ARCADE_MOVE_CONTROL,
+			):
+				telemetry = advance_surface_game(
+					state,
+					surface_intent,
+					input_mode,
+					physics_mode,
+				)
+			else:
+				active_component = component if controller_enabled else None
+				telemetry = advance_game(
+					state,
+					intent,
+					active_component,
+					physics_mode=physics_mode,
+				)
+				if controller_enabled:
+					telemetry = replace(telemetry, control_mode=input_mode)
+			time_trial.advance(state.boat.position, DT_SECONDS)
+		if telemetry is not None:
+			draw(
+				screen,
+				font,
+				state,
+				ENVIRONMENT,
+				display_intent,
 				telemetry,
-				settings=settings,
+				time_trial,
 			)
-		draw(screen, font, state, ENVIRONMENT, intent, telemetry)
-		pygame.display.flip()
-		clock.tick(round(1 / DT_SECONDS))
+			pygame.display.flip()
 
 	pygame.quit()
 

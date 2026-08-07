@@ -1,3 +1,4 @@
+import importlib.util
 import math
 import os
 import subprocess
@@ -18,6 +19,21 @@ def isolated_python(code):
 
 
 class ModuleBoundaryTest(unittest.TestCase):
+	def test_supported_physics_models_have_separate_modules(self):
+		from simple_sailing_game.physics import coupled, dynamic
+
+		self.assertEqual(
+			dynamic.step.__module__,
+			"simple_sailing_game.physics.dynamic",
+		)
+		self.assertEqual(
+			coupled.step.__module__,
+			"simple_sailing_game.physics.coupled",
+		)
+		self.assertIsNone(
+			importlib.util.find_spec("simple_sailing_game.physics.kinematic")
+		)
+
 	def test_assisted_and_manual_controllers_have_separate_modules(self):
 		from simple_sailing_game.controllers import assisted, manual
 
@@ -71,6 +87,7 @@ class ModuleBoundaryTest(unittest.TestCase):
 class ComponentWiringTest(unittest.TestCase):
 	def test_dead_ship_keeps_simulating_without_sailor_torque(self):
 		from simple_sailing_game import boat, game
+		from simple_sailing_game.physics import dynamic
 
 		state = boat.create_simulation(
 			game.BOAT_PARAMETERS,
@@ -78,7 +95,7 @@ class ComponentWiringTest(unittest.TestCase):
 		)
 		initial_sail_angle_rad = state.sail_angle_rad
 		for _ in range(round(2 / game.DT_SECONDS)):
-			boat.step(
+			dynamic.step(
 				state,
 				game.ENVIRONMENT,
 				game.BOAT_PARAMETERS,
@@ -145,13 +162,45 @@ class ComponentWiringTest(unittest.TestCase):
 
 		heavy_parameters = replace(
 			game.BOAT_PARAMETERS,
-			mass_kg=2 * game.BOAT_PARAMETERS.mass_kg,
+			hull_mass_kg=2 * game.BOAT_PARAMETERS.hull_mass_kg,
 		)
 		standard = boat.create_simulation(game.BOAT_PARAMETERS, 0)
 		heavy = boat.create_simulation(heavy_parameters, 0)
 
-		self.assertEqual(standard.boat.mass, game.BOAT_PARAMETERS.mass_kg)
-		self.assertEqual(heavy.boat.mass, heavy_parameters.mass_kg)
+		self.assertEqual(
+			standard.boat.mass,
+			boat.total_mass_kg(game.BOAT_PARAMETERS),
+		)
+		self.assertEqual(heavy.boat.mass, boat.total_mass_kg(heavy_parameters))
+
+	def test_each_component_mass_contributes_to_lumped_total(self):
+		from dataclasses import replace
+
+		from simple_sailing_game import boat, game
+
+		for field in (
+			"hull_mass_kg",
+			"sail_mass_kg",
+			"boom_mass_kg",
+			"rudder_mass_kg",
+			"tiller_mass_kg",
+		):
+			with self.subTest(field=field):
+				parameters = replace(
+					game.BOAT_PARAMETERS,
+					**{field: getattr(game.BOAT_PARAMETERS, field) + 1},
+				)
+				state = boat.create_simulation(parameters, 0)
+
+				self.assertEqual(
+					state.boat.mass,
+					boat.total_mass_kg(game.BOAT_PARAMETERS) + 1,
+				)
+
+	def test_default_component_masses_preserve_the_250_kg_boat(self):
+		from simple_sailing_game import boat, game
+
+		self.assertEqual(boat.total_mass_kg(game.BOAT_PARAMETERS), 250)
 
 
 if __name__ == "__main__":
