@@ -7,7 +7,7 @@ import pygame
 import pymunk
 
 from . import boat, course
-from .controllers import arcade, assisted as controller, manual
+from .controllers import arcade, assisted as controller, improved_arcade, manual
 from .physics import coupled as articulated_model
 from .physics import dynamic as lumped_model
 
@@ -37,6 +37,7 @@ AUTO_SHEET_CONTROL = "auto sheet"
 ARCADE_CONTROL = "arcade"
 ARCADE_STERNWAY_CONTROL = "arcade sternway"
 ARCADE_MOVE_CONTROL = "arcade move intent"
+IMPROVED_ARCADE_CONTROL = "improved arcade move intent"
 LUMPED_PHYSICS = "lumped"
 ARTICULATED_PHYSICS = "articulated"
 # Compatibility names for experiments and callers written before the modes were
@@ -596,11 +597,19 @@ def advance_surface_game(
 			MAXIMUM_YAW_RATE_RAD_S,
 		)
 	else:
-		targets = arcade.move_control(
-			surface_input,
-			intent,
-			MAXIMUM_YAW_RATE_RAD_S,
-		)
+		if control_mode == IMPROVED_ARCADE_CONTROL:
+			targets = improved_arcade.control(
+				surface_input,
+				intent,
+				observation.apparent_water_m_s.length,
+				MAXIMUM_YAW_RATE_RAD_S,
+			)
+		else:
+			targets = arcade.move_control(
+				surface_input,
+				intent,
+				MAXIMUM_YAW_RATE_RAD_S,
+			)
 
 	if targets.sail_target_angle_rad is None:
 		sail_target_angle_rad = max(
@@ -1095,18 +1104,20 @@ def main() -> None:
 	screen = pygame.display.set_mode((WIDTH, HEIGHT))
 	pygame.display.set_caption(
 		"Sailboat — 1 guided gradient, 2 manual, 3 auto-sheet, 4 arcade, "
-		"5 sternway arcade, 6 global optimum, 7 raw gradient, 8 move arcade; "
+		"5 sternway arcade, 6 global optimum, 7 raw gradient, 8 move arcade, "
+		"9 improved arcade; "
 		"P physics, R reset; WASD / gamepad, Space reverse modifier"
 	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = create_simulation()
 	time_trial = course.TimeTrial(COURSE_BUOYS_M, BUOY_RADIUS_M)
-	input_mode = GUIDED_GRADIENT_CONTROL
+	input_mode = IMPROVED_ARCADE_CONTROL
 	physics_mode = LUMPED_PHYSICS
 	controller_enabled = True
 	accumulated_seconds = 0.0
 	telemetry = None
+	smoothed_gamepad_intent = controller.MotionIntent()
 	joystick = None
 	if pygame.joystick.get_count():
 		joystick = pygame.joystick.Joystick(0)
@@ -1134,6 +1145,8 @@ def main() -> None:
 				input_mode = RAW_GRADIENT_CONTROL
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_8:
 				input_mode = ARCADE_MOVE_CONTROL
+			elif event.type == pygame.KEYDOWN and event.key == pygame.K_9:
+				input_mode = IMPROVED_ARCADE_CONTROL
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_p:
 				physics_mode = next_physics_mode(physics_mode)
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
@@ -1236,7 +1249,7 @@ def main() -> None:
 					right=keys[pygame.K_d],
 					explicit_reverse=explicit_reverse_active,
 				)
-			elif input_mode == ARCADE_MOVE_CONTROL:
+			elif input_mode in (ARCADE_MOVE_CONTROL, IMPROVED_ARCADE_CONTROL):
 				surface_intent = keyboard_motion_intent(
 					forward=keys[pygame.K_w],
 					backward=keys[pygame.K_s],
@@ -1267,12 +1280,19 @@ def main() -> None:
 							surface_intent.world_direction,
 							True,
 						)
-				elif input_mode == ARCADE_MOVE_CONTROL:
+				elif input_mode in (ARCADE_MOVE_CONTROL, IMPROVED_ARCADE_CONTROL):
 					joystick_intent = analog_motion_intent(
 						state.boat.angle,
 						joystick.get_axis(0),
 						joystick.get_axis(1),
 					)
+					if input_mode == IMPROVED_ARCADE_CONTROL:
+						smoothed_gamepad_intent = improved_arcade.smooth_gamepad_intent(
+							smoothed_gamepad_intent,
+							joystick_intent,
+							elapsed_seconds,
+						)
+						joystick_intent = smoothed_gamepad_intent
 					if joystick_intent != controller.MotionIntent():
 						surface_intent = joystick_intent
 				else:
@@ -1294,6 +1314,7 @@ def main() -> None:
 				ARCADE_CONTROL,
 				ARCADE_STERNWAY_CONTROL,
 				ARCADE_MOVE_CONTROL,
+				IMPROVED_ARCADE_CONTROL,
 			):
 				telemetry = advance_surface_game(
 					state,
