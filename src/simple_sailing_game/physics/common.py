@@ -21,6 +21,7 @@ def step_hull(
 		parameters.water_density_kg_m3,
 		parameters.hull_reference_area_m2,
 		parameters.hull_drag_coefficient,
+		parameters.hull_lateral_drag_coefficient,
 	)
 
 	state.boat.apply_force_at_local_point(

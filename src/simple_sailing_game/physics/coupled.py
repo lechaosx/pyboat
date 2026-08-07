@@ -304,6 +304,7 @@ def step(
 		parameters.water_density_kg_m3,
 		parameters.hull_reference_area_m2,
 		parameters.hull_drag_coefficient,
+		parameters.hull_lateral_drag_coefficient,
 	)
 
 	sail_center_world_m = hull.local_to_world(sail_load.center_local_m)

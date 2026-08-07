@@ -65,6 +65,19 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 		self.assertEqual(result.returncode, 0, result.stderr)
 
+	def test_simulation_does_not_import_pygame(self):
+		result = isolated_python(
+			"import sys, simple_sailing_game.simulation; "
+			"assert 'pygame' not in sys.modules"
+		)
+
+		self.assertEqual(result.returncode, 0, result.stderr)
+
+	def test_rendering_has_its_own_module(self):
+		from simple_sailing_game import render
+
+		self.assertEqual(render.draw.__module__, "simple_sailing_game.render")
+
 	def test_controller_does_not_depend_on_boat_or_pymunk(self):
 		result = isolated_python(
 			"import sys, simple_sailing_game.controllers.assisted, "

@@ -10,6 +10,21 @@ from simple_sailing_game.physics import coupled, dynamic
 
 
 class ForceInvariantTest(unittest.TestCase):
+	def test_configured_hull_resistance_is_primarily_longitudinal(self):
+		force = boat.hull_resistance_force(
+			pymunk.Vec2d(1, 1),
+			boat_angle_rad=0,
+			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
+			reference_area_m2=game.BOAT_PARAMETERS.hull_reference_area_m2,
+			coefficient=game.BOAT_PARAMETERS.hull_drag_coefficient,
+			lateral_coefficient=(
+				game.BOAT_PARAMETERS.hull_lateral_drag_coefficient
+			),
+		)
+
+		self.assertGreater(force.y, 0)
+		self.assertGreater(force.x, force.y)
+
 	def test_hull_resistance_is_longitudinal_in_boat_coordinates(self):
 		force = boat.hull_resistance_force(
 			pymunk.Vec2d(3, 4),

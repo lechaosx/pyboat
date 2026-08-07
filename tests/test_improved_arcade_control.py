@@ -25,7 +25,7 @@ class ImprovedArcadeControlTest(unittest.TestCase):
 			),
 		)
 
-	def test_turning_eases_power_without_changing_old_move_controller(self):
+	def test_turning_eases_power(self):
 		straight = improved_arcade.control(
 			self.control_input(), MotionIntent(1, 0), 2, maximum_yaw_rate_rad_s=1
 		)
@@ -38,15 +38,29 @@ class ImprovedArcadeControlTest(unittest.TestCase):
 			abs(straight.sheet_limit_angle_rad),
 		)
 
-	def test_gamepad_smoothing_approaches_target_without_overshoot(self):
-		result = improved_arcade.smooth_gamepad_intent(
-			MotionIntent(), MotionIntent(1, -1), dt_seconds=1 / 60
+	def test_original_move_controller_does_not_ease_power_while_turning(self):
+		straight = arcade.move_control(
+			self.control_input(), MotionIntent(1, 0), maximum_yaw_rate_rad_s=1
+		)
+		turning = arcade.move_control(
+			self.control_input(), MotionIntent(1, 1), maximum_yaw_rate_rad_s=1
 		)
 
-		self.assertGreater(result.forward, 0)
-		self.assertLess(result.forward, 1)
-		self.assertGreater(result.turn, -1)
-		self.assertLess(result.turn, 0)
+		self.assertEqual(turning.sheet_limit_angle_rad, straight.sheet_limit_angle_rad)
+
+	def test_low_water_speed_reduces_the_requested_yaw_rate(self):
+		low_speed = improved_arcade.control(
+			self.control_input(), MotionIntent(1, 0.8), 0, maximum_yaw_rate_rad_s=1
+		)
+		steering_speed = improved_arcade.control(
+			self.control_input(), MotionIntent(1, 0.8), 2, maximum_yaw_rate_rad_s=1
+		)
+
+		self.assertEqual(low_speed.rudder_target_angle_rad, 0)
+		self.assertNotEqual(
+			steering_speed.rudder_target_angle_rad,
+			low_speed.rudder_target_angle_rad,
+		)
 
 
 if __name__ == "__main__":

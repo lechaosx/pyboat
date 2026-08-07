@@ -123,6 +123,28 @@ class StartupTest(unittest.TestCase):
 
 
 class InputAdapterTest(unittest.TestCase):
+	def test_every_controller_has_a_selection_key(self):
+		self.assertEqual(
+			set(game.CONTROL_MODES_BY_KEY.values()),
+			{
+				game.MANUAL_CONTROL,
+				game.AUTO_SHEET_CONTROL,
+				game.IMPROVED_ARCADE_CONTROL,
+				game.ARCADE_MOVE_CONTROL,
+				game.ARCADE_CONTROL,
+				game.ARCADE_STERNWAY_CONTROL,
+				game.GUIDED_GRADIENT_CONTROL,
+				game.GLOBAL_OPTIMUM_CONTROL,
+				game.RAW_GRADIENT_CONTROL,
+			},
+		)
+
+	def test_improved_arcade_is_the_default_controller(self):
+		self.assertEqual(game.DEFAULT_CONTROL_MODE, game.IMPROVED_ARCADE_CONTROL)
+
+	def test_interactive_game_starts_with_articulated_physics(self):
+		self.assertEqual(game.DEFAULT_PHYSICS_MODE, game.ARTICULATED_PHYSICS)
+
 	def test_auto_sheet_keyboard_reverses_rudder_keys(self):
 		left = game.keyboard_auto_sheet_intent(
 			forward=False,
@@ -295,7 +317,7 @@ class InputAdapterTest(unittest.TestCase):
 
 		self.assertEqual(manual_input, manual.DirectionInput())
 
-	def test_interactive_game_starts_in_direct_gradient_mode(self):
+	def test_assisted_settings_start_in_direct_gradient_mode(self):
 		self.assertEqual(
 			game.CONTROLLER_SETTINGS.mode,
 			controller.DIRECT_GRADIENT_CONTROL,

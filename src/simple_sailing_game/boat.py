@@ -28,6 +28,7 @@ class BoatParameters:
 	rudder_position_m: tuple[float, float]
 	hull_reference_area_m2: float
 	hull_drag_coefficient: float
+	hull_lateral_drag_coefficient: float
 	sail_base_drag_coefficient: float
 	underwater_foil_base_drag_coefficient: float
 	sail_bearing_damping_n_m_s_rad: float
@@ -246,16 +247,24 @@ def hull_resistance_force(
 	fluid_density_kg_m3: float,
 	reference_area_m2: float,
 	coefficient: float,
+	lateral_coefficient: float = 0,
 ) -> pymunk.Vec2d:
-	"""Quadratic resistance along the hull; the keel supplies lateral resistance."""
 	local_flow_m_s = apparent_water_m_s.rotated(-boat_angle_rad)
 	longitudinal_flow_m_s = pymunk.Vec2d(local_flow_m_s.x, 0)
-	return drag_force(
+	lateral_flow_m_s = pymunk.Vec2d(0, local_flow_m_s.y)
+	longitudinal_force_n = drag_force(
 		longitudinal_flow_m_s,
 		fluid_density_kg_m3,
 		reference_area_m2,
 		coefficient,
-	).rotated(boat_angle_rad)
+	)
+	lateral_force_n = drag_force(
+		lateral_flow_m_s,
+		fluid_density_kg_m3,
+		reference_area_m2,
+		lateral_coefficient,
+	)
+	return (longitudinal_force_n + lateral_force_n).rotated(boat_angle_rad)
 
 
 def hinged_foil_load(

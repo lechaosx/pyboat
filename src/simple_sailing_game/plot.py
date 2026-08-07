@@ -3,7 +3,7 @@ import math
 import matplotlib.pyplot
 
 from . import boat
-from .game import BOAT_PARAMETERS
+from .simulation import BOAT_PARAMETERS
 
 
 lift = boat.lift_coefficient
