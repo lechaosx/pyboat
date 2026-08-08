@@ -5,15 +5,13 @@ from dataclasses import dataclass
 import pymunk
 
 from . import boat
-from .controllers import actuator, arcade, manual
+from .controllers import actuator, arcade
 from .physics import coupled
 
 
-MANUAL_CONTROL = "manual"
-AUTO_SHEET_CONTROL = "auto sheet"
-ARCADE_CONTROL = "arcade"
-ARCADE_MOVE_CONTROL = "arcade move intent"
-DIRECT_ARCADE_CONTROL = "direct arcade move intent"
+DIRECT_ARCADE_CONTROL = "direct arcade"
+AUTO_SHEET_CONTROL = "auto-sheet + rudder"
+YAW_RATE_ARCADE_CONTROL = "yaw-rate arcade"
 
 
 @dataclass(frozen=True)
@@ -145,7 +143,6 @@ def surface_control_state(
 		sail,
 		rudder,
 		arcade.ControlInput(
-			observation.boat_angle_rad,
 			observation.boat_angular_velocity_rad_s,
 			boat.lumped_moment_of_inertia_kg_m2(parameters),
 			observation.sail_load.center_local_m.rotated(
@@ -156,7 +153,6 @@ def surface_control_state(
 				observation.apparent_wind_m_s,
 				parameters.max_sail_angle_rad,
 			),
-			parameters.max_sail_angle_rad,
 			parameters.max_rudder_angle_rad,
 			_sample_effects(
 				sail_effect_at,
@@ -208,11 +204,10 @@ def sheet_control_torques(
 	return torques
 
 
-def _advance_surface_game(
+def advance_surface_game(
 	state: boat.SailingState,
-	intent: arcade.AutoSheetIntent | arcade.HeadingIntent | arcade.MotionIntent | manual.Input,
+	intent: arcade.AutoSheetIntent | arcade.MotionIntent,
 	control_mode: str,
-	manual_sheet_limit_angle_rad: float | None,
 	settings: SimulationSettings,
 	environment: boat.Environment,
 	dt_seconds: float,
@@ -220,31 +215,13 @@ def _advance_surface_game(
 	observation = boat.observe(state, environment, settings.parameters)
 	control_state = surface_control_state(observation, settings)
 	surface_input = control_state.surfaces
-	if control_mode == MANUAL_CONTROL:
-		assert manual_sheet_limit_angle_rad is not None
-		sheet_limit_angle_rad, rudder_target_angle_rad = manual.control(
-			manual_sheet_limit_angle_rad,
-			intent,
-			settings.parameters.max_sail_angle_rad,
-			settings.parameters.max_rudder_angle_rad,
-			dt_seconds,
-		)
-		targets = arcade.SurfaceTargets(
-			sheet_limit_angle_rad,
-			rudder_target_angle_rad,
-		)
-	elif control_mode == AUTO_SHEET_CONTROL:
-		targets = arcade.auto_sheet_manual_tiller(surface_input, intent)
-	elif control_mode == ARCADE_CONTROL:
-		targets = arcade.heading_control(
-			surface_input,
-			intent,
-			settings.maximum_yaw_rate_rad_s,
-		)
+	if control_mode == AUTO_SHEET_CONTROL:
+		targets = arcade.auto_sheet_control(surface_input, intent)
 	elif control_mode == DIRECT_ARCADE_CONTROL:
 		targets = arcade.direct_move_control(surface_input, intent)
 	else:
-		targets = arcade.move_control(
+		assert control_mode == YAW_RATE_ARCADE_CONTROL
+		targets = arcade.yaw_rate_move_control(
 			surface_input,
 			intent,
 			settings.maximum_yaw_rate_rad_s,
@@ -274,41 +251,3 @@ def _advance_surface_game(
 		dt_seconds,
 	)
 	return SimulationTelemetry(physics, control_mode, targets)
-
-
-def advance_surface_game(
-	state: boat.SailingState,
-	intent: arcade.AutoSheetIntent | arcade.HeadingIntent | arcade.MotionIntent,
-	control_mode: str,
-	settings: SimulationSettings,
-	environment: boat.Environment,
-	dt_seconds: float,
-) -> SimulationTelemetry:
-	return _advance_surface_game(
-		state,
-		intent,
-		control_mode,
-		None,
-		settings,
-		environment,
-		dt_seconds,
-	)
-
-
-def advance_manual_game(
-	state: boat.SailingState,
-	intent: manual.Input,
-	sheet_limit_angle_rad: float,
-	settings: SimulationSettings,
-	environment: boat.Environment,
-	dt_seconds: float,
-) -> SimulationTelemetry:
-	return _advance_surface_game(
-		state,
-		intent,
-		MANUAL_CONTROL,
-		sheet_limit_angle_rad,
-		settings,
-		environment,
-		dt_seconds,
-	)

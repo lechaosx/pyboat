@@ -4,7 +4,7 @@ import pygame
 import pymunk
 
 from . import boat, course, input as player_input, render, simulation
-from .controllers import arcade, manual
+from .controllers import arcade
 
 
 MAXIMUM_FRAME_TIME_SECONDS = 0.25
@@ -18,11 +18,9 @@ MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
 
-MANUAL_CONTROL = simulation.MANUAL_CONTROL
-AUTO_SHEET_CONTROL = simulation.AUTO_SHEET_CONTROL
-ARCADE_CONTROL = simulation.ARCADE_CONTROL
-ARCADE_MOVE_CONTROL = simulation.ARCADE_MOVE_CONTROL
 DIRECT_ARCADE_CONTROL = simulation.DIRECT_ARCADE_CONTROL
+AUTO_SHEET_CONTROL = simulation.AUTO_SHEET_CONTROL
+YAW_RATE_ARCADE_CONTROL = simulation.YAW_RATE_ARCADE_CONTROL
 
 BOAT_PARAMETERS = boat.BoatParameters(
 	air_density_kg_m3=1.225,
@@ -47,7 +45,7 @@ BOAT_PARAMETERS = boat.BoatParameters(
 	rudder_position_m=(-1.8, 0),
 	hull_reference_area_m2=0.3,
 	hull_drag_coefficient=0.08,
-	hull_lateral_drag_coefficient=0.4,
+	hull_lateral_drag_coefficient=0.02,
 	sail_base_drag_coefficient=0.02,
 	underwater_foil_base_drag_coefficient=0.02,
 	sail_bearing_damping_n_m_s_rad=20,
@@ -70,11 +68,9 @@ SIMULATION_SETTINGS = simulation.SimulationSettings(
 )
 
 CONTROL_MODES_BY_KEY = {
-	pygame.K_1: MANUAL_CONTROL,
+	pygame.K_1: DIRECT_ARCADE_CONTROL,
 	pygame.K_2: AUTO_SHEET_CONTROL,
-	pygame.K_3: DIRECT_ARCADE_CONTROL,
-	pygame.K_4: ARCADE_MOVE_CONTROL,
-	pygame.K_5: ARCADE_CONTROL,
+	pygame.K_3: YAW_RATE_ARCADE_CONTROL,
 }
 DEFAULT_CONTROL_MODE = DIRECT_ARCADE_CONTROL
 
@@ -99,16 +95,14 @@ def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((render.WIDTH, render.HEIGHT))
 	pygame.display.set_caption(
-		"Sailboat — 1 manual, 2 auto-sheet, 3 direct arcade; "
-		"comparisons: 4–5; R reset; WASD / gamepad"
+		"Sailboat — 1 direct arcade, 2 auto-sheet + rudder, "
+		"3 yaw-rate arcade; R reset; WASD / gamepad"
 	)
 	font = pygame.font.Font(None, 24)
 	clock = pygame.time.Clock()
 	state = simulation.create_simulation(SIMULATION_SETTINGS)
 	time_trial = course.TimeTrial(COURSE_BUOYS_M, BUOY_RADIUS_M)
 	input_mode = DEFAULT_CONTROL_MODE
-	heading_hold = arcade.HeadingHold()
-	manual_sheet_limit_angle_rad = BOAT_PARAMETERS.max_sail_angle_rad
 	accumulated_seconds = 0.0
 	telemetry = None
 	joystick = None
@@ -123,14 +117,9 @@ def main() -> None:
 			if event.type == pygame.QUIT:
 				running = False
 			elif event.type == pygame.KEYDOWN and event.key in CONTROL_MODES_BY_KEY:
-				selected_mode = CONTROL_MODES_BY_KEY[event.key]
-				if selected_mode == DIRECT_ARCADE_CONTROL and input_mode != selected_mode:
-					heading_hold = arcade.HeadingHold()
-				input_mode = selected_mode
+				input_mode = CONTROL_MODES_BY_KEY[event.key]
 			elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
 				state = simulation.create_simulation(SIMULATION_SETTINGS)
-				heading_hold = arcade.HeadingHold()
-				manual_sheet_limit_angle_rad = BOAT_PARAMETERS.max_sail_angle_rad
 				time_trial.reset()
 			elif event.type == pygame.JOYDEVICEADDED and joystick is None:
 				joystick = pygame.joystick.Joystick(event.device_index)
@@ -143,48 +132,7 @@ def main() -> None:
 				joystick = None
 
 		keys = pygame.key.get_pressed()
-		if input_mode == MANUAL_CONTROL:
-			keyboard_input = player_input.keyboard_manual(
-				sheet_in=keys[pygame.K_w] or keys[pygame.K_UP],
-				sheet_out=keys[pygame.K_s] or keys[pygame.K_DOWN],
-				rudder_left=keys[pygame.K_a] or keys[pygame.K_LEFT],
-				rudder_right=keys[pygame.K_d] or keys[pygame.K_RIGHT],
-			)
-			joystick_input = manual.Input()
-			if joystick is not None:
-				joystick_input = player_input.analog_manual(
-					joystick.get_axis(0),
-					joystick.get_axis(1),
-					ANALOG_STICK_DEADZONE,
-				)
-			intent = manual.Input(
-				sheet=joystick_input.sheet or keyboard_input.sheet,
-				rudder=joystick_input.rudder or keyboard_input.rudder,
-			)
-		elif input_mode == ARCADE_CONTROL:
-			explicit_reverse = keys[pygame.K_SPACE]
-			intent = player_input.keyboard_heading(
-				state.boat.angle,
-				keys[pygame.K_w],
-				keys[pygame.K_s],
-				keys[pygame.K_a],
-				keys[pygame.K_d],
-				explicit_reverse,
-			)
-			if joystick is not None:
-				if joystick.get_numbuttons():
-					explicit_reverse = explicit_reverse or joystick.get_button(0)
-				joystick_intent = player_input.analog_heading(
-					joystick.get_axis(0),
-					joystick.get_axis(1),
-					explicit_reverse,
-					ANALOG_STICK_DEADZONE,
-				)
-				if joystick_intent.world_direction != (0, 0):
-					intent = joystick_intent
-				elif explicit_reverse:
-					intent = arcade.HeadingIntent(intent.world_direction, True)
-		elif input_mode in (ARCADE_MOVE_CONTROL, DIRECT_ARCADE_CONTROL):
+		if input_mode in (DIRECT_ARCADE_CONTROL, YAW_RATE_ARCADE_CONTROL):
 			intent = player_input.keyboard_motion(
 				keys[pygame.K_w],
 				keys[pygame.K_s],
@@ -219,30 +167,14 @@ def main() -> None:
 			elapsed_seconds,
 		)
 		for _ in range(steps):
-			step_intent = intent
-			if input_mode == DIRECT_ARCADE_CONTROL:
-				step_intent = heading_hold.apply(state.boat.angle, intent)
-			if input_mode == MANUAL_CONTROL:
-				telemetry = simulation.advance_manual_game(
-					state,
-					intent,
-					manual_sheet_limit_angle_rad,
-					SIMULATION_SETTINGS,
-					ENVIRONMENT,
-					DT_SECONDS,
-				)
-				manual_sheet_limit_angle_rad = (
-					telemetry.surface_targets.sheet_limit_angle_rad
-				)
-			else:
-				telemetry = simulation.advance_surface_game(
-					state,
-					step_intent,
-					input_mode,
-					SIMULATION_SETTINGS,
-					ENVIRONMENT,
-					DT_SECONDS,
-				)
+			telemetry = simulation.advance_surface_game(
+				state,
+				intent,
+				input_mode,
+				SIMULATION_SETTINGS,
+				ENVIRONMENT,
+				DT_SECONDS,
+			)
 			time_trial.advance(state.boat.position, DT_SECONDS)
 		if telemetry is not None:
 			render.draw(

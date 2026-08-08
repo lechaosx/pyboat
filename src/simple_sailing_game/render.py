@@ -4,7 +4,7 @@ import pygame
 import pymunk
 
 from . import boat, course
-from .controllers import arcade, manual
+from .controllers import arcade
 from .simulation import SimulationTelemetry
 
 
@@ -14,12 +14,7 @@ FLOW_PIXELS_PER_METER_SECOND = 20
 FORCE_PIXELS_PER_NEWTON = 0.35
 INTENT_VECTOR_LENGTH_PX = 100
 
-PlayerIntent = (
-	arcade.MotionIntent
-	| manual.Input
-	| arcade.AutoSheetIntent
-	| arcade.HeadingIntent
-)
+PlayerIntent = arcade.MotionIntent | arcade.AutoSheetIntent
 
 
 def draw_vector(
@@ -71,10 +66,6 @@ def intent_vector(
 	return pymunk.Vec2d(intent.forward, intent.turn).rotated(boat_heading_rad)
 
 
-def heading_intent_vector(intent: arcade.HeadingIntent) -> pymunk.Vec2d:
-	return pymunk.Vec2d(*intent.world_direction)
-
-
 def draw_intent(
 	screen: pygame.Surface,
 	font: pygame.font.Font,
@@ -82,27 +73,6 @@ def draw_intent(
 	boat_heading_rad: float,
 	intent: PlayerIntent,
 ) -> None:
-	if isinstance(intent, arcade.HeadingIntent):
-		world_direction = heading_intent_vector(intent)
-		if world_direction.length > 1:
-			world_direction = world_direction.normalized()
-		draw_vector(
-			screen,
-			start,
-			world_direction,
-			(240, 100, 220),
-			INTENT_VECTOR_LENGTH_PX,
-			3,
-		)
-		reverse = "  reverse modifier" if intent.explicit_reverse else ""
-		text = font.render(
-			f"heading input: {world_direction.x:+.0%}, {world_direction.y:+.0%}{reverse}",
-			True,
-			(240, 100, 220),
-		)
-		screen.blit(text, (30, start.y - 10))
-		return
-
 	if isinstance(intent, arcade.AutoSheetIntent):
 		power = pymunk.Vec2d(intent.power, 0).rotated(boat_heading_rad)
 		rudder = pymunk.Vec2d(0, intent.rudder).rotated(boat_heading_rad)
@@ -114,23 +84,6 @@ def draw_intent(
 		)
 		text = font.render(
 			f"auto-sheet: power {intent.power:+.0%}  rudder {intent.rudder:+.0%}",
-			True,
-			(240, 100, 220),
-		)
-		screen.blit(text, (30, start.y - 10))
-		return
-
-	if isinstance(intent, manual.Input):
-		sheet = pymunk.Vec2d(intent.sheet, 0).rotated(boat_heading_rad)
-		rudder = pymunk.Vec2d(0, intent.rudder).rotated(boat_heading_rad)
-		draw_vector(
-			screen, start, sheet, (235, 205, 100), INTENT_VECTOR_LENGTH_PX, 3
-		)
-		draw_vector(
-			screen, start, rudder, (220, 220, 230), INTENT_VECTOR_LENGTH_PX, 3
-		)
-		text = font.render(
-			f"manual: sheet {intent.sheet:+.0%}  rudder {intent.rudder:+.0%}",
 			True,
 			(240, 100, 220),
 		)

@@ -2,7 +2,7 @@ import math
 
 import pymunk
 
-from .controllers import arcade, manual
+from .controllers import arcade
 
 
 def keyboard_motion(
@@ -16,21 +16,6 @@ def keyboard_motion(
 	return arcade.MotionIntent(longitudinal, -turn)
 
 
-def keyboard_heading(
-	boat_heading_rad: float,
-	forward: bool,
-	backward: bool,
-	left: bool,
-	right: bool,
-	explicit_reverse: bool,
-) -> arcade.HeadingIntent:
-	world_direction = pymunk.Vec2d(
-		int(forward) - int(backward),
-		int(right) - int(left),
-	).rotated(boat_heading_rad)
-	return arcade.HeadingIntent(tuple(world_direction), explicit_reverse)
-
-
 def keyboard_auto_sheet(
 	forward: bool,
 	left: bool,
@@ -39,34 +24,6 @@ def keyboard_auto_sheet(
 	return arcade.AutoSheetIntent(
 		power=int(forward),
 		rudder=int(left) - int(right),
-	)
-
-
-def keyboard_manual(
-	sheet_in: bool,
-	sheet_out: bool,
-	rudder_left: bool,
-	rudder_right: bool,
-) -> manual.Input:
-	return manual.Input(
-		sheet=int(sheet_in) - int(sheet_out),
-		rudder=int(rudder_right) - int(rudder_left),
-	)
-
-
-def analog_manual(
-	stick_x: float,
-	stick_y: float,
-	deadzone: float,
-) -> manual.Input:
-	def axis(value: float) -> float:
-		if abs(value) <= deadzone:
-			return 0
-		return max(-1, min(1, value))
-
-	return manual.Input(
-		sheet=axis(-stick_y),
-		rudder=axis(stick_x),
 	)
 
 
@@ -97,19 +54,6 @@ def analog_motion(
 		else local_intent.y
 	)
 	return arcade.MotionIntent(forward, turn)
-
-
-def analog_heading(
-	stick_x: float,
-	stick_y: float,
-	explicit_reverse: bool,
-	deadzone: float,
-) -> arcade.HeadingIntent:
-	world_vector = pymunk.Vec2d(stick_x, stick_y)
-	world_direction = (0, 0)
-	if world_vector.length > deadzone:
-		world_direction = (stick_x, stick_y)
-	return arcade.HeadingIntent(world_direction, explicit_reverse)
 
 
 def analog_auto_sheet(

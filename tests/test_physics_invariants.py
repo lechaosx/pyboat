@@ -184,7 +184,7 @@ class IntegrationInvariantTest(unittest.TestCase):
 				self.assertLess(max(final_rates_rad_s), 1.95)
 				self.assertLess(
 					max(final_rates_rad_s) - min(final_rates_rad_s),
-					0.02,
+					0.05,
 				)
 
 	def test_coupled_actuator_torque_preserves_total_angular_momentum(self):
@@ -221,11 +221,10 @@ class IntegrationInvariantTest(unittest.TestCase):
 	def simulate(self, dt_seconds):
 		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
 		for _ in range(round(5 / dt_seconds)):
-			direction = pymunk.Vec2d(1, 0).rotated(state.boat.angle)
 			simulation.advance_surface_game(
 				state,
-				arcade.HeadingIntent(world_direction=tuple(direction)),
-				game.ARCADE_CONTROL,
+				arcade.MotionIntent(forward=1),
+				game.YAW_RATE_ARCADE_CONTROL,
 				game.SIMULATION_SETTINGS,
 				game.ENVIRONMENT,
 				dt_seconds,

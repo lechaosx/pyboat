@@ -7,10 +7,9 @@ import unittest
 from dataclasses import replace
 
 import pygame
-import pymunk
 
 from simple_sailing_game import boat, game, input as player_input, render, simulation
-from simple_sailing_game.controllers import arcade, manual
+from simple_sailing_game.controllers import arcade
 
 
 class StartupTest(unittest.TestCase):
@@ -34,26 +33,23 @@ class StartupTest(unittest.TestCase):
 class InputAdapterTest(unittest.TestCase):
 	def test_every_controller_has_a_selection_key(self):
 		self.assertEqual(
-			set(game.CONTROL_MODES_BY_KEY.values()),
+			game.CONTROL_MODES_BY_KEY,
 			{
-				game.MANUAL_CONTROL,
-				game.AUTO_SHEET_CONTROL,
-				game.DIRECT_ARCADE_CONTROL,
-				game.ARCADE_MOVE_CONTROL,
-				game.ARCADE_CONTROL,
+				pygame.K_1: game.DIRECT_ARCADE_CONTROL,
+				pygame.K_2: game.AUTO_SHEET_CONTROL,
+				pygame.K_3: game.YAW_RATE_ARCADE_CONTROL,
 			},
 		)
-		self.assertTrue(
-			all(
-				key not in game.CONTROL_MODES_BY_KEY
-				for key in range(pygame.K_7, pygame.K_9 + 1)
-			)
-		)
+		self.assertEqual(game.DIRECT_ARCADE_CONTROL, "direct arcade")
+		self.assertEqual(game.AUTO_SHEET_CONTROL, "auto-sheet + rudder")
+		self.assertEqual(game.YAW_RATE_ARCADE_CONTROL, "yaw-rate arcade")
+		for old_name in ("MANUAL_CONTROL", "ARCADE_CONTROL", "ARCADE_MOVE_CONTROL"):
+			self.assertFalse(hasattr(game, old_name))
 
 	def test_direct_arcade_is_the_default_controller(self):
 		self.assertEqual(game.DEFAULT_CONTROL_MODE, game.DIRECT_ARCADE_CONTROL)
 		self.assertEqual(
-			game.CONTROL_MODES_BY_KEY[pygame.K_3],
+			game.CONTROL_MODES_BY_KEY[pygame.K_1],
 			game.DIRECT_ARCADE_CONTROL,
 		)
 
@@ -108,27 +104,6 @@ class InputAdapterTest(unittest.TestCase):
 			arcade.MotionIntent(1, 1),
 		)
 
-	def test_heading_input_preserves_world_direction_and_reverse_modifier(self):
-		intent = player_input.analog_heading(
-			-1,
-			0.25,
-			True,
-			game.ANALOG_STICK_DEADZONE,
-		)
-
-		self.assertEqual(intent, arcade.HeadingIntent((-1, 0.25), True))
-
-	def test_manual_input_is_incremental_sheet_and_direct_rudder(self):
-		keyboard = player_input.keyboard_manual(True, False, True, False)
-		analog = player_input.analog_manual(
-			-0.5,
-			-0.75,
-			game.ANALOG_STICK_DEADZONE,
-		)
-
-		self.assertEqual(keyboard, manual.Input(sheet=1, rudder=-1))
-		self.assertEqual(analog, manual.Input(sheet=0.75, rudder=-0.5))
-
 	def test_intent_visualization_preserves_local_square_components(self):
 		vector = render.intent_vector(arcade.MotionIntent(0.5, 0.5), math.pi / 2)
 
@@ -158,9 +133,8 @@ class SailingSimulationTest(unittest.TestCase):
 	def test_core_surface_controllers_run_on_articulated_physics(self):
 		cases = (
 			(game.AUTO_SHEET_CONTROL, arcade.AutoSheetIntent(1, 0)),
-			(game.ARCADE_CONTROL, arcade.HeadingIntent((1, 0))),
-			(game.ARCADE_MOVE_CONTROL, arcade.MotionIntent(1, 0)),
 			(game.DIRECT_ARCADE_CONTROL, arcade.MotionIntent(1, 0)),
+			(game.YAW_RATE_ARCADE_CONTROL, arcade.MotionIntent(1, 0)),
 		)
 		for control_mode, intent in cases:
 			with self.subTest(control_mode=control_mode):
@@ -168,25 +142,6 @@ class SailingSimulationTest(unittest.TestCase):
 				telemetry = self.advance(intent, control_mode)
 				self.assertEqual(telemetry.control_mode, control_mode)
 				self.assertTrue(all(map(math.isfinite, self.state.boat.velocity)))
-
-	def test_manual_sheet_is_retained_and_rudder_is_direct(self):
-		sheet_limit_angle_rad = game.BOAT_PARAMETERS.max_sail_angle_rad
-		for _ in range(round(1 / game.DT_SECONDS)):
-			telemetry = simulation.advance_manual_game(
-				self.state,
-				manual.Input(sheet=1, rudder=0.5),
-				sheet_limit_angle_rad,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
-			)
-			sheet_limit_angle_rad = telemetry.surface_targets.sheet_limit_angle_rad
-
-		self.assertAlmostEqual(sheet_limit_angle_rad, 0)
-		self.assertAlmostEqual(
-			telemetry.surface_targets.rudder_target_angle_rad,
-			game.BOAT_PARAMETERS.max_rudder_angle_rad / 2,
-		)
 
 	def test_direct_arcade_forward_input_damps_a_released_turn(self):
 		self.advance(arcade.MotionIntent(forward=1), game.DIRECT_ARCADE_CONTROL, 5)
@@ -209,61 +164,6 @@ class SailingSimulationTest(unittest.TestCase):
 			5,
 		)
 
-	def test_direct_arcade_settles_after_turning_downwind(self):
-		settings = replace(
-			game.SIMULATION_SETTINGS,
-			initial_boat_angle_rad=math.radians(135),
-		)
-		self.state = simulation.create_simulation(settings)
-		for body in self.state.space.bodies:
-			body.velocity = pymunk.Vec2d(1.5, 0).rotated(self.state.boat.angle)
-		heading_hold = arcade.HeadingHold()
-		for _ in range(round(15 / game.DT_SECONDS)):
-			intent = heading_hold.apply(
-				self.state.boat.angle,
-				arcade.MotionIntent(forward=1, turn=-1),
-			)
-			simulation.advance_surface_game(
-				self.state,
-				intent,
-				game.DIRECT_ARCADE_CONTROL,
-				settings,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
-			)
-			if self.state.boat.angle <= 0:
-				break
-		else:
-			self.fail("boat did not reach downwind")
-
-		headings_deg = []
-		for step in range(round(20 / game.DT_SECONDS)):
-			intent = heading_hold.apply(
-				self.state.boat.angle,
-				arcade.MotionIntent(forward=1),
-			)
-			simulation.advance_surface_game(
-				self.state,
-				intent,
-				game.DIRECT_ARCADE_CONTROL,
-				settings,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
-			)
-			if step >= round(10 / game.DT_SECONDS):
-				headings_deg.append(
-					math.degrees(math.remainder(self.state.boat.angle, 2 * math.pi))
-				)
-
-		self.assertLess(
-			max(headings_deg) - min(headings_deg),
-			settings.control_angle_resolution_deg,
-		)
-		self.assertLess(
-			abs(headings_deg[-1] - math.degrees(intent.held_heading_rad)),
-			settings.control_angle_resolution_deg,
-		)
-
 	def test_auto_sheet_surfaces_settle_without_chatter(self):
 		angles = []
 		for step_index in range(round(12 / game.DT_SECONDS)):
@@ -281,35 +181,6 @@ class SailingSimulationTest(unittest.TestCase):
 				math.radians(0.1),
 			)
 
-	def test_heading_reverse_input_exits_irons(self):
-		settings = replace(game.SIMULATION_SETTINGS, initial_boat_angle_rad=math.pi)
-		self.state = simulation.create_simulation(settings)
-		neutral = simulation.create_simulation(settings)
-		for _ in range(round(20 / game.DT_SECONDS)):
-			telemetry = simulation.advance_surface_game(
-				self.state,
-				arcade.HeadingIntent((-1, 0), explicit_reverse=True),
-				game.ARCADE_CONTROL,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
-			)
-			simulation.advance_surface_game(
-				neutral,
-				arcade.HeadingIntent(),
-				game.ARCADE_CONTROL,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
-			)
-
-		forward = pymunk.Vec2d(1, 0).rotated(self.state.boat.angle)
-		self.assertIsNotNone(telemetry.surface_targets.sail_target_angle_rad)
-		self.assertLess(
-			self.state.boat.velocity.dot(forward),
-			neutral.boat.velocity.dot(forward) - 0.05,
-		)
-
 	def test_draw_renders_each_intent_and_telemetry(self):
 		telemetry = self.advance(
 			arcade.MotionIntent(1, 0),
@@ -318,9 +189,7 @@ class SailingSimulationTest(unittest.TestCase):
 		pygame.font.init()
 		for intent in (
 			arcade.MotionIntent(1, 0),
-			manual.Input(sheet=1, rudder=-1),
 			arcade.AutoSheetIntent(power=1, rudder=-1),
-			arcade.HeadingIntent((0, -1)),
 		):
 			with self.subTest(intent=type(intent).__name__):
 				screen = pygame.Surface((render.WIDTH, render.HEIGHT))

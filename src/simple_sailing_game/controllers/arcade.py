@@ -6,39 +6,12 @@ from dataclasses import dataclass
 class MotionIntent:
 	forward: float = 0
 	turn: float = 0
-	held_heading_rad: float | None = None
-
-
-@dataclass
-class HeadingHold:
-	held_heading_rad: float | None = None
-
-	def apply(
-		self,
-		boat_heading_rad: float,
-		intent: MotionIntent,
-	) -> MotionIntent:
-		if intent.turn:
-			self.held_heading_rad = None
-		elif self.held_heading_rad is None:
-			self.held_heading_rad = boat_heading_rad
-		return MotionIntent(
-			intent.forward,
-			intent.turn,
-			self.held_heading_rad,
-		)
 
 
 @dataclass(frozen=True)
 class AutoSheetIntent:
 	power: float = 0
 	rudder: float = 0
-
-
-@dataclass(frozen=True)
-class HeadingIntent:
-	world_direction: tuple[float, float] = (0, 0)
-	explicit_reverse: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,12 +23,10 @@ class SurfaceEffect:
 
 @dataclass(frozen=True)
 class ControlInput:
-	boat_heading_rad: float
 	boat_angular_velocity_rad_s: float
 	boat_moment_of_inertia_kg_m2: float
 	current_sail_yaw_moment_n_m: float
 	free_sail_angle_rad: float
-	maximum_sail_angle_rad: float
 	maximum_rudder_angle_rad: float
 	sail_effects: tuple[SurfaceEffect, ...]
 	rudder_effects: tuple[SurfaceEffect, ...]
@@ -72,8 +43,7 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 	return max(minimum, min(maximum, value))
 
 
-def _critical_yaw_correction_moment(
-	heading_error_rad: float,
+def _critical_yaw_damping_moment(
 	angular_velocity_rad_s: float,
 	moment_of_inertia_kg_m2: float,
 	maximum_rudder_angle_rad: float,
@@ -89,8 +59,7 @@ def _critical_yaw_correction_moment(
 		moment_of_inertia_kg_m2 * moment_stiffness_n_m_rad
 	)
 	return _clamp(
-		-heading_error_rad * moment_stiffness_n_m_rad
-		- angular_velocity_rad_s * critical_damping_n_m_s_rad,
+		-angular_velocity_rad_s * critical_damping_n_m_s_rad,
 		minimum_moment_n_m,
 		maximum_moment_n_m,
 	)
@@ -151,7 +120,7 @@ def _sail_target(
 	return abs(target_angle_rad), nearest_effect, None
 
 
-def auto_sheet_manual_tiller(
+def auto_sheet_control(
 	control_input: ControlInput,
 	intent: AutoSheetIntent,
 ) -> SurfaceTargets:
@@ -170,39 +139,20 @@ def auto_sheet_manual_tiller(
 	)
 
 
-def _heading_motion(
+def yaw_rate_move_control(
 	control_input: ControlInput,
-	intent: HeadingIntent,
-) -> tuple[float, float]:
-	direction_x, direction_y = intent.world_direction
-	magnitude = math.hypot(direction_x, direction_y)
-	if not magnitude:
-		return 0, 0
-	power = min(1, magnitude)
-	heading_error_rad = math.remainder(
-		math.atan2(direction_y, direction_x) - control_input.boat_heading_rad,
-		2 * math.pi,
-	)
-	if intent.explicit_reverse:
-		power = -power
-	turn = _clamp(heading_error_rad / (math.pi / 2), -1, 1)
-	return power, turn
-
-
-def _motion_control(
-	control_input: ControlInput,
-	power: float,
-	turn: float,
+	intent: MotionIntent,
 	maximum_yaw_rate_rad_s: float,
-	gradual_sternway: bool = False,
 ) -> SurfaceTargets:
 	sheet_limit_angle_rad, sail_effect, sail_target_angle_rad = _sail_target(
 		control_input,
-		power,
+		_clamp(intent.forward, -1, 1),
 		True,
-		gradual_sternway,
+		True,
 	)
-	desired_yaw_rate_rad_s = turn * maximum_yaw_rate_rad_s
+	desired_yaw_rate_rad_s = (
+		_clamp(intent.turn, -1, 1) * maximum_yaw_rate_rad_s
+	)
 	rate_error = _clamp(
 		(desired_yaw_rate_rad_s - control_input.boat_angular_velocity_rad_s)
 		/ maximum_yaw_rate_rad_s,
@@ -230,35 +180,6 @@ def _motion_control(
 		sheet_limit_angle_rad,
 		rudder_effect.angle_rad,
 		sail_target_angle_rad,
-	)
-
-
-def heading_control(
-	control_input: ControlInput,
-	intent: HeadingIntent,
-	maximum_yaw_rate_rad_s: float,
-) -> SurfaceTargets:
-	power, turn = _heading_motion(control_input, intent)
-	return _motion_control(
-		control_input,
-		power,
-		turn,
-		maximum_yaw_rate_rad_s,
-		True,
-	)
-
-
-def move_control(
-	control_input: ControlInput,
-	intent: MotionIntent,
-	maximum_yaw_rate_rad_s: float,
-) -> SurfaceTargets:
-	return _motion_control(
-		control_input,
-		_clamp(intent.forward, -1, 1),
-		_clamp(intent.turn, -1, 1),
-		maximum_yaw_rate_rad_s,
-		True,
 	)
 
 
@@ -328,14 +249,7 @@ def direct_move_control(
 	elif turn < 0:
 		target_moment_n_m = -turn * min(0, min(total_moments_n_m))
 	else:
-		heading_error_rad = 0.0
-		if intent.held_heading_rad is not None:
-			heading_error_rad = math.remainder(
-				control_input.boat_heading_rad - intent.held_heading_rad,
-				2 * math.pi,
-			)
-		target_moment_n_m = _critical_yaw_correction_moment(
-			heading_error_rad,
+		target_moment_n_m = _critical_yaw_damping_moment(
 			control_input.boat_angular_velocity_rad_s,
 			control_input.boat_moment_of_inertia_kg_m2,
 			control_input.maximum_rudder_angle_rad,

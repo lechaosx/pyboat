@@ -33,10 +33,7 @@ class ModuleBoundaryTest(unittest.TestCase):
 		)
 		self.assertEqual(
 			configuration["optional-dependencies"],
-			{
-				"optimizer": ["numpy>=2.2.6,<2.4"],
-				"plots": ["matplotlib>=3.10.8"],
-			},
+			{"plots": ["matplotlib>=3.10.8"]},
 		)
 
 	def test_game_owns_runtime_simulation_configuration(self):
@@ -62,17 +59,13 @@ class ModuleBoundaryTest(unittest.TestCase):
 				"environment",
 				"dt_seconds",
 			),
-			simulation.advance_manual_game: (
-				"settings",
-				"environment",
-				"dt_seconds",
-			),
 		}
 		for function, parameter_names in required.items():
 			with self.subTest(function=function.__name__):
 				parameters = inspect.signature(function).parameters
 				for name in parameter_names:
 					self.assertIs(parameters[name].default, inspect.Parameter.empty)
+		self.assertFalse(hasattr(simulation, "advance_manual_game"))
 
 	def test_rendering_requires_boat_parameters(self):
 		from simple_sailing_game import render
@@ -96,32 +89,19 @@ class ModuleBoundaryTest(unittest.TestCase):
 			importlib.util.find_spec("simple_sailing_game.physics.kinematic")
 		)
 
-	def test_assisted_and_manual_controllers_have_separate_modules(self):
-		from simple_sailing_game.controllers import assisted, manual
-
-		self.assertEqual(
-			assisted.control.__module__,
-			"simple_sailing_game.controllers.assisted",
+	def test_removed_controller_modules_are_absent(self):
+		self.assertIsNone(
+			importlib.util.find_spec("simple_sailing_game.controllers.assisted")
 		)
-		self.assertEqual(
-			manual.control.__module__,
-			"simple_sailing_game.controllers.manual",
+		self.assertIsNone(
+			importlib.util.find_spec("simple_sailing_game.controllers.manual")
 		)
-
-	def test_manual_controller_does_not_load_assisted_optimizer(self):
-		result = isolated_python(
-			"import sys, simple_sailing_game.controllers.manual; "
-			"assert 'simple_sailing_game.controllers.assisted' not in sys.modules; "
-			"assert 'numpy' not in sys.modules"
-		)
-
-		self.assertEqual(result.returncode, 0, result.stderr)
 
 	def test_internal_modules_do_not_import_pygame(self):
 		result = isolated_python(
 			"import sys, simple_sailing_game.boat, "
-			"simple_sailing_game.controllers.assisted, "
-			"simple_sailing_game.controllers.manual; "
+			"simple_sailing_game.controllers.actuator, "
+			"simple_sailing_game.controllers.arcade; "
 			"assert 'pygame' not in sys.modules"
 		)
 
@@ -131,14 +111,6 @@ class ModuleBoundaryTest(unittest.TestCase):
 		result = isolated_python(
 			"import sys, simple_sailing_game.simulation; "
 			"assert 'pygame' not in sys.modules"
-		)
-
-		self.assertEqual(result.returncode, 0, result.stderr)
-
-	def test_playable_game_does_not_load_optimizer(self):
-		result = isolated_python(
-			"import sys, simple_sailing_game.game; "
-			"assert 'simple_sailing_game.controllers.assisted' not in sys.modules"
 		)
 
 		self.assertEqual(result.returncode, 0, result.stderr)
@@ -157,8 +129,8 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 	def test_controller_does_not_depend_on_boat_or_pymunk(self):
 		result = isolated_python(
-			"import sys, simple_sailing_game.controllers.assisted, "
-			"simple_sailing_game.controllers.manual; "
+			"import sys, simple_sailing_game.controllers.actuator, "
+			"simple_sailing_game.controllers.arcade; "
 			"assert 'simple_sailing_game.boat' not in sys.modules; "
 			"assert 'pymunk' not in sys.modules"
 		)

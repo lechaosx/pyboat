@@ -1,8 +1,6 @@
 import math
 from dataclasses import dataclass, replace
 
-import pymunk
-
 from . import boat, simulation
 from .controllers import arcade
 
@@ -17,6 +15,20 @@ class PolarPoint:
 	leeway_angle_deg: float
 
 
+def _move_intent_toward_heading(
+	boat_heading_rad: float,
+	target_heading_rad: float,
+) -> arcade.MotionIntent:
+	heading_error_rad = math.remainder(
+		target_heading_rad - boat_heading_rad,
+		2 * math.pi,
+	)
+	return arcade.MotionIntent(
+		forward=1,
+		turn=max(-1, min(1, heading_error_rad / (math.pi / 2))),
+	)
+
+
 def sample(
 	settings: simulation.SimulationSettings,
 	environment: boat.Environment,
@@ -29,18 +41,18 @@ def sample(
 	upwind_angle_rad = environment.true_wind_velocity_m_s.angle + math.pi
 	for heading_from_upwind_deg in headings_from_upwind_deg:
 		target_heading_rad = upwind_angle_rad + math.radians(heading_from_upwind_deg)
-		target_direction = pymunk.Vec2d(1, 0).rotated(target_heading_rad)
 		state = simulation.create_simulation(
 			replace(settings, initial_boat_angle_rad=target_heading_rad)
 		)
 		for _ in range(round(settling_seconds / dt_seconds)):
-			intent = arcade.HeadingIntent(
-				world_direction=tuple(target_direction),
+			intent = _move_intent_toward_heading(
+				state.boat.angle,
+				target_heading_rad,
 			)
 			simulation.advance_surface_game(
 				state,
 				intent,
-				simulation.ARCADE_CONTROL,
+				simulation.YAW_RATE_ARCADE_CONTROL,
 				settings,
 				environment,
 				dt_seconds,
@@ -51,13 +63,14 @@ def sample(
 		leeway_angles_deg = []
 		heading_errors_deg = []
 		for _ in range(round(sampling_seconds / dt_seconds)):
-			intent = arcade.HeadingIntent(
-				world_direction=tuple(target_direction),
+			intent = _move_intent_toward_heading(
+				state.boat.angle,
+				target_heading_rad,
 			)
 			simulation.advance_surface_game(
 				state,
 				intent,
-				simulation.ARCADE_CONTROL,
+				simulation.YAW_RATE_ARCADE_CONTROL,
 				settings,
 				environment,
 				dt_seconds,

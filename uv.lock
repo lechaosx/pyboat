@@ -798,9 +798,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-optimizer = [
-    { name = "numpy" },
-]
 plots = [
     { name = "matplotlib" },
 ]
@@ -808,11 +805,10 @@ plots = [
 [package.metadata]
 requires-dist = [
     { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.10.8" },
-    { name = "numpy", marker = "extra == 'optimizer'", specifier = ">=2.2.6,<2.4" },
     { name = "pygame", specifier = ">=2.5.0" },
     { name = "pymunk", specifier = ">=6.6.0" },
 ]
-provides-extras = ["optimizer", "plots"]
+provides-extras = ["plots"]
 
 [[package]]
 name = "six"
