@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import pymunk
 
+from .physics import curves
+
 
 @dataclass(frozen=True)
 class BoatParameters:
@@ -29,6 +31,10 @@ class BoatParameters:
 	hull_reference_area_m2: float
 	hull_drag_coefficient: float
 	hull_lateral_drag_coefficient: float
+	sail_lift_coefficient: curves.LiftCurve
+	sail_drag_coefficient: curves.DragCurve
+	underwater_foil_lift_coefficient: curves.LiftCurve
+	underwater_foil_drag_coefficient: curves.DragCurve
 	sail_base_drag_coefficient: float
 	underwater_foil_base_drag_coefficient: float
 	sail_bearing_damping_n_m_s_rad: float
@@ -184,33 +190,22 @@ def free_sail_angle(
 	return max(-maximum_angle_rad, min(maximum_angle_rad, boom_angle_rad))
 
 
-def lift_coefficient(angle_of_attack_rad: float) -> float:
-	"""Approximate a symmetric flat plate, including loss of lift past 45 degrees."""
-	return math.sin(2 * angle_of_attack_rad)
-
-
-def drag_coefficient(
-	angle_of_attack_rad: float,
-	base_drag_coefficient: float,
-) -> float:
-	"""Combine profile drag with flat-plate pressure drag."""
-	return base_drag_coefficient + 1 - math.cos(2 * angle_of_attack_rad)
-
-
 def force_on_foil(
 	apparent_flow_m_s: pymunk.Vec2d,
 	foil_angle_rad: float,
 	fluid_density_kg_m3: float,
 	area_m2: float,
 	base_drag_coefficient: float,
+	lift_coefficient_at: curves.LiftCurve,
+	drag_coefficient_at: curves.DragCurve,
 ) -> pymunk.Vec2d:
 	angle_of_attack_rad = foil_angle_rad - math.pi - apparent_flow_m_s.angle
 	dynamic_pressure_pa = 0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length**2
-	lift_n = dynamic_pressure_pa * area_m2 * lift_coefficient(angle_of_attack_rad)
+	lift_n = dynamic_pressure_pa * area_m2 * lift_coefficient_at(angle_of_attack_rad)
 	drag_n = (
 		dynamic_pressure_pa
 		* area_m2
-		* drag_coefficient(angle_of_attack_rad, base_drag_coefficient)
+		* drag_coefficient_at(angle_of_attack_rad, base_drag_coefficient)
 	)
 	return pymunk.Vec2d(drag_n, -lift_n).rotated(apparent_flow_m_s.angle)
 
@@ -267,6 +262,8 @@ def hinged_foil_load(
 	fluid_density_kg_m3: float,
 	area_m2: float,
 	base_drag_coefficient: float,
+	lift_coefficient_at: curves.LiftCurve,
+	drag_coefficient_at: curves.DragCurve,
 ) -> HingeLoad:
 	center_from_hinge_local_m = pymunk.Vec2d(-center_distance_m, 0).rotated(angle_rad)
 	center_local_m = pymunk.Vec2d(*hinge_position_local_m) + center_from_hinge_local_m
@@ -282,6 +279,8 @@ def hinged_foil_load(
 		fluid_density_kg_m3,
 		area_m2,
 		base_drag_coefficient,
+		lift_coefficient_at,
+		drag_coefficient_at,
 	)
 	return HingeLoad(
 		force_n,
@@ -313,6 +312,8 @@ def observe(
 		parameters.air_density_kg_m3,
 		parameters.sail_area_m2,
 		parameters.sail_base_drag_coefficient,
+		parameters.sail_lift_coefficient,
+		parameters.sail_drag_coefficient,
 	)
 	rudder_load = hinged_foil_load(
 		state.boat,
@@ -324,6 +325,8 @@ def observe(
 		parameters.water_density_kg_m3,
 		parameters.rudder_area_m2,
 		parameters.underwater_foil_base_drag_coefficient,
+		parameters.underwater_foil_lift_coefficient,
+		parameters.underwater_foil_drag_coefficient,
 	)
 	return BoatObservation(
 		state.boat.angle,

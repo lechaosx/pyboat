@@ -6,7 +6,7 @@ import pymunk
 
 from . import boat
 from .controllers import actuator, arcade
-from .physics import coupled
+from .physics import coupled, curves
 
 
 DIRECT_ARCADE_CONTROL = "direct arcade"
@@ -48,6 +48,8 @@ def _foil_effect(
 	area_m2: float,
 	boat_angular_velocity_rad_s: float,
 	base_drag_coefficient: float,
+	lift_coefficient_at: curves.LiftCurve,
+	drag_coefficient_at: curves.DragCurve,
 ) -> arcade.SurfaceEffect:
 	center_local_m = (
 		pymunk.Vec2d(*hinge_position_local_m)
@@ -64,6 +66,8 @@ def _foil_effect(
 		fluid_density_kg_m3,
 		area_m2,
 		base_drag_coefficient,
+		lift_coefficient_at,
+		drag_coefficient_at,
 	)
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 	return arcade.SurfaceEffect(
@@ -106,6 +110,8 @@ def surface_control_state(
 			parameters.sail_area_m2,
 			observation.boat_angular_velocity_rad_s,
 			parameters.sail_base_drag_coefficient,
+			parameters.sail_lift_coefficient,
+			parameters.sail_drag_coefficient,
 		)
 
 	def rudder_effect_at(angle_rad: float) -> arcade.SurfaceEffect:
@@ -119,6 +125,8 @@ def surface_control_state(
 			parameters.rudder_area_m2,
 			observation.boat_angular_velocity_rad_s,
 			parameters.underwater_foil_base_drag_coefficient,
+			parameters.underwater_foil_lift_coefficient,
+			parameters.underwater_foil_drag_coefficient,
 		)
 
 	sail = actuator.ActuatorState(

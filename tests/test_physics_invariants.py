@@ -6,10 +6,56 @@ import pymunk
 
 from simple_sailing_game import boat, game, simulation
 from simple_sailing_game.controllers import arcade
-from simple_sailing_game.physics import coupled
+from simple_sailing_game.physics import coupled, curves
 
 
 class ForceInvariantTest(unittest.TestCase):
+	def test_articulated_plant_uses_caller_selected_foil_curves(self):
+		zero_lift = lambda angle_of_attack_rad: 0
+		zero_drag = lambda angle_of_attack_rad, base_drag_coefficient: 0
+		parameters = replace(
+			game.BOAT_PARAMETERS,
+			sail_lift_coefficient=zero_lift,
+			sail_drag_coefficient=zero_drag,
+			underwater_foil_lift_coefficient=zero_lift,
+			underwater_foil_drag_coefficient=zero_drag,
+			hull_drag_coefficient=0,
+			hull_lateral_drag_coefficient=0,
+		)
+		state = coupled.create_simulation(parameters, 0)
+		for body in state.space.bodies:
+			body.velocity = pymunk.Vec2d(1, 1)
+
+		telemetry = coupled.step(
+			state,
+			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
+			parameters,
+			boat.ActuatorTorques(),
+			game.DT_SECONDS,
+		)
+
+		self.assertEqual(telemetry.observation.sail_load.force_n, (0, 0))
+		self.assertEqual(telemetry.observation.rudder_load.force_n, (0, 0))
+		self.assertEqual(telemetry.keel_force_n, (0, 0))
+
+	def test_underwater_foil_has_stronger_small_angle_lift_than_a_flat_plate(self):
+		angle_rad = math.radians(5)
+
+		self.assertGreater(
+			game.BOAT_PARAMETERS.underwater_foil_lift_coefficient(angle_rad),
+			curves.flat_plate_lift(angle_rad),
+		)
+
+	def test_underwater_foil_loses_lift_after_stalling(self):
+		lift = game.BOAT_PARAMETERS.underwater_foil_lift_coefficient
+		at_stall = lift(math.radians(15))
+		past_stall = lift(math.radians(20))
+		side_on = lift(math.radians(90))
+
+		self.assertGreater(at_stall, past_stall)
+		self.assertGreater(past_stall, side_on)
+		self.assertAlmostEqual(side_on, 0)
+
 	def test_offset_keel_uses_rotational_velocity(self):
 		parameters = replace(
 			game.BOAT_PARAMETERS,
@@ -38,6 +84,8 @@ class ForceInvariantTest(unittest.TestCase):
 			parameters.water_density_kg_m3,
 			parameters.keel_area_m2,
 			parameters.underwater_foil_base_drag_coefficient,
+			parameters.underwater_foil_lift_coefficient,
+			parameters.underwater_foil_drag_coefficient,
 		)
 
 		telemetry = coupled.step(
@@ -102,32 +150,60 @@ class ForceInvariantTest(unittest.TestCase):
 		self.assertGreater(state.boat.angular_velocity, 0)
 
 	def test_zero_flow_produces_zero_foil_force(self):
-		force = boat.force_on_foil(
-			pymunk.Vec2d(0, 0),
-			foil_angle_rad=1,
-			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
-			area_m2=1,
-			base_drag_coefficient=(
-				game.BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
+		for lift_coefficient_at, drag_coefficient_at in (
+			(
+				game.BOAT_PARAMETERS.sail_lift_coefficient,
+				game.BOAT_PARAMETERS.sail_drag_coefficient,
 			),
-		)
-
-		self.assertEqual(force, (0, 0))
-
-	def test_foil_force_never_adds_energy_relative_to_the_fluid(self):
-		flow = pymunk.Vec2d(3, -2)
-		for angle_deg in range(-180, 181, 15):
-			with self.subTest(angle_deg=angle_deg):
+			(
+				game.BOAT_PARAMETERS.underwater_foil_lift_coefficient,
+				game.BOAT_PARAMETERS.underwater_foil_drag_coefficient,
+			),
+		):
+			with self.subTest(lift_coefficient_at=lift_coefficient_at.__name__):
 				force = boat.force_on_foil(
-					flow,
-					math.radians(angle_deg),
-					game.BOAT_PARAMETERS.water_density_kg_m3,
+					pymunk.Vec2d(0, 0),
+					foil_angle_rad=1,
+					fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
 					area_m2=1,
 					base_drag_coefficient=(
 						game.BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
 					),
+					lift_coefficient_at=lift_coefficient_at,
+					drag_coefficient_at=drag_coefficient_at,
 				)
-				self.assertGreaterEqual(force.dot(flow), -1e-9)
+
+				self.assertEqual(force, (0, 0))
+
+	def test_foil_force_never_adds_energy_relative_to_the_fluid(self):
+		flow = pymunk.Vec2d(3, -2)
+		for lift_coefficient_at, drag_coefficient_at in (
+			(
+				game.BOAT_PARAMETERS.sail_lift_coefficient,
+				game.BOAT_PARAMETERS.sail_drag_coefficient,
+			),
+			(
+				game.BOAT_PARAMETERS.underwater_foil_lift_coefficient,
+				game.BOAT_PARAMETERS.underwater_foil_drag_coefficient,
+			),
+		):
+			for angle_deg in range(-180, 181, 15):
+				with self.subTest(
+					lift_coefficient_at=lift_coefficient_at.__name__,
+					angle_deg=angle_deg,
+				):
+					force = boat.force_on_foil(
+						flow,
+						math.radians(angle_deg),
+						game.BOAT_PARAMETERS.water_density_kg_m3,
+						area_m2=1,
+						base_drag_coefficient=(
+							game.BOAT_PARAMETERS.underwater_foil_base_drag_coefficient
+						),
+						lift_coefficient_at=lift_coefficient_at,
+						drag_coefficient_at=drag_coefficient_at,
+					)
+					self.assertGreaterEqual(force.dot(flow), -1e-9)
 
 	def test_keel_force_opposes_sideways_boat_motion(self):
 		state = coupled.create_simulation(

@@ -5,6 +5,7 @@ import pymunk
 
 from . import boat, course, input as player_input, render, simulation
 from .controllers import arcade
+from .physics import curves
 
 
 MAXIMUM_FRAME_TIME_SECONDS = 0.25
@@ -17,6 +18,10 @@ SAILOR_MAX_TILLER_FORCE_N = 60
 MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
+UNDERWATER_FOIL_LIFT_CURVE = curves.streamlined_lift(
+	stall_angle_rad=math.radians(15),
+	stall_lift_coefficient=0.8,
+)
 
 DIRECT_ARCADE_CONTROL = simulation.DIRECT_ARCADE_CONTROL
 AUTO_SHEET_CONTROL = simulation.AUTO_SHEET_CONTROL
@@ -46,6 +51,10 @@ BOAT_PARAMETERS = boat.BoatParameters(
 	hull_reference_area_m2=0.3,
 	hull_drag_coefficient=0.08,
 	hull_lateral_drag_coefficient=0.02,
+	sail_lift_coefficient=curves.flat_plate_lift,
+	sail_drag_coefficient=curves.flat_plate_drag,
+	underwater_foil_lift_coefficient=UNDERWATER_FOIL_LIFT_CURVE,
+	underwater_foil_drag_coefficient=curves.flat_plate_drag,
 	sail_base_drag_coefficient=0.02,
 	underwater_foil_base_drag_coefficient=0.02,
 	sail_bearing_damping_n_m_s_rad=20,

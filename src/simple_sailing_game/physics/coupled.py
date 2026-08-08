@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pymunk
 
 from .. import boat
+from . import curves
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,8 @@ def _surface_load(
 	fluid_density_kg_m3: float,
 	area_m2: float,
 	base_drag_coefficient: float,
+	lift_coefficient_at: curves.LiftCurve,
+	drag_coefficient_at: curves.DragCurve,
 ) -> boat.HingeLoad:
 	hinge_world_m = hull.local_to_world(hinge_position_local_m)
 	center_world_m = hinge_world_m + pymunk.Vec2d(
@@ -153,6 +156,8 @@ def _surface_load(
 		fluid_density_kg_m3,
 		area_m2,
 		base_drag_coefficient,
+		lift_coefficient_at,
+		drag_coefficient_at,
 	)
 	return boat.HingeLoad(
 		force_n,
@@ -189,6 +194,8 @@ def step(
 		parameters.air_density_kg_m3,
 		parameters.sail_area_m2,
 		parameters.sail_base_drag_coefficient,
+		parameters.sail_lift_coefficient,
+		parameters.sail_drag_coefficient,
 	)
 	rudder_load = _surface_load(
 		hull,
@@ -199,6 +206,8 @@ def step(
 		parameters.water_density_kg_m3,
 		parameters.rudder_area_m2,
 		parameters.underwater_foil_base_drag_coefficient,
+		parameters.underwater_foil_lift_coefficient,
+		parameters.underwater_foil_drag_coefficient,
 	)
 	observation = boat.BoatObservation(
 		hull.angle,
@@ -223,6 +232,8 @@ def step(
 		parameters.water_density_kg_m3,
 		parameters.keel_area_m2,
 		parameters.underwater_foil_base_drag_coefficient,
+		parameters.underwater_foil_lift_coefficient,
+		parameters.underwater_foil_drag_coefficient,
 	)
 	hull_drag_n = pymunk.Vec2d(0, 0)
 	for position_m in (

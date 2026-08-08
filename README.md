@@ -80,12 +80,37 @@ surfaces to the hull, fluid loads act on their bodies, and actuator torques act
 equally and oppositely on each surface and the hull. Appendage motion therefore
 reacts back on the boat while preserving coupled momentum.
 
-The sail and underwater foils have independently tunable profile-drag
-coefficients. Keel force acts at `keel_position_m`, so moving that point changes
-both local apparent flow and yaw moment. Hull resistance is sampled at the bow
-and stern, which produces yaw damping from local lateral flow. The configured
-hull lateral drag coefficient is `0.02`; the keel remains the main source of
-lateral resistance.
+The sail uses a symmetric flat-plate lift curve. The streamlined keel and rudder
+instead build lift linearly to a 15° stall, then transition toward separated
+flat-plate cross-flow. Sail and underwater foils also have independently tunable
+profile-drag coefficients. `BoatParameters` receives all four lift and drag
+curves from the caller, so alternate coefficient laws require no simulation-code
+changes. Keel force acts at `keel_position_m`, so moving that point changes both
+local apparent flow and yaw moment. Hull resistance is sampled at the bow and
+stern, which produces yaw damping from local lateral flow. The configured hull
+lateral drag coefficient is `0.02`; the keel remains the main source of lateral
+resistance.
+
+Callers compose coefficient functions before constructing the boat; the plant
+has no implicit curve defaults:
+
+```python
+import math
+
+from simple_sailing_game.physics import curves
+
+base_underwater_lift = curves.streamlined_lift(math.radians(12), 0.9)
+
+def underwater_lift(angle_of_attack_rad):
+    return 0.95 * base_underwater_lift(angle_of_attack_rad)
+
+curve_selection = {
+    "sail_lift_coefficient": curves.flat_plate_lift,
+    "sail_drag_coefficient": curves.flat_plate_drag,
+    "underwater_foil_lift_coefficient": underwater_lift,
+    "underwater_foil_drag_coefficient": curves.flat_plate_drag,
+}
+```
 
 Controller candidates are predicted quasi-statically. The prediction includes
 hull angular velocity but not the candidate surface's own angular motion. The
@@ -100,6 +125,8 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 - `controllers/actuator.py` converts surface targets into bounded torques.
 - `input.py` converts keyboard and gamepad state into controller intent.
 - `render.py` owns Pygame drawing.
+- `physics/curves.py` provides selectable and parameterized foil coefficient
+  curves.
 - `physics/coupled.py` constructs and advances the articulated boat.
 
 ## Model tuning
@@ -131,7 +158,8 @@ wind. Their deliberately broad reference envelope is:
 | Turn from rest | Direct control turns 135° within 28 seconds |
 | Neutral steering | Released yaw rate falls by at least 75% within 3 seconds |
 
-The simpler coefficient plot is also available:
+The simpler coefficient plot compares the sail and underwater lift curves with
+their shared pressure-drag curve:
 
 ```sh
 uv run --extra plots sailing-plot
