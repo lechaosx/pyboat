@@ -35,12 +35,12 @@ retaining the best completed lap.
 
 | Key | Controller |
 | --- | --- |
-| `1` | Direct arcade (default) |
+| `1` | Computed yaw-rate arcade (default) |
 | `2` | Auto-sheet + rudder |
-| `3` | Yaw-rate arcade |
+| `3` | Fixed yaw-rate arcade |
 
-Direct and yaw-rate arcade use `W/S` for forward/reverse power and `A/D` for
-turn. Auto-sheet uses `W` for powered trim and `A/D` for direct rudder position.
+Both yaw-rate modes use `W/S` for forward/reverse power and `A/D` for turn.
+Auto-sheet uses `W` for powered trim and `A/D` for direct rudder position.
 
 Keyboard commands are immediate and full-scale, including diagonals. This lets
 keyboard players create intermediate inputs with deliberate key frequency and
@@ -51,21 +51,21 @@ axis directly to rudder position.
 
 ## Controllers
 
-All three controllers are concrete functions in
+The three modes use two concrete controller functions in
 `src/simple_sailing_game/controllers/arcade.py`:
 
-- Direct arcade maps power to a fraction of currently achievable sail drive and
-  nonzero turn to a fraction of currently achievable combined sail-and-rudder
-  yaw moment. With the stick centered laterally, the sailor counteracts measured
-  yaw using critical damping derived from boat inertia and current rudder moment
-  authority. It does not latch or restore a heading.
+- Computed yaw-rate arcade is the default. Its maximum yaw rate is the local
+  water speed at the rudder multiplied by the tangent of maximum rudder angle
+  and divided by the keel-to-rudder distance. Turn input selects a continuous
+  fraction of that rate, including non-integer joystick values.
 - Auto-sheet chooses sail trim from the requested power while mapping steering
   directly to physical rudder angle. It exposes the clearest tiller-to-turn
   relationship.
-- Yaw-rate arcade is the retained comparison controller. It maps turn input to
-  the historical maximum yaw rate of 35°/s and chooses a rudder angle from the
-  rate error. Unlike direct arcade, its turn command describes a motion target
-  rather than a fraction of available yaw moment.
+- Fixed yaw-rate arcade is the retained comparison controller. It uses the same
+  policy with the historical maximum yaw rate of 35°/s.
+
+Both yaw-rate modes choose a rudder angle from the difference between requested
+and measured yaw rate. The HUD displays the measured and active maximum rates.
 
 Normal trim treats the sail command as a sheet limit: the sailor can pull the
 boom inward or hold it against the wind, but cannot push it outward. Explicit
@@ -155,8 +155,8 @@ wind. Their deliberately broad reference envelope is:
 | Polar tracking | Under 8° heading error at sampled headings |
 | Coast-down | Monotonic; 2 m/s falls below 1.5 m/s in 5 seconds |
 | Tack | Both directions complete within 15 seconds with forward speed retained |
-| Turn from rest | Direct control turns 135° within 28 seconds |
-| Neutral steering | Released yaw rate falls by at least 75% within 3 seconds |
+| Turn from rest | Computed yaw-rate control turns 135° within 28 seconds |
+| Neutral steering | Released yaw rate decreases over 3 seconds |
 
 The simpler coefficient plot compares the sail and underwater lift curves with
 their shared pressure-drag curve:

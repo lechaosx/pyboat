@@ -35,20 +35,26 @@ class InputAdapterTest(unittest.TestCase):
 		self.assertEqual(
 			game.CONTROL_MODES_BY_KEY,
 			{
-				pygame.K_1: game.DIRECT_ARCADE_CONTROL,
+				pygame.K_1: game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 				pygame.K_2: game.AUTO_SHEET_CONTROL,
 				pygame.K_3: game.YAW_RATE_ARCADE_CONTROL,
 			},
 		)
-		self.assertEqual(game.DIRECT_ARCADE_CONTROL, "direct arcade")
+		self.assertEqual(
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			"computed yaw-rate arcade",
+		)
 		self.assertEqual(game.AUTO_SHEET_CONTROL, "auto-sheet + rudder")
 		self.assertEqual(game.YAW_RATE_ARCADE_CONTROL, "yaw-rate arcade")
 
-	def test_direct_arcade_is_the_default_controller(self):
-		self.assertEqual(game.DEFAULT_CONTROL_MODE, game.DIRECT_ARCADE_CONTROL)
+	def test_computed_yaw_rate_arcade_is_the_default_controller(self):
+		self.assertEqual(
+			game.DEFAULT_CONTROL_MODE,
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+		)
 		self.assertEqual(
 			game.CONTROL_MODES_BY_KEY[pygame.K_1],
-			game.DIRECT_ARCADE_CONTROL,
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 		)
 
 	def test_playable_simulation_has_no_physics_model_switch(self):
@@ -129,7 +135,7 @@ class SailingSimulationTest(unittest.TestCase):
 	def test_core_surface_controllers_run_on_articulated_physics(self):
 		cases = (
 			(game.AUTO_SHEET_CONTROL, arcade.AutoSheetIntent(1, 0)),
-			(game.DIRECT_ARCADE_CONTROL, arcade.MotionIntent(1, 0)),
+			(game.COMPUTED_YAW_RATE_ARCADE_CONTROL, arcade.MotionIntent(1, 0)),
 			(game.YAW_RATE_ARCADE_CONTROL, arcade.MotionIntent(1, 0)),
 		)
 		for control_mode, intent in cases:
@@ -139,25 +145,56 @@ class SailingSimulationTest(unittest.TestCase):
 				self.assertEqual(telemetry.control_mode, control_mode)
 				self.assertTrue(all(map(math.isfinite, self.state.boat.velocity)))
 
-	def test_direct_arcade_forward_input_damps_a_released_turn(self):
-		self.advance(arcade.MotionIntent(forward=1), game.DIRECT_ARCADE_CONTROL, 5)
+	def test_computed_yaw_rate_arcade_countersteers_a_released_turn(self):
+		self.advance(
+			arcade.MotionIntent(forward=1),
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			5,
+		)
 		self.advance(
 			arcade.MotionIntent(forward=1, turn=-1),
-			game.DIRECT_ARCADE_CONTROL,
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 			2,
 		)
 		released_yaw_rate_rad_s = abs(self.state.boat.angular_velocity)
-		released_heading_rad = self.state.boat.angle
-		self.advance(arcade.MotionIntent(forward=1), game.DIRECT_ARCADE_CONTROL, 3)
+		self.advance(
+			arcade.MotionIntent(forward=1),
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			3,
+		)
 
 		self.assertGreater(released_yaw_rate_rad_s, math.radians(3))
 		self.assertLess(
 			abs(self.state.boat.angular_velocity),
-			released_yaw_rate_rad_s * 0.25,
+			released_yaw_rate_rad_s,
 		)
-		self.assertLess(
-			abs(math.degrees(self.state.boat.angle - released_heading_rad)),
-			5,
+
+	def test_computed_maximum_yaw_rate_uses_rudder_flow_and_steering_baseline(self):
+		for body in self.state.space.bodies:
+			body.velocity = (2, 0)
+		observation = boat.observe(
+			self.state,
+			game.ENVIRONMENT,
+			game.BOAT_PARAMETERS,
+		)
+
+		control_state = simulation.surface_control_state(
+			observation,
+			game.SIMULATION_SETTINGS,
+		)
+
+		steering_baseline_m = (
+			pygame.Vector2(game.BOAT_PARAMETERS.rudder_position_m)
+			- pygame.Vector2(game.BOAT_PARAMETERS.keel_position_m)
+		).length()
+		expected_yaw_rate_rad_s = (
+			2
+			* math.tan(game.BOAT_PARAMETERS.max_rudder_angle_rad)
+			/ steering_baseline_m
+		)
+		self.assertAlmostEqual(
+			control_state.maximum_yaw_rate_rad_s,
+			expected_yaw_rate_rad_s,
 		)
 
 	def test_auto_sheet_surfaces_settle_without_chatter(self):
@@ -180,7 +217,7 @@ class SailingSimulationTest(unittest.TestCase):
 	def test_draw_renders_each_intent_and_telemetry(self):
 		telemetry = self.advance(
 			arcade.MotionIntent(1, 0),
-			game.DIRECT_ARCADE_CONTROL,
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 		)
 		pygame.font.init()
 		for intent in (
@@ -203,10 +240,45 @@ class SailingSimulationTest(unittest.TestCase):
 					(30, 30, 40, 255),
 				)
 
+	def test_draw_renders_current_and_maximum_yaw_rate_for_rate_controllers(self):
+		class RecordingFont:
+			def __init__(self):
+				self.font = pygame.font.Font(None, 24)
+				self.texts = []
+
+			def render(self, text, antialias, color):
+				self.texts.append(text)
+				return self.font.render(text, antialias, color)
+
+		pygame.font.init()
+		for control_mode in (
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			game.YAW_RATE_ARCADE_CONTROL,
+		):
+			with self.subTest(control_mode=control_mode):
+				self.state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+				telemetry = self.advance(arcade.MotionIntent(1, 0), control_mode)
+				font = RecordingFont()
+				render.draw(
+					pygame.Surface((render.WIDTH, render.HEIGHT)),
+					font,
+					self.state,
+					game.ENVIRONMENT,
+					arcade.MotionIntent(1, 0),
+					telemetry,
+					game.BOAT_PARAMETERS,
+				)
+				observation = telemetry.physics.observation
+				expected = (
+					f"yaw {math.degrees(observation.boat_angular_velocity_rad_s):+.1f}°/s"
+					f" / {math.degrees(telemetry.maximum_yaw_rate_rad_s):.1f}°/s max"
+				)
+				self.assertTrue(any(expected in text for text in font.texts))
+
 	def test_telemetry_contains_force_and_surface_data(self):
 		telemetry = self.advance(
 			arcade.MotionIntent(1, 0),
-			game.DIRECT_ARCADE_CONTROL,
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 		)
 
 		self.assertTrue(

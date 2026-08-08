@@ -86,7 +86,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 			previous_speed_m_s = speed_m_s
 		self.assertLess(previous_speed_m_s, 1.5)
 
-	def test_mirrored_direct_control_produces_mirrored_motion(self):
+	def test_mirrored_computed_yaw_rate_control_produces_mirrored_motion(self):
 		states = []
 		for angle_rad, turn in (
 			(math.radians(135), -1),
@@ -102,7 +102,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 				simulation.advance_surface_game(
 					state,
 					MotionIntent(forward=1, turn=turn),
-					game.DIRECT_ARCADE_CONTROL,
+					game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 					game.SIMULATION_SETTINGS,
 					game.ENVIRONMENT,
 					game.DT_SECONDS,
@@ -116,7 +116,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		self.assertAlmostEqual(port.boat.velocity.y, -starboard.boat.velocity.y)
 		self.assertAlmostEqual(port.boat.angle, -starboard.boat.angle)
 
-	def test_direct_control_completes_tacks_on_both_sides(self):
+	def test_computed_yaw_rate_control_completes_tacks_on_both_sides(self):
 		for angle_rad, turn in (
 			(math.radians(135), 1),
 			(math.radians(-135), -1),
@@ -135,7 +135,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 					simulation.advance_surface_game(
 						state,
 						MotionIntent(forward=1, turn=turn),
-						game.DIRECT_ARCADE_CONTROL,
+						game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 						settings,
 						game.ENVIRONMENT,
 						game.DT_SECONDS,
@@ -148,7 +148,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 				forward = pymunk.Vec2d(1, 0).rotated(state.boat.angle)
 				self.assertGreater(state.boat.velocity.dot(forward), 0.5)
 
-	def test_direct_control_turns_from_rest_without_excessive_yaw_damping(self):
+	def test_computed_yaw_rate_control_turns_from_rest(self):
 		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
 		target_heading_rad = state.boat.angle + math.radians(135)
 
@@ -156,7 +156,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 			simulation.advance_surface_game(
 				state,
 				MotionIntent(forward=1, turn=1),
-				game.DIRECT_ARCADE_CONTROL,
+				game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 				game.SIMULATION_SETTINGS,
 				game.ENVIRONMENT,
 				game.DT_SECONDS,

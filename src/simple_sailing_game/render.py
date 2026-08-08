@@ -244,8 +244,15 @@ def draw(
 		)
 
 	draw_intent(screen, font, center, body.angle, intent)
+	yaw_rate_status = ""
+	if telemetry.maximum_yaw_rate_rad_s is not None:
+		yaw_rate_status = (
+			f"yaw {math.degrees(observation.boat_angular_velocity_rad_s):+.1f}°/s"
+			f" / {math.degrees(telemetry.maximum_yaw_rate_rad_s):.1f}°/s max    "
+		)
 	status = font.render(
 		f"{telemetry.control_mode} / articulated physics    "
+		f"{yaw_rate_status}"
 		f"water speed {observation.apparent_water_m_s.length:.1f} m/s    "
 		f"sail {math.degrees(state.sail_angle_rad):+.0f}°    "
 		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}°",

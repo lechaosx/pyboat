@@ -9,7 +9,7 @@ from .controllers import actuator, arcade
 from .physics import coupled, curves
 
 
-DIRECT_ARCADE_CONTROL = "direct arcade"
+COMPUTED_YAW_RATE_ARCADE_CONTROL = "computed yaw-rate arcade"
 AUTO_SHEET_CONTROL = "auto-sheet + rudder"
 YAW_RATE_ARCADE_CONTROL = "yaw-rate arcade"
 
@@ -21,7 +21,7 @@ class SimulationSettings:
 	control_angle_resolution_deg: int
 	sailor_max_sheet_force_n: float
 	sailor_max_tiller_force_n: float
-	maximum_yaw_rate_rad_s: float
+	fixed_maximum_yaw_rate_rad_s: float
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,7 @@ class SimulationTelemetry:
 	physics: boat.PhysicsTelemetry
 	control_mode: str
 	surface_targets: arcade.SurfaceTargets
+	maximum_yaw_rate_rad_s: float | None
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class SurfaceControlState:
 	sail: actuator.ActuatorState
 	rudder: actuator.ActuatorState
 	surfaces: arcade.ControlInput
+	maximum_yaw_rate_rad_s: float
 
 
 def _foil_effect(
@@ -145,15 +147,28 @@ def surface_control_state(
 		settings.sailor_max_tiller_force_n * parameters.tiller_length_m,
 		parameters.max_rudder_angle_rad,
 	)
+	rudder_position_world_m = pymunk.Vec2d(*parameters.rudder_position_m).rotated(
+		observation.boat_angle_rad
+	)
+	rudder_apparent_water_m_s = (
+		observation.apparent_water_m_s
+		- rudder_position_world_m.perpendicular()
+		* observation.boat_angular_velocity_rad_s
+	)
+	steering_baseline_m = (
+		pymunk.Vec2d(*parameters.rudder_position_m)
+		- pymunk.Vec2d(*parameters.keel_position_m)
+	).length
+	maximum_yaw_rate_rad_s = (
+		rudder_apparent_water_m_s.length
+		* math.tan(parameters.max_rudder_angle_rad)
+		/ steering_baseline_m
+	)
 	return SurfaceControlState(
 		sail,
 		rudder,
 		arcade.ControlInput(
 			observation.boat_angular_velocity_rad_s,
-			boat.approximate_moment_of_inertia_kg_m2(parameters),
-			observation.sail_load.center_local_m.rotated(
-				observation.boat_angle_rad
-			).cross(observation.sail_load.force_n),
 			boat.free_sail_angle(
 				observation.boat_angle_rad,
 				observation.apparent_wind_m_s,
@@ -171,6 +186,7 @@ def surface_control_state(
 				settings.control_angle_resolution_deg,
 			),
 		),
+		maximum_yaw_rate_rad_s,
 	)
 
 
@@ -221,14 +237,21 @@ def advance_surface_game(
 	surface_input = control_state.surfaces
 	if control_mode == AUTO_SHEET_CONTROL:
 		targets = arcade.auto_sheet_control(surface_input, intent)
-	elif control_mode == DIRECT_ARCADE_CONTROL:
-		targets = arcade.direct_move_control(surface_input, intent)
-	else:
-		assert control_mode == YAW_RATE_ARCADE_CONTROL
+		maximum_yaw_rate_rad_s = None
+	elif control_mode == COMPUTED_YAW_RATE_ARCADE_CONTROL:
+		maximum_yaw_rate_rad_s = control_state.maximum_yaw_rate_rad_s
 		targets = arcade.yaw_rate_move_control(
 			surface_input,
 			intent,
-			settings.maximum_yaw_rate_rad_s,
+			maximum_yaw_rate_rad_s,
+		)
+	else:
+		assert control_mode == YAW_RATE_ARCADE_CONTROL
+		maximum_yaw_rate_rad_s = settings.fixed_maximum_yaw_rate_rad_s
+		targets = arcade.yaw_rate_move_control(
+			surface_input,
+			intent,
+			maximum_yaw_rate_rad_s,
 		)
 
 	uses_sheet_limit = targets.sail_target_angle_rad is None
@@ -254,4 +277,9 @@ def advance_surface_game(
 		torques,
 		dt_seconds,
 	)
-	return SimulationTelemetry(physics, control_mode, targets)
+	return SimulationTelemetry(
+		physics,
+		control_mode,
+		targets,
+		maximum_yaw_rate_rad_s,
+	)

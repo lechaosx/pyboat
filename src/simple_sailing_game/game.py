@@ -15,7 +15,7 @@ INITIAL_BOAT_ANGLE_RAD = math.radians(135)
 CONTROL_ANGLE_RESOLUTION_DEG = 1
 SAILOR_MAX_SHEET_FORCE_N = 250
 SAILOR_MAX_TILLER_FORCE_N = 60
-MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
+FIXED_MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
 UNDERWATER_FOIL_LIFT_CURVE = curves.streamlined_lift(
@@ -23,7 +23,7 @@ UNDERWATER_FOIL_LIFT_CURVE = curves.streamlined_lift(
 	stall_lift_coefficient=0.8,
 )
 
-DIRECT_ARCADE_CONTROL = simulation.DIRECT_ARCADE_CONTROL
+COMPUTED_YAW_RATE_ARCADE_CONTROL = simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL
 AUTO_SHEET_CONTROL = simulation.AUTO_SHEET_CONTROL
 YAW_RATE_ARCADE_CONTROL = simulation.YAW_RATE_ARCADE_CONTROL
 
@@ -73,15 +73,15 @@ SIMULATION_SETTINGS = simulation.SimulationSettings(
 	control_angle_resolution_deg=CONTROL_ANGLE_RESOLUTION_DEG,
 	sailor_max_sheet_force_n=SAILOR_MAX_SHEET_FORCE_N,
 	sailor_max_tiller_force_n=SAILOR_MAX_TILLER_FORCE_N,
-	maximum_yaw_rate_rad_s=MAXIMUM_YAW_RATE_RAD_S,
+	fixed_maximum_yaw_rate_rad_s=FIXED_MAXIMUM_YAW_RATE_RAD_S,
 )
 
 CONTROL_MODES_BY_KEY = {
-	pygame.K_1: DIRECT_ARCADE_CONTROL,
+	pygame.K_1: COMPUTED_YAW_RATE_ARCADE_CONTROL,
 	pygame.K_2: AUTO_SHEET_CONTROL,
 	pygame.K_3: YAW_RATE_ARCADE_CONTROL,
 }
-DEFAULT_CONTROL_MODE = DIRECT_ARCADE_CONTROL
+DEFAULT_CONTROL_MODE = COMPUTED_YAW_RATE_ARCADE_CONTROL
 
 
 def fixed_step_schedule(
@@ -104,7 +104,7 @@ def main() -> None:
 	pygame.init()
 	screen = pygame.display.set_mode((render.WIDTH, render.HEIGHT))
 	pygame.display.set_caption(
-		"Sailboat — 1 direct arcade, 2 auto-sheet + rudder, "
+		"Sailboat — 1 computed yaw-rate arcade, 2 auto-sheet + rudder, "
 		"3 yaw-rate arcade; R reset; WASD / gamepad"
 	)
 	font = pygame.font.Font(None, 24)
@@ -141,7 +141,10 @@ def main() -> None:
 				joystick = None
 
 		keys = pygame.key.get_pressed()
-		if input_mode in (DIRECT_ARCADE_CONTROL, YAW_RATE_ARCADE_CONTROL):
+		if input_mode in (
+			COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			YAW_RATE_ARCADE_CONTROL,
+		):
 			intent = player_input.keyboard_motion(
 				keys[pygame.K_w],
 				keys[pygame.K_s],

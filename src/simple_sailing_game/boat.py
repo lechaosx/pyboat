@@ -161,14 +161,6 @@ def rudder_center_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
 	)
 
 
-def approximate_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
-	return (
-		total_mass_kg(parameters)
-		* (parameters.length_m**2 + parameters.beam_m**2)
-		/ 12
-	)
-
-
 def apparent_flow(
 	medium_velocity_m_s: pymunk.Vec2d,
 	point_velocity_m_s: pymunk.Vec2d,
