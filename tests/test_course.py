@@ -40,6 +40,8 @@ class TimeTrialTest(unittest.TestCase):
 class SailingFeedbackTest(unittest.TestCase):
 	def test_point_of_sail_names_characteristic_wind_angles(self):
 		self.assertEqual(course.point_of_sail(0), "in irons")
+		self.assertEqual(course.point_of_sail(math.radians(20)), "in irons")
+		self.assertEqual(course.point_of_sail(math.radians(30)), "close-hauled")
 		self.assertEqual(course.point_of_sail(math.radians(45)), "close-hauled")
 		self.assertEqual(course.point_of_sail(math.radians(90)), "beam reach")
 		self.assertEqual(course.point_of_sail(math.radians(135)), "broad reach")

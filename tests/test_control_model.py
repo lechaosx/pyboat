@@ -7,9 +7,13 @@ from functools import lru_cache
 import numpy as np
 import pymunk
 
-from simple_sailing_game import boat, game
+from simple_sailing_game import boat, game, input as player_input
 from simple_sailing_game.controllers import assisted as controller, manual
-from tests.support import controller_input_from_flows, intended_actuator_angles
+from tests.support import (
+	controller_input_from_flows,
+	foil_control_effect,
+	intended_actuator_angles,
+)
 
 
 HEADINGS_RAD = tuple(math.radians(degrees) for degrees in (0, 45, 90, 135, 180))
@@ -234,7 +238,7 @@ def target_effect(
 		apparent_water_m_s,
 	)
 	return (
-		game.foil_control_effect(
+		foil_control_effect(
 			boat_heading_rad,
 			apparent_wind_m_s,
 			game.BOAT_PARAMETERS.mast_position_m,
@@ -244,7 +248,7 @@ def target_effect(
 			game.BOAT_PARAMETERS.sail_area_m2,
 			angular_velocity_rad_s,
 		),
-		game.foil_control_effect(
+		foil_control_effect(
 			boat_heading_rad,
 			apparent_water_m_s,
 			game.BOAT_PARAMETERS.rudder_position_m,
@@ -552,10 +556,11 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			LOCAL_STICK_POSITIONS,
 		):
 			stick = world_stick(local_stick, heading_rad)
-			intent = game.analog_motion_intent(
+			intent = player_input.analog_motion(
 				heading_rad,
 				stick.x,
 				stick.y,
+				game.ANALOG_STICK_DEADZONE,
 			)
 			apparent_wind_m_s, apparent_water_m_s = flow_state(heading_rad, speed_m_s)
 			selected = target_effect(
@@ -605,10 +610,11 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			LOCAL_STICK_POSITIONS,
 		):
 			stick = world_stick(local_stick, heading_rad)
-			intent = game.analog_motion_intent(
+			intent = player_input.analog_motion(
 				heading_rad,
 				stick.x,
 				stick.y,
+				game.ANALOG_STICK_DEADZONE,
 			)
 			wind, water = flow_state(heading_rad, speed_m_s)
 			targets = intended_actuator_angles(
@@ -622,10 +628,11 @@ class ControlModelSpecificationTest(unittest.TestCase):
 			mirrored_heading_rad = -heading_rad
 			mirrored_local_stick = (local_stick[0], -local_stick[1])
 			mirrored_stick = world_stick(mirrored_local_stick, mirrored_heading_rad)
-			mirrored_intent = game.analog_motion_intent(
+			mirrored_intent = player_input.analog_motion(
 				mirrored_heading_rad,
 				mirrored_stick.x,
 				mirrored_stick.y,
+				game.ANALOG_STICK_DEADZONE,
 			)
 			mirrored_wind, mirrored_water = flow_state(mirrored_heading_rad, speed_m_s)
 			mirrored_targets = intended_actuator_angles(
@@ -645,84 +652,49 @@ class ControlModelSpecificationTest(unittest.TestCase):
 
 
 class ManualControlTest(unittest.TestCase):
-	def test_surface_direction_converts_to_a_bounded_actuator_angle(self):
-		maximum_angle_rad = math.pi / 6
+	def test_sheet_input_updates_and_retains_its_limit(self):
+		maximum_sail_angle_rad = math.pi / 2
+		initial_limit_rad = math.pi / 3
 
-		self.assertEqual(
-			manual.direction_angle_rad((1, 0), maximum_angle_rad),
-			0,
+		sheeted_in, _ = manual.control(
+			initial_limit_rad,
+			manual.Input(sheet=1),
+			maximum_sail_angle_rad,
+			math.pi / 6,
+			dt_seconds=0.25,
 		)
-		self.assertAlmostEqual(
-			manual.direction_angle_rad((0, -1), maximum_angle_rad),
-			-maximum_angle_rad,
-		)
-		self.assertAlmostEqual(
-			manual.direction_angle_rad((0, 1), maximum_angle_rad),
-			maximum_angle_rad,
-		)
-		self.assertAlmostEqual(
-			manual.direction_angle_rad((-1, 0), maximum_angle_rad),
-			maximum_angle_rad,
-		)
-		self.assertIsNone(manual.direction_angle_rad((0, 0), maximum_angle_rad))
-
-	def test_desired_directions_drive_surfaces_toward_target_angles(self):
-		control_input = controller_input_from_flows(
-			boat_angle_rad=0,
-			boat_angular_velocity_rad_s=0,
-			apparent_wind_m_s=pymunk.Vec2d(6, 0),
-			apparent_water_m_s=pymunk.Vec2d(-2, 0),
+		retained, _ = manual.control(
+			sheeted_in,
+			manual.Input(),
+			maximum_sail_angle_rad,
+			math.pi / 6,
+			dt_seconds=1,
 		)
 
-		output = manual.control(
-			control_input.sail,
-			control_input.rudder,
-			manual.DirectionInput(
-				sail_direction=(0, -1),
-				rudder_direction=(0, 1),
-			),
+		self.assertAlmostEqual(sheeted_in, initial_limit_rad - math.pi / 8)
+		self.assertAlmostEqual(retained, sheeted_in)
+
+	def test_sheet_and_rudder_inputs_are_clamped_to_physical_limits(self):
+		maximum_sail_angle_rad = math.pi / 2
+		maximum_rudder_angle_rad = math.pi / 6
+
+		sheeted_in = manual.control(
+			0.1,
+			manual.Input(sheet=2, rudder=-2),
+			maximum_sail_angle_rad,
+			maximum_rudder_angle_rad,
+			dt_seconds=1,
+		)
+		eased = manual.control(
+			maximum_sail_angle_rad - 0.1,
+			manual.Input(sheet=-2, rudder=2),
+			maximum_sail_angle_rad,
+			maximum_rudder_angle_rad,
+			dt_seconds=1,
 		)
 
-		self.assertEqual(
-			output.sail_n_m,
-			-control_input.sail.maximum_torque_n_m,
-		)
-		self.assertEqual(
-			output.rudder_n_m,
-			control_input.rudder.maximum_torque_n_m,
-		)
-
-	def test_neutral_directions_release_surfaces_to_fluid_loads(self):
-		control_input = controller_input_from_flows(
-			boat_angle_rad=0,
-			boat_angular_velocity_rad_s=0,
-			apparent_wind_m_s=pymunk.Vec2d(6, 0),
-			apparent_water_m_s=pymunk.Vec2d(-2, 0),
-		)
-		control_input = replace(
-			control_input,
-			sail=replace(
-				control_input.sail,
-				angle_rad=0.4,
-				angular_velocity_rad_s=0.2,
-				external_torque_n_m=10,
-			),
-			rudder=replace(
-				control_input.rudder,
-				angle_rad=-0.2,
-				angular_velocity_rad_s=-0.1,
-				external_torque_n_m=-5,
-			),
-		)
-
-		output = manual.control(
-			control_input.sail,
-			control_input.rudder,
-			manual.DirectionInput(),
-		)
-
-		self.assertEqual(output.sail_n_m, 0)
-		self.assertEqual(output.rudder_n_m, 0)
+		self.assertEqual(sheeted_in, (0, -maximum_rudder_angle_rad))
+		self.assertEqual(eased, (maximum_sail_angle_rad, maximum_rudder_angle_rad))
 
 
 if __name__ == "__main__":

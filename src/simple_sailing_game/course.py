@@ -47,7 +47,7 @@ class TimeTrial:
 def point_of_sail(angle_from_upwind_rad: float) -> str:
 	angle_rad = abs(math.remainder(angle_from_upwind_rad, 2 * math.pi))
 	angle_rad = min(angle_rad, 2 * math.pi - angle_rad)
-	if angle_rad < math.radians(35):
+	if angle_rad < math.radians(25):
 		return "in irons"
 	if angle_rad < math.radians(65):
 		return "close-hauled"

@@ -4,7 +4,9 @@ import math
 import os
 import subprocess
 import sys
+import tomllib
 import unittest
+from pathlib import Path
 
 import pymunk
 
@@ -20,6 +22,23 @@ def isolated_python(code):
 
 
 class ModuleBoundaryTest(unittest.TestCase):
+	def test_optional_tools_are_not_core_dependencies(self):
+		configuration = tomllib.loads(
+			(Path(__file__).parents[1] / "pyproject.toml").read_text()
+		)["project"]
+
+		self.assertEqual(
+			configuration["dependencies"],
+			["pygame>=2.5.0", "pymunk>=6.6.0"],
+		)
+		self.assertEqual(
+			configuration["optional-dependencies"],
+			{
+				"optimizer": ["numpy>=2.2.6,<2.4"],
+				"plots": ["matplotlib>=3.10.8"],
+			},
+		)
+
 	def test_game_owns_runtime_simulation_configuration(self):
 		from simple_sailing_game import game, simulation
 
@@ -29,8 +48,6 @@ class ModuleBoundaryTest(unittest.TestCase):
 			"ENVIRONMENT",
 			"DT_SECONDS",
 			"INITIAL_BOAT_ANGLE_RAD",
-			"CONTROLLER_SETTINGS",
-			"ASSISTED_CONTROL_SETTINGS",
 		):
 			with self.subTest(name=name):
 				self.assertFalse(hasattr(simulation, name))
@@ -40,23 +57,15 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 		required = {
 			simulation.create_simulation: ("settings",),
-			simulation.advance_game: (
-				"settings",
-				"environment",
-				"dt_seconds",
-				"physics_mode",
-			),
 			simulation.advance_surface_game: (
 				"settings",
 				"environment",
 				"dt_seconds",
-				"physics_mode",
 			),
-			simulation.step: (
+			simulation.advance_manual_game: (
 				"settings",
 				"environment",
 				"dt_seconds",
-				"physics_mode",
 			),
 		}
 		for function, parameter_names in required.items():
@@ -72,7 +81,7 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 		self.assertIs(parameter.default, inspect.Parameter.empty)
 
-	def test_supported_physics_models_have_separate_modules(self):
+	def test_articulated_plant_and_lumped_reference_have_separate_modules(self):
 		from simple_sailing_game.physics import coupled, dynamic
 
 		self.assertEqual(
@@ -126,6 +135,21 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 		self.assertEqual(result.returncode, 0, result.stderr)
 
+	def test_playable_game_does_not_load_optimizer(self):
+		result = isolated_python(
+			"import sys, simple_sailing_game.game; "
+			"assert 'simple_sailing_game.controllers.assisted' not in sys.modules"
+		)
+
+		self.assertEqual(result.returncode, 0, result.stderr)
+
+	def test_core_modules_do_not_import_numpy(self):
+		from simple_sailing_game import game, input, render, simulation
+
+		for module in (game, input, render, simulation):
+			with self.subTest(module=module.__name__):
+				self.assertNotIn("import numpy", inspect.getsource(module))
+
 	def test_rendering_has_its_own_module(self):
 		from simple_sailing_game import render
 
@@ -171,55 +195,6 @@ class ComponentWiringTest(unittest.TestCase):
 
 		self.assertNotEqual(state.sail_angle_rad, initial_sail_angle_rad)
 		self.assertTrue(math.isfinite(state.boat.angle))
-
-	def test_game_accepts_a_controller_function_or_none(self):
-		from simple_sailing_game import game
-		from simple_sailing_game.controllers import assisted as controller
-
-		calls = []
-
-		def fixed_controller(observation, intent, dt_seconds):
-			calls.append((observation, intent, dt_seconds))
-			return controller.ControlOutput(controller.ActuatorTorques(1, 0), None)
-
-		controlled = game.create_simulation()
-		game.advance_game(
-			controlled,
-			controller.MotionIntent(1, 0),
-			fixed_controller,
-		)
-		dead = game.create_simulation()
-		game.advance_game(
-			dead,
-			controller.MotionIntent(1, 0),
-			None,
-		)
-
-		self.assertEqual(len(calls), 1)
-		self.assertEqual(calls[0][1], controller.MotionIntent(1, 0))
-		self.assertNotEqual(dead.sail_angle_rad, controlled.sail_angle_rad)
-
-	def test_controller_does_not_mutate_boat_observation(self):
-		from simple_sailing_game import boat, game
-		from simple_sailing_game.controllers import assisted as controller
-
-		state = game.create_simulation()
-		observation = boat.observe(
-			state,
-			game.ENVIRONMENT,
-			game.BOAT_PARAMETERS,
-		)
-		controller_input = game.controller_input(observation)
-		before = controller_input
-
-		controller.control(
-			controller_input,
-			controller.MotionIntent(1, -1),
-			game.DT_SECONDS,
-			game.CONTROLLER_SETTINGS,
-		)
-
-		self.assertEqual(controller_input, before)
 
 	def test_game_can_construct_different_boat_parameters(self):
 		from dataclasses import replace

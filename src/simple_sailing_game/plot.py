@@ -1,7 +1,5 @@
 import math
 
-import matplotlib.pyplot
-
 from . import boat
 
 
@@ -16,6 +14,8 @@ def drag(angle_of_attack_rad: float, base_drag_coefficient: float) -> float:
 
 
 def main() -> None:
+	import matplotlib.pyplot
+
 	from .game import BOAT_PARAMETERS
 
 	angles_deg = list(range(-180, 181))

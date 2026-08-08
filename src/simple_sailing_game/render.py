@@ -1,11 +1,10 @@
 import math
 
-import numpy as np
 import pygame
 import pymunk
 
 from . import boat, course
-from .controllers import arcade, assisted as controller, manual
+from .controllers import arcade, manual
 from .simulation import SimulationTelemetry
 
 
@@ -14,13 +13,10 @@ PIXELS_PER_METER = 60
 FLOW_PIXELS_PER_METER_SECOND = 20
 FORCE_PIXELS_PER_NEWTON = 0.35
 INTENT_VECTOR_LENGTH_PX = 100
-CONTROL_LANDSCAPE_RECT = pygame.Rect(800, 280, 320, 320)
-CONTROL_GRADIENT_PIXELS_PER_ERROR = 8
-CONTROL_MOTION_PREVIEW_SECONDS = 0.25
 
 PlayerIntent = (
-	controller.MotionIntent
-	| manual.DirectionInput
+	arcade.MotionIntent
+	| manual.Input
 	| arcade.AutoSheetIntent
 	| arcade.HeadingIntent
 )
@@ -69,7 +65,7 @@ def draw_arrow(
 
 
 def intent_vector(
-	intent: controller.MotionIntent,
+	intent: arcade.MotionIntent,
 	boat_heading_rad: float,
 ) -> pymunk.Vec2d:
 	return pymunk.Vec2d(intent.forward, intent.turn).rotated(boat_heading_rad)
@@ -124,17 +120,17 @@ def draw_intent(
 		screen.blit(text, (30, start.y - 10))
 		return
 
-	if isinstance(intent, manual.DirectionInput):
-		sail = pymunk.Vec2d(*intent.sail_direction).rotated(boat_heading_rad)
-		rudder = pymunk.Vec2d(*intent.rudder_direction).rotated(boat_heading_rad)
+	if isinstance(intent, manual.Input):
+		sheet = pymunk.Vec2d(intent.sheet, 0).rotated(boat_heading_rad)
+		rudder = pymunk.Vec2d(0, intent.rudder).rotated(boat_heading_rad)
 		draw_vector(
-			screen, start, sail, (235, 205, 100), INTENT_VECTOR_LENGTH_PX, 3
+			screen, start, sheet, (235, 205, 100), INTENT_VECTOR_LENGTH_PX, 3
 		)
 		draw_vector(
 			screen, start, rudder, (220, 220, 230), INTENT_VECTOR_LENGTH_PX, 3
 		)
 		text = font.render(
-			"manual directions: yellow sail  white rudder",
+			f"manual: sheet {intent.sheet:+.0%}  rudder {intent.rudder:+.0%}",
 			True,
 			(240, 100, 220),
 		)
@@ -166,133 +162,6 @@ def draw_intent(
 	screen.blit(text, (30, start.y - 10))
 
 
-def control_landscape_point(
-	rect: pygame.Rect,
-	sail_angle_rad: float,
-	rudder_angle_rad: float,
-	parameters: boat.BoatParameters,
-) -> pymunk.Vec2d:
-	return pymunk.Vec2d(
-		rect.left
-		+ (sail_angle_rad + parameters.max_sail_angle_rad)
-		/ (2 * parameters.max_sail_angle_rad)
-		* rect.width,
-		rect.top
-		+ (parameters.max_rudder_angle_rad - rudder_angle_rad)
-		/ (2 * parameters.max_rudder_angle_rad)
-		* rect.height,
-	)
-
-
-def control_gradient_vector_px(
-	rect: pygame.Rect,
-	gradient: tuple[float, float] | pymunk.Vec2d,
-	parameters: boat.BoatParameters,
-) -> pymunk.Vec2d:
-	return pymunk.Vec2d(
-		-gradient[0]
-		* parameters.max_sail_angle_rad
-		* CONTROL_GRADIENT_PIXELS_PER_ERROR,
-		gradient[1]
-		* parameters.max_rudder_angle_rad
-		* CONTROL_GRADIENT_PIXELS_PER_ERROR,
-	)
-
-
-def control_motion_vector_px(
-	rect: pygame.Rect,
-	sail_angular_velocity_rad_s: float,
-	rudder_angular_velocity_rad_s: float,
-	parameters: boat.BoatParameters,
-) -> pymunk.Vec2d:
-	return pymunk.Vec2d(
-		sail_angular_velocity_rad_s
-		* CONTROL_MOTION_PREVIEW_SECONDS
-		* rect.width
-		/ (2 * parameters.max_sail_angle_rad),
-		-rudder_angular_velocity_rad_s
-		* CONTROL_MOTION_PREVIEW_SECONDS
-		* rect.height
-		/ (2 * parameters.max_rudder_angle_rad),
-	)
-
-
-def draw_control_quality_landscape(
-	screen: pygame.Surface,
-	font: pygame.font.Font,
-	state: boat.SailingState,
-	landscape: controller.ControlLandscape,
-	parameters: boat.BoatParameters,
-) -> None:
-	rect = CONTROL_LANDSCAPE_RECT
-	screen.blit(
-		font.render("control quality for current intent", True, (220, 220, 230)),
-		(rect.left, rect.top - 22),
-	)
-	errors = landscape.errors
-	quality = 1 - np.clip(np.sqrt(errors / 8), 0, 1)
-	colors = np.empty(errors.shape + (3,), dtype=np.uint8)
-	colors[:, :, 0] = 40 + 190 * (1 - quality)
-	colors[:, :, 1] = 40 + 190 * quality
-	colors[:, :, 2] = 55
-	surface = pygame.surfarray.make_surface(colors[:, ::-1])
-	screen.blit(pygame.transform.smoothscale(surface, rect.size), rect)
-	pygame.draw.rect(screen, (220, 220, 230), rect, 1)
-
-	current = control_landscape_point(
-		rect, state.sail_angle_rad, state.rudder_angle_rad, parameters
-	)
-	optimum = control_landscape_point(
-		rect,
-		landscape.optimum_sail_angle_rad,
-		landscape.optimum_rudder_angle_rad,
-		parameters,
-	)
-	pygame.draw.line(
-		screen, (255, 100, 220), optimum + (-5, -5), optimum + (5, 5), 2
-	)
-	pygame.draw.line(
-		screen, (255, 100, 220), optimum + (-5, 5), optimum + (5, -5), 2
-	)
-	downhill = control_gradient_vector_px(rect, landscape.gradient, parameters)
-	if downhill.length:
-		draw_vector(screen, current, downhill, (100, 220, 255), 1, 2)
-	motion = control_motion_vector_px(
-		rect,
-		state.sail_angular_velocity_rad_s,
-		state.rudder_angular_velocity_rad_s,
-		parameters,
-	)
-	if motion.length:
-		draw_vector(screen, current, motion, (255, 210, 90), 1, 2)
-	pygame.draw.circle(screen, (245, 245, 245), current, 5)
-	pygame.draw.circle(screen, (25, 25, 30), current, 5, 1)
-	screen.blit(
-		font.render(
-			"sail -90° left / +90° right    rudder +30° top / -30° bottom",
-			True,
-			(190, 190, 205),
-		),
-		(rect.left, rect.bottom + 5),
-	)
-	screen.blit(
-		font.render(
-			"green good   red poor   magenta global optimum",
-			True,
-			(210, 210, 220),
-		),
-		(rect.left, rect.bottom + 28),
-	)
-	screen.blit(
-		font.render(
-			"cyan normalized downhill gradient   yellow motion over 0.25 s",
-			True,
-			(210, 210, 220),
-		),
-		(rect.left, rect.bottom + 49),
-	)
-
-
 def draw(
 	screen: pygame.Surface,
 	font: pygame.font.Font,
@@ -306,7 +175,6 @@ def draw(
 	center = pymunk.Vec2d(WIDTH / 2, HEIGHT / 2)
 	body = state.boat
 	observation = telemetry.physics.observation
-	decision = telemetry.decision
 	screen.fill((30, 30, 40))
 
 	grid_spacing_px = PIXELS_PER_METER
@@ -423,30 +291,9 @@ def draw(
 		)
 
 	draw_intent(screen, font, center, body.angle, intent)
-	if decision is not None:
-		draw_control_quality_landscape(
-			screen, font, state, decision.landscape, parameters
-		)
-
-	if decision is None:
-		if telemetry.control_mode is not None:
-			control_status = (
-				f"{telemetry.control_mode} / {telemetry.physics_mode} physics"
-			)
-		else:
-			control_status = (
-				"manual control" if telemetry.controller_active else "uncontrolled"
-			)
-	else:
-		landscape = decision.landscape
-		control_mode = telemetry.control_mode or "controlled"
-		control_status = (
-			f"{control_mode} / {telemetry.physics_mode} physics    "
-			f"optimal sail {math.degrees(landscape.optimum_sail_angle_rad):+.0f}°    "
-			f"optimal rudder {math.degrees(landscape.optimum_rudder_angle_rad):+.0f}°"
-		)
 	status = font.render(
-		f"{control_status}    water speed {observation.apparent_water_m_s.length:.1f} m/s    "
+		f"{telemetry.control_mode} / articulated physics    "
+		f"water speed {observation.apparent_water_m_s.length:.1f} m/s    "
 		f"sail {math.degrees(state.sail_angle_rad):+.0f}°    "
 		f"rudder {math.degrees(state.rudder_angle_rad):+.0f}°",
 		True,
@@ -456,25 +303,24 @@ def draw(
 	upwind_angle_rad = observation.apparent_wind_m_s.angle + math.pi
 	point_of_sail = course.point_of_sail(body.angle - upwind_angle_rad)
 	feedback = f"point of sail: {point_of_sail}"
-	if telemetry.surface_targets is not None:
-		free_sail_angle_rad = boat.free_sail_angle(
-			body.angle,
-			observation.apparent_wind_m_s,
-			parameters.max_sail_angle_rad,
+	free_sail_angle_rad = boat.free_sail_angle(
+		body.angle,
+		observation.apparent_wind_m_s,
+		parameters.max_sail_angle_rad,
+	)
+	if telemetry.surface_targets.sail_target_angle_rad is None:
+		target_sail_angle_rad = max(
+			-telemetry.surface_targets.sheet_limit_angle_rad,
+			min(
+				telemetry.surface_targets.sheet_limit_angle_rad,
+				free_sail_angle_rad,
+			),
 		)
-		if telemetry.surface_targets.sail_target_angle_rad is None:
-			target_sail_angle_rad = max(
-				-telemetry.surface_targets.sheet_limit_angle_rad,
-				min(
-					telemetry.surface_targets.sheet_limit_angle_rad,
-					free_sail_angle_rad,
-				),
-			)
-		else:
-			target_sail_angle_rad = telemetry.surface_targets.sail_target_angle_rad
-		feedback += (
-			f"    trim: {course.trim_feedback(state.sail_angle_rad, target_sail_angle_rad)}"
-		)
+	else:
+		target_sail_angle_rad = telemetry.surface_targets.sail_target_angle_rad
+	feedback += (
+		f"    trim: {course.trim_feedback(state.sail_angle_rad, target_sail_angle_rad)}"
+	)
 	if time_trial is not None:
 		best = (
 			"--"

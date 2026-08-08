@@ -2,7 +2,7 @@ import math
 
 import pymunk
 
-from .controllers import arcade, assisted, manual
+from .controllers import arcade, manual
 
 
 def keyboard_motion(
@@ -10,10 +10,10 @@ def keyboard_motion(
 	backward: bool,
 	left: bool,
 	right: bool,
-) -> assisted.MotionIntent:
+) -> arcade.MotionIntent:
 	longitudinal = int(forward) - int(backward)
 	turn = int(left) - int(right)
-	return assisted.MotionIntent(longitudinal, -turn)
+	return arcade.MotionIntent(longitudinal, -turn)
 
 
 def keyboard_heading(
@@ -43,54 +43,30 @@ def keyboard_auto_sheet(
 
 
 def keyboard_manual(
-	rudder_forward: bool,
-	rudder_backward: bool,
+	sheet_in: bool,
+	sheet_out: bool,
 	rudder_left: bool,
 	rudder_right: bool,
-	sail_forward: bool,
-	sail_backward: bool,
-	sail_left: bool,
-	sail_right: bool,
-) -> manual.DirectionInput:
-	def direction(
-		forward: bool,
-		backward: bool,
-		left: bool,
-		right: bool,
-	) -> tuple[float, float]:
-		vector = pymunk.Vec2d(
-			int(forward) - int(backward),
-			int(right) - int(left),
-		)
-		return (0, 0) if not vector.length else tuple(vector.normalized())
-
-	return manual.DirectionInput(
-		sail_direction=direction(
-			sail_forward, sail_backward, sail_left, sail_right
-		),
-		rudder_direction=direction(
-			rudder_forward, rudder_backward, rudder_left, rudder_right
-		),
+) -> manual.Input:
+	return manual.Input(
+		sheet=int(sheet_in) - int(sheet_out),
+		rudder=int(rudder_right) - int(rudder_left),
 	)
 
 
 def analog_manual(
-	boat_heading_rad: float,
-	rudder_stick_x: float,
-	rudder_stick_y: float,
-	sail_stick_x: float,
-	sail_stick_y: float,
+	stick_x: float,
+	stick_y: float,
 	deadzone: float,
-) -> manual.DirectionInput:
-	def direction(x: float, y: float) -> tuple[float, float]:
-		vector = pymunk.Vec2d(x, y)
-		if vector.length <= deadzone:
-			return (0, 0)
-		return tuple(vector.normalized().rotated(-boat_heading_rad))
+) -> manual.Input:
+	def axis(value: float) -> float:
+		if abs(value) <= deadzone:
+			return 0
+		return max(-1, min(1, value))
 
-	return manual.DirectionInput(
-		sail_direction=direction(sail_stick_x, sail_stick_y),
-		rudder_direction=direction(rudder_stick_x, rudder_stick_y),
+	return manual.Input(
+		sheet=axis(-stick_y),
+		rudder=axis(stick_x),
 	)
 
 
@@ -99,11 +75,11 @@ def analog_motion(
 	stick_x: float,
 	stick_y: float,
 	deadzone: float,
-) -> assisted.MotionIntent:
+) -> arcade.MotionIntent:
 	world_vector = pymunk.Vec2d(stick_x, stick_y)
 	magnitude = min(1.0, world_vector.length)
 	if magnitude <= deadzone:
-		return assisted.MotionIntent()
+		return arcade.MotionIntent()
 	if math.isclose(magnitude, 1):
 		magnitude = 1
 	local_direction = world_vector.normalized().rotated(-boat_heading_rad)
@@ -120,7 +96,7 @@ def analog_motion(
 		if math.isclose(local_intent.y, 0, abs_tol=zero_tolerance)
 		else local_intent.y
 	)
-	return assisted.MotionIntent(forward, turn)
+	return arcade.MotionIntent(forward, turn)
 
 
 def analog_heading(

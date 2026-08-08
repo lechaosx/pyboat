@@ -21,139 +21,160 @@ the best completed lap.
 
 | Key | Action |
 | --- | --- |
-| `1` | Manual sail/rudder direction control |
+| `1` | Manual retained sheet/direct rudder control |
 | `2` | Automatic sheet with direct rudder control |
-| `3` | Improved arcade forward/turn control (default) |
-| `4` | Original arcade forward/turn control |
+| `3` | Direct force/moment arcade control (default) |
+| `4` | Original yaw-rate arcade forward/turn control |
 | `5` | Original arcade heading and yaw-rate control |
-| `6` | Original arcade control with automatic bow/stern selection |
-| `7` | Gradient controller with global-optimum helper |
-| `8` | Global-optimum target controller |
-| `9` | Raw gradient controller without the global helper |
 | `Space` | Reverse modifier in original arcade mode |
-| `P` | Toggle lumped/articulated physics |
 | `R` | Reset boat and current lap |
-| `M` | Toggle guided-gradient/manual modes |
-| `C` | Disable the sailor in the original modes |
 
-Modes 1–3 are the main manual-to-arcade progression. Modes 4–9 remain
-selectable as controller experiments so their behavior can be compared.
+Modes 1–3 are the main manual-to-arcade progression. Modes 4–5 remain selectable
+so their historical yaw-rate policies can be compared with direct control.
 
 Keyboard input depends on the selected controller:
 
-- Gradient and global-optimum controllers: `W/S` request forward/reverse force
-  and `A/D` request yaw.
-- Manual: `WASD` points the rudder and the arrow keys point the sail relative to
-  the boat. Each arrow marks the surface's forward direction, so a forward arrow
-  centers the drawn surface aft. Unreachable aft directions clamp to a mechanical
-  angle limit. Releasing all keys releases the corresponding surface.
+- Manual: hold `W/S` or up/down to sheet in or ease out. The sheet limit changes
+  incrementally and stays where it is when released. `A/D` or left/right directly
+  position the rudder and center it on release.
 - Auto-sheet: hold `W` for powered trim; `A/D` directly position the rudder.
-- Heading arcade modes: `W/A/S/D` continuously request
+- Heading arcade mode: `W/A/S/D` continuously requests
   bow/port/stern/starboard relative to the boat. Mode 5 points the bow toward
-  that direction. Mode 6 automatically selects the bow or stern and reverses
-  the turn while backing.
+  that direction.
 - Move-intent arcade modes: `W/S` directly request forward/reverse power and
-  `A/D` request turn. Mode 3 eases the sheet during large turns and reduces its
-  yaw-rate request at low speed; mode 4 preserves the original behavior.
+  `A/D` request turn. Mode 3 maps these values directly to fractions of the
+  currently achievable drive force and yaw moment. Mode 4 preserves the
+  original fixed-yaw-rate behavior.
 - Original arcade: hold `Space` while providing a WASD direction to back up
   without changing the requested heading. `Space` alone does not apply power.
 
-With a gamepad, mode 5 always points the bow toward the left stick; hold the south
-face button to reverse the stick command. Mode 6 selects forward motion for the
-forward half and reversed steering in sternway for the rear half. Modes 3 and 4
-convert the stick to boat-relative forward/turn components. Auto-sheet mode uses
+Keyboard diagonals retain full power and turn so players can use deliberate key
+duty cycles for fine control. With a gamepad, mode 5 always points the bow toward
+the left stick; hold the south face button to reverse the stick command. Modes 3
+and 4 convert the stick to boat-relative forward/turn components without further
+input shaping. Auto-sheet mode uses
 the left stick's vertical axis for power and horizontal axis for rudder position.
-Manual mode uses the left stick to point the rudder and the right stick to point
-the sail in world space. A centered stick releases its surface.
+Manual mode uses the left stick vertically to adjust the retained sheet limit and
+horizontally to position the rudder.
 
 ## Physics models
 
-The `lumped` model, implemented in
-`src/simple_sailing_game/physics/dynamic.py`, is the normal game and sailing
-education plant. One body carries the complete boat mass while the sail and
-rudder angles are integrated separately. It is direct, predictable, and easy to
-follow.
-
-The optional `articulated` model, implemented in
+The default `articulated` model, implemented in
 `src/simple_sailing_game/physics/coupled.py`, gives the hull, sail/boom, and
 rudder/tiller their selected masses. Pivots and rotary limits connect the
 surfaces to the hull, fluid loads act on their bodies, and actuator torques act
 equally and oppositely on each surface and the hull. This makes appendage motion
-react back on the boat.
+react back on the boat while preserving physically plausible coupled motion.
 
-Every controller can use either plant. Both consume the physical torques produced
-by the assisted and manual controllers.
+The `lumped` reference model, implemented in
+`src/simple_sailing_game/physics/dynamic.py`, places the complete boat mass on
+one body while integrating sail and rudder angles separately. It remains as a
+compact coding reference and is covered by focused force, damping, and timestep
+tests, but it is not a selectable game plant. This avoids multiplying every
+controller and maneuver across two nearly identical steady-state models.
+
+Normal trim treats the sail command as a sheet limit: the sailor can pull the
+boom inward or hold it against the wind, but cannot push it outward. Explicit
+reverse commands remain backed-sail targets rather than normal sheet trim.
 
 The sail and underwater foils have independently tunable profile-drag
 coefficients. Keel force acts at `keel_position_m`, so moving that point fore or
-aft produces a yaw moment. Hull resistance is primarily longitudinal; a smaller
-lateral coefficient damps the hull while the keel remains the main source of
-lateral resistance.
+aft changes both its local apparent flow and its yaw moment. Hull resistance is
+sampled at the bow and stern: streamlined longitudinal drag is small, while
+order-one lateral pressure drag supplies natural yaw damping. The keel remains
+the main source of lateral resistance.
 
 ## Controllers
 
-The original optimizer remains as a coding experiment in
-`src/simple_sailing_game/controllers/assisted.py`. Its three selectable modes
-either target the sampled global optimum, follow the local objective gradient,
-or guide that local gradient past poor local optima using the sampled result.
+The original optimizer remains as a standalone coding lab in
+`src/simple_sailing_game/controllers/assisted.py`. Its tests demonstrate modes
+that target the sampled global optimum, follow the local objective gradient, or
+guide that gradient past poor local optima. It is deliberately absent from the
+playable modes, telemetry, and renderer.
 
-The original controller in `src/simple_sailing_game/controllers/arcade.py`
-first trims the sail on the wind-selected side. Mode 5 always turns the bow
-toward the keyboard or stick direction; its separate reverse button
+The direct controller in `src/simple_sailing_game/controllers/arcade.py` maps
+mode 3 power to a fraction of the achievable drive force and turn to a fraction
+of the achievable combined sail-and-rudder yaw moment. Nonzero turn input remains
+fully direct. When steering is released, the sailor holds the release heading and
+countersteers heading error and measured yaw. The correction uses critical
+damping derived from the boat's inertia, current moment authority, and rudder
+range. There is no chosen target yaw rate, response time, speed shaping, or
+turn-dependent power reduction.
+
+The same module retains the original controllers for comparison. Mode 5 turns
+the bow toward the keyboard or stick direction; its separate reverse button
 selects a backwinded sail without changing that heading or supplying power on its
-own. Mode 6 chooses forward or sternway from the requested half-plane and
-reverses its yaw command in sternway. Mode 4 takes forward/turn intent directly
-and blends sail trim continuously as forward power crosses zero. All three
-select an achievable rudder moment, including compensation for the sail's yaw
-moment. Auto-sheet mode uses its own power/rudder intent instead.
+own. Mode 4 takes forward/turn intent directly, blends sail trim continuously as
+forward power crosses zero, and targets a fixed yaw rate. Both compensate for
+the sail's yaw moment when selecting a rudder angle. Auto-sheet mode uses its own
+power/rudder intent instead.
 
-The improved controller in
-`src/simple_sailing_game/controllers/improved_arcade.py` wraps the original
-forward/turn allocator. It reduces sail power during large turns and scales the
-requested yaw rate with speed through water. The old controllers are unchanged
-and remain selectable for comparison.
+Manual control changes the retained sheet limit at one full configured range per
+second and maps rudder input directly onto its physical angle range. The same
+one-sided sheet and actuator-force limits used by the automatic modes govern the
+actual surface motion.
 
-Manual control converts each requested physical surface direction into a bounded
-angle target. The sailor applies a damped steering torque while a direction is
-held and no torque when that surface's input is neutral.
-
-The on-screen intent display follows those meanings: optimizer and modes 3/4 show
-boat-relative forward/turn vectors, manual shows sail/rudder direction arrows,
-auto-sheet shows its two surface-control axes, and modes 5/6 show the requested
-world-space heading. In mode 6 the arrow remains an input display, so it does not
-predict the inverted sternway turn.
+The on-screen intent display follows those meanings: modes 3/4 show boat-relative
+forward/turn vectors, manual shows sheet/rudder axes, auto-sheet shows its two
+surface-control axes, and mode 5 shows the requested world-space heading.
 
 Controller candidates are predicted quasi-statically. The prediction includes
 hull angular velocity but not the candidate surface's own angular motion. The
 articulated plant recalculates the actual load from each physical surface body's
 velocity, so prediction and plant load can briefly differ during fast movement.
+Neutral direct control compensates the sail's measured current yaw moment rather
+than its target-angle prediction, including while the boom crosses downwind.
 
 ## Code layout
 
-- `game.py` owns runtime parameters, controller tuning, mode selection, and the
-  Pygame loop.
+- `game.py` owns runtime parameters, mode selection, and the Pygame loop.
 - `simulation.py` receives configuration explicitly and owns controller-to-plant
-  adaptation and stepping.
+  adaptation for the articulated plant.
 - `input.py` converts keyboard and gamepad state to controller intent.
 - `render.py` receives boat parameters explicitly and owns Pygame drawing.
+- `physics/dynamic.py` and `controllers/assisted.py` are compact reference/lab
+  implementations rather than runtime branches.
 
 ## Model tuning
 
-Generate a simulated speed polar for both plants:
+Generate a simulated speed polar for the articulated game plant:
 
 ```sh
-uv run sailing-polar
+uv run --extra plots sailing-polar
 ```
 
 This holds a series of headings with the arcade controller, lets each run settle,
 and writes `polar.png`. The reported quantities are implemented in
-`src/simple_sailing_game/polar.py`; adjust the durations or heading samples there
-when iterating quickly.
+`src/simple_sailing_game/polar.py`, including actual heading and heading error;
+adjust the durations or heading samples there when iterating quickly.
+
+The physical acceptance tests treat the configured boat as a 4 m, 250 kg
+displacement dinghy in 6 m/s wind. Their deliberately broad reference envelope
+is:
+
+| Behavior | Accepted range |
+| --- | --- |
+| In irons | Below 25°; a 15° attempt makes no sustained upwind progress |
+| 30° close-hauled | 0.6–1.4 m/s, under 12° leeway |
+| 90° beam reach | 2–3 m/s |
+| 120° broad reach | 2.2–3.2 m/s |
+| Heading hold | Under 8° error at sampled headings |
+| Coast-down | Monotonic; 2 m/s falls below 1.5 m/s in 5 seconds |
+| Tack | Both directions complete within 15 seconds with forward speed retained |
+| Released turn | Yaw rate falls by at least 75% within 3 seconds, with under 5° further heading drift |
+| Downwind stability | After turning onto downwind and releasing steering, settled heading variation and release-heading error stay below the 1° control sampling resolution |
 
 The simpler coefficient plot remains available:
 
 ```sh
-uv run sailing-plot
+uv run --extra plots sailing-plot
+```
+
+Pygame and Pymunk are the only core dependencies. NumPy belongs to the optimizer
+extra and Matplotlib to the plots extra. To run only the optimizer lab tests:
+
+```sh
+uv run --extra optimizer python -m unittest tests.test_control_model -v
 ```
 
 ## Tests
@@ -161,7 +182,7 @@ uv run sailing-plot
 Run the complete suite from the repository root:
 
 ```sh
-uv run python -m unittest discover -v
+uv run --all-extras python -m unittest discover -v
 ```
 
 The suite covers force equations, actuator behavior, the controllers, both

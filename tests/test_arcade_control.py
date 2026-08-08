@@ -1,8 +1,11 @@
 import math
 import unittest
+from dataclasses import replace
 
 from simple_sailing_game.controllers import arcade
-from simple_sailing_game.controllers.assisted import MotionIntent
+
+
+MotionIntent = arcade.MotionIntent
 
 
 class SurfaceControllerTest(unittest.TestCase):
@@ -15,6 +18,8 @@ class SurfaceControllerTest(unittest.TestCase):
 		return arcade.ControlInput(
 			boat_heading_rad=0,
 			boat_angular_velocity_rad_s=angular_velocity_rad_s,
+			boat_moment_of_inertia_kg_m2=1,
+			current_sail_yaw_moment_n_m=0,
 			free_sail_angle_rad=free_sail_angle_rad,
 			maximum_sail_angle_rad=math.pi / 2,
 			maximum_rudder_angle_rad=math.pi / 6,
@@ -34,6 +39,185 @@ class SurfaceControllerTest(unittest.TestCase):
 			),
 		)
 
+	def direct_control_input(self, *, angular_velocity_rad_s=0):
+		return arcade.ControlInput(
+			boat_heading_rad=0,
+			boat_angular_velocity_rad_s=angular_velocity_rad_s,
+			boat_moment_of_inertia_kg_m2=1,
+			current_sail_yaw_moment_n_m=0,
+			free_sail_angle_rad=-math.pi / 2,
+			maximum_sail_angle_rad=math.pi / 2,
+			maximum_rudder_angle_rad=math.pi / 6,
+			sail_effects=(
+				arcade.SurfaceEffect(-math.pi / 2, 0, 0),
+				arcade.SurfaceEffect(-math.pi / 3, 5, 1),
+				arcade.SurfaceEffect(-math.pi / 6, 10, 2),
+				arcade.SurfaceEffect(0, 6, 0),
+				arcade.SurfaceEffect(math.pi / 3, -5, -1),
+				arcade.SurfaceEffect(math.pi / 2, -10, -2),
+			),
+			rudder_effects=(
+				arcade.SurfaceEffect(-math.pi / 6, 0, 10),
+				arcade.SurfaceEffect(-math.pi / 12, 0, 4),
+				arcade.SurfaceEffect(0, 0, 0),
+				arcade.SurfaceEffect(math.pi / 12, 0, -4),
+				arcade.SurfaceEffect(math.pi / 6, 0, -10),
+			),
+		)
+
+	def test_heading_hold_captures_release_heading_and_clears_on_turn(self):
+		heading_hold = arcade.HeadingHold()
+
+		turning = heading_hold.apply(
+			boat_heading_rad=1,
+			intent=MotionIntent(forward=1, turn=1),
+		)
+		released = heading_hold.apply(
+			boat_heading_rad=2,
+			intent=MotionIntent(forward=1),
+		)
+		held = heading_hold.apply(
+			boat_heading_rad=2.5,
+			intent=MotionIntent(forward=1),
+		)
+		turned_again = heading_hold.apply(
+			boat_heading_rad=3,
+			intent=MotionIntent(forward=1, turn=-1),
+		)
+
+		self.assertIsNone(turning.held_heading_rad)
+		self.assertEqual(released.held_heading_rad, 2)
+		self.assertEqual(held.held_heading_rad, 2)
+		self.assertIsNone(turned_again.held_heading_rad)
+
+	def test_direct_arcade_selects_fractional_drive_force(self):
+		neutral = arcade.direct_move_control(
+			self.direct_control_input(), MotionIntent(forward=0, turn=0)
+		)
+		partial = arcade.direct_move_control(
+			self.direct_control_input(), MotionIntent(forward=0.5, turn=0)
+		)
+		full = arcade.direct_move_control(
+			self.direct_control_input(), MotionIntent(forward=1, turn=0)
+		)
+
+		self.assertAlmostEqual(neutral.sheet_limit_angle_rad, math.pi / 2)
+		self.assertAlmostEqual(partial.sheet_limit_angle_rad, math.pi / 3)
+		self.assertAlmostEqual(full.sheet_limit_angle_rad, math.pi / 6)
+
+	def test_direct_arcade_selects_fractional_reverse_drive(self):
+		partial = arcade.direct_move_control(
+			self.direct_control_input(), MotionIntent(forward=-0.5, turn=0)
+		)
+		full = arcade.direct_move_control(
+			self.direct_control_input(), MotionIntent(forward=-1, turn=0)
+		)
+
+		self.assertAlmostEqual(partial.sail_target_angle_rad, math.pi / 3)
+		self.assertAlmostEqual(full.sail_target_angle_rad, math.pi / 2)
+
+	def test_direct_arcade_maps_turn_to_achievable_moment(self):
+		for turn, expected_rudder_angle_rad in (
+			(1, -math.pi / 6),
+			(0.5, -math.pi / 12),
+			(0, 0),
+			(-0.5, math.pi / 12),
+			(-1, math.pi / 6),
+		):
+			with self.subTest(turn=turn):
+				output = arcade.direct_move_control(
+					self.direct_control_input(),
+					MotionIntent(forward=0.5, turn=turn),
+				)
+				self.assertAlmostEqual(
+					output.rudder_target_angle_rad,
+					expected_rudder_angle_rad,
+				)
+
+	def test_direct_arcade_does_not_reshape_nonzero_turn_for_yaw_rate(self):
+		stationary = arcade.direct_move_control(
+			self.direct_control_input(angular_velocity_rad_s=0),
+			MotionIntent(forward=0.5, turn=0.5),
+		)
+		rotating = arcade.direct_move_control(
+			self.direct_control_input(angular_velocity_rad_s=10),
+			MotionIntent(forward=0.5, turn=0.5),
+		)
+
+		self.assertEqual(rotating, stationary)
+
+	def test_direct_arcade_neutral_turn_countersteers_yaw(self):
+		stationary = arcade.direct_move_control(
+			self.direct_control_input(angular_velocity_rad_s=0),
+			MotionIntent(forward=0.5),
+		)
+		port_yaw = arcade.direct_move_control(
+			self.direct_control_input(angular_velocity_rad_s=0.5),
+			MotionIntent(forward=0.5),
+		)
+		starboard_yaw = arcade.direct_move_control(
+			self.direct_control_input(angular_velocity_rad_s=-0.5),
+			MotionIntent(forward=0.5),
+		)
+
+		self.assertGreater(
+			port_yaw.rudder_target_angle_rad,
+			stationary.rudder_target_angle_rad,
+		)
+		self.assertLess(
+			starboard_yaw.rudder_target_angle_rad,
+			stationary.rudder_target_angle_rad,
+		)
+
+	def test_direct_arcade_neutral_turn_restores_held_heading(self):
+		control_input = self.direct_control_input(angular_velocity_rad_s=0)
+		control_input = replace(control_input, boat_heading_rad=0.5)
+		neutral = arcade.direct_move_control(
+			control_input,
+			MotionIntent(forward=0.5),
+		)
+		held = arcade.direct_move_control(
+			control_input,
+			MotionIntent(forward=0.5, held_heading_rad=0),
+		)
+
+		self.assertGreater(
+			held.rudder_target_angle_rad,
+			neutral.rudder_target_angle_rad,
+		)
+
+	def test_direct_arcade_neutral_turn_compensates_current_sail_moment(self):
+		control_input = replace(
+			self.direct_control_input(),
+			current_sail_yaw_moment_n_m=8,
+		)
+
+		output = arcade.direct_move_control(
+			control_input,
+			MotionIntent(forward=0.5),
+		)
+
+		self.assertAlmostEqual(output.rudder_target_angle_rad, math.pi / 6)
+
+	def test_neutral_yaw_damping_uses_critical_damping_from_current_authority(self):
+		moment_n_m = arcade._critical_yaw_correction_moment(
+			heading_error_rad=0.1,
+			angular_velocity_rad_s=0.25,
+			moment_of_inertia_kg_m2=4,
+			maximum_rudder_angle_rad=0.5,
+			available_moments_n_m=(-10, 10),
+		)
+
+		expected_stiffness_n_m_rad = 20 / 1
+		expected_damping_n_m_s_rad = 2 * math.sqrt(
+			4 * expected_stiffness_n_m_rad
+		)
+		self.assertAlmostEqual(
+			moment_n_m,
+			-0.1 * expected_stiffness_n_m_rad
+			- 0.25 * expected_damping_n_m_s_rad,
+		)
+
 	def test_auto_sheet_uses_only_the_wind_selected_side(self):
 		output = arcade.auto_sheet_manual_tiller(
 			self.control_input(),
@@ -49,32 +233,6 @@ class SurfaceControllerTest(unittest.TestCase):
 		)
 
 		self.assertAlmostEqual(output.sheet_limit_angle_rad, math.pi / 2)
-
-	def test_sternway_arcade_points_the_stern_at_a_rear_heading(self):
-		output = arcade.sternway_control(
-			self.control_input(),
-			arcade.HeadingIntent(world_direction=(-1, 0)),
-			maximum_yaw_rate_rad_s=0.5,
-		)
-
-		self.assertAlmostEqual(output.sail_target_angle_rad, math.pi / 2)
-		self.assertAlmostEqual(output.rudder_target_angle_rad, 0)
-
-	def test_sternway_arcade_reverses_turn_when_targeting_with_the_stern(self):
-		forward = arcade.sternway_control(
-			self.control_input(),
-			arcade.HeadingIntent(world_direction=(1, 1)),
-			maximum_yaw_rate_rad_s=0.5,
-		)
-		backward = arcade.sternway_control(
-			self.control_input(),
-			arcade.HeadingIntent(world_direction=(-1, 1)),
-			maximum_yaw_rate_rad_s=0.5,
-		)
-
-		self.assertLess(forward.rudder_target_angle_rad, 0)
-		self.assertLess(backward.rudder_target_angle_rad, 0)
-		self.assertIsNotNone(backward.sail_target_angle_rad)
 
 	def test_move_arcade_preserves_turn_sense_while_backing(self):
 		forward = arcade.move_control(

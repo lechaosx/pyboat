@@ -9,16 +9,11 @@ from .actuator import (
 	ActuatorTorques,
 	damped_control_torque as damped_actuator_control_torque,
 )
+from .arcade import MotionIntent
 
 
 OPTIMIZED_TARGET_CONTROL = "optimized target"
 DIRECT_GRADIENT_CONTROL = "direct gradient"
-
-
-@dataclass(frozen=True)
-class MotionIntent:
-	forward: float = 0
-	turn: float = 0
 
 
 @dataclass(frozen=True)

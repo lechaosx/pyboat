@@ -1,7 +1,6 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-import matplotlib.pyplot
 import pymunk
 
 from . import boat, simulation
@@ -11,13 +10,14 @@ from .controllers import arcade
 @dataclass(frozen=True)
 class PolarPoint:
 	heading_from_upwind_deg: float
+	actual_heading_from_upwind_deg: float
+	heading_error_deg: float
 	speed_through_water_m_s: float
 	forward_speed_m_s: float
 	leeway_angle_deg: float
 
 
 def sample(
-	physics_mode: str,
 	settings: simulation.SimulationSettings,
 	environment: boat.Environment,
 	dt_seconds: float,
@@ -30,8 +30,9 @@ def sample(
 	for heading_from_upwind_deg in headings_from_upwind_deg:
 		target_heading_rad = upwind_angle_rad + math.radians(heading_from_upwind_deg)
 		target_direction = pymunk.Vec2d(1, 0).rotated(target_heading_rad)
-		state = simulation.create_simulation(settings)
-		state.boat.angle = target_heading_rad
+		state = simulation.create_simulation(
+			replace(settings, initial_boat_angle_rad=target_heading_rad)
+		)
 		for _ in range(round(settling_seconds / dt_seconds)):
 			intent = arcade.HeadingIntent(
 				world_direction=tuple(target_direction),
@@ -43,12 +44,12 @@ def sample(
 				settings,
 				environment,
 				dt_seconds,
-				physics_mode,
 			)
 
 		speeds_m_s = []
 		forward_speeds_m_s = []
 		leeway_angles_deg = []
+		heading_errors_deg = []
 		for _ in range(round(sampling_seconds / dt_seconds)):
 			intent = arcade.HeadingIntent(
 				world_direction=tuple(target_direction),
@@ -60,7 +61,6 @@ def sample(
 				settings,
 				environment,
 				dt_seconds,
-				physics_mode,
 			)
 			through_water_m_s = (
 				state.boat.velocity - environment.true_water_velocity_m_s
@@ -69,9 +69,22 @@ def sample(
 			speeds_m_s.append(through_water_m_s.length)
 			forward_speeds_m_s.append(local_velocity_m_s.x)
 			leeway_angles_deg.append(math.degrees(local_velocity_m_s.angle))
+			heading_errors_deg.append(
+				math.degrees(
+					math.remainder(
+						state.boat.angle - target_heading_rad,
+						2 * math.pi,
+					)
+				)
+			)
+		average_heading_error_deg = sum(heading_errors_deg) / len(
+			heading_errors_deg
+		)
 		points.append(
 			PolarPoint(
 				heading_from_upwind_deg,
+				heading_from_upwind_deg + average_heading_error_deg,
+				average_heading_error_deg,
 				sum(speeds_m_s) / len(speeds_m_s),
 				sum(forward_speeds_m_s) / len(forward_speeds_m_s),
 				sum(leeway_angles_deg) / len(leeway_angles_deg),
@@ -81,23 +94,20 @@ def sample(
 
 
 def main() -> None:
+	import matplotlib.pyplot
+
 	from . import game
 
-	for physics_mode in (
-		simulation.LUMPED_PHYSICS,
-		simulation.ARTICULATED_PHYSICS,
-	):
-		points = sample(
-			physics_mode,
-			game.SIMULATION_SETTINGS,
-			game.ENVIRONMENT,
-			game.DT_SECONDS,
-		)
-		matplotlib.pyplot.plot(
-			[point.heading_from_upwind_deg for point in points],
-			[point.speed_through_water_m_s for point in points],
-			label=physics_mode,
-		)
+	points = sample(
+		game.SIMULATION_SETTINGS,
+		game.ENVIRONMENT,
+		game.DT_SECONDS,
+	)
+	matplotlib.pyplot.plot(
+		[point.heading_from_upwind_deg for point in points],
+		[point.speed_through_water_m_s for point in points],
+		label="articulated",
+	)
 	matplotlib.pyplot.xlabel("Heading from upwind (degrees)")
 	matplotlib.pyplot.ylabel("Speed through water (m/s)")
 	matplotlib.pyplot.title("Simulated sailing polar")
