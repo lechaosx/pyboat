@@ -18,10 +18,18 @@ class SurfaceControllerTest(unittest.TestCase):
 		*,
 		angular_velocity_rad_s=0,
 		free_sail_angle_rad=-math.pi / 2,
+		sail_angle_rad=-math.pi / 4,
+		apparent_wind_angle_from_boat_forward_rad=0,
+		sail_side_hysteresis_angle_rad=math.radians(10),
 	):
 		return arcade.ControlInput(
 			boat_angular_velocity_rad_s=angular_velocity_rad_s,
 			free_sail_angle_rad=free_sail_angle_rad,
+			sail_angle_rad=sail_angle_rad,
+			apparent_wind_angle_from_boat_forward_rad=(
+				apparent_wind_angle_from_boat_forward_rad
+			),
+			sail_side_hysteresis_angle_rad=sail_side_hysteresis_angle_rad,
 			maximum_rudder_angle_rad=math.pi / 6,
 			sail_effects=(
 				arcade.SurfaceEffect(-math.pi / 2, 0, 0),
@@ -45,7 +53,7 @@ class SurfaceControllerTest(unittest.TestCase):
 			arcade.AutoSheetIntent(power=1, rudder=0),
 		)
 
-		self.assertAlmostEqual(output.sheet_limit_angle_rad, math.pi / 4)
+		self.assertAlmostEqual(output.sheet_target_angle_rad, -math.pi / 4)
 
 	def test_zero_power_eases_the_sheet_to_the_free_sail_angle(self):
 		output = arcade.auto_sheet_control(
@@ -53,7 +61,41 @@ class SurfaceControllerTest(unittest.TestCase):
 			arcade.AutoSheetIntent(power=0, rudder=0),
 		)
 
-		self.assertAlmostEqual(output.sheet_limit_angle_rad, math.pi / 2)
+		self.assertAlmostEqual(output.sheet_target_angle_rad, -math.pi / 2)
+
+	def test_auto_sheet_retains_sail_side_within_downwind_hysteresis(self):
+		output = arcade.auto_sheet_control(
+			self.control_input(
+				sail_angle_rad=math.pi / 4,
+				apparent_wind_angle_from_boat_forward_rad=math.radians(5),
+			),
+			arcade.AutoSheetIntent(power=1, rudder=0),
+		)
+
+		self.assertAlmostEqual(output.sheet_target_angle_rad, math.pi / 4)
+
+	def test_auto_sheet_switches_sail_side_beyond_downwind_hysteresis(self):
+		output = arcade.auto_sheet_control(
+			self.control_input(
+				sail_angle_rad=math.pi / 4,
+				apparent_wind_angle_from_boat_forward_rad=math.radians(11),
+			),
+			arcade.AutoSheetIntent(power=1, rudder=0),
+		)
+
+		self.assertAlmostEqual(output.sheet_target_angle_rad, -math.pi / 4)
+
+	def test_auto_sheet_does_not_retain_sail_side_upwind(self):
+		output = arcade.auto_sheet_control(
+			self.control_input(
+				free_sail_angle_rad=-math.pi / 4,
+				sail_angle_rad=math.pi / 4,
+				apparent_wind_angle_from_boat_forward_rad=3 * math.pi / 4,
+			),
+			arcade.AutoSheetIntent(power=1, rudder=0),
+		)
+
+		self.assertAlmostEqual(output.sheet_target_angle_rad, -math.pi / 4)
 
 	def test_yaw_rate_arcade_preserves_turn_sense_while_backing(self):
 		forward = arcade.yaw_rate_move_control(
@@ -80,7 +122,10 @@ class SurfaceControllerTest(unittest.TestCase):
 					maximum_yaw_rate_rad_s=0.5,
 				)
 
-				self.assertAlmostEqual(output.sheet_limit_angle_rad, math.pi / 2)
+				self.assertAlmostEqual(
+					abs(output.sheet_target_angle_rad),
+					math.pi / 2,
+				)
 				self.assertIsNone(output.sail_target_angle_rad)
 
 	def test_yaw_rate_arcade_uses_analog_turn_values_continuously(self):
@@ -112,7 +157,7 @@ class SurfaceControllerTest(unittest.TestCase):
 			maximum_yaw_rate_rad_s=0.5,
 		)
 
-		before_sail_target_rad = -before.sheet_limit_angle_rad
+		before_sail_target_rad = before.sheet_target_angle_rad
 		self.assertIsNotNone(after.sail_target_angle_rad)
 		self.assertLess(
 			abs(after.sail_target_angle_rad - before_sail_target_rad),

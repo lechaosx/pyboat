@@ -263,19 +263,8 @@ def draw(
 	upwind_angle_rad = observation.apparent_wind_m_s.angle + math.pi
 	point_of_sail = course.point_of_sail(body.angle - upwind_angle_rad)
 	feedback = f"point of sail: {point_of_sail}"
-	free_sail_angle_rad = boat.free_sail_angle(
-		body.angle,
-		observation.apparent_wind_m_s,
-		parameters.max_sail_angle_rad,
-	)
 	if telemetry.surface_targets.sail_target_angle_rad is None:
-		target_sail_angle_rad = max(
-			-telemetry.surface_targets.sheet_limit_angle_rad,
-			min(
-				telemetry.surface_targets.sheet_limit_angle_rad,
-				free_sail_angle_rad,
-			),
-		)
+		target_sail_angle_rad = telemetry.surface_targets.sheet_target_angle_rad
 	else:
 		target_sail_angle_rad = telemetry.surface_targets.sail_target_angle_rad
 	feedback += (

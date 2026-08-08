@@ -16,6 +16,7 @@ CONTROL_ANGLE_RESOLUTION_DEG = 1
 SAILOR_MAX_SHEET_FORCE_N = 250
 SAILOR_MAX_TILLER_FORCE_N = 60
 FIXED_MAXIMUM_YAW_RATE_RAD_S = math.radians(35)
+SAIL_SIDE_HYSTERESIS_ANGLE_RAD = math.radians(10)
 COURSE_BUOYS_M = ((0, 0), (-15, 15), (-30, 0), (-15, -15))
 BUOY_RADIUS_M = 2
 UNDERWATER_FOIL_LIFT_CURVE = curves.streamlined_lift(
@@ -74,6 +75,7 @@ SIMULATION_SETTINGS = simulation.SimulationSettings(
 	sailor_max_sheet_force_n=SAILOR_MAX_SHEET_FORCE_N,
 	sailor_max_tiller_force_n=SAILOR_MAX_TILLER_FORCE_N,
 	fixed_maximum_yaw_rate_rad_s=FIXED_MAXIMUM_YAW_RATE_RAD_S,
+	sail_side_hysteresis_angle_rad=SAIL_SIDE_HYSTERESIS_ANGLE_RAD,
 )
 
 CONTROL_MODES_BY_KEY = {

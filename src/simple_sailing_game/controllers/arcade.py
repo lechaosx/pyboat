@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 
@@ -24,6 +25,9 @@ class SurfaceEffect:
 class ControlInput:
 	boat_angular_velocity_rad_s: float
 	free_sail_angle_rad: float
+	sail_angle_rad: float
+	apparent_wind_angle_from_boat_forward_rad: float
+	sail_side_hysteresis_angle_rad: float
 	maximum_rudder_angle_rad: float
 	sail_effects: tuple[SurfaceEffect, ...]
 	rudder_effects: tuple[SurfaceEffect, ...]
@@ -31,7 +35,7 @@ class ControlInput:
 
 @dataclass(frozen=True)
 class SurfaceTargets:
-	sheet_limit_angle_rad: float
+	sheet_target_angle_rad: float
 	rudder_target_angle_rad: float
 	sail_target_angle_rad: float | None = None
 
@@ -40,8 +44,22 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 	return max(minimum, min(maximum, value))
 
 
-def _trimmed_sail_effect(control_input: ControlInput) -> SurfaceEffect:
+def _controlled_free_sail_angle(control_input: ControlInput) -> float:
 	free_angle_rad = control_input.free_sail_angle_rad
+	wind_angle_rad = control_input.apparent_wind_angle_from_boat_forward_rad
+	if (
+		abs(wind_angle_rad) < math.pi / 2
+		and abs(wind_angle_rad) < control_input.sail_side_hysteresis_angle_rad
+		and control_input.sail_angle_rad * free_angle_rad < 0
+	):
+		return math.copysign(abs(free_angle_rad), control_input.sail_angle_rad)
+	return free_angle_rad
+
+
+def _trimmed_sail_effect(
+	control_input: ControlInput,
+	free_angle_rad: float,
+) -> SurfaceEffect:
 	if free_angle_rad < 0:
 		available = tuple(
 			effect
@@ -73,7 +91,7 @@ def _sail_target(
 			key=lambda effect: (effect.drive_force_n, abs(effect.angle_rad)),
 		)
 		if not gradual_sternway:
-			return abs(backed.angle_rad), backed, backed.angle_rad
+			return backed.angle_rad, backed, backed.angle_rad
 		backing_power = _clamp(-power, 0, 1)
 		target_angle_rad = control_input.free_sail_angle_rad + backing_power * (
 			backed.angle_rad - control_input.free_sail_angle_rad
@@ -82,24 +100,25 @@ def _sail_target(
 			control_input.sail_effects,
 			key=lambda effect: abs(effect.angle_rad - target_angle_rad),
 		)
-		return abs(target_angle_rad), nearest_effect, target_angle_rad
+		return target_angle_rad, nearest_effect, target_angle_rad
 	power = _clamp(power, 0, 1)
-	trimmed = _trimmed_sail_effect(control_input)
-	target_angle_rad = control_input.free_sail_angle_rad + power * (
-		trimmed.angle_rad - control_input.free_sail_angle_rad
+	free_angle_rad = _controlled_free_sail_angle(control_input)
+	trimmed = _trimmed_sail_effect(control_input, free_angle_rad)
+	target_angle_rad = free_angle_rad + power * (
+		trimmed.angle_rad - free_angle_rad
 	)
 	nearest_effect = min(
 		control_input.sail_effects,
 		key=lambda effect: abs(effect.angle_rad - target_angle_rad),
 	)
-	return abs(target_angle_rad), nearest_effect, None
+	return target_angle_rad, nearest_effect, None
 
 
 def auto_sheet_control(
 	control_input: ControlInput,
 	intent: AutoSheetIntent,
 ) -> SurfaceTargets:
-	sheet_limit_angle_rad, _, sail_target_angle_rad = _sail_target(
+	sheet_target_angle_rad, _, sail_target_angle_rad = _sail_target(
 		control_input,
 		intent.power,
 		False,
@@ -108,7 +127,7 @@ def auto_sheet_control(
 		_clamp(intent.rudder, -1, 1) * control_input.maximum_rudder_angle_rad
 	)
 	return SurfaceTargets(
-		sheet_limit_angle_rad,
+		sheet_target_angle_rad,
 		rudder_target_angle_rad,
 		sail_target_angle_rad,
 	)
@@ -119,7 +138,7 @@ def yaw_rate_move_control(
 	intent: MotionIntent,
 	maximum_yaw_rate_rad_s: float,
 ) -> SurfaceTargets:
-	sheet_limit_angle_rad, sail_effect, sail_target_angle_rad = _sail_target(
+	sheet_target_angle_rad, sail_effect, sail_target_angle_rad = _sail_target(
 		control_input,
 		_clamp(intent.forward, -1, 1),
 		True,
@@ -149,7 +168,7 @@ def yaw_rate_move_control(
 		),
 	)[0]
 	return SurfaceTargets(
-		sheet_limit_angle_rad,
+		sheet_target_angle_rad,
 		rudder_effect.angle_rad,
 		sail_target_angle_rad,
 	)

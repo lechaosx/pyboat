@@ -22,6 +22,7 @@ class SimulationSettings:
 	sailor_max_sheet_force_n: float
 	sailor_max_tiller_force_n: float
 	fixed_maximum_yaw_rate_rad_s: float
+	sail_side_hysteresis_angle_rad: float
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,12 @@ def surface_control_state(
 				observation.apparent_wind_m_s,
 				parameters.max_sail_angle_rad,
 			),
+			observation.sail_angle_rad,
+			math.remainder(
+				observation.apparent_wind_m_s.angle - observation.boat_angle_rad,
+				2 * math.pi,
+			),
+			settings.sail_side_hysteresis_angle_rad,
 			parameters.max_rudder_angle_rad,
 			_sample_effects(
 				sail_effect_at,
@@ -256,10 +263,7 @@ def advance_surface_game(
 
 	uses_sheet_limit = targets.sail_target_angle_rad is None
 	if uses_sheet_limit:
-		sail_target_angle_rad = max(
-			-targets.sheet_limit_angle_rad,
-			min(targets.sheet_limit_angle_rad, surface_input.free_sail_angle_rad),
-		)
+		sail_target_angle_rad = targets.sheet_target_angle_rad
 	else:
 		sail_target_angle_rad = targets.sail_target_angle_rad
 	control_torques = (
