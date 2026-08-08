@@ -4,6 +4,20 @@ A compact 2D sailing simulation for learning how sailing forces, control systems
 and a small arcade game fit together. The game deliberately leaves out heel,
 waves, and sail deformation so the force calculations remain readable.
 
+## Design principles
+
+- Teach both sailing and coding with physics that stays readable.
+- Use one articulated plant. Pymunk resolves rigid-body motion, joints, surface
+  inertia, and reaction forces while the project supplies the fluid loads and
+  sailor controls.
+- Keep keyboard motion boat-relative and joystick motion world-relative; each is
+  intentionally adapted to what feels natural on that device.
+- Prefer behavioral checks over calibrated speed ceilings. A physics correction
+  that makes the boat faster should not fail only because it exceeds an old
+  maximum.
+- Treat graphics as supporting feedback rather than a simulation priority.
+- Add physical detail only when its educational value justifies the code.
+
 ## Run it
 
 Enter the development environment and start the game:
@@ -57,7 +71,7 @@ Normal trim treats the sail command as a sheet limit: the sailor can pull the
 boom inward or hold it against the wind, but cannot push it outward. Explicit
 reverse commands use a backed-sail target.
 
-## Physics models
+## Physics model
 
 The game always uses the `articulated` model in
 `src/simple_sailing_game/physics/coupled.py`. The hull, sail/boom, and
@@ -65,11 +79,6 @@ rudder/tiller have their selected masses. Pivots and rotary limits connect the
 surfaces to the hull, fluid loads act on their bodies, and actuator torques act
 equally and oppositely on each surface and the hull. Appendage motion therefore
 reacts back on the boat while preserving coupled momentum.
-
-The `lumped` model in `src/simple_sailing_game/physics/dynamic.py` places the
-complete boat mass on one body and integrates sail and rudder angles separately.
-It remains a compact educational reference covered by focused force, damping,
-and timestep tests, but it is not a selectable game plant.
 
 The sail and underwater foils have independently tunable profile-drag
 coefficients. Keel force acts at `keel_position_m`, so moving that point changes
@@ -91,8 +100,7 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 - `controllers/actuator.py` converts surface targets into bounded torques.
 - `input.py` converts keyboard and gamepad state into controller intent.
 - `render.py` owns Pygame drawing.
-- `physics/coupled.py` is the game plant; `physics/dynamic.py` is the lumped
-  educational reference.
+- `physics/coupled.py` constructs and advances the articulated boat.
 
 ## Model tuning
 
@@ -113,9 +121,10 @@ wind. Their deliberately broad reference envelope is:
 | Behavior | Accepted range |
 | --- | --- |
 | In irons | A 15° attempt stays below 0.2 m/s upwind progress |
-| 30° close-hauled | 0.6–1.4 m/s, under 12° leeway |
-| 90° beam reach | 2–3 m/s |
-| 120° broad reach | 2.2–3.2 m/s |
+| 30° close-hauled | At least 0.6 m/s, under 12° leeway |
+| 90° beam reach | At least 2 m/s |
+| 120° broad reach | At least 2.2 m/s |
+| 180° run | At least 0.5 m/s forward |
 | Polar tracking | Under 8° heading error at sampled headings |
 | Coast-down | Monotonic; 2 m/s falls below 1.5 m/s in 5 seconds |
 | Tack | Both directions complete within 15 seconds with forward speed retained |

@@ -74,17 +74,22 @@ class ModuleBoundaryTest(unittest.TestCase):
 
 		self.assertIs(parameter.default, inspect.Parameter.empty)
 
-	def test_articulated_plant_and_lumped_reference_have_separate_modules(self):
-		from simple_sailing_game.physics import coupled, dynamic
+	def test_articulated_plant_is_the_only_physics_model(self):
+		from simple_sailing_game.physics import coupled
 
-		self.assertEqual(
-			dynamic.step.__module__,
-			"simple_sailing_game.physics.dynamic",
-		)
 		self.assertEqual(
 			coupled.step.__module__,
 			"simple_sailing_game.physics.coupled",
 		)
+		self.assertIsNone(
+			importlib.util.find_spec("simple_sailing_game.physics.dynamic")
+		)
+		self.assertIsNone(
+			importlib.util.find_spec("simple_sailing_game.physics.common")
+		)
+		self.assertTrue(hasattr(coupled, "create_simulation"))
+		self.assertFalse(hasattr(coupled, "activate"))
+		self.assertFalse(hasattr(coupled, "deactivate"))
 		self.assertIsNone(
 			importlib.util.find_spec("simple_sailing_game.physics.kinematic")
 		)
@@ -149,15 +154,15 @@ class ModuleBoundaryTest(unittest.TestCase):
 class ComponentWiringTest(unittest.TestCase):
 	def test_dead_ship_keeps_simulating_without_sailor_torque(self):
 		from simple_sailing_game import boat, game
-		from simple_sailing_game.physics import dynamic
+		from simple_sailing_game.physics import coupled
 
-		state = boat.create_simulation(
+		state = coupled.create_simulation(
 			game.BOAT_PARAMETERS,
 			game.INITIAL_BOAT_ANGLE_RAD,
 		)
 		initial_sail_angle_rad = state.sail_angle_rad
 		for _ in range(round(2 / game.DT_SECONDS)):
-			dynamic.step(
+			coupled.step(
 				state,
 				game.ENVIRONMENT,
 				game.BOAT_PARAMETERS,
@@ -172,24 +177,29 @@ class ComponentWiringTest(unittest.TestCase):
 		from dataclasses import replace
 
 		from simple_sailing_game import boat, game
+		from simple_sailing_game.physics import coupled
 
 		heavy_parameters = replace(
 			game.BOAT_PARAMETERS,
 			hull_mass_kg=2 * game.BOAT_PARAMETERS.hull_mass_kg,
 		)
-		standard = boat.create_simulation(game.BOAT_PARAMETERS, 0)
-		heavy = boat.create_simulation(heavy_parameters, 0)
+		standard = coupled.create_simulation(game.BOAT_PARAMETERS, 0)
+		heavy = coupled.create_simulation(heavy_parameters, 0)
 
 		self.assertEqual(
-			standard.boat.mass,
+			sum(body.mass for body in standard.space.bodies),
 			boat.total_mass_kg(game.BOAT_PARAMETERS),
 		)
-		self.assertEqual(heavy.boat.mass, boat.total_mass_kg(heavy_parameters))
+		self.assertEqual(
+			sum(body.mass for body in heavy.space.bodies),
+			boat.total_mass_kg(heavy_parameters),
+		)
 
-	def test_each_component_mass_contributes_to_lumped_total(self):
+	def test_each_component_mass_contributes_to_assembly_total(self):
 		from dataclasses import replace
 
 		from simple_sailing_game import boat, game
+		from simple_sailing_game.physics import coupled
 
 		for field in (
 			"hull_mass_kg",
@@ -203,10 +213,10 @@ class ComponentWiringTest(unittest.TestCase):
 					game.BOAT_PARAMETERS,
 					**{field: getattr(game.BOAT_PARAMETERS, field) + 1},
 				)
-				state = boat.create_simulation(parameters, 0)
+				state = coupled.create_simulation(parameters, 0)
 
 				self.assertEqual(
-					state.boat.mass,
+					sum(body.mass for body in state.space.bodies),
 					boat.total_mass_kg(game.BOAT_PARAMETERS) + 1,
 				)
 

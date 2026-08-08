@@ -6,7 +6,7 @@ import pymunk
 
 from simple_sailing_game import boat, game, polar, simulation
 from simple_sailing_game.controllers.arcade import MotionIntent
-from simple_sailing_game.physics import coupled, dynamic
+from simple_sailing_game.physics import coupled
 
 
 class ReferenceDinghyAcceptanceTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 				game.SIMULATION_SETTINGS,
 				game.ENVIRONMENT,
 				game.DT_SECONDS,
-				headings_from_upwind_deg=(15, 30, 45, 90, 120),
+				headings_from_upwind_deg=(15, 30, 45, 90, 120, 180),
 				settling_seconds=15,
 				sampling_seconds=3,
 			)
@@ -43,16 +43,21 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 
 		self.assertGreaterEqual(close_hauled.actual_heading_from_upwind_deg, 25)
 		self.assertLess(abs(close_hauled.leeway_angle_deg), 12)
-		self.assertTrue(0.6 <= close_hauled.speed_through_water_m_s <= 1.4)
-		self.assertTrue(2 <= beam_reach.speed_through_water_m_s <= 3)
-		self.assertTrue(2.2 <= broad_reach.speed_through_water_m_s <= 3.2)
+		self.assertGreaterEqual(close_hauled.speed_through_water_m_s, 0.6)
+		self.assertGreaterEqual(beam_reach.speed_through_water_m_s, 2)
+		self.assertGreaterEqual(broad_reach.speed_through_water_m_s, 2.2)
+
+	def test_dead_run_retains_forward_motion(self):
+		dead_run = self.polar_points[180]
+
+		self.assertGreater(dead_run.forward_speed_m_s, 0.5)
 
 	def test_polar_heading_error_is_visible_and_bounded(self):
 		for point in self.polar_points.values():
 			with self.subTest(heading=point.heading_from_upwind_deg):
 				self.assertLess(abs(point.heading_error_deg), 8)
 
-	def test_unforced_coast_down_is_monotonic_on_both_plants(self):
+	def test_unforced_coast_down_is_monotonic(self):
 		parameters = replace(
 			game.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
@@ -64,26 +69,22 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 			pymunk.Vec2d(0, 0),
 			pymunk.Vec2d(0, 0),
 		)
-		for model in (dynamic, coupled):
-			with self.subTest(model=model.__name__):
-				state = boat.create_simulation(parameters, 0)
-				if model is coupled:
-					coupled.activate(state, parameters)
-				for body in state.space.bodies:
-					body.velocity = pymunk.Vec2d(2, 0)
-				previous_speed_m_s = state.boat.velocity.length
-				for _ in range(round(5 / game.DT_SECONDS)):
-					model.step(
-						state,
-						environment,
-						parameters,
-						boat.ActuatorTorques(),
-						game.DT_SECONDS,
-					)
-					speed_m_s = state.boat.velocity.length
-					self.assertLessEqual(speed_m_s, previous_speed_m_s + 1e-12)
-					previous_speed_m_s = speed_m_s
-				self.assertLess(previous_speed_m_s, 1.5)
+		state = coupled.create_simulation(parameters, 0)
+		for body in state.space.bodies:
+			body.velocity = pymunk.Vec2d(2, 0)
+		previous_speed_m_s = state.boat.velocity.length
+		for _ in range(round(5 / game.DT_SECONDS)):
+			coupled.step(
+				state,
+				environment,
+				parameters,
+				boat.ActuatorTorques(),
+				game.DT_SECONDS,
+			)
+			speed_m_s = state.boat.velocity.length
+			self.assertLessEqual(speed_m_s, previous_speed_m_s + 1e-12)
+			previous_speed_m_s = speed_m_s
+		self.assertLess(previous_speed_m_s, 1.5)
 
 	def test_mirrored_direct_control_produces_mirrored_motion(self):
 		states = []

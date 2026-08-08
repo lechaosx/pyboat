@@ -6,11 +6,11 @@ import pymunk
 
 from simple_sailing_game import boat, game, simulation
 from simple_sailing_game.controllers import arcade
-from simple_sailing_game.physics import coupled, dynamic
+from simple_sailing_game.physics import coupled
 
 
 class ForceInvariantTest(unittest.TestCase):
-	def test_offset_keel_uses_rotational_velocity_on_both_plants(self):
+	def test_offset_keel_uses_rotational_velocity(self):
 		parameters = replace(
 			game.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
@@ -23,38 +23,35 @@ class ForceInvariantTest(unittest.TestCase):
 			pymunk.Vec2d(0, 0),
 			pymunk.Vec2d(0, 0),
 		)
-		for model in (dynamic, coupled):
-			with self.subTest(model=model.__name__):
-				state = boat.create_simulation(parameters, 0)
-				state.boat.angular_velocity = 1
-				if model is coupled:
-					coupled.activate(state, parameters)
-				keel_velocity_m_s = state.boat.velocity_at_local_point(
-					parameters.keel_position_m
-				)
-				expected_force_n = boat.force_on_foil(
-					boat.apparent_flow(
-						environment.true_water_velocity_m_s,
-						keel_velocity_m_s,
-					),
-					state.boat.angle,
-					parameters.water_density_kg_m3,
-					parameters.keel_area_m2,
-					parameters.underwater_foil_base_drag_coefficient,
-				)
+		state = coupled.create_simulation(parameters, 0)
+		for body in state.space.bodies:
+			body.angular_velocity = 1
+		keel_velocity_m_s = state.boat.velocity_at_local_point(
+			parameters.keel_position_m
+		)
+		expected_force_n = boat.force_on_foil(
+			boat.apparent_flow(
+				environment.true_water_velocity_m_s,
+				keel_velocity_m_s,
+			),
+			state.boat.angle,
+			parameters.water_density_kg_m3,
+			parameters.keel_area_m2,
+			parameters.underwater_foil_base_drag_coefficient,
+		)
 
-				telemetry = model.step(
-					state,
-					environment,
-					parameters,
-					boat.ActuatorTorques(),
-					game.DT_SECONDS,
-				)
+		telemetry = coupled.step(
+			state,
+			environment,
+			parameters,
+			boat.ActuatorTorques(),
+			game.DT_SECONDS,
+		)
 
-				self.assertAlmostEqual(
-					(telemetry.keel_force_n - expected_force_n).length,
-					0,
-				)
+		self.assertAlmostEqual(
+			(telemetry.keel_force_n - expected_force_n).length,
+			0,
+		)
 
 	def test_configured_hull_resistance_opposes_motion_on_both_axes(self):
 		force = boat.hull_resistance_force(
@@ -90,10 +87,11 @@ class ForceInvariantTest(unittest.TestCase):
 			air_density_kg_m3=0,
 			hull_drag_coefficient=0,
 		)
-		state = boat.create_simulation(parameters, 0)
-		state.boat.velocity = pymunk.Vec2d(0, 1)
+		state = coupled.create_simulation(parameters, 0)
+		for body in state.space.bodies:
+			body.velocity = pymunk.Vec2d(0, 1)
 
-		dynamic.step(
+		coupled.step(
 			state,
 			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
 			parameters,
@@ -132,15 +130,16 @@ class ForceInvariantTest(unittest.TestCase):
 				self.assertGreaterEqual(force.dot(flow), -1e-9)
 
 	def test_keel_force_opposes_sideways_boat_motion(self):
-		state = boat.create_simulation(
+		state = coupled.create_simulation(
 			game.BOAT_PARAMETERS,
 			game.INITIAL_BOAT_ANGLE_RAD,
 		)
 		state.boat.angle = 0
-		state.boat.velocity = pymunk.Vec2d(0, 1)
+		for body in state.space.bodies:
+			body.velocity = pymunk.Vec2d(0, 1)
 		velocity = pymunk.Vec2d(*state.boat.velocity)
 
-		telemetry = dynamic.step(
+		telemetry = coupled.step(
 			state,
 			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
 			game.BOAT_PARAMETERS,
@@ -152,7 +151,7 @@ class ForceInvariantTest(unittest.TestCase):
 
 
 class IntegrationInvariantTest(unittest.TestCase):
-	def test_unforced_yaw_decays_consistently_on_both_plants(self):
+	def test_unforced_yaw_decay_is_timestep_stable(self):
 		parameters = replace(
 			game.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
@@ -165,27 +164,26 @@ class IntegrationInvariantTest(unittest.TestCase):
 			pymunk.Vec2d(0, 0),
 			pymunk.Vec2d(0, 0),
 		)
-		for model in (dynamic, coupled):
-			final_rates_rad_s = []
-			for dt_seconds in (1 / 30, 1 / 60, 1 / 120):
-				state = boat.create_simulation(parameters, 0)
-				state.boat.angular_velocity = 2
-				for _ in range(round(5 / dt_seconds)):
-					model.step(
-						state,
-						environment,
-						parameters,
-						boat.ActuatorTorques(),
-						dt_seconds,
-					)
-				final_rates_rad_s.append(abs(state.boat.angular_velocity))
-
-			with self.subTest(model=model.__name__):
-				self.assertLess(max(final_rates_rad_s), 1.95)
-				self.assertLess(
-					max(final_rates_rad_s) - min(final_rates_rad_s),
-					0.05,
+		final_rates_rad_s = []
+		for dt_seconds in (1 / 30, 1 / 60, 1 / 120):
+			state = coupled.create_simulation(parameters, 0)
+			for body in state.space.bodies:
+				body.angular_velocity = 2
+			for _ in range(round(5 / dt_seconds)):
+				coupled.step(
+					state,
+					environment,
+					parameters,
+					boat.ActuatorTorques(),
+					dt_seconds,
 				)
+			final_rates_rad_s.append(abs(state.boat.angular_velocity))
+
+		self.assertLess(max(final_rates_rad_s), 1.95)
+		self.assertLess(
+			max(final_rates_rad_s) - min(final_rates_rad_s),
+			0.05,
+		)
 
 	def test_coupled_actuator_torque_preserves_total_angular_momentum(self):
 		parameters = replace(
@@ -196,7 +194,7 @@ class IntegrationInvariantTest(unittest.TestCase):
 			sail_bearing_damping_n_m_s_rad=0,
 			rudder_bearing_damping_n_m_s_rad=0,
 		)
-		state = boat.create_simulation(parameters, 0)
+		state = coupled.create_simulation(parameters, 0)
 
 		coupled.step(
 			state,

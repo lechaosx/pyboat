@@ -300,41 +300,6 @@ def hinged_foil_load(
 	)
 
 
-def integrate_hinge(
-	angle_rad: float,
-	angular_velocity_rad_s: float,
-	torque_n_m: float,
-	moment_kg_m2: float,
-	bearing_damping_n_m_s_rad: float,
-	max_angle_rad: float,
-	dt_seconds: float,
-) -> tuple[float, float]:
-	damping_torque_n_m = angular_velocity_rad_s * bearing_damping_n_m_s_rad
-	angular_acceleration_rad_s2 = (torque_n_m - damping_torque_n_m) / moment_kg_m2
-	angular_velocity_rad_s += angular_acceleration_rad_s2 * dt_seconds
-	angle_rad += angular_velocity_rad_s * dt_seconds
-
-	limited_angle_rad = max(-max_angle_rad, min(max_angle_rad, angle_rad))
-	if limited_angle_rad != angle_rad:
-		angular_velocity_rad_s = 0
-	return limited_angle_rad, angular_velocity_rad_s
-
-
-def create_simulation(
-	parameters: BoatParameters,
-	initial_angle_rad: float,
-) -> SailingState:
-	space = pymunk.Space()
-	body = pymunk.Body(
-		total_mass_kg(parameters),
-		lumped_moment_of_inertia_kg_m2(parameters),
-	)
-	body.angle = initial_angle_rad
-	shape = pymunk.Poly.create_box(body, (parameters.length_m, parameters.beam_m))
-	space.add(body, shape)
-	return SailingState(space, body)
-
-
 def observe(
 	state: SailingState,
 	environment: Environment,

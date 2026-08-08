@@ -169,12 +169,10 @@ def surface_control_state(
 
 
 def create_simulation(settings: SimulationSettings) -> boat.SailingState:
-	state = boat.create_simulation(
+	return coupled.create_simulation(
 		settings.parameters,
 		settings.initial_boat_angle_rad,
 	)
-	coupled.activate(state, settings.parameters)
-	return state
 
 
 def target_control_torques(

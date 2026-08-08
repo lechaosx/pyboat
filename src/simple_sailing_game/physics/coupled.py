@@ -13,63 +13,19 @@ class Assembly:
 	constraints: tuple[pymunk.Constraint, ...]
 
 
-def _angular_momentum_about(
-	bodies: tuple[pymunk.Body, ...],
-	point_m: pymunk.Vec2d,
-) -> float:
-	return sum(
-		body.moment * body.angular_velocity
-		+ (body.position - point_m).cross(body.mass * body.velocity)
-		for body in bodies
-	)
-
-
-def _preserve_lumped_momentum(
-	bodies: tuple[pymunk.Body, ...],
-	point_m: pymunk.Vec2d,
-	linear_momentum_kg_m_s: pymunk.Vec2d,
-	angular_momentum_kg_m2_s: float,
-) -> None:
-	total_mass_kg = sum(body.mass for body in bodies)
-	current_linear_momentum = sum(
-		(body.mass * body.velocity for body in bodies),
-		pymunk.Vec2d(0, 0),
-	)
-	velocity_correction_m_s = (
-		linear_momentum_kg_m_s - current_linear_momentum
-	) / total_mass_kg
-	for body in bodies:
-		body.velocity += velocity_correction_m_s
-
-	current_angular_momentum = _angular_momentum_about(bodies, point_m)
-	moment_about_point_kg_m2 = sum(
-		body.moment + body.mass * (body.position - point_m).length**2
-		for body in bodies
-	)
-	angular_velocity_correction_rad_s = (
-		angular_momentum_kg_m2_s - current_angular_momentum
-	) / moment_about_point_kg_m2
-	for body in bodies:
-		center_from_point_m = body.position - point_m
-		body.velocity += (
-			center_from_point_m.perpendicular()
-			* angular_velocity_correction_rad_s
-		)
-		body.angular_velocity += angular_velocity_correction_rad_s
-
-
-def activate(
-	state: boat.SailingState,
+def create_simulation(
 	parameters: boat.BoatParameters,
-) -> Assembly:
-	if isinstance(state.coupled_assembly, Assembly):
-		return state.coupled_assembly
-
-	hull = state.boat
-	linear_momentum = hull.mass * hull.velocity
-	angular_momentum = hull.moment * hull.angular_velocity
-	hull.mass = parameters.hull_mass_kg
-	hull.moment = boat.hull_moment_of_inertia_kg_m2(parameters)
+	initial_angle_rad: float,
+) -> boat.SailingState:
+	space = pymunk.Space()
+	hull = pymunk.Body(
+		parameters.hull_mass_kg,
+		boat.hull_moment_of_inertia_kg_m2(parameters),
+	)
+	hull.angle = initial_angle_rad
+	shape = pymunk.Poly.create_box(hull, (parameters.length_m, parameters.beam_m))
+	space.add(hull, shape)
+	state = boat.SailingState(space, hull)
 
 	sail_mass_kg = parameters.sail_mass_kg + parameters.boom_mass_kg
 	sail = pymunk.Body(
@@ -152,15 +108,8 @@ def activate(
 		),
 	)
 	state.space.add(sail, rudder, *constraints)
-	assembly = Assembly(sail, rudder, constraints)
-	state.coupled_assembly = assembly
-	_preserve_lumped_momentum(
-		(hull, sail, rudder),
-		pymunk.Vec2d(*hull.position),
-		pymunk.Vec2d(*linear_momentum),
-		angular_momentum,
-	)
-	return assembly
+	state.coupled_assembly = Assembly(sail, rudder, constraints)
+	return state
 
 
 def _sync_surface_state(state: boat.SailingState, assembly: Assembly) -> None:
@@ -178,33 +127,6 @@ def _sync_surface_state(state: boat.SailingState, assembly: Assembly) -> None:
 	state.rudder_angular_velocity_rad_s = (
 		assembly.rudder.angular_velocity - state.boat.angular_velocity
 	)
-
-
-def deactivate(
-	state: boat.SailingState,
-	parameters: boat.BoatParameters,
-) -> None:
-	if not isinstance(state.coupled_assembly, Assembly):
-		return
-
-	assembly = state.coupled_assembly
-	_sync_surface_state(state, assembly)
-	hull = state.boat
-	bodies = (hull, assembly.sail, assembly.rudder)
-	linear_momentum = sum(
-		(body.mass * body.velocity for body in bodies),
-		pymunk.Vec2d(0, 0),
-	)
-	angular_momentum = _angular_momentum_about(
-		bodies,
-		pymunk.Vec2d(*hull.position),
-	)
-	state.space.remove(*assembly.constraints, assembly.sail, assembly.rudder)
-	state.coupled_assembly = None
-	hull.mass = boat.total_mass_kg(parameters)
-	hull.moment = boat.lumped_moment_of_inertia_kg_m2(parameters)
-	hull.velocity = linear_momentum / hull.mass
-	hull.angular_velocity = angular_momentum / hull.moment
 
 
 def _surface_load(
@@ -247,7 +169,8 @@ def step(
 	actuator_torques: boat.ActuatorTorques,
 	dt_seconds: float,
 ) -> boat.PhysicsTelemetry:
-	assembly = activate(state, parameters)
+	assembly = state.coupled_assembly
+	assert isinstance(assembly, Assembly)
 	_sync_surface_state(state, assembly)
 	hull = state.boat
 	apparent_water_m_s = boat.apparent_flow(
