@@ -65,7 +65,6 @@ class ModuleBoundaryTest(unittest.TestCase):
 				parameters = inspect.signature(function).parameters
 				for name in parameter_names:
 					self.assertIs(parameters[name].default, inspect.Parameter.empty)
-		self.assertFalse(hasattr(simulation, "advance_manual_game"))
 
 	def test_rendering_requires_boat_parameters(self):
 		from simple_sailing_game import render
@@ -92,14 +91,6 @@ class ModuleBoundaryTest(unittest.TestCase):
 		self.assertFalse(hasattr(coupled, "deactivate"))
 		self.assertIsNone(
 			importlib.util.find_spec("simple_sailing_game.physics.kinematic")
-		)
-
-	def test_removed_controller_modules_are_absent(self):
-		self.assertIsNone(
-			importlib.util.find_spec("simple_sailing_game.controllers.assisted")
-		)
-		self.assertIsNone(
-			importlib.util.find_spec("simple_sailing_game.controllers.manual")
 		)
 
 	def test_internal_modules_do_not_import_pygame(self):

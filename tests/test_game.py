@@ -9,7 +9,7 @@ from dataclasses import replace
 import pygame
 
 from simple_sailing_game import boat, game, input as player_input, render, simulation
-from simple_sailing_game.controllers import arcade
+from simple_sailing_game.controllers import actuator, arcade
 
 
 class StartupTest(unittest.TestCase):
@@ -43,8 +43,6 @@ class InputAdapterTest(unittest.TestCase):
 		self.assertEqual(game.DIRECT_ARCADE_CONTROL, "direct arcade")
 		self.assertEqual(game.AUTO_SHEET_CONTROL, "auto-sheet + rudder")
 		self.assertEqual(game.YAW_RATE_ARCADE_CONTROL, "yaw-rate arcade")
-		for old_name in ("MANUAL_CONTROL", "ARCADE_CONTROL", "ARCADE_MOVE_CONTROL"):
-			self.assertFalse(hasattr(game, old_name))
 
 	def test_direct_arcade_is_the_default_controller(self):
 		self.assertEqual(game.DEFAULT_CONTROL_MODE, game.DIRECT_ARCADE_CONTROL)
@@ -54,8 +52,6 @@ class InputAdapterTest(unittest.TestCase):
 		)
 
 	def test_playable_simulation_has_no_physics_model_switch(self):
-		self.assertFalse(hasattr(game, "next_physics_mode"))
-		self.assertFalse(hasattr(game, "LUMPED_PHYSICS"))
 		self.assertNotIn(
 			"physics_mode",
 			inspect.signature(simulation.advance_surface_game).parameters,
@@ -207,7 +203,7 @@ class SailingSimulationTest(unittest.TestCase):
 					(30, 30, 40, 255),
 				)
 
-	def test_telemetry_contains_force_and_surface_data_without_lab_fields(self):
+	def test_telemetry_contains_force_and_surface_data(self):
 		telemetry = self.advance(
 			arcade.MotionIntent(1, 0),
 			game.DIRECT_ARCADE_CONTROL,
@@ -216,11 +212,21 @@ class SailingSimulationTest(unittest.TestCase):
 		self.assertTrue(
 			all(map(math.isfinite, telemetry.physics.observation.sail_load.force_n))
 		)
-		self.assertFalse(hasattr(telemetry, "decision"))
-		self.assertFalse(hasattr(telemetry, "physics_mode"))
 
 
 class ModelAndActuatorTest(unittest.TestCase):
+	def test_actuator_state_contains_only_control_inputs(self):
+		self.assertEqual(
+			tuple(actuator.ActuatorState.__dataclass_fields__),
+			(
+				"angle_rad",
+				"angular_velocity_rad_s",
+				"moment_of_inertia_kg_m2",
+				"bearing_damping_n_m_s_rad",
+				"maximum_torque_n_m",
+				"maximum_angle_rad",
+			),
+		)
 	def test_sheet_never_pushes_the_sail_outward(self):
 		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
 		control_state = simulation.surface_control_state(
@@ -239,7 +245,6 @@ class ModelAndActuatorTest(unittest.TestCase):
 						control_state.sail,
 						angle_rad=angle_rad,
 						angular_velocity_rad_s=0,
-						external_torque_n_m=0,
 					),
 				)
 				torque_n_m = simulation.sheet_control_torques(

@@ -10,7 +10,6 @@ from .. import boat
 class Assembly:
 	sail: pymunk.Body
 	rudder: pymunk.Body
-	constraints: tuple[pymunk.Constraint, ...]
 
 
 def create_simulation(
@@ -108,7 +107,7 @@ def create_simulation(
 		),
 	)
 	state.space.add(sail, rudder, *constraints)
-	state.coupled_assembly = Assembly(sail, rudder, constraints)
+	state.coupled_assembly = Assembly(sail, rudder)
 	return state
 
 

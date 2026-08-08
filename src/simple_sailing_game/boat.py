@@ -155,7 +155,7 @@ def rudder_center_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
 	)
 
 
-def lumped_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+def approximate_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
 	return (
 		total_mass_kg(parameters)
 		* (parameters.length_m**2 + parameters.beam_m**2)
@@ -168,16 +168,6 @@ def apparent_flow(
 	point_velocity_m_s: pymunk.Vec2d,
 ) -> pymunk.Vec2d:
 	return medium_velocity_m_s - point_velocity_m_s
-
-
-def luffing_sail_angle(
-	boat_angle_rad: float,
-	apparent_wind_m_s: pymunk.Vec2d,
-) -> float:
-	if not apparent_wind_m_s.length:
-		return 0
-	upstream_angle_rad = apparent_wind_m_s.angle + math.pi
-	return math.remainder(upstream_angle_rad - boat_angle_rad, math.pi)
 
 
 def free_sail_angle(

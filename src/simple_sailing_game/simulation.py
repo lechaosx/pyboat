@@ -124,7 +124,6 @@ def surface_control_state(
 	sail = actuator.ActuatorState(
 		observation.sail_angle_rad,
 		observation.sail_angular_velocity_rad_s,
-		observation.sail_load.torque_n_m,
 		boat.sail_moment_of_inertia_kg_m2(parameters),
 		parameters.sail_bearing_damping_n_m_s_rad,
 		settings.sailor_max_sheet_force_n * parameters.sail_sheet_lever_arm_m,
@@ -133,7 +132,6 @@ def surface_control_state(
 	rudder = actuator.ActuatorState(
 		observation.rudder_angle_rad,
 		observation.rudder_angular_velocity_rad_s,
-		observation.rudder_load.torque_n_m,
 		boat.rudder_moment_of_inertia_kg_m2(parameters),
 		parameters.rudder_bearing_damping_n_m_s_rad,
 		settings.sailor_max_tiller_force_n * parameters.tiller_length_m,
@@ -144,7 +142,7 @@ def surface_control_state(
 		rudder,
 		arcade.ControlInput(
 			observation.boat_angular_velocity_rad_s,
-			boat.lumped_moment_of_inertia_kg_m2(parameters),
+			boat.approximate_moment_of_inertia_kg_m2(parameters),
 			observation.sail_load.center_local_m.rotated(
 				observation.boat_angle_rad
 			).cross(observation.sail_load.force_n),
