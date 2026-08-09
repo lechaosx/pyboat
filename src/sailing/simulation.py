@@ -217,13 +217,12 @@ def sheet_control_torques(
 	return torques
 
 
-def advance_surface_game(
+def apply_surface_game_forces(
 	state: boat.SailingState,
 	intent: arcade.AutoSheetIntent | arcade.MotionIntent,
 	control_mode: str,
 	settings: SimulationSettings,
 	environment: boat.Environment,
-	dt_seconds: float,
 ) -> SimulationTelemetry:
 	observation = coupled.observe(state, environment, settings.parameters)
 	control_state = surface_control_state(observation, settings)
@@ -260,12 +259,11 @@ def advance_surface_game(
 		sail_target_angle_rad,
 		targets.rudder_target_angle_rad,
 	)
-	physics = coupled.step(
+	physics = coupled.apply_forces(
 		state,
 		environment,
 		settings.parameters,
 		torques,
-		dt_seconds,
 	)
 	return SimulationTelemetry(
 		physics,
@@ -273,3 +271,23 @@ def advance_surface_game(
 		targets,
 		maximum_yaw_rate_rad_s,
 	)
+
+
+def advance_surface_game(
+	state: boat.SailingState,
+	intent: arcade.AutoSheetIntent | arcade.MotionIntent,
+	control_mode: str,
+	settings: SimulationSettings,
+	environment: boat.Environment,
+	dt_seconds: float,
+) -> SimulationTelemetry:
+	telemetry = apply_surface_game_forces(
+		state,
+		intent,
+		control_mode,
+		settings,
+		environment,
+	)
+	state.space.step(dt_seconds)
+	coupled.synchronize(state)
+	return telemetry

@@ -15,13 +15,17 @@ class Assembly:
 def create_simulation(
 	parameters: boat.BoatParameters,
 	initial_angle_rad: float,
+	space: pymunk.Space | None = None,
+	initial_position_m: tuple[float, float] = (0, 0),
 ) -> boat.SailingState:
-	space = pymunk.Space()
+	if space is None:
+		space = pymunk.Space()
 	hull = pymunk.Body(
 		parameters.hull_mass_kg,
 		boat.hull_moment_of_inertia_kg_m2(parameters),
 	)
 	hull.angle = initial_angle_rad
+	hull.position = initial_position_m
 	shape = pymunk.Poly.create_box(hull, (parameters.length_m, parameters.beam_m))
 	space.add(hull, shape)
 	state = boat.SailingState(space, hull)
@@ -111,6 +115,19 @@ def create_simulation(
 	return state
 
 
+def remove_simulation(state: boat.SailingState) -> None:
+	assembly = state.coupled_assembly
+	assert isinstance(assembly, Assembly)
+	bodies = (state.boat, assembly.sail, assembly.rudder)
+	constraints = tuple(
+		constraint
+		for constraint in state.space.constraints
+		if constraint.a in bodies or constraint.b in bodies
+	)
+	shapes = tuple(shape for body in bodies for shape in body.shapes)
+	state.space.remove(*constraints, *shapes, *bodies)
+
+
 def _sync_surface_state(state: boat.SailingState, assembly: Assembly) -> None:
 	state.sail_angle_rad = math.remainder(
 		assembly.sail.angle - state.boat.angle,
@@ -126,6 +143,12 @@ def _sync_surface_state(state: boat.SailingState, assembly: Assembly) -> None:
 	state.rudder_angular_velocity_rad_s = (
 		assembly.rudder.angular_velocity - state.boat.angular_velocity
 	)
+
+
+def synchronize(state: boat.SailingState) -> None:
+	assembly = state.coupled_assembly
+	assert isinstance(assembly, Assembly)
+	_sync_surface_state(state, assembly)
 
 
 def _surface_load(
@@ -199,12 +222,11 @@ def observe(
 	)
 
 
-def step(
+def apply_forces(
 	state: boat.SailingState,
 	environment: boat.Environment,
 	parameters: boat.BoatParameters,
 	actuator_torques: boat.ActuatorTorques,
-	dt_seconds: float,
 ) -> boat.PhysicsTelemetry:
 	assembly = state.coupled_assembly
 	assert isinstance(assembly, Assembly)
@@ -260,6 +282,22 @@ def step(
 	hull.torque -= actuator_torques.sail_n_m
 	assembly.rudder.torque += actuator_torques.rudder_n_m
 	hull.torque -= actuator_torques.rudder_n_m
-	state.space.step(dt_seconds)
-	_sync_surface_state(state, assembly)
 	return boat.PhysicsTelemetry(observation, keel_force_n, hull_drag_n)
+
+
+def step(
+	state: boat.SailingState,
+	environment: boat.Environment,
+	parameters: boat.BoatParameters,
+	actuator_torques: boat.ActuatorTorques,
+	dt_seconds: float,
+) -> boat.PhysicsTelemetry:
+	telemetry = apply_forces(
+		state,
+		environment,
+		parameters,
+		actuator_torques,
+	)
+	state.space.step(dt_seconds)
+	synchronize(state)
+	return telemetry

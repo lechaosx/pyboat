@@ -1,0 +1,66 @@
+import argparse
+import asyncio
+
+from websockets.asyncio.server import ServerConnection, broadcast, serve
+
+from . import config, protocol
+from .match import Match
+
+
+class GameServer:
+	def __init__(self, match: Match, snapshot_interval_ticks: int = 1) -> None:
+		self.match = match
+		self.snapshot_interval_ticks = snapshot_interval_ticks
+		self.connections: dict[ServerConnection, str] = {}
+
+	async def handle(self, connection: ServerConnection) -> None:
+		player_id = self.match.add_player()
+		self.connections[connection] = player_id
+		await connection.send(protocol.welcome_message(player_id))
+		try:
+			async for message in connection:
+				sequence, intent = protocol.parse_input(message)
+				self.match.set_input(player_id, sequence, intent)
+		finally:
+			del self.connections[connection]
+			self.match.remove_player(player_id)
+
+	def advance(self) -> None:
+		self.match.advance()
+		if self.match.tick % self.snapshot_interval_ticks == 0:
+			broadcast(
+				self.connections,
+				protocol.snapshot_message(self.match.snapshot()),
+			)
+
+	async def run(self) -> None:
+		loop = asyncio.get_running_loop()
+		next_tick_time = loop.time()
+		while True:
+			self.advance()
+			next_tick_time += self.match.dt_seconds
+			await asyncio.sleep(max(0, next_tick_time - loop.time()))
+
+
+async def run_server(host: str, port: int) -> None:
+	match = Match(
+		config.SIMULATION_SETTINGS,
+		config.ENVIRONMENT,
+		config.DT_SECONDS,
+	)
+	game_server = GameServer(match)
+	async with serve(game_server.handle, host, port):
+		print(f"Server listening on ws://{host}:{port}")
+		await game_server.run()
+
+
+def main() -> None:
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--host", default="127.0.0.1")
+	parser.add_argument("--port", type=int, default=8765)
+	arguments = parser.parse_args()
+	asyncio.run(run_server(arguments.host, arguments.port))
+
+
+if __name__ == "__main__":
+	main()

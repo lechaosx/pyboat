@@ -1,5 +1,5 @@
 [project]
-name = "simple-sailing-game"
+name = "sailing"
 version = "0.1.0"
 description = "Minimal 2D top-down sailing prototype"
 requires-python = ">=3.10"
@@ -7,10 +7,13 @@ requires-python = ">=3.10"
 dependencies = [
     "pygame>=2.5.0",
     "pymunk>=6.6.0",
+    "websockets>=16.0,<17.0",
 ]
 
 [project.scripts]
 game = "game.main:main"
+server = "game.server:main"
+client = "game.client:main"
 polar = "plotting.polar:main"
 coefficients = "plotting.coefficients:main"
 

@@ -43,6 +43,8 @@ class ModuleBoundaryTest(unittest.TestCase):
 			configuration["project"]["scripts"],
 			{
 				"game": "game.main:main",
+				"server": "game.server:main",
+				"client": "game.client:main",
 				"polar": "plotting.polar:main",
 				"coefficients": "plotting.coefficients:main",
 			},

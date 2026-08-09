@@ -31,6 +31,25 @@ The boat starts on a four-buoy time-trial course. Pass the numbered buoys in
 order; the active buoy is magenta. `R` resets the boat and current lap while
 retaining the best completed lap.
 
+## Multiplayer
+
+Start the authoritative server:
+
+```sh
+uv run server
+```
+
+Then start two or more clients in separate terminals:
+
+```sh
+uv run client
+```
+
+Each client receives its own boat and renders every connected player. The
+server advances the shared physics world at 60 Hz and broadcasts snapshots at
+60 Hz. Use `--host` and `--port` on the server or `--uri` on the client to
+connect across machines.
+
 ## Controls
 
 | Key | Controller |
@@ -121,8 +140,8 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 
 ## Code layout
 
-- `game` owns boat configuration, course logic, input, rendering, and the
-  Pygame loop.
+- `game` owns boat configuration, course logic, input, rendering, the
+  authoritative multiplayer server, and the Pygame client loops.
 - `sailing` provides the reusable boat model, controllers, simulation adapter,
   coefficient curves, and articulated physics.
 - `plotting` contains the speed-polar and coefficient-plot tools.
@@ -163,8 +182,8 @@ three foils:
 uv run coefficients
 ```
 
-Pygame and Pymunk are the only core dependencies. Matplotlib and pytest are
-development dependencies.
+Pygame, Pymunk, and websockets are the core dependencies. Matplotlib and pytest
+are development dependencies.
 
 ## Tests
 
@@ -175,5 +194,5 @@ uv run pytest
 ```
 
 The suite covers force equations, actuator behavior, all three controllers,
-coupled physics, timestep convergence, course progression, input mapping, and
-representative sailing maneuvers.
+coupled physics, timestep convergence, course progression, input mapping,
+multiplayer protocol behavior, and representative sailing maneuvers.
