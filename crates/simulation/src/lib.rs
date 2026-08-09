@@ -1,8 +1,10 @@
 use rapier2d::prelude::{
     ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
-    MassProperties, RevoluteJointBuilder, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
-    Rotation, Vector,
+    IntegrationParameters, MassProperties, PhysicsWorld, RevoluteJointBuilder, RigidBodyBuilder,
+    RigidBodyHandle, RigidBodySet, Rotation, Vector,
 };
+
+pub const DT_SECONDS: f32 = 1.0 / 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullParameters {
@@ -53,6 +55,12 @@ pub struct Boat {
     pub rudder: RigidBodyHandle,
     pub sail_joint: ImpulseJointHandle,
     pub rudder_joint: ImpulseJointHandle,
+}
+
+pub struct Simulation {
+    pub parameters: BoatParameters,
+    pub boat: Boat,
+    pub world: PhysicsWorld,
 }
 
 pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
@@ -275,5 +283,38 @@ pub fn read_motion(boat: &Boat, bodies: &RigidBodySet) -> BoatMotion {
         sail_angular_velocity_rad_s: sail.angvel() - hull.angvel(),
         rudder_angle_rad: relative_angle(rudder.rotation().angle(), hull.rotation().angle()),
         rudder_angular_velocity_rad_s: rudder.angvel() - hull.angvel(),
+    }
+}
+
+impl Simulation {
+    pub fn new(parameters: BoatParameters, motion: BoatMotion) -> Self {
+        let mut world = PhysicsWorld {
+            gravity: Vector::ZERO,
+            integration_parameters: IntegrationParameters {
+                dt: DT_SECONDS,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let boat = create_boat(
+            parameters,
+            motion,
+            &mut world.bodies,
+            &mut world.colliders,
+            &mut world.impulse_joints,
+        );
+        Self {
+            parameters,
+            boat,
+            world,
+        }
+    }
+
+    pub fn advance(&mut self) {
+        self.world.step();
+    }
+
+    pub fn motion(&self) -> BoatMotion {
+        read_motion(&self.boat, &self.world.bodies)
     }
 }
