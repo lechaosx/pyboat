@@ -6,16 +6,17 @@ This document is for developers working on the repository. Read
 
 ## Development environment
 
-Python 3.10 or newer is required. Set up the project using the Python environment
-and package manager of your choice. Repository commands use `uv`; prepare its
-environment with:
+Python 3.10 or newer and Rust 1.86 or newer are required. The Rust toolchain must
+include the `wasm32-unknown-unknown` target. Set up the Python project using the
+environment and package manager of your choice. Repository commands use `uv`;
+prepare its environment with:
 
 ```sh
 uv sync
 ```
 
-The optional Nix development environment provides `uv` and the other development
-tools:
+The optional Nix development environment provides the Python and Rust toolchains,
+including the WebAssembly target:
 
 ```sh
 nix develop
@@ -28,6 +29,8 @@ Run the complete suite:
 
 ```sh
 uv run pytest
+cargo test --workspace
+cargo check --workspace --target wasm32-unknown-unknown
 ```
 
 The suite covers force equations, actuator behavior, all three controllers,
@@ -67,8 +70,25 @@ documentation, and decision classification.
 - `src/sailing` provides the reusable boat model, controllers, simulation adapter,
   coefficient curves, and articulated physics.
 - `src/plotting` contains speed-polar and coefficient-plot tools.
+- `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
+
+## Rust migration
+
+The Python implementation remains the behavioral reference. Port one concrete
+behavior at a time into `pyboat-simulation`, add a Rust parity test for that
+behavior, and keep the crate independent of browser and native-server runtimes.
+The initial slice constructs the same hull outline and mass in Rapier that the
+Python prototype constructs in Pymunk.
+
+Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
+fixed-step simulation synchronous: callers gather available inputs before a tick
+and publish results after it rather than awaiting work during simulation.
+
+Rapier uses `enhanced-determinism` without SIMD or parallel features. Native tests
+exercise behavior; the WebAssembly check verifies that the same library remains
+portable to the browser target.
 
 ## Controllers
 

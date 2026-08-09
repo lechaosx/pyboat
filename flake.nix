@@ -22,9 +22,13 @@
 				pkgs.alsa-lib
 			]}";
 			packages = [
-				# Python + tooling
 				pkgs.python314
 				pkgs.uv
+				pkgs.cargo
+				pkgs.rustc
+				pkgs.rustfmt
+				pkgs.clippy
+				pkgs.rust-analyzer
 
 				# Build tools (pygame WILL need these)
 				pkgs.gcc

@@ -17,6 +17,10 @@ decisions.
   renderer.
 - **[Implicit]** The current Python implementation is the behavioral reference
   until another client passes equivalent networking and physics tests.
+- **[Implicit]** Migration proceeds behavior by behavior through a
+  runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
+  a Rust test against the Python reference before browser or native runtime
+  adapters consume it; hull construction is the first migrated behavior.
 
 ## Target browser and server stack
 
@@ -40,6 +44,12 @@ decisions.
   menus and the DOM-based HUD. It exchanges commands, a small derived UI view
   model, and discrete UI events with the Rust/WebAssembly client rather than raw
   gameplay snapshots.
+- **[Explicit]** Server and browser runtime work should use asynchronous I/O and
+  orchestration wherever work can suspend.
+- **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
+  never waits on networking, timers, persistence, rendering, or UI work.
+- **[Implicit]** The target runtime uses stable Rust. Nightly features are adopted
+  only when a concrete implementation need justifies their compatibility cost.
 
 ## Simulation authority and timing
 
@@ -52,6 +62,9 @@ decisions.
 - **[Implicit]** Clients send sequenced control commands rather than transforms.
   Server snapshots acknowledge only commands that have affected an authoritative
   simulation tick.
+- **[Implicit]** Rapier enables `enhanced-determinism` in the shared simulation
+  crate. SIMD and parallel features remain disabled until profiling demonstrates
+  a need and native/WebAssembly equivalence tests cover the selected feature set.
 
 ## Transport and protocol
 
@@ -143,7 +156,4 @@ decisions.
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or
   another transport.
-- Which Rapier determinism and performance features the native and WebAssembly
-  builds will enable, and what equivalence tests they must pass.
-- How the Python behavioral reference will be migrated incrementally to the target
-  Rust stack.
+- Which Python simulation behavior should be migrated after hull construction.
