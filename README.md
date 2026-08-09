@@ -45,10 +45,19 @@ Then start two or more clients in separate terminals:
 uv run client
 ```
 
-Each client receives its own boat and renders every connected player. The
-server advances the shared physics world at 60 Hz and broadcasts snapshots at
-60 Hz. Use `--host` and `--port` on the server or `--uri` on the client to
-connect across machines.
+Each client receives a player-specific snapshot. Boats within 8 m include the
+control state needed for a local collision-prediction bubble, boats out to 24 m
+include visual motion, and farther boats are omitted. The server advances the
+shared authoritative physics world at 60 Hz and sends snapshots at 60 Hz. Use
+`--host` and `--port` on the server or `--uri` on the client to connect across
+machines. The client extrapolates distant motion for at most 250 ms and smooths
+authoritative corrections over 100 ms.
+
+Exercise a client with controlled round-trip latency and one-way jitter:
+
+```sh
+uv run client --latency-ms 100 --jitter-ms 10
+```
 
 ## Controls
 

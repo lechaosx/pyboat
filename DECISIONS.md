@@ -1,0 +1,51 @@
+# Technical decisions
+
+This is the living record of decisions that affect the multiplayer architecture.
+Update an entry when implementation or evidence changes it.
+
+## Simulation authority and timing
+
+- The server owns one shared Pymunk world and is authoritative for movement,
+  collisions, and future combat outcomes.
+- The server advances at a fixed 60 Hz. Rendering and network arrival do not alter
+  the simulation step.
+- Clients send control intent, not transforms. Server snapshots acknowledge only
+  the receiving player's input sequence.
+
+## Client latency compensation
+
+- Boats outside the local interaction bubble use bounded kinematic extrapolation.
+  Extrapolation stops after 250 ms and corrections are smoothed over 100 ms.
+- The local player and boats within 8 m are recreated in one client-side Pymunk
+  space. The local boat uses current input; other boats hold their latest
+  server-reported input.
+- Each authoritative snapshot resets that local physics cluster and it is replayed
+  to render time. The server remains authoritative when predictions disagree.
+- The bubble starts before contact rather than at contact so the local solver has
+  both hulls when the collision impulse begins.
+
+## Per-player snapshots and spatial interest
+
+- Snapshots are assembled per player.
+- Boats within 8 m include motion and control intent for local physics prediction.
+- Boats from 8 m through 24 m include visual motion but omit control intent.
+- Boats beyond 24 m are omitted. The current radius covers the Python client's
+  viewport plus a margin; a later variable viewport will need to communicate its
+  interest bounds to the server.
+- Server candidate lookup uses the spatial index already maintained by Pymunk,
+  followed by an exact radial distance check. The client linearly scans only its
+  already-culled snapshot.
+
+## Prototype transport
+
+- The Python prototype uses JSON messages over WebSocket for easy inspection and
+  browser compatibility.
+- The simulation and protocol data are kept independent of rendering. Binary
+  encoding or a different realtime transport should be considered only after
+  measurements show JSON/WebSocket is the limiting factor.
+
+## Network testing
+
+- The Python client can inject round-trip latency and one-way jitter. Artificial
+  round-trip latency is divided equally between outgoing inputs and incoming
+  snapshots while preserving message order.

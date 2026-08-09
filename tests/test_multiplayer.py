@@ -1,11 +1,18 @@
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
 import pygame
 
 from game import config
-from game.client import draw_snapshot
+from game.client import (
+	DelayedMessages,
+	PhysicsBubble,
+	SnapshotPrediction,
+	draw_snapshot,
+	receive_snapshots,
+)
 from game.match import Match
 from game.protocol import input_message, parse_input, snapshot_message, welcome_message
 from game.server import GameServer
@@ -40,14 +47,35 @@ class MatchTest(unittest.TestCase):
 		for _ in range(120):
 			self.match.advance()
 
-		snapshot = self.match.snapshot()
+		snapshot = self.match.snapshot_for(first_id)
 		boats = {boat["id"]: boat for boat in snapshot["boats"]}
 		self.assertEqual(boats[first_id]["acknowledgedInput"], 7)
-		self.assertEqual(boats[second_id]["acknowledgedInput"], 0)
+		self.assertNotIn("acknowledgedInput", boats[second_id])
+		self.assertEqual(boats[first_id]["forward"], 1)
+		self.assertEqual(boats[first_id]["turn"], -0.5)
 		self.assertNotEqual(
 			(boats[first_id]["vx"], boats[first_id]["vy"]),
 			(boats[second_id]["vx"], boats[second_id]["vy"]),
 		)
+
+	def test_snapshot_detail_and_visibility_are_relative_to_player(self):
+		local_id = self.match.add_player()
+		near_id = self.match.add_player()
+		visible_id = self.match.add_player()
+		visibility_edge_id = self.match.add_player()
+		far_id = self.match.add_player()
+
+		boats = {
+			item["id"]: item for item in self.match.snapshot_for(local_id)["boats"]
+		}
+
+		self.assertEqual(
+			set(boats),
+			{local_id, near_id, visible_id, visibility_edge_id},
+		)
+		self.assertIn("forward", boats[local_id])
+		self.assertIn("forward", boats[near_id])
+		self.assertNotIn("forward", boats[visible_id])
 
 	def test_removing_player_removes_its_bodies_from_the_space(self):
 		first_id = self.match.add_player()
@@ -178,6 +206,176 @@ class ClientRenderTest(unittest.TestCase):
 		self.assertGreater(arrow_pixels, 0)
 
 
+class NetworkConditionsTest(unittest.TestCase):
+	def test_messages_wait_for_the_configured_delay(self):
+		messages = DelayedMessages(delay_seconds=0.05, jitter_seconds=0)
+		messages.add("snapshot", now=1)
+
+		self.assertEqual(messages.take_ready(now=1.049), [])
+		self.assertEqual(messages.take_ready(now=1.05), ["snapshot"])
+
+	def test_jitter_does_not_reorder_websocket_messages(self):
+		messages = DelayedMessages(delay_seconds=0.1, jitter_seconds=0.05)
+		with patch("game.client.random.uniform", side_effect=(0.05, -0.05)):
+			messages.add("first", now=1)
+			messages.add("second", now=1.01)
+
+		self.assertEqual(messages.take_ready(now=1.149), [])
+		self.assertEqual(messages.take_ready(now=1.151), ["first", "second"])
+
+
+class SnapshotReceiverTest(unittest.IsolatedAsyncioTestCase):
+	async def test_burst_keeps_the_latest_snapshot(self):
+		class Connection:
+			def __aiter__(self):
+				async def messages():
+					yield json.dumps({"type": "snapshot", "tick": 1})
+					yield json.dumps({"type": "snapshot", "tick": 2})
+
+				return messages()
+
+		snapshots = asyncio.Queue(maxsize=1)
+		await receive_snapshots(Connection(), snapshots)
+
+		_, snapshot = snapshots.get_nowait()
+		self.assertEqual(snapshot["tick"], 2)
+
+
+class SnapshotPredictionTest(unittest.TestCase):
+	def boat(self, **changes):
+		return {
+			"id": "player-1",
+			"x": 10,
+			"y": 5,
+			"vx": 2,
+			"vy": -1,
+			"angle": 0.5,
+			"angularVelocity": 0.2,
+			"sail": 0.1,
+			"sailAngularVelocity": -0.1,
+			"rudder": -0.2,
+			"rudderAngularVelocity": 0.4,
+		} | changes
+
+	def test_extrapolates_snapshot_to_render_time(self):
+		prediction = SnapshotPrediction()
+		prediction.accept(
+			{"type": "snapshot", "tick": 1, "boats": [self.boat()]},
+			received_at=1,
+			now=1,
+		)
+
+		boat = prediction.at(1.05)["boats"][0]
+		self.assertAlmostEqual(boat["x"], 10.1)
+		self.assertAlmostEqual(boat["y"], 4.95)
+		self.assertAlmostEqual(boat["angle"], 0.51)
+		self.assertAlmostEqual(boat["sail"], 0.095)
+		self.assertAlmostEqual(boat["rudder"], -0.18)
+
+	def test_stops_extrapolating_after_a_quarter_second(self):
+		prediction = SnapshotPrediction()
+		prediction.accept(
+			{"type": "snapshot", "tick": 1, "boats": [self.boat()]},
+			received_at=1,
+			now=1,
+		)
+
+		boat = prediction.at(2)["boats"][0]
+		self.assertAlmostEqual(boat["x"], 10.5)
+		self.assertAlmostEqual(boat["y"], 4.75)
+
+	def test_new_authoritative_snapshot_does_not_jump_at_reconciliation(self):
+		prediction = SnapshotPrediction(correction_seconds=0.1)
+		prediction.accept(
+			{"type": "snapshot", "tick": 1, "boats": [self.boat(x=0, vx=1)]},
+			received_at=1,
+			now=1,
+		)
+		before = prediction.at(1.05)["boats"][0]["x"]
+
+		prediction.accept(
+			{"type": "snapshot", "tick": 2, "boats": [self.boat(x=0.03, vx=1)]},
+			received_at=1.05,
+			now=1.05,
+		)
+
+		self.assertAlmostEqual(prediction.at(1.05)["boats"][0]["x"], before)
+		self.assertAlmostEqual(prediction.at(1.15)["boats"][0]["x"], 0.13)
+
+
+class PhysicsBubbleTest(unittest.TestCase):
+	def boat(self, player_id, x, y=0, vx=0, vy=0, **changes):
+		return {
+			"id": player_id,
+			"acknowledgedInput": 0,
+			"forward": 0,
+			"turn": 0,
+			"x": x,
+			"y": y,
+			"vx": vx,
+			"vy": vy,
+			"angle": 0,
+			"angularVelocity": 0,
+			"sail": 0,
+			"sailAngularVelocity": 0,
+			"rudder": 0,
+			"rudderAngularVelocity": 0,
+		} | changes
+
+	def bubble(self):
+		return PhysicsBubble(
+			config.SIMULATION_SETTINGS,
+			config.ENVIRONMENT,
+			config.DT_SECONDS,
+		)
+
+	def test_simulates_local_and_nearby_boats_in_one_space(self):
+		bubble = self.bubble()
+		snapshot = {
+			"type": "snapshot",
+			"tick": 1,
+			"boats": [
+				self.boat("local", 0),
+				self.boat("near", 6),
+				self.boat("far", 10),
+			],
+		}
+
+		bubble.accept(
+			snapshot,
+			"local",
+			arcade.MotionIntent(),
+			received_at=1,
+			now=1,
+		)
+
+		self.assertEqual(set(bubble.boats), {"local", "near"})
+		self.assertEqual(len(bubble.space.bodies), 6)
+
+	def test_nearby_boats_predict_their_collision(self):
+		bubble = self.bubble()
+		snapshot = {
+			"type": "snapshot",
+			"tick": 1,
+			"boats": [
+				self.boat("local", -3, vx=5),
+				self.boat("other", 3, vx=-5),
+			],
+		}
+		bubble.accept(
+			snapshot,
+			"local",
+			arcade.MotionIntent(),
+			received_at=1,
+			now=1,
+		)
+
+		bubble.advance_to(1.5, "local", arcade.MotionIntent())
+
+		self.assertLess(bubble.boats["local"].state.boat.velocity.x, 3)
+		self.assertGreater(bubble.boats["other"].state.boat.velocity.x, -3)
+
+
 class ServerTest(unittest.IsolatedAsyncioTestCase):
 	async def asyncSetUp(self):
 		match = Match(
@@ -207,7 +405,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
 		welcome = json.loads(await connection.recv())
 		return connection, welcome["playerId"]
 
-	async def test_two_clients_receive_distinct_ids_and_the_shared_snapshot(self):
+	async def test_two_clients_receive_distinct_ids_and_player_specific_snapshots(self):
 		first, first_id = await self.connect_player()
 		second, second_id = await self.connect_player()
 
@@ -216,11 +414,17 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
 		first_snapshot = json.loads(await asyncio.wait_for(first.recv(), 0.2))
 		second_snapshot = json.loads(await asyncio.wait_for(second.recv(), 0.2))
 		self.assertNotEqual(first_id, second_id)
-		self.assertEqual(first_snapshot, second_snapshot)
+		self.assertNotEqual(first_snapshot, second_snapshot)
 		self.assertEqual(
 			{boat["id"] for boat in first_snapshot["boats"]},
 			{first_id, second_id},
 		)
+		first_boats = {boat["id"]: boat for boat in first_snapshot["boats"]}
+		second_boats = {boat["id"]: boat for boat in second_snapshot["boats"]}
+		self.assertIn("acknowledgedInput", first_boats[first_id])
+		self.assertNotIn("acknowledgedInput", first_boats[second_id])
+		self.assertIn("acknowledgedInput", second_boats[second_id])
+		self.assertNotIn("acknowledgedInput", second_boats[first_id])
 
 	async def test_client_input_is_applied_and_acknowledged(self):
 		connection, player_id = await self.connect_player()

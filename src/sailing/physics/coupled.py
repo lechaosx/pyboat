@@ -128,6 +128,51 @@ def remove_simulation(state: boat.SailingState) -> None:
 	state.space.remove(*constraints, *shapes, *bodies)
 
 
+def restore_motion(
+	state: boat.SailingState,
+	parameters: boat.BoatParameters,
+	motion: boat.BoatMotion,
+) -> None:
+	assembly = state.coupled_assembly
+	assert isinstance(assembly, Assembly)
+	hull = state.boat
+	hull.position = motion.position_m
+	hull.velocity = motion.velocity_m_s
+	hull.angle = motion.angle_rad
+	hull.angular_velocity = motion.angular_velocity_rad_s
+
+	sail_hinge_world_m = hull.local_to_world(parameters.mast_position_m)
+	sail_center_from_hinge_world_m = boat.sail_center_from_mast_m(
+		parameters
+	).rotated(motion.angle_rad + motion.sail_angle_rad)
+	assembly.sail.position = sail_hinge_world_m + sail_center_from_hinge_world_m
+	assembly.sail.angle = motion.angle_rad + motion.sail_angle_rad
+	assembly.sail.angular_velocity = (
+		motion.angular_velocity_rad_s + motion.sail_angular_velocity_rad_s
+	)
+	assembly.sail.velocity = (
+		hull.velocity_at_world_point(sail_hinge_world_m)
+		+ sail_center_from_hinge_world_m.perpendicular()
+		* assembly.sail.angular_velocity
+	)
+
+	rudder_hinge_world_m = hull.local_to_world(parameters.rudder_position_m)
+	rudder_center_from_hinge_world_m = boat.rudder_center_from_hinge_m(
+		parameters
+	).rotated(motion.angle_rad + motion.rudder_angle_rad)
+	assembly.rudder.position = rudder_hinge_world_m + rudder_center_from_hinge_world_m
+	assembly.rudder.angle = motion.angle_rad + motion.rudder_angle_rad
+	assembly.rudder.angular_velocity = (
+		motion.angular_velocity_rad_s + motion.rudder_angular_velocity_rad_s
+	)
+	assembly.rudder.velocity = (
+		hull.velocity_at_world_point(rudder_hinge_world_m)
+		+ rudder_center_from_hinge_world_m.perpendicular()
+		* assembly.rudder.angular_velocity
+	)
+	synchronize(state)
+
+
 def _sync_surface_state(state: boat.SailingState, assembly: Assembly) -> None:
 	state.sail_angle_rad = math.remainder(
 		assembly.sail.angle - state.boat.angle,

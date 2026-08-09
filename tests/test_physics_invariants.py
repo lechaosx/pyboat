@@ -255,6 +255,44 @@ class ForceInvariantTest(unittest.TestCase):
 
 
 class IntegrationInvariantTest(unittest.TestCase):
+	def test_coupled_state_can_be_restored_from_authoritative_motion(self):
+		state = coupled.create_simulation(config.BOAT_PARAMETERS, 0)
+		motion = boat.BoatMotion(
+			position_m=(3, 4),
+			velocity_m_s=(2, -1),
+			angle_rad=0.7,
+			angular_velocity_rad_s=0.2,
+			sail_angle_rad=0.3,
+			sail_angular_velocity_rad_s=-0.1,
+			rudder_angle_rad=-0.2,
+			rudder_angular_velocity_rad_s=0.4,
+		)
+
+		coupled.restore_motion(state, config.BOAT_PARAMETERS, motion)
+
+		observation = coupled.observe(
+			state,
+			config.ENVIRONMENT,
+			config.BOAT_PARAMETERS,
+		)
+		self.assertEqual(state.boat.position, motion.position_m)
+		self.assertEqual(state.boat.velocity, motion.velocity_m_s)
+		self.assertAlmostEqual(observation.boat_angle_rad, motion.angle_rad)
+		self.assertAlmostEqual(
+			observation.boat_angular_velocity_rad_s,
+			motion.angular_velocity_rad_s,
+		)
+		self.assertAlmostEqual(observation.sail_angle_rad, motion.sail_angle_rad)
+		self.assertAlmostEqual(
+			observation.sail_angular_velocity_rad_s,
+			motion.sail_angular_velocity_rad_s,
+		)
+		self.assertAlmostEqual(observation.rudder_angle_rad, motion.rudder_angle_rad)
+		self.assertAlmostEqual(
+			observation.rudder_angular_velocity_rad_s,
+			motion.rudder_angular_velocity_rad_s,
+		)
+
 	def test_unforced_yaw_decay_is_timestep_stable(self):
 		parameters = replace(
 			config.BOAT_PARAMETERS,

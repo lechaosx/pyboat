@@ -52,6 +52,18 @@ class Environment:
 	true_water_velocity_m_s: pymunk.Vec2d
 
 
+@dataclass(frozen=True)
+class BoatMotion:
+	position_m: tuple[float, float]
+	velocity_m_s: tuple[float, float]
+	angle_rad: float
+	angular_velocity_rad_s: float
+	sail_angle_rad: float
+	sail_angular_velocity_rad_s: float
+	rudder_angle_rad: float
+	rudder_angular_velocity_rad_s: float
+
+
 @dataclass
 class SailingState:
 	space: pymunk.Space

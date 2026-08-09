@@ -28,10 +28,11 @@ class GameServer:
 	def advance(self) -> None:
 		self.match.advance()
 		if self.match.tick % self.snapshot_interval_ticks == 0:
-			broadcast(
-				self.connections,
-				protocol.snapshot_message(self.match.snapshot()),
-			)
+			for connection, player_id in self.connections.items():
+				broadcast(
+					(connection,),
+					protocol.snapshot_message(self.match.snapshot_for(player_id)),
+				)
 
 	async def run(self) -> None:
 		loop = asyncio.get_running_loop()
