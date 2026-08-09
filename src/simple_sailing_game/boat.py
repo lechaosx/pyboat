@@ -7,6 +7,14 @@ from .physics import curves
 
 
 @dataclass(frozen=True)
+class FoilProperties:
+	area_m2: float
+	lift_coefficient: curves.LiftCurve
+	drag_coefficient: curves.DragCurve
+	base_drag_coefficient: float
+
+
+@dataclass(frozen=True)
 class BoatParameters:
 	air_density_kg_m3: float
 	water_density_kg_m3: float
@@ -14,15 +22,15 @@ class BoatParameters:
 	length_m: float
 	beam_m: float
 	bow_length_m: float
-	sail_area_m2: float
+	sail_foil: FoilProperties
 	boom_length_m: float
 	boom_mass_kg: float
 	mast_position_m: tuple[float, float]
 	sail_center_of_effort_from_mast_m: float
 	sail_mass_kg: float
-	keel_area_m2: float
+	keel_foil: FoilProperties
 	keel_position_m: tuple[float, float]
-	rudder_area_m2: float
+	rudder_foil: FoilProperties
 	rudder_draw_length_m: float
 	rudder_mass_kg: float
 	tiller_length_m: float
@@ -31,12 +39,6 @@ class BoatParameters:
 	hull_reference_area_m2: float
 	hull_drag_coefficient: float
 	hull_lateral_drag_coefficient: float
-	sail_lift_coefficient: curves.LiftCurve
-	sail_drag_coefficient: curves.DragCurve
-	underwater_foil_lift_coefficient: curves.LiftCurve
-	underwater_foil_drag_coefficient: curves.DragCurve
-	sail_base_drag_coefficient: float
-	underwater_foil_base_drag_coefficient: float
 	sail_bearing_damping_n_m_s_rad: float
 	rudder_bearing_damping_n_m_s_rad: float
 	sail_sheet_lever_arm_m: float
@@ -186,18 +188,19 @@ def force_on_foil(
 	apparent_flow_m_s: pymunk.Vec2d,
 	foil_angle_rad: float,
 	fluid_density_kg_m3: float,
-	area_m2: float,
-	base_drag_coefficient: float,
-	lift_coefficient_at: curves.LiftCurve,
-	drag_coefficient_at: curves.DragCurve,
+	foil: FoilProperties,
 ) -> pymunk.Vec2d:
 	angle_of_attack_rad = foil_angle_rad - math.pi - apparent_flow_m_s.angle
 	dynamic_pressure_pa = 0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length**2
-	lift_n = dynamic_pressure_pa * area_m2 * lift_coefficient_at(angle_of_attack_rad)
+	lift_n = (
+		dynamic_pressure_pa
+		* foil.area_m2
+		* foil.lift_coefficient(angle_of_attack_rad)
+	)
 	drag_n = (
 		dynamic_pressure_pa
-		* area_m2
-		* drag_coefficient_at(angle_of_attack_rad, base_drag_coefficient)
+		* foil.area_m2
+		* foil.drag_coefficient(angle_of_attack_rad, foil.base_drag_coefficient)
 	)
 	return pymunk.Vec2d(drag_n, -lift_n).rotated(apparent_flow_m_s.angle)
 
@@ -242,94 +245,3 @@ def hull_resistance_force(
 		lateral_coefficient,
 	)
 	return (longitudinal_force_n + lateral_force_n).rotated(boat_angle_rad)
-
-
-def hinged_foil_load(
-	body: pymunk.Body,
-	medium_velocity_m_s: pymunk.Vec2d,
-	hinge_position_local_m: tuple[float, float],
-	center_distance_m: float,
-	angle_rad: float,
-	angular_velocity_rad_s: float,
-	fluid_density_kg_m3: float,
-	area_m2: float,
-	base_drag_coefficient: float,
-	lift_coefficient_at: curves.LiftCurve,
-	drag_coefficient_at: curves.DragCurve,
-) -> HingeLoad:
-	center_from_hinge_local_m = pymunk.Vec2d(-center_distance_m, 0).rotated(angle_rad)
-	center_local_m = pymunk.Vec2d(*hinge_position_local_m) + center_from_hinge_local_m
-	center_from_hinge_world_m = center_from_hinge_local_m.rotated(body.angle)
-	center_velocity_m_s = (
-		body.velocity_at_local_point(center_local_m)
-		+ center_from_hinge_world_m.perpendicular() * angular_velocity_rad_s
-	)
-	apparent_flow_m_s = apparent_flow(medium_velocity_m_s, center_velocity_m_s)
-	force_n = force_on_foil(
-		apparent_flow_m_s,
-		body.angle + angle_rad,
-		fluid_density_kg_m3,
-		area_m2,
-		base_drag_coefficient,
-		lift_coefficient_at,
-		drag_coefficient_at,
-	)
-	return HingeLoad(
-		force_n,
-		center_local_m,
-		center_from_hinge_world_m.cross(force_n),
-	)
-
-
-def observe(
-	state: SailingState,
-	environment: Environment,
-	parameters: BoatParameters,
-) -> BoatObservation:
-	apparent_water_m_s = apparent_flow(
-		environment.true_water_velocity_m_s,
-		state.boat.velocity,
-	)
-	apparent_wind_m_s = apparent_flow(
-		environment.true_wind_velocity_m_s,
-		state.boat.velocity,
-	)
-	sail_load = hinged_foil_load(
-		state.boat,
-		environment.true_wind_velocity_m_s,
-		parameters.mast_position_m,
-		parameters.sail_center_of_effort_from_mast_m,
-		state.sail_angle_rad,
-		state.sail_angular_velocity_rad_s,
-		parameters.air_density_kg_m3,
-		parameters.sail_area_m2,
-		parameters.sail_base_drag_coefficient,
-		parameters.sail_lift_coefficient,
-		parameters.sail_drag_coefficient,
-	)
-	rudder_load = hinged_foil_load(
-		state.boat,
-		environment.true_water_velocity_m_s,
-		parameters.rudder_position_m,
-		parameters.rudder_draw_length_m / 2,
-		state.rudder_angle_rad,
-		state.rudder_angular_velocity_rad_s,
-		parameters.water_density_kg_m3,
-		parameters.rudder_area_m2,
-		parameters.underwater_foil_base_drag_coefficient,
-		parameters.underwater_foil_lift_coefficient,
-		parameters.underwater_foil_drag_coefficient,
-	)
-	return BoatObservation(
-		state.boat.angle,
-		state.boat.angular_velocity,
-		pymunk.Vec2d(*state.boat.velocity),
-		state.sail_angle_rad,
-		state.sail_angular_velocity_rad_s,
-		state.rudder_angle_rad,
-		state.rudder_angular_velocity_rad_s,
-		apparent_wind_m_s,
-		apparent_water_m_s,
-		sail_load,
-		rudder_load,
-	)

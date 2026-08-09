@@ -8,27 +8,19 @@ def main() -> None:
 
 	angles_deg = list(range(-180, 181))
 	angles_rad = [math.radians(angle) for angle in angles_deg]
-	lifts = [BOAT_PARAMETERS.sail_lift_coefficient(angle) for angle in angles_rad]
-	underwater_lifts = [
-		BOAT_PARAMETERS.underwater_foil_lift_coefficient(angle)
-		for angle in angles_rad
-	]
-	drags = [
-		BOAT_PARAMETERS.sail_drag_coefficient(
-			angle,
-			BOAT_PARAMETERS.sail_base_drag_coefficient,
-		)
-		for angle in angles_rad
-	]
-
 	matplotlib.pyplot.figure(figsize=(16, 9))
-	matplotlib.pyplot.plot(angles_deg, lifts, label="Lift coefficient")
-	matplotlib.pyplot.plot(
-		angles_deg,
-		underwater_lifts,
-		label="Underwater foil lift coefficient",
-	)
-	matplotlib.pyplot.plot(angles_deg, drags, label="Drag coefficient")
+	for name, foil in (
+		("Sail", BOAT_PARAMETERS.sail_foil),
+		("Keel", BOAT_PARAMETERS.keel_foil),
+		("Rudder", BOAT_PARAMETERS.rudder_foil),
+	):
+		lifts = [foil.lift_coefficient(angle) for angle in angles_rad]
+		drags = [
+			foil.drag_coefficient(angle, foil.base_drag_coefficient)
+			for angle in angles_rad
+		]
+		matplotlib.pyplot.plot(angles_deg, lifts, label=f"{name} lift")
+		matplotlib.pyplot.plot(angles_deg, drags, label=f"{name} drag")
 	matplotlib.pyplot.xlabel("Angle of attack (degrees)")
 	matplotlib.pyplot.ylabel("Coefficient")
 	matplotlib.pyplot.title("Simplified foil coefficients")

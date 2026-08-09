@@ -260,7 +260,7 @@ def draw(
 		(220, 220, 230),
 	)
 	screen.blit(status, (30, HEIGHT - 35))
-	upwind_angle_rad = observation.apparent_wind_m_s.angle + math.pi
+	upwind_angle_rad = environment.true_wind_velocity_m_s.angle + math.pi
 	point_of_sail = course.point_of_sail(body.angle - upwind_angle_rad)
 	feedback = f"point of sail: {point_of_sail}"
 	if telemetry.surface_targets.sail_target_angle_rad is None:

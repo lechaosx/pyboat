@@ -6,7 +6,7 @@ import pymunk
 
 from . import boat
 from .controllers import actuator, arcade
-from .physics import coupled, curves
+from .physics import coupled
 
 
 COMPUTED_YAW_RATE_ARCADE_CONTROL = "computed yaw-rate arcade"
@@ -48,11 +48,8 @@ def _foil_effect(
 	center_distance_m: float,
 	angle_rad: float,
 	fluid_density_kg_m3: float,
-	area_m2: float,
+	foil: boat.FoilProperties,
 	boat_angular_velocity_rad_s: float,
-	base_drag_coefficient: float,
-	lift_coefficient_at: curves.LiftCurve,
-	drag_coefficient_at: curves.DragCurve,
 ) -> arcade.SurfaceEffect:
 	center_local_m = (
 		pymunk.Vec2d(*hinge_position_local_m)
@@ -67,10 +64,7 @@ def _foil_effect(
 		center_apparent_flow_m_s,
 		boat_angle_rad + angle_rad,
 		fluid_density_kg_m3,
-		area_m2,
-		base_drag_coefficient,
-		lift_coefficient_at,
-		drag_coefficient_at,
+		foil,
 	)
 	boat_forward = pymunk.Vec2d(1, 0).rotated(boat_angle_rad)
 	return arcade.SurfaceEffect(
@@ -110,11 +104,8 @@ def surface_control_state(
 			parameters.sail_center_of_effort_from_mast_m,
 			angle_rad,
 			parameters.air_density_kg_m3,
-			parameters.sail_area_m2,
+			parameters.sail_foil,
 			observation.boat_angular_velocity_rad_s,
-			parameters.sail_base_drag_coefficient,
-			parameters.sail_lift_coefficient,
-			parameters.sail_drag_coefficient,
 		)
 
 	def rudder_effect_at(angle_rad: float) -> arcade.SurfaceEffect:
@@ -125,18 +116,14 @@ def surface_control_state(
 			parameters.rudder_draw_length_m / 2,
 			angle_rad,
 			parameters.water_density_kg_m3,
-			parameters.rudder_area_m2,
+			parameters.rudder_foil,
 			observation.boat_angular_velocity_rad_s,
-			parameters.underwater_foil_base_drag_coefficient,
-			parameters.underwater_foil_lift_coefficient,
-			parameters.underwater_foil_drag_coefficient,
 		)
 
 	sail = actuator.ActuatorState(
 		observation.sail_angle_rad,
 		observation.sail_angular_velocity_rad_s,
 		boat.sail_moment_of_inertia_kg_m2(parameters),
-		parameters.sail_bearing_damping_n_m_s_rad,
 		settings.sailor_max_sheet_force_n * parameters.sail_sheet_lever_arm_m,
 		parameters.max_sail_angle_rad,
 	)
@@ -144,7 +131,6 @@ def surface_control_state(
 		observation.rudder_angle_rad,
 		observation.rudder_angular_velocity_rad_s,
 		boat.rudder_moment_of_inertia_kg_m2(parameters),
-		parameters.rudder_bearing_damping_n_m_s_rad,
 		settings.sailor_max_tiller_force_n * parameters.tiller_length_m,
 		parameters.max_rudder_angle_rad,
 	)
@@ -239,7 +225,7 @@ def advance_surface_game(
 	environment: boat.Environment,
 	dt_seconds: float,
 ) -> SimulationTelemetry:
-	observation = boat.observe(state, environment, settings.parameters)
+	observation = coupled.observe(state, environment, settings.parameters)
 	control_state = surface_control_state(observation, settings)
 	surface_input = control_state.surfaces
 	if control_mode == AUTO_SHEET_CONTROL:

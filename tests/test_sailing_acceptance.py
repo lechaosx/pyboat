@@ -61,9 +61,9 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		parameters = replace(
 			game.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
-			sail_area_m2=0,
-			keel_area_m2=0,
-			rudder_area_m2=0,
+			sail_foil=replace(game.BOAT_PARAMETERS.sail_foil, area_m2=0),
+			keel_foil=replace(game.BOAT_PARAMETERS.keel_foil, area_m2=0),
+			rudder_foil=replace(game.BOAT_PARAMETERS.rudder_foil, area_m2=0),
 		)
 		environment = boat.Environment(
 			pymunk.Vec2d(0, 0),

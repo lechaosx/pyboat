@@ -8,11 +8,6 @@ MotionIntent = arcade.MotionIntent
 
 
 class SurfaceControllerTest(unittest.TestCase):
-	def test_controller_functions_have_policy_names(self):
-		self.assertTrue(hasattr(arcade, "auto_sheet_control"))
-		self.assertTrue(hasattr(arcade, "yaw_rate_move_control"))
-		self.assertEqual(tuple(MotionIntent.__dataclass_fields__), ("forward", "turn"))
-
 	def control_input(
 		self,
 		*,

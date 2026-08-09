@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import pymunk
 
 from .. import boat
-from . import curves
 
 
 @dataclass(frozen=True)
@@ -136,10 +135,7 @@ def _surface_load(
 	hinge_position_local_m: tuple[float, float],
 	center_distance_m: float,
 	fluid_density_kg_m3: float,
-	area_m2: float,
-	base_drag_coefficient: float,
-	lift_coefficient_at: curves.LiftCurve,
-	drag_coefficient_at: curves.DragCurve,
+	foil: boat.FoilProperties,
 ) -> boat.HingeLoad:
 	hinge_world_m = hull.local_to_world(hinge_position_local_m)
 	center_world_m = hinge_world_m + pymunk.Vec2d(
@@ -154,15 +150,52 @@ def _surface_load(
 		apparent_flow_m_s,
 		surface.angle,
 		fluid_density_kg_m3,
-		area_m2,
-		base_drag_coefficient,
-		lift_coefficient_at,
-		drag_coefficient_at,
+		foil,
 	)
 	return boat.HingeLoad(
 		force_n,
 		hull.world_to_local(center_world_m),
 		(center_world_m - hinge_world_m).cross(force_n),
+	)
+
+
+def observe(
+	state: boat.SailingState,
+	environment: boat.Environment,
+	parameters: boat.BoatParameters,
+) -> boat.BoatObservation:
+	assembly = state.coupled_assembly
+	assert isinstance(assembly, Assembly)
+	_sync_surface_state(state, assembly)
+	hull = state.boat
+	return boat.BoatObservation(
+		hull.angle,
+		hull.angular_velocity,
+		pymunk.Vec2d(*hull.velocity),
+		state.sail_angle_rad,
+		state.sail_angular_velocity_rad_s,
+		state.rudder_angle_rad,
+		state.rudder_angular_velocity_rad_s,
+		boat.apparent_flow(environment.true_wind_velocity_m_s, hull.velocity),
+		boat.apparent_flow(environment.true_water_velocity_m_s, hull.velocity),
+		_surface_load(
+			hull,
+			assembly.sail,
+			environment.true_wind_velocity_m_s,
+			parameters.mast_position_m,
+			parameters.sail_center_of_effort_from_mast_m,
+			parameters.air_density_kg_m3,
+			parameters.sail_foil,
+		),
+		_surface_load(
+			hull,
+			assembly.rudder,
+			environment.true_water_velocity_m_s,
+			parameters.rudder_position_m,
+			parameters.rudder_draw_length_m / 2,
+			parameters.water_density_kg_m3,
+			parameters.rudder_foil,
+		),
 	)
 
 
@@ -175,53 +208,10 @@ def step(
 ) -> boat.PhysicsTelemetry:
 	assembly = state.coupled_assembly
 	assert isinstance(assembly, Assembly)
-	_sync_surface_state(state, assembly)
+	observation = observe(state, environment, parameters)
 	hull = state.boat
-	apparent_water_m_s = boat.apparent_flow(
-		environment.true_water_velocity_m_s,
-		hull.velocity,
-	)
-	apparent_wind_m_s = boat.apparent_flow(
-		environment.true_wind_velocity_m_s,
-		hull.velocity,
-	)
-	sail_load = _surface_load(
-		hull,
-		assembly.sail,
-		environment.true_wind_velocity_m_s,
-		parameters.mast_position_m,
-		parameters.sail_center_of_effort_from_mast_m,
-		parameters.air_density_kg_m3,
-		parameters.sail_area_m2,
-		parameters.sail_base_drag_coefficient,
-		parameters.sail_lift_coefficient,
-		parameters.sail_drag_coefficient,
-	)
-	rudder_load = _surface_load(
-		hull,
-		assembly.rudder,
-		environment.true_water_velocity_m_s,
-		parameters.rudder_position_m,
-		parameters.rudder_draw_length_m / 2,
-		parameters.water_density_kg_m3,
-		parameters.rudder_area_m2,
-		parameters.underwater_foil_base_drag_coefficient,
-		parameters.underwater_foil_lift_coefficient,
-		parameters.underwater_foil_drag_coefficient,
-	)
-	observation = boat.BoatObservation(
-		hull.angle,
-		hull.angular_velocity,
-		pymunk.Vec2d(*hull.velocity),
-		state.sail_angle_rad,
-		state.sail_angular_velocity_rad_s,
-		state.rudder_angle_rad,
-		state.rudder_angular_velocity_rad_s,
-		apparent_wind_m_s,
-		apparent_water_m_s,
-		sail_load,
-		rudder_load,
-	)
+	sail_load = observation.sail_load
+	rudder_load = observation.rudder_load
 	keel_apparent_water_m_s = boat.apparent_flow(
 		environment.true_water_velocity_m_s,
 		hull.velocity_at_local_point(parameters.keel_position_m),
@@ -230,10 +220,7 @@ def step(
 		keel_apparent_water_m_s,
 		hull.angle,
 		parameters.water_density_kg_m3,
-		parameters.keel_area_m2,
-		parameters.underwater_foil_base_drag_coefficient,
-		parameters.underwater_foil_lift_coefficient,
-		parameters.underwater_foil_drag_coefficient,
+		parameters.keel_foil,
 	)
 	hull_drag_n = pymunk.Vec2d(0, 0)
 	for position_m in (

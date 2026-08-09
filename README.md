@@ -83,13 +83,14 @@ reacts back on the boat while preserving coupled momentum.
 The sail uses a symmetric flat-plate lift curve. The streamlined keel and rudder
 instead build lift linearly to a 15° stall, then transition toward separated
 flat-plate cross-flow. Sail and underwater foils also have independently tunable
-profile-drag coefficients. `BoatParameters` receives all four lift and drag
-curves from the caller, so alternate coefficient laws require no simulation-code
-changes. Keel force acts at `keel_position_m`, so moving that point changes both
-local apparent flow and yaw moment. Hull resistance is sampled at the bow and
-stern, which produces yaw damping from local lateral flow. The configured hull
-lateral drag coefficient is `0.02`; the keel remains the main source of lateral
-resistance.
+profile-drag coefficients. `BoatParameters` receives separate sail, keel, and
+rudder foil properties from the caller. Each foil selects its own area, lift
+curve, drag curve, and base drag coefficient, so alternate boats and coefficient
+laws require no simulation-code changes. Keel force acts at `keel_position_m`,
+so moving that point changes both local apparent flow and yaw moment. Hull
+resistance is sampled at the bow and stern, which produces yaw damping from local
+lateral flow. The configured hull lateral drag coefficient is `0.02`; the keel
+remains the main source of lateral resistance.
 
 Callers compose coefficient functions before constructing the boat; the plant
 has no implicit curve defaults:
@@ -97,6 +98,7 @@ has no implicit curve defaults:
 ```python
 import math
 
+from simple_sailing_game import boat
 from simple_sailing_game.physics import curves
 
 base_underwater_lift = curves.streamlined_lift(math.radians(12), 0.9)
@@ -104,12 +106,12 @@ base_underwater_lift = curves.streamlined_lift(math.radians(12), 0.9)
 def underwater_lift(angle_of_attack_rad):
     return 0.95 * base_underwater_lift(angle_of_attack_rad)
 
-curve_selection = {
-    "sail_lift_coefficient": curves.flat_plate_lift,
-    "sail_drag_coefficient": curves.flat_plate_drag,
-    "underwater_foil_lift_coefficient": underwater_lift,
-    "underwater_foil_drag_coefficient": curves.flat_plate_drag,
-}
+keel_foil = boat.FoilProperties(
+    area_m2=0.6,
+    lift_coefficient=underwater_lift,
+    drag_coefficient=curves.flat_plate_drag,
+    base_drag_coefficient=0.02,
+)
 ```
 
 Controller candidates are predicted quasi-statically. The prediction includes
@@ -158,8 +160,8 @@ wind. Their deliberately broad reference envelope is:
 | Turn from rest | Computed yaw-rate control turns 135° within 28 seconds |
 | Neutral steering | Released yaw rate decreases over 3 seconds |
 
-The simpler coefficient plot compares the sail and underwater lift curves with
-their shared pressure-drag curve:
+The simpler coefficient plot compares the lift and drag curves selected for all
+three foils:
 
 ```sh
 uv run --extra plots sailing-plot

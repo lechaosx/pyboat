@@ -1,24 +1,15 @@
-import inspect
 import math
 import unittest
 
-from simple_sailing_game import boat
 from simple_sailing_game.physics import curves
 
 
 class CoefficientCurveTest(unittest.TestCase):
-	def test_force_functions_require_explicit_curves(self):
-		for function in (boat.force_on_foil, boat.hinged_foil_load):
-			with self.subTest(function=function.__name__):
-				parameters = inspect.signature(function).parameters
-				self.assertIs(
-					parameters["lift_coefficient_at"].default,
-					inspect.Parameter.empty,
-				)
-				self.assertIs(
-					parameters["drag_coefficient_at"].default,
-					inspect.Parameter.empty,
-				)
+	def test_flat_plate_coefficients_have_expected_characteristic_values(self):
+		self.assertAlmostEqual(curves.flat_plate_lift(0), 0)
+		self.assertAlmostEqual(curves.flat_plate_lift(math.pi / 4), 1)
+		self.assertAlmostEqual(curves.flat_plate_drag(0, 0.02), 0.02)
+		self.assertAlmostEqual(curves.flat_plate_drag(math.pi / 2, 0.02), 2.02)
 
 	def test_streamlined_lift_uses_caller_selected_stall(self):
 		lift = curves.streamlined_lift(

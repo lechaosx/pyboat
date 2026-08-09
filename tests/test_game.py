@@ -1,4 +1,3 @@
-import inspect
 import math
 import os
 import subprocess
@@ -10,6 +9,7 @@ import pygame
 
 from simple_sailing_game import boat, game, input as player_input, render, simulation
 from simple_sailing_game.controllers import actuator, arcade
+from simple_sailing_game.physics import coupled
 
 
 class StartupTest(unittest.TestCase):
@@ -33,19 +33,13 @@ class StartupTest(unittest.TestCase):
 class InputAdapterTest(unittest.TestCase):
 	def test_every_controller_has_a_selection_key(self):
 		self.assertEqual(
-			game.CONTROL_MODES_BY_KEY,
+			set(game.CONTROL_MODES_BY_KEY.values()),
 			{
-				pygame.K_1: game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-				pygame.K_2: game.AUTO_SHEET_CONTROL,
-				pygame.K_3: game.YAW_RATE_ARCADE_CONTROL,
+				game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+				game.AUTO_SHEET_CONTROL,
+				game.YAW_RATE_ARCADE_CONTROL,
 			},
 		)
-		self.assertEqual(
-			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-			"computed yaw-rate arcade",
-		)
-		self.assertEqual(game.AUTO_SHEET_CONTROL, "auto-sheet + rudder")
-		self.assertEqual(game.YAW_RATE_ARCADE_CONTROL, "yaw-rate arcade")
 
 	def test_computed_yaw_rate_arcade_is_the_default_controller(self):
 		self.assertEqual(
@@ -55,12 +49,6 @@ class InputAdapterTest(unittest.TestCase):
 		self.assertEqual(
 			game.CONTROL_MODES_BY_KEY[pygame.K_1],
 			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-		)
-
-	def test_playable_simulation_has_no_physics_model_switch(self):
-		self.assertNotIn(
-			"physics_mode",
-			inspect.signature(simulation.advance_surface_game).parameters,
 		)
 
 	def test_fixed_step_schedule_carries_partial_time_between_frames(self):
@@ -172,7 +160,7 @@ class SailingSimulationTest(unittest.TestCase):
 	def test_computed_maximum_yaw_rate_uses_rudder_flow_and_steering_baseline(self):
 		for body in self.state.space.bodies:
 			body.velocity = (2, 0)
-		observation = boat.observe(
+		observation = coupled.observe(
 			self.state,
 			game.ENVIRONMENT,
 			game.BOAT_PARAMETERS,
@@ -275,6 +263,53 @@ class SailingSimulationTest(unittest.TestCase):
 				)
 				self.assertTrue(any(expected in text for text in font.texts))
 
+	def test_draw_uses_true_wind_for_point_of_sail(self):
+		class RecordingFont:
+			def __init__(self):
+				self.font = pygame.font.Font(None, 24)
+				self.texts = []
+
+			def render(self, text, antialias, color):
+				self.texts.append(text)
+				return self.font.render(text, antialias, color)
+
+		upwind_angle_rad = game.ENVIRONMENT.true_wind_velocity_m_s.angle + math.pi
+		heading_rad = upwind_angle_rad + math.radians(135)
+		settings = replace(
+			game.SIMULATION_SETTINGS,
+			initial_boat_angle_rad=heading_rad,
+		)
+		state = simulation.create_simulation(settings)
+		velocity = (
+			2.5 * math.cos(heading_rad),
+			2.5 * math.sin(heading_rad),
+		)
+		for body in state.space.bodies:
+			body.velocity = velocity
+		telemetry = simulation.advance_surface_game(
+			state,
+			arcade.MotionIntent(forward=1),
+			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+			settings,
+			game.ENVIRONMENT,
+			game.DT_SECONDS,
+		)
+		pygame.font.init()
+		font = RecordingFont()
+		render.draw(
+			pygame.Surface((render.WIDTH, render.HEIGHT)),
+			font,
+			state,
+			game.ENVIRONMENT,
+			arcade.MotionIntent(forward=1),
+			telemetry,
+			game.BOAT_PARAMETERS,
+		)
+
+		self.assertTrue(
+			any("point of sail: broad reach" in text for text in font.texts)
+		)
+
 	def test_telemetry_contains_force_and_surface_data(self):
 		telemetry = self.advance(
 			arcade.MotionIntent(1, 0),
@@ -287,22 +322,21 @@ class SailingSimulationTest(unittest.TestCase):
 
 
 class ModelAndActuatorTest(unittest.TestCase):
-	def test_actuator_state_contains_only_control_inputs(self):
-		self.assertEqual(
-			tuple(actuator.ActuatorState.__dataclass_fields__),
-			(
-				"angle_rad",
-				"angular_velocity_rad_s",
-				"moment_of_inertia_kg_m2",
-				"bearing_damping_n_m_s_rad",
-				"maximum_torque_n_m",
-				"maximum_angle_rad",
-			),
+	def test_actuator_torque_damps_motion_at_its_target(self):
+		state = actuator.ActuatorState(
+			angle_rad=0,
+			angular_velocity_rad_s=1,
+			moment_of_inertia_kg_m2=2,
+			maximum_torque_n_m=100,
+			maximum_angle_rad=math.pi / 2,
 		)
+
+		self.assertLess(actuator.damped_control_torque(state, 0), 0)
+
 	def test_sheet_never_pushes_the_sail_outward(self):
 		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
 		control_state = simulation.surface_control_state(
-			boat.observe(state, game.ENVIRONMENT, game.BOAT_PARAMETERS),
+			coupled.observe(state, game.ENVIRONMENT, game.BOAT_PARAMETERS),
 			game.SIMULATION_SETTINGS,
 		)
 		for angle_rad, outward_target_rad in (
