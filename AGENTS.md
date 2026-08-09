@@ -1,5 +1,32 @@
 # Engineering Guidelines
 
+## Project Documentation
+
+- Read [PRODUCT.md](PRODUCT.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
+  [MAINTAINERS.md](MAINTAINERS.md) before planning or implementing changes.
+- Keep [README.md](README.md) as the user-facing repository signpost: what the product is,
+  current gameplay, controls, prerequisites, and how to run it. Do not move
+  internal implementation guidance into it.
+- Keep [MAINTAINERS.md](MAINTAINERS.md) developer-facing. Update it when development setup,
+  commands, repository layout, tests, tools, or implementation guidance changes.
+- Treat [PRODUCT.md](PRODUCT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) as living
+  decision records. Update them in the same change that introduces, changes, or
+  removes a decision.
+- Put player experience, scope, content, controls, balance, and product constraints
+  in [PRODUCT.md](PRODUCT.md).
+- Put implementation, simulation, networking, protocol, persistence, and technical
+  boundaries in [ARCHITECTURE.md](ARCHITECTURE.md).
+- Mark every decision as **[Explicit]** when the user directly requested or
+  affirmatively confirmed that specific decision.
+- Mark every decision as **[Implicit]** when an agent selected it. User acceptance
+  of the resulting behavior does not retroactively make the underlying choice
+  explicit.
+- Keep unresolved matters under an open-questions section rather than presenting
+  them as decisions.
+- If implementation and a decision record disagree, surface the discrepancy and
+  resolve both together.
+- Update links among these documents when files move or their roles change.
+
 ## Defer Abstraction
 
 - Start at the lowest practical level of abstraction and keep code concrete and local while requirements are still changing.

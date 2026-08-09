@@ -1,37 +1,67 @@
-# Simple Sailing Game
+# Pyboat
 
-A compact 2D sailing simulation for learning how sailing forces, control systems,
-and a small arcade game fit together. The game deliberately leaves out heel,
-waves, and sail deformation so the force calculations remain readable.
+Pyboat is an early multiplayer, top-down naval combat game built around readable,
+semi-realistic sailing physics. The current Python prototype lets several players
+sail, ram one another, take location-dependent damage, and leave physical wrecks
+behind when destroyed.
 
-## Design principles
+The longer-term product aims for the accessibility of Agar.io and the satisfying
+naval combat of *Assassin's Creed IV: Black Flag*, with persistent matches,
+automatic weapons, varied ships, progression, and a procedural world. Those
+features are not all implemented yet.
 
-- Teach both sailing and coding with physics that stays readable.
-- Use one articulated plant. Pymunk resolves rigid-body motion, joints, surface
-  inertia, and reaction forces while the project supplies the fluid loads and
-  sailor controls.
-- Keep keyboard motion boat-relative and joystick motion world-relative; each is
-  intentionally adapted to what feels natural on that device.
-- Prefer behavioral checks over calibrated speed ceilings. A physics correction
-  that makes the boat faster should not fail only because it exceeds an old
-  maximum.
-- Treat graphics as supporting feedback rather than a simulation priority.
-- Add physical detail only when its educational value justifies the code.
+## Project guide
 
-## Run it
+- [Product decisions](PRODUCT.md) describe the intended game and player
+  experience.
+- [Architecture decisions](ARCHITECTURE.md) describe the chosen technical design.
+- [Maintainer guide](MAINTAINERS.md) covers development, tests, physics, and the
+  repository layout.
+- [Engineering guidelines](AGENTS.md) define how changes should be made and
+  documented.
 
-Enter the development environment and start the game:
+## Requirements
+
+Pyboat requires Python 3.10 or newer. Set up a Python environment and install the
+project with whichever environment and package-management tools you prefer.
+
+The commands below use [`uv`](https://docs.astral.sh/uv/). To prepare that
+environment from the repository root:
+
+```sh
+uv sync
+```
+
+[Nix](https://nixos.org/) is optional. If installed, it provides the development
+tools, including `uv`:
 
 ```sh
 nix develop
+```
+
+## Run the standalone game
+
+```sh
 uv run game
 ```
 
-The boat starts on a four-buoy time-trial course. Pass the numbered buoys in
-order; the active buoy is magenta. `R` resets the boat and current lap while
+The standalone game is a four-buoy time trial. Pass the numbered buoys in order;
+the active buoy is magenta. Press `R` to reset the boat and current lap while
 retaining the best completed lap.
 
-## Multiplayer
+Choose a control mode with the number keys:
+
+| Key | Mode |
+| --- | --- |
+| `1` | Computed yaw-rate arcade control (default) |
+| `2` | Automatic sail trim with direct rudder control |
+| `3` | Fixed yaw-rate arcade control |
+
+In the arcade modes, `W/S` controls forward or reverse power and `A/D` turns. In
+automatic-trim mode, `W` powers the sail and `A/D` controls the rudder directly. A
+gamepad uses its left stick for world-relative movement.
+
+## Run multiplayer
 
 Start the authoritative server:
 
@@ -39,178 +69,21 @@ Start the authoritative server:
 uv run server
 ```
 
-Then start two or more clients in separate terminals:
+Then start a client in each additional terminal:
 
 ```sh
 uv run client
 ```
 
-Each client receives a player-specific snapshot. Boats within 8 m include the
-control state needed for a local collision-prediction bubble, boats out to 24 m
-include visual motion, and farther boats are omitted. The server advances the
-shared authoritative physics world at 60 Hz and sends snapshots at 60 Hz. Use
-`--host` and `--port` on the server or `--uri` on the client to connect across
-machines. The client extrapolates distant motion for at most 250 ms and smooths
-authoritative corrections over 100 ms. When a boat leaves network interest, its
-arrow remains at the last known direction until it returns or disconnects. Local
-input uses sequenced 60 Hz commands that are predicted until their server
-acknowledgement arrives. Physics corrections are immediate, while their rendered
-position and shortest-path rotation offsets settle over 100 ms.
+Multiplayer uses `W/S` for forward or reverse power and `A/D` to turn. Nearby
+players are visible directly; off-screen or recently out-of-range players remain
+indicated by directional arrows. Collisions cause damage based on the impact and
+where the hull was struck. When the local boat is destroyed, its client closes;
+the other players continue to see the drifting wreck.
 
-Hull collisions cause server-authoritative damage above a safe impact threshold.
-The bow is reinforced, the sides have normal strength, and the stern is weakest.
-A destroyed player's client exits; other clients continue to see the boat drifting
-and colliding as a controllerless wreck.
+The server listens on `127.0.0.1:8765` by default. Use `server --host` and
+`server --port` to change the listener, and `client --uri` to connect clients to
+another machine.
 
-Exercise a client with controlled round-trip latency and one-way jitter:
-
-```sh
-uv run client --latency-ms 100 --jitter-ms 10
-```
-
-## Controls
-
-| Key | Controller |
-| --- | --- |
-| `1` | Computed yaw-rate arcade (default) |
-| `2` | Auto-sheet + rudder |
-| `3` | Fixed yaw-rate arcade |
-
-Both yaw-rate modes use `W/S` for forward/reverse power and `A/D` for turn.
-Auto-sheet uses `W` for powered trim and `A/D` for direct rudder position.
-
-Keyboard commands are immediate and full-scale, including diagonals. This lets
-keyboard players create intermediate inputs with deliberate key frequency and
-duty cycle. The gamepad's left stick denotes a world-space direction; it is
-converted into boat-relative forward/turn components without controller-side
-input shaping. Auto-sheet instead maps its vertical axis to power and horizontal
-axis directly to rudder position.
-
-## Controllers
-
-The three modes use two concrete controller functions in
-`src/sailing/controllers/arcade.py`:
-
-- Computed yaw-rate arcade is the default. Its maximum yaw rate is the local
-  water speed at the rudder multiplied by the tangent of maximum rudder angle
-  and divided by the keel-to-rudder distance. Turn input selects a continuous
-  fraction of that rate, including non-integer joystick values.
-- Auto-sheet chooses sail trim from the requested power while mapping steering
-  directly to physical rudder angle. It exposes the clearest tiller-to-turn
-  relationship.
-- Fixed yaw-rate arcade is the retained comparison controller. It uses the same
-  policy with the historical maximum yaw rate of 35°/s.
-
-Both yaw-rate modes choose a rudder angle from the difference between requested
-and measured yaw rate. The HUD displays the measured and active maximum rates.
-
-Normal trim treats the sail command as a sheet limit: the sailor can pull the
-boom inward or hold it against the wind, but cannot push it outward. Explicit
-reverse commands use a backed-sail target.
-
-## Physics model
-
-The game always uses the `articulated` model in
-`src/sailing/physics/coupled.py`. The hull, sail/boom, and
-rudder/tiller have their selected masses. Pivots and rotary limits connect the
-surfaces to the hull, fluid loads act on their bodies, and actuator torques act
-equally and oppositely on each surface and the hull. Appendage motion therefore
-reacts back on the boat while preserving coupled momentum.
-
-The sail uses a symmetric flat-plate lift curve. The streamlined keel and rudder
-instead build lift linearly to a 15° stall, then transition toward separated
-flat-plate cross-flow. Sail and underwater foils also have independently tunable
-profile-drag coefficients. `BoatParameters` receives separate sail, keel, and
-rudder foil properties from the caller. Each foil selects its own area, lift
-curve, drag curve, and base drag coefficient, so alternate boats and coefficient
-laws require no simulation-code changes. Keel force acts at `keel_position_m`,
-so moving that point changes both local apparent flow and yaw moment. Hull
-resistance is sampled at the bow and stern, which produces yaw damping from local
-lateral flow. The configured hull lateral drag coefficient is `0.02`; the keel
-remains the main source of lateral resistance.
-
-Callers compose coefficient functions before constructing the boat; the plant
-has no implicit curve defaults:
-
-```python
-import math
-
-from sailing import boat
-from sailing.physics import curves
-
-base_underwater_lift = curves.streamlined_lift(math.radians(12), 0.9)
-
-def underwater_lift(angle_of_attack_rad):
-    return 0.95 * base_underwater_lift(angle_of_attack_rad)
-
-keel_foil = boat.FoilProperties(
-    area_m2=0.6,
-    lift_coefficient=underwater_lift,
-    drag_coefficient=curves.flat_plate_drag,
-    base_drag_coefficient=0.02,
-)
-```
-
-Controller candidates are predicted quasi-statically. The prediction includes
-hull angular velocity but not the candidate surface's own angular motion. The
-articulated plant recalculates actual load from each physical surface body's
-velocity, so prediction and plant load can briefly differ during fast movement.
-
-## Code layout
-
-- `game` owns boat configuration, course logic, input, rendering, the
-  authoritative multiplayer server, and the Pygame client loops.
-- `sailing` provides the reusable boat model, controllers, simulation adapter,
-  coefficient curves, and articulated physics.
-- `plotting` contains the speed-polar and coefficient-plot tools.
-
-## Model tuning
-
-Generate a simulated speed polar for the articulated plant:
-
-```sh
-uv run polar
-```
-
-The polar helper drives the retained yaw-rate controller with a local heading
-error command, lets each run settle, and writes `polar.png`. It reports requested
-and actual heading separately so controller error does not masquerade as a
-physics change.
-
-The physical acceptance tests use a 4 m, 250 kg displacement dinghy in 6 m/s
-wind. Their deliberately broad reference envelope is:
-
-| Behavior | Accepted range |
-| --- | --- |
-| In irons | A 15° attempt stays below 0.2 m/s upwind progress |
-| 30° close-hauled | At least 0.6 m/s, under 12° leeway |
-| 90° beam reach | At least 2 m/s |
-| 120° broad reach | At least 2.2 m/s |
-| 180° run | At least 0.5 m/s forward |
-| Polar tracking | Under 8° heading error at sampled headings |
-| Coast-down | Monotonic; 2 m/s falls below 1.5 m/s in 5 seconds |
-| Tack | Both directions complete within 15 seconds with forward speed retained |
-| Turn from rest | Computed yaw-rate control turns 135° within 28 seconds |
-| Neutral steering | Released yaw rate decreases over 3 seconds |
-
-The simpler coefficient plot compares the lift and drag curves selected for all
-three foils:
-
-```sh
-uv run coefficients
-```
-
-Pygame, Pymunk, and websockets are the core dependencies. Matplotlib and pytest
-are development dependencies.
-
-## Tests
-
-Run the complete suite from the repository root:
-
-```sh
-uv run pytest
-```
-
-The suite covers force equations, actuator behavior, all three controllers,
-coupled physics, timestep convergence, course progression, input mapping,
-multiplayer protocol behavior, and representative sailing maneuvers.
+Pyboat is a prototype: the Python client and server currently establish the
+gameplay and networking behavior, while the planned browser client is deferred.
