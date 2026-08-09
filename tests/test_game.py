@@ -7,9 +7,10 @@ from dataclasses import replace
 
 import pygame
 
-from simple_sailing_game import boat, game, input as player_input, render, simulation
-from simple_sailing_game.controllers import actuator, arcade
-from simple_sailing_game.physics import coupled
+from game import config, input as player_input, main as game, render
+from sailing import boat, simulation
+from sailing.controllers import actuator, arcade
+from sailing.physics import coupled
 
 
 class StartupTest(unittest.TestCase):
@@ -20,7 +21,7 @@ class StartupTest(unittest.TestCase):
 			"SDL_VIDEODRIVER": "dummy",
 		}
 		result = subprocess.run(
-			[sys.executable, "-c", "import simple_sailing_game.game"],
+			[sys.executable, "-c", "import game.main"],
 			capture_output=True,
 			env=environment,
 			text=True,
@@ -52,13 +53,13 @@ class InputAdapterTest(unittest.TestCase):
 		)
 
 	def test_fixed_step_schedule_carries_partial_time_between_frames(self):
-		steps, remaining_seconds = game.fixed_step_schedule(0, game.DT_SECONDS * 1.5)
+		steps, remaining_seconds = game.fixed_step_schedule(0, config.DT_SECONDS * 1.5)
 		self.assertEqual(steps, 1)
-		self.assertAlmostEqual(remaining_seconds, game.DT_SECONDS / 2)
+		self.assertAlmostEqual(remaining_seconds, config.DT_SECONDS / 2)
 
 		steps, remaining_seconds = game.fixed_step_schedule(
 			remaining_seconds,
-			game.DT_SECONDS / 2,
+			config.DT_SECONDS / 2,
 		)
 		self.assertEqual(steps, 1)
 		self.assertEqual(remaining_seconds, 0)
@@ -103,17 +104,17 @@ class InputAdapterTest(unittest.TestCase):
 
 class SailingSimulationTest(unittest.TestCase):
 	def setUp(self):
-		self.state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+		self.state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 
 	def advance(self, intent, control_mode, seconds=1):
-		for _ in range(round(seconds / game.DT_SECONDS)):
+		for _ in range(round(seconds / config.DT_SECONDS)):
 			telemetry = simulation.advance_surface_game(
 				self.state,
 				intent,
 				control_mode,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
+				config.SIMULATION_SETTINGS,
+				config.ENVIRONMENT,
+				config.DT_SECONDS,
 			)
 		return telemetry
 
@@ -128,7 +129,7 @@ class SailingSimulationTest(unittest.TestCase):
 		)
 		for control_mode, intent in cases:
 			with self.subTest(control_mode=control_mode):
-				self.state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+				self.state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 				telemetry = self.advance(intent, control_mode)
 				self.assertEqual(telemetry.control_mode, control_mode)
 				self.assertTrue(all(map(math.isfinite, self.state.boat.velocity)))
@@ -162,22 +163,22 @@ class SailingSimulationTest(unittest.TestCase):
 			body.velocity = (2, 0)
 		observation = coupled.observe(
 			self.state,
-			game.ENVIRONMENT,
-			game.BOAT_PARAMETERS,
+			config.ENVIRONMENT,
+			config.BOAT_PARAMETERS,
 		)
 
 		control_state = simulation.surface_control_state(
 			observation,
-			game.SIMULATION_SETTINGS,
+			config.SIMULATION_SETTINGS,
 		)
 
 		steering_baseline_m = (
-			pygame.Vector2(game.BOAT_PARAMETERS.rudder_position_m)
-			- pygame.Vector2(game.BOAT_PARAMETERS.keel_position_m)
+			pygame.Vector2(config.BOAT_PARAMETERS.rudder_position_m)
+			- pygame.Vector2(config.BOAT_PARAMETERS.keel_position_m)
 		).length()
 		expected_yaw_rate_rad_s = (
 			2
-			* math.tan(game.BOAT_PARAMETERS.max_rudder_angle_rad)
+			* math.tan(config.BOAT_PARAMETERS.max_rudder_angle_rad)
 			/ steering_baseline_m
 		)
 		self.assertAlmostEqual(
@@ -187,13 +188,13 @@ class SailingSimulationTest(unittest.TestCase):
 
 	def test_auto_sheet_surfaces_settle_without_chatter(self):
 		angles = []
-		for step_index in range(round(12 / game.DT_SECONDS)):
+		for step_index in range(round(12 / config.DT_SECONDS)):
 			self.advance(
 				arcade.AutoSheetIntent(power=1),
 				game.AUTO_SHEET_CONTROL,
-				game.DT_SECONDS,
+				config.DT_SECONDS,
 			)
-			if step_index >= round(11 / game.DT_SECONDS):
+			if step_index >= round(11 / config.DT_SECONDS):
 				angles.append((self.state.sail_angle_rad, self.state.rudder_angle_rad))
 
 		for surface_angles in zip(*angles):
@@ -218,10 +219,10 @@ class SailingSimulationTest(unittest.TestCase):
 					screen,
 					pygame.font.Font(None, 24),
 					self.state,
-					game.ENVIRONMENT,
+					config.ENVIRONMENT,
 					intent,
 					telemetry,
-					game.BOAT_PARAMETERS,
+					config.BOAT_PARAMETERS,
 				)
 				self.assertNotEqual(
 					screen.get_at((render.WIDTH // 2, render.HEIGHT // 2)),
@@ -244,17 +245,17 @@ class SailingSimulationTest(unittest.TestCase):
 			game.YAW_RATE_ARCADE_CONTROL,
 		):
 			with self.subTest(control_mode=control_mode):
-				self.state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+				self.state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 				telemetry = self.advance(arcade.MotionIntent(1, 0), control_mode)
 				font = RecordingFont()
 				render.draw(
 					pygame.Surface((render.WIDTH, render.HEIGHT)),
 					font,
 					self.state,
-					game.ENVIRONMENT,
+					config.ENVIRONMENT,
 					arcade.MotionIntent(1, 0),
 					telemetry,
-					game.BOAT_PARAMETERS,
+					config.BOAT_PARAMETERS,
 				)
 				observation = telemetry.physics.observation
 				expected = (
@@ -273,10 +274,10 @@ class SailingSimulationTest(unittest.TestCase):
 				self.texts.append(text)
 				return self.font.render(text, antialias, color)
 
-		upwind_angle_rad = game.ENVIRONMENT.true_wind_velocity_m_s.angle + math.pi
+		upwind_angle_rad = config.ENVIRONMENT.true_wind_velocity_m_s.angle + math.pi
 		heading_rad = upwind_angle_rad + math.radians(135)
 		settings = replace(
-			game.SIMULATION_SETTINGS,
+			config.SIMULATION_SETTINGS,
 			initial_boat_angle_rad=heading_rad,
 		)
 		state = simulation.create_simulation(settings)
@@ -291,8 +292,8 @@ class SailingSimulationTest(unittest.TestCase):
 			arcade.MotionIntent(forward=1),
 			game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 			settings,
-			game.ENVIRONMENT,
-			game.DT_SECONDS,
+			config.ENVIRONMENT,
+			config.DT_SECONDS,
 		)
 		pygame.font.init()
 		font = RecordingFont()
@@ -300,10 +301,10 @@ class SailingSimulationTest(unittest.TestCase):
 			pygame.Surface((render.WIDTH, render.HEIGHT)),
 			font,
 			state,
-			game.ENVIRONMENT,
+			config.ENVIRONMENT,
 			arcade.MotionIntent(forward=1),
 			telemetry,
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 		)
 
 		self.assertTrue(
@@ -334,10 +335,10 @@ class ModelAndActuatorTest(unittest.TestCase):
 		self.assertLess(actuator.damped_control_torque(state, 0), 0)
 
 	def test_sheet_never_pushes_the_sail_outward(self):
-		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+		state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 		control_state = simulation.surface_control_state(
-			coupled.observe(state, game.ENVIRONMENT, game.BOAT_PARAMETERS),
-			game.SIMULATION_SETTINGS,
+			coupled.observe(state, config.ENVIRONMENT, config.BOAT_PARAMETERS),
+			config.SIMULATION_SETTINGS,
 		)
 		for angle_rad, outward_target_rad in (
 			(0.25, 0.5),

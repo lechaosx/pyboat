@@ -24,7 +24,7 @@ Enter the development environment and start the game:
 
 ```sh
 nix develop
-uv run sailing-game
+uv run game
 ```
 
 The boat starts on a four-buoy time-trial course. Pass the numbered buoys in
@@ -52,7 +52,7 @@ axis directly to rudder position.
 ## Controllers
 
 The three modes use two concrete controller functions in
-`src/simple_sailing_game/controllers/arcade.py`:
+`src/sailing/controllers/arcade.py`:
 
 - Computed yaw-rate arcade is the default. Its maximum yaw rate is the local
   water speed at the rudder multiplied by the tangent of maximum rudder angle
@@ -74,7 +74,7 @@ reverse commands use a backed-sail target.
 ## Physics model
 
 The game always uses the `articulated` model in
-`src/simple_sailing_game/physics/coupled.py`. The hull, sail/boom, and
+`src/sailing/physics/coupled.py`. The hull, sail/boom, and
 rudder/tiller have their selected masses. Pivots and rotary limits connect the
 surfaces to the hull, fluid loads act on their bodies, and actuator torques act
 equally and oppositely on each surface and the hull. Appendage motion therefore
@@ -98,8 +98,8 @@ has no implicit curve defaults:
 ```python
 import math
 
-from simple_sailing_game import boat
-from simple_sailing_game.physics import curves
+from sailing import boat
+from sailing.physics import curves
 
 base_underwater_lift = curves.streamlined_lift(math.radians(12), 0.9)
 
@@ -121,22 +121,18 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 
 ## Code layout
 
-- `game.py` owns runtime parameters, mode selection, and the Pygame loop.
-- `simulation.py` adapts the three controllers to the articulated plant.
-- `controllers/arcade.py` owns intents and surface-target policies.
-- `controllers/actuator.py` converts surface targets into bounded torques.
-- `input.py` converts keyboard and gamepad state into controller intent.
-- `render.py` owns Pygame drawing.
-- `physics/curves.py` provides selectable and parameterized foil coefficient
-  curves.
-- `physics/coupled.py` constructs and advances the articulated boat.
+- `game` owns boat configuration, course logic, input, rendering, and the
+  Pygame loop.
+- `sailing` provides the reusable boat model, controllers, simulation adapter,
+  coefficient curves, and articulated physics.
+- `plotting` contains the speed-polar and coefficient-plot tools.
 
 ## Model tuning
 
 Generate a simulated speed polar for the articulated plant:
 
 ```sh
-uv run --extra plots sailing-polar
+uv run polar
 ```
 
 The polar helper drives the retained yaw-rate controller with a local heading
@@ -164,20 +160,20 @@ The simpler coefficient plot compares the lift and drag curves selected for all
 three foils:
 
 ```sh
-uv run --extra plots sailing-plot
+uv run coefficients
 ```
 
-Pygame and Pymunk are the only core dependencies. Matplotlib is confined to the
-optional `plots` dependency group.
+Pygame and Pymunk are the only core dependencies. Matplotlib and pytest are
+development dependencies.
 
 ## Tests
 
 Run the complete suite from the repository root:
 
 ```sh
-uv run --all-extras python -m unittest discover -v
+uv run pytest
 ```
 
-The suite covers force equations, actuator behavior, all three controllers, both
-physics models, timestep convergence, course progression, input mapping, and
+The suite covers force equations, actuator behavior, all three controllers,
+coupled physics, timestep convergence, course progression, input mapping, and
 representative sailing maneuvers.

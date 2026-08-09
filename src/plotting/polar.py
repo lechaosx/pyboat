@@ -1,8 +1,8 @@
 import math
 from dataclasses import dataclass, replace
 
-from . import boat, simulation
-from .controllers import arcade
+from sailing import boat, simulation
+from sailing.controllers import arcade
 
 
 @dataclass(frozen=True)
@@ -109,12 +109,12 @@ def sample(
 def main() -> None:
 	import matplotlib.pyplot
 
-	from . import game
+	from game import config
 
 	points = sample(
-		game.SIMULATION_SETTINGS,
-		game.ENVIRONMENT,
-		game.DT_SECONDS,
+		config.SIMULATION_SETTINGS,
+		config.ENVIRONMENT,
+		config.DT_SECONDS,
 	)
 	matplotlib.pyplot.plot(
 		[point.heading_from_upwind_deg for point in points],

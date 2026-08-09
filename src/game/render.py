@@ -3,9 +3,11 @@ import math
 import pygame
 import pymunk
 
-from . import boat, course
-from .controllers import arcade
-from .simulation import SimulationTelemetry
+from sailing import boat
+from sailing.controllers import arcade
+from sailing.simulation import SimulationTelemetry
+
+from . import course
 
 
 WIDTH, HEIGHT = 1280, 720

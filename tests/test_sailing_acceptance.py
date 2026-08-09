@@ -4,9 +4,11 @@ from dataclasses import replace
 
 import pymunk
 
-from simple_sailing_game import boat, game, polar, simulation
-from simple_sailing_game.controllers.arcade import MotionIntent
-from simple_sailing_game.physics import coupled
+from game import config
+from plotting import polar
+from sailing import boat, simulation
+from sailing.controllers.arcade import MotionIntent
+from sailing.physics import coupled
 
 
 class ReferenceDinghyAcceptanceTest(unittest.TestCase):
@@ -15,9 +17,9 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		cls.polar_points = {
 			point.heading_from_upwind_deg: point
 			for point in polar.sample(
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
+				config.SIMULATION_SETTINGS,
+				config.ENVIRONMENT,
+				config.DT_SECONDS,
 				headings_from_upwind_deg=(15, 30, 45, 90, 120, 180),
 				settling_seconds=15,
 				sampling_seconds=3,
@@ -59,11 +61,11 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 
 	def test_unforced_coast_down_is_monotonic(self):
 		parameters = replace(
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
-			sail_foil=replace(game.BOAT_PARAMETERS.sail_foil, area_m2=0),
-			keel_foil=replace(game.BOAT_PARAMETERS.keel_foil, area_m2=0),
-			rudder_foil=replace(game.BOAT_PARAMETERS.rudder_foil, area_m2=0),
+			sail_foil=replace(config.BOAT_PARAMETERS.sail_foil, area_m2=0),
+			keel_foil=replace(config.BOAT_PARAMETERS.keel_foil, area_m2=0),
+			rudder_foil=replace(config.BOAT_PARAMETERS.rudder_foil, area_m2=0),
 		)
 		environment = boat.Environment(
 			pymunk.Vec2d(0, 0),
@@ -73,13 +75,13 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		for body in state.space.bodies:
 			body.velocity = pymunk.Vec2d(2, 0)
 		previous_speed_m_s = state.boat.velocity.length
-		for _ in range(round(5 / game.DT_SECONDS)):
+		for _ in range(round(5 / config.DT_SECONDS)):
 			coupled.step(
 				state,
 				environment,
 				parameters,
 				boat.ActuatorTorques(),
-				game.DT_SECONDS,
+				config.DT_SECONDS,
 			)
 			speed_m_s = state.boat.velocity.length
 			self.assertLessEqual(speed_m_s, previous_speed_m_s + 1e-12)
@@ -94,18 +96,18 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		):
 			state = simulation.create_simulation(
 				replace(
-					game.SIMULATION_SETTINGS,
+					config.SIMULATION_SETTINGS,
 					initial_boat_angle_rad=angle_rad,
 				)
 			)
-			for _ in range(round(6 / game.DT_SECONDS)):
+			for _ in range(round(6 / config.DT_SECONDS)):
 				simulation.advance_surface_game(
 					state,
 					MotionIntent(forward=1, turn=turn),
-					game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-					game.SIMULATION_SETTINGS,
-					game.ENVIRONMENT,
-					game.DT_SECONDS,
+					simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+					config.SIMULATION_SETTINGS,
+					config.ENVIRONMENT,
+					config.DT_SECONDS,
 				)
 			states.append(state)
 
@@ -123,7 +125,7 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 		):
 			with self.subTest(angle_rad=angle_rad):
 				settings = replace(
-					game.SIMULATION_SETTINGS,
+					config.SIMULATION_SETTINGS,
 					initial_boat_angle_rad=angle_rad,
 				)
 				state = simulation.create_simulation(settings)
@@ -131,14 +133,14 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 					body.velocity = pymunk.Vec2d(0.75, 0).rotated(state.boat.angle)
 				target_heading_rad = state.boat.angle + turn * math.pi / 2
 
-				for _ in range(round(15 / game.DT_SECONDS)):
+				for _ in range(round(15 / config.DT_SECONDS)):
 					simulation.advance_surface_game(
 						state,
 						MotionIntent(forward=1, turn=turn),
-						game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+						simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL,
 						settings,
-						game.ENVIRONMENT,
-						game.DT_SECONDS,
+						config.ENVIRONMENT,
+						config.DT_SECONDS,
 					)
 					if (state.boat.angle - target_heading_rad) * turn >= 0:
 						break
@@ -149,17 +151,17 @@ class ReferenceDinghyAcceptanceTest(unittest.TestCase):
 				self.assertGreater(state.boat.velocity.dot(forward), 0.5)
 
 	def test_computed_yaw_rate_control_turns_from_rest(self):
-		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+		state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 		target_heading_rad = state.boat.angle + math.radians(135)
 
-		for _ in range(round(28 / game.DT_SECONDS)):
+		for _ in range(round(28 / config.DT_SECONDS)):
 			simulation.advance_surface_game(
 				state,
 				MotionIntent(forward=1, turn=1),
-				game.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
-				game.DT_SECONDS,
+				simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+				config.SIMULATION_SETTINGS,
+				config.ENVIRONMENT,
+				config.DT_SECONDS,
 			)
 			if state.boat.angle >= target_heading_rad:
 				break

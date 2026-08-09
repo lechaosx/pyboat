@@ -2,7 +2,7 @@ import math
 
 import pymunk
 
-from .controllers import arcade
+from sailing.controllers import arcade
 
 
 def keyboard_motion(

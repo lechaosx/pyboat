@@ -4,7 +4,7 @@ import math
 def main() -> None:
 	import matplotlib.pyplot
 
-	from .game import BOAT_PARAMETERS
+	from game.config import BOAT_PARAMETERS
 
 	angles_deg = list(range(-180, 181))
 	angles_rad = [math.radians(angle) for angle in angles_deg]

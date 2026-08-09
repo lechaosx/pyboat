@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from simple_sailing_game import course
+from game import course
 
 
 class TimeTrialTest(unittest.TestCase):

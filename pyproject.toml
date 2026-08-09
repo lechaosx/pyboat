@@ -9,14 +9,20 @@ dependencies = [
     "pymunk>=6.6.0",
 ]
 
-[project.optional-dependencies]
-plots = ["matplotlib>=3.10.8"]
-
 [project.scripts]
-sailing-game = "simple_sailing_game.game:main"
-sailing-plot = "simple_sailing_game.plot:main"
-sailing-polar = "simple_sailing_game.polar:main"
+game = "game.main:main"
+polar = "plotting.polar:main"
+coefficients = "plotting.coefficients:main"
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.8",
+    "pytest>=8.0.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["game", "sailing", "plotting"]

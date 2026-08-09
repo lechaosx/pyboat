@@ -4,9 +4,10 @@ from dataclasses import replace
 
 import pymunk
 
-from simple_sailing_game import boat, game, simulation
-from simple_sailing_game.controllers import arcade
-from simple_sailing_game.physics import coupled, curves
+from game import config
+from sailing import boat, simulation
+from sailing.controllers import arcade
+from sailing.physics import coupled, curves
 
 
 class ForceInvariantTest(unittest.TestCase):
@@ -20,12 +21,12 @@ class ForceInvariantTest(unittest.TestCase):
 		):
 			with self.subTest(foil_name=foil_name):
 				foil = replace(
-					getattr(game.BOAT_PARAMETERS, foil_name),
+					getattr(config.BOAT_PARAMETERS, foil_name),
 					lift_coefficient=zero_lift,
 					drag_coefficient=zero_drag,
 				)
 				parameters = replace(
-					game.BOAT_PARAMETERS,
+					config.BOAT_PARAMETERS,
 					**{foil_name: foil},
 					hull_drag_coefficient=0,
 					hull_lateral_drag_coefficient=0,
@@ -38,7 +39,7 @@ class ForceInvariantTest(unittest.TestCase):
 					boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
 					parameters,
 					boat.ActuatorTorques(),
-					game.DT_SECONDS,
+					config.DT_SECONDS,
 				)
 				forces = (
 					telemetry.observation.sail_load.force_n,
@@ -56,31 +57,31 @@ class ForceInvariantTest(unittest.TestCase):
 				)
 
 	def test_coupled_observation_uses_the_physical_surface_body(self):
-		state = coupled.create_simulation(game.BOAT_PARAMETERS, 0)
+		state = coupled.create_simulation(config.BOAT_PARAMETERS, 0)
 		assembly = state.coupled_assembly
 		self.assertIsInstance(assembly, coupled.Assembly)
 		assembly.sail.velocity = pymunk.Vec2d(3, 2)
 		hinge_world_m = state.boat.local_to_world(
-			game.BOAT_PARAMETERS.mast_position_m
+			config.BOAT_PARAMETERS.mast_position_m
 		)
 		center_world_m = hinge_world_m + pymunk.Vec2d(
-			-game.BOAT_PARAMETERS.sail_center_of_effort_from_mast_m,
+			-config.BOAT_PARAMETERS.sail_center_of_effort_from_mast_m,
 			0,
 		).rotated(assembly.sail.angle)
 		expected_force_n = boat.force_on_foil(
 			boat.apparent_flow(
-				game.ENVIRONMENT.true_wind_velocity_m_s,
+				config.ENVIRONMENT.true_wind_velocity_m_s,
 				assembly.sail.velocity_at_world_point(center_world_m),
 			),
 			assembly.sail.angle,
-			game.BOAT_PARAMETERS.air_density_kg_m3,
-			game.BOAT_PARAMETERS.sail_foil,
+			config.BOAT_PARAMETERS.air_density_kg_m3,
+			config.BOAT_PARAMETERS.sail_foil,
 		)
 
 		observation = coupled.observe(
 			state,
-			game.ENVIRONMENT,
-			game.BOAT_PARAMETERS,
+			config.ENVIRONMENT,
+			config.BOAT_PARAMETERS,
 		)
 
 		self.assertAlmostEqual(
@@ -92,12 +93,12 @@ class ForceInvariantTest(unittest.TestCase):
 		angle_rad = math.radians(5)
 
 		self.assertGreater(
-			game.BOAT_PARAMETERS.keel_foil.lift_coefficient(angle_rad),
+			config.BOAT_PARAMETERS.keel_foil.lift_coefficient(angle_rad),
 			curves.flat_plate_lift(angle_rad),
 		)
 
 	def test_underwater_foil_loses_lift_after_stalling(self):
-		lift = game.BOAT_PARAMETERS.keel_foil.lift_coefficient
+		lift = config.BOAT_PARAMETERS.keel_foil.lift_coefficient
 		at_stall = lift(math.radians(15))
 		past_stall = lift(math.radians(20))
 		side_on = lift(math.radians(90))
@@ -108,10 +109,10 @@ class ForceInvariantTest(unittest.TestCase):
 
 	def test_offset_keel_uses_rotational_velocity(self):
 		parameters = replace(
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
 			keel_position_m=(-1, 0),
-			rudder_foil=replace(game.BOAT_PARAMETERS.rudder_foil, area_m2=0),
+			rudder_foil=replace(config.BOAT_PARAMETERS.rudder_foil, area_m2=0),
 			hull_drag_coefficient=0,
 			hull_lateral_drag_coefficient=0,
 		)
@@ -140,7 +141,7 @@ class ForceInvariantTest(unittest.TestCase):
 			environment,
 			parameters,
 			boat.ActuatorTorques(),
-			game.DT_SECONDS,
+			config.DT_SECONDS,
 		)
 
 		self.assertAlmostEqual(
@@ -152,11 +153,11 @@ class ForceInvariantTest(unittest.TestCase):
 		force = boat.hull_resistance_force(
 			pymunk.Vec2d(1, 1),
 			boat_angle_rad=0,
-			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
-			reference_area_m2=game.BOAT_PARAMETERS.hull_reference_area_m2,
-			coefficient=game.BOAT_PARAMETERS.hull_drag_coefficient,
+			fluid_density_kg_m3=config.BOAT_PARAMETERS.water_density_kg_m3,
+			reference_area_m2=config.BOAT_PARAMETERS.hull_reference_area_m2,
+			coefficient=config.BOAT_PARAMETERS.hull_drag_coefficient,
 			lateral_coefficient=(
-				game.BOAT_PARAMETERS.hull_lateral_drag_coefficient
+				config.BOAT_PARAMETERS.hull_lateral_drag_coefficient
 			),
 		)
 
@@ -167,9 +168,9 @@ class ForceInvariantTest(unittest.TestCase):
 		force = boat.hull_resistance_force(
 			pymunk.Vec2d(3, 4),
 			boat_angle_rad=0,
-			fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
-			reference_area_m2=game.BOAT_PARAMETERS.hull_reference_area_m2,
-			coefficient=game.BOAT_PARAMETERS.hull_drag_coefficient,
+			fluid_density_kg_m3=config.BOAT_PARAMETERS.water_density_kg_m3,
+			reference_area_m2=config.BOAT_PARAMETERS.hull_reference_area_m2,
+			coefficient=config.BOAT_PARAMETERS.hull_drag_coefficient,
 		)
 
 		self.assertGreater(force.x, 0)
@@ -177,7 +178,7 @@ class ForceInvariantTest(unittest.TestCase):
 
 	def test_offset_keel_force_generates_hull_yaw(self):
 		parameters = replace(
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			keel_position_m=(-1, 0),
 			air_density_kg_m3=0,
 			hull_drag_coefficient=0,
@@ -191,22 +192,22 @@ class ForceInvariantTest(unittest.TestCase):
 			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
 			parameters,
 			boat.ActuatorTorques(),
-			game.DT_SECONDS,
+			config.DT_SECONDS,
 		)
 
 		self.assertGreater(state.boat.angular_velocity, 0)
 
 	def test_zero_flow_produces_zero_foil_force(self):
 		for foil in (
-			game.BOAT_PARAMETERS.sail_foil,
-			game.BOAT_PARAMETERS.keel_foil,
-			game.BOAT_PARAMETERS.rudder_foil,
+			config.BOAT_PARAMETERS.sail_foil,
+			config.BOAT_PARAMETERS.keel_foil,
+			config.BOAT_PARAMETERS.rudder_foil,
 		):
 			with self.subTest(lift_coefficient=foil.lift_coefficient.__name__):
 				force = boat.force_on_foil(
 					pymunk.Vec2d(0, 0),
 					foil_angle_rad=1,
-					fluid_density_kg_m3=game.BOAT_PARAMETERS.water_density_kg_m3,
+					fluid_density_kg_m3=config.BOAT_PARAMETERS.water_density_kg_m3,
 					foil=foil,
 				)
 
@@ -215,9 +216,9 @@ class ForceInvariantTest(unittest.TestCase):
 	def test_foil_force_never_adds_energy_relative_to_the_fluid(self):
 		flow = pymunk.Vec2d(3, -2)
 		for foil in (
-			game.BOAT_PARAMETERS.sail_foil,
-			game.BOAT_PARAMETERS.keel_foil,
-			game.BOAT_PARAMETERS.rudder_foil,
+			config.BOAT_PARAMETERS.sail_foil,
+			config.BOAT_PARAMETERS.keel_foil,
+			config.BOAT_PARAMETERS.rudder_foil,
 		):
 			for angle_deg in range(-180, 181, 15):
 				with self.subTest(
@@ -227,15 +228,15 @@ class ForceInvariantTest(unittest.TestCase):
 					force = boat.force_on_foil(
 						flow,
 						math.radians(angle_deg),
-						game.BOAT_PARAMETERS.water_density_kg_m3,
+						config.BOAT_PARAMETERS.water_density_kg_m3,
 						foil,
 					)
 					self.assertGreaterEqual(force.dot(flow), -1e-9)
 
 	def test_keel_force_opposes_sideways_boat_motion(self):
 		state = coupled.create_simulation(
-			game.BOAT_PARAMETERS,
-			game.INITIAL_BOAT_ANGLE_RAD,
+			config.BOAT_PARAMETERS,
+			config.INITIAL_BOAT_ANGLE_RAD,
 		)
 		state.boat.angle = 0
 		for body in state.space.bodies:
@@ -245,9 +246,9 @@ class ForceInvariantTest(unittest.TestCase):
 		telemetry = coupled.step(
 			state,
 			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			boat.ActuatorTorques(),
-			game.DT_SECONDS,
+			config.DT_SECONDS,
 		)
 
 		self.assertLess(telemetry.keel_force_n.dot(velocity), 0)
@@ -256,11 +257,11 @@ class ForceInvariantTest(unittest.TestCase):
 class IntegrationInvariantTest(unittest.TestCase):
 	def test_unforced_yaw_decay_is_timestep_stable(self):
 		parameters = replace(
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
-			sail_foil=replace(game.BOAT_PARAMETERS.sail_foil, area_m2=0),
-			keel_foil=replace(game.BOAT_PARAMETERS.keel_foil, area_m2=0),
-			rudder_foil=replace(game.BOAT_PARAMETERS.rudder_foil, area_m2=0),
+			sail_foil=replace(config.BOAT_PARAMETERS.sail_foil, area_m2=0),
+			keel_foil=replace(config.BOAT_PARAMETERS.keel_foil, area_m2=0),
+			rudder_foil=replace(config.BOAT_PARAMETERS.rudder_foil, area_m2=0),
 			hull_drag_coefficient=0,
 		)
 		environment = boat.Environment(
@@ -290,7 +291,7 @@ class IntegrationInvariantTest(unittest.TestCase):
 
 	def test_coupled_actuator_torque_preserves_total_angular_momentum(self):
 		parameters = replace(
-			game.BOAT_PARAMETERS,
+			config.BOAT_PARAMETERS,
 			air_density_kg_m3=0,
 			water_density_kg_m3=0,
 			hull_drag_coefficient=0,
@@ -304,7 +305,7 @@ class IntegrationInvariantTest(unittest.TestCase):
 			boat.Environment(pymunk.Vec2d(0, 0), pymunk.Vec2d(0, 0)),
 			parameters,
 			boat.ActuatorTorques(sail_n_m=100),
-			game.DT_SECONDS,
+			config.DT_SECONDS,
 		)
 
 		angular_momentum = sum(
@@ -320,14 +321,14 @@ class IntegrationInvariantTest(unittest.TestCase):
 		)
 
 	def simulate(self, dt_seconds):
-		state = simulation.create_simulation(game.SIMULATION_SETTINGS)
+		state = simulation.create_simulation(config.SIMULATION_SETTINGS)
 		for _ in range(round(5 / dt_seconds)):
 			simulation.advance_surface_game(
 				state,
 				arcade.MotionIntent(forward=1),
-				game.YAW_RATE_ARCADE_CONTROL,
-				game.SIMULATION_SETTINGS,
-				game.ENVIRONMENT,
+				simulation.YAW_RATE_ARCADE_CONTROL,
+				config.SIMULATION_SETTINGS,
+				config.ENVIRONMENT,
 				dt_seconds,
 			)
 		return state

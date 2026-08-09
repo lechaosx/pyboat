@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from simple_sailing_game.physics import curves
+from sailing.physics import curves
 
 
 class CoefficientCurveTest(unittest.TestCase):

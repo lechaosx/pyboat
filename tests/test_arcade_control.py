@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from simple_sailing_game.controllers import arcade
+from sailing.controllers import arcade
 
 
 MotionIntent = arcade.MotionIntent
