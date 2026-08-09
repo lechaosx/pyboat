@@ -158,17 +158,8 @@ def draw(
 			)
 			screen.blit(font.render(str(index + 1), True, color), position + (5, 5))
 
-	half_length_px = parameters.length_m * PIXELS_PER_METER / 2
-	half_beam_px = parameters.beam_m * PIXELS_PER_METER / 2
-	bow_base_px = (
-		parameters.length_m / 2 - parameters.bow_length_m
-	) * PIXELS_PER_METER
 	hull_points = [
-		pymunk.Vec2d(half_length_px, 0),
-		pymunk.Vec2d(bow_base_px, -half_beam_px),
-		pymunk.Vec2d(-half_length_px, -half_beam_px),
-		pymunk.Vec2d(-half_length_px, half_beam_px),
-		pymunk.Vec2d(bow_base_px, half_beam_px),
+		point * PIXELS_PER_METER for point in boat.hull_outline_m(parameters)
 	]
 	pygame.draw.polygon(
 		screen,

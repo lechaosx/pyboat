@@ -12,10 +12,12 @@ class GameServer:
 		self.match = match
 		self.snapshot_interval_ticks = snapshot_interval_ticks
 		self.connections: dict[ServerConnection, str] = {}
+		self.known_player_ids: dict[ServerConnection, set[str]] = {}
 
 	async def handle(self, connection: ServerConnection) -> None:
 		player_id = self.match.add_player()
 		self.connections[connection] = player_id
+		self.known_player_ids[connection] = set()
 		await connection.send(protocol.welcome_message(player_id))
 		try:
 			async for message in connection:
@@ -23,15 +25,22 @@ class GameServer:
 				self.match.set_input(player_id, sequence, intent)
 		finally:
 			del self.connections[connection]
+			del self.known_player_ids[connection]
 			self.match.remove_player(player_id)
 
 	def advance(self) -> None:
 		self.match.advance()
 		if self.match.tick % self.snapshot_interval_ticks == 0:
 			for connection, player_id in self.connections.items():
+				snapshot = self.match.snapshot_for(player_id)
+				known_ids = self.known_player_ids[connection]
+				removed_ids = sorted(known_ids - self.match.players.keys())
+				known_ids.difference_update(removed_ids)
+				known_ids.update(item["id"] for item in snapshot["boats"])
+				snapshot["removedPlayerIds"] = removed_ids
 				broadcast(
 					(connection,),
-					protocol.snapshot_message(self.match.snapshot_for(player_id)),
+					protocol.snapshot_message(snapshot),
 				)
 
 	async def run(self) -> None:

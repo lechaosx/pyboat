@@ -122,11 +122,16 @@ def total_mass_kg(parameters: BoatParameters) -> float:
 	)
 
 
-def hull_moment_of_inertia_kg_m2(parameters: BoatParameters) -> float:
+def hull_outline_m(parameters: BoatParameters) -> tuple[pymunk.Vec2d, ...]:
+	half_length_m = parameters.length_m / 2
+	half_beam_m = parameters.beam_m / 2
+	bow_base_m = half_length_m - parameters.bow_length_m
 	return (
-		parameters.hull_mass_kg
-		* (parameters.length_m**2 + parameters.beam_m**2)
-		/ 12
+		pymunk.Vec2d(half_length_m, 0),
+		pymunk.Vec2d(bow_base_m, -half_beam_m),
+		pymunk.Vec2d(-half_length_m, -half_beam_m),
+		pymunk.Vec2d(-half_length_m, half_beam_m),
+		pymunk.Vec2d(bow_base_m, half_beam_m),
 	)
 
 

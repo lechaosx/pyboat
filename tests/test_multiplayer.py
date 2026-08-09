@@ -8,6 +8,7 @@ import pygame
 from game import config
 from game.client import (
 	DelayedMessages,
+	InputHistory,
 	PhysicsBubble,
 	SnapshotPrediction,
 	draw_snapshot,
@@ -205,6 +206,45 @@ class ClientRenderTest(unittest.TestCase):
 		)
 		self.assertGreater(arrow_pixels, 0)
 
+	def test_draw_snapshot_keeps_stale_remote_position_as_an_edge_arrow(self):
+		pygame.font.init()
+		screen = pygame.Surface((640, 360))
+		draw_snapshot(
+			screen,
+			pygame.font.Font(None, 24),
+			"player-1",
+			{
+				"tick": 3,
+				"boats": [
+					{
+						"id": "player-1",
+						"x": 0,
+						"y": 0,
+						"angle": 0,
+						"sail": 0,
+						"rudder": 0,
+					},
+					{
+						"id": "player-2",
+						"x": 2,
+						"y": 0,
+						"angle": 0,
+						"sail": 0,
+						"rudder": 0,
+						"stale": True,
+					},
+				],
+			},
+			config.BOAT_PARAMETERS,
+		)
+
+		arrow_pixels = sum(
+			tuple(screen.get_at((x, y))) == (205, 205, 220, 255)
+			for x in range(590, 640)
+			for y in range(130, 230)
+		)
+		self.assertGreater(arrow_pixels, 0)
+
 
 class NetworkConditionsTest(unittest.TestCase):
 	def test_messages_wait_for_the_configured_delay(self):
@@ -302,6 +342,88 @@ class SnapshotPredictionTest(unittest.TestCase):
 		self.assertAlmostEqual(prediction.at(1.05)["boats"][0]["x"], before)
 		self.assertAlmostEqual(prediction.at(1.15)["boats"][0]["x"], 0.13)
 
+	def test_keeps_last_position_for_active_boat_omitted_by_interest(self):
+		prediction = SnapshotPrediction()
+		prediction.accept(
+			{
+				"type": "snapshot",
+				"tick": 1,
+				"removedPlayerIds": [],
+				"boats": [self.boat(), self.boat(id="player-2", x=24)],
+			},
+			received_at=1,
+			now=1,
+		)
+
+		prediction.accept(
+			{
+				"type": "snapshot",
+				"tick": 2,
+				"removedPlayerIds": [],
+				"boats": [self.boat()],
+			},
+			received_at=1.1,
+			now=1.1,
+		)
+
+		remote = next(
+			item for item in prediction.at(2)["boats"] if item["id"] == "player-2"
+		)
+		self.assertEqual(remote["x"], 24)
+		self.assertTrue(remote["stale"])
+
+	def test_removes_last_position_when_boat_disconnects(self):
+		prediction = SnapshotPrediction()
+		prediction.accept(
+			{
+				"type": "snapshot",
+				"tick": 1,
+				"removedPlayerIds": [],
+				"boats": [self.boat(), self.boat(id="player-2", x=24)],
+			},
+			received_at=1,
+			now=1,
+		)
+
+		prediction.accept(
+			{
+				"type": "snapshot",
+				"tick": 2,
+				"removedPlayerIds": ["player-2"],
+				"boats": [self.boat()],
+			},
+			received_at=1.1,
+			now=1.1,
+		)
+
+		self.assertEqual(
+			[item["id"] for item in prediction.at(1.1)["boats"]],
+			["player-1"],
+		)
+
+
+class InputHistoryTest(unittest.TestCase):
+	def test_replays_only_unacknowledged_input_timeline(self):
+		history = InputHistory()
+		turning = arcade.MotionIntent(forward=1, turn=1)
+		straight = arcade.MotionIntent(forward=1, turn=0)
+		history.record(1, turning, now=1)
+		history.record(2, straight, now=1.05)
+
+		segments = history.replay_segments(
+			acknowledged_sequence=1,
+			server_intent=turning,
+			received_at=1.1,
+			now=1.15,
+			maximum_seconds=0.25,
+		)
+		self.assertEqual(len(segments), 1)
+		self.assertAlmostEqual(segments[0][0], 0.1)
+		self.assertEqual(segments[0][1], straight)
+
+		history.acknowledge(1)
+		self.assertEqual([item.sequence for item in history.commands], [2])
+
 
 class PhysicsBubbleTest(unittest.TestCase):
 	def boat(self, player_id, x, y=0, vx=0, vy=0, **changes):
@@ -344,7 +466,7 @@ class PhysicsBubbleTest(unittest.TestCase):
 		bubble.accept(
 			snapshot,
 			"local",
-			arcade.MotionIntent(),
+			InputHistory(),
 			received_at=1,
 			now=1,
 		)
@@ -365,7 +487,7 @@ class PhysicsBubbleTest(unittest.TestCase):
 		bubble.accept(
 			snapshot,
 			"local",
-			arcade.MotionIntent(),
+			InputHistory(),
 			received_at=1,
 			now=1,
 		)
@@ -374,6 +496,26 @@ class PhysicsBubbleTest(unittest.TestCase):
 
 		self.assertLess(bubble.boats["local"].state.boat.velocity.x, 3)
 		self.assertGreater(bubble.boats["other"].state.boat.velocity.x, -3)
+
+	def test_replays_unacknowledged_turn_instead_of_waiting_for_server(self):
+		bubble = self.bubble()
+		history = InputHistory()
+		history.record(1, arcade.MotionIntent(forward=1, turn=1), now=1)
+		snapshot = {
+			"type": "snapshot",
+			"tick": 1,
+			"boats": [self.boat("local", 0, vx=4)],
+		}
+
+		bubble.accept(
+			snapshot,
+			"local",
+			history,
+			received_at=1.1,
+			now=1.1,
+		)
+
+		self.assertNotEqual(bubble.boats["local"].state.rudder_angle_rad, 0)
 
 
 class ServerTest(unittest.IsolatedAsyncioTestCase):
@@ -439,6 +581,23 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
 		snapshot = json.loads(await asyncio.wait_for(connection.recv(), 0.2))
 		boat = next(boat for boat in snapshot["boats"] if boat["id"] == player_id)
 		self.assertEqual(boat["acknowledgedInput"], 8)
+
+	async def test_disconnect_sends_tombstone_only_to_client_that_saw_player(self):
+		first, _ = await self.connect_player()
+		second, second_id = await self.connect_player()
+		self.game_server.advance()
+		await first.recv()
+		await second.recv()
+
+		await second.close()
+		for _ in range(100):
+			if second_id not in self.game_server.match.players:
+				break
+			await asyncio.sleep(0)
+		self.game_server.advance()
+
+		snapshot = json.loads(await asyncio.wait_for(first.recv(), 0.2))
+		self.assertEqual(snapshot["removedPlayerIds"], [second_id])
 
 
 if __name__ == "__main__":

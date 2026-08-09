@@ -255,6 +255,16 @@ class ForceInvariantTest(unittest.TestCase):
 
 
 class IntegrationInvariantTest(unittest.TestCase):
+	def test_hull_collision_shape_uses_rendered_boat_outline(self):
+		state = coupled.create_simulation(config.BOAT_PARAMETERS, 0)
+		shape = next(iter(state.boat.shapes))
+
+		self.assertIsInstance(shape, pymunk.Poly)
+		self.assertCountEqual(
+			tuple(shape.get_vertices()),
+			boat.hull_outline_m(config.BOAT_PARAMETERS),
+		)
+
 	def test_coupled_state_can_be_restored_from_authoritative_motion(self):
 		state = coupled.create_simulation(config.BOAT_PARAMETERS, 0)
 		motion = boat.BoatMotion(

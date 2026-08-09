@@ -51,6 +51,62 @@ class DelayedMessages:
 		return ready
 
 
+@dataclass(frozen=True)
+class InputCommand:
+	sequence: int
+	intent: arcade.MotionIntent
+	created_at: float
+
+
+class InputHistory:
+	def __init__(self) -> None:
+		self.commands: list[InputCommand] = []
+
+	def record(
+		self,
+		sequence: int,
+		intent: arcade.MotionIntent,
+		now: float,
+	) -> None:
+		self.commands.append(InputCommand(sequence, intent, now))
+
+	def acknowledge(self, sequence: int) -> None:
+		self.commands = [
+			command for command in self.commands if command.sequence > sequence
+		]
+
+	def replay_segments(
+		self,
+		acknowledged_sequence: int,
+		server_intent: arcade.MotionIntent,
+		received_at: float,
+		now: float,
+		maximum_seconds: float,
+	) -> list[tuple[float, arcade.MotionIntent]]:
+		commands = [
+			command
+			for command in self.commands
+			if command.sequence > acknowledged_sequence
+		]
+		first_command_at = commands[0].created_at if commands else received_at
+		start = max(now - maximum_seconds, min(received_at, first_command_at))
+		cursor = start
+		intent = server_intent
+		segments = []
+		for command in commands:
+			if command.created_at <= start:
+				intent = command.intent
+				continue
+			if command.created_at >= now:
+				break
+			segments.append((command.created_at - cursor, intent))
+			cursor = command.created_at
+			intent = command.intent
+		if now > cursor:
+			segments.append((now - cursor, intent))
+		return [(seconds, value) for seconds, value in segments if seconds > 0]
+
+
 class SnapshotPrediction:
 	_predicted_fields = (
 		("x", "vx"),
@@ -82,16 +138,26 @@ class SnapshotPrediction:
 			max(0, now - self._received_at),
 		)
 		boats = []
-		for boat in self._snapshot["boats"]:
-			predicted = dict(boat)
-			for value_name, velocity_name in self._predicted_fields:
-				predicted[value_name] += predicted[velocity_name] * seconds
+		for snapshot_boat in self._snapshot["boats"]:
+			predicted = dict(snapshot_boat)
+			if not predicted.get("stale"):
+				for value_name, velocity_name in self._predicted_fields:
+					predicted[value_name] += predicted[velocity_name] * seconds
 			boats.append(predicted)
 		return self._snapshot | {"boats": boats}
 
 	def accept(self, snapshot: dict, received_at: float, now: float) -> None:
 		previous = self.at(now) if self._snapshot is not None else None
-		self._snapshot = snapshot
+		removed_ids = set(snapshot.get("removedPlayerIds", []))
+		visible_ids = {item["id"] for item in snapshot["boats"]}
+		retained = []
+		if self._snapshot is not None:
+			retained = [
+				dict(item) | {"stale": True}
+				for item in self._snapshot["boats"]
+				if item["id"] not in removed_ids and item["id"] not in visible_ids
+			]
+		self._snapshot = snapshot | {"boats": snapshot["boats"] + retained}
 		self._received_at = received_at
 		self._correction_started_at = now
 		self._corrections = {}
@@ -99,6 +165,8 @@ class SnapshotPrediction:
 			return
 		previous_boats = {boat["id"]: boat for boat in previous["boats"]}
 		for boat in self._extrapolated(now)["boats"]:
+			if boat.get("stale"):
+				continue
 			if boat["id"] not in previous_boats:
 				continue
 			old = previous_boats[boat["id"]]
@@ -154,7 +222,7 @@ class PhysicsBubble:
 		self,
 		snapshot: dict,
 		local_id: str,
-		local_intent: arcade.MotionIntent,
+		input_history: InputHistory,
 		received_at: float,
 		now: float,
 	) -> None:
@@ -201,29 +269,28 @@ class PhysicsBubble:
 				item["forward"],
 				item["turn"],
 			)
-		self.boats[local_id].intent = local_intent
-		self._last_time = received_at
+		local_snapshot = snapshot_boats[local_id]
 		self._accumulator_seconds = 0
-		self.advance_to(
-			min(now, received_at + 0.25),
-			local_id,
-			local_intent,
-		)
+		for seconds, intent in input_history.replay_segments(
+			local_snapshot["acknowledgedInput"],
+			self.boats[local_id].intent,
+			received_at,
+			now,
+			0.25,
+		):
+			self._advance_seconds(seconds, local_id, intent)
+		input_history.acknowledge(local_snapshot["acknowledgedInput"])
 		self._last_time = now
 
-	def advance_to(
+	def _advance_seconds(
 		self,
-		now: float,
+		seconds: float,
 		local_id: str,
 		local_intent: arcade.MotionIntent,
 	) -> None:
-		if self._last_time is None:
-			self._last_time = now
-			return
 		if local_id in self.boats:
 			self.boats[local_id].intent = local_intent
-		self._accumulator_seconds += max(0, now - self._last_time)
-		self._last_time = now
+		self._accumulator_seconds += seconds
 		while self._accumulator_seconds >= self.dt_seconds:
 			for predicted_boat in self.boats.values():
 				simulation.apply_surface_game_forces(
@@ -237,6 +304,19 @@ class PhysicsBubble:
 			for predicted_boat in self.boats.values():
 				coupled.synchronize(predicted_boat.state)
 			self._accumulator_seconds -= self.dt_seconds
+
+	def advance_to(
+		self,
+		now: float,
+		local_id: str,
+		local_intent: arcade.MotionIntent,
+	) -> None:
+		if self._last_time is None:
+			self._last_time = now
+			return
+		seconds = max(0, now - self._last_time)
+		self._last_time = now
+		self._advance_seconds(seconds, local_id, local_intent)
 
 	def apply_to(self, snapshot: dict) -> dict:
 		boats = []
@@ -292,17 +372,8 @@ def draw_snapshot(
 	for y in range(round(y_offset), screen.get_height(), grid_spacing_px):
 		pygame.draw.line(screen, (38, 46, 58), (0, y), (screen.get_width(), y))
 
-	half_length_px = parameters.length_m * PIXELS_PER_METER / 2
-	half_beam_px = parameters.beam_m * PIXELS_PER_METER / 2
-	bow_base_px = (
-		parameters.length_m / 2 - parameters.bow_length_m
-	) * PIXELS_PER_METER
-	hull_points = (
-		pymunk.Vec2d(half_length_px, 0),
-		pymunk.Vec2d(bow_base_px, -half_beam_px),
-		pymunk.Vec2d(-half_length_px, -half_beam_px),
-		pymunk.Vec2d(-half_length_px, half_beam_px),
-		pymunk.Vec2d(bow_base_px, half_beam_px),
+	hull_points = tuple(
+		point * PIXELS_PER_METER for point in boat.hull_outline_m(parameters)
 	)
 	offscreen_players = []
 	for item in snapshot["boats"]:
@@ -313,6 +384,10 @@ def draw_snapshot(
 			+ screen_center
 		)
 		color = (100, 220, 140) if item["id"] == player_id else (205, 205, 220)
+		if item.get("stale"):
+			if item["id"] != player_id and position_px != screen_center:
+				offscreen_players.append((position_px, color))
+			continue
 		if item["id"] != player_id and not screen.get_rect().collidepoint(position_px):
 			offscreen_players.append((position_px, color))
 		pygame.draw.polygon(
@@ -405,6 +480,7 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 	incoming_messages = DelayedMessages(one_way_delay_seconds, jitter_seconds)
 	outgoing_messages = DelayedMessages(one_way_delay_seconds, jitter_seconds)
 	prediction = SnapshotPrediction()
+	input_history = InputHistory()
 	physics_bubble = PhysicsBubble(
 		config.SIMULATION_SETTINGS,
 		config.ENVIRONMENT,
@@ -433,6 +509,14 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 						keys[pygame.K_a],
 						keys[pygame.K_d],
 					)
+					if intent != last_intent:
+						sequence += 1
+						input_history.record(sequence, intent, now)
+						outgoing_messages.add(
+							protocol.input_message(sequence, intent),
+							now,
+						)
+						last_intent = intent
 					while not snapshots.empty():
 						received_at, snapshot = snapshots.get_nowait()
 						incoming_messages.add((received_at, snapshot), received_at)
@@ -442,18 +526,11 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 						physics_bubble.accept(
 							snapshot,
 							player_id,
-							intent,
+							input_history,
 							received_at,
 							now,
 						)
 					physics_bubble.advance_to(now, player_id, intent)
-					if intent != last_intent:
-						sequence += 1
-						outgoing_messages.add(
-							protocol.input_message(sequence, intent),
-							now,
-						)
-						last_intent = intent
 					for message in outgoing_messages.take_ready(now):
 						await connection.send(message)
 					draw_snapshot(

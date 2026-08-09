@@ -22,11 +22,14 @@ def create_simulation(
 		space = pymunk.Space()
 	hull = pymunk.Body(
 		parameters.hull_mass_kg,
-		boat.hull_moment_of_inertia_kg_m2(parameters),
+		pymunk.moment_for_poly(
+			parameters.hull_mass_kg,
+			boat.hull_outline_m(parameters),
+		),
 	)
 	hull.angle = initial_angle_rad
 	hull.position = initial_position_m
-	shape = pymunk.Poly.create_box(hull, (parameters.length_m, parameters.beam_m))
+	shape = pymunk.Poly(hull, boat.hull_outline_m(parameters))
 	space.add(hull, shape)
 	state = boat.SailingState(space, hull)
 

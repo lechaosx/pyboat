@@ -51,7 +51,9 @@ include visual motion, and farther boats are omitted. The server advances the
 shared authoritative physics world at 60 Hz and sends snapshots at 60 Hz. Use
 `--host` and `--port` on the server or `--uri` on the client to connect across
 machines. The client extrapolates distant motion for at most 250 ms and smooths
-authoritative corrections over 100 ms.
+authoritative corrections over 100 ms. When a boat leaves network interest, its
+arrow remains at the last known direction until it returns or disconnects. Local
+input changes are predicted until their server acknowledgement arrives.
 
 Exercise a client with controlled round-trip latency and one-way jitter:
 

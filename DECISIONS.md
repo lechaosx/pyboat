@@ -21,6 +21,9 @@ Update an entry when implementation or evidence changes it.
   server-reported input.
 - Each authoritative snapshot resets that local physics cluster and it is replayed
   to render time. The server remains authoritative when predictions disagree.
+- Local input changes are retained until acknowledged by the server. Reconciliation
+  restores authoritative state and replays the unacknowledged input timeline rather
+  than only applying the latest input.
 - The bubble starts before contact rather than at contact so the local solver has
   both hulls when the collision impulse begins.
 
@@ -32,9 +35,18 @@ Update an entry when implementation or evidence changes it.
 - Boats beyond 24 m are omitted. The current radius covers the Python client's
   viewport plus a margin; a later variable viewport will need to communicate its
   interest bounds to the server.
+- The server remembers which boats each connection has seen. Clients retain an
+  omitted boat's last known position as an arrow, and the server sends a one-time
+  tombstone if that boat disconnects.
 - Server candidate lookup uses the spatial index already maintained by Pymunk,
   followed by an exact radial distance check. The client linearly scans only its
   already-culled snapshot.
+
+## Boat geometry
+
+- The rendered and physical hull use one outline defined in sailing coordinates.
+  Pymunk may reorder its polygon vertices internally, but the collision and both
+  Python renderers consume the same points.
 
 ## Prototype transport
 
