@@ -20,7 +20,11 @@ decisions.
 - **[Implicit]** Migration proceeds behavior by behavior through a
   runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
   a Rust test against the Python reference before browser or native runtime
-  adapters consume it; hull construction is the first migrated behavior.
+  adapters consume it. Hull construction, the articulated boat assembly, and
+  authoritative motion restoration are the first migrated behaviors.
+- **[Explicit]** The Rust simulation may differ from Pymunk implementation details
+  and exact numerical trajectories when the result is physically correct.
+  Equivalence is judged by physical invariants and accepted gameplay behavior.
 
 ## Target browser and server stack
 
@@ -156,4 +160,7 @@ decisions.
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or
   another transport.
-- Which Python simulation behavior should be migrated after hull construction.
+- Whether sail and rudder bearing damping should use Rapier joint motors or
+  explicit project-owned torques.
+- Which Python simulation behavior should be migrated after authoritative motion
+  restoration.

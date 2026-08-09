@@ -1,6 +1,7 @@
 use rapier2d::prelude::{
-    ColliderBuilder, ColliderHandle, ColliderSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
-    Vector,
+    ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
+    MassProperties, RevoluteJointBuilder, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+    Rotation, Vector,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -17,6 +18,43 @@ pub struct Hull {
     pub collider: ColliderHandle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoatParameters {
+    pub hull: HullParameters,
+    pub sail_mass_kg: f32,
+    pub boom_mass_kg: f32,
+    pub boom_length_m: f32,
+    pub mast_position_m: Vector,
+    pub max_sail_angle_rad: f32,
+    pub rudder_mass_kg: f32,
+    pub tiller_mass_kg: f32,
+    pub rudder_draw_length_m: f32,
+    pub tiller_length_m: f32,
+    pub rudder_position_m: Vector,
+    pub max_rudder_angle_rad: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoatMotion {
+    pub position_m: Vector,
+    pub velocity_m_s: Vector,
+    pub angle_rad: f32,
+    pub angular_velocity_rad_s: f32,
+    pub sail_angle_rad: f32,
+    pub sail_angular_velocity_rad_s: f32,
+    pub rudder_angle_rad: f32,
+    pub rudder_angular_velocity_rad_s: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Boat {
+    pub hull: Hull,
+    pub sail: RigidBodyHandle,
+    pub rudder: RigidBodyHandle,
+    pub sail_joint: ImpulseJointHandle,
+    pub rudder_joint: ImpulseJointHandle,
+}
+
 pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
     let half_length_m = parameters.length_m / 2.0;
     let half_beam_m = parameters.beam_m / 2.0;
@@ -30,16 +68,212 @@ pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
     ]
 }
 
+fn polygon_moment_of_inertia(mass_kg: f32, points: &[Vector]) -> f32 {
+    let mut weighted_radius = 0.0;
+    let mut twice_area = 0.0;
+    for index in 0..points.len() {
+        let first = points[index];
+        let second = points[(index + 1) % points.len()];
+        let cross = first.perp_dot(second);
+        twice_area += cross;
+        weighted_radius +=
+            cross * (first.length_squared() + first.dot(second) + second.length_squared());
+    }
+    mass_kg * weighted_radius / (6.0 * twice_area)
+}
+
 pub fn create_hull(
     parameters: HullParameters,
     bodies: &mut RigidBodySet,
     colliders: &mut ColliderSet,
 ) -> Hull {
-    let body = bodies.insert(RigidBodyBuilder::dynamic());
-    let collider = ColliderBuilder::convex_polyline(hull_outline_m(parameters).to_vec())
+    let outline = hull_outline_m(parameters);
+    let mass_properties = MassProperties::new(
+        Vector::ZERO,
+        parameters.mass_kg,
+        polygon_moment_of_inertia(parameters.mass_kg, &outline),
+    );
+    let body =
+        bodies.insert(RigidBodyBuilder::dynamic().additional_mass_properties(mass_properties));
+    let collider = ColliderBuilder::convex_polyline(outline.to_vec())
         .unwrap()
-        .mass(parameters.mass_kg)
+        .density(0.0)
         .build();
     let collider = colliders.insert_with_parent(collider, body, bodies);
+    bodies[body].recompute_mass_properties_from_colliders(colliders);
     Hull { body, collider }
+}
+
+fn sail_center_from_mast_m(parameters: BoatParameters) -> Vector {
+    Vector::new(-parameters.boom_length_m / 2.0, 0.0)
+}
+
+fn sail_mass_properties(parameters: BoatParameters) -> MassProperties {
+    let mass_kg = parameters.sail_mass_kg + parameters.boom_mass_kg;
+    let hinge_inertia = mass_kg * parameters.boom_length_m.powi(2) / 3.0;
+    let center = sail_center_from_mast_m(parameters);
+    MassProperties::new(
+        Vector::ZERO,
+        mass_kg,
+        hinge_inertia - mass_kg * center.length_squared(),
+    )
+}
+
+fn rudder_center_from_hinge_m(parameters: BoatParameters) -> Vector {
+    let mass_kg = parameters.rudder_mass_kg + parameters.tiller_mass_kg;
+    Vector::new(
+        (-parameters.rudder_mass_kg * parameters.rudder_draw_length_m / 2.0
+            + parameters.tiller_mass_kg * parameters.tiller_length_m / 2.0)
+            / mass_kg,
+        0.0,
+    )
+}
+
+fn rudder_mass_properties(parameters: BoatParameters) -> MassProperties {
+    let mass_kg = parameters.rudder_mass_kg + parameters.tiller_mass_kg;
+    let hinge_inertia = parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
+        + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0;
+    let center = rudder_center_from_hinge_m(parameters);
+    MassProperties::new(
+        Vector::ZERO,
+        mass_kg,
+        hinge_inertia - mass_kg * center.length_squared(),
+    )
+}
+
+pub fn create_boat(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    bodies: &mut RigidBodySet,
+    colliders: &mut ColliderSet,
+    joints: &mut ImpulseJointSet,
+) -> Boat {
+    let hull = create_hull(parameters.hull, bodies, colliders);
+    let sail = bodies.insert(
+        RigidBodyBuilder::dynamic().additional_mass_properties(sail_mass_properties(parameters)),
+    );
+    let rudder = bodies.insert(
+        RigidBodyBuilder::dynamic().additional_mass_properties(rudder_mass_properties(parameters)),
+    );
+    bodies[sail].recompute_mass_properties_from_colliders(colliders);
+    bodies[rudder].recompute_mass_properties_from_colliders(colliders);
+    let sail_joint = joints.insert(
+        hull.body,
+        sail,
+        RevoluteJointBuilder::new()
+            .local_anchor1(parameters.mast_position_m)
+            .local_anchor2(-sail_center_from_mast_m(parameters))
+            .limits([
+                -parameters.max_sail_angle_rad,
+                parameters.max_sail_angle_rad,
+            ]),
+        true,
+    );
+    let rudder_joint = joints.insert(
+        hull.body,
+        rudder,
+        RevoluteJointBuilder::new()
+            .local_anchor1(parameters.rudder_position_m)
+            .local_anchor2(-rudder_center_from_hinge_m(parameters))
+            .limits([
+                -parameters.max_rudder_angle_rad,
+                parameters.max_rudder_angle_rad,
+            ]),
+        true,
+    );
+    let boat = Boat {
+        hull,
+        sail,
+        rudder,
+        sail_joint,
+        rudder_joint,
+    };
+    restore_motion(&boat, parameters, motion, bodies);
+    boat
+}
+
+fn rotated(vector: Vector, angle_rad: f32) -> Vector {
+    Rotation::new(angle_rad).transform_vector(vector)
+}
+
+fn perpendicular(vector: Vector) -> Vector {
+    Vector::new(-vector.y, vector.x)
+}
+
+fn restore_surface_motion(
+    body: RigidBodyHandle,
+    hinge_position_m: Vector,
+    center_from_hinge_m: Vector,
+    relative_angle_rad: f32,
+    relative_angular_velocity_rad_s: f32,
+    motion: BoatMotion,
+    bodies: &mut RigidBodySet,
+) {
+    let hinge_offset_m = rotated(hinge_position_m, motion.angle_rad);
+    let hinge_position_m = motion.position_m + hinge_offset_m;
+    let hinge_velocity_m_s =
+        motion.velocity_m_s + perpendicular(hinge_offset_m) * motion.angular_velocity_rad_s;
+    let angle_rad = motion.angle_rad + relative_angle_rad;
+    let angular_velocity_rad_s = motion.angular_velocity_rad_s + relative_angular_velocity_rad_s;
+    let center_offset_m = rotated(center_from_hinge_m, angle_rad);
+    let surface = &mut bodies[body];
+    surface.set_translation(hinge_position_m + center_offset_m, true);
+    surface.set_rotation(Rotation::new(angle_rad), true);
+    surface.set_linvel(
+        hinge_velocity_m_s + perpendicular(center_offset_m) * angular_velocity_rad_s,
+        true,
+    );
+    surface.set_angvel(angular_velocity_rad_s, true);
+}
+
+pub fn restore_motion(
+    boat: &Boat,
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    bodies: &mut RigidBodySet,
+) {
+    let hull = &mut bodies[boat.hull.body];
+    hull.set_translation(motion.position_m, true);
+    hull.set_rotation(Rotation::new(motion.angle_rad), true);
+    hull.set_linvel(motion.velocity_m_s, true);
+    hull.set_angvel(motion.angular_velocity_rad_s, true);
+    restore_surface_motion(
+        boat.sail,
+        parameters.mast_position_m,
+        sail_center_from_mast_m(parameters),
+        motion.sail_angle_rad,
+        motion.sail_angular_velocity_rad_s,
+        motion,
+        bodies,
+    );
+    restore_surface_motion(
+        boat.rudder,
+        parameters.rudder_position_m,
+        rudder_center_from_hinge_m(parameters),
+        motion.rudder_angle_rad,
+        motion.rudder_angular_velocity_rad_s,
+        motion,
+        bodies,
+    );
+}
+
+fn relative_angle(angle_rad: f32, hull_angle_rad: f32) -> f32 {
+    (angle_rad - hull_angle_rad + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
+        - std::f32::consts::PI
+}
+
+pub fn read_motion(boat: &Boat, bodies: &RigidBodySet) -> BoatMotion {
+    let hull = &bodies[boat.hull.body];
+    let sail = &bodies[boat.sail];
+    let rudder = &bodies[boat.rudder];
+    BoatMotion {
+        position_m: hull.translation(),
+        velocity_m_s: hull.linvel(),
+        angle_rad: hull.rotation().angle(),
+        angular_velocity_rad_s: hull.angvel(),
+        sail_angle_rad: relative_angle(sail.rotation().angle(), hull.rotation().angle()),
+        sail_angular_velocity_rad_s: sail.angvel() - hull.angvel(),
+        rudder_angle_rad: relative_angle(rudder.rotation().angle(), hull.rotation().angle()),
+        rudder_angular_velocity_rad_s: rudder.angvel() - hull.angvel(),
+    }
 }

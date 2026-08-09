@@ -79,8 +79,9 @@ documentation, and decision classification.
 The Python implementation remains the behavioral reference. Port one concrete
 behavior at a time into `pyboat-simulation`, add a Rust parity test for that
 behavior, and keep the crate independent of browser and native-server runtimes.
-The initial slice constructs the same hull outline and mass in Rapier that the
-Python prototype constructs in Pymunk.
+The initial slices construct the hull and articulated hull/sail/rudder assembly,
+then restore and read authoritative motion. Tests target physical invariants and
+accepted gameplay behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick
