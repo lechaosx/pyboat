@@ -52,6 +52,22 @@ Update an entry when implementation or evidence changes it.
   Pymunk may reorder its polygon vertices internally, but the collision and both
   Python renderers consume the same points.
 
+## Ramming damage and wrecks
+
+- Ramming damage is authoritative and comes from the first collision impulse.
+  Contacts at or below 100 N·s do no damage; stronger impulses convert to health
+  loss at 8 N·s per point before local hull strength is applied.
+- The bow triangle has 2× strength, the middle hull has 1× strength, and the aft
+  quarter has 0.6× strength. Each participant uses its own local contact point, so
+  the same collision can damage the boats differently.
+- A boat has 100 health. Recent damage is replicated with its server tick for
+  brief client hit feedback.
+- At zero health, the owner connection closes normally. The boat remains in the
+  authoritative world as a wreck with articulated physics, fluid forces, and
+  collisions, but no controller or actuator torque. Nearby clients predict the
+  same controllerless wreck physics.
+- Wreck lifetime and cleanup are intentionally undecided.
+
 ## Prototype transport
 
 - The Python prototype uses JSON messages over WebSocket for easy inspection and

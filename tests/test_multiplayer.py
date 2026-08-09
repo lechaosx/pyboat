@@ -18,7 +18,9 @@ from game.client import (
 from game.match import Match
 from game.protocol import input_message, parse_input, snapshot_message, welcome_message
 from game.server import GameServer
+from sailing import boat
 from sailing.controllers import arcade
+from sailing.physics import coupled
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
@@ -106,6 +108,87 @@ class MatchTest(unittest.TestCase):
 
 		self.assertEqual(len(space.bodies), 3)
 		self.assertEqual(set(self.match.players), {first_id})
+
+	def test_collision_damage_respects_bow_side_and_stern_strength(self):
+		losses = []
+		for x_m in (config.BOAT_PARAMETERS.length_m / 2, 0, -2):
+			player_id = self.match.add_player()
+			self.match.apply_collision_damage(
+				player_id,
+				impulse_n_s=700,
+				contact_local_m=(x_m, 0),
+			)
+			losses.append(100 - self.match.players[player_id].health)
+
+		bow_loss, side_loss, stern_loss = losses
+		self.assertGreater(stern_loss, side_loss)
+		self.assertGreater(side_loss, bow_loss)
+
+	def test_low_impulse_contact_does_not_damage_boat(self):
+		player_id = self.match.add_player()
+
+		self.match.apply_collision_damage(
+			player_id,
+			impulse_n_s=50,
+			contact_local_m=(0, config.BOAT_PARAMETERS.beam_m / 2),
+		)
+
+		self.assertEqual(self.match.players[player_id].health, 100)
+
+	def test_physical_hull_collision_applies_authoritative_damage(self):
+		first_id = self.match.add_player()
+		second_id = self.match.add_player()
+		for player_id, position_m, velocity_m_s in (
+			(first_id, (-2.5, 0), (5, 0)),
+			(second_id, (2.5, 0), (-5, 0)),
+		):
+			state = self.match.players[player_id].state
+			coupled.restore_motion(
+				state,
+				config.BOAT_PARAMETERS,
+				boat.BoatMotion(
+					position_m=position_m,
+					velocity_m_s=velocity_m_s,
+					angle_rad=0,
+					angular_velocity_rad_s=0,
+					sail_angle_rad=0,
+					sail_angular_velocity_rad_s=0,
+					rudder_angle_rad=0,
+					rudder_angular_velocity_rad_s=0,
+				),
+			)
+			self.match.space.reindex_shapes_for_body(state.boat)
+
+		for _ in range(30):
+			self.match.advance()
+
+		self.assertLess(self.match.players[first_id].health, 100)
+		self.assertLess(self.match.players[second_id].health, 100)
+
+	def test_snapshot_replicates_health_and_hit_tick(self):
+		player_id = self.match.add_player()
+		self.match.apply_collision_damage(player_id, 700, (0, 0))
+
+		item = self.match.snapshot_for(player_id)["boats"][0]
+
+		self.assertLess(item["health"], 100)
+		self.assertEqual(item["lastHitTick"], self.match.tick)
+
+	def test_destroyed_boat_becomes_controllerless_physics_wreck(self):
+		player_id = self.match.add_player()
+		state = self.match.players[player_id].state
+		state.boat.velocity = (1, 0)
+		self.match.apply_collision_damage(player_id, 2000, (-2, 0))
+		self.match.set_input(player_id, 1, arcade.MotionIntent(1, 1))
+		before = state.boat.position.x
+
+		self.match.advance()
+
+		player = self.match.players[player_id]
+		self.assertTrue(player.wreck)
+		self.assertEqual(player.health, 0)
+		self.assertEqual(list(player.pending_inputs), [])
+		self.assertGreater(state.boat.position.x, before)
 
 
 class ProtocolTest(unittest.TestCase):
@@ -263,6 +346,67 @@ class ClientRenderTest(unittest.TestCase):
 			for y in range(130, 230)
 		)
 		self.assertGreater(arrow_pixels, 0)
+
+	def test_draw_snapshot_flashes_recently_damaged_hull(self):
+		pygame.font.init()
+		screen = pygame.Surface((640, 360))
+		draw_snapshot(
+			screen,
+			pygame.font.Font(None, 24),
+			"player-1",
+			{
+				"tick": 10,
+				"boats": [
+					{
+						"id": "player-1",
+						"x": 0,
+						"y": 0,
+						"angle": 0,
+						"sail": 0,
+						"rudder": 0,
+						"health": 75,
+						"lastHitTick": 10,
+					},
+				],
+			},
+			config.BOAT_PARAMETERS,
+		)
+
+		colors = {
+			tuple(screen.get_at((x, y))) for x in range(640) for y in range(360)
+		}
+		self.assertIn((255, 110, 90, 255), colors)
+
+	def test_draw_snapshot_renders_wreck_with_distinct_hull_color(self):
+		pygame.font.init()
+		screen = pygame.Surface((640, 360))
+		draw_snapshot(
+			screen,
+			pygame.font.Font(None, 24),
+			"player-1",
+			{
+				"tick": 10,
+				"boats": [
+					{
+						"id": "wreck-1",
+						"x": 0,
+						"y": 0,
+						"angle": 0,
+						"sail": 0,
+						"rudder": 0,
+						"health": 0,
+						"lastHitTick": 10,
+						"wreck": True,
+					},
+				],
+			},
+			config.BOAT_PARAMETERS,
+		)
+
+		colors = {
+			tuple(screen.get_at((x, y))) for x in range(640) for y in range(360)
+		}
+		self.assertIn((110, 95, 75, 255), colors)
 
 
 class NetworkConditionsTest(unittest.TestCase):
@@ -651,6 +795,20 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
 
 		snapshot = json.loads(await asyncio.wait_for(first.recv(), 0.2))
 		self.assertEqual(snapshot["removedPlayerIds"], [second_id])
+
+	async def test_destroyed_boat_closes_its_client_connection(self):
+		connection, player_id = await self.connect_player()
+		observer, _ = await self.connect_player()
+		self.game_server.match.apply_collision_damage(player_id, 2000, (-2, 0))
+
+		self.game_server.advance()
+		await asyncio.wait_for(connection.wait_closed(), 0.2)
+		snapshot = json.loads(await asyncio.wait_for(observer.recv(), 0.2))
+		wreck = next(item for item in snapshot["boats"] if item["id"] == player_id)
+
+		self.assertEqual(connection.close_reason, "boat destroyed")
+		self.assertTrue(wreck["wreck"])
+		self.assertIn(player_id, self.game_server.match.players)
 
 
 if __name__ == "__main__":

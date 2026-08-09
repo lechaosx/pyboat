@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import pygame
 import pymunk
 from websockets.asyncio.client import ClientConnection, connect
+from websockets.exceptions import ConnectionClosedOK
 
 from sailing import boat, simulation
 from sailing.controllers import arcade
@@ -180,6 +181,7 @@ class SnapshotPrediction:
 class BubbleBoat:
 	state: boat.SailingState
 	intent: arcade.MotionIntent
+	wreck: bool = False
 
 
 class PhysicsBubble:
@@ -277,6 +279,7 @@ class PhysicsBubble:
 				item["forward"],
 				item["turn"],
 			)
+			self.boats[player_id].wreck = item.get("wreck", False)
 		local_snapshot = snapshot_boats[local_id]
 		self._accumulator_seconds = 0
 		for intent in input_history.replay_commands(
@@ -309,13 +312,21 @@ class PhysicsBubble:
 		self._accumulator_seconds += seconds
 		while self._accumulator_seconds >= self.dt_seconds:
 			for predicted_boat in self.boats.values():
-				simulation.apply_surface_game_forces(
-					predicted_boat.state,
-					predicted_boat.intent,
-					simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL,
-					self.settings,
-					self.environment,
-				)
+				if predicted_boat.wreck:
+					coupled.apply_forces(
+						predicted_boat.state,
+						self.environment,
+						self.settings.parameters,
+						boat.ActuatorTorques(),
+					)
+				else:
+					simulation.apply_surface_game_forces(
+						predicted_boat.state,
+						predicted_boat.intent,
+						simulation.COMPUTED_YAW_RATE_ARCADE_CONTROL,
+						self.settings,
+						self.environment,
+					)
 			self.space.step(self.dt_seconds)
 			for predicted_boat in self.boats.values():
 				coupled.synchronize(predicted_boat.state)
@@ -400,7 +411,18 @@ def draw_snapshot(
 			* PIXELS_PER_METER
 			+ screen_center
 		)
-		color = (100, 220, 140) if item["id"] == player_id else (205, 205, 220)
+		recent_hit = (
+			item.get("lastHitTick") is not None
+			and snapshot["tick"] - item["lastHitTick"] <= 6
+		)
+		if item.get("wreck"):
+			color = (110, 95, 75)
+		elif recent_hit:
+			color = (255, 110, 90)
+		elif item["id"] == player_id:
+			color = (100, 220, 140)
+		else:
+			color = (205, 205, 220)
 		if item.get("stale"):
 			if item["id"] != player_id and position_px != screen_center:
 				offscreen_players.append((position_px, color))
@@ -468,7 +490,11 @@ def draw_snapshot(
 			),
 		)
 
-	status = f"{player_id}    server tick {snapshot['tick']}    WASD to sail"
+	health = round(local_boat.get("health", config.BOAT_MAX_HEALTH)) if local_boat else 0
+	status = (
+		f"{player_id}    health {health}    "
+		f"server tick {snapshot['tick']}    WASD to sail"
+	)
 	screen.blit(font.render(status, True, (220, 220, 230)), (20, 20))
 
 
@@ -558,10 +584,13 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 					await asyncio.sleep(0)
 					if receiver.done():
 						await receiver
+						running = False
 			finally:
 				receiver.cancel()
 				with suppress(asyncio.CancelledError):
 					await receiver
+	except ConnectionClosedOK:
+		pass
 	finally:
 		pygame.quit()
 

@@ -13,6 +13,7 @@ class GameServer:
 		self.snapshot_interval_ticks = snapshot_interval_ticks
 		self.connections: dict[ServerConnection, str] = {}
 		self.known_player_ids: dict[ServerConnection, set[str]] = {}
+		self.closing_connections: set[ServerConnection] = set()
 
 	async def handle(self, connection: ServerConnection) -> None:
 		player_id = self.match.add_player()
@@ -26,12 +27,21 @@ class GameServer:
 		finally:
 			del self.connections[connection]
 			del self.known_player_ids[connection]
-			self.match.remove_player(player_id)
+			self.closing_connections.discard(connection)
+			if not self.match.players[player_id].wreck:
+				self.match.remove_player(player_id)
 
 	def advance(self) -> None:
 		self.match.advance()
+		for connection, player_id in self.connections.items():
+			if self.match.players[player_id].wreck:
+				if connection not in self.closing_connections:
+					self.closing_connections.add(connection)
+					asyncio.create_task(connection.close(reason="boat destroyed"))
 		if self.match.tick % self.snapshot_interval_ticks == 0:
 			for connection, player_id in self.connections.items():
+				if self.match.players[player_id].wreck:
+					continue
 				snapshot = self.match.snapshot_for(player_id)
 				known_ids = self.known_player_ids[connection]
 				removed_ids = sorted(known_ids - self.match.players.keys())

@@ -57,6 +57,11 @@ input uses sequenced 60 Hz commands that are predicted until their server
 acknowledgement arrives. Physics corrections are immediate, while their rendered
 position and shortest-path rotation offsets settle over 100 ms.
 
+Hull collisions cause server-authoritative damage above a safe impact threshold.
+The bow is reinforced, the sides have normal strength, and the stern is weakest.
+A destroyed player's client exits; other clients continue to see the boat drifting
+and colliding as a controllerless wreck.
+
 Exercise a client with controlled round-trip latency and one-way jitter:
 
 ```sh

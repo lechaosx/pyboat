@@ -17,6 +17,9 @@ class Player:
 	acknowledged_input: int = 0
 	last_received_input: int = 0
 	pending_inputs: deque[tuple[int, arcade.MotionIntent]] = field(default_factory=deque)
+	health: float = config.BOAT_MAX_HEALTH
+	last_hit_tick: int | None = None
+	wreck: bool = False
 
 
 class Match:
@@ -34,6 +37,7 @@ class Match:
 		self.player_ids_by_shape: dict[pymunk.Shape, str] = {}
 		self.tick = 0
 		self._next_player_number = 1
+		self.space.on_collision(post_solve=self._post_solve_collision)
 
 	def add_player(self) -> str:
 		player_number = self._next_player_number
@@ -63,13 +67,89 @@ class Match:
 		intent: arcade.MotionIntent,
 	) -> None:
 		player = self.players[player_id]
+		if player.wreck:
+			return
 		if sequence <= player.last_received_input:
 			return
 		player.pending_inputs.append((sequence, intent))
 		player.last_received_input = sequence
 
+	def apply_collision_damage(
+		self,
+		player_id: str,
+		impulse_n_s: float,
+		contact_local_m: tuple[float, float] | pymunk.Vec2d,
+	) -> float:
+		player = self.players[player_id]
+		if player.wreck:
+			return 0
+		x_m = contact_local_m[0]
+		parameters = self.settings.parameters
+		if x_m >= parameters.length_m / 2 - parameters.bow_length_m:
+			strength = config.BOW_STRENGTH_MULTIPLIER
+		elif x_m <= -parameters.length_m / 4:
+			strength = config.STERN_STRENGTH_MULTIPLIER
+		else:
+			strength = config.SIDE_STRENGTH_MULTIPLIER
+		damage = max(0, impulse_n_s - config.SAFE_COLLISION_IMPULSE_N_S) / (
+			config.COLLISION_IMPULSE_PER_DAMAGE_N_S * strength
+		)
+		if not damage:
+			return 0
+		player.health = max(0, player.health - damage)
+		player.last_hit_tick = self.tick
+		if not player.health:
+			player.wreck = True
+			player.intent = arcade.MotionIntent()
+			player.pending_inputs.clear()
+		return damage
+
+	def _post_solve_collision(
+		self,
+		arbiter: pymunk.Arbiter,
+		space: pymunk.Space,
+		data: object,
+	) -> None:
+		if not arbiter.is_first_contact:
+			return
+		shape_a, shape_b = arbiter.shapes
+		if shape_a not in self.player_ids_by_shape:
+			return
+		if shape_b not in self.player_ids_by_shape:
+			return
+		points = arbiter.contact_point_set.points
+		if not points:
+			return
+		point_a = sum((point.point_a for point in points), pymunk.Vec2d(0, 0)) / len(
+			points
+		)
+		point_b = sum((point.point_b for point in points), pymunk.Vec2d(0, 0)) / len(
+			points
+		)
+		impulse_n_s = arbiter.total_impulse.length
+		player_a = self.player_ids_by_shape[shape_a]
+		player_b = self.player_ids_by_shape[shape_b]
+		self.apply_collision_damage(
+			player_a,
+			impulse_n_s,
+			self.players[player_a].state.boat.world_to_local(point_a),
+		)
+		self.apply_collision_damage(
+			player_b,
+			impulse_n_s,
+			self.players[player_b].state.boat.world_to_local(point_b),
+		)
+
 	def advance(self) -> None:
 		for player in self.players.values():
+			if player.wreck:
+				coupled.apply_forces(
+					player.state,
+					self.environment,
+					self.settings.parameters,
+					boat.ActuatorTorques(),
+				)
+				continue
 			if player.pending_inputs:
 				sequence, player.intent = player.pending_inputs.popleft()
 				player.acknowledged_input = sequence
@@ -109,6 +189,9 @@ class Match:
 				continue
 			item = {
 				"id": other_id,
+				"health": player.health,
+				"lastHitTick": player.last_hit_tick,
+				"wreck": player.wreck,
 				"x": player.state.boat.position.x,
 				"y": player.state.boat.position.y,
 				"vx": player.state.boat.velocity.x,
