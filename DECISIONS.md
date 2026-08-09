@@ -21,9 +21,13 @@ Update an entry when implementation or evidence changes it.
   server-reported input.
 - Each authoritative snapshot resets that local physics cluster and it is replayed
   to render time. The server remains authoritative when predictions disagree.
-- Local input changes are retained until acknowledged by the server. Reconciliation
-  restores authoritative state and replays the unacknowledged input timeline rather
-  than only applying the latest input.
+- The client emits a sequenced user command every fixed tick. The server consumes
+  one command per simulation tick and acknowledges it only after simulation.
+  Reconciliation restores authoritative state and replays every unacknowledged
+  command for exactly one fixed timestep, capped at 250 ms.
+- Bubble correction offsets exist only in rendering and decay over 100 ms. Angular
+  offsets use the shortest path across the ±π boundary; physical bodies correct
+  immediately and never receive the visual offsets.
 - The bubble starts before contact rather than at contact so the local solver has
   both hulls when the collision impulse begins.
 

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import unittest
 from unittest.mock import patch
 
@@ -58,6 +59,24 @@ class MatchTest(unittest.TestCase):
 			(boats[first_id]["vx"], boats[first_id]["vy"]),
 			(boats[second_id]["vx"], boats[second_id]["vy"]),
 		)
+
+	def test_processes_one_queued_input_command_per_server_tick(self):
+		player_id = self.match.add_player()
+		turning = arcade.MotionIntent(forward=1, turn=-1)
+		straight = arcade.MotionIntent(forward=1, turn=0)
+		self.match.set_input(player_id, 1, turning)
+		self.match.set_input(player_id, 2, straight)
+
+		self.assertEqual(self.match.players[player_id].acknowledged_input, 0)
+		self.match.advance()
+		first = self.match.snapshot_for(player_id)["boats"][0]
+		self.assertEqual(first["acknowledgedInput"], 1)
+		self.assertEqual((first["forward"], first["turn"]), (1, -1))
+
+		self.match.advance()
+		second = self.match.snapshot_for(player_id)["boats"][0]
+		self.assertEqual(second["acknowledgedInput"], 2)
+		self.assertEqual((second["forward"], second["turn"]), (1, 0))
 
 	def test_snapshot_detail_and_visibility_are_relative_to_player(self):
 		local_id = self.match.add_player()
@@ -403,23 +422,18 @@ class SnapshotPredictionTest(unittest.TestCase):
 
 
 class InputHistoryTest(unittest.TestCase):
-	def test_replays_only_unacknowledged_input_timeline(self):
+	def test_replays_only_unacknowledged_fixed_tick_commands(self):
 		history = InputHistory()
 		turning = arcade.MotionIntent(forward=1, turn=1)
 		straight = arcade.MotionIntent(forward=1, turn=0)
-		history.record(1, turning, now=1)
-		history.record(2, straight, now=1.05)
+		history.record(1, turning)
+		history.record(2, straight)
 
-		segments = history.replay_segments(
+		commands = history.replay_commands(
 			acknowledged_sequence=1,
-			server_intent=turning,
-			received_at=1.1,
-			now=1.15,
-			maximum_seconds=0.25,
+			maximum_commands=15,
 		)
-		self.assertEqual(len(segments), 1)
-		self.assertAlmostEqual(segments[0][0], 0.1)
-		self.assertEqual(segments[0][1], straight)
+		self.assertEqual(commands, [straight])
 
 		history.acknowledge(1)
 		self.assertEqual([item.sequence for item in history.commands], [2])
@@ -467,7 +481,6 @@ class PhysicsBubbleTest(unittest.TestCase):
 			snapshot,
 			"local",
 			InputHistory(),
-			received_at=1,
 			now=1,
 		)
 
@@ -488,7 +501,6 @@ class PhysicsBubbleTest(unittest.TestCase):
 			snapshot,
 			"local",
 			InputHistory(),
-			received_at=1,
 			now=1,
 		)
 
@@ -500,7 +512,7 @@ class PhysicsBubbleTest(unittest.TestCase):
 	def test_replays_unacknowledged_turn_instead_of_waiting_for_server(self):
 		bubble = self.bubble()
 		history = InputHistory()
-		history.record(1, arcade.MotionIntent(forward=1, turn=1), now=1)
+		history.record(1, arcade.MotionIntent(forward=1, turn=1))
 		snapshot = {
 			"type": "snapshot",
 			"tick": 1,
@@ -511,11 +523,52 @@ class PhysicsBubbleTest(unittest.TestCase):
 			snapshot,
 			"local",
 			history,
-			received_at=1.1,
 			now=1.1,
 		)
 
-		self.assertNotEqual(bubble.boats["local"].state.rudder_angle_rad, 0)
+		self.assertNotEqual(
+			bubble.boats["local"].state.rudder_angular_velocity_rad_s,
+			0,
+		)
+
+	def test_rotation_correction_is_continuous_across_snapshots_and_wraparound(self):
+		bubble = self.bubble()
+		history = InputHistory()
+		first = {
+			"type": "snapshot",
+			"tick": 1,
+			"boats": [self.boat("local", 0, angle=math.pi - 0.05)],
+		}
+		bubble.accept(first, "local", history, now=1)
+
+		second = {
+			"type": "snapshot",
+			"tick": 2,
+			"boats": [self.boat("local", 0, angle=-math.pi + 0.05)],
+		}
+		bubble.accept(second, "local", history, now=1.05)
+		at_second = bubble.apply_to(second, now=1.05)["boats"][0]["angle"]
+		self.assertAlmostEqual(
+			math.remainder(at_second - (math.pi - 0.05), 2 * math.pi),
+			0,
+		)
+
+		before_third = bubble.apply_to(second, now=1.1)["boats"][0]["angle"]
+		third = {
+			"type": "snapshot",
+			"tick": 3,
+			"boats": [self.boat("local", 0, angle=-math.pi + 0.15)],
+		}
+		bubble.accept(third, "local", history, now=1.1)
+		at_third = bubble.apply_to(third, now=1.1)["boats"][0]["angle"]
+		self.assertAlmostEqual(
+			math.remainder(at_third - before_third, 2 * math.pi),
+			0,
+		)
+		self.assertAlmostEqual(
+			bubble.apply_to(third, now=1.2)["boats"][0]["angle"],
+			-math.pi + 0.15,
+		)
 
 
 class ServerTest(unittest.IsolatedAsyncioTestCase):
@@ -572,7 +625,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
 		connection, player_id = await self.connect_player()
 		await connection.send(input_message(8, arcade.MotionIntent(1, -0.5)))
 		for _ in range(100):
-			if self.game_server.match.players[player_id].acknowledged_input == 8:
+			if self.game_server.match.players[player_id].pending_inputs:
 				break
 			await asyncio.sleep(0)
 

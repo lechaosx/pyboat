@@ -53,7 +53,9 @@ shared authoritative physics world at 60 Hz and sends snapshots at 60 Hz. Use
 machines. The client extrapolates distant motion for at most 250 ms and smooths
 authoritative corrections over 100 ms. When a boat leaves network interest, its
 arrow remains at the last known direction until it returns or disconnects. Local
-input changes are predicted until their server acknowledgement arrives.
+input uses sequenced 60 Hz commands that are predicted until their server
+acknowledgement arrives. Physics corrections are immediate, while their rendered
+position and shortest-path rotation offsets settle over 100 ms.
 
 Exercise a client with controlled round-trip latency and one-way jitter:
 

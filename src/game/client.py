@@ -55,7 +55,6 @@ class DelayedMessages:
 class InputCommand:
 	sequence: int
 	intent: arcade.MotionIntent
-	created_at: float
 
 
 class InputHistory:
@@ -66,45 +65,25 @@ class InputHistory:
 		self,
 		sequence: int,
 		intent: arcade.MotionIntent,
-		now: float,
 	) -> None:
-		self.commands.append(InputCommand(sequence, intent, now))
+		self.commands.append(InputCommand(sequence, intent))
 
 	def acknowledge(self, sequence: int) -> None:
 		self.commands = [
 			command for command in self.commands if command.sequence > sequence
 		]
 
-	def replay_segments(
+	def replay_commands(
 		self,
 		acknowledged_sequence: int,
-		server_intent: arcade.MotionIntent,
-		received_at: float,
-		now: float,
-		maximum_seconds: float,
-	) -> list[tuple[float, arcade.MotionIntent]]:
+		maximum_commands: int,
+	) -> list[arcade.MotionIntent]:
 		commands = [
 			command
 			for command in self.commands
 			if command.sequence > acknowledged_sequence
 		]
-		first_command_at = commands[0].created_at if commands else received_at
-		start = max(now - maximum_seconds, min(received_at, first_command_at))
-		cursor = start
-		intent = server_intent
-		segments = []
-		for command in commands:
-			if command.created_at <= start:
-				intent = command.intent
-				continue
-			if command.created_at >= now:
-				break
-			segments.append((command.created_at - cursor, intent))
-			cursor = command.created_at
-			intent = command.intent
-		if now > cursor:
-			segments.append((now - cursor, intent))
-		return [(seconds, value) for seconds, value in segments if seconds > 0]
+		return [command.intent for command in commands[-maximum_commands:]]
 
 
 class SnapshotPrediction:
@@ -204,28 +183,57 @@ class BubbleBoat:
 
 
 class PhysicsBubble:
+	_corrected_fields = ("x", "y", "angle", "sail", "rudder")
+	_angular_fields = {"angle", "sail", "rudder"}
+
 	def __init__(
 		self,
 		settings: simulation.SimulationSettings,
 		environment: boat.Environment,
 		dt_seconds: float,
+		correction_seconds: float = 0.1,
 	) -> None:
 		self.settings = settings
 		self.environment = environment
 		self.dt_seconds = dt_seconds
+		self.correction_seconds = correction_seconds
 		self.space = pymunk.Space()
 		self.boats: dict[str, BubbleBoat] = {}
 		self._last_time: float | None = None
 		self._accumulator_seconds = 0.0
+		self._corrections: dict[str, dict[str, float]] = {}
+		self._correction_started_at = 0.0
+
+	def _render_motion(self, player_id: str, now: float) -> dict[str, float]:
+		state = self.boats[player_id].state
+		motion = {
+			"x": state.boat.position.x,
+			"y": state.boat.position.y,
+			"angle": state.boat.angle,
+			"sail": state.sail_angle_rad,
+			"rudder": state.rudder_angle_rad,
+		}
+		if not self.correction_seconds:
+			return motion
+		correction_scale = max(
+			0,
+			1 - (now - self._correction_started_at) / self.correction_seconds,
+		)
+		for field, difference in self._corrections.get(player_id, {}).items():
+			motion[field] += difference * correction_scale
+		return motion
 
 	def accept(
 		self,
 		snapshot: dict,
 		local_id: str,
 		input_history: InputHistory,
-		received_at: float,
 		now: float,
 	) -> None:
+		previous_motion = {
+			player_id: self._render_motion(player_id, now)
+			for player_id in self.boats
+		}
 		snapshot_boats = {item["id"]: item for item in snapshot["boats"]}
 		local = snapshot_boats.get(local_id)
 		if local is None:
@@ -271,16 +279,24 @@ class PhysicsBubble:
 			)
 		local_snapshot = snapshot_boats[local_id]
 		self._accumulator_seconds = 0
-		for seconds, intent in input_history.replay_segments(
+		for intent in input_history.replay_commands(
 			local_snapshot["acknowledgedInput"],
-			self.boats[local_id].intent,
-			received_at,
-			now,
-			0.25,
+			round(0.25 / self.dt_seconds),
 		):
-			self._advance_seconds(seconds, local_id, intent)
+			self._advance_seconds(self.dt_seconds, local_id, intent)
 		input_history.acknowledge(local_snapshot["acknowledgedInput"])
 		self._last_time = now
+		self._correction_started_at = now
+		self._corrections = {}
+		for player_id in previous_motion.keys() & self.boats.keys():
+			current_motion = self._render_motion(player_id, now)
+			correction = {}
+			for field in self._corrected_fields:
+				difference = previous_motion[player_id][field] - current_motion[field]
+				if field in self._angular_fields:
+					difference = math.remainder(difference, 2 * math.pi)
+				correction[field] = difference
+			self._corrections[player_id] = correction
 
 	def _advance_seconds(
 		self,
@@ -318,7 +334,7 @@ class PhysicsBubble:
 		self._last_time = now
 		self._advance_seconds(seconds, local_id, local_intent)
 
-	def apply_to(self, snapshot: dict) -> dict:
+	def apply_to(self, snapshot: dict, now: float) -> dict:
 		boats = []
 		for item in snapshot["boats"]:
 			predicted_boat = self.boats.get(item["id"])
@@ -326,18 +342,19 @@ class PhysicsBubble:
 				boats.append(item)
 				continue
 			state = predicted_boat.state
+			render_motion = self._render_motion(item["id"], now)
 			boats.append(
 				item
 				| {
-					"x": state.boat.position.x,
-					"y": state.boat.position.y,
+					"x": render_motion["x"],
+					"y": render_motion["y"],
 					"vx": state.boat.velocity.x,
 					"vy": state.boat.velocity.y,
-					"angle": state.boat.angle,
+					"angle": render_motion["angle"],
 					"angularVelocity": state.boat.angular_velocity,
-					"sail": state.sail_angle_rad,
+					"sail": render_motion["sail"],
 					"sailAngularVelocity": state.sail_angular_velocity_rad_s,
-					"rudder": state.rudder_angle_rad,
+					"rudder": render_motion["rudder"],
 					"rudderAngularVelocity": (
 						state.rudder_angular_velocity_rad_s
 					),
@@ -492,7 +509,6 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 			player_id = welcome["playerId"]
 			snapshots: asyncio.Queue = asyncio.Queue(maxsize=1)
 			receiver = asyncio.create_task(receive_snapshots(connection, snapshots))
-			last_intent = None
 			intent = arcade.MotionIntent()
 			sequence = 0
 			running = True
@@ -509,14 +525,12 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 						keys[pygame.K_a],
 						keys[pygame.K_d],
 					)
-					if intent != last_intent:
-						sequence += 1
-						input_history.record(sequence, intent, now)
-						outgoing_messages.add(
-							protocol.input_message(sequence, intent),
-							now,
-						)
-						last_intent = intent
+					sequence += 1
+					input_history.record(sequence, intent)
+					outgoing_messages.add(
+						protocol.input_message(sequence, intent),
+						now,
+					)
 					while not snapshots.empty():
 						received_at, snapshot = snapshots.get_nowait()
 						incoming_messages.add((received_at, snapshot), received_at)
@@ -527,7 +541,6 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 							snapshot,
 							player_id,
 							input_history,
-							received_at,
 							now,
 						)
 					physics_bubble.advance_to(now, player_id, intent)
@@ -537,7 +550,7 @@ async def run_client(uri: str, latency_ms: float = 0, jitter_ms: float = 0) -> N
 						screen,
 						font,
 						player_id,
-						physics_bubble.apply_to(prediction.at(now)),
+						physics_bubble.apply_to(prediction.at(now), now),
 						config.BOAT_PARAMETERS,
 					)
 					pygame.display.flip()

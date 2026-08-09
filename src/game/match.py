@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 
 import pymunk
 
@@ -14,6 +15,8 @@ class Player:
 	state: boat.SailingState
 	intent: arcade.MotionIntent
 	acknowledged_input: int = 0
+	last_received_input: int = 0
+	pending_inputs: deque[tuple[int, arcade.MotionIntent]] = field(default_factory=deque)
 
 
 class Match:
@@ -60,13 +63,16 @@ class Match:
 		intent: arcade.MotionIntent,
 	) -> None:
 		player = self.players[player_id]
-		if sequence <= player.acknowledged_input:
+		if sequence <= player.last_received_input:
 			return
-		player.intent = intent
-		player.acknowledged_input = sequence
+		player.pending_inputs.append((sequence, intent))
+		player.last_received_input = sequence
 
 	def advance(self) -> None:
 		for player in self.players.values():
+			if player.pending_inputs:
+				sequence, player.intent = player.pending_inputs.popleft()
+				player.acknowledged_input = sequence
 			simulation.apply_surface_game_forces(
 				player.state,
 				player.intent,
