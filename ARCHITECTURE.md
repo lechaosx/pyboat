@@ -18,6 +18,29 @@ decisions.
 - **[Implicit]** The current Python implementation is the behavioral reference
   until another client passes equivalent networking and physics tests.
 
+## Target browser and server stack
+
+- **[Explicit]** The target gameplay runtime is written in Rust. It compiles to
+  WebAssembly for the browser client, while the dedicated server uses the same
+  simulation code natively.
+- **[Explicit]** The browser renderer is written in Rust using `wgpu`.
+- **[Explicit]** The initial browser build targets WebGPU only and does not include
+  `wgpu`'s WebGL compatibility backend, prioritizing a smaller download and one
+  renderer capability model over support for browsers without WebGPU.
+- **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
+  simulation on both native and WebAssembly builds.
+- **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
+  queries. Project simulation code owns boat forces, control, damage, wreck
+  behavior, and other game rules.
+- **[Explicit]** The browser gameplay client owns its WebSocket connection,
+  protocol codec, replicated world state, prediction and reconciliation, physics,
+  and rendering in Rust/WebAssembly. Gameplay packets do not pass through a
+  handwritten TypeScript transport or parser.
+- **[Explicit]** TypeScript with HTML and CSS owns browser presentation such as
+  menus and the DOM-based HUD. It exchanges commands, a small derived UI view
+  model, and discrete UI events with the Rust/WebAssembly client rather than raw
+  gameplay snapshots.
+
 ## Simulation authority and timing
 
 - **[Explicit]** The dedicated server is authoritative, while clients compensate
@@ -120,4 +143,7 @@ decisions.
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or
   another transport.
-- How a non-Python frontend will reproduce or share the client-side physics model.
+- Which Rapier determinism and performance features the native and WebAssembly
+  builds will enable, and what equivalence tests they must pass.
+- How the Python behavioral reference will be migrated incrementally to the target
+  Rust stack.

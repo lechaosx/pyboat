@@ -44,6 +44,9 @@ This file records intended player experience, scope, and product behavior.
 ## Platforms and controls
 
 - **[Explicit]** Keyboard, controller, and touchpad input participate in cross-play.
+- **[Explicit]** Browser support is the primary platform target. Native desktop
+  and mobile clients are desirable secondary targets rather than requirements for
+  the first frontend.
 - **[Explicit]** A browser frontend is intended, but browser rendering is deferred
   while the Python client and server establish gameplay and networking behavior.
 - **[Explicit]** The browser implementation language is not committed to pure
@@ -82,6 +85,5 @@ This file records intended player experience, scope, and product behavior.
 - How long wrecks remain and how they are eventually cleaned up.
 - Whether current health, impact thresholds, damage conversion, and zone strength
   values remain appropriate after broader playtesting.
-- Which browser technology and language will implement the eventual frontend.
 - Concrete rules for progression, matchmaking, ship classes, automatic weapons,
   and the two custom actions.
