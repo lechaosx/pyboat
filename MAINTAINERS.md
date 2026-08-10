@@ -81,8 +81,9 @@ behavior at a time into `pyboat-simulation`, add a Rust parity test for that
 behavior, and keep the crate independent of browser and native-server runtimes.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
-actuator torques in a zero-gravity Rapier world at 60 Hz. Tests target physical
-invariants and accepted gameplay behavior rather than exact Pymunk trajectories.
+actuator torques and native Rapier bearing damping in a zero-gravity world at 60
+Hz. Tests target physical invariants and accepted gameplay behavior rather than
+exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

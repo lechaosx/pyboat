@@ -22,7 +22,7 @@ decisions.
   a Rust test against the Python reference before browser or native runtime
   adapters consume it. Hull construction, the articulated boat assembly, and
   authoritative motion restoration, fixed-step advancement, and actuator torque
-  application are the first migrated behaviors.
+  application and passive bearing damping are the first migrated behaviors.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -71,6 +71,10 @@ decisions.
   torques equally and oppositely to the controlled surface and hull. Rapier uses
   eight solver iterations with joint warm-starting so sustained actuator loads
   keep the articulated surfaces within their configured limits.
+- **[Implicit]** Passive sail and rudder bearing damping uses Rapier force-based
+  revolute-joint motors targeting zero relative angular velocity. Damping is
+  validated by energy loss, common-rotation preservation, and angular-momentum
+  conservation rather than matching Pymunk's numerical decay curve.
 - **[Implicit]** Clients send sequenced control commands rather than transforms.
   Server snapshots acknowledge only commands that have affected an authoritative
   simulation tick.
@@ -168,7 +172,5 @@ decisions.
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or
   another transport.
-- Whether sail and rudder bearing damping should use Rapier joint motors or
-  explicit project-owned torques.
-- Which Python simulation behavior should be migrated after actuator torque
-  application.
+- Which Python simulation behavior should be migrated after passive bearing
+  damping.

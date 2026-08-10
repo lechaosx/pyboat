@@ -1,7 +1,7 @@
 use rapier2d::prelude::{
     ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
-    IntegrationParameters, MassProperties, PhysicsWorld, RevoluteJointBuilder, RigidBodyBuilder,
-    RigidBodyHandle, RigidBodySet, Rotation, Vector,
+    IntegrationParameters, MassProperties, MotorModel, PhysicsWorld, RevoluteJointBuilder,
+    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, Rotation, Vector,
 };
 
 pub const DT_SECONDS: f32 = 1.0 / 60.0;
@@ -34,6 +34,8 @@ pub struct BoatParameters {
     pub tiller_length_m: f32,
     pub rudder_position_m: Vector,
     pub max_rudder_angle_rad: f32,
+    pub sail_bearing_damping_n_m_s_rad: f32,
+    pub rudder_bearing_damping_n_m_s_rad: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,7 +182,9 @@ pub fn create_boat(
             .limits([
                 -parameters.max_sail_angle_rad,
                 parameters.max_sail_angle_rad,
-            ]),
+            ])
+            .motor_model(MotorModel::ForceBased)
+            .motor_velocity(0.0, parameters.sail_bearing_damping_n_m_s_rad),
         true,
     );
     let rudder_joint = joints.insert(
@@ -192,7 +196,9 @@ pub fn create_boat(
             .limits([
                 -parameters.max_rudder_angle_rad,
                 parameters.max_rudder_angle_rad,
-            ]),
+            ])
+            .motor_model(MotorModel::ForceBased)
+            .motor_velocity(0.0, parameters.rudder_bearing_damping_n_m_s_rad),
         true,
     );
     let boat = Boat {

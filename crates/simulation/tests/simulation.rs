@@ -24,6 +24,8 @@ fn reference_parameters() -> BoatParameters {
         tiller_length_m: 1.0,
         rudder_position_m: Vector::new(-1.8, 0.0),
         max_rudder_angle_rad: PI / 6.0,
+        sail_bearing_damping_n_m_s_rad: 20.0,
+        rudder_bearing_damping_n_m_s_rad: 2.0,
     }
 }
 
@@ -61,6 +63,20 @@ fn angular_momentum(simulation: &Simulation) -> f32 {
         .map(|(_, body)| {
             body.mass_properties().local_mprops.principal_inertia() * body.angvel()
                 + body.translation().perp_dot(body.linvel() * body.mass())
+        })
+        .sum()
+}
+
+fn kinetic_energy(simulation: &Simulation) -> f32 {
+    simulation
+        .world
+        .bodies
+        .iter()
+        .map(|(_, body)| {
+            0.5 * body.mass() * body.linvel().length_squared()
+                + 0.5
+                    * body.mass_properties().local_mprops.principal_inertia()
+                    * body.angvel().powi(2)
         })
         .sum()
 }
@@ -166,4 +182,63 @@ fn actuator_torques_cannot_drive_surfaces_past_joint_limits() {
         result.rudder_angle_rad,
         parameters.max_rudder_angle_rad
     );
+}
+
+#[test]
+fn bearing_damping_reduces_relative_motion_and_conserves_angular_momentum() {
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    initial.sail_angular_velocity_rad_s = 1.0;
+    initial.rudder_angular_velocity_rad_s = -1.0;
+    let mut simulation = Simulation::new(parameters, initial);
+    let initial_energy = kinetic_energy(&simulation);
+    let initial_angular_momentum = angular_momentum(&simulation);
+
+    for _ in 0..120 {
+        simulation.advance(ActuatorTorques::default());
+    }
+
+    let result = simulation.motion();
+    assert!(
+        result.sail_angular_velocity_rad_s.abs() < 0.5,
+        "sail: {}",
+        result.sail_angular_velocity_rad_s
+    );
+    assert!(
+        result.rudder_angular_velocity_rad_s.abs() < 0.5,
+        "rudder: {}",
+        result.rudder_angular_velocity_rad_s
+    );
+    let final_energy = kinetic_energy(&simulation);
+    assert!(
+        final_energy < initial_energy * 0.5,
+        "{final_energy} >= {initial_energy} * 0.5"
+    );
+    let final_angular_momentum = angular_momentum(&simulation);
+    assert!(
+        (final_angular_momentum - initial_angular_momentum).abs()
+            < initial_angular_momentum.abs() * 1.0e-3,
+        "{final_angular_momentum} != {initial_angular_momentum}"
+    );
+}
+
+#[test]
+fn bearing_damping_does_not_resist_common_rotation() {
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    initial.angular_velocity_rad_s = 1.0;
+    let mut simulation = Simulation::new(parameters, initial);
+
+    for _ in 0..60 {
+        simulation.advance(ActuatorTorques::default());
+    }
+
+    let result = simulation.motion();
+    assert!((result.angular_velocity_rad_s - 1.0).abs() < 1.0e-3);
+    assert!(result.sail_angular_velocity_rad_s.abs() < 1.0e-3);
+    assert!(result.rudder_angular_velocity_rad_s.abs() < 1.0e-3);
 }

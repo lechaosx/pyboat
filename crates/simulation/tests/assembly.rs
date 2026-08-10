@@ -3,7 +3,9 @@ use std::f32::consts::PI;
 use pyboat_simulation::{
     BoatMotion, BoatParameters, HullParameters, create_boat, read_motion, restore_motion,
 };
-use rapier2d::prelude::{ColliderSet, ImpulseJointSet, RigidBody, RigidBodySet, Vector};
+use rapier2d::prelude::{
+    ColliderSet, ImpulseJointSet, MotorModel, RigidBody, RigidBodySet, Vector,
+};
 
 fn reference_parameters() -> BoatParameters {
     BoatParameters {
@@ -24,6 +26,8 @@ fn reference_parameters() -> BoatParameters {
         tiller_length_m: 1.0,
         rudder_position_m: Vector::new(-1.8, 0.0),
         max_rudder_angle_rad: PI / 6.0,
+        sail_bearing_damping_n_m_s_rad: 20.0,
+        rudder_bearing_damping_n_m_s_rad: 2.0,
     }
 }
 
@@ -101,6 +105,11 @@ fn creates_the_reference_articulated_assembly() {
     let sail_limits = sail_joint.limits().unwrap();
     assert_close(sail_limits.min, -PI / 2.0);
     assert_close(sail_limits.max, PI / 2.0);
+    let sail_motor = sail_joint.motor().unwrap();
+    assert_eq!(sail_motor.model, MotorModel::ForceBased);
+    assert_eq!(sail_motor.target_vel, 0.0);
+    assert_eq!(sail_motor.stiffness, 0.0);
+    assert_eq!(sail_motor.damping, 20.0);
 
     let rudder_joint = joints
         .get(boat.rudder_joint)
@@ -113,6 +122,11 @@ fn creates_the_reference_articulated_assembly() {
     let rudder_limits = rudder_joint.limits().unwrap();
     assert_close(rudder_limits.min, -PI / 6.0);
     assert_close(rudder_limits.max, PI / 6.0);
+    let rudder_motor = rudder_joint.motor().unwrap();
+    assert_eq!(rudder_motor.model, MotorModel::ForceBased);
+    assert_eq!(rudder_motor.target_vel, 0.0);
+    assert_eq!(rudder_motor.stiffness, 0.0);
+    assert_eq!(rudder_motor.damping, 2.0);
 }
 
 #[test]
