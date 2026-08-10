@@ -92,7 +92,9 @@ torque-limited actuator commands; sheet targets suppress outward sail torque.
 Arcade control predicts drive and yaw effects across candidate surface angles,
 then selects auto-sheet or yaw-rate targets before producing actuator torques.
 Candidate prediction includes hull angular velocity but remains quasi-static with
-respect to each candidate surface. Tests target physical invariants and accepted
+respect to each candidate surface. The controlled-advance API composes this policy
+with one synchronous physics tick and reports the chosen targets and active yaw
+rate. Tests target physical invariants, mirrored controlled maneuvers, and accepted
 gameplay behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the

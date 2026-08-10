@@ -1,10 +1,10 @@
 use std::f32::consts::PI;
 
 use pyboat_simulation::{
-    ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, DT_SECONDS,
-    Environment, HullParameters, MotionIntent, Simulation, SurfaceEffect, auto_sheet_control,
-    computed_maximum_yaw_rate_rad_s, flat_plate_force, hull_resistance_force,
-    sheet_control_torques, streamlined_foil_force, surface_control_input,
+    ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
+    DT_SECONDS, Environment, HullParameters, MotionIntent, Simulation, SurfaceControlCommand,
+    SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s, flat_plate_force,
+    hull_resistance_force, sheet_control_torques, streamlined_foil_force, surface_control_input,
     surface_target_control_torques, target_control_torques, yaw_rate_move_control,
 };
 use rapier2d::prelude::{RigidBody, Rotation, Vector};
@@ -815,4 +815,127 @@ fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
     assert_eq!(sheet_torques.sail_n_m, 0.0);
     assert!(explicit_torques.sail_n_m > 0.0);
     assert_eq!(sheet_torques.rudder_n_m, explicit_torques.rudder_n_m);
+}
+
+#[test]
+fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
+    let parameters = reference_parameters();
+    let initial = motion();
+    let environment = Environment {
+        true_wind_velocity_m_s: Vector::new(6.0, 1.0),
+        true_water_velocity_m_s: Vector::new(0.5, -0.25),
+    };
+    let settings = ControlSettings {
+        angle_resolution_deg: 30,
+        sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
+    };
+    let commands = [
+        SurfaceControlCommand::AutoSheet(AutoSheetIntent {
+            power: 0.7,
+            rudder: -0.4,
+        }),
+        SurfaceControlCommand::ComputedYawRate(MotionIntent {
+            forward: 0.7,
+            turn: -0.4,
+        }),
+        SurfaceControlCommand::FixedYawRate {
+            intent: MotionIntent {
+                forward: 0.7,
+                turn: -0.4,
+            },
+            maximum_yaw_rate_rad_s: 0.5,
+        },
+    ];
+
+    for command in commands {
+        let mut controlled = Simulation::new(parameters, initial);
+        let mut manual = Simulation::new(parameters, initial);
+        let input = surface_control_input(
+            parameters,
+            manual.motion(),
+            environment,
+            settings.angle_resolution_deg,
+            settings.sail_side_hysteresis_angle_rad,
+        );
+        let (expected_targets, expected_maximum_yaw_rate_rad_s) = match command {
+            SurfaceControlCommand::AutoSheet(intent) => (auto_sheet_control(&input, intent), None),
+            SurfaceControlCommand::ComputedYawRate(intent) => {
+                let maximum_yaw_rate_rad_s =
+                    computed_maximum_yaw_rate_rad_s(parameters, manual.motion(), environment);
+                (
+                    yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
+                    Some(maximum_yaw_rate_rad_s),
+                )
+            }
+            SurfaceControlCommand::FixedYawRate {
+                intent,
+                maximum_yaw_rate_rad_s,
+            } => (
+                yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
+                Some(maximum_yaw_rate_rad_s),
+            ),
+        };
+        let torques = surface_target_control_torques(parameters, manual.motion(), expected_targets);
+        manual.advance(environment, torques);
+
+        let telemetry = controlled.advance_controlled(environment, command, settings);
+
+        assert_eq!(telemetry.targets, expected_targets);
+        assert_eq!(
+            telemetry.maximum_yaw_rate_rad_s,
+            expected_maximum_yaw_rate_rad_s
+        );
+        assert_eq!(controlled.motion(), manual.motion());
+    }
+}
+
+#[test]
+fn mirrored_computed_yaw_rate_commands_produce_mirrored_motion() {
+    let parameters = reference_parameters();
+    let environment = Environment {
+        true_wind_velocity_m_s: Vector::new(6.0, 0.0),
+        true_water_velocity_m_s: Vector::ZERO,
+    };
+    let settings = ControlSettings {
+        angle_resolution_deg: 1,
+        sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
+    };
+    let mut port_motion = motion();
+    port_motion.velocity_m_s = Vector::ZERO;
+    port_motion.angle_rad = 135.0_f32.to_radians();
+    let mut starboard_motion = port_motion;
+    starboard_motion.angle_rad = -port_motion.angle_rad;
+    let mut port = Simulation::new(parameters, port_motion);
+    let mut starboard = Simulation::new(parameters, starboard_motion);
+
+    for _ in 0..6 * 60 {
+        port.advance_controlled(
+            environment,
+            SurfaceControlCommand::ComputedYawRate(MotionIntent {
+                forward: 1.0,
+                turn: -1.0,
+            }),
+            settings,
+        );
+        starboard.advance_controlled(
+            environment,
+            SurfaceControlCommand::ComputedYawRate(MotionIntent {
+                forward: 1.0,
+                turn: 1.0,
+            }),
+            settings,
+        );
+    }
+
+    let port = port.motion();
+    let starboard = starboard.motion();
+    assert_close(port.position_m.x, starboard.position_m.x);
+    assert_close(port.position_m.y, -starboard.position_m.y);
+    assert_close(port.velocity_m_s.x, starboard.velocity_m_s.x);
+    assert_close(port.velocity_m_s.y, -starboard.velocity_m_s.y);
+    assert_close(port.angle_rad, -starboard.angle_rad);
+    assert_close(
+        port.angular_velocity_rad_s,
+        -starboard.angular_velocity_rad_s,
+    );
 }

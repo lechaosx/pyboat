@@ -114,6 +114,28 @@ pub struct SurfaceTargets {
     pub sail_target_angle_rad: Option<f32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControlSettings {
+    pub angle_resolution_deg: u32,
+    pub sail_side_hysteresis_angle_rad: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SurfaceControlCommand {
+    AutoSheet(AutoSheetIntent),
+    ComputedYawRate(MotionIntent),
+    FixedYawRate {
+        intent: MotionIntent,
+        maximum_yaw_rate_rad_s: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ControlTelemetry {
+    pub targets: SurfaceTargets,
+    pub maximum_yaw_rate_rad_s: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Environment {
     pub true_wind_velocity_m_s: Vector,
@@ -988,6 +1010,46 @@ impl Simulation {
             true,
         );
         self.world.step();
+    }
+
+    pub fn advance_controlled(
+        &mut self,
+        environment: Environment,
+        command: SurfaceControlCommand,
+        settings: ControlSettings,
+    ) -> ControlTelemetry {
+        let motion = self.motion();
+        let input = surface_control_input(
+            self.parameters,
+            motion,
+            environment,
+            settings.angle_resolution_deg,
+            settings.sail_side_hysteresis_angle_rad,
+        );
+        let (targets, maximum_yaw_rate_rad_s) = match command {
+            SurfaceControlCommand::AutoSheet(intent) => (auto_sheet_control(&input, intent), None),
+            SurfaceControlCommand::ComputedYawRate(intent) => {
+                let maximum_yaw_rate_rad_s =
+                    computed_maximum_yaw_rate_rad_s(self.parameters, motion, environment);
+                (
+                    yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
+                    Some(maximum_yaw_rate_rad_s),
+                )
+            }
+            SurfaceControlCommand::FixedYawRate {
+                intent,
+                maximum_yaw_rate_rad_s,
+            } => (
+                yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
+                Some(maximum_yaw_rate_rad_s),
+            ),
+        };
+        let actuator_torques = surface_target_control_torques(self.parameters, motion, targets);
+        self.advance(environment, actuator_torques);
+        ControlTelemetry {
+            targets,
+            maximum_yaw_rate_rad_s,
+        }
     }
 
     pub fn motion(&self) -> BoatMotion {
