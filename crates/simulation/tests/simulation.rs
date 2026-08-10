@@ -2,10 +2,11 @@ use std::f32::consts::PI;
 
 use pyboat_simulation::{
     ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
-    DT_SECONDS, Environment, HullParameters, MotionIntent, Simulation, SurfaceControlCommand,
-    SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s, flat_plate_force,
-    hull_resistance_force, sheet_control_torques, streamlined_foil_force, surface_control_input,
-    surface_target_control_torques, target_control_torques, yaw_rate_move_control,
+    DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
+    SurfaceControlCommand, SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s,
+    flat_plate_force, hull_resistance_force, sheet_control_torques, streamlined_foil_force,
+    surface_control_input, surface_target_control_torques, target_control_torques,
+    yaw_rate_move_control,
 };
 use rapier2d::prelude::{RigidBody, Rotation, Vector};
 
@@ -150,6 +151,70 @@ fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
         world_point(hull, parameters.rudder_position_m),
         rudder.translation(),
     );
+}
+
+#[test]
+fn shared_simulation_advances_multiple_boats_in_one_world() {
+    let parameters = vacuum_parameters();
+    let mut first = motion();
+    first.position_m = Vector::new(0.0, -10.0);
+    let mut second = motion();
+    second.position_m = Vector::new(0.0, 4.0);
+    second.velocity_m_s = Vector::new(-1.0, 0.5);
+    let mut simulation = SharedSimulation::new();
+    let first_boat = simulation.add_boat(parameters, first);
+    let second_boat = simulation.add_boat(parameters, second);
+
+    assert_eq!(simulation.world.bodies.len(), 6);
+    assert_eq!(simulation.world.colliders.len(), 2);
+    assert_eq!(simulation.world.impulse_joints.len(), 4);
+    for _ in 0..60 {
+        simulation.advance(
+            Environment::default(),
+            &[ActuatorTorques::default(), ActuatorTorques::default()],
+        );
+    }
+
+    let first_result = simulation.motion(first_boat);
+    let second_result = simulation.motion(second_boat);
+    assert_vector_close(first_result.position_m, Vector::new(2.0, -11.0));
+    assert_vector_close(first_result.velocity_m_s, first.velocity_m_s);
+    assert_vector_close(second_result.position_m, Vector::new(-1.0, 4.5));
+    assert_vector_close(second_result.velocity_m_s, second.velocity_m_s);
+}
+
+#[test]
+fn shared_simulation_resolves_and_reports_hull_collisions() {
+    let parameters = vacuum_parameters();
+    let mut port = motion();
+    port.position_m = Vector::new(-2.5, 0.0);
+    port.velocity_m_s = Vector::new(5.0, 0.0);
+    port.angle_rad = 0.0;
+    let mut starboard = port;
+    starboard.position_m = Vector::new(2.5, 0.0);
+    starboard.velocity_m_s = Vector::new(-5.0, 0.0);
+    let mut simulation = SharedSimulation::new();
+    let port_boat = simulation.add_boat(parameters, port);
+    let starboard_boat = simulation.add_boat(parameters, starboard);
+
+    let mut contact = None;
+    for _ in 0..30 {
+        contact = simulation
+            .advance(
+                Environment::default(),
+                &[ActuatorTorques::default(), ActuatorTorques::default()],
+            )
+            .into_iter()
+            .find(|contact| contact.impulse_magnitude_n_s > 0.0)
+            .or(contact);
+    }
+
+    let contact = contact.expect("the converging hulls should collide");
+    let mut boats = [contact.first_boat, contact.second_boat];
+    boats.sort();
+    assert_eq!(boats, [port_boat, starboard_boat]);
+    assert!(simulation.motion(port_boat).velocity_m_s.x < port.velocity_m_s.x);
+    assert!(simulation.motion(starboard_boat).velocity_m_s.x > starboard.velocity_m_s.x);
 }
 
 #[test]

@@ -94,8 +94,11 @@ then selects auto-sheet or yaw-rate targets before producing actuator torques.
 Candidate prediction includes hull angular velocity but remains quasi-static with
 respect to each candidate surface. The controlled-advance API composes this policy
 with one synchronous physics tick and reports the chosen targets and active yaw
-rate. Tests target physical invariants, mirrored controlled maneuvers, and accepted
-gameplay behavior rather than exact Pymunk trajectories.
+rate. The shared simulation inserts multiple articulated boats into one Rapier
+world, applies their loads before a single world step, and reports active hull
+contacts with resolved impulse magnitudes. Tests target physical invariants,
+mirrored controlled maneuvers, and accepted gameplay behavior rather than exact
+Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

@@ -26,7 +26,8 @@ decisions.
   the first migrated behaviors, followed by stalled underwater-foil loads on the
   articulated rudder and hull-mounted keel, anisotropic hull resistance, and
   surface-target actuator control, followed by arcade surface-effect sampling and
-  target selection and controlled fixed-step advancement.
+  target selection, controlled fixed-step advancement, and shared-world stepping
+  with hull contact reporting.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -71,6 +72,10 @@ decisions.
 - **[Implicit]** The Rust simulation owns a zero-gravity Rapier `PhysicsWorld` and
   exposes one synchronous 60 Hz advance operation. Runtime adapters perform
   asynchronous work before and after, never during, that operation.
+- **[Implicit]** The Rust shared simulation inserts all articulated boats into one
+  Rapier world, applies every boat's loads before advancing that world once, and
+  returns active hull contact pairs with Rapier's resolved impulse magnitude for
+  game rules such as damage.
 - **[Implicit]** Each Rust simulation tick applies sail and rudder actuator
   torques equally and oppositely to the controlled surface and hull. Rapier uses
   eight solver iterations with joint warm-starting so sustained actuator loads

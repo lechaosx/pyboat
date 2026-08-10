@@ -157,6 +157,30 @@ pub struct Simulation {
     pub world: PhysicsWorld,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HullContact {
+    pub first_boat: usize,
+    pub second_boat: usize,
+    pub impulse_magnitude_n_s: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SharedBoat {
+    parameters: BoatParameters,
+    boat: Boat,
+}
+
+pub struct SharedSimulation {
+    boats: Vec<SharedBoat>,
+    pub world: PhysicsWorld,
+}
+
+impl Default for SharedSimulation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn apparent_flow(medium_velocity_m_s: Vector, point_velocity_m_s: Vector) -> Vector {
     medium_velocity_m_s - point_velocity_m_s
 }
@@ -584,7 +608,7 @@ pub fn create_hull(
     );
     let body =
         bodies.insert(RigidBodyBuilder::dynamic().additional_mass_properties(mass_properties));
-    let collider = ColliderBuilder::convex_polyline(outline.to_vec())
+    let collider = ColliderBuilder::convex_hull(&outline)
         .unwrap()
         .density(0.0)
         .build();
@@ -868,18 +892,128 @@ pub fn read_motion(boat: &Boat, bodies: &RigidBodySet) -> BoatMotion {
     }
 }
 
+fn physics_world() -> PhysicsWorld {
+    PhysicsWorld {
+        gravity: Vector::ZERO,
+        integration_parameters: IntegrationParameters {
+            dt: DT_SECONDS,
+            num_solver_iterations: 8,
+            warmstart_joints: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn apply_boat_forces(
+    world: &mut PhysicsWorld,
+    parameters: BoatParameters,
+    boat: Boat,
+    environment: Environment,
+    actuator_torques: ActuatorTorques,
+) {
+    for body in [boat.hull.body, boat.sail, boat.rudder] {
+        world.bodies[body].reset_forces(false);
+        world.bodies[body].reset_torques(false);
+    }
+
+    let sail = &world.bodies[boat.sail];
+    let sail_angle_rad = sail.rotation().angle();
+    let center_of_effort_m = sail.translation()
+        + rotated(
+            Vector::new(
+                parameters.boom_length_m / 2.0 - parameters.sail_center_of_effort_from_mast_m,
+                0.0,
+            ),
+            sail_angle_rad,
+        );
+    let apparent_wind_m_s = apparent_flow(
+        environment.true_wind_velocity_m_s,
+        sail.velocity_at_point(center_of_effort_m),
+    );
+    let sail_force_n = flat_plate_force(
+        apparent_wind_m_s,
+        sail_angle_rad,
+        parameters.air_density_kg_m3,
+        parameters.sail_area_m2,
+        parameters.sail_base_drag_coefficient,
+    );
+    world.bodies[boat.sail].add_force_at_point(sail_force_n, center_of_effort_m, true);
+
+    let rudder = &world.bodies[boat.rudder];
+    let rudder_angle_rad = rudder.rotation().angle();
+    let rudder_center_of_effort_m = rudder.translation()
+        + rotated(
+            Vector::new(-parameters.rudder_draw_length_m / 2.0, 0.0)
+                - rudder_center_from_hinge_m(parameters),
+            rudder_angle_rad,
+        );
+    let apparent_rudder_water_m_s = apparent_flow(
+        environment.true_water_velocity_m_s,
+        rudder.velocity_at_point(rudder_center_of_effort_m),
+    );
+    let rudder_force_n = streamlined_foil_force(
+        apparent_rudder_water_m_s,
+        rudder_angle_rad,
+        parameters.water_density_kg_m3,
+        parameters.rudder_area_m2,
+        parameters.rudder_base_drag_coefficient,
+        parameters.rudder_stall_angle_rad,
+        parameters.rudder_stall_lift_coefficient,
+    );
+    world.bodies[boat.rudder].add_force_at_point(rudder_force_n, rudder_center_of_effort_m, true);
+
+    let hull = &world.bodies[boat.hull.body];
+    let hull_angle_rad = hull.rotation().angle();
+    let keel_center_of_effort_m =
+        hull.translation() + rotated(parameters.keel_position_m, hull_angle_rad);
+    let apparent_keel_water_m_s = apparent_flow(
+        environment.true_water_velocity_m_s,
+        hull.velocity_at_point(keel_center_of_effort_m),
+    );
+    let keel_force_n = streamlined_foil_force(
+        apparent_keel_water_m_s,
+        hull_angle_rad,
+        parameters.water_density_kg_m3,
+        parameters.keel_area_m2,
+        parameters.keel_base_drag_coefficient,
+        parameters.keel_stall_angle_rad,
+        parameters.keel_stall_lift_coefficient,
+    );
+    world.bodies[boat.hull.body].add_force_at_point(keel_force_n, keel_center_of_effort_m, true);
+
+    for local_position_m in [
+        Vector::new(-parameters.hull.length_m / 2.0, 0.0),
+        Vector::new(parameters.hull.length_m / 2.0, 0.0),
+    ] {
+        let hull = &world.bodies[boat.hull.body];
+        let world_position_m = hull.translation() + rotated(local_position_m, hull_angle_rad);
+        let apparent_water_m_s = apparent_flow(
+            environment.true_water_velocity_m_s,
+            hull.velocity_at_point(world_position_m),
+        );
+        let force_n = hull_resistance_force(
+            apparent_water_m_s,
+            hull_angle_rad,
+            parameters.water_density_kg_m3,
+            parameters.hull_reference_area_m2 / 2.0,
+            parameters.hull_drag_coefficient,
+            parameters.hull_lateral_drag_coefficient,
+        );
+        world.bodies[boat.hull.body].add_force_at_point(force_n, world_position_m, true);
+    }
+
+    world.bodies[boat.sail].add_torque(actuator_torques.sail_n_m, true);
+    world.bodies[boat.rudder].add_torque(actuator_torques.rudder_n_m, true);
+    world.bodies[boat.hull.body].add_torque(
+        -actuator_torques.sail_n_m - actuator_torques.rudder_n_m,
+        true,
+    );
+}
+
 impl Simulation {
     pub fn new(parameters: BoatParameters, motion: BoatMotion) -> Self {
-        let mut world = PhysicsWorld {
-            gravity: Vector::ZERO,
-            integration_parameters: IntegrationParameters {
-                dt: DT_SECONDS,
-                num_solver_iterations: 8,
-                warmstart_joints: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        let mut world = physics_world();
         let boat = create_boat(
             parameters,
             motion,
@@ -895,119 +1029,12 @@ impl Simulation {
     }
 
     pub fn advance(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
-        for body in [self.boat.hull.body, self.boat.sail, self.boat.rudder] {
-            self.world.bodies[body].reset_forces(false);
-            self.world.bodies[body].reset_torques(false);
-        }
-
-        let sail = &self.world.bodies[self.boat.sail];
-        let sail_angle_rad = sail.rotation().angle();
-        let center_of_effort_m = sail.translation()
-            + rotated(
-                Vector::new(
-                    self.parameters.boom_length_m / 2.0
-                        - self.parameters.sail_center_of_effort_from_mast_m,
-                    0.0,
-                ),
-                sail_angle_rad,
-            );
-        let apparent_wind_m_s = apparent_flow(
-            environment.true_wind_velocity_m_s,
-            sail.velocity_at_point(center_of_effort_m),
-        );
-        let sail_force_n = flat_plate_force(
-            apparent_wind_m_s,
-            sail_angle_rad,
-            self.parameters.air_density_kg_m3,
-            self.parameters.sail_area_m2,
-            self.parameters.sail_base_drag_coefficient,
-        );
-        self.world.bodies[self.boat.sail].add_force_at_point(
-            sail_force_n,
-            center_of_effort_m,
-            true,
-        );
-
-        let rudder = &self.world.bodies[self.boat.rudder];
-        let rudder_angle_rad = rudder.rotation().angle();
-        let rudder_center_of_effort_m = rudder.translation()
-            + rotated(
-                Vector::new(-self.parameters.rudder_draw_length_m / 2.0, 0.0)
-                    - rudder_center_from_hinge_m(self.parameters),
-                rudder_angle_rad,
-            );
-        let apparent_rudder_water_m_s = apparent_flow(
-            environment.true_water_velocity_m_s,
-            rudder.velocity_at_point(rudder_center_of_effort_m),
-        );
-        let rudder_force_n = streamlined_foil_force(
-            apparent_rudder_water_m_s,
-            rudder_angle_rad,
-            self.parameters.water_density_kg_m3,
-            self.parameters.rudder_area_m2,
-            self.parameters.rudder_base_drag_coefficient,
-            self.parameters.rudder_stall_angle_rad,
-            self.parameters.rudder_stall_lift_coefficient,
-        );
-        self.world.bodies[self.boat.rudder].add_force_at_point(
-            rudder_force_n,
-            rudder_center_of_effort_m,
-            true,
-        );
-
-        let hull = &self.world.bodies[self.boat.hull.body];
-        let hull_angle_rad = hull.rotation().angle();
-        let keel_center_of_effort_m =
-            hull.translation() + rotated(self.parameters.keel_position_m, hull_angle_rad);
-        let apparent_keel_water_m_s = apparent_flow(
-            environment.true_water_velocity_m_s,
-            hull.velocity_at_point(keel_center_of_effort_m),
-        );
-        let keel_force_n = streamlined_foil_force(
-            apparent_keel_water_m_s,
-            hull_angle_rad,
-            self.parameters.water_density_kg_m3,
-            self.parameters.keel_area_m2,
-            self.parameters.keel_base_drag_coefficient,
-            self.parameters.keel_stall_angle_rad,
-            self.parameters.keel_stall_lift_coefficient,
-        );
-        self.world.bodies[self.boat.hull.body].add_force_at_point(
-            keel_force_n,
-            keel_center_of_effort_m,
-            true,
-        );
-
-        for local_position_m in [
-            Vector::new(-self.parameters.hull.length_m / 2.0, 0.0),
-            Vector::new(self.parameters.hull.length_m / 2.0, 0.0),
-        ] {
-            let hull = &self.world.bodies[self.boat.hull.body];
-            let world_position_m = hull.translation() + rotated(local_position_m, hull_angle_rad);
-            let apparent_water_m_s = apparent_flow(
-                environment.true_water_velocity_m_s,
-                hull.velocity_at_point(world_position_m),
-            );
-            let force_n = hull_resistance_force(
-                apparent_water_m_s,
-                hull_angle_rad,
-                self.parameters.water_density_kg_m3,
-                self.parameters.hull_reference_area_m2 / 2.0,
-                self.parameters.hull_drag_coefficient,
-                self.parameters.hull_lateral_drag_coefficient,
-            );
-            self.world.bodies[self.boat.hull.body].add_force_at_point(
-                force_n,
-                world_position_m,
-                true,
-            );
-        }
-
-        self.world.bodies[self.boat.sail].add_torque(actuator_torques.sail_n_m, true);
-        self.world.bodies[self.boat.rudder].add_torque(actuator_torques.rudder_n_m, true);
-        self.world.bodies[self.boat.hull.body].add_torque(
-            -actuator_torques.sail_n_m - actuator_torques.rudder_n_m,
-            true,
+        apply_boat_forces(
+            &mut self.world,
+            self.parameters,
+            self.boat,
+            environment,
+            actuator_torques,
         );
         self.world.step();
     }
@@ -1054,5 +1081,72 @@ impl Simulation {
 
     pub fn motion(&self) -> BoatMotion {
         read_motion(&self.boat, &self.world.bodies)
+    }
+}
+
+impl SharedSimulation {
+    pub fn new() -> Self {
+        Self {
+            boats: Vec::new(),
+            world: physics_world(),
+        }
+    }
+
+    pub fn add_boat(&mut self, parameters: BoatParameters, motion: BoatMotion) -> usize {
+        let boat = create_boat(
+            parameters,
+            motion,
+            &mut self.world.bodies,
+            &mut self.world.colliders,
+            &mut self.world.impulse_joints,
+        );
+        let index = self.boats.len();
+        self.boats.push(SharedBoat { parameters, boat });
+        index
+    }
+
+    pub fn advance(
+        &mut self,
+        environment: Environment,
+        actuator_torques: &[ActuatorTorques],
+    ) -> Vec<HullContact> {
+        assert_eq!(actuator_torques.len(), self.boats.len());
+        for (boat, actuator_torques) in self.boats.iter().zip(actuator_torques) {
+            apply_boat_forces(
+                &mut self.world,
+                boat.parameters,
+                boat.boat,
+                environment,
+                *actuator_torques,
+            );
+        }
+        self.world.step();
+        self.hull_contacts()
+    }
+
+    pub fn motion(&self, boat: usize) -> BoatMotion {
+        read_motion(&self.boats[boat].boat, &self.world.bodies)
+    }
+
+    fn hull_contacts(&self) -> Vec<HullContact> {
+        self.world
+            .contact_pairs()
+            .filter(|pair| pair.has_any_active_contact())
+            .filter_map(|pair| {
+                let first_boat = self
+                    .boats
+                    .iter()
+                    .position(|boat| boat.boat.hull.collider == pair.collider1)?;
+                let second_boat = self
+                    .boats
+                    .iter()
+                    .position(|boat| boat.boat.hull.collider == pair.collider2)?;
+                Some(HullContact {
+                    first_boat,
+                    second_boat,
+                    impulse_magnitude_n_s: pair.total_impulse_magnitude(),
+                })
+            })
+            .collect()
     }
 }
