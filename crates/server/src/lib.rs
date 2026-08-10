@@ -24,6 +24,9 @@ type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
+const VISIBILITY_RADIUS_M: f32 = 24.0;
+
 #[derive(Clone)]
 struct OutboundSnapshot {
     message: Message,
@@ -165,13 +168,37 @@ impl GameMatch {
         self.tick += 1;
     }
 
-    fn snapshot_for(&self, player_id: &str, removed_player_ids: Vec<String>) -> ServerMessage {
-        let boats = self
+    fn visible_boats(&self, player_id: &str) -> Vec<usize> {
+        let viewer = self
             .players
             .iter()
-            .enumerate()
-            .map(|(boat, player)| {
+            .position(|player| player.id == player_id)
+            .expect("a connection must have an authoritative boat");
+        self.simulation.boats_within_radius(
+            self.simulation.motion(viewer).position_m,
+            VISIBILITY_RADIUS_M,
+        )
+    }
+
+    fn snapshot_for(
+        &self,
+        player_id: &str,
+        visible_boats: &[usize],
+        removed_player_ids: Vec<String>,
+    ) -> ServerMessage {
+        let viewer = self
+            .players
+            .iter()
+            .position(|player| player.id == player_id)
+            .expect("a connection must have an authoritative boat");
+        let viewer_position_m = self.simulation.motion(viewer).position_m;
+        let boats = visible_boats
+            .iter()
+            .map(|&boat| {
+                let player = &self.players[boat];
                 let motion = self.simulation.motion(boat);
+                let include_intent = (motion.position_m - viewer_position_m).length_squared()
+                    <= PHYSICS_BUBBLE_RADIUS_M * PHYSICS_BUBBLE_RADIUS_M;
                 BoatSnapshot {
                     id: player.id.clone(),
                     x: motion.position_m.x,
@@ -184,8 +211,8 @@ impl GameMatch {
                     sail_angular_velocity: motion.sail_angular_velocity_rad_s,
                     rudder: motion.rudder_angle_rad,
                     rudder_angular_velocity: motion.rudder_angular_velocity_rad_s,
-                    forward: Some(player.intent.forward),
-                    turn: Some(player.intent.turn),
+                    forward: include_intent.then_some(player.intent.forward),
+                    turn: include_intent.then_some(player.intent.turn),
                     acknowledged_input: (player.id == player_id)
                         .then_some(player.acknowledged_input),
                 }
@@ -255,7 +282,15 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
                             .entry(removed.clone())
                             .or_insert(game_match.tick);
                     }
-                    connection.known_player_ids.clone_from(&active_player_ids);
+                    connection
+                        .known_player_ids
+                        .retain(|known| active_player_ids.contains(known));
+                    let visible_boats = game_match.visible_boats(player_id);
+                    connection.known_player_ids.extend(
+                        visible_boats
+                            .iter()
+                            .map(|boat| game_match.players[*boat].id.clone()),
+                    );
                     let mut removed_player_ids = connection
                         .pending_removals
                         .keys()
@@ -264,7 +299,7 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
                     removed_player_ids.sort();
                     let removal_tick = (!removed_player_ids.is_empty()).then_some(game_match.tick);
                     let snapshot = encode_server_message(
-                        &game_match.snapshot_for(player_id, removed_player_ids),
+                        &game_match.snapshot_for(player_id, &visible_boats, removed_player_ids),
                     )?;
                     connection.outbound.send_replace(Some(OutboundSnapshot {
                         message: Message::Text(snapshot.into()),

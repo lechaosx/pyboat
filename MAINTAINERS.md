@@ -220,10 +220,11 @@ the Python protocol while migration is incomplete. The server queues newer input
 sequences, consumes at most one per physics tick, and acknowledges only consumed
 commands. Snapshot fan-out uses Tokio watch channels so a slow connection retains
 only the newest state; disconnect tombstones persist until a snapshot is sent.
-Snapshots currently include all connected boats because maintained spatial
-interest is not implemented yet. Rust server integration tests bind an ephemeral
-loopback port and exercise actual WebSocket clients through input, motion, and
-disconnect cleanup.
+Rapier's maintained broad phase supplies interest candidates before exact radial
+checks. Boats within 8 m include intent for interaction prediction, boats through
+24 m include visual motion, and farther boats are omitted without a tombstone.
+Rust server integration tests bind an ephemeral loopback port and exercise actual
+WebSocket clients through input, motion, spatial interest, and disconnect cleanup.
 
 ## Model tuning
 

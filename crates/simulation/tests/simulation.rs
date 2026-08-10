@@ -211,6 +211,33 @@ fn shared_simulation_removes_an_articulated_boat_and_compacts_indices() {
 }
 
 #[test]
+fn shared_simulation_queries_boats_by_exact_radius() {
+    let parameters = vacuum_parameters();
+    let positions = [
+        Vector::ZERO,
+        Vector::new(3.0, 4.0),
+        Vector::new(5.0, 5.0),
+        Vector::new(20.0, 0.0),
+    ];
+    let mut simulation = SharedSimulation::new();
+    for position_m in positions {
+        let mut initial = motion();
+        initial.position_m = position_m;
+        initial.velocity_m_s = Vector::ZERO;
+        simulation.add_boat(parameters, initial);
+    }
+    simulation.advance(
+        Environment::default(),
+        &vec![ActuatorTorques::default(); positions.len()],
+    );
+
+    assert_eq!(
+        simulation.boats_within_radius(Vector::ZERO, 5.1),
+        vec![0, 1]
+    );
+}
+
+#[test]
 fn shared_simulation_resolves_and_reports_hull_collisions() {
     let parameters = vacuum_parameters();
     let mut port = motion();

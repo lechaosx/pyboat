@@ -52,8 +52,9 @@ cargo run -p pyboat-server
 The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
 connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes the same compact-JSON sequenced input as the Python
-prototype and publishes real boat snapshots at 60 Hz. Pass a different listen
-address as the final argument, for example
+prototype and publishes real boat snapshots at 60 Hz. Snapshots include nearby
+interaction state through 8 m, visual motion through 24 m, and omit farther boats.
+Pass a different listen address as the final argument, for example
 `cargo run -p pyboat-server -- 0.0.0.0:9000`. The browser demo is not connected to
 this server yet.
 

@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use rapier2d::prelude::{
-    ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
+    Aabb, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
     IntegrationParameters, MassProperties, MotorModel, PhysicsWorld, RevoluteJointBuilder,
     RigidBodyBuilder, RigidBodyHandle, RigidBodySet, Rotation, Vector,
 };
@@ -172,6 +174,7 @@ struct SharedBoat {
 
 pub struct SharedSimulation {
     boats: Vec<SharedBoat>,
+    boat_indices_by_collider: HashMap<ColliderHandle, usize>,
     pub world: PhysicsWorld,
 }
 
@@ -1088,6 +1091,7 @@ impl SharedSimulation {
     pub fn new() -> Self {
         Self {
             boats: Vec::new(),
+            boat_indices_by_collider: HashMap::new(),
             world: physics_world(),
         }
     }
@@ -1101,12 +1105,19 @@ impl SharedSimulation {
             &mut self.world.impulse_joints,
         );
         let index = self.boats.len();
+        self.boat_indices_by_collider
+            .insert(boat.hull.collider, index);
         self.boats.push(SharedBoat { parameters, boat });
         index
     }
 
-    pub fn remove_boat(&mut self, boat: usize) {
-        let boat = self.boats.remove(boat).boat;
+    pub fn remove_boat(&mut self, boat_index: usize) {
+        let boat = self.boats.remove(boat_index).boat;
+        self.boat_indices_by_collider.remove(&boat.hull.collider);
+        for (index, shifted_boat) in self.boats.iter().enumerate().skip(boat_index) {
+            self.boat_indices_by_collider
+                .insert(shifted_boat.boat.hull.collider, index);
+        }
         for body in [boat.sail, boat.rudder, boat.hull.body] {
             self.world.bodies.remove(
                 body,
@@ -1117,6 +1128,22 @@ impl SharedSimulation {
                 true,
             );
         }
+    }
+
+    pub fn boats_within_radius(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
+        let query_bounds = Aabb::from_half_extents(center_m, Vector::new(radius_m, radius_m));
+        let radius_squared_m2 = radius_m * radius_m;
+        let mut boats = self
+            .world
+            .query_pipeline()
+            .intersect_aabb_conservative(query_bounds)
+            .filter_map(|(collider, _)| self.boat_indices_by_collider.get(&collider).copied())
+            .filter(|boat| {
+                (self.motion(*boat).position_m - center_m).length_squared() <= radius_squared_m2
+            })
+            .collect::<Vec<_>>();
+        boats.sort_unstable();
+        boats
     }
 
     pub fn advance(

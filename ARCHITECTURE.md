@@ -30,7 +30,8 @@ decisions.
   articulated rudder and hull-mounted keel, anisotropic hull resistance, and
   surface-target actuator control, followed by arcade surface-effect sampling and
   target selection, controlled fixed-step advancement, and shared-world stepping
-  with hull contact reporting.
+  with hull contact reporting, articulated-boat removal, and maintained radial
+  spatial queries.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -162,9 +163,7 @@ decisions.
   protocols.
 - **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
   `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
-  optional nearby intent, and optional local acknowledgement fields. The Rust
-  server currently sends every connected boat while maintained spatial interest
-  remains unimplemented.
+  optional nearby intent, and optional local acknowledgement fields.
 - **[Implicit]** Disconnect tombstones remain in each connection's latest-only
   snapshots until that connection reports a successful WebSocket send, so
   replacing stale state cannot discard a removal event.
@@ -206,9 +205,10 @@ decisions.
   24 m are omitted.
 - **[Explicit]** Server interest management requires a maintained spatial query
   system.
-- **[Implicit]** Server candidate lookup uses Pymunk's maintained broad-phase
-  spatial index followed by an exact radial distance check. Clients linearly scan
-  only their already-culled snapshots.
+- **[Implicit]** Server candidate lookup uses the physics world's maintained
+  broad-phase spatial index followed by an exact radial distance check: Pymunk in
+  the Python reference and Rapier in the Rust server. Clients linearly scan only
+  their already-culled snapshots.
 - **[Explicit]** An omitted boat retains an arrow pointing toward its last known
   position.
 - **[Implicit]** The server remembers which boats each connection has seen and
@@ -245,7 +245,8 @@ decisions.
   connections in addition to deterministic simulation and protocol tests.
 - **[Implicit]** Rust loopback tests open real WebSocket connections against an
   ephemeral local port and verify concurrent connection identity, sequenced input
-  acknowledgement, authoritative motion, and disconnect cleanup.
+  acknowledgement, authoritative motion, spatial interest payloads, and disconnect
+  cleanup.
 
 ## Open architecture questions (not decisions)
 

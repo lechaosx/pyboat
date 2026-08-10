@@ -145,3 +145,66 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
     first.close(None).await.unwrap();
     server.abort();
 }
+
+#[tokio::test]
+async fn snapshots_apply_spatial_interest_and_tombstone_only_seen_boats() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(pyboat_server::serve(listener));
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        client.next().await.unwrap().unwrap();
+        clients.push(client);
+    }
+
+    let (registered_tick, _, _) = next_snapshot(&mut clients[4]).await;
+    let boats = timeout(Duration::from_secs(1), async {
+        loop {
+            let (tick, boats, _) = next_snapshot(&mut clients[0]).await;
+            if tick >= registered_tick {
+                break boats;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        boats
+            .iter()
+            .map(|boat| boat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["player-1", "player-2", "player-3", "player-4"]
+    );
+    let by_id = boats
+        .iter()
+        .map(|boat| (boat.id.as_str(), boat))
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(by_id["player-1"].acknowledged_input, Some(0));
+    assert_eq!(by_id["player-2"].forward, Some(0.0));
+    assert_eq!(by_id["player-2"].turn, Some(0.0));
+    assert_eq!(by_id["player-3"].forward, None);
+    assert_eq!(by_id["player-3"].turn, None);
+    assert_eq!(by_id["player-4"].forward, None);
+    assert_eq!(by_id["player-4"].turn, None);
+
+    clients[4].close(None).await.unwrap();
+    clients[3].close(None).await.unwrap();
+    timeout(Duration::from_secs(1), async {
+        loop {
+            let (_, boats, removed) = next_snapshot(&mut clients[0]).await;
+            assert!(!removed.iter().any(|player_id| player_id == "player-5"));
+            if removed.iter().any(|player_id| player_id == "player-4") {
+                assert!(boats.iter().all(|boat| boat.id != "player-4"));
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    for client in clients.iter_mut().take(3) {
+        client.close(None).await.unwrap();
+    }
+    server.abort();
+}
