@@ -220,6 +220,17 @@ impl BrowserGame {
         self.renderer
             .render(self.demo.scene(), self.demo.motion().position_m)
     }
+
+    pub fn set_player_input(
+        &mut self,
+        keyboard_forward: f32,
+        keyboard_turn: f32,
+        gamepad_x: f32,
+        gamepad_y: f32,
+    ) {
+        self.demo
+            .set_player_input(keyboard_forward, keyboard_turn, gamepad_x, gamepad_y);
+    }
 }
 
 fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {

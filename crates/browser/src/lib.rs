@@ -19,6 +19,7 @@ pub struct BoatScene {
 pub struct Demo {
     parameters: BoatParameters,
     simulation: Simulation,
+    motion_intent: MotionIntent,
     accumulator_seconds: f32,
 }
 
@@ -47,8 +48,44 @@ impl Demo {
         Self {
             parameters,
             simulation,
+            motion_intent: MotionIntent::default(),
             accumulator_seconds: 0.0,
         }
+    }
+
+    pub fn set_motion_intent(&mut self, forward: f32, turn: f32) {
+        self.motion_intent = MotionIntent {
+            forward: forward.clamp(-1.0, 1.0),
+            turn: turn.clamp(-1.0, 1.0),
+        };
+    }
+
+    pub fn set_player_input(
+        &mut self,
+        keyboard_forward: f32,
+        keyboard_turn: f32,
+        gamepad_x: f32,
+        gamepad_y: f32,
+    ) {
+        self.set_motion_intent(keyboard_forward, keyboard_turn);
+        let world_motion = Vector::new(gamepad_x, gamepad_y);
+        let length = world_motion.length();
+        let magnitude = length.min(1.0);
+        if magnitude == 0.0 {
+            return;
+        }
+
+        let local_direction =
+            Rotation::new(-self.motion().angle_rad).transform_vector(world_motion / length);
+        let square_scale = local_direction.x.abs().max(local_direction.y.abs());
+        self.motion_intent = MotionIntent {
+            forward: local_direction.x / square_scale * magnitude,
+            turn: local_direction.y / square_scale * magnitude,
+        };
+    }
+
+    pub fn motion_intent(&self) -> MotionIntent {
+        self.motion_intent
     }
 
     pub fn advance(&mut self, elapsed_seconds: f32) {
@@ -59,10 +96,7 @@ impl Demo {
                     true_wind_velocity_m_s: Vector::new(6.0, 0.0),
                     true_water_velocity_m_s: Vector::ZERO,
                 },
-                SurfaceControlCommand::ComputedYawRate(MotionIntent {
-                    forward: 1.0,
-                    turn: 0.0,
-                }),
+                SurfaceControlCommand::ComputedYawRate(self.motion_intent),
                 ControlSettings {
                     angle_resolution_deg: 1,
                     sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),

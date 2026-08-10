@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use pyboat_browser::{Demo, boat_scene};
-use pyboat_simulation::{BoatMotion, BoatParameters, DT_SECONDS, HullParameters};
+use pyboat_simulation::{BoatMotion, BoatParameters, DT_SECONDS, HullParameters, MotionIntent};
 use rapier2d::prelude::Vector;
 
 fn parameters() -> BoatParameters {
@@ -80,6 +80,7 @@ fn boat_scene_follows_hull_and_surface_motion() {
 fn demo_advances_the_real_simulation_at_fixed_ticks() {
     let mut demo = Demo::new();
     let initial = demo.motion();
+    demo.set_motion_intent(1.0, 0.0);
 
     for _ in 0..360 {
         demo.advance(DT_SECONDS);
@@ -88,4 +89,52 @@ fn demo_advances_the_real_simulation_at_fixed_ticks() {
     let advanced = demo.motion();
     assert!((advanced.position_m - initial.position_m).length() > 0.5);
     assert!(advanced.sail_angle_rad.abs() > 0.1);
+}
+
+#[test]
+fn demo_clamps_and_applies_player_motion_intent() {
+    let mut idle = Demo::new();
+    let mut controlled = Demo::new();
+    controlled.set_motion_intent(2.0, -2.0);
+
+    assert_eq!(
+        controlled.motion_intent(),
+        MotionIntent {
+            forward: 1.0,
+            turn: -1.0,
+        }
+    );
+    for _ in 0..360 {
+        idle.advance(DT_SECONDS);
+        controlled.advance(DT_SECONDS);
+    }
+
+    let idle = idle.motion();
+    let controlled = controlled.motion();
+    assert!((controlled.position_m - idle.position_m).length() > 0.5);
+    assert!((controlled.angle_rad - idle.angle_rad).abs() > 0.1);
+}
+
+#[test]
+fn demo_maps_keyboard_and_world_relative_gamepad_motion() {
+    let mut demo = Demo::new();
+
+    demo.set_player_input(1.0, -1.0, 0.0, -1.0);
+    let gamepad = demo.motion_intent();
+    assert!((gamepad.forward + 1.0).abs() < 1.0e-5);
+    assert!((gamepad.turn - 1.0).abs() < 1.0e-5);
+
+    demo.set_player_input(1.0, -1.0, 0.0, 0.0);
+    assert_eq!(
+        demo.motion_intent(),
+        MotionIntent {
+            forward: 1.0,
+            turn: -1.0,
+        }
+    );
+
+    demo.set_player_input(1.0, -1.0, 0.1, 0.1);
+    let small_gamepad = demo.motion_intent();
+    let mapped_magnitude = small_gamepad.forward.abs().max(small_gamepad.turn.abs());
+    assert!((mapped_magnitude - 0.02_f32.sqrt()).abs() < 1.0e-5);
 }

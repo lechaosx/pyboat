@@ -12,9 +12,9 @@ decisions.
 
 - **[Explicit]** The current gameplay reference stack consists of Python clients
   with a simple renderer and a Python dedicated server.
-- **[Implicit]** The initial browser vertical slice runs the Rust simulation and
-  renders one articulated boat before browser controls, protocol, or multiplayer
-  state are introduced.
+- **[Implicit]** The browser vertical slice runs the Rust simulation and renders
+  one articulated boat with local input before protocol or multiplayer state are
+  introduced.
 - **[Implicit]** Simulation and protocol data are independent of rendering, so a
   later browser client can reuse the same behavior without copying the Python
   renderer.
@@ -60,6 +60,13 @@ decisions.
   menus and the DOM-based HUD. It exchanges commands, a small derived UI view
   model, and discrete UI events with the Rust/WebAssembly client rather than raw
   gameplay snapshots.
+- **[Implicit]** TypeScript samples keyboard and browser gamepad state once per
+  animation frame. Rust clamps keyboard intent and converts the gamepad's
+  world-relative left-stick vector into boat-relative arcade intent.
+- **[Explicit]** Browser arcade input follows the standalone Python game's device
+  mapping, except that the browser adds no software gamepad deadzone. A displaced
+  first connected gamepad overrides keyboard input, while an exactly centered or
+  absent gamepad leaves keyboard input active.
 - **[Explicit]** Server and browser runtime work should use asynchronous I/O and
   orchestration wherever work can suspend.
 - **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
