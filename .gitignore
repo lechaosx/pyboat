@@ -4,3 +4,7 @@ __pycache__/
 /output.png
 /polar.png
 /target/
+/node_modules/
+/web/node_modules/
+/crates/browser/pkg/
+/web/dist/

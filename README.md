@@ -39,6 +39,23 @@ tools, including `uv`:
 nix develop
 ```
 
+The Rust browser demo additionally requires Rust 1.87 or newer with the
+`wasm32-unknown-unknown` target, `wasm-pack`, and Bun. The Nix environment includes
+all of them.
+
+## Run the Rust browser demo
+
+```sh
+nix develop
+bun install
+bun run dev
+```
+
+Open the Vite URL shown in the terminal in a WebGPU-capable browser. The page runs
+the real Rust/Rapier simulation at 60 Hz and renders its automatically controlled
+hull, sail, rudder, and moving water grid with Rust `wgpu`. This first visible
+slice does not have player controls or multiplayer yet.
+
 ## Run the standalone game
 
 ```sh
@@ -86,4 +103,5 @@ The server listens on `127.0.0.1:8765` by default. Use `server --host` and
 another machine.
 
 Pyboat is a prototype: the Python client and server currently establish the
-gameplay and networking behavior, while the planned browser client is deferred.
+gameplay and networking behavior, while the browser currently visualizes a single
+locally simulated boat.

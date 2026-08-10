@@ -47,8 +47,12 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Browser support is the primary platform target. Native desktop
   and mobile clients are desirable secondary targets rather than requirements for
   the first frontend.
-- **[Explicit]** A browser frontend is intended, but browser rendering is deferred
-  while the Python client and server establish gameplay and networking behavior.
+- **[Explicit]** When the existing simulation can support a meaningful visual,
+  establish a visible frontend slice before continuing deeper into gameplay
+  mechanics.
+- **[Implicit]** The initial browser slice visualizes one automatically controlled
+  boat from the Rust simulation; controls and multiplayer remain in the Python
+  prototype.
 - **[Explicit]** The browser implementation language is not committed to pure
   JavaScript.
 - **[Explicit]** The current steering and latency-compensated interaction were

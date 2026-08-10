@@ -6,10 +6,11 @@ This document is for developers working on the repository. Read
 
 ## Development environment
 
-Python 3.10 or newer and Rust 1.86 or newer are required. The Rust toolchain must
-include the `wasm32-unknown-unknown` target. Set up the Python project using the
-environment and package manager of your choice. Repository commands use `uv`;
-prepare its environment with:
+Python 3.10 or newer and Rust 1.87 or newer are required. The Rust toolchain must
+include the `wasm32-unknown-unknown` target. Browser development also requires
+`wasm-pack` and Bun. Set up the Python project using the environment and package
+manager of your choice. Repository commands use `uv`; prepare its environment
+with:
 
 ```sh
 uv sync
@@ -25,12 +26,19 @@ nix develop
 Pygame, Pymunk, and websockets are core dependencies. Matplotlib and pytest are
 development dependencies.
 
+Prepare the browser workspace with:
+
+```sh
+bun install
+```
+
 Run the complete suite:
 
 ```sh
 uv run pytest
 cargo test --workspace
 cargo check --workspace --target wasm32-unknown-unknown
+bun run build
 ```
 
 The suite covers force equations, actuator behavior, all three controllers,
@@ -71,6 +79,9 @@ documentation, and decision classification.
   coefficient curves, and articulated physics.
 - `src/plotting` contains speed-polar and coefficient-plot tools.
 - `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
+- `crates/browser` owns the browser demo, world-to-scene conversion, and WebGPU
+  renderer.
+- `web` contains the Vite page shell and TypeScript frame scheduling.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
 
@@ -96,9 +107,10 @@ respect to each candidate surface. The controlled-advance API composes this poli
 with one synchronous physics tick and reports the chosen targets and active yaw
 rate. The shared simulation inserts multiple articulated boats into one Rapier
 world, applies their loads before a single world step, and reports active hull
-contacts with resolved impulse magnitudes. Tests target physical invariants,
-mirrored controlled maneuvers, and accepted gameplay behavior rather than exact
-Pymunk trajectories.
+contacts with resolved impulse magnitudes. The browser demo advances the same
+controlled simulation in fixed ticks and converts hull, boom, and rudder motion
+to WebGPU vertices. Tests target physical invariants, mirrored controlled
+maneuvers, and accepted gameplay behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

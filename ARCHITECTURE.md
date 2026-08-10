@@ -10,8 +10,11 @@ decisions.
 
 ## Reference implementation and boundaries
 
-- **[Explicit]** The current reference stack consists of Python clients with a
-  simple renderer and a Python dedicated server. Browser rendering is deferred.
+- **[Explicit]** The current gameplay reference stack consists of Python clients
+  with a simple renderer and a Python dedicated server.
+- **[Implicit]** The initial browser vertical slice runs the Rust simulation and
+  renders one articulated boat before browser controls, protocol, or multiplayer
+  state are introduced.
 - **[Implicit]** Simulation and protocol data are independent of rendering, so a
   later browser client can reuse the same behavior without copying the Python
   renderer.
@@ -41,6 +44,9 @@ decisions.
 - **[Explicit]** The initial browser build targets WebGPU only and does not include
   `wgpu`'s WebGL compatibility backend, prioritizing a smaller download and one
   renderer capability model over support for browsers without WebGPU.
+- **[Implicit]** `wasm-pack` builds the Rust browser crate, Vite bundles the page,
+  and Bun runs workspace commands. TypeScript starts the page and schedules frames
+  while Rust owns WebGPU initialization, simulation, and scene rendering.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -93,6 +99,9 @@ decisions.
   command, selects surface targets, derives actuator torques, applies all physical
   loads, and advances exactly one fixed tick. It returns the selected targets and
   active maximum yaw rate for runtime telemetry.
+- **[Implicit]** The browser animation loop accumulates elapsed frame time, limits
+  catch-up to 250 ms per frame, and advances the synchronous simulation only in
+  complete 60 Hz ticks before rendering its latest motion.
 - **[Explicit]** Passive sail and rudder bearing damping uses Rapier force-based
   revolute-joint motors targeting zero relative angular velocity. Damping is
   validated by energy loss, common-rotation preservation, and angular-momentum

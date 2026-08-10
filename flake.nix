@@ -29,6 +29,10 @@
 				pkgs.rustfmt
 				pkgs.clippy
 				pkgs.rust-analyzer
+				pkgs.wasm-pack
+				pkgs.bun
+				pkgs.cargo-watch
+				pkgs.lld
 
 				# Build tools (pygame WILL need these)
 				pkgs.gcc
