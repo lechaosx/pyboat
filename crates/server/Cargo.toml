@@ -1,0 +1,14 @@
+[package]
+name = "pyboat-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+
+[dependencies]
+futures-util = "0.3.33"
+pyboat-protocol = { path = "../protocol" }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }

@@ -37,7 +37,7 @@ Run the complete suite:
 ```sh
 uv run pytest
 cargo test --workspace
-cargo check --workspace --target wasm32-unknown-unknown
+cargo check --workspace --exclude pyboat-server --target wasm32-unknown-unknown
 bun run build
 ```
 
@@ -79,6 +79,9 @@ documentation, and decision classification.
   coefficient curves, and articulated physics.
 - `src/plotting` contains speed-polar and coefficient-plot tools.
 - `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
+- `crates/protocol` contains typed compact-JSON messages shared by Rust runtimes.
+- `crates/server` contains the native async WebSocket server executable and
+  connection lifecycle.
 - `crates/browser` owns the browser demo, world-to-scene conversion, and WebGPU
   renderer.
 - `web` contains the Vite page shell and TypeScript frame scheduling.
@@ -202,6 +205,18 @@ that record in the same change whenever these behaviors change.
 
 Loopback integration tests open local WebSocket sockets. Environments that restrict
 socket creation must grant loopback permission to run the complete suite.
+
+The Rust connection server currently assigns identities but does not yet run a
+match. Start it on the default `127.0.0.1:8765` address with:
+
+```sh
+cargo run -p pyboat-server
+```
+
+`pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
+input on both encode and decode. The welcome and input shapes intentionally match
+the Python protocol while migration is incomplete. Rust server integration tests
+bind an ephemeral loopback port and exercise actual concurrent WebSocket clients.
 
 ## Model tuning
 

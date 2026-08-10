@@ -47,6 +47,12 @@ decisions.
 - **[Implicit]** `wasm-pack` builds the Rust browser crate, Vite bundles the page,
   and Bun runs workspace commands. TypeScript starts the page and schedules frames
   while Rust owns WebGPU initialization, simulation, and scene rendering.
+- **[Implicit]** `pyboat-protocol` owns typed runtime-independent wire messages,
+  while the native `pyboat-server` uses Tokio and tokio-tungstenite for async
+  WebSocket connection handling.
+- **[Implicit]** The initial Rust server slice accepts concurrent connections and
+  sends distinct `player-N` welcome identities. It does not yet own a match,
+  advance simulation ticks, consume input, or publish snapshots.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -143,11 +149,12 @@ decisions.
 
 ## Transport and protocol
 
-- **[Implicit]** The Python prototype uses compact JSON messages over WebSocket
-  because they are inspectable and browser-compatible.
-- **[Implicit]** JSON and WebSocket remain the prototype transport until
-  measurement identifies transport overhead as a limiting factor; binary encoding
-  or another realtime transport is contingent on that evidence.
+- **[Explicit]** Compact JSON over WebSocket remains the transport until
+  measurement identifies it as a bottleneck. Binary encoding is introduced only
+  in response to that evidence.
+- **[Implicit]** The Rust protocol initially preserves the Python input and welcome
+  message shapes so migration can proceed without maintaining two semantic
+  protocols.
 - **[Explicit]** Snapshots are assembled per receiving player because nearby boats
   require more prediction data than distant boats.
 
@@ -223,6 +230,9 @@ decisions.
   commands and incoming snapshots while preserving message order.
 - **[Implicit]** Automated integration tests use real loopback WebSocket
   connections in addition to deterministic simulation and protocol tests.
+- **[Implicit]** Rust loopback tests open real WebSocket connections against an
+  ephemeral local port and verify concurrent connection identity independently of
+  match simulation.
 
 ## Open architecture questions (not decisions)
 
