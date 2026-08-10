@@ -3,7 +3,7 @@ use std::{env, error::Error};
 use tokio::net::TcpListener;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let address = env::args()
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:8765".to_owned());

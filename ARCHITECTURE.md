@@ -50,9 +50,10 @@ decisions.
 - **[Implicit]** `pyboat-protocol` owns typed runtime-independent wire messages,
   while the native `pyboat-server` uses Tokio and tokio-tungstenite for async
   WebSocket connection handling.
-- **[Implicit]** The initial Rust server slice accepts concurrent connections and
-  sends distinct `player-N` welcome identities. It does not yet own a match,
-  advance simulation ticks, consume input, or publish snapshots.
+- **[Implicit]** The Rust server accepts concurrent connections, sends distinct
+  `player-N` welcome identities, and publishes 60 Hz snapshots containing an
+  increasing network tick with empty boat and removal lists. It does not yet own a
+  match, advance simulation physics, or consume input.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -121,6 +122,10 @@ decisions.
 - **[Implicit]** The browser animation loop accumulates elapsed frame time, limits
   catch-up to 250 ms per frame, and advances the synchronous simulation only in
   complete 60 Hz ticks before rendering its latest motion.
+- **[Implicit]** The Rust server's Tokio interval establishes the 60 Hz outbound
+  snapshot cadence separately from simulation work. Each connection retains only
+  the newest pending snapshot, preventing a slow client from accumulating stale
+  latency.
 - **[Explicit]** Passive sail and rudder bearing damping uses Rapier force-based
   revolute-joint motors targeting zero relative angular velocity. Damping is
   validated by energy loss, common-rotation preservation, and angular-momentum
@@ -155,6 +160,10 @@ decisions.
 - **[Implicit]** The Rust protocol initially preserves the Python input and welcome
   message shapes so migration can proceed without maintaining two semantic
   protocols.
+- **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
+  `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
+  optional nearby intent, and optional local acknowledgement fields; initial
+  server heartbeats leave both lists empty.
 - **[Explicit]** Snapshots are assembled per receiving player because nearby boats
   require more prediction data than distant boats.
 
@@ -231,8 +240,8 @@ decisions.
 - **[Implicit]** Automated integration tests use real loopback WebSocket
   connections in addition to deterministic simulation and protocol tests.
 - **[Implicit]** Rust loopback tests open real WebSocket connections against an
-  ephemeral local port and verify concurrent connection identity independently of
-  match simulation.
+  ephemeral local port and verify concurrent connection identity and increasing
+  snapshot ticks independently of match simulation.
 
 ## Open architecture questions (not decisions)
 

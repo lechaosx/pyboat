@@ -21,6 +21,35 @@ pub enum ServerMessage {
         #[serde(rename = "playerId")]
         player_id: String,
     },
+    #[serde(rename = "snapshot")]
+    Snapshot {
+        tick: u64,
+        boats: Vec<BoatSnapshot>,
+        #[serde(rename = "removedPlayerIds")]
+        removed_player_ids: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoatSnapshot {
+    pub id: String,
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub angle: f32,
+    pub angular_velocity: f32,
+    pub sail: f32,
+    pub sail_angular_velocity: f32,
+    pub rudder: f32,
+    pub rudder_angular_velocity: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acknowledged_input: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -51,9 +51,11 @@ cargo run -p pyboat-server
 
 The current Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent
 WebSocket connections, and sends each client a distinct compact-JSON welcome
-message. Pass a different listen address as the final argument, for example
-`cargo run -p pyboat-server -- 0.0.0.0:9000`. Authoritative simulation ticks and
-snapshots remain in the Python server for now.
+message followed by 60 Hz snapshot heartbeats. The snapshots currently contain a
+tick number with empty boat and removal lists; they do not advance physics yet.
+Pass a different listen address as the final argument, for example
+`cargo run -p pyboat-server -- 0.0.0.0:9000`. Authoritative simulation remains in
+the Python server for now.
 
 ## Run the Rust browser demo
 

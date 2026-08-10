@@ -46,3 +46,20 @@ fn input_rejects_values_outside_the_control_range() {
 
     assert_eq!(error, ProtocolError::InvalidMotionIntent);
 }
+
+#[test]
+fn empty_snapshot_matches_the_python_protocol() {
+    let expected = ServerMessage::Snapshot {
+        tick: 7,
+        boats: Vec::new(),
+        removed_player_ids: Vec::new(),
+    };
+    let encoded = encode_server_message(&expected).unwrap();
+    let decoded = decode_server_message(&encoded).unwrap();
+
+    assert_eq!(
+        encoded,
+        r#"{"type":"snapshot","tick":7,"boats":[],"removedPlayerIds":[]}"#
+    );
+    assert_eq!(decoded, expected);
+}
