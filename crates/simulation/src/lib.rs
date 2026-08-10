@@ -28,12 +28,29 @@ pub struct BoatParameters {
     pub boom_length_m: f32,
     pub mast_position_m: Vector,
     pub max_sail_angle_rad: f32,
+    pub air_density_kg_m3: f32,
+    pub sail_area_m2: f32,
+    pub sail_center_of_effort_from_mast_m: f32,
+    pub sail_base_drag_coefficient: f32,
+    pub water_density_kg_m3: f32,
+    pub keel_area_m2: f32,
+    pub keel_position_m: Vector,
+    pub keel_base_drag_coefficient: f32,
+    pub keel_stall_angle_rad: f32,
+    pub keel_stall_lift_coefficient: f32,
+    pub hull_reference_area_m2: f32,
+    pub hull_drag_coefficient: f32,
+    pub hull_lateral_drag_coefficient: f32,
     pub rudder_mass_kg: f32,
     pub tiller_mass_kg: f32,
     pub rudder_draw_length_m: f32,
     pub tiller_length_m: f32,
     pub rudder_position_m: Vector,
     pub max_rudder_angle_rad: f32,
+    pub rudder_area_m2: f32,
+    pub rudder_base_drag_coefficient: f32,
+    pub rudder_stall_angle_rad: f32,
+    pub rudder_stall_lift_coefficient: f32,
     pub sail_bearing_damping_n_m_s_rad: f32,
     pub rudder_bearing_damping_n_m_s_rad: f32,
 }
@@ -56,6 +73,12 @@ pub struct ActuatorTorques {
     pub rudder_n_m: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Environment {
+    pub true_wind_velocity_m_s: Vector,
+    pub true_water_velocity_m_s: Vector,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Boat {
     pub hull: Hull,
@@ -69,6 +92,97 @@ pub struct Simulation {
     pub parameters: BoatParameters,
     pub boat: Boat,
     pub world: PhysicsWorld,
+}
+
+pub fn apparent_flow(medium_velocity_m_s: Vector, point_velocity_m_s: Vector) -> Vector {
+    medium_velocity_m_s - point_velocity_m_s
+}
+
+pub fn flat_plate_lift_coefficient(angle_of_attack_rad: f32) -> f32 {
+    (2.0 * angle_of_attack_rad).sin()
+}
+
+pub fn flat_plate_drag_coefficient(angle_of_attack_rad: f32, base_drag_coefficient: f32) -> f32 {
+    base_drag_coefficient + 1.0 - (2.0 * angle_of_attack_rad).cos()
+}
+
+pub fn streamlined_lift_coefficient(
+    angle_of_attack_rad: f32,
+    stall_angle_rad: f32,
+    stall_lift_coefficient: f32,
+) -> f32 {
+    let angle_of_attack_rad = (angle_of_attack_rad + std::f32::consts::FRAC_PI_2)
+        .rem_euclid(std::f32::consts::PI)
+        - std::f32::consts::FRAC_PI_2;
+    let absolute_angle_rad = angle_of_attack_rad.abs();
+    if absolute_angle_rad <= stall_angle_rad {
+        return stall_lift_coefficient * angle_of_attack_rad / stall_angle_rad;
+    }
+
+    let separated_lift = stall_lift_coefficient
+        * ((std::f32::consts::FRAC_PI_2 - absolute_angle_rad)
+            / (std::f32::consts::FRAC_PI_2 - stall_angle_rad));
+    separated_lift
+        .max(flat_plate_lift_coefficient(angle_of_attack_rad).abs())
+        .copysign(angle_of_attack_rad)
+}
+
+pub fn flat_plate_force(
+    apparent_flow_m_s: Vector,
+    foil_angle_rad: f32,
+    fluid_density_kg_m3: f32,
+    area_m2: f32,
+    base_drag_coefficient: f32,
+) -> Vector {
+    let flow_angle_rad = apparent_flow_m_s.y.atan2(apparent_flow_m_s.x);
+    let angle_of_attack_rad = foil_angle_rad - std::f32::consts::PI - flow_angle_rad;
+    let dynamic_pressure_area_n =
+        0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length_squared() * area_m2;
+    let lift_n = dynamic_pressure_area_n * flat_plate_lift_coefficient(angle_of_attack_rad);
+    let drag_n = dynamic_pressure_area_n
+        * flat_plate_drag_coefficient(angle_of_attack_rad, base_drag_coefficient);
+    rotated(Vector::new(drag_n, -lift_n), flow_angle_rad)
+}
+
+pub fn streamlined_foil_force(
+    apparent_flow_m_s: Vector,
+    foil_angle_rad: f32,
+    fluid_density_kg_m3: f32,
+    area_m2: f32,
+    base_drag_coefficient: f32,
+    stall_angle_rad: f32,
+    stall_lift_coefficient: f32,
+) -> Vector {
+    let flow_angle_rad = apparent_flow_m_s.y.atan2(apparent_flow_m_s.x);
+    let angle_of_attack_rad = foil_angle_rad - std::f32::consts::PI - flow_angle_rad;
+    let dynamic_pressure_area_n =
+        0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length_squared() * area_m2;
+    let lift_n = dynamic_pressure_area_n
+        * streamlined_lift_coefficient(
+            angle_of_attack_rad,
+            stall_angle_rad,
+            stall_lift_coefficient,
+        );
+    let drag_n = dynamic_pressure_area_n
+        * flat_plate_drag_coefficient(angle_of_attack_rad, base_drag_coefficient);
+    rotated(Vector::new(drag_n, -lift_n), flow_angle_rad)
+}
+
+pub fn hull_resistance_force(
+    apparent_water_m_s: Vector,
+    hull_angle_rad: f32,
+    fluid_density_kg_m3: f32,
+    reference_area_m2: f32,
+    longitudinal_coefficient: f32,
+    lateral_coefficient: f32,
+) -> Vector {
+    let local_flow_m_s = rotated(apparent_water_m_s, -hull_angle_rad);
+    let pressure_area = 0.5 * fluid_density_kg_m3 * reference_area_m2;
+    let local_force_n = Vector::new(
+        local_flow_m_s.x * local_flow_m_s.x.abs() * pressure_area * longitudinal_coefficient,
+        local_flow_m_s.y * local_flow_m_s.y.abs() * pressure_area * lateral_coefficient,
+    );
+    rotated(local_force_n, hull_angle_rad)
 }
 
 pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
@@ -324,7 +438,115 @@ impl Simulation {
         }
     }
 
-    pub fn advance(&mut self, actuator_torques: ActuatorTorques) {
+    pub fn advance(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
+        for body in [self.boat.hull.body, self.boat.sail, self.boat.rudder] {
+            self.world.bodies[body].reset_forces(false);
+            self.world.bodies[body].reset_torques(false);
+        }
+
+        let sail = &self.world.bodies[self.boat.sail];
+        let sail_angle_rad = sail.rotation().angle();
+        let center_of_effort_m = sail.translation()
+            + rotated(
+                Vector::new(
+                    self.parameters.boom_length_m / 2.0
+                        - self.parameters.sail_center_of_effort_from_mast_m,
+                    0.0,
+                ),
+                sail_angle_rad,
+            );
+        let apparent_wind_m_s = apparent_flow(
+            environment.true_wind_velocity_m_s,
+            sail.velocity_at_point(center_of_effort_m),
+        );
+        let sail_force_n = flat_plate_force(
+            apparent_wind_m_s,
+            sail_angle_rad,
+            self.parameters.air_density_kg_m3,
+            self.parameters.sail_area_m2,
+            self.parameters.sail_base_drag_coefficient,
+        );
+        self.world.bodies[self.boat.sail].add_force_at_point(
+            sail_force_n,
+            center_of_effort_m,
+            true,
+        );
+
+        let rudder = &self.world.bodies[self.boat.rudder];
+        let rudder_angle_rad = rudder.rotation().angle();
+        let rudder_center_of_effort_m = rudder.translation()
+            + rotated(
+                Vector::new(-self.parameters.rudder_draw_length_m / 2.0, 0.0)
+                    - rudder_center_from_hinge_m(self.parameters),
+                rudder_angle_rad,
+            );
+        let apparent_rudder_water_m_s = apparent_flow(
+            environment.true_water_velocity_m_s,
+            rudder.velocity_at_point(rudder_center_of_effort_m),
+        );
+        let rudder_force_n = streamlined_foil_force(
+            apparent_rudder_water_m_s,
+            rudder_angle_rad,
+            self.parameters.water_density_kg_m3,
+            self.parameters.rudder_area_m2,
+            self.parameters.rudder_base_drag_coefficient,
+            self.parameters.rudder_stall_angle_rad,
+            self.parameters.rudder_stall_lift_coefficient,
+        );
+        self.world.bodies[self.boat.rudder].add_force_at_point(
+            rudder_force_n,
+            rudder_center_of_effort_m,
+            true,
+        );
+
+        let hull = &self.world.bodies[self.boat.hull.body];
+        let hull_angle_rad = hull.rotation().angle();
+        let keel_center_of_effort_m =
+            hull.translation() + rotated(self.parameters.keel_position_m, hull_angle_rad);
+        let apparent_keel_water_m_s = apparent_flow(
+            environment.true_water_velocity_m_s,
+            hull.velocity_at_point(keel_center_of_effort_m),
+        );
+        let keel_force_n = streamlined_foil_force(
+            apparent_keel_water_m_s,
+            hull_angle_rad,
+            self.parameters.water_density_kg_m3,
+            self.parameters.keel_area_m2,
+            self.parameters.keel_base_drag_coefficient,
+            self.parameters.keel_stall_angle_rad,
+            self.parameters.keel_stall_lift_coefficient,
+        );
+        self.world.bodies[self.boat.hull.body].add_force_at_point(
+            keel_force_n,
+            keel_center_of_effort_m,
+            true,
+        );
+
+        for local_position_m in [
+            Vector::new(-self.parameters.hull.length_m / 2.0, 0.0),
+            Vector::new(self.parameters.hull.length_m / 2.0, 0.0),
+        ] {
+            let hull = &self.world.bodies[self.boat.hull.body];
+            let world_position_m = hull.translation() + rotated(local_position_m, hull_angle_rad);
+            let apparent_water_m_s = apparent_flow(
+                environment.true_water_velocity_m_s,
+                hull.velocity_at_point(world_position_m),
+            );
+            let force_n = hull_resistance_force(
+                apparent_water_m_s,
+                hull_angle_rad,
+                self.parameters.water_density_kg_m3,
+                self.parameters.hull_reference_area_m2 / 2.0,
+                self.parameters.hull_drag_coefficient,
+                self.parameters.hull_lateral_drag_coefficient,
+            );
+            self.world.bodies[self.boat.hull.body].add_force_at_point(
+                force_n,
+                world_position_m,
+                true,
+            );
+        }
+
         self.world.bodies[self.boat.sail].add_torque(actuator_torques.sail_n_m, true);
         self.world.bodies[self.boat.rudder].add_torque(actuator_torques.rudder_n_m, true);
         self.world.bodies[self.boat.hull.body].add_torque(

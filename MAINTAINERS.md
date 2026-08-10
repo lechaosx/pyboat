@@ -82,8 +82,13 @@ behavior, and keep the crate independent of browser and native-server runtimes.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60
-Hz. Tests target physical invariants and accepted gameplay behavior rather than
-exact Pymunk trajectories.
+Hz. Flat-plate aerodynamic load is sampled at the sail's moving center of effort
+and applied there each tick. Streamlined underwater loads model attached flow
+through stall and act at the articulated rudder's moving center of effort and the
+hull-mounted keel position. Quadratic anisotropic hull resistance is sampled at
+the bow and stern, which opposes translation and yaw using each point's local
+water-relative velocity. Tests target physical invariants and accepted gameplay
+behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

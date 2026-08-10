@@ -1,9 +1,10 @@
 use std::f32::consts::PI;
 
 use pyboat_simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, HullParameters, Simulation,
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
+    Simulation, flat_plate_force, hull_resistance_force, streamlined_foil_force,
 };
-use rapier2d::prelude::{RigidBody, Vector};
+use rapier2d::prelude::{RigidBody, Rotation, Vector};
 
 fn reference_parameters() -> BoatParameters {
     BoatParameters {
@@ -18,15 +19,39 @@ fn reference_parameters() -> BoatParameters {
         boom_length_m: 2.0,
         mast_position_m: Vector::new(0.4, 0.0),
         max_sail_angle_rad: PI / 2.0,
+        air_density_kg_m3: 1.225,
+        sail_area_m2: 8.0,
+        sail_center_of_effort_from_mast_m: 0.7,
+        sail_base_drag_coefficient: 0.02,
+        water_density_kg_m3: 1025.0,
+        keel_area_m2: 0.6,
+        keel_position_m: Vector::ZERO,
+        keel_base_drag_coefficient: 0.02,
+        keel_stall_angle_rad: 15.0_f32.to_radians(),
+        keel_stall_lift_coefficient: 0.8,
+        hull_reference_area_m2: 0.3,
+        hull_drag_coefficient: 0.08,
+        hull_lateral_drag_coefficient: 0.02,
         rudder_mass_kg: 4.0,
         tiller_mass_kg: 2.0,
         rudder_draw_length_m: 0.5,
+        rudder_area_m2: 0.12,
+        rudder_base_drag_coefficient: 0.02,
+        rudder_stall_angle_rad: 15.0_f32.to_radians(),
+        rudder_stall_lift_coefficient: 0.8,
         tiller_length_m: 1.0,
         rudder_position_m: Vector::new(-1.8, 0.0),
         max_rudder_angle_rad: PI / 6.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
     }
+}
+
+fn vacuum_parameters() -> BoatParameters {
+    let mut parameters = reference_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    parameters.water_density_kg_m3 = 0.0;
+    parameters
 }
 
 fn motion() -> BoatMotion {
@@ -67,6 +92,15 @@ fn angular_momentum(simulation: &Simulation) -> f32 {
         .sum()
 }
 
+fn linear_momentum(simulation: &Simulation) -> Vector {
+    simulation
+        .world
+        .bodies
+        .iter()
+        .map(|(_, body)| body.linvel() * body.mass())
+        .sum()
+}
+
 fn kinetic_energy(simulation: &Simulation) -> f32 {
     simulation
         .world
@@ -83,13 +117,13 @@ fn kinetic_energy(simulation: &Simulation) -> f32 {
 
 #[test]
 fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut simulation = Simulation::new(parameters, motion());
 
     assert_eq!(simulation.world.integration_parameters.dt, DT_SECONDS);
     assert_eq!(simulation.world.gravity, Vector::ZERO);
     for _ in 0..60 {
-        simulation.advance(ActuatorTorques::default());
+        simulation.advance(Environment::default(), ActuatorTorques::default());
     }
 
     let result = simulation.motion();
@@ -115,7 +149,7 @@ fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
 
 #[test]
 fn sail_joint_stops_outward_motion_at_its_limit() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
@@ -123,7 +157,7 @@ fn sail_joint_stops_outward_motion_at_its_limit() {
     let mut simulation = Simulation::new(parameters, initial);
 
     for _ in 0..120 {
-        simulation.advance(ActuatorTorques::default());
+        simulation.advance(Environment::default(), ActuatorTorques::default());
     }
 
     let sail_angle_rad = simulation.motion().sail_angle_rad;
@@ -133,16 +167,19 @@ fn sail_joint_stops_outward_motion_at_its_limit() {
 
 #[test]
 fn actuator_torques_rotate_surfaces_and_conserve_angular_momentum() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
     let mut simulation = Simulation::new(parameters, initial);
 
-    simulation.advance(ActuatorTorques {
-        sail_n_m: 100.0,
-        rudder_n_m: 20.0,
-    });
+    simulation.advance(
+        Environment::default(),
+        ActuatorTorques {
+            sail_n_m: 100.0,
+            rudder_n_m: 20.0,
+        },
+    );
 
     let result = simulation.motion();
     assert!(result.sail_angular_velocity_rad_s > 0.0);
@@ -154,17 +191,20 @@ fn actuator_torques_rotate_surfaces_and_conserve_angular_momentum() {
 #[test]
 fn actuator_torques_cannot_drive_surfaces_past_joint_limits() {
     let loaded_limit_tolerance_rad = 1.0e-3;
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
     let mut simulation = Simulation::new(parameters, initial);
 
     for _ in 0..240 {
-        simulation.advance(ActuatorTorques {
-            sail_n_m: 100.0,
-            rudder_n_m: 20.0,
-        });
+        simulation.advance(
+            Environment::default(),
+            ActuatorTorques {
+                sail_n_m: 100.0,
+                rudder_n_m: 20.0,
+            },
+        );
     }
 
     let result = simulation.motion();
@@ -186,7 +226,7 @@ fn actuator_torques_cannot_drive_surfaces_past_joint_limits() {
 
 #[test]
 fn bearing_damping_reduces_relative_motion_and_conserves_angular_momentum() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
@@ -197,7 +237,7 @@ fn bearing_damping_reduces_relative_motion_and_conserves_angular_momentum() {
     let initial_angular_momentum = angular_momentum(&simulation);
 
     for _ in 0..120 {
-        simulation.advance(ActuatorTorques::default());
+        simulation.advance(Environment::default(), ActuatorTorques::default());
     }
 
     let result = simulation.motion();
@@ -226,7 +266,7 @@ fn bearing_damping_reduces_relative_motion_and_conserves_angular_momentum() {
 
 #[test]
 fn bearing_damping_does_not_resist_common_rotation() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
@@ -234,11 +274,197 @@ fn bearing_damping_does_not_resist_common_rotation() {
     let mut simulation = Simulation::new(parameters, initial);
 
     for _ in 0..60 {
-        simulation.advance(ActuatorTorques::default());
+        simulation.advance(Environment::default(), ActuatorTorques::default());
     }
 
     let result = simulation.motion();
     assert!((result.angular_velocity_rad_s - 1.0).abs() < 1.0e-3);
     assert!(result.sail_angular_velocity_rad_s.abs() < 1.0e-3);
     assert!(result.rudder_angular_velocity_rad_s.abs() < 1.0e-3);
+}
+
+#[test]
+fn sail_load_applies_the_expected_linear_and_angular_impulse() {
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    initial.sail_angle_rad = PI / 4.0;
+    let environment = Environment {
+        true_wind_velocity_m_s: Vector::new(6.0, 0.0),
+        ..Default::default()
+    };
+    let expected_force_n = flat_plate_force(
+        environment.true_wind_velocity_m_s,
+        initial.angle_rad + initial.sail_angle_rad,
+        parameters.air_density_kg_m3,
+        parameters.sail_area_m2,
+        parameters.sail_base_drag_coefficient,
+    );
+    let mast_position_m = initial.position_m
+        + Rotation::new(initial.angle_rad).transform_vector(parameters.mast_position_m);
+    let center_of_effort_m = mast_position_m
+        + Rotation::new(initial.angle_rad + initial.sail_angle_rad).transform_vector(Vector::new(
+            -parameters.sail_center_of_effort_from_mast_m,
+            0.0,
+        ));
+    let mut simulation = Simulation::new(parameters, initial);
+
+    simulation.advance(environment, ActuatorTorques::default());
+
+    assert_vector_close(linear_momentum(&simulation), expected_force_n * DT_SECONDS);
+    assert_close(
+        angular_momentum(&simulation),
+        center_of_effort_m.perp_dot(expected_force_n) * DT_SECONDS,
+    );
+}
+
+#[test]
+fn tick_torques_replace_previous_tick_loads() {
+    let mut simulation = Simulation::new(vacuum_parameters(), motion());
+
+    simulation.advance(
+        Environment::default(),
+        ActuatorTorques {
+            sail_n_m: 100.0,
+            rudder_n_m: 20.0,
+        },
+    );
+    simulation.advance(Environment::default(), ActuatorTorques::default());
+
+    assert_eq!(
+        simulation.world.bodies[simulation.boat.sail].user_torque(),
+        0.0
+    );
+    assert_eq!(
+        simulation.world.bodies[simulation.boat.rudder].user_torque(),
+        0.0
+    );
+    assert_eq!(
+        simulation.world.bodies[simulation.boat.hull.body].user_torque(),
+        0.0
+    );
+}
+
+#[test]
+fn rudder_load_applies_the_expected_linear_and_angular_impulse() {
+    let mut parameters = reference_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    parameters.keel_area_m2 = 0.0;
+    parameters.hull_reference_area_m2 = 0.0;
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    initial.rudder_angle_rad = 5.0_f32.to_radians();
+    let environment = Environment {
+        true_water_velocity_m_s: Vector::new(2.0, 0.0),
+        ..Default::default()
+    };
+    let expected_force_n = streamlined_foil_force(
+        environment.true_water_velocity_m_s,
+        initial.angle_rad + initial.rudder_angle_rad,
+        parameters.water_density_kg_m3,
+        parameters.rudder_area_m2,
+        parameters.rudder_base_drag_coefficient,
+        parameters.rudder_stall_angle_rad,
+        parameters.rudder_stall_lift_coefficient,
+    );
+    let hinge_position_m = initial.position_m
+        + Rotation::new(initial.angle_rad).transform_vector(parameters.rudder_position_m);
+    let center_of_effort_m = hinge_position_m
+        + Rotation::new(initial.angle_rad + initial.rudder_angle_rad)
+            .transform_vector(Vector::new(-parameters.rudder_draw_length_m / 2.0, 0.0));
+    let mut simulation = Simulation::new(parameters, initial);
+
+    simulation.advance(environment, ActuatorTorques::default());
+
+    assert_vector_close(linear_momentum(&simulation), expected_force_n * DT_SECONDS);
+    assert_close(
+        angular_momentum(&simulation),
+        center_of_effort_m.perp_dot(expected_force_n) * DT_SECONDS,
+    );
+}
+
+#[test]
+fn keel_load_applies_the_expected_linear_and_angular_impulse() {
+    let mut parameters = reference_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    parameters.rudder_area_m2 = 0.0;
+    parameters.hull_reference_area_m2 = 0.0;
+    parameters.keel_position_m = Vector::new(-1.0, 0.0);
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 5.0_f32.to_radians();
+    let environment = Environment {
+        true_water_velocity_m_s: Vector::new(2.0, 0.0),
+        ..Default::default()
+    };
+    let expected_force_n = streamlined_foil_force(
+        environment.true_water_velocity_m_s,
+        initial.angle_rad,
+        parameters.water_density_kg_m3,
+        parameters.keel_area_m2,
+        parameters.keel_base_drag_coefficient,
+        parameters.keel_stall_angle_rad,
+        parameters.keel_stall_lift_coefficient,
+    );
+    let center_of_effort_m = initial.position_m
+        + Rotation::new(initial.angle_rad).transform_vector(parameters.keel_position_m);
+    let mut simulation = Simulation::new(parameters, initial);
+
+    simulation.advance(environment, ActuatorTorques::default());
+
+    assert_vector_close(linear_momentum(&simulation), expected_force_n * DT_SECONDS);
+    assert_close(
+        angular_momentum(&simulation),
+        center_of_effort_m.perp_dot(expected_force_n) * DT_SECONDS,
+    );
+}
+
+#[test]
+fn bow_and_stern_hull_resistance_apply_the_expected_force_and_yaw_torque() {
+    let mut parameters = reference_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    parameters.keel_area_m2 = 0.0;
+    parameters.rudder_area_m2 = 0.0;
+    let mut initial = motion();
+    initial.position_m = Vector::ZERO;
+    initial.velocity_m_s = Vector::new(2.0, 1.0);
+    initial.angle_rad = 0.0;
+    initial.angular_velocity_rad_s = 0.5;
+    let half_length_m = parameters.hull.length_m / 2.0;
+    let bow_position_m = Vector::new(half_length_m, 0.0);
+    let stern_position_m = Vector::new(-half_length_m, 0.0);
+    let bow_velocity_m_s =
+        initial.velocity_m_s + Vector::new(0.0, half_length_m * initial.angular_velocity_rad_s);
+    let stern_velocity_m_s =
+        initial.velocity_m_s - Vector::new(0.0, half_length_m * initial.angular_velocity_rad_s);
+    let half_reference_area_m2 = parameters.hull_reference_area_m2 / 2.0;
+    let bow_force_n = hull_resistance_force(
+        -bow_velocity_m_s,
+        initial.angle_rad,
+        parameters.water_density_kg_m3,
+        half_reference_area_m2,
+        parameters.hull_drag_coefficient,
+        parameters.hull_lateral_drag_coefficient,
+    );
+    let stern_force_n = hull_resistance_force(
+        -stern_velocity_m_s,
+        initial.angle_rad,
+        parameters.water_density_kg_m3,
+        half_reference_area_m2,
+        parameters.hull_drag_coefficient,
+        parameters.hull_lateral_drag_coefficient,
+    );
+    let mut simulation = Simulation::new(parameters, initial);
+
+    simulation.advance(Environment::default(), ActuatorTorques::default());
+
+    let hull = &simulation.world.bodies[simulation.boat.hull.body];
+    assert_vector_close(hull.user_force(), bow_force_n + stern_force_n);
+    assert_close(
+        hull.user_torque(),
+        bow_position_m.perp_dot(bow_force_n) + stern_position_m.perp_dot(stern_force_n),
+    );
+    assert!(hull.user_torque() * initial.angular_velocity_rad_s < 0.0);
 }

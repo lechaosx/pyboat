@@ -22,7 +22,9 @@ decisions.
   a Rust test against the Python reference before browser or native runtime
   adapters consume it. Hull construction, the articulated boat assembly, and
   authoritative motion restoration, fixed-step advancement, and actuator torque
-  application and passive bearing damping are the first migrated behaviors.
+  application, passive bearing damping, and flat-plate sail load application are
+  the first migrated behaviors, followed by stalled underwater-foil loads on the
+  articulated rudder and hull-mounted keel and anisotropic hull resistance.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -71,10 +73,25 @@ decisions.
   torques equally and oppositely to the controlled surface and hull. Rapier uses
   eight solver iterations with joint warm-starting so sustained actuator loads
   keep the articulated surfaces within their configured limits.
-- **[Implicit]** Passive sail and rudder bearing damping uses Rapier force-based
+- **[Explicit]** Passive sail and rudder bearing damping uses Rapier force-based
   revolute-joint motors targeting zero relative angular velocity. Damping is
   validated by energy loss, common-rotation preservation, and angular-momentum
   conservation rather than matching Pymunk's numerical decay curve.
+- **[Implicit]** The Rust sail load uses the symmetric flat-plate coefficients
+  `Cl = sin(2α)` and `Cd = Cd0 + 1 - cos(2α)`. The pure force calculation uses
+  apparent flow and dynamic pressure without depending on a physics runtime.
+- **[Implicit]** Rust keel and rudder loads use a symmetric streamlined lift
+  curve: lift grows linearly to the configured stall point, then transitions
+  toward separated flat-plate cross-flow while drag retains the flat-plate law.
+- **[Implicit]** Each Rust tick samples apparent water at the articulated
+  rudder's moving center of effort and at the hull-mounted keel position, then
+  applies each streamlined foil load to its supporting rigid body at that point.
+- **[Implicit]** Rust hull resistance remains quadratic and anisotropic. Half of
+  the configured reference area is sampled at each end of the hull so local
+  lateral flow creates a physically opposing yaw torque.
+- **[Implicit]** Each Rust tick replaces the preceding tick's user-applied loads,
+  samples apparent wind at the moving sail center of effort, and applies the sail
+  force to the articulated sail at that world-space point.
 - **[Implicit]** Clients send sequenced control commands rather than transforms.
   Server snapshots acknowledge only commands that have affected an authoritative
   simulation tick.
@@ -172,5 +189,3 @@ decisions.
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or
   another transport.
-- Which Python simulation behavior should be migrated after passive bearing
-  damping.
