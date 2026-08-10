@@ -1,6 +1,7 @@
 use pyboat_simulation::{
-    BoatMotion, BoatParameters, ControlSettings, DT_SECONDS, Environment, HullParameters,
-    MotionIntent, Simulation, SurfaceControlCommand, apparent_flow, hull_outline_m,
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
+    HullParameters, MotionIntent, SharedSimulation, apparent_flow, computed_maximum_yaw_rate_rad_s,
+    hull_outline_m, surface_control_input, surface_target_control_torques, yaw_rate_move_control,
 };
 use rapier2d::prelude::{Rotation, Vector};
 
@@ -46,8 +47,11 @@ pub struct DemoView {
 
 pub struct Demo {
     parameters: BoatParameters,
-    simulation: Simulation,
+    simulation: SharedSimulation,
+    player_boat: usize,
+    practice_boat: usize,
     motion_intent: MotionIntent,
+    contacts: Vec<HullContact>,
     accumulator_seconds: f32,
 }
 
@@ -60,23 +64,30 @@ impl Default for Demo {
 impl Demo {
     pub fn new() -> Self {
         let parameters = demo_parameters();
-        let simulation = Simulation::new(
-            parameters,
-            BoatMotion {
-                position_m: Vector::ZERO,
-                velocity_m_s: Vector::ZERO,
-                angle_rad: 135.0_f32.to_radians(),
-                angular_velocity_rad_s: 0.0,
-                sail_angle_rad: 0.0,
-                sail_angular_velocity_rad_s: 0.0,
-                rudder_angle_rad: 0.0,
-                rudder_angular_velocity_rad_s: 0.0,
-            },
-        );
+        let player_motion = BoatMotion {
+            position_m: Vector::ZERO,
+            velocity_m_s: Vector::ZERO,
+            angle_rad: 135.0_f32.to_radians(),
+            angular_velocity_rad_s: 0.0,
+            sail_angle_rad: 0.0,
+            sail_angular_velocity_rad_s: 0.0,
+            rudder_angle_rad: 0.0,
+            rudder_angular_velocity_rad_s: 0.0,
+        };
+        let mut practice_motion = player_motion;
+        practice_motion.position_m =
+            Rotation::new(player_motion.angle_rad).transform_vector(Vector::new(6.0, 0.0));
+        practice_motion.angle_rad += std::f32::consts::PI;
+        let mut simulation = SharedSimulation::new();
+        let player_boat = simulation.add_boat(parameters, player_motion);
+        let practice_boat = simulation.add_boat(parameters, practice_motion);
         Self {
             parameters,
             simulation,
+            player_boat,
+            practice_boat,
             motion_intent: MotionIntent::default(),
+            contacts: Vec::new(),
             accumulator_seconds: 0.0,
         }
     }
@@ -119,20 +130,29 @@ impl Demo {
     pub fn advance(&mut self, elapsed_seconds: f32) {
         self.accumulator_seconds += elapsed_seconds.min(0.25);
         while self.accumulator_seconds >= DT_SECONDS {
-            self.simulation.advance_controlled(
-                demo_environment(),
-                SurfaceControlCommand::ComputedYawRate(self.motion_intent),
-                ControlSettings {
-                    angle_resolution_deg: 1,
-                    sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
-                },
+            let environment = demo_environment();
+            let motion = self.motion();
+            let control_input = surface_control_input(
+                self.parameters,
+                motion,
+                environment,
+                1,
+                10.0_f32.to_radians(),
             );
+            let maximum_yaw_rate_rad_s =
+                computed_maximum_yaw_rate_rad_s(self.parameters, motion, environment);
+            let targets =
+                yaw_rate_move_control(&control_input, self.motion_intent, maximum_yaw_rate_rad_s);
+            let player_torques = surface_target_control_torques(self.parameters, motion, targets);
+            self.contacts = self
+                .simulation
+                .advance(environment, &[player_torques, ActuatorTorques::default()]);
             self.accumulator_seconds -= DT_SECONDS;
         }
     }
 
     pub fn motion(&self) -> BoatMotion {
-        self.simulation.motion()
+        self.simulation.motion(self.player_boat)
     }
 
     pub fn view(&self) -> DemoView {
@@ -154,8 +174,15 @@ impl Demo {
         }
     }
 
-    pub fn scene(&self) -> BoatScene {
-        boat_scene(self.parameters, self.motion())
+    pub fn scenes(&self) -> [BoatScene; 2] {
+        [
+            boat_scene(self.parameters, self.motion()),
+            boat_scene(self.parameters, self.simulation.motion(self.practice_boat)),
+        ]
+    }
+
+    pub fn contacts(&self) -> &[HullContact] {
+        &self.contacts
     }
 }
 

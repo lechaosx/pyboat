@@ -52,11 +52,13 @@ bun run dev
 ```
 
 Open the Vite URL shown in the terminal in a WebGPU-capable browser. The page runs
-the real Rust/Rapier simulation at 60 Hz and renders its hull, sail, rudder, and
-moving water grid with Rust `wgpu`. Use `W/S` for forward or reverse power and
-`A/D` to turn. The first connected gamepad uses its left stick for world-relative
-movement. The HUD reports speed through water, apparent-wind speed, and point of
-sail. Multiplayer remains in the Python prototype.
+the real Rust/Rapier shared simulation at 60 Hz and renders two articulated boats
+and a moving water grid with Rust `wgpu`. Use `W/S` for forward or reverse power
+and `A/D` to turn. The first connected gamepad uses its left stick for
+world-relative movement. The coral boat is a passive physical practice target;
+both boats receive fluid forces and collide in the same Rapier world. The HUD
+reports speed through water, apparent-wind speed, and point of sail. Multiplayer
+remains in the Python prototype.
 
 ## Run the standalone game
 

@@ -123,9 +123,9 @@ impl Renderer {
         })
     }
 
-    fn render(&mut self, scene: BoatScene, camera_m: Vector) -> Result<(), JsValue> {
+    fn render(&mut self, scenes: &[BoatScene], camera_m: Vector) -> Result<(), JsValue> {
         self.resize();
-        let vertices = scene_vertices(scene, camera_m, self.config.width, self.config.height);
+        let vertices = scene_vertices(scenes, camera_m, self.config.width, self.config.height);
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
 
@@ -218,7 +218,7 @@ impl BrowserGame {
     pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
         self.demo.advance(elapsed_seconds);
         self.renderer
-            .render(self.demo.scene(), self.demo.motion().position_m)
+            .render(&self.demo.scenes(), self.demo.motion().position_m)
     }
 
     pub fn set_player_input(
@@ -254,7 +254,7 @@ fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
-fn scene_vertices(scene: BoatScene, camera_m: Vector, width: u32, height: u32) -> Vec<Vertex> {
+fn scene_vertices(scenes: &[BoatScene], camera_m: Vector, width: u32, height: u32) -> Vec<Vertex> {
     let aspect = width as f32 / height as f32;
     let view_width_m = VIEW_HEIGHT_M * aspect;
     let half_width_m = view_width_m / 2.0;
@@ -288,33 +288,35 @@ fn scene_vertices(scene: BoatScene, camera_m: Vector, width: u32, height: u32) -
         );
     }
 
-    for [first, second, third] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
-        for point in [
-            scene.hull_m[first],
-            scene.hull_m[second],
-            scene.hull_m[third],
-        ] {
-            vertices.push(vertex(point, [0.42, 0.82, 0.69], camera_m, view_width_m));
+    for (scene, hull_color) in scenes.iter().zip([[0.42, 0.82, 0.69], [0.91, 0.42, 0.32]]) {
+        for [first, second, third] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
+            for point in [
+                scene.hull_m[first],
+                scene.hull_m[second],
+                scene.hull_m[third],
+            ] {
+                vertices.push(vertex(point, hull_color, camera_m, view_width_m));
+            }
         }
+        push_quad(
+            &mut vertices,
+            scene.sail_m[0],
+            scene.sail_m[1],
+            0.07,
+            [0.96, 0.76, 0.25],
+            camera_m,
+            view_width_m,
+        );
+        push_quad(
+            &mut vertices,
+            scene.rudder_m[0],
+            scene.rudder_m[1],
+            0.08,
+            [0.86, 0.91, 0.91],
+            camera_m,
+            view_width_m,
+        );
     }
-    push_quad(
-        &mut vertices,
-        scene.sail_m[0],
-        scene.sail_m[1],
-        0.07,
-        [0.96, 0.76, 0.25],
-        camera_m,
-        view_width_m,
-    );
-    push_quad(
-        &mut vertices,
-        scene.rudder_m[0],
-        scene.rudder_m[1],
-        0.08,
-        [0.86, 0.91, 0.91],
-        camera_m,
-        view_width_m,
-    );
     assert!(vertices.len() <= MAX_VERTICES);
     vertices
 }

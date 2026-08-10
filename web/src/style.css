@@ -84,3 +84,9 @@ canvas {
   color: #c4d7d8;
   font-size: 0.72rem;
 }
+
+.overlay .practice {
+  margin-top: 0.2rem;
+  color: #e26b58;
+  font-size: 0.68rem;
+}

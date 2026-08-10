@@ -173,3 +173,25 @@ fn demo_view_reports_sailing_feedback() {
     assert!(underway.speed_m_s > 0.5);
     assert!(underway.apparent_wind_speed_m_s.is_finite());
 }
+
+#[test]
+fn demo_contains_a_distinct_practice_boat() {
+    let demo = Demo::new();
+    let scenes = demo.scenes();
+
+    assert_eq!(scenes.len(), 2);
+    assert!((scenes[1].rudder_m[0] - scenes[0].rudder_m[0]).length() > 4.0);
+}
+
+#[test]
+fn demo_reports_a_collision_with_the_practice_boat() {
+    let mut demo = Demo::new();
+    demo.set_motion_intent(1.0, 0.0);
+
+    let collided = (0..30 * 60).any(|_| {
+        demo.advance(DT_SECONDS);
+        !demo.contacts().is_empty()
+    });
+
+    assert!(collided);
+}

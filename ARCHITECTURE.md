@@ -12,9 +12,9 @@ decisions.
 
 - **[Explicit]** The current gameplay reference stack consists of Python clients
   with a simple renderer and a Python dedicated server.
-- **[Implicit]** The browser vertical slice runs the Rust simulation and renders
-  one articulated boat with local input before protocol or multiplayer state are
-  introduced.
+- **[Implicit]** The browser vertical slice runs one locally controlled boat and a
+  passive practice boat in the same Rust shared simulation before protocol or
+  multiplayer state are introduced.
 - **[Implicit]** Simulation and protocol data are independent of rendering, so a
   later browser client can reuse the same behavior without copying the Python
   renderer.
@@ -92,6 +92,9 @@ decisions.
   Rapier world, applies every boat's loads before advancing that world once, and
   returns active hull contact pairs with Rapier's resolved impulse magnitude for
   game rules such as damage.
+- **[Implicit]** The browser advances its local and passive practice boats through
+  that shared-world API and renders both, exercising collision response without
+  yet assigning damage or treating the practice boat as a network player.
 - **[Implicit]** Each Rust simulation tick applies sail and rudder actuator
   torques equally and oppositely to the controlled surface and hull. Rapier uses
   eight solver iterations with joint warm-starting so sustained actuator loads

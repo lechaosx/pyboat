@@ -50,11 +50,14 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** When the existing simulation can support a meaningful visual,
   establish a visible frontend slice before continuing deeper into gameplay
   mechanics.
-- **[Explicit]** The browser slice visualizes one locally controlled boat from the
+- **[Explicit]** The browser slice includes one locally controlled boat from the
   Rust simulation. `W/S` controls boat-relative forward or reverse power, `A/D`
   turns, and the first connected gamepad's left stick controls world-relative
   movement without an added software deadzone. Multiplayer remains in the Python
   prototype.
+- **[Implicit]** A distinctly colored passive practice boat shares the browser
+  physics world with the player so sailing and collisions are visible before
+  multiplayer and damage are introduced.
 - **[Implicit]** The browser HUD displays speed through water, apparent-wind
   speed, and point of sail as immediate sailing feedback.
 - **[Explicit]** The browser implementation language is not committed to pure
