@@ -55,6 +55,8 @@ This file records intended player experience, scope, and product behavior.
   turns, and the first connected gamepad's left stick controls world-relative
   movement without an added software deadzone. Multiplayer remains in the Python
   prototype.
+- **[Implicit]** The browser HUD displays speed through water, apparent-wind
+  speed, and point of sail as immediate sailing feedback.
 - **[Explicit]** The browser implementation language is not committed to pure
   JavaScript.
 - **[Explicit]** The current steering and latency-compensated interaction were

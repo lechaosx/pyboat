@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use pyboat_browser::{Demo, boat_scene};
+use pyboat_browser::{Demo, PointOfSail, boat_scene, point_of_sail};
 use pyboat_simulation::{BoatMotion, BoatParameters, DT_SECONDS, HullParameters, MotionIntent};
 use rapier2d::prelude::Vector;
 
@@ -137,4 +137,39 @@ fn demo_maps_keyboard_and_world_relative_gamepad_motion() {
     let small_gamepad = demo.motion_intent();
     let mapped_magnitude = small_gamepad.forward.abs().max(small_gamepad.turn.abs());
     assert!((mapped_magnitude - 0.02_f32.sqrt()).abs() < 1.0e-5);
+}
+
+#[test]
+fn point_of_sail_matches_the_python_feedback_boundaries() {
+    assert_eq!(point_of_sail(0.0), PointOfSail::InIrons);
+    assert_eq!(
+        point_of_sail(25.0_f32.to_radians()),
+        PointOfSail::CloseHauled
+    );
+    assert_eq!(point_of_sail(65.0_f32.to_radians()), PointOfSail::BeamReach);
+    assert_eq!(
+        point_of_sail(120.0_f32.to_radians()),
+        PointOfSail::BroadReach
+    );
+    assert_eq!(point_of_sail(155.0_f32.to_radians()), PointOfSail::Run);
+    assert_eq!(point_of_sail(PI), PointOfSail::Run);
+}
+
+#[test]
+fn demo_view_reports_sailing_feedback() {
+    let mut demo = Demo::new();
+    let initial = demo.view();
+
+    assert_eq!(initial.speed_m_s, 0.0);
+    assert_eq!(initial.apparent_wind_speed_m_s, 6.0);
+    assert_eq!(initial.point_of_sail, PointOfSail::CloseHauled);
+
+    demo.set_motion_intent(1.0, 0.0);
+    for _ in 0..360 {
+        demo.advance(DT_SECONDS);
+    }
+
+    let underway = demo.view();
+    assert!(underway.speed_m_s > 0.5);
+    assert!(underway.apparent_wind_speed_m_s.is_finite());
 }

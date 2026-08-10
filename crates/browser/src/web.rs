@@ -231,6 +231,18 @@ impl BrowserGame {
         self.demo
             .set_player_input(keyboard_forward, keyboard_turn, gamepad_x, gamepad_y);
     }
+
+    pub fn speed_m_s(&self) -> f32 {
+        self.demo.view().speed_m_s
+    }
+
+    pub fn apparent_wind_speed_m_s(&self) -> f32 {
+        self.demo.view().apparent_wind_speed_m_s
+    }
+
+    pub fn point_of_sail(&self) -> String {
+        self.demo.view().point_of_sail.label().to_owned()
+    }
 }
 
 fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {

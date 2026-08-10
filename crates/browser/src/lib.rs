@@ -1,6 +1,6 @@
 use pyboat_simulation::{
     BoatMotion, BoatParameters, ControlSettings, DT_SECONDS, Environment, HullParameters,
-    MotionIntent, Simulation, SurfaceControlCommand, hull_outline_m,
+    MotionIntent, Simulation, SurfaceControlCommand, apparent_flow, hull_outline_m,
 };
 use rapier2d::prelude::{Rotation, Vector};
 
@@ -14,6 +14,34 @@ pub struct BoatScene {
     pub hull_m: [Vector; 5],
     pub sail_m: [Vector; 2],
     pub rudder_m: [Vector; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointOfSail {
+    InIrons,
+    CloseHauled,
+    BeamReach,
+    BroadReach,
+    Run,
+}
+
+impl PointOfSail {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InIrons => "in irons",
+            Self::CloseHauled => "close-hauled",
+            Self::BeamReach => "beam reach",
+            Self::BroadReach => "broad reach",
+            Self::Run => "run",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DemoView {
+    pub speed_m_s: f32,
+    pub apparent_wind_speed_m_s: f32,
+    pub point_of_sail: PointOfSail,
 }
 
 pub struct Demo {
@@ -92,10 +120,7 @@ impl Demo {
         self.accumulator_seconds += elapsed_seconds.min(0.25);
         while self.accumulator_seconds >= DT_SECONDS {
             self.simulation.advance_controlled(
-                Environment {
-                    true_wind_velocity_m_s: Vector::new(6.0, 0.0),
-                    true_water_velocity_m_s: Vector::ZERO,
-                },
+                demo_environment(),
                 SurfaceControlCommand::ComputedYawRate(self.motion_intent),
                 ControlSettings {
                     angle_resolution_deg: 1,
@@ -110,8 +135,43 @@ impl Demo {
         self.simulation.motion()
     }
 
+    pub fn view(&self) -> DemoView {
+        let motion = self.motion();
+        let environment = demo_environment();
+        let upwind_angle_rad = environment
+            .true_wind_velocity_m_s
+            .y
+            .atan2(environment.true_wind_velocity_m_s.x)
+            + std::f32::consts::PI;
+        DemoView {
+            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length(),
+            apparent_wind_speed_m_s: apparent_flow(
+                environment.true_wind_velocity_m_s,
+                motion.velocity_m_s,
+            )
+            .length(),
+            point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
+        }
+    }
+
     pub fn scene(&self) -> BoatScene {
         boat_scene(self.parameters, self.motion())
+    }
+}
+
+pub fn point_of_sail(angle_from_upwind_rad: f32) -> PointOfSail {
+    let positive_angle_rad = angle_from_upwind_rad.rem_euclid(std::f32::consts::TAU);
+    let angle_rad = positive_angle_rad.min(std::f32::consts::TAU - positive_angle_rad);
+    if angle_rad < 25.0_f32.to_radians() {
+        PointOfSail::InIrons
+    } else if angle_rad < 65.0_f32.to_radians() {
+        PointOfSail::CloseHauled
+    } else if angle_rad < 120.0_f32.to_radians() {
+        PointOfSail::BeamReach
+    } else if angle_rad < 155.0_f32.to_radians() {
+        PointOfSail::BroadReach
+    } else {
+        PointOfSail::Run
     }
 }
 
@@ -175,5 +235,12 @@ fn demo_parameters() -> BoatParameters {
         max_rudder_actuator_torque_n_m: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
+    }
+}
+
+fn demo_environment() -> Environment {
+    Environment {
+        true_wind_velocity_m_s: Vector::new(6.0, 0.0),
+        true_water_velocity_m_s: Vector::ZERO,
     }
 }

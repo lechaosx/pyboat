@@ -3,12 +3,18 @@ import "./style.css";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
 const status = document.querySelector<HTMLElement>("#status");
+const speed = document.querySelector<HTMLElement>("#speed");
+const apparentWind = document.querySelector<HTMLElement>("#apparent-wind");
+const pointOfSail = document.querySelector<HTMLElement>("#point-of-sail");
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 
-if (!canvas || !status) {
-  throw new Error("The game canvas is missing");
+if (!canvas || !status || !speed || !apparentWind || !pointOfSail) {
+  throw new Error("The game page is incomplete");
 }
+const speedElement = speed;
+const apparentWindElement = apparentWind;
+const pointOfSailElement = pointOfSail;
 
 window.addEventListener("keydown", (event) => {
   if (controlKeys.has(event.code)) {
@@ -51,6 +57,9 @@ try {
       gamepad?.axes[1] ?? 0,
     );
     game.frame((timeMs - previousTimeMs) / 1000);
+    speedElement.textContent = game.speed_m_s().toFixed(1);
+    apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
+    pointOfSailElement.textContent = game.point_of_sail();
     previousTimeMs = timeMs;
     requestAnimationFrame(frame);
   }

@@ -111,9 +111,11 @@ contacts with resolved impulse magnitudes. The browser demo advances the same
 controlled simulation in fixed ticks and converts hull, boom, and rudder motion
 to WebGPU vertices. TypeScript samples `W/S`, `A/D`, and the first connected
 gamepad; Rust converts the gamepad's world-relative left-stick vector into local
-motion intent without adding a deadzone. Tests target physical invariants,
-mirrored controlled maneuvers, and accepted gameplay behavior rather than exact
-Pymunk trajectories.
+motion intent without adding a deadzone. Rust also derives the small sailing view
+used by the TypeScript DOM HUD; the web shell receives speed, apparent wind, and
+point-of-sail feedback rather than raw simulation state. Tests target physical
+invariants, mirrored controlled maneuvers, and accepted gameplay behavior rather
+than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

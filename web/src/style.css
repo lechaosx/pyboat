@@ -60,8 +60,27 @@ canvas {
   font-size: 0.78rem;
 }
 
+.telemetry {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 1rem;
+  margin: 1rem 0 0;
+}
+
+.telemetry dt {
+  color: #75c9c2;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.telemetry dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+}
+
 .overlay .controls {
-  margin-top: 0.25rem;
+  margin-top: 0.75rem;
   color: #c4d7d8;
   font-size: 0.72rem;
 }

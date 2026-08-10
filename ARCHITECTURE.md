@@ -63,6 +63,9 @@ decisions.
 - **[Implicit]** TypeScript samples keyboard and browser gamepad state once per
   animation frame. Rust clamps keyboard intent and converts the gamepad's
   world-relative left-stick vector into boat-relative arcade intent.
+- **[Implicit]** Rust derives speed through water, apparent-wind speed, and point
+  of sail from simulation state for the browser HUD. TypeScript formats this
+  small read-only view and updates the DOM without receiving raw simulation state.
 - **[Explicit]** Browser arcade input follows the standalone Python game's device
   mapping, except that the browser adds no software gamepad deadzone. A displaced
   first connected gamepad overrides keyboard input, while an exactly centered or
