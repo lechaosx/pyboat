@@ -51,6 +51,8 @@ pub struct BoatParameters {
     pub rudder_base_drag_coefficient: f32,
     pub rudder_stall_angle_rad: f32,
     pub rudder_stall_lift_coefficient: f32,
+    pub max_sail_actuator_torque_n_m: f32,
+    pub max_rudder_actuator_torque_n_m: f32,
     pub sail_bearing_damping_n_m_s_rad: f32,
     pub rudder_bearing_damping_n_m_s_rad: f32,
 }
@@ -238,9 +240,13 @@ fn sail_center_from_mast_m(parameters: BoatParameters) -> Vector {
     Vector::new(-parameters.boom_length_m / 2.0, 0.0)
 }
 
+fn sail_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f32 {
+    (parameters.sail_mass_kg + parameters.boom_mass_kg) * parameters.boom_length_m.powi(2) / 3.0
+}
+
 fn sail_mass_properties(parameters: BoatParameters) -> MassProperties {
     let mass_kg = parameters.sail_mass_kg + parameters.boom_mass_kg;
-    let hinge_inertia = mass_kg * parameters.boom_length_m.powi(2) / 3.0;
+    let hinge_inertia = sail_hinge_moment_of_inertia_kg_m2(parameters);
     let center = sail_center_from_mast_m(parameters);
     MassProperties::new(
         Vector::ZERO,
@@ -259,16 +265,88 @@ fn rudder_center_from_hinge_m(parameters: BoatParameters) -> Vector {
     )
 }
 
+fn rudder_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f32 {
+    parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
+        + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0
+}
+
 fn rudder_mass_properties(parameters: BoatParameters) -> MassProperties {
     let mass_kg = parameters.rudder_mass_kg + parameters.tiller_mass_kg;
-    let hinge_inertia = parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
-        + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0;
+    let hinge_inertia = rudder_hinge_moment_of_inertia_kg_m2(parameters);
     let center = rudder_center_from_hinge_m(parameters);
     MassProperties::new(
         Vector::ZERO,
         mass_kg,
         hinge_inertia - mass_kg * center.length_squared(),
     )
+}
+
+fn damped_control_torque(
+    angle_rad: f32,
+    angular_velocity_rad_s: f32,
+    moment_of_inertia_kg_m2: f32,
+    maximum_torque_n_m: f32,
+    maximum_angle_rad: f32,
+    target_angle_rad: f32,
+) -> f32 {
+    let stiffness_n_m_rad = maximum_torque_n_m / (maximum_angle_rad / 10.0);
+    let critical_damping_n_m_s_rad = 2.0 * (stiffness_n_m_rad * moment_of_inertia_kg_m2).sqrt();
+    (stiffness_n_m_rad * (target_angle_rad - angle_rad)
+        - critical_damping_n_m_s_rad * angular_velocity_rad_s)
+        .clamp(-maximum_torque_n_m, maximum_torque_n_m)
+}
+
+pub fn target_control_torques(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    target_sail_angle_rad: f32,
+    target_rudder_angle_rad: f32,
+) -> ActuatorTorques {
+    ActuatorTorques {
+        sail_n_m: damped_control_torque(
+            motion.sail_angle_rad,
+            motion.sail_angular_velocity_rad_s,
+            sail_hinge_moment_of_inertia_kg_m2(parameters),
+            parameters.max_sail_actuator_torque_n_m,
+            parameters.max_sail_angle_rad,
+            target_sail_angle_rad,
+        ),
+        rudder_n_m: damped_control_torque(
+            motion.rudder_angle_rad,
+            motion.rudder_angular_velocity_rad_s,
+            rudder_hinge_moment_of_inertia_kg_m2(parameters),
+            parameters.max_rudder_actuator_torque_n_m,
+            parameters.max_rudder_angle_rad,
+            target_rudder_angle_rad,
+        ),
+    }
+}
+
+pub fn sheet_control_torques(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    target_sail_angle_rad: f32,
+    target_rudder_angle_rad: f32,
+) -> ActuatorTorques {
+    let torques = target_control_torques(
+        parameters,
+        motion,
+        target_sail_angle_rad,
+        target_rudder_angle_rad,
+    );
+    let outward_direction = if motion.sail_angle_rad == 0.0 {
+        target_sail_angle_rad
+    } else {
+        motion.sail_angle_rad
+    };
+    if torques.sail_n_m * outward_direction > 0.0 {
+        ActuatorTorques {
+            sail_n_m: 0.0,
+            ..torques
+        }
+    } else {
+        torques
+    }
 }
 
 pub fn create_boat(

@@ -2,7 +2,8 @@ use std::f32::consts::PI;
 
 use pyboat_simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
-    Simulation, flat_plate_force, hull_resistance_force, streamlined_foil_force,
+    Simulation, flat_plate_force, hull_resistance_force, sheet_control_torques,
+    streamlined_foil_force, target_control_torques,
 };
 use rapier2d::prelude::{RigidBody, Rotation, Vector};
 
@@ -39,6 +40,8 @@ fn reference_parameters() -> BoatParameters {
         rudder_base_drag_coefficient: 0.02,
         rudder_stall_angle_rad: 15.0_f32.to_radians(),
         rudder_stall_lift_coefficient: 0.8,
+        max_sail_actuator_torque_n_m: 375.0,
+        max_rudder_actuator_torque_n_m: 60.0,
         tiller_length_m: 1.0,
         rudder_position_m: Vector::new(-1.8, 0.0),
         max_rudder_angle_rad: PI / 6.0,
@@ -467,4 +470,85 @@ fn bow_and_stern_hull_resistance_apply_the_expected_force_and_yaw_torque() {
         bow_position_m.perp_dot(bow_force_n) + stern_position_m.perp_dot(stern_force_n),
     );
     assert!(hull.user_torque() * initial.angular_velocity_rad_s < 0.0);
+}
+
+#[test]
+fn target_control_torques_reach_and_respect_actuator_limits() {
+    let parameters = reference_parameters();
+    let mut current = motion();
+    current.sail_angle_rad = 0.0;
+    current.sail_angular_velocity_rad_s = 0.0;
+    current.rudder_angle_rad = 0.0;
+    current.rudder_angular_velocity_rad_s = 0.0;
+
+    let torques = target_control_torques(
+        parameters,
+        current,
+        parameters.max_sail_angle_rad,
+        -parameters.max_rudder_angle_rad,
+    );
+
+    assert_eq!(
+        torques,
+        ActuatorTorques {
+            sail_n_m: parameters.max_sail_actuator_torque_n_m,
+            rudder_n_m: -parameters.max_rudder_actuator_torque_n_m,
+        }
+    );
+}
+
+#[test]
+fn target_control_torques_critically_damp_motion_at_the_target() {
+    let parameters = reference_parameters();
+    let mut current = motion();
+    current.sail_angle_rad = 0.25;
+    current.sail_angular_velocity_rad_s = 0.1;
+    current.rudder_angle_rad = -0.1;
+    current.rudder_angular_velocity_rad_s = -0.1;
+    let sail_hinge_inertia_kg_m2 = (parameters.sail_mass_kg + parameters.boom_mass_kg)
+        * parameters.boom_length_m.powi(2)
+        / 3.0;
+    let rudder_hinge_inertia_kg_m2 =
+        parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
+            + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0;
+    let sail_stiffness_n_m_rad =
+        parameters.max_sail_actuator_torque_n_m / (parameters.max_sail_angle_rad / 10.0);
+    let rudder_stiffness_n_m_rad =
+        parameters.max_rudder_actuator_torque_n_m / (parameters.max_rudder_angle_rad / 10.0);
+
+    let torques = target_control_torques(
+        parameters,
+        current,
+        current.sail_angle_rad,
+        current.rudder_angle_rad,
+    );
+
+    assert_close(
+        torques.sail_n_m,
+        -2.0 * (sail_stiffness_n_m_rad * sail_hinge_inertia_kg_m2).sqrt() * 0.1,
+    );
+    assert_close(
+        torques.rudder_n_m,
+        2.0 * (rudder_stiffness_n_m_rad * rudder_hinge_inertia_kg_m2).sqrt() * 0.1,
+    );
+}
+
+#[test]
+fn sheet_control_never_pushes_the_sail_outward() {
+    let parameters = reference_parameters();
+    for (angle_rad, outward_target_rad) in [(0.25, 0.5), (-0.25, -0.5), (0.0, 0.5)] {
+        let mut current = motion();
+        current.sail_angle_rad = angle_rad;
+        current.sail_angular_velocity_rad_s = 0.0;
+
+        let torques = sheet_control_torques(parameters, current, outward_target_rad, 0.2);
+
+        assert_eq!(torques.sail_n_m, 0.0);
+        assert_ne!(torques.rudder_n_m, 0.0);
+    }
+
+    let mut current = motion();
+    current.sail_angle_rad = 0.5;
+    current.sail_angular_velocity_rad_s = 0.0;
+    assert!(sheet_control_torques(parameters, current, 0.25, 0.0).sail_n_m < 0.0);
 }

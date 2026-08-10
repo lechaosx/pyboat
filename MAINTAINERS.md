@@ -87,8 +87,10 @@ and applied there each tick. Streamlined underwater loads model attached flow
 through stall and act at the articulated rudder's moving center of effort and the
 hull-mounted keel position. Quadratic anisotropic hull resistance is sampled at
 the bow and stern, which opposes translation and yaw using each point's local
-water-relative velocity. Tests target physical invariants and accepted gameplay
-behavior rather than exact Pymunk trajectories.
+water-relative velocity. Surface angle targets become critically damped,
+torque-limited actuator commands; sheet targets suppress outward sail torque.
+Tests target physical invariants and accepted gameplay behavior rather than exact
+Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick
