@@ -206,9 +206,9 @@ that record in the same change whenever these behaviors change.
 Loopback integration tests open local WebSocket sockets. Environments that restrict
 socket creation must grant loopback permission to run the complete suite.
 
-The Rust connection server currently assigns identities and emits empty 60 Hz
-snapshot heartbeats but does not yet run a match. Start it on the default
-`127.0.0.1:8765` address with:
+The Rust server assigns identities, creates one articulated Rapier boat per
+connection, consumes sequenced arcade input, and publishes authoritative state at
+60 Hz. Start it on the default `127.0.0.1:8765` address with:
 
 ```sh
 cargo run -p pyboat-server
@@ -216,10 +216,14 @@ cargo run -p pyboat-server
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
-the Python protocol while migration is incomplete. Snapshot fan-out uses Tokio
-watch channels so a slow connection retains only the newest state. Rust server
-integration tests bind an ephemeral loopback port and exercise actual concurrent
-WebSocket clients and increasing network ticks.
+the Python protocol while migration is incomplete. The server queues newer input
+sequences, consumes at most one per physics tick, and acknowledges only consumed
+commands. Snapshot fan-out uses Tokio watch channels so a slow connection retains
+only the newest state; disconnect tombstones persist until a snapshot is sent.
+Snapshots currently include all connected boats because maintained spatial
+interest is not implemented yet. Rust server integration tests bind an ephemeral
+loopback port and exercise actual WebSocket clients through input, motion, and
+disconnect cleanup.
 
 ## Model tuning
 

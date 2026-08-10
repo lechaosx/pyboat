@@ -746,6 +746,8 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "pyboat-protocol",
+ "pyboat-simulation",
+ "rapier2d",
  "tokio",
  "tokio-tungstenite",
 ]

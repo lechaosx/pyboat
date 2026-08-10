@@ -7,6 +7,8 @@ rust-version = "1.87"
 [dependencies]
 futures-util = "0.3.33"
 pyboat-protocol = { path = "../protocol" }
+pyboat-simulation = { path = "../simulation" }
+rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 

@@ -184,6 +184,33 @@ fn shared_simulation_advances_multiple_boats_in_one_world() {
 }
 
 #[test]
+fn shared_simulation_removes_an_articulated_boat_and_compacts_indices() {
+    let parameters = vacuum_parameters();
+    let mut first = motion();
+    first.position_m = Vector::new(0.0, -10.0);
+    let mut removed = motion();
+    removed.position_m = Vector::ZERO;
+    let mut third = motion();
+    third.position_m = Vector::new(0.0, 10.0);
+    let mut simulation = SharedSimulation::new();
+    simulation.add_boat(parameters, first);
+    simulation.add_boat(parameters, removed);
+    simulation.add_boat(parameters, third);
+
+    simulation.remove_boat(1);
+
+    assert_eq!(simulation.world.bodies.len(), 6);
+    assert_eq!(simulation.world.colliders.len(), 2);
+    assert_eq!(simulation.world.impulse_joints.len(), 4);
+    assert_vector_close(simulation.motion(0).position_m, first.position_m);
+    assert_vector_close(simulation.motion(1).position_m, third.position_m);
+    simulation.advance(
+        Environment::default(),
+        &[ActuatorTorques::default(), ActuatorTorques::default()],
+    );
+}
+
+#[test]
 fn shared_simulation_resolves_and_reports_hull_collisions() {
     let parameters = vacuum_parameters();
     let mut port = motion();

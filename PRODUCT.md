@@ -53,8 +53,9 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** The browser slice includes one locally controlled boat from the
   Rust simulation. `W/S` controls boat-relative forward or reverse power, `A/D`
   turns, and the first connected gamepad's left stick controls world-relative
-  movement without an added software deadzone. Multiplayer remains in the Python
-  prototype.
+  movement without an added software deadzone.
+- **[Implicit]** The browser demo remains local while the Rust multiplayer client
+  is built separately.
 - **[Implicit]** A distinctly colored passive practice boat shares the browser
   physics world with the player so sailing and collisions are visible before
   multiplayer and damage are introduced.

@@ -1105,6 +1105,20 @@ impl SharedSimulation {
         index
     }
 
+    pub fn remove_boat(&mut self, boat: usize) {
+        let boat = self.boats.remove(boat).boat;
+        for body in [boat.sail, boat.rudder, boat.hull.body] {
+            self.world.bodies.remove(
+                body,
+                &mut self.world.islands,
+                &mut self.world.colliders,
+                &mut self.world.impulse_joints,
+                &mut self.world.multibody_joints,
+                true,
+            );
+        }
+    }
+
     pub fn advance(
         &mut self,
         environment: Environment,
