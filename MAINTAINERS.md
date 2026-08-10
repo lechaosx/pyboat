@@ -89,8 +89,11 @@ hull-mounted keel position. Quadratic anisotropic hull resistance is sampled at
 the bow and stern, which opposes translation and yaw using each point's local
 water-relative velocity. Surface angle targets become critically damped,
 torque-limited actuator commands; sheet targets suppress outward sail torque.
-Tests target physical invariants and accepted gameplay behavior rather than exact
-Pymunk trajectories.
+Arcade control predicts drive and yaw effects across candidate surface angles,
+then selects auto-sheet or yaw-rate targets before producing actuator torques.
+Candidate prediction includes hull angular velocity but remains quasi-static with
+respect to each candidate surface. Tests target physical invariants and accepted
+gameplay behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick

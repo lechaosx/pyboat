@@ -5,6 +5,7 @@ use rapier2d::prelude::{
 };
 
 pub const DT_SECONDS: f32 = 1.0 / 60.0;
+const CONTROL_SELECTION_TIE_TOLERANCE: f32 = 1.0e-6;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullParameters {
@@ -73,6 +74,44 @@ pub struct BoatMotion {
 pub struct ActuatorTorques {
     pub sail_n_m: f32,
     pub rudder_n_m: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MotionIntent {
+    pub forward: f32,
+    pub turn: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AutoSheetIntent {
+    pub power: f32,
+    pub rudder: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceEffect {
+    pub angle_rad: f32,
+    pub drive_force_n: f32,
+    pub yaw_moment_n_m: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlInput {
+    pub boat_angular_velocity_rad_s: f32,
+    pub free_sail_angle_rad: f32,
+    pub sail_angle_rad: f32,
+    pub apparent_wind_angle_from_boat_forward_rad: f32,
+    pub sail_side_hysteresis_angle_rad: f32,
+    pub max_rudder_angle_rad: f32,
+    pub sail_effects: Vec<SurfaceEffect>,
+    pub rudder_effects: Vec<SurfaceEffect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceTargets {
+    pub sheet_target_angle_rad: f32,
+    pub rudder_target_angle_rad: f32,
+    pub sail_target_angle_rad: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -185,6 +224,302 @@ pub fn hull_resistance_force(
         local_flow_m_s.y * local_flow_m_s.y.abs() * pressure_area * lateral_coefficient,
     );
     rotated(local_force_n, hull_angle_rad)
+}
+
+fn wrapped_angle(angle_rad: f32) -> f32 {
+    (angle_rad + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI) - std::f32::consts::PI
+}
+
+fn free_sail_angle(hull_angle_rad: f32, apparent_wind_m_s: Vector, max_sail_angle_rad: f32) -> f32 {
+    if apparent_wind_m_s == Vector::ZERO {
+        return 0.0;
+    }
+    wrapped_angle(
+        apparent_wind_m_s.y.atan2(apparent_wind_m_s.x) - hull_angle_rad - std::f32::consts::PI,
+    )
+    .clamp(-max_sail_angle_rad, max_sail_angle_rad)
+}
+
+fn sample_surface_effects(
+    max_angle_rad: f32,
+    angle_resolution_deg: u32,
+    effect_at: impl Fn(f32) -> SurfaceEffect,
+) -> Vec<SurfaceEffect> {
+    let max_angle_deg = max_angle_rad.to_degrees().round() as i32;
+    (-max_angle_deg..=max_angle_deg)
+        .step_by(angle_resolution_deg as usize)
+        .map(|angle_deg| effect_at((angle_deg as f32).to_radians()))
+        .collect()
+}
+
+pub fn surface_control_input(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    environment: Environment,
+    angle_resolution_deg: u32,
+    sail_side_hysteresis_angle_rad: f32,
+) -> ControlInput {
+    let apparent_wind_m_s = apparent_flow(environment.true_wind_velocity_m_s, motion.velocity_m_s);
+    let apparent_water_m_s =
+        apparent_flow(environment.true_water_velocity_m_s, motion.velocity_m_s);
+    let boat_forward = rotated(Vector::new(1.0, 0.0), motion.angle_rad);
+    let sail_effects = sample_surface_effects(
+        parameters.max_sail_angle_rad,
+        angle_resolution_deg,
+        |angle_rad| {
+            let center_world_m = rotated(
+                parameters.mast_position_m
+                    + rotated(
+                        Vector::new(-parameters.sail_center_of_effort_from_mast_m, 0.0),
+                        angle_rad,
+                    ),
+                motion.angle_rad,
+            );
+            let center_apparent_wind_m_s =
+                apparent_wind_m_s - perpendicular(center_world_m) * motion.angular_velocity_rad_s;
+            let force_n = flat_plate_force(
+                center_apparent_wind_m_s,
+                motion.angle_rad + angle_rad,
+                parameters.air_density_kg_m3,
+                parameters.sail_area_m2,
+                parameters.sail_base_drag_coefficient,
+            );
+            SurfaceEffect {
+                angle_rad,
+                drive_force_n: force_n.dot(boat_forward),
+                yaw_moment_n_m: center_world_m.perp_dot(force_n),
+            }
+        },
+    );
+    let rudder_effects = sample_surface_effects(
+        parameters.max_rudder_angle_rad,
+        angle_resolution_deg,
+        |angle_rad| {
+            let center_world_m = rotated(
+                parameters.rudder_position_m
+                    + rotated(
+                        Vector::new(-parameters.rudder_draw_length_m / 2.0, 0.0),
+                        angle_rad,
+                    ),
+                motion.angle_rad,
+            );
+            let center_apparent_water_m_s =
+                apparent_water_m_s - perpendicular(center_world_m) * motion.angular_velocity_rad_s;
+            let force_n = streamlined_foil_force(
+                center_apparent_water_m_s,
+                motion.angle_rad + angle_rad,
+                parameters.water_density_kg_m3,
+                parameters.rudder_area_m2,
+                parameters.rudder_base_drag_coefficient,
+                parameters.rudder_stall_angle_rad,
+                parameters.rudder_stall_lift_coefficient,
+            );
+            SurfaceEffect {
+                angle_rad,
+                drive_force_n: force_n.dot(boat_forward),
+                yaw_moment_n_m: center_world_m.perp_dot(force_n),
+            }
+        },
+    );
+    ControlInput {
+        boat_angular_velocity_rad_s: motion.angular_velocity_rad_s,
+        free_sail_angle_rad: free_sail_angle(
+            motion.angle_rad,
+            apparent_wind_m_s,
+            parameters.max_sail_angle_rad,
+        ),
+        sail_angle_rad: motion.sail_angle_rad,
+        apparent_wind_angle_from_boat_forward_rad: wrapped_angle(
+            apparent_wind_m_s.y.atan2(apparent_wind_m_s.x) - motion.angle_rad,
+        ),
+        sail_side_hysteresis_angle_rad,
+        max_rudder_angle_rad: parameters.max_rudder_angle_rad,
+        sail_effects,
+        rudder_effects,
+    }
+}
+
+pub fn computed_maximum_yaw_rate_rad_s(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    environment: Environment,
+) -> f32 {
+    let rudder_position_world_m = rotated(parameters.rudder_position_m, motion.angle_rad);
+    let rudder_apparent_water_m_s = apparent_flow(
+        environment.true_water_velocity_m_s,
+        motion.velocity_m_s
+            + perpendicular(rudder_position_world_m) * motion.angular_velocity_rad_s,
+    );
+    let steering_baseline_m = (parameters.rudder_position_m - parameters.keel_position_m).length();
+    rudder_apparent_water_m_s.length() * parameters.max_rudder_angle_rad.tan() / steering_baseline_m
+}
+
+fn controlled_free_sail_angle(input: &ControlInput) -> f32 {
+    if input.apparent_wind_angle_from_boat_forward_rad.abs() < std::f32::consts::FRAC_PI_2
+        && input.apparent_wind_angle_from_boat_forward_rad.abs()
+            < input.sail_side_hysteresis_angle_rad
+        && input.sail_angle_rad * input.free_sail_angle_rad < 0.0
+    {
+        input
+            .free_sail_angle_rad
+            .abs()
+            .copysign(input.sail_angle_rad)
+    } else {
+        input.free_sail_angle_rad
+    }
+}
+
+fn trimmed_sail_effect(input: &ControlInput, free_sail_angle_rad: f32) -> SurfaceEffect {
+    input
+        .sail_effects
+        .iter()
+        .copied()
+        .filter(|effect| {
+            if free_sail_angle_rad < 0.0 {
+                free_sail_angle_rad <= effect.angle_rad && effect.angle_rad <= 0.0
+            } else if free_sail_angle_rad > 0.0 {
+                0.0 <= effect.angle_rad && effect.angle_rad <= free_sail_angle_rad
+            } else {
+                effect.angle_rad == 0.0
+            }
+        })
+        .reduce(|selected, effect| {
+            if effect.drive_force_n > selected.drive_force_n
+                || (effect.drive_force_n == selected.drive_force_n
+                    && effect.angle_rad.abs() < selected.angle_rad.abs())
+            {
+                effect
+            } else {
+                selected
+            }
+        })
+        .unwrap()
+}
+
+fn nearest_sail_effect(input: &ControlInput, target_angle_rad: f32) -> SurfaceEffect {
+    input
+        .sail_effects
+        .iter()
+        .copied()
+        .reduce(|selected, effect| {
+            let selected_error = (selected.angle_rad - target_angle_rad).abs();
+            let effect_error = (effect.angle_rad - target_angle_rad).abs();
+            if effect_error + CONTROL_SELECTION_TIE_TOLERANCE < selected_error {
+                effect
+            } else {
+                selected
+            }
+        })
+        .unwrap()
+}
+
+fn sail_target(
+    input: &ControlInput,
+    power: f32,
+    allow_sternway: bool,
+    gradual_sternway: bool,
+) -> (f32, SurfaceEffect, Option<f32>) {
+    if power < 0.0 && allow_sternway {
+        let backed = input
+            .sail_effects
+            .iter()
+            .copied()
+            .reduce(|selected, effect| {
+                if effect.drive_force_n < selected.drive_force_n
+                    || (effect.drive_force_n == selected.drive_force_n
+                        && effect.angle_rad.abs() < selected.angle_rad.abs())
+                {
+                    effect
+                } else {
+                    selected
+                }
+            })
+            .unwrap();
+        if !gradual_sternway {
+            return (backed.angle_rad, backed, Some(backed.angle_rad));
+        }
+        let backing_power = (-power).clamp(0.0, 1.0);
+        let target_angle_rad = input.free_sail_angle_rad
+            + backing_power * (backed.angle_rad - input.free_sail_angle_rad);
+        return (
+            target_angle_rad,
+            nearest_sail_effect(input, target_angle_rad),
+            Some(target_angle_rad),
+        );
+    }
+
+    let power = power.clamp(0.0, 1.0);
+    let free_sail_angle_rad = controlled_free_sail_angle(input);
+    let trimmed = trimmed_sail_effect(input, free_sail_angle_rad);
+    let target_angle_rad = free_sail_angle_rad + power * (trimmed.angle_rad - free_sail_angle_rad);
+    (
+        target_angle_rad,
+        nearest_sail_effect(input, target_angle_rad),
+        None,
+    )
+}
+
+pub fn auto_sheet_control(input: &ControlInput, intent: AutoSheetIntent) -> SurfaceTargets {
+    let (sheet_target_angle_rad, _, sail_target_angle_rad) =
+        sail_target(input, intent.power, false, false);
+    SurfaceTargets {
+        sheet_target_angle_rad,
+        rudder_target_angle_rad: intent.rudder.clamp(-1.0, 1.0) * input.max_rudder_angle_rad,
+        sail_target_angle_rad,
+    }
+}
+
+pub fn yaw_rate_move_control(
+    input: &ControlInput,
+    intent: MotionIntent,
+    maximum_yaw_rate_rad_s: f32,
+) -> SurfaceTargets {
+    let (sheet_target_angle_rad, sail_effect, sail_target_angle_rad) =
+        sail_target(input, intent.forward.clamp(-1.0, 1.0), true, true);
+    let mut rate_error_fraction = intent.turn.clamp(-1.0, 1.0);
+    if input.boat_angular_velocity_rad_s != 0.0 {
+        rate_error_fraction -= input.boat_angular_velocity_rad_s / maximum_yaw_rate_rad_s;
+    }
+    rate_error_fraction = rate_error_fraction.clamp(-1.0, 1.0);
+    let minimum_moment_n_m = input
+        .rudder_effects
+        .iter()
+        .map(|rudder| sail_effect.yaw_moment_n_m + rudder.yaw_moment_n_m)
+        .fold(f32::INFINITY, f32::min);
+    let maximum_moment_n_m = input
+        .rudder_effects
+        .iter()
+        .map(|rudder| sail_effect.yaw_moment_n_m + rudder.yaw_moment_n_m)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let target_moment_n_m = if rate_error_fraction < 0.0 {
+        -rate_error_fraction * minimum_moment_n_m.min(0.0)
+    } else {
+        rate_error_fraction * maximum_moment_n_m.max(0.0)
+    };
+    let rudder_effect = input
+        .rudder_effects
+        .iter()
+        .copied()
+        .reduce(|selected, effect| {
+            let selected_error =
+                (sail_effect.yaw_moment_n_m + selected.yaw_moment_n_m - target_moment_n_m).abs();
+            let effect_error =
+                (sail_effect.yaw_moment_n_m + effect.yaw_moment_n_m - target_moment_n_m).abs();
+            if effect_error + CONTROL_SELECTION_TIE_TOLERANCE < selected_error
+                || ((effect_error - selected_error).abs() <= CONTROL_SELECTION_TIE_TOLERANCE
+                    && effect.angle_rad.abs() < selected.angle_rad.abs())
+            {
+                effect
+            } else {
+                selected
+            }
+        })
+        .unwrap();
+    SurfaceTargets {
+        sheet_target_angle_rad,
+        rudder_target_angle_rad: rudder_effect.angle_rad,
+        sail_target_angle_rad,
+    }
 }
 
 pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
@@ -346,6 +681,27 @@ pub fn sheet_control_torques(
         }
     } else {
         torques
+    }
+}
+
+pub fn surface_target_control_torques(
+    parameters: BoatParameters,
+    motion: BoatMotion,
+    targets: SurfaceTargets,
+) -> ActuatorTorques {
+    match targets.sail_target_angle_rad {
+        Some(target_sail_angle_rad) => target_control_torques(
+            parameters,
+            motion,
+            target_sail_angle_rad,
+            targets.rudder_target_angle_rad,
+        ),
+        None => sheet_control_torques(
+            parameters,
+            motion,
+            targets.sheet_target_angle_rad,
+            targets.rudder_target_angle_rad,
+        ),
     }
 }
 

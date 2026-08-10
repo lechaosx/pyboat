@@ -25,7 +25,8 @@ decisions.
   application, passive bearing damping, and flat-plate sail load application are
   the first migrated behaviors, followed by stalled underwater-foil loads on the
   articulated rudder and hull-mounted keel, anisotropic hull resistance, and
-  surface-target actuator control.
+  surface-target actuator control, followed by arcade surface-effect sampling and
+  target selection.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -78,6 +79,11 @@ decisions.
   control with critical damping derived from each surface assembly's hinge
   inertia. A sheet target may pull the sail inward but suppresses actuator torque
   that would push it outward; explicit sail targets remain bidirectional.
+- **[Implicit]** Rust arcade control samples quasi-static sail and rudder effects
+  across their allowed angles using hull translation and angular velocity. It
+  preserves wind-side hysteresis, auto-sheet trim, backed-sail reverse, direct
+  rudder control, and fixed or water-speed-derived yaw-rate steering from the
+  accepted Python controller.
 - **[Explicit]** Passive sail and rudder bearing damping uses Rapier force-based
   revolute-joint motors targeting zero relative angular velocity. Damping is
   validated by energy loss, common-rotation preservation, and angular-momentum
