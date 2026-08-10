@@ -48,6 +48,12 @@ pub struct BoatMotion {
     pub rudder_angular_velocity_rad_s: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ActuatorTorques {
+    pub sail_n_m: f32,
+    pub rudder_n_m: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Boat {
     pub hull: Hull,
@@ -292,6 +298,8 @@ impl Simulation {
             gravity: Vector::ZERO,
             integration_parameters: IntegrationParameters {
                 dt: DT_SECONDS,
+                num_solver_iterations: 8,
+                warmstart_joints: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -310,7 +318,13 @@ impl Simulation {
         }
     }
 
-    pub fn advance(&mut self) {
+    pub fn advance(&mut self, actuator_torques: ActuatorTorques) {
+        self.world.bodies[self.boat.sail].add_torque(actuator_torques.sail_n_m, true);
+        self.world.bodies[self.boat.rudder].add_torque(actuator_torques.rudder_n_m, true);
+        self.world.bodies[self.boat.hull.body].add_torque(
+            -actuator_torques.sail_n_m - actuator_torques.rudder_n_m,
+            true,
+        );
         self.world.step();
     }
 

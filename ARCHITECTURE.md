@@ -21,8 +21,8 @@ decisions.
   runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
   a Rust test against the Python reference before browser or native runtime
   adapters consume it. Hull construction, the articulated boat assembly, and
-  authoritative motion restoration and fixed-step advancement are the first
-  migrated behaviors.
+  authoritative motion restoration, fixed-step advancement, and actuator torque
+  application are the first migrated behaviors.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -67,6 +67,10 @@ decisions.
 - **[Implicit]** The Rust simulation owns a zero-gravity Rapier `PhysicsWorld` and
   exposes one synchronous 60 Hz advance operation. Runtime adapters perform
   asynchronous work before and after, never during, that operation.
+- **[Implicit]** Each Rust simulation tick applies sail and rudder actuator
+  torques equally and oppositely to the controlled surface and hull. Rapier uses
+  eight solver iterations with joint warm-starting so sustained actuator loads
+  keep the articulated surfaces within their configured limits.
 - **[Implicit]** Clients send sequenced control commands rather than transforms.
   Server snapshots acknowledge only commands that have affected an authoritative
   simulation tick.
@@ -166,5 +170,5 @@ decisions.
   another transport.
 - Whether sail and rudder bearing damping should use Rapier joint motors or
   explicit project-owned torques.
-- Which Python simulation behavior should be migrated after fixed-step
-  advancement.
+- Which Python simulation behavior should be migrated after actuator torque
+  application.

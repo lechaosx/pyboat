@@ -1,6 +1,8 @@
 use std::f32::consts::PI;
 
-use pyboat_simulation::{BoatMotion, BoatParameters, DT_SECONDS, HullParameters, Simulation};
+use pyboat_simulation::{
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, HullParameters, Simulation,
+};
 use rapier2d::prelude::{RigidBody, Vector};
 
 fn reference_parameters() -> BoatParameters {
@@ -51,6 +53,18 @@ fn world_point(body: &RigidBody, local_point: Vector) -> Vector {
     body.translation() + body.rotation().transform_vector(local_point)
 }
 
+fn angular_momentum(simulation: &Simulation) -> f32 {
+    simulation
+        .world
+        .bodies
+        .iter()
+        .map(|(_, body)| {
+            body.mass_properties().local_mprops.principal_inertia() * body.angvel()
+                + body.translation().perp_dot(body.linvel() * body.mass())
+        })
+        .sum()
+}
+
 #[test]
 fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
     let parameters = reference_parameters();
@@ -59,7 +73,7 @@ fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
     assert_eq!(simulation.world.integration_parameters.dt, DT_SECONDS);
     assert_eq!(simulation.world.gravity, Vector::ZERO);
     for _ in 0..60 {
-        simulation.advance();
+        simulation.advance(ActuatorTorques::default());
     }
 
     let result = simulation.motion();
@@ -93,10 +107,63 @@ fn sail_joint_stops_outward_motion_at_its_limit() {
     let mut simulation = Simulation::new(parameters, initial);
 
     for _ in 0..120 {
-        simulation.advance();
+        simulation.advance(ActuatorTorques::default());
     }
 
     let sail_angle_rad = simulation.motion().sail_angle_rad;
     assert!(sail_angle_rad > 0.5);
     assert!(sail_angle_rad <= parameters.max_sail_angle_rad + 1.0e-3);
+}
+
+#[test]
+fn actuator_torques_rotate_surfaces_and_conserve_angular_momentum() {
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    let mut simulation = Simulation::new(parameters, initial);
+
+    simulation.advance(ActuatorTorques {
+        sail_n_m: 100.0,
+        rudder_n_m: 20.0,
+    });
+
+    let result = simulation.motion();
+    assert!(result.sail_angular_velocity_rad_s > 0.0);
+    assert!(result.rudder_angular_velocity_rad_s > 0.0);
+    assert!(result.angular_velocity_rad_s < 0.0);
+    assert!(angular_momentum(&simulation).abs() < 1.0e-4);
+}
+
+#[test]
+fn actuator_torques_cannot_drive_surfaces_past_joint_limits() {
+    let loaded_limit_tolerance_rad = 1.0e-3;
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    let mut simulation = Simulation::new(parameters, initial);
+
+    for _ in 0..240 {
+        simulation.advance(ActuatorTorques {
+            sail_n_m: 100.0,
+            rudder_n_m: 20.0,
+        });
+    }
+
+    let result = simulation.motion();
+    assert!(result.sail_angle_rad > 0.5);
+    assert!(
+        result.sail_angle_rad <= parameters.max_sail_angle_rad + loaded_limit_tolerance_rad,
+        "{} > {}",
+        result.sail_angle_rad,
+        parameters.max_sail_angle_rad
+    );
+    assert!(result.rudder_angle_rad > 0.1);
+    assert!(
+        result.rudder_angle_rad <= parameters.max_rudder_angle_rad + loaded_limit_tolerance_rad,
+        "{} > {}",
+        result.rudder_angle_rad,
+        parameters.max_rudder_angle_rad
+    );
 }
