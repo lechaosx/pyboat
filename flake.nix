@@ -11,14 +11,14 @@
 			LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath [
 				pkgs.zlib
 				pkgs.stdenv.cc.cc.lib
-				pkgs.xorg.libX11
-				pkgs.xorg.libXcursor
-				pkgs.xorg.libXext
-				pkgs.xorg.libXfixes
-				pkgs.xorg.libXrandr
-				pkgs.xorg.libXinerama
-				pkgs.xorg.libXi
-				pkgs.xorg.libXxf86vm
+				pkgs.libx11
+				pkgs.libxcursor
+				pkgs.libxext
+				pkgs.libxfixes
+				pkgs.libxrandr
+				pkgs.libxinerama
+				pkgs.libxi
+				pkgs.libxxf86vm
 				pkgs.alsa-lib
 			]}";
 			packages = [
@@ -49,14 +49,14 @@
 				pkgs.libjpeg
 
 				# Runtime libs pygame probes for
-				pkgs.xorg.libX11
-				pkgs.xorg.libXcursor
-				pkgs.xorg.libXext
-				pkgs.xorg.libXfixes
-				pkgs.xorg.libXrandr
-				pkgs.xorg.libXinerama
-				pkgs.xorg.libXi
-				pkgs.xorg.libXxf86vm
+				pkgs.libx11
+				pkgs.libxcursor
+				pkgs.libxext
+				pkgs.libxfixes
+				pkgs.libxrandr
+				pkgs.libxinerama
+				pkgs.libxi
+				pkgs.libxxf86vm
 				pkgs.alsa-lib
 			];
 
