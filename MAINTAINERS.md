@@ -221,6 +221,10 @@ with:
 cargo run -p pyboat-server
 ```
 
+Ctrl-C signals the async serving loop to release the listener and close active
+connections. Integration tests call `serve_until` with a one-shot future for the
+same controlled shutdown path; `serve` remains the indefinite entry point.
+
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
 the Python protocol while migration is incomplete. WebSocket upgrades must finish
@@ -239,7 +243,7 @@ array is a complete current interest set; `removedPlayerIds` remains empty in Ru
 snapshots for Python protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through handshake limits, input, motion, spatial interest, and
-disconnect cleanup.
+disconnect and server-shutdown cleanup.
 The browser crate also owns a native loopback test that sends its real sequenced
 commands through `pyboat-server`, drops intermediate snapshots before acceptance,
 and verifies acknowledgement and bounded prediction. Its Tokio, server, and

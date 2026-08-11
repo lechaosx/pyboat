@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     error::Error,
+    future::{Future, pending},
     io,
     time::Duration,
 };
@@ -197,13 +198,26 @@ impl GameMatch {
 }
 
 pub async fn serve(listener: TcpListener) -> ServerResult<()> {
+    serve_until(listener, pending::<Result<(), io::Error>>()).await
+}
+
+pub async fn serve_until<F, E>(listener: TcpListener, shutdown: F) -> ServerResult<()>
+where
+    F: Future<Output = Result<(), E>>,
+    E: Error + Send + Sync + 'static,
+{
     let (events, mut incoming_events) = mpsc::unbounded_channel();
     let mut connections: HashMap<String, watch::Sender<Option<Message>>> = HashMap::new();
     let mut game_match = GameMatch::new();
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
+    tokio::pin!(shutdown);
     loop {
         tokio::select! {
+            result = &mut shutdown => {
+                result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
+                return Ok(());
+            }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let events = events.clone();

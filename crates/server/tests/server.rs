@@ -3,6 +3,7 @@ use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_server_message, encode_client_message,
 };
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use tokio::time::{Duration, advance, timeout};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
@@ -321,4 +322,32 @@ async fn incomplete_handshake_closes_without_consuming_player_identity() {
     );
     client.close(None).await.unwrap();
     server.abort();
+}
+
+#[tokio::test]
+async fn shutdown_signal_stops_server_and_closes_connections() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown, shutdown_signal) = oneshot::channel();
+    let server = tokio::spawn(pyboat_server::serve_until(listener, shutdown_signal));
+    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    client.next().await.unwrap().unwrap();
+
+    shutdown.send(()).unwrap();
+    timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let closed = timeout(Duration::from_secs(1), async {
+        loop {
+            match client.next().await {
+                Some(Ok(message)) if !message.is_close() => {}
+                Some(Ok(_)) | Some(Err(_)) | None => break,
+            }
+        }
+    })
+    .await;
+
+    assert!(closed.is_ok());
 }
