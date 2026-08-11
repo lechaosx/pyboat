@@ -725,6 +725,7 @@ dependencies = [
  "bytemuck",
  "console_error_panic_hook",
  "futures-util",
+ "pyboat-game",
  "pyboat-protocol",
  "pyboat-server",
  "pyboat-simulation",
@@ -735,6 +736,14 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+]
+
+[[package]]
+name = "pyboat-game"
+version = "0.1.0"
+dependencies = [
+ "pyboat-simulation",
+ "rapier2d",
 ]
 
 [[package]]
@@ -750,6 +759,7 @@ name = "pyboat-server"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "pyboat-game",
  "pyboat-protocol",
  "pyboat-simulation",
  "rapier2d",

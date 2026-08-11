@@ -6,14 +6,11 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
+use pyboat_game::{computed_yaw_rate_torques, dinghy_parameters, match_environment};
 use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
-use pyboat_simulation::{
-    BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent, SharedSimulation,
-    computed_maximum_yaw_rate_rad_s, surface_control_input, surface_target_control_torques,
-    yaw_rate_move_control,
-};
+use pyboat_simulation::{BoatMotion, BoatParameters, Environment, MotionIntent, SharedSimulation};
 use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
@@ -63,11 +60,8 @@ struct GameMatch {
 impl GameMatch {
     fn new() -> Self {
         Self {
-            parameters: boat_parameters(),
-            environment: Environment {
-                true_wind_velocity_m_s: Vector::new(6.0, 0.0),
-                true_water_velocity_m_s: Vector::ZERO,
-            },
+            parameters: dinghy_parameters(),
+            environment: match_environment(),
             simulation: SharedSimulation::new(),
             players: Vec::new(),
             tick: 0,
@@ -135,22 +129,7 @@ impl GameMatch {
                 player.acknowledged_input = sequence;
             }
             let motion = self.simulation.motion(boat);
-            let control_input = surface_control_input(
-                self.parameters,
-                motion,
-                self.environment,
-                1,
-                10.0_f32.to_radians(),
-            );
-            let maximum_yaw_rate_rad_s =
-                computed_maximum_yaw_rate_rad_s(self.parameters, motion, self.environment);
-            let targets =
-                yaw_rate_move_control(&control_input, player.intent, maximum_yaw_rate_rad_s);
-            actuator_torques.push(surface_target_control_torques(
-                self.parameters,
-                motion,
-                targets,
-            ));
+            actuator_torques.push(computed_yaw_rate_torques(motion, player.intent));
         }
         self.simulation.advance(self.environment, &actuator_torques);
         self.tick += 1;
@@ -311,47 +290,4 @@ async fn handle_connection(
     let _ = events.send(ConnectionEvent::Disconnected { player_id });
     result?;
     Ok(())
-}
-
-fn boat_parameters() -> BoatParameters {
-    BoatParameters {
-        hull: HullParameters {
-            mass_kg: 222.0,
-            length_m: 4.0,
-            beam_m: 1.5,
-            bow_length_m: 0.7,
-        },
-        sail_mass_kg: 12.0,
-        boom_mass_kg: 10.0,
-        boom_length_m: 2.0,
-        mast_position_m: Vector::new(0.4, 0.0),
-        max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
-        air_density_kg_m3: 1.225,
-        sail_area_m2: 8.0,
-        sail_center_of_effort_from_mast_m: 0.7,
-        sail_base_drag_coefficient: 0.02,
-        water_density_kg_m3: 1025.0,
-        keel_area_m2: 0.6,
-        keel_position_m: Vector::ZERO,
-        keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
-        keel_stall_lift_coefficient: 0.8,
-        hull_reference_area_m2: 0.3,
-        hull_drag_coefficient: 0.08,
-        hull_lateral_drag_coefficient: 0.02,
-        rudder_mass_kg: 4.0,
-        tiller_mass_kg: 2.0,
-        rudder_draw_length_m: 0.5,
-        tiller_length_m: 1.0,
-        rudder_position_m: Vector::new(-1.8, 0.0),
-        max_rudder_angle_rad: 30.0_f32.to_radians(),
-        rudder_area_m2: 0.12,
-        rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
-        max_sail_actuator_torque_n_m: 375.0,
-        max_rudder_actuator_torque_n_m: 60.0,
-        sail_bearing_damping_n_m_s_rad: 20.0,
-        rudder_bearing_damping_n_m_s_rad: 2.0,
-    }
 }

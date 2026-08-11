@@ -33,6 +33,10 @@ decisions.
   target selection, controlled fixed-step advancement, and shared-world stepping
   with hull contact reporting, articulated-boat removal, and maintained radial
   spatial queries.
+- **[Implicit]** The runtime-independent `pyboat-game` crate owns the concrete
+  dinghy parameters, match environment, and computed-yaw-rate control composition
+  used by both the Rust server and browser. `pyboat-simulation` remains
+  parameterized and independent of game-specific tuning.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.

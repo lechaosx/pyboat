@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use pyboat_game::{computed_yaw_rate_torques, dinghy_parameters, match_environment};
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
-    HullParameters, MotionIntent, SharedSimulation, apparent_flow, computed_maximum_yaw_rate_rad_s,
-    hull_outline_m, surface_control_input, surface_target_control_torques, yaw_rate_move_control,
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, HullContact, MotionIntent,
+    SharedSimulation, apparent_flow, hull_outline_m,
 };
 use rapier2d::prelude::{Rotation, Vector};
 
@@ -238,7 +238,7 @@ impl MultiplayerClient {
 
     pub fn view(&self) -> Option<DemoView> {
         let motion = self.local_motion()?;
-        let environment = demo_environment();
+        let environment = match_environment();
         let upwind_angle_rad = environment
             .true_wind_velocity_m_s
             .y
@@ -268,7 +268,7 @@ impl MultiplayerClient {
             .into_iter()
             .filter_map(|boat| {
                 self.render_motion(&boat.snapshot.id)
-                    .map(|motion| boat_scene(demo_parameters(), motion))
+                    .map(|motion| boat_scene(dinghy_parameters(), motion))
             })
             .collect()
     }
@@ -296,7 +296,7 @@ impl MultiplayerClient {
             let (Some(forward), Some(turn)) = (boat.snapshot.forward, boat.snapshot.turn) else {
                 continue;
             };
-            let index = prediction.add_boat(demo_parameters(), snapshot_motion(&boat.snapshot));
+            let index = prediction.add_boat(dinghy_parameters(), snapshot_motion(&boat.snapshot));
             predicted_boats.insert(
                 player_id.clone(),
                 PredictedBoat {
@@ -335,10 +335,10 @@ impl MultiplayerClient {
         let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
         for boat in self.predicted_boats.values() {
             let motion = self.prediction.motion(boat.index);
-            actuator_torques[boat.index] = controlled_torques(motion, boat.intent);
+            actuator_torques[boat.index] = computed_yaw_rate_torques(motion, boat.intent);
         }
         self.prediction
-            .advance(demo_environment(), &actuator_torques);
+            .advance(match_environment(), &actuator_torques);
     }
 
     fn start_correction(
@@ -448,7 +448,7 @@ impl Default for Demo {
 
 impl Demo {
     pub fn new() -> Self {
-        let parameters = demo_parameters();
+        let parameters = dinghy_parameters();
         let player_motion = BoatMotion {
             position_m: Vector::ZERO,
             velocity_m_s: Vector::ZERO,
@@ -515,23 +515,12 @@ impl Demo {
     pub fn advance(&mut self, elapsed_seconds: f32) {
         self.accumulator_seconds += elapsed_seconds.min(0.25);
         while self.accumulator_seconds >= DT_SECONDS {
-            let environment = demo_environment();
             let motion = self.motion();
-            let control_input = surface_control_input(
-                self.parameters,
-                motion,
-                environment,
-                1,
-                10.0_f32.to_radians(),
+            let player_torques = computed_yaw_rate_torques(motion, self.motion_intent);
+            self.contacts = self.simulation.advance(
+                match_environment(),
+                &[player_torques, ActuatorTorques::default()],
             );
-            let maximum_yaw_rate_rad_s =
-                computed_maximum_yaw_rate_rad_s(self.parameters, motion, environment);
-            let targets =
-                yaw_rate_move_control(&control_input, self.motion_intent, maximum_yaw_rate_rad_s);
-            let player_torques = surface_target_control_torques(self.parameters, motion, targets);
-            self.contacts = self
-                .simulation
-                .advance(environment, &[player_torques, ActuatorTorques::default()]);
             self.accumulator_seconds -= DT_SECONDS;
         }
     }
@@ -542,7 +531,7 @@ impl Demo {
 
     pub fn view(&self) -> DemoView {
         let motion = self.motion();
-        let environment = demo_environment();
+        let environment = match_environment();
         let upwind_angle_rad = environment
             .true_wind_velocity_m_s
             .y
@@ -607,56 +596,6 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
     }
 }
 
-fn demo_parameters() -> BoatParameters {
-    BoatParameters {
-        hull: HullParameters {
-            mass_kg: 222.0,
-            length_m: 4.0,
-            beam_m: 1.5,
-            bow_length_m: 0.7,
-        },
-        sail_mass_kg: 12.0,
-        boom_mass_kg: 10.0,
-        boom_length_m: 2.0,
-        mast_position_m: Vector::new(0.4, 0.0),
-        max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
-        air_density_kg_m3: 1.225,
-        sail_area_m2: 8.0,
-        sail_center_of_effort_from_mast_m: 0.7,
-        sail_base_drag_coefficient: 0.02,
-        water_density_kg_m3: 1025.0,
-        keel_area_m2: 0.6,
-        keel_position_m: Vector::ZERO,
-        keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
-        keel_stall_lift_coefficient: 0.8,
-        hull_reference_area_m2: 0.3,
-        hull_drag_coefficient: 0.08,
-        hull_lateral_drag_coefficient: 0.02,
-        rudder_mass_kg: 4.0,
-        tiller_mass_kg: 2.0,
-        rudder_draw_length_m: 0.5,
-        tiller_length_m: 1.0,
-        rudder_position_m: Vector::new(-1.8, 0.0),
-        max_rudder_angle_rad: 30.0_f32.to_radians(),
-        rudder_area_m2: 0.12,
-        rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
-        max_sail_actuator_torque_n_m: 375.0,
-        max_rudder_actuator_torque_n_m: 60.0,
-        sail_bearing_damping_n_m_s_rad: 20.0,
-        rudder_bearing_damping_n_m_s_rad: 2.0,
-    }
-}
-
-fn demo_environment() -> Environment {
-    Environment {
-        true_wind_velocity_m_s: Vector::new(6.0, 0.0),
-        true_water_velocity_m_s: Vector::ZERO,
-    }
-}
-
 fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
     BoatMotion {
         position_m: Vector::new(snapshot.x, snapshot.y),
@@ -668,16 +607,6 @@ fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
         rudder_angle_rad: snapshot.rudder,
         rudder_angular_velocity_rad_s: snapshot.rudder_angular_velocity,
     }
-}
-
-fn controlled_torques(motion: BoatMotion, intent: MotionIntent) -> ActuatorTorques {
-    let parameters = demo_parameters();
-    let environment = demo_environment();
-    let control_input =
-        surface_control_input(parameters, motion, environment, 1, 10.0_f32.to_radians());
-    let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
-    let targets = yaw_rate_move_control(&control_input, intent, maximum_yaw_rate_rad_s);
-    surface_target_control_torques(parameters, motion, targets)
 }
 
 fn shortest_angle(angle_rad: f32) -> f32 {

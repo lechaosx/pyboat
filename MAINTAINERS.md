@@ -79,6 +79,8 @@ documentation, and decision classification.
   coefficient curves, and articulated physics.
 - `src/plotting` contains speed-polar and coefficient-plot tools.
 - `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
+- `crates/game` contains concrete Rust dinghy tuning, the match environment, and
+  control composition shared by the server and browser.
 - `crates/protocol` contains typed compact-JSON messages shared by Rust runtimes.
 - `crates/server` contains the native async WebSocket server executable and
   connection lifecycle.
@@ -94,6 +96,9 @@ documentation, and decision classification.
 The Python implementation remains the behavioral reference. Port one concrete
 behavior at a time into `pyboat-simulation`, add a Rust parity test for that
 behavior, and keep the crate independent of browser and native-server runtimes.
+Keep concrete dinghy and match tuning in `pyboat-game` so authoritative and
+predicted simulation consume the same values without making the simulation crate
+game-specific.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60
