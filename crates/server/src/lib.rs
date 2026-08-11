@@ -16,7 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{interval, timeout};
 use tokio_tungstenite::{
-    accept_async_with_config,
+    WebSocketStream, accept_async_with_config,
     tungstenite::{Message, protocol::WebSocketConfig},
 };
 
@@ -31,6 +31,9 @@ const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum ConnectionEvent {
+    Upgraded {
+        connection: Box<WebSocketStream<TcpStream>>,
+    },
     Connected {
         player_id: String,
         player_number: u64,
@@ -203,17 +206,35 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
-                let player_number = next_player_number;
-                let player_id = format!("player-{player_number}");
-                next_player_number += 1;
                 let events = events.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_connection(stream, player_id, player_number, events).await {
-                        eprintln!("WebSocket connection failed: {error}");
+                    match upgrade_connection(stream).await {
+                        Ok(connection) => {
+                            let _ = events.send(ConnectionEvent::Upgraded {
+                                connection: Box::new(connection),
+                            });
+                        }
+                        Err(error) => eprintln!("WebSocket connection failed: {error}"),
                     }
                 });
             }
             Some(event) = incoming_events.recv() => match event {
+                ConnectionEvent::Upgraded { connection } => {
+                    let player_number = next_player_number;
+                    let player_id = format!("player-{player_number}");
+                    next_player_number += 1;
+                    let events = events.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = handle_connection(
+                            *connection,
+                            player_id,
+                            player_number,
+                            events,
+                        ).await {
+                            eprintln!("WebSocket connection failed: {error}");
+                        }
+                    });
+                }
                 ConnectionEvent::Connected { player_id, player_number, outbound } => {
                     game_match.add_player(player_id.clone(), player_number);
                     connections.insert(player_id, outbound);
@@ -240,20 +261,23 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
     }
 }
 
+async fn upgrade_connection(stream: TcpStream) -> ConnectionResult<WebSocketStream<TcpStream>> {
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_CLIENT_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_CLIENT_MESSAGE_BYTES));
+    Ok(timeout(
+        WEBSOCKET_HANDSHAKE_TIMEOUT,
+        accept_async_with_config(stream, Some(config)),
+    )
+    .await??)
+}
+
 async fn handle_connection(
-    stream: TcpStream,
+    mut connection: WebSocketStream<TcpStream>,
     player_id: String,
     player_number: u64,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
-    let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_CLIENT_MESSAGE_BYTES))
-        .max_frame_size(Some(MAX_CLIENT_MESSAGE_BYTES));
-    let mut connection = timeout(
-        WEBSOCKET_HANDSHAKE_TIMEOUT,
-        accept_async_with_config(stream, Some(config)),
-    )
-    .await??;
     let welcome = encode_server_message(&ServerMessage::Welcome {
         player_id: player_id.clone(),
     })?;

@@ -58,9 +58,9 @@ decisions.
   while the native `pyboat-server` uses Tokio and tokio-tungstenite for async
   WebSocket connection handling.
 - **[Implicit]** The Rust server owns one shared authoritative Rapier match. Each
-  accepted connection creates a distinct articulated boat, validated sequenced
-  input drives computed-yaw-rate arcade control, and disconnecting removes that
-  boat from the physics world.
+  completed WebSocket connection creates a distinct articulated boat, validated
+  sequenced input drives computed-yaw-rate arcade control, and disconnecting
+  removes that boat from the physics world.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -172,8 +172,8 @@ decisions.
   frames to 1 KiB. Current client messages contain only compact input commands, so
   larger traffic is rejected before JSON decoding.
 - **[Implicit]** A TCP connection must complete its WebSocket upgrade within five
-  seconds. Incomplete handshakes are closed without joining the authoritative
-  match.
+  seconds. Incomplete handshakes are closed without consuming a player identity,
+  spawn position, or authoritative match slot.
 - **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
   messages in Rust, and retains only the newest pending snapshot between rendered
   frames. Welcome identity is applied immediately and is not part of that
@@ -271,8 +271,9 @@ decisions.
   connections in addition to deterministic simulation and protocol tests.
 - **[Implicit]** Rust loopback tests open real WebSocket connections against an
   ephemeral local port and verify concurrent connection identity, sequenced input
-  acknowledgement, bounded input backlog, message size and handshake time,
-  authoritative motion, spatial interest payloads, and disconnect cleanup.
+  acknowledgement, bounded input backlog, message size, handshake time and failed
+  handshake identity isolation, authoritative motion, spatial interest payloads,
+  and disconnect cleanup.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.

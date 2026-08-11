@@ -293,7 +293,7 @@ async fn server_rejects_client_messages_larger_than_one_kibibyte() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn server_closes_connections_that_do_not_finish_the_websocket_handshake() {
+async fn incomplete_handshake_closes_without_consuming_player_identity() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(pyboat_server::serve(listener));
@@ -309,5 +309,16 @@ async fn server_closes_connections_that_do_not_finish_the_websocket_handshake() 
     assert!(became_readable.is_ok());
     let mut byte = [0_u8];
     assert_eq!(stream.try_read(&mut byte).unwrap(), 0);
+
+    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    let welcome =
+        decode_server_message(client.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(
+        welcome,
+        ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+        }
+    );
+    client.close(None).await.unwrap();
     server.abort();
 }

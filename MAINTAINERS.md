@@ -213,8 +213,9 @@ Loopback integration tests open local WebSocket sockets. Environments that restr
 socket creation must grant loopback permission to run the complete suite.
 
 The Rust server assigns identities, creates one articulated Rapier boat per
-connection, consumes sequenced arcade input, and publishes authoritative state at
-60 Hz. Start it on the default `127.0.0.1:8765` address with:
+completed WebSocket connection, consumes sequenced arcade input, and publishes
+authoritative state at 60 Hz. Start it on the default `127.0.0.1:8765` address
+with:
 
 ```sh
 cargo run -p pyboat-server
@@ -223,18 +224,19 @@ cargo run -p pyboat-server
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
 the Python protocol while migration is incomplete. WebSocket upgrades must finish
-within five seconds. Client messages and individual WebSocket frames are limited
-to 1 KiB because inputs are the only client message type. The server queues newer
-input sequences, consumes at most one per physics tick, and acknowledges only
-consumed commands. A player's pending queue retains the newest 15 commands;
-overflow drops the oldest unapplied command rather than accumulating more than 250
-ms of stale control. Snapshot fan-out uses Tokio watch channels so a slow
-connection retains only the newest state. Rapier's maintained broad phase supplies
-interest candidates before exact radial checks. Boats within 8 m include intent
-for interaction prediction, boats through 24 m include visual motion, and farther
-boats are omitted. The boats array is a complete current interest set;
-`removedPlayerIds` remains empty in Rust snapshots for Python protocol
-compatibility.
+within five seconds. Identity and spawn allocation happen after a successful
+upgrade, so failed handshakes do not enter the match or advance player numbering.
+Client messages and individual WebSocket frames are limited to 1 KiB because
+inputs are the only client message type. The server queues newer input sequences,
+consumes at most one per physics tick, and acknowledges only consumed commands. A
+player's pending queue retains the newest 15 commands; overflow drops the oldest
+unapplied command rather than accumulating more than 250 ms of stale control.
+Snapshot fan-out uses Tokio watch channels so a slow connection retains only the
+newest state. Rapier's maintained broad phase supplies interest candidates before
+exact radial checks. Boats within 8 m include intent for interaction prediction,
+boats through 24 m include visual motion, and farther boats are omitted. The boats
+array is a complete current interest set; `removedPlayerIds` remains empty in Rust
+snapshots for Python protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through handshake limits, input, motion, spatial interest, and
 disconnect cleanup.
