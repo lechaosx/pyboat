@@ -54,9 +54,11 @@ This file records intended player experience, scope, and product behavior.
   Rust simulation. `W/S` controls boat-relative forward or reverse power, `A/D`
   turns, and the first connected gamepad's left stick controls world-relative
   movement without an added software deadzone.
-- **[Implicit]** The browser connects to the Rust authoritative server, renders
-  its latest visible boats, and sends fixed-tick controls. Client prediction and
-  reconciliation remain unimplemented, so network latency is currently visible.
+- **[Implicit]** The browser connects to the Rust authoritative server, sends
+  fixed-tick controls, predicts nearby physical interaction, reconciles local
+  input, and extrapolates distant visible boats without intentional render delay.
+- **[Explicit]** Boats move smoothly when authoritative snapshots arrive and when
+  they enter or leave the nearby physics bubble.
 - **[Implicit]** The browser HUD displays speed through water, apparent-wind
   speed, and point of sail from authoritative local state as immediate sailing
   feedback.

@@ -294,14 +294,15 @@ impl BrowserGame {
     }
 
     pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
-        if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
-            self.client.borrow_mut().accept(snapshot);
-        }
+        let inputs = self.client.borrow_mut().take_inputs(elapsed_seconds);
         if self.socket.ready_state() == WebSocket::OPEN {
-            for input in self.client.borrow_mut().take_inputs(elapsed_seconds) {
+            for input in inputs {
                 self.socket
                     .send_with_str(&encode_client_message(&input).map_err(js_error)?)?;
             }
+        }
+        if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
+            self.client.borrow_mut().accept(snapshot);
         }
         let client = self.client.borrow();
         self.renderer

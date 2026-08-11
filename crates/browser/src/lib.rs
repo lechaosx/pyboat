@@ -12,6 +12,9 @@ use rapier2d::prelude::{Rotation, Vector};
 mod web;
 
 pub const VIEW_HEIGHT_M: f32 = 15.0;
+const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
+const MAXIMUM_REPLAY_COMMANDS: usize = 15;
+const CORRECTION_SECONDS: f32 = 0.1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatScene {
@@ -54,13 +57,44 @@ pub struct ReplicatedBoat {
     pub stale: bool,
 }
 
+#[derive(Clone, Copy)]
+struct InputCommand {
+    sequence: i64,
+    intent: MotionIntent,
+}
+
+#[derive(Clone, Copy)]
+struct PredictedBoat {
+    index: usize,
+    intent: MotionIntent,
+}
+
+#[derive(Clone, Copy)]
+struct MotionCorrection {
+    position_m: Vector,
+    velocity_m_s: Vector,
+    angle_rad: f32,
+    angular_velocity_rad_s: f32,
+    sail_angle_rad: f32,
+    sail_angular_velocity_rad_s: f32,
+    rudder_angle_rad: f32,
+    rudder_angular_velocity_rad_s: f32,
+}
+
 pub struct MultiplayerClient {
     player_id: Option<String>,
     boats: HashMap<String, ReplicatedBoat>,
+    snapshot_received_at_seconds: HashMap<String, f32>,
     tick: Option<u64>,
     motion_intent: MotionIntent,
     next_input_sequence: i64,
+    input_history: Vec<InputCommand>,
     input_accumulator_seconds: f32,
+    time_seconds: f32,
+    prediction: SharedSimulation,
+    predicted_boats: HashMap<String, PredictedBoat>,
+    corrections: HashMap<String, MotionCorrection>,
+    correction_started_at_seconds: f32,
 }
 
 impl Default for MultiplayerClient {
@@ -74,10 +108,17 @@ impl MultiplayerClient {
         Self {
             player_id: None,
             boats: HashMap::new(),
+            snapshot_received_at_seconds: HashMap::new(),
             tick: None,
             motion_intent: MotionIntent::default(),
             next_input_sequence: 1,
+            input_history: Vec::new(),
             input_accumulator_seconds: 0.0,
+            time_seconds: 0.0,
+            prediction: SharedSimulation::new(),
+            predicted_boats: HashMap::new(),
+            corrections: HashMap::new(),
+            correction_started_at_seconds: 0.0,
         }
     }
 
@@ -92,13 +133,28 @@ impl MultiplayerClient {
                 if self.tick.is_some_and(|current| tick < current) {
                     return;
                 }
+                let previous_motion = self
+                    .boats
+                    .keys()
+                    .filter_map(|player_id| {
+                        self.render_motion(player_id)
+                            .map(|motion| (player_id.clone(), motion))
+                    })
+                    .collect::<HashMap<_, _>>();
                 for boat in self.boats.values_mut() {
                     boat.stale = true;
                 }
                 for player_id in removed_player_ids {
                     self.boats.remove(&player_id);
+                    self.snapshot_received_at_seconds.remove(&player_id);
                 }
+                let visible_player_ids = boats
+                    .iter()
+                    .map(|snapshot| snapshot.id.clone())
+                    .collect::<Vec<_>>();
                 for snapshot in boats {
+                    self.snapshot_received_at_seconds
+                        .insert(snapshot.id.clone(), self.time_seconds);
                     self.boats.insert(
                         snapshot.id.clone(),
                         ReplicatedBoat {
@@ -108,6 +164,8 @@ impl MultiplayerClient {
                     );
                 }
                 self.tick = Some(tick);
+                self.rebuild_prediction(&visible_player_ids);
+                self.start_correction(previous_motion, &visible_player_ids);
             }
         }
     }
@@ -159,19 +217,27 @@ impl MultiplayerClient {
     }
 
     pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
+        let elapsed_seconds = elapsed_seconds.max(0.0);
+        self.time_seconds += elapsed_seconds;
         if self.player_id.is_none() {
             self.input_accumulator_seconds = 0.0;
             return Vec::new();
         }
-        self.input_accumulator_seconds += elapsed_seconds.min(0.25);
+        self.input_accumulator_seconds += elapsed_seconds.min(MAXIMUM_PREDICTION_SECONDS);
         let mut inputs = Vec::new();
         while self.input_accumulator_seconds >= DT_SECONDS {
-            inputs.push(ClientMessage::Input {
+            let command = InputCommand {
                 sequence: self.next_input_sequence,
-                forward: self.motion_intent.forward,
-                turn: self.motion_intent.turn,
+                intent: self.motion_intent,
+            };
+            self.input_history.push(command);
+            inputs.push(ClientMessage::Input {
+                sequence: command.sequence,
+                forward: command.intent.forward,
+                turn: command.intent.turn,
             });
             self.next_input_sequence += 1;
+            self.advance_prediction(command.intent);
             self.input_accumulator_seconds -= DT_SECONDS;
         }
         inputs
@@ -215,14 +281,169 @@ impl MultiplayerClient {
         });
         boats
             .into_iter()
-            .map(|boat| boat_scene(demo_parameters(), snapshot_motion(&boat.snapshot)))
+            .filter_map(|boat| {
+                self.render_motion(&boat.snapshot.id)
+                    .map(|motion| boat_scene(demo_parameters(), motion))
+            })
             .collect()
     }
 
     fn local_motion(&self) -> Option<BoatMotion> {
         let player_id = self.player_id.as_ref()?;
+        self.render_motion(player_id)
+    }
+
+    fn rebuild_prediction(&mut self, visible_player_ids: &[String]) {
+        let Some(local_id) = self.player_id.as_ref() else {
+            return;
+        };
+        let Some(local) = self.boats.get(local_id) else {
+            return;
+        };
+        let Some(acknowledged_input) = local.snapshot.acknowledged_input else {
+            return;
+        };
+
+        let mut prediction = SharedSimulation::new();
+        let mut predicted_boats = HashMap::new();
+        for player_id in visible_player_ids {
+            let boat = &self.boats[player_id];
+            let (Some(forward), Some(turn)) = (boat.snapshot.forward, boat.snapshot.turn) else {
+                continue;
+            };
+            let index = prediction.add_boat(demo_parameters(), snapshot_motion(&boat.snapshot));
+            predicted_boats.insert(
+                player_id.clone(),
+                PredictedBoat {
+                    index,
+                    intent: MotionIntent { forward, turn },
+                },
+            );
+        }
+        self.prediction = prediction;
+        self.predicted_boats = predicted_boats;
+
+        let replay = self
+            .input_history
+            .iter()
+            .filter(|command| command.sequence > acknowledged_input)
+            .rev()
+            .take(MAXIMUM_REPLAY_COMMANDS)
+            .copied()
+            .collect::<Vec<_>>();
+        for command in replay.into_iter().rev() {
+            self.advance_prediction(command.intent);
+        }
+        self.input_history
+            .retain(|command| command.sequence > acknowledged_input);
+    }
+
+    fn advance_prediction(&mut self, local_intent: MotionIntent) {
+        let Some(local_id) = self.player_id.as_ref() else {
+            return;
+        };
+        let Some(local) = self.predicted_boats.get_mut(local_id) else {
+            return;
+        };
+        local.intent = local_intent;
+
+        let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
+        for boat in self.predicted_boats.values() {
+            let motion = self.prediction.motion(boat.index);
+            actuator_torques[boat.index] = controlled_torques(motion, boat.intent);
+        }
+        self.prediction
+            .advance(demo_environment(), &actuator_torques);
+    }
+
+    fn start_correction(
+        &mut self,
+        previous_motion: HashMap<String, BoatMotion>,
+        visible_player_ids: &[String],
+    ) {
+        self.corrections.clear();
+        self.correction_started_at_seconds = self.time_seconds;
+        for player_id in visible_player_ids {
+            let Some(previous) = previous_motion.get(player_id) else {
+                continue;
+            };
+            let Some(current) = self.predicted_motion(player_id) else {
+                continue;
+            };
+            self.corrections.insert(
+                player_id.clone(),
+                MotionCorrection {
+                    position_m: previous.position_m - current.position_m,
+                    velocity_m_s: previous.velocity_m_s - current.velocity_m_s,
+                    angle_rad: shortest_angle(previous.angle_rad - current.angle_rad),
+                    angular_velocity_rad_s: previous.angular_velocity_rad_s
+                        - current.angular_velocity_rad_s,
+                    sail_angle_rad: shortest_angle(
+                        previous.sail_angle_rad - current.sail_angle_rad,
+                    ),
+                    sail_angular_velocity_rad_s: previous.sail_angular_velocity_rad_s
+                        - current.sail_angular_velocity_rad_s,
+                    rudder_angle_rad: shortest_angle(
+                        previous.rudder_angle_rad - current.rudder_angle_rad,
+                    ),
+                    rudder_angular_velocity_rad_s: previous.rudder_angular_velocity_rad_s
+                        - current.rudder_angular_velocity_rad_s,
+                },
+            );
+        }
+    }
+
+    fn predicted_motion(&self, player_id: &str) -> Option<BoatMotion> {
+        if let Some(boat) = self.predicted_boats.get(player_id) {
+            return Some(self.prediction.motion(boat.index));
+        }
         let boat = self.boats.get(player_id)?;
-        Some(snapshot_motion(&boat.snapshot))
+        let mut motion = snapshot_motion(&boat.snapshot);
+        if !boat.stale {
+            let received_at = self.snapshot_received_at_seconds[player_id];
+            let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
+            motion.position_m += motion.velocity_m_s * seconds;
+            motion.angle_rad += motion.angular_velocity_rad_s * seconds;
+            motion.sail_angle_rad += motion.sail_angular_velocity_rad_s * seconds;
+            motion.rudder_angle_rad += motion.rudder_angular_velocity_rad_s * seconds;
+        }
+        Some(motion)
+    }
+
+    fn render_motion(&self, player_id: &str) -> Option<BoatMotion> {
+        let mut motion = self.predicted_motion(player_id)?;
+        if let Some(correction) = self.corrections.get(player_id) {
+            let elapsed_seconds = self.time_seconds - self.correction_started_at_seconds;
+            let (position_m, velocity_m_s) = cubic_vector_correction(
+                correction.position_m,
+                correction.velocity_m_s,
+                elapsed_seconds,
+            );
+            let (angle_rad, angular_velocity_rad_s) = cubic_correction(
+                correction.angle_rad,
+                correction.angular_velocity_rad_s,
+                elapsed_seconds,
+            );
+            let (sail_angle_rad, sail_angular_velocity_rad_s) = cubic_correction(
+                correction.sail_angle_rad,
+                correction.sail_angular_velocity_rad_s,
+                elapsed_seconds,
+            );
+            let (rudder_angle_rad, rudder_angular_velocity_rad_s) = cubic_correction(
+                correction.rudder_angle_rad,
+                correction.rudder_angular_velocity_rad_s,
+                elapsed_seconds,
+            );
+            motion.position_m += position_m;
+            motion.velocity_m_s += velocity_m_s;
+            motion.angle_rad += angle_rad;
+            motion.angular_velocity_rad_s += angular_velocity_rad_s;
+            motion.sail_angle_rad += sail_angle_rad;
+            motion.sail_angular_velocity_rad_s += sail_angular_velocity_rad_s;
+            motion.rudder_angle_rad += rudder_angle_rad;
+            motion.rudder_angular_velocity_rad_s += rudder_angular_velocity_rad_s;
+        }
+        Some(motion)
     }
 }
 
@@ -464,4 +685,47 @@ fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
         rudder_angle_rad: snapshot.rudder,
         rudder_angular_velocity_rad_s: snapshot.rudder_angular_velocity,
     }
+}
+
+fn controlled_torques(motion: BoatMotion, intent: MotionIntent) -> ActuatorTorques {
+    let parameters = demo_parameters();
+    let environment = demo_environment();
+    let control_input =
+        surface_control_input(parameters, motion, environment, 1, 10.0_f32.to_radians());
+    let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
+    let targets = yaw_rate_move_control(&control_input, intent, maximum_yaw_rate_rad_s);
+    surface_target_control_torques(parameters, motion, targets)
+}
+
+fn shortest_angle(angle_rad: f32) -> f32 {
+    (angle_rad + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+}
+
+fn cubic_correction(
+    displacement: f32,
+    velocity_difference: f32,
+    elapsed_seconds: f32,
+) -> (f32, f32) {
+    let progress = (elapsed_seconds / CORRECTION_SECONDS).clamp(0.0, 1.0);
+    let progress_squared = progress * progress;
+    let progress_cubed = progress_squared * progress;
+    let displacement_basis = 2.0 * progress_cubed - 3.0 * progress_squared + 1.0;
+    let velocity_basis = progress_cubed - 2.0 * progress_squared + progress;
+    let displacement_derivative = (6.0 * progress_squared - 6.0 * progress) / CORRECTION_SECONDS;
+    let velocity_derivative = 3.0 * progress_squared - 4.0 * progress + 1.0;
+    (
+        displacement * displacement_basis
+            + velocity_difference * CORRECTION_SECONDS * velocity_basis,
+        displacement * displacement_derivative + velocity_difference * velocity_derivative,
+    )
+}
+
+fn cubic_vector_correction(
+    displacement: Vector,
+    velocity_difference: Vector,
+    elapsed_seconds: f32,
+) -> (Vector, Vector) {
+    let (x, vx) = cubic_correction(displacement.x, velocity_difference.x, elapsed_seconds);
+    let (y, vy) = cubic_correction(displacement.y, velocity_difference.y, elapsed_seconds);
+    (Vector::new(x, y), Vector::new(vx, vy))
 }

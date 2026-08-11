@@ -123,8 +123,8 @@ decisions.
   loads, and advances exactly one fixed tick. It returns the selected targets and
   active maximum yaw rate for runtime telemetry.
 - **[Implicit]** The authoritative browser client limits input catch-up to 250 ms,
-  emits commands only in complete 60 Hz ticks, and renders the latest received
-  snapshot without prediction until reconciliation is implemented.
+  emits commands only in complete 60 Hz ticks, and advances its nearby prediction
+  world once for each emitted command.
 - **[Implicit]** The Rust server's Tokio interval advances one synchronous physics
   tick and publishes its resulting snapshot at 60 Hz. Each connection retains
   only the newest pending snapshot, preventing a slow client from accumulating
@@ -194,9 +194,13 @@ decisions.
   activating only after collision begins.
 - **[Implicit]** Boats outside the physics bubble use kinematic extrapolation,
   capped at 250 ms.
-- **[Implicit]** Authoritative corrections affect physics immediately, while
-  render-only position, hull angle, sail angle, and rudder angle offsets decay over
-  100 ms. Angular offsets follow the shortest path across the ±π boundary.
+- **[Explicit]** Entering and leaving the nearby physics bubble and accepting new
+  authoritative motion do not snap a boat's rendered pose or make its kinematic
+  motion visibly jerky.
+- **[Implicit]** Authoritative corrections affect physics immediately, while a
+  render-only cubic correction converges position, hull angle, sail angle, rudder
+  angle, and their visual velocities over 100 ms. It preserves pose and velocity
+  at both ends, and angular offsets follow the shortest path across the ±π boundary.
 - **[Explicit]** The current prediction and reconciliation behavior has been
   manually accepted as feeling great and is the networking responsiveness
   baseline. Contrary measurements or playtest evidence are the basis for changing
@@ -253,9 +257,9 @@ decisions.
   ephemeral local port and verify concurrent connection identity, sequenced input
   acknowledgement, authoritative motion, spatial interest payloads, and disconnect
   cleanup.
-- **[Implicit]** Native browser-crate tests verify authoritative snapshot state,
-  omission retention, tombstone removal, HUD derivation, and fixed-tick command
-  sequencing independently of browser APIs.
+- **[Implicit]** Native browser-crate tests verify replicated state, input
+  sequencing, nearby physical prediction, distant extrapolation, bubble-transition
+  continuity, and reconciliation independently of browser APIs.
 
 ## Open architecture questions (not decisions)
 

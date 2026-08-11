@@ -230,8 +230,12 @@ The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` 
 an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
 between frames, retains omitted boats as stale awareness state, removes tombstoned
-boats, and sends sequenced input at 60 Hz. It currently renders authoritative
-state without prediction or reconciliation.
+boats, and sends sequenced input at 60 Hz. The client rebuilds one nearby Rapier
+world from each authoritative snapshot, replays up to 250 ms of unacknowledged
+local commands, and advances it with newly emitted commands. Boats outside that
+world extrapolate for at most 250 ms. A cubic 100 ms render correction preserves
+pose and velocity across snapshots and physics-bubble transitions while physical
+state changes immediately.
 
 ## Model tuning
 
