@@ -724,9 +724,13 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
+ "futures-util",
  "pyboat-protocol",
+ "pyboat-server",
  "pyboat-simulation",
  "rapier2d",
+ "tokio",
+ "tokio-tungstenite",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

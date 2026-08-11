@@ -74,8 +74,9 @@ decisions.
   animation frame. Rust clamps keyboard intent and converts the gamepad's
   world-relative left-stick vector into boat-relative arcade intent.
 - **[Implicit]** Rust derives speed through water, apparent-wind speed, and point
-  of sail from authoritative local state for the browser HUD. TypeScript formats
-  this small read-only view and updates the DOM without receiving raw snapshots.
+  of sail from predicted and reconciled local state for the browser HUD.
+  TypeScript formats this small read-only view and updates the DOM without
+  receiving raw snapshots.
 - **[Explicit]** Browser arcade input follows the standalone Python game's device
   mapping, except that the browser adds no software gamepad deadzone. A displaced
   first connected gamepad overrides keyboard input, while an exactly centered or
@@ -260,6 +261,9 @@ decisions.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.
+- **[Implicit]** A browser-owned native loopback test drives `MultiplayerClient`
+  through the real Rust WebSocket server, deliberately skips intermediate
+  snapshots, and verifies fixed-tick input acknowledgement and bounded prediction.
 
 ## Open architecture questions (not decisions)
 

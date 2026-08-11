@@ -227,6 +227,10 @@ The boats array is a complete current interest set; `removedPlayerIds` remains
 empty in Rust snapshots for Python protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through input, motion, spatial interest, and disconnect cleanup.
+The browser crate also owns a native loopback test that sends its real sequenced
+commands through `pyboat-server`, drops intermediate snapshots before acceptance,
+and verifies acknowledgement and bounded prediction. Its Tokio, server, and
+WebSocket dependencies are dev-only and do not enter the WebAssembly artifact.
 The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` for
 an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
