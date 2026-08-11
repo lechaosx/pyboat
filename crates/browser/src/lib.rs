@@ -54,7 +54,6 @@ pub struct DemoView {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReplicatedBoat {
     pub snapshot: BoatSnapshot,
-    pub stale: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -128,7 +127,7 @@ impl MultiplayerClient {
             ServerMessage::Snapshot {
                 tick,
                 boats,
-                removed_player_ids,
+                removed_player_ids: _,
             } => {
                 if self.tick.is_some_and(|current| tick < current) {
                     return;
@@ -141,27 +140,17 @@ impl MultiplayerClient {
                             .map(|motion| (player_id.clone(), motion))
                     })
                     .collect::<HashMap<_, _>>();
-                for boat in self.boats.values_mut() {
-                    boat.stale = true;
-                }
-                for player_id in removed_player_ids {
-                    self.boats.remove(&player_id);
-                    self.snapshot_received_at_seconds.remove(&player_id);
-                }
                 let visible_player_ids = boats
                     .iter()
                     .map(|snapshot| snapshot.id.clone())
                     .collect::<Vec<_>>();
+                self.boats.clear();
+                self.snapshot_received_at_seconds.clear();
                 for snapshot in boats {
                     self.snapshot_received_at_seconds
                         .insert(snapshot.id.clone(), self.time_seconds);
-                    self.boats.insert(
-                        snapshot.id.clone(),
-                        ReplicatedBoat {
-                            snapshot,
-                            stale: false,
-                        },
-                    );
+                    self.boats
+                        .insert(snapshot.id.clone(), ReplicatedBoat { snapshot });
                 }
                 self.tick = Some(tick);
                 self.rebuild_prediction(&visible_player_ids);
@@ -267,11 +256,7 @@ impl MultiplayerClient {
     }
 
     pub fn scenes(&self) -> Vec<BoatScene> {
-        let mut boats = self
-            .boats
-            .values()
-            .filter(|boat| !boat.stale)
-            .collect::<Vec<_>>();
+        let mut boats = self.boats.values().collect::<Vec<_>>();
         boats.sort_by(|first, second| {
             let first_is_local = self.player_id() == Some(first.snapshot.id.as_str());
             let second_is_local = self.player_id() == Some(second.snapshot.id.as_str());
@@ -399,14 +384,12 @@ impl MultiplayerClient {
         }
         let boat = self.boats.get(player_id)?;
         let mut motion = snapshot_motion(&boat.snapshot);
-        if !boat.stale {
-            let received_at = self.snapshot_received_at_seconds[player_id];
-            let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
-            motion.position_m += motion.velocity_m_s * seconds;
-            motion.angle_rad += motion.angular_velocity_rad_s * seconds;
-            motion.sail_angle_rad += motion.sail_angular_velocity_rad_s * seconds;
-            motion.rudder_angle_rad += motion.rudder_angular_velocity_rad_s * seconds;
-        }
+        let received_at = self.snapshot_received_at_seconds[player_id];
+        let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
+        motion.position_m += motion.velocity_m_s * seconds;
+        motion.angle_rad += motion.angular_velocity_rad_s * seconds;
+        motion.sail_angle_rad += motion.sail_angular_velocity_rad_s * seconds;
+        motion.rudder_angle_rad += motion.rudder_angular_velocity_rad_s * seconds;
         Some(motion)
     }
 

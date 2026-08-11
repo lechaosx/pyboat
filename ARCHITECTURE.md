@@ -170,9 +170,9 @@ decisions.
 - **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
   `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
   optional nearby intent, and optional local acknowledgement fields.
-- **[Implicit]** Disconnect tombstones remain in each connection's latest-only
-  snapshots until that connection reports a successful WebSocket send, so
-  replacing stale state cannot discard a removal event.
+- **[Implicit]** `removedPlayerIds` remains in the JSON envelope for Python
+  protocol compatibility. Rust server snapshots leave it empty, and the Rust
+  browser treats `boats` as the complete current interest set.
 - **[Explicit]** Snapshots are assembled per receiving player because nearby boats
   require more prediction data than distant boats.
 
@@ -219,11 +219,11 @@ decisions.
   broad-phase spatial index followed by an exact radial distance check: Pymunk in
   the Python reference and Rapier in the Rust server. Clients linearly scan only
   their already-culled snapshots.
-- **[Explicit]** An omitted boat retains an arrow pointing toward its last known
-  position.
-- **[Implicit]** The server remembers which boats each connection has seen and
-  sends a one-time tombstone only when a previously seen boat disconnects. This
-  preserves arrows without sending all distant player IDs continuously.
+- **[Explicit]** Directional arrows to other ships are a debug feature and are not
+  required in the Rust browser.
+- **[Implicit]** Each Rust snapshot's `boats` array is the receiver's complete
+  current interest set. The browser discards an omitted boat immediately, so the
+  server does not track per-connection seen IDs or reliable removal tombstones.
 
 ## Boat geometry
 

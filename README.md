@@ -75,11 +75,10 @@ bun run dev
 
 Open the Vite URL shown in the terminal in a WebGPU-capable browser. The Rust/WASM
 client connects to port `8765` on the page hostname, sends sequenced controls, and
-renders the latest authoritative articulated boats with Rust `wgpu`. Use `W/S`
-for forward or reverse power and `A/D` to turn. The first connected gamepad uses
-its left stick for world-relative movement. The HUD reports authoritative speed
-through water, apparent-wind speed, and point of sail. Client prediction is not
-implemented yet, so input latency is currently visible.
+renders predicted articulated boats with Rust `wgpu`. Use `W/S` for forward or
+reverse power and `A/D` to turn. The first connected gamepad uses its left stick
+for world-relative movement. The HUD reports speed through water, apparent-wind
+speed, and point of sail.
 
 ## Run the standalone game
 
@@ -118,10 +117,9 @@ uv run client
 ```
 
 Multiplayer uses `W/S` for forward or reverse power and `A/D` to turn. Nearby
-players are visible directly; off-screen or recently out-of-range players remain
-indicated by directional arrows. Collisions cause damage based on the impact and
-where the hull was struck. When the local boat is destroyed, its client closes;
-the other players continue to see the drifting wreck.
+players are visible directly. Collisions cause damage based on the impact and where
+the hull was struck. When the local boat is destroyed, its client closes; the other
+players continue to see the drifting wreck.
 
 The server listens on `127.0.0.1:8765` by default. Use `server --host` and
 `server --port` to change the listener, and `client --uri` to connect clients to
@@ -129,4 +127,4 @@ another machine.
 
 Pyboat is a prototype: the Python client remains the prediction and reconciliation
 reference, while the Rust server and browser now provide an authoritative
-multiplayer path without client-side prediction.
+multiplayer path with nearby physical prediction and reconciliation.

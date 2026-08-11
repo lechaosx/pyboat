@@ -60,8 +60,8 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Boats move smoothly when authoritative snapshots arrive and when
   they enter or leave the nearby physics bubble.
 - **[Implicit]** The browser HUD displays speed through water, apparent-wind
-  speed, and point of sail from authoritative local state as immediate sailing
-  feedback.
+  speed, and point of sail from predicted and reconciled local state as immediate
+  sailing feedback.
 - **[Explicit]** The browser implementation language is not committed to pure
   JavaScript.
 - **[Explicit]** The current steering and latency-compensated interaction were
@@ -72,9 +72,8 @@ This file records intended player experience, scope, and product behavior.
 
 - **[Explicit]** Players should see other nearby boats without intentional
   interpolation delay that would make aiming harder.
-- **[Explicit]** Off-screen players have directional arrows. If a player leaves
-  network interest, its arrow remains directed toward its last known position
-  until the boat is seen again or disconnects.
+- **[Explicit]** Directional arrows to other ships are debug-only feedback and may
+  be omitted from the browser and product UI.
 - **[Implicit]** Wrecks and recently damaged boats use distinct colors, and the
   local client displays numerical health.
 

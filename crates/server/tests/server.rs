@@ -133,8 +133,8 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
     timeout(Duration::from_secs(1), async {
         loop {
             let (_, boats, removed) = next_snapshot(&mut first).await;
-            if removed == ["player-2"] {
-                assert!(boats.iter().all(|boat| boat.id != "player-2"));
+            assert!(removed.is_empty());
+            if boats.iter().all(|boat| boat.id != "player-2") {
                 break;
             }
         }
@@ -147,7 +147,7 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
 }
 
 #[tokio::test]
-async fn snapshots_apply_spatial_interest_and_tombstone_only_seen_boats() {
+async fn snapshots_are_complete_current_interest_sets() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(pyboat_server::serve(listener));
@@ -193,9 +193,8 @@ async fn snapshots_apply_spatial_interest_and_tombstone_only_seen_boats() {
     timeout(Duration::from_secs(1), async {
         loop {
             let (_, boats, removed) = next_snapshot(&mut clients[0]).await;
-            assert!(!removed.iter().any(|player_id| player_id == "player-5"));
-            if removed.iter().any(|player_id| player_id == "player-4") {
-                assert!(boats.iter().all(|boat| boat.id != "player-4"));
+            assert!(removed.is_empty());
+            if boats.iter().all(|boat| boat.id != "player-4") {
                 break;
             }
         }

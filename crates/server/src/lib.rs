@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     error::Error,
     io,
     time::Duration,
@@ -27,36 +27,20 @@ pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const VISIBILITY_RADIUS_M: f32 = 24.0;
 
-#[derive(Clone)]
-struct OutboundSnapshot {
-    message: Message,
-    removal_tick: Option<u64>,
-}
-
 enum ConnectionEvent {
     Connected {
         player_id: String,
         player_number: u64,
-        outbound: watch::Sender<Option<OutboundSnapshot>>,
+        outbound: watch::Sender<Option<Message>>,
     },
     Input {
         player_id: String,
         sequence: i64,
         intent: MotionIntent,
     },
-    RemovalsSent {
-        player_id: String,
-        tick: u64,
-    },
     Disconnected {
         player_id: String,
     },
-}
-
-struct ConnectionState {
-    outbound: watch::Sender<Option<OutboundSnapshot>>,
-    known_player_ids: HashSet<String>,
-    pending_removals: HashMap<String, u64>,
 }
 
 struct Player {
@@ -180,12 +164,7 @@ impl GameMatch {
         )
     }
 
-    fn snapshot_for(
-        &self,
-        player_id: &str,
-        visible_boats: &[usize],
-        removed_player_ids: Vec<String>,
-    ) -> ServerMessage {
+    fn snapshot_for(&self, player_id: &str, visible_boats: &[usize]) -> ServerMessage {
         let viewer = self
             .players
             .iter()
@@ -221,14 +200,14 @@ impl GameMatch {
         ServerMessage::Snapshot {
             tick: self.tick,
             boats,
-            removed_player_ids,
+            removed_player_ids: Vec::new(),
         }
     }
 }
 
 pub async fn serve(listener: TcpListener) -> ServerResult<()> {
     let (events, mut incoming_events) = mpsc::unbounded_channel();
-    let mut connections: HashMap<String, ConnectionState> = HashMap::new();
+    let mut connections: HashMap<String, watch::Sender<Option<Message>>> = HashMap::new();
     let mut game_match = GameMatch::new();
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
@@ -249,19 +228,10 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
             Some(event) = incoming_events.recv() => match event {
                 ConnectionEvent::Connected { player_id, player_number, outbound } => {
                     game_match.add_player(player_id.clone(), player_number);
-                    connections.insert(player_id, ConnectionState {
-                        outbound,
-                        known_player_ids: HashSet::new(),
-                        pending_removals: HashMap::new(),
-                    });
+                    connections.insert(player_id, outbound);
                 }
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     game_match.set_input(&player_id, sequence, intent);
-                }
-                ConnectionEvent::RemovalsSent { player_id, tick } => {
-                    if let Some(connection) = connections.get_mut(&player_id) {
-                        connection.pending_removals.retain(|_, first_tick| *first_tick > tick);
-                    }
                 }
                 ConnectionEvent::Disconnected { player_id } => {
                     connections.remove(&player_id);
@@ -270,41 +240,12 @@ pub async fn serve(listener: TcpListener) -> ServerResult<()> {
             },
             _ = ticker.tick() => {
                 game_match.advance();
-                let active_player_ids = game_match
-                    .players
-                    .iter()
-                    .map(|player| player.id.clone())
-                    .collect::<HashSet<_>>();
-                for (player_id, connection) in &mut connections {
-                    for removed in connection.known_player_ids.difference(&active_player_ids) {
-                        connection
-                            .pending_removals
-                            .entry(removed.clone())
-                            .or_insert(game_match.tick);
-                    }
-                    connection
-                        .known_player_ids
-                        .retain(|known| active_player_ids.contains(known));
+                for (player_id, outbound) in &connections {
                     let visible_boats = game_match.visible_boats(player_id);
-                    connection.known_player_ids.extend(
-                        visible_boats
-                            .iter()
-                            .map(|boat| game_match.players[*boat].id.clone()),
-                    );
-                    let mut removed_player_ids = connection
-                        .pending_removals
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    removed_player_ids.sort();
-                    let removal_tick = (!removed_player_ids.is_empty()).then_some(game_match.tick);
                     let snapshot = encode_server_message(
-                        &game_match.snapshot_for(player_id, &visible_boats, removed_player_ids),
+                        &game_match.snapshot_for(player_id, &visible_boats),
                     )?;
-                    connection.outbound.send_replace(Some(OutboundSnapshot {
-                        message: Message::Text(snapshot.into()),
-                        removal_tick,
-                    }));
+                    outbound.send_replace(Some(Message::Text(snapshot.into())));
                 }
             }
         }
@@ -356,16 +297,8 @@ async fn handle_connection(
                 }
                 let snapshot = outbound_updates.borrow_and_update().clone();
                 if let Some(snapshot) = snapshot {
-                    if let Err(error) = connection.send(snapshot.message).await {
+                    if let Err(error) = connection.send(snapshot).await {
                         break Err(error);
-                    }
-                    if let Some(tick) = snapshot.removal_tick {
-                        if events.send(ConnectionEvent::RemovalsSent {
-                            player_id: player_id.clone(),
-                            tick,
-                        }).is_err() {
-                            break Ok(());
-                        }
                     }
                 }
             }

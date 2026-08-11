@@ -220,22 +220,22 @@ input on both encode and decode. The welcome and input shapes intentionally matc
 the Python protocol while migration is incomplete. The server queues newer input
 sequences, consumes at most one per physics tick, and acknowledges only consumed
 commands. Snapshot fan-out uses Tokio watch channels so a slow connection retains
-only the newest state; disconnect tombstones persist until a snapshot is sent.
-Rapier's maintained broad phase supplies interest candidates before exact radial
-checks. Boats within 8 m include intent for interaction prediction, boats through
-24 m include visual motion, and farther boats are omitted without a tombstone.
+only the newest state. Rapier's maintained broad phase supplies interest candidates
+before exact radial checks. Boats within 8 m include intent for interaction
+prediction, boats through 24 m include visual motion, and farther boats are omitted.
+The boats array is a complete current interest set; `removedPlayerIds` remains
+empty in Rust snapshots for Python protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through input, motion, spatial interest, and disconnect cleanup.
 The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` for
 an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
-between frames, retains omitted boats as stale awareness state, removes tombstoned
-boats, and sends sequenced input at 60 Hz. The client rebuilds one nearby Rapier
-world from each authoritative snapshot, replays up to 250 ms of unacknowledged
-local commands, and advances it with newly emitted commands. Boats outside that
-world extrapolate for at most 250 ms. A cubic 100 ms render correction preserves
-pose and velocity across snapshots and physics-bubble transitions while physical
-state changes immediately.
+between frames, replaces its replicated interest set, and sends sequenced input at
+60 Hz. The client rebuilds one nearby Rapier world from each authoritative
+snapshot, replays up to 250 ms of unacknowledged local commands, and advances it
+with newly emitted commands. Boats outside that world extrapolate for at most 250
+ms. A cubic 100 ms render correction preserves pose and velocity across snapshots
+and physics-bubble transitions while physical state changes immediately.
 
 ## Model tuning
 

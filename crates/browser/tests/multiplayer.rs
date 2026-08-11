@@ -22,7 +22,7 @@ fn boat(id: &str, x: f32) -> BoatSnapshot {
 }
 
 #[test]
-fn multiplayer_client_retains_omitted_boats_until_a_tombstone() {
+fn multiplayer_client_discards_boats_omitted_from_interest() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
@@ -34,7 +34,7 @@ fn multiplayer_client_retains_omitted_boats_until_a_tombstone() {
     });
 
     assert_eq!(client.player_id(), Some("player-1"));
-    assert!(!client.boat("player-2").unwrap().stale);
+    assert!(client.boat("player-2").is_some());
     assert_eq!(client.scenes().len(), 2);
 
     client.accept(ServerMessage::Snapshot {
@@ -43,16 +43,8 @@ fn multiplayer_client_retains_omitted_boats_until_a_tombstone() {
         removed_player_ids: Vec::new(),
     });
 
-    assert!(client.boat("player-2").unwrap().stale);
-    assert_eq!(client.scenes().len(), 1);
-
-    client.accept(ServerMessage::Snapshot {
-        tick: 3,
-        boats: vec![boat("player-1", 2.0)],
-        removed_player_ids: vec!["player-2".to_owned()],
-    });
-
     assert!(client.boat("player-2").is_none());
+    assert_eq!(client.scenes().len(), 1);
 }
 
 #[test]
