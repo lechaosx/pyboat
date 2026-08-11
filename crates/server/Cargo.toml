@@ -14,4 +14,5 @@ tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "s
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
+tokio = { version = "1.53.1", features = ["test-util"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }

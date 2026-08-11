@@ -14,7 +14,7 @@ use pyboat_simulation::{BoatMotion, BoatParameters, Environment, MotionIntent, S
 use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
-use tokio::time::interval;
+use tokio::time::{interval, timeout};
 use tokio_tungstenite::{
     accept_async_with_config,
     tungstenite::{Message, protocol::WebSocketConfig},
@@ -28,6 +28,7 @@ const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
+const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum ConnectionEvent {
     Connected {
@@ -248,7 +249,11 @@ async fn handle_connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_CLIENT_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_CLIENT_MESSAGE_BYTES));
-    let mut connection = accept_async_with_config(stream, Some(config)).await?;
+    let mut connection = timeout(
+        WEBSOCKET_HANDSHAKE_TIMEOUT,
+        accept_async_with_config(stream, Some(config)),
+    )
+    .await??;
     let welcome = encode_server_message(&ServerMessage::Welcome {
         player_id: player_id.clone(),
     })?;

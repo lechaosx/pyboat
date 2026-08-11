@@ -3,7 +3,7 @@ use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_server_message, encode_client_message,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, advance, timeout};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -289,5 +289,25 @@ async fn server_rejects_client_messages_larger_than_one_kibibyte() {
     .unwrap();
 
     assert!(rejected);
+    server.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn server_closes_connections_that_do_not_finish_the_websocket_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(pyboat_server::serve(listener));
+    let stream = TcpStream::connect(address).await.unwrap();
+
+    // The handshake task must poll once to register its deadline before the clock
+    // advances.
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+    advance(Duration::from_secs(6)).await;
+    let became_readable = timeout(Duration::from_secs(1), stream.readable()).await;
+
+    assert!(became_readable.is_ok());
+    let mut byte = [0_u8];
+    assert_eq!(stream.try_read(&mut byte).unwrap(), 0);
     server.abort();
 }
