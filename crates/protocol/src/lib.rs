@@ -22,6 +22,8 @@ pub enum ServerMessage {
     Welcome {
         #[serde(rename = "playerId")]
         player_id: String,
+        #[serde(rename = "matchSeed")]
+        match_seed: u64,
     },
     #[serde(rename = "snapshot")]
     Snapshot {

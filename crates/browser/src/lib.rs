@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use pyboat_game::{computed_yaw_rate_torques, dinghy_parameters, match_environment};
+use pyboat_game::{
+    computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
+    match_environment, procedural_match_environment,
+};
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, HullContact, MotionIntent,
-    SharedSimulation, apparent_flow, hull_outline_m,
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
+    MotionIntent, SharedSimulation, apparent_flow, hull_outline_m,
 };
 use rapier2d::prelude::{Rotation, Vector};
 
@@ -87,10 +90,12 @@ struct MotionCorrection {
 
 pub struct MultiplayerClient {
     player_id: Option<String>,
+    match_seed: Option<u64>,
     connection_active: bool,
     boats: HashMap<String, ReplicatedBoat>,
     snapshot_received_at_seconds: HashMap<String, f32>,
     tick: Option<u64>,
+    prediction_tick: u64,
     motion_intent: MotionIntent,
     next_input_sequence: i64,
     input_history: Vec<InputCommand>,
@@ -113,10 +118,12 @@ impl MultiplayerClient {
     pub fn new() -> Self {
         Self {
             player_id: None,
+            match_seed: None,
             connection_active: false,
             boats: HashMap::new(),
             snapshot_received_at_seconds: HashMap::new(),
             tick: None,
+            prediction_tick: 0,
             motion_intent: MotionIntent::default(),
             next_input_sequence: 1,
             input_history: Vec::new(),
@@ -132,8 +139,12 @@ impl MultiplayerClient {
 
     pub fn accept(&mut self, message: ServerMessage) {
         match message {
-            ServerMessage::Welcome { player_id } => {
+            ServerMessage::Welcome {
+                player_id,
+                match_seed,
+            } => {
                 self.player_id = Some(player_id);
+                self.match_seed = Some(match_seed);
                 self.connection_active = true;
             }
             ServerMessage::Snapshot {
@@ -283,7 +294,8 @@ impl MultiplayerClient {
 
     pub fn view(&self) -> Option<DemoView> {
         let motion = self.local_motion()?;
-        let environment = match_environment();
+        let environment =
+            procedural_match_environment(self.match_seed?, self.prediction_tick, motion.position_m);
         let upwind_angle_rad = environment
             .true_wind_velocity_m_s
             .y
@@ -367,6 +379,7 @@ impl MultiplayerClient {
         }
         self.prediction = prediction;
         self.predicted_boats = predicted_boats;
+        self.prediction_tick = self.tick.unwrap_or(0);
 
         let replay = self
             .input_history
@@ -387,20 +400,29 @@ impl MultiplayerClient {
         let Some(local_id) = self.player_id.as_ref() else {
             return;
         };
+        let Some(match_seed) = self.match_seed else {
+            return;
+        };
         let Some(local) = self.predicted_boats.get_mut(local_id) else {
             return;
         };
         local.intent = local_intent;
 
+        let mut environments = vec![Environment::default(); self.predicted_boats.len()];
         let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
         for boat in self.predicted_boats.values() {
             let motion = self.prediction.motion(boat.index);
+            let environment =
+                procedural_match_environment(match_seed, self.prediction_tick, motion.position_m);
+            environments[boat.index] = environment;
             if !boat.wreck {
-                actuator_torques[boat.index] = computed_yaw_rate_torques(motion, boat.intent);
+                actuator_torques[boat.index] =
+                    computed_yaw_rate_torques_in_environment(motion, boat.intent, environment);
             }
         }
         self.prediction
-            .advance(match_environment(), &actuator_torques);
+            .advance_with_environments(&environments, &actuator_torques);
+        self.prediction_tick += 1;
     }
 
     fn start_correction(
@@ -723,6 +745,7 @@ mod tests {
         let mut client = MultiplayerClient::new();
         client.accept(ServerMessage::Welcome {
             player_id: "player-1".to_owned(),
+            match_seed: 42,
         });
 
         for _ in 0..10 {

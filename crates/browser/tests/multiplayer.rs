@@ -1,6 +1,8 @@
 use pyboat_browser::MultiplayerClient;
+use pyboat_game::procedural_match_environment;
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use pyboat_simulation::DT_SECONDS;
+use pyboat_simulation::{DT_SECONDS, apparent_flow};
+use rapier2d::prelude::Vector;
 
 fn boat(id: &str, x: f32) -> BoatSnapshot {
     BoatSnapshot {
@@ -29,6 +31,7 @@ fn multiplayer_client_discards_boats_omitted_from_interest() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     client.accept(ServerMessage::Snapshot {
         tick: 1,
@@ -57,6 +60,7 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
     assert!(client.take_inputs(DT_SECONDS).is_empty());
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
 
     assert!(client.take_inputs(DT_SECONDS / 2.0).is_empty());
@@ -92,6 +96,7 @@ fn multiplayer_client_sends_viewport_only_when_connected_and_changed() {
     assert_eq!(client.update_viewport(15.0), None);
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     assert_eq!(
         client.update_viewport(15.0),
@@ -112,6 +117,7 @@ fn multiplayer_client_keeps_cruising_and_marks_remote_boats_dead_after_disconnec
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -145,6 +151,7 @@ fn destroyed_player_spectates_their_passive_wreck_without_sending_input() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -173,6 +180,7 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     client.accept(ServerMessage::Snapshot {
         tick: 9,
@@ -185,6 +193,11 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
     assert_eq!(client.view().unwrap().speed_m_s, 5.0);
+    let environment = procedural_match_environment(42, 9, client.camera_m().unwrap());
+    assert_eq!(
+        client.view().unwrap().apparent_wind_speed_m_s,
+        apparent_flow(environment.true_wind_velocity_m_s, Vector::new(3.0, 4.0)).length(),
+    );
     assert_eq!(client.scenes().len(), 2);
 }
 
@@ -193,6 +206,7 @@ fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.health = 70.0;
@@ -222,6 +236,7 @@ fn multiplayer_prediction_does_not_control_wrecks() {
         let mut client = MultiplayerClient::new();
         client.accept(ServerMessage::Welcome {
             player_id: "player-1".to_owned(),
+            match_seed: 42,
         });
         let mut local = boat("player-1", 0.0);
         local.y = 0.0;
@@ -256,6 +271,7 @@ fn multiplayer_client_predicts_local_input_before_server_acknowledgement() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -281,6 +297,7 @@ fn multiplayer_client_replays_input_emitted_before_the_first_snapshot() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     client.set_motion_intent(1.0, 1.0);
     client.take_inputs(DT_SECONDS);
@@ -306,6 +323,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", -3.0);
     local.y = 0.0;
@@ -342,6 +360,7 @@ fn multiplayer_client_extrapolates_distant_boats_for_at_most_quarter_second() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -377,6 +396,7 @@ fn multiplayer_client_smooths_authoritative_position_corrections() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -408,6 +428,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -438,6 +459,7 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -493,6 +515,7 @@ fn multiplayer_client_preserves_visual_velocity_across_kinematic_corrections() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
+        match_seed: 42,
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;

@@ -184,6 +184,37 @@ fn shared_simulation_advances_multiple_boats_in_one_world() {
 }
 
 #[test]
+fn shared_simulation_applies_a_distinct_environment_to_each_boat() {
+    let parameters = reference_parameters();
+    let mut first = motion();
+    first.position_m = Vector::new(0.0, -10.0);
+    first.velocity_m_s = Vector::ZERO;
+    first.angle_rad = 0.0;
+    let mut second = first;
+    second.position_m = Vector::new(0.0, 10.0);
+    let mut simulation = SharedSimulation::new();
+    let first_boat = simulation.add_boat(parameters, first);
+    let second_boat = simulation.add_boat(parameters, second);
+
+    simulation.advance_with_environments(
+        &[
+            Environment {
+                true_wind_velocity_m_s: Vector::new(6.0, 0.0),
+                true_water_velocity_m_s: Vector::ZERO,
+            },
+            Environment {
+                true_wind_velocity_m_s: Vector::new(-6.0, 0.0),
+                true_water_velocity_m_s: Vector::ZERO,
+            },
+        ],
+        &[ActuatorTorques::default(), ActuatorTorques::default()],
+    );
+
+    assert!(simulation.motion(first_boat).velocity_m_s.x > 0.0);
+    assert!(simulation.motion(second_boat).velocity_m_s.x < 0.0);
+}
+
+#[test]
 fn shared_simulation_removes_an_articulated_boat_and_compacts_indices() {
     let parameters = vacuum_parameters();
     let mut first = motion();

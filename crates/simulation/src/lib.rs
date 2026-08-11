@@ -1167,6 +1167,28 @@ impl SharedSimulation {
         self.hull_contacts()
     }
 
+    pub fn advance_with_environments(
+        &mut self,
+        environments: &[Environment],
+        actuator_torques: &[ActuatorTorques],
+    ) -> Vec<HullContact> {
+        assert_eq!(environments.len(), self.boats.len());
+        assert_eq!(actuator_torques.len(), self.boats.len());
+        for ((boat, environment), actuator_torques) in
+            self.boats.iter().zip(environments).zip(actuator_torques)
+        {
+            apply_boat_forces(
+                &mut self.world,
+                boat.parameters,
+                boat.boat,
+                *environment,
+                *actuator_torques,
+            );
+        }
+        self.world.step();
+        self.hull_contacts()
+    }
+
     pub fn motion(&self, boat: usize) -> BoatMotion {
         read_motion(&self.boats[boat].boat, &self.world.bodies)
     }

@@ -51,12 +51,13 @@ cargo run -p pyboat-server
 
 The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
 connections, and creates one boat per client in a shared authoritative Rapier
-simulation. It consumes the same compact-JSON sequenced input as the Python
-prototype, applies location-dependent ramming damage, preserves destroyed boats as
-physical wrecks, and publishes real boat snapshots at 60 Hz. Snapshots include
-nearby interaction state through 8 m and visual motion through each client's requested
-viewport radius, bounded to 8–24 m and defaulting to 24 m. Pass a different listen
-address as the final argument, for example
+simulation. It consumes compact-JSON sequenced input, applies location-dependent
+ramming damage, preserves destroyed boats as physical wrecks, and publishes real
+boat snapshots at 60 Hz. Each server run uses one match seed for wind that changes
+smoothly across the world and over time.
+Snapshots include nearby interaction state through 8 m and visual motion through
+each client's requested viewport radius, bounded to 8–24 m and defaulting to 24 m.
+Pass a different listen address as the final argument, for example
 `cargo run -p pyboat-server -- 0.0.0.0:9000`.
 
 ## Run the Rust browser client
@@ -80,7 +81,10 @@ client connects to port `8765` on the page hostname, sends sequenced controls, a
 reports its canvas-sized interest radius before rendering predicted articulated
 boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
-HUD reports health, speed through water, apparent-wind speed, and point of sail.
+browser predicts the server's seeded wind locally. The HUD reports health, speed
+through water, apparent-wind speed, and point of sail using the wind at the local
+boat.
+
 Recently hit boats and wrecks receive distinct hull colors. When the local boat is
 destroyed, the player continues spectating the drifting wreck. If the server
 connection ends, a living local boat remains controllable through local prediction
@@ -129,7 +133,9 @@ players continue to see the drifting wreck.
 
 This retained Python reference still exits on death or server disconnect. The Rust
 browser intentionally differs during migration by continuing wreck spectating and
-disconnected local cruising.
+disconnected local cruising. The Python server also retains constant wind and does
+not send the match seed required by the Rust browser. Rust/Python client-server
+interoperability is not maintained during the migration.
 
 The server listens on `127.0.0.1:8765` by default. Use `server --host` and
 `server --port` to change the listener, and `client --uri` to connect clients to

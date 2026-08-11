@@ -21,6 +21,9 @@ decisions.
   renderer.
 - **[Implicit]** The current Python implementation is the behavioral reference
   until another client passes equivalent networking and physics tests.
+- **[Explicit]** Rust/Python client-server interoperability and exact numerical
+  physics parity are not migration requirements. The target Rust stack may change
+  its protocol and behavior independently of the retained Pymunk implementation.
 - **[Explicit]** Once the Rust implementation surpasses the Python version, the
   retained Python implementation and its documentation references will be
   removed.
@@ -29,8 +32,9 @@ decisions.
   wreck spectating and disconnected cruising.
 - **[Implicit]** Migration proceeds behavior by behavior through a
   runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
-  a Rust test against the Python reference before browser or native runtime
-  adapters consume it. Hull construction, the articulated boat assembly, and
+  Rust tests for its accepted physical invariants and gameplay behavior before
+  browser or native runtime adapters consume it. Hull construction, the
+  articulated boat assembly, and
   authoritative motion restoration, fixed-step advancement, and actuator torque
   application, passive bearing damping, and flat-plate sail load application are
   the first migrated behaviors, followed by stalled underwater-foil loads on the
@@ -40,9 +44,10 @@ decisions.
   with hull impulse and local-contact reporting, articulated-boat removal, and
   maintained radial spatial queries.
 - **[Implicit]** The runtime-independent `pyboat-game` crate owns the concrete
-  dinghy parameters, match environment, and computed-yaw-rate control composition
-  used by both the Rust server and browser. `pyboat-simulation` remains
-  parameterized and independent of game-specific tuning.
+  dinghy parameters, deterministic procedural-environment sampling, and
+  computed-yaw-rate control composition used by both the Rust server and browser.
+  `pyboat-simulation` remains parameterized and independent of game-specific
+  tuning.
 - **[Explicit]** The Rust simulation may differ from Pymunk implementation details
   and exact numerical trajectories when the result is physically correct.
   Equivalence is judged by physical invariants and accepted gameplay behavior.
@@ -116,9 +121,17 @@ decisions.
   exposes one synchronous 60 Hz advance operation. Runtime adapters perform
   asynchronous work before and after, never during, that operation.
 - **[Implicit]** The Rust shared simulation inserts all articulated boats into one
-  Rapier world, applies every boat's loads before advancing that world once, and
-  returns active hull contact pairs with Rapier's resolved impulse magnitude and
-  averaged hull-local contact points for game rules such as damage.
+  Rapier world, accepts one environment sample per boat, applies every boat's
+  loads before advancing that world once, and returns active hull contact pairs
+  with Rapier's resolved impulse magnitude and averaged hull-local contact points
+  for game rules such as damage.
+- **[Implicit]** Each Rust server process creates one match seed at startup. A
+  pure function of that seed, simulation tick, and world position samples bounded
+  wind from smoothly interpolated value noise. The current procedural environment
+  leaves water current at zero.
+- **[Implicit]** The server samples the environment independently at each boat's
+  position before every authoritative tick. The browser uses the same seed, tick,
+  and position sampling for each predicted boat and for the local sailing HUD.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.
@@ -177,9 +190,9 @@ decisions.
 - **[Explicit]** Compact JSON over WebSocket remains the transport until
   measurement identifies it as a bottleneck. Binary encoding is introduced only
   in response to that evidence.
-- **[Implicit]** The Rust protocol initially preserves the Python input and welcome
-  message shapes so migration can proceed without maintaining two semantic
-  protocols.
+- **[Implicit]** `pyboat-protocol` defines the Rust stack's wire contract. Its
+  `welcome` message includes the match's `matchSeed`, which the retained Python
+  server does not send; cross-runtime client-server pairings are unsupported.
 - **[Implicit]** The Rust server limits client WebSocket messages and individual
   frames to 1 KiB. Current client messages contain only compact input and viewport
   commands, so larger traffic is rejected before JSON decoding.
@@ -192,15 +205,13 @@ decisions.
   connection, and any queued snapshot follows the welcome message.
 - **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
   messages in Rust, and retains only the newest pending snapshot between rendered
-  frames. Welcome identity is applied immediately and is not part of that
-  latest-only mailbox.
-- **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
-  `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
-  health and wreck state, optional nearby intent, and optional local
-  acknowledgement fields.
-- **[Implicit]** `removedPlayerIds` remains in the JSON envelope for Python
-  protocol compatibility. Rust server snapshots leave it empty, and the Rust
-  browser treats `boats` as the complete current interest set.
+  frames. Welcome identity and match seed are applied immediately and are not part
+  of that latest-only mailbox.
+- **[Implicit]** The typed Rust snapshot envelope contains `tick`, `boats`, and
+  `removedPlayerIds`. Its boat type contains physical motion, health and wreck
+  state, optional nearby intent, and optional local acknowledgement fields.
+- **[Implicit]** Rust server snapshots leave `removedPlayerIds` empty, and the
+  Rust browser treats `boats` as the complete current interest set.
 - **[Explicit]** Snapshots are assembled per receiving player because nearby boats
   require more prediction data than distant boats.
 - **[Implicit]** The browser sends a compact viewport-radius message after welcome

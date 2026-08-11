@@ -4,22 +4,27 @@ use pyboat_protocol::{
 };
 
 #[test]
-fn welcome_message_matches_the_python_protocol() {
+fn welcome_message_carries_match_seed() {
     let expected = ServerMessage::Welcome {
         player_id: "player-3".to_owned(),
+        match_seed: 42,
     };
     let encoded = encode_server_message(&ServerMessage::Welcome {
         player_id: "player-3".to_owned(),
+        match_seed: 42,
     })
     .unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(encoded, r#"{"type":"welcome","playerId":"player-3"}"#);
+    assert_eq!(
+        encoded,
+        r#"{"type":"welcome","playerId":"player-3","matchSeed":42}"#
+    );
     assert_eq!(decoded, expected);
 }
 
 #[test]
-fn input_message_matches_the_python_protocol() {
+fn input_message_is_compact_and_round_trips() {
     let expected = ClientMessage::Input {
         sequence: 12,
         forward: 0.75,
@@ -62,7 +67,7 @@ fn viewport_message_is_compact_and_rejects_invalid_radius() {
 }
 
 #[test]
-fn empty_snapshot_matches_the_python_protocol() {
+fn empty_snapshot_is_compact_and_round_trips() {
     let expected = ServerMessage::Snapshot {
         tick: 7,
         boats: Vec::new(),
@@ -79,7 +84,7 @@ fn empty_snapshot_matches_the_python_protocol() {
 }
 
 #[test]
-fn boat_damage_state_matches_the_python_protocol() {
+fn boat_damage_state_is_compact_and_round_trips() {
     let message = ServerMessage::Snapshot {
         tick: 12,
         boats: vec![BoatSnapshot {

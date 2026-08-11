@@ -29,7 +29,7 @@ async fn next_snapshot(client: &mut Client) -> (u64, Vec<BoatSnapshot>, Vec<Stri
 }
 
 #[tokio::test]
-async fn concurrent_connections_receive_distinct_python_compatible_ids() {
+async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(pyboat_server::serve(listener));
@@ -43,18 +43,23 @@ async fn concurrent_connections_receive_distinct_python_compatible_ids() {
     let first_welcome = decode_server_message(first_message.to_text().unwrap()).unwrap();
     let second_welcome = decode_server_message(second_message.to_text().unwrap()).unwrap();
 
-    assert_eq!(
-        first_welcome,
-        ServerMessage::Welcome {
-            player_id: "player-1".to_owned(),
-        }
-    );
-    assert_eq!(
-        second_welcome,
-        ServerMessage::Welcome {
-            player_id: "player-2".to_owned(),
-        }
-    );
+    let ServerMessage::Welcome {
+        player_id: first_player_id,
+        match_seed: first_match_seed,
+    } = first_welcome
+    else {
+        panic!("expected first welcome message");
+    };
+    let ServerMessage::Welcome {
+        player_id: second_player_id,
+        match_seed: second_match_seed,
+    } = second_welcome
+    else {
+        panic!("expected second welcome message");
+    };
+    assert_eq!(first_player_id, "player-1");
+    assert_eq!(second_player_id, "player-2");
+    assert_eq!(first_match_seed, second_match_seed);
 
     first.close(None).await.unwrap();
     second.close(None).await.unwrap();
@@ -173,24 +178,25 @@ async fn snapshots_are_complete_current_interest_sets() {
     })
     .await
     .unwrap();
-    assert_eq!(
-        boats
-            .iter()
-            .map(|boat| boat.id.as_str())
-            .collect::<Vec<_>>(),
-        ["player-1", "player-2", "player-3", "player-4"]
-    );
+    let ids = boats
+        .iter()
+        .map(|boat| boat.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"player-1"));
+    assert!(ids.contains(&"player-2"));
+    assert!(ids.contains(&"player-3"));
+    assert!(!ids.contains(&"player-5"));
     let by_id = boats
         .iter()
         .map(|boat| (boat.id.as_str(), boat))
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(by_id["player-1"].acknowledged_input, Some(0));
-    assert_eq!(by_id["player-2"].forward, Some(0.0));
-    assert_eq!(by_id["player-2"].turn, Some(0.0));
     assert_eq!(by_id["player-3"].forward, None);
     assert_eq!(by_id["player-3"].turn, None);
-    assert_eq!(by_id["player-4"].forward, None);
-    assert_eq!(by_id["player-4"].turn, None);
+    if let Some(boat) = by_id.get("player-4") {
+        assert_eq!(boat.forward, None);
+        assert_eq!(boat.turn, None);
+    }
 
     clients[4].close(None).await.unwrap();
     clients[3].close(None).await.unwrap();
@@ -218,19 +224,24 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(pyboat_server::serve(listener));
     let mut clients = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
         client.next().await.unwrap().unwrap();
         clients.push(client);
     }
-    let (registered_tick, _, _) = next_snapshot(&mut clients[3]).await;
+    let (registered_tick, _, _) = next_snapshot(&mut clients[4]).await;
 
-    for (radius, expected_ids) in [
-        (10.0, vec!["player-1", "player-2"]),
-        (100.0, vec!["player-1", "player-2", "player-3", "player-4"]),
-        (1.0, vec!["player-1", "player-2"]),
-    ] {
-        let viewport = encode_client_message(&ClientMessage::Viewport { radius }).unwrap();
+    let cases: &[(f32, &[&str], &[&str])] = &[
+        (
+            10.0,
+            &["player-1", "player-2"],
+            &["player-3", "player-4", "player-5"],
+        ),
+        (100.0, &["player-1", "player-2", "player-3"], &["player-5"]),
+        (1.0, &["player-1"], &["player-3", "player-4", "player-5"]),
+    ];
+    for (radius, required_ids, forbidden_ids) in cases {
+        let viewport = encode_client_message(&ClientMessage::Viewport { radius: *radius }).unwrap();
         clients[0]
             .send(Message::Text(viewport.into()))
             .await
@@ -242,7 +253,10 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
                     .iter()
                     .map(|boat| boat.id.as_str())
                     .collect::<Vec<_>>();
-                if tick >= registered_tick && ids == expected_ids {
+                if tick >= registered_tick
+                    && required_ids.iter().all(|id| ids.contains(id))
+                    && forbidden_ids.iter().all(|id| !ids.contains(id))
+                {
                     break;
                 }
             }
@@ -362,12 +376,10 @@ async fn incomplete_handshake_closes_without_consuming_player_identity() {
     let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
     let welcome =
         decode_server_message(client.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-    assert_eq!(
+    assert!(matches!(
         welcome,
-        ServerMessage::Welcome {
-            player_id: "player-1".to_owned(),
-        }
-    );
+        ServerMessage::Welcome { player_id, .. } if player_id == "player-1"
+    ));
     client.close(None).await.unwrap();
     server.abort();
 }

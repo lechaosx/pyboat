@@ -79,8 +79,8 @@ documentation, and decision classification.
   coefficient curves, and articulated physics.
 - `src/plotting` contains speed-polar and coefficient-plot tools.
 - `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
-- `crates/game` contains concrete Rust dinghy tuning, the match environment, and
-  control composition shared by the server and browser.
+- `crates/game` contains concrete Rust dinghy tuning, deterministic procedural
+  environment sampling, and control composition shared by the server and browser.
 - `crates/protocol` contains typed compact-JSON messages shared by Rust runtimes.
 - `crates/server` contains the native async WebSocket server executable and
   connection lifecycle.
@@ -93,12 +93,15 @@ documentation, and decision classification.
 
 ## Rust migration
 
-The Python implementation remains the behavioral reference. Port one concrete
-behavior at a time into `pyboat-simulation`, add a Rust parity test for that
-behavior, and keep the crate independent of browser and native-server runtimes.
+The Python implementation remains a historical source for accepted behavior, not
+a compatibility target. Port one concrete behavior at a time into
+`pyboat-simulation`, test its physical invariants and gameplay behavior in Rust,
+and keep the crate independent of browser and native-server runtimes.
 Keep concrete dinghy and match tuning in `pyboat-game` so authoritative and
 predicted simulation consume the same values without making the simulation crate
-game-specific.
+game-specific. Its procedural environment sampler is a pure function of match
+seed, simulation tick, and world position so native and WebAssembly runtimes can
+reproduce the same wind without transmitting a field grid.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60
@@ -115,18 +118,19 @@ Candidate prediction includes hull angular velocity but remains quasi-static wit
 respect to each candidate surface. The controlled-advance API composes this policy
 with one synchronous physics tick and reports the chosen targets and active yaw
 rate. The shared simulation inserts multiple articulated boats into one Rapier
-world, applies their loads before a single world step, and reports active hull
-contacts with resolved impulse magnitudes and hull-local contact points. The Rust
-server uses those contacts for the reference ramming-damage tuning and leaves
+world, accepts a separate environment for each boat, applies their loads before a
+single world step, and reports active hull contacts with resolved impulse
+magnitudes and hull-local contact points. The Rust server uses those contacts for
+the reference ramming-damage tuning and leaves
 destroyed boats in the world with passive forces and zero actuator torque. The
 retained local browser harness advances the same shared simulation for one
 controlled boat and one passive practice boat. The current browser entry point
-instead converts authoritative snapshot motion to WebGPU vertices. TypeScript samples
-`W/S`, `A/D`, and the first connected gamepad; Rust converts the gamepad's
+instead converts authoritative snapshot motion to WebGPU vertices. TypeScript
+samples `W/S`, `A/D`, and the first connected gamepad; Rust converts the gamepad's
 world-relative left-stick vector into local motion intent without adding a
-deadzone. Rust owns the WebSocket,
-latest-snapshot mailbox, compact-JSON codec, fixed-tick input sequencing, and the
-small sailing view used by the TypeScript DOM HUD. Tests target physical
+deadzone. Rust owns the WebSocket, latest-snapshot mailbox, compact-JSON codec,
+fixed-tick input sequencing, and the small sailing view used by the TypeScript DOM
+HUD. Tests target physical
 invariants, replicated-state behavior, mirrored controlled maneuvers, and accepted
 gameplay behavior rather than exact Pymunk trajectories.
 
@@ -207,10 +211,12 @@ velocity, so prediction and plant load can briefly differ during fast movement.
 
 ## Multiplayer implementation
 
-The Python server and client are the current behavioral reference. Their authority,
-fixed-tick commands, prediction bubble, reconciliation, spatial interest, damage,
-and wreck decisions are recorded in [`ARCHITECTURE.md`](ARCHITECTURE.md). Update
-that record in the same change whenever these behaviors change.
+The Python server and client remain a historical behavioral reference. Their
+authority, fixed-tick commands, prediction bubble, reconciliation, spatial
+interest, damage, and wreck decisions are recorded in
+[`ARCHITECTURE.md`](ARCHITECTURE.md). Rust/Python interoperability and exact
+Pymunk/Rapier parity are not requirements. Update the record in the same change
+whenever these behaviors change.
 
 Loopback integration tests open local WebSocket sockets. Environments that restrict
 socket creation must grant loopback permission to run the complete suite.
@@ -232,10 +238,11 @@ Integration tests call `serve_until` with a one-shot future for the same control
 shutdown path; `serve` remains the indefinite entry point.
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
-input on both encode and decode. The welcome and input shapes intentionally match
-the Python protocol while migration is incomplete. WebSocket upgrades must finish
-within five seconds. Identity and spawn allocation happen after a successful
-upgrade, so failed handshakes do not enter the match or advance player numbering.
+input on both encode and decode. It is the Rust stack's wire contract and need not
+remain compatible with Python. Rust welcome messages include `matchSeed`, which
+the retained Python server does not send. WebSocket upgrades must finish within
+five seconds. Identity and spawn allocation happen after a successful upgrade, so
+failed handshakes do not enter the match or advance player numbering.
 The connection task waits for central player and shutdown-mailbox registration
 before sending `welcome`, preserving welcome-before-snapshot ordering and making
 the welcomed session visible to controlled shutdown.
@@ -251,8 +258,7 @@ exact radial checks. Boats within 8 m include intent for interaction prediction.
 Beyond that, boats through the client's requested viewport radius include visual
 motion, with server-side bounds of 8–24 m and a 24 m default for clients without
 viewport updates. The boats array is a complete current interest set;
-`removedPlayerIds` remains empty in Rust snapshots for Python protocol
-compatibility.
+`removedPlayerIds` remains empty in Rust snapshots.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through handshake limits, input, motion, spatial interest, and
 disconnect and server-shutdown cleanup. One shutdown test owns the server in an
@@ -267,6 +273,9 @@ an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
 between frames, replaces its replicated interest set, sends its viewport radius
 after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 Hz.
+Welcome also supplies the server-selected match seed. Authoritative and predicted
+ticks sample the same smooth wind function separately at each boat, and the local
+sample supplies the apparent-wind HUD.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

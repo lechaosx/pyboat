@@ -36,6 +36,9 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Seas and islands are procedurally generated.
 - **[Explicit]** Weather, currents, waves, wind, and storms should be procedural
   but deterministic from a match seed across both space and time.
+- **[Implicit]** The first implemented procedural-environment slice gives each
+  Rust match seeded wind that changes smoothly across the world and over time.
+  Water current remains still until a later environment slice.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
 - **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate

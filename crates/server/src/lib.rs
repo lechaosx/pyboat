@@ -3,17 +3,18 @@ use std::{
     error::Error,
     future::{Future, pending},
     io,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::{SinkExt, StreamExt};
-use pyboat_game::{computed_yaw_rate_torques, dinghy_parameters, match_environment};
+use pyboat_game::{
+    computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
+};
 use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
 use pyboat_simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, Environment, HullContact, MotionIntent,
-    SharedSimulation,
+    ActuatorTorques, BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation,
 };
 use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
@@ -82,21 +83,21 @@ struct Player {
 
 struct GameMatch {
     parameters: BoatParameters,
-    environment: Environment,
     simulation: SharedSimulation,
     players: Vec<Player>,
     active_hull_contacts: HashSet<(String, String)>,
+    match_seed: u64,
     tick: u64,
 }
 
 impl GameMatch {
-    fn new() -> Self {
+    fn new(match_seed: u64) -> Self {
         Self {
             parameters: dinghy_parameters(),
-            environment: match_environment(),
             simulation: SharedSimulation::new(),
             players: Vec::new(),
             active_hull_contacts: HashSet::new(),
+            match_seed,
             tick: 0,
         }
     }
@@ -179,8 +180,13 @@ impl GameMatch {
     }
 
     fn advance(&mut self) {
+        let mut environments = Vec::with_capacity(self.players.len());
         let mut actuator_torques = Vec::with_capacity(self.players.len());
         for (boat, player) in self.players.iter_mut().enumerate() {
+            let motion = self.simulation.motion(boat);
+            let environment =
+                procedural_match_environment(self.match_seed, self.tick, motion.position_m);
+            environments.push(environment);
             if player.wreck {
                 actuator_torques.push(ActuatorTorques::default());
                 continue;
@@ -189,10 +195,15 @@ impl GameMatch {
                 player.intent = intent;
                 player.acknowledged_input = sequence;
             }
-            let motion = self.simulation.motion(boat);
-            actuator_torques.push(computed_yaw_rate_torques(motion, player.intent));
+            actuator_torques.push(computed_yaw_rate_torques_in_environment(
+                motion,
+                player.intent,
+                environment,
+            ));
         }
-        let contacts = self.simulation.advance(self.environment, &actuator_torques);
+        let contacts = self
+            .simulation
+            .advance_with_environments(&environments, &actuator_torques);
         self.apply_hull_contacts(&contacts);
         self.tick += 1;
     }
@@ -325,7 +336,7 @@ where
 {
     let (events, mut incoming_events) = mpsc::unbounded_channel();
     let mut connections: HashMap<String, watch::Sender<Option<Message>>> = HashMap::new();
-    let mut game_match = GameMatch::new();
+    let mut game_match = GameMatch::new(new_match_seed());
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
     tokio::pin!(shutdown);
@@ -378,6 +389,7 @@ where
                             *connection,
                             player_id,
                             player_number,
+                            game_match.match_seed,
                             events,
                         ).await {
                             eprintln!("WebSocket connection failed: {error}");
@@ -434,6 +446,7 @@ async fn handle_connection(
     mut connection: WebSocketStream<TcpStream>,
     player_id: String,
     player_number: u64,
+    match_seed: u64,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
     // A watch channel retains only the newest snapshot when a client cannot keep up.
@@ -452,6 +465,7 @@ async fn handle_connection(
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "server stopped"))?;
     let welcome = encode_server_message(&ServerMessage::Welcome {
         player_id: player_id.clone(),
+        match_seed,
     })?;
     connection.send(Message::Text(welcome.into())).await?;
 
@@ -505,6 +519,13 @@ async fn handle_connection(
     Ok(())
 }
 
+fn new_match_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must be after the Unix epoch")
+        .as_nanos() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,7 +542,7 @@ mod tests {
     fn collision_damage_respects_bow_side_and_stern_strength() {
         let mut losses = Vec::new();
         for contact_x_m in [1.5, 0.0, -1.5] {
-            let mut game_match = GameMatch::new();
+            let mut game_match = GameMatch::new(42);
             game_match.add_player("player-1".to_owned(), 1);
             game_match.apply_collision_damage("player-1", 580.0, contact_x_m);
             losses.push(100.0 - player(&game_match, "player-1").health);
@@ -534,7 +555,7 @@ mod tests {
 
     #[test]
     fn collision_damage_applies_only_when_contact_begins() {
-        let mut game_match = GameMatch::new();
+        let mut game_match = GameMatch::new(42);
         game_match.add_player("player-1".to_owned(), 1);
         game_match.add_player("player-2".to_owned(), 2);
         let contact = HullContact {
@@ -557,7 +578,7 @@ mod tests {
 
     #[test]
     fn destroyed_boat_becomes_a_persistent_spectated_wreck() {
-        let mut game_match = GameMatch::new();
+        let mut game_match = GameMatch::new(42);
         game_match.add_player("player-1".to_owned(), 1);
         game_match.set_input(
             "player-1",
