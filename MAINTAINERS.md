@@ -221,9 +221,10 @@ with:
 cargo run -p pyboat-server
 ```
 
-Ctrl-C signals the async serving loop to release the listener and close active
-connections. Integration tests call `serve_until` with a one-shot future for the
-same controlled shutdown path; `serve` remains the indefinite entry point.
+Ctrl-C signals the async serving loop to send WebSocket close frames, release the
+listener, and close active connections. Integration tests call `serve_until` with
+a one-shot future for the same controlled shutdown path; `serve` remains the
+indefinite entry point.
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match

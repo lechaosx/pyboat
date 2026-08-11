@@ -216,6 +216,9 @@ where
         tokio::select! {
             result = &mut shutdown => {
                 result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
+                for outbound in connections.values() {
+                    outbound.send_replace(Some(Message::Close(None)));
+                }
                 return Ok(());
             }
             accepted = listener.accept() => {

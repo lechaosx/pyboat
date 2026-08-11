@@ -339,15 +339,16 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let closed = timeout(Duration::from_secs(1), async {
+    timeout(Duration::from_secs(1), async {
         loop {
             match client.next().await {
-                Some(Ok(message)) if !message.is_close() => {}
-                Some(Ok(_)) | Some(Err(_)) | None => break,
+                Some(Ok(message)) if message.is_close() => break,
+                Some(Ok(_)) => {}
+                Some(Err(error)) => panic!("connection failed before close frame: {error}"),
+                None => panic!("connection ended before close frame"),
             }
         }
     })
-    .await;
-
-    assert!(closed.is_ok());
+    .await
+    .unwrap();
 }

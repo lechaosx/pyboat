@@ -88,9 +88,9 @@ decisions.
 - **[Explicit]** Server and browser runtime work should use asynchronous I/O and
   orchestration wherever work can suspend.
 - **[Implicit]** The native server treats Ctrl-C as an asynchronous shutdown
-  signal. Shutdown returns the authoritative serving loop, releases its listener
-  and outbound snapshot senders, and allows established connection tasks to
-  close.
+  signal. Shutdown publishes a WebSocket close frame to each established client,
+  then returns the authoritative serving loop and releases its listener and
+  outbound senders.
 - **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
   never waits on networking, timers, persistence, rendering, or UI work.
 - **[Implicit]** The target runtime uses stable Rust. Nightly features are adopted
@@ -277,7 +277,7 @@ decisions.
   ephemeral local port and verify concurrent connection identity, sequenced input
   acknowledgement, bounded input backlog, message size, handshake time and failed
   handshake identity isolation, authoritative motion, spatial interest payloads,
-  disconnect cleanup, and signaled server shutdown.
+  disconnect cleanup, and protocol-clean signaled server shutdown.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.
