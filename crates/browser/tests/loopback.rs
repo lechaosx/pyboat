@@ -38,7 +38,9 @@ async fn browser_client_predicts_and_reconciles_against_the_real_server() {
         loop {
             if last_sequence < 30 {
                 for input in client.take_inputs(DT_SECONDS) {
-                    let ClientMessage::Input { sequence, .. } = &input;
+                    let ClientMessage::Input { sequence, .. } = &input else {
+                        panic!("fixed-tick input generation returned a viewport message");
+                    };
                     last_sequence = *sequence;
                     let encoded = encode_client_message(&input).unwrap();
                     connection

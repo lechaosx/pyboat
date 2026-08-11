@@ -213,6 +213,51 @@ async fn snapshots_are_complete_current_interest_sets() {
 }
 
 #[tokio::test]
+async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(pyboat_server::serve(listener));
+    let mut clients = Vec::new();
+    for _ in 0..4 {
+        let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        client.next().await.unwrap().unwrap();
+        clients.push(client);
+    }
+    let (registered_tick, _, _) = next_snapshot(&mut clients[3]).await;
+
+    for (radius, expected_ids) in [
+        (10.0, vec!["player-1", "player-2"]),
+        (100.0, vec!["player-1", "player-2", "player-3", "player-4"]),
+        (1.0, vec!["player-1", "player-2"]),
+    ] {
+        let viewport = encode_client_message(&ClientMessage::Viewport { radius }).unwrap();
+        clients[0]
+            .send(Message::Text(viewport.into()))
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let (tick, boats, _) = next_snapshot(&mut clients[0]).await;
+                let ids = boats
+                    .iter()
+                    .map(|boat| boat.id.as_str())
+                    .collect::<Vec<_>>();
+                if tick >= registered_tick && ids == expected_ids {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    for client in &mut clients {
+        client.close(None).await.unwrap();
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn input_backlog_keeps_only_the_newest_quarter_second() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

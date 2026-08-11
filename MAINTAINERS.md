@@ -236,17 +236,20 @@ upgrade, so failed handshakes do not enter the match or advance player numbering
 The connection task waits for central player and shutdown-mailbox registration
 before sending `welcome`, preserving welcome-before-snapshot ordering and making
 the welcomed session visible to controlled shutdown.
-Client messages and individual WebSocket frames are limited to 1 KiB because
-inputs are the only client message type. The server queues newer input sequences,
-consumes at most one per physics tick, and acknowledges only consumed commands. A
-player's pending queue retains the newest 15 commands; overflow drops the oldest
-unapplied command rather than accumulating more than 250 ms of stale control.
+Client messages and individual WebSocket frames are limited to 1 KiB; the current
+input and viewport messages are both compact. The server queues newer input
+sequences, consumes at most one per physics tick, and acknowledges only consumed
+commands. A player's pending queue retains the newest 15 commands; overflow drops
+the oldest unapplied command rather than accumulating more than 250 ms of stale
+control.
 Snapshot fan-out uses Tokio watch channels so a slow connection retains only the
 newest state. Rapier's maintained broad phase supplies interest candidates before
-exact radial checks. Boats within 8 m include intent for interaction prediction,
-boats through 24 m include visual motion, and farther boats are omitted. The boats
-array is a complete current interest set; `removedPlayerIds` remains empty in Rust
-snapshots for Python protocol compatibility.
+exact radial checks. Boats within 8 m include intent for interaction prediction.
+Beyond that, boats through the client's requested viewport radius include visual
+motion, with server-side bounds of 8–24 m and a 24 m default for clients without
+viewport updates. The boats array is a complete current interest set;
+`removedPlayerIds` remains empty in Rust snapshots for Python protocol
+compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through handshake limits, input, motion, spatial interest, and
 disconnect and server-shutdown cleanup. One shutdown test owns the server in an
@@ -259,10 +262,12 @@ WebSocket dependencies are dev-only and do not enter the WebAssembly artifact.
 The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` for
 an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
-between frames, replaces its replicated interest set, and sends sequenced input at
-60 Hz. On a connection error or close, it stops emitting input and freezes the
-last replicated scene; the connection status shows a clean close reason when one
-is available. The client rebuilds one nearby Rapier world from each authoritative
+between frames, replaces its replicated interest set, sends its viewport radius
+after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 Hz.
+The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
+connection error or close, the browser stops emitting input and freezes the last
+replicated scene; the connection status shows a clean close reason when one is
+available. The client rebuilds one nearby Rapier world from each authoritative
 snapshot, replays up to 250 ms of unacknowledged local commands, and advances it
 with newly emitted commands. It retains only those 15 replayable commands, so a
 snapshot stall cannot grow prediction history without bound. Boats outside that

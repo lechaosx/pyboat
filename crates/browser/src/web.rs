@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
-use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M};
+use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M, viewport_interest_radius_m};
 
 const MAX_VERTICES: usize = 2048;
 
@@ -203,6 +203,11 @@ impl Renderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
     }
+
+    fn aspect_ratio(&self) -> f32 {
+        let (width, height) = canvas_dimensions(&self.canvas);
+        width as f32 / height as f32
+    }
 }
 
 #[wasm_bindgen]
@@ -310,8 +315,16 @@ impl BrowserGame {
     }
 
     pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
-        let inputs = self.client.borrow_mut().take_inputs(elapsed_seconds);
+        let viewport_radius_m = viewport_interest_radius_m(self.renderer.aspect_ratio());
+        let mut client = self.client.borrow_mut();
+        let viewport = client.update_viewport(viewport_radius_m);
+        let inputs = client.take_inputs(elapsed_seconds);
+        drop(client);
         if self.socket.ready_state() == WebSocket::OPEN {
+            if let Some(viewport) = viewport {
+                self.socket
+                    .send_with_str(&encode_client_message(&viewport).map_err(js_error)?)?;
+            }
             for input in inputs {
                 self.socket
                     .send_with_str(&encode_client_message(&input).map_err(js_error)?)?;

@@ -83,6 +83,28 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
 }
 
 #[test]
+fn multiplayer_client_sends_viewport_only_when_connected_and_changed() {
+    let mut client = MultiplayerClient::new();
+
+    assert_eq!(client.update_viewport(15.0), None);
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+    });
+    assert_eq!(
+        client.update_viewport(15.0),
+        Some(ClientMessage::Viewport { radius: 15.0 })
+    );
+    assert_eq!(client.update_viewport(15.0), None);
+    assert_eq!(
+        client.update_viewport(18.0),
+        Some(ClientMessage::Viewport { radius: 18.0 })
+    );
+
+    client.disconnect();
+    assert_eq!(client.update_viewport(20.0), None);
+}
+
+#[test]
 fn multiplayer_client_freezes_when_the_connection_ends() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {

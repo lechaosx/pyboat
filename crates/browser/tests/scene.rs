@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use pyboat_browser::{Demo, PointOfSail, boat_scene, point_of_sail};
+use pyboat_browser::{Demo, PointOfSail, boat_scene, point_of_sail, viewport_interest_radius_m};
 use pyboat_game::dinghy_parameters;
 use pyboat_simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 use rapier2d::prelude::Vector;
@@ -32,6 +32,11 @@ fn boat_scene_follows_hull_and_surface_motion() {
     assert_vector_close(scene.sail_m[1], Vector::new(5.0, 4.4));
     assert_vector_close(scene.rudder_m[0], Vector::new(3.0, 2.2));
     assert_vector_close(scene.rudder_m[1], Vector::new(3.0, 1.7));
+}
+
+#[test]
+fn viewport_interest_covers_the_visible_rectangle_and_boat_margin() {
+    assert!((viewport_interest_radius_m(4.0 / 3.0) - 15.0).abs() < 1.0e-5);
 }
 
 #[test]

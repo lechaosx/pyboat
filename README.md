@@ -53,8 +53,9 @@ The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
 connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes the same compact-JSON sequenced input as the Python
 prototype and publishes real boat snapshots at 60 Hz. Snapshots include nearby
-interaction state through 8 m, visual motion through 24 m, and omit farther boats.
-Pass a different listen address as the final argument, for example
+interaction state through 8 m and visual motion through each client's requested
+viewport radius, bounded to 8–24 m and defaulting to 24 m. Pass a different listen
+address as the final argument, for example
 `cargo run -p pyboat-server -- 0.0.0.0:9000`.
 
 ## Run the Rust browser client
@@ -75,10 +76,10 @@ bun run dev
 
 Open the Vite URL shown in the terminal in a WebGPU-capable browser. The Rust/WASM
 client connects to port `8765` on the page hostname, sends sequenced controls, and
-renders predicted articulated boats with Rust `wgpu`. Use `W/S` for forward or
-reverse power and `A/D` to turn. The first connected gamepad uses its left stick
-for world-relative movement. The HUD reports speed through water, apparent-wind
-speed, and point of sail.
+reports its canvas-sized interest radius before rendering predicted articulated
+boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
+The first connected gamepad uses its left stick for world-relative movement. The
+HUD reports speed through water, apparent-wind speed, and point of sail.
 
 ## Run the standalone game
 

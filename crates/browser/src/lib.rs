@@ -12,6 +12,7 @@ use rapier2d::prelude::{Rotation, Vector};
 mod web;
 
 pub const VIEW_HEIGHT_M: f32 = 15.0;
+const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
@@ -90,6 +91,7 @@ pub struct MultiplayerClient {
     next_input_sequence: i64,
     input_history: Vec<InputCommand>,
     input_accumulator_seconds: f32,
+    sent_viewport_radius_m: Option<f32>,
     time_seconds: f32,
     prediction: SharedSimulation,
     predicted_boats: HashMap<String, PredictedBoat>,
@@ -115,6 +117,7 @@ impl MultiplayerClient {
             next_input_sequence: 1,
             input_history: Vec::new(),
             input_accumulator_seconds: 0.0,
+            sent_viewport_radius_m: None,
             time_seconds: 0.0,
             prediction: SharedSimulation::new(),
             predicted_boats: HashMap::new(),
@@ -172,6 +175,7 @@ impl MultiplayerClient {
         self.connection_active = false;
         self.input_history.clear();
         self.input_accumulator_seconds = 0.0;
+        self.sent_viewport_radius_m = None;
     }
 
     pub fn tick(&self) -> Option<u64> {
@@ -187,6 +191,14 @@ impl MultiplayerClient {
             forward: forward.clamp(-1.0, 1.0),
             turn: turn.clamp(-1.0, 1.0),
         };
+    }
+
+    pub fn update_viewport(&mut self, radius_m: f32) -> Option<ClientMessage> {
+        if !self.connection_active || self.sent_viewport_radius_m == Some(radius_m) {
+            return None;
+        }
+        self.sent_viewport_radius_m = Some(radius_m);
+        Some(ClientMessage::Viewport { radius: radius_m })
     }
 
     pub fn set_player_input(
@@ -442,6 +454,11 @@ impl MultiplayerClient {
         }
         Some(motion)
     }
+}
+
+pub fn viewport_interest_radius_m(aspect_ratio: f32) -> f32 {
+    let view_width_m = VIEW_HEIGHT_M * aspect_ratio;
+    view_width_m.hypot(VIEW_HEIGHT_M) / 2.0 + VIEWPORT_INTEREST_MARGIN_M
 }
 
 pub struct Demo {

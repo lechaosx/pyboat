@@ -48,6 +48,20 @@ fn input_rejects_values_outside_the_control_range() {
 }
 
 #[test]
+fn viewport_message_is_compact_and_rejects_invalid_radius() {
+    let expected = ClientMessage::Viewport { radius: 17.5 };
+    let encoded = encode_client_message(&expected).unwrap();
+    let decoded = decode_client_message(&encoded).unwrap();
+
+    assert_eq!(encoded, r#"{"type":"viewport","radius":17.5}"#);
+    assert_eq!(decoded, expected);
+    assert_eq!(
+        encode_client_message(&ClientMessage::Viewport { radius: 0.0 }).unwrap_err(),
+        ProtocolError::InvalidViewportRadius
+    );
+}
+
+#[test]
 fn empty_snapshot_matches_the_python_protocol() {
     let expected = ServerMessage::Snapshot {
         tick: 7,

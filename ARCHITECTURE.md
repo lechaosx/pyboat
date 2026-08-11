@@ -174,8 +174,8 @@ decisions.
   message shapes so migration can proceed without maintaining two semantic
   protocols.
 - **[Implicit]** The Rust server limits client WebSocket messages and individual
-  frames to 1 KiB. Current client messages contain only compact input commands, so
-  larger traffic is rejected before JSON decoding.
+  frames to 1 KiB. Current client messages contain only compact input and viewport
+  commands, so larger traffic is rejected before JSON decoding.
 - **[Implicit]** A TCP connection must complete its WebSocket upgrade within five
   seconds. Incomplete handshakes are closed without consuming a player identity,
   spawn position, or authoritative match slot.
@@ -195,6 +195,9 @@ decisions.
   browser treats `boats` as the complete current interest set.
 - **[Explicit]** Snapshots are assembled per receiving player because nearby boats
   require more prediction data than distant boats.
+- **[Implicit]** The browser sends a compact viewport-radius message after welcome
+  and whenever its canvas aspect ratio changes. The radius covers the viewport's
+  half-diagonal plus a 2.5 m boat-geometry margin.
 
 ## Client prediction and reconciliation
 
@@ -216,7 +219,7 @@ decisions.
   prediction while retaining the last replicated scene. A clean close reason is
   presented through the browser's connection status.
 - **[Implicit]** The client recreates the local boat and boats within 8 m in one
-  Pymunk prediction space. The local boat uses unacknowledged commands; nearby
+  Rapier prediction space. The local boat uses unacknowledged commands; nearby
   boats hold their latest server-reported command.
 - **[Explicit]** The interaction bubble begins shortly before contact rather than
   activating only after collision begins.
@@ -238,9 +241,10 @@ decisions.
 
 - **[Explicit]** Boats sufficiently far outside the viewport do not need to be
   included in snapshots.
-- **[Implicit]** Boats within 8 m include full motion and control data, boats from
-  8 m through 24 m include visual motion without control data, and boats beyond
-  24 m are omitted.
+- **[Implicit]** Boats within 8 m include full motion and control data. Beyond 8 m,
+  boats through the receiving client's requested viewport radius include visual
+  motion without control data. The server clamps that radius to 8–24 m and uses
+  24 m for clients that do not send viewport updates.
 - **[Explicit]** Server interest management requires a maintained spatial query
   system.
 - **[Implicit]** Server candidate lookup uses the physics world's maintained
@@ -285,9 +289,10 @@ decisions.
   ephemeral local port and verify concurrent connection identity, sequenced input
   acknowledgement, bounded input backlog, message size, handshake time and failed
   handshake identity isolation, authoritative motion, spatial interest payloads,
-  disconnect cleanup, and the code and reason of protocol-clean signaled server
-  shutdown. Shutdown coverage includes dropping an isolated server runtime as soon
-  as its serving future returns, ensuring close frames are flushed before return.
+  viewport-radius bounds, disconnect cleanup, and the code and reason of
+  protocol-clean signaled server shutdown. Shutdown coverage includes dropping an
+  isolated server runtime as soon as its serving future returns, ensuring close
+  frames are flushed before return.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.
@@ -297,7 +302,6 @@ decisions.
 
 ## Open architecture questions (not decisions)
 
-- How a variable-size future viewport communicates interest bounds to the server.
 - Whether wreck cleanup is time-based, distance-based, capacity-based, or driven by
   salvage gameplay.
 - Whether measured scale eventually justifies binary snapshots, batching, UDP, or

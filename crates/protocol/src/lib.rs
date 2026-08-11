@@ -11,6 +11,8 @@ pub enum ClientMessage {
         forward: f32,
         turn: f32,
     },
+    #[serde(rename = "viewport")]
+    Viewport { radius: f32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,6 +58,7 @@ pub struct BoatSnapshot {
 pub enum ProtocolError {
     Json(String),
     InvalidMotionIntent,
+    InvalidViewportRadius,
 }
 
 impl fmt::Display for ProtocolError {
@@ -64,6 +67,9 @@ impl fmt::Display for ProtocolError {
             Self::Json(error) => write!(formatter, "protocol JSON error: {error}"),
             Self::InvalidMotionIntent => {
                 formatter.write_str("motion intent values must be finite and between -1 and 1")
+            }
+            Self::InvalidViewportRadius => {
+                formatter.write_str("viewport radius must be finite and positive")
             }
         }
     }
@@ -92,6 +98,9 @@ fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError>
                 || !(-1.0..=1.0).contains(turn) =>
         {
             Err(ProtocolError::InvalidMotionIntent)
+        }
+        ClientMessage::Viewport { radius } if !radius.is_finite() || *radius <= 0.0 => {
+            Err(ProtocolError::InvalidViewportRadius)
         }
         _ => Ok(()),
     }

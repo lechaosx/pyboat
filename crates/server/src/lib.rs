@@ -29,7 +29,7 @@ type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
-const VISIBILITY_RADIUS_M: f32 = 24.0;
+const MAX_VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,6 +50,10 @@ enum ConnectionEvent {
         sequence: i64,
         intent: MotionIntent,
     },
+    Viewport {
+        player_id: String,
+        radius_m: f32,
+    },
     Disconnected {
         player_id: String,
     },
@@ -61,6 +65,7 @@ struct Player {
     acknowledged_input: i64,
     last_received_input: i64,
     pending_inputs: VecDeque<(i64, MotionIntent)>,
+    visibility_radius_m: f32,
 }
 
 struct GameMatch {
@@ -102,6 +107,7 @@ impl GameMatch {
             acknowledged_input: 0,
             last_received_input: 0,
             pending_inputs: VecDeque::new(),
+            visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
         });
     }
 
@@ -135,6 +141,18 @@ impl GameMatch {
         player.last_received_input = sequence;
     }
 
+    fn set_viewport(&mut self, player_id: &str, radius_m: f32) {
+        let Some(player) = self
+            .players
+            .iter_mut()
+            .find(|player| player.id == player_id)
+        else {
+            return;
+        };
+        player.visibility_radius_m =
+            radius_m.clamp(PHYSICS_BUBBLE_RADIUS_M, MAX_VISIBILITY_RADIUS_M);
+    }
+
     fn advance(&mut self) {
         let mut actuator_torques = Vec::with_capacity(self.players.len());
         for (boat, player) in self.players.iter_mut().enumerate() {
@@ -155,10 +173,9 @@ impl GameMatch {
             .iter()
             .position(|player| player.id == player_id)
             .expect("a connection must have an authoritative boat");
-        self.simulation.boats_within_radius(
-            self.simulation.motion(viewer).position_m,
-            VISIBILITY_RADIUS_M,
-        )
+        let radius_m = self.players[viewer].visibility_radius_m;
+        self.simulation
+            .boats_within_radius(self.simulation.motion(viewer).position_m, radius_m)
     }
 
     fn snapshot_for(&self, player_id: &str, visible_boats: &[usize]) -> ServerMessage {
@@ -285,6 +302,9 @@ where
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     game_match.set_input(&player_id, sequence, intent);
                 }
+                ConnectionEvent::Viewport { player_id, radius_m } => {
+                    game_match.set_viewport(&player_id, radius_m);
+                }
                 ConnectionEvent::Disconnected { player_id } => {
                     connections.remove(&player_id);
                     game_match.remove_player(&player_id);
@@ -344,14 +364,24 @@ async fn handle_connection(
         tokio::select! {
             incoming = connection.next() => match incoming {
                 Some(Ok(message)) if message.is_text() => {
-                    let ClientMessage::Input { sequence, forward, turn } =
-                        decode_client_message(message.to_text()?)?;
-                    if events.send(ConnectionEvent::Input {
-                        player_id: player_id.clone(),
-                        sequence,
-                        intent: MotionIntent { forward, turn },
-                    }).is_err() {
-                        break Ok(());
+                    match decode_client_message(message.to_text()?)? {
+                        ClientMessage::Input { sequence, forward, turn } => {
+                            if events.send(ConnectionEvent::Input {
+                                player_id: player_id.clone(),
+                                sequence,
+                                intent: MotionIntent { forward, turn },
+                            }).is_err() {
+                                break Ok(());
+                            }
+                        }
+                        ClientMessage::Viewport { radius } => {
+                            if events.send(ConnectionEvent::Viewport {
+                                player_id: player_id.clone(),
+                                radius_m: radius,
+                            }).is_err() {
+                                break Ok(());
+                            }
+                        }
                     }
                 }
                 Some(Ok(message)) if !message.is_close() => {}
