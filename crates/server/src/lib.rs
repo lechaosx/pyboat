@@ -14,7 +14,7 @@ use pyboat_protocol::{
 use pyboat_simulation::{BoatMotion, BoatParameters, Environment, MotionIntent, SharedSimulation};
 use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{interval, timeout};
 use tokio_tungstenite::{
     WebSocketStream, accept_async_with_config,
@@ -33,6 +33,7 @@ const VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 enum ConnectionEvent {
     Upgraded {
@@ -42,6 +43,7 @@ enum ConnectionEvent {
         player_id: String,
         player_number: u64,
         outbound: watch::Sender<Option<Message>>,
+        registered: oneshot::Sender<()>,
     },
     Input {
         player_id: String,
@@ -225,6 +227,18 @@ where
                         reason: "Server shutting down".into(),
                     }))));
                 }
+                let _ = timeout(CONNECTION_SHUTDOWN_TIMEOUT, async {
+                    while !connections.is_empty() {
+                        let Some(event) = incoming_events.recv().await else {
+                            break;
+                        };
+                        if let ConnectionEvent::Disconnected { player_id } = event {
+                            connections.remove(&player_id);
+                            game_match.remove_player(&player_id);
+                        }
+                    }
+                })
+                .await;
                 return Ok(());
             }
             accepted = listener.accept() => {
@@ -258,9 +272,15 @@ where
                         }
                     });
                 }
-                ConnectionEvent::Connected { player_id, player_number, outbound } => {
+                ConnectionEvent::Connected {
+                    player_id,
+                    player_number,
+                    outbound,
+                    registered,
+                } => {
                     game_match.add_player(player_id.clone(), player_number);
                     connections.insert(player_id, outbound);
+                    let _ = registered.send(());
                 }
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     game_match.set_input(&player_id, sequence, intent);
@@ -301,20 +321,25 @@ async fn handle_connection(
     player_number: u64,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
-    let welcome = encode_server_message(&ServerMessage::Welcome {
-        player_id: player_id.clone(),
-    })?;
-    connection.send(Message::Text(welcome.into())).await?;
-
     // A watch channel retains only the newest snapshot when a client cannot keep up.
     let (outbound, mut outbound_updates) = watch::channel(None);
+    let (registered, registration) = oneshot::channel();
     events
         .send(ConnectionEvent::Connected {
             player_id: player_id.clone(),
             player_number,
             outbound,
+            registered,
         })
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "server stopped"))?;
+    registration
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "server stopped"))?;
+    let welcome = encode_server_message(&ServerMessage::Welcome {
+        player_id: player_id.clone(),
+    })?;
+    connection.send(Message::Text(welcome.into())).await?;
+
     let result = loop {
         tokio::select! {
             incoming = connection.next() => match incoming {
@@ -337,10 +362,14 @@ async fn handle_connection(
                 if changed.is_err() {
                     break Ok(());
                 }
-                let snapshot = outbound_updates.borrow_and_update().clone();
-                if let Some(snapshot) = snapshot {
-                    if let Err(error) = connection.send(snapshot).await {
+                let message = outbound_updates.borrow_and_update().clone();
+                if let Some(message) = message {
+                    let closes_connection = message.is_close();
+                    if let Err(error) = connection.send(message).await {
                         break Err(error);
+                    }
+                    if closes_connection {
+                        break Ok(());
                     }
                 }
             }

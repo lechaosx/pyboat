@@ -90,7 +90,8 @@ decisions.
 - **[Implicit]** The native server treats Ctrl-C as an asynchronous shutdown
   signal. Shutdown publishes a WebSocket close frame with code 1001 and the
   reason `Server shutting down` to each established client, then returns the
-  authoritative serving loop and releases its listener and outbound senders.
+  authoritative serving loop after allowing up to one second for connection
+  handlers to flush those frames. Handlers do not wait for a peer close response.
 - **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
   never waits on networking, timers, persistence, rendering, or UI work.
 - **[Implicit]** The target runtime uses stable Rust. Nightly features are adopted
@@ -178,6 +179,10 @@ decisions.
 - **[Implicit]** A TCP connection must complete its WebSocket upgrade within five
   seconds. Incomplete handshakes are closed without consuming a player identity,
   spawn position, or authoritative match slot.
+- **[Implicit]** After upgrade, the connection task waits for the authoritative
+  loop to register its player and shutdown mailbox before sending `welcome`.
+  Receiving `welcome` therefore guarantees that controlled shutdown includes the
+  connection, and any queued snapshot follows the welcome message.
 - **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
   messages in Rust, and retains only the newest pending snapshot between rendered
   frames. Welcome identity is applied immediately and is not part of that
@@ -281,7 +286,8 @@ decisions.
   acknowledgement, bounded input backlog, message size, handshake time and failed
   handshake identity isolation, authoritative motion, spatial interest payloads,
   disconnect cleanup, and the code and reason of protocol-clean signaled server
-  shutdown.
+  shutdown. Shutdown coverage includes dropping an isolated server runtime as soon
+  as its serving future returns, ensuring close frames are flushed before return.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.

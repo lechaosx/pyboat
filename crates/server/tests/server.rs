@@ -358,3 +358,42 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
     assert_eq!(close.code, CloseCode::Away);
     assert_eq!(close.reason, "Server shutting down");
 }
+
+#[tokio::test]
+async fn shutdown_flushes_close_frame_before_server_runtime_stops() {
+    let (address_sender, address_receiver) = std::sync::mpsc::sync_channel(1);
+    let (shutdown, shutdown_signal) = oneshot::channel();
+    let server = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                address_sender.send(listener.local_addr().unwrap()).unwrap();
+                pyboat_server::serve_until(listener, shutdown_signal).await
+            })
+    });
+    let address = address_receiver.recv().unwrap();
+    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    client.next().await.unwrap().unwrap();
+
+    shutdown.send(()).unwrap();
+    server.join().unwrap().unwrap();
+
+    let close = timeout(Duration::from_secs(1), async {
+        loop {
+            match client.next().await {
+                Some(Ok(Message::Close(close))) => break close,
+                Some(Ok(_)) => {}
+                Some(Err(error)) => panic!("connection failed before close frame: {error}"),
+                None => panic!("connection ended before close frame"),
+            }
+        }
+    })
+    .await
+    .unwrap()
+    .expect("shutdown close frame must include a reason");
+    assert_eq!(close.code, CloseCode::Away);
+    assert_eq!(close.reason, "Server shutting down");
+}

@@ -222,15 +222,20 @@ cargo run -p pyboat-server
 ```
 
 Ctrl-C signals the async serving loop to send WebSocket close frames with code
-1001 and the reason `Server shutting down`, release the listener, and close active
-connections. Integration tests call `serve_until` with a one-shot future for the
-same controlled shutdown path; `serve` remains the indefinite entry point.
+1001 and the reason `Server shutting down`, allow up to one second for established
+connections to flush them, and then release the listener. Connection handlers
+exit after writing the frame rather than waiting for a peer close response.
+Integration tests call `serve_until` with a one-shot future for the same controlled
+shutdown path; `serve` remains the indefinite entry point.
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
 the Python protocol while migration is incomplete. WebSocket upgrades must finish
 within five seconds. Identity and spawn allocation happen after a successful
 upgrade, so failed handshakes do not enter the match or advance player numbering.
+The connection task waits for central player and shutdown-mailbox registration
+before sending `welcome`, preserving welcome-before-snapshot ordering and making
+the welcomed session visible to controlled shutdown.
 Client messages and individual WebSocket frames are limited to 1 KiB because
 inputs are the only client message type. The server queues newer input sequences,
 consumes at most one per physics tick, and acknowledges only consumed commands. A
@@ -244,7 +249,9 @@ array is a complete current interest set; `removedPlayerIds` remains empty in Ru
 snapshots for Python protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through handshake limits, input, motion, spatial interest, and
-disconnect and server-shutdown cleanup.
+disconnect and server-shutdown cleanup. One shutdown test owns the server in an
+isolated Tokio runtime and drops that runtime when the serving future returns to
+verify the close frame was flushed first.
 The browser crate also owns a native loopback test that sends its real sequenced
 commands through `pyboat-server`, drops intermediate snapshots before acceptance,
 and verifies acknowledgement and bounded prediction. Its Tokio, server, and
