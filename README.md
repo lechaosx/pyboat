@@ -39,7 +39,7 @@ tools, including `uv`:
 nix develop
 ```
 
-The Rust browser demo additionally requires Rust 1.87 or newer with the
+The Rust browser client additionally requires Rust 1.87 or newer with the
 `wasm32-unknown-unknown` target, `wasm-pack`, and Bun. The Nix environment includes
 all of them.
 
@@ -55,10 +55,17 @@ simulation. It consumes the same compact-JSON sequenced input as the Python
 prototype and publishes real boat snapshots at 60 Hz. Snapshots include nearby
 interaction state through 8 m, visual motion through 24 m, and omit farther boats.
 Pass a different listen address as the final argument, for example
-`cargo run -p pyboat-server -- 0.0.0.0:9000`. The browser demo is not connected to
-this server yet.
+`cargo run -p pyboat-server -- 0.0.0.0:9000`.
 
-## Run the Rust browser demo
+## Run the Rust browser client
+
+Start the Rust server in one terminal:
+
+```sh
+cargo run -p pyboat-server
+```
+
+Then start the browser workspace in another:
 
 ```sh
 nix develop
@@ -66,14 +73,13 @@ bun install
 bun run dev
 ```
 
-Open the Vite URL shown in the terminal in a WebGPU-capable browser. The page runs
-the real Rust/Rapier shared simulation at 60 Hz and renders two articulated boats
-and a moving water grid with Rust `wgpu`. Use `W/S` for forward or reverse power
-and `A/D` to turn. The first connected gamepad uses its left stick for
-world-relative movement. The coral boat is a passive physical practice target;
-both boats receive fluid forces and collide in the same Rapier world. The HUD
-reports speed through water, apparent-wind speed, and point of sail. Multiplayer
-remains in the Python prototype.
+Open the Vite URL shown in the terminal in a WebGPU-capable browser. The Rust/WASM
+client connects to port `8765` on the page hostname, sends sequenced controls, and
+renders the latest authoritative articulated boats with Rust `wgpu`. Use `W/S`
+for forward or reverse power and `A/D` to turn. The first connected gamepad uses
+its left stick for world-relative movement. The HUD reports authoritative speed
+through water, apparent-wind speed, and point of sail. Client prediction is not
+implemented yet, so input latency is currently visible.
 
 ## Run the standalone game
 
@@ -121,6 +127,6 @@ The server listens on `127.0.0.1:8765` by default. Use `server --host` and
 `server --port` to change the listener, and `client --uri` to connect clients to
 another machine.
 
-Pyboat is a prototype: the Python client and server currently establish the
-gameplay and networking behavior, while the browser currently visualizes a single
-locally simulated boat.
+Pyboat is a prototype: the Python client remains the prediction and reconciliation
+reference, while the Rust server and browser now provide an authoritative
+multiplayer path without client-side prediction.

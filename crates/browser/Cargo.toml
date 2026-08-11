@@ -8,6 +8,7 @@ rust-version = "1.87"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+pyboat-protocol = { path = "../protocol" }
 pyboat-simulation = { path = "../simulation" }
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 
@@ -16,7 +17,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }
+web-sys = { version = "0.3", features = ["CloseEvent", "Event", "HtmlCanvasElement", "Location", "MessageEvent", "WebSocket", "Window"] }
 wgpu = { version = "30.0.0", default-features = false, features = ["std", "webgpu", "wgsl"] }
 
 [package.metadata.wasm-pack.profile.release]

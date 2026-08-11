@@ -12,6 +12,7 @@ const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 if (!canvas || !status || !speed || !apparentWind || !pointOfSail) {
   throw new Error("The game page is incomplete");
 }
+const statusElement = status;
 const speedElement = speed;
 const apparentWindElement = apparentWind;
 const pointOfSailElement = pointOfSail;
@@ -45,7 +46,6 @@ function firstGamepad(): Gamepad | null {
 
 try {
   const game = await BrowserGame.create(canvas);
-  status.textContent = "Rapier physics · WebGPU rendering";
   let previousTimeMs = performance.now();
 
   function frame(timeMs: number): void {
@@ -57,6 +57,7 @@ try {
       gamepad?.axes[1] ?? 0,
     );
     game.frame((timeMs - previousTimeMs) / 1000);
+    statusElement.textContent = game.status();
     speedElement.textContent = game.speed_m_s().toFixed(1);
     apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
     pointOfSailElement.textContent = game.point_of_sail();
@@ -66,6 +67,6 @@ try {
 
   requestAnimationFrame(frame);
 } catch (error) {
-  status.textContent = "WebGPU could not start in this browser";
+  statusElement.textContent = "Pyboat could not start in this browser";
   throw error;
 }

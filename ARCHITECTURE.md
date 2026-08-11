@@ -12,9 +12,10 @@ decisions.
 
 - **[Explicit]** The current gameplay reference stack consists of Python clients
   with a simple renderer and a Python dedicated server.
-- **[Implicit]** The browser vertical slice runs one locally controlled boat and a
-  passive practice boat in the same Rust shared simulation before protocol or
-  multiplayer state are introduced.
+- **[Implicit]** The initial browser vertical slice ran one locally controlled boat
+  and a passive practice boat in the same Rust shared simulation before protocol
+  and multiplayer state were introduced. That local demo remains a native test
+  harness rather than the current browser entry point.
 - **[Implicit]** Simulation and protocol data are independent of rendering, so a
   later browser client can reuse the same behavior without copying the Python
   renderer.
@@ -47,7 +48,8 @@ decisions.
   renderer capability model over support for browsers without WebGPU.
 - **[Implicit]** `wasm-pack` builds the Rust browser crate, Vite bundles the page,
   and Bun runs workspace commands. TypeScript starts the page and schedules frames
-  while Rust owns WebGPU initialization, simulation, and scene rendering.
+  while Rust owns WebGPU initialization, networking, replicated state, fixed-tick
+  input emission, and scene rendering.
 - **[Implicit]** `pyboat-protocol` owns typed runtime-independent wire messages,
   while the native `pyboat-server` uses Tokio and tokio-tungstenite for async
   WebSocket connection handling.
@@ -72,8 +74,8 @@ decisions.
   animation frame. Rust clamps keyboard intent and converts the gamepad's
   world-relative left-stick vector into boat-relative arcade intent.
 - **[Implicit]** Rust derives speed through water, apparent-wind speed, and point
-  of sail from simulation state for the browser HUD. TypeScript formats this
-  small read-only view and updates the DOM without receiving raw simulation state.
+  of sail from authoritative local state for the browser HUD. TypeScript formats
+  this small read-only view and updates the DOM without receiving raw snapshots.
 - **[Explicit]** Browser arcade input follows the standalone Python game's device
   mapping, except that the browser adds no software gamepad deadzone. A displaced
   first connected gamepad overrides keyboard input, while an exactly centered or
@@ -100,9 +102,9 @@ decisions.
   Rapier world, applies every boat's loads before advancing that world once, and
   returns active hull contact pairs with Rapier's resolved impulse magnitude for
   game rules such as damage.
-- **[Implicit]** The browser advances its local and passive practice boats through
-  that shared-world API and renders both, exercising collision response without
-  yet assigning damage or treating the practice boat as a network player.
+- **[Implicit]** The retained local browser test harness advances its controlled
+  and passive practice boats through the shared-world API, exercising collision
+  response independently of networking.
 - **[Implicit]** Each Rust simulation tick applies sail and rudder actuator
   torques equally and oppositely to the controlled surface and hull. Rapier uses
   eight solver iterations with joint warm-starting so sustained actuator loads
@@ -120,9 +122,9 @@ decisions.
   command, selects surface targets, derives actuator torques, applies all physical
   loads, and advances exactly one fixed tick. It returns the selected targets and
   active maximum yaw rate for runtime telemetry.
-- **[Implicit]** The browser animation loop accumulates elapsed frame time, limits
-  catch-up to 250 ms per frame, and advances the synchronous simulation only in
-  complete 60 Hz ticks before rendering its latest motion.
+- **[Implicit]** The authoritative browser client limits input catch-up to 250 ms,
+  emits commands only in complete 60 Hz ticks, and renders the latest received
+  snapshot without prediction until reconciliation is implemented.
 - **[Implicit]** The Rust server's Tokio interval advances one synchronous physics
   tick and publishes its resulting snapshot at 60 Hz. Each connection retains
   only the newest pending snapshot, preventing a slow client from accumulating
@@ -161,6 +163,10 @@ decisions.
 - **[Implicit]** The Rust protocol initially preserves the Python input and welcome
   message shapes so migration can proceed without maintaining two semantic
   protocols.
+- **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
+  messages in Rust, and retains only the newest pending snapshot between rendered
+  frames. Welcome identity is applied immediately and is not part of that
+  latest-only mailbox.
 - **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
   `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
   optional nearby intent, and optional local acknowledgement fields.
@@ -247,6 +253,9 @@ decisions.
   ephemeral local port and verify concurrent connection identity, sequenced input
   acknowledgement, authoritative motion, spatial interest payloads, and disconnect
   cleanup.
+- **[Implicit]** Native browser-crate tests verify authoritative snapshot state,
+  omission retention, tombstone removal, HUD derivation, and fixed-tick command
+  sequencing independently of browser APIs.
 
 ## Open architecture questions (not decisions)
 

@@ -1,12 +1,18 @@
-use std::{borrow::Cow, mem};
+use std::{
+    borrow::Cow,
+    cell::{Cell, RefCell},
+    mem,
+    rc::Rc,
+};
 
 use bytemuck::{Pod, Zeroable};
+use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
-use crate::{BoatScene, Demo, VIEW_HEIGHT_M};
+use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M};
 
 const MAX_VERTICES: usize = 2048;
 
@@ -201,24 +207,105 @@ impl Renderer {
 
 #[wasm_bindgen]
 pub struct BrowserGame {
-    demo: Demo,
+    client: Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: Rc<Cell<ConnectionStatus>>,
+    socket: WebSocket,
     renderer: Renderer,
+    _on_open: Closure<dyn FnMut(Event)>,
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_error: Closure<dyn FnMut(Event)>,
+    _on_close: Closure<dyn FnMut(CloseEvent)>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ConnectionStatus {
+    Connecting,
+    Connected,
+    Error,
+    Closed,
 }
 
 #[wasm_bindgen]
 impl BrowserGame {
     pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserGame, JsValue> {
         console_error_panic_hook::set_once();
+        let renderer = Renderer::new(canvas).await?;
+        let client = Rc::new(RefCell::new(MultiplayerClient::new()));
+        let pending_snapshot = Rc::new(RefCell::new(None));
+        let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
+        let socket = WebSocket::new(&server_url()?)?;
+
+        let on_open = {
+            let connection_status = Rc::clone(&connection_status);
+            Closure::new(move |_: Event| connection_status.set(ConnectionStatus::Connected))
+        };
+        socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+
+        let on_message = {
+            let client = Rc::clone(&client);
+            let pending_snapshot = Rc::clone(&pending_snapshot);
+            let connection_status = Rc::clone(&connection_status);
+            Closure::new(move |event: MessageEvent| {
+                let Some(message) = event.data().as_string() else {
+                    connection_status.set(ConnectionStatus::Error);
+                    return;
+                };
+                match decode_server_message(&message) {
+                    Ok(message @ ServerMessage::Welcome { .. }) => {
+                        client.borrow_mut().accept(message);
+                    }
+                    Ok(message @ ServerMessage::Snapshot { .. }) => {
+                        pending_snapshot.replace(Some(message));
+                    }
+                    Err(_) => connection_status.set(ConnectionStatus::Error),
+                }
+            })
+        };
+        socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+        let on_error = {
+            let connection_status = Rc::clone(&connection_status);
+            Closure::new(move |_: Event| connection_status.set(ConnectionStatus::Error))
+        };
+        socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
+        let on_close = {
+            let connection_status = Rc::clone(&connection_status);
+            Closure::new(move |_: CloseEvent| {
+                if connection_status.get() != ConnectionStatus::Error {
+                    connection_status.set(ConnectionStatus::Closed);
+                }
+            })
+        };
+        socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+
         Ok(Self {
-            demo: Demo::new(),
-            renderer: Renderer::new(canvas).await?,
+            client,
+            pending_snapshot,
+            connection_status,
+            socket,
+            renderer,
+            _on_open: on_open,
+            _on_message: on_message,
+            _on_error: on_error,
+            _on_close: on_close,
         })
     }
 
     pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
-        self.demo.advance(elapsed_seconds);
+        if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
+            self.client.borrow_mut().accept(snapshot);
+        }
+        if self.socket.ready_state() == WebSocket::OPEN {
+            for input in self.client.borrow_mut().take_inputs(elapsed_seconds) {
+                self.socket
+                    .send_with_str(&encode_client_message(&input).map_err(js_error)?)?;
+            }
+        }
+        let client = self.client.borrow();
         self.renderer
-            .render(&self.demo.scenes(), self.demo.motion().position_m)
+            .render(&client.scenes(), client.camera_m().unwrap_or(Vector::ZERO))
     }
 
     pub fn set_player_input(
@@ -228,21 +315,63 @@ impl BrowserGame {
         gamepad_x: f32,
         gamepad_y: f32,
     ) {
-        self.demo
-            .set_player_input(keyboard_forward, keyboard_turn, gamepad_x, gamepad_y);
+        self.client.borrow_mut().set_player_input(
+            keyboard_forward,
+            keyboard_turn,
+            gamepad_x,
+            gamepad_y,
+        );
     }
 
     pub fn speed_m_s(&self) -> f32 {
-        self.demo.view().speed_m_s
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.speed_m_s)
+            .unwrap_or(0.0)
     }
 
     pub fn apparent_wind_speed_m_s(&self) -> f32 {
-        self.demo.view().apparent_wind_speed_m_s
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.apparent_wind_speed_m_s)
+            .unwrap_or(0.0)
     }
 
     pub fn point_of_sail(&self) -> String {
-        self.demo.view().point_of_sail.label().to_owned()
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.point_of_sail.label().to_owned())
+            .unwrap_or_else(|| "waiting".to_owned())
     }
+
+    pub fn status(&self) -> String {
+        match self.connection_status.get() {
+            ConnectionStatus::Connecting => "Connecting to authoritative server…".to_owned(),
+            ConnectionStatus::Connected => self
+                .client
+                .borrow()
+                .player_id()
+                .map(|player_id| format!("Authoritative server · {player_id}"))
+                .unwrap_or_else(|| "Connected · waiting for identity…".to_owned()),
+            ConnectionStatus::Error => "Server connection failed".to_owned(),
+            ConnectionStatus::Closed => "Server connection closed".to_owned(),
+        }
+    }
+}
+
+fn server_url() -> Result<String, JsValue> {
+    let location = web_sys::window()
+        .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?
+        .location();
+    let scheme = if location.protocol()? == "https:" {
+        "wss"
+    } else {
+        "ws"
+    };
+    Ok(format!("{scheme}://{}:8765", location.hostname()?))
 }
 
 fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
@@ -288,7 +417,12 @@ fn scene_vertices(scenes: &[BoatScene], camera_m: Vector, width: u32, height: u3
         );
     }
 
-    for (scene, hull_color) in scenes.iter().zip([[0.42, 0.82, 0.69], [0.91, 0.42, 0.32]]) {
+    for (index, scene) in scenes.iter().enumerate() {
+        let hull_color = if index == 0 {
+            [0.42, 0.82, 0.69]
+        } else {
+            [0.91, 0.42, 0.32]
+        };
         for [first, second, third] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
             for point in [
                 scene.hull_m[first],

@@ -82,8 +82,9 @@ documentation, and decision classification.
 - `crates/protocol` contains typed compact-JSON messages shared by Rust runtimes.
 - `crates/server` contains the native async WebSocket server executable and
   connection lifecycle.
-- `crates/browser` owns the browser demo, world-to-scene conversion, and WebGPU
-  renderer.
+- `crates/browser` owns Rust/WASM networking, replicated browser state,
+  world-to-scene conversion, and the WebGPU renderer. Its retained local demo is a
+  native simulation test harness.
 - `web` contains the Vite page shell and TypeScript frame scheduling.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
@@ -110,16 +111,16 @@ respect to each candidate surface. The controlled-advance API composes this poli
 with one synchronous physics tick and reports the chosen targets and active yaw
 rate. The shared simulation inserts multiple articulated boats into one Rapier
 world, applies their loads before a single world step, and reports active hull
-contacts with resolved impulse magnitudes. The browser demo advances the same
-shared simulation in fixed ticks for one controlled boat and one passive practice
-boat, then converts both boats' hull, boom, and rudder motion to WebGPU vertices.
-TypeScript samples `W/S`, `A/D`, and the first connected gamepad; Rust converts
-the gamepad's world-relative left-stick vector into local motion intent without
-adding a deadzone. Rust also derives the small sailing view used by the TypeScript
-DOM HUD; the web shell receives speed, apparent wind, and point-of-sail feedback
-rather than raw simulation state. Tests target physical invariants, mirrored
-controlled maneuvers, and accepted gameplay behavior rather than exact Pymunk
-trajectories.
+contacts with resolved impulse magnitudes. The retained local browser harness
+advances the same shared simulation for one controlled boat and one passive
+practice boat. The current browser entry point instead converts authoritative
+snapshot motion to WebGPU vertices. TypeScript samples `W/S`, `A/D`, and the first
+connected gamepad; Rust converts the gamepad's world-relative left-stick vector
+into local motion intent without adding a deadzone. Rust owns the WebSocket,
+latest-snapshot mailbox, compact-JSON codec, fixed-tick input sequencing, and the
+small sailing view used by the TypeScript DOM HUD. Tests target physical
+invariants, replicated-state behavior, mirrored controlled maneuvers, and accepted
+gameplay behavior rather than exact Pymunk trajectories.
 
 Runtime adapters should use asynchronous I/O wherever work can suspend. Keep the
 fixed-step simulation synchronous: callers gather available inputs before a tick
@@ -225,6 +226,12 @@ checks. Boats within 8 m include intent for interaction prediction, boats throug
 24 m include visual motion, and farther boats are omitted without a tombstone.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through input, motion, spatial interest, and disconnect cleanup.
+The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` for
+an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
+termination in front of the server. It keeps only the latest pending snapshot
+between frames, retains omitted boats as stale awareness state, removes tombstoned
+boats, and sends sequenced input at 60 Hz. It currently renders authoritative
+state without prediction or reconciliation.
 
 ## Model tuning
 

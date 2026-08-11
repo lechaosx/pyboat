@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
     HullParameters, MotionIntent, SharedSimulation, apparent_flow, computed_maximum_yaw_rate_rad_s,
@@ -43,6 +46,184 @@ pub struct DemoView {
     pub speed_m_s: f32,
     pub apparent_wind_speed_m_s: f32,
     pub point_of_sail: PointOfSail,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplicatedBoat {
+    pub snapshot: BoatSnapshot,
+    pub stale: bool,
+}
+
+pub struct MultiplayerClient {
+    player_id: Option<String>,
+    boats: HashMap<String, ReplicatedBoat>,
+    tick: Option<u64>,
+    motion_intent: MotionIntent,
+    next_input_sequence: i64,
+    input_accumulator_seconds: f32,
+}
+
+impl Default for MultiplayerClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MultiplayerClient {
+    pub fn new() -> Self {
+        Self {
+            player_id: None,
+            boats: HashMap::new(),
+            tick: None,
+            motion_intent: MotionIntent::default(),
+            next_input_sequence: 1,
+            input_accumulator_seconds: 0.0,
+        }
+    }
+
+    pub fn accept(&mut self, message: ServerMessage) {
+        match message {
+            ServerMessage::Welcome { player_id } => self.player_id = Some(player_id),
+            ServerMessage::Snapshot {
+                tick,
+                boats,
+                removed_player_ids,
+            } => {
+                if self.tick.is_some_and(|current| tick < current) {
+                    return;
+                }
+                for boat in self.boats.values_mut() {
+                    boat.stale = true;
+                }
+                for player_id in removed_player_ids {
+                    self.boats.remove(&player_id);
+                }
+                for snapshot in boats {
+                    self.boats.insert(
+                        snapshot.id.clone(),
+                        ReplicatedBoat {
+                            snapshot,
+                            stale: false,
+                        },
+                    );
+                }
+                self.tick = Some(tick);
+            }
+        }
+    }
+
+    pub fn player_id(&self) -> Option<&str> {
+        self.player_id.as_deref()
+    }
+
+    pub fn tick(&self) -> Option<u64> {
+        self.tick
+    }
+
+    pub fn boat(&self, player_id: &str) -> Option<&ReplicatedBoat> {
+        self.boats.get(player_id)
+    }
+
+    pub fn set_motion_intent(&mut self, forward: f32, turn: f32) {
+        self.motion_intent = MotionIntent {
+            forward: forward.clamp(-1.0, 1.0),
+            turn: turn.clamp(-1.0, 1.0),
+        };
+    }
+
+    pub fn set_player_input(
+        &mut self,
+        keyboard_forward: f32,
+        keyboard_turn: f32,
+        gamepad_x: f32,
+        gamepad_y: f32,
+    ) {
+        self.set_motion_intent(keyboard_forward, keyboard_turn);
+        let world_motion = Vector::new(gamepad_x, gamepad_y);
+        let length = world_motion.length();
+        let magnitude = length.min(1.0);
+        if magnitude == 0.0 {
+            return;
+        }
+        let Some(local_motion) = self.local_motion() else {
+            return;
+        };
+
+        let local_direction =
+            Rotation::new(-local_motion.angle_rad).transform_vector(world_motion / length);
+        let square_scale = local_direction.x.abs().max(local_direction.y.abs());
+        self.motion_intent = MotionIntent {
+            forward: local_direction.x / square_scale * magnitude,
+            turn: local_direction.y / square_scale * magnitude,
+        };
+    }
+
+    pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
+        if self.player_id.is_none() {
+            self.input_accumulator_seconds = 0.0;
+            return Vec::new();
+        }
+        self.input_accumulator_seconds += elapsed_seconds.min(0.25);
+        let mut inputs = Vec::new();
+        while self.input_accumulator_seconds >= DT_SECONDS {
+            inputs.push(ClientMessage::Input {
+                sequence: self.next_input_sequence,
+                forward: self.motion_intent.forward,
+                turn: self.motion_intent.turn,
+            });
+            self.next_input_sequence += 1;
+            self.input_accumulator_seconds -= DT_SECONDS;
+        }
+        inputs
+    }
+
+    pub fn camera_m(&self) -> Option<Vector> {
+        Some(self.local_motion()?.position_m)
+    }
+
+    pub fn view(&self) -> Option<DemoView> {
+        let motion = self.local_motion()?;
+        let environment = demo_environment();
+        let upwind_angle_rad = environment
+            .true_wind_velocity_m_s
+            .y
+            .atan2(environment.true_wind_velocity_m_s.x)
+            + std::f32::consts::PI;
+        Some(DemoView {
+            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length(),
+            apparent_wind_speed_m_s: apparent_flow(
+                environment.true_wind_velocity_m_s,
+                motion.velocity_m_s,
+            )
+            .length(),
+            point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
+        })
+    }
+
+    pub fn scenes(&self) -> Vec<BoatScene> {
+        let mut boats = self
+            .boats
+            .values()
+            .filter(|boat| !boat.stale)
+            .collect::<Vec<_>>();
+        boats.sort_by(|first, second| {
+            let first_is_local = self.player_id() == Some(first.snapshot.id.as_str());
+            let second_is_local = self.player_id() == Some(second.snapshot.id.as_str());
+            second_is_local
+                .cmp(&first_is_local)
+                .then_with(|| first.snapshot.id.cmp(&second.snapshot.id))
+        });
+        boats
+            .into_iter()
+            .map(|boat| boat_scene(demo_parameters(), snapshot_motion(&boat.snapshot)))
+            .collect()
+    }
+
+    fn local_motion(&self) -> Option<BoatMotion> {
+        let player_id = self.player_id.as_ref()?;
+        let boat = self.boats.get(player_id)?;
+        Some(snapshot_motion(&boat.snapshot))
+    }
 }
 
 pub struct Demo {
@@ -269,5 +450,18 @@ fn demo_environment() -> Environment {
     Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 0.0),
         true_water_velocity_m_s: Vector::ZERO,
+    }
+}
+
+fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
+    BoatMotion {
+        position_m: Vector::new(snapshot.x, snapshot.y),
+        velocity_m_s: Vector::new(snapshot.vx, snapshot.vy),
+        angle_rad: snapshot.angle,
+        angular_velocity_rad_s: snapshot.angular_velocity,
+        sail_angle_rad: snapshot.sail,
+        sail_angular_velocity_rad_s: snapshot.sail_angular_velocity,
+        rudder_angle_rad: snapshot.rudder,
+        rudder_angular_velocity_rad_s: snapshot.rudder_angular_velocity,
     }
 }
