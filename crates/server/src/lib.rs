@@ -26,6 +26,7 @@ pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const VISIBILITY_RADIUS_M: f32 = 24.0;
+const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 
 enum ConnectionEvent {
     Connected {
@@ -118,6 +119,9 @@ impl GameMatch {
         };
         if sequence <= player.last_received_input {
             return;
+        }
+        if player.pending_inputs.len() == MAX_PENDING_INPUT_COMMANDS {
+            player.pending_inputs.pop_front();
         }
         player.pending_inputs.push_back((sequence, intent));
         player.last_received_input = sequence;

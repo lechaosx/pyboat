@@ -207,3 +207,44 @@ async fn snapshots_are_complete_current_interest_sets() {
     }
     server.abort();
 }
+
+#[tokio::test]
+async fn input_backlog_keeps_only_the_newest_quarter_second() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(pyboat_server::serve(listener));
+    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    client.next().await.unwrap().unwrap();
+    let (initial_tick, _, _) = next_snapshot(&mut client).await;
+
+    for sequence in 1..=100 {
+        let input = encode_client_message(&ClientMessage::Input {
+            sequence,
+            forward: if sequence == 100 { -1.0 } else { 1.0 },
+            turn: 0.0,
+        })
+        .unwrap();
+        client.send(Message::Text(input.into())).await.unwrap();
+    }
+
+    let (acknowledged_tick, acknowledged) = timeout(Duration::from_secs(3), async {
+        loop {
+            let (tick, boats, _) = next_snapshot(&mut client).await;
+            let local = boats
+                .into_iter()
+                .find(|boat| boat.id == "player-1")
+                .unwrap();
+            if local.acknowledged_input == Some(100) {
+                break (tick, local);
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(acknowledged_tick <= initial_tick + 30);
+    assert_eq!(acknowledged.forward, Some(-1.0));
+
+    client.close(None).await.unwrap();
+    server.abort();
+}

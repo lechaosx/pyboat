@@ -187,6 +187,9 @@ decisions.
   consumes one queued command per simulation tick, and the client restores the
   acknowledged state before replaying each unacknowledged command for one fixed
   timestep.
+- **[Implicit]** Each Rust server player retains at most the newest 15 pending
+  commands, matching 250 ms at 60 Hz. Overflow discards the oldest unapplied
+  commands so a burst cannot create an unbounded stale-control backlog.
 - **[Implicit]** Replay is capped at 250 ms to bound work and runaway prediction.
 - **[Implicit]** The client recreates the local boat and boats within 8 m in one
   Pymunk prediction space. The local boat uses unacknowledged commands; nearby
@@ -256,8 +259,8 @@ decisions.
   connections in addition to deterministic simulation and protocol tests.
 - **[Implicit]** Rust loopback tests open real WebSocket connections against an
   ephemeral local port and verify concurrent connection identity, sequenced input
-  acknowledgement, authoritative motion, spatial interest payloads, and disconnect
-  cleanup.
+  acknowledgement, bounded input backlog, authoritative motion, spatial interest
+  payloads, and disconnect cleanup.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.
