@@ -108,27 +108,64 @@ fn multiplayer_client_sends_viewport_only_when_connected_and_changed() {
 }
 
 #[test]
-fn multiplayer_client_freezes_when_the_connection_ends() {
+fn multiplayer_client_keeps_cruising_and_marks_remote_boats_dead_after_disconnect() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
     });
     let mut local = boat("player-1", 0.0);
+    local.y = 0.0;
+    local.vx = 4.0;
+    local.vy = 0.0;
+    local.angle = 0.0;
+    local.acknowledged_input = Some(0);
+    let mut remote = boat("player-2", 6.0);
+    remote.y = 0.0;
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local, remote],
+        removed_player_ids: Vec::new(),
+    });
+    let connected_position_m = client.camera_m().unwrap();
+
+    client.disconnect();
+    client.set_motion_intent(1.0, 1.0);
+
+    assert!(client.take_inputs(0.25).is_empty());
+    assert!(client.camera_m().unwrap().x > connected_position_m.x);
+    assert_eq!(client.player_id(), Some("player-1"));
+    assert!(!client.boat("player-1").unwrap().snapshot.wreck);
+    assert_eq!(client.boat("player-2").unwrap().snapshot.health, 0.0);
+    assert!(client.boat("player-2").unwrap().snapshot.wreck);
+    assert!(client.scenes()[1].wreck);
+}
+
+#[test]
+fn destroyed_player_spectates_their_passive_wreck_without_sending_input() {
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+    });
+    let mut local = boat("player-1", 0.0);
+    local.y = 0.0;
+    local.vx = 2.0;
+    local.vy = 0.0;
+    local.angle = 0.0;
+    local.health = 0.0;
+    local.wreck = true;
     local.acknowledged_input = Some(0);
     client.accept(ServerMessage::Snapshot {
         tick: 1,
         boats: vec![local],
         removed_player_ids: Vec::new(),
     });
+    let initial_position_m = client.camera_m().unwrap();
     client.set_motion_intent(1.0, 1.0);
-    client.take_inputs(DT_SECONDS);
-    let final_position_m = client.camera_m().unwrap();
 
-    client.disconnect();
-
-    assert!(client.take_inputs(1.0).is_empty());
-    assert_eq!(client.camera_m(), Some(final_position_m));
-    assert_eq!(client.player_id(), Some("player-1"));
+    assert!(client.take_inputs(0.25).is_empty());
+    assert!(client.camera_m().unwrap().x > initial_position_m.x);
+    assert_eq!(client.health(), Some(0.0));
+    assert!(client.scenes()[0].wreck);
 }
 
 #[test]

@@ -268,17 +268,18 @@ termination in front of the server. It keeps only the latest pending snapshot
 between frames, replaces its replicated interest set, sends its viewport radius
 after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 Hz.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
-connection error or close, the browser stops emitting input and freezes the last
-replicated scene; the connection status shows a clean close reason when one is
-available. The client rebuilds one nearby Rapier world from each authoritative
-snapshot, replays up to 250 ms of unacknowledged local commands, and advances it
-with newly emitted commands. It retains only those 15 replayable commands, so a
-snapshot stall cannot grow prediction history without bound. Boats outside that
-world extrapolate for at most 250 ms. A cubic 100 ms render correction preserves
-pose and velocity across snapshots and physics-bubble transitions while physical
-state changes immediately. Health and recent-hit state drive the browser HUD and
-hull feedback. Wrecks use passive nearby prediction, and the server closes the
-destroyed owner's connection normally while retaining the wreck for observers.
+connection error or close, the browser stops emitting network input, marks remote
+boats as wrecks, and continues fixed-tick local prediction; the connection status
+shows a clean close reason when one is available. The client rebuilds one nearby
+Rapier world from each authoritative snapshot, replays up to 250 ms of
+unacknowledged local commands, and advances it with newly emitted commands. It
+retains only those 15 replayable commands, so a snapshot stall cannot grow
+prediction history without bound. Boats outside that world extrapolate for at
+most 250 ms. A cubic 100 ms render correction preserves pose and velocity across
+snapshots and physics-bubble transitions while physical state changes immediately.
+Health and recent-hit state drive the browser HUD and hull feedback. Wrecks use
+passive nearby prediction. A destroyed owner remains connected, emits no more
+input, and continues receiving snapshots centered on the wreck.
 
 ## Model tuning
 

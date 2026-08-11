@@ -178,8 +178,20 @@ impl MultiplayerClient {
     pub fn disconnect(&mut self) {
         self.connection_active = false;
         self.input_history.clear();
-        self.input_accumulator_seconds = 0.0;
         self.sent_viewport_radius_m = None;
+        let player_id = self.player_id.clone();
+        for (boat_id, boat) in &mut self.boats {
+            if Some(boat_id) == player_id.as_ref() {
+                continue;
+            }
+            boat.snapshot.health = 0.0;
+            boat.snapshot.wreck = true;
+        }
+        for (boat_id, boat) in &mut self.predicted_boats {
+            if Some(boat_id) != player_id.as_ref() {
+                boat.wreck = true;
+            }
+        }
     }
 
     pub fn tick(&self) -> Option<u64> {
@@ -234,29 +246,32 @@ impl MultiplayerClient {
 
     pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
         let elapsed_seconds = elapsed_seconds.max(0.0);
-        if !self.connection_active {
-            self.input_accumulator_seconds = 0.0;
-            return Vec::new();
-        }
         self.time_seconds += elapsed_seconds;
         self.input_accumulator_seconds += elapsed_seconds.min(MAXIMUM_PREDICTION_SECONDS);
+        let local_wreck = self
+            .player_id
+            .as_ref()
+            .and_then(|player_id| self.boats.get(player_id))
+            .is_some_and(|boat| boat.snapshot.wreck);
         let mut inputs = Vec::new();
         while self.input_accumulator_seconds >= DT_SECONDS {
-            let command = InputCommand {
-                sequence: self.next_input_sequence,
-                intent: self.motion_intent,
-            };
-            if self.input_history.len() == MAXIMUM_REPLAY_COMMANDS {
-                self.input_history.remove(0);
+            if self.connection_active && !local_wreck {
+                let command = InputCommand {
+                    sequence: self.next_input_sequence,
+                    intent: self.motion_intent,
+                };
+                if self.input_history.len() == MAXIMUM_REPLAY_COMMANDS {
+                    self.input_history.remove(0);
+                }
+                self.input_history.push(command);
+                inputs.push(ClientMessage::Input {
+                    sequence: command.sequence,
+                    forward: command.intent.forward,
+                    turn: command.intent.turn,
+                });
+                self.next_input_sequence += 1;
             }
-            self.input_history.push(command);
-            inputs.push(ClientMessage::Input {
-                sequence: command.sequence,
-                forward: command.intent.forward,
-                turn: command.intent.turn,
-            });
-            self.next_input_sequence += 1;
-            self.advance_prediction(command.intent);
+            self.advance_prediction(self.motion_intent);
             self.input_accumulator_seconds -= DT_SECONDS;
         }
         inputs

@@ -259,13 +259,6 @@ impl GameMatch {
         self.active_hull_contacts = active_hull_contacts;
     }
 
-    fn is_wreck(&self, player_id: &str) -> bool {
-        self.players
-            .iter()
-            .find(|player| player.id == player_id)
-            .is_some_and(|player| player.wreck)
-    }
-
     fn visible_boats(&self, player_id: &str) -> Vec<usize> {
         let viewer = self
             .players
@@ -415,13 +408,6 @@ where
             _ = ticker.tick() => {
                 game_match.advance();
                 for (player_id, outbound) in &connections {
-                    if game_match.is_wreck(player_id) {
-                        outbound.send_replace(Some(Message::Close(Some(CloseFrame {
-                            code: CloseCode::Normal,
-                            reason: "boat destroyed".into(),
-                        }))));
-                        continue;
-                    }
                     let visible_boats = game_match.visible_boats(player_id);
                     let snapshot = encode_server_message(
                         &game_match.snapshot_for(player_id, &visible_boats),
@@ -570,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn destroyed_boat_becomes_a_persistent_controllerless_wreck() {
+    fn destroyed_boat_becomes_a_persistent_spectated_wreck() {
         let mut game_match = GameMatch::new();
         game_match.add_player("player-1".to_owned(), 1);
         game_match.set_input(
@@ -603,6 +589,14 @@ mod tests {
         };
         assert_eq!(boats[0].health, 0.0);
         assert_eq!(boats[0].last_hit_tick, Some(0));
+        assert!(boats[0].wreck);
+
+        game_match.advance();
+        let ServerMessage::Snapshot { boats, .. } = game_match.snapshot_for("player-1", &[0])
+        else {
+            unreachable!();
+        };
+        assert_eq!(boats[0].health, 0.0);
         assert!(boats[0].wreck);
     }
 }

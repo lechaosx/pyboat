@@ -53,8 +53,8 @@ The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
 connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes the same compact-JSON sequenced input as the Python
 prototype, applies location-dependent ramming damage, preserves destroyed boats as
-physical wrecks, and publishes real boat snapshots at 60 Hz. Snapshots include nearby
-interaction state through 8 m and visual motion through each client's requested
+physical wrecks, and publishes real boat snapshots at 60 Hz. Snapshots include
+nearby interaction state through 8 m and visual motion through each client's requested
 viewport radius, bounded to 8–24 m and defaulting to 24 m. Pass a different listen
 address as the final argument, for example
 `cargo run -p pyboat-server -- 0.0.0.0:9000`.
@@ -82,8 +82,9 @@ boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn
 The first connected gamepad uses its left stick for world-relative movement. The
 HUD reports health, speed through water, apparent-wind speed, and point of sail.
 Recently hit boats and wrecks receive distinct hull colors. When the local boat is
-destroyed, the server closes its connection with a destruction notice while other
-players continue to see the wreck.
+destroyed, the player continues spectating the drifting wreck. If the server
+connection ends, a living local boat remains controllable through local prediction
+while remote boats appear and behave as wrecks.
 
 ## Run the standalone game
 
@@ -125,6 +126,10 @@ Multiplayer uses `W/S` for forward or reverse power and `A/D` to turn. Nearby
 players are visible directly. Collisions cause damage based on the impact and where
 the hull was struck. When the local boat is destroyed, its client closes; the other
 players continue to see the drifting wreck.
+
+This retained Python reference still exits on death or server disconnect. The Rust
+browser intentionally differs during migration by continuing wreck spectating and
+disconnected local cruising.
 
 The server listens on `127.0.0.1:8765` by default. Use `server --host` and
 `server --port` to change the listener, and `client --uri` to connect clients to

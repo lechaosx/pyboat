@@ -21,6 +21,12 @@ decisions.
   renderer.
 - **[Implicit]** The current Python implementation is the behavioral reference
   until another client passes equivalent networking and physics tests.
+- **[Explicit]** Once the Rust implementation surpasses the Python version, the
+  retained Python implementation and its documentation references will be
+  removed.
+- **[Implicit]** During migration, the Python client retains its historical
+  death/disconnect exit behavior while the Rust browser implements continued
+  wreck spectating and disconnected cruising.
 - **[Implicit]** Migration proceeds behavior by behavior through a
   runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
   a Rust test against the Python reference before browser or native runtime
@@ -217,9 +223,10 @@ decisions.
 - **[Implicit]** The client retains and replays only the newest 15 unacknowledged
   commands, capping prediction history at 250 ms to bound memory, replay work, and
   runaway prediction during a snapshot stall.
-- **[Implicit]** A browser connection error or close stops input generation and
-  prediction while retaining the last replicated scene. A clean close reason is
-  presented through the browser's connection status.
+- **[Implicit]** A browser connection error or close stops network input emission
+  but continues fixed-tick local prediction from the last replicated scene. The
+  local boat remains controllable when alive; remote boats become passive wrecks
+  with zero health. A clean close reason remains visible in the connection status.
 - **[Implicit]** The client recreates the local boat and boats within 8 m in one
   Rapier prediction space. The local boat uses unacknowledged commands; nearby
   boats hold their latest server-reported command.
@@ -275,8 +282,8 @@ decisions.
   suppress a later collision.
 - **[Implicit]** Snapshots replicate health and the most recent damage tick for
   client status and brief hit feedback.
-- **[Explicit]** Reaching zero health causes the destroyed boat owner's client to
-  close normally.
+- **[Explicit]** Reaching zero health keeps the destroyed boat owner connected as
+  a spectator centered on that wreck.
 - **[Explicit]** A destroyed boat remains in authoritative and nearby client
   physics as a wreck with hull, sail, rudder, momentum, fluid forces, and
   collisions but no controller.
@@ -284,6 +291,9 @@ decisions.
   hull, and joint forces with zero actuator torque.
 - **[Implicit]** Nearby browser prediction also gives wrecks zero actuator torque,
   preventing stale replicated intent from controlling them.
+- **[Implicit]** A browser spectating its local wreck emits no further input
+  commands while continuing to predict the wreck's passive motion between
+  snapshots.
 
 ## Network testing
 

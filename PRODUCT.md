@@ -61,6 +61,10 @@ This file records intended player experience, scope, and product behavior.
   they enter or leave the nearby physics bubble.
 - **[Explicit]** The browser presents the player with a server-down notice when
   its connection to the authoritative server ends.
+- **[Explicit]** After losing the server connection, a living player's browser
+  continues local cruising and presents every other visible boat as a wreck. If
+  the local boat is already a wreck, the resulting scene presents every boat as
+  dead.
 - **[Implicit]** The browser HUD displays speed through water, apparent-wind
   speed, and point of sail from predicted and reconciled local state as immediate
   sailing feedback.
@@ -89,8 +93,8 @@ This file records intended player experience, scope, and product behavior.
   at or below 100 N·s, converts stronger impulse at 8 N·s per damage point, and
   applies strength multipliers of 2× at the bow, 1× amidships, and 0.6× at the
   stern.
-- **[Explicit]** When a player's boat is destroyed, that player's client exits
-  instead of respawning.
+- **[Explicit]** When a player's boat is destroyed, that player continues
+  spectating the drifting wreck instead of exiting or respawning.
 - **[Explicit]** Other players continue to see the destroyed boat as a wreck. The
   wreck follows boat physics and collisions but has no controller.
 
