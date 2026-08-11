@@ -58,6 +58,8 @@ pub struct BoatParameters {
     pub max_rudder_actuator_torque_n_m: f32,
     pub sail_bearing_damping_n_m_s_rad: f32,
     pub rudder_bearing_damping_n_m_s_rad: f32,
+    pub draft_m: f32,
+    pub grounding_resistance_n_s_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,10 +140,21 @@ pub struct ControlTelemetry {
     pub maximum_yaw_rate_rad_s: Option<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Environment {
     pub true_wind_velocity_m_s: Vector,
     pub true_water_velocity_m_s: Vector,
+    pub water_depth_m: f32,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            true_wind_velocity_m_s: Vector::ZERO,
+            true_water_velocity_m_s: Vector::ZERO,
+            water_depth_m: f32::INFINITY,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,6 +288,16 @@ pub fn hull_resistance_force(
         local_flow_m_s.y * local_flow_m_s.y.abs() * pressure_area * lateral_coefficient,
     );
     rotated(local_force_n, hull_angle_rad)
+}
+
+pub fn grounding_resistance_force(
+    point_velocity_m_s: Vector,
+    water_depth_m: f32,
+    draft_m: f32,
+    resistance_n_s_m: f32,
+) -> Vector {
+    let lost_clearance_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
+    -point_velocity_m_s * resistance_n_s_m * lost_clearance_fraction
 }
 
 fn wrapped_angle(angle_rad: f32) -> f32 {
@@ -1005,7 +1028,17 @@ fn apply_boat_forces(
             parameters.hull_drag_coefficient,
             parameters.hull_lateral_drag_coefficient,
         );
-        world.bodies[boat.hull.body].add_force_at_point(force_n, world_position_m, true);
+        let grounding_force_n = grounding_resistance_force(
+            hull.velocity_at_point(world_position_m),
+            environment.water_depth_m,
+            parameters.draft_m,
+            parameters.grounding_resistance_n_s_m / 2.0,
+        );
+        world.bodies[boat.hull.body].add_force_at_point(
+            force_n + grounding_force_n,
+            world_position_m,
+            true,
+        );
     }
 
     world.bodies[boat.sail].add_torque(actuator_torques.sail_n_m, true);

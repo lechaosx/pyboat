@@ -54,11 +54,11 @@ connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes compact-JSON sequenced input, applies location-dependent
 ramming damage, preserves destroyed boats as physical wrecks, and publishes real
 boat snapshots at 60 Hz. New boats spawn at a random bearing just beyond the
-existing fleet and point downwind. Each server run uses one match seed for wind
-that changes smoothly across the world and over time, can blow in any direction,
-and includes gusts. Wind speed follows a `k = 2`, `λ = 9 m/s` Weibull
-distribution, so near-calms are possible and strong winds become progressively
-rarer.
+existing fleet in water at least 1.5 m deep and point downwind. Each server run
+uses one match seed for wind that changes smoothly across the world and over time,
+can blow in any direction, and includes gusts. Wind speed follows a `k = 2`,
+`λ = 9 m/s` Weibull distribution, so near-calms are possible and strong winds
+become progressively rarer.
 Snapshots include nearby interaction state through 8 m and visual motion through
 each client's requested viewport radius, bounded to 8–24 m and defaulting to 24 m.
 Pass a different listen address as the final argument, for example
@@ -89,8 +89,10 @@ browser predicts the server's seeded wind locally. The HUD reports health, speed
 through water, apparent-wind speed, and point of sail using the wind at the local
 boat. Cyan arrows across the game world show the local wind field's direction and
 relative speed. The same match seed produces a static island and seabed elevation
-field, rendered as deep water, open water, shallows, beach, cliffs, and inland
-terrain. Terrain does not affect boat motion yet.
+field. Water color changes continuously with depth before a distinct shoreline
+transition into beach, cliffs, and inland terrain. Boats slow progressively when
+their 0.6 m draft loses bottom clearance and become effectively grounded on
+exposed terrain.
 
 Recently hit boats and wrecks receive distinct hull colors. When the local boat is
 destroyed, the player continues spectating the drifting wreck. If the server

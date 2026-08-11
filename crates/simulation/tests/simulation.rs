@@ -50,6 +50,8 @@ fn reference_parameters() -> BoatParameters {
         max_rudder_angle_rad: PI / 6.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
+        draft_m: 0.6,
+        grounding_resistance_n_s_m: 6_000.0,
     }
 }
 
@@ -201,10 +203,12 @@ fn shared_simulation_applies_a_distinct_environment_to_each_boat() {
             Environment {
                 true_wind_velocity_m_s: Vector::new(6.0, 0.0),
                 true_water_velocity_m_s: Vector::ZERO,
+                ..Default::default()
             },
             Environment {
                 true_wind_velocity_m_s: Vector::new(-6.0, 0.0),
                 true_water_velocity_m_s: Vector::ZERO,
+                ..Default::default()
             },
         ],
         &[ActuatorTorques::default(), ActuatorTorques::default()],
@@ -212,6 +216,52 @@ fn shared_simulation_applies_a_distinct_environment_to_each_boat() {
 
     assert!(simulation.motion(first_boat).velocity_m_s.x > 0.0);
     assert!(simulation.motion(second_boat).velocity_m_s.x < 0.0);
+}
+
+#[test]
+fn lost_bottom_clearance_slows_the_boat_and_exposed_ground_stops_it() {
+    fn speed_after_tick(water_depth_m: f32) -> f32 {
+        let parameters = vacuum_parameters();
+        let mut initial = motion();
+        initial.velocity_m_s = Vector::new(2.0, 0.0);
+        initial.angle_rad = 0.0;
+        let mut simulation = Simulation::new(parameters, initial);
+        simulation.advance(
+            Environment {
+                water_depth_m,
+                ..Default::default()
+            },
+            ActuatorTorques::default(),
+        );
+        simulation.motion().velocity_m_s.length()
+    }
+
+    let deep_speed_m_s = speed_after_tick(1.5);
+    let shallow_speed_m_s = speed_after_tick(0.3);
+    let grounded_speed_m_s = speed_after_tick(0.0);
+
+    assert_close(deep_speed_m_s, 2.0);
+    assert!(grounded_speed_m_s < shallow_speed_m_s);
+    assert!(shallow_speed_m_s < deep_speed_m_s);
+
+    let parameters = vacuum_parameters();
+    let mut initial = motion();
+    initial.velocity_m_s = Vector::new(2.0, 0.0);
+    initial.angle_rad = 0.0;
+    initial.angular_velocity_rad_s = 1.0;
+    let mut grounded = Simulation::new(parameters, initial);
+    for _ in 0..120 {
+        grounded.advance(
+            Environment {
+                water_depth_m: 0.0,
+                ..Default::default()
+            },
+            ActuatorTorques::default(),
+        );
+    }
+
+    assert!(grounded.motion().velocity_m_s.length() < 0.01);
+    assert!(grounded.motion().angular_velocity_rad_s.abs() < 0.01);
 }
 
 #[test]
@@ -792,6 +842,7 @@ fn surface_control_input_samples_quasi_static_sail_and_rudder_effects() {
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 1.0),
         true_water_velocity_m_s: Vector::new(0.5, -0.25),
+        ..Default::default()
     };
 
     let input = surface_control_input(parameters, current, environment, 30, 10.0_f32.to_radians());
@@ -986,6 +1037,7 @@ fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 1.0),
         true_water_velocity_m_s: Vector::new(0.5, -0.25),
+        ..Default::default()
     };
     let settings = ControlSettings {
         angle_resolution_deg: 30,
@@ -1057,6 +1109,7 @@ fn mirrored_computed_yaw_rate_commands_produce_mirrored_motion() {
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 0.0),
         true_water_velocity_m_s: Vector::ZERO,
+        ..Default::default()
     };
     let settings = ControlSettings {
         angle_resolution_deg: 1,

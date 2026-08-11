@@ -25,16 +25,22 @@ fn vertex(input: VertexInput) -> VertexOutput {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain > 0.5 {
-        var terrain_color = vec3<f32>(0.025, 0.11, 0.15);
-        if input.elevation_m >= -4.0 {
-            terrain_color = vec3<f32>(0.04, 0.19, 0.25);
+        if input.elevation_m < 0.0 {
+            let depth_m = -input.elevation_m;
+            let shallow_color = vec3<f32>(0.12, 0.42, 0.5);
+            let open_water_color = vec3<f32>(0.04, 0.19, 0.25);
+            let deep_water_color = vec3<f32>(0.025, 0.11, 0.15);
+            let water_color = mix(
+                shallow_color,
+                open_water_color,
+                smoothstep(0.0, 1.0, depth_m),
+            );
+            return vec4<f32>(
+                mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m)),
+                1.0,
+            );
         }
-        if input.elevation_m >= -1.0 {
-            terrain_color = vec3<f32>(0.12, 0.42, 0.5);
-        }
-        if input.elevation_m >= 0.0 {
-            terrain_color = vec3<f32>(0.76, 0.67, 0.43);
-        }
+        var terrain_color = vec3<f32>(0.76, 0.67, 0.43);
         if input.elevation_m >= 0.4 {
             terrain_color = vec3<f32>(0.35, 0.31, 0.25);
         }

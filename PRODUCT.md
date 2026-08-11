@@ -40,14 +40,21 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
   slows a dragging boat proportionally, beaches can ground it, and rocks can
   damage it.
+- **[Explicit]** New boats spawn with enough water depth to avoid beginning
+  grounded.
 - **[Explicit]** Weather, currents, waves, wind, and storms should be procedural
   but deterministic from a match seed across both space and time.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
-- **[Implicit]** The browser's first terrain slice renders a static seeded
-  elevation field as deep water, open water, shallows, beach, cliff, and inland
-  bands. Boat interaction with that terrain remains for a later slice.
+- **[Explicit]** The browser renders water depth continuously, with a distinct
+  transition at the shoreline.
+- **[Implicit]** The browser renders its static seeded elevation field with a
+  continuous shallow-to-deep water gradient and discrete beach, cliff, and inland
+  bands.
+- **[Implicit]** The current dinghy has a 0.6 m effective draft. Lost bottom
+  clearance adds proportionally increasing resistance, and exposed terrain
+  strongly resists movement. Spawns require at least 1.5 m of water.
 - **[Explicit]** Wind may blow in every direction. At any fixed place and time,
   its speed follows a Weibull distribution with shape `k = 2` and scale
   `λ = 9 m/s`, allowing near-calms and a decaying tail of increasingly rare strong
@@ -129,5 +136,6 @@ This file records intended player experience, scope, and product behavior.
   values remain appropriate after broader playtesting.
 - Concrete rules for progression, matchmaking, ship classes, automatic weapons,
   and the two custom actions.
-- Boat draft, grounding recovery, shallow-drag tuning, and rock placement and
-  damage rules.
+- Whether the current draft, spawn clearance, and grounding-resistance tuning
+  remain appropriate after playtesting.
+- Grounding recovery and rock placement and damage rules.

@@ -2,7 +2,8 @@ use std::f32::consts::PI;
 
 use pyboat_simulation::{
     apparent_flow, flat_plate_drag_coefficient, flat_plate_force, flat_plate_lift_coefficient,
-    hull_resistance_force, streamlined_foil_force, streamlined_lift_coefficient,
+    grounding_resistance_force, hull_resistance_force, streamlined_foil_force,
+    streamlined_lift_coefficient,
 };
 use rapier2d::prelude::{Rotation, Vector};
 
@@ -24,6 +25,22 @@ fn apparent_flow_is_medium_velocity_relative_to_the_surface() {
         apparent_flow(Vector::new(6.0, 1.0), Vector::new(2.0, -1.0)),
         Vector::new(4.0, 2.0)
     );
+}
+
+#[test]
+fn grounding_resistance_increases_proportionally_as_clearance_disappears() {
+    let velocity_m_s = Vector::new(2.0, -1.0);
+    let draft_m = 0.6;
+    let resistance_n_s_m = 6_000.0;
+
+    let deep_force_n = grounding_resistance_force(velocity_m_s, 1.5, draft_m, resistance_n_s_m);
+    let shallow_force_n = grounding_resistance_force(velocity_m_s, 0.3, draft_m, resistance_n_s_m);
+    let grounded_force_n = grounding_resistance_force(velocity_m_s, 0.0, draft_m, resistance_n_s_m);
+
+    assert_eq!(deep_force_n, Vector::ZERO);
+    assert_vector_close(shallow_force_n, grounded_force_n * 0.5);
+    assert_vector_close(grounded_force_n, -velocity_m_s * resistance_n_s_m);
+    assert!(grounded_force_n.dot(velocity_m_s) < 0.0);
 }
 
 #[test]

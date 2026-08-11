@@ -47,6 +47,8 @@ fn reference_parameters() -> BoatParameters {
         max_rudder_actuator_torque_n_m: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
+        draft_m: 0.6,
+        grounding_resistance_n_s_m: 6_000.0,
     }
 }
 

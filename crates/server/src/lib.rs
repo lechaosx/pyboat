@@ -9,6 +9,7 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use pyboat_game::{
     computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
+    procedural_terrain_elevation_m,
 };
 use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
@@ -39,6 +40,8 @@ const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const SPAWN_CLEARANCE_M: f32 = 8.0;
+const MINIMUM_SPAWN_WATER_DEPTH_M: f32 = 1.5;
+const SPAWN_BEARING_CANDIDATES: u32 = 32;
 const BOAT_MAX_HEALTH: f32 = 100.0;
 const SAFE_COLLISION_IMPULSE_N_S: f32 = 100.0;
 const COLLISION_IMPULSE_PER_DAMAGE_N_S: f32 = 8.0;
@@ -88,6 +91,7 @@ struct GameMatch {
     players: Vec<Player>,
     active_hull_contacts: HashSet<(String, String)>,
     match_seed: u64,
+    spawn_origin_m: Option<Vector>,
     tick: u64,
 }
 
@@ -99,26 +103,46 @@ impl GameMatch {
             players: Vec::new(),
             active_hull_contacts: HashSet::new(),
             match_seed,
+            spawn_origin_m: None,
             tick: 0,
         }
     }
 
     fn add_player(&mut self, player_id: String, player_number: u64) {
-        let position_m = if self.players.is_empty() {
-            Vector::ZERO
+        let spawn_origin_m = self.spawn_origin_m.unwrap_or(Vector::ZERO);
+        let fleet_radius_m = (0..self.players.len())
+            .map(|boat| (self.simulation.motion(boat).position_m - spawn_origin_m).length())
+            .fold(0.0_f32, f32::max);
+        let minimum_radius_m = if self.players.is_empty() {
+            0.0
         } else {
-            let fleet_radius_m = (0..self.players.len())
-                .map(|boat| self.simulation.motion(boat).position_m.length())
-                .fold(0.0_f32, f32::max);
-            let mut random_bits =
-                self.match_seed ^ player_number.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            random_bits = (random_bits ^ (random_bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            random_bits = (random_bits ^ (random_bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            random_bits ^= random_bits >> 31;
-            let bearing_rad =
-                std::f32::consts::TAU * ((random_bits >> 40) as f32 / (1_u32 << 24) as f32);
-            Vector::new(bearing_rad.cos(), bearing_rad.sin()) * (fleet_radius_m + SPAWN_CLEARANCE_M)
+            fleet_radius_m + SPAWN_CLEARANCE_M
         };
+        let mut random_bits = self.match_seed ^ player_number.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        random_bits = (random_bits ^ (random_bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        random_bits = (random_bits ^ (random_bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        random_bits ^= random_bits >> 31;
+        let initial_bearing_rad =
+            std::f32::consts::TAU * ((random_bits >> 40) as f32 / (1_u32 << 24) as f32);
+        let mut radius_m = minimum_radius_m;
+        let position_m = 'spawn: loop {
+            for candidate in 0..SPAWN_BEARING_CANDIDATES {
+                let bearing_rad = initial_bearing_rad
+                    + std::f32::consts::TAU * candidate as f32 / SPAWN_BEARING_CANDIDATES as f32;
+                let candidate_m =
+                    spawn_origin_m + Vector::new(bearing_rad.cos(), bearing_rad.sin()) * radius_m;
+                if procedural_terrain_elevation_m(self.match_seed, candidate_m)
+                    <= -MINIMUM_SPAWN_WATER_DEPTH_M
+                {
+                    break 'spawn candidate_m;
+                }
+                if radius_m == 0.0 {
+                    break;
+                }
+            }
+            radius_m = radius_m.max(minimum_radius_m) + SPAWN_CLEARANCE_M;
+        };
+        self.spawn_origin_m.get_or_insert(position_m);
         let wind = procedural_match_environment(self.match_seed, self.tick, position_m)
             .true_wind_velocity_m_s;
         self.simulation.add_boat(
@@ -557,29 +581,45 @@ mod tests {
     }
 
     #[test]
-    fn new_players_spawn_randomly_beyond_the_fleet_and_point_downwind() {
+    fn new_players_spawn_safely_beyond_the_fleet_and_point_downwind() {
         let mut game_match = GameMatch::new(42);
         for player_number in 1..=5 {
+            let spawn_origin_m = game_match.spawn_origin_m.unwrap_or(Vector::ZERO);
             let fleet_radius_m = (0..game_match.players.len())
-                .map(|boat| game_match.simulation.motion(boat).position_m.length())
+                .map(|boat| {
+                    (game_match.simulation.motion(boat).position_m - spawn_origin_m).length()
+                })
                 .fold(0.0_f32, f32::max);
             game_match.add_player(format!("player-{player_number}"), player_number);
 
             let spawned = game_match.simulation.motion(player_number as usize - 1);
-            if player_number == 1 {
-                assert_eq!(spawned.position_m, Vector::ZERO);
-            } else {
-                assert!((spawned.position_m.length() - fleet_radius_m - 8.0).abs() < 1.0e-5);
+            if player_number > 1 {
+                assert!(
+                    (spawned.position_m - game_match.spawn_origin_m.unwrap()).length()
+                        >= fleet_radius_m + SPAWN_CLEARANCE_M
+                );
             }
-            let wind = procedural_match_environment(
+            let environment = procedural_match_environment(
                 game_match.match_seed,
                 game_match.tick,
                 spawned.position_m,
-            )
-            .true_wind_velocity_m_s;
+            );
+            assert!(environment.water_depth_m >= MINIMUM_SPAWN_WATER_DEPTH_M);
             let forward = Vector::new(spawned.angle_rad.cos(), spawned.angle_rad.sin());
-            assert!(forward.dot(wind.normalize()) > 0.999_99);
+            assert!(forward.dot(environment.true_wind_velocity_m_s.normalize()) > 0.999_99);
         }
+
+        let mut repeated_match = GameMatch::new(42);
+        repeated_match.add_player("player-1".to_owned(), 1);
+        repeated_match.add_player("player-2".to_owned(), 2);
+        assert_eq!(
+            game_match.simulation.motion(0).position_m,
+            repeated_match.simulation.motion(0).position_m,
+        );
+        assert_eq!(
+            game_match.simulation.motion(1).position_m,
+            repeated_match.simulation.motion(1).position_m,
+        );
 
         let mut other_match = GameMatch::new(43);
         other_match.add_player("player-1".to_owned(), 1);

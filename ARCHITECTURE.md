@@ -75,10 +75,10 @@ decisions.
   wrecks.
 - **[Explicit]** A newly connected boat spawns on a random bearing just outside
   the radial extent of all other players and points downwind at its spawn point.
-- **[Implicit]** The current unbounded world measures spawn radii from the world
-  origin. The first boat starts at the origin; each later boat uses a deterministic
-  bearing derived from the match seed and player number at 8 m beyond the
-  outermost player, including wrecks.
+- **[Implicit]** The first boat's deterministic safe-water position becomes the
+  match spawn origin. Each later boat checks seed-derived bearings at 8 m beyond
+  the fleet's radial extent around that origin, including wrecks, and expands the
+  search outward only when that ring has no position at least 1.5 m deep.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -140,6 +140,9 @@ decisions.
   world position in `pyboat-game`. Five octaves of smoothly interpolated seeded
   value noise, from 128 m down to 8 m wavelengths, produce continuous island and
   seabed contours without replicated terrain data.
+- **[Implicit]** Each sampled simulation environment includes water depth derived
+  from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
+  preserving terrain-independent harnesses and the accepted deep-water behavior.
 - **[Explicit]** At a fixed position and time, wind direction is uniform over the
   full circle and speed has a Weibull marginal with `k = 2` and `λ = 9 m/s`.
   Smooth spatial and per-tick temporal evolution includes gusts.
@@ -161,10 +164,10 @@ decisions.
   scene converts those local samples to proportional arrows, so field
   visualization adds no network data and arrows enter the viewport continuously.
 - **[Implicit]** The browser samples shared terrain elevation on a world-aligned
-  1 m mesh extending beyond the viewport. Its WebGPU fragment shader classifies
-  interpolated elevation into deep water below -4 m, open water below -1 m,
-  shallows below sea level, beach below 0.4 m, cliff below 2 m, and inland above
-  that threshold.
+  1 m mesh extending beyond the viewport. Its WebGPU fragment shader continuously
+  blends shallow, open, and deep-water colors from sea level through 4 m depth,
+  switches distinctly to beach at sea level, and retains cliff and inland land
+  bands.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.
@@ -208,6 +211,11 @@ decisions.
 - **[Implicit]** Rust hull resistance remains quadratic and anisotropic. Half of
   the configured reference area is sampled at each end of the hull so local
   lateral flow creates a physically opposing yaw torque.
+- **[Implicit]** A boat whose sampled water depth is below its configured draft
+  receives linear seabed resistance at the bow and stern. Resistance scales from
+  zero at full clearance to the configured maximum on exposed terrain, opposing
+  both translation and yaw. The current dinghy uses a 0.6 m draft and a
+  6,000 N·s/m maximum coefficient.
 - **[Implicit]** Each Rust tick replaces the preceding tick's user-applied loads,
   samples apparent wind at the moving sail center of effort, and applies the sail
   force to the articulated sail at that world-space point.

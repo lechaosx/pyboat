@@ -105,8 +105,9 @@ reproduce the same wind. Keep procedural tuning and sampling in this shared crat
 the protocol transfers the seed rather than sampled fields or parameters.
 Static terrain uses five octaves of seeded value noise over 8–128 m wavelengths.
 The shared sampler returns continuous elevation relative to sea level from only
-the match seed and world position, providing the future authoritative grounding
-and shallow-water boundary without adding terrain to the protocol.
+the match seed and world position. Each procedural environment converts elevation
+to water depth for authoritative and predicted grounding without adding terrain
+to the protocol.
 Wind is the sum of 48 divergence-free Fourier modes in weather, local, and gust
 bands. Seeded Box–Muller coefficients create isotropic Gaussian vector components,
 giving speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies
@@ -122,7 +123,11 @@ and applied there each tick. Streamlined underwater loads model attached flow
 through stall and act at the articulated rudder's moving center of effort and the
 hull-mounted keel position. Quadratic anisotropic hull resistance is sampled at
 the bow and stern, which opposes translation and yaw using each point's local
-water-relative velocity. Surface angle targets become critically damped,
+water-relative velocity. When sampled depth falls below the boat's draft, those
+points also receive linear seabed resistance based on their ground-relative
+velocity. The dinghy's 0.6 m draft and 6,000 N·s/m maximum coefficient make
+resistance rise proportionally as clearance disappears and leave exposed boats
+effectively grounded. Surface angle targets become critically damped,
 torque-limited actuator commands; sheet targets suppress outward sail torque.
 Arcade control predicts drive and yaw effects across candidate surface angles,
 then selects auto-sheet or yaw-rate targets before producing actuator torques.
@@ -235,11 +240,11 @@ socket creation must grant loopback permission to run the complete suite.
 
 The Rust server assigns identities, creates one articulated Rapier boat per
 completed WebSocket connection, consumes sequenced arcade input, and publishes
-authoritative state at 60 Hz. The first boat spawns at the world origin. Later
-boats use a match-seeded bearing 8 m beyond the greatest radius of every existing
-boat, including wrecks, and point along the procedural wind sampled at the spawn
-position and current tick. Start the server on the default `127.0.0.1:8765`
-address with:
+authoritative state at 60 Hz. The first deterministic position with at least
+1.5 m of water becomes the match's spawn origin. Later boats search seed-derived
+bearings at least 8 m beyond the fleet radius around that origin and point along
+the procedural wind sampled at the chosen position and current tick. Start the
+server on the default `127.0.0.1:8765` address with:
 
 ```sh
 cargo run -p pyboat-server
@@ -296,8 +301,8 @@ ring beyond the viewport and renders proportional wind arrows behind boats. Keep
 this visualization derived from the shared sampler rather than introducing
 replicated environment fields.
 It samples shared terrain elevation on a world-aligned 1 m mesh beyond the
-viewport. The fragment shader interpolates elevations across the mesh and assigns
-the deep-water, open-water, shallow, beach, cliff, and inland presentation bands.
+viewport. The fragment shader interpolates both elevation and underwater color,
+with a distinct shoreline transition into the beach, cliff, and inland bands.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

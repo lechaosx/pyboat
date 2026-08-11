@@ -19,11 +19,14 @@ fn shared_dinghy_and_environment_preserve_the_accepted_tuning() {
     assert_eq!(parameters.sail_area_m2, 8.0);
     assert_eq!(parameters.keel_area_m2, 0.6);
     assert_eq!(parameters.rudder_area_m2, 0.12);
+    assert_eq!(parameters.draft_m, 0.6);
+    assert_eq!(parameters.grounding_resistance_n_s_m, 6_000.0);
     assert_eq!(
         match_environment().true_wind_velocity_m_s,
         Vector::new(6.0, 0.0)
     );
     assert_eq!(match_environment().true_water_velocity_m_s, Vector::ZERO);
+    assert_eq!(match_environment().water_depth_m, f32::INFINITY);
 }
 
 #[test]
@@ -151,6 +154,10 @@ fn procedural_terrain_is_seeded_and_continuous() {
             > 0.01
     );
     assert!((procedural_terrain_elevation_m(seed + 1, position_m) - elevation_m).abs() > 0.01);
+    assert_eq!(
+        procedural_match_environment(seed, 600, position_m).water_depth_m,
+        (-elevation_m).max(0.0)
+    );
 }
 
 #[test]

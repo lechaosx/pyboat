@@ -271,6 +271,54 @@ fn multiplayer_client_derives_world_aligned_terrain_from_the_match_seed() {
 }
 
 #[test]
+fn multiplayer_prediction_applies_seeded_grounding_resistance() {
+    fn position_matching(match_seed: u64, predicate: impl Fn(f32) -> bool) -> Vector {
+        for x in -128..=128 {
+            for y in -128..=128 {
+                let position_m = Vector::new(x as f32 * 2.0, y as f32 * 2.0);
+                let depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
+                if predicate(depth_m) {
+                    return position_m;
+                }
+            }
+        }
+        panic!("the representative terrain should contain the requested depth");
+    }
+
+    fn predicted_speed_m_s(match_seed: u64, position_m: Vector) -> f32 {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed,
+        });
+        let mut local = boat("player-1", position_m.x);
+        local.y = position_m.y;
+        local.vx = 2.0;
+        local.vy = 0.0;
+        local.angle = 0.0;
+        local.forward = Some(0.0);
+        local.turn = Some(0.0);
+        local.acknowledged_input = Some(0);
+        client.accept(ServerMessage::Snapshot {
+            tick: 9,
+            boats: vec![local],
+            removed_player_ids: Vec::new(),
+        });
+        client.take_inputs(DT_SECONDS);
+        client.view().unwrap().speed_m_s
+    }
+
+    let match_seed = 42;
+    let deep_position_m = position_matching(match_seed, |depth_m| depth_m >= 1.5);
+    let grounded_position_m = position_matching(match_seed, |depth_m| depth_m == 0.0);
+
+    assert!(
+        predicted_speed_m_s(match_seed, grounded_position_m)
+            < predicted_speed_m_s(match_seed, deep_position_m)
+    );
+}
+
+#[test]
 fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {

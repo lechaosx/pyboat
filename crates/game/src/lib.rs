@@ -74,6 +74,8 @@ pub fn dinghy_parameters() -> BoatParameters {
         max_rudder_actuator_torque_n_m: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
+        draft_m: 0.6,
+        grounding_resistance_n_s_m: 6_000.0,
     }
 }
 
@@ -81,6 +83,7 @@ pub fn match_environment() -> Environment {
     Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 0.0),
         true_water_velocity_m_s: Vector::ZERO,
+        water_depth_m: f32::INFINITY,
     }
 }
 
@@ -88,6 +91,7 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
     Environment {
         true_wind_velocity_m_s: procedural_wind(match_seed, tick, position_m),
         true_water_velocity_m_s: Vector::ZERO,
+        water_depth_m: (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0),
     }
 }
 
