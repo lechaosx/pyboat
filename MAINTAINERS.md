@@ -222,17 +222,18 @@ cargo run -p pyboat-server
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
-the Python protocol while migration is incomplete. The server queues newer input
-sequences, consumes at most one per physics tick, and acknowledges only consumed
-commands. A player's pending queue retains the newest 15 commands; overflow drops
-the oldest unapplied command rather than accumulating more than 250 ms of stale
-control. Snapshot fan-out uses Tokio watch channels so a slow connection retains
-only the newest state. Rapier's maintained broad phase supplies interest
-candidates before exact radial checks. Boats within 8 m include intent for
-interaction prediction, boats through 24 m include visual motion, and farther
-boats are omitted. The boats array is a complete current interest set;
-`removedPlayerIds` remains empty in Rust snapshots for Python protocol
-compatibility.
+the Python protocol while migration is incomplete. Client messages and individual
+WebSocket frames are limited to 1 KiB because inputs are the only client message
+type. The server queues newer input sequences, consumes at most one per physics
+tick, and acknowledges only consumed commands. A player's pending queue retains
+the newest 15 commands; overflow drops the oldest unapplied command rather than
+accumulating more than 250 ms of stale control. Snapshot fan-out uses Tokio watch
+channels so a slow connection retains only the newest state. Rapier's maintained
+broad phase supplies interest candidates before exact radial checks. Boats within
+8 m include intent for interaction prediction, boats through 24 m include visual
+motion, and farther boats are omitted. The boats array is a complete current
+interest set; `removedPlayerIds` remains empty in Rust snapshots for Python
+protocol compatibility.
 Rust server integration tests bind an ephemeral loopback port and exercise actual
 WebSocket clients through input, motion, spatial interest, and disconnect cleanup.
 The browser crate also owns a native loopback test that sends its real sequenced

@@ -168,6 +168,9 @@ decisions.
 - **[Implicit]** The Rust protocol initially preserves the Python input and welcome
   message shapes so migration can proceed without maintaining two semantic
   protocols.
+- **[Implicit]** The Rust server limits client WebSocket messages and individual
+  frames to 1 KiB. Current client messages contain only compact input commands, so
+  larger traffic is rejected before JSON decoding.
 - **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
   messages in Rust, and retains only the newest pending snapshot between rendered
   frames. Welcome identity is applied immediately and is not part of that
@@ -265,8 +268,8 @@ decisions.
   connections in addition to deterministic simulation and protocol tests.
 - **[Implicit]** Rust loopback tests open real WebSocket connections against an
   ephemeral local port and verify concurrent connection identity, sequenced input
-  acknowledgement, bounded input backlog, authoritative motion, spatial interest
-  payloads, and disconnect cleanup.
+  acknowledgement, bounded input backlog and message size, authoritative motion,
+  spatial interest payloads, and disconnect cleanup.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, and reconciliation independently of browser APIs.

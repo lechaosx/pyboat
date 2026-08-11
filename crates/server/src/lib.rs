@@ -15,7 +15,10 @@ use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
 use tokio::time::interval;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+    accept_async_with_config,
+    tungstenite::{Message, protocol::WebSocketConfig},
+};
 
 type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -24,6 +27,7 @@ pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
+const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 
 enum ConnectionEvent {
     Connected {
@@ -241,7 +245,10 @@ async fn handle_connection(
     player_number: u64,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
-    let mut connection = accept_async(stream).await?;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_CLIENT_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_CLIENT_MESSAGE_BYTES));
+    let mut connection = accept_async_with_config(stream, Some(config)).await?;
     let welcome = encode_server_message(&ServerMessage::Welcome {
         player_id: player_id.clone(),
     })?;

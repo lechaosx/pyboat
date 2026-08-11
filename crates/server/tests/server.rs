@@ -248,3 +248,46 @@ async fn input_backlog_keeps_only_the_newest_quarter_second() {
     client.close(None).await.unwrap();
     server.abort();
 }
+
+#[tokio::test]
+async fn server_rejects_client_messages_larger_than_one_kibibyte() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(pyboat_server::serve(listener));
+    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
+    client.next().await.unwrap().unwrap();
+
+    let mut input = encode_client_message(&ClientMessage::Input {
+        sequence: 1,
+        forward: 1.0,
+        turn: 0.0,
+    })
+    .unwrap();
+    input.push_str(&" ".repeat(1024));
+    client.send(Message::Text(input.into())).await.unwrap();
+
+    let rejected = timeout(Duration::from_secs(1), async {
+        loop {
+            match client.next().await {
+                Some(Ok(message)) if message.is_text() => {
+                    let ServerMessage::Snapshot { boats, .. } =
+                        decode_server_message(message.to_text().unwrap()).unwrap()
+                    else {
+                        panic!("welcome must be sent only once");
+                    };
+                    if boats.iter().any(|boat| boat.acknowledged_input == Some(1)) {
+                        break false;
+                    }
+                }
+                Some(Ok(message)) if message.is_close() => break true,
+                Some(Ok(_)) => {}
+                Some(Err(_)) | None => break true,
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(rejected);
+    server.abort();
+}
