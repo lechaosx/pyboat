@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use pyboat_game::{
     computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
-    match_environment, procedural_match_environment,
+    match_environment, procedural_match_environment, procedural_terrain_elevation_m,
 };
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{
@@ -17,6 +17,7 @@ mod web;
 pub const VIEW_HEIGHT_M: f32 = 15.0;
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const WIND_VECTOR_SPACING_M: f32 = 3.0;
+const TERRAIN_MESH_SPACING_M: f32 = 1.0;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
@@ -35,6 +36,12 @@ pub struct BoatScene {
 pub struct WindVector {
     pub position_m: Vector,
     pub velocity_m_s: Vector,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainVertex {
+    pub position_m: Vector,
+    pub elevation_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,6 +392,42 @@ impl MultiplayerClient {
             }
         }
         vectors
+    }
+
+    pub fn terrain_vertices(&self, aspect_ratio: f32) -> Vec<TerrainVertex> {
+        let match_seed = match self.match_seed {
+            Some(match_seed) => match_seed,
+            None => return Vec::new(),
+        };
+        let camera_m = match self.camera_m() {
+            Some(camera_m) => camera_m,
+            None => return Vec::new(),
+        };
+        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0 + TERRAIN_MESH_SPACING_M;
+        let half_height_m = VIEW_HEIGHT_M / 2.0 + TERRAIN_MESH_SPACING_M;
+        let first_x = ((camera_m.x - half_width_m) / TERRAIN_MESH_SPACING_M).floor() as i32;
+        let last_x = ((camera_m.x + half_width_m) / TERRAIN_MESH_SPACING_M).ceil() as i32;
+        let first_y = ((camera_m.y - half_height_m) / TERRAIN_MESH_SPACING_M).floor() as i32;
+        let last_y = ((camera_m.y + half_height_m) / TERRAIN_MESH_SPACING_M).ceil() as i32;
+        let mut vertices = Vec::new();
+        for x in first_x..last_x {
+            for y in first_y..last_y {
+                let corners = [
+                    Vector::new(x as f32, y as f32) * TERRAIN_MESH_SPACING_M,
+                    Vector::new((x + 1) as f32, y as f32) * TERRAIN_MESH_SPACING_M,
+                    Vector::new((x + 1) as f32, (y + 1) as f32) * TERRAIN_MESH_SPACING_M,
+                    Vector::new(x as f32, (y + 1) as f32) * TERRAIN_MESH_SPACING_M,
+                ];
+                for index in [0, 1, 2, 0, 2, 3] {
+                    let position_m = corners[index];
+                    vertices.push(TerrainVertex {
+                        position_m,
+                        elevation_m: procedural_terrain_elevation_m(match_seed, position_m),
+                    });
+                }
+            }
+        }
+        vertices
     }
 
     fn local_motion(&self) -> Option<BoatMotion> {

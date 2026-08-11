@@ -7,6 +7,7 @@ use rapier2d::prelude::Vector;
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
+const TERRAIN_OCTAVE_COUNT: usize = 5;
 
 #[derive(Clone, Copy)]
 struct WindBand {
@@ -88,6 +89,60 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
         true_wind_velocity_m_s: procedural_wind(match_seed, tick, position_m),
         true_water_velocity_m_s: Vector::ZERO,
     }
+}
+
+pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+    let mut noise = 0.0;
+    let mut amplitude = 1.0;
+    let mut amplitude_sum = 0.0;
+    let mut wavelength_m = 128.0;
+    for octave in 0..TERRAIN_OCTAVE_COUNT {
+        noise += amplitude
+            * terrain_value_noise(
+                match_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
+                position_m,
+                wavelength_m,
+            );
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    (12.0 * noise / amplitude_sum - 2.0) as f32
+}
+
+fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -> f64 {
+    let x = f64::from(position_m.x) / wavelength_m;
+    let y = f64::from(position_m.y) / wavelength_m;
+    let x0 = libm::floor(x) as i64;
+    let y0 = libm::floor(y) as i64;
+    let blend_x = smoothstep(x - x0 as f64);
+    let blend_y = smoothstep(y - y0 as f64);
+    let bottom = lerp(
+        terrain_lattice_value(match_seed, x0, y0),
+        terrain_lattice_value(match_seed, x0 + 1, y0),
+        blend_x,
+    );
+    let top = lerp(
+        terrain_lattice_value(match_seed, x0, y0 + 1),
+        terrain_lattice_value(match_seed, x0 + 1, y0 + 1),
+        blend_x,
+    );
+    lerp(bottom, top, blend_y)
+}
+
+fn terrain_lattice_value(match_seed: u64, x: i64, y: i64) -> f64 {
+    let key = match_seed
+        ^ (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (y as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
+    2.0 * hash_unit(key) - 1.0
+}
+
+fn smoothstep(value: f64) -> f64 {
+    value * value * (3.0 - 2.0 * value)
+}
+
+fn lerp(first: f64, second: f64, amount: f64) -> f64 {
+    first + amount * (second - first)
 }
 
 fn procedural_wind(match_seed: u64, tick: u64, position_m: Vector) -> Vector {

@@ -136,6 +136,10 @@ decisions.
   divergence-free Fourier modes with seeded Gaussian coefficients. Modes are
   evaluated directly rather than interpolating random time-cell values. The
   current procedural environment leaves water current at zero.
+- **[Implicit]** Static terrain elevation is a pure function of match seed and
+  world position in `pyboat-game`. Five octaves of smoothly interpolated seeded
+  value noise, from 128 m down to 8 m wavelengths, produce continuous island and
+  seabed contours without replicated terrain data.
 - **[Explicit]** At a fixed position and time, wind direction is uniform over the
   full circle and speed has a Weibull marginal with `k = 2` and `λ = 9 m/s`.
   Smooth spatial and per-tick temporal evolution includes gusts.
@@ -156,6 +160,11 @@ decisions.
   grid plus one offscreen grid ring using its current prediction tick. The WebGPU
   scene converts those local samples to proportional arrows, so field
   visualization adds no network data and arrows enter the viewport continuously.
+- **[Implicit]** The browser samples shared terrain elevation on a world-aligned
+  1 m mesh extending beyond the viewport. Its WebGPU fragment shader classifies
+  interpolated elevation into deep water below -4 m, open water below -1 m,
+  shallows below sea level, beach below 0.4 m, cliff below 2 m, and inland above
+  that threshold.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

@@ -1,4 +1,7 @@
-use pyboat_game::{dinghy_parameters, match_environment, procedural_match_environment};
+use pyboat_game::{
+    dinghy_parameters, match_environment, procedural_match_environment,
+    procedural_terrain_elevation_m,
+};
 use rapier2d::prelude::Vector;
 
 #[test]
@@ -124,4 +127,51 @@ fn procedural_wind_is_spatially_and_temporally_coherent() {
         maximum_speed = maximum_speed.max(speed);
     }
     assert!(maximum_speed - minimum_speed > 1.0);
+}
+
+#[test]
+fn procedural_terrain_is_seeded_and_continuous() {
+    let seed = 0x5eed_u64;
+    let position_m = Vector::new(12.0, -7.0);
+    let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+
+    assert_eq!(
+        elevation_m,
+        procedural_terrain_elevation_m(seed, position_m)
+    );
+    assert!(elevation_m.is_finite());
+    assert!(
+        (procedural_terrain_elevation_m(seed, position_m + Vector::new(0.1, 0.1)) - elevation_m)
+            .abs()
+            < 0.2
+    );
+    assert!(
+        (procedural_terrain_elevation_m(seed, position_m + Vector::new(64.0, 0.0)) - elevation_m)
+            .abs()
+            > 0.01
+    );
+    assert!((procedural_terrain_elevation_m(seed + 1, position_m) - elevation_m).abs() > 0.01);
+}
+
+#[test]
+fn procedural_terrain_forms_land_among_navigable_water() {
+    let mut minimum_elevation_m = f32::MAX;
+    let mut maximum_elevation_m = f32::MIN;
+    let mut land_samples = 0;
+    let mut samples = 0;
+
+    for x in -32..=32 {
+        for y in -32..=32 {
+            let elevation_m =
+                procedural_terrain_elevation_m(0x5eed, Vector::new(x as f32 * 8.0, y as f32 * 8.0));
+            minimum_elevation_m = minimum_elevation_m.min(elevation_m);
+            maximum_elevation_m = maximum_elevation_m.max(elevation_m);
+            land_samples += usize::from(elevation_m >= 0.0);
+            samples += 1;
+        }
+    }
+
+    assert!(minimum_elevation_m < -4.0);
+    assert!(maximum_elevation_m > 2.0);
+    assert!((samples / 10..samples / 2).contains(&land_samples));
 }

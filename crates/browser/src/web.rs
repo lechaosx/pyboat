@@ -12,9 +12,12 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
-use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M, WindVector, viewport_interest_radius_m};
+use crate::{
+    BoatScene, MultiplayerClient, TerrainVertex, VIEW_HEIGHT_M, WindVector,
+    viewport_interest_radius_m,
+};
 
-const MAX_VERTICES: usize = 8192;
+const MAX_VERTICES: usize = 32768;
 const WIND_ARROW_SCALE_SECONDS: f32 = 0.22;
 
 #[repr(C)]
@@ -22,11 +25,13 @@ const WIND_ARROW_SCALE_SECONDS: f32 = 0.22;
 struct Vertex {
     position: [f32; 2],
     color: [f32; 3],
+    elevation_m: f32,
+    is_terrain: f32,
 }
 
 impl Vertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32, 3 => Float32];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -134,12 +139,14 @@ impl Renderer {
         &mut self,
         scenes: &[BoatScene],
         wind_vectors: &[WindVector],
+        terrain_vertices: &[TerrainVertex],
         camera_m: Vector,
     ) -> Result<(), JsValue> {
         self.resize();
         let vertices = scene_vertices(
             scenes,
             wind_vectors,
+            terrain_vertices,
             camera_m,
             self.config.width,
             self.config.height,
@@ -350,6 +357,7 @@ impl BrowserGame {
         self.renderer.render(
             &client.scenes(),
             &client.wind_vectors(aspect_ratio),
+            &client.terrain_vertices(aspect_ratio),
             client.camera_m().unwrap_or(Vector::ZERO),
         )
     }
@@ -441,6 +449,7 @@ fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
 fn scene_vertices(
     scenes: &[BoatScene],
     wind_vectors: &[WindVector],
+    terrain_vertices: &[TerrainVertex],
     camera_m: Vector,
     width: u32,
     height: u32,
@@ -450,6 +459,15 @@ fn scene_vertices(
     let half_width_m = view_width_m / 2.0;
     let half_height_m = VIEW_HEIGHT_M / 2.0;
     let mut vertices = Vec::new();
+
+    for terrain in terrain_vertices {
+        vertices.push(Vertex {
+            position: clip_position(terrain.position_m, camera_m, view_width_m),
+            color: [0.0; 3],
+            elevation_m: terrain.elevation_m,
+            is_terrain: 1.0,
+        });
+    }
 
     let first_x = (camera_m.x - half_width_m).floor() as i32;
     let last_x = (camera_m.x + half_width_m).ceil() as i32;
@@ -573,14 +591,20 @@ fn push_quad(
 }
 
 fn vertex(point_m: Vector, color: [f32; 3], camera_m: Vector, view_width_m: f32) -> Vertex {
-    let relative_m = point_m - camera_m;
     Vertex {
-        position: [
-            2.0 * relative_m.x / view_width_m,
-            -2.0 * relative_m.y / VIEW_HEIGHT_M,
-        ],
+        position: clip_position(point_m, camera_m, view_width_m),
         color,
+        elevation_m: 0.0,
+        is_terrain: 0.0,
     }
+}
+
+fn clip_position(point_m: Vector, camera_m: Vector, view_width_m: f32) -> [f32; 2] {
+    let relative_m = point_m - camera_m;
+    [
+        2.0 * relative_m.x / view_width_m,
+        -2.0 * relative_m.y / VIEW_HEIGHT_M,
+    ]
 }
 
 fn js_error(error: impl ToString) -> JsValue {

@@ -44,8 +44,8 @@ bun run build
 The suite covers force equations, actuator behavior, all three controllers,
 coupled physics, timestep convergence, course progression, input mapping,
 multiplayer protocol behavior, interest management, prediction and
-reconciliation, damage and wreck lifecycle, and representative sailing
-maneuvers.
+reconciliation, deterministic terrain generation, damage and wreck lifecycle,
+and representative sailing maneuvers.
 
 Exercise a multiplayer client with controlled round-trip latency and one-way
 jitter:
@@ -103,6 +103,10 @@ game-specific. Its procedural environment sampler is a pure function of match
 seed, simulation tick, and world position so native and WebAssembly runtimes can
 reproduce the same wind. Keep procedural tuning and sampling in this shared crate;
 the protocol transfers the seed rather than sampled fields or parameters.
+Static terrain uses five octaves of seeded value noise over 8–128 m wavelengths.
+The shared sampler returns continuous elevation relative to sea level from only
+the match seed and world position, providing the future authoritative grounding
+and shallow-water boundary without adding terrain to the protocol.
 Wind is the sum of 48 divergence-free Fourier modes in weather, local, and gust
 bands. Seeded Box–Muller coefficients create isotropic Gaussian vector components,
 giving speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies
@@ -291,6 +295,9 @@ The browser also samples that function on a world-aligned 3 m grid extending one
 ring beyond the viewport and renders proportional wind arrows behind boats. Keep
 this visualization derived from the shared sampler rather than introducing
 replicated environment fields.
+It samples shared terrain elevation on a world-aligned 1 m mesh beyond the
+viewport. The fragment shader interpolates elevations across the mesh and assigns
+the deep-water, open-water, shallow, beach, cliff, and inland presentation bands.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

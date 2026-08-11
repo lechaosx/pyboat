@@ -37,11 +37,17 @@ This file records intended player experience, scope, and product behavior.
 ## World and presentation
 
 - **[Explicit]** Seas and islands are procedurally generated.
+- **[Explicit]** Procedural water depth affects boats physically: shallow water
+  slows a dragging boat proportionally, beaches can ground it, and rocks can
+  damage it.
 - **[Explicit]** Weather, currents, waves, wind, and storms should be procedural
   but deterministic from a match seed across both space and time.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
+- **[Implicit]** The browser's first terrain slice renders a static seeded
+  elevation field as deep water, open water, shallows, beach, cliff, and inland
+  bands. Boat interaction with that terrain remains for a later slice.
 - **[Explicit]** Wind may blow in every direction. At any fixed place and time,
   its speed follows a Weibull distribution with shape `k = 2` and scale
   `λ = 9 m/s`, allowing near-calms and a decaying tail of increasingly rare strong
@@ -123,3 +129,5 @@ This file records intended player experience, scope, and product behavior.
   values remain appropriate after broader playtesting.
 - Concrete rules for progression, matchmaking, ship classes, automatic weapons,
   and the two custom actions.
+- Boat draft, grounding recovery, shallow-drag tuning, and rock placement and
+  damage rules.
