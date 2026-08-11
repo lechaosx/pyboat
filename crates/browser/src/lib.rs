@@ -219,6 +219,9 @@ impl MultiplayerClient {
                 sequence: self.next_input_sequence,
                 intent: self.motion_intent,
             };
+            if self.input_history.len() == MAXIMUM_REPLAY_COMMANDS {
+                self.input_history.remove(0);
+            }
             self.input_history.push(command);
             inputs.push(ClientMessage::Input {
                 sequence: command.sequence,
@@ -640,4 +643,25 @@ fn cubic_vector_correction(
     let (x, vx) = cubic_correction(displacement.x, velocity_difference.x, elapsed_seconds);
     let (y, vy) = cubic_correction(displacement.y, velocity_difference.y, elapsed_seconds);
     (Vector::new(x, y), Vector::new(vx, vy))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiplayer_input_history_keeps_only_replayable_commands() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+        });
+
+        for _ in 0..10 {
+            client.take_inputs(MAXIMUM_PREDICTION_SECONDS);
+        }
+
+        assert_eq!(client.input_history.len(), MAXIMUM_REPLAY_COMMANDS);
+        assert_eq!(client.input_history[0].sequence, 136);
+        assert_eq!(client.input_history[14].sequence, 150);
+    }
 }

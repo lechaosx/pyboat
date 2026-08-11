@@ -245,9 +245,11 @@ termination in front of the server. It keeps only the latest pending snapshot
 between frames, replaces its replicated interest set, and sends sequenced input at
 60 Hz. The client rebuilds one nearby Rapier world from each authoritative
 snapshot, replays up to 250 ms of unacknowledged local commands, and advances it
-with newly emitted commands. Boats outside that world extrapolate for at most 250
-ms. A cubic 100 ms render correction preserves pose and velocity across snapshots
-and physics-bubble transitions while physical state changes immediately.
+with newly emitted commands. It retains only those 15 replayable commands, so a
+snapshot stall cannot grow prediction history without bound. Boats outside that
+world extrapolate for at most 250 ms. A cubic 100 ms render correction preserves
+pose and velocity across snapshots and physics-bubble transitions while physical
+state changes immediately.
 
 ## Model tuning
 

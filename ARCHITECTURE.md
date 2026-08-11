@@ -194,7 +194,9 @@ decisions.
 - **[Implicit]** Each Rust server player retains at most the newest 15 pending
   commands, matching 250 ms at 60 Hz. Overflow discards the oldest unapplied
   commands so a burst cannot create an unbounded stale-control backlog.
-- **[Implicit]** Replay is capped at 250 ms to bound work and runaway prediction.
+- **[Implicit]** The client retains and replays only the newest 15 unacknowledged
+  commands, capping prediction history at 250 ms to bound memory, replay work, and
+  runaway prediction during a snapshot stall.
 - **[Implicit]** The client recreates the local boat and boats within 8 m in one
   Pymunk prediction space. The local boat uses unacknowledged commands; nearby
   boats hold their latest server-reported command.
