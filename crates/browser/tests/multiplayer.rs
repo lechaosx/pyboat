@@ -5,6 +5,9 @@ use pyboat_simulation::DT_SECONDS;
 fn boat(id: &str, x: f32) -> BoatSnapshot {
     BoatSnapshot {
         id: id.to_owned(),
+        health: 100.0,
+        last_hit_tick: None,
+        wreck: false,
         x,
         y: 2.0,
         vx: 3.0,
@@ -141,10 +144,74 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     });
 
     assert_eq!(client.tick(), Some(9));
+    assert_eq!(client.health(), Some(100.0));
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
     assert_eq!(client.view().unwrap().speed_m_s, 5.0);
     assert_eq!(client.scenes().len(), 2);
+}
+
+#[test]
+fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+    });
+    let mut local = boat("player-1", 0.0);
+    local.health = 70.0;
+    local.last_hit_tick = Some(8);
+    let mut wreck = boat("player-2", 3.0);
+    wreck.health = 0.0;
+    wreck.wreck = true;
+
+    client.accept(ServerMessage::Snapshot {
+        tick: 9,
+        boats: vec![local, wreck],
+        removed_player_ids: Vec::new(),
+    });
+
+    let scenes = client.scenes();
+    assert!(scenes[0].is_local);
+    assert!(scenes[0].recently_damaged);
+    assert!(!scenes[0].wreck);
+    assert!(!scenes[1].is_local);
+    assert!(!scenes[1].recently_damaged);
+    assert!(scenes[1].wreck);
+}
+
+#[test]
+fn multiplayer_prediction_does_not_control_wrecks() {
+    fn client_with_wreck_intent(forward: f32, turn: f32) -> MultiplayerClient {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+        });
+        let mut local = boat("player-1", 0.0);
+        local.y = 0.0;
+        local.vx = 0.0;
+        local.vy = 0.0;
+        local.acknowledged_input = Some(0);
+        let mut wreck = boat("player-2", 4.0);
+        wreck.y = 0.0;
+        wreck.vx = 0.0;
+        wreck.vy = 0.0;
+        wreck.wreck = true;
+        wreck.forward = Some(forward);
+        wreck.turn = Some(turn);
+        client.accept(ServerMessage::Snapshot {
+            tick: 1,
+            boats: vec![local, wreck],
+            removed_player_ids: Vec::new(),
+        });
+        client
+    }
+
+    let mut idle = client_with_wreck_intent(0.0, 0.0);
+    let mut commanded = client_with_wreck_intent(1.0, 1.0);
+    idle.take_inputs(0.25);
+    commanded.take_inputs(0.25);
+
+    assert_eq!(idle.scenes()[1], commanded.scenes()[1]);
 }
 
 #[test]

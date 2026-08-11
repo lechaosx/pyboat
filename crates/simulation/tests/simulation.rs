@@ -267,6 +267,18 @@ fn shared_simulation_resolves_and_reports_hull_collisions() {
     let mut boats = [contact.first_boat, contact.second_boat];
     boats.sort();
     assert_eq!(boats, [port_boat, starboard_boat]);
+    let port_contact_m = if contact.first_boat == port_boat {
+        contact.first_contact_local_m
+    } else {
+        contact.second_contact_local_m
+    };
+    let starboard_contact_m = if contact.first_boat == starboard_boat {
+        contact.first_contact_local_m
+    } else {
+        contact.second_contact_local_m
+    };
+    assert!(port_contact_m.x > 1.0);
+    assert!(starboard_contact_m.x < -1.0);
     assert!(simulation.motion(port_boat).velocity_m_s.x < port.velocity_m_s.x);
     assert!(simulation.motion(starboard_boat).velocity_m_s.x > starboard.velocity_m_s.x);
 }

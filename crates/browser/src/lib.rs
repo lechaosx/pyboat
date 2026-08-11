@@ -22,6 +22,9 @@ pub struct BoatScene {
     pub hull_m: [Vector; 5],
     pub sail_m: [Vector; 2],
     pub rudder_m: [Vector; 2],
+    pub is_local: bool,
+    pub recently_damaged: bool,
+    pub wreck: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +70,7 @@ struct InputCommand {
 struct PredictedBoat {
     index: usize,
     intent: MotionIntent,
+    wreck: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -281,6 +285,11 @@ impl MultiplayerClient {
         })
     }
 
+    pub fn health(&self) -> Option<f32> {
+        let player_id = self.player_id.as_ref()?;
+        Some(self.boats.get(player_id)?.snapshot.health)
+    }
+
     pub fn scenes(&self) -> Vec<BoatScene> {
         let mut boats = self.boats.values().collect::<Vec<_>>();
         boats.sort_by(|first, second| {
@@ -293,8 +302,17 @@ impl MultiplayerClient {
         boats
             .into_iter()
             .filter_map(|boat| {
-                self.render_motion(&boat.snapshot.id)
-                    .map(|motion| boat_scene(dinghy_parameters(), motion))
+                self.render_motion(&boat.snapshot.id).map(|motion| {
+                    let mut scene = boat_scene(dinghy_parameters(), motion);
+                    scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
+                    scene.recently_damaged = !boat.snapshot.wreck
+                        && boat.snapshot.last_hit_tick.is_some_and(|last_hit_tick| {
+                            self.tick
+                                .is_some_and(|tick| tick.saturating_sub(last_hit_tick) <= 6)
+                        });
+                    scene.wreck = boat.snapshot.wreck;
+                    scene
+                })
             })
             .collect()
     }
@@ -328,6 +346,7 @@ impl MultiplayerClient {
                 PredictedBoat {
                     index,
                     intent: MotionIntent { forward, turn },
+                    wreck: boat.snapshot.wreck,
                 },
             );
         }
@@ -361,7 +380,9 @@ impl MultiplayerClient {
         let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
         for boat in self.predicted_boats.values() {
             let motion = self.prediction.motion(boat.index);
-            actuator_torques[boat.index] = computed_yaw_rate_torques(motion, boat.intent);
+            if !boat.wreck {
+                actuator_torques[boat.index] = computed_yaw_rate_torques(motion, boat.intent);
+            }
         }
         self.prediction
             .advance(match_environment(), &actuator_torques);
@@ -580,8 +601,10 @@ impl Demo {
     }
 
     pub fn scenes(&self) -> [BoatScene; 2] {
+        let mut player = boat_scene(self.parameters, self.motion());
+        player.is_local = true;
         [
-            boat_scene(self.parameters, self.motion()),
+            player,
             boat_scene(self.parameters, self.simulation.motion(self.practice_boat)),
         ]
     }
@@ -624,6 +647,9 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
         hull_m,
         sail_m: [mast_m, sail_end_m],
         rudder_m: [rudder_hinge_m, rudder_end_m],
+        is_local: false,
+        recently_damaged: false,
+        wreck: false,
     }
 }
 

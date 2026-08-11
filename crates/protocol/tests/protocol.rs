@@ -1,6 +1,6 @@
 use pyboat_protocol::{
-    ClientMessage, ProtocolError, ServerMessage, decode_client_message, decode_server_message,
-    encode_client_message, encode_server_message,
+    BoatSnapshot, ClientMessage, ProtocolError, ServerMessage, decode_client_message,
+    decode_server_message, encode_client_message, encode_server_message,
 };
 
 #[test]
@@ -76,4 +76,37 @@ fn empty_snapshot_matches_the_python_protocol() {
         r#"{"type":"snapshot","tick":7,"boats":[],"removedPlayerIds":[]}"#
     );
     assert_eq!(decoded, expected);
+}
+
+#[test]
+fn boat_damage_state_matches_the_python_protocol() {
+    let message = ServerMessage::Snapshot {
+        tick: 12,
+        boats: vec![BoatSnapshot {
+            id: "player-2".to_owned(),
+            health: 75.0,
+            last_hit_tick: Some(11),
+            wreck: false,
+            x: 1.0,
+            y: 2.0,
+            vx: 3.0,
+            vy: 4.0,
+            angle: 0.5,
+            angular_velocity: 0.1,
+            sail: 0.2,
+            sail_angular_velocity: -0.1,
+            rudder: -0.3,
+            rudder_angular_velocity: 0.2,
+            forward: Some(0.75),
+            turn: Some(-0.25),
+            acknowledged_input: None,
+        }],
+        removed_player_ids: Vec::new(),
+    };
+
+    let encoded = encode_server_message(&message).unwrap();
+    let decoded = decode_server_message(&encoded).unwrap();
+
+    assert!(encoded.contains(r#""health":75.0,"lastHitTick":11,"wreck":false"#));
+    assert_eq!(decoded, message);
 }

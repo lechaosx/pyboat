@@ -116,12 +116,15 @@ respect to each candidate surface. The controlled-advance API composes this poli
 with one synchronous physics tick and reports the chosen targets and active yaw
 rate. The shared simulation inserts multiple articulated boats into one Rapier
 world, applies their loads before a single world step, and reports active hull
-contacts with resolved impulse magnitudes. The retained local browser harness
-advances the same shared simulation for one controlled boat and one passive
-practice boat. The current browser entry point instead converts authoritative
-snapshot motion to WebGPU vertices. TypeScript samples `W/S`, `A/D`, and the first
-connected gamepad; Rust converts the gamepad's world-relative left-stick vector
-into local motion intent without adding a deadzone. Rust owns the WebSocket,
+contacts with resolved impulse magnitudes and hull-local contact points. The Rust
+server uses those contacts for the reference ramming-damage tuning and leaves
+destroyed boats in the world with passive forces and zero actuator torque. The
+retained local browser harness advances the same shared simulation for one
+controlled boat and one passive practice boat. The current browser entry point
+instead converts authoritative snapshot motion to WebGPU vertices. TypeScript samples
+`W/S`, `A/D`, and the first connected gamepad; Rust converts the gamepad's
+world-relative left-stick vector into local motion intent without adding a
+deadzone. Rust owns the WebSocket,
 latest-snapshot mailbox, compact-JSON codec, fixed-tick input sequencing, and the
 small sailing view used by the TypeScript DOM HUD. Tests target physical
 invariants, replicated-state behavior, mirrored controlled maneuvers, and accepted
@@ -273,7 +276,9 @@ with newly emitted commands. It retains only those 15 replayable commands, so a
 snapshot stall cannot grow prediction history without bound. Boats outside that
 world extrapolate for at most 250 ms. A cubic 100 ms render correction preserves
 pose and velocity across snapshots and physics-bubble transitions while physical
-state changes immediately.
+state changes immediately. Health and recent-hit state drive the browser HUD and
+hull feedback. Wrecks use passive nearby prediction, and the server closes the
+destroyed owner's connection normally while retaining the wreck for observers.
 
 ## Model tuning
 

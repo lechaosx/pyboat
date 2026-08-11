@@ -31,8 +31,8 @@ decisions.
   articulated rudder and hull-mounted keel, anisotropic hull resistance, and
   surface-target actuator control, followed by arcade surface-effect sampling and
   target selection, controlled fixed-step advancement, and shared-world stepping
-  with hull contact reporting, articulated-boat removal, and maintained radial
-  spatial queries.
+  with hull impulse and local-contact reporting, articulated-boat removal, and
+  maintained radial spatial queries.
 - **[Implicit]** The runtime-independent `pyboat-game` crate owns the concrete
   dinghy parameters, match environment, and computed-yaw-rate control composition
   used by both the Rust server and browser. `pyboat-simulation` remains
@@ -59,8 +59,9 @@ decisions.
   WebSocket connection handling.
 - **[Implicit]** The Rust server owns one shared authoritative Rapier match. Each
   completed WebSocket connection creates a distinct articulated boat, validated
-  sequenced input drives computed-yaw-rate arcade control, and disconnecting
-  removes that boat from the physics world.
+  sequenced input drives computed-yaw-rate arcade control, live disconnects remove
+  that boat from the physics world, and destroyed boats remain as controllerless
+  wrecks.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
@@ -110,8 +111,8 @@ decisions.
   asynchronous work before and after, never during, that operation.
 - **[Implicit]** The Rust shared simulation inserts all articulated boats into one
   Rapier world, applies every boat's loads before advancing that world once, and
-  returns active hull contact pairs with Rapier's resolved impulse magnitude for
-  game rules such as damage.
+  returns active hull contact pairs with Rapier's resolved impulse magnitude and
+  averaged hull-local contact points for game rules such as damage.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.
@@ -189,7 +190,8 @@ decisions.
   latest-only mailbox.
 - **[Implicit]** The typed Rust snapshot envelope preserves the Python `tick`,
   `boats`, and `removedPlayerIds` fields. Its boat type contains physical motion,
-  optional nearby intent, and optional local acknowledgement fields.
+  health and wreck state, optional nearby intent, and optional local
+  acknowledgement fields.
 - **[Implicit]** `removedPlayerIds` remains in the JSON envelope for Python
   protocol compatibility. Rust server snapshots leave it empty, and the Rust
   browser treats `boats` as the complete current interest set.
@@ -268,6 +270,9 @@ decisions.
 
 - **[Implicit]** Ramming damage uses the first authoritative collision impulse and
   applies damage independently to both boats using each hull's local contact point.
+- **[Implicit]** The Rust server tracks active contact pairs by stable player ID so
+  a sustained contact damages only once and live-player index compaction cannot
+  suppress a later collision.
 - **[Implicit]** Snapshots replicate health and the most recent damage tick for
   client status and brief hit feedback.
 - **[Explicit]** Reaching zero health causes the destroyed boat owner's client to
@@ -277,6 +282,8 @@ decisions.
   collisions but no controller.
 - **[Implicit]** Controllerless wrecks receive passive aerodynamic, hydrodynamic,
   hull, and joint forces with zero actuator torque.
+- **[Implicit]** Nearby browser prediction also gives wrecks zero actuator torque,
+  preventing stale replicated intent from controlling them.
 
 ## Network testing
 
@@ -295,7 +302,8 @@ decisions.
   frames are flushed before return.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
-  continuity, and reconciliation independently of browser APIs.
+  continuity, reconciliation, damage feedback, and controllerless wreck prediction
+  independently of browser APIs.
 - **[Implicit]** A browser-owned native loopback test drives `MultiplayerClient`
   through the real Rust WebSocket server, deliberately skips intermediate
   snapshots, and verifies fixed-tick input acknowledgement and bounded prediction.

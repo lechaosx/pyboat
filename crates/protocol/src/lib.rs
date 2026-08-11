@@ -36,6 +36,9 @@ pub enum ServerMessage {
 #[serde(rename_all = "camelCase")]
 pub struct BoatSnapshot {
     pub id: String,
+    pub health: f32,
+    pub last_hit_tick: Option<u64>,
+    pub wreck: bool,
     pub x: f32,
     pub y: f32,
     pub vx: f32,

@@ -369,6 +369,10 @@ impl BrowserGame {
             .unwrap_or(0.0)
     }
 
+    pub fn health(&self) -> f32 {
+        self.client.borrow().health().unwrap_or(0.0)
+    }
+
     pub fn point_of_sail(&self) -> String {
         self.client
             .borrow()
@@ -452,8 +456,12 @@ fn scene_vertices(scenes: &[BoatScene], camera_m: Vector, width: u32, height: u3
         );
     }
 
-    for (index, scene) in scenes.iter().enumerate() {
-        let hull_color = if index == 0 {
+    for scene in scenes {
+        let hull_color = if scene.wreck {
+            [0.43, 0.37, 0.29]
+        } else if scene.recently_damaged {
+            [1.0, 0.43, 0.35]
+        } else if scene.is_local {
             [0.42, 0.82, 0.69]
         } else {
             [0.91, 0.42, 0.32]

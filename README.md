@@ -52,7 +52,8 @@ cargo run -p pyboat-server
 The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
 connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes the same compact-JSON sequenced input as the Python
-prototype and publishes real boat snapshots at 60 Hz. Snapshots include nearby
+prototype, applies location-dependent ramming damage, preserves destroyed boats as
+physical wrecks, and publishes real boat snapshots at 60 Hz. Snapshots include nearby
 interaction state through 8 m and visual motion through each client's requested
 viewport radius, bounded to 8–24 m and defaulting to 24 m. Pass a different listen
 address as the final argument, for example
@@ -79,7 +80,10 @@ client connects to port `8765` on the page hostname, sends sequenced controls, a
 reports its canvas-sized interest radius before rendering predicted articulated
 boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
-HUD reports speed through water, apparent-wind speed, and point of sail.
+HUD reports health, speed through water, apparent-wind speed, and point of sail.
+Recently hit boats and wrecks receive distinct hull colors. When the local boat is
+destroyed, the server closes its connection with a destruction notice while other
+players continue to see the wreck.
 
 ## Run the standalone game
 

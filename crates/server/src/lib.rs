@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     error::Error,
     future::{Future, pending},
     io,
@@ -11,7 +11,10 @@ use pyboat_game::{computed_yaw_rate_torques, dinghy_parameters, match_environmen
 use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
-use pyboat_simulation::{BoatMotion, BoatParameters, Environment, MotionIntent, SharedSimulation};
+use pyboat_simulation::{
+    ActuatorTorques, BoatMotion, BoatParameters, Environment, HullContact, MotionIntent,
+    SharedSimulation,
+};
 use rapier2d::prelude::Vector;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -34,6 +37,12 @@ const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const BOAT_MAX_HEALTH: f32 = 100.0;
+const SAFE_COLLISION_IMPULSE_N_S: f32 = 100.0;
+const COLLISION_IMPULSE_PER_DAMAGE_N_S: f32 = 8.0;
+const BOW_STRENGTH_MULTIPLIER: f32 = 2.0;
+const SIDE_STRENGTH_MULTIPLIER: f32 = 1.0;
+const STERN_STRENGTH_MULTIPLIER: f32 = 0.6;
 
 enum ConnectionEvent {
     Upgraded {
@@ -66,6 +75,9 @@ struct Player {
     last_received_input: i64,
     pending_inputs: VecDeque<(i64, MotionIntent)>,
     visibility_radius_m: f32,
+    health: f32,
+    last_hit_tick: Option<u64>,
+    wreck: bool,
 }
 
 struct GameMatch {
@@ -73,6 +85,7 @@ struct GameMatch {
     environment: Environment,
     simulation: SharedSimulation,
     players: Vec<Player>,
+    active_hull_contacts: HashSet<(String, String)>,
     tick: u64,
 }
 
@@ -83,6 +96,7 @@ impl GameMatch {
             environment: match_environment(),
             simulation: SharedSimulation::new(),
             players: Vec::new(),
+            active_hull_contacts: HashSet::new(),
             tick: 0,
         }
     }
@@ -108,6 +122,9 @@ impl GameMatch {
             last_received_input: 0,
             pending_inputs: VecDeque::new(),
             visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+            health: BOAT_MAX_HEALTH,
+            last_hit_tick: None,
+            wreck: false,
         });
     }
 
@@ -119,8 +136,13 @@ impl GameMatch {
         else {
             return;
         };
+        if self.players[player].wreck {
+            return;
+        }
         self.players.remove(player);
         self.simulation.remove_boat(player);
+        self.active_hull_contacts
+            .retain(|(first, second)| first != player_id && second != player_id);
     }
 
     fn set_input(&mut self, player_id: &str, sequence: i64, intent: MotionIntent) {
@@ -131,6 +153,9 @@ impl GameMatch {
         else {
             return;
         };
+        if player.wreck {
+            return;
+        }
         if sequence <= player.last_received_input {
             return;
         }
@@ -156,6 +181,10 @@ impl GameMatch {
     fn advance(&mut self) {
         let mut actuator_torques = Vec::with_capacity(self.players.len());
         for (boat, player) in self.players.iter_mut().enumerate() {
+            if player.wreck {
+                actuator_torques.push(ActuatorTorques::default());
+                continue;
+            }
             if let Some((sequence, intent)) = player.pending_inputs.pop_front() {
                 player.intent = intent;
                 player.acknowledged_input = sequence;
@@ -163,8 +192,78 @@ impl GameMatch {
             let motion = self.simulation.motion(boat);
             actuator_torques.push(computed_yaw_rate_torques(motion, player.intent));
         }
-        self.simulation.advance(self.environment, &actuator_torques);
+        let contacts = self.simulation.advance(self.environment, &actuator_torques);
+        self.apply_hull_contacts(&contacts);
         self.tick += 1;
+    }
+
+    fn apply_collision_damage(&mut self, player_id: &str, impulse_n_s: f32, contact_x_m: f32) {
+        let Some(player) = self
+            .players
+            .iter_mut()
+            .find(|player| player.id == player_id)
+        else {
+            return;
+        };
+        if player.wreck {
+            return;
+        }
+        let hull = self.parameters.hull;
+        let strength = if contact_x_m >= hull.length_m / 2.0 - hull.bow_length_m {
+            BOW_STRENGTH_MULTIPLIER
+        } else if contact_x_m <= -hull.length_m / 4.0 {
+            STERN_STRENGTH_MULTIPLIER
+        } else {
+            SIDE_STRENGTH_MULTIPLIER
+        };
+        let damage = (impulse_n_s - SAFE_COLLISION_IMPULSE_N_S).max(0.0)
+            / (COLLISION_IMPULSE_PER_DAMAGE_N_S * strength);
+        if damage == 0.0 {
+            return;
+        }
+        player.health = (player.health - damage).max(0.0);
+        player.last_hit_tick = Some(self.tick);
+        if player.health == 0.0 {
+            player.wreck = true;
+            player.intent = MotionIntent::default();
+            player.pending_inputs.clear();
+        }
+    }
+
+    fn apply_hull_contacts(&mut self, contacts: &[HullContact]) {
+        let mut active_hull_contacts = HashSet::with_capacity(contacts.len());
+        for contact in contacts {
+            let first_player_id = self.players[contact.first_boat].id.clone();
+            let second_player_id = self.players[contact.second_boat].id.clone();
+            let contact_pair = if first_player_id < second_player_id {
+                (first_player_id.clone(), second_player_id.clone())
+            } else {
+                (second_player_id.clone(), first_player_id.clone())
+            };
+            let contact_began = !self.active_hull_contacts.contains(&contact_pair);
+            active_hull_contacts.insert(contact_pair);
+            if !contact_began {
+                continue;
+            }
+            self.apply_collision_damage(
+                &first_player_id,
+                contact.impulse_magnitude_n_s,
+                contact.first_contact_local_m.x,
+            );
+            self.apply_collision_damage(
+                &second_player_id,
+                contact.impulse_magnitude_n_s,
+                contact.second_contact_local_m.x,
+            );
+        }
+        self.active_hull_contacts = active_hull_contacts;
+    }
+
+    fn is_wreck(&self, player_id: &str) -> bool {
+        self.players
+            .iter()
+            .find(|player| player.id == player_id)
+            .is_some_and(|player| player.wreck)
     }
 
     fn visible_boats(&self, player_id: &str) -> Vec<usize> {
@@ -194,6 +293,9 @@ impl GameMatch {
                     <= PHYSICS_BUBBLE_RADIUS_M * PHYSICS_BUBBLE_RADIUS_M;
                 BoatSnapshot {
                     id: player.id.clone(),
+                    health: player.health,
+                    last_hit_tick: player.last_hit_tick,
+                    wreck: player.wreck,
                     x: motion.position_m.x,
                     y: motion.position_m.y,
                     vx: motion.velocity_m_s.x,
@@ -313,6 +415,13 @@ where
             _ = ticker.tick() => {
                 game_match.advance();
                 for (player_id, outbound) in &connections {
+                    if game_match.is_wreck(player_id) {
+                        outbound.send_replace(Some(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Normal,
+                            reason: "boat destroyed".into(),
+                        }))));
+                        continue;
+                    }
                     let visible_boats = game_match.visible_boats(player_id);
                     let snapshot = encode_server_message(
                         &game_match.snapshot_for(player_id, &visible_boats),
@@ -408,4 +517,92 @@ async fn handle_connection(
     let _ = events.send(ConnectionEvent::Disconnected { player_id });
     result?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn player<'a>(game_match: &'a GameMatch, player_id: &str) -> &'a Player {
+        game_match
+            .players
+            .iter()
+            .find(|player| player.id == player_id)
+            .unwrap()
+    }
+
+    #[test]
+    fn collision_damage_respects_bow_side_and_stern_strength() {
+        let mut losses = Vec::new();
+        for contact_x_m in [1.5, 0.0, -1.5] {
+            let mut game_match = GameMatch::new();
+            game_match.add_player("player-1".to_owned(), 1);
+            game_match.apply_collision_damage("player-1", 580.0, contact_x_m);
+            losses.push(100.0 - player(&game_match, "player-1").health);
+        }
+
+        assert!((losses[0] - 30.0).abs() < 1.0e-5);
+        assert!((losses[1] - 60.0).abs() < 1.0e-5);
+        assert!((losses[2] - 100.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn collision_damage_applies_only_when_contact_begins() {
+        let mut game_match = GameMatch::new();
+        game_match.add_player("player-1".to_owned(), 1);
+        game_match.add_player("player-2".to_owned(), 2);
+        let contact = HullContact {
+            first_boat: 0,
+            second_boat: 1,
+            impulse_magnitude_n_s: 180.0,
+            first_contact_local_m: Vector::ZERO,
+            second_contact_local_m: Vector::ZERO,
+        };
+
+        game_match.apply_hull_contacts(&[contact]);
+        let after_first_contact = player(&game_match, "player-1").health;
+        game_match.apply_hull_contacts(&[contact]);
+        assert_eq!(player(&game_match, "player-1").health, after_first_contact);
+
+        game_match.apply_hull_contacts(&[]);
+        game_match.apply_hull_contacts(&[contact]);
+        assert!(player(&game_match, "player-1").health < after_first_contact);
+    }
+
+    #[test]
+    fn destroyed_boat_becomes_a_persistent_controllerless_wreck() {
+        let mut game_match = GameMatch::new();
+        game_match.add_player("player-1".to_owned(), 1);
+        game_match.set_input(
+            "player-1",
+            1,
+            MotionIntent {
+                forward: 1.0,
+                turn: 1.0,
+            },
+        );
+        game_match.apply_collision_damage("player-1", 2000.0, -1.5);
+
+        let destroyed = player(&game_match, "player-1");
+        assert_eq!(destroyed.health, 0.0);
+        assert_eq!(destroyed.last_hit_tick, Some(0));
+        assert!(destroyed.wreck);
+        assert_eq!(destroyed.intent, MotionIntent::default());
+        assert!(destroyed.pending_inputs.is_empty());
+
+        game_match.remove_player("player-1");
+        assert!(
+            game_match
+                .players
+                .iter()
+                .any(|player| player.id == "player-1")
+        );
+        let ServerMessage::Snapshot { boats, .. } = game_match.snapshot_for("player-1", &[0])
+        else {
+            unreachable!();
+        };
+        assert_eq!(boats[0].health, 0.0);
+        assert_eq!(boats[0].last_hit_tick, Some(0));
+        assert!(boats[0].wreck);
+    }
 }

@@ -164,6 +164,8 @@ pub struct HullContact {
     pub first_boat: usize,
     pub second_boat: usize,
     pub impulse_magnitude_n_s: f32,
+    pub first_contact_local_m: Vector,
+    pub second_contact_local_m: Vector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1182,10 +1184,29 @@ impl SharedSimulation {
                     .boats
                     .iter()
                     .position(|boat| boat.boat.hull.collider == pair.collider2)?;
+                let (first_contact_local_m, second_contact_local_m, contact_count) = pair
+                    .manifolds
+                    .iter()
+                    .flat_map(|manifold| &manifold.points)
+                    .fold(
+                        (Vector::ZERO, Vector::ZERO, 0_u32),
+                        |(first, second, count), contact| {
+                            (
+                                first + contact.local_p1,
+                                second + contact.local_p2,
+                                count + 1,
+                            )
+                        },
+                    );
+                if contact_count == 0 {
+                    return None;
+                }
                 Some(HullContact {
                     first_boat,
                     second_boat,
                     impulse_magnitude_n_s: pair.total_impulse_magnitude(),
+                    first_contact_local_m: first_contact_local_m / contact_count as f32,
+                    second_contact_local_m: second_contact_local_m / contact_count as f32,
                 })
             })
             .collect()

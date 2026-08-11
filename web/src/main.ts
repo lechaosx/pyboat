@@ -6,16 +6,18 @@ const status = document.querySelector<HTMLElement>("#status");
 const speed = document.querySelector<HTMLElement>("#speed");
 const apparentWind = document.querySelector<HTMLElement>("#apparent-wind");
 const pointOfSail = document.querySelector<HTMLElement>("#point-of-sail");
+const health = document.querySelector<HTMLElement>("#health");
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 
-if (!canvas || !status || !speed || !apparentWind || !pointOfSail) {
+if (!canvas || !status || !speed || !apparentWind || !pointOfSail || !health) {
   throw new Error("The game page is incomplete");
 }
 const statusElement = status;
 const speedElement = speed;
 const apparentWindElement = apparentWind;
 const pointOfSailElement = pointOfSail;
+const healthElement = health;
 
 window.addEventListener("keydown", (event) => {
   if (controlKeys.has(event.code)) {
@@ -61,6 +63,7 @@ try {
     speedElement.textContent = game.speed_m_s().toFixed(1);
     apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
     pointOfSailElement.textContent = game.point_of_sail();
+    healthElement.textContent = game.health().toFixed(0);
     previousTimeMs = timeMs;
     requestAnimationFrame(frame);
   }
