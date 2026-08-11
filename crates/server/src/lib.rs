@@ -38,6 +38,7 @@ const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const SPAWN_CLEARANCE_M: f32 = 8.0;
 const BOAT_MAX_HEALTH: f32 = 100.0;
 const SAFE_COLLISION_IMPULSE_N_S: f32 = 100.0;
 const COLLISION_IMPULSE_PER_DAMAGE_N_S: f32 = 8.0;
@@ -103,12 +104,29 @@ impl GameMatch {
     }
 
     fn add_player(&mut self, player_id: String, player_number: u64) {
+        let position_m = if self.players.is_empty() {
+            Vector::ZERO
+        } else {
+            let fleet_radius_m = (0..self.players.len())
+                .map(|boat| self.simulation.motion(boat).position_m.length())
+                .fold(0.0_f32, f32::max);
+            let mut random_bits =
+                self.match_seed ^ player_number.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            random_bits = (random_bits ^ (random_bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            random_bits = (random_bits ^ (random_bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            random_bits ^= random_bits >> 31;
+            let bearing_rad =
+                std::f32::consts::TAU * ((random_bits >> 40) as f32 / (1_u32 << 24) as f32);
+            Vector::new(bearing_rad.cos(), bearing_rad.sin()) * (fleet_radius_m + SPAWN_CLEARANCE_M)
+        };
+        let wind = procedural_match_environment(self.match_seed, self.tick, position_m)
+            .true_wind_velocity_m_s;
         self.simulation.add_boat(
             self.parameters,
             BoatMotion {
-                position_m: Vector::new(0.0, (player_number - 1) as f32 * 8.0),
+                position_m,
                 velocity_m_s: Vector::ZERO,
-                angle_rad: 135.0_f32.to_radians(),
+                angle_rad: wind.y.atan2(wind.x),
                 angular_velocity_rad_s: 0.0,
                 sail_angle_rad: 0.0,
                 sail_angular_velocity_rad_s: 0.0,
@@ -536,6 +554,40 @@ mod tests {
             .iter()
             .find(|player| player.id == player_id)
             .unwrap()
+    }
+
+    #[test]
+    fn new_players_spawn_randomly_beyond_the_fleet_and_point_downwind() {
+        let mut game_match = GameMatch::new(42);
+        for player_number in 1..=5 {
+            let fleet_radius_m = (0..game_match.players.len())
+                .map(|boat| game_match.simulation.motion(boat).position_m.length())
+                .fold(0.0_f32, f32::max);
+            game_match.add_player(format!("player-{player_number}"), player_number);
+
+            let spawned = game_match.simulation.motion(player_number as usize - 1);
+            if player_number == 1 {
+                assert_eq!(spawned.position_m, Vector::ZERO);
+            } else {
+                assert!((spawned.position_m.length() - fleet_radius_m - 8.0).abs() < 1.0e-5);
+            }
+            let wind = procedural_match_environment(
+                game_match.match_seed,
+                game_match.tick,
+                spawned.position_m,
+            )
+            .true_wind_velocity_m_s;
+            let forward = Vector::new(spawned.angle_rad.cos(), spawned.angle_rad.sin());
+            assert!(forward.dot(wind.normalize()) > 0.999_99);
+        }
+
+        let mut other_match = GameMatch::new(43);
+        other_match.add_player("player-1".to_owned(), 1);
+        other_match.add_player("player-2".to_owned(), 2);
+        assert_ne!(
+            game_match.simulation.motion(1).position_m,
+            other_match.simulation.motion(1).position_m,
+        );
     }
 
     #[test]

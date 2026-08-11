@@ -16,6 +16,9 @@ This file records intended player experience, scope, and product behavior.
   multiplayer game.
 - **[Explicit]** Matches are persistent rather than round-based. Players may join
   an existing match at any time while it has capacity.
+- **[Explicit]** A newly connected boat spawns at a random bearing just beyond
+  the radial extent of every other player on the map, with its bow pointing in
+  the local wind direction.
 - **[Explicit]** Combat should include ramming, cannons, exploding barrels, and
   other weapons.
 - **[Explicit]** Weapons should mostly operate automatically. In addition to

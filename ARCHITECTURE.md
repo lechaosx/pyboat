@@ -73,6 +73,12 @@ decisions.
   sequenced input drives computed-yaw-rate arcade control, live disconnects remove
   that boat from the physics world, and destroyed boats remain as controllerless
   wrecks.
+- **[Explicit]** A newly connected boat spawns on a random bearing just outside
+  the radial extent of all other players and points downwind at its spawn point.
+- **[Implicit]** The current unbounded world measures spawn radii from the world
+  origin. The first boat starts at the origin; each later boat uses a deterministic
+  bearing derived from the match seed and player number at 8 m beyond the
+  outermost player, including wrecks.
 - **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
   simulation on both native and WebAssembly builds.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial

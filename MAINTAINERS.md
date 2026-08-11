@@ -231,8 +231,11 @@ socket creation must grant loopback permission to run the complete suite.
 
 The Rust server assigns identities, creates one articulated Rapier boat per
 completed WebSocket connection, consumes sequenced arcade input, and publishes
-authoritative state at 60 Hz. Start it on the default `127.0.0.1:8765` address
-with:
+authoritative state at 60 Hz. The first boat spawns at the world origin. Later
+boats use a match-seeded bearing 8 m beyond the greatest radius of every existing
+boat, including wrecks, and point along the procedural wind sampled at the spawn
+position and current tick. Start the server on the default `127.0.0.1:8765`
+address with:
 
 ```sh
 cargo run -p pyboat-server
