@@ -1176,14 +1176,8 @@ impl SharedSimulation {
             .contact_pairs()
             .filter(|pair| pair.has_any_active_contact())
             .filter_map(|pair| {
-                let first_boat = self
-                    .boats
-                    .iter()
-                    .position(|boat| boat.boat.hull.collider == pair.collider1)?;
-                let second_boat = self
-                    .boats
-                    .iter()
-                    .position(|boat| boat.boat.hull.collider == pair.collider2)?;
+                let first_boat = *self.boat_indices_by_collider.get(&pair.collider1)?;
+                let second_boat = *self.boat_indices_by_collider.get(&pair.collider2)?;
                 let (first_contact_local_m, second_contact_local_m, contact_count) = pair
                     .manifolds
                     .iter()
