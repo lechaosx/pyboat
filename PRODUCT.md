@@ -39,9 +39,18 @@ This file records intended player experience, scope, and product behavior.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
+- **[Explicit]** Wind may blow in every direction. At any fixed place and time,
+  its speed follows a Weibull distribution with shape `k = 2` and scale
+  `λ = 9 m/s`, allowing near-calms and a decaying tail of increasingly rare strong
+  wind.
+- **[Explicit]** Wind changes smoothly in space and on every simulation tick and
+  includes short-scale gusts.
+- **[Explicit]** Wind forms spatially coherent air masses and avoids rapid visible
+  oscillation over time.
 - **[Explicit]** The browser displays the wind vector field on the game world.
-- **[Implicit]** World-aligned cyan arrows sample wind every 3 m; their direction
-  and length show local flow direction and relative speed without obscuring boats.
+- **[Implicit]** World-aligned cyan arrows sample wind every 3 m, including one
+  grid ring beyond the viewport; their direction and length show local flow
+  direction and relative speed without obscuring boats or appearing abruptly.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
 - **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate

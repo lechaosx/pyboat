@@ -219,6 +219,7 @@ fn multiplayer_client_derives_visible_wind_vectors_from_the_match_seed() {
     let vectors = client.wind_vectors(4.0 / 3.0);
 
     assert!(!vectors.is_empty());
+    let mut has_offscreen_vector = false;
     for vector in vectors {
         assert_eq!(
             vector.velocity_m_s,
@@ -226,9 +227,13 @@ fn multiplayer_client_derives_visible_wind_vectors_from_the_match_seed() {
         );
         assert!((vector.position_m.x / 3.0).fract().abs() < 1.0e-5);
         assert!((vector.position_m.y / 3.0).fract().abs() < 1.0e-5);
-        assert!((vector.position_m.x - 7.0).abs() <= 10.0);
-        assert!((vector.position_m.y - 2.0).abs() <= 7.5);
+        let camera_distance_x = (vector.position_m.x - 7.0).abs();
+        let camera_distance_y = (vector.position_m.y - 2.0).abs();
+        assert!(camera_distance_x <= 13.0);
+        assert!(camera_distance_y <= 10.5);
+        has_offscreen_vector |= camera_distance_x > 10.0 || camera_distance_y > 7.5;
     }
+    assert!(has_offscreen_vector);
 }
 
 #[test]

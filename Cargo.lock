@@ -752,6 +752,7 @@ dependencies = [
 name = "pyboat-game"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "pyboat-simulation",
  "rapier2d",
 ]

@@ -360,8 +360,8 @@ impl MultiplayerClient {
             Some(camera_m) => camera_m,
             None => return Vec::new(),
         };
-        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0;
-        let half_height_m = VIEW_HEIGHT_M / 2.0;
+        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0 + WIND_VECTOR_SPACING_M;
+        let half_height_m = VIEW_HEIGHT_M / 2.0 + WIND_VECTOR_SPACING_M;
         let first_x = ((camera_m.x - half_width_m) / WIND_VECTOR_SPACING_M).ceil() as i32;
         let last_x = ((camera_m.x + half_width_m) / WIND_VECTOR_SPACING_M).floor() as i32;
         let first_y = ((camera_m.y - half_height_m) / WIND_VECTOR_SPACING_M).ceil() as i32;

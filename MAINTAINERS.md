@@ -103,6 +103,13 @@ game-specific. Its procedural environment sampler is a pure function of match
 seed, simulation tick, and world position so native and WebAssembly runtimes can
 reproduce the same wind. Keep procedural tuning and sampling in this shared crate;
 the protocol transfers the seed rather than sampled fields or parameters.
+Wind is the sum of 48 divergence-free Fourier modes in weather, local, and gust
+bands. Seeded Box–Muller coefficients create isotropic Gaussian vector components,
+giving speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies
+the shared software transcendental functions used by native and WebAssembly
+sampling. One seed-derived transport vector moves the entire frozen field, so
+spatial structures remain coherent instead of individual modes propagating in
+unrelated directions.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60
@@ -277,9 +284,10 @@ after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 H
 Welcome also supplies the server-selected match seed. Authoritative and predicted
 ticks sample the same smooth wind function separately at each boat, and the local
 sample supplies the apparent-wind HUD.
-The browser also samples that function on a visible world-aligned 3 m grid and
-renders proportional wind arrows behind boats. Keep this visualization derived
-from the shared sampler rather than introducing replicated environment fields.
+The browser also samples that function on a world-aligned 3 m grid extending one
+ring beyond the viewport and renders proportional wind arrows behind boats. Keep
+this visualization derived from the shared sampler rather than introducing
+replicated environment fields.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

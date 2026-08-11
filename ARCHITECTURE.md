@@ -126,9 +126,18 @@ decisions.
   with Rapier's resolved impulse magnitude and averaged hull-local contact points
   for game rules such as damage.
 - **[Implicit]** Each Rust server process creates one match seed at startup. A
-  pure function of that seed, simulation tick, and world position samples bounded
-  wind from smoothly interpolated value noise. The current procedural environment
-  leaves water current at zero.
+  pure function of that seed, simulation tick, and world position evaluates 48
+  divergence-free Fourier modes with seeded Gaussian coefficients. Modes are
+  evaluated directly rather than interpolating random time-cell values. The
+  current procedural environment leaves water current at zero.
+- **[Explicit]** At a fixed position and time, wind direction is uniform over the
+  full circle and speed has a Weibull marginal with `k = 2` and `λ = 9 m/s`.
+  Smooth spatial and per-tick temporal evolution includes gusts.
+- **[Implicit]** The spectral model assigns 85% of component variance to
+  2,048–8,192 m weather modes, 10% to 256–2,048 m local modes, and 5% to 64–512 m
+  gust modes. One seed-derived 6 m/s transport vector translates the complete
+  field without deforming it, making gust structures vary over approximately
+  10.7–85 seconds.
 - **[Explicit]** The match seed is the only procedural world or environment datum
   transferred from server to client. Both runtimes use the same shared
   deterministic functions and tuning to derive matching parameters from the seed,
@@ -138,8 +147,9 @@ decisions.
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
 - **[Implicit]** The browser samples visible wind vectors on a world-aligned 3 m
-  grid using its current prediction tick. The WebGPU scene converts those local
-  samples to proportional arrows, so field visualization adds no network data.
+  grid plus one offscreen grid ring using its current prediction tick. The WebGPU
+  scene converts those local samples to proportional arrows, so field
+  visualization adds no network data and arrows enter the viewport continuously.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

@@ -54,7 +54,9 @@ connections, and creates one boat per client in a shared authoritative Rapier
 simulation. It consumes compact-JSON sequenced input, applies location-dependent
 ramming damage, preserves destroyed boats as physical wrecks, and publishes real
 boat snapshots at 60 Hz. Each server run uses one match seed for wind that changes
-smoothly across the world and over time.
+smoothly across the world and over time, can blow in any direction, and includes
+gusts. Wind speed follows a `k = 2`, `λ = 9 m/s` Weibull distribution, so
+near-calms are possible and strong winds become progressively rarer.
 Snapshots include nearby interaction state through 8 m and visual motion through
 each client's requested viewport radius, bounded to 8–24 m and defaulting to 24 m.
 Pass a different listen address as the final argument, for example
