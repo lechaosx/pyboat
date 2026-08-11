@@ -59,6 +59,8 @@ This file records intended player experience, scope, and product behavior.
   input, and extrapolates distant visible boats without intentional render delay.
 - **[Explicit]** Boats move smoothly when authoritative snapshots arrive and when
   they enter or leave the nearby physics bubble.
+- **[Explicit]** The browser presents the player with a server-down notice when
+  its connection to the authoritative server ends.
 - **[Implicit]** The browser HUD displays speed through water, apparent-wind
   speed, and point of sail from predicted and reconciled local state as immediate
   sailing feedback.

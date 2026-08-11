@@ -18,7 +18,10 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::{interval, timeout};
 use tokio_tungstenite::{
     WebSocketStream, accept_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
+    tungstenite::{
+        Message,
+        protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
+    },
 };
 
 type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -217,7 +220,10 @@ where
             result = &mut shutdown => {
                 result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
                 for outbound in connections.values() {
-                    outbound.send_replace(Some(Message::Close(None)));
+                    outbound.send_replace(Some(Message::Close(Some(CloseFrame {
+                        code: CloseCode::Away,
+                        reason: "Server shutting down".into(),
+                    }))));
                 }
                 return Ok(());
             }

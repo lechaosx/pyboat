@@ -210,6 +210,7 @@ pub struct BrowserGame {
     client: Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
     connection_status: Rc<Cell<ConnectionStatus>>,
+    close_notice: Rc<RefCell<Option<String>>>,
     socket: WebSocket,
     renderer: Renderer,
     _on_open: Closure<dyn FnMut(Event)>,
@@ -234,6 +235,7 @@ impl BrowserGame {
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
+        let close_notice = Rc::new(RefCell::new(None));
         let socket = WebSocket::new(&server_url()?)?;
 
         let on_open = {
@@ -248,6 +250,7 @@ impl BrowserGame {
             let connection_status = Rc::clone(&connection_status);
             Closure::new(move |event: MessageEvent| {
                 let Some(message) = event.data().as_string() else {
+                    client.borrow_mut().disconnect();
                     connection_status.set(ConnectionStatus::Error);
                     return;
                 };
@@ -258,21 +261,33 @@ impl BrowserGame {
                     Ok(message @ ServerMessage::Snapshot { .. }) => {
                         pending_snapshot.replace(Some(message));
                     }
-                    Err(_) => connection_status.set(ConnectionStatus::Error),
+                    Err(_) => {
+                        client.borrow_mut().disconnect();
+                        connection_status.set(ConnectionStatus::Error);
+                    }
                 }
             })
         };
         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
         let on_error = {
+            let client = Rc::clone(&client);
             let connection_status = Rc::clone(&connection_status);
-            Closure::new(move |_: Event| connection_status.set(ConnectionStatus::Error))
+            Closure::new(move |_: Event| {
+                client.borrow_mut().disconnect();
+                connection_status.set(ConnectionStatus::Error);
+            })
         };
         socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
 
         let on_close = {
+            let client = Rc::clone(&client);
             let connection_status = Rc::clone(&connection_status);
-            Closure::new(move |_: CloseEvent| {
+            let close_notice = Rc::clone(&close_notice);
+            Closure::new(move |event: CloseEvent| {
+                client.borrow_mut().disconnect();
+                let reason = event.reason();
+                close_notice.replace((!reason.is_empty()).then_some(reason));
                 if connection_status.get() != ConnectionStatus::Error {
                     connection_status.set(ConnectionStatus::Closed);
                 }
@@ -284,6 +299,7 @@ impl BrowserGame {
             client,
             pending_snapshot,
             connection_status,
+            close_notice,
             socket,
             renderer,
             _on_open: on_open,
@@ -358,7 +374,12 @@ impl BrowserGame {
                 .map(|player_id| format!("Authoritative server · {player_id}"))
                 .unwrap_or_else(|| "Connected · waiting for identity…".to_owned()),
             ConnectionStatus::Error => "Server connection failed".to_owned(),
-            ConnectionStatus::Closed => "Server connection closed".to_owned(),
+            ConnectionStatus::Closed => self
+                .close_notice
+                .borrow()
+                .as_ref()
+                .map(|notice| format!("Server connection closed · {notice}"))
+                .unwrap_or_else(|| "Server connection closed".to_owned()),
         }
     }
 }

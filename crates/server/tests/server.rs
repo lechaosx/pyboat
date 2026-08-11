@@ -5,7 +5,10 @@ use pyboat_protocol::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::time::{Duration, advance, timeout};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{Message, protocol::frame::coding::CloseCode},
+};
 
 type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -339,10 +342,10 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
         .unwrap()
         .unwrap()
         .unwrap();
-    timeout(Duration::from_secs(1), async {
+    let close = timeout(Duration::from_secs(1), async {
         loop {
             match client.next().await {
-                Some(Ok(message)) if message.is_close() => break,
+                Some(Ok(Message::Close(close))) => break close,
                 Some(Ok(_)) => {}
                 Some(Err(error)) => panic!("connection failed before close frame: {error}"),
                 None => panic!("connection ended before close frame"),
@@ -351,4 +354,7 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
     })
     .await
     .unwrap();
+    let close = close.expect("shutdown close frame must include a reason");
+    assert_eq!(close.code, CloseCode::Away);
+    assert_eq!(close.reason, "Server shutting down");
 }

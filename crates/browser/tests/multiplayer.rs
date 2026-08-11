@@ -83,6 +83,30 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
 }
 
 #[test]
+fn multiplayer_client_freezes_when_the_connection_ends() {
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+    });
+    let mut local = boat("player-1", 0.0);
+    local.acknowledged_input = Some(0);
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local],
+        removed_player_ids: Vec::new(),
+    });
+    client.set_motion_intent(1.0, 1.0);
+    client.take_inputs(DT_SECONDS);
+    let final_position_m = client.camera_m().unwrap();
+
+    client.disconnect();
+
+    assert!(client.take_inputs(1.0).is_empty());
+    assert_eq!(client.camera_m(), Some(final_position_m));
+    assert_eq!(client.player_id(), Some("player-1"));
+}
+
+#[test]
 fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {

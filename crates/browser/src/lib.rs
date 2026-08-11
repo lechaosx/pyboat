@@ -82,6 +82,7 @@ struct MotionCorrection {
 
 pub struct MultiplayerClient {
     player_id: Option<String>,
+    connection_active: bool,
     boats: HashMap<String, ReplicatedBoat>,
     snapshot_received_at_seconds: HashMap<String, f32>,
     tick: Option<u64>,
@@ -106,6 +107,7 @@ impl MultiplayerClient {
     pub fn new() -> Self {
         Self {
             player_id: None,
+            connection_active: false,
             boats: HashMap::new(),
             snapshot_received_at_seconds: HashMap::new(),
             tick: None,
@@ -123,7 +125,10 @@ impl MultiplayerClient {
 
     pub fn accept(&mut self, message: ServerMessage) {
         match message {
-            ServerMessage::Welcome { player_id } => self.player_id = Some(player_id),
+            ServerMessage::Welcome { player_id } => {
+                self.player_id = Some(player_id);
+                self.connection_active = true;
+            }
             ServerMessage::Snapshot {
                 tick,
                 boats,
@@ -161,6 +166,12 @@ impl MultiplayerClient {
 
     pub fn player_id(&self) -> Option<&str> {
         self.player_id.as_deref()
+    }
+
+    pub fn disconnect(&mut self) {
+        self.connection_active = false;
+        self.input_history.clear();
+        self.input_accumulator_seconds = 0.0;
     }
 
     pub fn tick(&self) -> Option<u64> {
@@ -207,11 +218,11 @@ impl MultiplayerClient {
 
     pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
         let elapsed_seconds = elapsed_seconds.max(0.0);
-        self.time_seconds += elapsed_seconds;
-        if self.player_id.is_none() {
+        if !self.connection_active {
             self.input_accumulator_seconds = 0.0;
             return Vec::new();
         }
+        self.time_seconds += elapsed_seconds;
         self.input_accumulator_seconds += elapsed_seconds.min(MAXIMUM_PREDICTION_SECONDS);
         let mut inputs = Vec::new();
         while self.input_accumulator_seconds >= DT_SECONDS {

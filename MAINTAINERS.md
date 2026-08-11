@@ -221,10 +221,10 @@ with:
 cargo run -p pyboat-server
 ```
 
-Ctrl-C signals the async serving loop to send WebSocket close frames, release the
-listener, and close active connections. Integration tests call `serve_until` with
-a one-shot future for the same controlled shutdown path; `serve` remains the
-indefinite entry point.
+Ctrl-C signals the async serving loop to send WebSocket close frames with code
+1001 and the reason `Server shutting down`, release the listener, and close active
+connections. Integration tests call `serve_until` with a one-shot future for the
+same controlled shutdown path; `serve` remains the indefinite entry point.
 
 `pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
 input on both encode and decode. The welcome and input shapes intentionally match
@@ -253,7 +253,9 @@ The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` 
 an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
 termination in front of the server. It keeps only the latest pending snapshot
 between frames, replaces its replicated interest set, and sends sequenced input at
-60 Hz. The client rebuilds one nearby Rapier world from each authoritative
+60 Hz. On a connection error or close, it stops emitting input and freezes the
+last replicated scene; the connection status shows a clean close reason when one
+is available. The client rebuilds one nearby Rapier world from each authoritative
 snapshot, replays up to 250 ms of unacknowledged local commands, and advances it
 with newly emitted commands. It retains only those 15 replayable commands, so a
 snapshot stall cannot grow prediction history without bound. Boats outside that
