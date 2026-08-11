@@ -101,7 +101,8 @@ Keep concrete dinghy and match tuning in `pyboat-game` so authoritative and
 predicted simulation consume the same values without making the simulation crate
 game-specific. Its procedural environment sampler is a pure function of match
 seed, simulation tick, and world position so native and WebAssembly runtimes can
-reproduce the same wind without transmitting a field grid.
+reproduce the same wind. Keep procedural tuning and sampling in this shared crate;
+the protocol transfers the seed rather than sampled fields or parameters.
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60

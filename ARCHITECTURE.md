@@ -129,6 +129,11 @@ decisions.
   pure function of that seed, simulation tick, and world position samples bounded
   wind from smoothly interpolated value noise. The current procedural environment
   leaves water current at zero.
+- **[Explicit]** The match seed is the only procedural world or environment datum
+  transferred from server to client. Both runtimes use the same shared
+  deterministic functions and tuning to derive matching parameters from the seed,
+  simulation tick, and world position. Authoritative snapshots still synchronize
+  changing boat state; they do not carry sampled environment fields.
 - **[Implicit]** The server samples the environment independently at each boat's
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
