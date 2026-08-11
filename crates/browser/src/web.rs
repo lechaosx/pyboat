@@ -12,9 +12,10 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
-use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M, viewport_interest_radius_m};
+use crate::{BoatScene, MultiplayerClient, VIEW_HEIGHT_M, WindVector, viewport_interest_radius_m};
 
-const MAX_VERTICES: usize = 2048;
+const MAX_VERTICES: usize = 8192;
+const WIND_ARROW_SCALE_SECONDS: f32 = 0.22;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -129,9 +130,20 @@ impl Renderer {
         })
     }
 
-    fn render(&mut self, scenes: &[BoatScene], camera_m: Vector) -> Result<(), JsValue> {
+    fn render(
+        &mut self,
+        scenes: &[BoatScene],
+        wind_vectors: &[WindVector],
+        camera_m: Vector,
+    ) -> Result<(), JsValue> {
         self.resize();
-        let vertices = scene_vertices(scenes, camera_m, self.config.width, self.config.height);
+        let vertices = scene_vertices(
+            scenes,
+            wind_vectors,
+            camera_m,
+            self.config.width,
+            self.config.height,
+        );
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
 
@@ -334,8 +346,12 @@ impl BrowserGame {
             self.client.borrow_mut().accept(snapshot);
         }
         let client = self.client.borrow();
-        self.renderer
-            .render(&client.scenes(), client.camera_m().unwrap_or(Vector::ZERO))
+        let aspect_ratio = self.renderer.aspect_ratio();
+        self.renderer.render(
+            &client.scenes(),
+            &client.wind_vectors(aspect_ratio),
+            client.camera_m().unwrap_or(Vector::ZERO),
+        )
     }
 
     pub fn set_player_input(
@@ -422,7 +438,13 @@ fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
-fn scene_vertices(scenes: &[BoatScene], camera_m: Vector, width: u32, height: u32) -> Vec<Vertex> {
+fn scene_vertices(
+    scenes: &[BoatScene],
+    wind_vectors: &[WindVector],
+    camera_m: Vector,
+    width: u32,
+    height: u32,
+) -> Vec<Vertex> {
     let aspect = width as f32 / height as f32;
     let view_width_m = VIEW_HEIGHT_M * aspect;
     let half_width_m = view_width_m / 2.0;
@@ -454,6 +476,36 @@ fn scene_vertices(scenes: &[BoatScene], camera_m: Vector, width: u32, height: u3
             camera_m,
             view_width_m,
         );
+    }
+
+    for vector in wind_vectors {
+        let end_m = vector.position_m + vector.velocity_m_s * WIND_ARROW_SCALE_SECONDS;
+        let direction = vector.velocity_m_s.normalize();
+        let normal = Vector::new(-direction.y, direction.x);
+        let arrow_color = [0.2, 0.58, 0.78];
+        push_quad(
+            &mut vertices,
+            vector.position_m,
+            end_m,
+            0.025,
+            arrow_color,
+            camera_m,
+            view_width_m,
+        );
+        for arrowhead_m in [
+            end_m - direction * 0.28 + normal * 0.16,
+            end_m - direction * 0.28 - normal * 0.16,
+        ] {
+            push_quad(
+                &mut vertices,
+                end_m,
+                arrowhead_m,
+                0.025,
+                arrow_color,
+                camera_m,
+                view_width_m,
+            );
+        }
     }
 
     for scene in scenes {

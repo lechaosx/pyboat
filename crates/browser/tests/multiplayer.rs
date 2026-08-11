@@ -202,6 +202,36 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
 }
 
 #[test]
+fn multiplayer_client_derives_visible_wind_vectors_from_the_match_seed() {
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+    });
+    let mut local = boat("player-1", 7.0);
+    local.y = 2.0;
+    client.accept(ServerMessage::Snapshot {
+        tick: 9,
+        boats: vec![local],
+        removed_player_ids: Vec::new(),
+    });
+
+    let vectors = client.wind_vectors(4.0 / 3.0);
+
+    assert!(!vectors.is_empty());
+    for vector in vectors {
+        assert_eq!(
+            vector.velocity_m_s,
+            procedural_match_environment(42, 9, vector.position_m).true_wind_velocity_m_s,
+        );
+        assert!((vector.position_m.x / 3.0).fract().abs() < 1.0e-5);
+        assert!((vector.position_m.y / 3.0).fract().abs() < 1.0e-5);
+        assert!((vector.position_m.x - 7.0).abs() <= 10.0);
+        assert!((vector.position_m.y - 2.0).abs() <= 7.5);
+    }
+}
+
+#[test]
 fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {

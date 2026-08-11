@@ -137,6 +137,9 @@ decisions.
 - **[Implicit]** The server samples the environment independently at each boat's
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
+- **[Implicit]** The browser samples visible wind vectors on a world-aligned 3 m
+  grid using its current prediction tick. The WebGPU scene converts those local
+  samples to proportional arrows, so field visualization adds no network data.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

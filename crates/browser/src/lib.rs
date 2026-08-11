@@ -16,6 +16,7 @@ mod web;
 
 pub const VIEW_HEIGHT_M: f32 = 15.0;
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
+const WIND_VECTOR_SPACING_M: f32 = 3.0;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
@@ -28,6 +29,12 @@ pub struct BoatScene {
     pub is_local: bool,
     pub recently_damaged: bool,
     pub wreck: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindVector {
+    pub position_m: Vector,
+    pub velocity_m_s: Vector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +349,42 @@ impl MultiplayerClient {
                 })
             })
             .collect()
+    }
+
+    pub fn wind_vectors(&self, aspect_ratio: f32) -> Vec<WindVector> {
+        let match_seed = match self.match_seed {
+            Some(match_seed) => match_seed,
+            None => return Vec::new(),
+        };
+        let camera_m = match self.camera_m() {
+            Some(camera_m) => camera_m,
+            None => return Vec::new(),
+        };
+        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0;
+        let half_height_m = VIEW_HEIGHT_M / 2.0;
+        let first_x = ((camera_m.x - half_width_m) / WIND_VECTOR_SPACING_M).ceil() as i32;
+        let last_x = ((camera_m.x + half_width_m) / WIND_VECTOR_SPACING_M).floor() as i32;
+        let first_y = ((camera_m.y - half_height_m) / WIND_VECTOR_SPACING_M).ceil() as i32;
+        let last_y = ((camera_m.y + half_height_m) / WIND_VECTOR_SPACING_M).floor() as i32;
+        let mut vectors = Vec::new();
+        for x in first_x..=last_x {
+            for y in first_y..=last_y {
+                let position_m = Vector::new(
+                    x as f32 * WIND_VECTOR_SPACING_M,
+                    y as f32 * WIND_VECTOR_SPACING_M,
+                );
+                vectors.push(WindVector {
+                    position_m,
+                    velocity_m_s: procedural_match_environment(
+                        match_seed,
+                        self.prediction_tick,
+                        position_m,
+                    )
+                    .true_wind_velocity_m_s,
+                });
+            }
+        }
+        vectors
     }
 
     fn local_motion(&self) -> Option<BoatMotion> {

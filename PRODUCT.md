@@ -39,6 +39,9 @@ This file records intended player experience, scope, and product behavior.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
+- **[Explicit]** The browser displays the wind vector field on the game world.
+- **[Implicit]** World-aligned cyan arrows sample wind every 3 m; their direction
+  and length show local flow direction and relative speed without obscuring boats.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
 - **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate

@@ -277,6 +277,9 @@ after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 H
 Welcome also supplies the server-selected match seed. Authoritative and predicted
 ticks sample the same smooth wind function separately at each boat, and the local
 sample supplies the apparent-wind HUD.
+The browser also samples that function on a visible world-aligned 3 m grid and
+renders proportional wind arrows behind boats. Keep this visualization derived
+from the shared sampler rather than introducing replicated environment fields.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

@@ -83,7 +83,8 @@ boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn
 The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded wind locally. The HUD reports health, speed
 through water, apparent-wind speed, and point of sail using the wind at the local
-boat.
+boat. Cyan arrows across the game world show the local wind field's direction and
+relative speed.
 
 Recently hit boats and wrecks receive distinct hull colors. When the local boat is
 destroyed, the player continues spectating the drifting wreck. If the server
