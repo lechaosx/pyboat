@@ -93,7 +93,8 @@ through water, apparent-wind speed, and point of sail using the wind at the loca
 boat. One striped windsock on the local boat's bow shows apparent-wind direction
 and strength: each visible band represents about 3 knots, up to all five at
 15 knots. The mouse wheel zooms in or out without a gameplay limit; click the
-mouse wheel to restore the original view. The same match seed produces a connected,
+mouse wheel to restore the original view. The lower-left scale bar follows the
+zoom in real metric units. The same match seed produces a connected,
 vastly dominant ocean with sparse clusters of large islands. Smaller density fields
 shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
 color changes continuously with depth before a distinct shoreline transition.

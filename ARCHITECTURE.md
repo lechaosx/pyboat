@@ -203,6 +203,9 @@ decisions.
   derivatives through noise, density splines, masks, and peaks. Shoreline and
   inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
   and gentler inland terrain is green.
+- **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
+  metric scale from the current vertical view distance and CSS viewport height.
+  It does not add world geometry or affect simulation and networking.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 
 use pyboat_browser::{
-    Demo, PointOfSail, boat_scene, point_of_sail, viewport_interest_radius_m, windsock_extension,
-    zoom_view_height_m,
+    Demo, PointOfSail, boat_scene, point_of_sail, scale_bar, viewport_interest_radius_m,
+    windsock_extension, zoom_view_height_m,
 };
 use pyboat_game::dinghy_parameters;
 use pyboat_simulation::{BoatMotion, DT_SECONDS, MotionIntent};
@@ -51,6 +51,24 @@ fn wheel_zoom_scales_without_an_artificial_view_limit() {
 
     assert!(zoomed_out > 15.0);
     assert!((restored - 15.0).abs() < 1.0e-4);
+}
+
+#[test]
+fn scale_bar_uses_real_world_distance_at_every_zoom() {
+    let normal = scale_bar(15.0, 900.0);
+    assert_eq!(normal.distance_m, 2.0);
+    assert_eq!(normal.label, "2 m");
+    assert!((normal.width_px - 120.0).abs() < 1.0e-5);
+
+    let far = scale_bar(15_000.0, 900.0);
+    assert_eq!(far.distance_m, 2_000.0);
+    assert_eq!(far.label, "2 km");
+    assert!((far.width_px - 120.0).abs() < 1.0e-5);
+
+    let close = scale_bar(0.15, 900.0);
+    assert_eq!(close.distance_m, 0.02);
+    assert_eq!(close.label, "2 cm");
+    assert!((close.width_px - 120.0).abs() < 1.0e-4);
 }
 
 #[test]

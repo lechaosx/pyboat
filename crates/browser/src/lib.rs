@@ -556,6 +556,46 @@ pub fn zoom_view_height_m(view_height_m: f32, wheel_delta_y: f32) -> f32 {
     }
 }
 
+pub struct ScaleBar {
+    pub distance_m: f32,
+    pub width_px: f32,
+    pub label: String,
+}
+
+pub fn scale_bar(view_height_m: f32, viewport_height_px: f32) -> ScaleBar {
+    let target_distance_m = view_height_m * 120.0 / viewport_height_px;
+    let magnitude_m = 10.0_f32.powf(target_distance_m.log10().floor());
+    let normalized_distance = target_distance_m / magnitude_m;
+    let readable_multiplier = if normalized_distance < 1.5 {
+        1.0
+    } else if normalized_distance < 3.5 {
+        2.0
+    } else if normalized_distance < 7.5 {
+        5.0
+    } else {
+        10.0
+    };
+    let distance_m = readable_multiplier * magnitude_m;
+    let label = if distance_m >= 1_000.0 {
+        format!("{:.0} km", distance_m / 1_000.0)
+    } else if distance_m >= 1.0 {
+        format!("{distance_m:.0} m")
+    } else if distance_m >= 0.01 {
+        format!("{:.0} cm", distance_m * 100.0)
+    } else if distance_m >= 0.001 {
+        format!("{:.0} mm", distance_m * 1_000.0)
+    } else if distance_m >= 0.000_001 {
+        format!("{:.0} µm", distance_m * 1_000_000.0)
+    } else {
+        format!("{:.0} nm", distance_m * 1_000_000_000.0)
+    };
+    ScaleBar {
+        distance_m,
+        width_px: distance_m / view_height_m * viewport_height_px,
+        label,
+    }
+}
+
 pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
     (apparent_wind_speed_m_s.max(0.0) / WINDSOCK_FULL_EXTENSION_SPEED_M_S).min(1.0)
 }

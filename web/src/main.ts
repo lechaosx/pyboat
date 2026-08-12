@@ -7,10 +7,21 @@ const speed = document.querySelector<HTMLElement>("#speed");
 const apparentWind = document.querySelector<HTMLElement>("#apparent-wind");
 const pointOfSail = document.querySelector<HTMLElement>("#point-of-sail");
 const health = document.querySelector<HTMLElement>("#health");
+const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
+const scaleLine = document.querySelector<HTMLElement>("#scale-line");
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 
-if (!canvas || !status || !speed || !apparentWind || !pointOfSail || !health) {
+if (
+  !canvas ||
+  !status ||
+  !speed ||
+  !apparentWind ||
+  !pointOfSail ||
+  !health ||
+  !scaleLabel ||
+  !scaleLine
+) {
   throw new Error("The game page is incomplete");
 }
 const statusElement = status;
@@ -18,6 +29,8 @@ const speedElement = speed;
 const apparentWindElement = apparentWind;
 const pointOfSailElement = pointOfSail;
 const healthElement = health;
+const scaleLabelElement = scaleLabel;
+const scaleLineElement = scaleLine;
 
 window.addEventListener("keydown", (event) => {
   if (controlKeys.has(event.code)) {
@@ -90,6 +103,8 @@ try {
     apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
     pointOfSailElement.textContent = game.point_of_sail();
     healthElement.textContent = game.health().toFixed(0);
+    scaleLabelElement.textContent = game.scale_bar_label();
+    scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
     previousTimeMs = timeMs;
     requestAnimationFrame(frame);
   }

@@ -345,7 +345,9 @@ the same amplitude normalization and density composition. Gradients at or above
 inland terrain renders green.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
-boats.
+boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels
+from the current vertical view height and canvas client height; keep its metric
+label derived from the same distance.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

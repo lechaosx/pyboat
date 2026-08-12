@@ -107,6 +107,10 @@ This file records intended player experience, scope, and product behavior.
   15 knots; the current final band extends continuously between thresholds.
 - **[Explicit]** The mouse wheel zooms the world view in and out without an
   artificial gameplay limit. Clicking the mouse wheel resets the original zoom.
+- **[Explicit]** The world view provides a persistent sense of physical scale.
+- **[Implicit]** A lower-left segmented graphic scale, styled like the scale bars
+  on architectural drawings, selects readable 1–2–5 distances and changes between
+  metric units as zoom changes.
 - **[Implicit]** Terrain remains visible when zoomed beyond the server's boat
   interest limit, but boats outside that limit are absent.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around

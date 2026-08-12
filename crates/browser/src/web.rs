@@ -13,7 +13,7 @@ use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock, scale_bar,
     viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 
@@ -419,6 +419,22 @@ impl BrowserGame {
 
     pub fn reset_zoom(&mut self) {
         self.view_height_m = DEFAULT_VIEW_HEIGHT_M;
+    }
+
+    pub fn scale_bar_width_px(&self) -> f32 {
+        scale_bar(
+            self.view_height_m,
+            self.renderer.canvas.client_height() as f32,
+        )
+        .width_px
+    }
+
+    pub fn scale_bar_label(&self) -> String {
+        scale_bar(
+            self.view_height_m,
+            self.renderer.canvas.client_height() as f32,
+        )
+        .label
     }
 
     pub fn set_player_input(
