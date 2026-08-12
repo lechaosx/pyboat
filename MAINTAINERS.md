@@ -69,7 +69,7 @@ uv run client --latency-ms 100 --jitter-ms 10
 - Add physical detail only when its educational value justifies the code.
 
 The repository-level [`AGENTS.md`](AGENTS.md) adds rules for abstraction,
-documentation, and decision classification.
+documentation, decision classification, and choosing tests by observable risk.
 
 ## Code layout
 

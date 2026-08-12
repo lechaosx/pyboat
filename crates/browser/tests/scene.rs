@@ -65,7 +65,7 @@ fn windsock_reveals_one_band_per_three_knots() {
 }
 
 #[test]
-fn scene_shader_samples_seeded_terrain_per_fragment() {
+fn scene_shader_satisfies_webgpu_validation() {
     let module =
         naga::front::wgsl::parse_str(SCENE_SHADER).expect("scene shader should be valid WGSL");
     naga::valid::Validator::new(
@@ -74,20 +74,6 @@ fn scene_shader_samples_seeded_terrain_per_fragment() {
     )
     .validate(&module)
     .expect("scene shader should satisfy WebGPU validation");
-    assert!(SCENE_SHADER.contains("fn procedural_terrain_elevation_m"));
-    assert!(SCENE_SHADER.contains("procedural_terrain_elevation_m(input.world_position_m)"));
-    assert!(SCENE_SHADER.contains("match_seed: vec2<u32>"));
-    assert!(SCENE_SHADER.contains("wavelength_m = 8192.0"));
-    assert!(SCENE_SHADER.contains("wavelength_m = 1024.0"));
-}
-
-#[test]
-fn scene_shader_derives_cliffs_from_elevation_gradient() {
-    assert!(SCENE_SHADER.contains("fn terrain_slope"));
-    assert!(SCENE_SHADER.contains("dpdx(elevation_m)"));
-    assert!(SCENE_SHADER.contains("dpdy(elevation_m)"));
-    assert!(SCENE_SHADER.contains("slope >= 0.01"));
-    assert!(!SCENE_SHADER.contains("if elevation_m >= 0.4"));
 }
 
 #[test]
