@@ -88,7 +88,8 @@ The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded wind locally. The HUD reports health, speed
 through water, apparent-wind speed, and point of sail using the wind at the local
 boat. One striped windsock on the local boat's bow shows apparent-wind direction
-and strength. The mouse wheel zooms in or out without a gameplay limit; click the
+and strength: each visible band represents about 3 knots, up to all five at
+15 knots. The mouse wheel zooms in or out without a gameplay limit; click the
 mouse wheel to restore the original view. The same match seed produces vast seas
 with sparse clusters of large islands. Water color changes continuously with depth
 before a distinct shoreline transition into beach, cliffs, and inland terrain.

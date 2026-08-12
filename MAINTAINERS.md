@@ -301,8 +301,10 @@ Welcome also supplies the server-selected match seed. Authoritative and predicte
 ticks sample the same smooth wind function separately at each boat, and the local
 sample supplies the apparent-wind HUD.
 The local boat scene subtracts predicted boat velocity from that seeded true wind
-and renders the result as one drag-inflated windsock attached to its bow. Remote
-boats have no wind indicator.
+and renders the result as one windsock attached to its bow. Five equal bands map
+linearly to 0–15 knots of apparent wind. The renderer emits only complete bands
+before the current extension and one partial final band; remote boats have no wind
+indicator.
 The browser draws one fullscreen terrain quad. Its fragment shader reconstructs
 world position and mirrors the Rust cluster and island elevation fields for every
 pixel, including 64-bit seed mixing represented as pairs of WebGPU-compatible

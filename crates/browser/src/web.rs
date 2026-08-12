@@ -636,14 +636,17 @@ fn push_windsock(
     let direction = windsock.apparent_wind_velocity_m_s / speed_m_s;
     let normal = Vector::new(-direction.y, direction.x);
     let extension = windsock_extension(speed_m_s);
-    let length_m = 1.2 * extension;
+    let length_m = 1.2;
     for segment in 0..5 {
         let start = segment as f32 / 5.0;
-        let end = (segment + 1) as f32 / 5.0;
+        if start >= extension {
+            break;
+        }
+        let end = ((segment + 1) as f32 / 5.0).min(extension);
         let start_m = windsock.anchor_m + direction * length_m * start;
         let end_m = windsock.anchor_m + direction * length_m * end;
-        let start_half_width_m = (0.1 - 0.075 * start) * extension;
-        let end_half_width_m = (0.1 - 0.075 * end) * extension;
+        let start_half_width_m = 0.1 - 0.075 * start;
+        let end_half_width_m = 0.1 - 0.075 * end;
         let corners = [
             start_m + normal * start_half_width_m,
             start_m - normal * start_half_width_m,

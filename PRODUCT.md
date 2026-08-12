@@ -73,8 +73,11 @@ This file records intended player experience, scope, and product behavior.
   oscillation over time.
 - **[Explicit]** The browser has no world grid or field of wind arrows. Exactly
   one apparent-wind windsock is attached to the bow of the local boat.
-- **[Implicit]** The red-and-white tapered windsock points down the local apparent
-  airflow and extends progressively as aerodynamic drag lifts it against gravity.
+- **[Explicit]** At lower apparent-wind speeds, only the inflated part of the
+  windsock is rendered rather than showing the entire compressed sock.
+- **[Implicit]** The red-and-white tapered windsock points down local apparent
+  airflow. Each of its five bands represents 3 knots, so it is fully extended at
+  15 knots; the current final band extends continuously between thresholds.
 - **[Explicit]** The mouse wheel zooms the world view in and out without an
   artificial gameplay limit. Clicking the mouse wheel resets the original zoom.
 - **[Implicit]** Terrain remains visible when zoomed beyond the server's boat

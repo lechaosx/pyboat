@@ -54,15 +54,14 @@ fn wheel_zoom_scales_without_an_artificial_view_limit() {
 }
 
 #[test]
-fn windsock_progressively_lifts_into_apparent_wind() {
-    let calm = windsock_extension(0.0);
-    let moderate = windsock_extension(4.0);
-    let strong = windsock_extension(8.0);
+fn windsock_reveals_one_band_per_three_knots() {
+    const THREE_KNOTS_M_S: f32 = 1.543_333_4;
 
-    assert_eq!(calm, 0.0);
-    assert!((moderate - 0.5_f32.sqrt()).abs() < 1.0e-5);
-    assert!(moderate < strong);
-    assert!(strong < 1.0);
+    assert_eq!(windsock_extension(0.0), 0.0);
+    assert!((windsock_extension(THREE_KNOTS_M_S) - 0.2).abs() < 1.0e-5);
+    assert!((windsock_extension(2.0 * THREE_KNOTS_M_S) - 0.4).abs() < 1.0e-5);
+    assert_eq!(windsock_extension(5.0 * THREE_KNOTS_M_S), 1.0);
+    assert_eq!(windsock_extension(20.0), 1.0);
 }
 
 #[test]

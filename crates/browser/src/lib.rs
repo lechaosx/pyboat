@@ -21,6 +21,7 @@ const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
+const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatScene {
@@ -556,8 +557,7 @@ pub fn zoom_view_height_m(view_height_m: f32, wheel_delta_y: f32) -> f32 {
 }
 
 pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
-    let drag_to_weight = (apparent_wind_speed_m_s.max(0.0) / 4.0).powi(2);
-    drag_to_weight / (1.0 + drag_to_weight.powi(2)).sqrt()
+    (apparent_wind_speed_m_s.max(0.0) / WINDSOCK_FULL_EXTENSION_SPEED_M_S).min(1.0)
 }
 
 pub struct Demo {
