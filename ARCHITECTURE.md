@@ -191,6 +191,8 @@ decisions.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
   they move and evolve without a world-sized fluid simulation. Clouds do not
   participate in visibility or any other gameplay rule.
+- **[Explicit]** Wind affects cloud translation, not the orientation of the noise
+  coordinate system; changing wind must not rotate the rendered cloud field.
 - **[Explicit]** Common cloud formations emerge from continuous weather
   parameters rather than a discrete cloud-type selector.
 - **[Implicit]** Shared cloud cover is five octaves of smooth value noise over
@@ -237,8 +239,9 @@ decisions.
 - **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered wind,
   moisture, instability, low and high cloudiness, and rain intensity into the
   shared sample consumed by the renderer. WGSL continuously blends a cellular
-  128–2 m cumulus field, a wind-aligned 512–32 m stratiform field, and sparse
-  wind-aligned 512–16 m cirrus ridges. Instability weights cumulus against stratus;
+  128–2 m cumulus field, a 512–32 m stratiform field, and sparse 512–16 m cirrus
+  ridges. A client-local seed fixes their elongated coordinate orientation while
+  instability weights cumulus against stratus;
   instability with rain strengthens storm cells. The browser integrates one
   camera-local visual offset from the sampled wind each frame, avoiding a global
   flow simulation. Cloud shading applies only to the fullscreen world surface, so

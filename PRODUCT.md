@@ -136,6 +136,8 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Cloud shapes move at the speed and direction of the shared local
   wind while also forming and dissipating over time, without simulating a global
   fluid volume.
+- **[Explicit]** Changes in wind direction curve cloud motion but do not rotate
+  the cloud density pattern in place.
 - **[Explicit]** Familiar cloud families emerge from continuous atmospheric
   conditions rather than named presets: stable moisture favors layered clouds,
   instability favors cellular and towering clouds, rain darkens storm systems,

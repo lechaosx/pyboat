@@ -366,14 +366,15 @@ predicted simulation time, a visual seed derived from the local player identity,
 and the locally integrated cloud offset. WGSL uses the one weather sample
 uniformly across the viewport; it does not mirror the shared weather field per
 pixel. Player-specific noise forms three continuously blended responses: cellular
-128–2 m cumulus, wind-aligned 512–32 m stratus, and sparse wind-aligned 512–16 m
-cirrus ridges. Instability blends stratus toward cumulus and, together with rain,
-strengthens dense storm cells. Seeded time-slice interpolation changes each field
-while each frame also adds sampled unsheltered wind velocity times elapsed time to
-the offset. Cloud shading applies only to the fullscreen terrain quad, never boat
-fragments. Low density is visually suppressed through 0.10; a short 0.10–0.30
-opacity ramp keeps cloud edges crisp, and rain intensity darkens clouds toward
-storm grey.
+128–2 m cumulus, elongated 512–32 m stratus, and sparse elongated 512–16 m cirrus
+ridges. One angle derived from the client-local visual seed fixes their noise
+coordinate basis. Do not derive that basis from current wind: wind changes only
+the integrated translation offset, while recomputing the basis rotates the entire
+field. Instability blends stratus toward cumulus and, together with rain,
+strengthens dense storm cells. Seeded time-slice interpolation changes each field.
+Cloud shading applies only to the fullscreen terrain quad, never boat fragments.
+Low density is visually suppressed through 0.10; a short 0.10–0.30 opacity ramp
+keeps cloud edges crisp, and rain intensity darkens clouds toward storm grey.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

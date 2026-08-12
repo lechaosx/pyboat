@@ -172,17 +172,16 @@ fn terrain_fractal_sample(
     return sample;
 }
 
-fn cloud_coordinates(position_m: vec2<f32>, along_wind_scale: f32) -> vec2<f32> {
-    let wind_speed = length(scene.weather.xy);
-    var along_wind = vec2<f32>(1.0, 0.0);
-    if wind_speed > 0.01 {
-        along_wind = scene.weather.xy / wind_speed;
-    }
-    let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
+fn cloud_coordinates(position_m: vec2<f32>, along_cloud_scale: f32) -> vec2<f32> {
+    let orientation = 6.28318530718 * terrain_hash_unit(
+        scene.cloud_visual_seed ^ vec2<u32>(0x85a308d3u, 0x243f6a88u),
+    );
+    let along_cloud = vec2<f32>(cos(orientation), sin(orientation));
+    let across_cloud = vec2<f32>(-along_cloud.y, along_cloud.x);
     let advected_position_m = position_m - scene.cloud_offset_m;
     return vec2<f32>(
-        along_wind_scale * dot(advected_position_m, along_wind),
-        dot(advected_position_m, across_wind),
+        along_cloud_scale * dot(advected_position_m, along_cloud),
+        dot(advected_position_m, across_cloud),
     );
 }
 
