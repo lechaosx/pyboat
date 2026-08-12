@@ -275,7 +275,7 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     }
 
     assert!(
-        mixed_coastal_patches >= 64,
+        mixed_coastal_patches >= 48,
         "only {mixed_coastal_patches} mixed coastal patches"
     );
     assert!(maximum_slope > 0.15, "maximum slope was {maximum_slope}");
@@ -283,22 +283,51 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     relief_128_m.sort_by(f32::total_cmp);
     let relief_32_m_p90 = relief_32_m[relief_32_m.len() * 9 / 10];
     let relief_128_m_p90 = relief_128_m[relief_128_m.len() * 9 / 10];
-    let short_to_long_relief = relief_32_m_p90 / relief_128_m_p90;
     assert!(
-        (0.5..=2.0).contains(&relief_32_m_p90),
+        relief_32_m_p90 <= 1.94,
         "32 m relief p90 was {relief_32_m_p90} m"
     );
     assert!(
-        (0.75..=3.0).contains(&relief_128_m_p90),
+        relief_128_m_p90 <= 2.92,
         "128 m relief p90 was {relief_128_m_p90} m"
-    );
-    assert!(
-        (0.6..=0.75).contains(&short_to_long_relief),
-        "32 m relief p90 was {relief_32_m_p90} m versus {relief_128_m_p90} m at 128 m"
     );
     assert!(deep_access_patches > 0);
     assert!(
         deep_access_patches * 4 < mixed_coastal_patches,
         "{deep_access_patches} of {mixed_coastal_patches} reef patches had deep access"
+    );
+}
+
+#[test]
+fn procedural_shorelines_do_not_fragment_at_reef_scale() {
+    let mut coastal_transects = 0;
+    let mut shoreline_crossings = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for patch_x in -24..=24 {
+            for patch_y in -24..=24 {
+                let start_m = Vector::new(patch_x as f32 * 256.0 - 128.0, patch_y as f32 * 256.0);
+                let mut previous_is_land = procedural_terrain_elevation_m(seed, start_m) >= 0.0;
+                let mut crossings = 0;
+                for sample in 1..=64 {
+                    let is_land = procedural_terrain_elevation_m(
+                        seed,
+                        start_m + Vector::new(sample as f32 * 4.0, 0.0),
+                    ) >= 0.0;
+                    crossings += usize::from(is_land != previous_is_land);
+                    previous_is_land = is_land;
+                }
+                if crossings > 0 {
+                    coastal_transects += 1;
+                    shoreline_crossings += crossings;
+                }
+            }
+        }
+    }
+
+    assert!(coastal_transects > 0);
+    assert!(
+        shoreline_crossings <= coastal_transects * 2,
+        "{shoreline_crossings} crossings fragmented {coastal_transects} coastal transects"
     );
 }

@@ -146,15 +146,16 @@ decisions.
   players in regional seas. Three 8,192–2,048 m cluster octaves and five
   1,024–64 m island-detail octaves produce sparse large islands in a connected,
   dominant ocean.
-- **[Implicit]** In base elevations from -4 to 3 m, a smooth coastal mask
-  multiplies four further 32–4 m octaves. A signed 1.8 m contribution cuts
-  channels and raises rugged seabed, while a 1 m upper-tail contribution makes
-  uncommon emergent rocks. Applying the same field across sea level makes rocky
-  outcrops continue into rugged coast without per-rock clearance rules.
+- **[Implicit]** Four 32–4 m reef octaves have separate roles. Between -4 and
+  -0.1 m elevation, a smooth mask applies up to 0.6 m of signed relief to the
+  submerged seabed. A narrower -2 to -0.1 m mask adds up to 2 m only where the
+  reef field exceeds its 0.65–0.85 upper-tail spline, producing sparse emergent
+  rocks without adding reef-scale noise to the parent island silhouette.
 - **[Implicit]** NOAA BlueTopo 4 m grids for rocky Maine and the Florida Keys
   calibrate the coastal relief spectrum in the same -4 to 1 m elevation band as
-  the game. Generated 90th-percentile relief stays within the observed ranges at
-  32 m and 128 m baselines, and statistical samples require 4 m-deep access near
+  the game. Observed 90th-percentile relief provides upper bounds at 32 m and
+  128 m baselines rather than a shoreline-shape target. Statistical samples also
+  limit aggregate 256 m shoreline fragmentation and require 4 m-deep access near
   some, but fewer than one quarter, of mixed reef neighborhoods.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,

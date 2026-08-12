@@ -54,6 +54,9 @@ This file records intended player experience, scope, and product behavior.
   than separately placed objects. Their probability distribution naturally forms
   navigable channels; small boats can commonly use them as cover, while deep
   passages for large ships occur rarely.
+- **[Explicit]** Large-island silhouettes remain coherent rather than inheriting
+  reef-scale noise. Small-scale relief stays predominantly underwater, with only
+  sparse peaks emerging as coastal rocks.
 - **[Explicit]** Gentle shoreline renders as beach, while sufficiently steep
   shoreline and inland slopes render as bare rock.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water

@@ -106,12 +106,13 @@ the protocol transfers the seed rather than sampled fields or parameters.
 Static terrain routes several seeded density fields in uncompressed real metres.
 Three cluster octaves over 2,048–8,192 m and five island-detail octaves over
 64–1,024 m shape sparse large islands without a continent-scale field that could
-close regional seas. In base elevations from -4 to 3 m, a smooth coastal mask
-applies four 4–32 m reef octaves. Their signed 1.8 m contribution cuts channels
-and raises rugged seabed; a further 1 m upper-tail contribution produces uncommon
-emergent rocks. This creates a distribution of channel depths without placing
-objects or checking clearance around individual features. Keep land at 5–15%
-across representative regions and each sampled 65 km region below 20%. The shared
+close regional seas. Four 4–32 m reef octaves feed two smooth masks. Between
+-4 and -0.1 m elevation, up to 0.6 m of signed relief cuts channels and raises
+the submerged seabed. Between -2 and -0.1 m, a 0.65–0.85 upper-tail spline adds
+up to 2 m for sparse emergent rocks. This creates a distribution of channel
+depths without placing objects, checking clearance around individual features,
+or applying reef-scale noise to the parent island. Keep land at 5–15% across
+representative regions and each sampled 65 km region below 20%. The shared
 sampler returns continuous elevation relative to sea level from only the match
 seed and world position. Each procedural environment converts elevation to water
 depth for authoritative and predicted grounding without adding terrain to the
@@ -119,10 +120,10 @@ protocol.
 Coastal relief is calibrated against [NOAA BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html)
 4 m tiles `BH5475HC` (rocky Maine, 2026-06-01) and `BH4TB55V` (Florida Keys,
 2026-05-20), using the same -4 to 1 m elevation band in data and generator.
-At 32 m and 128 m baselines, keep generated 90th-percentile relief within the
-observed `0.54–1.94 m` and `0.76–2.92 m` ranges, with their ratio between 0.60 and
-0.75. The source grids are public navigation bathymetry; calibration data stays
-outside the repository.
+At 32 m and 128 m baselines, keep generated 90th-percentile relief below the
+observed `1.94 m` and `2.92 m` rocky-coast upper bounds. Treat those data as
+roughness limits, not shoreline-contour targets. The source grids are public
+navigation bathymetry; calibration data stays outside the repository.
 Unsheltered wind is the sum of 48 divergence-free Fourier modes. Weather modes
 carry 90% of component variance over 32,768–131,072 m wavelengths, regional modes
 carry 8% over 4,096–32,768 m, and gust modes carry 2% over 64–512 m. This gives an

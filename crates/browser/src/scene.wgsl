@@ -203,27 +203,35 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var terrain: TerrainSample;
     terrain.elevation_m = base.value;
     terrain.gradient = base.gradient;
-    let deep_gate = terrain_smoothstep_sample(-4.0, -1.5, base);
-    let inland_rise = terrain_smoothstep_sample(1.0, 3.0, base);
-    let inland_gate_value = 1.0 - inland_rise.value;
-    let reef_mask_value = deep_gate.value * inland_gate_value;
-    if reef_mask_value == 0.0 {
+    let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, base);
+    let seabed_shore_rise = terrain_smoothstep_sample(-0.5, -0.1, base);
+    let seabed_shore_gate_value = 1.0 - seabed_shore_rise.value;
+    let seabed_mask_value = seabed_deep_gate.value * seabed_shore_gate_value;
+    let rock_deep_gate = terrain_smoothstep_sample(-2.0, -0.8, base);
+    let rock_shore_rise = terrain_smoothstep_sample(-0.4, -0.1, base);
+    let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
+    let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
+    if seabed_mask_value == 0.0 && rock_mask_value == 0.0 {
         return terrain;
     }
-    let reef_mask_gradient = deep_gate.gradient * inland_gate_value
-        - inland_rise.gradient * deep_gate.value;
+    let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
+        - seabed_shore_rise.gradient * seabed_deep_gate.value;
+    let rock_mask_gradient = rock_deep_gate.gradient * rock_shore_gate_value
+        - rock_shore_rise.gradient * rock_deep_gate.value;
     let reef = terrain_fractal_sample(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         position_m,
         32.0,
         4u,
     );
-    let reef_peak = terrain_smoothstep_sample(0.4, 0.7, reef);
-    let reef_detail_value = 1.8 * reef.value + reef_peak.value;
-    let reef_detail_gradient = 1.8 * reef.gradient + reef_peak.gradient;
-    terrain.elevation_m += reef_mask_value * reef_detail_value;
-    terrain.gradient += reef_mask_gradient * reef_detail_value
-        + reef_detail_gradient * reef_mask_value;
+    let reef_peak = terrain_smoothstep_sample(0.65, 0.85, reef);
+    terrain.elevation_m += 0.6 * seabed_mask_value * reef.value
+        + 2.0 * rock_mask_value * reef_peak.value;
+    terrain.gradient += 0.6 * (
+        seabed_mask_gradient * reef.value + reef.gradient * seabed_mask_value
+    ) + 2.0 * (
+        rock_mask_gradient * reef_peak.value + reef_peak.gradient * rock_mask_value
+    );
     return terrain;
 }
 

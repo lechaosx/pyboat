@@ -118,9 +118,11 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     );
     let local_density = 0.68 * cluster + 0.32 * island;
     let base_elevation_m = 18.0 * (local_density - 0.35);
-    let reef_mask = smoothstep_range(-4.0, -1.5, base_elevation_m)
-        * (1.0 - smoothstep_range(1.0, 3.0, base_elevation_m));
-    if reef_mask == 0.0 {
+    let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
+        * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));
+    let rock_mask = smoothstep_range(-2.0, -0.8, base_elevation_m)
+        * (1.0 - smoothstep_range(-0.4, -0.1, base_elevation_m));
+    if seabed_mask == 0.0 && rock_mask == 0.0 {
         return base_elevation_m as f32;
     }
     let reef = terrain_fractal_noise(
@@ -129,8 +131,8 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         32.0,
         TERRAIN_REEF_OCTAVE_COUNT,
     );
-    let reef_peak = smoothstep_range(0.4, 0.7, reef);
-    (base_elevation_m + reef_mask * (1.8 * reef + reef_peak)) as f32
+    let reef_peak = smoothstep_range(0.65, 0.85, reef);
+    (base_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
 }
 
 fn terrain_fractal_noise(
