@@ -261,6 +261,64 @@ fn directional_cloud_noise(
     return filtered / weight_sum;
 }
 
+struct OrientedCloudNoise {
+    first: f32,
+    second: f32,
+    blend: f32,
+};
+
+fn oriented_cloud_noise(
+    position_m: vec2<f32>,
+    high_altitude: bool,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    initial_lifetime_seconds: f32,
+    along_wind_scale: f32,
+) -> OrientedCloudNoise {
+    let layer_wind = select(scene.cloud_motion.xy, scene.cloud_motion.zw, high_altitude);
+    var wind_angle = 0.0;
+    if length(layer_wind) > 0.5 {
+        wind_angle = atan2(layer_wind.y, layer_wind.x);
+    }
+    let orientation_count = 12.0;
+    let orientation_position = fract(wind_angle / 3.14159265359) * orientation_count;
+    let first_index = floor(orientation_position);
+    let second_index = (first_index + 1.0) % orientation_count;
+    let first_angle = first_index * 3.14159265359 / orientation_count;
+    let second_angle = second_index * 3.14159265359 / orientation_count;
+    let first_direction = vec2<f32>(cos(first_angle), sin(first_angle));
+    let second_direction = vec2<f32>(cos(second_angle), sin(second_angle));
+    let first_across = vec2<f32>(-first_direction.y, first_direction.x);
+    let second_across = vec2<f32>(-second_direction.y, second_direction.x);
+    let position = cloud_coordinates(position_m, high_altitude);
+
+    var sample: OrientedCloudNoise;
+    sample.first = visual_cloud_noise(
+        vec2<f32>(
+            along_wind_scale * dot(position, first_direction),
+            dot(position, first_across),
+        ),
+        field_salt,
+        initial_wavelength_m,
+        octave_count,
+        initial_lifetime_seconds,
+    );
+    sample.second = visual_cloud_noise(
+        vec2<f32>(
+            along_wind_scale * dot(position, second_direction),
+            dot(position, second_across),
+        ),
+        field_salt,
+        initial_wavelength_m,
+        octave_count,
+        initial_lifetime_seconds,
+    );
+    // Fixed orientation fields crossfade so changing wind cannot rotate existing clouds.
+    sample.blend = smoothstep(0.15, 0.85, fract(orientation_position));
+    return sample;
+}
+
 struct CloudSample {
     density: f32,
     optical_depth: f32,
@@ -303,14 +361,14 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     );
     let cumulus = cover * cumulus_body * (0.52 + 0.48 * cumulus_billows);
 
-    let stratus_noise = directional_cloud_noise(
+    let stratus_noise = oriented_cloud_noise(
         position_m,
         false,
         vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
-        240.0,
-        6u,
-        420.0,
-        720.0,
+        512.0,
+        5u,
+        300.0,
+        0.20,
     );
     let stratus_breakup = visual_cloud_noise(
         cloud_coordinates(position_m, false),
@@ -319,25 +377,33 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         5u,
         210.0,
     );
-    let stratus_ridge = 1.0 - smoothstep(0.010, 0.042, abs(stratus_noise));
-    let stratus_breakup_amount = smoothstep(-0.16, 0.38, stratus_breakup);
+    let stratus_threshold = mix(0.30, -0.20, cover * moisture);
+    let first_stratus = smoothstep(
+        stratus_threshold,
+        stratus_threshold + 0.25,
+        stratus_noise.first,
+    );
+    let second_stratus = smoothstep(
+        stratus_threshold,
+        stratus_threshold + 0.25,
+        stratus_noise.second,
+    );
     let stratus = cover
         * moisture
-        * smoothstep(0.18, 0.46, stratus_ridge)
-        * (0.16 + 0.84 * stratus_breakup_amount);
+        * mix(first_stratus, second_stratus, stratus_noise.blend);
 
     let storm_suppression = 1.0 - 0.88 * rain * smoothstep(0.45, 0.90, instability);
     let low_cloud = storm_suppression
         * mix(stratus, cumulus, smoothstep(0.22, 0.72, instability));
 
-    let cirrus_noise = directional_cloud_noise(
+    let cirrus_noise = oriented_cloud_noise(
         position_m,
         true,
         vec2<u32>(0x75374cc3u, 0x589965ccu),
-        320.0,
-        5u,
-        360.0,
-        640.0,
+        512.0,
+        6u,
+        240.0,
+        0.08,
     );
     let cirrus_envelope = visual_cloud_noise(
         cloud_coordinates(position_m, true),
@@ -353,17 +419,22 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         5u,
         180.0,
     );
-    let cirrus_filament = smoothstep(0.045, 0.075, cirrus_noise)
-        - smoothstep(0.13, 0.17, cirrus_noise);
     let cirrus_envelope_amount = smoothstep(
         0.04,
         0.34,
         cirrus_envelope + 0.10 * cirrus_feather,
     );
+    let first_cirrus_ridge = 1.0 - abs(cirrus_noise.first);
+    let second_cirrus_ridge = 1.0 - abs(cirrus_noise.second);
+    let cirrus_filament = mix(
+        smoothstep(0.94, 0.985, first_cirrus_ridge),
+        smoothstep(0.94, 0.985, second_cirrus_ridge),
+        cirrus_noise.blend,
+    );
     let cirrus = 0.58
         * high_cloudiness
         * cirrus_filament
-        * (0.38 + 0.62 * cirrus_envelope_amount);
+        * (0.55 + 0.45 * cirrus_envelope_amount);
 
     let squall_noise = directional_cloud_noise(
         position_m,
@@ -411,7 +482,10 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         max(
             max(
                 low_optical_depth,
-                cirrus * (0.18 + 0.20 * (0.5 + 0.5 * cirrus_feather)),
+                cirrus
+                    * (0.14
+                        + 0.16 * cirrus_envelope_amount
+                        + 0.14 * (0.5 + 0.5 * cirrus_feather)),
             ),
             max(1.12 * squall_mass, 1.18 * storm_mass * storm_depth_variation),
         ),

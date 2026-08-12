@@ -46,8 +46,8 @@ const SHOWCASES: [Showcase; 5] = [
     },
     Showcase {
         name: "marine-stratus",
-        weather: [7.0, 2.0, 0.72, 0.0],
-        structure: [0.90, 0.12, 0.05, 0.0],
+        weather: [7.0, 2.0, 0.95, 0.0],
+        structure: [0.98, 0.08, 0.05, 0.0],
     },
     Showcase {
         name: "high-cirrus",

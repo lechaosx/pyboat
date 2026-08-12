@@ -375,10 +375,11 @@ low/high cloudiness, rain state, predicted simulation time, a visual seed derive
 from the local player identity, and separately integrated low/high cloud offsets. WGSL uses the one weather
 sample uniformly across the viewport; it does not mirror the shared weather field
 per pixel. Player-specific noise forms three continuously blended responses:
-cellular cumulus, elongated stratus and squalls, and sparse high cirrus. Nine
-weighted samples of each elongated field form wind-aligned correlation without
-transforming noise coordinates. Low and high winds advance separate translation
-offsets. Instability blends stratus toward cumulus and, together with rain,
+cellular cumulus, elongated stratus and squalls, and sparse high cirrus. Stratus
+compresses noise coordinates fivefold along its selected axes; cirrus compresses
+them 12.5-fold. Each layer's wind selects two neighbors among 12 fixed undirected
+axes and crossfades their formed density, preventing in-place rotation. Low and
+high winds advance separate translation offsets. Instability blends stratus toward cumulus and, together with rain,
 strengthens dense storm cells. Cloud shading applies only to the fullscreen
 terrain quad, never boat fragments. Density, optical depth, darkness, and relief
 are calculated separately; an exponential optical-depth mapping keeps ordinary

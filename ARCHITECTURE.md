@@ -194,9 +194,10 @@ decisions.
   participate in visibility or any other gameplay rule.
 - **[Explicit]** Wind affects cloud translation, not the orientation of the noise
   coordinate system; changing wind must not rotate the rendered cloud field.
-- **[Explicit]** Elongated formations arise by filtering the same unwarped
-  spacetime-noise field along the large-scale wind direction. As that direction
-  changes, formations rebuild from the underlying field rather than rotating.
+- **[Explicit]** Elongated formations compress spacetime-noise coordinates along
+  fixed orientation axes. Wind selects neighboring axes and crossfades their
+  already-formed density, so formations rebuild toward a changed wind direction
+  without rotating in place.
 - **[Explicit]** Cloud motion and formation use only the lowest-frequency wind
   components so regional and gust-scale changes do not abruptly redirect them.
 - **[Explicit]** Sea-level, low-cloud, and high-cloud winds are coherent samples
@@ -253,8 +254,9 @@ decisions.
   band at 118% speed. Low-cloud wind blends that band with the complete surface
   field at 108% speed. WGSL continuously blends crisp 96–1.5 m cumulus and 28 m
   billow detail with elongated stratus, sparse translucent cirrus, narrow squall
-  fronts, and convective storm mass. Nine weighted samples filter the unwarped
-  spacetime fields along each layer's wind direction. Density, optical depth,
+  fronts, and convective storm mass. Twelve fixed axes cover each undirected
+  half-circle; each layer's wind crossfades its two nearest independently sampled
+  orientations. Density, optical depth,
   darkness, and relief remain separate so thin cloud stays transparent, dense
   rain cloud darkens continuously, and fine internal detail survives inside the
   silhouette. Instability weights cumulus against stratus; instability with rain
