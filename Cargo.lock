@@ -735,6 +735,7 @@ dependencies = [
  "bytemuck",
  "console_error_panic_hook",
  "futures-util",
+ "naga",
  "pyboat-game",
  "pyboat-protocol",
  "pyboat-server",

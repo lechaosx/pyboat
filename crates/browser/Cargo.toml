@@ -15,6 +15,7 @@ rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 
 [dev-dependencies]
 futures-util = "0.3.33"
+naga = { version = "30.0.0", features = ["wgsl-in"] }
 pyboat-server = { path = "../server" }
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }

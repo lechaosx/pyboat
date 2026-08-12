@@ -13,7 +13,7 @@ use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, TerrainVertex, Windsock,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock,
     viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 
@@ -24,13 +24,12 @@ const MAX_VERTICES: usize = 32768;
 struct Vertex {
     position: [f32; 2],
     color: [f32; 3],
-    elevation_m: f32,
     is_terrain: f32,
 }
 
 impl Vertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32, 3 => Float32];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -41,6 +40,14 @@ impl Vertex {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SceneUniforms {
+    camera_and_view_m: [f32; 4],
+    match_seed: [u32; 2],
+    _padding: [u32; 2],
+}
+
 struct Renderer {
     canvas: HtmlCanvasElement,
     device: wgpu::Device,
@@ -49,6 +56,8 @@ struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
 }
 
 impl Renderer {
@@ -88,11 +97,24 @@ impl Renderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Pyboat scene shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("scene.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SCENE_SHADER)),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Pyboat scene uniforms layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pyboat scene pipeline layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -122,6 +144,20 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Pyboat scene uniforms"),
+            size: mem::size_of::<SceneUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Pyboat scene uniforms bind group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
 
         Ok(Self {
             canvas,
@@ -131,20 +167,22 @@ impl Renderer {
             config,
             pipeline,
             vertex_buffer,
+            uniform_buffer,
+            bind_group,
         })
     }
 
     fn render(
         &mut self,
         scenes: &[BoatScene],
-        terrain_vertices: &[TerrainVertex],
+        match_seed: Option<u64>,
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
         self.resize();
         let vertices = scene_vertices(
             scenes,
-            terrain_vertices,
+            match_seed.is_some(),
             camera_m,
             self.config.width,
             self.config.height,
@@ -152,6 +190,17 @@ impl Renderer {
         );
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
+        let match_seed = match_seed.unwrap_or(0);
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&SceneUniforms {
+                camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
+                match_seed: [match_seed as u32, (match_seed >> 32) as u32],
+                _padding: [0; 2],
+            }),
+        );
 
         let frame = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => frame,
@@ -202,6 +251,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -355,10 +405,9 @@ impl BrowserGame {
             self.client.borrow_mut().accept(snapshot);
         }
         let client = self.client.borrow();
-        let aspect_ratio = self.renderer.aspect_ratio();
         self.renderer.render(
             &client.scenes(),
-            &client.terrain_vertices(aspect_ratio, self.view_height_m),
+            client.match_seed(),
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
         )
@@ -458,7 +507,7 @@ fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
 
 fn scene_vertices(
     scenes: &[BoatScene],
-    terrain_vertices: &[TerrainVertex],
+    render_terrain: bool,
     camera_m: Vector,
     width: u32,
     height: u32,
@@ -468,13 +517,21 @@ fn scene_vertices(
     let view_width_m = view_height_m * aspect;
     let mut vertices = Vec::new();
 
-    for terrain in terrain_vertices {
-        vertices.push(Vertex {
-            position: clip_position(terrain.position_m, camera_m, view_width_m, view_height_m),
-            color: [0.0; 3],
-            elevation_m: terrain.elevation_m,
-            is_terrain: 1.0,
-        });
+    if render_terrain {
+        for position in [
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ] {
+            vertices.push(Vertex {
+                position,
+                color: [0.0; 3],
+                is_terrain: 1.0,
+            });
+        }
     }
 
     for scene in scenes {
@@ -620,7 +677,6 @@ fn vertex(
     Vertex {
         position: clip_position(point_m, camera_m, view_width_m, view_height_m),
         color,
-        elevation_m: 0.0,
         is_terrain: 0.0,
     }
 }

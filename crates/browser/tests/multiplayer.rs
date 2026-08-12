@@ -1,5 +1,5 @@
 use pyboat_browser::MultiplayerClient;
-use pyboat_game::{procedural_match_environment, procedural_terrain_elevation_m};
+use pyboat_game::procedural_match_environment;
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{DT_SECONDS, apparent_flow};
 use rapier2d::prelude::Vector;
@@ -238,40 +238,15 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
 }
 
 #[test]
-fn multiplayer_client_derives_world_aligned_terrain_from_the_match_seed() {
+fn multiplayer_client_exposes_the_match_seed_for_gpu_terrain() {
     let mut client = MultiplayerClient::new();
+    assert_eq!(client.match_seed(), None);
+
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
     });
-    let mut local = boat("player-1", 7.25);
-    local.y = 2.5;
-    client.accept(ServerMessage::Snapshot {
-        tick: 9,
-        boats: vec![local],
-        removed_player_ids: Vec::new(),
-    });
-
-    let terrain = client.terrain_vertices(4.0 / 3.0, 15.0);
-
-    assert!(!terrain.is_empty());
-    assert_eq!(terrain.len() % 6, 0);
-    let mut has_offscreen_vertex = false;
-    for vertex in &terrain {
-        assert_eq!(
-            vertex.elevation_m,
-            procedural_terrain_elevation_m(42, vertex.position_m)
-        );
-        assert!(vertex.position_m.x.fract().abs() < 1.0e-5);
-        assert!(vertex.position_m.y.fract().abs() < 1.0e-5);
-        let camera_distance_x = (vertex.position_m.x - 7.25).abs();
-        let camera_distance_y = (vertex.position_m.y - 2.5).abs();
-        has_offscreen_vertex |= camera_distance_x > 10.0 || camera_distance_y > 7.5;
-    }
-    assert!(has_offscreen_vertex);
-
-    let zoomed_out_terrain = client.terrain_vertices(4.0 / 3.0, 15_000.0);
-    assert!(zoomed_out_terrain.len() <= terrain.len() * 2);
+    assert_eq!(client.match_seed(), Some(42));
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use pyboat_game::{
     computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
-    match_environment, procedural_match_environment, procedural_terrain_elevation_m,
+    match_environment, procedural_match_environment,
 };
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{
@@ -15,8 +15,9 @@ use rapier2d::prelude::{Rotation, Vector};
 mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const SCENE_SHADER: &str = include_str!("scene.wgsl");
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
-const TERRAIN_MESH_SPACING_M: f32 = 1.0;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
@@ -36,12 +37,6 @@ pub struct BoatScene {
 pub struct Windsock {
     pub anchor_m: Vector,
     pub apparent_wind_velocity_m_s: Vector,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TerrainVertex {
-    pub position_m: Vector,
-    pub elevation_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +193,10 @@ impl MultiplayerClient {
 
     pub fn player_id(&self) -> Option<&str> {
         self.player_id.as_deref()
+    }
+
+    pub fn match_seed(&self) -> Option<u64> {
+        self.match_seed
     }
 
     pub fn disconnect(&mut self) {
@@ -370,43 +369,6 @@ impl MultiplayerClient {
                 })
             })
             .collect()
-    }
-
-    pub fn terrain_vertices(&self, aspect_ratio: f32, view_height_m: f32) -> Vec<TerrainVertex> {
-        let match_seed = match self.match_seed {
-            Some(match_seed) => match_seed,
-            None => return Vec::new(),
-        };
-        let camera_m = match self.camera_m() {
-            Some(camera_m) => camera_m,
-            None => return Vec::new(),
-        };
-        let mesh_spacing_m = terrain_mesh_spacing_m(view_height_m);
-        let half_width_m = view_height_m * aspect_ratio / 2.0 + mesh_spacing_m;
-        let half_height_m = view_height_m / 2.0 + mesh_spacing_m;
-        let first_x = ((camera_m.x - half_width_m) / mesh_spacing_m).floor() as i32;
-        let last_x = ((camera_m.x + half_width_m) / mesh_spacing_m).ceil() as i32;
-        let first_y = ((camera_m.y - half_height_m) / mesh_spacing_m).floor() as i32;
-        let last_y = ((camera_m.y + half_height_m) / mesh_spacing_m).ceil() as i32;
-        let mut vertices = Vec::new();
-        for x in first_x..last_x {
-            for y in first_y..last_y {
-                let corners = [
-                    Vector::new(x as f32, y as f32) * mesh_spacing_m,
-                    Vector::new((x + 1) as f32, y as f32) * mesh_spacing_m,
-                    Vector::new((x + 1) as f32, (y + 1) as f32) * mesh_spacing_m,
-                    Vector::new(x as f32, (y + 1) as f32) * mesh_spacing_m,
-                ];
-                for index in [0, 1, 2, 0, 2, 3] {
-                    let position_m = corners[index];
-                    vertices.push(TerrainVertex {
-                        position_m,
-                        elevation_m: procedural_terrain_elevation_m(match_seed, position_m),
-                    });
-                }
-            }
-        }
-        vertices
     }
 
     fn local_motion(&self) -> Option<BoatMotion> {
@@ -596,11 +558,6 @@ pub fn zoom_view_height_m(view_height_m: f32, wheel_delta_y: f32) -> f32 {
 pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
     let drag_to_weight = (apparent_wind_speed_m_s.max(0.0) / 4.0).powi(2);
     drag_to_weight / (1.0 + drag_to_weight.powi(2)).sqrt()
-}
-
-fn terrain_mesh_spacing_m(view_height_m: f32) -> f32 {
-    let relative_scale = (view_height_m / DEFAULT_VIEW_HEIGHT_M).max(1.0);
-    2.0_f32.powf(relative_scale.log2().ceil()) * TERRAIN_MESH_SPACING_M
 }
 
 pub struct Demo {

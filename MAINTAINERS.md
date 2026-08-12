@@ -301,13 +301,15 @@ sample supplies the apparent-wind HUD.
 The local boat scene subtracts predicted boat velocity from that seeded true wind
 and renders the result as one drag-inflated windsock attached to its bow. Remote
 boats have no wind indicator.
-The browser samples shared terrain elevation on a world-aligned mesh beyond the
-viewport. Spacing starts at 1 m and doubles as the mouse-wheel view expands, so
-unclamped multiplicative zoom does not grow the terrain vertex count with visible
-area. The fragment shader interpolates both elevation and underwater color, with
-a distinct shoreline transition into the beach, cliff, and inland bands. Middle
-mouse resets the original 15 m view height. Terrain can remain visible outside
-the server's clamped boat-interest radius, where snapshots contain no boats.
+The browser draws one fullscreen terrain quad. Its fragment shader reconstructs
+world position and mirrors the Rust five-octave elevation sampler for every pixel,
+including 64-bit seed mixing represented as pairs of WebGPU-compatible 32-bit
+integers. Keep WGSL terrain constants and hashing synchronized with
+`pyboat-game`; Rust remains authoritative for physical depth. The shader owns
+underwater color and the shoreline, beach, cliff, and inland material bands.
+Middle mouse resets the original 15 m view height. Terrain can remain visible
+outside the server's clamped boat-interest radius, where snapshots contain no
+boats.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

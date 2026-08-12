@@ -8,6 +8,8 @@ use pyboat_game::dinghy_parameters;
 use pyboat_simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 use rapier2d::prelude::Vector;
 
+const SCENE_SHADER: &str = include_str!("../src/scene.wgsl");
+
 fn assert_vector_close(actual: Vector, expected: Vector) {
     assert!(
         (actual - expected).length() < 1.0e-5,
@@ -61,6 +63,21 @@ fn windsock_progressively_lifts_into_apparent_wind() {
     assert!((moderate - 0.5_f32.sqrt()).abs() < 1.0e-5);
     assert!(moderate < strong);
     assert!(strong < 1.0);
+}
+
+#[test]
+fn scene_shader_samples_seeded_terrain_per_fragment() {
+    let module =
+        naga::front::wgsl::parse_str(SCENE_SHADER).expect("scene shader should be valid WGSL");
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .expect("scene shader should satisfy WebGPU validation");
+    assert!(SCENE_SHADER.contains("fn procedural_terrain_elevation_m"));
+    assert!(SCENE_SHADER.contains("procedural_terrain_elevation_m(input.world_position_m)"));
+    assert!(SCENE_SHADER.contains("match_seed: vec2<u32>"));
 }
 
 #[test]

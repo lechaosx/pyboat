@@ -152,10 +152,12 @@ decisions.
   field without deforming it, making gust structures vary over approximately
   10.7–85 seconds.
 - **[Explicit]** The match seed is the only procedural world or environment datum
-  transferred from server to client. Both runtimes use the same shared
-  deterministic functions and tuning to derive matching parameters from the seed,
-  simulation tick, and world position. Authoritative snapshots still synchronize
+  transferred from server to client. Authoritative snapshots still synchronize
   changing boat state; they do not carry sampled environment fields.
+- **[Implicit]** Server and browser physics use the same shared Rust deterministic
+  functions and tuning to derive matching parameters from the seed, simulation
+  tick, and world position. Browser terrain rendering mirrors the static elevation
+  algorithm in WGSL rather than transferring samples.
 - **[Implicit]** The server samples the environment independently at each boat's
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
@@ -163,13 +165,14 @@ decisions.
   true wind and predicted boat velocity. The WebGPU scene renders it as a
   drag-inflated, striped windsock attached to the local bow; remote boats receive
   no wind indicator.
-- **[Implicit]** The browser samples shared terrain elevation on a world-aligned
-  mesh extending beyond the viewport. Mesh spacing starts at 1 m and increases in
-  powers of two as the view expands, keeping the terrain vertex budget bounded
-  during unclamped multiplicative zoom. Its WebGPU fragment shader continuously
-  blends shallow, open, and deep-water colors from sea level through 4 m depth,
-  switches distinctly to beach at sea level, and retains cliff and inland land
-  bands.
+- **[Explicit]** Browser terrain is not polygonized. One fullscreen quad supplies
+  world positions, and the WebGPU fragment shader evaluates seeded elevation per
+  pixel at every zoom level. Physics samples depth only where boats require it.
+- **[Implicit]** WGSL mirrors Rust's five-octave noise constants and emulates its
+  64-bit seed hashing with pairs of 32-bit integers. The shader owns all terrain
+  presentation: it continuously blends shallow, open, and deep-water colors from
+  sea level through 4 m depth, switches distinctly to beach at sea level, and
+  retains cliff and inland land bands.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.
