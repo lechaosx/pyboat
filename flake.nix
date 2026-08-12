@@ -20,6 +20,7 @@
 				pkgs.libxi
 				pkgs.libxxf86vm
 				pkgs.alsa-lib
+				pkgs.vulkan-loader
 			]}";
 			packages = [
 				pkgs.python314
@@ -33,6 +34,7 @@
 				pkgs.bun
 				pkgs.cargo-watch
 				pkgs.lld
+				pkgs.vulkan-loader
 
 				# Build tools (pygame WILL need these)
 				pkgs.gcc

@@ -208,6 +208,11 @@ Rapier uses `enhanced-determinism` without SIMD or parallel features. Native tes
 exercise behavior; the WebAssembly check verifies that the same library remains
 portable to the browser target.
 
+Run `cargo run -p pyboat-weather-showcase` to render fixed weather conditions
+through the browser's WGSL shader into `weather-showcase/`. The native offscreen
+renderer requires a Vulkan adapter and excludes boats and the HUD so cloud and
+terrain presentation remain easy to compare.
+
 ## Controllers
 
 The three modes use two concrete controller functions in
