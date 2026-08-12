@@ -214,7 +214,7 @@ fn visual_cloud_noise(
         let second = terrain_value_noise(second_seed, position_m, wavelength_m).value;
         noise += amplitude * mix(first, second, time_blend);
         amplitude_sum += amplitude;
-        amplitude *= 0.5;
+        amplitude *= 0.58;
         wavelength_m *= 0.5;
     }
     return noise / amplitude_sum;
@@ -274,18 +274,18 @@ fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
         cloud_coordinates(position_m),
         vec2<u32>(0x38d01377u, 0x452821e6u),
         128.0,
-        7u,
+        9u,
         120.0,
     );
     let cumulus_threshold = mix(0.48, -0.12, cover);
     let cumulus_body = smoothstep(
         cumulus_threshold,
-        cumulus_threshold + 0.12,
+        cumulus_threshold + 0.065,
         cumulus_noise,
     );
     let cumulus_interior = smoothstep(
-        cumulus_threshold + 0.08,
-        cumulus_threshold + 0.45,
+        cumulus_threshold + 0.05,
+        cumulus_threshold + 0.32,
         cumulus_noise,
     );
     let cumulus = cumulus_body * (0.65 + 0.35 * cumulus_interior);
@@ -294,14 +294,14 @@ fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
         position_m,
         vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
         512.0,
-        5u,
+        7u,
         300.0,
         384.0,
     );
     let stratus_threshold = mix(0.38, -0.10, cover * moisture);
     let stratus = smoothstep(
         stratus_threshold,
-        stratus_threshold + 0.25,
+        stratus_threshold + 0.12,
         stratus_noise,
     );
 
@@ -314,14 +314,14 @@ fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
         position_m,
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
-        6u,
+        8u,
         240.0,
         512.0,
     );
     let cirrus_ridge = 1.0 - abs(cirrus_noise);
     let cirrus = 0.45
         * high_cloudiness
-        * smoothstep(0.82, 0.95, cirrus_ridge);
+        * smoothstep(0.86, 0.94, cirrus_ridge);
 
     return max(max(low_cloud, storm_cell), cirrus);
 }
@@ -435,7 +435,7 @@ fn cloud_color(surface_color: vec3<f32>, density: f32) -> vec3<f32> {
         vec3<f32>(0.10, 0.12, 0.14),
         storm_amount,
     );
-    let opacity = smoothstep(0.10, 0.30, density) * (0.18 + 0.62 * density);
+    let opacity = smoothstep(0.14, 0.22, density) * (0.12 + 0.68 * density);
     return mix(surface_color, cloud, opacity);
 }
 

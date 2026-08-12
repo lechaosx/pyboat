@@ -367,17 +367,17 @@ state, predicted simulation time, a visual seed derived from the local player
 identity, and the locally integrated cloud offset. WGSL uses the one weather
 sample uniformly across the viewport; it does not mirror the shared weather field
 per pixel. Player-specific noise forms three continuously blended responses:
-cellular 128–2 m cumulus, elongated 512–32 m stratus, and sparse elongated
-512–16 m cirrus ridges. Stratus samples the same unwarped spacetime field at its
-center and 384 m in both cloud-wind directions; cirrus uses 512 m. Their weighted
-directional average forms streaks without transforming the noise coordinates.
+cellular 128–0.5 m cumulus, elongated 512–8 m stratus, and sparse elongated
+512–4 m cirrus ridges. Each successive octave retains 58% amplitude. Stratus
+samples the same unwarped spacetime field at its center and 384 m in both
+cloud-wind directions; cirrus uses 512 m. Their weighted directional average
+forms streaks without transforming the noise coordinates.
 Cloud wind also advances the integrated translation offset; full wind remains
 available separately and includes regional variation and gusts. Instability
 blends stratus toward cumulus and, together with rain, strengthens dense storm
 cells. Cloud shading applies only to the fullscreen terrain quad, never boat
-fragments. Low density is visually suppressed through 0.10; a short 0.10–0.30
-opacity ramp keeps cloud edges crisp, and rain intensity darkens clouds toward
-storm grey.
+fragments. Density below 0.14 is visually suppressed; a 0.14–0.22 opacity ramp
+keeps cloud edges crisp, and rain intensity darkens clouds toward storm grey.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

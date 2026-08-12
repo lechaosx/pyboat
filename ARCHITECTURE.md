@@ -245,8 +245,10 @@ decisions.
 - **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered wind,
   its dominant 32,768–131,072 m band as cloud wind, moisture, instability, low and
   high cloudiness, and rain intensity into the shared sample consumed by the
-  renderer. WGSL continuously blends a cellular 128–2 m cumulus field, a
-  512–32 m stratiform field, and sparse 512–16 m cirrus ridges. Three samples of
+  renderer. WGSL continuously blends a cellular 128–0.5 m cumulus field, a
+  512–8 m stratiform field, and sparse 512–4 m cirrus ridges. Cloud octaves retain
+  58% of the preceding amplitude so sub-metre and metre-scale detail affects crisp
+  silhouettes. Three samples of
   the same stratus or cirrus field—centered and offset both ways along cloud
   wind—form the elongated responses without transforming noise coordinates.
   Instability weights cumulus against stratus; instability with rain strengthens
