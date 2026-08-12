@@ -92,7 +92,8 @@ and strength: each visible band represents about 3 knots, up to all five at
 15 knots. The mouse wheel zooms in or out without a gameplay limit; click the
 mouse wheel to restore the original view. The same match seed produces vast seas
 with sparse clusters of large islands. Water color changes continuously with depth
-before a distinct shoreline transition into beach, cliffs, and inland terrain.
+before a distinct shoreline transition into beach. Island interiors are green,
+with rocky cliffs appearing only on the steepest generated slopes.
 Boats slow progressively when their 0.6 m draft loses bottom clearance. Static
 ground friction prevents creep after they settle, while sufficiently extreme
 force can break that hold and slide the boat against lower kinetic friction.

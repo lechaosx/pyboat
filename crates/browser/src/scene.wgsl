@@ -157,7 +157,16 @@ fn procedural_terrain_elevation_m(position_m: vec2<f32>) -> f32 {
     return 18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35);
 }
 
-fn terrain_color(elevation_m: f32) -> vec3<f32> {
+fn terrain_slope(elevation_m: f32, world_position_m: vec2<f32>) -> f32 {
+    let elevation_change = vec2<f32>(dpdx(elevation_m), dpdy(elevation_m));
+    let world_distance = vec2<f32>(
+        length(dpdx(world_position_m)),
+        length(dpdy(world_position_m)),
+    );
+    return length(elevation_change / max(world_distance, vec2<f32>(1e-6)));
+}
+
+fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
     if elevation_m < 0.0 {
         let depth_m = -elevation_m;
         let shallow_color = vec3<f32>(0.12, 0.42, 0.5);
@@ -170,20 +179,21 @@ fn terrain_color(elevation_m: f32) -> vec3<f32> {
         );
         return mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
     }
-    if elevation_m >= 2.0 {
-        return vec3<f32>(0.15, 0.28, 0.17);
+    if elevation_m < 0.4 {
+        return vec3<f32>(0.76, 0.67, 0.43);
     }
-    if elevation_m >= 0.4 {
+    if slope >= 0.01 {
         return vec3<f32>(0.35, 0.31, 0.25);
     }
-    return vec3<f32>(0.76, 0.67, 0.43);
+    return vec3<f32>(0.15, 0.28, 0.17);
 }
 
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain > 0.5 {
         let elevation_m = procedural_terrain_elevation_m(input.world_position_m);
-        return vec4<f32>(terrain_color(elevation_m), 1.0);
+        let slope = terrain_slope(elevation_m, input.world_position_m);
+        return vec4<f32>(terrain_color(elevation_m, slope), 1.0);
     }
     return vec4<f32>(input.color, 1.0);
 }

@@ -82,6 +82,15 @@ fn scene_shader_samples_seeded_terrain_per_fragment() {
 }
 
 #[test]
+fn scene_shader_derives_cliffs_from_elevation_gradient() {
+    assert!(SCENE_SHADER.contains("fn terrain_slope"));
+    assert!(SCENE_SHADER.contains("dpdx(elevation_m)"));
+    assert!(SCENE_SHADER.contains("dpdy(elevation_m)"));
+    assert!(SCENE_SHADER.contains("slope >= 0.01"));
+    assert!(!SCENE_SHADER.contains("if elevation_m >= 0.4"));
+}
+
+#[test]
 fn demo_advances_the_real_simulation_at_fixed_ticks() {
     let mut demo = Demo::new();
     let initial = demo.motion();

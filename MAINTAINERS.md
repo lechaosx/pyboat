@@ -310,7 +310,9 @@ world position and mirrors the Rust cluster and island elevation fields for ever
 pixel, including 64-bit seed mixing represented as pairs of WebGPU-compatible
 32-bit integers. Keep WGSL terrain constants and hashing synchronized with
 `pyboat-game`; Rust remains authoritative for physical depth. The shader owns
-underwater color and the shoreline, beach, cliff, and inland material bands.
+underwater color and the shoreline and beach materials. It derives a world-space
+elevation gradient from fragment derivatives; inland gradients at or above
+`0.01 m/m` render as rocky cliffs and gentler inland terrain renders green.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats.

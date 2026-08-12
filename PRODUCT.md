@@ -57,8 +57,11 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** The browser renders water depth continuously, with a distinct
   transition at the shoreline.
 - **[Implicit]** The browser renders its static seeded elevation field with a
-  continuous shallow-to-deep water gradient and discrete beach, cliff, and inland
-  bands.
+  continuous shallow-to-deep water gradient and a discrete beach band.
+- **[Explicit]** Inland terrain is green except where its local elevation gradient
+  is steep enough to render as a rocky cliff.
+- **[Implicit]** A `0.01 m/m` per-pixel elevation-gradient threshold selects the
+  steepest parts of the current low-relief terrain as cliffs.
 - **[Implicit]** The current dinghy has a 0.6 m effective draft. Lost bottom
   clearance transfers its weight progressively onto the seabed; effective static
   and kinetic friction coefficients are 1.0 and 0.6. Spawns require at least

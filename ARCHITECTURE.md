@@ -175,7 +175,9 @@ decisions.
   island field and emulates their 64-bit seed hashing with pairs of 32-bit
   integers. The shader owns all terrain presentation: it continuously blends
   shallow, open, and deep-water colors from sea level through 4 m depth, switches
-  distinctly to beach at sea level, and retains cliff and inland land bands.
+  distinctly to beach at sea level, and derives world-space elevation gradient
+  from fragment derivatives. Inland pixels at or above `0.01 m/m` are rocky
+  cliffs; gentler inland terrain is green.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.
