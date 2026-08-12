@@ -134,8 +134,9 @@ decisions.
 - **[Implicit]** Each Rust server process creates one match seed at startup. A
   pure function of that seed, simulation tick, and world position evaluates 48
   divergence-free Fourier modes with seeded Gaussian coefficients. Modes are
-  evaluated directly rather than interpolating random time-cell values. The
-  current procedural environment leaves water current at zero.
+  evaluated directly rather than interpolating random time-cell values. Terrain
+  sampled along the resulting upwind direction then modifies the surface wind.
+  The current procedural environment leaves water current at zero.
 - **[Implicit]** Static terrain elevation is a pure function of match seed and
   world position in `pyboat-game`. Three octaves of seeded value noise over
   8,192–2,048 m wavelengths place sparse archipelago regions. Five further
@@ -145,14 +146,21 @@ decisions.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
-- **[Explicit]** At a fixed position and time, wind direction is uniform over the
-  full circle and speed has a Weibull marginal with `k = 2` and `λ = 9 m/s`.
-  Smooth spatial and per-tick temporal evolution includes gusts.
+- **[Explicit]** At a fixed position and time, unsheltered wind direction is
+  uniform over the full circle and speed has a Weibull marginal with `k = 2` and
+  `λ = 9 m/s`. Smooth spatial and per-tick temporal evolution includes gusts.
 - **[Implicit]** The spectral model assigns 85% of component variance to
   2,048–8,192 m weather modes, 10% to 256–2,048 m local modes, and 5% to 64–512 m
   gust modes. One seed-derived 6 m/s transport vector translates the complete
   field without deforming it, making gust structures vary over approximately
   10.7–85 seconds.
+- **[Explicit]** Near-land wind uses a simplified deterministic model of lee
+  shelter over the sea. Match seed, tick, and position remain sufficient for every
+  runtime to compute the same terrain-modified wind without transferring samples.
+- **[Implicit]** The shared sampler checks terrain 16, 32, 64, 128, 256, and 512 m
+  upwind. Positive elevation becomes a progressively stronger obstruction through
+  1.5 m, its effect recovers with a 256 m distance scale, and the strongest sample
+  can reduce speed by at most 70%. This first model preserves wind direction.
 - **[Explicit]** The match seed is the only procedural world or environment datum
   transferred from server to client. Authoritative snapshots still synchronize
   changing boat state; they do not carry sampled environment fields.

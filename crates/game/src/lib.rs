@@ -7,6 +7,10 @@ use rapier2d::prelude::Vector;
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
+const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
+const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
+const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
+const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 
@@ -90,8 +94,9 @@ pub fn match_environment() -> Environment {
 }
 
 pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
+    let open_wind = procedural_wind(match_seed, tick, position_m);
     Environment {
-        true_wind_velocity_m_s: procedural_wind(match_seed, tick, position_m),
+        true_wind_velocity_m_s: land_sheltered_wind(match_seed, position_m, open_wind),
         true_water_velocity_m_s: Vector::ZERO,
         water_depth_m: (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0),
     }
@@ -213,6 +218,23 @@ fn procedural_wind(match_seed: u64, tick: u64, position_m: Vector) -> Vector {
     Vector::new(velocity_x_m_s as f32, velocity_y_m_s as f32)
 }
 
+fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -> Vector {
+    let speed_m_s = open_wind.length();
+    if speed_m_s == 0.0 {
+        return open_wind;
+    }
+    let upwind = -open_wind / speed_m_s;
+    let mut shelter: f32 = 0.0;
+    for distance_m in LAND_WIND_SAMPLE_DISTANCES_M {
+        let elevation_m =
+            procedural_terrain_elevation_m(match_seed, position_m + distance_m * upwind);
+        let obstruction = (elevation_m / LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M).clamp(0.0, 1.0);
+        let recovery = 1.0 / (1.0 + distance_m / LAND_WIND_RECOVERY_DISTANCE_M);
+        shelter = shelter.max(obstruction * recovery);
+    }
+    open_wind * (1.0 - LAND_WIND_MAX_SPEED_REDUCTION * shelter)
+}
+
 fn normal_pair(key: u64) -> (f64, f64) {
     let radius = libm::sqrt(-2.0 * libm::log(hash_unit(key ^ 0x5899_65cc_7537_4cc3)));
     let angle = std::f64::consts::TAU * hash_unit(key ^ 0x1d8e_4e27_c47d_124f);
@@ -245,4 +267,101 @@ pub fn computed_yaw_rate_torques_in_environment(
     let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
     let targets = yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s);
     surface_target_control_torques(parameters, motion, targets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_wind_has_uniform_direction_and_weibull_speed() {
+        const SAMPLE_COUNT: usize = 16_384;
+        let mut quadrant_counts = [0; 4];
+        let mut speed_bins = [0; 31];
+        let mut speed_sum = 0.0;
+        let mut x_square_sum = 0.0;
+        let mut y_square_sum = 0.0;
+        let mut cross_sum = 0.0;
+        let mut maximum_speed: f32 = 0.0;
+
+        for seed in 0..SAMPLE_COUNT as u64 {
+            let velocity = procedural_wind(seed, 12_345, Vector::new(12.0, -7.0));
+            let quadrant = match (velocity.x >= 0.0, velocity.y >= 0.0) {
+                (true, true) => 0,
+                (false, true) => 1,
+                (false, false) => 2,
+                (true, false) => 3,
+            };
+            quadrant_counts[quadrant] += 1;
+            let speed = velocity.length();
+            speed_bins[(speed.floor() as usize).min(speed_bins.len() - 1)] += 1;
+            speed_sum += speed;
+            x_square_sum += velocity.x * velocity.x;
+            y_square_sum += velocity.y * velocity.y;
+            cross_sum += velocity.x * velocity.y;
+            maximum_speed = maximum_speed.max(speed);
+        }
+
+        for count in quadrant_counts {
+            assert!(count > SAMPLE_COUNT / 8);
+        }
+        let mean_speed = speed_sum / SAMPLE_COUNT as f32;
+        assert!((7.6..=8.4).contains(&mean_speed));
+        assert!((38.0..=43.0).contains(&(x_square_sum / SAMPLE_COUNT as f32)));
+        assert!((38.0..=43.0).contains(&(y_square_sum / SAMPLE_COUNT as f32)));
+        assert!((cross_sum / SAMPLE_COUNT as f32).abs() < 1.0);
+        let mode_bin = speed_bins
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, count)| *count)
+            .unwrap()
+            .0;
+        assert!((5..=7).contains(&mode_bin));
+        assert!(speed_bins[0] > 0);
+        assert!(speed_bins[6] > speed_bins[12]);
+        assert!(speed_bins[12] > speed_bins[18]);
+        assert!(maximum_speed > 25.0);
+    }
+
+    #[test]
+    fn upwind_land_shelters_nearby_water() {
+        let match_seed = 0x5eed;
+        let tick = 12_345;
+        let mut strongest_reduction: f32 = 0.0;
+        let mut sheltered_water_found = false;
+
+        for x in -32..=32 {
+            for y in -32..=32 {
+                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+                if procedural_terrain_elevation_m(match_seed, position_m) >= 0.0 {
+                    continue;
+                }
+                let open_wind = procedural_wind(match_seed, tick, position_m);
+                let open_speed_m_s = open_wind.length();
+                if open_speed_m_s < 2.0 {
+                    continue;
+                }
+                let upwind = -open_wind / open_speed_m_s;
+                let obstruction_m = [64.0, 128.0, 256.0, 512.0]
+                    .into_iter()
+                    .map(|distance_m| {
+                        procedural_terrain_elevation_m(match_seed, position_m + distance_m * upwind)
+                    })
+                    .fold(0.0_f32, f32::max);
+                if obstruction_m < 1.0 {
+                    continue;
+                }
+
+                sheltered_water_found = true;
+                let local_speed_m_s = procedural_match_environment(match_seed, tick, position_m)
+                    .true_wind_velocity_m_s
+                    .length();
+                strongest_reduction =
+                    strongest_reduction.max(1.0 - local_speed_m_s / open_speed_m_s);
+            }
+        }
+
+        assert!(sheltered_water_found);
+        assert!(strongest_reduction > 0.15, "{strongest_reduction}");
+    }
 }

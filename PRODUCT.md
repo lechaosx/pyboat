@@ -66,14 +66,20 @@ This file records intended player experience, scope, and product behavior.
   clearance transfers its weight progressively onto the seabed; effective static
   and kinetic friction coefficients are 1.0 and 0.6. Spawns require at least
   1.5 m of water.
-- **[Explicit]** Wind may blow in every direction. At any fixed place and time,
-  its speed follows a Weibull distribution with shape `k = 2` and scale
+- **[Explicit]** Unsheltered wind may blow in every direction. At any fixed place
+  and time, its speed follows a Weibull distribution with shape `k = 2` and scale
   `λ = 9 m/s`, allowing near-calms and a decaying tail of increasingly rare strong
   wind.
 - **[Explicit]** Wind changes smoothly in space and on every simulation tick and
   includes short-scale gusts.
 - **[Explicit]** Wind forms spatially coherent air masses and avoids rapid visible
   oscillation over time.
+- **[Explicit]** Near land, a deliberately simplified surface-wind model captures
+  the essential lee shelter over the sea. It remains deterministic from the match
+  seed so every client computes it without transferring sampled wind.
+- **[Implicit]** The current model preserves the unsheltered wind direction while
+  upwind terrain reduces its speed. Strong shelter may remove at most 70% of the
+  local speed and recovers over several hundred metres.
 - **[Explicit]** The browser has no world grid or field of wind arrows. Exactly
   one apparent-wind windsock is attached to the bow of the local boat.
 - **[Explicit]** At lower apparent-wind speeds, only the inflated part of the

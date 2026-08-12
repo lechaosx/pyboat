@@ -52,57 +52,6 @@ fn procedural_wind_is_seeded_and_continuous_across_space_and_time() {
 }
 
 #[test]
-fn procedural_wind_has_uniform_direction_and_weibull_speed() {
-    const SAMPLE_COUNT: usize = 16_384;
-    let mut quadrant_counts = [0; 4];
-    let mut speed_bins = [0; 31];
-    let mut speed_sum = 0.0;
-    let mut x_square_sum = 0.0;
-    let mut y_square_sum = 0.0;
-    let mut cross_sum = 0.0;
-    let mut maximum_speed: f32 = 0.0;
-
-    for seed in 0..SAMPLE_COUNT as u64 {
-        let velocity = procedural_match_environment(seed, 12_345, Vector::new(12.0, -7.0))
-            .true_wind_velocity_m_s;
-        let quadrant = match (velocity.x >= 0.0, velocity.y >= 0.0) {
-            (true, true) => 0,
-            (false, true) => 1,
-            (false, false) => 2,
-            (true, false) => 3,
-        };
-        quadrant_counts[quadrant] += 1;
-        let speed = velocity.length();
-        speed_bins[(speed.floor() as usize).min(speed_bins.len() - 1)] += 1;
-        speed_sum += speed;
-        x_square_sum += velocity.x * velocity.x;
-        y_square_sum += velocity.y * velocity.y;
-        cross_sum += velocity.x * velocity.y;
-        maximum_speed = maximum_speed.max(speed);
-    }
-
-    for count in quadrant_counts {
-        assert!(count > SAMPLE_COUNT / 8);
-    }
-    let mean_speed = speed_sum / SAMPLE_COUNT as f32;
-    assert!((7.6..=8.4).contains(&mean_speed));
-    assert!((38.0..=43.0).contains(&(x_square_sum / SAMPLE_COUNT as f32)));
-    assert!((38.0..=43.0).contains(&(y_square_sum / SAMPLE_COUNT as f32)));
-    assert!((cross_sum / SAMPLE_COUNT as f32).abs() < 1.0);
-    let mode_bin = speed_bins
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, count)| *count)
-        .unwrap()
-        .0;
-    assert!((5..=7).contains(&mode_bin));
-    assert!(speed_bins[0] > 0);
-    assert!(speed_bins[6] > speed_bins[12]);
-    assert!(speed_bins[12] > speed_bins[18]);
-    assert!(maximum_speed > 25.0);
-}
-
-#[test]
 fn procedural_wind_is_spatially_and_temporally_coherent() {
     let position_m = Vector::new(12.0, -7.0);
     let mut spatial_change_sum = 0.0;
