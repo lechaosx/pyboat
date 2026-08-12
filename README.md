@@ -43,6 +43,10 @@ The Rust browser client additionally requires Rust 1.87 or newer with the
 `wasm32-unknown-unknown` target, `wasm-pack`, and Bun. The Nix environment includes
 all of them.
 
+The separate procedural weather and terrain playground runs with
+`bun run dev:playground`. It renders the production scene shader without a game
+server and exposes live tuning controls.
+
 ## Run the Rust connection server
 
 ```sh

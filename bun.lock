@@ -7,6 +7,13 @@
       "name": "@pyboat/browser",
       "version": "0.1.0",
     },
+    "weather-playground": {
+      "name": "@pyboat/weather-playground",
+      "devDependencies": {
+        "typescript": "^6.0.3",
+        "vite": "^8.0.13",
+      },
+    },
     "web": {
       "name": "@pyboat/web",
       "dependencies": {
@@ -23,6 +30,8 @@
     "@oxc-project/types": ["@oxc-project/types@0.143.0", "", {}, "sha512-u6JZdLBTLotrNC9Vd6vPssINdzcCzleKAH6EJKImQb7GtYvX5keN2dxkoK44stCc4tffE6QQRtZTXVSzsLUlWA=="],
 
     "@pyboat/browser": ["@pyboat/browser@workspace:crates/browser"],
+
+    "@pyboat/weather-playground": ["@pyboat/weather-playground@workspace:weather-playground"],
 
     "@pyboat/web": ["@pyboat/web@workspace:web"],
 

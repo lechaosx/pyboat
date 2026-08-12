@@ -28,6 +28,9 @@ struct SceneUniforms {
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     cloud_offsets_m: [f32; 4],
+    cloud_tuning: [f32; 4],
+    cloud_rendering: [f32; 4],
+    terrain_tuning: [f32; 4],
     time_seconds: f32,
     padding: [u32; 3],
 }
@@ -185,6 +188,9 @@ fn render_showcase(
         match_seed: [MATCH_SEED as u32, (MATCH_SEED >> 32) as u32],
         cloud_visual_seed: [CLOUD_SEED as u32, (CLOUD_SEED >> 32) as u32],
         cloud_offsets_m: [0.0; 4],
+        cloud_tuning: [1.0, 1.0, 5.0, 12.5],
+        cloud_rendering: [1.0; 4],
+        terrain_tuning: [1.0, 1.0, 0.08, 0.0],
         time_seconds: 37.0,
         padding: [0; 3],
     };

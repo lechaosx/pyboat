@@ -267,6 +267,13 @@ decisions.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.
+- **[Explicit]** Procedural weather and terrain tuning has a separate web app,
+  not an in-game mode. It imports the production WGSL shader and renders its
+  fullscreen world quad directly without multiplayer, simulation, or a server.
+- **[Implicit]** Three additional scene-uniform vectors carry cloud-noise,
+  cloud-material, and terrain tuning. The game and native showcase always supply
+  production defaults; only the playground edits them. This keeps one shader as
+  the rendering source of truth while preserving normal gameplay behavior.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

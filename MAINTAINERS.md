@@ -88,6 +88,8 @@ documentation, decision classification, and choosing tests by observable risk.
   world-to-scene conversion, and the WebGPU renderer. Its retained local demo is a
   native simulation test harness.
 - `web` contains the Vite page shell and TypeScript frame scheduling.
+- `weather-playground` is a separate Vite/WebGPU app for live production-shader
+  weather and terrain tuning.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
 
@@ -215,6 +217,17 @@ renderer requires a Vulkan adapter and excludes boats and the HUD so cloud and
 terrain presentation remain easy to compare. Every checked-in condition uses the
 same camera, view height, match seed, visual seed, cloud offsets, and time; only
 the local weather parameters differ.
+
+Run the interactive playground with:
+
+```sh
+bun run dev:playground
+```
+
+It imports `crates/browser/src/scene.wgsl` directly and needs WebGPU but no game
+server. Controls cover seed, camera, time, weather, low/high winds, cloud feature
+scale and detail, stratus/cirrus elongation, optical material, and terrain scale,
+elevation, and cliff slope. `bun run build` validates and bundles both web apps.
 
 ## Controllers
 

@@ -6,6 +6,9 @@ struct SceneUniforms {
     match_seed: vec2<u32>,
     cloud_visual_seed: vec2<u32>,
     cloud_offsets_m: vec4<f32>,
+    cloud_tuning: vec4<f32>,
+    cloud_rendering: vec4<f32>,
+    terrain_tuning: vec4<f32>,
     time_seconds: f32,
 };
 
@@ -336,18 +339,19 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     let cumulus_body_noise = visual_cloud_noise(
         cloud_coordinates(position_m, false),
         vec2<u32>(0x38d01377u, 0x452821e6u),
-        96.0,
+        96.0 * scene.cloud_tuning.x,
         7u,
         150.0,
     );
     let cumulus_billow_noise = visual_cloud_noise(
         cloud_coordinates(position_m, false),
         vec2<u32>(0x16d2a771u, 0x9e3779b9u),
-        28.0,
+        28.0 * scene.cloud_tuning.x,
         6u,
         75.0,
     );
-    let cumulus_noise = cumulus_body_noise + 0.22 * cumulus_billow_noise;
+    let cumulus_noise = cumulus_body_noise
+        + 0.22 * scene.cloud_tuning.y * cumulus_billow_noise;
     let cumulus_threshold = mix(0.42, -0.08, cover);
     let cumulus_body = smoothstep(
         cumulus_threshold,
@@ -365,15 +369,15 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         position_m,
         false,
         vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
-        512.0,
+        512.0 * scene.cloud_tuning.x,
         5u,
         300.0,
-        0.20,
+        1.0 / max(scene.cloud_tuning.z, 1.0),
     );
     let stratus_breakup = visual_cloud_noise(
         cloud_coordinates(position_m, false),
         vec2<u32>(0xa24baed4u, 0x94d049bbu),
-        96.0,
+        96.0 * scene.cloud_tuning.x,
         5u,
         210.0,
     );
@@ -400,22 +404,22 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         position_m,
         true,
         vec2<u32>(0x75374cc3u, 0x589965ccu),
-        512.0,
+        512.0 * scene.cloud_tuning.x,
         6u,
         240.0,
-        0.08,
+        1.0 / max(scene.cloud_tuning.w, 1.0),
     );
     let cirrus_envelope = visual_cloud_noise(
         cloud_coordinates(position_m, true),
         vec2<u32>(0x4cf5ad43u, 0xbf58476du),
-        640.0,
+        640.0 * scene.cloud_tuning.x,
         4u,
         720.0,
     );
     let cirrus_feather = visual_cloud_noise(
         cloud_coordinates(position_m, true),
         vec2<u32>(0x9e3779b9u, 0x7f4a7c15u),
-        72.0,
+        72.0 * scene.cloud_tuning.x,
         5u,
         180.0,
     );
@@ -440,7 +444,7 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         position_m,
         false,
         vec2<u32>(0x632be59bu, 0x8cb92ba7u),
-        420.0,
+        420.0 * scene.cloud_tuning.x,
         5u,
         300.0,
         720.0,
@@ -456,7 +460,7 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     let storm_macro = visual_cloud_noise(
         cloud_coordinates(position_m, false),
         vec2<u32>(0x1b56c4e9u, 0xd1b54a32u),
-        180.0,
+        180.0 * scene.cloud_tuning.x,
         5u,
         240.0,
     );
@@ -503,7 +507,9 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     );
     let cellular_relief = cumulus_body
         * mix(0.25, 1.0, instability)
-        * (0.35 * cumulus_billows + 0.65 * (0.5 + 0.5 * cumulus_billow_noise));
+        * (0.35 * cumulus_billows
+            + 0.65
+                * (0.5 + 0.5 * scene.cloud_tuning.y * cumulus_billow_noise));
     let storm_relief = storm_mass
         * (0.48 + 0.52 * (0.5 + 0.5 * cumulus_billow_noise));
     sample.relief = clamp(
@@ -533,21 +539,22 @@ fn terrain_smoothstep_sample(
 }
 
 fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
+    let terrain_position_m = position_m / scene.terrain_tuning.x;
     let cluster = terrain_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
-        position_m,
+        terrain_position_m,
         8192.0,
         3u,
     );
     let island = terrain_fractal_sample(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        position_m,
+        terrain_position_m,
         1024.0,
         5u,
     );
     let geology = terrain_fractal_sample(
         vec2<u32>(0x299f31d0u, 0xa4093822u),
-        position_m,
+        terrain_position_m,
         8192.0,
         3u,
     );
@@ -555,11 +562,11 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var unscaled: TerrainNoiseSample;
     unscaled.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.35);
     unscaled.gradient = 18.0 * (0.68 * cluster.gradient + 0.32 * island.gradient);
-    let elevation_scale = 1.0 + 49.0 * geology_amount.value;
+    let elevation_scale = scene.terrain_tuning.y * (1.0 + 49.0 * geology_amount.value);
     var base: TerrainNoiseSample;
     base.value = unscaled.value * elevation_scale;
     base.gradient = unscaled.gradient * elevation_scale
-        + unscaled.value * 49.0 * geology_amount.gradient;
+        + unscaled.value * scene.terrain_tuning.y * 49.0 * geology_amount.gradient;
 
     var terrain: TerrainSample;
     terrain.elevation_m = base.value;
@@ -573,6 +580,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
     let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
     if seabed_mask_value == 0.0 && rock_mask_value == 0.0 {
+        terrain.gradient /= scene.terrain_tuning.x;
         return terrain;
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
@@ -581,7 +589,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         - rock_shore_rise.gradient * rock_deep_gate.value;
     let reef = terrain_fractal_sample(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
-        position_m,
+        terrain_position_m,
         32.0,
         4u,
     );
@@ -593,6 +601,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     ) + 2.0 * (
         rock_mask_gradient * reef_peak.value + reef_peak.gradient * rock_mask_value
     );
+    terrain.gradient /= scene.terrain_tuning.x;
     return terrain;
 }
 
@@ -609,7 +618,7 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
         );
         return mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
     }
-    if slope >= 0.08 {
+    if slope >= scene.terrain_tuning.z {
         return vec3<f32>(0.35, 0.31, 0.25);
     }
     if elevation_m < 0.4 {
@@ -622,15 +631,16 @@ fn cloud_color(surface_color: vec3<f32>, cloud_sample: CloudSample) -> vec3<f32>
     let density = cloud_sample.density;
     let edge_light = (1.0 - smoothstep(0.35, 0.80, cloud_sample.darkness))
         * clamp((dpdx(density) - dpdy(density)) * 0.65, -0.10, 0.10);
-    let top_light = (cloud_sample.relief - 0.38) * 0.20;
+    let top_light = scene.cloud_rendering.w * (cloud_sample.relief - 0.38) * 0.20;
     let depth_shadow = smoothstep(0.55, 1.45, cloud_sample.optical_depth) * 0.10;
     let cloud = mix(
         vec3<f32>(0.86, 0.89, 0.90),
         vec3<f32>(0.12, 0.15, 0.17),
-        cloud_sample.darkness,
+        clamp(cloud_sample.darkness * scene.cloud_rendering.z, 0.0, 1.0),
     ) + edge_light + top_light - depth_shadow;
     let body = smoothstep(0.08, 0.18, density);
-    let opacity = body * (1.0 - exp(-1.35 * cloud_sample.optical_depth));
+    let optical_depth = scene.cloud_rendering.x * cloud_sample.optical_depth;
+    let opacity = scene.cloud_rendering.y * body * (1.0 - exp(-1.35 * optical_depth));
     return mix(surface_color, cloud, opacity);
 }
 
