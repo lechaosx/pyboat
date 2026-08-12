@@ -50,6 +50,32 @@ try {
   const game = await BrowserGame.create(canvas);
   let previousTimeMs = performance.now();
 
+  canvas.addEventListener(
+    "wheel",
+    (event) => {
+      const deltaScale =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? canvas.clientHeight
+            : 1;
+      game.zoom(event.deltaY * deltaScale);
+      event.preventDefault();
+    },
+    { passive: false },
+  );
+  canvas.addEventListener("mousedown", (event) => {
+    if (event.button === 1) {
+      game.reset_zoom();
+      event.preventDefault();
+    }
+  });
+  canvas.addEventListener("auxclick", (event) => {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  });
+
   function frame(timeMs: number): void {
     const gamepad = firstGamepad();
     game.set_player_input(

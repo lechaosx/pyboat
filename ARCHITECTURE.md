@@ -159,12 +159,14 @@ decisions.
 - **[Implicit]** The server samples the environment independently at each boat's
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
-- **[Implicit]** The browser samples visible wind vectors on a world-aligned 3 m
-  grid plus one offscreen grid ring using its current prediction tick. The WebGPU
-  scene converts those local samples to proportional arrows, so field
-  visualization adds no network data and arrows enter the viewport continuously.
+- **[Implicit]** The browser derives one local apparent-wind vector from seeded
+  true wind and predicted boat velocity. The WebGPU scene renders it as a
+  drag-inflated, striped windsock attached to the local bow; remote boats receive
+  no wind indicator.
 - **[Implicit]** The browser samples shared terrain elevation on a world-aligned
-  1 m mesh extending beyond the viewport. Its WebGPU fragment shader continuously
+  mesh extending beyond the viewport. Mesh spacing starts at 1 m and increases in
+  powers of two as the view expands, keeping the terrain vertex budget bounded
+  during unclamped multiplicative zoom. Its WebGPU fragment shader continuously
   blends shallow, open, and deep-water colors from sea level through 4 m depth,
   switches distinctly to beach at sea level, and retains cliff and inland land
   bands.

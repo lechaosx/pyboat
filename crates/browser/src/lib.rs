@@ -14,9 +14,8 @@ use rapier2d::prelude::{Rotation, Vector};
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-pub const VIEW_HEIGHT_M: f32 = 15.0;
+pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
-const WIND_VECTOR_SPACING_M: f32 = 3.0;
 const TERRAIN_MESH_SPACING_M: f32 = 1.0;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
@@ -27,15 +26,16 @@ pub struct BoatScene {
     pub hull_m: [Vector; 5],
     pub sail_m: [Vector; 2],
     pub rudder_m: [Vector; 2],
+    pub windsock: Option<Windsock>,
     pub is_local: bool,
     pub recently_damaged: bool,
     pub wreck: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindVector {
-    pub position_m: Vector,
-    pub velocity_m_s: Vector,
+pub struct Windsock {
+    pub anchor_m: Vector,
+    pub apparent_wind_velocity_m_s: Vector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -346,6 +346,20 @@ impl MultiplayerClient {
                 self.render_motion(&boat.snapshot.id).map(|motion| {
                     let mut scene = boat_scene(dinghy_parameters(), motion);
                     scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
+                    if scene.is_local {
+                        scene.windsock = self.match_seed.map(|match_seed| Windsock {
+                            anchor_m: scene.hull_m[0],
+                            apparent_wind_velocity_m_s: apparent_flow(
+                                procedural_match_environment(
+                                    match_seed,
+                                    self.prediction_tick,
+                                    motion.position_m,
+                                )
+                                .true_wind_velocity_m_s,
+                                motion.velocity_m_s,
+                            ),
+                        });
+                    }
                     scene.recently_damaged = !boat.snapshot.wreck
                         && boat.snapshot.last_hit_tick.is_some_and(|last_hit_tick| {
                             self.tick
@@ -358,7 +372,7 @@ impl MultiplayerClient {
             .collect()
     }
 
-    pub fn wind_vectors(&self, aspect_ratio: f32) -> Vec<WindVector> {
+    pub fn terrain_vertices(&self, aspect_ratio: f32, view_height_m: f32) -> Vec<TerrainVertex> {
         let match_seed = match self.match_seed {
             Some(match_seed) => match_seed,
             None => return Vec::new(),
@@ -367,56 +381,21 @@ impl MultiplayerClient {
             Some(camera_m) => camera_m,
             None => return Vec::new(),
         };
-        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0 + WIND_VECTOR_SPACING_M;
-        let half_height_m = VIEW_HEIGHT_M / 2.0 + WIND_VECTOR_SPACING_M;
-        let first_x = ((camera_m.x - half_width_m) / WIND_VECTOR_SPACING_M).ceil() as i32;
-        let last_x = ((camera_m.x + half_width_m) / WIND_VECTOR_SPACING_M).floor() as i32;
-        let first_y = ((camera_m.y - half_height_m) / WIND_VECTOR_SPACING_M).ceil() as i32;
-        let last_y = ((camera_m.y + half_height_m) / WIND_VECTOR_SPACING_M).floor() as i32;
-        let mut vectors = Vec::new();
-        for x in first_x..=last_x {
-            for y in first_y..=last_y {
-                let position_m = Vector::new(
-                    x as f32 * WIND_VECTOR_SPACING_M,
-                    y as f32 * WIND_VECTOR_SPACING_M,
-                );
-                vectors.push(WindVector {
-                    position_m,
-                    velocity_m_s: procedural_match_environment(
-                        match_seed,
-                        self.prediction_tick,
-                        position_m,
-                    )
-                    .true_wind_velocity_m_s,
-                });
-            }
-        }
-        vectors
-    }
-
-    pub fn terrain_vertices(&self, aspect_ratio: f32) -> Vec<TerrainVertex> {
-        let match_seed = match self.match_seed {
-            Some(match_seed) => match_seed,
-            None => return Vec::new(),
-        };
-        let camera_m = match self.camera_m() {
-            Some(camera_m) => camera_m,
-            None => return Vec::new(),
-        };
-        let half_width_m = VIEW_HEIGHT_M * aspect_ratio / 2.0 + TERRAIN_MESH_SPACING_M;
-        let half_height_m = VIEW_HEIGHT_M / 2.0 + TERRAIN_MESH_SPACING_M;
-        let first_x = ((camera_m.x - half_width_m) / TERRAIN_MESH_SPACING_M).floor() as i32;
-        let last_x = ((camera_m.x + half_width_m) / TERRAIN_MESH_SPACING_M).ceil() as i32;
-        let first_y = ((camera_m.y - half_height_m) / TERRAIN_MESH_SPACING_M).floor() as i32;
-        let last_y = ((camera_m.y + half_height_m) / TERRAIN_MESH_SPACING_M).ceil() as i32;
+        let mesh_spacing_m = terrain_mesh_spacing_m(view_height_m);
+        let half_width_m = view_height_m * aspect_ratio / 2.0 + mesh_spacing_m;
+        let half_height_m = view_height_m / 2.0 + mesh_spacing_m;
+        let first_x = ((camera_m.x - half_width_m) / mesh_spacing_m).floor() as i32;
+        let last_x = ((camera_m.x + half_width_m) / mesh_spacing_m).ceil() as i32;
+        let first_y = ((camera_m.y - half_height_m) / mesh_spacing_m).floor() as i32;
+        let last_y = ((camera_m.y + half_height_m) / mesh_spacing_m).ceil() as i32;
         let mut vertices = Vec::new();
         for x in first_x..last_x {
             for y in first_y..last_y {
                 let corners = [
-                    Vector::new(x as f32, y as f32) * TERRAIN_MESH_SPACING_M,
-                    Vector::new((x + 1) as f32, y as f32) * TERRAIN_MESH_SPACING_M,
-                    Vector::new((x + 1) as f32, (y + 1) as f32) * TERRAIN_MESH_SPACING_M,
-                    Vector::new(x as f32, (y + 1) as f32) * TERRAIN_MESH_SPACING_M,
+                    Vector::new(x as f32, y as f32) * mesh_spacing_m,
+                    Vector::new((x + 1) as f32, y as f32) * mesh_spacing_m,
+                    Vector::new((x + 1) as f32, (y + 1) as f32) * mesh_spacing_m,
+                    Vector::new(x as f32, (y + 1) as f32) * mesh_spacing_m,
                 ];
                 for index in [0, 1, 2, 0, 2, 3] {
                     let position_m = corners[index];
@@ -600,9 +579,28 @@ impl MultiplayerClient {
     }
 }
 
-pub fn viewport_interest_radius_m(aspect_ratio: f32) -> f32 {
-    let view_width_m = VIEW_HEIGHT_M * aspect_ratio;
-    view_width_m.hypot(VIEW_HEIGHT_M) / 2.0 + VIEWPORT_INTEREST_MARGIN_M
+pub fn viewport_interest_radius_m(aspect_ratio: f32, view_height_m: f32) -> f32 {
+    let view_width_m = view_height_m * aspect_ratio;
+    view_width_m.hypot(view_height_m) / 2.0 + VIEWPORT_INTEREST_MARGIN_M
+}
+
+pub fn zoom_view_height_m(view_height_m: f32, wheel_delta_y: f32) -> f32 {
+    let zoomed_view_height_m = view_height_m * (wheel_delta_y * 0.001).exp();
+    if zoomed_view_height_m.is_finite() && zoomed_view_height_m > 0.0 {
+        zoomed_view_height_m
+    } else {
+        view_height_m
+    }
+}
+
+pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
+    let drag_to_weight = (apparent_wind_speed_m_s.max(0.0) / 4.0).powi(2);
+    drag_to_weight / (1.0 + drag_to_weight.powi(2)).sqrt()
+}
+
+fn terrain_mesh_spacing_m(view_height_m: f32) -> f32 {
+    let relative_scale = (view_height_m / DEFAULT_VIEW_HEIGHT_M).max(1.0);
+    2.0_f32.powf(relative_scale.log2().ceil()) * TERRAIN_MESH_SPACING_M
 }
 
 pub struct Demo {
@@ -770,6 +768,7 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
         hull_m,
         sail_m: [mast_m, sail_end_m],
         rudder_m: [rudder_hinge_m, rudder_end_m],
+        windsock: None,
         is_local: false,
         recently_damaged: false,
         wreck: false,

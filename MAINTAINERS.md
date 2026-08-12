@@ -298,13 +298,16 @@ after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 H
 Welcome also supplies the server-selected match seed. Authoritative and predicted
 ticks sample the same smooth wind function separately at each boat, and the local
 sample supplies the apparent-wind HUD.
-The browser also samples that function on a world-aligned 3 m grid extending one
-ring beyond the viewport and renders proportional wind arrows behind boats. Keep
-this visualization derived from the shared sampler rather than introducing
-replicated environment fields.
-It samples shared terrain elevation on a world-aligned 1 m mesh beyond the
-viewport. The fragment shader interpolates both elevation and underwater color,
-with a distinct shoreline transition into the beach, cliff, and inland bands.
+The local boat scene subtracts predicted boat velocity from that seeded true wind
+and renders the result as one drag-inflated windsock attached to its bow. Remote
+boats have no wind indicator.
+The browser samples shared terrain elevation on a world-aligned mesh beyond the
+viewport. Spacing starts at 1 m and doubles as the mouse-wheel view expands, so
+unclamped multiplicative zoom does not grow the terrain vertex count with visible
+area. The fragment shader interpolates both elevation and underwater color, with
+a distinct shoreline transition into the beach, cliff, and inland bands. Middle
+mouse resets the original 15 m view height. Terrain can remain visible outside
+the server's clamped boat-interest radius, where snapshots contain no boats.
 The radius covers the visible half-diagonal plus a 2.5 m geometry margin. On a
 connection error or close, the browser stops emitting network input, marks remote
 boats as wrecks, and continues fixed-tick local prediction; the connection status

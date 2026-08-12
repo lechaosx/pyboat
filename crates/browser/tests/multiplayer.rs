@@ -202,7 +202,7 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
 }
 
 #[test]
-fn multiplayer_client_derives_visible_wind_vectors_from_the_match_seed() {
+fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
@@ -212,28 +212,29 @@ fn multiplayer_client_derives_visible_wind_vectors_from_the_match_seed() {
     local.y = 2.0;
     client.accept(ServerMessage::Snapshot {
         tick: 9,
-        boats: vec![local],
+        boats: vec![local.clone(), boat("player-2", 10.0)],
         removed_player_ids: Vec::new(),
     });
 
-    let vectors = client.wind_vectors(4.0 / 3.0);
-
-    assert!(!vectors.is_empty());
-    let mut has_offscreen_vector = false;
-    for vector in vectors {
-        assert_eq!(
-            vector.velocity_m_s,
-            procedural_match_environment(42, 9, vector.position_m).true_wind_velocity_m_s,
-        );
-        assert!((vector.position_m.x / 3.0).fract().abs() < 1.0e-5);
-        assert!((vector.position_m.y / 3.0).fract().abs() < 1.0e-5);
-        let camera_distance_x = (vector.position_m.x - 7.0).abs();
-        let camera_distance_y = (vector.position_m.y - 2.0).abs();
-        assert!(camera_distance_x <= 13.0);
-        assert!(camera_distance_y <= 10.5);
-        has_offscreen_vector |= camera_distance_x > 10.0 || camera_distance_y > 7.5;
-    }
-    assert!(has_offscreen_vector);
+    let scenes = client.scenes();
+    assert_eq!(
+        scenes
+            .iter()
+            .filter(|scene| scene.windsock.is_some())
+            .count(),
+        1
+    );
+    let local_scene = scenes.iter().find(|scene| scene.is_local).unwrap();
+    let windsock = local_scene.windsock.unwrap();
+    let position_m = Vector::new(local.x, local.y);
+    assert_eq!(windsock.anchor_m, local_scene.hull_m[0]);
+    assert_eq!(
+        windsock.apparent_wind_velocity_m_s,
+        apparent_flow(
+            procedural_match_environment(42, 9, position_m).true_wind_velocity_m_s,
+            Vector::new(local.vx, local.vy),
+        )
+    );
 }
 
 #[test]
@@ -251,12 +252,12 @@ fn multiplayer_client_derives_world_aligned_terrain_from_the_match_seed() {
         removed_player_ids: Vec::new(),
     });
 
-    let terrain = client.terrain_vertices(4.0 / 3.0);
+    let terrain = client.terrain_vertices(4.0 / 3.0, 15.0);
 
     assert!(!terrain.is_empty());
     assert_eq!(terrain.len() % 6, 0);
     let mut has_offscreen_vertex = false;
-    for vertex in terrain {
+    for vertex in &terrain {
         assert_eq!(
             vertex.elevation_m,
             procedural_terrain_elevation_m(42, vertex.position_m)
@@ -268,6 +269,9 @@ fn multiplayer_client_derives_world_aligned_terrain_from_the_match_seed() {
         has_offscreen_vertex |= camera_distance_x > 10.0 || camera_distance_y > 7.5;
     }
     assert!(has_offscreen_vertex);
+
+    let zoomed_out_terrain = client.terrain_vertices(4.0 / 3.0, 15_000.0);
+    assert!(zoomed_out_terrain.len() <= terrain.len() * 2);
 }
 
 #[test]

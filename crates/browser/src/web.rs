@@ -13,12 +13,11 @@ use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, MultiplayerClient, TerrainVertex, VIEW_HEIGHT_M, WindVector,
-    viewport_interest_radius_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, TerrainVertex, Windsock,
+    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 
 const MAX_VERTICES: usize = 32768;
-const WIND_ARROW_SCALE_SECONDS: f32 = 0.22;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -138,18 +137,18 @@ impl Renderer {
     fn render(
         &mut self,
         scenes: &[BoatScene],
-        wind_vectors: &[WindVector],
         terrain_vertices: &[TerrainVertex],
         camera_m: Vector,
+        view_height_m: f32,
     ) -> Result<(), JsValue> {
         self.resize();
         let vertices = scene_vertices(
             scenes,
-            wind_vectors,
             terrain_vertices,
             camera_m,
             self.config.width,
             self.config.height,
+            view_height_m,
         );
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
@@ -237,6 +236,7 @@ pub struct BrowserGame {
     close_notice: Rc<RefCell<Option<String>>>,
     socket: WebSocket,
     renderer: Renderer,
+    view_height_m: f32,
     _on_open: Closure<dyn FnMut(Event)>,
     _on_message: Closure<dyn FnMut(MessageEvent)>,
     _on_error: Closure<dyn FnMut(Event)>,
@@ -326,6 +326,7 @@ impl BrowserGame {
             close_notice,
             socket,
             renderer,
+            view_height_m: DEFAULT_VIEW_HEIGHT_M,
             _on_open: on_open,
             _on_message: on_message,
             _on_error: on_error,
@@ -334,7 +335,8 @@ impl BrowserGame {
     }
 
     pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
-        let viewport_radius_m = viewport_interest_radius_m(self.renderer.aspect_ratio());
+        let viewport_radius_m =
+            viewport_interest_radius_m(self.renderer.aspect_ratio(), self.view_height_m);
         let mut client = self.client.borrow_mut();
         let viewport = client.update_viewport(viewport_radius_m);
         let inputs = client.take_inputs(elapsed_seconds);
@@ -356,10 +358,18 @@ impl BrowserGame {
         let aspect_ratio = self.renderer.aspect_ratio();
         self.renderer.render(
             &client.scenes(),
-            &client.wind_vectors(aspect_ratio),
-            &client.terrain_vertices(aspect_ratio),
+            &client.terrain_vertices(aspect_ratio, self.view_height_m),
             client.camera_m().unwrap_or(Vector::ZERO),
+            self.view_height_m,
         )
+    }
+
+    pub fn zoom(&mut self, wheel_delta_y: f32) {
+        self.view_height_m = zoom_view_height_m(self.view_height_m, wheel_delta_y);
+    }
+
+    pub fn reset_zoom(&mut self) {
+        self.view_height_m = DEFAULT_VIEW_HEIGHT_M;
     }
 
     pub fn set_player_input(
@@ -448,82 +458,23 @@ fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
 
 fn scene_vertices(
     scenes: &[BoatScene],
-    wind_vectors: &[WindVector],
     terrain_vertices: &[TerrainVertex],
     camera_m: Vector,
     width: u32,
     height: u32,
+    view_height_m: f32,
 ) -> Vec<Vertex> {
     let aspect = width as f32 / height as f32;
-    let view_width_m = VIEW_HEIGHT_M * aspect;
-    let half_width_m = view_width_m / 2.0;
-    let half_height_m = VIEW_HEIGHT_M / 2.0;
+    let view_width_m = view_height_m * aspect;
     let mut vertices = Vec::new();
 
     for terrain in terrain_vertices {
         vertices.push(Vertex {
-            position: clip_position(terrain.position_m, camera_m, view_width_m),
+            position: clip_position(terrain.position_m, camera_m, view_width_m, view_height_m),
             color: [0.0; 3],
             elevation_m: terrain.elevation_m,
             is_terrain: 1.0,
         });
-    }
-
-    let first_x = (camera_m.x - half_width_m).floor() as i32;
-    let last_x = (camera_m.x + half_width_m).ceil() as i32;
-    for x in first_x..=last_x {
-        push_quad(
-            &mut vertices,
-            Vector::new(x as f32, camera_m.y - half_height_m),
-            Vector::new(x as f32, camera_m.y + half_height_m),
-            0.012,
-            [0.075, 0.18, 0.22],
-            camera_m,
-            view_width_m,
-        );
-    }
-    let first_y = (camera_m.y - half_height_m).floor() as i32;
-    let last_y = (camera_m.y + half_height_m).ceil() as i32;
-    for y in first_y..=last_y {
-        push_quad(
-            &mut vertices,
-            Vector::new(camera_m.x - half_width_m, y as f32),
-            Vector::new(camera_m.x + half_width_m, y as f32),
-            0.012,
-            [0.075, 0.18, 0.22],
-            camera_m,
-            view_width_m,
-        );
-    }
-
-    for vector in wind_vectors {
-        let end_m = vector.position_m + vector.velocity_m_s * WIND_ARROW_SCALE_SECONDS;
-        let direction = vector.velocity_m_s.normalize();
-        let normal = Vector::new(-direction.y, direction.x);
-        let arrow_color = [0.2, 0.58, 0.78];
-        push_quad(
-            &mut vertices,
-            vector.position_m,
-            end_m,
-            0.025,
-            arrow_color,
-            camera_m,
-            view_width_m,
-        );
-        for arrowhead_m in [
-            end_m - direction * 0.28 + normal * 0.16,
-            end_m - direction * 0.28 - normal * 0.16,
-        ] {
-            push_quad(
-                &mut vertices,
-                end_m,
-                arrowhead_m,
-                0.025,
-                arrow_color,
-                camera_m,
-                view_width_m,
-            );
-        }
     }
 
     for scene in scenes {
@@ -542,7 +493,13 @@ fn scene_vertices(
                 scene.hull_m[second],
                 scene.hull_m[third],
             ] {
-                vertices.push(vertex(point, hull_color, camera_m, view_width_m));
+                vertices.push(vertex(
+                    point,
+                    hull_color,
+                    camera_m,
+                    view_width_m,
+                    view_height_m,
+                ));
             }
         }
         push_quad(
@@ -553,6 +510,7 @@ fn scene_vertices(
             [0.96, 0.76, 0.25],
             camera_m,
             view_width_m,
+            view_height_m,
         );
         push_quad(
             &mut vertices,
@@ -562,7 +520,17 @@ fn scene_vertices(
             [0.86, 0.91, 0.91],
             camera_m,
             view_width_m,
+            view_height_m,
         );
+        if let Some(windsock) = scene.windsock {
+            push_windsock(
+                &mut vertices,
+                windsock,
+                camera_m,
+                view_width_m,
+                view_height_m,
+            );
+        }
     }
     assert!(vertices.len() <= MAX_VERTICES);
     vertices
@@ -576,6 +544,7 @@ fn push_quad(
     color: [f32; 3],
     camera_m: Vector,
     view_width_m: f32,
+    view_height_m: f32,
 ) {
     let direction = end_m - start_m;
     let normal = Vector::new(-direction.y, direction.x).normalize() * half_width_m;
@@ -586,24 +555,86 @@ fn push_quad(
         end_m + normal,
     ];
     for index in [0, 1, 2, 0, 2, 3] {
-        vertices.push(vertex(corners[index], color, camera_m, view_width_m));
+        vertices.push(vertex(
+            corners[index],
+            color,
+            camera_m,
+            view_width_m,
+            view_height_m,
+        ));
     }
 }
 
-fn vertex(point_m: Vector, color: [f32; 3], camera_m: Vector, view_width_m: f32) -> Vertex {
+fn push_windsock(
+    vertices: &mut Vec<Vertex>,
+    windsock: Windsock,
+    camera_m: Vector,
+    view_width_m: f32,
+    view_height_m: f32,
+) {
+    let speed_m_s = windsock.apparent_wind_velocity_m_s.length();
+    if speed_m_s <= f32::EPSILON {
+        return;
+    }
+    let direction = windsock.apparent_wind_velocity_m_s / speed_m_s;
+    let normal = Vector::new(-direction.y, direction.x);
+    let extension = windsock_extension(speed_m_s);
+    let length_m = 1.2 * extension;
+    for segment in 0..5 {
+        let start = segment as f32 / 5.0;
+        let end = (segment + 1) as f32 / 5.0;
+        let start_m = windsock.anchor_m + direction * length_m * start;
+        let end_m = windsock.anchor_m + direction * length_m * end;
+        let start_half_width_m = (0.1 - 0.075 * start) * extension;
+        let end_half_width_m = (0.1 - 0.075 * end) * extension;
+        let corners = [
+            start_m + normal * start_half_width_m,
+            start_m - normal * start_half_width_m,
+            end_m - normal * end_half_width_m,
+            end_m + normal * end_half_width_m,
+        ];
+        let color = if segment % 2 == 0 {
+            [0.94, 0.18, 0.12]
+        } else {
+            [0.96, 0.94, 0.84]
+        };
+        for index in [0, 1, 2, 0, 2, 3] {
+            vertices.push(vertex(
+                corners[index],
+                color,
+                camera_m,
+                view_width_m,
+                view_height_m,
+            ));
+        }
+    }
+}
+
+fn vertex(
+    point_m: Vector,
+    color: [f32; 3],
+    camera_m: Vector,
+    view_width_m: f32,
+    view_height_m: f32,
+) -> Vertex {
     Vertex {
-        position: clip_position(point_m, camera_m, view_width_m),
+        position: clip_position(point_m, camera_m, view_width_m, view_height_m),
         color,
         elevation_m: 0.0,
         is_terrain: 0.0,
     }
 }
 
-fn clip_position(point_m: Vector, camera_m: Vector, view_width_m: f32) -> [f32; 2] {
+fn clip_position(
+    point_m: Vector,
+    camera_m: Vector,
+    view_width_m: f32,
+    view_height_m: f32,
+) -> [f32; 2] {
     let relative_m = point_m - camera_m;
     [
         2.0 * relative_m.x / view_width_m,
-        -2.0 * relative_m.y / VIEW_HEIGHT_M,
+        -2.0 * relative_m.y / view_height_m,
     ]
 }
 

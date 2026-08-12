@@ -67,10 +67,14 @@ This file records intended player experience, scope, and product behavior.
   includes short-scale gusts.
 - **[Explicit]** Wind forms spatially coherent air masses and avoids rapid visible
   oscillation over time.
-- **[Explicit]** The browser displays the wind vector field on the game world.
-- **[Implicit]** World-aligned cyan arrows sample wind every 3 m, including one
-  grid ring beyond the viewport; their direction and length show local flow
-  direction and relative speed without obscuring boats or appearing abruptly.
+- **[Explicit]** The browser has no world grid or field of wind arrows. Exactly
+  one apparent-wind windsock is attached to the bow of the local boat.
+- **[Implicit]** The red-and-white tapered windsock points down the local apparent
+  airflow and extends progressively as aerodynamic drag lifts it against gravity.
+- **[Explicit]** The mouse wheel zooms the world view in and out without an
+  artificial gameplay limit. Clicking the mouse wheel resets the original zoom.
+- **[Implicit]** Terrain remains visible when zoomed beyond the server's boat
+  interest limit, but boats outside that limit are absent.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
 - **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate

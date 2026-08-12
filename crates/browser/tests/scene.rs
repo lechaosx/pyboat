@@ -1,6 +1,9 @@
 use std::f32::consts::PI;
 
-use pyboat_browser::{Demo, PointOfSail, boat_scene, point_of_sail, viewport_interest_radius_m};
+use pyboat_browser::{
+    Demo, PointOfSail, boat_scene, point_of_sail, viewport_interest_radius_m, windsock_extension,
+    zoom_view_height_m,
+};
 use pyboat_game::dinghy_parameters;
 use pyboat_simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 use rapier2d::prelude::Vector;
@@ -36,7 +39,28 @@ fn boat_scene_follows_hull_and_surface_motion() {
 
 #[test]
 fn viewport_interest_covers_the_visible_rectangle_and_boat_margin() {
-    assert!((viewport_interest_radius_m(4.0 / 3.0) - 15.0).abs() < 1.0e-5);
+    assert!((viewport_interest_radius_m(4.0 / 3.0, 15.0) - 15.0).abs() < 1.0e-5);
+}
+
+#[test]
+fn wheel_zoom_scales_without_an_artificial_view_limit() {
+    let zoomed_out = zoom_view_height_m(15.0, 1_000.0);
+    let restored = zoom_view_height_m(zoomed_out, -1_000.0);
+
+    assert!(zoomed_out > 15.0);
+    assert!((restored - 15.0).abs() < 1.0e-4);
+}
+
+#[test]
+fn windsock_progressively_lifts_into_apparent_wind() {
+    let calm = windsock_extension(0.0);
+    let moderate = windsock_extension(4.0);
+    let strong = windsock_extension(8.0);
+
+    assert_eq!(calm, 0.0);
+    assert!((moderate - 0.5_f32.sqrt()).abs() < 1.0e-5);
+    assert!(moderate < strong);
+    assert!(strong < 1.0);
 }
 
 #[test]
