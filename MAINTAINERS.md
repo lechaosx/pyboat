@@ -103,13 +103,18 @@ game-specific. Its procedural environment sampler is a pure function of match
 seed, simulation tick, and world position so native and WebAssembly runtimes can
 reproduce the same wind. Keep procedural tuning and sampling in this shared crate;
 the protocol transfers the seed rather than sampled fields or parameters.
-Static terrain combines three octaves of seeded cluster noise over 2,048–8,192 m
-wavelengths with five octaves of island noise over 64–1,024 m wavelengths. The
-weighted field targets 5–15% land over broad representative areas while retaining
-large coherent islands. The shared sampler returns continuous elevation relative
-to sea level from only the match seed and world position. Each procedural
-environment converts elevation to water depth for authoritative and predicted
-grounding without adding terrain to the protocol.
+Static terrain routes several seeded density fields. Three continentalness octaves
+span 32,768–131,072 m; a smooth spline turns them into ocean and archipelago
+provinces. Three cluster octaves over 2,048–8,192 m and five island-detail octaves
+over 64–1,024 m shape local land. In base elevations from -6 to -0.5 m, a smooth
+coastal mask applies four 16–128 m reef octaves; a peaked upper-tail transform
+lifts rare parts by up to 6 m. This produces sharp rocks and a distribution of
+channel depths without placing objects or checking clearance around individual
+features. Keep global land at 5–15% across representative regions while allowing
+individual provinces to differ substantially. The shared sampler returns
+continuous elevation relative to sea level from only the match seed and world
+position. Each procedural environment converts elevation to water depth for
+authoritative and predicted grounding without adding terrain to the protocol.
 Unsheltered wind is the sum of 48 divergence-free Fourier modes. Weather modes
 carry 90% of component variance over 32,768–131,072 m wavelengths, regional modes
 carry 8% over 4,096–32,768 m, and gust modes carry 2% over 64–512 m. This gives an
@@ -320,15 +325,15 @@ linearly to 0–15 knots of apparent wind. The renderer emits only complete band
 before the current extension and one partial final band; remote boats have no wind
 indicator.
 The browser draws one fullscreen terrain quad. Its fragment shader reconstructs
-world position and mirrors the Rust cluster and island elevation fields for every
-pixel, including 64-bit seed mixing represented as pairs of WebGPU-compatible
-32-bit integers. Keep WGSL terrain constants and hashing synchronized with
-`pyboat-game`; Rust remains authoritative for physical depth. The shader owns
-underwater color and the shoreline and beach materials. Each value-noise octave
-returns its analytic world-space gradient alongside its value; the shader combines
-gradients with the same amplitude, normalization, field weights, and elevation
-scale. Inland gradients at or above `0.01 m/m` render as rocky cliffs and gentler
-inland terrain renders green.
+world position and mirrors the Rust continentalness, cluster, island-detail, and
+reef density fields for every pixel, including 64-bit seed mixing represented as
+pairs of WebGPU-compatible 32-bit integers. Keep WGSL terrain constants, spline
+edges, masks, hashing, and peak transforms synchronized with `pyboat-game`; Rust
+remains authoritative for physical depth. The shader owns underwater color and
+the shoreline and beach materials. Each value-noise octave returns its analytic
+world-space gradient alongside its value; the shader propagates gradients through
+the same amplitude normalization and density composition. Inland gradients at or
+above `0.01 m/m` render as rocky cliffs and gentler inland terrain renders green.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats.

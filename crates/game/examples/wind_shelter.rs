@@ -31,11 +31,20 @@ fn representative_coast_center() -> Vector {
     ];
     let mut center = Vector::ZERO;
     let mut best_score = f32::MIN;
-    for x in -64..=64 {
-        for y in -64..=64 {
-            let candidate = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+    for x in -256..=256 {
+        for y in -256..=256 {
+            let candidate = Vector::new(x as f32 * 512.0, y as f32 * 512.0);
             let elevation_m = procedural_terrain_elevation_m(MATCH_SEED, candidate);
             if elevation_m < 0.4 {
+                continue;
+            }
+            let nearby_land = ring
+                .iter()
+                .filter(|offset| {
+                    procedural_terrain_elevation_m(MATCH_SEED, candidate + **offset / 3.0) >= 0.0
+                })
+                .count();
+            if nearby_land < 4 {
                 continue;
             }
             let surrounding_water = ring
@@ -44,13 +53,17 @@ fn representative_coast_center() -> Vector {
                     procedural_terrain_elevation_m(MATCH_SEED, candidate + **offset) < 0.0
                 })
                 .count();
-            let score = elevation_m + surrounding_water as f32;
+            if surrounding_water < 2 {
+                continue;
+            }
+            let score = elevation_m + 2.0 * nearby_land as f32 + surrounding_water as f32;
             if score > best_score {
                 best_score = score;
                 center = candidate;
             }
         }
     }
+    assert!(best_score > f32::MIN, "no representative coast found");
     center
 }
 

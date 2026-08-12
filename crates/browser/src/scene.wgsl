@@ -136,54 +136,108 @@ fn terrain_value_noise(
     return sample;
 }
 
-fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
-    var cluster_noise = 0.0;
-    var cluster_gradient = vec2<f32>(0.0);
+fn terrain_fractal_sample(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+) -> TerrainNoiseSample {
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
-    var wavelength_m = 8192.0;
-    for (var octave = 0u; octave < 3u; octave++) {
+    var wavelength_m = initial_wavelength_m;
+    for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
-            ^ vec2<u32>(0x78bd642fu, 0xa0761d64u)
+            ^ field_salt
             ^ multiply_u64(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
         let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
-        cluster_noise += amplitude * octave_sample.value;
-        cluster_gradient += amplitude * octave_sample.gradient;
+        sample.value += amplitude * octave_sample.value;
+        sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
-    cluster_noise /= amplitude_sum;
-    cluster_gradient /= amplitude_sum;
+    sample.value /= amplitude_sum;
+    sample.gradient /= amplitude_sum;
+    return sample;
+}
 
-    var island_noise = 0.0;
-    var island_gradient = vec2<f32>(0.0);
-    amplitude = 1.0;
-    amplitude_sum = 0.0;
-    wavelength_m = 1024.0;
-    for (var octave = 0u; octave < 5u; octave++) {
-        let octave_seed = scene.match_seed
-            ^ vec2<u32>(0xa0b428dbu, 0xe7037ed1u)
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
-        let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
-        island_noise += amplitude * octave_sample.value;
-        island_gradient += amplitude * octave_sample.gradient;
-        amplitude_sum += amplitude;
-        amplitude *= 0.5;
-        wavelength_m *= 0.5;
+fn terrain_smoothstep_sample(
+    lower: f32,
+    upper: f32,
+    input: TerrainNoiseSample,
+) -> TerrainNoiseSample {
+    let normalized = (input.value - lower) / (upper - lower);
+    let amount = clamp(normalized, 0.0, 1.0);
+    var sample: TerrainNoiseSample;
+    sample.value = amount * amount * (3.0 - 2.0 * amount);
+    sample.gradient = vec2<f32>(0.0);
+    if normalized > 0.0 && normalized < 1.0 {
+        sample.gradient = input.gradient * 6.0 * amount * (1.0 - amount) / (upper - lower);
     }
-    island_noise /= amplitude_sum;
-    island_gradient /= amplitude_sum;
+    return sample;
+}
+
+fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
+    let continentalness = terrain_fractal_sample(
+        vec2<u32>(0x85a308d3u, 0x243f6a88u),
+        position_m,
+        131072.0,
+        3u,
+    );
+    let province = terrain_smoothstep_sample(-0.25, 0.5, continentalness);
+    let cluster = terrain_fractal_sample(
+        vec2<u32>(0x78bd642fu, 0xa0761d64u),
+        position_m,
+        8192.0,
+        3u,
+    );
+    let island = terrain_fractal_sample(
+        vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        position_m,
+        1024.0,
+        5u,
+    );
+    var base: TerrainNoiseSample;
+    base.value = 18.0 * (
+        0.46 * province.value
+            + 0.54 * (0.68 * cluster.value + 0.32 * island.value)
+            - 0.473
+    );
+    base.gradient = 18.0 * (
+        0.46 * province.gradient
+            + 0.54 * (0.68 * cluster.gradient + 0.32 * island.gradient)
+    );
 
     var terrain: TerrainSample;
-    terrain.elevation_m = 18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35);
-    terrain.gradient = 18.0 * (0.68 * cluster_gradient + 0.32 * island_gradient);
+    terrain.elevation_m = base.value;
+    terrain.gradient = base.gradient;
+    let deep_gate = terrain_smoothstep_sample(-6.0, -2.0, base);
+    let shore_rise = terrain_smoothstep_sample(-2.0, -0.5, base);
+    let shore_gate_value = 1.0 - shore_rise.value;
+    let reef_mask_value = deep_gate.value * shore_gate_value;
+    if reef_mask_value == 0.0 {
+        return terrain;
+    }
+    let reef_mask_gradient = deep_gate.gradient * shore_gate_value
+        - shore_rise.gradient * deep_gate.value;
+    let reef = terrain_fractal_sample(
+        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        position_m,
+        128.0,
+        4u,
+    );
+    let reef_peak = terrain_smoothstep_sample(0.45, 0.7, reef);
+    terrain.elevation_m += 6.0 * reef_mask_value * reef_peak.value;
+    terrain.gradient += 6.0 * (
+        reef_mask_gradient * reef_peak.value
+            + reef_peak.gradient * reef_mask_value
+    );
     return terrain;
 }
 

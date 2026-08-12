@@ -39,8 +39,16 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Seas and islands are procedurally generated.
 - **[Explicit]** Vast seas dominate the world, with huge islands occurring in
   sparse clusters rather than land and water occupying roughly equal areas.
-- **[Implicit]** Broad representative terrain contains 5–15% land. Major island
-  shapes remain spatially coherent across at least 512 m.
+- **[Implicit]** Broad representative terrain contains 5–15% land across multiple
+  regions. Individual provinces range from almost empty ocean to land-rich
+  archipelagos, and major island shapes remain coherent across at least 512 m.
+- **[Explicit]** Terrain generation takes inspiration from Minecraft's
+  multi-scale density composition: broad landmass probability controls where
+  progressively smaller fields shape islands, coasts, reefs, and rocks.
+- **[Explicit]** Reefs and rocks are features of the continuous depth field rather
+  than separately placed objects. Their probability distribution naturally forms
+  navigable channels; small boats can commonly use them as cover, while deep
+  passages for large ships occur rarely.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
   slows a dragging boat proportionally, beaches can ground it, and rocks can
   damage it.
@@ -165,4 +173,6 @@ This file records intended player experience, scope, and product behavior.
   and the two custom actions.
 - Whether the current draft, spawn clearance, and grounding-friction tuning
   remain appropriate after playtesting.
-- Grounding recovery and rock placement and damage rules.
+- Grounding recovery and rock-impact damage tuning.
+- Concrete large-ship drafts and how often each class should find usable reef
+  passages.

@@ -137,12 +137,19 @@ decisions.
   evaluated directly rather than interpolating random time-cell values. Terrain
   sampled along the resulting upwind direction then modifies the surface wind.
   The current procedural environment leaves water current at zero.
-- **[Implicit]** Static terrain elevation is a pure function of match seed and
-  world position in `pyboat-game`. Three octaves of seeded value noise over
-  8,192–2,048 m wavelengths place sparse archipelago regions. Five further
-  octaves over 1,024–64 m wavelengths shape large islands and their coastlines
-  within those regions. Their weighted elevation produces 5–15% land over broad
-  representative areas without replicated terrain data.
+- **[Explicit]** Static terrain is one continuous seeded density field inspired
+  by Minecraft's composition of broad landmass probability and progressively
+  smaller shaping fields. Reefs and rocks remain part of this field rather than
+  becoming separately placed or replicated objects.
+- **[Implicit]** Three value-noise octaves over 131,072–32,768 m produce
+  continentalness, which passes through a smooth density spline before combining
+  with three 8,192–2,048 m cluster octaves and five 1,024–64 m island-detail
+  octaves. This routes 5–15% global land into provinces ranging from open ocean to
+  land-rich archipelagos.
+- **[Implicit]** In base elevations from -6 to -0.5 m, a smooth coastal mask
+  multiplies four further 128–16 m octaves. Only the field's upper tail is lifted
+  by up to 6 m, naturally producing sharp emergent outcrops, ordinary navigable
+  channels, and uncommon 4 m-deep passages without per-rock clearance rules.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
@@ -182,14 +189,13 @@ decisions.
 - **[Explicit]** Browser terrain is not polygonized. One fullscreen quad supplies
   world positions, and the WebGPU fragment shader evaluates seeded elevation per
   pixel at every zoom level. Physics samples depth only where boats require it.
-- **[Implicit]** WGSL mirrors Rust's three-octave cluster field and five-octave
-  island field and emulates their 64-bit seed hashing with pairs of 32-bit
-  integers. The shader owns all terrain presentation: it continuously blends
-  shallow, open, and deep-water colors from sea level through 4 m depth, switches
-  distinctly to beach at sea level, and propagates the smooth value-noise
-  function's analytic world-space derivatives through every octave and terrain
-  field. Inland pixels at or above `0.01 m/m` are rocky cliffs; gentler inland
-  terrain is green.
+- **[Implicit]** WGSL mirrors Rust's continentalness, cluster, island-detail, and
+  coastal-reef density fields and emulates their 64-bit seed hashing with pairs of
+  32-bit integers. The shader owns all terrain presentation: it continuously
+  blends shallow, open, and deep-water colors from sea level through 4 m depth,
+  switches distinctly to beach at sea level, and propagates analytic world-space
+  derivatives through noise, density splines, masks, and peaks. Inland pixels at
+  or above `0.01 m/m` are rocky cliffs; gentler inland terrain is green.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

@@ -11,8 +11,10 @@ const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
 const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
+const TERRAIN_CONTINENTALNESS_OCTAVE_COUNT: usize = 3;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
+const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
 
 #[derive(Clone, Copy)]
 struct WindBand {
@@ -103,16 +105,55 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
 }
 
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
-    let mut cluster_noise = 0.0;
+    let continentalness = terrain_fractal_noise(
+        match_seed ^ 0x243f_6a88_85a3_08d3,
+        position_m,
+        131_072.0,
+        TERRAIN_CONTINENTALNESS_OCTAVE_COUNT,
+    );
+    let province = smoothstep_range(-0.25, 0.5, continentalness);
+    let cluster = terrain_fractal_noise(
+        match_seed ^ 0xa076_1d64_78bd_642f,
+        position_m,
+        8192.0,
+        TERRAIN_CLUSTER_OCTAVE_COUNT,
+    );
+    let island = terrain_fractal_noise(
+        match_seed ^ 0xe703_7ed1_a0b4_28db,
+        position_m,
+        1024.0,
+        TERRAIN_ISLAND_OCTAVE_COUNT,
+    );
+    let local_density = 0.68 * cluster + 0.32 * island;
+    let base_elevation_m = 18.0 * (0.46 * province + 0.54 * local_density - 0.473);
+    let reef_mask = smoothstep_range(-6.0, -2.0, base_elevation_m)
+        * (1.0 - smoothstep_range(-2.0, -0.5, base_elevation_m));
+    if reef_mask == 0.0 {
+        return base_elevation_m as f32;
+    }
+    let reef = terrain_fractal_noise(
+        match_seed ^ 0x5899_65cc_7537_4cc3,
+        position_m,
+        128.0,
+        TERRAIN_REEF_OCTAVE_COUNT,
+    );
+    let reef_peak = smoothstep_range(0.45, 0.7, reef);
+    (base_elevation_m + 6.0 * reef_mask * reef_peak) as f32
+}
+
+fn terrain_fractal_noise(
+    field_seed: u64,
+    position_m: Vector,
+    mut wavelength_m: f64,
+    octave_count: usize,
+) -> f64 {
+    let mut noise = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
-    let mut wavelength_m = 8192.0;
-    for octave in 0..TERRAIN_CLUSTER_OCTAVE_COUNT {
-        cluster_noise += amplitude
+    for octave in 0..octave_count {
+        noise += amplitude
             * terrain_value_noise(
-                match_seed
-                    ^ 0xa076_1d64_78bd_642f
-                    ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
+                field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
                 position_m,
                 wavelength_m,
             );
@@ -120,28 +161,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
-    cluster_noise /= amplitude_sum;
-
-    let mut island_noise = 0.0;
-    amplitude = 1.0;
-    amplitude_sum = 0.0;
-    wavelength_m = 1024.0;
-    for octave in 0..TERRAIN_ISLAND_OCTAVE_COUNT {
-        island_noise += amplitude
-            * terrain_value_noise(
-                match_seed
-                    ^ 0xe703_7ed1_a0b4_28db
-                    ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-                position_m,
-                wavelength_m,
-            );
-        amplitude_sum += amplitude;
-        amplitude *= 0.5;
-        wavelength_m *= 0.5;
-    }
-    island_noise /= amplitude_sum;
-
-    (18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35)) as f32
+    noise / amplitude_sum
 }
 
 fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -> f64 {
@@ -173,6 +193,10 @@ fn terrain_lattice_value(match_seed: u64, x: i64, y: i64) -> f64 {
 
 fn smoothstep(value: f64) -> f64 {
     value * value * (3.0 - 2.0 * value)
+}
+
+fn smoothstep_range(lower: f64, upper: f64, value: f64) -> f64 {
+    smoothstep(((value - lower) / (upper - lower)).clamp(0.0, 1.0))
 }
 
 fn lerp(first: f64, second: f64, amount: f64) -> f64 {

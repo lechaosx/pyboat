@@ -155,8 +155,6 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
     let mut land_samples_with_distant_land = 0;
 
     for seed in [0, 1, 0x5eed, 0xdead_beef] {
-        let land_samples_before_seed = land_samples;
-        let samples_before_seed = samples;
         for x in -128..=128 {
             for y in -128..=128 {
                 let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
@@ -173,9 +171,6 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
                 samples += 1;
             }
         }
-        let seed_land_samples = land_samples - land_samples_before_seed;
-        let seed_samples = samples - samples_before_seed;
-        assert!(seed_land_samples < seed_samples / 5);
     }
 
     assert!(minimum_elevation_m < -4.0);
@@ -189,4 +184,112 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
         land_samples_with_distant_land * 2 > land_samples,
         "only {land_samples_with_distant_land} of {land_samples} land samples remained land 512 m away"
     );
+}
+
+#[test]
+fn procedural_terrain_forms_distinct_ocean_and_archipelago_provinces() {
+    let mut ocean_tiles = 0;
+    let mut archipelago_tiles = 0;
+    let mut land_samples = 0;
+    let mut samples = 0;
+    let mut tiles = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for tile_x in -4..=4 {
+            for tile_y in -4..=4 {
+                let mut tile_land_samples = 0;
+                for sample_x in 0..8 {
+                    for sample_y in 0..8 {
+                        let position_m = Vector::new(
+                            tile_x as f32 * 16_384.0 + (sample_x as f32 - 3.5) * 2_048.0,
+                            tile_y as f32 * 16_384.0 + (sample_y as f32 - 3.5) * 2_048.0,
+                        );
+                        tile_land_samples +=
+                            usize::from(procedural_terrain_elevation_m(seed, position_m) >= 0.0);
+                    }
+                }
+                ocean_tiles += usize::from(tile_land_samples <= 1);
+                archipelago_tiles += usize::from(tile_land_samples >= 10);
+                land_samples += tile_land_samples;
+                samples += 64;
+                tiles += 1;
+            }
+        }
+    }
+
+    assert!(
+        ocean_tiles * 2 > tiles,
+        "only {ocean_tiles} of {tiles} tiles were open ocean"
+    );
+    assert!(
+        archipelago_tiles * 10 > tiles,
+        "only {archipelago_tiles} of {tiles} tiles contained archipelagos"
+    );
+    assert!(
+        (samples / 20..=samples * 3 / 20).contains(&land_samples),
+        "land occupied {land_samples} of {samples} samples"
+    );
+}
+
+#[test]
+fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
+    let mut mixed_coastal_patches = 0;
+    let mut deep_access_patches = 0;
+    let mut maximum_slope: f32 = 0.0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for patch_x in -24..=24 {
+            for patch_y in -24..=24 {
+                let mut has_outcrop = false;
+                let mut has_navigable_water = false;
+                let mut has_deep_water = false;
+                for sample_x in 0..8 {
+                    for sample_y in 0..8 {
+                        let position_m = Vector::new(
+                            patch_x as f32 * 256.0 + (sample_x as f32 - 3.5) * 32.0,
+                            patch_y as f32 * 256.0 + (sample_y as f32 - 3.5) * 32.0,
+                        );
+                        let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                        has_outcrop |= elevation_m >= 0.25;
+                        has_navigable_water |= elevation_m <= -1.5;
+                        has_deep_water |= elevation_m <= -4.0;
+                        if elevation_m >= 0.0 {
+                            let gradient = Vector::new(
+                                procedural_terrain_elevation_m(
+                                    seed,
+                                    position_m + Vector::new(2.0, 0.0),
+                                ) - procedural_terrain_elevation_m(
+                                    seed,
+                                    position_m - Vector::new(2.0, 0.0),
+                                ),
+                                procedural_terrain_elevation_m(
+                                    seed,
+                                    position_m + Vector::new(0.0, 2.0),
+                                ) - procedural_terrain_elevation_m(
+                                    seed,
+                                    position_m - Vector::new(0.0, 2.0),
+                                ),
+                            ) / 4.0;
+                            maximum_slope = maximum_slope.max(gradient.length());
+                        }
+                    }
+                }
+                if has_outcrop && has_navigable_water {
+                    mixed_coastal_patches += 1;
+                    deep_access_patches += usize::from(has_deep_water);
+                }
+            }
+        }
+    }
+
+    assert!(
+        mixed_coastal_patches >= 64,
+        "only {mixed_coastal_patches} mixed coastal patches"
+    );
+    assert!(deep_access_patches > 0);
+    assert!(
+        deep_access_patches * 4 < mixed_coastal_patches,
+        "{deep_access_patches} of {mixed_coastal_patches} reef patches had deep access"
+    );
+    assert!(maximum_slope > 0.15, "maximum slope was {maximum_slope}");
 }
