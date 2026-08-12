@@ -122,6 +122,12 @@ fixed points from 16–512 m upwind. Elevation through 1.5 m scales obstruction,
 reduces speed by at most 70% without changing direction. Keep this calculation in
 `pyboat-game`; server and browser must apply identical shelter from the shared
 match seed rather than transferring wind samples.
+Regenerate the checked-in shelter visualization from the shared sampler with:
+
+```sh
+cargo run -p pyboat-game --example wind_shelter --release -- docs/wind-shelter.svg
+```
+
 The initial slices construct the hull and articulated hull/sail/rudder assembly,
 restore and read authoritative motion, and advance it with equal-and-opposite
 actuator torques and native Rapier bearing damping in a zero-gravity world at 60

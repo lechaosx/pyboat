@@ -94,7 +94,7 @@ pub fn match_environment() -> Environment {
 }
 
 pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
-    let open_wind = procedural_wind(match_seed, tick, position_m);
+    let open_wind = procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m);
     Environment {
         true_wind_velocity_m_s: land_sheltered_wind(match_seed, position_m, open_wind),
         true_water_velocity_m_s: Vector::ZERO,
@@ -179,7 +179,11 @@ fn lerp(first: f64, second: f64, amount: f64) -> f64 {
     first + amount * (second - first)
 }
 
-fn procedural_wind(match_seed: u64, tick: u64, position_m: Vector) -> Vector {
+pub fn procedural_unsheltered_wind_velocity_m_s(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> Vector {
     let time_seconds = tick as f64 * f64::from(DT_SECONDS);
     let transport_direction_rad =
         std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
@@ -285,7 +289,8 @@ mod tests {
         let mut maximum_speed: f32 = 0.0;
 
         for seed in 0..SAMPLE_COUNT as u64 {
-            let velocity = procedural_wind(seed, 12_345, Vector::new(12.0, -7.0));
+            let velocity =
+                procedural_unsheltered_wind_velocity_m_s(seed, 12_345, Vector::new(12.0, -7.0));
             let quadrant = match (velocity.x >= 0.0, velocity.y >= 0.0) {
                 (true, true) => 0,
                 (false, true) => 1,
@@ -336,7 +341,8 @@ mod tests {
                 if procedural_terrain_elevation_m(match_seed, position_m) >= 0.0 {
                     continue;
                 }
-                let open_wind = procedural_wind(match_seed, tick, position_m);
+                let open_wind =
+                    procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m);
                 let open_speed_m_s = open_wind.length();
                 if open_speed_m_s < 2.0 {
                     continue;
