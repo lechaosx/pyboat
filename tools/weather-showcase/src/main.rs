@@ -27,14 +27,13 @@ struct SceneUniforms {
     cloud_motion: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
-    cloud_offset_m: [f32; 2],
+    cloud_offsets_m: [f32; 4],
     time_seconds: f32,
-    padding: u32,
+    padding: [u32; 3],
 }
 
 struct Showcase {
     name: &'static str,
-    camera_m: [f32; 2],
     weather: [f32; 4],
     structure: [f32; 4],
 }
@@ -42,32 +41,27 @@ struct Showcase {
 const SHOWCASES: [Showcase; 5] = [
     Showcase {
         name: "fair-cumulus",
-        camera_m: [0.0, 0.0],
         weather: [6.0, 1.0, 0.48, 0.0],
         structure: [0.48, 0.82, 0.04, 0.0],
     },
     Showcase {
         name: "marine-stratus",
-        camera_m: [0.0, 0.0],
-        weather: [7.0, 2.0, 0.86, 0.0],
+        weather: [7.0, 2.0, 0.72, 0.0],
         structure: [0.90, 0.12, 0.05, 0.0],
     },
     Showcase {
         name: "high-cirrus",
-        camera_m: [0.0, 0.0],
         weather: [8.0, 3.0, 0.0, 0.0],
         structure: [0.28, 0.35, 0.96, 0.0],
     },
     Showcase {
         name: "rain-squall",
-        camera_m: [0.0, 0.0],
-        weather: [10.0, 3.0, 0.78, 0.62],
+        weather: [10.0, 3.0, 0.64, 0.62],
         structure: [0.92, 0.62, 0.18, 0.0],
     },
     Showcase {
         name: "convective-storm",
-        camera_m: [0.0, 0.0],
-        weather: [12.0, 4.0, 0.92, 0.90],
+        weather: [12.0, 4.0, 0.76, 0.90],
         structure: [0.98, 0.96, 0.28, 0.0],
     },
 ];
@@ -179,20 +173,20 @@ fn render_showcase(
 ) {
     let view_width_m = VIEW_HEIGHT_M * WIDTH as f32 / HEIGHT as f32;
     let uniforms = SceneUniforms {
-        camera_and_view_m: [
-            showcase.camera_m[0],
-            showcase.camera_m[1],
-            view_width_m,
-            VIEW_HEIGHT_M,
-        ],
+        camera_and_view_m: [0.0, 0.0, view_width_m, VIEW_HEIGHT_M],
         weather: showcase.weather,
         weather_structure: showcase.structure,
-        cloud_motion: [showcase.weather[0], showcase.weather[1], 0.0, 0.0],
+        cloud_motion: [
+            1.08 * showcase.weather[0],
+            1.08 * showcase.weather[1],
+            1.18 * showcase.weather[0],
+            1.18 * showcase.weather[1],
+        ],
         match_seed: [MATCH_SEED as u32, (MATCH_SEED >> 32) as u32],
         cloud_visual_seed: [CLOUD_SEED as u32, (CLOUD_SEED >> 32) as u32],
-        cloud_offset_m: [0.0, 0.0],
+        cloud_offsets_m: [0.0; 4],
         time_seconds: 37.0,
-        padding: 0,
+        padding: [0; 3],
     };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

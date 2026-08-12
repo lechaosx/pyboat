@@ -185,8 +185,8 @@ decisions.
   generated independently per player but must look similar under the same local
   weather state.
 - **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies its full wind, large-scale cloud wind, moisture, instability, low
-  and high cloudiness, and rain intensity as parameters to local procedural
+  and supplies its sea-level, low-cloud, and high-cloud winds, moisture,
+  instability, low and high cloudiness, and rain intensity as parameters to local procedural
   rendering. That one state applies uniformly across the viewport, including at
   extreme debug zoom.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
@@ -199,6 +199,11 @@ decisions.
   changes, formations rebuild from the underlying field rather than rotating.
 - **[Explicit]** Cloud motion and formation use only the lowest-frequency wind
   components so regional and gust-scale changes do not abruptly redirect them.
+- **[Explicit]** Sea-level, low-cloud, and high-cloud winds are coherent samples
+  of one seeded weather system rather than independent fields. The common
+  synoptic flow dominates all three; shorter-scale variation increases toward
+  sea level, while average wind speed increases with altitude. Terrain shelter
+  affects the final wind used by boat physics, not the winds aloft.
 - **[Explicit]** Common cloud formations emerge from continuous weather
   parameters rather than a discrete cloud-type selector.
 - **[Implicit]** Shared cloud cover is five octaves of smooth value noise over
@@ -242,20 +247,21 @@ decisions.
   derivatives through noise, density splines, masks, and peaks. Shoreline and
   inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
   and gentler inland terrain is green.
-- **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered wind,
-  its dominant 32,768–131,072 m band as cloud wind, moisture, instability, low and
-  high cloudiness, and rain intensity into the shared sample consumed by the
-  renderer. WGSL continuously blends a cellular 128–0.5 m cumulus field, a
-  512–8 m stratiform field, and sparse 512–4 m cirrus ridges. Cloud octaves retain
-  58% of the preceding amplitude so sub-metre and metre-scale detail affects crisp
-  silhouettes. Three samples of
-  the same stratus or cirrus field—centered and offset both ways along cloud
-  wind—form the elongated responses without transforming noise coordinates.
-  Instability weights cumulus against stratus; instability with rain strengthens
-  storm cells. The browser integrates one camera-local visual offset from cloud
-  wind each frame, avoiding a global flow simulation. Cloud shading applies only
-  to the fullscreen world surface, so boats remain equally visible to clients
-  with different visual seeds.
+- **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered surface
+  wind, low- and high-cloud winds, moisture, instability, low and high cloudiness,
+  and rain intensity. High-cloud wind is the dominant 32,768–131,072 m synoptic
+  band at 118% speed. Low-cloud wind blends that band with the complete surface
+  field at 108% speed. WGSL continuously blends crisp 96–1.5 m cumulus and 28 m
+  billow detail with elongated stratus, sparse translucent cirrus, narrow squall
+  fronts, and convective storm mass. Nine weighted samples filter the unwarped
+  spacetime fields along each layer's wind direction. Density, optical depth,
+  darkness, and relief remain separate so thin cloud stays transparent, dense
+  rain cloud darkens continuously, and fine internal detail survives inside the
+  silhouette. Instability weights cumulus against stratus; instability with rain
+  strengthens storm cells. The browser integrates separate camera-local low- and
+  high-cloud offsets, avoiding a global flow simulation. Cloud shading applies
+  only to the fullscreen world surface, so boats remain equally visible to
+  clients with different visual seeds.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.

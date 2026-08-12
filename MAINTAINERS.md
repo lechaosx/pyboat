@@ -146,8 +146,9 @@ body; multiply it by an interior density rising from 0.25 to 1 through a
 0.15–0.75 smoothstep. More than half of representative samples must remain clear,
 10–40% must be cloudy, and density above 0.85 must be present but below 1%.
 `procedural_weather` packages that cloudiness and its continuous moisture signal
-with unsheltered wind and a separate cloud wind containing only the dominant
-32,768–131,072 m band. Independent four-octave fields provide instability over
+with an unsheltered surface wind and coherent low- and high-cloud winds. The high
+wind is the dominant 32,768–131,072 m band at 118% speed; the low wind blends that
+band with the complete surface field at 108% speed. Independent four-octave fields provide instability over
 16,384–2,048 m and sparse high-cloud potential over 32,768–4,096 m. Rain maps the
 0.7–0.95 tail of cloudiness weighted 65–100% by instability. Final surface wind
 samples terrain at six fixed points from 16–512 m upwind. Elevation through 1.5 m
@@ -211,7 +212,9 @@ portable to the browser target.
 Run `cargo run -p pyboat-weather-showcase` to render fixed weather conditions
 through the browser's WGSL shader into `weather-showcase/`. The native offscreen
 renderer requires a Vulkan adapter and excludes boats and the HUD so cloud and
-terrain presentation remain easy to compare.
+terrain presentation remain easy to compare. Every checked-in condition uses the
+same camera, view height, match seed, visual seed, cloud offsets, and time; only
+the local weather parameters differ.
 
 ## Controllers
 
@@ -367,22 +370,19 @@ the same amplitude normalization and density composition. Gradients at or above
 `0.08 m/m` render as bare rock; below that cutoff, shoreline renders as beach and
 inland terrain renders green.
 Each frame samples `procedural_weather` at the camera position. The scene uniform
-carries full wind, cloud wind, moisture, instability, low/high cloudiness, and rain
-state, predicted simulation time, a visual seed derived from the local player
-identity, and the locally integrated cloud offset. WGSL uses the one weather
+carries surface, low-cloud, and high-cloud winds, moisture, instability,
+low/high cloudiness, rain state, predicted simulation time, a visual seed derived
+from the local player identity, and separately integrated low/high cloud offsets. WGSL uses the one weather
 sample uniformly across the viewport; it does not mirror the shared weather field
 per pixel. Player-specific noise forms three continuously blended responses:
-cellular 128–0.5 m cumulus, elongated 512–8 m stratus, and sparse elongated
-512–4 m cirrus ridges. Each successive octave retains 58% amplitude. Stratus
-samples the same unwarped spacetime field at its center and 384 m in both
-cloud-wind directions; cirrus uses 512 m. Their weighted directional average
-forms streaks without transforming the noise coordinates.
-Cloud wind also advances the integrated translation offset; full wind remains
-available separately and includes regional variation and gusts. Instability
-blends stratus toward cumulus and, together with rain, strengthens dense storm
-cells. Cloud shading applies only to the fullscreen terrain quad, never boat
-fragments. Density below 0.14 is visually suppressed; a 0.14–0.22 opacity ramp
-keeps cloud edges crisp, and rain intensity darkens clouds toward storm grey.
+cellular cumulus, elongated stratus and squalls, and sparse high cirrus. Nine
+weighted samples of each elongated field form wind-aligned correlation without
+transforming noise coordinates. Low and high winds advance separate translation
+offsets. Instability blends stratus toward cumulus and, together with rain,
+strengthens dense storm cells. Cloud shading applies only to the fullscreen
+terrain quad, never boat fragments. Density, optical depth, darkness, and relief
+are calculated separately; an exponential optical-depth mapping keeps ordinary
+clouds translucent while dense rain cloud becomes opaque and dark.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

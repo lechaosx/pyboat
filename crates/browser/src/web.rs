@@ -50,9 +50,9 @@ struct SceneUniforms {
     cloud_motion: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
-    cloud_offset_m: [f32; 2],
+    cloud_offsets_m: [f32; 4],
     time_seconds: f32,
-    _padding: u32,
+    _padding: [u32; 3],
 }
 
 struct Renderer {
@@ -65,7 +65,8 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    cloud_offset_m: Vector,
+    low_cloud_offset_m: Vector,
+    high_cloud_offset_m: Vector,
 }
 
 impl Renderer {
@@ -177,7 +178,8 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
-            cloud_offset_m: Vector::ZERO,
+            low_cloud_offset_m: Vector::ZERO,
+            high_cloud_offset_m: Vector::ZERO,
         })
     }
 
@@ -205,7 +207,8 @@ impl Renderer {
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let weather = match_seed.map(|match_seed| procedural_weather(match_seed, tick, camera_m));
         if let Some(weather) = weather {
-            self.cloud_offset_m += weather.cloud_wind_velocity_m_s * elapsed_seconds;
+            self.low_cloud_offset_m += weather.low_cloud_wind_velocity_m_s * elapsed_seconds;
+            self.high_cloud_offset_m += weather.high_cloud_wind_velocity_m_s * elapsed_seconds;
         }
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
@@ -231,17 +234,22 @@ impl Renderer {
                 }),
                 cloud_motion: weather.map_or([0.0; 4], |weather| {
                     [
-                        weather.cloud_wind_velocity_m_s.x,
-                        weather.cloud_wind_velocity_m_s.y,
-                        0.0,
-                        0.0,
+                        weather.low_cloud_wind_velocity_m_s.x,
+                        weather.low_cloud_wind_velocity_m_s.y,
+                        weather.high_cloud_wind_velocity_m_s.x,
+                        weather.high_cloud_wind_velocity_m_s.y,
                     ]
                 }),
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
-                cloud_offset_m: [self.cloud_offset_m.x, self.cloud_offset_m.y],
+                cloud_offsets_m: [
+                    self.low_cloud_offset_m.x,
+                    self.low_cloud_offset_m.y,
+                    self.high_cloud_offset_m.x,
+                    self.high_cloud_offset_m.y,
+                ],
                 time_seconds: tick as f32 / 60.0,
-                _padding: 0,
+                _padding: [0; 3],
             }),
         );
 

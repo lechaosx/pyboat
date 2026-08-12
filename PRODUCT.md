@@ -133,9 +133,10 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Rendering uses the weather sampled at the local boat for the
   whole viewport. Extreme debug zoom therefore shows one uniform weather regime
   across the visible map.
-- **[Explicit]** Cloud shapes move at the speed and direction of the shared
-  large-scale local wind while also forming and dissipating over time, without
-  simulating a global fluid volume. Short-scale gusts do not steer cloud motion.
+- **[Explicit]** Cloud shapes move at the speed and direction of coherent low-
+  and high-altitude winds while also forming and dissipating over time, without
+  simulating a global fluid volume. Boat physics uses the related sea-level wind;
+  short-scale gusts do not abruptly steer cloud motion.
 - **[Explicit]** Changes in wind direction curve cloud motion but do not rotate
   the cloud density pattern in place. Elongated formations rebuild continuously
   from the same spacetime noise as the large-scale wind direction changes.
@@ -146,6 +147,10 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Cloud cover is predominantly low-altitude and detailed at the
   default view. Broad, flat grey overcast is avoided so navigation remains clear;
   storm clouds are rare, while ordinary moving clouds remain useful wind cues.
+- **[Explicit]** Ordinary clouds are sparse and mostly translucent, with fine
+  internal density and depth variation. Long decks are uncommon; dense dark
+  opacity is concentrated in rare storm conditions so the boat usually remains
+  readable.
 - **[Explicit]** Clouds do not conceal players or otherwise affect gameplay.
   Authored sprites remain appropriate for details such as rocks, trees, and
   wreckage.

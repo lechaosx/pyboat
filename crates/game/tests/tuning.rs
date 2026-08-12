@@ -209,8 +209,8 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     let mut instability_range = (1.0_f32, 0.0_f32);
     let mut high_cloud_samples = 0;
     let mut full_wind_change = 0.0;
-    let mut cloud_wind_change = 0.0;
-    let mut distinct_cloud_wind_samples = 0;
+    let mut low_cloud_wind_change = 0.0;
+    let mut distinct_low_cloud_wind_samples = 0;
 
     for seed in 0..1_024 {
         let weather = procedural_weather(seed, 12_345, position_m);
@@ -221,10 +221,11 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
         );
         let later_weather = procedural_weather(seed, 12_405, position_m);
         full_wind_change += (later_weather.wind_velocity_m_s - weather.wind_velocity_m_s).length();
-        cloud_wind_change +=
-            (later_weather.cloud_wind_velocity_m_s - weather.cloud_wind_velocity_m_s).length();
-        distinct_cloud_wind_samples += usize::from(
-            (weather.cloud_wind_velocity_m_s - weather.wind_velocity_m_s).length() > 0.01,
+        low_cloud_wind_change += (later_weather.low_cloud_wind_velocity_m_s
+            - weather.low_cloud_wind_velocity_m_s)
+            .length();
+        distinct_low_cloud_wind_samples += usize::from(
+            (weather.low_cloud_wind_velocity_m_s - weather.wind_velocity_m_s).length() > 0.01,
         );
         assert_eq!(
             weather.cloudiness,
@@ -250,8 +251,47 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     assert!(instability_range.1 > 0.75);
     assert!(high_cloud_samples > 0);
     assert!(high_cloud_samples < 512);
-    assert!(distinct_cloud_wind_samples > 900);
-    assert!(cloud_wind_change < full_wind_change * 0.25);
+    assert!(distinct_low_cloud_wind_samples > 900);
+    assert!(low_cloud_wind_change < full_wind_change * 0.5);
+}
+
+#[test]
+fn procedural_weather_wind_profile_is_seeded_coherent_and_faster_aloft() {
+    let position_m = Vector::new(12.0, -7.0);
+    let mut sea_speed_sum = 0.0;
+    let mut low_speed_sum = 0.0;
+    let mut high_speed_sum = 0.0;
+    let mut sea_low_alignment_sum = 0.0;
+    let mut low_high_alignment_sum = 0.0;
+    let mut samples = 0;
+    let mut sheared_samples = 0;
+
+    for seed in 0..1_024 {
+        let weather = procedural_weather(seed, 12_345, position_m);
+        assert_eq!(weather, procedural_weather(seed, 12_345, position_m));
+
+        let sea = weather.wind_velocity_m_s;
+        let low = weather.low_cloud_wind_velocity_m_s;
+        let high = weather.high_cloud_wind_velocity_m_s;
+        if sea.length() < 1.0 || low.length() < 1.0 || high.length() < 1.0 {
+            continue;
+        }
+
+        sea_speed_sum += sea.length();
+        low_speed_sum += low.length();
+        high_speed_sum += high.length();
+        sea_low_alignment_sum += sea.normalize().dot(low.normalize());
+        low_high_alignment_sum += low.normalize().dot(high.normalize());
+        sheared_samples += usize::from((sea - low).length() > 0.01 && (low - high).length() > 0.01);
+        samples += 1;
+    }
+
+    assert!(samples > 900);
+    assert!(low_speed_sum > sea_speed_sum);
+    assert!(high_speed_sum > low_speed_sum);
+    assert!(sea_low_alignment_sum / samples as f32 > 0.95);
+    assert!(low_high_alignment_sum / samples as f32 > 0.95);
+    assert!(sheared_samples > samples * 9 / 10);
 }
 
 #[test]
