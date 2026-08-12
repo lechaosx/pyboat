@@ -99,26 +99,46 @@ fn terrain_lattice_value(seed: vec2<u32>, x: i32, y: i32) -> f32 {
     return 2.0 * terrain_hash_unit(key) - 1.0;
 }
 
-fn terrain_value_noise(seed: vec2<u32>, position_m: vec2<f32>, wavelength_m: f32) -> f32 {
+struct TerrainNoiseSample {
+    value: f32,
+    gradient: vec2<f32>,
+};
+
+struct TerrainSample {
+    elevation_m: f32,
+    gradient: vec2<f32>,
+};
+
+fn terrain_value_noise(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
     let scaled_position = position_m / wavelength_m;
     let cell = vec2<i32>(floor(scaled_position));
     let fraction = scaled_position - vec2<f32>(cell);
     let blend = fraction * fraction * (vec2<f32>(3.0) - 2.0 * fraction);
-    let bottom = mix(
-        terrain_lattice_value(seed, cell.x, cell.y),
-        terrain_lattice_value(seed, cell.x + 1, cell.y),
-        blend.x,
+    let blend_derivative = 6.0 * fraction * (vec2<f32>(1.0) - fraction) / wavelength_m;
+    let bottom_left = terrain_lattice_value(seed, cell.x, cell.y);
+    let bottom_right = terrain_lattice_value(seed, cell.x + 1, cell.y);
+    let top_left = terrain_lattice_value(seed, cell.x, cell.y + 1);
+    let top_right = terrain_lattice_value(seed, cell.x + 1, cell.y + 1);
+    let bottom = mix(bottom_left, bottom_right, blend.x);
+    let top = mix(top_left, top_right, blend.x);
+
+    var sample: TerrainNoiseSample;
+    sample.value = mix(bottom, top, blend.y);
+    sample.gradient = vec2<f32>(
+        mix(bottom_right - bottom_left, top_right - top_left, blend.y)
+            * blend_derivative.x,
+        (top - bottom) * blend_derivative.y,
     );
-    let top = mix(
-        terrain_lattice_value(seed, cell.x, cell.y + 1),
-        terrain_lattice_value(seed, cell.x + 1, cell.y + 1),
-        blend.x,
-    );
-    return mix(bottom, top, blend.y);
+    return sample;
 }
 
-fn procedural_terrain_elevation_m(position_m: vec2<f32>) -> f32 {
+fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var cluster_noise = 0.0;
+    var cluster_gradient = vec2<f32>(0.0);
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = 8192.0;
@@ -129,14 +149,18 @@ fn procedural_terrain_elevation_m(position_m: vec2<f32>) -> f32 {
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        cluster_noise += amplitude * terrain_value_noise(octave_seed, position_m, wavelength_m);
+        let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
+        cluster_noise += amplitude * octave_sample.value;
+        cluster_gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
     cluster_noise /= amplitude_sum;
+    cluster_gradient /= amplitude_sum;
 
     var island_noise = 0.0;
+    var island_gradient = vec2<f32>(0.0);
     amplitude = 1.0;
     amplitude_sum = 0.0;
     wavelength_m = 1024.0;
@@ -147,23 +171,20 @@ fn procedural_terrain_elevation_m(position_m: vec2<f32>) -> f32 {
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        island_noise += amplitude * terrain_value_noise(octave_seed, position_m, wavelength_m);
+        let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
+        island_noise += amplitude * octave_sample.value;
+        island_gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
     island_noise /= amplitude_sum;
+    island_gradient /= amplitude_sum;
 
-    return 18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35);
-}
-
-fn terrain_slope(elevation_m: f32, world_position_m: vec2<f32>) -> f32 {
-    let elevation_change = vec2<f32>(dpdx(elevation_m), dpdy(elevation_m));
-    let world_distance = vec2<f32>(
-        length(dpdx(world_position_m)),
-        length(dpdy(world_position_m)),
-    );
-    return length(elevation_change / max(world_distance, vec2<f32>(1e-6)));
+    var terrain: TerrainSample;
+    terrain.elevation_m = 18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35);
+    terrain.gradient = 18.0 * (0.68 * cluster_gradient + 0.32 * island_gradient);
+    return terrain;
 }
 
 fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
@@ -191,9 +212,8 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain > 0.5 {
-        let elevation_m = procedural_terrain_elevation_m(input.world_position_m);
-        let slope = terrain_slope(elevation_m, input.world_position_m);
-        return vec4<f32>(terrain_color(elevation_m, slope), 1.0);
+        let terrain = procedural_terrain_sample(input.world_position_m);
+        return vec4<f32>(terrain_color(terrain.elevation_m, length(terrain.gradient)), 1.0);
     }
     return vec4<f32>(input.color, 1.0);
 }
