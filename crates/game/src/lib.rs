@@ -11,7 +11,6 @@ const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
 const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
-const TERRAIN_CONTINENTALNESS_OCTAVE_COUNT: usize = 3;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
@@ -105,13 +104,6 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
 }
 
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
-    let continentalness = terrain_fractal_noise(
-        match_seed ^ 0x243f_6a88_85a3_08d3,
-        position_m,
-        131_072.0,
-        TERRAIN_CONTINENTALNESS_OCTAVE_COUNT,
-    );
-    let province = smoothstep_range(-0.25, 0.5, continentalness);
     let cluster = terrain_fractal_noise(
         match_seed ^ 0xa076_1d64_78bd_642f,
         position_m,
@@ -125,20 +117,20 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         TERRAIN_ISLAND_OCTAVE_COUNT,
     );
     let local_density = 0.68 * cluster + 0.32 * island;
-    let base_elevation_m = 18.0 * (0.46 * province + 0.54 * local_density - 0.473);
-    let reef_mask = smoothstep_range(-6.0, -2.0, base_elevation_m)
-        * (1.0 - smoothstep_range(-2.0, -0.5, base_elevation_m));
+    let base_elevation_m = 18.0 * (local_density - 0.35);
+    let reef_mask = smoothstep_range(-4.0, -1.5, base_elevation_m)
+        * (1.0 - smoothstep_range(1.0, 3.0, base_elevation_m));
     if reef_mask == 0.0 {
         return base_elevation_m as f32;
     }
     let reef = terrain_fractal_noise(
         match_seed ^ 0x5899_65cc_7537_4cc3,
         position_m,
-        128.0,
+        32.0,
         TERRAIN_REEF_OCTAVE_COUNT,
     );
-    let reef_peak = smoothstep_range(0.45, 0.7, reef);
-    (base_elevation_m + 6.0 * reef_mask * reef_peak) as f32
+    let reef_peak = smoothstep_range(0.4, 0.7, reef);
+    (base_elevation_m + reef_mask * (1.8 * reef + reef_peak)) as f32
 }
 
 fn terrain_fractal_noise(

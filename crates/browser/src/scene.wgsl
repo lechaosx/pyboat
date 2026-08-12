@@ -184,13 +184,6 @@ fn terrain_smoothstep_sample(
 }
 
 fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
-    let continentalness = terrain_fractal_sample(
-        vec2<u32>(0x85a308d3u, 0x243f6a88u),
-        position_m,
-        131072.0,
-        3u,
-    );
-    let province = terrain_smoothstep_sample(-0.25, 0.5, continentalness);
     let cluster = terrain_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         position_m,
@@ -204,40 +197,33 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         5u,
     );
     var base: TerrainNoiseSample;
-    base.value = 18.0 * (
-        0.46 * province.value
-            + 0.54 * (0.68 * cluster.value + 0.32 * island.value)
-            - 0.473
-    );
-    base.gradient = 18.0 * (
-        0.46 * province.gradient
-            + 0.54 * (0.68 * cluster.gradient + 0.32 * island.gradient)
-    );
+    base.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.35);
+    base.gradient = 18.0 * (0.68 * cluster.gradient + 0.32 * island.gradient);
 
     var terrain: TerrainSample;
     terrain.elevation_m = base.value;
     terrain.gradient = base.gradient;
-    let deep_gate = terrain_smoothstep_sample(-6.0, -2.0, base);
-    let shore_rise = terrain_smoothstep_sample(-2.0, -0.5, base);
-    let shore_gate_value = 1.0 - shore_rise.value;
-    let reef_mask_value = deep_gate.value * shore_gate_value;
+    let deep_gate = terrain_smoothstep_sample(-4.0, -1.5, base);
+    let inland_rise = terrain_smoothstep_sample(1.0, 3.0, base);
+    let inland_gate_value = 1.0 - inland_rise.value;
+    let reef_mask_value = deep_gate.value * inland_gate_value;
     if reef_mask_value == 0.0 {
         return terrain;
     }
-    let reef_mask_gradient = deep_gate.gradient * shore_gate_value
-        - shore_rise.gradient * deep_gate.value;
+    let reef_mask_gradient = deep_gate.gradient * inland_gate_value
+        - inland_rise.gradient * deep_gate.value;
     let reef = terrain_fractal_sample(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         position_m,
-        128.0,
+        32.0,
         4u,
     );
-    let reef_peak = terrain_smoothstep_sample(0.45, 0.7, reef);
-    terrain.elevation_m += 6.0 * reef_mask_value * reef_peak.value;
-    terrain.gradient += 6.0 * (
-        reef_mask_gradient * reef_peak.value
-            + reef_peak.gradient * reef_mask_value
-    );
+    let reef_peak = terrain_smoothstep_sample(0.4, 0.7, reef);
+    let reef_detail_value = 1.8 * reef.value + reef_peak.value;
+    let reef_detail_gradient = 1.8 * reef.gradient + reef_peak.gradient;
+    terrain.elevation_m += reef_mask_value * reef_detail_value;
+    terrain.gradient += reef_mask_gradient * reef_detail_value
+        + reef_detail_gradient * reef_mask_value;
     return terrain;
 }
 
@@ -254,11 +240,11 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
         );
         return mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
     }
+    if slope >= 0.08 {
+        return vec3<f32>(0.35, 0.31, 0.25);
+    }
     if elevation_m < 0.4 {
         return vec3<f32>(0.76, 0.67, 0.43);
-    }
-    if slope >= 0.01 {
-        return vec3<f32>(0.35, 0.31, 0.25);
     }
     return vec3<f32>(0.15, 0.28, 0.17);
 }

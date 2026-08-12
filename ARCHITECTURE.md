@@ -138,18 +138,24 @@ decisions.
   sampled along the resulting upwind direction then modifies the surface wind.
   The current procedural environment leaves water current at zero.
 - **[Explicit]** Static terrain is one continuous seeded density field inspired
-  by Minecraft's composition of broad landmass probability and progressively
-  smaller shaping fields. Reefs and rocks remain part of this field rather than
-  becoming separately placed or replicated objects.
-- **[Implicit]** Three value-noise octaves over 131,072–32,768 m produce
-  continentalness, which passes through a smooth density spline before combining
-  with three 8,192–2,048 m cluster octaves and five 1,024–64 m island-detail
-  octaves. This routes 5–15% global land into provinces ranging from open ocean to
-  land-rich archipelagos.
-- **[Implicit]** In base elevations from -6 to -0.5 m, a smooth coastal mask
-  multiplies four further 128–16 m octaves. Only the field's upper tail is lifted
-  by up to 6 m, naturally producing sharp emergent outcrops, ordinary navigable
-  channels, and uncommon 4 m-deep passages without per-rock clearance rules.
+  by Minecraft's composition of progressively smaller shaping fields. Reefs and
+  rocks remain part of this field rather than becoming separately placed or
+  replicated objects. Horizontal distance and elevation both use uncompressed
+  real metres.
+- **[Explicit]** Terrain has no continent-scale density layer that can enclose
+  players in regional seas. Three 8,192–2,048 m cluster octaves and five
+  1,024–64 m island-detail octaves produce sparse large islands in a connected,
+  dominant ocean.
+- **[Implicit]** In base elevations from -4 to 3 m, a smooth coastal mask
+  multiplies four further 32–4 m octaves. A signed 1.8 m contribution cuts
+  channels and raises rugged seabed, while a 1 m upper-tail contribution makes
+  uncommon emergent rocks. Applying the same field across sea level makes rocky
+  outcrops continue into rugged coast without per-rock clearance rules.
+- **[Implicit]** NOAA BlueTopo 4 m grids for rocky Maine and the Florida Keys
+  calibrate the coastal relief spectrum in the same -4 to 1 m elevation band as
+  the game. Generated 90th-percentile relief stays within the observed ranges at
+  32 m and 128 m baselines, and statistical samples require 4 m-deep access near
+  some, but fewer than one quarter, of mixed reef neighborhoods.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
@@ -189,13 +195,14 @@ decisions.
 - **[Explicit]** Browser terrain is not polygonized. One fullscreen quad supplies
   world positions, and the WebGPU fragment shader evaluates seeded elevation per
   pixel at every zoom level. Physics samples depth only where boats require it.
-- **[Implicit]** WGSL mirrors Rust's continentalness, cluster, island-detail, and
-  coastal-reef density fields and emulates their 64-bit seed hashing with pairs of
+- **[Implicit]** WGSL mirrors Rust's cluster, island-detail, and coastal-reef
+  density fields and emulates their 64-bit seed hashing with pairs of
   32-bit integers. The shader owns all terrain presentation: it continuously
   blends shallow, open, and deep-water colors from sea level through 4 m depth,
   switches distinctly to beach at sea level, and propagates analytic world-space
-  derivatives through noise, density splines, masks, and peaks. Inland pixels at
-  or above `0.01 m/m` are rocky cliffs; gentler inland terrain is green.
+  derivatives through noise, density splines, masks, and peaks. Shoreline and
+  inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
+  and gentler inland terrain is green.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

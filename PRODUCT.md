@@ -39,16 +39,23 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Seas and islands are procedurally generated.
 - **[Explicit]** Vast seas dominate the world, with huge islands occurring in
   sparse clusters rather than land and water occupying roughly equal areas.
-- **[Implicit]** Broad representative terrain contains 5–15% land across multiple
-  regions. Individual provinces range from almost empty ocean to land-rich
-  archipelagos, and major island shapes remain coherent across at least 512 m.
+- **[Implicit]** Broad representative terrain contains 5–15% land, each sampled
+  65 km region remains sea-dominated, and major island shapes remain coherent
+  across at least 512 m.
 - **[Explicit]** Terrain generation takes inspiration from Minecraft's
-  multi-scale density composition: broad landmass probability controls where
-  progressively smaller fields shape islands, coasts, reefs, and rocks.
+  multi-scale density composition: broad island fields combine with progressively
+  smaller fields that shape coasts, reefs, and rocks.
+- **[Explicit]** Procedural terrain uses real metres horizontally and vertically;
+  generation does not compress real-world depths or feature sizes.
+- **[Explicit]** A continent-scale density layer must not create closed regional
+  seas that isolate players. Sparse island clusters sit in a connected dominant
+  ocean instead.
 - **[Explicit]** Reefs and rocks are features of the continuous depth field rather
   than separately placed objects. Their probability distribution naturally forms
   navigable channels; small boats can commonly use them as cover, while deep
   passages for large ships occur rarely.
+- **[Explicit]** Gentle shoreline renders as beach, while sufficiently steep
+  shoreline and inland slopes render as bare rock.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
   slows a dragging boat proportionally, beaches can ground it, and rocks can
   damage it.
@@ -65,11 +72,11 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** The browser renders water depth continuously, with a distinct
   transition at the shoreline.
 - **[Implicit]** The browser renders its static seeded elevation field with a
-  continuous shallow-to-deep water gradient and a discrete beach band.
+  continuous shallow-to-deep water gradient and a discrete shoreline transition.
 - **[Explicit]** Inland terrain is green except where its local elevation gradient
   is steep enough to render as a rocky cliff.
-- **[Implicit]** A `0.01 m/m` per-pixel elevation-gradient threshold selects the
-  steepest parts of the current low-relief terrain as cliffs.
+- **[Implicit]** A `0.08 m/m` per-pixel elevation-gradient threshold separates
+  bare rock from gentler beach and green terrain.
 - **[Implicit]** The current dinghy has a 0.6 m effective draft. Lost bottom
   clearance transfers its weight progressively onto the seabed; effective static
   and kinetic friction coefficients are 1.0 and 0.6. Spawns require at least
