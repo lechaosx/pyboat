@@ -103,11 +103,13 @@ game-specific. Its procedural environment sampler is a pure function of match
 seed, simulation tick, and world position so native and WebAssembly runtimes can
 reproduce the same wind. Keep procedural tuning and sampling in this shared crate;
 the protocol transfers the seed rather than sampled fields or parameters.
-Static terrain uses five octaves of seeded value noise over 8–128 m wavelengths.
-The shared sampler returns continuous elevation relative to sea level from only
-the match seed and world position. Each procedural environment converts elevation
-to water depth for authoritative and predicted grounding without adding terrain
-to the protocol.
+Static terrain combines three octaves of seeded cluster noise over 2,048–8,192 m
+wavelengths with five octaves of island noise over 64–1,024 m wavelengths. The
+weighted field targets 5–15% land over broad representative areas while retaining
+large coherent islands. The shared sampler returns continuous elevation relative
+to sea level from only the match seed and world position. Each procedural
+environment converts elevation to water depth for authoritative and predicted
+grounding without adding terrain to the protocol.
 Wind is the sum of 48 divergence-free Fourier modes in weather, local, and gust
 bands. Seeded Box–Muller coefficients create isotropic Gaussian vector components,
 giving speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies
@@ -302,9 +304,9 @@ The local boat scene subtracts predicted boat velocity from that seeded true win
 and renders the result as one drag-inflated windsock attached to its bow. Remote
 boats have no wind indicator.
 The browser draws one fullscreen terrain quad. Its fragment shader reconstructs
-world position and mirrors the Rust five-octave elevation sampler for every pixel,
-including 64-bit seed mixing represented as pairs of WebGPU-compatible 32-bit
-integers. Keep WGSL terrain constants and hashing synchronized with
+world position and mirrors the Rust cluster and island elevation fields for every
+pixel, including 64-bit seed mixing represented as pairs of WebGPU-compatible
+32-bit integers. Keep WGSL terrain constants and hashing synchronized with
 `pyboat-game`; Rust remains authoritative for physical depth. The shader owns
 underwater color and the shoreline, beach, cliff, and inland material bands.
 Middle mouse resets the original 15 m view height. Terrain can remain visible

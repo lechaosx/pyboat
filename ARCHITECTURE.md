@@ -137,9 +137,11 @@ decisions.
   evaluated directly rather than interpolating random time-cell values. The
   current procedural environment leaves water current at zero.
 - **[Implicit]** Static terrain elevation is a pure function of match seed and
-  world position in `pyboat-game`. Five octaves of smoothly interpolated seeded
-  value noise, from 128 m down to 8 m wavelengths, produce continuous island and
-  seabed contours without replicated terrain data.
+  world position in `pyboat-game`. Three octaves of seeded value noise over
+  8,192–2,048 m wavelengths place sparse archipelago regions. Five further
+  octaves over 1,024–64 m wavelengths shape large islands and their coastlines
+  within those regions. Their weighted elevation produces 5–15% land over broad
+  representative areas without replicated terrain data.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
@@ -168,11 +170,11 @@ decisions.
 - **[Explicit]** Browser terrain is not polygonized. One fullscreen quad supplies
   world positions, and the WebGPU fragment shader evaluates seeded elevation per
   pixel at every zoom level. Physics samples depth only where boats require it.
-- **[Implicit]** WGSL mirrors Rust's five-octave noise constants and emulates its
-  64-bit seed hashing with pairs of 32-bit integers. The shader owns all terrain
-  presentation: it continuously blends shallow, open, and deep-water colors from
-  sea level through 4 m depth, switches distinctly to beach at sea level, and
-  retains cliff and inland land bands.
+- **[Implicit]** WGSL mirrors Rust's three-octave cluster field and five-octave
+  island field and emulates their 64-bit seed hashing with pairs of 32-bit
+  integers. The shader owns all terrain presentation: it continuously blends
+  shallow, open, and deep-water colors from sea level through 4 m depth, switches
+  distinctly to beach at sea level, and retains cliff and inland land bands.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

@@ -37,6 +37,10 @@ This file records intended player experience, scope, and product behavior.
 ## World and presentation
 
 - **[Explicit]** Seas and islands are procedurally generated.
+- **[Explicit]** Vast seas dominate the world, with huge islands occurring in
+  sparse clusters rather than land and water occupying roughly equal areas.
+- **[Implicit]** Broad representative terrain contains 5–15% land. Major island
+  shapes remain spatially coherent across at least 512 m.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
   slows a dragging boat proportionally, beaches can ground it, and rocks can
   damage it.

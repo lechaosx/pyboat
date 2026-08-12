@@ -78,6 +78,8 @@ fn scene_shader_samples_seeded_terrain_per_fragment() {
     assert!(SCENE_SHADER.contains("fn procedural_terrain_elevation_m"));
     assert!(SCENE_SHADER.contains("procedural_terrain_elevation_m(input.world_position_m)"));
     assert!(SCENE_SHADER.contains("match_seed: vec2<u32>"));
+    assert!(SCENE_SHADER.contains("wavelength_m = 8192.0"));
+    assert!(SCENE_SHADER.contains("wavelength_m = 1024.0"));
 }
 
 #[test]

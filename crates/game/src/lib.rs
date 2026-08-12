@@ -7,7 +7,8 @@ use rapier2d::prelude::Vector;
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
-const TERRAIN_OCTAVE_COUNT: usize = 5;
+const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
+const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 
 #[derive(Clone, Copy)]
 struct WindBand {
@@ -97,14 +98,16 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
 }
 
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
-    let mut noise = 0.0;
+    let mut cluster_noise = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
-    let mut wavelength_m = 128.0;
-    for octave in 0..TERRAIN_OCTAVE_COUNT {
-        noise += amplitude
+    let mut wavelength_m = 8192.0;
+    for octave in 0..TERRAIN_CLUSTER_OCTAVE_COUNT {
+        cluster_noise += amplitude
             * terrain_value_noise(
-                match_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
+                match_seed
+                    ^ 0xa076_1d64_78bd_642f
+                    ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
                 position_m,
                 wavelength_m,
             );
@@ -112,7 +115,28 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
-    (12.0 * noise / amplitude_sum - 2.0) as f32
+    cluster_noise /= amplitude_sum;
+
+    let mut island_noise = 0.0;
+    amplitude = 1.0;
+    amplitude_sum = 0.0;
+    wavelength_m = 1024.0;
+    for octave in 0..TERRAIN_ISLAND_OCTAVE_COUNT {
+        island_noise += amplitude
+            * terrain_value_noise(
+                match_seed
+                    ^ 0xe703_7ed1_a0b4_28db
+                    ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
+                position_m,
+                wavelength_m,
+            );
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    island_noise /= amplitude_sum;
+
+    (18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35)) as f32
 }
 
 fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -> f64 {

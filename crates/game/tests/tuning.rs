@@ -162,24 +162,46 @@ fn procedural_terrain_is_seeded_and_continuous() {
 }
 
 #[test]
-fn procedural_terrain_forms_land_among_navigable_water() {
+fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
     let mut minimum_elevation_m = f32::MAX;
     let mut maximum_elevation_m = f32::MIN;
     let mut land_samples = 0;
     let mut samples = 0;
+    let mut land_samples_with_distant_land = 0;
 
-    for x in -32..=32 {
-        for y in -32..=32 {
-            let elevation_m =
-                procedural_terrain_elevation_m(0x5eed, Vector::new(x as f32 * 8.0, y as f32 * 8.0));
-            minimum_elevation_m = minimum_elevation_m.min(elevation_m);
-            maximum_elevation_m = maximum_elevation_m.max(elevation_m);
-            land_samples += usize::from(elevation_m >= 0.0);
-            samples += 1;
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        let land_samples_before_seed = land_samples;
+        let samples_before_seed = samples;
+        for x in -128..=128 {
+            for y in -128..=128 {
+                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+                let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                minimum_elevation_m = minimum_elevation_m.min(elevation_m);
+                maximum_elevation_m = maximum_elevation_m.max(elevation_m);
+                if elevation_m >= 0.0 {
+                    land_samples += 1;
+                    land_samples_with_distant_land += usize::from(
+                        procedural_terrain_elevation_m(seed, position_m + Vector::new(512.0, 0.0))
+                            >= 0.0,
+                    );
+                }
+                samples += 1;
+            }
         }
+        let seed_land_samples = land_samples - land_samples_before_seed;
+        let seed_samples = samples - samples_before_seed;
+        assert!(seed_land_samples < seed_samples / 5);
     }
 
     assert!(minimum_elevation_m < -4.0);
     assert!(maximum_elevation_m > 2.0);
-    assert!((samples / 10..samples / 2).contains(&land_samples));
+    assert!(
+        (samples / 20..=samples * 3 / 20).contains(&land_samples),
+        "land occupied {} of {samples} samples",
+        land_samples
+    );
+    assert!(
+        land_samples_with_distant_land * 2 > land_samples,
+        "only {land_samples_with_distant_land} of {land_samples} land samples remained land 512 m away"
+    );
 }

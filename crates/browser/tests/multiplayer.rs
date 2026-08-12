@@ -1,5 +1,5 @@
 use pyboat_browser::MultiplayerClient;
-use pyboat_game::procedural_match_environment;
+use pyboat_game::{procedural_match_environment, procedural_terrain_elevation_m};
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{DT_SECONDS, apparent_flow};
 use rapier2d::prelude::Vector;
@@ -254,8 +254,8 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
     fn position_matching(match_seed: u64, predicate: impl Fn(f32) -> bool) -> Vector {
         for x in -128..=128 {
             for y in -128..=128 {
-                let position_m = Vector::new(x as f32 * 2.0, y as f32 * 2.0);
-                let depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
+                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+                let depth_m = (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0);
                 if predicate(depth_m) {
                     return position_m;
                 }

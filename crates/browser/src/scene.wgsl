@@ -118,21 +118,43 @@ fn terrain_value_noise(seed: vec2<u32>, position_m: vec2<f32>, wavelength_m: f32
 }
 
 fn procedural_terrain_elevation_m(position_m: vec2<f32>) -> f32 {
-    var noise = 0.0;
+    var cluster_noise = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
-    var wavelength_m = 128.0;
-    for (var octave = 0u; octave < 5u; octave++) {
-        let octave_seed = scene.match_seed ^ multiply_u64(
-            vec2<u32>(octave, 0u),
-            vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-        );
-        noise += amplitude * terrain_value_noise(octave_seed, position_m, wavelength_m);
+    var wavelength_m = 8192.0;
+    for (var octave = 0u; octave < 3u; octave++) {
+        let octave_seed = scene.match_seed
+            ^ vec2<u32>(0x78bd642fu, 0xa0761d64u)
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        cluster_noise += amplitude * terrain_value_noise(octave_seed, position_m, wavelength_m);
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
-    return 12.0 * noise / amplitude_sum - 2.0;
+    cluster_noise /= amplitude_sum;
+
+    var island_noise = 0.0;
+    amplitude = 1.0;
+    amplitude_sum = 0.0;
+    wavelength_m = 1024.0;
+    for (var octave = 0u; octave < 5u; octave++) {
+        let octave_seed = scene.match_seed
+            ^ vec2<u32>(0xa0b428dbu, 0xe7037ed1u)
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        island_noise += amplitude * terrain_value_noise(octave_seed, position_m, wavelength_m);
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    island_noise /= amplitude_sum;
+
+    return 18.0 * (0.68 * cluster_noise + 0.32 * island_noise - 0.35);
 }
 
 fn terrain_color(elevation_m: f32) -> vec3<f32> {
