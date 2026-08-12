@@ -110,18 +110,21 @@ large coherent islands. The shared sampler returns continuous elevation relative
 to sea level from only the match seed and world position. Each procedural
 environment converts elevation to water depth for authoritative and predicted
 grounding without adding terrain to the protocol.
-Unsheltered wind is the sum of 48 divergence-free Fourier modes in weather, local,
-and gust bands. Seeded Box–Muller coefficients create isotropic Gaussian vector
-components, giving speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal.
-`libm` supplies the shared software transcendental functions used by native and
-WebAssembly sampling. One seed-derived transport vector moves the entire frozen
-field, so spatial structures remain coherent instead of individual modes
-propagating in unrelated directions. Final surface wind samples terrain at six
-fixed points from 16–512 m upwind. Elevation through 1.5 m scales obstruction, a
-256 m rational distance falloff models recovery, and the strongest obstruction
-reduces speed by at most 70% without changing direction. Keep this calculation in
-`pyboat-game`; server and browser must apply identical shelter from the shared
-match seed rather than transferring wind samples.
+Unsheltered wind is the sum of 48 divergence-free Fourier modes. Weather modes
+carry 90% of component variance over 32,768–131,072 m wavelengths, regional modes
+carry 8% over 4,096–32,768 m, and gust modes carry 2% over 64–512 m. This gives an
+island-scale view a prevailing direction while distant regions remain unrelated.
+Seeded Box–Muller coefficients create isotropic Gaussian vector components, giving
+speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies the
+shared software transcendental functions used by native and WebAssembly sampling.
+One seed-derived transport vector moves the entire frozen field, so spatial
+structures remain coherent instead of individual modes propagating in unrelated
+directions. Final surface wind samples terrain at six fixed points from 16–512 m
+upwind. Elevation through 1.5 m scales obstruction, a 256 m rational distance
+falloff models recovery, and the strongest obstruction reduces speed by at most
+70% without changing direction. Keep this calculation in `pyboat-game`; server
+and browser must apply identical shelter from the shared match seed rather than
+transferring wind samples.
 Regenerate the checked-in shelter visualization from the shared sampler with:
 
 ```sh

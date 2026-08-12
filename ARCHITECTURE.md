@@ -149,11 +149,14 @@ decisions.
 - **[Explicit]** At a fixed position and time, unsheltered wind direction is
   uniform over the full circle and speed has a Weibull marginal with `k = 2` and
   `λ = 9 m/s`. Smooth spatial and per-tick temporal evolution includes gusts.
-- **[Implicit]** The spectral model assigns 85% of component variance to
-  2,048–8,192 m weather modes, 10% to 256–2,048 m local modes, and 5% to 64–512 m
-  gust modes. One seed-derived 6 m/s transport vector translates the complete
-  field without deforming it, making gust structures vary over approximately
-  10.7–85 seconds.
+- **[Explicit]** Wind around a roughly 2 km island has a recognizable prevailing
+  direction except near a calm, while wind across the very large world varies
+  smoothly among broad weather systems without one universal direction.
+- **[Implicit]** The spectral model assigns 90% of component variance to
+  32,768–131,072 m weather modes, 8% to 4,096–32,768 m regional modes, and 2% to
+  64–512 m gust modes. One seed-derived 6 m/s transport vector translates the
+  complete field without deforming it. Gust structures vary over approximately
+  10.7–85 seconds, while the dominant weather structures pass over hours.
 - **[Explicit]** Near-land wind uses a simplified deterministic model of lee
   shelter over the sea. Match seed, tick, and position remain sufficient for every
   runtime to compute the same terrain-modified wind without transferring samples.

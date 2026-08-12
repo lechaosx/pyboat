@@ -74,6 +74,9 @@ This file records intended player experience, scope, and product behavior.
   includes short-scale gusts.
 - **[Explicit]** Wind forms spatially coherent air masses and avoids rapid visible
   oscillation over time.
+- **[Explicit]** Wind has a recognizable prevailing direction around an island
+  roughly 2 km across, except near a calm. Across the very large world it varies
+  smoothly among broad weather systems and has no universal direction.
 - **[Explicit]** Near land, a deliberately simplified surface-wind model captures
   the essential lee shelter over the sea. It remains deterministic from the match
   seed so every client computes it without transferring sampled wind.

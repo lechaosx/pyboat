@@ -58,8 +58,10 @@ existing fleet in water at least 1.5 m deep and point downwind. Each server run
 uses one match seed for wind that changes smoothly across the world and over time,
 can blow in any direction, and includes gusts. Unsheltered wind speed follows a
 `k = 2`, `λ = 9 m/s` Weibull distribution, so near-calms are possible and strong
-winds become progressively rarer. Islands shelter nearby downwind water, with
-wind strength recovering over several hundred metres.
+winds become progressively rarer. One prevailing direction dominates around an
+island, while distant regions belong to different broad weather systems. Islands
+shelter nearby downwind water, with wind strength recovering over several hundred
+metres.
 Snapshots include nearby interaction state through 8 m and visual motion through
 each client's requested viewport radius, bounded to 8–24 m and defaulting to 24 m.
 Pass a different listen address as the final argument, for example

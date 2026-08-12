@@ -23,19 +23,19 @@ struct WindBand {
 
 const WIND_BANDS: [WindBand; 3] = [
     WindBand {
-        minimum_wavelength_m: 2048.0,
-        maximum_wavelength_m: 8192.0,
-        variance_fraction: 0.85,
+        minimum_wavelength_m: 32_768.0,
+        maximum_wavelength_m: 131_072.0,
+        variance_fraction: 0.90,
     },
     WindBand {
-        minimum_wavelength_m: 256.0,
-        maximum_wavelength_m: 2048.0,
-        variance_fraction: 0.10,
+        minimum_wavelength_m: 4096.0,
+        maximum_wavelength_m: 32_768.0,
+        variance_fraction: 0.08,
     },
     WindBand {
         minimum_wavelength_m: 64.0,
         maximum_wavelength_m: 512.0,
-        variance_fraction: 0.05,
+        variance_fraction: 0.02,
     },
 ];
 

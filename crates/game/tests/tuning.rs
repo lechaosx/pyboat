@@ -1,6 +1,6 @@
 use pyboat_game::{
     dinghy_parameters, match_environment, procedural_match_environment,
-    procedural_terrain_elevation_m,
+    procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
 };
 use rapier2d::prelude::Vector;
 
@@ -80,6 +80,42 @@ fn procedural_wind_is_spatially_and_temporally_coherent() {
         maximum_speed = maximum_speed.max(speed);
     }
     assert!(maximum_speed - minimum_speed > 1.0);
+}
+
+#[test]
+fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
+    let position_m = Vector::new(12.0, -7.0);
+    let mut local_alignment_sum = 0.0;
+    let mut regional_alignment_sum = 0.0;
+    let mut local_samples = 0;
+    let mut regional_samples = 0;
+
+    for seed in 0..1_024 {
+        let wind = procedural_unsheltered_wind_velocity_m_s(seed, 12_345, position_m);
+        let local = procedural_unsheltered_wind_velocity_m_s(
+            seed,
+            12_345,
+            position_m + Vector::new(2_048.0, 0.0),
+        );
+        let regional = procedural_unsheltered_wind_velocity_m_s(
+            seed,
+            12_345,
+            position_m + Vector::new(65_536.0, 0.0),
+        );
+        if wind.length() >= 3.0 && local.length() >= 3.0 {
+            local_alignment_sum += wind.normalize().dot(local.normalize());
+            local_samples += 1;
+        }
+        if wind.length() >= 3.0 && regional.length() >= 3.0 {
+            regional_alignment_sum += wind.normalize().dot(regional.normalize());
+            regional_samples += 1;
+        }
+    }
+
+    assert!(local_samples > 800);
+    assert!(regional_samples > 800);
+    assert!(local_alignment_sum / local_samples as f32 > 0.85);
+    assert!((regional_alignment_sum / regional_samples as f32).abs() < 0.25);
 }
 
 #[test]
