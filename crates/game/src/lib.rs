@@ -15,7 +15,7 @@ const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_GEOLOGY_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
-const CLOUD_OCTAVE_COUNT: usize = 6;
+const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
 
 #[derive(Clone, Copy)]
 struct WindBand {
@@ -145,16 +145,18 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     (base_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
 }
 
-pub fn procedural_cloud_density(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
+pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
     let (transported_x_m, transported_y_m) =
         transported_weather_position_m(match_seed, tick, position_m);
     let cloud_noise = terrain_fractal_noise(
         match_seed ^ 0x082e_fa98_ec4e_6c89,
         Vector::new(transported_x_m as f32, transported_y_m as f32),
         4096.0,
-        CLOUD_OCTAVE_COUNT,
+        CLOUD_COVER_OCTAVE_COUNT,
     );
-    smoothstep_range(-0.15, 0.45, cloud_noise) as f32
+    let cloud_body = smoothstep_range(0.05, 0.15, cloud_noise);
+    let interior_density = smoothstep_range(0.15, 0.75, cloud_noise);
+    (cloud_body * (0.25 + 0.75 * interior_density)) as f32
 }
 
 fn terrain_fractal_noise(

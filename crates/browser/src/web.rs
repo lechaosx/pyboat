@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
+use pyboat_game::procedural_unsheltered_wind_velocity_m_s;
 use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use wasm_bindgen::prelude::*;
@@ -45,6 +46,8 @@ impl Vertex {
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     match_seed: [u32; 2],
+    cloud_visual_seed: [u32; 2],
+    cloud_offset_m: [f32; 2],
     time_seconds: f32,
     _padding: u32,
 }
@@ -59,6 +62,7 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    cloud_offset_m: Vector,
 }
 
 impl Renderer {
@@ -170,6 +174,7 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
+            cloud_offset_m: Vector::ZERO,
         })
     }
 
@@ -177,9 +182,11 @@ impl Renderer {
         &mut self,
         scenes: &[BoatScene],
         match_seed: Option<u64>,
+        cloud_visual_seed: u64,
         tick: u64,
         camera_m: Vector,
         view_height_m: f32,
+        elapsed_seconds: f32,
     ) -> Result<(), JsValue> {
         self.resize();
         let vertices = scene_vertices(
@@ -193,6 +200,11 @@ impl Renderer {
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
+        if let Some(match_seed) = match_seed {
+            self.cloud_offset_m +=
+                procedural_unsheltered_wind_velocity_m_s(match_seed, tick, camera_m)
+                    * elapsed_seconds;
+        }
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
             &self.uniform_buffer,
@@ -200,6 +212,8 @@ impl Renderer {
             bytemuck::bytes_of(&SceneUniforms {
                 camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
+                cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
+                cloud_offset_m: [self.cloud_offset_m.x, self.cloud_offset_m.y],
                 time_seconds: tick as f32 / 60.0,
                 _padding: 0,
             }),
@@ -411,9 +425,11 @@ impl BrowserGame {
         self.renderer.render(
             &client.scenes(),
             client.match_seed(),
+            client.player_id().map(cloud_visual_seed).unwrap_or(0),
             client.prediction_tick,
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
+            elapsed_seconds,
         )
     }
 
@@ -526,6 +542,12 @@ impl BrowserGame {
                 .unwrap_or_else(|| "Server connection closed".to_owned()),
         }
     }
+}
+
+fn cloud_visual_seed(player_id: &str) -> u64 {
+    player_id.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 fn server_url() -> Result<String, JsValue> {

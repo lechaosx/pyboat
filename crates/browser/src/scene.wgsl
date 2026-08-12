@@ -1,6 +1,8 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
     match_seed: vec2<u32>,
+    cloud_visual_seed: vec2<u32>,
+    cloud_offset_m: vec2<f32>,
     time_seconds: f32,
     padding: u32,
 };
@@ -168,7 +170,7 @@ fn terrain_fractal_sample(
     return sample;
 }
 
-fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
+fn procedural_cloud_cover(position_m: vec2<f32>) -> f32 {
     let transport_direction = 6.28318530718 * terrain_hash_unit(
         scene.match_seed ^ vec2<u32>(0x85a308d3u, 0x243f6a88u),
     );
@@ -181,9 +183,56 @@ fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
         transported_position_m,
         4096.0,
-        6u,
+        5u,
     );
-    return smoothstep(-0.15, 0.45, cloud_noise.value);
+    let cloud_body = smoothstep(0.05, 0.15, cloud_noise.value);
+    let interior_density = smoothstep(0.15, 0.75, cloud_noise.value);
+    return cloud_body * (0.25 + 0.75 * interior_density);
+}
+
+fn visual_cloud_noise(position_m: vec2<f32>) -> f32 {
+    var noise = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = 128.0;
+    for (var octave = 0u; octave < 7u; octave++) {
+        let octave_seed = scene.cloud_visual_seed
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        let lifetime_seconds = 120.0 * sqrt(wavelength_m / 128.0);
+        let scaled_time = scene.time_seconds / lifetime_seconds;
+        let time_cell = i32(floor(scaled_time));
+        let time_blend = smoothstep(0.0, 1.0, fract(scaled_time));
+        let first_seed = octave_seed
+            ^ multiply_u64(
+                signed_u64(time_cell),
+                vec2<u32>(0x94d049bbu, 0x133111ebu),
+            );
+        let second_seed = octave_seed
+            ^ multiply_u64(
+                signed_u64(time_cell + 1),
+                vec2<u32>(0x94d049bbu, 0x133111ebu),
+            );
+        let advected_position_m = position_m - scene.cloud_offset_m;
+        let first = terrain_value_noise(first_seed, advected_position_m, wavelength_m).value;
+        let second = terrain_value_noise(second_seed, advected_position_m, wavelength_m).value;
+        noise += amplitude * mix(first, second, time_blend);
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    return noise / amplitude_sum;
+}
+
+fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
+    let cover = procedural_cloud_cover(position_m);
+    let detail = visual_cloud_noise(position_m);
+    let body_threshold = mix(0.45, -0.15, cover);
+    let body = smoothstep(body_threshold, body_threshold + 0.12, detail);
+    let interior = smoothstep(body_threshold + 0.10, body_threshold + 0.50, detail);
+    return cover * body * (0.65 + 0.35 * interior);
 }
 
 fn terrain_smoothstep_sample(
@@ -289,13 +338,14 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
 }
 
 fn cloud_color(surface_color: vec3<f32>, density: f32) -> vec3<f32> {
-    let storm_amount = smoothstep(0.55, 1.0, density);
+    let storm_amount = smoothstep(0.75, 1.0, density);
     let cloud = mix(
         vec3<f32>(0.88, 0.90, 0.90),
         vec3<f32>(0.10, 0.12, 0.14),
         storm_amount,
     );
-    return mix(surface_color, cloud, 0.78 * density);
+    let opacity = smoothstep(0.10, 0.30, density) * (0.18 + 0.62 * density);
+    return mix(surface_color, cloud, opacity);
 }
 
 @fragment
@@ -304,7 +354,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain > 0.5 {
         let terrain = procedural_terrain_sample(input.world_position_m);
         surface_color = terrain_color(terrain.elevation_m, length(terrain.gradient));
+        let density = procedural_cloud_density(input.world_position_m);
+        surface_color = cloud_color(surface_color, density);
     }
-    let density = procedural_cloud_density(input.world_position_m);
-    return vec4<f32>(cloud_color(surface_color, density), 1.0);
+    return vec4<f32>(surface_color, 1.0);
 }

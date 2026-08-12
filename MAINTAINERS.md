@@ -140,10 +140,11 @@ speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies the
 shared software transcendental functions used by native and WebAssembly sampling.
 One seed-derived transport vector moves the entire frozen field, so spatial
 structures remain coherent instead of individual modes propagating in unrelated
-directions. Cloud density evaluates six octaves of smooth value noise over
-4,096–128 m in the same transported coordinates. Map its signal through a
--0.15–0.45 smoothstep; representative samples must contain both broad clear and
-cloudy regions, with density above 0.85 present but below 10%. Final surface wind
+directions. Shared cloud cover evaluates five octaves of smooth value noise over
+4,096–256 m in the same transported coordinates. A 0.05–0.15 smoothstep forms its
+body; multiply it by an interior density rising from 0.25 to 1 through a
+0.15–0.75 smoothstep. More than half of representative samples must remain clear,
+10–40% must be cloudy, and density above 0.85 must be present but below 1%. Final surface wind
 samples terrain at six fixed points from 16–512 m upwind. Elevation through 1.5 m
 scales obstruction, a 256 m rational distance falloff models recovery, and the
 strongest obstruction reduces speed by at most 70% without changing direction.
@@ -355,12 +356,17 @@ world-space gradient alongside its value; the shader propagates gradients throug
 the same amplitude normalization and density composition. Gradients at or above
 `0.08 m/m` render as bare rock; below that cutoff, shoreline renders as beach and
 inland terrain renders green.
-The scene uniform also carries predicted simulation time. WGSL reconstructs the
-same weather transport and cloud value noise as `pyboat-game`; keep octave
-wavelengths, salt, transport, and density mapping synchronized. Cloud density
-shades both the fullscreen terrain and later boat fragments. Low density is
-translucent light grey, while the same continuous density darkens and conceals the
-scene toward storm grey at its upper tail.
+The scene uniform carries predicted simulation time, a visual seed derived from
+the local player identity, and the locally integrated cloud offset. WGSL
+reconstructs only the shared coarse cloud cover from `pyboat-game`; keep its
+wavelengths, salt, transport, and density mapping synchronized. Seven octaves of
+player-specific 128–2 m noise form the visible cloud bodies and interpolate
+between seeded time slices with 120–15 second octave lifetimes. Each frame adds
+the camera's unsheltered wind velocity times elapsed time to the offset, so visual
+clouds follow the shared wind without a global fluid simulation. Cloud shading
+applies only to the fullscreen terrain quad, never boat fragments. Low density is
+visually suppressed through 0.10; a short 0.10–0.30 opacity ramp keeps cloud edges
+crisp, and density starts darkening at 0.75 toward storm grey.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

@@ -125,11 +125,20 @@ This file records intended player experience, scope, and product behavior.
   interest limit, but boats outside that limit are absent.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
-- **[Explicit]** Clouds are a noise-based density manifestation of the same
-  seeded spacetime weather system as wind. Storm clouds emerge from the dense
-  tail of that field, and increasing density makes clouds continuously darker.
-- **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate
-  for details such as rocks, trees, and wreckage.
+- **[Explicit]** Global weather, including wind and future rain intensity, is the
+  same for every player and is deterministic from match seed, position, and time.
+- **[Explicit]** Visible clouds are a noise-based presentation of that weather,
+  not globally shared geometry. Players at the same place and time see similar
+  cover and storminess, while fine cloud shapes may differ per player.
+- **[Explicit]** Cloud shapes move at the speed and direction of the shared local
+  wind while also forming and dissipating over time, without simulating a global
+  fluid volume.
+- **[Explicit]** Cloud cover is predominantly low-altitude and detailed at the
+  default view. Broad, flat grey overcast is avoided so navigation remains clear;
+  storm clouds are rare, while ordinary moving clouds remain useful wind cues.
+- **[Explicit]** Clouds do not conceal players or otherwise affect gameplay.
+  Authored sprites remain appropriate for details such as rocks, trees, and
+  wreckage.
 
 ## Platforms and controls
 

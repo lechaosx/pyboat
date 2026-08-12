@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use pyboat_game::{
-    dinghy_parameters, match_environment, procedural_cloud_density, procedural_match_environment,
+    dinghy_parameters, match_environment, procedural_cloud_cover, procedural_match_environment,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
 };
 use rapier2d::prelude::Vector;
@@ -121,7 +121,7 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
 }
 
 #[test]
-fn procedural_cloud_density_is_seeded_and_continuous_in_spacetime() {
+fn procedural_cloud_cover_is_seeded_and_continuous_in_spacetime() {
     let position_m = Vector::new(12.0, -7.0);
     let mut nearby_change = 0.0;
     let mut one_second_change = 0.0;
@@ -130,20 +130,19 @@ fn procedural_cloud_density_is_seeded_and_continuous_in_spacetime() {
     let mut other_seed_change = 0.0;
 
     for seed in 0..512 {
-        let density = procedural_cloud_density(seed, 12_345, position_m);
-        assert_eq!(density, procedural_cloud_density(seed, 12_345, position_m));
-        assert!((0.0..=1.0).contains(&density));
-        nearby_change +=
-            (procedural_cloud_density(seed, 12_345, position_m + Vector::new(1.0, 0.0)) - density)
-                .abs();
-        one_second_change += (procedural_cloud_density(seed, 12_405, position_m) - density).abs();
+        let cover = procedural_cloud_cover(seed, 12_345, position_m);
+        assert_eq!(cover, procedural_cloud_cover(seed, 12_345, position_m));
+        assert!((0.0..=1.0).contains(&cover));
+        nearby_change += (procedural_cloud_cover(seed, 12_345, position_m + Vector::new(1.0, 0.0))
+            - cover)
+            .abs();
+        one_second_change += (procedural_cloud_cover(seed, 12_405, position_m) - cover).abs();
         distant_change +=
-            (procedural_cloud_density(seed, 12_345, position_m + Vector::new(2_048.0, 0.0))
-                - density)
+            (procedural_cloud_cover(seed, 12_345, position_m + Vector::new(8_192.0, 0.0)) - cover)
                 .abs();
-        one_minute_change += (procedural_cloud_density(seed, 15_945, position_m) - density).abs();
+        one_minute_change += (procedural_cloud_cover(seed, 15_945, position_m) - cover).abs();
         other_seed_change +=
-            (procedural_cloud_density(seed + 10_000, 12_345, position_m) - density).abs();
+            (procedural_cloud_cover(seed + 10_000, 12_345, position_m) - cover).abs();
     }
 
     assert!(nearby_change / 512.0 < 0.02);
@@ -158,7 +157,7 @@ fn procedural_cloud_density_is_seeded_and_continuous_in_spacetime() {
 }
 
 #[test]
-fn procedural_cloud_density_has_clear_skies_and_rare_storms() {
+fn procedural_cloud_cover_has_mostly_clear_skies_and_rare_storms() {
     let mut clear_samples = 0;
     let mut cloudy_samples = 0;
     let mut storm_samples = 0;
@@ -167,7 +166,7 @@ fn procedural_cloud_density_has_clear_skies_and_rare_storms() {
     for seed in [0, 1, 0x5eed, 0xdead_beef] {
         for x in -64..=64 {
             for y in -64..=64 {
-                let density = procedural_cloud_density(
+                let density = procedural_cloud_cover(
                     seed,
                     12_345,
                     Vector::new(x as f32 * 256.0, y as f32 * 256.0),
@@ -181,19 +180,23 @@ fn procedural_cloud_density_has_clear_skies_and_rare_storms() {
     }
 
     assert!(
-        clear_samples * 5 > samples,
+        clear_samples * 2 > samples,
         "only {clear_samples} of {samples} samples were clear"
     );
     assert!(
-        cloudy_samples * 5 > samples,
+        cloudy_samples * 10 > samples,
         "only {cloudy_samples} of {samples} samples were cloudy"
+    );
+    assert!(
+        cloudy_samples * 5 < samples * 2,
+        "{cloudy_samples} of {samples} samples were cloudy"
     );
     assert!(
         storm_samples > 0,
         "no sampled cloud density reached storm strength"
     );
     assert!(
-        storm_samples * 10 < samples,
+        storm_samples * 100 < samples,
         "{storm_samples} of {samples} samples were storm density"
     );
 }
