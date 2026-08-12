@@ -47,6 +47,7 @@ struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     weather: [f32; 4],
     weather_structure: [f32; 4],
+    cloud_motion: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     cloud_offset_m: [f32; 2],
@@ -204,7 +205,7 @@ impl Renderer {
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let weather = match_seed.map(|match_seed| procedural_weather(match_seed, tick, camera_m));
         if let Some(weather) = weather {
-            self.cloud_offset_m += weather.wind_velocity_m_s * elapsed_seconds;
+            self.cloud_offset_m += weather.cloud_wind_velocity_m_s * elapsed_seconds;
         }
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
@@ -225,6 +226,14 @@ impl Renderer {
                         weather.moisture,
                         weather.instability,
                         weather.high_cloudiness,
+                        0.0,
+                    ]
+                }),
+                cloud_motion: weather.map_or([0.0; 4], |weather| {
+                    [
+                        weather.cloud_wind_velocity_m_s.x,
+                        weather.cloud_wind_velocity_m_s.y,
+                        0.0,
                         0.0,
                     ]
                 }),

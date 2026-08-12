@@ -208,6 +208,9 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     let mut rainy_samples = 0;
     let mut instability_range = (1.0_f32, 0.0_f32);
     let mut high_cloud_samples = 0;
+    let mut full_wind_change = 0.0;
+    let mut cloud_wind_change = 0.0;
+    let mut distinct_cloud_wind_samples = 0;
 
     for seed in 0..1_024 {
         let weather = procedural_weather(seed, 12_345, position_m);
@@ -215,6 +218,13 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
         assert_eq!(
             weather.wind_velocity_m_s,
             procedural_unsheltered_wind_velocity_m_s(seed, 12_345, position_m)
+        );
+        let later_weather = procedural_weather(seed, 12_405, position_m);
+        full_wind_change += (later_weather.wind_velocity_m_s - weather.wind_velocity_m_s).length();
+        cloud_wind_change +=
+            (later_weather.cloud_wind_velocity_m_s - weather.cloud_wind_velocity_m_s).length();
+        distinct_cloud_wind_samples += usize::from(
+            (weather.cloud_wind_velocity_m_s - weather.wind_velocity_m_s).length() > 0.01,
         );
         assert_eq!(
             weather.cloudiness,
@@ -240,6 +250,8 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     assert!(instability_range.1 > 0.75);
     assert!(high_cloud_samples > 0);
     assert!(high_cloud_samples < 512);
+    assert!(distinct_cloud_wind_samples > 900);
+    assert!(cloud_wind_change < full_wind_change * 0.25);
 }
 
 #[test]

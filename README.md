@@ -93,8 +93,8 @@ wind, moisture, instability, cloudiness, and rain intensity at a position, while
 fine cloud shapes are generated locally and remain presentation-only. The browser
 applies the weather at the local boat uniformly across the view. Layered stratus,
 cellular cumulus, sparse cirrus wisps, and dense storm cells blend naturally from
-those conditions. Mostly low, crisp cloud bodies follow the local wind and evolve
-without covering the world in grey. The HUD
+those conditions. Mostly low, crisp cloud bodies follow only the slowly changing
+large-scale wind and evolve without covering the world in grey. The HUD
 reports health, speed through water, apparent-wind speed, and point of sail using
 the wind at the local boat. One striped windsock on the local boat's bow shows
 apparent-wind direction and strength: each visible band represents about 3 knots,

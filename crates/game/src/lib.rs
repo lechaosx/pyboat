@@ -20,6 +20,7 @@ const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
     pub wind_velocity_m_s: Vector,
+    pub cloud_wind_velocity_m_s: Vector,
     pub cloudiness: f32,
     pub moisture: f32,
     pub instability: f32,
@@ -153,6 +154,7 @@ pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> Pro
     let rain_signal = cloudiness * (0.65 + 0.35 * instability);
     ProceduralWeather {
         wind_velocity_m_s: procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m),
+        cloud_wind_velocity_m_s: procedural_wind_velocity_m_s(match_seed, tick, position_m, 1),
         cloudiness,
         moisture,
         instability,
@@ -303,11 +305,20 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     tick: u64,
     position_m: Vector,
 ) -> Vector {
+    procedural_wind_velocity_m_s(match_seed, tick, position_m, WIND_BANDS.len())
+}
+
+fn procedural_wind_velocity_m_s(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    band_count: usize,
+) -> Vector {
     let (transported_x_m, transported_y_m) =
         transported_weather_position_m(match_seed, tick, position_m);
     let mut velocity_x_m_s = 0.0;
     let mut velocity_y_m_s = 0.0;
-    for (band_index, band) in WIND_BANDS.iter().enumerate() {
+    for (band_index, band) in WIND_BANDS.iter().take(band_count).enumerate() {
         let band_key = match_seed ^ (band_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let rotation = hash_unit(band_key ^ 0xa076_1d64_78bd_642f);
         let amplitude_m_s = WIND_WEIBULL_SCALE_M_S

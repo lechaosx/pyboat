@@ -133,11 +133,12 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Rendering uses the weather sampled at the local boat for the
   whole viewport. Extreme debug zoom therefore shows one uniform weather regime
   across the visible map.
-- **[Explicit]** Cloud shapes move at the speed and direction of the shared local
-  wind while also forming and dissipating over time, without simulating a global
-  fluid volume.
+- **[Explicit]** Cloud shapes move at the speed and direction of the shared
+  large-scale local wind while also forming and dissipating over time, without
+  simulating a global fluid volume. Short-scale gusts do not steer cloud motion.
 - **[Explicit]** Changes in wind direction curve cloud motion but do not rotate
-  the cloud density pattern in place.
+  the cloud density pattern in place. Elongated formations rebuild continuously
+  from the same spacetime noise as the large-scale wind direction changes.
 - **[Explicit]** Familiar cloud families emerge from continuous atmospheric
   conditions rather than named presets: stable moisture favors layered clouds,
   instability favors cellular and towering clouds, rain darkens storm systems,
