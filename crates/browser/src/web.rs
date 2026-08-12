@@ -468,6 +468,30 @@ impl BrowserGame {
             .unwrap_or(0.0)
     }
 
+    pub fn water_depth_m(&self) -> f32 {
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.water_depth_m)
+            .unwrap_or(0.0)
+    }
+
+    pub fn bottom_clearance_m(&self) -> f32 {
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.bottom_clearance_m)
+            .unwrap_or(0.0)
+    }
+
+    pub fn bottom_contact_fraction(&self) -> f32 {
+        self.client
+            .borrow()
+            .view()
+            .map(|view| view.bottom_contact_fraction)
+            .unwrap_or(0.0)
+    }
+
     pub fn health(&self) -> f32 {
         self.client.borrow().health().unwrap_or(0.0)
     }

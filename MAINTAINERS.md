@@ -106,8 +106,14 @@ the protocol transfers the seed rather than sampled fields or parameters.
 Static terrain routes several seeded density fields in uncompressed real metres.
 Three cluster octaves over 2,048–8,192 m and five island-detail octaves over
 64–1,024 m shape sparse large islands without a continent-scale field that could
-close regional seas. Four 4–32 m reef octaves feed two smooth masks. Between
--4 and -0.1 m elevation, up to 0.6 m of signed relief cuts channels and raises
+close regional seas. Three 2,048–8,192 m geology octaves form one coherent
+modulation field. Its 0.31–0.56 upper-tail spline scales signed base elevation by
+1–50× while preserving the zero contour. Representative samples must include
+beachless, mixed, and beach-dominant 2 km coastal regions while beaches remain
+the global majority, most sampled cliffs remain steep immediately offshore, and
+depths beyond 100 m occur without exceeding 5% of water samples. Four 4–32 m reef
+octaves feed two smooth masks. Between -4 and -0.1 m elevation, up to 0.6 m of
+signed relief cuts channels and raises
 the submerged seabed. Between -2 and -0.1 m, a 0.65–0.85 upper-tail spline adds
 up to 2 m for sparse emergent rocks. This creates a distribution of channel
 depths without placing objects, checking clearance around individual features,
@@ -116,7 +122,8 @@ representative regions and each sampled 65 km region below 20%. The shared
 sampler returns continuous elevation relative to sea level from only the match
 seed and world position. Each procedural environment converts elevation to water
 depth for authoritative and predicted grounding without adding terrain to the
-protocol.
+protocol. The browser also exposes that predicted depth, depth minus dinghy draft,
+and bottom support fraction to the navigation HUD.
 Coastal relief is calibrated against [NOAA BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html)
 4 m tiles `BH5475HC` (rocky Maine, 2026-06-01) and `BH4TB55V` (Florida Keys,
 2026-05-20), using the same -4 to 1 m elevation band in data and generator.

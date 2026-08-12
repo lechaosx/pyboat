@@ -202,6 +202,36 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
 }
 
 #[test]
+fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
+    let match_seed = 42;
+    let position_m = (-256..=256)
+        .flat_map(|x| (-256..=256).map(move |y| Vector::new(x as f32 * 16.0, y as f32 * 16.0)))
+        .find(|position_m| {
+            let depth_m = (-procedural_terrain_elevation_m(match_seed, *position_m)).max(0.0);
+            (0.1..0.5).contains(&depth_m)
+        })
+        .expect("the representative terrain should contain dragging depth");
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed,
+    });
+    let mut local = boat("player-1", position_m.x);
+    local.y = position_m.y;
+    client.accept(ServerMessage::Snapshot {
+        tick: 9,
+        boats: vec![local],
+        removed_player_ids: Vec::new(),
+    });
+
+    let view = client.view().unwrap();
+    let expected_depth_m = (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0);
+    assert_eq!(view.water_depth_m, expected_depth_m);
+    assert_eq!(view.bottom_clearance_m, expected_depth_m - 0.6);
+    assert_eq!(view.bottom_contact_fraction, (0.6 - expected_depth_m) / 0.6);
+}
+
+#[test]
 fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {

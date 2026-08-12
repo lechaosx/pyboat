@@ -57,6 +57,11 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Large-island silhouettes remain coherent rather than inheriting
   reef-scale noise. Small-scale relief stays predominantly underwater, with only
   sparse peaks emerging as coastal rocks.
+- **[Explicit]** Coast geology varies by island and along long island sectors.
+  Some islands have no beach, some combine cliff and beach coasts, and others
+  remain beach-dominant.
+- **[Explicit]** Cliffs continue below the waterline, and rare deep trenches
+  occur in the same continuous terrain field.
 - **[Explicit]** Gentle shoreline renders as beach, while sufficiently steep
   shoreline and inland slopes render as bare rock.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
@@ -74,6 +79,8 @@ This file records intended player experience, scope, and product behavior.
   Water current remains still until a later environment slice.
 - **[Explicit]** The browser renders water depth continuously, with a distinct
   transition at the shoreline.
+- **[Explicit]** The browser HUD reports water depth, under-keel clearance, and
+  how strongly the hull is dragging on the bottom.
 - **[Implicit]** The browser renders its static seeded elevation field with a
   continuous shallow-to-deep water gradient and a discrete shoreline transition.
 - **[Explicit]** Inland terrain is green except where its local elevation gradient

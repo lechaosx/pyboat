@@ -66,6 +66,9 @@ pub struct DemoView {
     pub speed_m_s: f32,
     pub apparent_wind_speed_m_s: f32,
     pub point_of_sail: PointOfSail,
+    pub water_depth_m: f32,
+    pub bottom_clearance_m: f32,
+    pub bottom_contact_fraction: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -310,6 +313,7 @@ impl MultiplayerClient {
         let motion = self.local_motion()?;
         let environment =
             procedural_match_environment(self.match_seed?, self.prediction_tick, motion.position_m);
+        let draft_m = dinghy_parameters().draft_m;
         let upwind_angle_rad = environment
             .true_wind_velocity_m_s
             .y
@@ -323,6 +327,10 @@ impl MultiplayerClient {
             )
             .length(),
             point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
+            water_depth_m: environment.water_depth_m,
+            bottom_clearance_m: environment.water_depth_m - draft_m,
+            bottom_contact_fraction: ((draft_m - environment.water_depth_m) / draft_m)
+                .clamp(0.0, 1.0),
         })
     }
 
@@ -715,6 +723,11 @@ impl Demo {
             )
             .length(),
             point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
+            water_depth_m: environment.water_depth_m,
+            bottom_clearance_m: environment.water_depth_m - self.parameters.draft_m,
+            bottom_contact_fraction: ((self.parameters.draft_m - environment.water_depth_m)
+                / self.parameters.draft_m)
+                .clamp(0.0, 1.0),
         }
     }
 

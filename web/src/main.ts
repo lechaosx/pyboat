@@ -7,6 +7,9 @@ const speed = document.querySelector<HTMLElement>("#speed");
 const apparentWind = document.querySelector<HTMLElement>("#apparent-wind");
 const pointOfSail = document.querySelector<HTMLElement>("#point-of-sail");
 const health = document.querySelector<HTMLElement>("#health");
+const waterDepth = document.querySelector<HTMLElement>("#water-depth");
+const bottomClearance = document.querySelector<HTMLElement>("#bottom-clearance");
+const bottomContact = document.querySelector<HTMLElement>("#bottom-contact");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
 const scaleLine = document.querySelector<HTMLElement>("#scale-line");
 const pressedKeys = new Set<string>();
@@ -19,6 +22,9 @@ if (
   !apparentWind ||
   !pointOfSail ||
   !health ||
+  !waterDepth ||
+  !bottomClearance ||
+  !bottomContact ||
   !scaleLabel ||
   !scaleLine
 ) {
@@ -29,6 +35,9 @@ const speedElement = speed;
 const apparentWindElement = apparentWind;
 const pointOfSailElement = pointOfSail;
 const healthElement = health;
+const waterDepthElement = waterDepth;
+const bottomClearanceElement = bottomClearance;
+const bottomContactElement = bottomContact;
 const scaleLabelElement = scaleLabel;
 const scaleLineElement = scaleLine;
 
@@ -103,6 +112,16 @@ try {
     apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
     pointOfSailElement.textContent = game.point_of_sail();
     healthElement.textContent = game.health().toFixed(0);
+    waterDepthElement.textContent = game.water_depth_m().toFixed(1);
+    bottomClearanceElement.textContent = game.bottom_clearance_m().toFixed(1);
+    const bottomContactFraction = game.bottom_contact_fraction();
+    bottomContactElement.textContent =
+      bottomContactFraction >= 1
+        ? "grounded"
+        : bottomContactFraction > 0
+          ? `dragging ${(bottomContactFraction * 100).toFixed(0)}%`
+          : "clear";
+    bottomContactElement.classList.toggle("active", bottomContactFraction > 0);
     scaleLabelElement.textContent = game.scale_bar_label();
     scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
     previousTimeMs = timeMs;

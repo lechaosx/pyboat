@@ -146,6 +146,11 @@ decisions.
   players in regional seas. Three 8,192–2,048 m cluster octaves and five
   1,024–64 m island-detail octaves produce sparse large islands in a connected,
   dominant ocean.
+- **[Implicit]** One 8,192–2,048 m geology field scales the signed base elevation
+  by 1–50× through a `0.31–0.56` smooth upper-tail spline. It preserves the zero
+  contour while naturally producing beachless, mixed, and beach-dominant coasts;
+  steep land continues into steep submerged flanks, and the rare strongest
+  negative regions become trenches.
 - **[Implicit]** Four 32–4 m reef octaves have separate roles. Between -4 and
   -0.1 m elevation, a smooth mask applies up to 0.6 m of signed relief to the
   submerged seabed. A narrower -2 to -0.1 m mask adds up to 2 m only where the
@@ -155,11 +160,14 @@ decisions.
   calibrate the coastal relief spectrum in the same -4 to 1 m elevation band as
   the game. Observed 90th-percentile relief provides upper bounds at 32 m and
   128 m baselines rather than a shoreline-shape target. Statistical samples also
-  limit aggregate 256 m shoreline fragmentation and require 4 m-deep access near
-  some, but fewer than one quarter, of mixed reef neighborhoods.
+  limit aggregate 256 m shoreline fragmentation and require a 4 m-deep transect
+  through some, but fewer than one quarter, of mixed reef neighborhoods.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
   from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
+- **[Implicit]** The browser derives water depth, clearance below the 0.6 m keel,
+  and bottom support fraction from the same locally predicted environment used
+  for grounding. These navigation readouts require no protocol fields.
 - **[Explicit]** At a fixed position and time, unsheltered wind direction is
   uniform over the full circle and speed has a Weibull marginal with `k = 2` and
   `λ = 9 m/s`. Smooth spatial and per-tick temporal evolution includes gusts.

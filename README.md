@@ -92,14 +92,17 @@ browser predicts the server's seeded wind locally. The HUD reports health, speed
 through water, apparent-wind speed, and point of sail using the wind at the local
 boat. One striped windsock on the local boat's bow shows apparent-wind direction
 and strength: each visible band represents about 3 knots, up to all five at
-15 knots. The mouse wheel zooms in or out without a gameplay limit; click the
-mouse wheel to restore the original view. The lower-left scale bar follows the
-zoom in real metric units. The same match seed produces a connected,
+15 knots. The HUD also reports water depth, under-keel clearance, and whether the
+hull is clear, dragging, or grounded. The mouse wheel zooms in or out without a
+gameplay limit; click the mouse wheel to restore the original view. The lower-left
+scale bar follows the zoom in real metric units. The same match seed produces a connected,
 vastly dominant ocean with sparse clusters of large islands. Smaller density fields
 shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
 color changes continuously with depth before a distinct shoreline transition.
 Gentle shore is beach, while steep shore and inland cliffs are bare rock; the rest
-of each island is green.
+of each island is green. Broad geology varies by island, so some coasts are all
+cliff, some alternate cliffs and beaches, and others remain beach-dominant. Cliffs
+continue down their submerged flanks, and rare deep trenches break up the seafloor.
 Boats slow progressively when their 0.6 m draft loses bottom clearance. Static
 ground friction prevents creep after they settle, while sufficiently extreme
 force can break that hold and slide the boat against lower kinetic friction.

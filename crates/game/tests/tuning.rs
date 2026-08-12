@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pyboat_game::{
     dinghy_parameters, match_environment, procedural_match_environment,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
@@ -207,6 +209,8 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
             for patch_y in -24..=24 {
                 let mut has_outcrop = false;
                 let mut has_navigable_water = false;
+                let mut deep_water = [[false; 8]; 8];
+                let mut shallow_water_samples = 0;
                 for sample_x in 0..8 {
                     for sample_y in 0..8 {
                         let position_m = Vector::new(
@@ -229,6 +233,8 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                         }
                         has_outcrop |= elevation_m >= 0.25;
                         has_navigable_water |= elevation_m <= -1.5;
+                        deep_water[sample_x][sample_y] = elevation_m <= -4.0;
+                        shallow_water_samples += usize::from((-2.0..=-0.2).contains(&elevation_m));
                         if elevation_m >= 0.0 {
                             let gradient = Vector::new(
                                 procedural_terrain_elevation_m(
@@ -250,23 +256,11 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                         }
                     }
                 }
-                if has_outcrop && has_navigable_water {
+                if has_outcrop && has_navigable_water && shallow_water_samples >= 8 {
                     mixed_coastal_patches += 1;
-                    let patch_center_m =
-                        Vector::new(patch_x as f32 * 256.0, patch_y as f32 * 256.0);
-                    let has_deep_access = [
-                        Vector::new(256.0, 0.0),
-                        Vector::new(181.0, 181.0),
-                        Vector::new(0.0, 256.0),
-                        Vector::new(-181.0, 181.0),
-                        Vector::new(-256.0, 0.0),
-                        Vector::new(-181.0, -181.0),
-                        Vector::new(0.0, -256.0),
-                        Vector::new(181.0, -181.0),
-                    ]
-                    .into_iter()
-                    .any(|offset_m| {
-                        procedural_terrain_elevation_m(seed, patch_center_m + offset_m) <= -4.0
+                    let has_deep_access = (0..8).any(|across| {
+                        (0..8).all(|along| deep_water[across][along])
+                            || (0..8).all(|along| deep_water[along][across])
                     });
                     deep_access_patches += usize::from(has_deep_access);
                 }
@@ -329,5 +323,173 @@ fn procedural_shorelines_do_not_fragment_at_reef_scale() {
     assert!(
         shoreline_crossings <= coastal_transects * 2,
         "{shoreline_crossings} crossings fragmented {coastal_transects} coastal transects"
+    );
+}
+
+#[test]
+fn procedural_islands_mix_gentle_beaches_with_steep_cliff_coasts() {
+    let mut gentle_coast_points = 0;
+    let mut cliff_coast_points = 0;
+    let mut regional_coast_points = HashMap::<(u64, i32, i32), [usize; 2]>::new();
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -192_i32..=192 {
+            for y in -192_i32..=192 {
+                let position_m = Vector::new(x as f32 * 32.0, y as f32 * 32.0);
+                let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                if !(0.0..=1.0).contains(&elevation_m) {
+                    continue;
+                }
+                let cardinal_directions = [
+                    Vector::new(1.0, 0.0),
+                    Vector::new(0.0, 1.0),
+                    Vector::new(-1.0, 0.0),
+                    Vector::new(0.0, -1.0),
+                ];
+                let touches_water = cardinal_directions.iter().any(|direction| {
+                    procedural_terrain_elevation_m(seed, position_m + direction * 16.0) < 0.0
+                });
+                let belongs_to_island = cardinal_directions.iter().any(|direction| {
+                    procedural_terrain_elevation_m(seed, position_m + direction * 64.0) >= 0.0
+                });
+                if !touches_water || !belongs_to_island {
+                    continue;
+                }
+                let gradient = Vector::new(
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(2.0, 0.0))
+                        - procedural_terrain_elevation_m(seed, position_m - Vector::new(2.0, 0.0)),
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(0.0, 2.0))
+                        - procedural_terrain_elevation_m(seed, position_m - Vector::new(0.0, 2.0)),
+                ) / 4.0;
+                let regional_counts = regional_coast_points
+                    .entry((seed, x.div_euclid(64), y.div_euclid(64)))
+                    .or_default();
+                if gradient.length() >= 0.08 {
+                    cliff_coast_points += 1;
+                    regional_counts[1] += 1;
+                } else {
+                    gentle_coast_points += 1;
+                    regional_counts[0] += 1;
+                }
+            }
+        }
+    }
+
+    let coast_points = gentle_coast_points + cliff_coast_points;
+    assert!(coast_points > 0);
+    assert!(
+        cliff_coast_points * 10 >= coast_points,
+        "only {cliff_coast_points} of {coast_points} coast points were cliffs"
+    );
+    assert!(
+        gentle_coast_points * 2 > coast_points,
+        "only {gentle_coast_points} of {coast_points} coast points were beaches"
+    );
+    let beachless_regions = regional_coast_points
+        .values()
+        .filter(|counts| counts[1] >= 8 && counts[0] == 0)
+        .count();
+    let mixed_regions = regional_coast_points
+        .values()
+        .filter(|counts| {
+            let total = counts[0] + counts[1];
+            total >= 8 && counts[0] * 4 >= total && counts[1] * 4 >= total
+        })
+        .count();
+    let beach_regions = regional_coast_points
+        .values()
+        .filter(|counts| counts[0] >= 8 && counts[1] * 10 < counts[0] + counts[1])
+        .count();
+    assert!(
+        beachless_regions > 0,
+        "no sampled coastal region was beachless"
+    );
+    assert!(
+        mixed_regions > 0,
+        "no sampled coastal region mixed cliffs and beaches"
+    );
+    assert!(
+        beach_regions > 0,
+        "no sampled coastal region was beach-dominant"
+    );
+}
+
+#[test]
+fn procedural_cliffs_continue_below_the_waterline() {
+    let mut cliff_crossings = 0;
+    let mut submerged_cliff_crossings = 0;
+    let cardinal_directions = [
+        Vector::new(1.0, 0.0),
+        Vector::new(0.0, 1.0),
+        Vector::new(-1.0, 0.0),
+        Vector::new(0.0, -1.0),
+    ];
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -128..=128 {
+            for y in -128..=128 {
+                let shore_m = Vector::new(x as f32 * 64.0, y as f32 * 64.0);
+                let shore_elevation_m = procedural_terrain_elevation_m(seed, shore_m);
+                if !(0.0..=2.0).contains(&shore_elevation_m) {
+                    continue;
+                }
+
+                for direction in cardinal_directions {
+                    let water_elevation_m =
+                        procedural_terrain_elevation_m(seed, shore_m + direction * 32.0);
+                    if water_elevation_m >= 0.0 {
+                        continue;
+                    }
+                    let inland_elevation_m =
+                        procedural_terrain_elevation_m(seed, shore_m - direction * 32.0);
+                    let offshore_elevation_m =
+                        procedural_terrain_elevation_m(seed, shore_m + direction * 64.0);
+                    let land_slope = (inland_elevation_m - shore_elevation_m) / 32.0;
+                    if land_slope < 0.08 {
+                        continue;
+                    }
+
+                    cliff_crossings += 1;
+                    let submerged_slope = (water_elevation_m - offshore_elevation_m) / 32.0;
+                    submerged_cliff_crossings += usize::from(submerged_slope >= 0.08);
+                }
+            }
+        }
+    }
+
+    assert!(cliff_crossings > 0, "no sampled shoreline crossed a cliff");
+    assert!(
+        submerged_cliff_crossings * 2 >= cliff_crossings,
+        "only {submerged_cliff_crossings} of {cliff_crossings} cliffs continued underwater"
+    );
+}
+
+#[test]
+fn procedural_seafloor_has_rare_deep_trenches() {
+    let mut water_samples = 0;
+    let mut trench_samples = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -128..=128 {
+            for y in -128..=128 {
+                let elevation_m = procedural_terrain_elevation_m(
+                    seed,
+                    Vector::new(x as f32 * 128.0, y as f32 * 128.0),
+                );
+                if elevation_m < 0.0 {
+                    water_samples += 1;
+                    trench_samples += usize::from(elevation_m <= -100.0);
+                }
+            }
+        }
+    }
+
+    assert!(
+        trench_samples > 0,
+        "no sampled seafloor reached 100 m depth"
+    );
+    assert!(
+        trench_samples * 20 < water_samples,
+        "{trench_samples} of {water_samples} water samples were trench depth"
     );
 }

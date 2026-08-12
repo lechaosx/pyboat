@@ -79,6 +79,10 @@ canvas {
   font-size: 0.82rem;
 }
 
+#bottom-contact.active {
+  color: #e26b58;
+}
+
 .overlay .controls {
   margin-top: 0.75rem;
   color: #c4d7d8;
