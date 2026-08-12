@@ -125,14 +125,21 @@ This file records intended player experience, scope, and product behavior.
   interest limit, but boats outside that limit are absent.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
-- **[Explicit]** Global weather, including wind and future rain intensity, is the
+- **[Explicit]** Global weather, including wind and rain intensity, is the
   same for every player and is deterministic from match seed, position, and time.
 - **[Explicit]** Visible clouds are a noise-based presentation of that weather,
   not globally shared geometry. Players at the same place and time see similar
   cover and storminess, while fine cloud shapes may differ per player.
+- **[Explicit]** Rendering uses the weather sampled at the local boat for the
+  whole viewport. Extreme debug zoom therefore shows one uniform weather regime
+  across the visible map.
 - **[Explicit]** Cloud shapes move at the speed and direction of the shared local
   wind while also forming and dissipating over time, without simulating a global
   fluid volume.
+- **[Explicit]** Familiar cloud families emerge from continuous atmospheric
+  conditions rather than named presets: stable moisture favors layered clouds,
+  instability favors cellular and towering clouds, rain darkens storm systems,
+  and sparse high-level cloud potential produces wind-stretched wisps.
 - **[Explicit]** Cloud cover is predominantly low-altitude and detailed at the
   default view. Broad, flat grey overcast is avoided so navigation remains clear;
   storm clouds are rare, while ordinary moving clouds remain useful wind cues.

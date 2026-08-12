@@ -144,7 +144,11 @@ directions. Shared cloud cover evaluates five octaves of smooth value noise over
 4,096–256 m in the same transported coordinates. A 0.05–0.15 smoothstep forms its
 body; multiply it by an interior density rising from 0.25 to 1 through a
 0.15–0.75 smoothstep. More than half of representative samples must remain clear,
-10–40% must be cloudy, and density above 0.85 must be present but below 1%. Final surface wind
+10–40% must be cloudy, and density above 0.85 must be present but below 1%.
+`procedural_weather` packages that cloudiness and its continuous moisture signal
+with unsheltered wind. Independent four-octave fields provide instability over
+16,384–2,048 m and sparse high-cloud potential over 32,768–4,096 m. Rain maps the
+0.7–0.95 tail of cloudiness weighted 65–100% by instability. Final surface wind
 samples terrain at six fixed points from 16–512 m upwind. Elevation through 1.5 m
 scales obstruction, a 256 m rational distance falloff models recovery, and the
 strongest obstruction reduces speed by at most 70% without changing direction.
@@ -356,17 +360,20 @@ world-space gradient alongside its value; the shader propagates gradients throug
 the same amplitude normalization and density composition. Gradients at or above
 `0.08 m/m` render as bare rock; below that cutoff, shoreline renders as beach and
 inland terrain renders green.
-The scene uniform carries predicted simulation time, a visual seed derived from
-the local player identity, and the locally integrated cloud offset. WGSL
-reconstructs only the shared coarse cloud cover from `pyboat-game`; keep its
-wavelengths, salt, transport, and density mapping synchronized. Seven octaves of
-player-specific 128–2 m noise form the visible cloud bodies and interpolate
-between seeded time slices with 120–15 second octave lifetimes. Each frame adds
-the camera's unsheltered wind velocity times elapsed time to the offset, so visual
-clouds follow the shared wind without a global fluid simulation. Cloud shading
-applies only to the fullscreen terrain quad, never boat fragments. Low density is
-visually suppressed through 0.10; a short 0.10–0.30 opacity ramp keeps cloud edges
-crisp, and density starts darkening at 0.75 toward storm grey.
+Each frame samples `procedural_weather` at the camera position. The scene uniform
+carries its wind, moisture, instability, low/high cloudiness, and rain state,
+predicted simulation time, a visual seed derived from the local player identity,
+and the locally integrated cloud offset. WGSL uses the one weather sample
+uniformly across the viewport; it does not mirror the shared weather field per
+pixel. Player-specific noise forms three continuously blended responses: cellular
+128–2 m cumulus, wind-aligned 512–32 m stratus, and sparse wind-aligned 512–16 m
+cirrus ridges. Instability blends stratus toward cumulus and, together with rain,
+strengthens dense storm cells. Seeded time-slice interpolation changes each field
+while each frame also adds sampled unsheltered wind velocity times elapsed time to
+the offset. Cloud shading applies only to the fullscreen terrain quad, never boat
+fragments. Low density is visually suppressed through 0.10; a short 0.10–0.30
+opacity ramp keeps cloud edges crisp, and rain intensity darkens clouds toward
+storm grey.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

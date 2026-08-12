@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use pyboat_game::procedural_unsheltered_wind_velocity_m_s;
+use pyboat_game::procedural_weather;
 use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use wasm_bindgen::prelude::*;
@@ -45,6 +45,8 @@ impl Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
+    weather: [f32; 4],
+    weather_structure: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     cloud_offset_m: [f32; 2],
@@ -200,10 +202,9 @@ impl Renderer {
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
-        if let Some(match_seed) = match_seed {
-            self.cloud_offset_m +=
-                procedural_unsheltered_wind_velocity_m_s(match_seed, tick, camera_m)
-                    * elapsed_seconds;
+        let weather = match_seed.map(|match_seed| procedural_weather(match_seed, tick, camera_m));
+        if let Some(weather) = weather {
+            self.cloud_offset_m += weather.wind_velocity_m_s * elapsed_seconds;
         }
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
@@ -211,6 +212,22 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&SceneUniforms {
                 camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
+                weather: weather.map_or([0.0; 4], |weather| {
+                    [
+                        weather.wind_velocity_m_s.x,
+                        weather.wind_velocity_m_s.y,
+                        weather.cloudiness,
+                        weather.rain_intensity,
+                    ]
+                }),
+                weather_structure: weather.map_or([0.0; 4], |weather| {
+                    [
+                        weather.moisture,
+                        weather.instability,
+                        weather.high_cloudiness,
+                        0.0,
+                    ]
+                }),
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
                 cloud_offset_m: [self.cloud_offset_m.x, self.cloud_offset_m.y],

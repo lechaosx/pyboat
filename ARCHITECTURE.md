@@ -181,16 +181,26 @@ decisions.
   10.7–85 seconds, while the dominant weather structures pass over hours.
 - **[Explicit]** Match-wide weather state is distinct from its presentation.
   Seed, tick, and position determine identical wind, coarse cloud cover, and
-  future rain intensity for every participant. Fine cloud geometry may be
+  rain intensity for every participant. Fine cloud geometry may be
   generated independently per player but must look similar under the same local
   weather state.
+- **[Explicit]** The renderer samples the shared seeded weather at the local boat
+  and supplies its wind, moisture, instability, low and high cloudiness, and rain
+  intensity as parameters to local procedural rendering. That one state applies
+  uniformly across the viewport, including at extreme debug zoom.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
   they move and evolve without a world-sized fluid simulation. Clouds do not
   participate in visibility or any other gameplay rule.
+- **[Explicit]** Common cloud formations emerge from continuous weather
+  parameters rather than a discrete cloud-type selector.
 - **[Implicit]** Shared cloud cover is five octaves of smooth value noise over
   4,096–256 m in the transported weather coordinates. A `0.05–0.15` body edge and
   `0.15–0.75` interior mapping leave more than half of representative samples
-  clear, 10–40% cloudy, and fewer than 1% above 0.85 storm density.
+  clear, 10–40% cloudy, and fewer than 1% above 0.85 storm density. That field also
+  supplies continuous moisture. Four 16,384–2,048 m octaves supply independent
+  instability, and four 32,768–4,096 m octaves supply sparse high-cloud potential.
+  Rain intensity rises through `0.7–0.95` from cloudiness weighted 65–100% by
+  instability.
 - **[Explicit]** Near-land wind uses a simplified deterministic model of lee
   shelter over the sea. Match seed, tick, and position remain sufficient for every
   runtime to compute the same terrain-modified wind without transferring samples.
@@ -224,14 +234,15 @@ decisions.
   derivatives through noise, density splines, masks, and peaks. Shoreline and
   inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
   and gentler inland terrain is green.
-- **[Implicit]** WGSL mirrors the shared coarse cloud-cover field from
-  `pyboat-game`. It combines that envelope with seven octaves of player-seeded
-  128–2 m visual noise whose octave lifetimes range from 120 to 15 seconds. The
-  browser integrates one camera-local visual offset from the unsheltered wind each
-  frame; this is accurate at the gameplay view and avoids evaluating or simulating
-  a global flow in the renderer. Cloud shading applies only to the fullscreen
-  world surface, so boats remain equally visible to clients with different visual
-  seeds.
+- **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered wind,
+  moisture, instability, low and high cloudiness, and rain intensity into the
+  shared sample consumed by the renderer. WGSL continuously blends a cellular
+  128–2 m cumulus field, a wind-aligned 512–32 m stratiform field, and sparse
+  wind-aligned 512–16 m cirrus ridges. Instability weights cumulus against stratus;
+  instability with rain strengthens storm cells. The browser integrates one
+  camera-local visual offset from the sampled wind each frame, avoiding a global
+  flow simulation. Cloud shading applies only to the fullscreen world surface, so
+  boats remain equally visible to clients with different visual seeds.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.

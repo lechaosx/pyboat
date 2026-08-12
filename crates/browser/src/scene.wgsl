@@ -1,5 +1,7 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
+    weather: vec4<f32>,
+    weather_structure: vec4<f32>,
     match_seed: vec2<u32>,
     cloud_visual_seed: vec2<u32>,
     cloud_offset_m: vec2<f32>,
@@ -170,38 +172,40 @@ fn terrain_fractal_sample(
     return sample;
 }
 
-fn procedural_cloud_cover(position_m: vec2<f32>) -> f32 {
-    let transport_direction = 6.28318530718 * terrain_hash_unit(
-        scene.match_seed ^ vec2<u32>(0x85a308d3u, 0x243f6a88u),
+fn cloud_coordinates(position_m: vec2<f32>, along_wind_scale: f32) -> vec2<f32> {
+    let wind_speed = length(scene.weather.xy);
+    var along_wind = vec2<f32>(1.0, 0.0);
+    if wind_speed > 0.01 {
+        along_wind = scene.weather.xy / wind_speed;
+    }
+    let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
+    let advected_position_m = position_m - scene.cloud_offset_m;
+    return vec2<f32>(
+        along_wind_scale * dot(advected_position_m, along_wind),
+        dot(advected_position_m, across_wind),
     );
-    let transported_position_m = position_m
-        - 6.0 * scene.time_seconds * vec2<f32>(
-            cos(transport_direction),
-            sin(transport_direction),
-        );
-    let cloud_noise = terrain_fractal_sample(
-        vec2<u32>(0xec4e6c89u, 0x082efa98u),
-        transported_position_m,
-        4096.0,
-        5u,
-    );
-    let cloud_body = smoothstep(0.05, 0.15, cloud_noise.value);
-    let interior_density = smoothstep(0.15, 0.75, cloud_noise.value);
-    return cloud_body * (0.25 + 0.75 * interior_density);
 }
 
-fn visual_cloud_noise(position_m: vec2<f32>) -> f32 {
+fn visual_cloud_noise(
+    position_m: vec2<f32>,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    initial_lifetime_seconds: f32,
+) -> f32 {
     var noise = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
-    var wavelength_m = 128.0;
-    for (var octave = 0u; octave < 7u; octave++) {
+    var wavelength_m = initial_wavelength_m;
+    for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.cloud_visual_seed
+            ^ field_salt
             ^ multiply_u64(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        let lifetime_seconds = 120.0 * sqrt(wavelength_m / 128.0);
+        let lifetime_seconds = initial_lifetime_seconds
+            * sqrt(wavelength_m / initial_wavelength_m);
         let scaled_time = scene.time_seconds / lifetime_seconds;
         let time_cell = i32(floor(scaled_time));
         let time_blend = smoothstep(0.0, 1.0, fract(scaled_time));
@@ -215,9 +219,8 @@ fn visual_cloud_noise(position_m: vec2<f32>) -> f32 {
                 signed_u64(time_cell + 1),
                 vec2<u32>(0x94d049bbu, 0x133111ebu),
             );
-        let advected_position_m = position_m - scene.cloud_offset_m;
-        let first = terrain_value_noise(first_seed, advected_position_m, wavelength_m).value;
-        let second = terrain_value_noise(second_seed, advected_position_m, wavelength_m).value;
+        let first = terrain_value_noise(first_seed, position_m, wavelength_m).value;
+        let second = terrain_value_noise(second_seed, position_m, wavelength_m).value;
         noise += amplitude * mix(first, second, time_blend);
         amplitude_sum += amplitude;
         amplitude *= 0.5;
@@ -227,12 +230,63 @@ fn visual_cloud_noise(position_m: vec2<f32>) -> f32 {
 }
 
 fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
-    let cover = procedural_cloud_cover(position_m);
-    let detail = visual_cloud_noise(position_m);
-    let body_threshold = mix(0.45, -0.15, cover);
-    let body = smoothstep(body_threshold, body_threshold + 0.12, detail);
-    let interior = smoothstep(body_threshold + 0.10, body_threshold + 0.50, detail);
-    return cover * body * (0.65 + 0.35 * interior);
+    let cover = scene.weather.z;
+    let moisture = scene.weather_structure.x;
+    let instability = scene.weather_structure.y;
+    let high_cloudiness = scene.weather_structure.z;
+
+    let cumulus_noise = visual_cloud_noise(
+        cloud_coordinates(position_m, 1.0),
+        vec2<u32>(0x38d01377u, 0x452821e6u),
+        128.0,
+        7u,
+        120.0,
+    );
+    let cumulus_threshold = mix(0.48, -0.12, cover);
+    let cumulus_body = smoothstep(
+        cumulus_threshold,
+        cumulus_threshold + 0.12,
+        cumulus_noise,
+    );
+    let cumulus_interior = smoothstep(
+        cumulus_threshold + 0.08,
+        cumulus_threshold + 0.45,
+        cumulus_noise,
+    );
+    let cumulus = cumulus_body * (0.65 + 0.35 * cumulus_interior);
+
+    let stratus_noise = visual_cloud_noise(
+        cloud_coordinates(position_m, 0.20),
+        vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
+        512.0,
+        5u,
+        300.0,
+    );
+    let stratus_threshold = mix(0.38, -0.10, cover * moisture);
+    let stratus = smoothstep(
+        stratus_threshold,
+        stratus_threshold + 0.25,
+        stratus_noise,
+    );
+
+    let low_cloud = cover * mix(stratus, cumulus, instability);
+    let storm_cell = scene.weather.w
+        * instability
+        * smoothstep(0.25, 0.75, cumulus);
+
+    let cirrus_noise = visual_cloud_noise(
+        cloud_coordinates(position_m, 0.08),
+        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        512.0,
+        6u,
+        240.0,
+    );
+    let cirrus_ridge = 1.0 - abs(cirrus_noise);
+    let cirrus = 0.45
+        * high_cloudiness
+        * smoothstep(0.82, 0.95, cirrus_ridge);
+
+    return max(max(low_cloud, storm_cell), cirrus);
 }
 
 fn terrain_smoothstep_sample(
@@ -338,7 +392,7 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
 }
 
 fn cloud_color(surface_color: vec3<f32>, density: f32) -> vec3<f32> {
-    let storm_amount = smoothstep(0.75, 1.0, density);
+    let storm_amount = max(smoothstep(0.75, 1.0, density), scene.weather.w);
     let cloud = mix(
         vec3<f32>(0.88, 0.90, 0.90),
         vec3<f32>(0.10, 0.12, 0.14),

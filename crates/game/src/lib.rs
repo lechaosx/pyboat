@@ -17,6 +17,16 @@ const TERRAIN_GEOLOGY_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
 const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProceduralWeather {
+    pub wind_velocity_m_s: Vector,
+    pub cloudiness: f32,
+    pub moisture: f32,
+    pub instability: f32,
+    pub high_cloudiness: f32,
+    pub rain_intensity: f32,
+}
+
 #[derive(Clone, Copy)]
 struct WindBand {
     minimum_wavelength_m: f64,
@@ -105,6 +115,52 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
     }
 }
 
+pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> ProceduralWeather {
+    let cloud_noise = procedural_weather_noise(
+        match_seed,
+        tick,
+        position_m,
+        0x082e_fa98_ec4e_6c89,
+        4096.0,
+        CLOUD_COVER_OCTAVE_COUNT,
+    );
+    let cloudiness = cloud_cover_from_noise(cloud_noise);
+    let moisture = smoothstep_range(-0.5, 0.5, cloud_noise) as f32;
+    let instability = smoothstep_range(
+        -0.5,
+        0.5,
+        procedural_weather_noise(
+            match_seed,
+            tick,
+            position_m,
+            0x4528_21e6_38d0_1377,
+            16_384.0,
+            4,
+        ),
+    ) as f32;
+    let high_cloudiness = smoothstep_range(
+        0.35,
+        0.65,
+        procedural_weather_noise(
+            match_seed,
+            tick,
+            position_m,
+            0xbe54_66cf_34e9_0c6c,
+            32_768.0,
+            4,
+        ),
+    ) as f32;
+    let rain_signal = cloudiness * (0.65 + 0.35 * instability);
+    ProceduralWeather {
+        wind_velocity_m_s: procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m),
+        cloudiness,
+        moisture,
+        instability,
+        high_cloudiness,
+        rain_intensity: smoothstep_range(0.7, 0.95, f64::from(rain_signal)) as f32,
+    }
+}
+
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
     let cluster = terrain_fractal_noise(
         match_seed ^ 0xa076_1d64_78bd_642f,
@@ -146,17 +202,38 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
 }
 
 pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
-    let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m);
-    let cloud_noise = terrain_fractal_noise(
-        match_seed ^ 0x082e_fa98_ec4e_6c89,
-        Vector::new(transported_x_m as f32, transported_y_m as f32),
+    cloud_cover_from_noise(procedural_weather_noise(
+        match_seed,
+        tick,
+        position_m,
+        0x082e_fa98_ec4e_6c89,
         4096.0,
         CLOUD_COVER_OCTAVE_COUNT,
-    );
+    ))
+}
+
+fn cloud_cover_from_noise(cloud_noise: f64) -> f32 {
     let cloud_body = smoothstep_range(0.05, 0.15, cloud_noise);
     let interior_density = smoothstep_range(0.15, 0.75, cloud_noise);
     (cloud_body * (0.25 + 0.75 * interior_density)) as f32
+}
+
+fn procedural_weather_noise(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    salt: u64,
+    wavelength_m: f64,
+    octave_count: usize,
+) -> f64 {
+    let (transported_x_m, transported_y_m) =
+        transported_weather_position_m(match_seed, tick, position_m);
+    terrain_fractal_noise(
+        match_seed ^ salt,
+        Vector::new(transported_x_m as f32, transported_y_m as f32),
+        wavelength_m,
+        octave_count,
+    )
 }
 
 fn terrain_fractal_noise(

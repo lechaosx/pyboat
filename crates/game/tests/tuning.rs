@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use pyboat_game::{
     dinghy_parameters, match_environment, procedural_cloud_cover, procedural_match_environment,
-    procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
+    procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s, procedural_weather,
 };
 use rapier2d::prelude::Vector;
 
@@ -199,6 +199,47 @@ fn procedural_cloud_cover_has_mostly_clear_skies_and_rare_storms() {
         storm_samples * 100 < samples,
         "{storm_samples} of {samples} samples were storm density"
     );
+}
+
+#[test]
+fn procedural_weather_composes_shared_wind_clouds_and_rain() {
+    let position_m = Vector::new(12.0, -7.0);
+    let mut clear_samples = 0;
+    let mut rainy_samples = 0;
+    let mut instability_range = (1.0_f32, 0.0_f32);
+    let mut high_cloud_samples = 0;
+
+    for seed in 0..1_024 {
+        let weather = procedural_weather(seed, 12_345, position_m);
+        assert_eq!(weather, procedural_weather(seed, 12_345, position_m));
+        assert_eq!(
+            weather.wind_velocity_m_s,
+            procedural_unsheltered_wind_velocity_m_s(seed, 12_345, position_m)
+        );
+        assert_eq!(
+            weather.cloudiness,
+            procedural_cloud_cover(seed, 12_345, position_m)
+        );
+        assert!((0.0..=1.0).contains(&weather.moisture));
+        assert!((0.0..=1.0).contains(&weather.instability));
+        assert!((0.0..=1.0).contains(&weather.high_cloudiness));
+        assert!((0.0..=1.0).contains(&weather.rain_intensity));
+        if weather.rain_intensity > 0.0 {
+            assert!(weather.cloudiness > 0.7);
+        }
+        clear_samples += usize::from(weather.rain_intensity == 0.0);
+        rainy_samples += usize::from(weather.rain_intensity > 0.0);
+        instability_range.0 = instability_range.0.min(weather.instability);
+        instability_range.1 = instability_range.1.max(weather.instability);
+        high_cloud_samples += usize::from(weather.high_cloudiness > 0.0);
+    }
+
+    assert!(clear_samples > rainy_samples);
+    assert!(rainy_samples > 0);
+    assert!(instability_range.0 < 0.25);
+    assert!(instability_range.1 > 0.75);
+    assert!(high_cloud_samples > 0);
+    assert!(high_cloud_samples < 512);
 }
 
 #[test]

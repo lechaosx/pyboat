@@ -89,10 +89,12 @@ reports its canvas-sized interest radius before rendering predicted articulated
 boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded weather locally. Players share the same
-coarse cloud cover and wind, while fine cloud shapes are generated locally and
-remain presentation-only. Mostly low, crisp cloud bodies follow the local wind
-and evolve without covering the world in grey; rare dense peaks form dark storm
-clouds. The HUD
+wind, moisture, instability, cloudiness, and rain intensity at a position, while
+fine cloud shapes are generated locally and remain presentation-only. The browser
+applies the weather at the local boat uniformly across the view. Layered stratus,
+cellular cumulus, sparse cirrus wisps, and dense storm cells blend naturally from
+those conditions. Mostly low, crisp cloud bodies follow the local wind and evolve
+without covering the world in grey. The HUD
 reports health, speed through water, apparent-wind speed, and point of sail using
 the wind at the local boat. One striped windsock on the local boat's bow shows
 apparent-wind direction and strength: each visible band represents about 3 knots,
