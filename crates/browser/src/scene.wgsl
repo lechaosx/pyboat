@@ -1,7 +1,8 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
     match_seed: vec2<u32>,
-    padding: vec2<u32>,
+    time_seconds: f32,
+    padding: u32,
 };
 
 @group(0) @binding(0)
@@ -167,6 +168,24 @@ fn terrain_fractal_sample(
     return sample;
 }
 
+fn procedural_cloud_density(position_m: vec2<f32>) -> f32 {
+    let transport_direction = 6.28318530718 * terrain_hash_unit(
+        scene.match_seed ^ vec2<u32>(0x85a308d3u, 0x243f6a88u),
+    );
+    let transported_position_m = position_m
+        - 6.0 * scene.time_seconds * vec2<f32>(
+            cos(transport_direction),
+            sin(transport_direction),
+        );
+    let cloud_noise = terrain_fractal_sample(
+        vec2<u32>(0xec4e6c89u, 0x082efa98u),
+        transported_position_m,
+        4096.0,
+        6u,
+    );
+    return smoothstep(-0.15, 0.45, cloud_noise.value);
+}
+
 fn terrain_smoothstep_sample(
     lower: f32,
     upper: f32,
@@ -269,11 +288,23 @@ fn terrain_color(elevation_m: f32, slope: f32) -> vec3<f32> {
     return vec3<f32>(0.15, 0.28, 0.17);
 }
 
+fn cloud_color(surface_color: vec3<f32>, density: f32) -> vec3<f32> {
+    let storm_amount = smoothstep(0.55, 1.0, density);
+    let cloud = mix(
+        vec3<f32>(0.88, 0.90, 0.90),
+        vec3<f32>(0.10, 0.12, 0.14),
+        storm_amount,
+    );
+    return mix(surface_color, cloud, 0.78 * density);
+}
+
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+    var surface_color = input.color;
     if input.is_terrain > 0.5 {
         let terrain = procedural_terrain_sample(input.world_position_m);
-        return vec4<f32>(terrain_color(terrain.elevation_m, length(terrain.gradient)), 1.0);
+        surface_color = terrain_color(terrain.elevation_m, length(terrain.gradient));
     }
-    return vec4<f32>(input.color, 1.0);
+    let density = procedural_cloud_density(input.world_position_m);
+    return vec4<f32>(cloud_color(surface_color, density), 1.0);
 }

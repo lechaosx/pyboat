@@ -45,7 +45,8 @@ impl Vertex {
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     match_seed: [u32; 2],
-    _padding: [u32; 2],
+    time_seconds: f32,
+    _padding: u32,
 }
 
 struct Renderer {
@@ -176,6 +177,7 @@ impl Renderer {
         &mut self,
         scenes: &[BoatScene],
         match_seed: Option<u64>,
+        tick: u64,
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
@@ -198,7 +200,8 @@ impl Renderer {
             bytemuck::bytes_of(&SceneUniforms {
                 camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
-                _padding: [0; 2],
+                time_seconds: tick as f32 / 60.0,
+                _padding: 0,
             }),
         );
 
@@ -408,6 +411,7 @@ impl BrowserGame {
         self.renderer.render(
             &client.scenes(),
             client.match_seed(),
+            client.prediction_tick,
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
         )

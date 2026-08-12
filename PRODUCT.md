@@ -125,6 +125,9 @@ This file records intended player experience, scope, and product behavior.
   interest limit, but boats outside that limit are absent.
 - **[Explicit]** Graphics should be mostly procedural, including wave lines around
   islands and moving ships and clouds that correspond to weather.
+- **[Explicit]** Clouds are a noise-based density manifestation of the same
+  seeded spacetime weather system as wind. Storm clouds emerge from the dense
+  tail of that field, and increasing density makes clouds continuously darker.
 - **[Explicit]** Clouds may conceal players. Authored sprites remain appropriate
   for details such as rocks, trees, and wreckage.
 

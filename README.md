@@ -88,16 +88,18 @@ client connects to port `8765` on the page hostname, sends sequenced controls, a
 reports its canvas-sized interest radius before rendering predicted articulated
 boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
-browser predicts the server's seeded wind locally. The HUD reports health, speed
-through water, apparent-wind speed, and point of sail using the wind at the local
-boat. One striped windsock on the local boat's bow shows apparent-wind direction
-and strength: each visible band represents about 3 knots, up to all five at
-15 knots. The HUD also reports water depth, under-keel clearance, and whether the
+browser predicts the server's seeded weather locally. Wind and cloud density share
+the same moving weather system: thin clouds are pale and translucent, while the
+dense tail naturally forms dark storm clouds that can conceal boats. The HUD
+reports health, speed through water, apparent-wind speed, and point of sail using
+the wind at the local boat. One striped windsock on the local boat's bow shows
+apparent-wind direction and strength: each visible band represents about 3 knots,
+up to all five at 15 knots. The HUD also reports water depth, under-keel clearance, and whether the
 hull is clear, dragging, or grounded. The mouse wheel zooms in or out without a
 gameplay limit; click the mouse wheel to restore the original view. The lower-left
-scale bar follows the zoom in real metric units. The same match seed produces a connected,
-vastly dominant ocean with sparse clusters of large islands. Smaller density fields
-shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
+scale bar follows the zoom in real metric units. The same match seed produces a
+connected, vastly dominant ocean with sparse clusters of large islands. Smaller
+density fields shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
 color changes continuously with depth before a distinct shoreline transition.
 Gentle shore is beach, while steep shore and inland cliffs are bare rock; the rest
 of each island is green. Broad geology varies by island, so some coasts are all

@@ -15,6 +15,7 @@ const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_GEOLOGY_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
+const CLOUD_OCTAVE_COUNT: usize = 6;
 
 #[derive(Clone, Copy)]
 struct WindBand {
@@ -144,6 +145,18 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     (base_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
 }
 
+pub fn procedural_cloud_density(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
+    let (transported_x_m, transported_y_m) =
+        transported_weather_position_m(match_seed, tick, position_m);
+    let cloud_noise = terrain_fractal_noise(
+        match_seed ^ 0x082e_fa98_ec4e_6c89,
+        Vector::new(transported_x_m as f32, transported_y_m as f32),
+        4096.0,
+        CLOUD_OCTAVE_COUNT,
+    );
+    smoothstep_range(-0.15, 0.45, cloud_noise) as f32
+}
+
 fn terrain_fractal_noise(
     field_seed: u64,
     position_m: Vector,
@@ -211,13 +224,8 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     tick: u64,
     position_m: Vector,
 ) -> Vector {
-    let time_seconds = tick as f64 * f64::from(DT_SECONDS);
-    let transport_direction_rad =
-        std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
-    let transported_x_m =
-        f64::from(position_m.x) - 6.0 * libm::cos(transport_direction_rad) * time_seconds;
-    let transported_y_m =
-        f64::from(position_m.y) - 6.0 * libm::sin(transport_direction_rad) * time_seconds;
+    let (transported_x_m, transported_y_m) =
+        transported_weather_position_m(match_seed, tick, position_m);
     let mut velocity_x_m_s = 0.0;
     let mut velocity_y_m_s = 0.0;
     for (band_index, band) in WIND_BANDS.iter().enumerate() {
@@ -247,6 +255,16 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
         }
     }
     Vector::new(velocity_x_m_s as f32, velocity_y_m_s as f32)
+}
+
+fn transported_weather_position_m(match_seed: u64, tick: u64, position_m: Vector) -> (f64, f64) {
+    let time_seconds = tick as f64 * f64::from(DT_SECONDS);
+    let transport_direction_rad =
+        std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
+    (
+        f64::from(position_m.x) - 6.0 * libm::cos(transport_direction_rad) * time_seconds,
+        f64::from(position_m.y) - 6.0 * libm::sin(transport_direction_rad) * time_seconds,
+    )
 }
 
 fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -> Vector {

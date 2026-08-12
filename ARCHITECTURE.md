@@ -179,6 +179,14 @@ decisions.
   64–512 m gust modes. One seed-derived 6 m/s transport vector translates the
   complete field without deforming it. Gust structures vary over approximately
   10.7–85 seconds, while the dominant weather structures pass over hours.
+- **[Explicit]** Cloud density and wind are manifestations of one seeded
+  spacetime weather system rather than independently moving procedural fields.
+- **[Implicit]** Cloud density is six octaves of smooth value noise over
+  4,096–128 m, evaluated in the exact transported spacetime coordinates used by
+  the wind field. A smooth `-0.15–0.45` density mapping leaves broad clear and
+  cloudy regions while keeping density above 0.85 below 10% of representative
+  samples. Density texture is independent from wind amplitude, but its motion is
+  part of the same weather transport rather than a separate animation.
 - **[Explicit]** Near-land wind uses a simplified deterministic model of lee
   shelter over the sea. Match seed, tick, and position remain sufficient for every
   runtime to compute the same terrain-modified wind without transferring samples.
@@ -212,6 +220,11 @@ decisions.
   derivatives through noise, density splines, masks, and peaks. Shoreline and
   inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
   and gentler inland terrain is green.
+- **[Implicit]** WGSL also mirrors the shared weather transport and cloud value
+  noise from `pyboat-game`, evaluating them from match seed, predicted simulation
+  time, and fragment world position. Cloud density blends every world fragment
+  toward light grey at low density and dark storm grey at high density, including
+  boat fragments so dense cloud can conceal players.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.

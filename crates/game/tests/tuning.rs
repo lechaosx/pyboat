@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use pyboat_game::{
-    dinghy_parameters, match_environment, procedural_match_environment,
+    dinghy_parameters, match_environment, procedural_cloud_density, procedural_match_environment,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
 };
 use rapier2d::prelude::Vector;
@@ -118,6 +118,84 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
     assert!(regional_samples > 800);
     assert!(local_alignment_sum / local_samples as f32 > 0.85);
     assert!((regional_alignment_sum / regional_samples as f32).abs() < 0.25);
+}
+
+#[test]
+fn procedural_cloud_density_is_seeded_and_continuous_in_spacetime() {
+    let position_m = Vector::new(12.0, -7.0);
+    let mut nearby_change = 0.0;
+    let mut one_second_change = 0.0;
+    let mut distant_change = 0.0;
+    let mut one_minute_change = 0.0;
+    let mut other_seed_change = 0.0;
+
+    for seed in 0..512 {
+        let density = procedural_cloud_density(seed, 12_345, position_m);
+        assert_eq!(density, procedural_cloud_density(seed, 12_345, position_m));
+        assert!((0.0..=1.0).contains(&density));
+        nearby_change +=
+            (procedural_cloud_density(seed, 12_345, position_m + Vector::new(1.0, 0.0)) - density)
+                .abs();
+        one_second_change += (procedural_cloud_density(seed, 12_405, position_m) - density).abs();
+        distant_change +=
+            (procedural_cloud_density(seed, 12_345, position_m + Vector::new(2_048.0, 0.0))
+                - density)
+                .abs();
+        one_minute_change += (procedural_cloud_density(seed, 15_945, position_m) - density).abs();
+        other_seed_change +=
+            (procedural_cloud_density(seed + 10_000, 12_345, position_m) - density).abs();
+    }
+
+    assert!(nearby_change / 512.0 < 0.02);
+    assert!(one_second_change / 512.0 < 0.1);
+    assert!(distant_change / 512.0 > 0.1);
+    assert!(
+        one_minute_change / 512.0 > 0.03,
+        "mean one-minute density change was {}",
+        one_minute_change / 512.0
+    );
+    assert!(other_seed_change / 512.0 > 0.1);
+}
+
+#[test]
+fn procedural_cloud_density_has_clear_skies_and_rare_storms() {
+    let mut clear_samples = 0;
+    let mut cloudy_samples = 0;
+    let mut storm_samples = 0;
+    let mut samples = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -64..=64 {
+            for y in -64..=64 {
+                let density = procedural_cloud_density(
+                    seed,
+                    12_345,
+                    Vector::new(x as f32 * 256.0, y as f32 * 256.0),
+                );
+                clear_samples += usize::from(density <= 0.05);
+                cloudy_samples += usize::from(density >= 0.2);
+                storm_samples += usize::from(density >= 0.85);
+                samples += 1;
+            }
+        }
+    }
+
+    assert!(
+        clear_samples * 5 > samples,
+        "only {clear_samples} of {samples} samples were clear"
+    );
+    assert!(
+        cloudy_samples * 5 > samples,
+        "only {cloudy_samples} of {samples} samples were cloudy"
+    );
+    assert!(
+        storm_samples > 0,
+        "no sampled cloud density reached storm strength"
+    );
+    assert!(
+        storm_samples * 10 < samples,
+        "{storm_samples} of {samples} samples were storm density"
+    );
 }
 
 #[test]
