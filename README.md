@@ -91,8 +91,9 @@ boat. Cyan arrows across the game world show the local wind field's direction an
 relative speed. The same match seed produces a static island and seabed elevation
 field. Water color changes continuously with depth before a distinct shoreline
 transition into beach, cliffs, and inland terrain. Boats slow progressively when
-their 0.6 m draft loses bottom clearance and become effectively grounded on
-exposed terrain.
+their 0.6 m draft loses bottom clearance. Static ground friction prevents creep
+after they settle, while sufficiently extreme force can break that hold and slide
+the boat against lower kinetic friction.
 
 Recently hit boats and wrecks receive distinct hull colors. When the local boat is
 destroyed, the player continues spectating the drifting wreck. If the server

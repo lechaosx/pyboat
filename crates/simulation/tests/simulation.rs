@@ -51,7 +51,8 @@ fn reference_parameters() -> BoatParameters {
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
         draft_m: 0.6,
-        grounding_resistance_n_s_m: 6_000.0,
+        ground_static_friction_coefficient: 1.0,
+        ground_kinetic_friction_coefficient: 0.6,
     }
 }
 
@@ -262,6 +263,43 @@ fn lost_bottom_clearance_slows_the_boat_and_exposed_ground_stops_it() {
 
     assert!(grounded.motion().velocity_m_s.length() < 0.01);
     assert!(grounded.motion().angular_velocity_rad_s.abs() < 0.01);
+}
+
+#[test]
+fn exposed_ground_prevents_creep_in_strong_wind() {
+    let parameters = reference_parameters();
+    let mut initial = motion();
+    initial.position_m = Vector::new(12.0, -7.0);
+    initial.velocity_m_s = Vector::ZERO;
+    initial.angle_rad = 0.0;
+    initial.angular_velocity_rad_s = 0.0;
+    initial.sail_angle_rad = PI / 4.0;
+    let mut grounded = Simulation::new(parameters, initial);
+    let strong_wind_environment = Environment {
+        true_wind_velocity_m_s: Vector::new(15.0, 0.0),
+        water_depth_m: 0.0,
+        ..Default::default()
+    };
+
+    for _ in 0..600 {
+        grounded.advance(strong_wind_environment, ActuatorTorques::default());
+    }
+
+    assert_vector_close(grounded.motion().position_m, initial.position_m);
+    assert_close(grounded.motion().angle_rad, initial.angle_rad);
+    assert_eq!(grounded.motion().velocity_m_s, Vector::ZERO);
+    assert_eq!(grounded.motion().angular_velocity_rad_s, 0.0);
+
+    let mut extreme_wind = Simulation::new(parameters, initial);
+    let extreme_wind_environment = Environment {
+        true_wind_velocity_m_s: Vector::new(40.0, 0.0),
+        water_depth_m: 0.0,
+        ..Default::default()
+    };
+    for _ in 0..60 {
+        extreme_wind.advance(extreme_wind_environment, ActuatorTorques::default());
+    }
+    assert!((extreme_wind.motion().position_m - initial.position_m).length() > 0.1);
 }
 
 #[test]

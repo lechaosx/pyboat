@@ -212,10 +212,12 @@ decisions.
   the configured reference area is sampled at each end of the hull so local
   lateral flow creates a physically opposing yaw torque.
 - **[Implicit]** A boat whose sampled water depth is below its configured draft
-  receives linear seabed resistance at the bow and stern. Resistance scales from
-  zero at full clearance to the configured maximum on exposed terrain, opposing
-  both translation and yaw. The current dinghy uses a 0.6 m draft and a
-  6,000 N·s/m maximum coefficient.
+  transfers a proportional fraction of its weight onto the seabed. When the
+  external force and yaw wrench fit inside the static-friction envelope, Rapier
+  fixes the hull until that demand breaks the hold. Otherwise capped kinetic
+  friction acts at the bow and stern against ground-relative translation and yaw
+  without overshooting rest. The current dinghy uses a 0.6 m draft with effective
+  static and kinetic friction coefficients of 1.0 and 0.6.
 - **[Implicit]** Each Rust tick replaces the preceding tick's user-applied loads,
   samples apparent wind at the moving sail center of effort, and applies the sail
   force to the articulated sail at that world-space point.

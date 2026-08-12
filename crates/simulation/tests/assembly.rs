@@ -48,7 +48,8 @@ fn reference_parameters() -> BoatParameters {
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
         draft_m: 0.6,
-        grounding_resistance_n_s_m: 6_000.0,
+        ground_static_friction_coefficient: 1.0,
+        ground_kinetic_friction_coefficient: 0.6,
     }
 }
 

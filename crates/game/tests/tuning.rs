@@ -20,7 +20,8 @@ fn shared_dinghy_and_environment_preserve_the_accepted_tuning() {
     assert_eq!(parameters.keel_area_m2, 0.6);
     assert_eq!(parameters.rudder_area_m2, 0.12);
     assert_eq!(parameters.draft_m, 0.6);
-    assert_eq!(parameters.grounding_resistance_n_s_m, 6_000.0);
+    assert_eq!(parameters.ground_static_friction_coefficient, 1.0);
+    assert_eq!(parameters.ground_kinetic_friction_coefficient, 0.6);
     assert_eq!(
         match_environment().true_wind_velocity_m_s,
         Vector::new(6.0, 0.0)

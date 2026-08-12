@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 
 use pyboat_simulation::{
     apparent_flow, flat_plate_drag_coefficient, flat_plate_force, flat_plate_lift_coefficient,
-    grounding_resistance_force, hull_resistance_force, streamlined_foil_force,
+    grounding_friction_force, hull_resistance_force, streamlined_foil_force,
     streamlined_lift_coefficient,
 };
 use rapier2d::prelude::{Rotation, Vector};
@@ -28,19 +28,46 @@ fn apparent_flow_is_medium_velocity_relative_to_the_surface() {
 }
 
 #[test]
-fn grounding_resistance_increases_proportionally_as_clearance_disappears() {
-    let velocity_m_s = Vector::new(2.0, -1.0);
+fn kinetic_grounding_friction_scales_with_support_and_does_not_overshoot_rest() {
+    let velocity_m_s = Vector::new(2.0, 0.0);
     let draft_m = 0.6;
-    let resistance_n_s_m = 6_000.0;
+    let supported_mass_kg = 125.0;
+    let kinetic_friction_coefficient = 0.6;
 
-    let deep_force_n = grounding_resistance_force(velocity_m_s, 1.5, draft_m, resistance_n_s_m);
-    let shallow_force_n = grounding_resistance_force(velocity_m_s, 0.3, draft_m, resistance_n_s_m);
-    let grounded_force_n = grounding_resistance_force(velocity_m_s, 0.0, draft_m, resistance_n_s_m);
+    let deep_force_n = grounding_friction_force(
+        velocity_m_s,
+        1.5,
+        draft_m,
+        supported_mass_kg,
+        kinetic_friction_coefficient,
+    );
+    let shallow_force_n = grounding_friction_force(
+        velocity_m_s,
+        0.3,
+        draft_m,
+        supported_mass_kg,
+        kinetic_friction_coefficient,
+    );
+    let grounded_force_n = grounding_friction_force(
+        velocity_m_s,
+        0.0,
+        draft_m,
+        supported_mass_kg,
+        kinetic_friction_coefficient,
+    );
+    let almost_stopped_force_n = grounding_friction_force(
+        Vector::new(0.01, 0.0),
+        0.0,
+        draft_m,
+        supported_mass_kg,
+        kinetic_friction_coefficient,
+    );
 
     assert_eq!(deep_force_n, Vector::ZERO);
     assert_vector_close(shallow_force_n, grounded_force_n * 0.5);
-    assert_vector_close(grounded_force_n, -velocity_m_s * resistance_n_s_m);
+    assert_close(grounded_force_n.length(), 0.6 * supported_mass_kg * 9.81);
     assert!(grounded_force_n.dot(velocity_m_s) < 0.0);
+    assert_vector_close(almost_stopped_force_n, Vector::new(-75.0, 0.0));
 }
 
 #[test]

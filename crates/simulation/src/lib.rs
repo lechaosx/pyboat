@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use rapier2d::prelude::{
     Aabb, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
     IntegrationParameters, MassProperties, MotorModel, PhysicsWorld, RevoluteJointBuilder,
-    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, Rotation, Vector,
+    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType, Rotation, Vector,
 };
 
 pub const DT_SECONDS: f32 = 1.0 / 60.0;
 const CONTROL_SELECTION_TIE_TOLERANCE: f32 = 1.0e-6;
+const GRAVITY_ACCELERATION_M_S2: f32 = 9.81;
+const STATIC_GROUND_SPEED_THRESHOLD_M_S: f32 = 0.02;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullParameters {
@@ -59,7 +61,8 @@ pub struct BoatParameters {
     pub sail_bearing_damping_n_m_s_rad: f32,
     pub rudder_bearing_damping_n_m_s_rad: f32,
     pub draft_m: f32,
-    pub grounding_resistance_n_s_m: f32,
+    pub ground_static_friction_coefficient: f32,
+    pub ground_kinetic_friction_coefficient: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -290,14 +293,111 @@ pub fn hull_resistance_force(
     rotated(local_force_n, hull_angle_rad)
 }
 
-pub fn grounding_resistance_force(
+pub fn grounding_friction_force(
     point_velocity_m_s: Vector,
     water_depth_m: f32,
     draft_m: f32,
-    resistance_n_s_m: f32,
+    supported_mass_kg: f32,
+    kinetic_friction_coefficient: f32,
 ) -> Vector {
-    let lost_clearance_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
-    -point_velocity_m_s * resistance_n_s_m * lost_clearance_fraction
+    let support_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
+    let maximum_force_n = kinetic_friction_coefficient
+        * supported_mass_kg
+        * GRAVITY_ACCELERATION_M_S2
+        * support_fraction;
+    let stopping_force_n = -point_velocity_m_s * supported_mass_kg / DT_SECONDS;
+    if stopping_force_n.length() <= maximum_force_n {
+        return stopping_force_n;
+    }
+    if point_velocity_m_s == Vector::ZERO {
+        Vector::ZERO
+    } else {
+        -point_velocity_m_s.normalize() * maximum_force_n
+    }
+}
+
+fn total_mass_kg(parameters: BoatParameters) -> f32 {
+    parameters.hull.mass_kg
+        + parameters.sail_mass_kg
+        + parameters.boom_mass_kg
+        + parameters.rudder_mass_kg
+        + parameters.tiller_mass_kg
+}
+
+fn apply_grounding_friction(
+    world: &mut PhysicsWorld,
+    parameters: BoatParameters,
+    boat: Boat,
+    water_depth_m: f32,
+) {
+    let support_fraction =
+        ((parameters.draft_m - water_depth_m) / parameters.draft_m).clamp(0.0, 1.0);
+    if support_fraction == 0.0 {
+        world.bodies[boat.hull.body].set_body_type(RigidBodyType::Dynamic, true);
+        return;
+    }
+
+    let hull = &world.bodies[boat.hull.body];
+    let hull_center_m = hull.center_of_mass();
+    let hull_angle_rad = hull.rotation().angle();
+    let half_length_m = parameters.hull.length_m / 2.0;
+    let forward = rotated(Vector::new(1.0, 0.0), hull_angle_rad);
+    let bow_position_m = hull_center_m + forward * half_length_m;
+    let stern_position_m = hull_center_m - forward * half_length_m;
+    let bow_velocity_m_s = hull.velocity_at_point(bow_position_m);
+    let stern_velocity_m_s = hull.velocity_at_point(stern_position_m);
+    let total_mass_kg = total_mass_kg(parameters);
+
+    if bow_velocity_m_s.length() <= STATIC_GROUND_SPEED_THRESHOLD_M_S
+        && stern_velocity_m_s.length() <= STATIC_GROUND_SPEED_THRESHOLD_M_S
+    {
+        let (external_force_n, external_torque_n_m, inertia_kg_m2) =
+            [boat.hull.body, boat.sail, boat.rudder].iter().fold(
+                (Vector::ZERO, 0.0, 0.0),
+                |(force_n, torque_n_m, inertia_kg_m2), body_handle| {
+                    let body = &world.bodies[*body_handle];
+                    let body_force_n = body.user_force();
+                    let offset_m = body.center_of_mass() - hull_center_m;
+                    (
+                        force_n + body_force_n,
+                        torque_n_m + body.user_torque() + offset_m.perp_dot(body_force_n),
+                        inertia_kg_m2
+                            + body.mass_properties().local_mprops.principal_inertia()
+                            + body.mass() * offset_m.length_squared(),
+                    )
+                },
+            );
+        let required_force_n = -external_force_n - hull.linvel() * total_mass_kg / DT_SECONDS;
+        let required_torque_n_m = -external_torque_n_m - hull.angvel() * inertia_kg_m2 / DT_SECONDS;
+        let static_force_limit_n = parameters.ground_static_friction_coefficient
+            * total_mass_kg
+            * GRAVITY_ACCELERATION_M_S2
+            * support_fraction;
+        let static_torque_limit_n_m = static_force_limit_n * half_length_m;
+        let static_friction_usage = (required_force_n.length() / static_force_limit_n).powi(2)
+            + (required_torque_n_m / static_torque_limit_n_m).powi(2);
+        if static_friction_usage <= 1.0 {
+            world.bodies[boat.hull.body].set_linvel(Vector::ZERO, true);
+            world.bodies[boat.hull.body].set_angvel(0.0, true);
+            world.bodies[boat.hull.body].set_body_type(RigidBodyType::Fixed, true);
+            return;
+        }
+    }
+
+    world.bodies[boat.hull.body].set_body_type(RigidBodyType::Dynamic, true);
+    for (position_m, velocity_m_s) in [
+        (bow_position_m, bow_velocity_m_s),
+        (stern_position_m, stern_velocity_m_s),
+    ] {
+        let friction_force_n = grounding_friction_force(
+            velocity_m_s,
+            water_depth_m,
+            parameters.draft_m,
+            total_mass_kg / 2.0,
+            parameters.ground_kinetic_friction_coefficient,
+        );
+        world.bodies[boat.hull.body].add_force_at_point(friction_force_n, position_m, true);
+    }
 }
 
 fn wrapped_angle(angle_rad: f32) -> f32 {
@@ -944,7 +1044,6 @@ fn apply_boat_forces(
         world.bodies[body].reset_forces(false);
         world.bodies[body].reset_torques(false);
     }
-
     let sail = &world.bodies[boat.sail];
     let sail_angle_rad = sail.rotation().angle();
     let center_of_effort_m = sail.translation()
@@ -1028,17 +1127,7 @@ fn apply_boat_forces(
             parameters.hull_drag_coefficient,
             parameters.hull_lateral_drag_coefficient,
         );
-        let grounding_force_n = grounding_resistance_force(
-            hull.velocity_at_point(world_position_m),
-            environment.water_depth_m,
-            parameters.draft_m,
-            parameters.grounding_resistance_n_s_m / 2.0,
-        );
-        world.bodies[boat.hull.body].add_force_at_point(
-            force_n + grounding_force_n,
-            world_position_m,
-            true,
-        );
+        world.bodies[boat.hull.body].add_force_at_point(force_n, world_position_m, true);
     }
 
     world.bodies[boat.sail].add_torque(actuator_torques.sail_n_m, true);
@@ -1047,6 +1136,7 @@ fn apply_boat_forces(
         -actuator_torques.sail_n_m - actuator_torques.rudder_n_m,
         true,
     );
+    apply_grounding_friction(world, parameters, boat, environment.water_depth_m);
 }
 
 impl Simulation {

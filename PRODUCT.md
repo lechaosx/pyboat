@@ -40,6 +40,9 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water
   slows a dragging boat proportionally, beaches can ground it, and rocks can
   damage it.
+- **[Explicit]** Grounding resistance resembles physical static and sliding
+  friction: a grounded boat does not creep under a steady force within its hold,
+  while a sufficiently large force can break it free.
 - **[Explicit]** New boats spawn with enough water depth to avoid beginning
   grounded.
 - **[Explicit]** Weather, currents, waves, wind, and storms should be procedural
@@ -53,8 +56,9 @@ This file records intended player experience, scope, and product behavior.
   continuous shallow-to-deep water gradient and discrete beach, cliff, and inland
   bands.
 - **[Implicit]** The current dinghy has a 0.6 m effective draft. Lost bottom
-  clearance adds proportionally increasing resistance, and exposed terrain
-  strongly resists movement. Spawns require at least 1.5 m of water.
+  clearance transfers its weight progressively onto the seabed; effective static
+  and kinetic friction coefficients are 1.0 and 0.6. Spawns require at least
+  1.5 m of water.
 - **[Explicit]** Wind may blow in every direction. At any fixed place and time,
   its speed follows a Weibull distribution with shape `k = 2` and scale
   `λ = 9 m/s`, allowing near-calms and a decaying tail of increasingly rare strong
@@ -136,6 +140,6 @@ This file records intended player experience, scope, and product behavior.
   values remain appropriate after broader playtesting.
 - Concrete rules for progression, matchmaking, ship classes, automatic weapons,
   and the two custom actions.
-- Whether the current draft, spawn clearance, and grounding-resistance tuning
+- Whether the current draft, spawn clearance, and grounding-friction tuning
   remain appropriate after playtesting.
 - Grounding recovery and rock placement and damage rules.

@@ -123,12 +123,14 @@ and applied there each tick. Streamlined underwater loads model attached flow
 through stall and act at the articulated rudder's moving center of effort and the
 hull-mounted keel position. Quadratic anisotropic hull resistance is sampled at
 the bow and stern, which opposes translation and yaw using each point's local
-water-relative velocity. When sampled depth falls below the boat's draft, those
-points also receive linear seabed resistance based on their ground-relative
-velocity. The dinghy's 0.6 m draft and 6,000 N·s/m maximum coefficient make
-resistance rise proportionally as clearance disappears and leave exposed boats
-effectively grounded. Surface angle targets become critically damped,
-torque-limited actuator commands; sheet targets suppress outward sail torque.
+water-relative velocity. When sampled depth falls below the boat's draft, the
+seabed supports a proportional fraction of the boat's weight. A static-friction
+wrench fixes the hull while combined external force and yaw demand remain inside
+its breakaway envelope. After breakaway, capped kinetic friction acts at the bow
+and stern without numerically overshooting rest. The dinghy's 0.6 m draft uses
+effective static and kinetic coefficients of 1.0 and 0.6. Surface angle targets
+become critically damped, torque-limited actuator commands; sheet targets
+suppress outward sail torque.
 Arcade control predicts drive and yaw effects across candidate surface angles,
 then selects auto-sheet or yaw-rate targets before producing actuator torques.
 Candidate prediction includes hull angular velocity but remains quasi-static with
