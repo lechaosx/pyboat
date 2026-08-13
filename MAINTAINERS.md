@@ -383,11 +383,14 @@ fields for every pixel, including 64-bit seed mixing represented as
 pairs of WebGPU-compatible 32-bit integers. Keep WGSL terrain constants, spline
 edges, masks, hashing, and peak transforms synchronized with `pyboat-game`; Rust
 remains authoritative for physical depth. The shader owns underwater color and
-the shoreline and beach materials. Each value-noise octave returns its analytic
+the land materials. Each value-noise octave returns its analytic
 world-space gradient alongside its value; the shader propagates gradients through
-the same amplitude normalization and density composition. Gradients at or above
-`0.08 m/m` render as bare rock; below that cutoff, shoreline renders as beach and
-inland terrain renders green.
+the same amplitude normalization and density composition. The gradient supplies
+height-field lighting and slope-based rock exposure, whose threshold decreases
+with altitude. Broad elevation and vegetation fields select alpine rock, sparse
+snow, grass, and clustered forest canopy. Separate finer fields grade colors
+inside those materials. Beach width varies with broad geology but always begins
+at sea level; steep rock can meet the water before beach classification.
 Each frame samples `procedural_weather` at the camera position. The scene uniform
 carries surface, low-cloud, and high-cloud winds, moisture, instability,
 low/high cloudiness, rain state, predicted simulation time, a visual seed derived

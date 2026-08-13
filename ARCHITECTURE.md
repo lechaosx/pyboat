@@ -249,10 +249,14 @@ decisions.
   density fields and emulates their 64-bit seed hashing with pairs of
   32-bit integers. The shader owns all terrain presentation: it continuously
   blends shallow, open, and deep-water colors from sea level through 4 m depth,
-  switches distinctly to beach at sea level, and propagates analytic world-space
-  derivatives through noise, density splines, masks, and peaks. Shoreline and
-  inland pixels at or above `0.08 m/m` are bare rock; gentler shoreline is beach
-  and gentler inland terrain is green.
+  switches distinctly to land at sea level, and propagates analytic world-space
+  derivatives through noise, density splines, masks, and peaks. Those derivatives
+  provide height-field lighting and slope-based rock exposure. The rock-slope
+  threshold decreases with altitude; broad altitude fields then select alpine
+  rock and sparse snow. Seeded fields grade rock, grass, and forest internally,
+  while beach, vegetation, rock, and snow retain sharp material boundaries.
+  Broad geology varies beach width continuously from sea level, so sand does not
+  appear as disconnected inland patches.
 - **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered surface
   wind, low- and high-cloud winds, moisture, instability, low and high cloudiness,
   and rain intensity. High-cloud wind is the dominant 32,768–131,072 m synoptic

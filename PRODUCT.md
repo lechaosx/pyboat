@@ -88,10 +88,17 @@ This file records intended player experience, scope, and product behavior.
   how strongly the hull is dragging on the bottom.
 - **[Implicit]** The browser renders its static seeded elevation field with a
   continuous shallow-to-deep water gradient and a discrete shoreline transition.
-- **[Explicit]** Inland terrain is green except where its local elevation gradient
-  is steep enough to render as a rocky cliff.
-- **[Implicit]** A `0.08 m/m` per-pixel elevation-gradient threshold separates
-  bare rock from gentler beach and green terrain.
+- **[Explicit]** Land uses distinct beach, grass, forest, rock, and high-altitude
+  snow materials. Material boundaries remain sharp except for the blend between
+  grass and trees; color variation stays within each material.
+- **[Explicit]** Rock exposure increases with altitude, allowing high mountains
+  to remain rocky on gentler ground. Mountain rock detail follows the same
+  height field as physical terrain and must read as relief rather than isolines.
+- **[Explicit]** Where a beach occurs, it begins at the shoreline and continues
+  inland with a procedurally varying width. Steep rock may instead meet the
+  water directly.
+- **[Implicit]** Trees are currently represented by a clustered forest canopy
+  material rather than individual geometry.
 - **[Implicit]** The current dinghy has a 0.6 m effective draft. Lost bottom
   clearance transfers its weight progressively onto the seabed; effective static
   and kinetic friction coefficients are 1.0 and 0.6. Spawns require at least

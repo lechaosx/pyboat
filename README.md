@@ -112,9 +112,11 @@ scale bar follows the zoom in real metric units. The same match seed produces a
 connected, vastly dominant ocean with sparse clusters of large islands. Smaller
 density fields shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
 color changes continuously with depth before a distinct shoreline transition.
-Gentle shore is beach, while steep shore and inland cliffs are bare rock; the rest
-of each island is green. Broad geology varies by island, so some coasts are all
-cliff, some alternate cliffs and beaches, and others remain beach-dominant. Cliffs
+Gentle shore has a connected beach whose width varies with broad geology, while
+steep shore and inland cliffs are bare rock. Inland grass blends into clustered
+forest, higher terrain exposes more rock, and the highest peaks carry sparse snow.
+Some coasts are all cliff, some alternate cliffs and beaches, and others remain
+beach-dominant. Cliffs
 continue down their submerged flanks, and rare deep trenches break up the seafloor.
 Boats slow progressively when their 0.6 m draft loses bottom clearance. Static
 ground friction prevents creep after they settle, while sufficiently extreme
