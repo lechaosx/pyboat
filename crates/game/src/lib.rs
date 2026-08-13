@@ -13,7 +13,6 @@ const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
 const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
-const TERRAIN_GEOLOGY_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
 const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
 
@@ -185,13 +184,9 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     );
     let local_density = 0.68 * cluster + 0.32 * island;
     let unscaled_elevation_m = 18.0 * (local_density - 0.35);
-    let geology = terrain_fractal_noise(
-        match_seed ^ 0xa409_3822_299f_31d0,
-        position_m,
-        8192.0,
-        TERRAIN_GEOLOGY_OCTAVE_COUNT,
-    );
-    let elevation_scale = 1.0 + 49.0 * smoothstep_range(0.31, 0.56, geology);
+    let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
+    let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
+    let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
     let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
         * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));

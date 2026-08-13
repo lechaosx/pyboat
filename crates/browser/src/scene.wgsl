@@ -552,21 +552,22 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         1024.0,
         5u,
     );
-    let geology = terrain_fractal_sample(
-        vec2<u32>(0x299f31d0u, 0xa4093822u),
-        terrain_position_m,
-        8192.0,
-        3u,
-    );
-    let geology_amount = terrain_smoothstep_sample(0.31, 0.56, geology);
     var unscaled: TerrainNoiseSample;
     unscaled.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.35);
     unscaled.gradient = 18.0 * (0.68 * cluster.gradient + 0.32 * island.gradient);
-    let elevation_scale = scene.terrain_tuning.y * (1.0 + 49.0 * geology_amount.value);
+    let island_ruggedness = terrain_smoothstep_sample(0.32, 0.58, cluster);
+    var negative_cluster: TerrainNoiseSample;
+    negative_cluster.value = -cluster.value;
+    negative_cluster.gradient = -cluster.gradient;
+    let trench_depth = terrain_smoothstep_sample(0.50, 0.74, negative_cluster);
+    let elevation_scale = scene.terrain_tuning.y
+        * (1.0 + 19.0 * island_ruggedness.value + 29.0 * trench_depth.value);
     var base: TerrainNoiseSample;
     base.value = unscaled.value * elevation_scale;
     base.gradient = unscaled.gradient * elevation_scale
-        + unscaled.value * scene.terrain_tuning.y * 49.0 * geology_amount.gradient;
+        + unscaled.value
+            * scene.terrain_tuning.y
+            * (19.0 * island_ruggedness.gradient + 29.0 * trench_depth.gradient);
 
     var terrain: TerrainSample;
     terrain.elevation_m = base.value;

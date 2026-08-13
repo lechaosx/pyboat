@@ -59,7 +59,7 @@ const defaults: State = {
   darkness: 1,
   relief: 1,
   terrainScale: 1,
-  elevationScale: 1,
+  elevationScale: 3,
   cliffSlope: 0.08,
 };
 

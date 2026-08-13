@@ -146,11 +146,12 @@ decisions.
   players in regional seas. Three 8,192–2,048 m cluster octaves and five
   1,024–64 m island-detail octaves produce sparse large islands in a connected,
   dominant ocean.
-- **[Implicit]** One 8,192–2,048 m geology field scales the signed base elevation
-  by 1–50× through a `0.31–0.56` smooth upper-tail spline. It preserves the zero
-  contour while naturally producing beachless, mixed, and beach-dominant coasts;
-  steep land continues into steep submerged flanks, and the rare strongest
-  negative regions become trenches.
+- **[Implicit]** The production base elevation scale is `3×`. Positive and
+  negative tails of the existing 8,192–2,048 m cluster density independently
+  amplify signed relief: positive `0.32–0.58` density produces rugged major
+  islands up to `60×`, while negative `0.50–0.74` density produces rarer trenches
+  up to `90×`. Because relief derives from the same broad field as island shape,
+  it crosses sea level continuously without a separate cliff-biome noise field.
 - **[Implicit]** Four 32–4 m reef octaves have separate roles. Between -4 and
   -0.1 m elevation, a smooth mask applies up to 0.6 m of signed relief to the
   submerged seabed. A narrower -2 to -0.1 m mask adds up to 2 m only where the

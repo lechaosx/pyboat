@@ -253,7 +253,7 @@ impl Renderer {
                 ],
                 cloud_tuning: [1.0, 1.0, 5.0, 12.5],
                 cloud_rendering: [1.0; 4],
-                terrain_tuning: [1.0, 1.0, 0.08, 0.0],
+                terrain_tuning: [1.0, 3.0, 0.08, 0.0],
                 time_seconds: tick as f32 / 60.0,
                 _padding: [0; 3],
             }),

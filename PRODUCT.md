@@ -62,6 +62,11 @@ This file records intended player experience, scope, and product behavior.
   remain beach-dominant.
 - **[Explicit]** Cliffs continue below the waterline, and rare deep trenches
   occur in the same continuous terrain field.
+- **[Explicit]** The production terrain uses `3×` base elevation relief so most
+  coasts reach navigable water within hundreds of metres rather than remaining
+  shallow for roughly a kilometre. Broad lagoons may still occur naturally.
+- **[Explicit]** Cliff terrain emerges from the same landform density that shapes
+  an island rather than from a separate cliff-biome mask.
 - **[Explicit]** Gentle shoreline renders as beach, while sufficiently steep
   shoreline and inland slopes render as bare rock.
 - **[Explicit]** Procedural water depth affects boats physically: shallow water

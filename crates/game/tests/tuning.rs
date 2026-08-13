@@ -639,6 +639,46 @@ fn procedural_cliffs_continue_below_the_waterline() {
 }
 
 #[test]
+fn procedural_coasts_often_reach_navigable_depth_within_256_metres() {
+    let mut sea_facing_shores = 0;
+    let mut nearby_navigable_water = 0;
+    let cardinal_directions = [
+        Vector::new(1.0, 0.0),
+        Vector::new(0.0, 1.0),
+        Vector::new(-1.0, 0.0),
+        Vector::new(0.0, -1.0),
+    ];
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -128..=128 {
+            for y in -128..=128 {
+                let shore_m = Vector::new(x as f32 * 64.0, y as f32 * 64.0);
+                let shore_elevation_m = procedural_terrain_elevation_m(seed, shore_m);
+                if !(0.0..=2.0).contains(&shore_elevation_m) {
+                    continue;
+                }
+
+                for direction in cardinal_directions {
+                    if procedural_terrain_elevation_m(seed, shore_m + direction * 32.0) >= 0.0 {
+                        continue;
+                    }
+                    sea_facing_shores += 1;
+                    nearby_navigable_water += usize::from(
+                        procedural_terrain_elevation_m(seed, shore_m + direction * 256.0) <= -4.0,
+                    );
+                }
+            }
+        }
+    }
+
+    assert!(sea_facing_shores > 0);
+    assert!(
+        nearby_navigable_water * 2 >= sea_facing_shores,
+        "only {nearby_navigable_water} of {sea_facing_shores} shoreline transects reached 4 m depth within 256 m"
+    );
+}
+
+#[test]
 fn procedural_seafloor_has_rare_deep_trenches() {
     let mut water_samples = 0;
     let mut trench_samples = 0;

@@ -108,12 +108,14 @@ the protocol transfers the seed rather than sampled fields or parameters.
 Static terrain routes several seeded density fields in uncompressed real metres.
 Three cluster octaves over 2,048–8,192 m and five island-detail octaves over
 64–1,024 m shape sparse large islands without a continent-scale field that could
-close regional seas. Three 2,048–8,192 m geology octaves form one coherent
-modulation field. Its 0.31–0.56 upper-tail spline scales signed base elevation by
-1–50× while preserving the zero contour. Representative samples must include
-beachless, mixed, and beach-dominant 2 km coastal regions while beaches remain
-the global majority, most sampled cliffs remain steep immediately offshore, and
-depths beyond 100 m occur without exceeding 5% of water samples. Four 4–32 m reef
+close regional seas. The production base elevation scale is 3×. Positive
+0.32–0.58 and negative 0.50–0.74 tails of the cluster density independently
+amplify signed elevation up to 60× for rugged major islands and 90× for rarer
+trenches. Representative samples must include beachless, mixed, and
+beach-dominant 2 km coastal regions while beaches remain the global majority,
+most sampled cliffs remain steep immediately offshore, most sampled shore
+transects reach 4 m depth within 256 m, and depths beyond 100 m occur without
+exceeding 5% of water samples. Four 4–32 m reef
 octaves feed two smooth masks. Between -4 and -0.1 m elevation, up to 0.6 m of
 signed relief cuts channels and raises
 the submerged seabed. Between -2 and -0.1 m, a 0.65–0.85 upper-tail spline adds

@@ -190,7 +190,7 @@ fn render_showcase(
         cloud_offsets_m: [0.0; 4],
         cloud_tuning: [1.0, 1.0, 5.0, 12.5],
         cloud_rendering: [1.0; 4],
-        terrain_tuning: [1.0, 1.0, 0.08, 0.0],
+        terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         time_seconds: 37.0,
         padding: [0; 3],
     };
