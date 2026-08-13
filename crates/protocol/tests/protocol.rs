@@ -16,10 +16,7 @@ fn welcome_message_carries_match_seed() {
     .unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(
-        encoded,
-        r#"{"type":"welcome","playerId":"player-3","matchSeed":42}"#
-    );
+    assert_eq!(encoded.len(), 12);
     assert_eq!(decoded, expected);
 }
 
@@ -33,10 +30,7 @@ fn input_message_is_compact_and_round_trips() {
     let encoded = encode_client_message(&expected).unwrap();
     let decoded = decode_client_message(&encoded).unwrap();
 
-    assert_eq!(
-        encoded,
-        r#"{"type":"input","sequence":12,"forward":0.75,"turn":-0.25}"#
-    );
+    assert_eq!(encoded.len(), 11);
     assert_eq!(decoded, expected);
 }
 
@@ -58,7 +52,7 @@ fn viewport_message_is_compact_and_rejects_invalid_radius() {
     let encoded = encode_client_message(&expected).unwrap();
     let decoded = decode_client_message(&encoded).unwrap();
 
-    assert_eq!(encoded, r#"{"type":"viewport","radius":17.5}"#);
+    assert_eq!(encoded.len(), 6);
     assert_eq!(decoded, expected);
     assert_eq!(
         encode_client_message(&ClientMessage::Viewport { radius: 0.0 }).unwrap_err(),
@@ -76,10 +70,7 @@ fn empty_snapshot_is_compact_and_round_trips() {
     let encoded = encode_server_message(&expected).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(
-        encoded,
-        r#"{"type":"snapshot","tick":7,"boats":[],"removedPlayerIds":[]}"#
-    );
+    assert_eq!(encoded, [1, 1, 7, 0, 0]);
     assert_eq!(decoded, expected);
 }
 
@@ -112,6 +103,14 @@ fn boat_damage_state_is_compact_and_round_trips() {
     let encoded = encode_server_message(&message).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert!(encoded.contains(r#""health":75.0,"lastHitTick":11,"wreck":false"#));
+    assert!(encoded.len() < 80);
     assert_eq!(decoded, message);
+}
+
+#[test]
+fn protocol_rejects_an_unsupported_version() {
+    assert_eq!(
+        decode_client_message(&[2, 0]),
+        Err(ProtocolError::UnsupportedVersion(2))
+    );
 }

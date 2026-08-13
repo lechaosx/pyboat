@@ -1,16 +1,21 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
+    collections::VecDeque,
     mem,
     rc::Rc,
 };
 
 use bytemuck::{Pod, Zeroable};
+use bytes::Bytes;
 use pyboat_game::procedural_weather;
 use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
+use url::Url;
 use wasm_bindgen::prelude::*;
-use web_sys::{CloseEvent, Event, HtmlCanvasElement, MessageEvent, WebSocket};
+use wasm_bindgen_futures::spawn_local;
+use web_sys::HtmlCanvasElement;
+use web_transport_wasm::{ClientBuilder, Session};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
@@ -19,6 +24,7 @@ use crate::{
 };
 
 const MAX_VERTICES: usize = 32768;
+const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -356,13 +362,13 @@ pub struct BrowserGame {
     pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
     connection_status: Rc<Cell<ConnectionStatus>>,
     close_notice: Rc<RefCell<Option<String>>>,
-    socket: WebSocket,
+    transport: Rc<RefCell<Option<Session>>>,
+    pending_datagrams: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    pending_reliable: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    sending_datagrams: Rc<Cell<bool>>,
+    sending_reliable: Rc<Cell<bool>>,
     renderer: Renderer,
     view_height_m: f32,
-    _on_open: Closure<dyn FnMut(Event)>,
-    _on_message: Closure<dyn FnMut(MessageEvent)>,
-    _on_error: Closure<dyn FnMut(Event)>,
-    _on_close: Closure<dyn FnMut(CloseEvent)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -382,77 +388,36 @@ impl BrowserGame {
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
         let close_notice = Rc::new(RefCell::new(None));
-        let socket = WebSocket::new(&server_url()?)?;
+        let transport = Rc::new(RefCell::new(None));
+        let pending_datagrams = Rc::new(RefCell::new(VecDeque::new()));
+        let pending_reliable = Rc::new(RefCell::new(VecDeque::new()));
+        let sending_datagrams = Rc::new(Cell::new(false));
+        let sending_reliable = Rc::new(Cell::new(false));
 
-        let on_open = {
-            let connection_status = Rc::clone(&connection_status);
-            Closure::new(move |_: Event| connection_status.set(ConnectionStatus::Connected))
-        };
-        socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-
-        let on_message = {
-            let client = Rc::clone(&client);
-            let pending_snapshot = Rc::clone(&pending_snapshot);
-            let connection_status = Rc::clone(&connection_status);
-            Closure::new(move |event: MessageEvent| {
-                let Some(message) = event.data().as_string() else {
-                    client.borrow_mut().disconnect();
-                    connection_status.set(ConnectionStatus::Error);
-                    return;
-                };
-                match decode_server_message(&message) {
-                    Ok(message @ ServerMessage::Welcome { .. }) => {
-                        client.borrow_mut().accept(message);
-                    }
-                    Ok(message @ ServerMessage::Snapshot { .. }) => {
-                        pending_snapshot.replace(Some(message));
-                    }
-                    Err(_) => {
-                        client.borrow_mut().disconnect();
-                        connection_status.set(ConnectionStatus::Error);
-                    }
-                }
-            })
-        };
-        socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-
-        let on_error = {
-            let client = Rc::clone(&client);
-            let connection_status = Rc::clone(&connection_status);
-            Closure::new(move |_: Event| {
-                client.borrow_mut().disconnect();
-                connection_status.set(ConnectionStatus::Error);
-            })
-        };
-        socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-
-        let on_close = {
-            let client = Rc::clone(&client);
-            let connection_status = Rc::clone(&connection_status);
-            let close_notice = Rc::clone(&close_notice);
-            Closure::new(move |event: CloseEvent| {
-                client.borrow_mut().disconnect();
-                let reason = event.reason();
-                close_notice.replace((!reason.is_empty()).then_some(reason));
-                if connection_status.get() != ConnectionStatus::Error {
-                    connection_status.set(ConnectionStatus::Closed);
-                }
-            })
-        };
-        socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+        connect_webtransport(
+            Rc::clone(&client),
+            Rc::clone(&pending_snapshot),
+            Rc::clone(&connection_status),
+            Rc::clone(&close_notice),
+            Rc::clone(&transport),
+            Rc::clone(&pending_datagrams),
+            Rc::clone(&pending_reliable),
+            Rc::clone(&sending_datagrams),
+            Rc::clone(&sending_reliable),
+        )?;
 
         Ok(Self {
             client,
             pending_snapshot,
             connection_status,
             close_notice,
-            socket,
+            transport,
+            pending_datagrams,
+            pending_reliable,
+            sending_datagrams,
+            sending_reliable,
             renderer,
             view_height_m: DEFAULT_VIEW_HEIGHT_M,
-            _on_open: on_open,
-            _on_message: on_message,
-            _on_error: on_error,
-            _on_close: on_close,
         })
     }
 
@@ -463,16 +428,28 @@ impl BrowserGame {
         let viewport = client.update_viewport(viewport_radius_m);
         let inputs = client.take_inputs(elapsed_seconds);
         drop(client);
-        if self.socket.ready_state() == WebSocket::OPEN {
-            if let Some(viewport) = viewport {
-                self.socket
-                    .send_with_str(&encode_client_message(&viewport).map_err(js_error)?)?;
-            }
-            for input in inputs {
-                self.socket
-                    .send_with_str(&encode_client_message(&input).map_err(js_error)?)?;
-            }
+        if let Some(viewport) = viewport {
+            self.pending_reliable
+                .borrow_mut()
+                .push_back(encode_client_message(&viewport).map_err(js_error)?);
         }
+        for input in inputs {
+            let mut pending = self.pending_datagrams.borrow_mut();
+            if pending.len() == MAXIMUM_PENDING_DATAGRAMS {
+                pending.pop_front();
+            }
+            pending.push_back(encode_client_message(&input).map_err(js_error)?);
+        }
+        pump_datagrams(
+            &self.transport,
+            &self.pending_datagrams,
+            &self.sending_datagrams,
+        );
+        pump_reliable(
+            &self.transport,
+            &self.pending_reliable,
+            &self.sending_reliable,
+        );
         if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
             self.client.borrow_mut().accept(snapshot);
         }
@@ -599,6 +576,220 @@ impl BrowserGame {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn connect_webtransport(
+    protocol_client: Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: Rc<Cell<ConnectionStatus>>,
+    close_notice: Rc<RefCell<Option<String>>>,
+    transport: Rc<RefCell<Option<Session>>>,
+    pending_datagrams: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    pending_reliable: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    sending_datagrams: Rc<Cell<bool>>,
+    sending_reliable: Rc<Cell<bool>>,
+) -> Result<(), JsValue> {
+    let url = Url::parse(&server_url()?).map_err(js_error)?;
+    let builder = ClientBuilder::new()
+        .with_pooling(false)
+        .with_unreliable(true);
+    let webtransport_client = match configured_certificate_hash()? {
+        Some(hash) => builder.with_server_certificate_hashes(vec![hash]),
+        None => builder.with_system_roots(),
+    };
+
+    spawn_local(async move {
+        let session = match webtransport_client.connect(url).await {
+            Ok(session) => session,
+            Err(error) => {
+                protocol_client.borrow_mut().disconnect();
+                close_notice.replace(Some(error.to_string()));
+                connection_status.set(ConnectionStatus::Error);
+                return;
+            }
+        };
+        transport.replace(Some(session.clone()));
+        connection_status.set(ConnectionStatus::Connected);
+        receive_datagrams(
+            session.clone(),
+            Rc::clone(&protocol_client),
+            Rc::clone(&pending_snapshot),
+            Rc::clone(&connection_status),
+        );
+        receive_reliable_messages(
+            session.clone(),
+            Rc::clone(&protocol_client),
+            Rc::clone(&pending_snapshot),
+            Rc::clone(&connection_status),
+        );
+        watch_connection_close(session, protocol_client, connection_status, close_notice);
+        pump_datagrams(&transport, &pending_datagrams, &sending_datagrams);
+        pump_reliable(&transport, &pending_reliable, &sending_reliable);
+    });
+    Ok(())
+}
+
+fn receive_datagrams(
+    session: Session,
+    protocol_client: Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: Rc<Cell<ConnectionStatus>>,
+) {
+    spawn_local(async move {
+        while let Ok(message) = session.recv_datagram().await {
+            if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
+                protocol_client.borrow_mut().disconnect();
+                connection_status.set(ConnectionStatus::Error);
+                break;
+            }
+        }
+    });
+}
+
+fn receive_reliable_messages(
+    session: Session,
+    protocol_client: Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: Rc<Cell<ConnectionStatus>>,
+) {
+    spawn_local(async move {
+        while let Ok(mut stream) = session.accept_uni().await {
+            let mut message = Vec::new();
+            loop {
+                match stream.read(64 * 1024).await {
+                    Ok(Some(chunk)) => message.extend_from_slice(&chunk),
+                    Ok(None) => break,
+                    Err(_) => return,
+                }
+            }
+            if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
+                protocol_client.borrow_mut().disconnect();
+                connection_status.set(ConnectionStatus::Error);
+                break;
+            }
+        }
+    });
+}
+
+fn accept_server_message(
+    bytes: &[u8],
+    protocol_client: &Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
+) -> Result<(), pyboat_protocol::ProtocolError> {
+    match decode_server_message(bytes)? {
+        message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
+        message @ ServerMessage::Snapshot { .. } => {
+            pending_snapshot.replace(Some(message));
+        }
+    }
+    Ok(())
+}
+
+fn watch_connection_close(
+    session: Session,
+    protocol_client: Rc<RefCell<MultiplayerClient>>,
+    connection_status: Rc<Cell<ConnectionStatus>>,
+    close_notice: Rc<RefCell<Option<String>>>,
+) {
+    spawn_local(async move {
+        let error = session.closed().await;
+        protocol_client.borrow_mut().disconnect();
+        close_notice.replace(Some(error.to_string()));
+        if connection_status.get() != ConnectionStatus::Error {
+            connection_status.set(ConnectionStatus::Closed);
+        }
+    });
+}
+
+fn pump_datagrams(
+    transport: &Rc<RefCell<Option<Session>>>,
+    pending: &Rc<RefCell<VecDeque<Vec<u8>>>>,
+    sending: &Rc<Cell<bool>>,
+) {
+    if sending.get() {
+        return;
+    }
+    let Some(session) = transport.borrow().clone() else {
+        return;
+    };
+    sending.set(true);
+    let pending = Rc::clone(pending);
+    let sending = Rc::clone(sending);
+    spawn_local(async move {
+        loop {
+            let Some(message) = pending.borrow_mut().pop_front() else {
+                break;
+            };
+            if session.send_datagram(Bytes::from(message)).await.is_err() {
+                pending.borrow_mut().clear();
+                break;
+            }
+        }
+        sending.set(false);
+    });
+}
+
+fn pump_reliable(
+    transport: &Rc<RefCell<Option<Session>>>,
+    pending: &Rc<RefCell<VecDeque<Vec<u8>>>>,
+    sending: &Rc<Cell<bool>>,
+) {
+    if sending.get() {
+        return;
+    }
+    let Some(session) = transport.borrow().clone() else {
+        return;
+    };
+    sending.set(true);
+    let pending = Rc::clone(pending);
+    let sending = Rc::clone(sending);
+    spawn_local(async move {
+        loop {
+            let Some(message) = pending.borrow_mut().pop_front() else {
+                break;
+            };
+            let result = async {
+                let mut stream = session.open_uni().await?;
+                stream.write(&message).await?;
+                stream.finish()
+            }
+            .await;
+            if result.is_err() {
+                pending.borrow_mut().clear();
+                break;
+            }
+        }
+        sending.set(false);
+    });
+}
+
+fn configured_certificate_hash() -> Result<Option<Vec<u8>>, JsValue> {
+    let search = web_sys::window()
+        .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?
+        .location()
+        .search()?;
+    let Some(value) = search
+        .trim_start_matches('?')
+        .split('&')
+        .filter_map(|parameter| parameter.split_once('='))
+        .find_map(|(key, value)| (key == "webtransportCertificateHash").then_some(value))
+    else {
+        return Ok(None);
+    };
+    let bytes = value
+        .split(':')
+        .map(|byte| {
+            u8::from_str_radix(byte, 16)
+                .map_err(|_| JsValue::from_str("invalid WebTransport certificate hash"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if bytes.len() != 32 {
+        return Err(JsValue::from_str(
+            "WebTransport certificate hash must contain 32 bytes",
+        ));
+    }
+    Ok(Some(bytes))
+}
+
 fn cloud_visual_seed(player_id: &str) -> u64 {
     player_id.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -609,12 +800,7 @@ fn server_url() -> Result<String, JsValue> {
     let location = web_sys::window()
         .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?
         .location();
-    let scheme = if location.protocol()? == "https:" {
-        "wss"
-    } else {
-        "ws"
-    };
-    Ok(format!("{scheme}://{}:8765", location.hostname()?))
+    Ok(format!("https://{}:8765/game", location.hostname()?))
 }
 
 fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {

@@ -2,40 +2,34 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
+pub const PROTOCOL_VERSION: u8 = 1;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum ClientMessage {
-    #[serde(rename = "input")]
     Input {
         sequence: i64,
         forward: f32,
         turn: f32,
     },
-    #[serde(rename = "viewport")]
-    Viewport { radius: f32 },
+    Viewport {
+        radius: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum ServerMessage {
-    #[serde(rename = "welcome")]
     Welcome {
-        #[serde(rename = "playerId")]
         player_id: String,
-        #[serde(rename = "matchSeed")]
         match_seed: u64,
     },
-    #[serde(rename = "snapshot")]
     Snapshot {
         tick: u64,
         boats: Vec<BoatSnapshot>,
-        #[serde(rename = "removedPlayerIds")]
         removed_player_ids: Vec<String>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BoatSnapshot {
     pub id: String,
     pub health: f32,
@@ -51,17 +45,16 @@ pub struct BoatSnapshot {
     pub sail_angular_velocity: f32,
     pub rudder: f32,
     pub rudder_angular_velocity: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub forward: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub acknowledged_input: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProtocolError {
-    Json(String),
+    Codec(String),
+    UnsupportedVersion(u8),
+    MissingVersion,
     InvalidMotionIntent,
     InvalidViewportRadius,
 }
@@ -69,7 +62,11 @@ pub enum ProtocolError {
 impl fmt::Display for ProtocolError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Json(error) => write!(formatter, "protocol JSON error: {error}"),
+            Self::Codec(error) => write!(formatter, "protocol codec error: {error}"),
+            Self::UnsupportedVersion(version) => {
+                write!(formatter, "unsupported protocol version {version}")
+            }
+            Self::MissingVersion => formatter.write_str("protocol message is missing its version"),
             Self::InvalidMotionIntent => {
                 formatter.write_str("motion intent values must be finite and between -1 and 1")
             }
@@ -82,16 +79,15 @@ impl fmt::Display for ProtocolError {
 
 impl Error for ProtocolError {}
 
-pub fn decode_client_message(message: &str) -> Result<ClientMessage, ProtocolError> {
-    let message: ClientMessage =
-        serde_json::from_str(message).map_err(|error| ProtocolError::Json(error.to_string()))?;
+pub fn decode_client_message(message: &[u8]) -> Result<ClientMessage, ProtocolError> {
+    let message: ClientMessage = decode_message(message)?;
     validate_client_message(&message)?;
     Ok(message)
 }
 
-pub fn encode_client_message(message: &ClientMessage) -> Result<String, ProtocolError> {
+pub fn encode_client_message(message: &ClientMessage) -> Result<Vec<u8>, ProtocolError> {
     validate_client_message(message)?;
-    serde_json::to_string(message).map_err(|error| ProtocolError::Json(error.to_string()))
+    encode_message(message)
 }
 
 fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError> {
@@ -111,10 +107,26 @@ fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError>
     }
 }
 
-pub fn decode_server_message(message: &str) -> Result<ServerMessage, ProtocolError> {
-    serde_json::from_str(message).map_err(|error| ProtocolError::Json(error.to_string()))
+pub fn decode_server_message(message: &[u8]) -> Result<ServerMessage, ProtocolError> {
+    decode_message(message)
 }
 
-pub fn encode_server_message(message: &ServerMessage) -> Result<String, serde_json::Error> {
-    serde_json::to_string(message)
+pub fn encode_server_message(message: &ServerMessage) -> Result<Vec<u8>, ProtocolError> {
+    encode_message(message)
+}
+
+fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, ProtocolError> {
+    let mut encoded = vec![PROTOCOL_VERSION];
+    encoded.extend(
+        postcard::to_allocvec(message).map_err(|error| ProtocolError::Codec(error.to_string()))?,
+    );
+    Ok(encoded)
+}
+
+fn decode_message<'a, T: Deserialize<'a>>(message: &'a [u8]) -> Result<T, ProtocolError> {
+    let (&version, payload) = message.split_first().ok_or(ProtocolError::MissingVersion)?;
+    if version != PROTOCOL_VERSION {
+        return Err(ProtocolError::UnsupportedVersion(version));
+    }
+    postcard::from_bytes(payload).map_err(|error| ProtocolError::Codec(error.to_string()))
 }

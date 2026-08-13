@@ -39,7 +39,7 @@ tools, including `uv`:
 nix develop
 ```
 
-The Rust browser client additionally requires Rust 1.87 or newer with the
+The Rust stack additionally requires Rust 1.88 or newer, with the
 `wasm32-unknown-unknown` target, `wasm-pack`, and Bun. The Nix environment includes
 all of them.
 
@@ -56,12 +56,13 @@ track clicks transition smoothly, while dragging a slider remains immediate.
 cargo run -p pyboat-server
 ```
 
-The Rust server listens on `ws://127.0.0.1:8765`, accepts concurrent WebSocket
-connections, and creates one boat per client in a shared authoritative Rapier
-simulation. It consumes compact-JSON sequenced input, applies location-dependent
-ramming damage, preserves destroyed boats as physical wrecks, and publishes real
-boat snapshots at 60 Hz. New boats spawn at a random bearing just beyond the
-existing fleet in water at least 1.5 m deep and point downwind. Each server run
+The Rust server listens on `https://127.0.0.1:8765/game`, accepts concurrent
+WebTransport sessions, and creates one boat per client in a shared authoritative
+Rapier simulation. It consumes Postcard-encoded sequenced input datagrams, applies
+location-dependent ramming damage, preserves destroyed boats as physical wrecks,
+and publishes real boat snapshot datagrams at 60 Hz. New boats spawn at a random
+bearing just beyond the existing fleet in water at least 1.5 m deep and point
+downwind. Each server run
 uses one match seed for wind that changes smoothly across the world and over time,
 can blow in any direction, and includes gusts. Unsheltered wind speed follows a
 `k = 2`, `λ = 9 m/s` Weibull distribution, so near-calms are possible and strong
@@ -73,6 +74,11 @@ Snapshots include nearby interaction state through 8 m and visual motion through
 each client's requested viewport radius, bounded to 8–24 m and defaulting to 24 m.
 Pass a different listen address as the final argument, for example
 `cargo run -p pyboat-server -- 0.0.0.0:9000`.
+WebTransport always encrypts its QUIC connection with TLS; browsers provide no
+plaintext development mode. With no certificate arguments, the server creates a
+short-lived, self-signed development certificate and prints its SHA-256 hash. For
+a deployed certificate, pass its PEM certificate and private key after the listen
+address: `cargo run -p pyboat-server -- 0.0.0.0:8765 cert.pem key.pem`.
 
 ## Run the Rust browser client
 
@@ -90,10 +96,28 @@ bun install
 bun run dev
 ```
 
-Open the Vite URL shown in the terminal in a WebGPU-capable browser. The Rust/WASM
-client connects to port `8765` on the page hostname, sends sequenced controls, and
-reports its canvas-sized interest radius before rendering predicted articulated
-boats with Rust `wgpu`. Use `W/S` for forward or reverse power and `A/D` to turn.
+For the self-signed development certificate:
+
+1. Keep the server running and copy its complete `Browser certificate hash`.
+2. Start Vite with `bun run dev`.
+3. Append the hash to the Vite URL as the `webtransportCertificateHash` query
+   parameter, for example
+   `http://localhost:5173/?webtransportCertificateHash=d7:3a:...:72:48`.
+4. Open that URL. The Vite page can remain plain HTTP because loopback origins
+   are secure browser contexts; the WebTransport connection itself remains
+   encrypted.
+
+The server generates a new certificate on every start. After restarting it,
+replace the hash in the browser URL and reload the page. A server log ending in
+`cryptographic handshake failed: error 42` normally means the browser used no
+hash or a stale hash. Omit the query parameter when the server uses a certificate
+trusted by the browser.
+
+Open that URL in a WebGPU- and WebTransport-capable browser. The Rust/WASM client
+connects to port `8765` on the page hostname, sends sequenced control datagrams,
+and reports its canvas-sized interest radius over a reliable stream before
+rendering predicted articulated boats with Rust `wgpu`. Use `W/S` for forward or
+reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded weather locally. Players share the same
 wind, moisture, instability, cloudiness, and rain intensity at a position, while

@@ -14,18 +14,20 @@ pyboat-simulation = { path = "../simulation" }
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 
 [dev-dependencies]
-futures-util = "0.3.33"
 naga = { version = "30.0.0", features = ["wgsl-in"] }
 pyboat-server = { path = "../server" }
-tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time"] }
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+wtransport = "0.7.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
+bytes = "1"
 console_error_panic_hook = "0.1"
+url = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["CloseEvent", "Event", "HtmlCanvasElement", "Location", "MessageEvent", "WebSocket", "Window"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Location", "Window"] }
+web-transport-wasm = "0.5.10"
 wgpu = { version = "30.0.0", default-features = false, features = ["std", "webgpu", "wgsl"] }
 
 [package.metadata.wasm-pack.profile.release]

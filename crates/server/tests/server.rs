@@ -1,24 +1,112 @@
-use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
+
 use pyboat_protocol::{
-    BoatSnapshot, ClientMessage, ServerMessage, decode_server_message, encode_client_message,
+    BoatSnapshot, ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_server_message,
+    encode_client_message,
 };
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
-use tokio::time::{Duration, advance, timeout};
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async,
-    tungstenite::{Message, protocol::frame::coding::CloseCode},
-};
+use tokio::task::JoinHandle;
+use tokio::time::{Duration, timeout};
+use wtransport::endpoint::{Endpoint, endpoint_side::Client};
+use wtransport::error::ConnectionError;
+use wtransport::tls::Sha256Digest;
+use wtransport::{ClientConfig, Connection, Identity};
 
-type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
+struct TestServer {
+    address: std::net::SocketAddr,
+    certificate_hash: Sha256Digest,
+    task: JoinHandle<pyboat_server::ServerResult<()>>,
+}
 
-async fn next_snapshot(client: &mut Client) -> (u64, Vec<BoatSnapshot>, Vec<String>) {
-    let message = timeout(Duration::from_millis(100), client.next())
+struct TestClient {
+    _endpoint: Endpoint<Client>,
+    connection: Connection,
+}
+
+fn server_endpoint() -> (
+    Endpoint<wtransport::endpoint::endpoint_side::Server>,
+    Sha256Digest,
+) {
+    let identity = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
+    let certificate_hash = identity.certificate_chain().as_slice()[0].hash();
+    let endpoint = pyboat_server::endpoint("127.0.0.1:0".parse().unwrap(), identity).unwrap();
+    (endpoint, certificate_hash)
+}
+
+fn start_server() -> TestServer {
+    let (endpoint, certificate_hash) = server_endpoint();
+    let address = endpoint.local_addr().unwrap();
+    let task = tokio::spawn(pyboat_server::serve(endpoint));
+    TestServer {
+        address,
+        certificate_hash,
+        task,
+    }
+}
+
+fn client_endpoint(certificate_hash: Sha256Digest) -> Endpoint<Client> {
+    Endpoint::client(
+        ClientConfig::builder()
+            .with_bind_default()
+            .with_server_certificate_hashes([certificate_hash])
+            .build(),
+    )
+    .unwrap()
+}
+
+async fn connect(server: &TestServer) -> (TestClient, ServerMessage) {
+    let endpoint = client_endpoint(server.certificate_hash.clone());
+    let connection = endpoint
+        .connect(&format!("https://127.0.0.1:{}/game", server.address.port()))
+        .await
+        .unwrap();
+    let welcome = receive_reliable(&connection).await;
+    (
+        TestClient {
+            _endpoint: endpoint,
+            connection,
+        },
+        decode_server_message(&welcome).unwrap(),
+    )
+}
+
+async fn receive_reliable(connection: &Connection) -> Vec<u8> {
+    let mut stream = timeout(Duration::from_secs(1), connection.accept_uni())
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
-    match decode_server_message(message.to_text().unwrap()).unwrap() {
+    let mut message = Vec::new();
+    let mut buffer = [0; 256];
+    while let Some(read) = stream.read(&mut buffer).await.unwrap() {
+        message.extend_from_slice(&buffer[..read]);
+    }
+    message
+}
+
+async fn send_reliable(connection: &Connection, message: &[u8]) {
+    let mut stream = connection.open_uni().await.unwrap().await.unwrap();
+    stream.write_all(message).await.unwrap();
+    stream.finish().await.unwrap();
+}
+
+async fn next_snapshot(client: &TestClient) -> (u64, Vec<BoatSnapshot>, Vec<String>) {
+    let message = timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            datagram = client.connection.receive_datagram() => datagram.unwrap().to_vec(),
+            stream = client.connection.accept_uni() => {
+                let mut stream = stream.unwrap();
+                let mut message = Vec::new();
+                let mut buffer = [0; 512];
+                while let Some(read) = stream.read(&mut buffer).await.unwrap() {
+                    message.extend_from_slice(&buffer[..read]);
+                }
+                message
+            }
+        }
+    })
+    .await
+    .unwrap();
+    match decode_server_message(&message).unwrap() {
         ServerMessage::Snapshot {
             tick,
             boats,
@@ -28,20 +116,15 @@ async fn next_snapshot(client: &mut Client) -> (u64, Vec<BoatSnapshot>, Vec<Stri
     }
 }
 
+fn close(client: &TestClient) {
+    client.connection.close(0_u32.into(), b"test complete");
+}
+
 #[tokio::test]
 async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
-
-    let (mut first, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    let (mut second, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    let first_message = first.next().await.unwrap().unwrap();
-    let second_message = second.next().await.unwrap().unwrap();
-    assert!(first_message.is_text());
-    assert!(second_message.is_text());
-    let first_welcome = decode_server_message(first_message.to_text().unwrap()).unwrap();
-    let second_welcome = decode_server_message(second_message.to_text().unwrap()).unwrap();
+    let server = start_server();
+    let (first, first_welcome) = connect(&server).await;
+    let (second, second_welcome) = connect(&server).await;
 
     let ServerMessage::Welcome {
         player_id: first_player_id,
@@ -61,20 +144,17 @@ async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
     assert_eq!(second_player_id, "player-2");
     assert_eq!(first_match_seed, second_match_seed);
 
-    first.close(None).await.unwrap();
-    second.close(None).await.unwrap();
-    server.abort();
+    close(&first);
+    close(&second);
+    server.task.abort();
 }
 
 #[tokio::test]
 async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
-    let (mut first, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    first.next().await.unwrap().unwrap();
+    let server = start_server();
+    let (first, _) = connect(&server).await;
 
-    let (initial_tick, initial_boats, initial_removed) = next_snapshot(&mut first).await;
+    let (initial_tick, initial_boats, initial_removed) = next_snapshot(&first).await;
     let initial = initial_boats
         .iter()
         .find(|boat| boat.id == "player-1")
@@ -88,10 +168,10 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
         turn: 0.25,
     })
     .unwrap();
-    first.send(Message::Text(input.into())).await.unwrap();
+    first.connection.send_datagram(input).unwrap();
     let (acknowledged_tick, acknowledged) = timeout(Duration::from_secs(1), async {
         loop {
-            let (tick, boats, _) = next_snapshot(&mut first).await;
+            let (tick, boats, _) = next_snapshot(&first).await;
             let local = boats
                 .into_iter()
                 .find(|boat| boat.id == "player-1")
@@ -109,7 +189,7 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
 
     let (moved_tick, moved) = timeout(Duration::from_secs(1), async {
         loop {
-            let (tick, boats, _) = next_snapshot(&mut first).await;
+            let (tick, boats, _) = next_snapshot(&first).await;
             if tick >= acknowledged_tick + 30 {
                 break (
                     tick,
@@ -126,11 +206,10 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
     assert!(moved_tick >= acknowledged_tick + 30);
     assert!(moved.x.is_finite() && moved.y.is_finite());
 
-    let (mut second, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    second.next().await.unwrap().unwrap();
+    let (second, _) = connect(&server).await;
     timeout(Duration::from_secs(1), async {
         loop {
-            let (_, boats, _) = next_snapshot(&mut first).await;
+            let (_, boats, _) = next_snapshot(&first).await;
             if boats.iter().any(|boat| boat.id == "player-2") {
                 break;
             }
@@ -138,11 +217,11 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
     })
     .await
     .unwrap();
-    second.close(None).await.unwrap();
+    close(&second);
 
     timeout(Duration::from_secs(1), async {
         loop {
-            let (_, boats, removed) = next_snapshot(&mut first).await;
+            let (_, boats, removed) = next_snapshot(&first).await;
             assert!(removed.is_empty());
             if boats.iter().all(|boat| boat.id != "player-2") {
                 break;
@@ -152,26 +231,22 @@ async fn server_runs_an_authoritative_match_and_removes_disconnected_boats() {
     .await
     .unwrap();
 
-    first.close(None).await.unwrap();
-    server.abort();
+    close(&first);
+    server.task.abort();
 }
 
 #[tokio::test]
 async fn snapshots_are_complete_current_interest_sets() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
+    let server = start_server();
     let mut clients = Vec::new();
     for _ in 0..5 {
-        let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-        client.next().await.unwrap().unwrap();
-        clients.push(client);
+        clients.push(connect(&server).await.0);
     }
 
-    let (registered_tick, _, _) = next_snapshot(&mut clients[4]).await;
+    let (registered_tick, _, _) = next_snapshot(&clients[4]).await;
     let boats = timeout(Duration::from_secs(1), async {
         loop {
-            let (tick, boats, _) = next_snapshot(&mut clients[0]).await;
+            let (tick, boats, _) = next_snapshot(&clients[0]).await;
             if tick >= registered_tick {
                 break boats;
             }
@@ -190,7 +265,7 @@ async fn snapshots_are_complete_current_interest_sets() {
     let by_id = boats
         .iter()
         .map(|boat| (boat.id.as_str(), boat))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
     assert_eq!(by_id["player-1"].acknowledged_input, Some(0));
     assert_eq!(by_id["player-3"].forward, None);
     assert_eq!(by_id["player-3"].turn, None);
@@ -199,11 +274,11 @@ async fn snapshots_are_complete_current_interest_sets() {
         assert_eq!(boat.turn, None);
     }
 
-    clients[4].close(None).await.unwrap();
-    clients[3].close(None).await.unwrap();
+    close(&clients[4]);
+    close(&clients[3]);
     timeout(Duration::from_secs(1), async {
         loop {
-            let (_, boats, removed) = next_snapshot(&mut clients[0]).await;
+            let (_, boats, removed) = next_snapshot(&clients[0]).await;
             assert!(removed.is_empty());
             if boats.iter().all(|boat| boat.id != "player-4") {
                 break;
@@ -213,24 +288,20 @@ async fn snapshots_are_complete_current_interest_sets() {
     .await
     .unwrap();
 
-    for client in clients.iter_mut().take(3) {
-        client.close(None).await.unwrap();
+    for client in clients.iter().take(3) {
+        close(client);
     }
-    server.abort();
+    server.task.abort();
 }
 
 #[tokio::test]
 async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
+    let server = start_server();
     let mut clients = Vec::new();
     for _ in 0..5 {
-        let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-        client.next().await.unwrap().unwrap();
-        clients.push(client);
+        clients.push(connect(&server).await.0);
     }
-    let (registered_tick, _, _) = next_snapshot(&mut clients[4]).await;
+    let (registered_tick, _, _) = next_snapshot(&clients[4]).await;
 
     let cases: &[(f32, &[&str], &[&str])] = &[
         (
@@ -243,13 +314,10 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
     ];
     for (radius, required_ids, forbidden_ids) in cases {
         let viewport = encode_client_message(&ClientMessage::Viewport { radius: *radius }).unwrap();
-        clients[0]
-            .send(Message::Text(viewport.into()))
-            .await
-            .unwrap();
+        send_reliable(&clients[0].connection, &viewport).await;
         timeout(Duration::from_secs(1), async {
             loop {
-                let (tick, boats, _) = next_snapshot(&mut clients[0]).await;
+                let (tick, boats, _) = next_snapshot(&clients[0]).await;
                 let ids = boats
                     .iter()
                     .map(|boat| boat.id.as_str())
@@ -266,20 +334,17 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
         .unwrap();
     }
 
-    for client in &mut clients {
-        client.close(None).await.unwrap();
+    for client in &clients {
+        close(client);
     }
-    server.abort();
+    server.task.abort();
 }
 
 #[tokio::test]
 async fn input_backlog_keeps_only_the_newest_quarter_second() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
-    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    client.next().await.unwrap().unwrap();
-    let (initial_tick, _, _) = next_snapshot(&mut client).await;
+    let server = start_server();
+    let (client, _) = connect(&server).await;
+    let (initial_tick, _, _) = next_snapshot(&client).await;
 
     for sequence in 1..=100 {
         let input = encode_client_message(&ClientMessage::Input {
@@ -288,12 +353,12 @@ async fn input_backlog_keeps_only_the_newest_quarter_second() {
             turn: 0.0,
         })
         .unwrap();
-        client.send(Message::Text(input.into())).await.unwrap();
+        client.connection.send_datagram(input).unwrap();
     }
 
     let (acknowledged_tick, acknowledged) = timeout(Duration::from_secs(3), async {
         loop {
-            let (tick, boats, _) = next_snapshot(&mut client).await;
+            let (tick, boats, _) = next_snapshot(&client).await;
             let local = boats
                 .into_iter()
                 .find(|boat| boat.id == "player-1")
@@ -309,116 +374,112 @@ async fn input_backlog_keeps_only_the_newest_quarter_second() {
     assert!(acknowledged_tick <= initial_tick + 30);
     assert_eq!(acknowledged.forward, Some(-1.0));
 
-    client.close(None).await.unwrap();
-    server.abort();
+    close(&client);
+    server.task.abort();
 }
 
 #[tokio::test]
-async fn server_rejects_client_messages_larger_than_one_kibibyte() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
-    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    client.next().await.unwrap().unwrap();
+async fn unfinished_reliable_stream_does_not_block_input_datagrams() {
+    let server = start_server();
+    let (client, _) = connect(&server).await;
+    next_snapshot(&client).await;
 
-    let mut input = encode_client_message(&ClientMessage::Input {
+    let mut unfinished = client.connection.open_uni().await.unwrap().await.unwrap();
+    unfinished.write_all(&[PROTOCOL_VERSION]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let input = encode_client_message(&ClientMessage::Input {
         sequence: 1,
         forward: 1.0,
         turn: 0.0,
     })
     .unwrap();
-    input.push_str(&" ".repeat(1024));
-    client.send(Message::Text(input.into())).await.unwrap();
+    client.connection.send_datagram(input).unwrap();
 
-    let rejected = timeout(Duration::from_secs(1), async {
+    timeout(Duration::from_secs(1), async {
         loop {
-            match client.next().await {
-                Some(Ok(message)) if message.is_text() => {
-                    let ServerMessage::Snapshot { boats, .. } =
-                        decode_server_message(message.to_text().unwrap()).unwrap()
-                    else {
-                        panic!("welcome must be sent only once");
-                    };
-                    if boats.iter().any(|boat| boat.acknowledged_input == Some(1)) {
-                        break false;
-                    }
-                }
-                Some(Ok(message)) if message.is_close() => break true,
-                Some(Ok(_)) => {}
-                Some(Err(_)) | None => break true,
+            let (_, boats, _) = next_snapshot(&client).await;
+            let local = boats
+                .into_iter()
+                .find(|boat| boat.id == "player-1")
+                .unwrap();
+            if local.acknowledged_input == Some(1) {
+                break;
             }
         }
     })
     .await
     .unwrap();
 
-    assert!(rejected);
-    server.abort();
+    drop(unfinished);
+    close(&client);
+    server.task.abort();
 }
 
-#[tokio::test(start_paused = true)]
-async fn incomplete_handshake_closes_without_consuming_player_identity() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(listener));
-    let stream = TcpStream::connect(address).await.unwrap();
+#[tokio::test]
+async fn server_rejects_client_messages_larger_than_one_kibibyte() {
+    let server = start_server();
+    let (client, _) = connect(&server).await;
+    send_reliable(&client.connection, &vec![0; 1025]).await;
 
-    // The handshake task must poll once to register its deadline before the clock
-    // advances.
-    tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
-    advance(Duration::from_secs(6)).await;
-    let became_readable = timeout(Duration::from_secs(1), stream.readable()).await;
+    timeout(Duration::from_secs(1), client.connection.closed())
+        .await
+        .unwrap();
+    server.task.abort();
+}
 
-    assert!(became_readable.is_ok());
-    let mut byte = [0_u8];
-    assert_eq!(stream.try_read(&mut byte).unwrap(), 0);
+#[tokio::test]
+async fn failed_session_does_not_consume_player_identity() {
+    let server = start_server();
+    let endpoint = client_endpoint(server.certificate_hash.clone());
+    let invalid = endpoint
+        .connect(&format!(
+            "https://127.0.0.1:{}/wrong",
+            server.address.port()
+        ))
+        .await;
+    assert!(invalid.is_err());
 
-    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    let welcome =
-        decode_server_message(client.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    let (client, welcome) = connect(&server).await;
     assert!(matches!(
         welcome,
         ServerMessage::Welcome { player_id, .. } if player_id == "player-1"
     ));
-    client.close(None).await.unwrap();
-    server.abort();
+    close(&client);
+    server.task.abort();
 }
 
 #[tokio::test]
 async fn shutdown_signal_stops_server_and_closes_connections() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let (endpoint, certificate_hash) = server_endpoint();
+    let address = endpoint.local_addr().unwrap();
     let (shutdown, shutdown_signal) = oneshot::channel();
-    let server = tokio::spawn(pyboat_server::serve_until(listener, shutdown_signal));
-    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    client.next().await.unwrap().unwrap();
+    let task = tokio::spawn(pyboat_server::serve_until(endpoint, shutdown_signal));
+    let server = TestServer {
+        address,
+        certificate_hash,
+        task,
+    };
+    let (client, _) = connect(&server).await;
 
     shutdown.send(()).unwrap();
-    timeout(Duration::from_secs(1), server)
+    timeout(Duration::from_secs(1), server.task)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    let close = timeout(Duration::from_secs(1), async {
-        loop {
-            match client.next().await {
-                Some(Ok(Message::Close(close))) => break close,
-                Some(Ok(_)) => {}
-                Some(Err(error)) => panic!("connection failed before close frame: {error}"),
-                None => panic!("connection ended before close frame"),
-            }
-        }
-    })
-    .await
-    .unwrap();
-    let close = close.expect("shutdown close frame must include a reason");
-    assert_eq!(close.code, CloseCode::Away);
-    assert_eq!(close.reason, "Server shutting down");
+    let close = timeout(Duration::from_secs(1), client.connection.closed())
+        .await
+        .unwrap();
+    let ConnectionError::ApplicationClosed(close) = close else {
+        panic!("expected application close, got {close:?}");
+    };
+    assert_eq!(close.code(), 1_u32.into());
+    assert_eq!(close.reason(), b"Server shutting down");
 }
 
 #[tokio::test]
-async fn shutdown_flushes_close_frame_before_server_runtime_stops() {
+async fn shutdown_flushes_close_before_server_runtime_stops() {
     let (address_sender, address_receiver) = std::sync::mpsc::sync_channel(1);
     let (shutdown, shutdown_signal) = oneshot::channel();
     let server = std::thread::spawn(move || {
@@ -427,31 +488,30 @@ async fn shutdown_flushes_close_frame_before_server_runtime_stops() {
             .build()
             .unwrap()
             .block_on(async move {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                address_sender.send(listener.local_addr().unwrap()).unwrap();
-                pyboat_server::serve_until(listener, shutdown_signal).await
+                let (endpoint, certificate_hash) = server_endpoint();
+                address_sender
+                    .send((endpoint.local_addr().unwrap(), certificate_hash))
+                    .unwrap();
+                pyboat_server::serve_until(endpoint, shutdown_signal).await
             })
     });
-    let address = address_receiver.recv().unwrap();
-    let (mut client, _) = connect_async(format!("ws://{address}")).await.unwrap();
-    client.next().await.unwrap().unwrap();
+    let (address, certificate_hash) = address_receiver.recv().unwrap();
+    let endpoint = client_endpoint(certificate_hash);
+    let connection = endpoint
+        .connect(&format!("https://127.0.0.1:{}/game", address.port()))
+        .await
+        .unwrap();
+    receive_reliable(&connection).await;
 
     shutdown.send(()).unwrap();
     server.join().unwrap().unwrap();
 
-    let close = timeout(Duration::from_secs(1), async {
-        loop {
-            match client.next().await {
-                Some(Ok(Message::Close(close))) => break close,
-                Some(Ok(_)) => {}
-                Some(Err(error)) => panic!("connection failed before close frame: {error}"),
-                None => panic!("connection ended before close frame"),
-            }
-        }
-    })
-    .await
-    .unwrap()
-    .expect("shutdown close frame must include a reason");
-    assert_eq!(close.code, CloseCode::Away);
-    assert_eq!(close.reason, "Server shutting down");
+    let close = timeout(Duration::from_secs(1), connection.closed())
+        .await
+        .unwrap();
+    let ConnectionError::ApplicationClosed(close) = close else {
+        panic!("expected application close, got {close:?}");
+    };
+    assert_eq!(close.code(), 1_u32.into());
+    assert_eq!(close.reason(), b"Server shutting down");
 }

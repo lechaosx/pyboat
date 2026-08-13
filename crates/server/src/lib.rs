@@ -3,10 +3,10 @@ use std::{
     error::Error,
     future::{Future, pending},
     io,
+    net::SocketAddr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use futures_util::{SinkExt, StreamExt};
 use pyboat_game::{
     computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
     procedural_terrain_elevation_m,
@@ -18,15 +18,13 @@ use pyboat_simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation,
 };
 use rapier2d::prelude::Vector;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{interval, timeout};
-use tokio_tungstenite::{
-    WebSocketStream, accept_async_with_config,
-    tungstenite::{
-        Message,
-        protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
-    },
+use wtransport::{
+    Connection, Endpoint, Identity, ServerConfig, VarInt,
+    endpoint::{IncomingSession, endpoint_side::Server},
+    error::SendDatagramError,
+    stream::RecvStream,
 };
 
 type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -37,7 +35,8 @@ const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const MAX_VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
-const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBTRANSPORT_PATH: &str = "/game";
+const WEBTRANSPORT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const SPAWN_CLEARANCE_M: f32 = 8.0;
 const MINIMUM_SPAWN_WATER_DEPTH_M: f32 = 1.5;
@@ -51,12 +50,12 @@ const STERN_STRENGTH_MULTIPLIER: f32 = 0.6;
 
 enum ConnectionEvent {
     Upgraded {
-        connection: Box<WebSocketStream<TcpStream>>,
+        connection: Connection,
     },
     Connected {
         player_id: String,
         player_number: u64,
-        outbound: watch::Sender<Option<Message>>,
+        outbound: watch::Sender<Option<OutboundMessage>>,
         registered: oneshot::Sender<()>,
     },
     Input {
@@ -71,6 +70,17 @@ enum ConnectionEvent {
     Disconnected {
         player_id: String,
     },
+}
+
+enum IncomingMessage {
+    Datagram(ClientMessage),
+    Reliable(ClientMessage),
+}
+
+#[derive(Clone)]
+enum OutboundMessage {
+    Snapshot(Vec<u8>),
+    Close,
 }
 
 struct Player {
@@ -367,17 +377,26 @@ impl GameMatch {
     }
 }
 
-pub async fn serve(listener: TcpListener) -> ServerResult<()> {
-    serve_until(listener, pending::<Result<(), io::Error>>()).await
+pub fn endpoint(address: SocketAddr, identity: Identity) -> ServerResult<Endpoint<Server>> {
+    let config = ServerConfig::builder()
+        .with_bind_address(address)
+        .with_identity(identity)
+        .keep_alive_interval(Some(Duration::from_secs(3)))
+        .build();
+    Ok(Endpoint::server(config)?)
 }
 
-pub async fn serve_until<F, E>(listener: TcpListener, shutdown: F) -> ServerResult<()>
+pub async fn serve(endpoint: Endpoint<Server>) -> ServerResult<()> {
+    serve_until(endpoint, pending::<Result<(), io::Error>>()).await
+}
+
+pub async fn serve_until<F, E>(endpoint: Endpoint<Server>, shutdown: F) -> ServerResult<()>
 where
     F: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
 {
     let (events, mut incoming_events) = mpsc::unbounded_channel();
-    let mut connections: HashMap<String, watch::Sender<Option<Message>>> = HashMap::new();
+    let mut connections: HashMap<String, watch::Sender<Option<OutboundMessage>>> = HashMap::new();
     let mut game_match = GameMatch::new(new_match_seed());
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
@@ -387,10 +406,7 @@ where
             result = &mut shutdown => {
                 result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
                 for outbound in connections.values() {
-                    outbound.send_replace(Some(Message::Close(Some(CloseFrame {
-                        code: CloseCode::Away,
-                        reason: "Server shutting down".into(),
-                    }))));
+                    outbound.send_replace(Some(OutboundMessage::Close));
                 }
                 let _ = timeout(CONNECTION_SHUTDOWN_TIMEOUT, async {
                     while !connections.is_empty() {
@@ -406,17 +422,16 @@ where
                 .await;
                 return Ok(());
             }
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+            incoming_session = endpoint.accept() => {
                 let events = events.clone();
                 tokio::spawn(async move {
-                    match upgrade_connection(stream).await {
+                    match upgrade_connection(incoming_session).await {
                         Ok(connection) => {
                             let _ = events.send(ConnectionEvent::Upgraded {
-                                connection: Box::new(connection),
+                                connection,
                             });
                         }
-                        Err(error) => eprintln!("WebSocket connection failed: {error}"),
+                        Err(error) => eprintln!("WebTransport connection failed: {error}"),
                     }
                 });
             }
@@ -428,13 +443,13 @@ where
                     let events = events.clone();
                     tokio::spawn(async move {
                         if let Err(error) = handle_connection(
-                            *connection,
+                            connection,
                             player_id,
                             player_number,
                             game_match.match_seed,
                             events,
                         ).await {
-                            eprintln!("WebSocket connection failed: {error}");
+                            eprintln!("WebTransport connection failed: {error}");
                         }
                     });
                 }
@@ -466,32 +481,29 @@ where
                     let snapshot = encode_server_message(
                         &game_match.snapshot_for(player_id, &visible_boats),
                     )?;
-                    outbound.send_replace(Some(Message::Text(snapshot.into())));
+                    outbound.send_replace(Some(OutboundMessage::Snapshot(snapshot)));
                 }
             }
         }
     }
 }
 
-async fn upgrade_connection(stream: TcpStream) -> ConnectionResult<WebSocketStream<TcpStream>> {
-    let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_CLIENT_MESSAGE_BYTES))
-        .max_frame_size(Some(MAX_CLIENT_MESSAGE_BYTES));
-    Ok(timeout(
-        WEBSOCKET_HANDSHAKE_TIMEOUT,
-        accept_async_with_config(stream, Some(config)),
-    )
-    .await??)
+async fn upgrade_connection(incoming_session: IncomingSession) -> ConnectionResult<Connection> {
+    let request = timeout(WEBTRANSPORT_HANDSHAKE_TIMEOUT, incoming_session).await??;
+    if request.path() != WEBTRANSPORT_PATH {
+        request.not_found().await;
+        return Err(io::Error::new(io::ErrorKind::NotFound, "unknown WebTransport path").into());
+    }
+    Ok(request.accept().await?)
 }
 
 async fn handle_connection(
-    mut connection: WebSocketStream<TcpStream>,
+    connection: Connection,
     player_id: String,
     player_number: u64,
     match_seed: u64,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
-    // A watch channel retains only the newest snapshot when a client cannot keep up.
     let (outbound, mut outbound_updates) = watch::channel(None);
     let (registered, registration) = oneshot::channel();
     events
@@ -509,56 +521,151 @@ async fn handle_connection(
         player_id: player_id.clone(),
         match_seed,
     })?;
-    connection.send(Message::Text(welcome.into())).await?;
+    send_reliable_message(&connection, &welcome).await?;
+    let (mut incoming_messages, receive_tasks) = receive_messages(&connection);
 
-    let result = loop {
-        tokio::select! {
-            incoming = connection.next() => match incoming {
-                Some(Ok(message)) if message.is_text() => {
-                    match decode_client_message(message.to_text()?)? {
-                        ClientMessage::Input { sequence, forward, turn } => {
-                            if events.send(ConnectionEvent::Input {
-                                player_id: player_id.clone(),
-                                sequence,
-                                intent: MotionIntent { forward, turn },
-                            }).is_err() {
-                                break Ok(());
-                            }
-                        }
-                        ClientMessage::Viewport { radius } => {
-                            if events.send(ConnectionEvent::Viewport {
-                                player_id: player_id.clone(),
-                                radius_m: radius,
-                            }).is_err() {
-                                break Ok(());
-                            }
+    let result: ConnectionResult<()> = async {
+        loop {
+            tokio::select! {
+                incoming = incoming_messages.recv() => match incoming {
+                    Some(Ok(IncomingMessage::Datagram(ClientMessage::Input {
+                        sequence,
+                        forward,
+                        turn,
+                    }))) => {
+                        if events.send(ConnectionEvent::Input {
+                            player_id: player_id.clone(),
+                            sequence,
+                            intent: MotionIntent { forward, turn },
+                        }).is_err() {
+                            break Ok(());
                         }
                     }
-                }
-                Some(Ok(message)) if !message.is_close() => {}
-                Some(Ok(_)) | None => break Ok(()),
-                Some(Err(error)) => break Err(error),
-            },
-            changed = outbound_updates.changed() => {
-                if changed.is_err() {
-                    break Ok(());
-                }
-                let message = outbound_updates.borrow_and_update().clone();
-                if let Some(message) = message {
-                    let closes_connection = message.is_close();
-                    if let Err(error) = connection.send(message).await {
-                        break Err(error);
+                    Some(Ok(IncomingMessage::Reliable(ClientMessage::Viewport { radius }))) => {
+                        if events.send(ConnectionEvent::Viewport {
+                            player_id: player_id.clone(),
+                            radius_m: radius,
+                        }).is_err() {
+                            break Ok(());
+                        }
                     }
-                    if closes_connection {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => break Err(error),
+                    None => break Ok(()),
+                },
+                changed = outbound_updates.changed() => {
+                    if changed.is_err() {
                         break Ok(());
+                    }
+                    let message = outbound_updates.borrow_and_update().clone();
+                    match message {
+                        Some(OutboundMessage::Snapshot(message)) => {
+                            match connection.send_datagram(&message) {
+                                Ok(()) => {}
+                                Err(SendDatagramError::TooLarge) => {
+                                    send_reliable_message(&connection, &message).await?;
+                                }
+                                Err(error) => break Err(error.into()),
+                            }
+                        }
+                        Some(OutboundMessage::Close) => {
+                            connection.close(VarInt::from_u32(1), b"Server shutting down");
+                            break Ok(());
+                        }
+                        None => {}
                     }
                 }
             }
         }
-    };
+    }
+    .await;
+    for task in receive_tasks {
+        task.abort();
+    }
     let _ = events.send(ConnectionEvent::Disconnected { player_id });
     result?;
     Ok(())
+}
+
+fn receive_messages(
+    connection: &Connection,
+) -> (
+    mpsc::UnboundedReceiver<ConnectionResult<IncomingMessage>>,
+    [tokio::task::JoinHandle<()>; 2],
+) {
+    let (messages, receiver) = mpsc::unbounded_channel();
+    let datagram_connection = connection.clone();
+    let datagram_messages = messages.clone();
+    let datagram_task = tokio::spawn(async move {
+        loop {
+            let message: ConnectionResult<IncomingMessage> =
+                match datagram_connection.receive_datagram().await {
+                    Ok(message) if message.len() <= MAX_CLIENT_MESSAGE_BYTES => {
+                        decode_client_message(&message)
+                            .map(IncomingMessage::Datagram)
+                            .map_err(|error| error.into())
+                    }
+                    Ok(_) => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "client datagram exceeds message limit",
+                    )
+                    .into()),
+                    Err(error) => Err(error.into()),
+                };
+            let failed = message.is_err();
+            if datagram_messages.send(message).is_err() || failed {
+                break;
+            }
+        }
+    });
+
+    let stream_connection = connection.clone();
+    let stream_task = tokio::spawn(async move {
+        loop {
+            match stream_connection.accept_uni().await {
+                Ok(stream) => {
+                    let messages = messages.clone();
+                    tokio::spawn(async move {
+                        let message = receive_reliable_message(stream)
+                            .await
+                            .and_then(|message| {
+                                decode_client_message(&message).map_err(|error| error.into())
+                            })
+                            .map(IncomingMessage::Reliable);
+                        let _ = messages.send(message);
+                    });
+                }
+                Err(error) => {
+                    let _ = messages.send(Err(error.into()));
+                    break;
+                }
+            }
+        }
+    });
+    (receiver, [datagram_task, stream_task])
+}
+
+async fn send_reliable_message(connection: &Connection, message: &[u8]) -> ConnectionResult<()> {
+    let mut stream = connection.open_uni().await?.await?;
+    stream.write_all(message).await?;
+    stream.finish().await?;
+    Ok(())
+}
+
+async fn receive_reliable_message(mut stream: RecvStream) -> ConnectionResult<Vec<u8>> {
+    let mut message = Vec::new();
+    let mut buffer = [0; 256];
+    while let Some(read) = stream.read(&mut buffer).await? {
+        if message.len() + read > MAX_CLIENT_MESSAGE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "client stream exceeds message limit",
+            )
+            .into());
+        }
+        message.extend_from_slice(&buffer[..read]);
+    }
+    Ok(message)
 }
 
 fn new_match_seed() -> u64 {

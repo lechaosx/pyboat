@@ -66,10 +66,10 @@ decisions.
   while Rust owns WebGPU initialization, networking, replicated state, fixed-tick
   input emission, and scene rendering.
 - **[Implicit]** `pyboat-protocol` owns typed runtime-independent wire messages,
-  while the native `pyboat-server` uses Tokio and tokio-tungstenite for async
-  WebSocket connection handling.
+  while the native `pyboat-server` uses Tokio and `wtransport` for async
+  WebTransport session handling.
 - **[Implicit]** The Rust server owns one shared authoritative Rapier match. Each
-  completed WebSocket connection creates a distinct articulated boat, validated
+  completed WebTransport session creates a distinct articulated boat, validated
   sequenced input drives computed-yaw-rate arcade control, live disconnects remove
   that boat from the physics world, and destroyed boats remain as controllerless
   wrecks.
@@ -84,7 +84,7 @@ decisions.
 - **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
   queries. Project simulation code owns boat forces, control, damage, wreck
   behavior, and other game rules.
-- **[Explicit]** The browser gameplay client owns its WebSocket connection,
+- **[Explicit]** The browser gameplay client owns its WebTransport session,
   protocol codec, replicated world state, prediction and reconciliation, physics,
   and rendering in Rust/WebAssembly. Gameplay packets do not pass through a
   handwritten TypeScript transport or parser.
@@ -106,10 +106,10 @@ decisions.
 - **[Explicit]** Server and browser runtime work should use asynchronous I/O and
   orchestration wherever work can suspend.
 - **[Implicit]** The native server treats Ctrl-C as an asynchronous shutdown
-  signal. Shutdown publishes a WebSocket close frame with code 1001 and the
+  signal. Shutdown closes each WebTransport session with application code 1 and the
   reason `Server shutting down` to each established client, then returns the
   authoritative serving loop after allowing up to one second for connection
-  handlers to flush those frames. Handlers do not wait for a peer close response.
+  handlers to flush those closes. Handlers do not wait for a peer response.
 - **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
   never waits on networking, timers, persistence, rendering, or UI work.
 - **[Implicit]** The target runtime uses stable Rust. Nightly features are adopted
@@ -353,23 +353,39 @@ decisions.
 
 ## Transport and protocol
 
-- **[Explicit]** Compact JSON over WebSocket remains the transport until
-  measurement identifies it as a bottleneck. Binary encoding is introduced only
-  in response to that evidence.
+- **[Explicit]** The Rust stack uses Postcard-encoded binary messages over
+  WebTransport. This replaced the original compact JSON/WebSocket protocol.
+- **[Explicit]** Browser WebTransport connections always use TLS because the web
+  platform provides no plaintext mode. Development uses a short-lived
+  server-generated certificate pinned through its SHA-256 hash in the page URL;
+  the loopback Vite page itself may remain on HTTP. Restarting the server creates
+  a new certificate and therefore requires a new pin.
+- **[Implicit]** Each encoded message starts with a one-byte protocol version.
+  Postcard's positional enum and struct representation is the versioned Rust wire
+  contract; incompatible schema changes require a new protocol version.
 - **[Implicit]** `pyboat-protocol` defines the Rust stack's wire contract. Its
-  `welcome` message includes the match's `matchSeed`, which the retained Python
+  `welcome` message includes the match's `match_seed`, which the retained Python
   server does not send; cross-runtime client-server pairings are unsupported.
-- **[Implicit]** The Rust server limits client WebSocket messages and individual
-  frames to 1 KiB. Current client messages contain only compact input and viewport
-  commands, so larger traffic is rejected before JSON decoding.
-- **[Implicit]** A TCP connection must complete its WebSocket upgrade within five
-  seconds. Incomplete handshakes are closed without consuming a player identity,
-  spawn position, or authoritative match slot.
-- **[Implicit]** After upgrade, the connection task waits for the authoritative
-  loop to register its player and shutdown mailbox before sending `welcome`.
+- **[Implicit]** The Rust server limits each client datagram and reliable message
+  to 1 KiB. Current client messages contain only compact input and viewport
+  commands, so larger traffic is rejected before Postcard decoding.
+- **[Implicit]** A QUIC connection must establish a WebTransport session on
+  `/game` within five seconds. Incomplete or wrong-path sessions are rejected
+  without consuming a player identity, spawn position, or authoritative match
+  slot.
+- **[Implicit]** After session establishment, the connection task waits for the
+  authoritative loop to register its player and shutdown mailbox before sending
+  `welcome`.
   Receiving `welcome` therefore guarantees that controlled shutdown includes the
   connection, and any queued snapshot follows the welcome message.
-- **[Implicit]** The Rust/WASM client uses `web_sys::WebSocket`, decodes protocol
+- **[Implicit]** Welcome and viewport messages use reliable unidirectional
+  streams. Fixed-tick input and normal snapshots use WebTransport datagrams so a
+  lost packet cannot delay newer state. A snapshot larger than the negotiated
+  datagram limit falls back to a reliable unidirectional stream.
+- **[Implicit]** Reliable client streams are decoded independently of the input
+  datagram loop, so a delayed stream does not block control delivery. Snapshot
+  publication remains latest-only before transport delivery.
+- **[Implicit]** The Rust/WASM client uses `web-transport-wasm`, decodes Postcard
   messages in Rust, and retains only the newest pending snapshot between rendered
   frames. Welcome identity and match seed are applied immediately and are not part
   of that latest-only mailbox.
@@ -477,27 +493,27 @@ decisions.
 - **[Implicit]** The Python client can inject round-trip latency and one-way jitter
   for playtesting. Artificial round-trip latency is split equally between outgoing
   commands and incoming snapshots while preserving message order.
-- **[Implicit]** Automated integration tests use real loopback WebSocket
+- **[Implicit]** Automated integration tests use real loopback WebTransport
   connections in addition to deterministic simulation and protocol tests.
-- **[Implicit]** Rust loopback tests open real WebSocket connections against an
-  ephemeral local port and verify concurrent connection identity, sequenced input
-  acknowledgement, bounded input backlog, message size, handshake time and failed
-  handshake identity isolation, authoritative motion, spatial interest payloads,
-  viewport-radius bounds, disconnect cleanup, and the code and reason of
-  protocol-clean signaled server shutdown. Shutdown coverage includes dropping an
-  isolated server runtime as soon as its serving future returns, ensuring close
-  frames are flushed before return.
+- **[Implicit]** Rust loopback tests open real WebTransport sessions against an
+  ephemeral local UDP port and verify concurrent connection identity, sequenced
+  input acknowledgement, bounded input backlog, message size, wrong-path identity
+  isolation, independent reliable-stream and datagram delivery, authoritative
+  motion, spatial interest payloads, viewport-radius bounds, disconnect cleanup,
+  and the code and reason of signaled server shutdown. Shutdown coverage includes
+  dropping an isolated server runtime as soon as its serving future returns,
+  ensuring application closes are flushed before return.
 - **[Implicit]** Native browser-crate tests verify replicated state, input
   sequencing, nearby physical prediction, distant extrapolation, bubble-transition
   continuity, reconciliation, damage feedback, and controllerless wreck prediction
   independently of browser APIs.
 - **[Implicit]** A browser-owned native loopback test drives `MultiplayerClient`
-  through the real Rust WebSocket server, deliberately skips intermediate
+  through the real Rust WebTransport server, deliberately skips intermediate
   snapshots, and verifies fixed-tick input acknowledgement and bounded prediction.
 
 ## Open architecture questions (not decisions)
 
 - Whether wreck cleanup is time-based, distance-based, capacity-based, or driven by
   salvage gameplay.
-- Whether measured scale eventually justifies binary snapshots, batching, UDP, or
-  another transport.
+- Whether measured scale eventually justifies snapshot batching or application-level
+  delta compression.

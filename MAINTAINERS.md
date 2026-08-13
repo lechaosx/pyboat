@@ -6,7 +6,7 @@ This document is for developers working on the repository. Read
 
 ## Development environment
 
-Python 3.10 or newer and Rust 1.87 or newer are required. The Rust toolchain must
+Python 3.10 or newer and Rust 1.88 or newer are required. The Rust toolchain must
 include the `wasm32-unknown-unknown` target. Browser development also requires
 `wasm-pack` and Bun. Set up the Python project using the environment and package
 manager of your choice. Repository commands use `uv`; prepare its environment
@@ -23,8 +23,8 @@ including the WebAssembly target:
 nix develop
 ```
 
-Pygame, Pymunk, and websockets are core dependencies. Matplotlib and pytest are
-development dependencies.
+Runtime and development dependencies are installed from `pyproject.toml` and the
+workspace manifests.
 
 Prepare the browser workspace with:
 
@@ -81,8 +81,9 @@ documentation, decision classification, and choosing tests by observable risk.
 - `crates/simulation` is the runtime-independent Rust/Rapier simulation library.
 - `crates/game` contains concrete Rust dinghy tuning, deterministic procedural
   environment sampling, and control composition shared by the server and browser.
-- `crates/protocol` contains typed compact-JSON messages shared by Rust runtimes.
-- `crates/server` contains the native async WebSocket server executable and
+- `crates/protocol` contains typed, versioned Postcard messages shared by Rust
+  runtimes.
+- `crates/server` contains the native async WebTransport server executable and
   connection lifecycle.
 - `crates/browser` owns Rust/WASM networking, replicated browser state,
   world-to-scene conversion, and the WebGPU renderer. Its retained local demo is a
@@ -199,7 +200,7 @@ controlled boat and one passive practice boat. The current browser entry point
 instead converts authoritative snapshot motion to WebGPU vertices. TypeScript
 samples `W/S`, `A/D`, and the first connected gamepad; Rust converts the gamepad's
 world-relative left-stick vector into local motion intent without adding a
-deadzone. Rust owns the WebSocket, latest-snapshot mailbox, compact-JSON codec,
+deadzone. Rust owns WebTransport, the latest-snapshot mailbox, the Postcard codec,
 fixed-tick input sequencing, and the small sailing view used by the TypeScript DOM
 HUD. Tests target physical
 invariants, replicated-state behavior, mirrored controlled maneuvers, and accepted
@@ -311,11 +312,12 @@ interest, damage, and wreck decisions are recorded in
 Pymunk/Rapier parity are not requirements. Update the record in the same change
 whenever these behaviors change.
 
-Loopback integration tests open local WebSocket sockets. Environments that restrict
-socket creation must grant loopback permission to run the complete suite.
+Loopback integration tests open local WebTransport sessions over UDP. Environments
+that restrict socket creation must grant loopback permission to run the complete
+suite.
 
 The Rust server assigns identities, creates one articulated Rapier boat per
-completed WebSocket connection, consumes sequenced arcade input, and publishes
+completed WebTransport session, consumes sequenced arcade input, and publishes
 authoritative state at 60 Hz. The first deterministic position with at least
 1.5 m of water becomes the match's spawn origin. Later boats search seed-derived
 bearings at least 8 m beyond the fleet radius around that origin and point along
@@ -326,24 +328,29 @@ server on the default `127.0.0.1:8765` address with:
 cargo run -p pyboat-server
 ```
 
-Ctrl-C signals the async serving loop to send WebSocket close frames with code
-1001 and the reason `Server shutting down`, allow up to one second for established
-connections to flush them, and then release the listener. Connection handlers
-exit after writing the frame rather than waiting for a peer close response.
+Ctrl-C signals the async serving loop to close WebTransport sessions with
+application code 1 and the reason `Server shutting down`, allow up to one second
+for established connections to flush the close, and then release the endpoint.
+Connection handlers do not wait for a peer close response.
 Integration tests call `serve_until` with a one-shot future for the same controlled
 shutdown path; `serve` remains the indefinite entry point.
 
-`pyboat-protocol` uses serde-tagged compact JSON and validates normalized motion
-input on both encode and decode. It is the Rust stack's wire contract and need not
-remain compatible with Python. Rust welcome messages include `matchSeed`, which
-the retained Python server does not send. WebSocket upgrades must finish within
-five seconds. Identity and spawn allocation happen after a successful upgrade, so
-failed handshakes do not enter the match or advance player numbering.
+`pyboat-protocol` uses a one-byte version prefix followed by Postcard and validates
+normalized motion input on both encode and decode. It is the Rust stack's wire
+contract and need not remain compatible with Python. Rust welcome messages include
+`match_seed`, which the retained Python server does not send. WebTransport sessions
+must establish on `/game` within five seconds. Identity and spawn allocation happen
+after successful session establishment, so failed and wrong-path handshakes do not
+enter the match or advance player numbering.
 The connection task waits for central player and shutdown-mailbox registration
 before sending `welcome`, preserving welcome-before-snapshot ordering and making
 the welcomed session visible to controlled shutdown.
-Client messages and individual WebSocket frames are limited to 1 KiB; the current
-input and viewport messages are both compact. The server queues newer input
+Client datagrams and reliable messages are limited to 1 KiB; the current input and
+viewport messages are both compact. Fixed-tick input and snapshots use datagrams;
+welcome and viewport messages use reliable unidirectional streams. Oversized
+snapshots fall back to a reliable stream. Reliable client streams are read outside
+the datagram receive loop so delayed stream data cannot block later input. The
+server queues newer input
 sequences, consumes at most one per physics tick, and acknowledges only consumed
 commands. A player's pending queue retains the newest 15 commands; overflow drops
 the oldest unapplied command rather than accumulating more than 250 ms of stale
@@ -355,20 +362,41 @@ Beyond that, boats through the client's requested viewport radius include visual
 motion, with server-side bounds of 8–24 m and a 24 m default for clients without
 viewport updates. The boats array is a complete current interest set;
 `removedPlayerIds` remains empty in Rust snapshots.
-Rust server integration tests bind an ephemeral loopback port and exercise actual
-WebSocket clients through handshake limits, input, motion, spatial interest, and
-disconnect and server-shutdown cleanup. One shutdown test owns the server in an
-isolated Tokio runtime and drops that runtime when the serving future returns to
-verify the close frame was flushed first.
+Rust server integration tests bind an ephemeral loopback UDP port and exercise
+actual WebTransport clients through path and message limits, input, independent
+stream/datagram delivery, motion, spatial interest, disconnect cleanup, and server
+shutdown. One shutdown test owns the server in an isolated Tokio runtime and drops
+that runtime when the serving future returns to verify the application close was
+flushed first.
 The browser crate also owns a native loopback test that sends its real sequenced
 commands through `pyboat-server`, drops intermediate snapshots before acceptance,
 and verifies acknowledgement and bounded prediction. Its Tokio, server, and
-WebSocket dependencies are dev-only and do not enter the WebAssembly artifact.
-The Rust/WASM browser connects to port `8765` on the page hostname, using `wss` for
-an HTTPS page and `ws` otherwise; HTTPS deployment therefore requires TLS
-termination in front of the server. It keeps only the latest pending snapshot
-between frames, replaces its replicated interest set, sends its viewport radius
-after welcome and canvas aspect-ratio changes, and sends sequenced input at 60 Hz.
+native WebTransport dependencies are dev-only and do not enter the WebAssembly
+artifact. The Rust/WASM browser uses `web-transport-wasm` to connect to
+`https://<page-hostname>:8765/game`. WebTransport requires TLS for every browser
+connection and has no plaintext development mode. With no certificate arguments,
+the server generates a short-lived self-signed certificate on every start and
+prints its dotted SHA-256 hash. Keep that server process running, start Vite with
+`bun run dev`, and append the complete hash to the Vite URL, for example:
+
+```text
+http://localhost:5173/?webtransportCertificateHash=d7:3a:...:72:48
+```
+
+The loopback Vite page may remain on HTTP, but the WebTransport endpoint remains
+encrypted. Restarting the server changes the certificate and requires replacing
+the query parameter before reloading the page. A server-side cryptographic
+handshake failure with TLS alert 42 normally indicates a missing or stale hash.
+When using a browser-trusted certificate, pass its PEM certificate and private key
+after the listen address and omit the hash query parameter:
+
+```sh
+cargo run -p pyboat-server -- 0.0.0.0:8765 cert.pem key.pem
+```
+
+The client keeps only the latest pending snapshot between frames, replaces its
+replicated interest set, sends its viewport radius after welcome and canvas
+aspect-ratio changes, and sends sequenced input at 60 Hz.
 Welcome also supplies the server-selected match seed. Authoritative and predicted
 ticks sample the same smooth wind function separately at each boat, and the local
 sample supplies the apparent-wind HUD.
