@@ -170,6 +170,9 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Clouds cast translucent shadows on the world. Formation height
   controls their projected separation, so higher clouds cast shadows farther
   from their visible bodies than low clouds.
+- **[Explicit]** Each cloud layer casts its own corresponding shadow. Visual
+  separation remains short enough to associate a cloud and its shadow in the
+  default view.
 - **[Explicit]** Clouds do not conceal players or otherwise affect gameplay.
   Authored sprites remain appropriate for details such as rocks, trees, and
   wreckage.

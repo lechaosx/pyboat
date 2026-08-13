@@ -274,12 +274,13 @@ decisions.
   high-cloud offsets, avoiding a global flow simulation. Cloud shading applies
   only to the fullscreen world surface, so boats remain equally visible to
   clients with different visual seeds.
-- **[Implicit]** Cloud shadows evaluate the local cloud field once more at the
-  point where the terrain-to-sun ray crosses the weather-derived cloud layer.
-  Low-cloud height rises from 650 m with instability and rain, while high cloud
-  uses 6,200 m; mixed conditions interpolate one effective projection height.
-  Terrain elevation shortens that projection. Separate low/high optical depths
-  make the translucent surface attenuation follow the projected cloud family.
+- **[Implicit]** Cloud shadows project low and high procedural layers separately,
+  then add their optical depths for Beer-Lambert surface transmittance. Low-cloud
+  height rises from 650 m with instability and rain; high cloud uses 6,200 m.
+  For readability in the 480 m default top-down view, visual separation is
+  compressed to 30–50 m for low cloud and 80 m for high cloud rather than using
+  literal atmospheric displacement. Terrain elevation shortens each distance
+  independently. Low-cloud cover does not move either projection.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.

@@ -248,19 +248,28 @@ struct CloudSample {
     optical_depth: f32,
     darkness: f32,
     relief: f32,
-    low_shadow_depth: f32,
-    high_shadow_depth: f32,
 };
 
-fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
+struct LowCloudSample {
+    density: f32,
+    optical_depth: f32,
+    direct_darkness: f32,
+    relief: f32,
+};
+
+struct HighCloudSample {
+    density: f32,
+    optical_depth: f32,
+    relief: f32,
+};
+
+fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     let cover = scene.weather.z;
     let moisture = scene.weather_structure.x;
     let instability = scene.weather_structure.y;
-    let high_cloudiness = scene.weather_structure.z;
     let rain = scene.weather.w;
 
     let low_base_position_m = cloud_base_coordinates(position_m, false);
-    let high_base_position_m = cloud_base_coordinates(position_m, true);
 
     let cumulus_body_noise = visual_cloud_noise(
         low_base_position_m,
@@ -326,29 +335,6 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     let low_cloud = storm_suppression
         * mix(stratus, cumulus, smoothstep(0.22, 0.72, instability));
 
-    let cirrus_feather = visual_cloud_noise(
-        high_base_position_m,
-        vec2<u32>(0x9e3779b9u, 0x7f4a7c15u),
-        72.0 * scene.cloud_tuning.x,
-        5u,
-        180.0,
-    );
-    let cirrus_mask_noise = visual_cloud_noise(
-        cloud_mask_coordinates(position_m, true, scene.cloud_tuning.w),
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
-        640.0 * scene.cloud_tuning.x,
-        3u,
-        720.0,
-    );
-    let cirrus_envelope_amount = smoothstep(-0.05, 0.42, cirrus_mask_noise);
-    let cirrus_ridge = 1.0 - abs(cirrus_mask_noise);
-    let cirrus_filament = smoothstep(0.94, 0.985, cirrus_ridge)
-        * (0.48 + 0.52 * smoothstep(-0.35, 0.30, cirrus_feather));
-    let cirrus = 0.58
-        * high_cloudiness
-        * cirrus_filament
-        * (0.55 + 0.45 * cirrus_envelope_amount);
-
     let squall_base_noise = visual_cloud_noise(
         low_base_position_m,
         vec2<u32>(0x8cb92ba7u, 0x632be59bu),
@@ -399,38 +385,20 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         smoothstep(-0.08, 0.48, storm_potential),
     );
 
-    var sample: CloudSample;
-    sample.density = max(max(low_cloud, cirrus), max(squall_mass, storm_mass));
+    var sample: LowCloudSample;
+    sample.density = max(low_cloud, max(squall_mass, storm_mass));
     let low_optical_depth = mix(
         0.42 * stratus,
         cumulus * (0.18 + 0.55 * cumulus_billows),
         smoothstep(0.22, 0.72, instability),
     );
-    sample.low_shadow_depth = max(
+    sample.optical_depth = max(
         low_optical_depth,
         max(1.12 * squall_mass, 1.18 * storm_mass * storm_depth_variation),
     );
-    sample.high_shadow_depth = cirrus
-        * (0.14
-            + 0.16 * cirrus_envelope_amount
-            + 0.14 * (0.5 + 0.5 * cirrus_feather));
-    sample.optical_depth = clamp(
-        max(
-            sample.low_shadow_depth,
-            sample.high_shadow_depth,
-        ),
-        0.0,
-        1.5,
-    );
-    sample.darkness = clamp(
-        0.10 * low_cloud
-            + 0.48 * smoothstep(0.55, 1.35, sample.optical_depth)
-            + 0.48 * squall_mass
-            + 0.48 * storm_mass
-            + rain * 0.16 * sample.density,
-        0.0,
-        1.0,
-    );
+    sample.direct_darkness = 0.10 * low_cloud
+        + 0.48 * squall_mass
+        + 0.48 * storm_mass;
     let cellular_relief = cumulus_body
         * mix(0.25, 1.0, instability)
         * (0.35 * cumulus_billows
@@ -440,11 +408,62 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         * (0.48 + 0.52 * (0.5 + 0.5 * cumulus_billow_noise));
     sample.relief = clamp(
         max(cellular_relief, storm_relief)
-            + 0.32 * stratus * (0.5 + 0.5 * stratus_base_noise)
-            + 0.20 * cirrus * (0.5 + 0.5 * cirrus_feather),
+            + 0.32 * stratus * (0.5 + 0.5 * stratus_base_noise),
         0.0,
         1.0,
     );
+    return sample;
+}
+
+fn procedural_high_cloud_sample(position_m: vec2<f32>) -> HighCloudSample {
+    let high_base_position_m = cloud_base_coordinates(position_m, true);
+    let cirrus_feather = visual_cloud_noise(
+        high_base_position_m,
+        vec2<u32>(0x9e3779b9u, 0x7f4a7c15u),
+        72.0 * scene.cloud_tuning.x,
+        5u,
+        180.0,
+    );
+    let cirrus_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, true, scene.cloud_tuning.w),
+        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        640.0 * scene.cloud_tuning.x,
+        3u,
+        720.0,
+    );
+    let cirrus_envelope_amount = smoothstep(-0.05, 0.42, cirrus_mask_noise);
+    let cirrus_ridge = 1.0 - abs(cirrus_mask_noise);
+    let cirrus_filament = smoothstep(0.94, 0.985, cirrus_ridge)
+        * (0.48 + 0.52 * smoothstep(-0.35, 0.30, cirrus_feather));
+    let cirrus = 0.58
+        * scene.weather_structure.z
+        * cirrus_filament
+        * (0.55 + 0.45 * cirrus_envelope_amount);
+
+    var sample: HighCloudSample;
+    sample.density = cirrus;
+    sample.optical_depth = cirrus
+        * (0.14
+            + 0.16 * cirrus_envelope_amount
+            + 0.14 * (0.5 + 0.5 * cirrus_feather));
+    sample.relief = 0.20 * cirrus * (0.5 + 0.5 * cirrus_feather);
+    return sample;
+}
+
+fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
+    let low = procedural_low_cloud_sample(position_m);
+    let high = procedural_high_cloud_sample(position_m);
+    var sample: CloudSample;
+    sample.density = max(low.density, high.density);
+    sample.optical_depth = clamp(max(low.optical_depth, high.optical_depth), 0.0, 1.5);
+    sample.darkness = clamp(
+        low.direct_darkness
+            + 0.48 * smoothstep(0.55, 1.35, sample.optical_depth)
+            + scene.weather.w * 0.16 * sample.density,
+        0.0,
+        1.0,
+    );
+    sample.relief = clamp(low.relief + high.relief, 0.0, 1.0);
     return sample;
 }
 
@@ -691,27 +710,40 @@ fn cloud_shadow_color(
     position_m: vec2<f32>,
     elevation_m: f32,
 ) -> vec3<f32> {
-    let low_presence = max(scene.weather.z, scene.weather.w);
-    let high_presence = 0.58 * scene.weather_structure.z;
-    let high_fraction = high_presence / max(low_presence + high_presence, 0.001);
     let low_height_m = 650.0
         + 650.0 * scene.weather_structure.y
         + 550.0 * scene.weather.w;
-    let cloud_height_m = mix(low_height_m, 6200.0, high_fraction);
-    let projection_height_m = max(cloud_height_m - max(elevation_m, 0.0), 50.0);
-    let light_direction = normalize(vec3<f32>(-0.55, -0.75, 1.0));
-    let projected_position_m = position_m
-        + projection_height_m * light_direction.xy / light_direction.z;
-    let projected_cloud = procedural_cloud_sample(projected_position_m);
-    let shadow_depth = mix(
-        projected_cloud.low_shadow_depth,
-        projected_cloud.high_shadow_depth,
-        high_fraction,
+    let high_height_m = 6200.0;
+    let surface_height_m = max(elevation_m, 0.0);
+    let light_bearing = normalize(vec2<f32>(-0.55, -0.75));
+    let low_clearance = clamp(
+        (low_height_m - surface_height_m) / low_height_m,
+        0.2,
+        1.0,
     );
-    let shadow_strength = 0.34
-        * scene.cloud_rendering.y
-        * (1.0 - exp(-1.25 * scene.cloud_rendering.x * shadow_depth));
-    return surface_color * mix(1.0, 0.68, shadow_strength);
+    let high_clearance = clamp(
+        (high_height_m - surface_height_m) / high_height_m,
+        0.2,
+        1.0,
+    );
+    let low_shadow_distance_m = low_clearance
+        * (30.0 + 0.017 * (low_height_m - 650.0));
+    let high_shadow_distance_m = 80.0 * high_clearance;
+    let projected_low = procedural_low_cloud_sample(
+        position_m + low_shadow_distance_m * light_bearing,
+    );
+    let projected_high = procedural_high_cloud_sample(
+        position_m + high_shadow_distance_m * light_bearing,
+    );
+    let shadow_depth = projected_low.optical_depth + projected_high.optical_depth;
+    let shadow_transmittance = exp(
+        -0.85 * scene.cloud_rendering.x * shadow_depth,
+    );
+    return surface_color * mix(
+        1.0,
+        shadow_transmittance,
+        scene.cloud_rendering.y,
+    );
 }
 
 @fragment

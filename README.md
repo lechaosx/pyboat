@@ -102,7 +102,8 @@ applies the weather at the local boat uniformly across the view. Layered stratus
 cellular cumulus, sparse cirrus wisps, and dense storm cells blend naturally from
 those conditions. Mostly low, crisp cloud bodies follow only the slowly changing
 large-scale wind and evolve without covering the world in grey. Translucent cloud
-shadows project across the world according to formation height. The HUD
+shadows from the low and high layers project independently across the world,
+with higher formations displaced farther. The HUD
 reports health, speed through water, apparent-wind speed, and point of sail using
 the wind at the local boat. One striped windsock on the local boat's bow shows
 apparent-wind direction and strength: each visible band represents about 3 knots,
