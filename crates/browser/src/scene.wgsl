@@ -248,6 +248,8 @@ struct CloudSample {
     optical_depth: f32,
     darkness: f32,
     relief: f32,
+    low_shadow_depth: f32,
+    high_shadow_depth: f32,
 };
 
 fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
@@ -404,16 +406,18 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         cumulus * (0.18 + 0.55 * cumulus_billows),
         smoothstep(0.22, 0.72, instability),
     );
+    sample.low_shadow_depth = max(
+        low_optical_depth,
+        max(1.12 * squall_mass, 1.18 * storm_mass * storm_depth_variation),
+    );
+    sample.high_shadow_depth = cirrus
+        * (0.14
+            + 0.16 * cirrus_envelope_amount
+            + 0.14 * (0.5 + 0.5 * cirrus_feather));
     sample.optical_depth = clamp(
         max(
-            max(
-                low_optical_depth,
-                cirrus
-                    * (0.14
-                        + 0.16 * cirrus_envelope_amount
-                        + 0.14 * (0.5 + 0.5 * cirrus_feather)),
-            ),
-            max(1.12 * squall_mass, 1.18 * storm_mass * storm_depth_variation),
+            sample.low_shadow_depth,
+            sample.high_shadow_depth,
         ),
         0.0,
         1.5,
@@ -682,6 +686,34 @@ fn cloud_color(surface_color: vec3<f32>, cloud_sample: CloudSample) -> vec3<f32>
     return mix(surface_color, cloud, opacity);
 }
 
+fn cloud_shadow_color(
+    surface_color: vec3<f32>,
+    position_m: vec2<f32>,
+    elevation_m: f32,
+) -> vec3<f32> {
+    let low_presence = max(scene.weather.z, scene.weather.w);
+    let high_presence = 0.58 * scene.weather_structure.z;
+    let high_fraction = high_presence / max(low_presence + high_presence, 0.001);
+    let low_height_m = 650.0
+        + 650.0 * scene.weather_structure.y
+        + 550.0 * scene.weather.w;
+    let cloud_height_m = mix(low_height_m, 6200.0, high_fraction);
+    let projection_height_m = max(cloud_height_m - max(elevation_m, 0.0), 50.0);
+    let light_direction = normalize(vec3<f32>(-0.55, -0.75, 1.0));
+    let projected_position_m = position_m
+        + projection_height_m * light_direction.xy / light_direction.z;
+    let projected_cloud = procedural_cloud_sample(projected_position_m);
+    let shadow_depth = mix(
+        projected_cloud.low_shadow_depth,
+        projected_cloud.high_shadow_depth,
+        high_fraction,
+    );
+    let shadow_strength = 0.34
+        * scene.cloud_rendering.y
+        * (1.0 - exp(-1.25 * scene.cloud_rendering.x * shadow_depth));
+    return surface_color * mix(1.0, 0.68, shadow_strength);
+}
+
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var surface_color = input.color;
@@ -691,6 +723,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             input.world_position_m,
             terrain.elevation_m,
             terrain.gradient,
+        );
+        surface_color = cloud_shadow_color(
+            surface_color,
+            input.world_position_m,
+            terrain.elevation_m,
         );
         let cloud_sample = procedural_cloud_sample(input.world_position_m);
         surface_color = cloud_color(surface_color, cloud_sample);

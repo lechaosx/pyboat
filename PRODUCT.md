@@ -167,6 +167,9 @@ This file records intended player experience, scope, and product behavior.
   internal density and depth variation. Long decks are uncommon; dense dark
   opacity is concentrated in rare storm conditions so the boat usually remains
   readable.
+- **[Explicit]** Clouds cast translucent shadows on the world. Formation height
+  controls their projected separation, so higher clouds cast shadows farther
+  from their visible bodies than low clouds.
 - **[Explicit]** Clouds do not conceal players or otherwise affect gameplay.
   Authored sprites remain appropriate for details such as rocks, trees, and
   wreckage.

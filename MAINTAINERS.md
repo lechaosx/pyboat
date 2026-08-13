@@ -406,6 +406,11 @@ strengthens dense storm cells. Cloud shading applies only to the fullscreen
 terrain quad, never boat fragments. Density, optical depth, darkness, and relief
 are calculated separately; an exponential optical-depth mapping keeps ordinary
 clouds translucent while dense rain cloud becomes opaque and dark.
+The terrain pass projects a second cloud sample toward the shared light direction
+at a weather-derived layer height, reduced by positive terrain elevation. Low and
+high optical depth remain separate for this sample so cirrus uses its higher,
+farther projection while low cloud and storms use their lower formation height.
+This is one additional full cloud-field evaluation per terrain fragment.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels
