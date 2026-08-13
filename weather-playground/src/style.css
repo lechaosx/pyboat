@@ -18,6 +18,29 @@ canvas {
 }
 canvas.dragging { cursor: grabbing; }
 
+.scale-bar {
+  position: fixed;
+  right: 2rem;
+  bottom: 2rem;
+  color: #e8f2f2;
+  filter: drop-shadow(0 1px 2px rgb(4 18 24 / 90%));
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+#scale-line {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  height: 0.5rem;
+  border: 1px solid currentcolor;
+}
+#scale-line span:nth-child(odd) { background: currentcolor; }
+.scale-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+}
+
 aside {
   position: relative;
   width: min(25rem, calc(100vw - 2rem));
@@ -79,4 +102,5 @@ output { text-align: right; color: #b8cece; font-variant-numeric: tabular-nums; 
 
 @media (max-width: 700px) {
   aside { width: 100vw; min-height: auto; max-height: 52vh; }
+  .scale-bar { right: 1rem; bottom: 1rem; }
 }

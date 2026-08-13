@@ -142,9 +142,13 @@ This file records intended player experience, scope, and product behavior.
   and high-altitude winds while also forming and dissipating over time, without
   simulating a global fluid volume. Boat physics uses the related sea-level wind;
   short-scale gusts do not abruptly steer cloud motion.
-- **[Explicit]** Changes in wind direction curve cloud motion but do not rotate
-  the cloud density pattern in place. Elongated formations rebuild continuously
-  from the same spacetime noise as the large-scale wind direction changes.
+- **[Explicit]** Each cloud family combines its own isotropic, non-rotating detail
+  field with a lower-frequency formation mask aligned to the layer wind. The mask
+  may rotate without visibly rotating individual billows or cloud texture.
+- **[Explicit]** Cloud advection can be continuously split between detail and
+  formation mask. Moving only the mask makes cloud form at its leading edge and
+  dissipate at its trailing edge; moving only detail preserves a stationary
+  formation envelope.
 - **[Explicit]** Familiar cloud families emerge from continuous atmospheric
   conditions rather than named presets: stable moisture favors layered clouds,
   instability favors cellular and towering clouds, rain darkens storm systems,
@@ -165,6 +169,13 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** The procedural playground supports drag panning and cursor-
   anchored mouse-wheel zoom. Its time advances continuously, and an adjustable
   rate scales both weather evolution and cloud motion.
+- **[Explicit]** The playground uses the same architectural 1–2–5 metric scale
+  indicator as gameplay. Absolute camera position and time are not linear
+  sliders; navigation uses drag and wheel, while current time is a live readout.
+- **[Implicit]** View height is likewise controlled only through wheel zoom rather
+  than an impractically wide linear slider.
+- **[Explicit]** Weather presets interpolate smoothly. Clicking a slider track
+  eases to the selected value, while dragging a slider remains immediate.
 - **[Explicit]** Keyboard, controller, and touchpad input participate in cross-play.
 - **[Explicit]** Browser support is the primary platform target. Native desktop
   and mobile clients are desirable secondary targets rather than requirements for

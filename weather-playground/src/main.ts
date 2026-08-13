@@ -22,6 +22,7 @@ type State = {
   cloudDetail: number;
   stratusLength: number;
   cirrusLength: number;
+  motionInMask: number;
   opticalDepth: number;
   opacity: number;
   darkness: number;
@@ -54,6 +55,7 @@ const defaults: State = {
   cloudDetail: 1,
   stratusLength: 5,
   cirrusLength: 12.5,
+  motionInMask: 1,
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
@@ -68,11 +70,17 @@ const canvas = document.querySelector<HTMLCanvasElement>("#preview");
 const controls = document.querySelector<HTMLElement>("#controls");
 const presets = document.querySelector<HTMLElement>("#presets");
 const status = document.querySelector<HTMLElement>("#status");
-if (!canvas || !controls || !presets || !status) throw new Error("Playground page is incomplete");
+const scaleLine = document.querySelector<HTMLElement>("#scale-line");
+const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
+if (!canvas || !controls || !presets || !status || !scaleLine || !scaleLabel) {
+  throw new Error("Playground page is incomplete");
+}
 const previewCanvas = canvas;
 const controlsElement = controls;
 const presetsElement = presets;
 const statusElement = status;
+const scaleLineElement = scaleLine;
+const scaleLabelElement = scaleLabel;
 
 type Range = {
   key: NumericStateKey;
@@ -84,10 +92,6 @@ type Range = {
 
 const groups: Array<[string, Range[]]> = [
   ["View", [
-    { key: "cameraX", label: "Camera X (m)", min: -100000000, max: 100000000, step: 10 },
-    { key: "cameraY", label: "Camera Y (m)", min: -100000000, max: 100000000, step: 10 },
-    { key: "viewHeight", label: "View height (m)", min: 0.1, max: 10000000, step: 0.1 },
-    { key: "time", label: "Time (s)", min: 0, max: 86400, step: 1 },
     { key: "timeRate", label: "Time rate", min: 0, max: 20, step: 0.1 },
   ]],
   ["Weather", [
@@ -108,6 +112,7 @@ const groups: Array<[string, Range[]]> = [
     { key: "cloudDetail", label: "Fine detail", min: 0, max: 2, step: 0.05 },
     { key: "stratusLength", label: "Stratus length", min: 1, max: 16, step: 0.25 },
     { key: "cirrusLength", label: "Cirrus length", min: 1, max: 30, step: 0.5 },
+    { key: "motionInMask", label: "Motion in mask", min: 0, max: 1, step: 0.05 },
   ]],
   ["Cloud material", [
     { key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
@@ -125,6 +130,8 @@ const groups: Array<[string, Range[]]> = [
 const rangeInputs = new Map<NumericStateKey, HTMLInputElement>();
 const rangeOutputs = new Map<NumericStateKey, HTMLOutputElement>();
 const rangesByKey = new Map<NumericStateKey, Range>();
+type ValueTransition = { elapsed: number; from: number; to: number };
+const valueTransitions = new Map<NumericStateKey, ValueTransition>();
 for (const [title, ranges] of groups) {
   const fieldset = document.createElement("fieldset");
   const legend = document.createElement("legend");
@@ -143,9 +150,44 @@ for (const [title, ranges] of groups) {
     input.value = String(state[range.key]);
     output.value = format(Number(input.value), range.step);
     input.addEventListener("input", () => {
-      (state[range.key] as number) = Number(input.value);
-      output.value = format(Number(input.value), range.step);
+      presetTransition = undefined;
+      valueTransitions.delete(range.key);
+      state[range.key] = Number(input.value);
+      output.value = format(state[range.key], range.step);
     });
+    let pointerId: number | undefined;
+    let pointerX = 0;
+    let dragging = false;
+    input.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      pointerX = event.clientX;
+      dragging = false;
+      input.setPointerCapture(event.pointerId);
+    });
+    input.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== pointerId) return;
+      if (!dragging && Math.abs(event.clientX - pointerX) < 4) return;
+      dragging = true;
+      presetTransition = undefined;
+      valueTransitions.delete(range.key);
+      state[range.key] = rangeValueAtPointer(range, input, event.clientX);
+      syncControl(range.key);
+    });
+    input.addEventListener("pointerup", (event) => {
+      if (event.pointerId !== pointerId) return;
+      if (!dragging) {
+        presetTransition = undefined;
+        valueTransitions.set(range.key, {
+          elapsed: 0,
+          from: state[range.key],
+          to: rangeValueAtPointer(range, input, event.clientX),
+        });
+      }
+      pointerId = undefined;
+    });
+    input.addEventListener("pointercancel", () => { pointerId = undefined; });
     label.append(name, input, output);
     fieldset.append(label);
     rangeInputs.set(range.key, input);
@@ -176,6 +218,8 @@ seedFieldset.querySelector<HTMLButtonElement>("#reset")!.addEventListener("click
   Object.assign(state, defaults);
   lowOffset = [0, 0];
   highOffset = [0, 0];
+  presetTransition = undefined;
+  valueTransitions.clear();
   seedInput.value = state.seed;
   pauseButton.textContent = "Pause";
   syncControls();
@@ -188,11 +232,56 @@ const weatherPresets: Record<string, Partial<State>> = {
   Squall: { cover: 0.64, moisture: 0.92, instability: 0.62, highCloud: 0.18, rain: 0.62 },
   Storm: { cover: 0.76, moisture: 0.98, instability: 0.96, highCloud: 0.28, rain: 0.9 },
 };
+type PresetTransition = {
+  elapsed: number;
+  from: Partial<State>;
+  to: Partial<State>;
+};
+let presetTransition: PresetTransition | undefined;
 for (const [name, values] of Object.entries(weatherPresets)) {
   const button = document.createElement("button");
   button.textContent = name;
-  button.addEventListener("click", () => { Object.assign(state, values); syncControls(); });
+  button.addEventListener("click", () => {
+    valueTransitions.clear();
+    const from: Partial<State> = {};
+    for (const key of Object.keys(values) as Array<keyof State>) {
+      (from[key] as State[typeof key]) = state[key];
+    }
+    presetTransition = { elapsed: 0, from, to: values };
+  });
   presetsElement.append(button);
+}
+
+function advancePresetTransition(elapsed: number): void {
+  if (!presetTransition) return;
+  presetTransition.elapsed += elapsed;
+  const progress = Math.min(presetTransition.elapsed / 1.5, 1);
+  const amount = progress * progress * (3 - 2 * progress);
+  for (const key of Object.keys(presetTransition.to) as NumericStateKey[]) {
+    const from = presetTransition.from[key] as number;
+    const to = presetTransition.to[key] as number;
+    state[key] = from + (to - from) * amount;
+    syncControl(key);
+  }
+  if (progress === 1) presetTransition = undefined;
+}
+
+function advanceValueTransitions(elapsed: number): void {
+  for (const [key, transition] of valueTransitions) {
+    transition.elapsed += elapsed;
+    const progress = Math.min(transition.elapsed / 0.3, 1);
+    const amount = progress * progress * (3 - 2 * progress);
+    state[key] = transition.from + (transition.to - transition.from) * amount;
+    syncControl(key);
+    if (progress === 1) valueTransitions.delete(key);
+  }
+}
+
+function rangeValueAtPointer(range: Range, input: HTMLInputElement, clientX: number): number {
+  const rect = input.getBoundingClientRect();
+  const amount = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  const value = range.min + amount * (range.max - range.min);
+  return Math.min(range.max, Math.max(range.min, Math.round(value / range.step) * range.step));
 }
 
 function format(value: number, step: number): string {
@@ -209,12 +298,6 @@ function syncControl(key: NumericStateKey): void {
   const value = state[key];
   rangeInputs.get(key)!.value = String(value);
   rangeOutputs.get(key)!.value = format(value, rangesByKey.get(key)!.step);
-}
-
-function syncNavigationControls(): void {
-  syncControl("cameraX");
-  syncControl("cameraY");
-  syncControl("viewHeight");
 }
 
 let dragPointer: number | undefined;
@@ -235,7 +318,6 @@ previewCanvas.addEventListener("pointermove", (event) => {
   state.cameraY -= (event.clientY - dragY) / previewCanvas.clientHeight * state.viewHeight;
   dragX = event.clientX;
   dragY = event.clientY;
-  syncNavigationControls();
 });
 function finishDrag(event: PointerEvent): void {
   if (event.pointerId !== dragPointer) return;
@@ -259,7 +341,6 @@ previewCanvas.addEventListener("wheel", (event) => {
   state.cameraX += pointerX * (oldWidth - newWidth);
   state.cameraY += pointerY * (oldHeight - newHeight);
   state.viewHeight = newHeight;
-  syncNavigationControls();
 }, { passive: false });
 
 const gpu = (navigator as Navigator & { gpu?: any }).gpu;
@@ -296,7 +377,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const uniformBuffer = device.createBuffer({ size: 160, usage: 0x40 | 0x08 });
+const uniformBuffer = device.createBuffer({ size: 176, usage: 0x40 | 0x08 });
 const bindGroup = device.createBindGroup({
   layout: pipeline.getBindGroupLayout(0),
   entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
@@ -317,7 +398,7 @@ function wind(speed: number, degrees: number): [number, number] {
 }
 
 function writeUniforms(): void {
-  const buffer = new ArrayBuffer(160);
+  const buffer = new ArrayBuffer(176);
   const floats = new Float32Array(buffer);
   const uints = new Uint32Array(buffer);
   const aspect = previewCanvas.width / previewCanvas.height;
@@ -337,8 +418,14 @@ function writeUniforms(): void {
   floats.set([...lowOffset, ...highOffset], 20);
   floats.set([state.cloudScale, state.cloudDetail, state.stratusLength, state.cirrusLength], 24);
   floats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 28);
-  floats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 32);
-  floats[36] = state.time;
+  floats.set([
+    state.motionInMask,
+    state.lowWindDirection * Math.PI / 180,
+    state.highWindDirection * Math.PI / 180,
+    0,
+  ], 32);
+  floats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 36);
+  floats[40] = state.time;
   device.queue.writeBuffer(uniformBuffer, 0, buffer);
 }
 
@@ -352,11 +439,33 @@ function resize(): void {
   }
 }
 
+function updateScaleBar(): void {
+  const targetDistance = state.viewHeight * 120 / previewCanvas.clientHeight;
+  const magnitude = 10 ** Math.floor(Math.log10(targetDistance));
+  const normalized = targetDistance / magnitude;
+  const multiplier = normalized < 1.5 ? 1 : normalized < 3.5 ? 2 : normalized < 7.5 ? 5 : 10;
+  const distance = multiplier * magnitude;
+  scaleLineElement.style.width = `${distance / state.viewHeight * previewCanvas.clientHeight}px`;
+  scaleLabelElement.textContent = formatDistance(distance);
+}
+
+function formatDistance(distanceMetres: number): string {
+  if (distanceMetres >= 1000) return `${(distanceMetres / 1000).toFixed(0)} km`;
+  if (distanceMetres >= 1) return `${distanceMetres.toFixed(0)} m`;
+  if (distanceMetres >= 0.01) return `${(distanceMetres * 100).toFixed(0)} cm`;
+  if (distanceMetres >= 0.001) return `${(distanceMetres * 1000).toFixed(0)} mm`;
+  if (distanceMetres >= 0.000001) return `${(distanceMetres * 1000000).toFixed(0)} µm`;
+  return `${(distanceMetres * 1000000000).toFixed(0)} nm`;
+}
+
 let previous = performance.now();
 function frame(now: number): void {
   resize();
+  updateScaleBar();
   const elapsed = Math.min((now - previous) / 1000, 0.1);
   previous = now;
+  advancePresetTransition(elapsed);
+  advanceValueTransitions(elapsed);
   if (!state.paused) {
     const simulationElapsed = elapsed * state.timeRate;
     state.time += simulationElapsed;
@@ -370,7 +479,6 @@ function frame(now: number): void {
       highOffset[0] + high[0] * simulationElapsed,
       highOffset[1] + high[1] * simulationElapsed,
     ];
-    syncControl("time");
   }
   writeUniforms();
   const encoder = device.createCommandEncoder();

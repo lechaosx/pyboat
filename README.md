@@ -47,7 +47,8 @@ The separate procedural weather and terrain playground runs with
 `bun run dev:playground`. It renders the production scene shader without a game
 server and exposes live tuning controls. Drag the preview to pan, use the mouse
 wheel to zoom around the pointer, and adjust the time rate to inspect weather
-evolution.
+evolution. The preview includes the gameplay scale indicator; presets and slider
+track clicks transition smoothly, while dragging a slider remains immediate.
 
 ## Run the Rust connection server
 

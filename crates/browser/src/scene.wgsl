@@ -8,6 +8,7 @@ struct SceneUniforms {
     cloud_offsets_m: vec4<f32>,
     cloud_tuning: vec4<f32>,
     cloud_rendering: vec4<f32>,
+    cloud_behavior: vec4<f32>,
     terrain_tuning: vec4<f32>,
     time_seconds: f32,
 };
@@ -175,13 +176,6 @@ fn terrain_fractal_sample(
     return sample;
 }
 
-fn cloud_coordinates(position_m: vec2<f32>, high_altitude: bool) -> vec2<f32> {
-    if high_altitude {
-        return position_m - scene.cloud_offsets_m.zw;
-    }
-    return position_m - scene.cloud_offsets_m.xy;
-}
-
 fn visual_cloud_noise(
     position_m: vec2<f32>,
     field_salt: vec2<u32>,
@@ -225,101 +219,28 @@ fn visual_cloud_noise(
     return noise / amplitude_sum;
 }
 
-fn directional_cloud_noise(
+fn cloud_base_coordinates(
     position_m: vec2<f32>,
     high_altitude: bool,
-    field_salt: vec2<u32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    initial_lifetime_seconds: f32,
-    filter_half_span_m: f32,
-) -> f32 {
-    let center_m = cloud_coordinates(position_m, high_altitude);
-    let layer_wind = select(scene.cloud_motion.xy, scene.cloud_motion.zw, high_altitude);
-    let wind_speed = length(layer_wind);
-    if wind_speed < 0.5 {
-        return visual_cloud_noise(
-            center_m,
-            field_salt,
-            initial_wavelength_m,
-            octave_count,
-            initial_lifetime_seconds,
-        );
-    }
-    let wind_direction = layer_wind / wind_speed;
-    var filtered = 0.0;
-    var weight_sum = 0.0;
-    for (var sample_index = 0u; sample_index < 9u; sample_index++) {
-        let along_wind = f32(sample_index) / 8.0 * 2.0 - 1.0;
-        let weight = 1.0 - 0.55 * abs(along_wind);
-        filtered += weight * visual_cloud_noise(
-            center_m + filter_half_span_m * along_wind * wind_direction,
-            field_salt,
-            initial_wavelength_m,
-            octave_count,
-            initial_lifetime_seconds,
-        );
-        weight_sum += weight;
-    }
-    return filtered / weight_sum;
+) -> vec2<f32> {
+    let offset_m = select(scene.cloud_offsets_m.xy, scene.cloud_offsets_m.zw, high_altitude);
+    return position_m - offset_m * (1.0 - clamp(scene.cloud_behavior.x, 0.0, 1.0));
 }
 
-struct OrientedCloudNoise {
-    first: f32,
-    second: f32,
-    blend: f32,
-};
-
-fn oriented_cloud_noise(
+fn cloud_mask_coordinates(
     position_m: vec2<f32>,
     high_altitude: bool,
-    field_salt: vec2<u32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    initial_lifetime_seconds: f32,
-    along_wind_scale: f32,
-) -> OrientedCloudNoise {
-    let layer_wind = select(scene.cloud_motion.xy, scene.cloud_motion.zw, high_altitude);
-    var wind_angle = 0.0;
-    if length(layer_wind) > 0.5 {
-        wind_angle = atan2(layer_wind.y, layer_wind.x);
-    }
-    let orientation_count = 12.0;
-    let orientation_position = fract(wind_angle / 3.14159265359) * orientation_count;
-    let first_index = floor(orientation_position);
-    let second_index = (first_index + 1.0) % orientation_count;
-    let first_angle = first_index * 3.14159265359 / orientation_count;
-    let second_angle = second_index * 3.14159265359 / orientation_count;
-    let first_direction = vec2<f32>(cos(first_angle), sin(first_angle));
-    let second_direction = vec2<f32>(cos(second_angle), sin(second_angle));
-    let first_across = vec2<f32>(-first_direction.y, first_direction.x);
-    let second_across = vec2<f32>(-second_direction.y, second_direction.x);
-    let position = cloud_coordinates(position_m, high_altitude);
-
-    var sample: OrientedCloudNoise;
-    sample.first = visual_cloud_noise(
-        vec2<f32>(
-            along_wind_scale * dot(position, first_direction),
-            dot(position, first_across),
-        ),
-        field_salt,
-        initial_wavelength_m,
-        octave_count,
-        initial_lifetime_seconds,
+    elongation: f32,
+) -> vec2<f32> {
+    let offset_m = select(scene.cloud_offsets_m.xy, scene.cloud_offsets_m.zw, high_altitude);
+    let translated_m = position_m - offset_m * clamp(scene.cloud_behavior.x, 0.0, 1.0);
+    let wind_angle = select(scene.cloud_behavior.y, scene.cloud_behavior.z, high_altitude);
+    let along_wind = vec2<f32>(cos(wind_angle), sin(wind_angle));
+    let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
+    return vec2<f32>(
+        dot(translated_m, along_wind) / max(elongation, 1.0),
+        dot(translated_m, across_wind),
     );
-    sample.second = visual_cloud_noise(
-        vec2<f32>(
-            along_wind_scale * dot(position, second_direction),
-            dot(position, second_across),
-        ),
-        field_salt,
-        initial_wavelength_m,
-        octave_count,
-        initial_lifetime_seconds,
-    );
-    // Fixed orientation fields crossfade so changing wind cannot rotate existing clouds.
-    sample.blend = smoothstep(0.15, 0.85, fract(orientation_position));
-    return sample;
 }
 
 struct CloudSample {
@@ -336,22 +257,33 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     let high_cloudiness = scene.weather_structure.z;
     let rain = scene.weather.w;
 
+    let low_base_position_m = cloud_base_coordinates(position_m, false);
+    let high_base_position_m = cloud_base_coordinates(position_m, true);
+
     let cumulus_body_noise = visual_cloud_noise(
-        cloud_coordinates(position_m, false),
+        low_base_position_m,
         vec2<u32>(0x38d01377u, 0x452821e6u),
         96.0 * scene.cloud_tuning.x,
-        7u,
+        6u,
         150.0,
     );
     let cumulus_billow_noise = visual_cloud_noise(
-        cloud_coordinates(position_m, false),
+        low_base_position_m,
         vec2<u32>(0x16d2a771u, 0x9e3779b9u),
         28.0 * scene.cloud_tuning.x,
-        6u,
+        5u,
         75.0,
     );
+    let cumulus_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, false, 1.5),
+        vec2<u32>(0xa24baed4u, 0x94d049bbu),
+        384.0 * scene.cloud_tuning.x,
+        3u,
+        480.0,
+    );
     let cumulus_noise = cumulus_body_noise
-        + 0.22 * scene.cloud_tuning.y * cumulus_billow_noise;
+        + 0.22 * scene.cloud_tuning.y * cumulus_billow_noise
+        + 0.22 * cumulus_mask_noise;
     let cumulus_threshold = mix(0.42, -0.08, cover);
     let cumulus_body = smoothstep(
         cumulus_threshold,
@@ -365,106 +297,96 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
     );
     let cumulus = cover * cumulus_body * (0.52 + 0.48 * cumulus_billows);
 
-    let stratus_noise = oriented_cloud_noise(
-        position_m,
-        false,
+    let stratus_base_noise = visual_cloud_noise(
+        low_base_position_m,
         vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
-        512.0 * scene.cloud_tuning.x,
-        5u,
-        300.0,
-        1.0 / max(scene.cloud_tuning.z, 1.0),
-    );
-    let stratus_breakup = visual_cloud_noise(
-        cloud_coordinates(position_m, false),
-        vec2<u32>(0xa24baed4u, 0x94d049bbu),
-        96.0 * scene.cloud_tuning.x,
+        112.0 * scene.cloud_tuning.x,
         5u,
         210.0,
     );
-    let stratus_threshold = mix(0.30, -0.20, cover * moisture);
-    let first_stratus = smoothstep(
-        stratus_threshold,
-        stratus_threshold + 0.25,
-        stratus_noise.first,
+    let stratus_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, false, scene.cloud_tuning.z),
+        vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
+        512.0 * scene.cloud_tuning.x,
+        3u,
+        600.0,
     );
-    let second_stratus = smoothstep(
-        stratus_threshold,
-        stratus_threshold + 0.25,
-        stratus_noise.second,
-    );
+    let stratus_ridge = 1.0 - abs(stratus_mask_noise);
+    let stratus_threshold = mix(0.90, 0.72, cover * moisture);
+    let stratus_envelope = smoothstep(stratus_threshold, stratus_threshold + 0.10, stratus_ridge);
+    let stratus_detail = smoothstep(-0.34, 0.28, stratus_base_noise);
     let stratus = cover
         * moisture
-        * mix(first_stratus, second_stratus, stratus_noise.blend);
+        * stratus_envelope
+        * (0.42 + 0.58 * stratus_detail);
 
     let storm_suppression = 1.0 - 0.88 * rain * smoothstep(0.45, 0.90, instability);
     let low_cloud = storm_suppression
         * mix(stratus, cumulus, smoothstep(0.22, 0.72, instability));
 
-    let cirrus_noise = oriented_cloud_noise(
-        position_m,
-        true,
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
-        512.0 * scene.cloud_tuning.x,
-        6u,
-        240.0,
-        1.0 / max(scene.cloud_tuning.w, 1.0),
-    );
-    let cirrus_envelope = visual_cloud_noise(
-        cloud_coordinates(position_m, true),
-        vec2<u32>(0x4cf5ad43u, 0xbf58476du),
-        640.0 * scene.cloud_tuning.x,
-        4u,
-        720.0,
-    );
     let cirrus_feather = visual_cloud_noise(
-        cloud_coordinates(position_m, true),
+        high_base_position_m,
         vec2<u32>(0x9e3779b9u, 0x7f4a7c15u),
         72.0 * scene.cloud_tuning.x,
         5u,
         180.0,
     );
-    let cirrus_envelope_amount = smoothstep(
-        0.04,
-        0.34,
-        cirrus_envelope + 0.10 * cirrus_feather,
+    let cirrus_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, true, scene.cloud_tuning.w),
+        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        640.0 * scene.cloud_tuning.x,
+        3u,
+        720.0,
     );
-    let first_cirrus_ridge = 1.0 - abs(cirrus_noise.first);
-    let second_cirrus_ridge = 1.0 - abs(cirrus_noise.second);
-    let cirrus_filament = mix(
-        smoothstep(0.94, 0.985, first_cirrus_ridge),
-        smoothstep(0.94, 0.985, second_cirrus_ridge),
-        cirrus_noise.blend,
-    );
+    let cirrus_envelope_amount = smoothstep(-0.05, 0.42, cirrus_mask_noise);
+    let cirrus_ridge = 1.0 - abs(cirrus_mask_noise);
+    let cirrus_filament = smoothstep(0.94, 0.985, cirrus_ridge)
+        * (0.48 + 0.52 * smoothstep(-0.35, 0.30, cirrus_feather));
     let cirrus = 0.58
         * high_cloudiness
         * cirrus_filament
         * (0.55 + 0.45 * cirrus_envelope_amount);
 
-    let squall_noise = directional_cloud_noise(
-        position_m,
-        false,
+    let squall_base_noise = visual_cloud_noise(
+        low_base_position_m,
+        vec2<u32>(0x8cb92ba7u, 0x632be59bu),
+        120.0 * scene.cloud_tuning.x,
+        5u,
+        180.0,
+    );
+    let squall_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, false, max(4.0, 1.6 * scene.cloud_tuning.z)),
         vec2<u32>(0x632be59bu, 0x8cb92ba7u),
         420.0 * scene.cloud_tuning.x,
-        5u,
-        300.0,
-        720.0,
+        3u,
+        540.0,
     );
-    let squall_band = smoothstep(0.075, 0.125, squall_noise);
+    let squall_ridge = 1.0 - abs(squall_mask_noise);
+    let squall_band = smoothstep(0.55, 0.85, squall_ridge);
     let squall_front = rain
         * smoothstep(0.30, 0.62, instability)
         * (1.0 - smoothstep(0.78, 0.96, instability))
         * squall_band
-        * mix(0.65, 1.0, smoothstep(-0.30, 0.20, cumulus_body_noise));
-    let squall_mass = sqrt(squall_front);
+        * smoothstep(-0.25, 0.25, squall_base_noise);
+    let squall_mass = squall_front;
 
     let storm_macro = visual_cloud_noise(
-        cloud_coordinates(position_m, false),
+        low_base_position_m,
         vec2<u32>(0x1b56c4e9u, 0xd1b54a32u),
         180.0 * scene.cloud_tuning.x,
         5u,
         240.0,
     );
-    let storm_potential = storm_macro + 0.18 * cumulus_billow_noise;
+    let storm_mask_noise = visual_cloud_noise(
+        cloud_mask_coordinates(position_m, false, 2.5),
+        vec2<u32>(0x4cf5ad43u, 0xbf58476du),
+        480.0 * scene.cloud_tuning.x,
+        3u,
+        660.0,
+    );
+    let storm_potential = storm_macro
+        + 0.18 * cumulus_billow_noise
+        + 0.24 * storm_mask_noise;
     let storm_anvil = rain
         * smoothstep(0.72, 0.94, instability)
         * smoothstep(-0.10, 0.34, storm_potential);
@@ -514,7 +436,7 @@ fn procedural_cloud_sample(position_m: vec2<f32>) -> CloudSample {
         * (0.48 + 0.52 * (0.5 + 0.5 * cumulus_billow_noise));
     sample.relief = clamp(
         max(cellular_relief, storm_relief)
-            + 0.32 * stratus * (0.5 + 0.5 * stratus_breakup)
+            + 0.32 * stratus * (0.5 + 0.5 * stratus_base_noise)
             + 0.20 * cirrus * (0.5 + 0.5 * cirrus_feather),
         0.0,
         1.0,

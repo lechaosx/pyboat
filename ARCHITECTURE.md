@@ -193,12 +193,16 @@ decisions.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
   they move and evolve without a world-sized fluid simulation. Clouds do not
   participate in visibility or any other gameplay rule.
-- **[Explicit]** Wind affects cloud translation, not the orientation of the noise
-  coordinate system; changing wind must not rotate the rendered cloud field.
-- **[Explicit]** Elongated formations compress spacetime-noise coordinates along
-  fixed orientation axes. Wind selects neighboring axes and crossfades their
-  already-formed density, so formations rebuild toward a changed wind direction
-  without rotating in place.
+- **[Explicit]** Every cloud family combines a family-specific isotropic detail
+  field with a lower-frequency formation mask. Detail coordinates never rotate;
+  mask coordinates align directly to the low-frequency layer-wind direction and
+  may rotate to reorganize the broad formation without rotating individual cloud
+  texture.
+- **[Explicit]** One continuous parameter splits total layer advection between
+  detail and mask coordinates. Both fields continue evolving through spacetime
+  noise independently of that split.
+- **[Implicit]** Production assigns all spatial advection to the formation mask,
+  making clouds form at their leading edge and dissipate at their trailing edge.
 - **[Explicit]** Cloud motion and formation use only the lowest-frequency wind
   components so regional and gust-scale changes do not abruptly redirect them.
 - **[Explicit]** Sea-level, low-cloud, and high-cloud winds are coherent samples
@@ -253,11 +257,12 @@ decisions.
   wind, low- and high-cloud winds, moisture, instability, low and high cloudiness,
   and rain intensity. High-cloud wind is the dominant 32,768–131,072 m synoptic
   band at 118% speed. Low-cloud wind blends that band with the complete surface
-  field at 108% speed. WGSL continuously blends crisp 96–1.5 m cumulus and 28 m
-  billow detail with elongated stratus, sparse translucent cirrus, narrow squall
-  fronts, and convective storm mass. Twelve fixed axes cover each undirected
-  half-circle; each layer's wind crossfades its two nearest independently sampled
-  orientations. Density, optical depth,
+  field at 108% speed. WGSL combines family-specific isotropic bases with direct
+  wind-aligned, lower-frequency masks for cumulus, stratus, cirrus, squall, and
+  storm formations. Mask ridges organize elongated families while their base
+  fields retain distinct fine texture. The model evaluates 46 noise octaves per
+  terrain pixel, down from 99 in the fixed-axis and directional-filter model.
+  Density, optical depth,
   darkness, and relief remain separate so thin cloud stays transparent, dense
   rain cloud darkens continuously, and fine internal detail survives inside the
   silhouette. Instability weights cumulus against stratus; instability with rain

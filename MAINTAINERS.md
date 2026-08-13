@@ -227,11 +227,13 @@ bun run dev:playground
 ```
 
 It imports `crates/browser/src/scene.wgsl` directly and needs WebGPU but no game
-server. Controls cover seed, camera, time, weather, low/high winds, cloud feature
-scale and detail, stratus/cirrus elongation, optical material, and terrain scale,
-elevation, and cliff slope. Dragging pans the preview, the mouse wheel zooms
-around its pointer position, and the playback rate scales both noise evolution
-and low/high cloud advection. `bun run build` validates and bundles both web apps.
+server. Controls cover seed, time rate, weather, low/high winds, cloud feature
+scale and detail, stratus/cirrus elongation, the detail-to-mask motion split,
+optical material, and terrain tuning. Dragging pans the preview, the mouse wheel
+zooms around its pointer position, and an architectural 1–2–5 scale bar reports
+physical distance. Presets crossfade over 1.5 seconds. A range-track click eases
+over 0.3 seconds; dragging remains direct. `bun run build` validates and bundles
+both web apps.
 
 ## Controllers
 
@@ -391,12 +393,12 @@ carries surface, low-cloud, and high-cloud winds, moisture, instability,
 low/high cloudiness, rain state, predicted simulation time, a visual seed derived
 from the local player identity, and separately integrated low/high cloud offsets. WGSL uses the one weather
 sample uniformly across the viewport; it does not mirror the shared weather field
-per pixel. Player-specific noise forms three continuously blended responses:
-cellular cumulus, elongated stratus and squalls, and sparse high cirrus. Stratus
-compresses noise coordinates fivefold along its selected axes; cirrus compresses
-them 12.5-fold. Each layer's wind selects two neighbors among 12 fixed undirected
-axes and crossfades their formed density, preventing in-place rotation. Low and
-high winds advance separate translation offsets. Instability blends stratus toward cumulus and, together with rain,
+per pixel. Each family samples a distinct isotropic detail field and a lower-
+frequency formation mask. The mask aligns directly with the separately supplied
+low/high wind direction, even at zero speed, while a behavior parameter splits
+integrated layer offsets between base and mask coordinates. The production value
+of 1 assigns all translation to the mask. Low and high winds advance separate
+translation offsets. Instability blends stratus toward cumulus and, together with rain,
 strengthens dense storm cells. Cloud shading applies only to the fullscreen
 terrain quad, never boat fragments. Density, optical depth, darkness, and relief
 are calculated separately; an exponential optical-depth mapping keeps ordinary
