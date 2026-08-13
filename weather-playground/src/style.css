@@ -13,7 +13,10 @@ canvas {
   inset: 0;
   width: 100vw;
   height: 100vh;
+  cursor: grab;
+  touch-action: none;
 }
+canvas.dragging { cursor: grabbing; }
 
 aside {
   position: relative;
@@ -36,6 +39,7 @@ header p {
 
 h1 { margin: 0.2rem 0; font: 400 2rem Georgia, serif; }
 #status { color: #9db5b9; font-size: 0.75rem; }
+.navigation-hint { margin: 0.3rem 0 0; color: #9db5b9; font-size: 0.72rem; }
 nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 1rem 0; }
 button {
   padding: 0.38rem 0.62rem;

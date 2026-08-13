@@ -227,7 +227,9 @@ bun run dev:playground
 It imports `crates/browser/src/scene.wgsl` directly and needs WebGPU but no game
 server. Controls cover seed, camera, time, weather, low/high winds, cloud feature
 scale and detail, stratus/cirrus elongation, optical material, and terrain scale,
-elevation, and cliff slope. `bun run build` validates and bundles both web apps.
+elevation, and cliff slope. Dragging pans the preview, the mouse wheel zooms
+around its pointer position, and the playback rate scales both noise evolution
+and low/high cloud advection. `bun run build` validates and bundles both web apps.
 
 ## Controllers
 

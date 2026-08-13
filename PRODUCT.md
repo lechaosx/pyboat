@@ -157,6 +157,9 @@ This file records intended player experience, scope, and product behavior.
 
 ## Platforms and controls
 
+- **[Explicit]** The procedural playground supports drag panning and cursor-
+  anchored mouse-wheel zoom. Its time advances continuously, and an adjustable
+  rate scales both weather evolution and cloud motion.
 - **[Explicit]** Keyboard, controller, and touchpad input participate in cross-play.
 - **[Explicit]** Browser support is the primary platform target. Native desktop
   and mobile clients are desirable secondary targets rather than requirements for

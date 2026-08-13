@@ -31,6 +31,8 @@ type State = {
   cliffSlope: number;
 };
 
+type NumericStateKey = Exclude<keyof State, "seed" | "paused">;
+
 const defaults: State = {
   seed: "0x5eed",
   cameraX: 0,
@@ -73,7 +75,7 @@ const presetsElement = presets;
 const statusElement = status;
 
 type Range = {
-  key: keyof State;
+  key: NumericStateKey;
   label: string;
   min: number;
   max: number;
@@ -82,10 +84,10 @@ type Range = {
 
 const groups: Array<[string, Range[]]> = [
   ["View", [
-    { key: "cameraX", label: "Camera X (m)", min: -20000, max: 20000, step: 10 },
-    { key: "cameraY", label: "Camera Y (m)", min: -20000, max: 20000, step: 10 },
-    { key: "viewHeight", label: "View height (m)", min: 15, max: 20000, step: 5 },
-    { key: "time", label: "Time (s)", min: 0, max: 3600, step: 1 },
+    { key: "cameraX", label: "Camera X (m)", min: -100000000, max: 100000000, step: 10 },
+    { key: "cameraY", label: "Camera Y (m)", min: -100000000, max: 100000000, step: 10 },
+    { key: "viewHeight", label: "View height (m)", min: 0.1, max: 10000000, step: 0.1 },
+    { key: "time", label: "Time (s)", min: 0, max: 86400, step: 1 },
     { key: "timeRate", label: "Time rate", min: 0, max: 20, step: 0.1 },
   ]],
   ["Weather", [
@@ -120,7 +122,9 @@ const groups: Array<[string, Range[]]> = [
   ]],
 ];
 
-const rangeInputs = new Map<keyof State, HTMLInputElement>();
+const rangeInputs = new Map<NumericStateKey, HTMLInputElement>();
+const rangeOutputs = new Map<NumericStateKey, HTMLOutputElement>();
+const rangesByKey = new Map<NumericStateKey, Range>();
 for (const [title, ranges] of groups) {
   const fieldset = document.createElement("fieldset");
   const legend = document.createElement("legend");
@@ -145,6 +149,8 @@ for (const [title, ranges] of groups) {
     label.append(name, input, output);
     fieldset.append(label);
     rangeInputs.set(range.key, input);
+    rangeOutputs.set(range.key, output);
+    rangesByKey.set(range.key, range);
   }
   controlsElement.append(fieldset);
 }
@@ -194,11 +200,67 @@ function format(value: number, step: number): string {
 }
 
 function syncControls(): void {
-  for (const [key, input] of rangeInputs) {
-    input.value = String(state[key]);
-    input.dispatchEvent(new Event("input"));
+  for (const key of rangeInputs.keys()) {
+    syncControl(key);
   }
 }
+
+function syncControl(key: NumericStateKey): void {
+  const value = state[key];
+  rangeInputs.get(key)!.value = String(value);
+  rangeOutputs.get(key)!.value = format(value, rangesByKey.get(key)!.step);
+}
+
+function syncNavigationControls(): void {
+  syncControl("cameraX");
+  syncControl("cameraY");
+  syncControl("viewHeight");
+}
+
+let dragPointer: number | undefined;
+let dragX = 0;
+let dragY = 0;
+previewCanvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  dragPointer = event.pointerId;
+  dragX = event.clientX;
+  dragY = event.clientY;
+  previewCanvas.setPointerCapture(event.pointerId);
+  previewCanvas.classList.add("dragging");
+});
+previewCanvas.addEventListener("pointermove", (event) => {
+  if (event.pointerId !== dragPointer) return;
+  const aspect = previewCanvas.clientWidth / previewCanvas.clientHeight;
+  state.cameraX -= (event.clientX - dragX) / previewCanvas.clientWidth * state.viewHeight * aspect;
+  state.cameraY -= (event.clientY - dragY) / previewCanvas.clientHeight * state.viewHeight;
+  dragX = event.clientX;
+  dragY = event.clientY;
+  syncNavigationControls();
+});
+function finishDrag(event: PointerEvent): void {
+  if (event.pointerId !== dragPointer) return;
+  dragPointer = undefined;
+  previewCanvas.classList.remove("dragging");
+}
+previewCanvas.addEventListener("pointerup", finishDrag);
+previewCanvas.addEventListener("pointercancel", finishDrag);
+previewCanvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const rect = previewCanvas.getBoundingClientRect();
+  const pointerX = (event.clientX - rect.left) / rect.width - 0.5;
+  const pointerY = (event.clientY - rect.top) / rect.height - 0.5;
+  const oldHeight = state.viewHeight;
+  const oldWidth = oldHeight * rect.width / rect.height;
+  const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+  const newHeight = Math.min(10000000, Math.max(0.1,
+    oldHeight * Math.exp(event.deltaY * deltaScale * 0.001),
+  ));
+  const newWidth = newHeight * rect.width / rect.height;
+  state.cameraX += pointerX * (oldWidth - newWidth);
+  state.cameraY += pointerY * (oldHeight - newHeight);
+  state.viewHeight = newHeight;
+  syncNavigationControls();
+}, { passive: false });
 
 const gpu = (navigator as Navigator & { gpu?: any }).gpu;
 if (!gpu) throw new Error("WebGPU is unavailable");
@@ -296,11 +358,19 @@ function frame(now: number): void {
   const elapsed = Math.min((now - previous) / 1000, 0.1);
   previous = now;
   if (!state.paused) {
-    state.time += elapsed * state.timeRate;
+    const simulationElapsed = elapsed * state.timeRate;
+    state.time += simulationElapsed;
     const low = wind(state.lowWindSpeed, state.lowWindDirection);
     const high = wind(state.highWindSpeed, state.highWindDirection);
-    lowOffset = [lowOffset[0] + low[0] * elapsed, lowOffset[1] + low[1] * elapsed];
-    highOffset = [highOffset[0] + high[0] * elapsed, highOffset[1] + high[1] * elapsed];
+    lowOffset = [
+      lowOffset[0] + low[0] * simulationElapsed,
+      lowOffset[1] + low[1] * simulationElapsed,
+    ];
+    highOffset = [
+      highOffset[0] + high[0] * simulationElapsed,
+      highOffset[1] + high[1] * simulationElapsed,
+    ];
+    syncControl("time");
   }
   writeUniforms();
   const encoder = device.createCommandEncoder();
@@ -319,8 +389,8 @@ function frame(now: number): void {
   pass.end();
   device.queue.submit([encoder.finish()]);
   statusElement.textContent = state.paused
-    ? "Paused"
-    : `${previewCanvas.width} × ${previewCanvas.height} · live`;
+    ? `Paused at ${format(state.time, 1)} s`
+    : `${previewCanvas.width} × ${previewCanvas.height} · ${format(state.time, 1)} s · ${format(state.timeRate, 0.1)}×`;
   requestAnimationFrame(frame);
 }
 
