@@ -12,7 +12,7 @@ type State = {
   viewHeight: number;
   time: number;
   cloudTimeScale: number;
-  calendarTimeScale: number;
+  worldTimeScale: number;
   timeScalesLocked: boolean;
   paused: boolean;
   pressureHpa: number;
@@ -21,6 +21,7 @@ type State = {
   synopticPressureGradient: number;
   synopticPressureGradientDirection: number;
   lowTemperature: number;
+  temperatureAnomaly: number;
   seasonalTemperatureRange: number;
   diurnalTemperatureRange: number;
   upperTemperature: number;
@@ -28,10 +29,12 @@ type State = {
   temperatureGradientDirection: number;
   waterVapor: number;
   aerosolOpticalDepth: number;
-  latitude: number;
-  dayOfYear: number;
-  timeOfDay: number;
+  solarLatitude: number;
+  seasonPhase: number;
+  dayPhase: number;
   moonPhase: number;
+  tidalRange: number;
+  tidalPhaseOffset: number;
   celestialLightingEnabled: number;
   detailCharacter: number;
   detailBlobiness: number;
@@ -59,6 +62,11 @@ type State = {
   vegetationVisible: number;
   surfaceTextureVisible: number;
   landscapeLightingVisible: number;
+  seasonalSnowVisible: number;
+  glaciersVisible: number;
+  seasonalVegetationVisible: number;
+  tidesEnabled: number;
+  seaIceVisible: number;
   pressureWindScale: number;
   pressureCirculationEnabled: number;
   crossIsobarScale: number;
@@ -98,11 +106,12 @@ type ControlGroup = {
 type WeatherScenario = Pick<State,
   | "pressureHpa" | "pressureGradient" | "pressureGradientDirection"
   | "synopticPressureGradient" | "synopticPressureGradientDirection"
-  | "lowTemperature" | "upperTemperature"
+  | "lowTemperature" | "temperatureAnomaly" | "upperTemperature"
   | "seasonalTemperatureRange" | "diurnalTemperatureRange"
   | "temperatureGradient" | "temperatureGradientDirection" | "waterVapor"
   | "aerosolOpticalDepth"
-  | "latitude" | "dayOfYear" | "timeOfDay" | "moonPhase"
+  | "solarLatitude" | "seasonPhase" | "dayPhase" | "moonPhase"
+  | "tidalRange" | "tidalPhaseOffset"
 >;
 type WeatherScenarioDefinition = WeatherScenario & {
   slug: string;
@@ -117,7 +126,7 @@ const defaults: State = {
   viewHeight: 480,
   time: 37,
   cloudTimeScale: 1,
-  calendarTimeScale: 0,
+  worldTimeScale: 0,
   timeScalesLocked: false,
   paused: false,
   pressureHpa: 1008,
@@ -126,6 +135,7 @@ const defaults: State = {
   synopticPressureGradient: 0.85,
   synopticPressureGradientDirection: -81,
   lowTemperature: 14,
+  temperatureAnomaly: 0,
   seasonalTemperatureRange: 12,
   diurnalTemperatureRange: 4,
   upperTemperature: -14,
@@ -133,10 +143,12 @@ const defaults: State = {
   temperatureGradientDirection: -65,
   waterVapor: 13,
   aerosolOpticalDepth: 0.08,
-  latitude: 45,
-  dayOfYear: 172,
-  timeOfDay: 14,
+  solarLatitude: 45,
+  seasonPhase: 0.2521,
+  dayPhase: 0.5833,
   moonPhase: 0.25,
+  tidalRange: 1.25,
+  tidalPhaseOffset: 0,
   celestialLightingEnabled: 1,
   detailCharacter: 0.35,
   detailBlobiness: 0.25,
@@ -164,6 +176,11 @@ const defaults: State = {
   vegetationVisible: 1,
   surfaceTextureVisible: 1,
   landscapeLightingVisible: 1,
+  seasonalSnowVisible: 1,
+  glaciersVisible: 1,
+  seasonalVegetationVisible: 1,
+  tidesEnabled: 1,
+  seaIceVisible: 1,
   pressureWindScale: 1,
   pressureCirculationEnabled: 1,
   crossIsobarScale: 1,
@@ -201,6 +218,7 @@ const groups: ControlGroup[] = [
   {
     domain: "weather", category: "Conditions", layer: "Thermodynamics", controls: [
       range("lowTemperature", "Annual mean low temperature · °C", "WORLD", -35, 45, 0.5),
+      range("temperatureAnomaly", "Current temperature anomaly · °C", "WORLD", -25, 25, 0.5),
       range("seasonalTemperatureRange", "Seasonal range · °C", "WORLD", 0, 40, 0.5),
       range("diurnalTemperatureRange", "Daily range · °C", "WORLD", 0, 20, 0.5),
       range("upperTemperature", "Upper temperature · °C", "WORLD", -80, 10, 0.5),
@@ -212,9 +230,9 @@ const groups: ControlGroup[] = [
   {
     domain: "weather", category: "Conditions", layer: "Time and sky", controls: [
       toggle("celestialLightingEnabled", "Celestial lighting", "DEBUG"),
-      range("latitude", "Latitude · °", "WORLD", -80, 80, 1),
-      range("dayOfYear", "Day of year", "WORLD", 1, 365, 1),
-      range("timeOfDay", "Local solar time · h", "WORLD", 0, 23.99, 0.05),
+      range("solarLatitude", "Solar latitude · °", "WORLD", -90, 90, 1),
+      range("seasonPhase", "Season phase · 0 equinox, 0.25 north sun", "WORLD", 0, 1, 0.001),
+      range("dayPhase", "Day phase · 0 midnight, 0.5 noon", "WORLD", 0, 1, 0.001),
       range("moonPhase", "Moon phase · 0 new, 0.5 full", "WORLD", 0, 1, 0.01),
     ],
   },
@@ -290,6 +308,25 @@ const groups: ControlGroup[] = [
       toggle("landscapeLightingVisible", "Terrain lighting", "DEBUG"),
     ],
   },
+  {
+    domain: "landscape", category: "Layers", layer: "Seasonal surface", controls: [
+      toggle("seasonalSnowVisible", "Seasonal snow", "DEBUG"),
+      toggle("glaciersVisible", "Glaciers", "DEBUG"),
+      toggle("seasonalVegetationVisible", "Vegetation seasons", "DEBUG"),
+    ],
+  },
+  {
+    domain: "water", category: "Conditions", layer: "Astronomical tide", controls: [
+      toggle("tidesEnabled", "Tidal water height", "DEBUG"),
+      range("tidalRange", "Reference tidal range · m", "WORLD", 0, 5, 0.05),
+      range("tidalPhaseOffset", "Local phase offset", "WORLD", -0.5, 0.5, 0.005),
+    ],
+  },
+  {
+    domain: "water", category: "Layers", layer: "Frozen water", controls: [
+      toggle("seaIceVisible", "Sea ice", "DEBUG"),
+    ],
+  },
 ];
 
 const lowCloudDependentKeys = new Set<NumericStateKey>([
@@ -300,14 +337,17 @@ const lowCloudDependentKeys = new Set<NumericStateKey>([
 ]);
 const landscapeCompositionKeys = new Set<NumericStateKey>([
   "coastalReliefVisible", "vegetationVisible", "surfaceTextureVisible",
-  "landscapeLightingVisible",
+  "landscapeLightingVisible", "seasonalSnowVisible", "glaciersVisible",
+  "seasonalVegetationVisible",
 ]);
+const tideKeys = new Set<NumericStateKey>(["tidalRange", "tidalPhaseOffset"]);
 const subtoggleKeys = new Set<NumericStateKey>([
   "lowCloudVisible", "lowCloudShadow", "upperCloudShadow", "upperShadowOnLowCloud",
-  ...landscapeCompositionKeys,
+  ...landscapeCompositionKeys, "seaIceVisible",
 ]);
 const subrangeKeys = new Set<NumericStateKey>([
-  "latitude", "dayOfYear", "timeOfDay", "moonPhase",
+  "solarLatitude", "seasonPhase", "dayPhase", "moonPhase",
+  "tidalRange", "tidalPhaseOffset",
   "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
 
@@ -324,9 +364,10 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
     [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
-    [38, "Vegetation field"], [39, "Beach geology"],
+    [38, "Vegetation field"], [39, "Beach geology"], [40, "Seasonal snow"],
+    [41, "Glacier climate"], [42, "Autumn vegetation"],
   ],
-  water: [[0, "Final composition"]],
+  water: [[0, "Final composition"], [48, "Tide height"], [49, "Sea ice climate"]],
 };
 
 const weatherScenarios = scenarioDefinitions as WeatherScenarioDefinition[];
@@ -381,6 +422,14 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       vegetationVisible: defaults.vegetationVisible,
       surfaceTextureVisible: defaults.surfaceTextureVisible,
       landscapeLightingVisible: defaults.landscapeLightingVisible,
+      seasonalSnowVisible: defaults.seasonalSnowVisible,
+      glaciersVisible: defaults.glaciersVisible,
+      seasonalVegetationVisible: defaults.seasonalVegetationVisible,
+    },
+  },
+  "water:Layers": {
+    Production: {
+      seaIceVisible: defaults.seaIceVisible,
     },
   },
 };
@@ -449,12 +498,12 @@ function updateDependentControls(): void {
   setControlsEnabled(lowCloudDependentKeys, lowCloudEnabled);
   setControlsEnabled(["upperCloudShadow"], upperCloudEnabled);
   setControlsEnabled(["upperShadowOnLowCloud"], lowCloudEnabled && upperCloudEnabled);
-  setControlsEnabled(["moonPhase"], state.celestialLightingEnabled > 0.5);
   setControlsEnabled(["pressureWindScale"], state.pressureCirculationEnabled > 0.5);
   setControlsEnabled(["crossIsobarScale"], state.crossIsobarEnabled > 0.5);
   setControlsEnabled(["thermalWindScale"], state.thermalWindEnabled > 0.5);
   setControlsEnabled(["shelterStrength"], state.shelterEnabled > 0.5);
   setControlsEnabled(landscapeCompositionKeys, state.landscapeCompositionEnabled > 0.5);
+  setControlsEnabled(tideKeys, state.tidesEnabled > 0.5);
 }
 
 function resetButton(
@@ -649,13 +698,12 @@ function renderControls(): void {
     controlsElement.append(section);
   }
   derivedOutputElement = undefined;
-  if (activeDomain === "weather") {
-    const derivedSection = document.createElement("section");
-    derivedSection.className = "control-category derived-output";
-    derivedSection.innerHTML = "<h2>Derived atmosphere · read only</h2><div class=\"derived-grid\"></div>";
-    derivedOutputElement = derivedSection.querySelector<HTMLElement>(".derived-grid")!;
-    controlsElement.append(derivedSection);
-  }
+  const derivedSection = document.createElement("section");
+  derivedSection.className = "control-category derived-output";
+  const derivedName = activeDomain === "weather" ? "atmosphere" : "surface";
+  derivedSection.innerHTML = `<h2>Derived ${derivedName} · read only</h2><div class="derived-grid"></div>`;
+  derivedOutputElement = derivedSection.querySelector<HTMLElement>(".derived-grid")!;
+  controlsElement.append(derivedSection);
   const diagnosticSection = document.createElement("section");
   diagnosticSection.className = "control-category diagnostics";
   diagnosticSection.innerHTML = "<h2>Diagnostics</h2>";
@@ -688,12 +736,6 @@ function renderControls(): void {
   diagnosticSection.append(diagnosticLabel);
   controlsElement.append(diagnosticSection);
   updateDependentControls();
-  if (activeDomain === "water") {
-    const empty = document.createElement("section");
-    empty.className = "empty-domain";
-    empty.innerHTML = "<h2>Water systems</h2><p>Currents, waves and water rendering will live here when their first implementation slice exists.</p>";
-    controlsElement.prepend(empty);
-  }
 }
 
 function renderDomains(): void {
@@ -750,15 +792,15 @@ worldToolbarElement.innerHTML = `
     <summary>World and playback</summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed <span class="kind kind-world">WORLD</span></label><input id="seed" type="text" value="${state.seed}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time <span class="kind kind-world">WORLD</span></label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="calendar-time-scale">Calendar · × real time <span class="kind kind-world">WORLD</span></label><input id="calendar-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.calendarTimeScale)}"><input id="calendar-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.calendarTimeScale}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time <span class="kind kind-world">WORLD</span></label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together <span class="kind kind-world">WORLD</span></label></div>
     <div class="actions"><button id="pause">Pause</button></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
-const calendarTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#calendar-time-scale")!;
-const calendarTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#calendar-time-value")!;
+const worldTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
+const worldTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
 const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
 const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
 seedInput.addEventListener("input", () => {
@@ -767,18 +809,18 @@ seedInput.addEventListener("input", () => {
 function syncTimeScaleInputs(): void {
   cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
   cloudTimeValueInput.value = String(state.cloudTimeScale);
-  calendarTimeScaleInput.value = String(timeScaleToSlider(state.calendarTimeScale));
-  calendarTimeValueInput.value = String(state.calendarTimeScale);
+  worldTimeScaleInput.value = String(timeScaleToSlider(state.worldTimeScale));
+  worldTimeValueInput.value = String(state.worldTimeScale);
   lockTimeScalesInput.checked = state.timeScalesLocked;
 }
 function setCloudTimeScale(value: number): void {
   state.cloudTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) state.calendarTimeScale = state.cloudTimeScale;
+  if (state.timeScalesLocked) state.worldTimeScale = state.cloudTimeScale;
   syncTimeScaleInputs();
 }
-function setCalendarTimeScale(value: number): void {
-  state.calendarTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) state.cloudTimeScale = state.calendarTimeScale;
+function setWorldTimeScale(value: number): void {
+  state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+  if (state.timeScalesLocked) state.cloudTimeScale = state.worldTimeScale;
   syncTimeScaleInputs();
 }
 cloudTimeScaleInput.addEventListener("input", () => {
@@ -790,18 +832,18 @@ cloudTimeValueInput.addEventListener("input", () => {
   }
 });
 cloudTimeValueInput.addEventListener("change", syncTimeScaleInputs);
-calendarTimeScaleInput.addEventListener("input", () => {
-  setCalendarTimeScale(timeScaleFromSlider(calendarTimeScaleInput.valueAsNumber));
+worldTimeScaleInput.addEventListener("input", () => {
+  setWorldTimeScale(timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
 });
-calendarTimeValueInput.addEventListener("input", () => {
-  if (Number.isFinite(calendarTimeValueInput.valueAsNumber)) {
-    setCalendarTimeScale(calendarTimeValueInput.valueAsNumber);
+worldTimeValueInput.addEventListener("input", () => {
+  if (Number.isFinite(worldTimeValueInput.valueAsNumber)) {
+    setWorldTimeScale(worldTimeValueInput.valueAsNumber);
   }
 });
-calendarTimeValueInput.addEventListener("change", syncTimeScaleInputs);
+worldTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 lockTimeScalesInput.addEventListener("change", () => {
   state.timeScalesLocked = lockTimeScalesInput.checked;
-  if (state.timeScalesLocked) state.calendarTimeScale = state.cloudTimeScale;
+  if (state.timeScalesLocked) state.worldTimeScale = state.cloudTimeScale;
   syncTimeScaleInputs();
 });
 pauseButton.addEventListener("click", () => {
@@ -820,6 +862,7 @@ function syncControl(key: NumericStateKey): void {
     || key === "thermalWindEnabled"
     || key === "shelterEnabled"
     || key === "landscapeCompositionEnabled"
+    || key === "tidesEnabled"
   ) updateDependentControls();
   const input = inputByKey.get(key);
   if (!input) return;
@@ -841,9 +884,9 @@ function advanceTransitions(elapsed: number): void {
     for (const key of Object.keys(presetTransition.to) as NumericStateKey[]) {
       const from = presetTransition.from[key] as number;
       const to = presetTransition.to[key] as number;
-      if (key === "timeOfDay") {
-        const delta = (to - from + 36) % 24 - 12;
-        state[key] = (from + delta * amount + 24) % 24;
+      if (key === "dayPhase" || key === "seasonPhase" || key === "moonPhase") {
+        const delta = (to - from + 1.5) % 1 - 0.5;
+        state[key] = (from + delta * amount + 1) % 1;
       } else {
         state[key] = from + (to - from) * amount;
       }
@@ -940,8 +983,12 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneBuffer = device.createBuffer({ size: 112, usage: 0x40 | 0x08 });
-const playgroundBuffer = device.createBuffer({ size: 144, usage: 0x40 | 0x08 });
+const sceneFloats = new Float32Array(32);
+const sceneUints = new Uint32Array(sceneFloats.buffer);
+const tuningFloats = new Float32Array(40);
+const tuningUints = new Uint32Array(tuningFloats.buffer);
+const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
+const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
 const sceneBindGroup = device.createBindGroup({
   layout: pipeline.getBindGroupLayout(0),
   entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
@@ -966,33 +1013,63 @@ function directedVector(magnitude: number, degrees: number): [number, number] {
 }
 
 function currentLowTemperature(): number {
-  const hemisphere = state.latitude < 0 ? -1 : 1;
-  const seasonalPhase = 2 * Math.PI * (state.dayOfYear - 205) / 365;
-  const diurnalPhase = 2 * Math.PI * (state.timeOfDay - 15) / 24;
+  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
+  const seasonalPhase = 2 * Math.PI * (state.seasonPhase - 0.09);
+  const diurnalPhase = 2 * Math.PI * (state.dayPhase - 0.625);
   return state.lowTemperature
-    + 0.5 * state.seasonalTemperatureRange * hemisphere * Math.cos(seasonalPhase)
-    + 0.5 * state.diurnalTemperatureRange * Math.cos(diurnalPhase);
+    + 0.5 * state.seasonalTemperatureRange * latitudeSeasonality()
+      * hemisphere * Math.sin(seasonalPhase)
+    + 0.5 * state.diurnalTemperatureRange * Math.cos(diurnalPhase)
+    + state.temperatureAnomaly;
+}
+
+function latitudeSeasonality(): number {
+  return 0.15 + 0.85 * smoothstepValue(0, 45, Math.abs(state.solarLatitude));
+}
+
+function groundTemperature(elevation: number): number {
+  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
+  return state.lowTemperature
+    + 0.42 * state.seasonalTemperatureRange * latitudeSeasonality() * hemisphere
+      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.13))
+    - 0.0065 * Math.max(elevation, 0);
+}
+
+function waterTemperature(): number {
+  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
+  return state.lowTemperature
+    + 0.28 * state.seasonalTemperatureRange * latitudeSeasonality() * hemisphere
+      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.175));
+}
+
+function tideHeight(): number {
+  const solarHourAngle = 2 * Math.PI * (state.dayPhase - 0.5);
+  const lunarHourAngle = solarHourAngle + 2 * Math.PI * state.moonPhase;
+  const phaseOffset = 2 * Math.PI * state.tidalPhaseOffset;
+  const lunarTide = Math.cos(2 * (lunarHourAngle + phaseOffset));
+  const solarTide = 0.46 * Math.cos(2 * (solarHourAngle + phaseOffset));
+  return 0.5 * state.tidesEnabled * state.tidalRange * (lunarTide + solarTide) / 1.46;
 }
 
 type Light = { direction: [number, number, number]; intensity: number };
 type CelestialLighting = { sun: Light; moon: Light; ambient: number };
 
 function celestialDirection(declination: number, hourAngle: number): [number, number, number] {
-  const latitude = state.latitude * Math.PI / 180;
+  const solarLatitude = state.solarLatitude * Math.PI / 180;
   return [
     -Math.cos(declination) * Math.sin(hourAngle),
-    Math.sin(declination) * Math.cos(latitude)
-      - Math.cos(declination) * Math.sin(latitude) * Math.cos(hourAngle),
-    Math.sin(latitude) * Math.sin(declination)
-      + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle),
+    Math.sin(declination) * Math.cos(solarLatitude)
+      - Math.cos(declination) * Math.sin(solarLatitude) * Math.cos(hourAngle),
+    Math.sin(solarLatitude) * Math.sin(declination)
+      + Math.cos(solarLatitude) * Math.cos(declination) * Math.cos(hourAngle),
   ];
 }
 
 function celestialLighting(): CelestialLighting {
   const obliquity = 23.44 * Math.PI / 180;
-  const solarLongitude = 2 * Math.PI * (state.dayOfYear - 80) / 365;
+  const solarLongitude = 2 * Math.PI * state.seasonPhase;
   const solarDeclination = Math.asin(Math.sin(obliquity) * Math.sin(solarLongitude));
-  const solarHourAngle = 2 * Math.PI * (state.timeOfDay - 12) / 24;
+  const solarHourAngle = 2 * Math.PI * (state.dayPhase - 0.5);
   const sunDirection = celestialDirection(solarDeclination, solarHourAngle);
   const sunElevation = Math.sqrt(Math.max(sunDirection[2], 0));
   const sunHorizon = smoothstepValue(0, 0.08, sunDirection[2]);
@@ -1100,9 +1177,28 @@ function atmosphericOutputs(): Array<[string, string]> {
   ];
 }
 
+function surfaceOutputs(): Array<[string, string]> {
+  const moisture = smoothstepValue(2, 10, state.waterVapor);
+  const ground = groundTemperature(0);
+  const alpineGround = groundTemperature(600);
+  const water = waterTemperature();
+  const snow = (1 - smoothstepValue(-6, 2, alpineGround)) * (0.35 + 0.65 * moisture);
+  const ice = 1 - smoothstepValue(-2.2, 1, water);
+  const glacier = (1 - smoothstepValue(-5, 1, state.lowTemperature - 3.9)) * moisture;
+  return [
+    ["Ground temperature", `${ground.toFixed(1)} °C`],
+    ["Water temperature", `${water.toFixed(1)} °C`],
+    ["Snow at 600 m", snow.toFixed(2)],
+    ["Sea ice climate", ice.toFixed(2)],
+    ["Glacier climate at 600 m", glacier.toFixed(2)],
+    ["Tide height", `${tideHeight().toFixed(2)} m`],
+  ];
+}
+
 function updateDerivedOutput(): void {
   if (!derivedOutputElement) return;
-  derivedOutputElement.replaceChildren(...atmosphericOutputs().flatMap(([label, value]) => {
+  const outputs = activeDomain === "weather" ? atmosphericOutputs() : surfaceOutputs();
+  derivedOutputElement.replaceChildren(...outputs.flatMap(([label, value]) => {
     const name = document.createElement("span");
     name.textContent = label;
     const output = document.createElement("output");
@@ -1112,9 +1208,6 @@ function updateDerivedOutput(): void {
 }
 
 function writeUniforms(): void {
-  const sceneData = new ArrayBuffer(112);
-  const sceneFloats = new Float32Array(sceneData);
-  const sceneUints = new Uint32Array(sceneData);
   const aspect = previewCanvas.width / previewCanvas.height;
   const pressureGradient = directedVector(state.pressureGradient / 1000, state.pressureGradientDirection);
   const synopticGradient = directedVector(
@@ -1129,16 +1222,16 @@ function writeUniforms(): void {
   sceneFloats.set([state.pressureHpa, ...pressureGradient, state.seasonalTemperatureRange], 4);
   sceneFloats.set([...synopticGradient, state.lowTemperature, state.upperTemperature], 8);
   sceneFloats.set([state.waterVapor, ...temperatureGradient, state.diurnalTemperatureRange], 12);
-  sceneFloats.set([state.latitude, state.dayOfYear, state.timeOfDay, state.moonPhase], 16);
+  sceneFloats.set([state.solarLatitude, state.seasonPhase, state.dayPhase, state.moonPhase], 16);
+  sceneFloats.set([
+    state.tidesEnabled * state.tidalRange, state.tidalPhaseOffset, state.temperatureAnomaly, 0,
+  ], 20);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 20);
-  sceneFloats[24] = state.time;
-  sceneFloats[25] = state.aerosolOpticalDepth;
-  device.queue.writeBuffer(sceneBuffer, 0, sceneData);
+  sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 24);
+  sceneFloats[28] = state.time;
+  sceneFloats[29] = state.aerosolOpticalDepth;
+  device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
-  const tuningData = new ArrayBuffer(144);
-  const tuningFloats = new Float32Array(tuningData);
-  const tuningUints = new Uint32Array(tuningData);
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
   ], 0);
@@ -1166,8 +1259,14 @@ function writeUniforms(): void {
     state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
   ], 28);
-  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 32);
-  device.queue.writeBuffer(playgroundBuffer, 0, tuningData);
+  tuningFloats.set([
+    state.landscapeCompositionEnabled * state.seasonalSnowVisible,
+    state.landscapeCompositionEnabled * state.glaciersVisible,
+    state.seaIceVisible,
+    state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
+  ], 32);
+  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 36);
+  device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 
 function resize(): void {
@@ -1200,6 +1299,9 @@ function formatDistance(distanceMetres: number): string {
 }
 
 let previous = performance.now();
+const worldDaySeconds = 86_400;
+const worldYearDays = 360;
+const lunarCycleDays = 28;
 function frame(now: number): void {
   resize();
   updateScaleBar();
@@ -1209,8 +1311,13 @@ function frame(now: number): void {
   if (!state.paused) {
     const simulationElapsed = elapsed * state.cloudTimeScale;
     state.time += simulationElapsed;
-    state.timeOfDay = (state.timeOfDay + elapsed * state.calendarTimeScale / 3600) % 24;
-    syncControl("timeOfDay");
+    const worldElapsed = elapsed * state.worldTimeScale;
+    state.dayPhase = (state.dayPhase + worldElapsed / worldDaySeconds) % 1;
+    state.seasonPhase = (state.seasonPhase + worldElapsed / (worldDaySeconds * worldYearDays)) % 1;
+    state.moonPhase = (state.moonPhase + worldElapsed / (worldDaySeconds * lunarCycleDays)) % 1;
+    syncControl("dayPhase");
+    syncControl("seasonPhase");
+    syncControl("moonPhase");
   }
   updateDerivedOutput();
   writeUniforms();
@@ -1232,7 +1339,7 @@ function frame(now: number): void {
   device.queue.submit([encoder.finish()]);
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.cloudTimeScale}× clouds · ${state.calendarTimeScale}× calendar · ${state.timeOfDay.toFixed(2)} h`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
   requestAnimationFrame(frame);
 }
 

@@ -44,15 +44,17 @@ The Rust stack additionally requires Rust 1.88 or newer, with the
 all of them.
 
 The separate procedural world laboratory runs with `bun run dev:playground`. Its
-Weather, Landscape, and future Water domains render the production scene
+Weather, Landscape, and Water domains render the production scene
 algorithms without a game server. Controls distinguish live world conditions,
 procedural-model tuning, fixed shader tuning, and playground-only diagnostics.
 Cloud masks, shadows, terrain fields, primary atmospheric gradients, derived wind
 and shear, and approximate shelter can be inspected directly. Derived weather and
 sun/moon lighting are read-only; scenarios change pressure, climate, moisture,
-aerosol optical depth, location, calendar time, and moon phase. Drag the preview
+aerosol optical depth, fictional solar location and world phases, and local tide.
+Landscape and Water expose seasonal snow, glaciers, vegetation color, tidal
+height, and sea ice. Drag the preview
 to pan, use the mouse wheel to zoom around the pointer, and adjust cloud-evolution
-and calendar multipliers independently or lock them together. `2×` means twice
+and world-clock multipliers independently or lock them together. `2×` means twice
 real time for either clock. Every slider value can also be typed directly. Weather
 scenarios and slider-track clicks transition smoothly, while dragging remains
 immediate. World inputs have no arbitrary default reset; changed tuning and debug
@@ -161,13 +163,16 @@ gameplay limit; click the mouse wheel to restore the original view. The lower-le
 scale bar follows the zoom in real metric units. The same match seed produces a
 connected, vastly dominant ocean with sparse clusters of large islands. Smaller
 density fields shape coastlines, reefs, and sharp outcrops without placing terrain objects. Water
-color changes continuously with depth before a distinct shoreline transition.
+color changes continuously with tidal depth before a distinct moving shoreline.
+Cold climates can form broken sea ice; seasonal temperature, moisture, and
+altitude produce snow and persistent glacier material.
 Gentle shore has a connected beach whose width varies with broad geology, while
 steep shore and inland cliffs are bare rock. Inland grass blends into clustered
-forest, higher terrain exposes more rock, and the highest peaks carry sparse snow.
+forest, temperate vegetation changes color while cooling, and higher terrain
+exposes more rock.
 Some coasts are all cliff, some alternate cliffs and beaches, and others remain
-beach-dominant. Cliffs
-continue down their submerged flanks, and rare deep trenches break up the seafloor.
+beach-dominant. Cliffs continue down their submerged flanks, shallow shelves give
+way to kilometre-deep ocean basins, and rare deep trenches break up the seafloor.
 Boats slow progressively when their 0.6 m draft loses bottom clearance. Static
 ground friction prevents creep after they settle, while sufficiently extreme
 force can break that hold and slide the boat against lower kinetic friction.

@@ -1,5 +1,5 @@
 use pyboat_browser::MultiplayerClient;
-use pyboat_game::{procedural_match_environment, procedural_terrain_elevation_m};
+use pyboat_game::{procedural_match_environment, procedural_water_depth_m};
 use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use pyboat_simulation::{DT_SECONDS, apparent_flow};
 use rapier2d::prelude::Vector;
@@ -204,13 +204,35 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
 #[test]
 fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     let match_seed = 42;
-    let position_m = (-256..=256)
-        .flat_map(|x| (-256..=256).map(move |y| Vector::new(x as f32 * 16.0, y as f32 * 16.0)))
-        .find(|position_m| {
-            let depth_m = (-procedural_terrain_elevation_m(match_seed, *position_m)).max(0.0);
-            (0.1..0.5).contains(&depth_m)
-        })
-        .expect("the representative terrain should contain dragging depth");
+    let depth_at = |position_m| procedural_water_depth_m(match_seed, 9.0 / 60.0, position_m);
+    let mut position_m = None;
+    'search: for x in -64..64 {
+        for y in -64..=64 {
+            let start_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+            let end_m = start_m + Vector::new(128.0, 0.0);
+            let start_depth_m = depth_at(start_m);
+            let end_depth_m = depth_at(end_m);
+            if (start_depth_m < 0.3) == (end_depth_m < 0.3) {
+                continue;
+            }
+            let (mut shallow_m, mut deep_m) = if start_depth_m < end_depth_m {
+                (start_m, end_m)
+            } else {
+                (end_m, start_m)
+            };
+            for _ in 0..12 {
+                let middle_m = (shallow_m + deep_m) * 0.5;
+                if depth_at(middle_m) < 0.3 {
+                    shallow_m = middle_m;
+                } else {
+                    deep_m = middle_m;
+                }
+            }
+            position_m = Some((shallow_m + deep_m) * 0.5);
+            break 'search;
+        }
+    }
+    let position_m = position_m.expect("the representative terrain should contain dragging depth");
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
@@ -225,7 +247,7 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     });
 
     let view = client.view().unwrap();
-    let expected_depth_m = (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0);
+    let expected_depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
     assert_eq!(view.water_depth_m, expected_depth_m);
     assert_eq!(view.bottom_clearance_m, expected_depth_m - 0.6);
     assert_eq!(view.bottom_contact_fraction, (0.6 - expected_depth_m) / 0.6);
@@ -285,7 +307,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
         for x in -128..=128 {
             for y in -128..=128 {
                 let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
-                let depth_m = (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0);
+                let depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
                 if predicate(depth_m) {
                     return position_m;
                 }

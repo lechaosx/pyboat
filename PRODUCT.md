@@ -62,6 +62,10 @@ This file records intended player experience, scope, and product behavior.
   remain beach-dominant.
 - **[Explicit]** Cliffs continue below the waterline, and rare deep trenches
   occur in the same continuous terrain field.
+- **[Explicit]** Shallow depths remain around coasts, reefs, lagoons, and shelf
+  water. The connected water between island clusters deepens into ordinary
+  ocean basins measured in hundreds to thousands of metres rather than remaining
+  a roughly 30 m-deep shelf.
 - **[Explicit]** The production terrain uses `3×` base elevation relief so most
   coasts reach navigable water within hundreds of metres rather than remaining
   shallow for roughly a kilometre. Broad lagoons may still occur naturally.
@@ -83,9 +87,11 @@ This file records intended player experience, scope, and product behavior.
   moving through spacetime, without a global fluid simulation or explicit storm
   objects and life cycles. Storm-like conditions emerge when the continuous
   atmospheric fields align.
-- **[Explicit]** Pressure, climate and upper-level temperature, absolute moisture,
-  aerosol optical depth, location, calendar time, moon phase, and terrain forcing
-  are primary conditions.
+- **[Explicit]** Pressure, climate and upper-level temperature, current
+  temperature anomaly, absolute moisture, aerosol optical depth, solar latitude,
+  world day/season phases, moon phase, local tidal response, and terrain forcing
+  are primary conditions. These describe a fictional local environment rather
+  than a literal Earth location or calendar.
   Current low-level temperature follows seasonal and daily cycles. Sun and moon
   position and illumination, wind at both levels, relative humidity, instability,
   lift, cloud potential, rain, gustiness, and wind shear
@@ -96,15 +102,28 @@ This file records intended player experience, scope, and product behavior.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
+- **[Explicit]** Seasonal terrain and water need only remain locally plausible,
+  deterministic, and smooth through space and time. They do not require a global
+  climate simulation or stored per-location history. Analytic thermal lag and
+  annual accumulation-versus-melt approximations derive ground and water
+  temperature, seasonal snow, sea ice, glaciers, and vegetation season.
+- **[Explicit]** Moon and sun position derive a stateless astronomical tide.
+  Moon phase changes spring/neap range but does not drive weather. Tidal water
+  height changes authoritative depth, grounding, navigability, and the rendered
+  shoreline; local range and phase response need not form a globally correct
+  ocean basin.
 - **[Explicit]** The browser renders water depth continuously, with a distinct
   transition at the shoreline.
 - **[Explicit]** The browser HUD reports water depth, under-keel clearance, and
   how strongly the hull is dragging on the bottom.
-- **[Implicit]** The browser renders its static seeded elevation field with a
-  continuous shallow-to-deep water gradient and a discrete shoreline transition.
-- **[Explicit]** Land uses distinct beach, grass, forest, rock, and high-altitude
-  snow materials. Material boundaries remain sharp except for the blend between
-  grass and trees; color variation stays within each material.
+- **[Implicit]** The browser renders its static seeded elevation field against
+  the current tidal water height, with a continuous shallow-to-deep gradient and
+  a discrete moving shoreline transition.
+- **[Explicit]** Land uses distinct beach, grass, forest, rock, seasonal snow,
+  and glacier materials; sufficiently cold water forms broken sea ice. Temperate
+  vegetation can turn ochre and orange while tropical vegetation remains driven
+  primarily by moisture. Material boundaries remain sharp except for the blend
+  between grass and trees; color variation stays within each material.
 - **[Explicit]** Rock exposure increases with altitude, allowing high mountains
   to remain rocky on gentler ground. Mountain rock detail follows the same
   height field as physical terrain and must read as relief rather than isolines.
@@ -214,7 +233,7 @@ This file records intended player experience, scope, and product behavior.
 ## Platforms and controls
 
 - **[Explicit]** One general procedural playground covers generated weather,
-  landscape, and future water systems. Each domain separates semantic layers,
+  landscape, and water systems. Each domain separates semantic layers,
   world conditions, model tuning, shader tuning, and diagnostic views rather
   than presenting one undifferentiated list of controls.
 - **[Explicit]** Weather diagnostics can independently display and enable cloud
@@ -231,17 +250,17 @@ This file records intended player experience, scope, and product behavior.
   the initial world conditions are illustrative rather than canonical. The
   initial diagnostic output is always the final composed scene.
 - **[Explicit]** The procedural playground supports drag panning and cursor-
-  anchored mouse-wheel zoom. Cloud animation and calendar time have independent
+  anchored mouse-wheel zoom. Cloud animation and world time have independent
   rates, so cloud advection and texture evolution can continue while time of day
   is frozen. Primary weather fields stay fixed until changed manually or by a
   scenario.
-- **[Explicit]** Cloud-evolution and calendar speeds use the same real-time
+- **[Explicit]** Cloud-evolution and world-clock speeds use the same real-time
   multiplier: `2×` advances either clock twice as fast as real time. Their speeds
   can be locked together or adjusted independently.
 - **[Explicit]** The playground uses the same architectural 1–2–5 metric scale
   indicator as gameplay. Absolute camera position and cloud-animation time are
-  not linear sliders; navigation uses drag and wheel, while local solar time is a
-  world control.
+  not linear sliders; navigation uses drag and wheel, while normalized day,
+  season, and moon phases are world controls.
 - **[Implicit]** View height is likewise controlled only through wheel zoom rather
   than an impractically wide linear slider.
 - **[Explicit]** Live world inputs have no reset-to-default action because no one
@@ -258,7 +277,8 @@ This file records intended player experience, scope, and product behavior.
   rain, a cold-front squall, tropical convection, and post-front clearing each
   configure realistic primary causes and retain a distinct visual mood. Dawn mist,
   golden-hour cumulus, winter twilight stratus, clear full moon, a moonlit squall,
-  and high-latitude summer midnight also exercise day, season, and moonlight moods.
+  high-latitude summer midnight, polar freeze, and temperate autumn also exercise
+  day, season, moonlight, snow, ice, glaciers, and vegetation moods.
 - **[Explicit]** The playground has a deterministic headless capture mode that is
   also practical for humans. It renders chosen scenarios through the same shader
   and emits images plus readable derived-condition and image summaries for visual

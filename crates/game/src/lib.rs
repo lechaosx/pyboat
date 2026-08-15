@@ -18,6 +18,9 @@ const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
+const WORLD_DAY_SECONDS: f64 = 86_400.0;
+const WORLD_YEAR_DAYS: f64 = 360.0;
+const WORLD_LUNAR_CYCLE_DAYS: f64 = 28.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AtmospherePrimary {
@@ -32,9 +35,9 @@ pub struct AtmospherePrimary {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CelestialConditions {
-    pub latitude_degrees: f32,
-    pub day_of_year: f32,
-    pub solar_time_hours: f32,
+    pub solar_latitude_degrees: f32,
+    pub season_phase: f32,
+    pub day_phase: f32,
     pub moon_phase: f32,
 }
 
@@ -55,6 +58,22 @@ pub struct ClimateConditions {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TidalConditions {
+    pub reference_range_m: f32,
+    pub phase_offset: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceClimate {
+    pub air_temperature_c: f32,
+    pub ground_temperature_c: f32,
+    pub water_temperature_c: f32,
+    pub seasonal_snow_cover: f32,
+    pub sea_ice_cover: f32,
+    pub glacier_cover: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
     pub primary: AtmospherePrimary,
     pub wind_velocity_m_s: Vector,
@@ -69,13 +88,11 @@ pub struct ProceduralWeather {
 }
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
-    let latitude = f64::from(conditions.latitude_degrees).to_radians();
-    let solar_longitude =
-        std::f64::consts::TAU * (f64::from(conditions.day_of_year) - 80.0) / 365.0;
+    let latitude = f64::from(conditions.solar_latitude_degrees).to_radians();
+    let solar_longitude = std::f64::consts::TAU * f64::from(conditions.season_phase);
     let obliquity = 23.44_f64.to_radians();
     let solar_declination = libm::asin(libm::sin(obliquity) * libm::sin(solar_longitude));
-    let solar_hour_angle =
-        std::f64::consts::TAU * (f64::from(conditions.solar_time_hours) - 12.0) / 24.0;
+    let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let sun_direction = celestial_direction(latitude, solar_declination, solar_hour_angle);
     let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
     let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
@@ -107,18 +124,135 @@ pub fn current_low_temperature_c(
     climate: ClimateConditions,
     conditions: CelestialConditions,
 ) -> f32 {
-    let hemisphere = if conditions.latitude_degrees < 0.0 {
+    let hemisphere = if conditions.solar_latitude_degrees < 0.0 {
         -1.0
     } else {
         1.0
     };
-    let seasonal_phase =
-        std::f64::consts::TAU * (f64::from(conditions.day_of_year) - 205.0) / 365.0;
-    let diurnal_phase =
-        std::f64::consts::TAU * (f64::from(conditions.solar_time_hours) - 15.0) / 24.0;
+    let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.09);
+    let diurnal_phase = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.625);
+    let latitude_seasonality = 0.15
+        + 0.85
+            * smoothstep_range(
+                0.0,
+                45.0,
+                f64::from(conditions.solar_latitude_degrees.abs()),
+            ) as f32;
     climate.annual_mean_low_temperature_c
-        + 0.5 * climate.seasonal_temperature_range_c * hemisphere * libm::cos(seasonal_phase) as f32
+        + 0.5
+            * climate.seasonal_temperature_range_c
+            * latitude_seasonality
+            * hemisphere
+            * libm::sin(seasonal_phase) as f32
         + 0.5 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+}
+
+pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> f32 {
+    let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
+    let lunar_hour_angle =
+        solar_hour_angle + std::f64::consts::TAU * f64::from(conditions.moon_phase);
+    let phase_offset = std::f64::consts::TAU * f64::from(tide.phase_offset);
+    let lunar_tide = libm::cos(2.0 * (lunar_hour_angle + phase_offset));
+    let solar_tide = 0.46 * libm::cos(2.0 * (solar_hour_angle + phase_offset));
+    0.5 * tide.reference_range_m * ((lunar_tide + solar_tide) / 1.46) as f32
+}
+
+pub fn world_celestial_conditions(world_time_seconds: f64) -> CelestialConditions {
+    CelestialConditions {
+        solar_latitude_degrees: 45.0,
+        season_phase: (0.2521 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
+            .rem_euclid(1.0) as f32,
+        day_phase: (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32,
+        moon_phase: (0.25 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_CYCLE_DAYS))
+            .rem_euclid(1.0) as f32,
+    }
+}
+
+pub fn procedural_tidal_conditions(match_seed: u64, position_m: Vector) -> TidalConditions {
+    let response =
+        terrain_fractal_noise(match_seed ^ 0x94d0_49bb_1331_11eb, position_m, 131_072.0, 3) as f32;
+    let lag =
+        terrain_fractal_noise(match_seed ^ 0xbf58_476d_1ce4_e5b9, position_m, 131_072.0, 3) as f32;
+    TidalConditions {
+        reference_range_m: 1.25 + 0.75 * response,
+        phase_offset: 0.08 * lag,
+    }
+}
+
+pub fn procedural_water_height_m(
+    match_seed: u64,
+    world_time_seconds: f64,
+    position_m: Vector,
+) -> f32 {
+    tide_height_m(
+        procedural_tidal_conditions(match_seed, position_m),
+        world_celestial_conditions(world_time_seconds),
+    )
+}
+
+pub fn procedural_water_depth_m(
+    match_seed: u64,
+    world_time_seconds: f64,
+    position_m: Vector,
+) -> f32 {
+    (procedural_water_height_m(match_seed, world_time_seconds, position_m)
+        - procedural_terrain_elevation_m(match_seed, position_m))
+    .max(0.0)
+}
+
+pub fn climate_surface(
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+    water_vapor_g_kg: f32,
+    elevation_m: f32,
+) -> SurfaceClimate {
+    let air_temperature_c = current_low_temperature_c(climate, conditions);
+    let hemisphere = if conditions.solar_latitude_degrees < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let latitude_seasonality = 0.15
+        + 0.85
+            * smoothstep_range(
+                0.0,
+                45.0,
+                f64::from(conditions.solar_latitude_degrees.abs()),
+            ) as f32;
+    let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.13);
+    let ground_temperature_c = climate.annual_mean_low_temperature_c
+        + 0.42
+            * climate.seasonal_temperature_range_c
+            * latitude_seasonality
+            * hemisphere
+            * libm::sin(seasonal_phase) as f32;
+    let water_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.175);
+    let water_temperature_c = climate.annual_mean_low_temperature_c
+        + 0.28
+            * climate.seasonal_temperature_range_c
+            * latitude_seasonality
+            * hemisphere
+            * libm::sin(water_phase) as f32;
+    let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
+    let moisture_support = smoothstep_range(2.0, 10.0, f64::from(water_vapor_g_kg)) as f32;
+    let seasonal_snow_cover = (1.0
+        - smoothstep_range(-6.0, 2.0, f64::from(ground_temperature_at_elevation_c)) as f32)
+        * (0.35 + 0.65 * moisture_support);
+    let sea_ice_cover = 1.0 - smoothstep_range(-2.2, 1.0, f64::from(water_temperature_c)) as f32;
+    let annual_temperature_at_elevation_c =
+        climate.annual_mean_low_temperature_c - 0.0065 * elevation_m.max(0.0);
+    let glacier_cover = (1.0
+        - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_at_elevation_c)) as f32)
+        * moisture_support;
+
+    SurfaceClimate {
+        air_temperature_c,
+        ground_temperature_c,
+        water_temperature_c,
+        seasonal_snow_cover,
+        sea_ice_cover,
+        glacier_cover,
+    }
 }
 
 fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32; 3] {
@@ -221,7 +355,7 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
     Environment {
         true_wind_velocity_m_s: land_sheltered_wind(match_seed, position_m, open_wind),
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: (-procedural_terrain_elevation_m(match_seed, position_m)).max(0.0),
+        water_depth_m: procedural_water_depth_m(match_seed, tick as f64 / 60.0, position_m),
     }
 }
 
@@ -385,12 +519,17 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
     let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
+    let base_depth_m = -base_elevation_m;
+    let offshore_amount = smoothstep_range(4.0, 24.0, base_depth_m);
+    let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
+    let terrain_elevation_m =
+        -(base_depth_m + offshore_amount * (ocean_floor_depth_m - base_depth_m));
     let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
         * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));
     let rock_mask = smoothstep_range(-2.0, -0.8, base_elevation_m)
         * (1.0 - smoothstep_range(-0.4, -0.1, base_elevation_m));
     if seabed_mask == 0.0 && rock_mask == 0.0 {
-        return base_elevation_m as f32;
+        return terrain_elevation_m as f32;
     }
     let reef = terrain_fractal_noise(
         match_seed ^ 0x5899_65cc_7537_4cc3,
@@ -399,7 +538,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         TERRAIN_REEF_OCTAVE_COUNT,
     );
     let reef_peak = smoothstep_range(0.65, 0.85, reef);
-    (base_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
+    (terrain_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
 }
 
 pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {

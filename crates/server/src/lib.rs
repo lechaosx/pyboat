@@ -9,7 +9,6 @@ use std::{
 
 use pyboat_game::{
     computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
-    procedural_terrain_elevation_m,
 };
 use pyboat_protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
@@ -141,8 +140,9 @@ impl GameMatch {
                     + std::f32::consts::TAU * candidate as f32 / SPAWN_BEARING_CANDIDATES as f32;
                 let candidate_m =
                     spawn_origin_m + Vector::new(bearing_rad.cos(), bearing_rad.sin()) * radius_m;
-                if procedural_terrain_elevation_m(self.match_seed, candidate_m)
-                    <= -MINIMUM_SPAWN_WATER_DEPTH_M
+                if procedural_match_environment(self.match_seed, self.tick, candidate_m)
+                    .water_depth_m
+                    >= MINIMUM_SPAWN_WATER_DEPTH_M
                 {
                     break 'spawn candidate_m;
                 }

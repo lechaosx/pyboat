@@ -152,8 +152,7 @@ button:hover { background: #1b414b; }
   font-size: 0.68rem;
 }
 
-details,
-.empty-domain {
+details {
   margin-bottom: 0.55rem;
   background: rgb(8 29 36 / 72%);
   border: 1px solid var(--line);
@@ -180,8 +179,7 @@ details > :last-child { margin-bottom: 0.72rem; }
 
 .control-category { margin-top: 1rem; }
 
-.control-category h2,
-.empty-domain h2 {
+.control-category h2 {
   margin: 0 0 0.5rem;
   color: var(--accent);
   font-size: 0.66rem;
@@ -347,9 +345,6 @@ output {
 }
 
 .actions button { font-size: 0.68rem; }
-
-.empty-domain { padding: 0.85rem; }
-.empty-domain p { margin: 0; color: var(--muted); font-size: 0.74rem; line-height: 1.5; }
 
 @media (max-width: 760px) {
   aside {

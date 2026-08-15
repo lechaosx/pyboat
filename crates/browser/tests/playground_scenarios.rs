@@ -18,6 +18,7 @@ struct Scenario {
     synoptic_pressure_gradient: f32,
     synoptic_pressure_gradient_direction: f32,
     low_temperature: f32,
+    temperature_anomaly: f32,
     seasonal_temperature_range: f32,
     diurnal_temperature_range: f32,
     upper_temperature: f32,
@@ -25,18 +26,20 @@ struct Scenario {
     temperature_gradient_direction: f32,
     water_vapor: f32,
     aerosol_optical_depth: f32,
-    latitude: f32,
-    day_of_year: f32,
-    time_of_day: f32,
+    solar_latitude: f32,
+    season_phase: f32,
+    day_phase: f32,
     moon_phase: f32,
+    tidal_range: f32,
+    tidal_phase_offset: f32,
 }
 
 impl Scenario {
     fn celestial_conditions(&self) -> CelestialConditions {
         CelestialConditions {
-            latitude_degrees: self.latitude,
-            day_of_year: self.day_of_year,
-            solar_time_hours: self.time_of_day,
+            solar_latitude_degrees: self.solar_latitude,
+            season_phase: self.season_phase,
+            day_phase: self.day_phase,
             moon_phase: self.moon_phase,
         }
     }
@@ -49,7 +52,7 @@ impl Scenario {
                 diurnal_temperature_range_c: self.diurnal_temperature_range,
             },
             self.celestial_conditions(),
-        )
+        ) + self.temperature_anomaly
     }
 
     fn weather(&self) -> ProceduralWeather {
@@ -107,17 +110,17 @@ fn playground_scenarios_have_stable_unique_human_labels() {
     assert!(
         scenarios
             .iter()
-            .all(|scenario| scenario.latitude.abs() <= 90.0)
+            .all(|scenario| scenario.solar_latitude.abs() <= 90.0)
     );
     assert!(
         scenarios
             .iter()
-            .all(|scenario| (1.0..=365.0).contains(&scenario.day_of_year))
+            .all(|scenario| (0.0..=1.0).contains(&scenario.season_phase))
     );
     assert!(
         scenarios
             .iter()
-            .all(|scenario| (0.0..24.0).contains(&scenario.time_of_day))
+            .all(|scenario| (0.0..=1.0).contains(&scenario.day_phase))
     );
     assert!(
         scenarios
@@ -129,10 +132,15 @@ fn playground_scenarios_have_stable_unique_human_labels() {
             .iter()
             .all(|scenario| (0.0..=1.0).contains(&scenario.aerosol_optical_depth))
     );
+    assert!(
+        scenarios
+            .iter()
+            .all(|scenario| scenario.tidal_range >= 0.0 && scenario.tidal_phase_offset.abs() <= 0.5)
+    );
 }
 
 #[test]
-fn time_of_day_scenarios_exercise_sun_twilight_and_moonlight() {
+fn day_phase_scenarios_exercise_sun_twilight_and_moonlight() {
     let scenarios = scenarios();
     let midday = celestial_lighting(scenario(&scenarios, "clear-high").celestial_conditions());
     let twilight =

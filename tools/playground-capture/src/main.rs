@@ -2,8 +2,8 @@ use std::{env, fs, path::PathBuf};
 
 use bytemuck::{Pod, Zeroable};
 use pyboat_game::{
-    AtmospherePrimary, CelestialConditions, ClimateConditions, celestial_lighting,
-    current_low_temperature_c, derive_weather,
+    AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
+    climate_surface, current_low_temperature_c, derive_weather, tide_height_m,
 };
 use rapier2d::prelude::Vector;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ struct Scenario {
     synoptic_pressure_gradient: f32,
     synoptic_pressure_gradient_direction: f32,
     low_temperature: f32,
+    temperature_anomaly: f32,
     seasonal_temperature_range: f32,
     diurnal_temperature_range: f32,
     upper_temperature: f32,
@@ -31,10 +32,12 @@ struct Scenario {
     temperature_gradient_direction: f32,
     water_vapor: f32,
     aerosol_optical_depth: f32,
-    latitude: f32,
-    day_of_year: f32,
-    time_of_day: f32,
+    solar_latitude: f32,
+    season_phase: f32,
+    day_phase: f32,
     moon_phase: f32,
+    tidal_range: f32,
+    tidal_phase_offset: f32,
 }
 
 #[derive(Clone)]
@@ -69,6 +72,7 @@ struct SceneUniforms {
     synoptic_pressure_and_temperature: [f32; 4],
     moisture_and_temperature_gradient: [f32; 4],
     celestial_conditions: [f32; 4],
+    world_surface_conditions: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     time_seconds: f32,
@@ -87,6 +91,7 @@ struct PlaygroundUniforms {
     layer_visibility: [f32; 4],
     landscape_visibility: [f32; 4],
     atmosphere_model: [f32; 4],
+    climate_visibility: [f32; 4],
     diagnostics: [u32; 4],
 }
 
@@ -99,6 +104,12 @@ struct DerivedOutput {
     moon_direction: [f32; 3],
     moon_intensity: f32,
     clear_sky_ambient_intensity: f32,
+    ground_temperature_c: f32,
+    water_temperature_c: f32,
+    seasonal_snow_cover_at_600_m: f32,
+    sea_ice_cover: f32,
+    glacier_cover_at_600_m: f32,
+    tide_height_m: f32,
     surface_wind_m_s: [f32; 2],
     surface_wind_speed_m_s: f32,
     upper_wind_m_s: [f32; 2],
@@ -252,6 +263,11 @@ fn parse_debug_view(value: &str) -> Result<u32, String> {
         "surface-wind" => Ok(16),
         "upper-wind" => Ok(17),
         "shear" => Ok(18),
+        "snow" => Ok(40),
+        "glacier" => Ok(41),
+        "autumn" => Ok(42),
+        "tide" => Ok(48),
+        "sea-ice" => Ok(49),
         _ => parse(value, "--debug"),
     }
 }
@@ -269,8 +285,10 @@ fn print_help() {
            --seed N|0xHEX         deterministic visual seed\n\
            --time SECONDS         deterministic animation time\n\
            --debug NAME|N         final, low-density, upper-depth, low-shadow,\n\
-                                  upper-shadow, surface-wind, upper-wind, or shear\n\n\
-         Each PNG gets a JSON sidecar containing primary inputs, derived weather, and image metrics."
+                                  upper-shadow, surface-wind, upper-wind, shear,\n\
+                                  snow, glacier, autumn, tide, or sea-ice\n\n\
+         Each PNG gets a JSON sidecar containing primary inputs, derived weather,\n\
+         surface climate, tide, and image metrics."
     );
 }
 
@@ -347,6 +365,7 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         layer_visibility: [1.0; 4],
         landscape_visibility: [1.0; 4],
         atmosphere_model: [1.0; 4],
+        climate_visibility: [1.0; 4],
         diagnostics: [options.debug_view, 1, 0, 0],
     };
     let playground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -448,9 +467,9 @@ fn render_scenario(
         scenario.temperature_gradient_direction,
     );
     let conditions = CelestialConditions {
-        latitude_degrees: scenario.latitude,
-        day_of_year: scenario.day_of_year,
-        solar_time_hours: scenario.time_of_day,
+        solar_latitude_degrees: scenario.solar_latitude,
+        season_phase: scenario.season_phase,
+        day_phase: scenario.day_phase,
         moon_phase: scenario.moon_phase,
     };
     let cloud_seed = options.seed ^ 0x7079_626f_6174;
@@ -480,10 +499,16 @@ fn render_scenario(
             scenario.diurnal_temperature_range,
         ],
         celestial_conditions: [
-            conditions.latitude_degrees,
-            conditions.day_of_year,
-            conditions.solar_time_hours,
+            conditions.solar_latitude_degrees,
+            conditions.season_phase,
+            conditions.day_phase,
             conditions.moon_phase,
+        ],
+        world_surface_conditions: [
+            scenario.tidal_range,
+            scenario.tidal_phase_offset,
+            scenario.temperature_anomaly,
+            0.0,
         ],
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         cloud_visual_seed: [cloud_seed as u32, (cloud_seed >> 32) as u32],
@@ -627,20 +652,27 @@ fn capture_report<'a>(
         scenario.temperature_gradient_direction,
     );
     let conditions = CelestialConditions {
-        latitude_degrees: scenario.latitude,
-        day_of_year: scenario.day_of_year,
-        solar_time_hours: scenario.time_of_day,
+        solar_latitude_degrees: scenario.solar_latitude,
+        season_phase: scenario.season_phase,
+        day_phase: scenario.day_phase,
         moon_phase: scenario.moon_phase,
     };
-    let low_temperature = current_low_temperature_c(
-        ClimateConditions {
-            annual_mean_low_temperature_c: scenario.low_temperature,
-            seasonal_temperature_range_c: scenario.seasonal_temperature_range,
-            diurnal_temperature_range_c: scenario.diurnal_temperature_range,
+    let climate = ClimateConditions {
+        annual_mean_low_temperature_c: scenario.low_temperature,
+        seasonal_temperature_range_c: scenario.seasonal_temperature_range,
+        diurnal_temperature_range_c: scenario.diurnal_temperature_range,
+    };
+    let low_temperature =
+        current_low_temperature_c(climate, conditions) + scenario.temperature_anomaly;
+    let celestial = celestial_lighting(conditions);
+    let surface = climate_surface(climate, conditions, scenario.water_vapor, 600.0);
+    let tide_height = tide_height_m(
+        TidalConditions {
+            reference_range_m: scenario.tidal_range,
+            phase_offset: scenario.tidal_phase_offset,
         },
         conditions,
     );
-    let celestial = celestial_lighting(conditions);
     let weather = derive_weather(AtmospherePrimary {
         pressure_hpa: scenario.pressure_hpa,
         pressure_gradient_hpa_per_m: pressure_gradient,
@@ -667,6 +699,12 @@ fn capture_report<'a>(
             moon_direction: celestial.moon_direction,
             moon_intensity: celestial.moon_intensity,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
+            ground_temperature_c: surface.ground_temperature_c,
+            water_temperature_c: surface.water_temperature_c,
+            seasonal_snow_cover_at_600_m: surface.seasonal_snow_cover,
+            sea_ice_cover: surface.sea_ice_cover,
+            glacier_cover_at_600_m: surface.glacier_cover,
+            tide_height_m: tide_height,
             surface_wind_m_s: weather.wind_velocity_m_s.into(),
             surface_wind_speed_m_s: weather.wind_velocity_m_s.length(),
             upper_wind_m_s: weather.upper_wind_velocity_m_s.into(),

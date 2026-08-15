@@ -152,6 +152,11 @@ decisions.
   islands up to `60×`, while negative `0.50–0.74` density produces rarer trenches
   up to `90×`. Because relief derives from the same broad field as island shape,
   it crosses sea level continuously without a separate cliff-biome noise field.
+- **[Implicit]** Elevation through 4 m water depth retains the coastal field
+  unchanged. From 4 to 24 m of base depth, a smooth remap approaches a 3,000 m
+  ocean floor plus up to another 3,000 m from the existing trench field. Rust
+  and WGSL apply the same remap and analytic gradient; coastal reef masks continue
+  to use the unremapped base elevation.
 - **[Implicit]** Four 32–4 m reef octaves have separate roles. Between -4 and
   -0.1 m elevation, a smooth mask applies up to 0.6 m of signed relief to the
   submerged seabed. A narrower -2 to -0.1 m mask adds up to 2 m only where the
@@ -164,7 +169,8 @@ decisions.
   limit aggregate 256 m shoreline fragmentation and require a 4 m-deep transect
   through some, but fewer than one quarter, of mixed reef neighborhoods.
 - **[Implicit]** Each sampled simulation environment includes water depth derived
-  from that elevation. `pyboat-simulation` treats unspecified depth as infinite,
+  from terrain elevation and the current procedural tide. `pyboat-simulation`
+  treats unspecified depth as infinite,
   preserving terrain-independent harnesses and the accepted deep-water behavior.
 - **[Implicit]** The browser derives water depth, clearance below the 0.6 m keel,
   and bottom support fraction from the same locally predicted environment used
@@ -194,7 +200,7 @@ decisions.
   generated independently per player but must look similar under the same local
   weather state.
 - **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies only primary atmospheric and calendar fields to local
+  and supplies only primary atmospheric, celestial, climate, and tidal fields to local
   procedural rendering. WGSL recomputes the small intermediate expressions it
   needs; derived atmospheric values and cloud offsets are not shader inputs. That
   one primary sample applies uniformly across the viewport, including at extreme
@@ -241,7 +247,7 @@ decisions.
 - **[Implicit]** Server and browser physics use the same shared Rust deterministic
   functions and tuning to derive matching parameters from the seed, simulation
   tick, and world position. Browser terrain rendering mirrors the static elevation
-  algorithm in WGSL rather than transferring samples.
+  algorithm and derived tidal waterline in WGSL rather than transferring samples.
 - **[Implicit]** The server samples the environment independently at each boat's
   position before every authoritative tick. The browser uses the same seed, tick,
   and position sampling for each predicted boat and for the local sailing HUD.
@@ -256,13 +262,16 @@ decisions.
 - **[Implicit]** WGSL mirrors Rust's cluster, island-detail, and coastal-reef
   density fields and emulates their 64-bit seed hashing with pairs of
   32-bit integers. The shader owns all terrain presentation: it continuously
-  blends shallow, open, and deep-water colors from sea level through 4 m depth,
-  switches distinctly to land at sea level, and propagates analytic world-space
+  blends shallow, open, and deep-water colors from the current tidal surface
+  through 4 m depth, switches distinctly to exposed terrain at that waterline,
+  and propagates analytic world-space
   derivatives through noise, density splines, masks, and peaks. Those derivatives
   provide height-field lighting and slope-based rock exposure. The rock-slope
   threshold decreases with altitude; broad altitude fields then select alpine
-  rock and sparse snow. Seeded fields grade rock, grass, and forest internally,
-  while beach, vegetation, rock, and snow retain sharp material boundaries.
+  rock. Stateless climate expressions add seasonal snow, glaciers, broken sea
+  ice, vegetation dormancy, and temperate autumn color. Seeded fields grade rock,
+  grass, and forest internally, while beach, vegetation, rock, snow, and glacier
+  retain sharp material boundaries.
   Broad geology varies beach width continuously from sea level, so sand does not
   appear as disconnected inland patches.
 - **[Implicit]** `pyboat-game::procedural_atmosphere_primary` samples the primary
@@ -294,7 +303,7 @@ decisions.
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.
 - **[Explicit]** A separate general procedural playground covers weather,
-  landscape, and future water systems rather than exposing an in-game debug mode.
+  landscape, and water systems rather than exposing an in-game debug mode.
   It renders the production WGSL algorithms directly without multiplayer,
   simulation, or a server.
 - **[Explicit]** Values supplied naturally by a match remain uniforms in both
@@ -303,19 +312,35 @@ decisions.
   and layer switches exist only in the playground entry point.
 - **[Explicit]** Playground tuning defaults mirror the production WGSL override
   values and use final composition rather than a diagnostic view initially.
-- **[Explicit]** Calendar state is latitude, day of year, local solar time, and
-  moon phase. A compact axial-tilt/hour-angle model derives sun and moon direction,
+- **[Explicit]** Celestial state is fictional solar latitude plus normalized
+  season, day, and moon phases; it does not identify an Earth place or date. A
+  compact axial-tilt/hour-angle model derives sun and moon direction,
   horizon attenuation, twilight, and moonlight; it is a rendering-grade day/night
   model rather than observatory astronomy. Annual-mean low temperature plus
   seasonal and diurnal ranges derives the current low-level temperature before
   atmospheric outcomes are evaluated.
-- **[Explicit]** Cloud animation time and calendar time are independent playground
+- **[Explicit]** Cloud animation time and world time are independent playground
   clocks. Primary atmospheric fields do not advance from either clock. Gameplay
   may synchronize both clocks from one authoritative timeline without coupling
   their calculations.
 - **[Explicit]** Both playground clocks expose dimensionless real-time multipliers
-  and may be locked to one multiplier. Calendar hours advance by elapsed real
-  seconds multiplied by the calendar scale and divided by 3,600.
+  and may be locked to one multiplier. At `1×`, normalized day, season, and moon
+  phases advance using a 24-hour world day, 360-day seasonal cycle, and 28-day
+  moon cycle; these are fictional tuning periods rather than a calendar.
+- **[Explicit]** Surface climate is stateless. Solar latitude attenuates the
+  configured seasonal response near the equator; fixed analytic phase lags and
+  amplitude damping approximate ground and water thermal inertia. Temperature,
+  moisture, altitude lapse, and annual accumulation-versus-melt potential derive
+  seasonal snow, sea ice, and glacier cover. Temperate cooling derives vegetation
+  autumn color. The current synoptic temperature anomaly affects weather without
+  redefining annual glacier climate.
+- **[Explicit]** Astronomical tide is the normalized sum of semidiurnal lunar and
+  `0.46×` solar components. Doubling their local hour angles yields two cycles per
+  world day; sun/moon alignment produces spring tides and quarter phase produces
+  neap tides. A seeded low-frequency local range and phase response is sufficient;
+  no globally coherent basin or stored state is required. Rust applies the tide
+  to authoritative water depth and WGSL evaluates the same expression for the
+  shoreline and cloud-shadow receiver height.
 - **[Explicit]** Ambient scene light is derived separately from direct sun or moon
   light. Primary-driven cloud and rain amounts attenuate and cool ambient fill,
   while sampled cloud optical depth controls spatial direct-light shadows.
@@ -337,7 +362,7 @@ decisions.
   are never copied back into primary world inputs or shader uniforms.
 - **[Explicit]** World inputs have no reset-to-default control. Category presets
   replace that concept; Weather scenarios interpolate the complete primary
-  atmosphere, climate, location, calendar, and moon input set while preserving
+  atmosphere, climate, solar location, world phases, moon, and tide input set while preserving
   renderer/model tuning, diagnostic
   state, seed, playback, camera, and zoom. Each implemented non-world category
   exposes a Production preset sourced from the same initial values as its
@@ -346,9 +371,9 @@ decisions.
   by the browser UI, deterministic scenario tests, and the native headless
   capture tool. `pyboat-playground-capture` renders `fragment_playground` through
   headless Vulkan with production tuning defaults. Each PNG receives a JSON
-  sidecar containing its primary inputs, Rust-derived celestial lighting and
-  atmosphere, fixed capture
-  coordinates, and luminance metrics; diagnostic shader views are selectable.
+  sidecar containing its primary inputs, Rust-derived celestial lighting,
+  atmosphere, surface climate, tide, fixed capture coordinates, and luminance
+  metrics; diagnostic shader views are selectable.
 - **[Implicit]** Cloud rendering derives continuous stratiform, convective, and
   shear amounts from primary-driven atmospheric intermediates. Those amounts
   adjust detail character, formation scale and elongation, height, optical depth,

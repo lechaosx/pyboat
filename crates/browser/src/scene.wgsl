@@ -4,6 +4,7 @@ struct SceneUniforms {
     synoptic_pressure_and_temperature: vec4<f32>,
     moisture_and_temperature_gradient: vec4<f32>,
     celestial_conditions: vec4<f32>,
+    world_surface_conditions: vec4<f32>,
     match_seed: vec2<u32>,
     cloud_visual_seed: vec2<u32>,
     time_seconds: f32,
@@ -27,6 +28,7 @@ struct PlaygroundUniforms {
     layer_visibility: vec4<f32>,
     landscape_visibility: vec4<f32>,
     wind_model: vec4<f32>,
+    climate_visibility: vec4<f32>,
     diagnostics: vec4<u32>,
 };
 
@@ -57,6 +59,7 @@ var<private> tuning: SceneTuning;
 var<private> layer_visibility: vec4<f32>;
 var<private> landscape_visibility: vec4<f32>;
 var<private> atmosphere_model: vec4<f32>;
+var<private> climate_visibility: vec4<f32>;
 var<private> celestial_visibility: f32;
 var<private> sun_light_direction: vec3<f32>;
 var<private> moon_light_direction: vec3<f32>;
@@ -93,11 +96,86 @@ fn upper_wind_m_s() -> vec2<f32> {
 
 fn current_low_temperature_c() -> f32 {
     let hemisphere = select(1.0, -1.0, scene.celestial_conditions.x < 0.0);
-    let seasonal_phase = TAU * (scene.celestial_conditions.y - 205.0) / 365.0;
-    let diurnal_phase = TAU * (scene.celestial_conditions.z - 15.0) / 24.0;
+    let latitude_seasonality = 0.15
+        + 0.85 * smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
+    let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.09);
+    let diurnal_phase = TAU * (scene.celestial_conditions.z - 0.625);
     return scene.synoptic_pressure_and_temperature.z
-        + 0.5 * scene.pressure.w * hemisphere * cos(seasonal_phase)
-        + 0.5 * scene.moisture_and_temperature_gradient.w * cos(diurnal_phase);
+        + 0.5 * scene.pressure.w * latitude_seasonality * hemisphere * sin(seasonal_phase)
+        + 0.5 * scene.moisture_and_temperature_gradient.w * cos(diurnal_phase)
+        + scene.world_surface_conditions.z;
+}
+
+fn climate_latitude_seasonality() -> f32 {
+    return 0.15 + 0.85 * smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
+}
+
+fn climate_hemisphere() -> f32 {
+    return select(1.0, -1.0, scene.celestial_conditions.x < 0.0);
+}
+
+fn ground_temperature_c(elevation_m: f32) -> f32 {
+    let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.13);
+    let sea_level_temperature = scene.synoptic_pressure_and_temperature.z
+        + 0.42 * scene.pressure.w * climate_latitude_seasonality()
+            * climate_hemisphere() * sin(seasonal_phase);
+    return sea_level_temperature - 0.0065 * max(elevation_m, 0.0);
+}
+
+fn water_temperature_c() -> f32 {
+    let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.175);
+    return scene.synoptic_pressure_and_temperature.z
+        + 0.28 * scene.pressure.w * climate_latitude_seasonality()
+            * climate_hemisphere() * sin(seasonal_phase);
+}
+
+fn climate_moisture_support() -> f32 {
+    return smoothstep(2.0, 10.0, scene.moisture_and_temperature_gradient.x);
+}
+
+fn seasonal_snow_cover(elevation_m: f32) -> f32 {
+    let cold = 1.0 - smoothstep(-6.0, 2.0, ground_temperature_c(elevation_m));
+    return cold * (0.35 + 0.65 * climate_moisture_support());
+}
+
+fn sea_ice_cover() -> f32 {
+    return 1.0 - smoothstep(-2.2, 1.0, water_temperature_c());
+}
+
+fn glacier_cover(elevation_m: f32) -> f32 {
+    let annual_temperature = scene.synoptic_pressure_and_temperature.z
+        - 0.0065 * max(elevation_m, 0.0);
+    return (1.0 - smoothstep(-5.0, 1.0, annual_temperature))
+        * climate_moisture_support();
+}
+
+fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
+    let annual_temperature = scene.synoptic_pressure_and_temperature.z
+        - 0.0065 * max(elevation_m, 0.0);
+    let temperate = smoothstep(3.0, 10.0, annual_temperature)
+        * (1.0 - smoothstep(18.0, 25.0, annual_temperature));
+    let cooling = smoothstep(
+        0.10,
+        0.80,
+        -climate_hemisphere() * cos(TAU * (scene.celestial_conditions.y - 0.13)),
+    );
+    let temperature = ground_temperature_c(elevation_m);
+    let mild = smoothstep(-2.0, 8.0, temperature)
+        * (1.0 - smoothstep(14.0, 20.0, temperature));
+    return temperate * cooling * mild;
+}
+
+fn vegetation_dormancy(elevation_m: f32) -> f32 {
+    return 1.0 - smoothstep(-2.0, 8.0, ground_temperature_c(elevation_m));
+}
+
+fn tide_height_m() -> f32 {
+    let solar_hour_angle = TAU * (scene.celestial_conditions.z - 0.5);
+    let lunar_hour_angle = solar_hour_angle + TAU * scene.celestial_conditions.w;
+    let phase_offset = TAU * scene.world_surface_conditions.y;
+    let lunar_tide = cos(2.0 * (lunar_hour_angle + phase_offset));
+    let solar_tide = 0.46 * cos(2.0 * (solar_hour_angle + phase_offset));
+    return 0.5 * scene.world_surface_conditions.x * (lunar_tide + solar_tide) / 1.46;
 }
 
 fn relative_humidity() -> f32 {
@@ -704,9 +782,9 @@ fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
 
 fn initialize_celestial_lighting() {
     let obliquity = 23.44 * PI / 180.0;
-    let solar_longitude = TAU * (scene.celestial_conditions.y - 80.0) / 365.0;
+    let solar_longitude = TAU * scene.celestial_conditions.y;
     let declination = asin(sin(obliquity) * sin(solar_longitude));
-    let hour_angle = TAU * (scene.celestial_conditions.z - 12.0) / 24.0;
+    let hour_angle = TAU * (scene.celestial_conditions.z - 0.5);
     sun_light_direction = celestial_direction(declination, hour_angle);
     let sun_horizon = smoothstep(0.0, 0.08, sun_light_direction.z);
     sun_light_amount = celestial_visibility * sun_horizon
@@ -861,9 +939,27 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             * tuning.terrain_tuning.y
             * (19.0 * island_ruggedness.gradient + 29.0 * trench_depth.gradient);
 
+    var base_depth: TerrainNoiseSample;
+    base_depth.value = -base.value;
+    base_depth.gradient = -base.gradient;
+    let offshore_amount = terrain_smoothstep_sample(4.0, 24.0, base_depth);
+    var ocean_floor_depth: TerrainNoiseSample;
+    ocean_floor_depth.value = 3000.0 + 3000.0 * trench_depth.value;
+    ocean_floor_depth.gradient = 3000.0 * trench_depth.gradient;
+    let deepened_depth_m = mix(
+        base_depth.value,
+        ocean_floor_depth.value,
+        offshore_amount.value,
+    );
+    let deepened_depth_gradient = mix(
+        base_depth.gradient,
+        ocean_floor_depth.gradient,
+        offshore_amount.value,
+    ) + offshore_amount.gradient * (ocean_floor_depth.value - base_depth.value);
+
     var terrain: TerrainSample;
-    terrain.elevation_m = base.value;
-    terrain.gradient = base.gradient;
+    terrain.elevation_m = -deepened_depth_m;
+    terrain.gradient = -deepened_depth_gradient;
     let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, base);
     let seabed_shore_rise = terrain_smoothstep_sample(-0.5, -0.1, base);
     let seabed_shore_gate_value = 1.0 - seabed_shore_rise.value;
@@ -947,8 +1043,9 @@ fn terrain_color(
     terrain_gradient: vec2<f32>,
 ) -> vec3<f32> {
     let slope = length(terrain_gradient);
-    if elevation_m < 0.0 {
-        let depth_m = -elevation_m;
+    let water_height_m = tide_height_m();
+    if elevation_m < water_height_m {
+        let depth_m = water_height_m - elevation_m;
         let shallow_color = vec3<f32>(0.12, 0.42, 0.5);
         let open_water_color = vec3<f32>(0.04, 0.19, 0.25);
         let deep_water_color = vec3<f32>(0.025, 0.11, 0.15);
@@ -957,7 +1054,25 @@ fn terrain_color(
             open_water_color,
             smoothstep(0.0, 1.0, depth_m),
         );
-        return mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
+        let open_water = mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
+        let ice_climate = climate_visibility.z * sea_ice_cover();
+        if ice_climate <= 0.001 {
+            return open_water;
+        }
+        let ice_noise = terrain_fractal_sample(
+            vec2<u32>(0x243f6a88u, 0x85a308d3u), position_m, 192.0, 2u,
+        ).value;
+        let ice_amount = ice_climate * smoothstep(
+            -0.04,
+            0.08,
+            ice_noise + 0.35 * (ice_climate - 0.5),
+        );
+        let ice_color = mix(
+            vec3<f32>(0.52, 0.67, 0.70),
+            vec3<f32>(0.88, 0.93, 0.92),
+            0.55 + 0.20 * ice_noise,
+        );
+        return mix(open_water, ice_color, ice_amount);
     }
 
     let surface = terrain_fractal_sample(
@@ -981,17 +1096,32 @@ fn terrain_color(
     let hill_grade = mix(1.0, mix(0.62, 1.18, hill_light), lighting_amount);
     let altitude_exposure = smoothstep(50.0, 200.0, elevation_m);
     let rock_slope_threshold = tuning.terrain_tuning.z * mix(3.0, 0.8, altitude_exposure);
-    if slope >= rock_slope_threshold {
-        return terrain_rock_color(position_m, terrain_gradient, elevation_m);
+    let glacier_amount = smoothstep(
+        0.32,
+        0.78,
+        climate_visibility.y * glacier_cover(elevation_m) + 0.16 * surface,
+    );
+    if glacier_amount > 0.5 {
+        return mix(
+            vec3<f32>(0.48, 0.69, 0.74),
+            vec3<f32>(0.88, 0.94, 0.94),
+            0.45 + 0.35 * surface_grade,
+        ) * mix(1.0, mix(0.76, 1.10, hill_light), lighting_amount);
     }
-
-    let snow_line_m = 360.0 + 45.0 * vegetation;
-    if elevation_m >= snow_line_m {
+    let snow_amount = smoothstep(
+        0.30,
+        0.75,
+        climate_visibility.x * seasonal_snow_cover(elevation_m) + 0.18 * surface,
+    );
+    if snow_amount > 0.5 {
         return mix(
             vec3<f32>(0.72, 0.76, 0.77),
             vec3<f32>(0.96, 0.97, 0.96),
             0.55 + 0.20 * surface_grade,
         ) * mix(1.0, mix(0.78, 1.08, hill_light), lighting_amount);
+    }
+    if slope >= rock_slope_threshold {
+        return terrain_rock_color(position_m, terrain_gradient, elevation_m);
     }
 
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
@@ -1025,18 +1155,28 @@ fn terrain_color(
         3u,
     ).value;
     let canopy_cluster = smoothstep(-0.22, 0.38, canopy_detail + 0.32 * vegetation);
-    let grass_color = mix(
+    var grass_color = mix(
         vec3<f32>(0.09, 0.24, 0.10),
         vec3<f32>(0.32, 0.38, 0.17),
         0.20 * surface_grade
             + 0.20 * (0.5 + 0.5 * vegetation)
             + 0.60 * smoothstep(8.0, 150.0, elevation_m),
     ) * hill_grade;
-    let forest_color = mix(
+    var forest_color = mix(
         vec3<f32>(0.03, 0.12, 0.06),
         vec3<f32>(0.09, 0.27, 0.11),
         0.22 + 0.40 * canopy_cluster,
     ) * hill_grade;
+    let autumn = climate_visibility.w * autumn_vegetation_amount(elevation_m);
+    let dormancy = climate_visibility.w * vegetation_dormancy(elevation_m);
+    grass_color = mix(grass_color, vec3<f32>(0.52, 0.28, 0.04) * hill_grade, 0.62 * autumn);
+    forest_color = mix(
+        forest_color,
+        vec3<f32>(0.62, 0.18, 0.025) * hill_grade,
+        0.80 * autumn * (0.45 + 0.55 * canopy_cluster),
+    );
+    grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15) * hill_grade, 0.42 * dormancy);
+    forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10) * hill_grade, 0.32 * dormancy);
     return mix(
         grass_color,
         forest_color,
@@ -1158,7 +1298,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         surface_color = cloud_shadow_color(
             surface_color,
             input.world_position_m,
-            terrain.elevation_m,
+            max(terrain.elevation_m, tide_height_m()),
         );
         if layer_visibility.x > 0.0 {
             let low_height_m = 650.0
@@ -1258,7 +1398,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     }
     if mode >= 9u && mode <= 11u {
         let terrain = procedural_terrain_sample(position_m);
-        let surface_height_m = max(terrain.elevation_m, 0.0);
+        let surface_height_m = max(terrain.elevation_m, tide_height_m());
         let low_height_m = 650.0
             + 650.0 * atmospheric_instability()
             + 550.0 * rain_intensity();
@@ -1339,6 +1479,21 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         ).value;
         return vec4<f32>(signed_debug_color(geology), 1.0);
     }
+    if mode == 40u {
+        return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);
+    }
+    if mode == 41u {
+        return vec4<f32>(scalar_debug_color(glacier_cover(terrain.elevation_m)), 1.0);
+    }
+    if mode == 42u {
+        return vec4<f32>(scalar_debug_color(autumn_vegetation_amount(terrain.elevation_m)), 1.0);
+    }
+    if mode == 48u {
+        return vec4<f32>(signed_debug_color(tide_height_m() / 2.0), 1.0);
+    }
+    if mode == 49u {
+        return vec4<f32>(scalar_debug_color(sea_ice_cover()), 1.0);
+    }
     return final_scene_color(input);
 }
 
@@ -1348,6 +1503,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     layer_visibility = vec4<f32>(1.0);
     landscape_visibility = vec4<f32>(1.0);
     atmosphere_model = vec4<f32>(1.0);
+    climate_visibility = vec4<f32>(1.0);
     celestial_visibility = 1.0;
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();
@@ -1361,6 +1517,7 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     layer_visibility = playground.layer_visibility;
     landscape_visibility = playground.landscape_visibility;
     atmosphere_model = playground.wind_model;
+    climate_visibility = playground.climate_visibility;
     celestial_visibility = f32(playground.diagnostics.y);
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();

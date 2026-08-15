@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use pyboat_game::{
-    AtmospherePrimary, CelestialConditions, ClimateConditions, celestial_lighting,
-    current_low_temperature_c, derive_weather, dinghy_parameters, match_environment,
-    procedural_atmosphere_primary, procedural_cloud_cover, procedural_match_environment,
-    procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s, procedural_weather,
+    AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
+    climate_surface, current_low_temperature_c, derive_weather, dinghy_parameters,
+    match_environment, procedural_atmosphere_primary, procedural_cloud_cover,
+    procedural_match_environment, procedural_terrain_elevation_m,
+    procedural_unsheltered_wind_velocity_m_s, procedural_water_depth_m, procedural_weather,
+    tide_height_m,
 };
 use rapier2d::prelude::Vector;
 
@@ -310,17 +312,17 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
 #[test]
 fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
     let noon = celestial_lighting(CelestialConditions {
-        latitude_degrees: 0.0,
-        day_of_year: 80.0,
-        solar_time_hours: 12.0,
+        solar_latitude_degrees: 0.0,
+        season_phase: 0.0,
+        day_phase: 0.5,
         moon_phase: 0.0,
     });
     let midnight = celestial_lighting(CelestialConditions {
-        solar_time_hours: 0.0,
+        day_phase: 0.0,
         ..CelestialConditions {
-            latitude_degrees: 0.0,
-            day_of_year: 80.0,
-            solar_time_hours: 12.0,
+            solar_latitude_degrees: 0.0,
+            season_phase: 0.0,
+            day_phase: 0.5,
             moon_phase: 0.0,
         }
     });
@@ -334,17 +336,17 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
 #[test]
 fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     let full_moon_midnight = celestial_lighting(CelestialConditions {
-        latitude_degrees: 0.0,
-        day_of_year: 80.0,
-        solar_time_hours: 0.0,
+        solar_latitude_degrees: 0.0,
+        season_phase: 0.0,
+        day_phase: 0.0,
         moon_phase: 0.5,
     });
     let new_moon_midnight = celestial_lighting(CelestialConditions {
         moon_phase: 0.0,
         ..CelestialConditions {
-            latitude_degrees: 0.0,
-            day_of_year: 80.0,
-            solar_time_hours: 0.0,
+            solar_latitude_degrees: 0.0,
+            season_phase: 0.0,
+            day_phase: 0.0,
             moon_phase: 0.5,
         }
     });
@@ -358,17 +360,17 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 #[test]
 fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let summer = celestial_lighting(CelestialConditions {
-        latitude_degrees: 55.0,
-        day_of_year: 172.0,
-        solar_time_hours: 12.0,
+        solar_latitude_degrees: 55.0,
+        season_phase: 0.25,
+        day_phase: 0.5,
         moon_phase: 0.25,
     });
     let winter = celestial_lighting(CelestialConditions {
-        day_of_year: 355.0,
+        season_phase: 0.75,
         ..CelestialConditions {
-            latitude_degrees: 55.0,
-            day_of_year: 172.0,
-            solar_time_hours: 12.0,
+            solar_latitude_degrees: 55.0,
+            season_phase: 0.25,
+            day_phase: 0.5,
             moon_phase: 0.25,
         }
     });
@@ -387,36 +389,36 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
     let northern_summer = current_low_temperature_c(
         climate,
         CelestialConditions {
-            latitude_degrees: 55.0,
-            day_of_year: 205.0,
-            solar_time_hours: 15.0,
+            solar_latitude_degrees: 55.0,
+            season_phase: 0.34,
+            day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
     let northern_winter = current_low_temperature_c(
         climate,
         CelestialConditions {
-            latitude_degrees: 55.0,
-            day_of_year: 22.0,
-            solar_time_hours: 15.0,
+            solar_latitude_degrees: 55.0,
+            season_phase: 0.84,
+            day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
     let southern_summer = current_low_temperature_c(
         climate,
         CelestialConditions {
-            latitude_degrees: -55.0,
-            day_of_year: 22.0,
-            solar_time_hours: 15.0,
+            solar_latitude_degrees: -55.0,
+            season_phase: 0.84,
+            day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
     let summer_before_dawn = current_low_temperature_c(
         climate,
         CelestialConditions {
-            latitude_degrees: 55.0,
-            day_of_year: 205.0,
-            solar_time_hours: 3.0,
+            solar_latitude_degrees: 55.0,
+            season_phase: 0.34,
+            day_phase: 0.125,
             moon_phase: 0.0,
         },
     );
@@ -424,6 +426,108 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
     assert!(northern_summer > northern_winter + 19.0);
     assert!((northern_summer - southern_summer).abs() < 0.01);
     assert!(northern_summer > summer_before_dawn + 7.9);
+}
+
+#[test]
+fn solar_latitude_suppresses_equatorial_temperature_seasons() {
+    let climate = ClimateConditions {
+        annual_mean_low_temperature_c: 15.0,
+        seasonal_temperature_range_c: 20.0,
+        diurnal_temperature_range_c: 0.0,
+    };
+    let temperature = |solar_latitude_degrees, season_phase| {
+        current_low_temperature_c(
+            climate,
+            CelestialConditions {
+                solar_latitude_degrees,
+                season_phase,
+                day_phase: 0.5,
+                moon_phase: 0.0,
+            },
+        )
+    };
+    let equatorial_range = (temperature(0.0, 0.34) - temperature(0.0, 0.84)).abs();
+    let high_latitude_range = (temperature(70.0, 0.34) - temperature(70.0, 0.84)).abs();
+
+    assert!(equatorial_range < 0.25 * high_latitude_range);
+}
+
+#[test]
+fn aligned_sun_and_moon_produce_a_larger_tidal_range_than_quarter_phase() {
+    let conditions = |day_phase, moon_phase| CelestialConditions {
+        solar_latitude_degrees: 45.0,
+        season_phase: 0.25,
+        day_phase,
+        moon_phase,
+    };
+    let tide = TidalConditions {
+        reference_range_m: 2.0,
+        phase_offset: 0.0,
+    };
+    let range = |moon_phase| {
+        tide_height_m(tide, conditions(0.5, moon_phase))
+            - tide_height_m(tide, conditions(0.75, moon_phase))
+    };
+
+    assert!(range(0.0) > 1.9);
+    assert!(range(0.0) > 2.5 * range(0.25).abs());
+    assert!((range(0.0) - range(0.5)).abs() < 0.01);
+}
+
+#[test]
+fn stateless_surface_climate_distinguishes_seasonal_snow_sea_ice_and_glaciers() {
+    let cold = climate_surface(
+        ClimateConditions {
+            annual_mean_low_temperature_c: -8.0,
+            seasonal_temperature_range_c: 18.0,
+            diurnal_temperature_range_c: 4.0,
+        },
+        CelestialConditions {
+            solar_latitude_degrees: 65.0,
+            season_phase: 0.84,
+            day_phase: 0.5,
+            moon_phase: 0.0,
+        },
+        8.0,
+        600.0,
+    );
+    let warm = climate_surface(
+        ClimateConditions {
+            annual_mean_low_temperature_c: 22.0,
+            seasonal_temperature_range_c: 8.0,
+            diurnal_temperature_range_c: 4.0,
+        },
+        CelestialConditions {
+            solar_latitude_degrees: 15.0,
+            season_phase: 0.34,
+            day_phase: 0.5,
+            moon_phase: 0.0,
+        },
+        8.0,
+        600.0,
+    );
+
+    assert!(cold.seasonal_snow_cover > 0.8);
+    assert!(cold.sea_ice_cover > 0.8);
+    assert!(cold.glacier_cover > 0.8);
+    assert!(warm.seasonal_snow_cover < 0.05);
+    assert!(warm.sea_ice_cover < 0.05);
+    assert!(warm.glacier_cover < 0.05);
+}
+
+#[test]
+fn astronomical_tide_changes_authoritative_water_depth() {
+    let seed = 0x5eed;
+    let position_m = (-32..=32)
+        .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
+        .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -3.0)
+        .expect("representative region should contain deep water");
+    let high_tide_depth = procedural_match_environment(seed, 0, position_m).water_depth_m;
+    let six_hours_in_ticks = 6 * 60 * 60 * 60;
+    let low_tide_depth =
+        procedural_match_environment(seed, six_hours_in_ticks, position_m).water_depth_m;
+
+    assert!((high_tide_depth - low_tide_depth).abs() > 0.1);
 }
 
 #[test]
@@ -532,7 +636,7 @@ fn procedural_terrain_is_seeded_and_continuous() {
     assert!((procedural_terrain_elevation_m(seed + 1, position_m) - elevation_m).abs() > 0.01);
     assert_eq!(
         procedural_match_environment(seed, 600, position_m).water_depth_m,
-        (-elevation_m).max(0.0)
+        procedural_water_depth_m(seed, 10.0, position_m)
     );
 }
 
@@ -893,8 +997,9 @@ fn procedural_coasts_often_reach_navigable_depth_within_256_metres() {
 }
 
 #[test]
-fn procedural_seafloor_has_rare_deep_trenches() {
+fn procedural_seafloor_has_ocean_scale_basins_and_rare_abyssal_trenches() {
     let mut water_samples = 0;
+    let mut basin_samples = 0;
     let mut trench_samples = 0;
 
     for seed in [0, 1, 0x5eed, 0xdead_beef] {
@@ -906,15 +1011,20 @@ fn procedural_seafloor_has_rare_deep_trenches() {
                 );
                 if elevation_m < 0.0 {
                     water_samples += 1;
-                    trench_samples += usize::from(elevation_m <= -100.0);
+                    basin_samples += usize::from(elevation_m <= -500.0);
+                    trench_samples += usize::from(elevation_m <= -4_500.0);
                 }
             }
         }
     }
 
     assert!(
+        basin_samples * 2 > water_samples,
+        "only {basin_samples} of {water_samples} water samples reached ocean-basin depth"
+    );
+    assert!(
         trench_samples > 0,
-        "no sampled seafloor reached 100 m depth"
+        "no sampled seafloor reached abyssal-trench depth"
     );
     assert!(
         trench_samples * 20 < water_samples,

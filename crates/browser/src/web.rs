@@ -8,7 +8,9 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
-use pyboat_game::procedural_atmosphere_primary;
+use pyboat_game::{
+    procedural_atmosphere_primary, procedural_tidal_conditions, world_celestial_conditions,
+};
 use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use url::Url;
@@ -55,6 +57,7 @@ struct SceneUniforms {
     synoptic_pressure_and_temperature: [f32; 4],
     moisture_and_temperature_gradient: [f32; 4],
     celestial_conditions: [f32; 4],
+    world_surface_conditions: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     time_seconds: f32,
@@ -209,6 +212,8 @@ impl Renderer {
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let primary =
             match_seed.map(|match_seed| procedural_atmosphere_primary(match_seed, tick, camera_m));
+        let celestial = world_celestial_conditions(tick as f64 / 60.0);
+        let tide = procedural_tidal_conditions(match_seed.unwrap_or(0), camera_m);
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
             &self.uniform_buffer,
@@ -220,14 +225,14 @@ impl Renderer {
                         primary.pressure_hpa,
                         primary.pressure_gradient_hpa_per_m.x,
                         primary.pressure_gradient_hpa_per_m.y,
-                        0.0,
+                        12.0,
                     ]
                 }),
                 synoptic_pressure_and_temperature: primary.map_or([0.0; 4], |primary| {
                     [
                         primary.synoptic_pressure_gradient_hpa_per_m.x,
                         primary.synoptic_pressure_gradient_hpa_per_m.y,
-                        primary.low_temperature_c,
+                        14.0,
                         primary.upper_temperature_c,
                     ]
                 }),
@@ -236,10 +241,21 @@ impl Renderer {
                         primary.water_vapor_g_kg,
                         primary.temperature_gradient_c_per_m.x,
                         primary.temperature_gradient_c_per_m.y,
-                        0.0,
+                        4.0,
                     ]
                 }),
-                celestial_conditions: [45.0, 172.0, 14.0, 0.25],
+                celestial_conditions: [
+                    celestial.solar_latitude_degrees,
+                    celestial.season_phase,
+                    celestial.day_phase,
+                    celestial.moon_phase,
+                ],
+                world_surface_conditions: [
+                    tide.reference_range_m,
+                    tide.phase_offset,
+                    primary.map_or(0.0, |primary| primary.low_temperature_c - 16.0),
+                    0.0,
+                ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
                 time_seconds: tick as f32 / 60.0,

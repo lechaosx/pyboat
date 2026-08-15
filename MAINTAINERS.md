@@ -90,7 +90,7 @@ documentation, decision classification, and choosing tests by observable risk.
   native simulation test harness.
 - `web` contains the Vite page shell and TypeScript frame scheduling.
 - `playground` is the separate Vite/WebGPU procedural laboratory for weather,
-  landscape, future water systems, and production-shader diagnostics.
+  landscape, water systems, and production-shader diagnostics.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
 
@@ -115,8 +115,10 @@ amplify signed elevation up to 60× for rugged major islands and 90× for rarer
 trenches. Representative samples must include beachless, mixed, and
 beach-dominant 2 km coastal regions while beaches remain the global majority,
 most sampled cliffs remain steep immediately offshore, most sampled shore
-transects reach 4 m depth within 256 m, and depths beyond 100 m occur without
-exceeding 5% of water samples. Four 4–32 m reef
+transects reach 4 m depth within 256 m, more than half of water samples reach
+500 m depth, and 4,500 m trenches remain below 5% of water samples. Preserve the
+base elevation through 4 m depth, then smoothly remap 4–24 m of base depth toward
+a 3,000–6,000 m floor using the existing trench field. Four 4–32 m reef
 octaves feed two smooth masks. Between -4 and -0.1 m elevation, up to 0.6 m of
 signed relief cuts channels and raises
 the submerged seabed. Between -2 and -0.1 m, a 0.65–0.85 upper-tail spline adds
@@ -124,9 +126,9 @@ up to 2 m for sparse emergent rocks. This creates a distribution of channel
 depths without placing objects, checking clearance around individual features,
 or applying reef-scale noise to the parent island. Keep land at 5–15% across
 representative regions and each sampled 65 km region below 20%. The shared
-sampler returns continuous elevation relative to sea level from only the match
-seed and world position. Each procedural environment converts elevation to water
-depth for authoritative and predicted grounding without adding terrain to the
+sampler returns continuous elevation relative to mean sea level from only the match
+seed and world position. Each procedural environment combines elevation with the
+stateless astronomical tide for authoritative and predicted grounding without adding terrain to the
 protocol. The browser also exposes that predicted depth, depth minus dinghy draft,
 and bottom support fraction to the navigation HUD.
 Coastal relief is calibrated against [NOAA BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html)
@@ -224,9 +226,10 @@ playground-only diagnostics. Weather views expose low-cloud detail and formation
 fields, cloud height, both shadow layers, optical outputs, primary atmospheric
 gradients, derived surface/upper wind and shear, and terrain shelter. The derived
 panel is read-only; scenarios change its primary causes, climate, aerosol optical
-depth, location, calendar time, and moon phase. Landscape views expose elevation, slope, normals, island fields,
-coastal relief, vegetation, and beach geology. Water remains an explicit empty
-domain until its first current or wave slice exists.
+depth, fictional solar location and world phases, and local tide. Landscape views
+expose elevation, slope, normals, island fields, coastal relief, vegetation, beach
+geology, seasonal snow, glaciers, and autumn color. Water views expose tidal
+height and sea-ice climate.
 
 The WGSL module has `fragment` and `fragment_playground` entry points. Gameplay
 constructs tuning from scalar `override` defaults and binds only scene state. The
@@ -236,11 +239,12 @@ functions. Keep shared functions dependent on that private state rather than the
 playground binding so production never statically accesses the lab interface.
 Dragging pans the preview, the mouse wheel zooms around its pointer position, and
 an architectural 1–2–5 scale bar reports physical distance. Weather scenarios
-crossfade the complete primary atmosphere, climate, calendar, location, and moon
-world state over 1.5 seconds. Cloud evolution and calendar speed are both
-multipliers of real elapsed time and may be locked together. Calendar time divides
-scaled seconds by 3,600 before advancing local solar hours. A zero calendar speed
-freezes lighting and the thermal cycle without freezing clouds. Primary weather
+crossfade the complete primary atmosphere, climate, celestial phases, solar
+location, moon, and tide world state over 1.5 seconds. Cloud evolution and world
+clock speed are both multipliers of real elapsed time and may be locked together.
+At `1×`, day, season, and moon phases use 24-hour, 360-day, and 28-day fictional
+cycles. A zero world-clock speed freezes lighting and the thermal cycle without
+freezing clouds. Primary weather
 fields change only through controls or scenarios.
 World inputs have no default reset; changed shader, model, and debug values show
 individual reset buttons. Non-world categories also provide a Production preset
@@ -263,8 +267,9 @@ cargo run -p pyboat-playground-capture --release -- \
 ```
 
 The tool uses the same WGSL playground entry point and writes a JSON sidecar for
-each PNG with primary fields, derived celestial lighting and weather, capture coordinates, and image
-metrics. Use `--camera-x`, `--camera-y`, `--view-height`, `--seed`, and `--time`
+each PNG with primary fields, derived celestial lighting, weather, surface
+climate, tide, capture coordinates, and image metrics. Use `--camera-x`,
+`--camera-y`, `--view-height`, `--seed`, and `--time`
 to make human bug reports and before/after comparisons reproducible.
 
 ## Controllers
@@ -440,21 +445,23 @@ The browser draws one fullscreen terrain quad. Its fragment shader reconstructs
 world position and mirrors the Rust cluster, island-detail, and reef density
 fields for every pixel, including 64-bit seed mixing represented as
 pairs of WebGPU-compatible 32-bit integers. Keep WGSL terrain constants, spline
-edges, masks, hashing, and peak transforms synchronized with `pyboat-game`; Rust
-remains authoritative for physical depth. The shader owns underwater color and
+edges, masks, hashing, peak transforms, and offshore depth remap synchronized with
+`pyboat-game`; Rust remains authoritative for physical depth. The shader owns underwater color and
 the land materials. Each value-noise octave returns its analytic
 world-space gradient alongside its value; the shader propagates gradients through
 the same amplitude normalization and density composition. The gradient supplies
 height-field lighting and slope-based rock exposure, whose threshold decreases
-with altitude. Broad elevation and vegetation fields select alpine rock, sparse
-snow, grass, and clustered forest canopy. Separate finer fields grade colors
-inside those materials. Beach width varies with broad geology but always begins
-at sea level; steep rock can meet the water before beach classification.
+with altitude. Broad elevation and vegetation fields select alpine rock, grass,
+and clustered forest canopy. Stateless surface-climate functions add snow,
+glaciers, broken sea ice, vegetation dormancy, and temperate autumn color.
+Separate finer fields grade colors inside those materials. Beach width varies
+with broad geology but always begins at the current tidal waterline; steep rock
+can meet the water before beach classification.
 Each frame samples `procedural_atmosphere_primary` at the camera position. The
 scene uniform carries pressure and its full/broad gradients, low/upper
 temperature, horizontal temperature gradient, absolute moisture, aerosol optical
-depth, latitude, day
-of year, local solar time, moon phase,
+depth, annual climate, current temperature anomaly, solar latitude, normalized
+season/day/moon phases, local tidal range and phase,
 predicted simulation time, and a visual seed derived from the local player
 identity. It carries no derived weather values or cloud offsets. WGSL mirrors the
 short primary-to-derived expressions it needs and uses the one primary sample
