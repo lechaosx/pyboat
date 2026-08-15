@@ -2,6 +2,8 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
+// Postcard encodes these enums and structs positionally. Reordering or changing
+// fields is a wire-contract change and requires a new version.
 pub const PROTOCOL_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

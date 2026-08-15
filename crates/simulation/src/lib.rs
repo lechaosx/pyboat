@@ -374,6 +374,8 @@ fn apply_grounding_friction(
             * GRAVITY_ACCELERATION_M_S2
             * support_fraction;
         let static_torque_limit_n_m = static_force_limit_n * half_length_m;
+        // One elliptical budget couples translation and yaw; testing independent
+        // limits would allow an unrealistically large combined grounding wrench.
         let static_friction_usage = (required_force_n.length() / static_force_limit_n).powi(2)
             + (required_torque_n_m / static_torque_limit_n_m).powi(2);
         if static_friction_usage <= 1.0 {
@@ -895,6 +897,8 @@ pub fn create_boat(
     );
     bodies[sail].recompute_mass_properties_from_colliders(colliders);
     bodies[rudder].recompute_mass_properties_from_colliders(colliders);
+    // Force-based relative damping dissipates hinge motion without resisting
+    // common rotation or changing assembly angular momentum.
     let sail_joint = joints.insert(
         hull.body,
         sail,

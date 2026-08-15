@@ -1,3 +1,6 @@
+//! Procedural transcendental functions use `libm` so native and WebAssembly
+//! builds do not silently diverge through platform math implementations.
+
 use pyboat_simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
     MotionIntent, computed_maximum_yaw_rate_rad_s, surface_control_input,
@@ -501,6 +504,9 @@ fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {
 }
 
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+    // Keep this composition synchronized with `procedural_terrain_sample` in
+    // `crates/browser/src/scene.wgsl`: Rust supplies physical depth while WGSL
+    // renders the same shoreline.
     let cluster = terrain_fractal_noise(
         match_seed ^ 0xa076_1d64_78bd_642f,
         position_m,
@@ -520,10 +526,14 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
     let base_depth_m = -base_elevation_m;
+    // Preserve measured coastal relief before deepening the open ocean; applying
+    // the remap at the shore would turn navigable coastal slopes into abyss walls.
     let offshore_amount = smoothstep_range(4.0, 24.0, base_depth_m);
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
     let terrain_elevation_m =
         -(base_depth_m + offshore_amount * (ocean_floor_depth_m - base_depth_m));
+    // Reef gates use the pre-remap coast so open-ocean depth does not change the
+    // distribution of channels and emergent rocks.
     let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
         * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));
     let rock_mask = smoothstep_range(-2.0, -0.8, base_elevation_m)
@@ -635,6 +645,9 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
 }
 
 fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) -> PressureSample {
+    // Rotating the analytic gradient of one scalar potential gives coherent flow
+    // without sources or sinks; `wind_from_pressure_gradient` then adds the small
+    // cross-isobar component used by the surface model.
     let (transported_x_m, transported_y_m) =
         transported_weather_position_m(match_seed, tick, position_m);
     let mut potential_m2_s = 0.0;

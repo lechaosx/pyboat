@@ -4,28 +4,31 @@
 
 - Read [PRODUCT.md](PRODUCT.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
   [MAINTAINERS.md](MAINTAINERS.md) before planning or implementing changes.
-- Keep [README.md](README.md) as the user-facing repository signpost: what the product is,
-  current gameplay, controls, prerequisites, and how to run it. Do not move
-  internal implementation guidance into it.
-- Keep [MAINTAINERS.md](MAINTAINERS.md) developer-facing. Update it when development setup,
-  commands, repository layout, tests, tools, or implementation guidance changes.
-- Treat [PRODUCT.md](PRODUCT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) as living
-  decision records. Update them in the same change that introduces, changes, or
-  removes a decision.
-- Put player experience, scope, content, controls, balance, and product constraints
-  in [PRODUCT.md](PRODUCT.md).
-- Put implementation, simulation, networking, protocol, persistence, and technical
-  boundaries in [ARCHITECTURE.md](ARCHITECTURE.md).
-- Mark every decision as **[Explicit]** when the user directly requested or
-  affirmatively confirmed that specific decision.
-- Mark every decision as **[Implicit]** when an agent selected it. User acceptance
-  of the resulting behavior does not retroactively make the underlying choice
-  explicit.
-- Keep unresolved matters under an open-questions section rather than presenting
-  them as decisions.
-- If implementation and a decision record disagree, surface the discrepancy and
-  resolve both together.
-- Update links among these documents when files move or their roles change.
+- Follow the documentation ownership map in
+  [README.md](README.md#project-guide).
+- Update a decision record in the same change that introduces, changes, or
+  removes the decision.
+- Mark a decision **[Explicit]** when the user requests or clearly endorses it,
+  including when that endorsement happens after an agent first selected it. Mark
+  agent-selected decisions **[Implicit]** until then; passive acceptance alone
+  does not reclassify them.
+- Keep unresolved matters as open questions rather than decisions.
+- Keep delivery status out of decision records. `README.md` is the sole concise
+  summary of current playable behavior.
+- Apply a staleness test before adding documentation: identify its canonical
+  owner and the event that requires an update. If correctness depends on
+  periodically comparing prose with code, and the prose adds no durable decision,
+  rationale, or indispensable workflow, do not add it.
+- Prefer sources that stay correct by construction: manifests for requirements,
+  CLI help for options, tests for accepted behavior, and generator metadata on
+  generated artifacts.
+- Put non-obvious rationale, invariants, calibration provenance, and cross-file
+  synchronization constraints beside the relevant code. Do not add task context,
+  reasoning history, absence justifications, or restatements as comments.
+- Avoid duplicated instructions, implementation inventories, delivery matrices,
+  and explanations of behavior that code states plainly.
+- Treat unimplemented target behavior as future scope, not a contradiction. When
+  implemented behavior contradicts a recorded decision, resolve both together.
 
 ## Defer Abstraction
 

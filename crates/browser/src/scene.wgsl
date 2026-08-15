@@ -55,6 +55,8 @@ override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
 
+// Entry points initialize private state so shared rendering functions work with
+// either production overrides or the playground tuning uniform.
 var<private> tuning: SceneTuning;
 var<private> layer_visibility: vec4<f32>;
 var<private> landscape_visibility: vec4<f32>;
@@ -909,6 +911,9 @@ fn terrain_smoothstep_sample(
 }
 
 fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
+    // Keep the density composition synchronized with
+    // `pyboat_game::procedural_terrain_elevation_m`; Rust remains authoritative
+    // for physical depth.
     let terrain_position_m = position_m / tuning.terrain_tuning.x;
     let cluster = terrain_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
@@ -1339,6 +1344,8 @@ fn signed_debug_color(value: f32) -> vec3<f32> {
 }
 
 fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
+    // This diagnostic favors shader cost over parity. Gameplay shelter is sampled
+    // by `pyboat-game` and remains authoritative.
     let speed = length(wind_m_s);
     if speed < 0.01 {
         return 1.0;

@@ -570,6 +570,8 @@ pub struct ScaleBar {
     pub label: String,
 }
 
+// Keep the 1-2-5 selection synchronized with `updateScaleBar` in
+// `playground/src/main.ts`; gameplay and the lab share one physical-scale convention.
 pub fn scale_bar(view_height_m: f32, viewport_height_px: f32) -> ScaleBar {
     let target_distance_m = view_height_m * 120.0 / viewport_height_px;
     let magnitude_m = 10.0_f32.powf(target_distance_m.log10().floor());

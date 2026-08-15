@@ -690,6 +690,10 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
 
 #[test]
 fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
+    // Relief ceilings are 90th percentiles from NOAA BlueTopo 4 m grids
+    // BH5475HC (rocky Maine, 2026-06-01) and BH4TB55V (Florida Keys, 2026-05-20),
+    // sampled in the same -4..1 m band. They bound roughness, not shoreline shape.
+    // Source: https://www.nauticalcharts.noaa.gov/data/bluetopo.html
     let mut mixed_coastal_patches = 0;
     let mut deep_access_patches = 0;
     let mut maximum_slope: f32 = 0.0;

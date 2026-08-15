@@ -1279,6 +1279,8 @@ function resize(): void {
   }
 }
 
+// Keep the 1-2-5 selection synchronized with `scale_bar` in
+// `crates/browser/src/lib.rs`; gameplay and the lab share one physical-scale convention.
 function updateScaleBar(): void {
   const targetDistance = state.viewHeight * 120 / previewCanvas.clientHeight;
   const magnitude = 10 ** Math.floor(Math.log10(targetDistance));

@@ -1,608 +1,140 @@
 # Architecture decisions
 
-This file records implementation, simulation, networking, and operational
-decisions.
+This record contains technical choices that constrain future implementation. Code
+and tests remain the source of truth for algorithms, constants, and schemas.
 
-- **[Explicit]** means the user directly requested or affirmatively confirmed the
-  decision.
-- **[Implicit]** means an agent selected the decision. Later acceptance of the
-  resulting behavior does not make that underlying choice explicit.
+| Mark | Meaning |
+| --- | --- |
+| **[Explicit]** | The user requested or clearly endorsed the choice, including after it was initially implicit |
+| **[Implicit]** | An agent selected the choice |
 
-## Reference implementation and boundaries
+## Runtime boundaries
 
-- **[Explicit]** The current gameplay reference stack consists of Python clients
-  with a simple renderer and a Python dedicated server.
-- **[Implicit]** The initial browser vertical slice ran one locally controlled boat
-  and a passive practice boat in the same Rust shared simulation before protocol
-  and multiplayer state were introduced. That local demo remains a native test
-  harness rather than the current browser entry point.
-- **[Implicit]** Simulation and protocol data are independent of rendering, so a
-  later browser client can reuse the same behavior without copying the Python
-  renderer.
-- **[Implicit]** The current Python implementation is the behavioral reference
-  until another client passes equivalent networking and physics tests.
-- **[Explicit]** Rust/Python client-server interoperability and exact numerical
-  physics parity are not migration requirements. The target Rust stack may change
-  its protocol and behavior independently of the retained Pymunk implementation.
-- **[Explicit]** Once the Rust implementation surpasses the Python version, the
-  retained Python implementation and its documentation references will be
-  removed.
-- **[Implicit]** During migration, the Python client retains its historical
-  death/disconnect exit behavior while the Rust browser implements continued
-  wreck spectating and disconnected cruising.
-- **[Implicit]** Migration proceeds behavior by behavior through a
-  runtime-independent `pyboat-simulation` Rust crate. Each migrated behavior has
-  Rust tests for its accepted physical invariants and gameplay behavior before
-  browser or native runtime adapters consume it. Hull construction, the
-  articulated boat assembly, and
-  authoritative motion restoration, fixed-step advancement, and actuator torque
-  application, passive bearing damping, and flat-plate sail load application are
-  the first migrated behaviors, followed by stalled underwater-foil loads on the
-  articulated rudder and hull-mounted keel, anisotropic hull resistance, and
-  surface-target actuator control, followed by arcade surface-effect sampling and
-  target selection, controlled fixed-step advancement, and shared-world stepping
-  with hull impulse and local-contact reporting, articulated-boat removal, and
-  maintained radial spatial queries.
-- **[Implicit]** The runtime-independent `pyboat-game` crate owns the concrete
-  dinghy parameters, deterministic procedural-environment sampling, and
-  computed-yaw-rate control composition used by both the Rust server and browser.
-  `pyboat-simulation` remains parameterized and independent of game-specific
-  tuning.
-- **[Explicit]** The Rust simulation may differ from Pymunk implementation details
-  and exact numerical trajectories when the result is physically correct.
-  Equivalence is judged by physical invariants and accepted gameplay behavior.
+- **[Explicit]** Rust is the target gameplay runtime. The same simulation compiles
+  to WebAssembly for the browser and runs natively on the dedicated server.
+- **[Explicit]** The Python client and dedicated server remain a behavioral
+  reference during migration, not a Rust compatibility target. Rust may change
+  protocols, implementation details, and numerical trajectories when physical
+  invariants and accepted play behavior remain sound. Remove Python after Rust
+  surpasses it.
+- **[Implicit]** Migration proceeds one tested behavior at a time through the
+  runtime-independent `pyboat-simulation` crate. `pyboat-game` owns concrete game
+  policy, tuning, control composition, and procedural environment sampling shared
+  by native and browser runtimes.
+- **[Explicit]** Rapier 2D provides target rigid-body physics on native and
+  WebAssembly builds.
+- **[Explicit]** The browser renderer is Rust `wgpu`, initially WebGPU-only rather
+  than carrying a WebGL compatibility backend.
+- **[Explicit]** Rust/WASM owns gameplay transport, protocol decoding, replicated
+  state, prediction, reconciliation, physics, and rendering. TypeScript, HTML,
+  and CSS own menus and DOM presentation and receive only commands, discrete
+  events, and a small derived UI view.
 
-## Target browser and server stack
+## Authority and simulation
 
-- **[Explicit]** The target gameplay runtime is written in Rust. It compiles to
-  WebAssembly for the browser client, while the dedicated server uses the same
-  simulation code natively.
-- **[Explicit]** The browser renderer is written in Rust using `wgpu`.
-- **[Explicit]** The initial browser build targets WebGPU only and does not include
-  `wgpu`'s WebGL compatibility backend, prioritizing a smaller download and one
-  renderer capability model over support for browsers without WebGPU.
-- **[Implicit]** `wasm-pack` builds the Rust browser crate, Vite bundles the page,
-  and Bun runs workspace commands. TypeScript starts the page and schedules frames
-  while Rust owns WebGPU initialization, networking, replicated state, fixed-tick
-  input emission, and scene rendering.
-- **[Implicit]** `pyboat-protocol` owns typed runtime-independent wire messages,
-  while the native `pyboat-server` uses Tokio and `wtransport` for async
-  WebTransport session handling.
-- **[Implicit]** The Rust server owns one shared authoritative Rapier match. Each
-  completed WebTransport session creates a distinct articulated boat, validated
-  sequenced input drives computed-yaw-rate arcade control, live disconnects remove
-  that boat from the physics world, and destroyed boats remain as controllerless
-  wrecks.
-- **[Explicit]** A newly connected boat spawns on a random bearing just outside
-  the radial extent of all other players and points downwind at its spawn point.
-- **[Implicit]** The first boat's deterministic safe-water position becomes the
-  match spawn origin. Each later boat checks seed-derived bearings at 8 m beyond
-  the fleet's radial extent around that origin, including wrecks, and expands the
-  search outward only when that ring has no position at least 1.5 m deep.
-- **[Explicit]** Rapier 2D provides rigid-body physics for the target Rust
-  simulation on both native and WebAssembly builds.
-- **[Implicit]** Rapier owns collision detection, contact resolution, and spatial
-  queries. Project simulation code owns boat forces, control, damage, wreck
-  behavior, and other game rules.
-- **[Explicit]** The browser gameplay client owns its WebTransport session,
-  protocol codec, replicated world state, prediction and reconciliation, physics,
-  and rendering in Rust/WebAssembly. Gameplay packets do not pass through a
-  handwritten TypeScript transport or parser.
-- **[Explicit]** TypeScript with HTML and CSS owns browser presentation such as
-  menus and the DOM-based HUD. It exchanges commands, a small derived UI view
-  model, and discrete UI events with the Rust/WebAssembly client rather than raw
-  gameplay snapshots.
-- **[Implicit]** TypeScript samples keyboard and browser gamepad state once per
-  animation frame. Rust clamps keyboard intent and converts the gamepad's
-  world-relative left-stick vector into boat-relative arcade intent.
-- **[Implicit]** Rust derives speed through water, apparent-wind speed, and point
-  of sail from predicted and reconciled local state for the browser HUD.
-  TypeScript formats this small read-only view and updates the DOM without
-  receiving raw snapshots.
-- **[Explicit]** Browser arcade input follows the standalone Python game's device
-  mapping, except that the browser adds no software gamepad deadzone. A displaced
-  first connected gamepad overrides keyboard input, while an exactly centered or
-  absent gamepad leaves keyboard input active.
-- **[Explicit]** Server and browser runtime work should use asynchronous I/O and
-  orchestration wherever work can suspend.
-- **[Implicit]** The native server treats Ctrl-C as an asynchronous shutdown
-  signal. Shutdown closes each WebTransport session with application code 1 and the
-  reason `Server shutting down` to each established client, then returns the
-  authoritative serving loop after allowing up to one second for connection
-  handlers to flush those closes. Handlers do not wait for a peer response.
-- **[Implicit]** The fixed-step simulation itself remains synchronous so a tick
-  never waits on networking, timers, persistence, rendering, or UI work.
-- **[Implicit]** The target runtime uses stable Rust. Nightly features are adopted
-  only when a concrete implementation need justifies their compatibility cost.
+- **[Explicit]** The dedicated server is authoritative. Clients predict locally
+  and reconcile corrections without exposing them where practical.
+- **[Implicit]** Each match advances all boats and wrecks together in one
+  fixed-step physics world. Runtime adapters gather asynchronous work
+  before a synchronous tick and publish results afterward; simulation never
+  awaits I/O, timers, persistence, rendering, or UI.
+- **[Implicit]** Project code owns fluid loads, articulated control, game rules,
+  damage, and wreck behavior. Rapier owns rigid-body integration, joints,
+  collision response, and spatial queries.
+- **[Explicit]** Rendered hull geometry and collision geometry agree.
+- **[Explicit]** A destroyed boat retains its bodies, momentum, fluid forces, and
+  collisions but has no controller. Its owner stays connected as a spectator
+  centered on it.
 
-## Simulation authority and timing
+## Procedural environment and rendering
 
-- **[Explicit]** The dedicated server is authoritative, while clients compensate
-  for latency without exposing the correction to the player where practical.
-- **[Implicit]** The server owns one shared Pymunk space for all live boats and
-  wrecks, allowing authoritative physical interaction.
-- **[Implicit]** The server advances at a fixed 60 Hz. Rendering and packet arrival
-  do not change the physics timestep.
-- **[Implicit]** The Rust simulation owns a zero-gravity Rapier `PhysicsWorld` and
-  exposes one synchronous 60 Hz advance operation. Runtime adapters perform
-  asynchronous work before and after, never during, that operation.
-- **[Implicit]** The Rust shared simulation inserts all articulated boats into one
-  Rapier world, accepts one environment sample per boat, applies every boat's
-  loads before advancing that world once, and returns active hull contact pairs
-  with Rapier's resolved impulse magnitude and averaged hull-local contact points
-  for game rules such as damage.
-- **[Implicit]** Each Rust server process creates one match seed at startup. A
-  pure function of that seed, simulation tick, and world position evaluates 48
-  divergence-free Fourier modes with seeded Gaussian coefficients. Modes are
-  evaluated directly rather than interpolating random time-cell values. Terrain
-  sampled along the resulting upwind direction then modifies the surface wind.
-  The current procedural environment leaves water current at zero.
-- **[Explicit]** Static terrain is one continuous seeded density field inspired
-  by Minecraft's composition of progressively smaller shaping fields. Reefs and
-  rocks remain part of this field rather than becoming separately placed or
-  replicated objects. Horizontal distance and elevation both use uncompressed
-  real metres.
-- **[Explicit]** Terrain has no continent-scale density layer that can enclose
-  players in regional seas. Three 8,192–2,048 m cluster octaves and five
-  1,024–64 m island-detail octaves produce sparse large islands in a connected,
-  dominant ocean.
-- **[Implicit]** The production base elevation scale is `3×`. Positive and
-  negative tails of the existing 8,192–2,048 m cluster density independently
-  amplify signed relief: positive `0.32–0.58` density produces rugged major
-  islands up to `60×`, while negative `0.50–0.74` density produces rarer trenches
-  up to `90×`. Because relief derives from the same broad field as island shape,
-  it crosses sea level continuously without a separate cliff-biome noise field.
-- **[Implicit]** Elevation through 4 m water depth retains the coastal field
-  unchanged. From 4 to 24 m of base depth, a smooth remap approaches a 3,000 m
-  ocean floor plus up to another 3,000 m from the existing trench field. Rust
-  and WGSL apply the same remap and analytic gradient; coastal reef masks continue
-  to use the unremapped base elevation.
-- **[Implicit]** Four 32–4 m reef octaves have separate roles. Between -4 and
-  -0.1 m elevation, a smooth mask applies up to 0.6 m of signed relief to the
-  submerged seabed. A narrower -2 to -0.1 m mask adds up to 2 m only where the
-  reef field exceeds its 0.65–0.85 upper-tail spline, producing sparse emergent
-  rocks without adding reef-scale noise to the parent island silhouette.
-- **[Implicit]** NOAA BlueTopo 4 m grids for rocky Maine and the Florida Keys
-  calibrate the coastal relief spectrum in the same -4 to 1 m elevation band as
-  the game. Observed 90th-percentile relief provides upper bounds at 32 m and
-  128 m baselines rather than a shoreline-shape target. Statistical samples also
-  limit aggregate 256 m shoreline fragmentation and require a 4 m-deep transect
-  through some, but fewer than one quarter, of mixed reef neighborhoods.
-- **[Implicit]** Each sampled simulation environment includes water depth derived
-  from terrain elevation and the current procedural tide. `pyboat-simulation`
-  treats unspecified depth as infinite,
-  preserving terrain-independent harnesses and the accepted deep-water behavior.
-- **[Implicit]** The browser derives water depth, clearance below the 0.6 m keel,
-  and bottom support fraction from the same locally predicted environment used
-  for grounding. These navigation readouts require no protocol fields.
-- **[Explicit]** At a fixed position and time, unsheltered wind direction is
-  uniform over the full circle and speed has a Weibull marginal with `k = 2` and
-  `λ = 9 m/s`. Smooth spatial and per-tick temporal evolution includes gusts.
-- **[Explicit]** Wind around a roughly 2 km island has a recognizable prevailing
-  direction except near a calm, while wind across the very large world varies
-  smoothly among broad weather systems without one universal direction.
-- **[Implicit]** The spectral model assigns 90% of component variance to
-  32,768–131,072 m weather modes, 8% to 4,096–32,768 m regional modes, and 2% to
-  64–512 m gust modes. One seed-derived 6 m/s transport vector translates the
-  complete field without deforming it. Gust structures vary over approximately
-  10.7–85 seconds, while the dominant weather structures pass over hours.
-- **[Explicit]** The spectral field is a scalar pressure potential. Its analytic
-  gradient drives a mostly isobaric surface wind with a small component toward
-  lower pressure; the lowest-frequency pressure gradient drives upper flow.
-  Horizontal temperature gradient adds a rotated thermal-wind term aloft, so
-  vertical shear is derived as upper minus surface wind. No fluid grid or storm
-  entity is simulated.
-- **[Explicit]** Match-wide weather state is distinct from its presentation.
-  Seed, tick, and position determine identical pressure, low/upper temperature,
-  horizontal temperature gradient, and absolute moisture for every participant.
-  Wind, relative humidity, instability, lift, cloud potential, rain, and shear
-  are pure derived diagnostics. Fine cloud geometry may be
-  generated independently per player but must look similar under the same local
-  weather state.
-- **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies only primary atmospheric, celestial, climate, and tidal fields to local
-  procedural rendering. WGSL recomputes the small intermediate expressions it
-  needs; derived atmospheric values and cloud offsets are not shader inputs. That
-  one primary sample applies uniformly across the viewport, including at extreme
-  debug zoom.
-- **[Explicit]** Visible clouds combine wind advection with time-varying noise so
-  they move and evolve without a world-sized fluid simulation. Clouds do not
-  participate in visibility or any other gameplay rule.
-- **[Explicit]** One visible low-cloud field combines an evolving isotropic detail
-  field with a lower-frequency formation mask. Detail coordinates may translate
-  but never rotate, scale, or become anisotropic. Value-composition parameters may
-  change detail character, contrast, edge softness, and whether a gate derived
-  from the detail values creates disconnected bodies. The independent mask may
-  rotate, scale, elongate, translate, and define broad formation shape.
-- **[Explicit]** One continuous parameter splits total layer advection between
-  detail and mask coordinates. Both fields continue evolving through spacetime
-  noise independently of that split.
-- **[Implicit]** Production assigns 65% of visible-cloud spatial advection to the
-  formation mask and 35% to detail coordinates; the playground can tune the full
-  continuous range.
-- **[Explicit]** Visible low clouds advect with the complete unsheltered surface
-  wind, while one invisible upper-cloud field advects only with the
-  lowest-frequency synoptic wind. Terrain shelter affects the final wind used by
-  boat physics, not either presentation field.
-- **[Explicit]** Low-cloud appearance emerges continuously from weather and
-  tuning parameters rather than distinct rendered cloud-family implementations.
-- **[Implicit]** Absolute moisture is five octaves of transported smooth value
-  noise beginning at 3,584 m. Low and upper temperatures use separate broad
-  four-octave fields, and a finite spatial derivative of the low field supplies
-  horizontal temperature gradient. Saturation capacity converts temperature and
-  absolute moisture to relative humidity. Smooth combinations of humidity,
-  pressure deficit, pressure/temperature gradients, and lapse difference derive
-  lift, low/upper cloud potential, and rain. Representative low-cloud samples
-  remain more than half clear, 10–40% cloudy, and fewer than 1% above 0.85 density.
-- **[Explicit]** Near-land wind uses a simplified deterministic model of lee
-  shelter over the sea. Match seed, tick, and position remain sufficient for every
-  runtime to compute the same terrain-modified wind without transferring samples.
-- **[Implicit]** The shared sampler checks terrain 16, 32, 64, 128, 256, and 512 m
-  upwind. Positive elevation becomes a progressively stronger obstruction through
-  1.5 m, its effect recovers with a 256 m distance scale, and the strongest sample
-  can reduce speed by at most 70%. This first model preserves wind direction.
-- **[Explicit]** The match seed is the only procedural world or environment datum
-  transferred from server to client. Authoritative snapshots still synchronize
-  changing boat state; they do not carry sampled environment fields.
-- **[Implicit]** Server and browser physics use the same shared Rust deterministic
-  functions and tuning to derive matching parameters from the seed, simulation
-  tick, and world position. Browser terrain rendering mirrors the static elevation
-  algorithm and derived tidal waterline in WGSL rather than transferring samples.
-- **[Implicit]** The server samples the environment independently at each boat's
-  position before every authoritative tick. The browser uses the same seed, tick,
-  and position sampling for each predicted boat and for the local sailing HUD.
-- **[Implicit]** The browser derives one local apparent-wind vector from seeded
-  true wind and predicted boat velocity. The WebGPU scene renders only its
-  inflated fraction as a striped windsock attached to the local bow. Five equal
-  bands map linearly to 0–15 knots, including a partial final band; remote boats
-  receive no wind indicator.
-- **[Explicit]** Browser terrain is not polygonized. One fullscreen quad supplies
-  world positions, and the WebGPU fragment shader evaluates seeded elevation per
-  pixel at every zoom level. Physics samples depth only where boats require it.
-- **[Implicit]** WGSL mirrors Rust's cluster, island-detail, and coastal-reef
-  density fields and emulates their 64-bit seed hashing with pairs of
-  32-bit integers. The shader owns all terrain presentation: it continuously
-  blends shallow, open, and deep-water colors from the current tidal surface
-  through 4 m depth, switches distinctly to exposed terrain at that waterline,
-  and propagates analytic world-space
-  derivatives through noise, density splines, masks, and peaks. Those derivatives
-  provide height-field lighting and slope-based rock exposure. The rock-slope
-  threshold decreases with altitude; broad altitude fields then select alpine
-  rock. Stateless climate expressions add seasonal snow, glaciers, broken sea
-  ice, vegetation dormancy, and temperate autumn color. Seeded fields grade rock,
-  grass, and forest internally, while beach, vegetation, rock, snow, and glacier
-  retain sharp material boundaries.
-  Broad geology varies beach width continuously from sea level, so sand does not
-  appear as disconnected inland patches.
-- **[Implicit]** `pyboat-game::procedural_atmosphere_primary` samples the primary
-  local state, and `derive_weather` computes informative/gameplay outcomes without
-  override paths. WGSL mirrors those short derivations from the primary uniform.
-  Each evolving cloud-noise time cell advects its samples with derived surface or
-  upper flow, avoiding CPU-integrated offsets. WGSL gives
-  the low layer one seven-octave isotropic detail field and one four-octave broad
-  formation mask. A tunable motion split divides translation between their
-  coordinates. Detail-value and formation gates independently control whether
-  either field defines the silhouette. One four-octave isotropic field supplies
-  upper optical depth without visible material calculations. Visible, projected,
-  and upper-on-low samples total 30 cloud-noise octaves per terrain pixel.
-  Density, optical depth, darkness, relief, and height remain separate for
-  lighting and translucency. The low-cloud height field comes from density and
-  detail without another noise sample; analytic gradients propagate through both
-  detail and formation envelopes for terrain-style directional shading. Cloud
-  shading applies only to the fullscreen world surface, so boats remain equally
-  visible to clients with different visual seeds.
-- **[Implicit]** Cloud shadows project the 650–1,850 m visible layer and 6,200 m
-  upper layer from one three-dimensional surface-to-light direction. At a source
-  position and height, the shader samples each cloud at the horizontal offset
-  `(cloud height - source height) × light.xy / light.z`. The primary light is the
-  sun when available and the moon at night. Their optical depths combine
-  for Beer-Lambert surface transmittance. The upper layer is also sampled from the
-  varying low-cloud top height to attenuate direct low-cloud illumination while
-  preserving ambient light. Direct shadows fade when their light reaches the horizon.
-- **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
-  metric scale from the current vertical view distance and CSS viewport height.
-  It does not add world geometry or affect simulation and networking.
-- **[Explicit]** A separate general procedural playground covers weather,
-  landscape, and water systems rather than exposing an in-game debug mode.
-  It renders the production WGSL algorithms directly without multiplayer,
-  simulation, or a server.
-- **[Explicit]** Values supplied naturally by a match remain uniforms in both
-  gameplay and the playground. Fixed shader tuning uses WGSL pipeline overrides
-  in gameplay but a live uniform buffer in the playground. Diagnostic controls
-  and layer switches exist only in the playground entry point.
-- **[Explicit]** Playground tuning defaults mirror the production WGSL override
-  values and use final composition rather than a diagnostic view initially.
-- **[Explicit]** Celestial state is fictional solar latitude plus normalized
-  season, day, and moon phases; it does not identify an Earth place or date. A
-  compact axial-tilt/hour-angle model derives sun and moon direction,
-  horizon attenuation, twilight, and moonlight; it is a rendering-grade day/night
-  model rather than observatory astronomy. Annual-mean low temperature plus
-  seasonal and diurnal ranges derives the current low-level temperature before
-  atmospheric outcomes are evaluated.
-- **[Explicit]** Cloud animation time and world time are independent playground
-  clocks. Primary atmospheric fields do not advance from either clock. Gameplay
-  may synchronize both clocks from one authoritative timeline without coupling
-  their calculations.
-- **[Explicit]** Both playground clocks expose dimensionless real-time multipliers
-  and may be locked to one multiplier. At `1×`, normalized day, season, and moon
-  phases advance using a 24-hour world day, 360-day seasonal cycle, and 28-day
-  moon cycle; these are fictional tuning periods rather than a calendar.
-- **[Explicit]** Surface climate is stateless. Solar latitude attenuates the
-  configured seasonal response near the equator; fixed analytic phase lags and
-  amplitude damping approximate ground and water thermal inertia. Temperature,
-  moisture, altitude lapse, and annual accumulation-versus-melt potential derive
-  seasonal snow, sea ice, and glacier cover. Temperate cooling derives vegetation
-  autumn color. The current synoptic temperature anomaly affects weather without
-  redefining annual glacier climate.
-- **[Explicit]** Astronomical tide is the normalized sum of semidiurnal lunar and
-  `0.46×` solar components. Doubling their local hour angles yields two cycles per
-  world day; sun/moon alignment produces spring tides and quarter phase produces
-  neap tides. A seeded low-frequency local range and phase response is sufficient;
-  no globally coherent basin or stored state is required. Rust applies the tide
-  to authoritative water depth and WGSL evaluates the same expression for the
-  shoreline and cloud-shadow receiver height.
-- **[Explicit]** Ambient scene light is derived separately from direct sun or moon
-  light. Primary-driven cloud and rain amounts attenuate and cool ambient fill,
-  while sampled cloud optical depth controls spatial direct-light shadows.
-- **[Implicit]** Surface and low-cloud shading compose an ambient contribution
-  with a separately colored direct contribution. Low-sun warmth is gated by
-  aerosol optical depth and relative-humidity haze; solid upper cover suppresses
-  the ambient warm path. Moonlight stays cool. Projected cloud transmittance
-  multiplies only the direct contribution.
-- **[Implicit]** One WGSL module has production and playground fragment entry
-  points. Each populates private invocation-local tuning state, from scalar
-  pipeline overrides or the playground uniform respectively, before calling the
-  same cloud, terrain, lighting, and composition functions. Because production
-  does not statically access the playground binding, its pipeline layout and
-  runtime path contain no playground tuning or diagnostics.
-- **[Explicit]** Playground wind shelter may approximate the authoritative model.
-  The lab separately visualizes derived surface wind, upper wind, vertical shear,
-  pressure gradient, temperature gradient, and shelter while leaving Rust
-  gameplay physics authoritative. Derived atmospheric results are read-only and
-  are never copied back into primary world inputs or shader uniforms.
-- **[Explicit]** World inputs have no reset-to-default control. Category presets
-  replace that concept; Weather scenarios interpolate the complete primary
-  atmosphere, climate, solar location, world phases, moon, and tide input set while preserving
-  renderer/model tuning, diagnostic
-  state, seed, playback, camera, and zoom. Each implemented non-world category
-  exposes a Production preset sourced from the same initial values as its
-  individual reset controls.
-- **[Implicit]** `playground/scenarios.json` is the shared scenario catalog used
-  by the browser UI, deterministic scenario tests, and the native headless
-  capture tool. `pyboat-playground-capture` renders `fragment_playground` through
-  headless Vulkan with production tuning defaults. Each PNG receives a JSON
-  sidecar containing its primary inputs, Rust-derived celestial lighting,
-  atmosphere, surface climate, tide, fixed capture coordinates, and luminance
-  metrics; diagnostic shader views are selectable.
-- **[Implicit]** Cloud rendering derives continuous stratiform, convective, and
-  shear amounts from primary-driven atmospheric intermediates. Those amounts
-  adjust detail character, formation scale and elongation, height, optical depth,
-  and darkness without scenario identifiers or new shader inputs.
-- **[Explicit]** The former native weather-showcase renderer and checked-in image
-  collection are removed in favor of the interactive procedural playground.
-- **[Implicit]** The retained local browser test harness advances its controlled
-  and passive practice boats through the shared-world API, exercising collision
-  response independently of networking.
-- **[Implicit]** Each Rust simulation tick applies sail and rudder actuator
-  torques equally and oppositely to the controlled surface and hull. Rapier uses
-  eight solver iterations with joint warm-starting so sustained actuator loads
-  keep the articulated surfaces within their configured limits.
-- **[Implicit]** Rust surface target control uses torque-limited proportional
-  control with critical damping derived from each surface assembly's hinge
-  inertia. A sheet target may pull the sail inward but suppresses actuator torque
-  that would push it outward; explicit sail targets remain bidirectional.
-- **[Implicit]** Rust arcade control samples quasi-static sail and rudder effects
-  across their allowed angles using hull translation and angular velocity. It
-  preserves wind-side hysteresis, auto-sheet trim, backed-sail reverse, direct
-  rudder control, and fixed or water-speed-derived yaw-rate steering from the
-  accepted Python controller.
-- **[Implicit]** One Rust controlled-advance operation accepts a mode-specific
-  command, selects surface targets, derives actuator torques, applies all physical
-  loads, and advances exactly one fixed tick. It returns the selected targets and
-  active maximum yaw rate for runtime telemetry.
-- **[Implicit]** The authoritative browser client limits input catch-up to 250 ms,
-  emits commands only in complete 60 Hz ticks, and advances its nearby prediction
-  world once for each emitted command.
-- **[Implicit]** The Rust server's Tokio interval advances one synchronous physics
-  tick and publishes its resulting snapshot at 60 Hz. Each connection retains
-  only the newest pending snapshot, preventing a slow client from accumulating
-  stale latency.
-- **[Explicit]** Passive sail and rudder bearing damping uses Rapier force-based
-  revolute-joint motors targeting zero relative angular velocity. Damping is
-  validated by energy loss, common-rotation preservation, and angular-momentum
-  conservation rather than matching Pymunk's numerical decay curve.
-- **[Implicit]** The Rust sail load uses the symmetric flat-plate coefficients
-  `Cl = sin(2α)` and `Cd = Cd0 + 1 - cos(2α)`. The pure force calculation uses
-  apparent flow and dynamic pressure without depending on a physics runtime.
-- **[Implicit]** Rust keel and rudder loads use a symmetric streamlined lift
-  curve: lift grows linearly to the configured stall point, then transitions
-  toward separated flat-plate cross-flow while drag retains the flat-plate law.
-- **[Implicit]** Each Rust tick samples apparent water at the articulated
-  rudder's moving center of effort and at the hull-mounted keel position, then
-  applies each streamlined foil load to its supporting rigid body at that point.
-- **[Implicit]** Rust hull resistance remains quadratic and anisotropic. Half of
-  the configured reference area is sampled at each end of the hull so local
-  lateral flow creates a physically opposing yaw torque.
-- **[Implicit]** A boat whose sampled water depth is below its configured draft
-  transfers a proportional fraction of its weight onto the seabed. When the
-  external force and yaw wrench fit inside the static-friction envelope, Rapier
-  fixes the hull until that demand breaks the hold. Otherwise capped kinetic
-  friction acts at the bow and stern against ground-relative translation and yaw
-  without overshooting rest. The current dinghy uses a 0.6 m draft with effective
-  static and kinetic friction coefficients of 1.0 and 0.6.
-- **[Implicit]** Each Rust tick replaces the preceding tick's user-applied loads,
-  samples apparent wind at the moving sail center of effort, and applies the sail
-  force to the articulated sail at that world-space point.
-- **[Implicit]** Clients send sequenced control commands rather than transforms.
-  Server snapshots acknowledge only commands that have affected an authoritative
-  simulation tick.
-- **[Implicit]** Rapier enables `enhanced-determinism` in the shared simulation
-  crate. SIMD and parallel features remain disabled until profiling demonstrates
-  a need and native/WebAssembly equivalence tests cover the selected feature set.
+- **[Explicit]** Static terrain is a continuous seeded density field composed at
+  multiple scales in uncompressed metres. Reefs and rocks are field features, not
+  replicated objects, and no continent-scale layer may close the dominant ocean.
+- **[Implicit]** `pyboat-game` is authoritative for deterministic terrain,
+  atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
+  sample from match seed, tick, and world position rather than transferring
+  sampled fields through the protocol.
+- **[Explicit]** The match seed is the only procedural-world datum sent to a
+  client. Snapshots synchronize boats, not sampled environment fields or model
+  parameters.
+- **[Explicit]** Primary atmosphere and climate state is distinct from derived
+  weather. Derived values have no override path.
+- **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
+  analytic gradient drives mostly isobaric surface wind. Broad pressure drives
+  upper flow, horizontal temperature gradient contributes thermal wind, and
+  vertical shear is derived; there is no weather grid or storm entity.
+- **[Explicit]** Rendering samples primary weather at the local boat and applies
+  it uniformly across the viewport. WGSL recomputes short derivations rather than
+  accepting derived-weather or integrated cloud-offset inputs.
+- **[Explicit]** The visible cloud layer combines isotropic detail with an
+  independently shaped lower-frequency formation mask. A continuous parameter
+  divides advection between them; low cloud follows complete unsheltered surface
+  wind, while an invisible upper field follows broad synoptic wind. Cloud family
+  appearance emerges from conditions and tuning rather than separate renderers.
+  Detail may translate but does not rotate, scale, or become anisotropic; the mask
+  owns those transformations. A disconnected-body gate derives from the detail
+  values rather than another noise field.
+- **[Explicit]** Surface climate and astronomical tide are stateless analytic
+  models. Tide contributes to authoritative and predicted depth as well as the
+  rendered shoreline.
+- **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
+  seeded elevation at each pixel and zoom level; physics samples depth only at
+  positions where boats require it.
+- **[Implicit]** WGSL mirrors the authoritative terrain and short environment
+  derivations. Rust remains authoritative when a rendering approximation differs.
+- **[Explicit]** Gameplay and the procedural playground share production shader
+  functions. Gameplay binds scene state and fixed production tuning; the lab adds
+  live tuning and diagnostic state without adding that interface to production.
+- **[Explicit]** Celestial state is a fictional latitude with normalized day,
+  season, and moon phases. Rendering-grade astronomy derives light and tide;
+  ambient illumination remains separate from spatial direct-light shadows. Cloud
+  shadow displacement follows physical layer height and light direction rather
+  than a readability-compressed offset.
+- **[Explicit]** Playground diagnostics may approximate authoritative shelter but
+  never feed derived results back into primary inputs or gameplay physics.
 
-## Transport and protocol
+## Transport
 
-- **[Explicit]** The Rust stack uses Postcard-encoded binary messages over
-  WebTransport. This replaced the original compact JSON/WebSocket protocol.
-- **[Explicit]** Browser WebTransport connections always use TLS because the web
-  platform provides no plaintext mode. Development uses a short-lived
-  server-generated certificate pinned through its SHA-256 hash in the page URL;
-  the loopback Vite page itself may remain on HTTP. Restarting the server creates
-  a new certificate and therefore requires a new pin.
-- **[Implicit]** Each encoded message starts with a one-byte protocol version.
-  Postcard's positional enum and struct representation is the versioned Rust wire
-  contract; incompatible schema changes require a new protocol version.
-- **[Implicit]** `pyboat-protocol` defines the Rust stack's wire contract. Its
-  `welcome` message includes the match's `match_seed`, which the retained Python
-  server does not send; cross-runtime client-server pairings are unsupported.
-- **[Implicit]** The Rust server limits each client datagram and reliable message
-  to 1 KiB. Current client messages contain only compact input and viewport
-  commands, so larger traffic is rejected before Postcard decoding.
-- **[Implicit]** A QUIC connection must establish a WebTransport session on
-  `/game` within five seconds. Incomplete or wrong-path sessions are rejected
-  without consuming a player identity, spawn position, or authoritative match
-  slot.
-- **[Implicit]** After session establishment, the connection task waits for the
-  authoritative loop to register its player and shutdown mailbox before sending
-  `welcome`.
-  Receiving `welcome` therefore guarantees that controlled shutdown includes the
-  connection, and any queued snapshot follows the welcome message.
-- **[Implicit]** Welcome and viewport messages use reliable unidirectional
-  streams. Fixed-tick input and normal snapshots use WebTransport datagrams so a
-  lost packet cannot delay newer state. A snapshot larger than the negotiated
-  datagram limit falls back to a reliable unidirectional stream.
-- **[Implicit]** Reliable client streams are decoded independently of the input
-  datagram loop, so a delayed stream does not block control delivery. Snapshot
-  publication remains latest-only before transport delivery.
-- **[Implicit]** The Rust/WASM client uses `web-transport-wasm`, decodes Postcard
-  messages in Rust, and retains only the newest pending snapshot between rendered
-  frames. Welcome identity and match seed are applied immediately and are not part
-  of that latest-only mailbox.
-- **[Implicit]** The typed Rust snapshot envelope contains `tick`, `boats`, and
-  `removedPlayerIds`. Its boat type contains physical motion, health and wreck
-  state, optional nearby intent, and optional local acknowledgement fields.
-- **[Implicit]** Rust server snapshots leave `removedPlayerIds` empty, and the
-  Rust browser treats `boats` as the complete current interest set.
-- **[Explicit]** Snapshots are assembled per receiving player because nearby boats
-  require more prediction data than distant boats.
-- **[Implicit]** The browser sends a compact viewport-radius message after welcome
-  and whenever its canvas aspect ratio changes. The radius covers the viewport's
-  half-diagonal plus a 2.5 m boat-geometry margin.
+- **[Explicit]** The Rust stack uses versioned, Postcard-encoded binary messages
+  over WebTransport rather than the Python JSON/WebSocket contract.
+- **[Explicit]** WebTransport is always encrypted. Local development pins a
+  short-lived self-signed server certificate through its SHA-256 hash; deployed
+  environments provide a browser-trusted certificate.
+- **[Implicit]** Network queues are bounded and latest-biased so delayed clients
+  cannot accumulate stale commands or snapshots. Commands are sequenced, and an
+  acknowledgement covers only input already used by an authoritative tick.
+- **[Explicit]** Snapshots are assembled for each recipient because nearby boats
+  need prediction data that distant visible boats do not.
 
-## Client prediction and reconciliation
+## Prediction and interest
 
-- **[Explicit]** Client prediction includes physical interaction between the local
-  boat and nearby boats rather than only the local transform.
-- **[Explicit]** Steering responsiveness uses Source-style prediction and
-  reconciliation.
-- **[Implicit]** The client emits one sequenced command per fixed tick. The server
-  consumes one queued command per simulation tick, and the client restores the
-  acknowledged state before replaying each unacknowledged command for one fixed
-  timestep.
-- **[Implicit]** Each Rust server player retains at most the newest 15 pending
-  commands, matching 250 ms at 60 Hz. Overflow discards the oldest unapplied
-  commands so a burst cannot create an unbounded stale-control backlog.
-- **[Implicit]** The client retains and replays only the newest 15 unacknowledged
-  commands, capping prediction history at 250 ms to bound memory, replay work, and
-  runaway prediction during a snapshot stall.
-- **[Implicit]** A browser connection error or close stops network input emission
-  but continues fixed-tick local prediction from the last replicated scene. The
-  local boat remains controllable when alive; remote boats become passive wrecks
-  with zero health. A clean close reason remains visible in the connection status.
-- **[Implicit]** The client recreates the local boat and boats within 8 m in one
-  Rapier prediction space. The local boat uses unacknowledged commands; nearby
-  boats hold their latest server-reported command.
-- **[Explicit]** The interaction bubble begins shortly before contact rather than
-  activating only after collision begins.
-- **[Implicit]** Boats outside the physics bubble use kinematic extrapolation,
-  capped at 250 ms.
-- **[Explicit]** Entering and leaving the nearby physics bubble and accepting new
-  authoritative motion do not snap a boat's rendered pose or make its kinematic
-  motion visibly jerky.
-- **[Implicit]** Authoritative corrections affect physics immediately, while a
-  render-only cubic correction converges position, hull angle, sail angle, rudder
-  angle, and their visual velocities over 100 ms. It preserves pose and velocity
-  at both ends, and angular offsets follow the shortest path across the ±π boundary.
-- **[Explicit]** The current prediction and reconciliation behavior has been
-  manually accepted as feeling great and is the networking responsiveness
-  baseline. Contrary measurements or playtest evidence are the basis for changing
-  it.
-
-## Spatial interest and awareness
-
-- **[Explicit]** Boats sufficiently far outside the viewport do not need to be
-  included in snapshots.
-- **[Implicit]** Boats within 8 m include full motion and control data. Beyond 8 m,
-  boats through the receiving client's requested viewport radius include visual
-  motion without control data. The server clamps that radius to 8–24 m and uses
-  24 m for clients that do not send viewport updates.
-- **[Explicit]** Server interest management requires a maintained spatial query
+- **[Explicit]** Source-style prediction and reconciliation provides responsive
+  steering and includes physical interaction between the local boat and nearby
+  boats.
+- **[Implicit]** The client restores acknowledged authoritative state, replays a
+  bounded history of unacknowledged fixed-tick commands, and applies corrections
+  to physics immediately while smoothing render pose and velocity.
+- **[Explicit]** The nearby physics bubble starts before contact. Entering or
+  leaving it, and accepting authoritative corrections, must not visibly snap or
+  jerk boats.
+- **[Implicit]** Nearby boats share the local prediction world; distant boats use
+  bounded kinematic extrapolation.
+- **[Explicit]** Boats sufficiently outside the viewport may be omitted from a
+  recipient's snapshots, and server lookup uses a maintained spatial query
   system.
-- **[Implicit]** Server candidate lookup uses the physics world's maintained
-  broad-phase spatial index followed by an exact radial distance check: Pymunk in
-  the Python reference and Rapier in the Rust server. Clients linearly scan only
-  their already-culled snapshots.
-- **[Explicit]** Directional arrows to other ships are a debug feature and are not
-  required in the Rust browser.
-- **[Implicit]** Each Rust snapshot's `boats` array is the receiver's complete
-  current interest set. The browser discards an omitted boat immediately, so the
-  server does not track per-connection seen IDs or reliable removal tombstones.
 
-## Boat geometry
+## Operations
 
-- **[Explicit]** Rendered hull geometry and collision geometry must agree.
-- **[Implicit]** One hull outline in sailing coordinates supplies Pymunk collision
-  geometry, moment of inertia, and both Python renderers. Pymunk may reorder
-  polygon vertices internally.
+- **[Explicit]** Server and browser orchestration use asynchronous I/O wherever
+  work may suspend.
+- **[Explicit]** Visual procedural-world work uses the interactive playground and
+  deterministic headless capture rather than a separate native showcase or a
+  checked-in image collection.
 
-## Damage and wreck simulation
+## Open questions
 
-- **[Implicit]** Ramming damage uses the first authoritative collision impulse and
-  applies damage independently to both boats using each hull's local contact point.
-- **[Implicit]** The Rust server tracks active contact pairs by stable player ID so
-  a sustained contact damages only once and live-player index compaction cannot
-  suppress a later collision.
-- **[Implicit]** Snapshots replicate health and the most recent damage tick for
-  client status and brief hit feedback.
-- **[Explicit]** Reaching zero health keeps the destroyed boat owner connected as
-  a spectator centered on that wreck.
-- **[Explicit]** A destroyed boat remains in authoritative and nearby client
-  physics as a wreck with hull, sail, rudder, momentum, fluid forces, and
-  collisions but no controller.
-- **[Implicit]** Controllerless wrecks receive passive aerodynamic, hydrodynamic,
-  hull, and joint forces with zero actuator torque.
-- **[Implicit]** Nearby browser prediction also gives wrecks zero actuator torque,
-  preventing stale replicated intent from controlling them.
-- **[Implicit]** A browser spectating its local wreck emits no further input
-  commands while continuing to predict the wreck's passive motion between
-  snapshots.
-
-## Network testing
-
-- **[Implicit]** The Python client can inject round-trip latency and one-way jitter
-  for playtesting. Artificial round-trip latency is split equally between outgoing
-  commands and incoming snapshots while preserving message order.
-- **[Implicit]** Automated integration tests use real loopback WebTransport
-  connections in addition to deterministic simulation and protocol tests.
-- **[Implicit]** Rust loopback tests open real WebTransport sessions against an
-  ephemeral local UDP port and verify concurrent connection identity, sequenced
-  input acknowledgement, bounded input backlog, message size, wrong-path identity
-  isolation, independent reliable-stream and datagram delivery, authoritative
-  motion, spatial interest payloads, viewport-radius bounds, disconnect cleanup,
-  and the code and reason of signaled server shutdown. Shutdown coverage includes
-  dropping an isolated server runtime as soon as its serving future returns,
-  ensuring application closes are flushed before return.
-- **[Implicit]** Native browser-crate tests verify replicated state, input
-  sequencing, nearby physical prediction, distant extrapolation, bubble-transition
-  continuity, reconciliation, damage feedback, and controllerless wreck prediction
-  independently of browser APIs.
-- **[Implicit]** A browser-owned native loopback test drives `MultiplayerClient`
-  through the real Rust WebTransport server, deliberately skips intermediate
-  snapshots, and verifies fixed-tick input acknowledgement and bounded prediction.
-
-## Open architecture questions (not decisions)
-
-- Whether wreck cleanup is time-based, distance-based, capacity-based, or driven by
-  salvage gameplay.
-- Whether measured scale eventually justifies snapshot batching or application-level
-  delta compression.
+| Area | Unresolved choice |
+| --- | --- |
+| Wreck lifecycle | Time-, distance-, capacity-, or salvage-driven cleanup |
+| Snapshot format | Whether measured scale eventually justifies batching or application-level deltas |
