@@ -8,5 +8,5 @@ __pycache__/
 /web/node_modules/
 /crates/browser/pkg/
 /web/dist/
-/weather-playground/dist/
-/weather-playground/node_modules/
+/playground/dist/
+/playground/node_modules/

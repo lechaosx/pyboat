@@ -89,8 +89,8 @@ documentation, decision classification, and choosing tests by observable risk.
   world-to-scene conversion, and the WebGPU renderer. Its retained local demo is a
   native simulation test harness.
 - `web` contains the Vite page shell and TypeScript frame scheduling.
-- `weather-playground` is a separate Vite/WebGPU app for live production-shader
-  weather and terrain tuning.
+- `playground` is the separate Vite/WebGPU procedural laboratory for weather,
+  landscape, future water systems, and production-shader diagnostics.
 - `tests` contains unit, invariant, maneuver, rendering, protocol, and loopback
   multiplayer integration tests.
 
@@ -151,9 +151,8 @@ body; multiply it by an interior density rising from 0.25 to 1 through a
 0.15–0.75 smoothstep. More than half of representative samples must remain clear,
 10–40% must be cloudy, and density above 0.85 must be present but below 1%.
 `procedural_weather` packages that cloudiness and its continuous moisture signal
-with an unsheltered surface wind and coherent low- and high-cloud winds. The high
-wind is the dominant 32,768–131,072 m band at 118% speed; the low wind blends that
-band with the complete surface field at 108% speed. Independent four-octave fields provide instability over
+with an unsheltered surface wind and a coherent upper-cloud wind. The upper wind
+is the dominant 32,768–131,072 m band at 118% speed. Independent four-octave fields provide instability over
 16,384–2,048 m and sparse high-cloud potential over 32,768–4,096 m. Rain maps the
 0.7–0.95 tail of cloudiness weighted 65–100% by instability. Final surface wind
 samples terrain at six fixed points from 16–512 m upwind. Elevation through 1.5 m
@@ -214,13 +213,6 @@ Rapier uses `enhanced-determinism` without SIMD or parallel features. Native tes
 exercise behavior; the WebAssembly check verifies that the same library remains
 portable to the browser target.
 
-Run `cargo run -p pyboat-weather-showcase` to render fixed weather conditions
-through the browser's WGSL shader into `weather-showcase/`. The native offscreen
-renderer requires a Vulkan adapter and excludes boats and the HUD so cloud and
-terrain presentation remain easy to compare. Every checked-in condition uses the
-same camera, view height, match seed, visual seed, cloud offsets, and time; only
-the local weather parameters differ.
-
 Run the interactive playground with:
 
 ```sh
@@ -228,13 +220,28 @@ bun run dev:playground
 ```
 
 It imports `crates/browser/src/scene.wgsl` directly and needs WebGPU but no game
-server. Controls cover seed, time rate, weather, low/high winds, cloud feature
-scale and detail, stratus/cirrus elongation, the detail-to-mask motion split,
-optical material, and terrain tuning. Dragging pans the preview, the mouse wheel
-zooms around its pointer position, and an architectural 1–2–5 scale bar reports
-physical distance. Presets crossfade over 1.5 seconds. A range-track click eases
-over 0.3 seconds; dragging remains direct. `bun run build` validates and bundles
-both web apps.
+server. Weather, Landscape, and Water tabs organize semantic layers and label
+controls as live world inputs, procedural-model tuning, fixed shader tuning, or
+playground-only diagnostics. Weather views expose low-cloud detail and formation
+fields, cloud height, both shadow layers, optical outputs, approximate wind
+components, and terrain shelter. Landscape views expose elevation, slope, normals, island fields,
+coastal relief, vegetation, and beach geology. Water remains an explicit empty
+domain until its first current or wave slice exists.
+
+The WGSL module has `fragment` and `fragment_playground` entry points. Gameplay
+constructs tuning from scalar `override` defaults and binds only scene state. The
+playground binds the same scene state plus a live tuning/diagnostic buffer; both
+entry points populate private tuning state before calling shared rendering
+functions. Keep shared functions dependent on that private state rather than the
+playground binding so production never statically accesses the lab interface.
+Dragging pans the preview, the mouse wheel zooms around its pointer position, and
+an architectural 1–2–5 scale bar reports physical distance. Weather scenarios
+crossfade the complete atmosphere, wind, and sun world state over 1.5 seconds.
+World inputs have no default reset; changed shader, model, and debug values show
+individual reset buttons. Non-world categories also provide a Production preset
+for restoring their complete in-game tuning. A range-track click eases over 0.3
+seconds; dragging remains direct. `bun run build` validates and bundles both web
+apps.
 
 ## Controllers
 
@@ -420,28 +427,34 @@ snow, grass, and clustered forest canopy. Separate finer fields grade colors
 inside those materials. Beach width varies with broad geology but always begins
 at sea level; steep rock can meet the water before beach classification.
 Each frame samples `procedural_weather` at the camera position. The scene uniform
-carries surface, low-cloud, and high-cloud winds, moisture, instability,
-low/high cloudiness, rain state, predicted simulation time, a visual seed derived
-from the local player identity, and separately integrated low/high cloud offsets. WGSL uses the one weather
+carries unsheltered surface and synoptic winds, moisture, instability, low/upper
+cloudiness, rain state, a fixed three-dimensional sun direction and intensity,
+predicted simulation time, a visual seed derived from the local player identity,
+and separately integrated visible/upper cloud offsets. WGSL uses the one weather
 sample uniformly across the viewport; it does not mirror the shared weather field
-per pixel. Each family samples a distinct isotropic detail field and a lower-
-frequency formation mask. The mask aligns directly with the separately supplied
-low/high wind direction, even at zero speed, while a behavior parameter splits
-integrated layer offsets between base and mask coordinates. The production value
-of 1 assigns all translation to the mask. Low and high winds advance separate
-translation offsets. Instability blends stratus toward cumulus and, together with rain,
-strengthens dense storm cells. Cloud shading applies only to the fullscreen
-terrain quad, never boat fragments. Density, optical depth, darkness, and relief
-are calculated separately; an exponential optical-depth mapping keeps ordinary
-clouds translucent while dense rain cloud becomes opaque and dark.
-The terrain pass projects the low-cloud and high-cloud samplers independently
-toward the shared light bearing. The low layer separates by 30–50 m according to
-its 650–1,850 m weather-derived height; cirrus separates by 80 m. These display
-distances deliberately compress literal atmospheric projection so each cloud and
-shadow can remain visible in the default 480 m view. Positive terrain elevation
-shortens each distance. Add both projected optical depths before applying surface
-transmittance as `exp(-0.85 × optical depth)`. Together the two layer samples cost
-the same noise work as one additional complete cloud-field evaluation.
+per pixel. The visible offset advances with complete unsheltered surface wind; the
+upper offset advances with the lowest-frequency synoptic wind. One behavior
+parameter preserves the continuous detail-to-mask motion split.
+
+The visible layer combines one seven-octave evolving isotropic detail field with
+one four-octave broad formation mask. Detail coordinates never rotate or scale;
+value remapping controls their billowy character, contrast, edge, and optional
+detail-derived body gate. The independently translated mask controls rotation,
+scale, elongation, and broad bodies. Its maximum-coverage parameter initially
+targets 50% statistically across the field rather than per viewport. One broad
+four-octave field supplies upper optical depth only. Density, optical depth,
+darkness, relief, and height remain separate. The height field reuses density and
+detail, while analytic gradients include both detail and formation envelopes for
+directional lighting without another noise sample. Cloud shading applies only to
+the fullscreen terrain quad, never boat fragments.
+
+The terrain pass projects both layers from their physical heights along
+`sun.xy / sun.z`: 650–1,850 m for visible cloud and 6,200 m for upper cloud.
+Terrain elevation shortens each projection. The upper field is also projected
+from the varying low-cloud top to attenuate direct light on visible cloud while
+preserving ambient illumination. Add both terrain-projected optical depths before applying
+surface transmittance as `exp(-0.85 × optical depth)`. The complete visible,
+shadow, and upper-on-low path evaluates 30 cloud-noise octaves per terrain pixel.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

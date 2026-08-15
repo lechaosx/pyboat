@@ -186,32 +186,31 @@ decisions.
   generated independently per player but must look similar under the same local
   weather state.
 - **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies its sea-level, low-cloud, and high-cloud winds, moisture,
-  instability, low and high cloudiness, and rain intensity as parameters to local procedural
+  and supplies its unsheltered surface and synoptic winds, moisture, instability,
+  low and upper cloudiness, and rain intensity as parameters to local procedural
   rendering. That one state applies uniformly across the viewport, including at
   extreme debug zoom.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
   they move and evolve without a world-sized fluid simulation. Clouds do not
   participate in visibility or any other gameplay rule.
-- **[Explicit]** Every cloud family combines a family-specific isotropic detail
-  field with a lower-frequency formation mask. Detail coordinates never rotate;
-  mask coordinates align directly to the low-frequency layer-wind direction and
-  may rotate to reorganize the broad formation without rotating individual cloud
-  texture.
+- **[Explicit]** One visible low-cloud field combines an evolving isotropic detail
+  field with a lower-frequency formation mask. Detail coordinates may translate
+  but never rotate, scale, or become anisotropic. Value-composition parameters may
+  change detail character, contrast, edge softness, and whether a gate derived
+  from the detail values creates disconnected bodies. The independent mask may
+  rotate, scale, elongate, translate, and define broad formation shape.
 - **[Explicit]** One continuous parameter splits total layer advection between
   detail and mask coordinates. Both fields continue evolving through spacetime
   noise independently of that split.
-- **[Implicit]** Production assigns all spatial advection to the formation mask,
-  making clouds form at their leading edge and dissipate at their trailing edge.
-- **[Explicit]** Cloud motion and formation use only the lowest-frequency wind
-  components so regional and gust-scale changes do not abruptly redirect them.
-- **[Explicit]** Sea-level, low-cloud, and high-cloud winds are coherent samples
-  of one seeded weather system rather than independent fields. The common
-  synoptic flow dominates all three; shorter-scale variation increases toward
-  sea level, while average wind speed increases with altitude. Terrain shelter
-  affects the final wind used by boat physics, not the winds aloft.
-- **[Explicit]** Common cloud formations emerge from continuous weather
-  parameters rather than a discrete cloud-type selector.
+- **[Implicit]** Production assigns 65% of visible-cloud spatial advection to the
+  formation mask and 35% to detail coordinates; the playground can tune the full
+  continuous range.
+- **[Explicit]** Visible low clouds advect with the complete unsheltered surface
+  wind, while one invisible upper-cloud field advects only with the
+  lowest-frequency synoptic wind. Terrain shelter affects the final wind used by
+  boat physics, not either presentation field.
+- **[Explicit]** Low-cloud appearance emerges continuously from weather and
+  tuning parameters rather than distinct rendered cloud-family implementations.
 - **[Implicit]** Shared cloud cover is five octaves of smooth value noise over
   4,096–256 m in the transported weather coordinates. A `0.05–0.15` body edge and
   `0.15–0.75` interior mapping leave more than half of representative samples
@@ -258,39 +257,60 @@ decisions.
   Broad geology varies beach width continuously from sea level, so sand does not
   appear as disconnected inland patches.
 - **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered surface
-  wind, low- and high-cloud winds, moisture, instability, low and high cloudiness,
-  and rain intensity. High-cloud wind is the dominant 32,768–131,072 m synoptic
-  band at 118% speed. Low-cloud wind blends that band with the complete surface
-  field at 108% speed. WGSL combines family-specific isotropic bases with direct
-  wind-aligned, lower-frequency masks for cumulus, stratus, cirrus, squall, and
-  storm formations. Mask ridges organize elongated families while their base
-  fields retain distinct fine texture. The model evaluates 46 noise octaves per
-  terrain pixel, down from 99 in the fixed-axis and directional-filter model.
-  Density, optical depth,
-  darkness, and relief remain separate so thin cloud stays transparent, dense
-  rain cloud darkens continuously, and fine internal detail survives inside the
-  silhouette. Instability weights cumulus against stratus; instability with rain
-  strengthens storm cells. The browser integrates separate camera-local low- and
-  high-cloud offsets, avoiding a global flow simulation. Cloud shading applies
-  only to the fullscreen world surface, so boats remain equally visible to
-  clients with different visual seeds.
-- **[Implicit]** Cloud shadows project low and high procedural layers separately,
-  then add their optical depths for Beer-Lambert surface transmittance. Low-cloud
-  height rises from 650 m with instability and rain; high cloud uses 6,200 m.
-  For readability in the 480 m default top-down view, visual separation is
-  compressed to 30–50 m for low cloud and 80 m for high cloud rather than using
-  literal atmospheric displacement. Terrain elevation shortens each distance
-  independently. Low-cloud cover does not move either projection.
+  wind, a coherent upper-cloud wind, moisture, instability, low and upper
+  cloudiness, and rain intensity. The browser integrates the complete
+  unsheltered surface wind into the visible offset and the dominant
+  32,768–131,072 m synoptic band at 118% speed into the upper offset. WGSL gives
+  the low layer one seven-octave isotropic detail field and one four-octave broad
+  formation mask. A tunable motion split divides translation between their
+  coordinates. Detail-value and formation gates independently control whether
+  either field defines the silhouette. One four-octave isotropic field supplies
+  upper optical depth without visible material calculations. Visible, projected,
+  and upper-on-low samples total 30 cloud-noise octaves per terrain pixel.
+  Density, optical depth, darkness, relief, and height remain separate for
+  lighting and translucency. The low-cloud height field comes from density and
+  detail without another noise sample; analytic gradients propagate through both
+  detail and formation envelopes for terrain-style directional shading. Cloud
+  shading applies only to the fullscreen world surface, so boats remain equally
+  visible to clients with different visual seeds.
+- **[Implicit]** Cloud shadows project the 650–1,850 m visible layer and 6,200 m
+  upper layer from one three-dimensional surface-to-sun direction. At a source
+  position and height, the shader samples each cloud at the horizontal offset
+  `(cloud height - source height) × sun.xy / sun.z`. Their optical depths combine
+  for Beer-Lambert surface transmittance. The upper layer is also sampled from the
+  varying low-cloud top height to attenuate direct low-cloud illumination while
+  preserving ambient light. Direct shadows fade when the sun reaches the horizon.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.
-- **[Explicit]** Procedural weather and terrain tuning has a separate web app,
-  not an in-game mode. It imports the production WGSL shader and renders its
-  fullscreen world quad directly without multiplayer, simulation, or a server.
-- **[Implicit]** Three additional scene-uniform vectors carry cloud-noise,
-  cloud-material, and terrain tuning. The game and native showcase always supply
-  production defaults; only the playground edits them. This keeps one shader as
-  the rendering source of truth while preserving normal gameplay behavior.
+- **[Explicit]** A separate general procedural playground covers weather,
+  landscape, and future water systems rather than exposing an in-game debug mode.
+  It renders the production WGSL algorithms directly without multiplayer,
+  simulation, or a server.
+- **[Explicit]** Values supplied naturally by a match remain uniforms in both
+  gameplay and the playground. Fixed shader tuning uses WGSL pipeline overrides
+  in gameplay but a live uniform buffer in the playground. Diagnostic controls
+  and layer switches exist only in the playground entry point.
+- **[Explicit]** Playground tuning defaults mirror the production WGSL override
+  values and use final composition rather than a diagnostic view initially.
+- **[Implicit]** One WGSL module has production and playground fragment entry
+  points. Each populates private invocation-local tuning state, from scalar
+  pipeline overrides or the playground uniform respectively, before calling the
+  same cloud, terrain, lighting, and composition functions. Because production
+  does not statically access the playground binding, its pipeline layout and
+  runtime path contain no playground tuning or diagnostics.
+- **[Explicit]** Playground wind shelter may approximate the authoritative model.
+  The lab separately visualizes surface, synoptic, regional-residual, gust,
+  combined-wind, and shelter fields while leaving Rust gameplay physics
+  authoritative.
+- **[Explicit]** World inputs have no reset-to-default control. Category presets
+  replace that concept; Weather scenarios interpolate the complete atmosphere,
+  wind, and sun input set while preserving renderer/model tuning, diagnostic
+  state, seed, playback, camera, and zoom. Each implemented non-world category
+  exposes a Production preset sourced from the same initial values as its
+  individual reset controls.
+- **[Explicit]** The former native weather-showcase renderer and checked-in image
+  collection are removed in favor of the interactive procedural playground.
 - **[Implicit]** The retained local browser test harness advances its controlled
   and passive practice boats through the shared-world API, exercising collision
   response independently of networking.

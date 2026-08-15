@@ -43,12 +43,18 @@ The Rust stack additionally requires Rust 1.88 or newer, with the
 `wasm32-unknown-unknown` target, `wasm-pack`, and Bun. The Nix environment includes
 all of them.
 
-The separate procedural weather and terrain playground runs with
-`bun run dev:playground`. It renders the production scene shader without a game
-server and exposes live tuning controls. Drag the preview to pan, use the mouse
-wheel to zoom around the pointer, and adjust the time rate to inspect weather
-evolution. The preview includes the gameplay scale indicator; presets and slider
-track clicks transition smoothly, while dragging a slider remains immediate.
+The separate procedural world laboratory runs with `bun run dev:playground`. Its
+Weather, Landscape, and future Water domains render the production scene
+algorithms without a game server. Controls distinguish live world conditions,
+procedural-model tuning, fixed shader tuning, and playground-only diagnostics.
+Cloud masks, shadows, terrain fields, wind components, and approximate shelter
+can be inspected directly. Drag the preview to pan, use the mouse wheel to zoom
+around the pointer, and adjust the time rate to inspect evolution. Weather
+scenarios and slider-track clicks transition smoothly, while dragging remains
+immediate. World inputs have no arbitrary default reset; changed tuning and debug
+values show individual reset buttons, and non-world categories offer Production
+presets. Layer and contribution toggles preserve and disable their subordinate
+controls.
 
 ## Run the Rust connection server
 
@@ -122,12 +128,13 @@ The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded weather locally. Players share the same
 wind, moisture, instability, cloudiness, and rain intensity at a position, while
 fine cloud shapes are generated locally and remain presentation-only. The browser
-applies the weather at the local boat uniformly across the view. Layered stratus,
-cellular cumulus, sparse cirrus wisps, and dense storm cells blend naturally from
-those conditions. Mostly low, crisp cloud bodies follow only the slowly changing
-large-scale wind and evolve without covering the world in grey. Translucent cloud
-shadows from the low and high layers project independently across the world,
-with higher formations displaced farther. The HUD
+applies the weather at the local boat uniformly across the view. One visible layer
+of sparse wisps and occasional cumulus moves with the surface wind; its evolving
+isotropic detail and broad formation mask can create both small and large bodies
+without ordinarily covering most of the world. A simpler invisible upper layer
+moves with broad synoptic wind and appears through its shadows. Both layers cast
+translucent shadows projected from the sun direction, and upper clouds also shade
+the visible low clouds. The HUD
 reports health, speed through water, apparent-wind speed, and point of sail using
 the wind at the local boat. One striped windsock on the local boat's bow shows
 apparent-wind direction and strength: each visible band represents about 3 knots,

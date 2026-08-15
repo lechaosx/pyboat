@@ -53,14 +53,11 @@ struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     weather: [f32; 4],
     weather_structure: [f32; 4],
-    cloud_motion: [f32; 4],
+    sun_direction_and_intensity: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     cloud_offsets_m: [f32; 4],
-    cloud_tuning: [f32; 4],
-    cloud_rendering: [f32; 4],
-    cloud_behavior: [f32; 4],
-    terrain_tuning: [f32; 4],
+    wind_vectors_m_s: [f32; 4],
     time_seconds: f32,
     _padding: [u32; 3],
 }
@@ -217,7 +214,7 @@ impl Renderer {
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let weather = match_seed.map(|match_seed| procedural_weather(match_seed, tick, camera_m));
         if let Some(weather) = weather {
-            self.low_cloud_offset_m += weather.low_cloud_wind_velocity_m_s * elapsed_seconds;
+            self.low_cloud_offset_m += weather.wind_velocity_m_s * elapsed_seconds;
             self.high_cloud_offset_m += weather.high_cloud_wind_velocity_m_s * elapsed_seconds;
         }
         let match_seed = match_seed.unwrap_or(0);
@@ -242,14 +239,7 @@ impl Renderer {
                         0.0,
                     ]
                 }),
-                cloud_motion: weather.map_or([0.0; 4], |weather| {
-                    [
-                        weather.low_cloud_wind_velocity_m_s.x,
-                        weather.low_cloud_wind_velocity_m_s.y,
-                        weather.high_cloud_wind_velocity_m_s.x,
-                        weather.high_cloud_wind_velocity_m_s.y,
-                    ]
-                }),
+                sun_direction_and_intensity: [-0.55, -0.75, 1.0, 1.0],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
                 cloud_offsets_m: [
@@ -258,23 +248,14 @@ impl Renderer {
                     self.high_cloud_offset_m.x,
                     self.high_cloud_offset_m.y,
                 ],
-                cloud_tuning: [1.0, 1.0, 5.0, 12.5],
-                cloud_rendering: [1.0; 4],
-                cloud_behavior: weather.map_or([1.0, 0.0, 0.0, 0.0], |weather| {
+                wind_vectors_m_s: weather.map_or([0.0; 4], |weather| {
                     [
-                        1.0,
-                        weather
-                            .low_cloud_wind_velocity_m_s
-                            .y
-                            .atan2(weather.low_cloud_wind_velocity_m_s.x),
-                        weather
-                            .high_cloud_wind_velocity_m_s
-                            .y
-                            .atan2(weather.high_cloud_wind_velocity_m_s.x),
-                        0.0,
+                        weather.wind_velocity_m_s.x,
+                        weather.wind_velocity_m_s.y,
+                        weather.high_cloud_wind_velocity_m_s.x,
+                        weather.high_cloud_wind_velocity_m_s.y,
                     ]
                 }),
-                terrain_tuning: [1.0, 3.0, 0.08, 0.0],
                 time_seconds: tick as f32 / 60.0,
                 _padding: [0; 3],
             }),

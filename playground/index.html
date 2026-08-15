@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pyboat weather playground</title>
+    <title>Pyboat procedural lab</title>
   </head>
   <body>
     <main>
-      <canvas id="preview" aria-label="Procedural weather and terrain preview"></canvas>
+      <canvas id="preview" aria-label="Procedural world preview"></canvas>
       <div class="scale-bar" aria-label="Map scale">
         <div id="scale-line"><span></span><span></span><span></span><span></span></div>
         <div class="scale-labels"><span>0</span><span id="scale-label">200 m</span></div>
@@ -15,11 +15,13 @@
       <aside>
         <header>
           <p>PYBOAT / PROCEDURAL LAB</p>
-          <h1>Weather playground</h1>
+          <h1>World laboratory</h1>
           <span id="status">Starting WebGPU…</span>
           <div class="navigation-hint">Drag to pan · mouse wheel to zoom</div>
         </header>
-        <nav id="presets" aria-label="Weather presets"></nav>
+        <nav id="domains" class="domains" aria-label="Procedural domains"></nav>
+        <section id="world-toolbar" aria-label="World controls"></section>
+        <nav id="presets" class="presets" aria-label="Weather scenarios"></nav>
         <div id="controls"></div>
       </aside>
     </main>

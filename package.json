@@ -3,12 +3,12 @@
   "scripts": {
     "build:wasm": "wasm-pack build crates/browser --target bundler",
     "build:web": "bun run --cwd web build",
-    "build:playground": "bun run --cwd weather-playground build",
+    "build:playground": "bun run --cwd playground build",
     "build": "bun run build:wasm && bun run build:web && bun run build:playground",
     "dev:rust": "cargo-watch --watch crates/browser/src --watch crates/protocol/src --watch crates/simulation/src -s 'wasm-pack build crates/browser --target bundler --dev'",
     "dev:web": "bun run --cwd web dev",
-    "dev:playground": "bun run --cwd weather-playground dev",
+    "dev:playground": "bun run --cwd playground dev",
     "dev": "bun run build:wasm -- --dev && (bun run dev:rust & bun run dev:web)"
   },
-  "workspaces": ["crates/browser", "web", "weather-playground"]
+  "workspaces": ["crates/browser", "web", "playground"]
 }

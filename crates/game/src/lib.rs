@@ -19,7 +19,6 @@ const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
     pub wind_velocity_m_s: Vector,
-    pub low_cloud_wind_velocity_m_s: Vector,
     pub high_cloud_wind_velocity_m_s: Vector,
     pub cloudiness: f32,
     pub moisture: f32,
@@ -154,12 +153,9 @@ pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> Pro
     let rain_signal = cloudiness * (0.65 + 0.35 * instability);
     let wind_velocity_m_s = procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m);
     let synoptic_wind_velocity_m_s = procedural_wind_velocity_m_s(match_seed, tick, position_m, 1);
-    let low_cloud_wind_velocity_m_s =
-        1.08 * (0.35 * wind_velocity_m_s + 0.65 * synoptic_wind_velocity_m_s);
     let high_cloud_wind_velocity_m_s = 1.18 * synoptic_wind_velocity_m_s;
     ProceduralWeather {
         wind_velocity_m_s,
-        low_cloud_wind_velocity_m_s,
         high_cloud_wind_velocity_m_s,
         cloudiness,
         moisture,

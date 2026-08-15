@@ -7,8 +7,8 @@
       "name": "@pyboat/browser",
       "version": "0.1.0",
     },
-    "weather-playground": {
-      "name": "@pyboat/weather-playground",
+    "playground": {
+      "name": "@pyboat/procedural-lab",
       "devDependencies": {
         "typescript": "^6.0.3",
         "vite": "^8.0.13",
@@ -31,7 +31,7 @@
 
     "@pyboat/browser": ["@pyboat/browser@workspace:crates/browser"],
 
-    "@pyboat/weather-playground": ["@pyboat/weather-playground@workspace:weather-playground"],
+    "@pyboat/procedural-lab": ["@pyboat/procedural-lab@workspace:playground"],
 
     "@pyboat/web": ["@pyboat/web@workspace:web"],
 

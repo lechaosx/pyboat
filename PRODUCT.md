@@ -145,40 +145,66 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Rendering uses the weather sampled at the local boat for the
   whole viewport. Extreme debug zoom therefore shows one uniform weather regime
   across the visible map.
-- **[Explicit]** Cloud shapes move at the speed and direction of coherent low-
-  and high-altitude winds while also forming and dissipating over time, without
-  simulating a global fluid volume. Boat physics uses the related sea-level wind;
-  short-scale gusts do not abruptly steer cloud motion.
-- **[Explicit]** Each cloud family combines its own isotropic, non-rotating detail
-  field with a lower-frequency formation mask aligned to the layer wind. The mask
-  may rotate without visibly rotating individual billows or cloud texture.
+- **[Explicit]** The camera is compositionally below one invisible upper-cloud
+  layer and above one visible low-cloud layer. Upper clouds appear only through
+  their shadows; visible low clouds provide the detailed weather and wind cue.
+- **[Explicit]** Visible low clouds move with the complete unsheltered surface
+  wind. The invisible upper layer moves only with the lowest-frequency synoptic
+  wind. Both layers also form and dissipate over time without simulating a global
+  fluid volume.
+- **[Explicit]** The visible layer combines one evolving isotropic, non-rotating,
+  unscaled detail field with a lower-frequency formation mask. Detail character,
+  contrast, and blob formation may change without transforming its coordinates.
+  The mask controls broad shape, rotation, scale, elongation, and sparsity.
 - **[Explicit]** Cloud advection can be continuously split between detail and
   formation mask. Moving only the mask makes cloud form at its leading edge and
   dissipate at its trailing edge; moving only detail preserves a stationary
   formation envelope.
-- **[Explicit]** Familiar cloud families emerge from continuous atmospheric
-  conditions rather than named presets: stable moisture favors layered clouds,
-  instability favors cellular and towering clouds, rain darkens storm systems,
-  and sparse high-level cloud potential produces wind-stretched wisps.
-- **[Explicit]** Cloud cover is predominantly low-altitude and detailed at the
-  default view. Broad, flat grey overcast is avoided so navigation remains clear;
-  storm clouds are rare, while ordinary moving clouds remain useful wind cues.
+- **[Explicit]** The detail field may remain continuous inside mask-defined cloud
+  bodies, form disconnected bodies through a gate derived from its own values, or
+  combine both mechanisms. The detail gate does not introduce another sampled
+  noise field.
+- **[Explicit]** Visible clouds range from wisps and small cumulus to occasional
+  large bodies, but substantial clear space remains in ordinary cloudy weather.
+  Maximum visible coverage is tunable and initially targets 50% statistically
+  across the procedural field rather than clamping each viewport.
+- **[Explicit]** Storms primarily appear through broad upper-cloud shadows and
+  increased visible low scud rather than a screen-covering visible cloud deck.
 - **[Explicit]** Ordinary clouds are sparse and mostly translucent, with fine
   internal density and depth variation. Long decks are uncommon; dense dark
   opacity is concentrated in rare storm conditions so the boat usually remains
   readable.
-- **[Explicit]** Clouds cast translucent shadows on the world. Formation height
-  controls their projected separation, so higher clouds cast shadows farther
-  from their visible bodies than low clouds.
-- **[Explicit]** Each cloud layer casts its own corresponding shadow. Visual
-  separation remains short enough to associate a cloud and its shadow in the
-  default view.
+- **[Explicit]** Both cloud layers cast translucent shadows projected from their
+  physical formation heights and the sun direction. Higher clouds and lower sun
+  elevations produce longer displacement without an artificial readability
+  compression.
+- **[Explicit]** Upper-cloud shadows also attenuate direct sunlight on the visible
+  low clouds while leaving ambient illumination, so low clouds remain readable
+  beneath broad upper cover.
+- **[Explicit]** Visible low clouds have a procedural height field. It shapes
+  their local directional shading and the projection of upper-cloud shadows onto
+  their tops so cloud bodies do not read as flat textures.
 - **[Explicit]** Clouds do not conceal players or otherwise affect gameplay.
   Authored sprites remain appropriate for details such as rocks, trees, and
   wreckage.
 
 ## Platforms and controls
 
+- **[Explicit]** One general procedural playground covers generated weather,
+  landscape, and future water systems. Each domain separates semantic layers,
+  world conditions, model tuning, shader tuning, and diagnostic views rather
+  than presenting one undifferentiated list of controls.
+- **[Explicit]** Weather diagnostics can independently display and enable cloud
+  layers, detail and formation fields, masks, optical properties, projected
+  shadows, wind components, and approximate terrain shelter. Landscape
+  diagnostics likewise expose terrain composition fields and layers.
+- **[Explicit]** Independently meaningful rendered contributions have enable
+  switches separate from their magnitude tuning. Master switches preserve and
+  visually disable their dependent controls; cloud layers, sun lighting, wind
+  components, shelter, and landscape composition follow this hierarchy.
+- **[Explicit]** Playground tuning defaults match production game defaults, while
+  the initial world conditions are illustrative rather than canonical. The
+  initial diagnostic output is always the final composed scene.
 - **[Explicit]** The procedural playground supports drag panning and cursor-
   anchored mouse-wheel zoom. Its time advances continuously, and an adjustable
   rate scales both weather evolution and cloud motion.
@@ -187,8 +213,13 @@ This file records intended player experience, scope, and product behavior.
   sliders; navigation uses drag and wheel, while current time is a live readout.
 - **[Implicit]** View height is likewise controlled only through wheel zoom rather
   than an impractically wide linear slider.
-- **[Explicit]** Weather presets interpolate smoothly. Clicking a slider track
-  eases to the selected value, while dragging a slider remains immediate.
+- **[Explicit]** Live world inputs have no reset-to-default action because no one
+  world state is canonical. Semantic categories may instead provide presets.
+  Weather Conditions exposes scenarios that set every atmosphere, wind, and sun
+  world input while preserving shader and model tuning, debug state, camera, seed,
+  playback, and zoom. Non-world categories initially provide a Production preset
+  that restores the corresponding in-game tuning as a group. Clicking a slider
+  track eases to the selected value, while dragging a slider remains immediate.
 - **[Explicit]** Keyboard, controller, and touchpad input participate in cross-play.
 - **[Explicit]** Browser support is the primary platform target. Native desktop
   and mobile clients are desirable secondary targets rather than requirements for
