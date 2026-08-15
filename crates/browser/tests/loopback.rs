@@ -1,6 +1,6 @@
-use pyboat_browser::MultiplayerClient;
-use pyboat_protocol::{ClientMessage, ServerMessage, decode_server_message, encode_client_message};
-use pyboat_simulation::DT_SECONDS;
+use browser::MultiplayerClient;
+use protocol::{ClientMessage, ServerMessage, decode_server_message, encode_client_message};
+use simulation::DT_SECONDS;
 use tokio::time::{Duration, timeout};
 use wtransport::{ClientConfig, Connection, Endpoint, Identity};
 
@@ -28,9 +28,9 @@ async fn next_server_message(connection: &Connection) -> ServerMessage {
 async fn browser_client_predicts_and_reconciles_against_the_real_server() {
     let identity = Identity::self_signed(["127.0.0.1"]).unwrap();
     let certificate_hash = identity.certificate_chain().as_slice()[0].hash();
-    let endpoint = pyboat_server::endpoint("127.0.0.1:0".parse().unwrap(), identity).unwrap();
+    let endpoint = server::endpoint("127.0.0.1:0".parse().unwrap(), identity).unwrap();
     let address = endpoint.local_addr().unwrap();
-    let server = tokio::spawn(pyboat_server::serve(endpoint));
+    let server = tokio::spawn(server::serve(endpoint));
     let client_endpoint = Endpoint::client(
         ClientConfig::builder()
             .with_bind_default()

@@ -1,8 +1,8 @@
 [package]
-name = "pyboat-simulation"
+name = "simulation"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.89"
 
 [dependencies]
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }

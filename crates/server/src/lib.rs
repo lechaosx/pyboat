@@ -7,13 +7,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use pyboat_game::{
+use game::{
     computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
 };
-use pyboat_protocol::{
+use protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
-use pyboat_simulation::{
+use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation,
 };
 use rapier2d::prelude::Vector;

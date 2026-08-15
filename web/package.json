@@ -1,5 +1,5 @@
 {
-  "name": "@pyboat/web",
+  "name": "web",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pyboat/browser": "workspace:*"
+    "browser": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

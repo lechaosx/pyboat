@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use pyboat_game::{
+use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
     climate_surface, current_low_temperature_c, derive_weather, dinghy_parameters,
     match_environment, procedural_atmosphere_primary, procedural_cloud_cover,

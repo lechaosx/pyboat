@@ -8,7 +8,7 @@ This file covers non-default server operation.
 Pass a listen address as the first argument:
 
 ```sh
-cargo run -p pyboat-server -- 0.0.0.0:9000
+cargo run -p server -- 0.0.0.0:9000
 ```
 
 ## Certificates
@@ -18,5 +18,5 @@ certificate for local hash pinning. For a deployed certificate, pass its PEM
 certificate and private key after the address:
 
 ```sh
-cargo run -p pyboat-server -- 0.0.0.0:8765 cert.pem key.pem
+cargo run -p server -- 0.0.0.0:8765 cert.pem key.pem
 ```

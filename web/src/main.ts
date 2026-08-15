@@ -1,4 +1,4 @@
-import { BrowserGame } from "@pyboat/browser";
+import { BrowserGame } from "browser";
 import "./style.css";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
@@ -130,6 +130,6 @@ try {
 
   requestAnimationFrame(frame);
 } catch (error) {
-  statusElement.textContent = "Pyboat could not start in this browser";
+  statusElement.textContent = "The game could not start in this browser";
   throw error;
 }

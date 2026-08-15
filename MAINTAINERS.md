@@ -9,9 +9,8 @@ Repository-wide checks:
 
 | Surface | Command |
 | --- | --- |
-| Python | `uv run pytest` |
 | Native Rust workspace | `cargo test --workspace` |
-| Rust browser target | `cargo check -p pyboat-browser --target wasm32-unknown-unknown` |
+| Rust browser target | `cargo check -p browser --target wasm32-unknown-unknown` |
 | Browser and playground | `bun run build` |
 
 Some integration tests open loopback UDP sockets for real WebTransport sessions.
@@ -25,7 +24,6 @@ visual checks.
 
 | Area | Paths |
 | --- | --- |
-| Python reference | [`src`](src), [`tests`](tests) |
 | Shared Rust | [`crates/simulation`](crates/simulation), [`crates/game`](crates/game), [`crates/protocol`](crates/protocol) |
 | Rust applications | [`crates/server`](crates/server), [`crates/browser`](crates/browser) |
 | Web and tools | [`web`](web), [`playground`](playground), [`tools`](tools) |

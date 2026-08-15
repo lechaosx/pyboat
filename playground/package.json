@@ -1,5 +1,5 @@
 {
-  "name": "@pyboat/procedural-lab",
+  "name": "procedural-lab",
   "private": true,
   "type": "module",
   "scripts": {

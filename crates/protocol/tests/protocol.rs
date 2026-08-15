@@ -1,4 +1,4 @@
-use pyboat_protocol::{
+use protocol::{
     BoatSnapshot, ClientMessage, ProtocolError, ServerMessage, decode_client_message,
     decode_server_message, encode_client_message, encode_server_message,
 };

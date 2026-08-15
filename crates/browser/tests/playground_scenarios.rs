@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use pyboat_game::{
+use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, ProceduralWeather,
     celestial_lighting, current_low_temperature_c, derive_weather,
 };

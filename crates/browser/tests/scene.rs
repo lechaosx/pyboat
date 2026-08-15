@@ -1,11 +1,11 @@
 use std::f32::consts::PI;
 
-use pyboat_browser::{
+use browser::{
     Demo, PointOfSail, boat_scene, point_of_sail, scale_bar, viewport_interest_radius_m,
     windsock_extension, zoom_view_height_m,
 };
-use pyboat_game::dinghy_parameters;
-use pyboat_simulation::{BoatMotion, DT_SECONDS, MotionIntent};
+use game::dinghy_parameters;
+use simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 use rapier2d::prelude::Vector;
 
 const SCENE_SHADER: &str = include_str!("../src/scene.wgsl");
@@ -158,7 +158,7 @@ fn demo_maps_keyboard_and_world_relative_gamepad_motion() {
 }
 
 #[test]
-fn point_of_sail_matches_the_python_feedback_boundaries() {
+fn point_of_sail_matches_the_feedback_boundaries() {
     assert_eq!(point_of_sail(0.0), PointOfSail::InIrons);
     assert_eq!(
         point_of_sail(25.0_f32.to_radians()),

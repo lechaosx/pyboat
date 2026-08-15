@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use pyboat_simulation::{
+use simulation::{
     apparent_flow, flat_plate_drag_coefficient, flat_plate_force, flat_plate_lift_coefficient,
     grounding_friction_force, hull_resistance_force, streamlined_foil_force,
     streamlined_lift_coefficient,

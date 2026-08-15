@@ -1,13 +1,13 @@
 [package]
-name = "pyboat-server"
+name = "server"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [dependencies]
-pyboat-game = { path = "../game" }
-pyboat-protocol = { path = "../protocol" }
-pyboat-simulation = { path = "../simulation" }
+game = { path = "../game" }
+protocol = { path = "../protocol" }
+simulation = { path = "../simulation" }
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 tokio = { version = "1.53.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 wtransport = "0.7.2"

@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use pyboat_simulation::{
+use simulation::{
     BoatMotion, BoatParameters, HullParameters, create_boat, read_motion, restore_motion,
 };
 use rapier2d::prelude::{

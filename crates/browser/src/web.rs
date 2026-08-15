@@ -8,10 +8,10 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
-use pyboat_game::{
+use game::{
     procedural_atmosphere_primary, procedural_tidal_conditions, world_celestial_conditions,
 };
-use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
+use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use url::Url;
 use wasm_bindgen::prelude::*;
@@ -98,7 +98,7 @@ impl Renderer {
             .map_err(js_error)?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("Pyboat WebGPU device"),
+                label: Some("WebGPU device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -113,11 +113,11 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Pyboat scene shader"),
+            label: Some("Scene shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SCENE_SHADER)),
         });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Pyboat scene uniforms layout"),
+            label: Some("Scene uniforms layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -130,12 +130,12 @@ impl Renderer {
             }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pyboat scene pipeline layout"),
+            label: Some("Scene pipeline layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Pyboat scene pipeline"),
+            label: Some("Scene pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -156,19 +156,19 @@ impl Renderer {
             cache: None,
         });
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Pyboat dynamic vertices"),
+            label: Some("Dynamic vertices"),
             size: (MAX_VERTICES * mem::size_of::<Vertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Pyboat scene uniforms"),
+            label: Some("Scene uniforms"),
             size: mem::size_of::<SceneUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Pyboat scene uniforms bind group"),
+            label: Some("Scene uniforms bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -288,11 +288,11 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Pyboat frame encoder"),
+                label: Some("Frame encoder"),
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Pyboat scene pass"),
+                label: Some("Scene pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -657,7 +657,7 @@ fn accept_server_message(
     bytes: &[u8],
     protocol_client: &Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
-) -> Result<(), pyboat_protocol::ProtocolError> {
+) -> Result<(), protocol::ProtocolError> {
     match decode_server_message(bytes)? {
         message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
         message @ ServerMessage::Snapshot { .. } => {

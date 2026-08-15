@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use bytemuck::{Pod, Zeroable};
-use pyboat_game::{
+use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
     climate_surface, current_low_temperature_c, derive_weather, tide_height_m,
 };
@@ -274,7 +274,7 @@ fn parse_debug_view(value: &str) -> Result<u32, String> {
 
 fn print_help() {
     println!(
-        "pyboat-playground-capture [--scenario SLUG | --all] [options]\n\n\
+        "playground-capture [--scenario SLUG | --all] [options]\n\n\
          Options:\n\
            --list                 list scenario slugs and descriptions\n\
            --output PATH          write one scenario to PATH\n\
@@ -306,7 +306,7 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         .map_err(|error| format!("no headless Vulkan adapter available: {error}"))?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("Pyboat playground capture device"),
+            label: Some("Playground capture device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -316,7 +316,7 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Pyboat scene shader"),
+        label: Some("Scene shader"),
         source: wgpu::ShaderSource::Wgsl(SHADER.into()),
     });
     let scene_layout = uniform_layout(&device, "scene uniforms layout");

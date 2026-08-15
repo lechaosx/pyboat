@@ -1,7 +1,7 @@
 //! Procedural transcendental functions use `libm` so native and WebAssembly
 //! builds do not silently diverge through platform math implementations.
 
-use pyboat_simulation::{
+use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
     MotionIntent, computed_maximum_yaw_rate_rad_s, surface_control_input,
     surface_target_control_torques, yaw_rate_move_control,

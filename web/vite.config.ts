@@ -5,5 +5,5 @@ export default defineConfig({
   plugins: [wasm()],
   base: "./",
   build: { target: "esnext" },
-  optimizeDeps: { exclude: ["@pyboat/browser"] },
+  optimizeDeps: { exclude: ["browser"] },
 });

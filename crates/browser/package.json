@@ -1,7 +1,7 @@
 {
-  "name": "@pyboat/browser",
+  "name": "browser",
   "version": "0.1.0",
   "type": "module",
-  "main": "./pkg/pyboat_browser.js",
-  "types": "./pkg/pyboat_browser.d.ts"
+  "main": "./pkg/browser.js",
+  "types": "./pkg/browser.d.ts"
 }

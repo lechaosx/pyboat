@@ -1,8 +1,8 @@
 [package]
-name = "pyboat-protocol"
+name = "protocol"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.89"
 
 [dependencies]
 postcard = { version = "1.1.3", features = ["alloc"] }

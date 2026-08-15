@@ -1,4 +1,4 @@
-use pyboat_simulation::{HullParameters, create_hull, hull_outline_m};
+use simulation::{HullParameters, create_hull, hull_outline_m};
 use rapier2d::prelude::{ColliderSet, RigidBodySet, Vector};
 
 fn reference_hull() -> HullParameters {
@@ -11,7 +11,7 @@ fn reference_hull() -> HullParameters {
 }
 
 #[test]
-fn matches_the_python_reference_outline() {
+fn reference_hull_has_the_expected_outline() {
     assert_eq!(
         hull_outline_m(reference_hull()),
         [

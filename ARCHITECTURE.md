@@ -10,17 +10,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 ## Runtime boundaries
 
-- **[Explicit]** Rust is the target gameplay runtime. The same simulation compiles
+- **[Explicit]** Rust is the gameplay runtime. The same simulation compiles
   to WebAssembly for the browser and runs natively on the dedicated server.
-- **[Explicit]** The Python client and dedicated server remain a behavioral
-  reference during migration, not a Rust compatibility target. Rust may change
-  protocols, implementation details, and numerical trajectories when physical
-  invariants and accepted play behavior remain sound. Remove Python after Rust
-  surpasses it.
-- **[Implicit]** Migration proceeds one tested behavior at a time through the
-  runtime-independent `pyboat-simulation` crate. `pyboat-game` owns concrete game
-  policy, tuning, control composition, and procedural environment sampling shared
-  by native and browser runtimes.
+- **[Implicit]** The runtime-independent `simulation` crate owns reusable physics
+  and control behavior. `game` owns concrete game policy, tuning, control
+  composition, and procedural environment sampling shared by native and browser
+  runtimes.
 - **[Explicit]** Rapier 2D provides target rigid-body physics on native and
   WebAssembly builds.
 - **[Explicit]** The browser renderer is Rust `wgpu`, initially WebGPU-only rather
@@ -51,7 +46,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Static terrain is a continuous seeded density field composed at
   multiple scales in uncompressed metres. Reefs and rocks are field features, not
   replicated objects, and no continent-scale layer may close the dominant ocean.
-- **[Implicit]** `pyboat-game` is authoritative for deterministic terrain,
+- **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring
   sampled fields through the protocol.
@@ -96,8 +91,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 ## Transport
 
-- **[Explicit]** The Rust stack uses versioned, Postcard-encoded binary messages
-  over WebTransport rather than the Python JSON/WebSocket contract.
+- **[Explicit]** The stack uses versioned, Postcard-encoded binary messages over
+  WebTransport.
 - **[Explicit]** WebTransport is always encrypted. Local development pins a
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.

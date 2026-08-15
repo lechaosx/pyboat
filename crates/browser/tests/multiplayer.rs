@@ -1,7 +1,7 @@
-use pyboat_browser::MultiplayerClient;
-use pyboat_game::{procedural_match_environment, procedural_water_depth_m};
-use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use pyboat_simulation::{DT_SECONDS, apparent_flow};
+use browser::MultiplayerClient;
+use game::{procedural_match_environment, procedural_water_depth_m};
+use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
+use simulation::{DT_SECONDS, apparent_flow};
 use rapier2d::prelude::Vector;
 
 fn boat(id: &str, x: f32) -> BoatSnapshot {

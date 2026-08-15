@@ -912,7 +912,7 @@ fn terrain_smoothstep_sample(
 
 fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     // Keep the density composition synchronized with
-    // `pyboat_game::procedural_terrain_elevation_m`; Rust remains authoritative
+    // `game::procedural_terrain_elevation_m`; Rust remains authoritative
     // for physical depth.
     let terrain_position_m = position_m / tuning.terrain_tuning.x;
     let cluster = terrain_fractal_sample(
@@ -1345,7 +1345,7 @@ fn signed_debug_color(value: f32) -> vec3<f32> {
 
 fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
     // This diagnostic favors shader cost over parity. Gameplay shelter is sampled
-    // by `pyboat-game` and remains authoritative.
+    // by `game` and remains authoritative.
     let speed = length(wind_m_s);
     if speed < 0.01 {
         return 1.0;

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use pyboat_game::{
+use game::{
     computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
     match_environment, procedural_match_environment,
 };
-use pyboat_protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use pyboat_simulation::{
+use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
+use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
     MotionIntent, SharedSimulation, apparent_flow, hull_outline_m,
 };

@@ -25,12 +25,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let certificate_hash = identity.certificate_chain().as_slice()[0]
         .hash()
         .fmt(Sha256DigestFmt::DottedHex);
-    let endpoint = pyboat_server::endpoint(address.parse()?, identity)?;
+    let endpoint = server::endpoint(address.parse()?, identity)?;
     println!(
         "Server listening on https://{}/game",
         endpoint.local_addr()?
     );
     println!("Browser certificate hash: {certificate_hash}");
-    pyboat_server::serve_until(endpoint, tokio::signal::ctrl_c()).await?;
+    server::serve_until(endpoint, tokio::signal::ctrl_c()).await?;
     Ok(())
 }

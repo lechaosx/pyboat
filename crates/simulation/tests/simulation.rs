@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use pyboat_simulation::{
+use simulation::{
     ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
     DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
     SurfaceControlCommand, SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s,
@@ -1050,12 +1050,12 @@ fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
     let mut current = motion();
     current.sail_angle_rad = 0.25;
     current.sail_angular_velocity_rad_s = 0.0;
-    let sheet_targets = pyboat_simulation::SurfaceTargets {
+    let sheet_targets = simulation::SurfaceTargets {
         sheet_target_angle_rad: 0.5,
         rudder_target_angle_rad: 0.2,
         sail_target_angle_rad: None,
     };
-    let explicit_targets = pyboat_simulation::SurfaceTargets {
+    let explicit_targets = simulation::SurfaceTargets {
         sail_target_angle_rad: Some(0.5),
         ..sheet_targets
     };

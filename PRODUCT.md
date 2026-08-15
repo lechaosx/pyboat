@@ -11,7 +11,7 @@ current playable behavior; this file does not track delivery status.
 
 ## Experience and scope
 
-- **[Explicit]** Pyboat is an accessible, multiplayer, top-down naval combat game
+- **[Explicit]** The product is an accessible, multiplayer, top-down naval combat game
   with semi-realistic sailing. It adapts the shared-world immediacy of Agar.io and
   the satisfying naval combat of *Assassin's Creed IV: Black Flag*.
 - **[Explicit]** The game experience is primary. Helping players learn sailing may

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use pyboat_protocol::{
+use protocol::{
     BoatSnapshot, ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_server_message,
     encode_client_message,
 };
@@ -15,7 +15,7 @@ use wtransport::{ClientConfig, Connection, Identity};
 struct TestServer {
     address: std::net::SocketAddr,
     certificate_hash: Sha256Digest,
-    task: JoinHandle<pyboat_server::ServerResult<()>>,
+    task: JoinHandle<server::ServerResult<()>>,
 }
 
 struct TestClient {
@@ -29,14 +29,14 @@ fn server_endpoint() -> (
 ) {
     let identity = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
     let certificate_hash = identity.certificate_chain().as_slice()[0].hash();
-    let endpoint = pyboat_server::endpoint("127.0.0.1:0".parse().unwrap(), identity).unwrap();
+    let endpoint = server::endpoint("127.0.0.1:0".parse().unwrap(), identity).unwrap();
     (endpoint, certificate_hash)
 }
 
 fn start_server() -> TestServer {
     let (endpoint, certificate_hash) = server_endpoint();
     let address = endpoint.local_addr().unwrap();
-    let task = tokio::spawn(pyboat_server::serve(endpoint));
+    let task = tokio::spawn(server::serve(endpoint));
     TestServer {
         address,
         certificate_hash,
@@ -454,7 +454,7 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
     let (endpoint, certificate_hash) = server_endpoint();
     let address = endpoint.local_addr().unwrap();
     let (shutdown, shutdown_signal) = oneshot::channel();
-    let task = tokio::spawn(pyboat_server::serve_until(endpoint, shutdown_signal));
+    let task = tokio::spawn(server::serve_until(endpoint, shutdown_signal));
     let server = TestServer {
         address,
         certificate_hash,
@@ -492,7 +492,7 @@ async fn shutdown_flushes_close_before_server_runtime_stops() {
                 address_sender
                     .send((endpoint.local_addr().unwrap(), certificate_hash))
                     .unwrap();
-                pyboat_server::serve_until(endpoint, shutdown_signal).await
+                server::serve_until(endpoint, shutdown_signal).await
             })
     });
     let (address, certificate_hash) = address_receiver.recv().unwrap();

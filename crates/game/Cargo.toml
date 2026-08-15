@@ -1,10 +1,10 @@
 [package]
-name = "pyboat-game"
+name = "game"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.89"
 
 [dependencies]
 libm = "0.2"
-pyboat-simulation = { path = "../simulation" }
+simulation = { path = "../simulation" }
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
