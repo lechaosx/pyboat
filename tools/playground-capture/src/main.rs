@@ -30,6 +30,7 @@ struct Scenario {
     temperature_gradient: f32,
     temperature_gradient_direction: f32,
     water_vapor: f32,
+    aerosol_optical_depth: f32,
     latitude: f32,
     day_of_year: f32,
     time_of_day: f32,
@@ -71,7 +72,8 @@ struct SceneUniforms {
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     time_seconds: f32,
-    padding: [u32; 3],
+    aerosol_optical_depth: f32,
+    padding: [u32; 2],
 }
 
 #[repr(C)]
@@ -115,12 +117,16 @@ struct DerivedOutput {
 #[serde(rename_all = "camelCase")]
 struct ImageMetrics {
     mean_luminance: f32,
+    mean_red: f32,
+    mean_green: f32,
+    mean_blue: f32,
     luminance_contrast: f32,
     luminance_p10: f32,
     luminance_p50: f32,
     luminance_p90: f32,
     dark_pixel_fraction: f32,
     bright_pixel_fraction: f32,
+    warm_pixel_fraction: f32,
 }
 
 #[derive(Serialize)]
@@ -482,7 +488,8 @@ fn render_scenario(
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         cloud_visual_seed: [cloud_seed as u32, (cloud_seed >> 32) as u32],
         time_seconds: options.time_seconds,
-        padding: [0; 3],
+        aerosol_optical_depth: scenario.aerosol_optical_depth,
+        padding: [0; 2],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),
@@ -678,6 +685,23 @@ fn capture_report<'a>(
 }
 
 fn image_metrics(rgba: &[u8]) -> ImageMetrics {
+    let pixel_count = rgba.len() as f32 / 4.0;
+    let channel_mean = |channel: usize| {
+        rgba.chunks_exact(4)
+            .map(|pixel| f32::from(pixel[channel]) / 255.0)
+            .sum::<f32>()
+            / pixel_count
+    };
+    let warm_pixel_fraction = rgba
+        .chunks_exact(4)
+        .filter(|pixel| {
+            let red = f32::from(pixel[0]);
+            let green = f32::from(pixel[1]);
+            let blue = f32::from(pixel[2]);
+            red > 1.05 * green && red > 1.20 * blue && red > 24.0
+        })
+        .count() as f32
+        / pixel_count;
     let mut luminances: Vec<f32> = rgba
         .chunks_exact(4)
         .map(|pixel| {
@@ -697,6 +721,9 @@ fn image_metrics(rgba: &[u8]) -> ImageMetrics {
     let percentile = |amount: f32| luminances[(luminances.len() as f32 * amount) as usize];
     ImageMetrics {
         mean_luminance: mean,
+        mean_red: channel_mean(0),
+        mean_green: channel_mean(1),
+        mean_blue: channel_mean(2),
         luminance_contrast: variance.sqrt(),
         luminance_p10: percentile(0.10),
         luminance_p50: percentile(0.50),
@@ -705,6 +732,7 @@ fn image_metrics(rgba: &[u8]) -> ImageMetrics {
             / luminances.len() as f32,
         bright_pixel_fraction: luminances.iter().filter(|value| **value > 0.55).count() as f32
             / luminances.len() as f32,
+        warm_pixel_fraction,
     }
 }
 

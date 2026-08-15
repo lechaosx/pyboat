@@ -11,8 +11,9 @@ type State = {
   cameraY: number;
   viewHeight: number;
   time: number;
-  timeRate: number;
-  dayRate: number;
+  cloudTimeScale: number;
+  calendarTimeScale: number;
+  timeScalesLocked: boolean;
   paused: boolean;
   pressureHpa: number;
   pressureGradient: number;
@@ -26,6 +27,7 @@ type State = {
   temperatureGradient: number;
   temperatureGradientDirection: number;
   waterVapor: number;
+  aerosolOpticalDepth: number;
   latitude: number;
   dayOfYear: number;
   timeOfDay: number;
@@ -69,7 +71,7 @@ type State = {
   debugView: number;
 };
 
-type NumericStateKey = Exclude<keyof State, "seed" | "paused">;
+type NumericStateKey = Exclude<keyof State, "seed" | "paused" | "timeScalesLocked">;
 type RangeControl = {
   type: "range";
   key: NumericStateKey;
@@ -99,6 +101,7 @@ type WeatherScenario = Pick<State,
   | "lowTemperature" | "upperTemperature"
   | "seasonalTemperatureRange" | "diurnalTemperatureRange"
   | "temperatureGradient" | "temperatureGradientDirection" | "waterVapor"
+  | "aerosolOpticalDepth"
   | "latitude" | "dayOfYear" | "timeOfDay" | "moonPhase"
 >;
 type WeatherScenarioDefinition = WeatherScenario & {
@@ -113,8 +116,9 @@ const defaults: State = {
   cameraY: 0,
   viewHeight: 480,
   time: 37,
-  timeRate: 1,
-  dayRate: 0,
+  cloudTimeScale: 1,
+  calendarTimeScale: 0,
+  timeScalesLocked: false,
   paused: false,
   pressureHpa: 1008,
   pressureGradient: 1.0,
@@ -128,6 +132,7 @@ const defaults: State = {
   temperatureGradient: 0.12,
   temperatureGradientDirection: -65,
   waterVapor: 13,
+  aerosolOpticalDepth: 0.08,
   latitude: 45,
   dayOfYear: 172,
   timeOfDay: 14,
@@ -211,6 +216,11 @@ const groups: ControlGroup[] = [
       range("dayOfYear", "Day of year", "WORLD", 1, 365, 1),
       range("timeOfDay", "Local solar time · h", "WORLD", 0, 23.99, 0.05),
       range("moonPhase", "Moon phase · 0 new, 0.5 full", "WORLD", 0, 1, 0.01),
+    ],
+  },
+  {
+    domain: "weather", category: "Conditions", layer: "Atmospheric optics", controls: [
+      range("aerosolOpticalDepth", "Aerosol optical depth", "WORLD", 0, 1, 0.01),
     ],
   },
   {
@@ -403,7 +413,7 @@ type PresetTransition = { elapsed: number; from: Partial<State>; to: Partial<Sta
 const valueTransitions = new Map<NumericStateKey, ValueTransition>();
 let presetTransition: PresetTransition | undefined;
 const inputByKey = new Map<NumericStateKey, HTMLInputElement>();
-const outputByKey = new Map<NumericStateKey, HTMLOutputElement>();
+const outputByKey = new Map<NumericStateKey, HTMLInputElement>();
 const rangeByKey = new Map<NumericStateKey, RangeControl>();
 const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
 const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
@@ -485,7 +495,12 @@ function createRangeControl(control: RangeControl): HTMLDivElement {
   input.max = String(control.max);
   input.step = String(control.step);
   input.value = String(state[control.key]);
-  const output = document.createElement("output");
+  const output = document.createElement("input");
+  output.type = "number";
+  output.className = "range-value";
+  output.min = String(control.min);
+  output.max = String(control.max);
+  output.step = String(control.step);
   output.value = format(state[control.key], control.step);
   input.addEventListener("input", () => {
     presetTransition = undefined;
@@ -493,6 +508,14 @@ function createRangeControl(control: RangeControl): HTMLDivElement {
     state[control.key] = Number(input.value);
     syncControl(control.key);
   });
+  output.addEventListener("input", () => {
+    if (!Number.isFinite(output.valueAsNumber)) return;
+    presetTransition = undefined;
+    valueTransitions.delete(control.key);
+    state[control.key] = Math.min(control.max, Math.max(control.min, output.valueAsNumber));
+    syncControl(control.key);
+  });
+  output.addEventListener("change", () => syncControl(control.key));
   let pointerId: number | undefined;
   let pointerX = 0;
   let dragging = false;
@@ -713,30 +736,73 @@ function renderScenarios(): void {
   }
 }
 
+const minimumTimeScaleSlider = -2;
+const maximumTimeScale = 100000;
+function timeScaleFromSlider(value: number): number {
+  return value <= minimumTimeScaleSlider ? 0 : Number((10 ** value).toPrecision(3));
+}
+function timeScaleToSlider(value: number): number {
+  return value <= 0 ? minimumTimeScaleSlider : Math.log10(value);
+}
+
 worldToolbarElement.innerHTML = `
   <details open>
     <summary>World and playback</summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed <span class="kind kind-world">WORLD</span></label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="time-rate">Cloud time rate <span class="kind kind-world">WORLD</span></label><input id="time-rate" type="range" min="0" max="20" step="0.1" value="${state.timeRate}"><output>${format(state.timeRate, 0.1)}</output></div>
-    <div class="control range-control no-reset"><label class="control-name" for="day-rate">Day cycle · h/s <span class="kind kind-world">WORLD</span></label><input id="day-rate" type="range" min="0" max="2" step="0.01" value="${state.dayRate}"><output>${format(state.dayRate, 0.01)}</output></div>
+    <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time <span class="kind kind-world">WORLD</span></label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="calendar-time-scale">Calendar · × real time <span class="kind kind-world">WORLD</span></label><input id="calendar-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.calendarTimeScale)}"><input id="calendar-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.calendarTimeScale}"></div>
+    <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together <span class="kind kind-world">WORLD</span></label></div>
     <div class="actions"><button id="pause">Pause</button></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
-const timeRateInput = worldToolbarElement.querySelector<HTMLInputElement>("#time-rate")!;
-const timeRateOutput = timeRateInput.nextElementSibling as HTMLOutputElement;
-const dayRateInput = worldToolbarElement.querySelector<HTMLInputElement>("#day-rate")!;
-const dayRateOutput = dayRateInput.nextElementSibling as HTMLOutputElement;
+const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
+const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
+const calendarTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#calendar-time-scale")!;
+const calendarTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#calendar-time-value")!;
+const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
 const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
 });
-timeRateInput.addEventListener("input", () => {
-  state.timeRate = Number(timeRateInput.value);
-  timeRateOutput.value = format(state.timeRate, 0.1);
+function syncTimeScaleInputs(): void {
+  cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
+  cloudTimeValueInput.value = String(state.cloudTimeScale);
+  calendarTimeScaleInput.value = String(timeScaleToSlider(state.calendarTimeScale));
+  calendarTimeValueInput.value = String(state.calendarTimeScale);
+  lockTimeScalesInput.checked = state.timeScalesLocked;
+}
+function setCloudTimeScale(value: number): void {
+  state.cloudTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+  if (state.timeScalesLocked) state.calendarTimeScale = state.cloudTimeScale;
+  syncTimeScaleInputs();
+}
+function setCalendarTimeScale(value: number): void {
+  state.calendarTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+  if (state.timeScalesLocked) state.cloudTimeScale = state.calendarTimeScale;
+  syncTimeScaleInputs();
+}
+cloudTimeScaleInput.addEventListener("input", () => {
+  setCloudTimeScale(timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
 });
-dayRateInput.addEventListener("input", () => {
-  state.dayRate = Number(dayRateInput.value);
-  dayRateOutput.value = format(state.dayRate, 0.01);
+cloudTimeValueInput.addEventListener("input", () => {
+  if (Number.isFinite(cloudTimeValueInput.valueAsNumber)) {
+    setCloudTimeScale(cloudTimeValueInput.valueAsNumber);
+  }
+});
+cloudTimeValueInput.addEventListener("change", syncTimeScaleInputs);
+calendarTimeScaleInput.addEventListener("input", () => {
+  setCalendarTimeScale(timeScaleFromSlider(calendarTimeScaleInput.valueAsNumber));
+});
+calendarTimeValueInput.addEventListener("input", () => {
+  if (Number.isFinite(calendarTimeValueInput.valueAsNumber)) {
+    setCalendarTimeScale(calendarTimeValueInput.valueAsNumber);
+  }
+});
+calendarTimeValueInput.addEventListener("change", syncTimeScaleInputs);
+lockTimeScalesInput.addEventListener("change", () => {
+  state.timeScalesLocked = lockTimeScalesInput.checked;
+  if (state.timeScalesLocked) state.calendarTimeScale = state.cloudTimeScale;
+  syncTimeScaleInputs();
 });
 pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
@@ -1011,11 +1077,17 @@ function atmosphericOutputs(): Array<[string, string]> {
     return `${elevation.toFixed(1)}° elevation · ${azimuth.toFixed(0)}° azimuth`;
   };
   const overcast = Math.min(1, 0.42 * lowCloud + 0.58 * upperCloud + 0.3 * rain);
+  const sunsetScattering = Math.min(
+    1,
+    0.82 * smoothstepValue(0.06, 0.4, state.aerosolOpticalDepth)
+      + 0.18 * smoothstepValue(0.65, 1.1, humidity),
+  );
   return [
     ["Current low temperature", `${lowTemperature.toFixed(1)} °C`],
     ["Sun", `${angle(celestial.sun.direction)} · ${celestial.sun.intensity.toFixed(2)}`],
     ["Moon", `${angle(celestial.moon.direction)} · ${celestial.moon.intensity.toFixed(2)}`],
     ["Ambient light", (celestial.ambient * (1 - 0.42 * overcast)).toFixed(2)],
+    ["Sunset scattering", sunsetScattering.toFixed(2)],
     ["Surface wind", `${speed(surface).toFixed(1)} m/s · ${direction(surface).toFixed(0)}°`],
     ["Upper wind", `${speed(upper).toFixed(1)} m/s · ${direction(upper).toFixed(0)}°`],
     ["Vertical shear", `${speed(shear).toFixed(1)} m/s · ${direction(shear).toFixed(0)}°`],
@@ -1061,6 +1133,7 @@ function writeUniforms(): void {
   const [seedLow, seedHigh] = splitSeed(state.seed);
   sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 20);
   sceneFloats[24] = state.time;
+  sceneFloats[25] = state.aerosolOpticalDepth;
   device.queue.writeBuffer(sceneBuffer, 0, sceneData);
 
   const tuningData = new ArrayBuffer(144);
@@ -1134,9 +1207,9 @@ function frame(now: number): void {
   previous = now;
   advanceTransitions(elapsed);
   if (!state.paused) {
-    const simulationElapsed = elapsed * state.timeRate;
+    const simulationElapsed = elapsed * state.cloudTimeScale;
     state.time += simulationElapsed;
-    state.timeOfDay = (state.timeOfDay + elapsed * state.dayRate) % 24;
+    state.timeOfDay = (state.timeOfDay + elapsed * state.calendarTimeScale / 3600) % 24;
     syncControl("timeOfDay");
   }
   updateDerivedOutput();
@@ -1159,7 +1232,7 @@ function frame(now: number): void {
   device.queue.submit([encoder.finish()]);
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · ${format(state.time, 1)} s · ${state.timeOfDay.toFixed(2)} h`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.cloudTimeScale}× clouds · ${state.calendarTimeScale}× calendar · ${state.timeOfDay.toFixed(2)} h`;
   requestAnimationFrame(frame);
 }
 

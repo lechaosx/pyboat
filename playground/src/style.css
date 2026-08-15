@@ -91,7 +91,8 @@ h1 {
 
 button,
 select,
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   color: inherit;
   background: #102a33;
   border: 1px solid #2c515b;
@@ -234,8 +235,8 @@ details > :last-child { margin-bottom: 0.72rem; }
   opacity: 0.42;
 }
 
-.range-control { grid-template-columns: 9.3rem 1fr 2.8rem 1.55rem; }
-.range-control.no-reset { grid-template-columns: 9.3rem 1fr 2.8rem; }
+.range-control { grid-template-columns: 9.3rem 1fr 4.4rem 1.55rem; }
+.range-control.no-reset { grid-template-columns: 9.3rem 1fr 4.4rem; }
 
 .control-name {
   display: flex;
@@ -278,6 +279,8 @@ input[type="checkbox"] {
   padding: 0.12rem 0;
 }
 
+.toggle-control.no-reset { grid-template-columns: 1rem 1fr; }
+
 details > .subtoggle { margin-left: 1.7rem; }
 details > .subcontrol { margin-left: 1.7rem; }
 
@@ -285,6 +288,21 @@ input[type="text"],
 select {
   width: 100%;
   padding: 0.38rem 0.45rem;
+}
+
+.range-value {
+  appearance: textfield;
+  width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.35rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.range-value::-webkit-inner-spin-button,
+.range-value::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
 }
 
 output {
@@ -346,8 +364,8 @@ output {
 }
 
 @media (max-width: 420px) {
-  .range-control { grid-template-columns: 7.6rem 1fr 2.5rem 1.55rem; }
-  .range-control.no-reset { grid-template-columns: 7.6rem 1fr 2.5rem; }
+  .range-control { grid-template-columns: 7.6rem 1fr 4rem 1.55rem; }
+  .range-control.no-reset { grid-template-columns: 7.6rem 1fr 4rem; }
   .text-control,
   .select-control { grid-template-columns: 7.6rem 1fr 1.55rem; }
   .text-control.no-reset { grid-template-columns: 7.6rem 1fr; }

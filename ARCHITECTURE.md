@@ -313,9 +313,17 @@ decisions.
   clocks. Primary atmospheric fields do not advance from either clock. Gameplay
   may synchronize both clocks from one authoritative timeline without coupling
   their calculations.
+- **[Explicit]** Both playground clocks expose dimensionless real-time multipliers
+  and may be locked to one multiplier. Calendar hours advance by elapsed real
+  seconds multiplied by the calendar scale and divided by 3,600.
 - **[Explicit]** Ambient scene light is derived separately from direct sun or moon
   light. Primary-driven cloud and rain amounts attenuate and cool ambient fill,
   while sampled cloud optical depth controls spatial direct-light shadows.
+- **[Implicit]** Surface and low-cloud shading compose an ambient contribution
+  with a separately colored direct contribution. Low-sun warmth is gated by
+  aerosol optical depth and relative-humidity haze; solid upper cover suppresses
+  the ambient warm path. Moonlight stays cool. Projected cloud transmittance
+  multiplies only the direct contribution.
 - **[Implicit]** One WGSL module has production and playground fragment entry
   points. Each populates private invocation-local tuning state, from scalar
   pipeline overrides or the playground uniform respectively, before calling the

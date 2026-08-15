@@ -223,8 +223,8 @@ controls as live world inputs, procedural-model tuning, fixed shader tuning, or
 playground-only diagnostics. Weather views expose low-cloud detail and formation
 fields, cloud height, both shadow layers, optical outputs, primary atmospheric
 gradients, derived surface/upper wind and shear, and terrain shelter. The derived
-panel is read-only; scenarios change its primary causes, climate, location,
-calendar time, and moon phase. Landscape views expose elevation, slope, normals, island fields,
+panel is read-only; scenarios change its primary causes, climate, aerosol optical
+depth, location, calendar time, and moon phase. Landscape views expose elevation, slope, normals, island fields,
 coastal relief, vegetation, and beach geology. Water remains an explicit empty
 domain until its first current or wave slice exists.
 
@@ -237,14 +237,17 @@ playground binding so production never statically accesses the lab interface.
 Dragging pans the preview, the mouse wheel zooms around its pointer position, and
 an architectural 1–2–5 scale bar reports physical distance. Weather scenarios
 crossfade the complete primary atmosphere, climate, calendar, location, and moon
-world state over 1.5 seconds. Cloud time controls texture evolution and advection
-independently of the day-cycle rate, which advances local solar time. Keeping the
-day-cycle rate at zero freezes lighting and the thermal cycle without freezing
-clouds. Primary weather fields change only through controls or scenarios.
+world state over 1.5 seconds. Cloud evolution and calendar speed are both
+multipliers of real elapsed time and may be locked together. Calendar time divides
+scaled seconds by 3,600 before advancing local solar hours. A zero calendar speed
+freezes lighting and the thermal cycle without freezing clouds. Primary weather
+fields change only through controls or scenarios.
 World inputs have no default reset; changed shader, model, and debug values show
 individual reset buttons. Non-world categories also provide a Production preset
 for restoring their complete in-game tuning. A range-track click eases over 0.3
-seconds; dragging remains direct. `bun run build` validates and bundles both web
+seconds; dragging remains direct. Every range control also exposes a typed numeric
+field; CSS removes native number steppers without disabling keyboard entry.
+`bun run build` validates and bundles both web
 apps.
 
 Weather scenarios live in `playground/scenarios.json`; do not duplicate them in
@@ -449,7 +452,8 @@ inside those materials. Beach width varies with broad geology but always begins
 at sea level; steep rock can meet the water before beach classification.
 Each frame samples `procedural_atmosphere_primary` at the camera position. The
 scene uniform carries pressure and its full/broad gradients, low/upper
-temperature, horizontal temperature gradient, absolute moisture, latitude, day
+temperature, horizontal temperature gradient, absolute moisture, aerosol optical
+depth, latitude, day
 of year, local solar time, moon phase,
 predicted simulation time, and a visual seed derived from the local player
 identity. It carries no derived weather values or cloud offsets. WGSL mirrors the
@@ -479,6 +483,11 @@ preserving ambient illumination. Add both terrain-projected optical depths befor
 surface transmittance as `exp(-0.85 × optical depth)`. Separately, global cloud
 and rain amounts attenuate and cool the celestial ambient fill. The complete visible,
 shadow, and upper-on-low path evaluates 30 cloud-noise octaves per terrain pixel.
+Keep ambient and direct color contributions separate. Low sun shifts toward
+orange only when aerosol and moist-haze scattering support it; upper cover limits
+the warm ambient path. Moonlight remains blue, and cloud transmittance affects
+only direct light. Headless capture reports per-channel means and a warm-pixel
+fraction alongside luminance metrics for color-tuning comparisons.
 Middle mouse resets the original 15 m view height. Terrain can remain visible
 outside the server's clamped boat-interest radius, where snapshots contain no
 boats. The lower-left DOM scale bar selects a 1–2–5 distance near 120 CSS pixels

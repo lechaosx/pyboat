@@ -84,7 +84,8 @@ This file records intended player experience, scope, and product behavior.
   objects and life cycles. Storm-like conditions emerge when the continuous
   atmospheric fields align.
 - **[Explicit]** Pressure, climate and upper-level temperature, absolute moisture,
-  location, calendar time, moon phase, and terrain forcing are primary conditions.
+  aerosol optical depth, location, calendar time, moon phase, and terrain forcing
+  are primary conditions.
   Current low-level temperature follows seasonal and daily cycles. Sun and moon
   position and illumination, wind at both levels, relative humidity, instability,
   lift, cloud potential, rain, gustiness, and wind shear
@@ -197,6 +198,12 @@ This file records intended player experience, scope, and product behavior.
 - **[Explicit]** Cloud cover and rain also attenuate and cool ambient illumination;
   weather therefore changes the whole scene mood independently of local direct-light
   shadows.
+- **[Explicit]** Low sun does not imply an orange scene by itself. Aerosol optical
+  depth and moist haze determine scattering strength, while upper-cloud openness
+  determines whether warm light reaches the scene. When those conditions align,
+  lit cloud tops, terrain, and water become visibly orange or red. Cloud shadows
+  remove that warm direct component while retaining cooler ambient fill rather
+  than applying one uniform color filter to the viewport.
 - **[Explicit]** Visible low clouds have a procedural height field. It shapes
   their local directional shading and the projection of upper-cloud shadows onto
   their tops so cloud bodies do not read as flat textures.
@@ -228,6 +235,9 @@ This file records intended player experience, scope, and product behavior.
   rates, so cloud advection and texture evolution can continue while time of day
   is frozen. Primary weather fields stay fixed until changed manually or by a
   scenario.
+- **[Explicit]** Cloud-evolution and calendar speeds use the same real-time
+  multiplier: `2×` advances either clock twice as fast as real time. Their speeds
+  can be locked together or adjusted independently.
 - **[Explicit]** The playground uses the same architectural 1–2–5 metric scale
   indicator as gameplay. Absolute camera position and cloud-animation time are
   not linear sliders; navigation uses drag and wheel, while local solar time is a
@@ -242,6 +252,7 @@ This file records intended player experience, scope, and product behavior.
   playback, and zoom. Non-world categories initially provide a Production preset
   that restores the corresponding in-game tuning as a group. Clicking a slider
   track eases to the selected value, while dragging a slider remains immediate.
+  Every slider also has a directly editable numeric value without spinner arrows.
 - **[Explicit]** Weather scenarios are characteristic regimes rather than generic
   intensity steps: clear high pressure, fair cumulus, marine stratus, warm-front
   rain, a cold-front squall, tropical convection, and post-front clearing each

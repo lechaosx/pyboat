@@ -58,7 +58,8 @@ struct SceneUniforms {
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     time_seconds: f32,
-    _padding: [u32; 3],
+    aerosol_optical_depth: f32,
+    _padding: [u32; 2],
 }
 
 struct Renderer {
@@ -242,7 +243,8 @@ impl Renderer {
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
                 time_seconds: tick as f32 / 60.0,
-                _padding: [0; 3],
+                aerosol_optical_depth: 0.08,
+                _padding: [0; 2],
             }),
         );
 

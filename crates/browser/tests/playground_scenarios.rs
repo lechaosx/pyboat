@@ -24,6 +24,7 @@ struct Scenario {
     temperature_gradient: f32,
     temperature_gradient_direction: f32,
     water_vapor: f32,
+    aerosol_optical_depth: f32,
     latitude: f32,
     day_of_year: f32,
     time_of_day: f32,
@@ -122,6 +123,11 @@ fn playground_scenarios_have_stable_unique_human_labels() {
         scenarios
             .iter()
             .all(|scenario| (0.0..=1.0).contains(&scenario.moon_phase))
+    );
+    assert!(
+        scenarios
+            .iter()
+            .all(|scenario| (0.0..=1.0).contains(&scenario.aerosol_optical_depth))
     );
 }
 

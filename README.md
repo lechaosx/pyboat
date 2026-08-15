@@ -50,9 +50,10 @@ procedural-model tuning, fixed shader tuning, and playground-only diagnostics.
 Cloud masks, shadows, terrain fields, primary atmospheric gradients, derived wind
 and shear, and approximate shelter can be inspected directly. Derived weather and
 sun/moon lighting are read-only; scenarios change pressure, climate, moisture,
-location, calendar time, and moon phase. Drag the preview to pan, use the mouse
-wheel to zoom around the pointer, and adjust cloud time and day-cycle rates
-independently. Weather
+aerosol optical depth, location, calendar time, and moon phase. Drag the preview
+to pan, use the mouse wheel to zoom around the pointer, and adjust cloud-evolution
+and calendar multipliers independently or lock them together. `2×` means twice
+real time for either clock. Every slider value can also be typed directly. Weather
 scenarios and slider-track clicks transition smoothly, while dragging remains
 immediate. World inputs have no arbitrary default reset; changed tuning and debug
 values show individual reset buttons, and non-world categories offer Production

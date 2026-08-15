@@ -7,6 +7,7 @@ struct SceneUniforms {
     match_seed: vec2<u32>,
     cloud_visual_seed: vec2<u32>,
     time_seconds: f32,
+    aerosol_optical_depth: f32,
 };
 
 struct SceneTuning {
@@ -62,6 +63,7 @@ var<private> moon_light_direction: vec3<f32>;
 var<private> sun_light_amount: f32;
 var<private> moon_light_amount: f32;
 var<private> ambient_light_color: vec3<f32>;
+var<private> sunset_scattering: f32;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -757,7 +759,12 @@ fn calculate_atmospheric_ambient_color() -> vec3<f32> {
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
     var color = mix(vec3<f32>(0.42, 0.52, 0.75), vec3<f32>(0.84, 0.90, 1.0), twilight);
     color = mix(color, vec3<f32>(1.0), daylight);
-    color = mix(color, vec3<f32>(1.22, 0.72, 0.48), 0.48 * horizon_glow);
+    let sky_openness = 1.0 - 0.75 * upper_cloud_coverage();
+    color = mix(
+        color,
+        vec3<f32>(1.30, 0.52, 0.30),
+        0.62 * horizon_glow * sunset_scattering * sky_openness,
+    );
     let overcast = clamp(
         0.42 * low_cloud_coverage() + 0.58 * upper_cloud_coverage() + 0.30 * rain_intensity(),
         0.0,
@@ -770,6 +777,31 @@ fn calculate_atmospheric_ambient_color() -> vec3<f32> {
 
 fn atmospheric_ambient_color() -> vec3<f32> {
     return ambient_light_color;
+}
+
+fn calculate_sunset_scattering() -> f32 {
+    let aerosol = smoothstep(0.06, 0.40, clamp(scene.aerosol_optical_depth, 0.0, 1.0));
+    let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
+    return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
+}
+
+fn sun_direct_light_color() -> vec3<f32> {
+    let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_direction().z);
+    let warmth = low_sun * mix(0.06, 1.0, sunset_scattering);
+    return mix(vec3<f32>(1.0), vec3<f32>(1.55, 0.34, 0.06), warmth);
+}
+
+fn ambient_contribution_color() -> vec3<f32> {
+    let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
+    let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
+    return atmospheric_ambient_color() * max(1.0 - sun_share - moon_share, 0.0);
+}
+
+fn direct_contribution_color() -> vec3<f32> {
+    let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
+    let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
+    return sun_share * sun_direct_light_color()
+        + moon_share * vec3<f32>(0.48, 0.62, 1.0);
 }
 
 fn projected_cloud_position(
@@ -1022,7 +1054,8 @@ fn cloud_color(
         -tuning.cloud_rendering.w * cloud_sample.gradient,
         1.0,
     ));
-    let direct_light = max(dot(cloud_normal, primary_light_direction()), 0.0)
+    let direct_facing = max(dot(cloud_normal, primary_light_direction()), 0.0);
+    let direct_light = direct_facing
         * clamp(direct_light_amount(), 0.0, 1.0);
     let sunlight = direct_light_amount() * upper_transmittance;
     let relief = cloud_sample.relief / max(density, 0.001);
@@ -1043,9 +1076,10 @@ fn cloud_color(
     ) * (0.70 + sunlight * mix(0.12, 0.36, direct_light))
         + edge_light
         - depth_shadow);
-    cloud *= 0.12
-        + 0.88 * atmospheric_ambient_color()
-        + 0.40 * direct_moon_amount() * vec3<f32>(0.45, 0.58, 0.85);
+    cloud *= ambient_contribution_color()
+        + direct_contribution_color()
+            * upper_transmittance
+            * mix(0.25, 1.0, direct_facing);
     let body = smoothstep(0.08, 0.18, density);
     let optical_depth = tuning.cloud_rendering.x * cloud_sample.optical_depth;
     let opacity = tuning.cloud_rendering.y * body * (1.0 - exp(-1.35 * optical_depth));
@@ -1082,9 +1116,8 @@ fn cloud_shadow_color(
         + 550.0 * rain_intensity();
     let upper_height_m = 6200.0;
     let surface_height_m = max(elevation_m, 0.0);
-    let shadow_strength = direct_light_amount();
-    if shadow_strength <= 0.0 {
-        return surface_color;
+    if direct_light_amount() <= 0.0 {
+        return surface_color * ambient_contribution_color();
     }
     var shadow_depth = 0.0;
     if layer_visibility.y > 0.0 {
@@ -1102,10 +1135,14 @@ fn cloud_shadow_color(
     let shadow_transmittance = exp(
         -0.85 * tuning.cloud_rendering.x * shadow_depth,
     );
-    return surface_color * mix(
+    let direct_transmittance = mix(
         1.0,
         shadow_transmittance,
-        tuning.cloud_rendering.y * shadow_strength,
+        clamp(tuning.cloud_rendering.y, 0.0, 1.0),
+    );
+    return surface_color * (
+        ambient_contribution_color()
+            + direct_transmittance * direct_contribution_color()
     );
 }
 
@@ -1118,7 +1155,6 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             terrain.elevation_m,
             terrain.gradient,
         );
-        surface_color *= atmospheric_ambient_color();
         surface_color = cloud_shadow_color(
             surface_color,
             input.world_position_m,
@@ -1314,6 +1350,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     atmosphere_model = vec4<f32>(1.0);
     celestial_visibility = 1.0;
     initialize_celestial_lighting();
+    sunset_scattering = calculate_sunset_scattering();
     ambient_light_color = calculate_atmospheric_ambient_color();
     return final_scene_color(input);
 }
@@ -1326,6 +1363,7 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     atmosphere_model = playground.wind_model;
     celestial_visibility = f32(playground.diagnostics.y);
     initialize_celestial_lighting();
+    sunset_scattering = calculate_sunset_scattering();
     ambient_light_color = calculate_atmospheric_ambient_color();
     if playground.diagnostics.x == 0u {
         return final_scene_color(input);
