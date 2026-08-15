@@ -31,6 +31,30 @@ pub struct AtmospherePrimary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CelestialConditions {
+    pub latitude_degrees: f32,
+    pub day_of_year: f32,
+    pub solar_time_hours: f32,
+    pub moon_phase: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CelestialLighting {
+    pub sun_direction: [f32; 3],
+    pub sun_intensity: f32,
+    pub moon_direction: [f32; 3],
+    pub moon_intensity: f32,
+    pub ambient_intensity: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClimateConditions {
+    pub annual_mean_low_temperature_c: f32,
+    pub seasonal_temperature_range_c: f32,
+    pub diurnal_temperature_range_c: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
     pub primary: AtmospherePrimary,
     pub wind_velocity_m_s: Vector,
@@ -42,6 +66,68 @@ pub struct ProceduralWeather {
     pub instability: f32,
     pub upper_cloudiness: f32,
     pub rain_intensity: f32,
+}
+
+pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
+    let latitude = f64::from(conditions.latitude_degrees).to_radians();
+    let solar_longitude =
+        std::f64::consts::TAU * (f64::from(conditions.day_of_year) - 80.0) / 365.0;
+    let obliquity = 23.44_f64.to_radians();
+    let solar_declination = libm::asin(libm::sin(obliquity) * libm::sin(solar_longitude));
+    let solar_hour_angle =
+        std::f64::consts::TAU * (f64::from(conditions.solar_time_hours) - 12.0) / 24.0;
+    let sun_direction = celestial_direction(latitude, solar_declination, solar_hour_angle);
+    let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
+    let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
+    let sun_intensity = sun_horizon * (0.35 + 0.65 * sun_elevation);
+
+    let phase_angle = std::f64::consts::TAU * f64::from(conditions.moon_phase.rem_euclid(1.0));
+    let lunar_longitude = solar_longitude + phase_angle;
+    let lunar_declination = libm::asin(libm::sin(obliquity) * libm::sin(lunar_longitude));
+    let moon_direction =
+        celestial_direction(latitude, lunar_declination, solar_hour_angle + phase_angle);
+    let illuminated_fraction = 0.5 - 0.5 * libm::cos(phase_angle);
+    let moon_intensity = 0.12
+        * illuminated_fraction as f32
+        * smoothstep_range(0.0, 0.08, f64::from(moon_direction[2])) as f32;
+    let twilight = smoothstep_range(-0.18, 0.12, f64::from(sun_direction[2])) as f32;
+    let ambient_intensity =
+        (0.035 + twilight * (0.45 + 0.515 * sun_elevation) + 0.85 * moon_intensity).min(1.0);
+
+    CelestialLighting {
+        sun_direction,
+        sun_intensity,
+        moon_direction,
+        moon_intensity,
+        ambient_intensity,
+    }
+}
+
+pub fn current_low_temperature_c(
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+) -> f32 {
+    let hemisphere = if conditions.latitude_degrees < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let seasonal_phase =
+        std::f64::consts::TAU * (f64::from(conditions.day_of_year) - 205.0) / 365.0;
+    let diurnal_phase =
+        std::f64::consts::TAU * (f64::from(conditions.solar_time_hours) - 15.0) / 24.0;
+    climate.annual_mean_low_temperature_c
+        + 0.5 * climate.seasonal_temperature_range_c * hemisphere * libm::cos(seasonal_phase) as f32
+        + 0.5 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+}
+
+fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32; 3] {
+    let east = -libm::cos(declination) * libm::sin(hour_angle);
+    let north = libm::sin(declination) * libm::cos(latitude)
+        - libm::cos(declination) * libm::sin(latitude) * libm::cos(hour_angle);
+    let up = libm::sin(latitude) * libm::sin(declination)
+        + libm::cos(latitude) * libm::cos(declination) * libm::cos(hour_angle);
+    [east as f32, north as f32, up as f32]
 }
 
 #[derive(Clone, Copy)]
@@ -238,10 +324,10 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
     let lift = (0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
     let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
     let cloud_signal = 0.68 * condensation + 0.22 * lift + 0.10 * instability * condensation;
-    let cloudiness = smoothstep_range(0.55, 0.98, f64::from(cloud_signal)) as f32;
+    let cloudiness = smoothstep_range(0.50, 0.98, f64::from(cloud_signal)) as f32;
     let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
     let upper_cloudiness = smoothstep_range(0.68, 0.90, f64::from(upper_cloud_signal)) as f32;
-    let rain_signal = cloudiness * (0.55 + 0.25 * instability + 0.20 * lift);
+    let rain_signal = cloudiness * (0.45 + 0.20 * instability + 0.45 * lift);
 
     ProceduralWeather {
         primary,
@@ -253,7 +339,7 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
         cloudiness,
         instability,
         upper_cloudiness,
-        rain_intensity: smoothstep_range(0.68, 0.92, f64::from(rain_signal)) as f32,
+        rain_intensity: smoothstep_range(0.55, 0.90, f64::from(rain_signal)) as f32,
     }
 }
 

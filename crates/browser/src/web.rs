@@ -54,7 +54,7 @@ struct SceneUniforms {
     pressure: [f32; 4],
     synoptic_pressure_and_temperature: [f32; 4],
     moisture_and_temperature_gradient: [f32; 4],
-    sun_direction_and_intensity: [f32; 4],
+    celestial_conditions: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
     time_seconds: f32,
@@ -238,7 +238,7 @@ impl Renderer {
                         0.0,
                     ]
                 }),
-                sun_direction_and_intensity: [-0.55, -0.75, 1.0, 1.0],
+                celestial_conditions: [45.0, 172.0, 14.0, 0.25],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
                 time_seconds: tick as f32 / 60.0,

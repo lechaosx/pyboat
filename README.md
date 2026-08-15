@@ -48,14 +48,28 @@ Weather, Landscape, and future Water domains render the production scene
 algorithms without a game server. Controls distinguish live world conditions,
 procedural-model tuning, fixed shader tuning, and playground-only diagnostics.
 Cloud masks, shadows, terrain fields, primary atmospheric gradients, derived wind
-and shear, and approximate shelter can be inspected directly. Derived weather is
-read-only; scenarios change pressure, temperature, moisture, and sun inputs. Drag the preview to pan, use the mouse wheel to zoom
-around the pointer, and adjust the time rate to inspect evolution. Weather
+and shear, and approximate shelter can be inspected directly. Derived weather and
+sun/moon lighting are read-only; scenarios change pressure, climate, moisture,
+location, calendar time, and moon phase. Drag the preview to pan, use the mouse
+wheel to zoom around the pointer, and adjust cloud time and day-cycle rates
+independently. Weather
 scenarios and slider-track clicks transition smoothly, while dragging remains
 immediate. World inputs have no arbitrary default reset; changed tuning and debug
 values show individual reset buttons, and non-world categories offer Production
 presets. Layer and contribution toggles preserve and disable their subordinate
 controls.
+
+Render the same scenarios without a browser with:
+
+```sh
+cargo run -p pyboat-playground-capture --release -- --list
+cargo run -p pyboat-playground-capture --release -- --all
+```
+
+The capture command accepts deterministic camera, seed, time, resolution, and
+diagnostic-view options. It writes each PNG beside a JSON report containing its
+primary conditions, derived weather, and image statistics; run `--help` for the
+complete interface.
 
 ## Run the Rust connection server
 
@@ -135,7 +149,7 @@ of sparse wisps and occasional cumulus moves with the surface wind; its evolving
 isotropic detail and broad formation mask can create both small and large bodies
 without ordinarily covering most of the world. A simpler invisible upper layer
 moves with broad synoptic wind and appears through its shadows. Both layers cast
-translucent shadows projected from the sun direction, and upper clouds also shade
+translucent shadows projected from the current sun or moon direction, and upper clouds also shade
 the visible low clouds. The HUD
 reports health, speed through water, apparent-wind speed, and point of sail using
 the wind at the local boat. One striped windsock on the local boat's bow shows

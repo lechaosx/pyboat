@@ -194,7 +194,7 @@ decisions.
   generated independently per player but must look similar under the same local
   weather state.
 - **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies only primary atmospheric fields and sun forcing to local
+  and supplies only primary atmospheric and calendar fields to local
   procedural rendering. WGSL recomputes the small intermediate expressions it
   needs; derived atmospheric values and cloud offsets are not shader inputs. That
   one primary sample applies uniformly across the viewport, including at extreme
@@ -283,12 +283,13 @@ decisions.
   shading applies only to the fullscreen world surface, so boats remain equally
   visible to clients with different visual seeds.
 - **[Implicit]** Cloud shadows project the 650–1,850 m visible layer and 6,200 m
-  upper layer from one three-dimensional surface-to-sun direction. At a source
+  upper layer from one three-dimensional surface-to-light direction. At a source
   position and height, the shader samples each cloud at the horizontal offset
-  `(cloud height - source height) × sun.xy / sun.z`. Their optical depths combine
+  `(cloud height - source height) × light.xy / light.z`. The primary light is the
+  sun when available and the moon at night. Their optical depths combine
   for Beer-Lambert surface transmittance. The upper layer is also sampled from the
   varying low-cloud top height to attenuate direct low-cloud illumination while
-  preserving ambient light. Direct shadows fade when the sun reaches the horizon.
+  preserving ambient light. Direct shadows fade when their light reaches the horizon.
 - **[Implicit]** A DOM overlay derives a segmented architectural-style 1–2–5
   metric scale from the current vertical view distance and CSS viewport height.
   It does not add world geometry or affect simulation and networking.
@@ -302,6 +303,19 @@ decisions.
   and layer switches exist only in the playground entry point.
 - **[Explicit]** Playground tuning defaults mirror the production WGSL override
   values and use final composition rather than a diagnostic view initially.
+- **[Explicit]** Calendar state is latitude, day of year, local solar time, and
+  moon phase. A compact axial-tilt/hour-angle model derives sun and moon direction,
+  horizon attenuation, twilight, and moonlight; it is a rendering-grade day/night
+  model rather than observatory astronomy. Annual-mean low temperature plus
+  seasonal and diurnal ranges derives the current low-level temperature before
+  atmospheric outcomes are evaluated.
+- **[Explicit]** Cloud animation time and calendar time are independent playground
+  clocks. Primary atmospheric fields do not advance from either clock. Gameplay
+  may synchronize both clocks from one authoritative timeline without coupling
+  their calculations.
+- **[Explicit]** Ambient scene light is derived separately from direct sun or moon
+  light. Primary-driven cloud and rain amounts attenuate and cool ambient fill,
+  while sampled cloud optical depth controls spatial direct-light shadows.
 - **[Implicit]** One WGSL module has production and playground fragment entry
   points. Each populates private invocation-local tuning state, from scalar
   pipeline overrides or the playground uniform respectively, before calling the
@@ -315,10 +329,22 @@ decisions.
   are never copied back into primary world inputs or shader uniforms.
 - **[Explicit]** World inputs have no reset-to-default control. Category presets
   replace that concept; Weather scenarios interpolate the complete primary
-  atmosphere and sun input set while preserving renderer/model tuning, diagnostic
+  atmosphere, climate, location, calendar, and moon input set while preserving
+  renderer/model tuning, diagnostic
   state, seed, playback, camera, and zoom. Each implemented non-world category
   exposes a Production preset sourced from the same initial values as its
   individual reset controls.
+- **[Implicit]** `playground/scenarios.json` is the shared scenario catalog used
+  by the browser UI, deterministic scenario tests, and the native headless
+  capture tool. `pyboat-playground-capture` renders `fragment_playground` through
+  headless Vulkan with production tuning defaults. Each PNG receives a JSON
+  sidecar containing its primary inputs, Rust-derived celestial lighting and
+  atmosphere, fixed capture
+  coordinates, and luminance metrics; diagnostic shader views are selectable.
+- **[Implicit]** Cloud rendering derives continuous stratiform, convective, and
+  shear amounts from primary-driven atmospheric intermediates. Those amounts
+  adjust detail character, formation scale and elongation, height, optical depth,
+  and darkness without scenario identifiers or new shader inputs.
 - **[Explicit]** The former native weather-showcase renderer and checked-in image
   collection are removed in favor of the interactive procedural playground.
 - **[Implicit]** The retained local browser test harness advances its controlled

@@ -1,4 +1,5 @@
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
+import scenarioDefinitions from "../scenarios.json";
 import "./style.css";
 
 type Domain = "weather" | "landscape" | "water";
@@ -11,6 +12,7 @@ type State = {
   viewHeight: number;
   time: number;
   timeRate: number;
+  dayRate: number;
   paused: boolean;
   pressureHpa: number;
   pressureGradient: number;
@@ -18,14 +20,17 @@ type State = {
   synopticPressureGradient: number;
   synopticPressureGradientDirection: number;
   lowTemperature: number;
+  seasonalTemperatureRange: number;
+  diurnalTemperatureRange: number;
   upperTemperature: number;
   temperatureGradient: number;
   temperatureGradientDirection: number;
   waterVapor: number;
-  sunAzimuth: number;
-  sunElevation: number;
-  sunIntensity: number;
-  sunEnabled: number;
+  latitude: number;
+  dayOfYear: number;
+  timeOfDay: number;
+  moonPhase: number;
+  celestialLightingEnabled: number;
   detailCharacter: number;
   detailBlobiness: number;
   detailContrast: number;
@@ -92,9 +97,15 @@ type WeatherScenario = Pick<State,
   | "pressureHpa" | "pressureGradient" | "pressureGradientDirection"
   | "synopticPressureGradient" | "synopticPressureGradientDirection"
   | "lowTemperature" | "upperTemperature"
+  | "seasonalTemperatureRange" | "diurnalTemperatureRange"
   | "temperatureGradient" | "temperatureGradientDirection" | "waterVapor"
-  | "sunAzimuth" | "sunElevation" | "sunIntensity"
+  | "latitude" | "dayOfYear" | "timeOfDay" | "moonPhase"
 >;
+type WeatherScenarioDefinition = WeatherScenario & {
+  slug: string;
+  label: string;
+  description: string;
+};
 
 const defaults: State = {
   seed: "0x5eed",
@@ -103,21 +114,25 @@ const defaults: State = {
   viewHeight: 480,
   time: 37,
   timeRate: 1,
+  dayRate: 0,
   paused: false,
-  pressureHpa: 1004,
+  pressureHpa: 1008,
   pressureGradient: 1.0,
   pressureGradientDirection: -81,
-  synopticPressureGradient: 0.9,
+  synopticPressureGradient: 0.85,
   synopticPressureGradientDirection: -81,
-  lowTemperature: 21,
-  upperTemperature: -18,
+  lowTemperature: 14,
+  seasonalTemperatureRange: 12,
+  diurnalTemperatureRange: 4,
+  upperTemperature: -14,
   temperatureGradient: 0.12,
   temperatureGradientDirection: -65,
-  waterVapor: 10,
-  sunAzimuth: -126,
-  sunElevation: 47,
-  sunIntensity: 1,
-  sunEnabled: 1,
+  waterVapor: 13,
+  latitude: 45,
+  dayOfYear: 172,
+  timeOfDay: 14,
+  moonPhase: 0.25,
+  celestialLightingEnabled: 1,
   detailCharacter: 0.35,
   detailBlobiness: 0.25,
   detailContrast: 1.15,
@@ -180,7 +195,9 @@ const groups: ControlGroup[] = [
   },
   {
     domain: "weather", category: "Conditions", layer: "Thermodynamics", controls: [
-      range("lowTemperature", "Low temperature · °C", "WORLD", -35, 45, 0.5),
+      range("lowTemperature", "Annual mean low temperature · °C", "WORLD", -35, 45, 0.5),
+      range("seasonalTemperatureRange", "Seasonal range · °C", "WORLD", 0, 40, 0.5),
+      range("diurnalTemperatureRange", "Daily range · °C", "WORLD", 0, 20, 0.5),
       range("upperTemperature", "Upper temperature · °C", "WORLD", -80, 10, 0.5),
       range("temperatureGradient", "Horizontal ΔT · °C/km", "WORLD", 0, 1, 0.01),
       range("temperatureGradientDirection", "ΔT direction", "WORLD", -180, 180, 1),
@@ -188,11 +205,12 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Conditions", layer: "Sun", controls: [
-      toggle("sunEnabled", "Sun lighting", "DEBUG"),
-      range("sunAzimuth", "Azimuth", "WORLD", -180, 180, 1),
-      range("sunElevation", "Elevation", "WORLD", -10, 90, 1),
-      range("sunIntensity", "Intensity", "WORLD", 0, 1.5, 0.05),
+    domain: "weather", category: "Conditions", layer: "Time and sky", controls: [
+      toggle("celestialLightingEnabled", "Celestial lighting", "DEBUG"),
+      range("latitude", "Latitude · °", "WORLD", -80, 80, 1),
+      range("dayOfYear", "Day of year", "WORLD", 1, 365, 1),
+      range("timeOfDay", "Local solar time · h", "WORLD", 0, 23.99, 0.05),
+      range("moonPhase", "Moon phase · 0 new, 0.5 full", "WORLD", 0, 1, 0.01),
     ],
   },
   {
@@ -279,7 +297,7 @@ const subtoggleKeys = new Set<NumericStateKey>([
   ...landscapeCompositionKeys,
 ]);
 const subrangeKeys = new Set<NumericStateKey>([
-  "sunAzimuth", "sunElevation", "sunIntensity",
+  "latitude", "dayOfYear", "timeOfDay", "moonPhase",
   "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
 
@@ -301,50 +319,7 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
   water: [[0, "Final composition"]],
 };
 
-const weatherScenarios: Record<string, WeatherScenario> = {
-  Clear: {
-    pressureHpa: 1024, pressureGradient: 0.5, pressureGradientDirection: -75,
-    synopticPressureGradient: 0.45, synopticPressureGradientDirection: -75,
-    lowTemperature: 18, upperTemperature: -10,
-    temperatureGradient: 0.04, temperatureGradientDirection: -60, waterVapor: 4,
-    sunAzimuth: -110, sunElevation: 58, sunIntensity: 1.05,
-  },
-  Fair: {
-    pressureHpa: 1014, pressureGradient: 0.9, pressureGradientDirection: -81,
-    synopticPressureGradient: 0.8, synopticPressureGradientDirection: -81,
-    lowTemperature: 21, upperTemperature: -14,
-    temperatureGradient: 0.10, temperatureGradientDirection: -65, waterVapor: 8,
-    sunAzimuth: -126, sunElevation: 47, sunIntensity: 1,
-  },
-  Moist: {
-    pressureHpa: 1005, pressureGradient: 1.2, pressureGradientDirection: -105,
-    synopticPressureGradient: 1.1, synopticPressureGradientDirection: -100,
-    lowTemperature: 19, upperTemperature: -18,
-    temperatureGradient: 0.18, temperatureGradientDirection: -30, waterVapor: 12,
-    sunAzimuth: -140, sunElevation: 28, sunIntensity: 0.72,
-  },
-  Rainy: {
-    pressureHpa: 992, pressureGradient: 1.8, pressureGradientDirection: -115,
-    synopticPressureGradient: 1.5, synopticPressureGradientDirection: -108,
-    lowTemperature: 24, upperTemperature: -22,
-    temperatureGradient: 0.28, temperatureGradientDirection: -25, waterVapor: 17,
-    sunAzimuth: -150, sunElevation: 22, sunIntensity: 0.46,
-  },
-  "Deep convection": {
-    pressureHpa: 980, pressureGradient: 2.6, pressureGradientDirection: -128,
-    synopticPressureGradient: 2.2, synopticPressureGradientDirection: -120,
-    lowTemperature: 32, upperTemperature: -34,
-    temperatureGradient: 0.42, temperatureGradientDirection: -20, waterVapor: 22,
-    sunAzimuth: -165, sunElevation: 16, sunIntensity: 0.28,
-  },
-  "Strong shear": {
-    pressureHpa: 1002, pressureGradient: 0.8, pressureGradientDirection: -120,
-    synopticPressureGradient: 1.6, synopticPressureGradientDirection: -55,
-    lowTemperature: 25, upperTemperature: -24,
-    temperatureGradient: 0.65, temperatureGradientDirection: 20, waterVapor: 13,
-    sunAzimuth: -118, sunElevation: 34, sunIntensity: 0.82,
-  },
-};
+const weatherScenarios = scenarioDefinitions as WeatherScenarioDefinition[];
 
 const categoryPresets: Record<string, Record<string, Partial<State>>> = {
   "weather:Layers": {
@@ -464,10 +439,7 @@ function updateDependentControls(): void {
   setControlsEnabled(lowCloudDependentKeys, lowCloudEnabled);
   setControlsEnabled(["upperCloudShadow"], upperCloudEnabled);
   setControlsEnabled(["upperShadowOnLowCloud"], lowCloudEnabled && upperCloudEnabled);
-  setControlsEnabled(
-    ["sunAzimuth", "sunElevation", "sunIntensity"],
-    state.sunEnabled > 0.5,
-  );
+  setControlsEnabled(["moonPhase"], state.celestialLightingEnabled > 0.5);
   setControlsEnabled(["pressureWindScale"], state.pressureCirculationEnabled > 0.5);
   setControlsEnabled(["crossIsobarScale"], state.crossIsobarEnabled > 0.5);
   setControlsEnabled(["thermalWindScale"], state.thermalWindEnabled > 0.5);
@@ -724,9 +696,11 @@ function renderScenarios(): void {
   const label = document.createElement("span");
   label.textContent = "SCENARIOS";
   presetsElement.append(label);
-  for (const [name, values] of Object.entries(weatherScenarios)) {
+  for (const scenario of weatherScenarios) {
+    const { slug: _slug, label, description, ...values } = scenario;
     const button = document.createElement("button");
-    button.textContent = name;
+    button.textContent = label;
+    button.title = description;
     button.addEventListener("click", () => {
       valueTransitions.clear();
       const from: Partial<State> = {};
@@ -743,12 +717,15 @@ worldToolbarElement.innerHTML = `
   <details open>
     <summary>World and playback</summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed <span class="kind kind-world">WORLD</span></label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="time-rate">Time rate <span class="kind kind-world">WORLD</span></label><input id="time-rate" type="range" min="0" max="20" step="0.1" value="${state.timeRate}"><output>${format(state.timeRate, 0.1)}</output></div>
+    <div class="control range-control no-reset"><label class="control-name" for="time-rate">Cloud time rate <span class="kind kind-world">WORLD</span></label><input id="time-rate" type="range" min="0" max="20" step="0.1" value="${state.timeRate}"><output>${format(state.timeRate, 0.1)}</output></div>
+    <div class="control range-control no-reset"><label class="control-name" for="day-rate">Day cycle · h/s <span class="kind kind-world">WORLD</span></label><input id="day-rate" type="range" min="0" max="2" step="0.01" value="${state.dayRate}"><output>${format(state.dayRate, 0.01)}</output></div>
     <div class="actions"><button id="pause">Pause</button></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
 const timeRateInput = worldToolbarElement.querySelector<HTMLInputElement>("#time-rate")!;
 const timeRateOutput = timeRateInput.nextElementSibling as HTMLOutputElement;
+const dayRateInput = worldToolbarElement.querySelector<HTMLInputElement>("#day-rate")!;
+const dayRateOutput = dayRateInput.nextElementSibling as HTMLOutputElement;
 const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
@@ -756,6 +733,10 @@ seedInput.addEventListener("input", () => {
 timeRateInput.addEventListener("input", () => {
   state.timeRate = Number(timeRateInput.value);
   timeRateOutput.value = format(state.timeRate, 0.1);
+});
+dayRateInput.addEventListener("input", () => {
+  state.dayRate = Number(dayRateInput.value);
+  dayRateOutput.value = format(state.dayRate, 0.01);
 });
 pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
@@ -767,7 +748,7 @@ function syncControl(key: NumericStateKey): void {
   if (
     key === "lowCloudEnabled"
     || key === "upperCloudEnabled"
-    || key === "sunEnabled"
+    || key === "celestialLightingEnabled"
     || key === "pressureCirculationEnabled"
     || key === "crossIsobarEnabled"
     || key === "thermalWindEnabled"
@@ -794,7 +775,12 @@ function advanceTransitions(elapsed: number): void {
     for (const key of Object.keys(presetTransition.to) as NumericStateKey[]) {
       const from = presetTransition.from[key] as number;
       const to = presetTransition.to[key] as number;
-      state[key] = from + (to - from) * amount;
+      if (key === "timeOfDay") {
+        const delta = (to - from + 36) % 24 - 12;
+        state[key] = (from + delta * amount + 24) % 24;
+      } else {
+        state[key] = from + (to - from) * amount;
+      }
       syncControl(key);
     }
     if (progress === 1) presetTransition = undefined;
@@ -913,11 +899,56 @@ function directedVector(magnitude: number, degrees: number): [number, number] {
   return [magnitude * Math.cos(radians), magnitude * Math.sin(radians)];
 }
 
-function sunDirection(azimuthDegrees: number, elevationDegrees: number): [number, number, number] {
-  const azimuth = azimuthDegrees * Math.PI / 180;
-  const elevation = elevationDegrees * Math.PI / 180;
-  const horizontal = Math.cos(elevation);
-  return [horizontal * Math.cos(azimuth), horizontal * Math.sin(azimuth), Math.sin(elevation)];
+function currentLowTemperature(): number {
+  const hemisphere = state.latitude < 0 ? -1 : 1;
+  const seasonalPhase = 2 * Math.PI * (state.dayOfYear - 205) / 365;
+  const diurnalPhase = 2 * Math.PI * (state.timeOfDay - 15) / 24;
+  return state.lowTemperature
+    + 0.5 * state.seasonalTemperatureRange * hemisphere * Math.cos(seasonalPhase)
+    + 0.5 * state.diurnalTemperatureRange * Math.cos(diurnalPhase);
+}
+
+type Light = { direction: [number, number, number]; intensity: number };
+type CelestialLighting = { sun: Light; moon: Light; ambient: number };
+
+function celestialDirection(declination: number, hourAngle: number): [number, number, number] {
+  const latitude = state.latitude * Math.PI / 180;
+  return [
+    -Math.cos(declination) * Math.sin(hourAngle),
+    Math.sin(declination) * Math.cos(latitude)
+      - Math.cos(declination) * Math.sin(latitude) * Math.cos(hourAngle),
+    Math.sin(latitude) * Math.sin(declination)
+      + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle),
+  ];
+}
+
+function celestialLighting(): CelestialLighting {
+  const obliquity = 23.44 * Math.PI / 180;
+  const solarLongitude = 2 * Math.PI * (state.dayOfYear - 80) / 365;
+  const solarDeclination = Math.asin(Math.sin(obliquity) * Math.sin(solarLongitude));
+  const solarHourAngle = 2 * Math.PI * (state.timeOfDay - 12) / 24;
+  const sunDirection = celestialDirection(solarDeclination, solarHourAngle);
+  const sunElevation = Math.sqrt(Math.max(sunDirection[2], 0));
+  const sunHorizon = smoothstepValue(0, 0.08, sunDirection[2]);
+  const sunIntensity = sunHorizon * (0.35 + 0.65 * sunElevation);
+  const phaseAngle = 2 * Math.PI * ((state.moonPhase % 1 + 1) % 1);
+  const lunarDeclination = Math.asin(
+    Math.sin(obliquity) * Math.sin(solarLongitude + phaseAngle),
+  );
+  const moonDirection = celestialDirection(lunarDeclination, solarHourAngle + phaseAngle);
+  const illuminatedFraction = 0.5 - 0.5 * Math.cos(phaseAngle);
+  const moonIntensity = 0.12 * illuminatedFraction
+    * smoothstepValue(0, 0.08, moonDirection[2]);
+  const twilight = smoothstepValue(-0.18, 0.12, sunDirection[2]);
+  const ambient = Math.min(
+    1,
+    0.035 + twilight * (0.45 + 0.515 * sunElevation) + 0.85 * moonIntensity,
+  );
+  return {
+    sun: { direction: sunDirection, intensity: sunIntensity },
+    moon: { direction: moonDirection, intensity: moonIntensity },
+    ambient,
+  };
 }
 
 function smoothstepValue(lower: number, upper: number, value: number): number {
@@ -951,18 +982,19 @@ function atmosphericOutputs(): Array<[string, string]> {
   const shear: [number, number] = [upper[0] - surface[0], upper[1] - surface[1]];
   const speed = (value: [number, number]) => Math.hypot(...value);
   const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
+  const lowTemperature = currentLowTemperature();
   const humidity = Math.min(1.5, Math.max(
     0,
-    state.waterVapor / (3.5 * Math.exp(0.055 * (state.lowTemperature + 5))),
+    state.waterVapor / (3.5 * Math.exp(0.055 * (lowTemperature + 5))),
   ));
-  const instability = smoothstepValue(28, 48, state.lowTemperature - state.upperTemperature);
+  const instability = smoothstepValue(28, 48, lowTemperature - state.upperTemperature);
   const pressureLift = 1 - smoothstepValue(990, 1012, state.pressureHpa);
   const gradientLift = smoothstepValue(0.0002, 0.0015, Math.hypot(...pressureGradient));
   const frontalLift = smoothstepValue(0.00005, 0.0005, Math.hypot(...temperatureGradient));
   const lift = Math.min(1, Math.max(0, 0.45 * pressureLift + 0.35 * gradientLift + 0.2 * frontalLift));
   const condensation = smoothstepValue(0.45, 0.95, humidity);
   const lowCloud = smoothstepValue(
-    0.55,
+    0.5,
     0.98,
     0.68 * condensation + 0.22 * lift + 0.1 * instability * condensation,
   );
@@ -971,8 +1003,19 @@ function atmosphericOutputs(): Array<[string, string]> {
     0.9,
     0.55 * condensation + 0.3 * lift + 0.15 * frontalLift,
   );
-  const rain = smoothstepValue(0.68, 0.92, lowCloud * (0.55 + 0.25 * instability + 0.2 * lift));
+  const rain = smoothstepValue(0.55, 0.9, lowCloud * (0.45 + 0.2 * instability + 0.45 * lift));
+  const celestial = celestialLighting();
+  const angle = (direction: [number, number, number]): string => {
+    const elevation = Math.asin(direction[2]) * 180 / Math.PI;
+    const azimuth = Math.atan2(direction[0], direction[1]) * 180 / Math.PI;
+    return `${elevation.toFixed(1)}° elevation · ${azimuth.toFixed(0)}° azimuth`;
+  };
+  const overcast = Math.min(1, 0.42 * lowCloud + 0.58 * upperCloud + 0.3 * rain);
   return [
+    ["Current low temperature", `${lowTemperature.toFixed(1)} °C`],
+    ["Sun", `${angle(celestial.sun.direction)} · ${celestial.sun.intensity.toFixed(2)}`],
+    ["Moon", `${angle(celestial.moon.direction)} · ${celestial.moon.intensity.toFixed(2)}`],
+    ["Ambient light", (celestial.ambient * (1 - 0.42 * overcast)).toFixed(2)],
     ["Surface wind", `${speed(surface).toFixed(1)} m/s · ${direction(surface).toFixed(0)}°`],
     ["Upper wind", `${speed(upper).toFixed(1)} m/s · ${direction(upper).toFixed(0)}°`],
     ["Vertical shear", `${speed(shear).toFixed(1)} m/s · ${direction(shear).toFixed(0)}°`],
@@ -1011,13 +1054,10 @@ function writeUniforms(): void {
     state.temperatureGradientDirection,
   );
   sceneFloats.set([state.cameraX, state.cameraY, state.viewHeight * aspect, state.viewHeight], 0);
-  sceneFloats.set([state.pressureHpa, ...pressureGradient, 0], 4);
+  sceneFloats.set([state.pressureHpa, ...pressureGradient, state.seasonalTemperatureRange], 4);
   sceneFloats.set([...synopticGradient, state.lowTemperature, state.upperTemperature], 8);
-  sceneFloats.set([state.waterVapor, ...temperatureGradient, 0], 12);
-  sceneFloats.set([
-    ...sunDirection(state.sunAzimuth, state.sunElevation),
-    state.sunEnabled * state.sunIntensity,
-  ], 16);
+  sceneFloats.set([state.waterVapor, ...temperatureGradient, state.diurnalTemperatureRange], 12);
+  sceneFloats.set([state.latitude, state.dayOfYear, state.timeOfDay, state.moonPhase], 16);
   const [seedLow, seedHigh] = splitSeed(state.seed);
   sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 20);
   sceneFloats[24] = state.time;
@@ -1053,7 +1093,7 @@ function writeUniforms(): void {
     state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
   ], 28);
-  tuningUints.set([state.debugView, 0, 0, 0], 32);
+  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 32);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningData);
 }
 
@@ -1096,6 +1136,8 @@ function frame(now: number): void {
   if (!state.paused) {
     const simulationElapsed = elapsed * state.timeRate;
     state.time += simulationElapsed;
+    state.timeOfDay = (state.timeOfDay + elapsed * state.dayRate) % 24;
+    syncControl("timeOfDay");
   }
   updateDerivedOutput();
   writeUniforms();
@@ -1117,7 +1159,7 @@ function frame(now: number): void {
   device.queue.submit([encoder.finish()]);
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · ${format(state.time, 1)} s · ${format(state.timeRate, 0.1)}×`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · ${format(state.time, 1)} s · ${state.timeOfDay.toFixed(2)} h`;
   requestAnimationFrame(frame);
 }
 

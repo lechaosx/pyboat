@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use pyboat_game::{
-    AtmospherePrimary, derive_weather, dinghy_parameters, match_environment,
+    AtmospherePrimary, CelestialConditions, ClimateConditions, celestial_lighting,
+    current_low_temperature_c, derive_weather, dinghy_parameters, match_environment,
     procedural_atmosphere_primary, procedural_cloud_cover, procedural_match_environment,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s, procedural_weather,
 };
@@ -304,6 +305,125 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
     assert!((nearby.pressure_hpa - primary.pressure_hpa).abs() < 0.1);
     assert!((nearby.low_temperature_c - primary.low_temperature_c).abs() < 0.1);
     assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
+}
+
+#[test]
+fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
+    let noon = celestial_lighting(CelestialConditions {
+        latitude_degrees: 0.0,
+        day_of_year: 80.0,
+        solar_time_hours: 12.0,
+        moon_phase: 0.0,
+    });
+    let midnight = celestial_lighting(CelestialConditions {
+        solar_time_hours: 0.0,
+        ..CelestialConditions {
+            latitude_degrees: 0.0,
+            day_of_year: 80.0,
+            solar_time_hours: 12.0,
+            moon_phase: 0.0,
+        }
+    });
+
+    assert!(noon.sun_direction[2] > 0.99);
+    assert!(noon.sun_intensity > 0.99);
+    assert!(midnight.sun_direction[2] < -0.99);
+    assert_eq!(midnight.sun_intensity, 0.0);
+}
+
+#[test]
+fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
+    let full_moon_midnight = celestial_lighting(CelestialConditions {
+        latitude_degrees: 0.0,
+        day_of_year: 80.0,
+        solar_time_hours: 0.0,
+        moon_phase: 0.5,
+    });
+    let new_moon_midnight = celestial_lighting(CelestialConditions {
+        moon_phase: 0.0,
+        ..CelestialConditions {
+            latitude_degrees: 0.0,
+            day_of_year: 80.0,
+            solar_time_hours: 0.0,
+            moon_phase: 0.5,
+        }
+    });
+
+    assert!(full_moon_midnight.moon_direction[2] > 0.99);
+    assert!(full_moon_midnight.moon_intensity > 0.09);
+    assert_eq!(new_moon_midnight.moon_intensity, 0.0);
+    assert!(full_moon_midnight.ambient_intensity > new_moon_midnight.ambient_intensity);
+}
+
+#[test]
+fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
+    let summer = celestial_lighting(CelestialConditions {
+        latitude_degrees: 55.0,
+        day_of_year: 172.0,
+        solar_time_hours: 12.0,
+        moon_phase: 0.25,
+    });
+    let winter = celestial_lighting(CelestialConditions {
+        day_of_year: 355.0,
+        ..CelestialConditions {
+            latitude_degrees: 55.0,
+            day_of_year: 172.0,
+            solar_time_hours: 12.0,
+            moon_phase: 0.25,
+        }
+    });
+
+    assert!(summer.sun_direction[2] > winter.sun_direction[2] + 0.5);
+    assert!(summer.ambient_intensity > winter.ambient_intensity);
+}
+
+#[test]
+fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
+    let climate = ClimateConditions {
+        annual_mean_low_temperature_c: 15.0,
+        seasonal_temperature_range_c: 20.0,
+        diurnal_temperature_range_c: 8.0,
+    };
+    let northern_summer = current_low_temperature_c(
+        climate,
+        CelestialConditions {
+            latitude_degrees: 55.0,
+            day_of_year: 205.0,
+            solar_time_hours: 15.0,
+            moon_phase: 0.0,
+        },
+    );
+    let northern_winter = current_low_temperature_c(
+        climate,
+        CelestialConditions {
+            latitude_degrees: 55.0,
+            day_of_year: 22.0,
+            solar_time_hours: 15.0,
+            moon_phase: 0.0,
+        },
+    );
+    let southern_summer = current_low_temperature_c(
+        climate,
+        CelestialConditions {
+            latitude_degrees: -55.0,
+            day_of_year: 22.0,
+            solar_time_hours: 15.0,
+            moon_phase: 0.0,
+        },
+    );
+    let summer_before_dawn = current_low_temperature_c(
+        climate,
+        CelestialConditions {
+            latitude_degrees: 55.0,
+            day_of_year: 205.0,
+            solar_time_hours: 3.0,
+            moon_phase: 0.0,
+        },
+    );
+
+    assert!(northern_summer > northern_winter + 19.0);
+    assert!((northern_summer - southern_summer).abs() < 0.01);
+    assert!(northern_summer > summer_before_dawn + 7.9);
 }
 
 #[test]

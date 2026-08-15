@@ -10,3 +10,4 @@ __pycache__/
 /web/dist/
 /playground/dist/
 /playground/node_modules/
+/playground-captures/

@@ -83,9 +83,11 @@ This file records intended player experience, scope, and product behavior.
   moving through spacetime, without a global fluid simulation or explicit storm
   objects and life cycles. Storm-like conditions emerge when the continuous
   atmospheric fields align.
-- **[Explicit]** Pressure, low- and upper-level temperature, absolute moisture,
-  sun, and terrain forcing are primary conditions. Wind at both levels, relative
-  humidity, instability, lift, cloud potential, rain, gustiness, and wind shear
+- **[Explicit]** Pressure, climate and upper-level temperature, absolute moisture,
+  location, calendar time, moon phase, and terrain forcing are primary conditions.
+  Current low-level temperature follows seasonal and daily cycles. Sun and moon
+  position and illumination, wind at both levels, relative humidity, instability,
+  lift, cloud potential, rain, gustiness, and wind shear
   are derived outcomes and cannot be overridden directly.
 - **[Explicit]** Vertical wind shear is the difference between derived upper and
   surface wind. Horizontal temperature gradients contribute a thermal-wind
@@ -186,12 +188,15 @@ This file records intended player experience, scope, and product behavior.
   opacity is concentrated in rare storm conditions so the boat usually remains
   readable.
 - **[Explicit]** Both cloud layers cast translucent shadows projected from their
-  physical formation heights and the sun direction. Higher clouds and lower sun
-  elevations produce longer displacement without an artificial readability
-  compression.
-- **[Explicit]** Upper-cloud shadows also attenuate direct sunlight on the visible
+  physical formation heights and the current sun or moon direction. Higher clouds
+  and lower light elevations produce longer displacement without an artificial
+  readability compression.
+- **[Explicit]** Upper-cloud shadows also attenuate direct sun or moonlight on the visible
   low clouds while leaving ambient illumination, so low clouds remain readable
   beneath broad upper cover.
+- **[Explicit]** Cloud cover and rain also attenuate and cool ambient illumination;
+  weather therefore changes the whole scene mood independently of local direct-light
+  shadows.
 - **[Explicit]** Visible low clouds have a procedural height field. It shapes
   their local directional shading and the projection of upper-cloud shadows onto
   their tops so cloud bodies do not read as flat textures.
@@ -213,26 +218,40 @@ This file records intended player experience, scope, and product behavior.
   diagnostics likewise expose terrain composition fields and layers.
 - **[Explicit]** Independently meaningful rendered contributions have enable
   switches separate from their magnitude tuning. Master switches preserve and
-  visually disable their dependent controls; cloud layers, sun lighting, wind
+  visually disable their dependent controls; cloud layers, celestial lighting, wind
   components, shelter, and landscape composition follow this hierarchy.
 - **[Explicit]** Playground tuning defaults match production game defaults, while
   the initial world conditions are illustrative rather than canonical. The
   initial diagnostic output is always the final composed scene.
 - **[Explicit]** The procedural playground supports drag panning and cursor-
-  anchored mouse-wheel zoom. Its time advances continuously, and an adjustable
-  rate scales both weather evolution and cloud motion.
+  anchored mouse-wheel zoom. Cloud animation and calendar time have independent
+  rates, so cloud advection and texture evolution can continue while time of day
+  is frozen. Primary weather fields stay fixed until changed manually or by a
+  scenario.
 - **[Explicit]** The playground uses the same architectural 1–2–5 metric scale
-  indicator as gameplay. Absolute camera position and time are not linear
-  sliders; navigation uses drag and wheel, while current time is a live readout.
+  indicator as gameplay. Absolute camera position and cloud-animation time are
+  not linear sliders; navigation uses drag and wheel, while local solar time is a
+  world control.
 - **[Implicit]** View height is likewise controlled only through wheel zoom rather
   than an impractically wide linear slider.
 - **[Explicit]** Live world inputs have no reset-to-default action because no one
   world state is canonical. Semantic categories may instead provide presets.
-  Weather Conditions exposes scenarios that set every primary atmosphere and sun
-  world input while preserving shader and model tuning, debug state, camera, seed,
+  Weather Conditions exposes scenarios that set every primary atmosphere,
+  climate, location, time, and moon world input while preserving shader and model
+  tuning, debug state, camera, seed,
   playback, and zoom. Non-world categories initially provide a Production preset
   that restores the corresponding in-game tuning as a group. Clicking a slider
   track eases to the selected value, while dragging a slider remains immediate.
+- **[Explicit]** Weather scenarios are characteristic regimes rather than generic
+  intensity steps: clear high pressure, fair cumulus, marine stratus, warm-front
+  rain, a cold-front squall, tropical convection, and post-front clearing each
+  configure realistic primary causes and retain a distinct visual mood. Dawn mist,
+  golden-hour cumulus, winter twilight stratus, clear full moon, a moonlit squall,
+  and high-latitude summer midnight also exercise day, season, and moonlight moods.
+- **[Explicit]** The playground has a deterministic headless capture mode that is
+  also practical for humans. It renders chosen scenarios through the same shader
+  and emits images plus readable derived-condition and image summaries for visual
+  comparison and tuning.
 - **[Explicit]** Keyboard, controller, and touchpad input participate in cross-play.
 - **[Explicit]** Browser support is the primary platform target. Native desktop
   and mobile clients are desirable secondary targets rather than requirements for

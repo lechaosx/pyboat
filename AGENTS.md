@@ -44,6 +44,7 @@
 - Use red-green TDD for bug fixes and for behavior or contracts that can be exercised through a stable interface at reasonable cost. Confirm that the new test fails for the intended reason before implementing the change.
 - Add tests for observable behavior, compatibility boundaries, deterministic calculations, and regressions that are likely to recur.
 - Do not add tests whose primary assertion searches source text, pins private names or structure, or encodes subjective visual tuning. Such tests obstruct implementation changes without protecting product behavior.
+- Do not test thin delivery adapters, command wrappers, or presentation formatting merely to prove that they forward to already-testable behavior. Test the underlying stable contract directly; verify the adapter with the smallest appropriate build, smoke check, or manual exercise.
 - For rendering and other changes whose meaningful result is visual, run the strongest practical automated checks, such as parser validation, compilation, and build verification. State when visual inspection is still required.
 - Documentation, formatting, metadata, and compile-only changes do not require a contrived failing test. Run the smallest relevant verification after the change.
 - Do not duplicate production logic in a test solely to make an implementation detail testable.
