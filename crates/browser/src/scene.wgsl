@@ -1,12 +1,11 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
-    weather: vec4<f32>,
-    weather_structure: vec4<f32>,
+    pressure: vec4<f32>,
+    synoptic_pressure_and_temperature: vec4<f32>,
+    moisture_and_temperature_gradient: vec4<f32>,
     sun_direction_and_intensity: vec4<f32>,
     match_seed: vec2<u32>,
     cloud_visual_seed: vec2<u32>,
-    cloud_offsets_m: vec4<f32>,
-    wind_vectors_m_s: vec4<f32>,
     time_seconds: f32,
 };
 
@@ -56,6 +55,83 @@ override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
 var<private> tuning: SceneTuning;
 var<private> layer_visibility: vec4<f32>;
 var<private> landscape_visibility: vec4<f32>;
+var<private> atmosphere_model: vec4<f32>;
+
+fn rotate_left(vector: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(-vector.y, vector.x);
+}
+
+fn surface_wind_m_s() -> vec2<f32> {
+    let cross_isobar_fraction = 0.12 * atmosphere_model.y;
+    let gradient = scene.pressure.yz;
+    return 6000.0 * atmosphere_model.x
+        * (rotate_left(gradient) - cross_isobar_fraction * gradient)
+        / sqrt(1.0 + cross_isobar_fraction * cross_isobar_fraction);
+}
+
+fn upper_wind_m_s() -> vec2<f32> {
+    let cross_isobar_fraction = 0.12 * atmosphere_model.y;
+    let gradient = scene.synoptic_pressure_and_temperature.xy;
+    let pressure_wind = 6000.0 * atmosphere_model.x
+        * (rotate_left(gradient) - cross_isobar_fraction * gradient)
+        / sqrt(1.0 + cross_isobar_fraction * cross_isobar_fraction);
+    return 1.12 * pressure_wind
+        + 12000.0 * atmosphere_model.z
+            * rotate_left(scene.moisture_and_temperature_gradient.yz);
+}
+
+fn relative_humidity() -> f32 {
+    let low_temperature_c = scene.synoptic_pressure_and_temperature.z;
+    let saturation_capacity_g_kg = 3.5 * exp(0.055 * (low_temperature_c + 5.0));
+    return clamp(scene.moisture_and_temperature_gradient.x / saturation_capacity_g_kg, 0.0, 1.5);
+}
+
+fn atmospheric_instability() -> f32 {
+    return smoothstep(
+        28.0,
+        48.0,
+        scene.synoptic_pressure_and_temperature.z - scene.synoptic_pressure_and_temperature.w,
+    );
+}
+
+fn atmospheric_lift() -> f32 {
+    let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, scene.pressure.x);
+    let gradient_lift = smoothstep(0.0002, 0.0015, length(scene.pressure.yz));
+    let frontal_lift = smoothstep(
+        0.00005,
+        0.0005,
+        length(scene.moisture_and_temperature_gradient.yz),
+    );
+    return clamp(0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift, 0.0, 1.0);
+}
+
+fn low_cloud_coverage() -> f32 {
+    let condensation = smoothstep(0.45, 0.95, relative_humidity());
+    let signal = 0.68 * condensation
+        + 0.22 * atmospheric_lift()
+        + 0.10 * atmospheric_instability() * condensation;
+    return smoothstep(0.55, 0.98, signal);
+}
+
+fn upper_cloud_coverage() -> f32 {
+    let condensation = smoothstep(0.45, 0.95, relative_humidity());
+    let frontal_lift = smoothstep(
+        0.00005,
+        0.0005,
+        length(scene.moisture_and_temperature_gradient.yz),
+    );
+    return smoothstep(
+        0.68,
+        0.90,
+        0.55 * condensation + 0.30 * atmospheric_lift() + 0.15 * frontal_lift,
+    );
+}
+
+fn rain_intensity() -> f32 {
+    let signal = low_cloud_coverage()
+        * (0.55 + 0.25 * atmospheric_instability() + 0.20 * atmospheric_lift());
+    return smoothstep(0.68, 0.92, signal);
+}
 
 fn production_tuning() -> SceneTuning {
     return SceneTuning(
@@ -259,6 +335,7 @@ fn terrain_fractal_sample(
 
 fn visual_cloud_noise_sample(
     position_m: vec2<f32>,
+    velocity_m_s: vec2<f32>,
     field_salt: vec2<u32>,
     initial_wavelength_m: f32,
     octave_count: u32,
@@ -281,7 +358,8 @@ fn visual_cloud_noise_sample(
             * sqrt(wavelength_m / initial_wavelength_m);
         let scaled_time = scene.time_seconds / lifetime_seconds;
         let time_cell = i32(floor(scaled_time));
-        let time_blend = smoothstep(0.0, 1.0, fract(scaled_time));
+        let time_fraction = fract(scaled_time);
+        let time_blend = smoothstep(0.0, 1.0, time_fraction);
         let first_seed = octave_seed
             ^ multiply_u64(
                 signed_u64(time_cell),
@@ -292,8 +370,17 @@ fn visual_cloud_noise_sample(
                 signed_u64(time_cell + 1),
                 vec2<u32>(0x94d049bbu, 0x133111ebu),
             );
-        let first = terrain_value_noise(first_seed, position_m, wavelength_m);
-        let second = terrain_value_noise(second_seed, position_m, wavelength_m);
+        let age_seconds = time_fraction * lifetime_seconds;
+        let first = terrain_value_noise(
+            first_seed,
+            position_m - velocity_m_s * age_seconds,
+            wavelength_m,
+        );
+        let second = terrain_value_noise(
+            second_seed,
+            position_m - velocity_m_s * (age_seconds - lifetime_seconds),
+            wavelength_m,
+        );
         sample.value += amplitude * mix(first.value, second.value, time_blend);
         let gradient_weight = amplitude * sqrt(wavelength_m / initial_wavelength_m);
         sample.gradient += gradient_weight * mix(first.gradient, second.gradient, time_blend);
@@ -307,26 +394,25 @@ fn visual_cloud_noise_sample(
 }
 
 fn low_cloud_detail_coordinates(position_m: vec2<f32>) -> vec2<f32> {
-    return position_m
-        - scene.cloud_offsets_m.xy * (1.0 - clamp(tuning.cloud_behavior.x, 0.0, 1.0));
+    return position_m;
 }
 
 fn low_cloud_mask_coordinates(position_m: vec2<f32>) -> vec2<f32> {
-    let translated_m = position_m
-        - scene.cloud_offsets_m.xy * clamp(tuning.cloud_behavior.x, 0.0, 1.0);
-    let wind_angle = atan2(scene.wind_vectors_m_s.y, scene.wind_vectors_m_s.x);
+    let wind = surface_wind_m_s();
+    let wind_angle = atan2(wind.y, wind.x);
     let along_wind = vec2<f32>(cos(wind_angle), sin(wind_angle));
     let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
     let mask_scale = max(tuning.cloud_formation.y, 0.01);
     let elongation = max(tuning.cloud_formation.z, 1.0);
     return vec2<f32>(
-        dot(translated_m, along_wind) / elongation,
-        dot(translated_m, across_wind),
+        dot(position_m, along_wind) / elongation,
+        dot(position_m, across_wind),
     ) / mask_scale;
 }
 
 fn low_cloud_mask_gradient_to_world(gradient: vec2<f32>) -> vec2<f32> {
-    let wind_angle = atan2(scene.wind_vectors_m_s.y, scene.wind_vectors_m_s.x);
+    let wind = surface_wind_m_s();
+    let wind_angle = atan2(wind.y, wind.x);
     let along_wind = vec2<f32>(cos(wind_angle), sin(wind_angle));
     let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
     let mask_scale = max(tuning.cloud_formation.y, 0.01);
@@ -364,8 +450,8 @@ struct UpperCloudSample {
 };
 
 fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
-    let cover = scene.weather.z;
-    let rain = scene.weather.w;
+    let cover = low_cloud_coverage();
+    let rain = rain_intensity();
     if cover <= 0.0 {
         var empty: LowCloudSample;
         empty.density = 0.0;
@@ -382,6 +468,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     }
     let raw_detail = visual_cloud_noise_sample(
         low_cloud_detail_coordinates(position_m),
+        surface_wind_m_s() * (1.0 - clamp(tuning.cloud_behavior.x, 0.0, 1.0)),
         vec2<u32>(0x38d01377u, 0x452821e6u),
         144.0,
         7u,
@@ -411,6 +498,9 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
 
     let mask_noise = visual_cloud_noise_sample(
         low_cloud_mask_coordinates(position_m),
+        low_cloud_mask_coordinates(
+            surface_wind_m_s() * clamp(tuning.cloud_behavior.x, 0.0, 1.0),
+        ),
         vec2<u32>(0xa24baed4u, 0x94d049bbu),
         640.0,
         4u,
@@ -504,8 +594,8 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
 fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
     let upper_coverage = clamp(
         max(
-            scene.weather_structure.z,
-            0.30 * scene.weather.z + 0.70 * scene.weather.w,
+            upper_cloud_coverage(),
+            0.30 * low_cloud_coverage() + 0.70 * rain_intensity(),
         ),
         0.0,
         1.0,
@@ -516,20 +606,21 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         return empty;
     }
     let upper_noise = visual_cloud_noise_sample(
-        position_m - scene.cloud_offsets_m.zw,
+        position_m,
+        upper_wind_m_s(),
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
         4u,
         1400.0,
     );
-    let upper_threshold = mix(0.62, 0.12, upper_coverage) - 0.18 * scene.weather.w;
+    let upper_threshold = mix(0.62, 0.12, upper_coverage) - 0.18 * rain_intensity();
     let body = smoothstep(
         upper_threshold,
         upper_threshold + 0.10,
         upper_noise.value,
     );
     var sample: UpperCloudSample;
-    sample.optical_depth = body * upper_coverage * (0.40 + 0.80 * scene.weather.w);
+    sample.optical_depth = body * upper_coverage * (0.40 + 0.80 * rain_intensity());
     return sample;
 }
 
@@ -845,8 +936,8 @@ fn cloud_shadow_color(
     elevation_m: f32,
 ) -> vec3<f32> {
     let low_height_m = 650.0
-        + 650.0 * scene.weather_structure.y
-        + 550.0 * scene.weather.w;
+        + 650.0 * atmospheric_instability()
+        + 550.0 * rain_intensity();
     let upper_height_m = 6200.0;
     let surface_height_m = max(elevation_m, 0.0);
     let shadow_strength = direct_sun_amount();
@@ -892,8 +983,8 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         );
         if layer_visibility.x > 0.0 {
             let low_height_m = 650.0
-                + 650.0 * scene.weather_structure.y
-                + 550.0 * scene.weather.w;
+                + 650.0 * atmospheric_instability()
+                + 550.0 * rain_intensity();
             let upper_height_m = 6200.0;
             let low_cloud = procedural_low_cloud_sample(input.world_position_m);
             var upper_transmittance = 1.0;
@@ -926,33 +1017,6 @@ fn signed_debug_color(value: f32) -> vec3<f32> {
         mix(vec3<f32>(0.07, 0.10, 0.14), vec3<f32>(0.92, 0.52, 0.16), amount),
         amount >= 0.0,
     );
-}
-
-fn approximate_gust(position_m: vec2<f32>) -> vec2<f32> {
-    let drift = scene.time_seconds * vec2<f32>(5.0, -3.0);
-    let x = visual_cloud_noise_sample(
-        position_m - drift,
-        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
-        256.0,
-        3u,
-        90.0,
-    ).value;
-    let y = visual_cloud_noise_sample(
-        position_m - drift,
-        vec2<u32>(0x3c6ef372u, 0xa54ff53au),
-        256.0,
-        3u,
-        90.0,
-    ).value;
-    return 3.0 * vec2<f32>(x, y);
-}
-
-fn approximate_wind(position_m: vec2<f32>) -> vec2<f32> {
-    let synoptic = scene.wind_vectors_m_s.zw;
-    let regional = scene.wind_vectors_m_s.xy - synoptic / 1.18;
-    return playground.wind_model.x * synoptic
-        + playground.wind_model.y * regional
-        + playground.wind_model.z * approximate_gust(position_m);
 }
 
 fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
@@ -1017,8 +1081,8 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         let terrain = procedural_terrain_sample(position_m);
         let surface_height_m = max(terrain.elevation_m, 0.0);
         let low_height_m = 650.0
-            + 650.0 * scene.weather_structure.y
-            + 550.0 * scene.weather.w;
+            + 650.0 * atmospheric_instability()
+            + 550.0 * rain_intensity();
         let low = procedural_low_cloud_sample(projected_cloud_position(
             position_m, surface_height_m, low_height_m,
         ));
@@ -1037,17 +1101,17 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(scalar_debug_color(transmittance), 1.0);
     }
     if mode >= 16u && mode <= 21u {
-        let surface = scene.wind_vectors_m_s.xy;
-        let synoptic = scene.wind_vectors_m_s.zw;
-        let regional = surface - synoptic / 1.18;
-        let gust = approximate_gust(position_m);
-        let combined = approximate_wind(position_m);
+        let surface = surface_wind_m_s();
+        let upper = upper_wind_m_s();
+        let shear = upper - surface;
+        let pressure_gradient = 6000.0 * scene.pressure.yz;
+        let temperature_gradient = 12000.0 * scene.moisture_and_temperature_gradient.yz;
         if mode == 16u { return vec4<f32>(wind_debug_color(position_m, surface), 1.0); }
-        if mode == 17u { return vec4<f32>(wind_debug_color(position_m, synoptic), 1.0); }
-        if mode == 18u { return vec4<f32>(wind_debug_color(position_m, regional), 1.0); }
-        if mode == 19u { return vec4<f32>(wind_debug_color(position_m, gust), 1.0); }
-        if mode == 20u { return vec4<f32>(wind_debug_color(position_m, combined), 1.0); }
-        let shelter = approximate_shelter(position_m, combined);
+        if mode == 17u { return vec4<f32>(wind_debug_color(position_m, upper), 1.0); }
+        if mode == 18u { return vec4<f32>(wind_debug_color(position_m, shear), 1.0); }
+        if mode == 19u { return vec4<f32>(wind_debug_color(position_m, pressure_gradient), 1.0); }
+        if mode == 20u { return vec4<f32>(wind_debug_color(position_m, temperature_gradient), 1.0); }
+        let shelter = approximate_shelter(position_m, surface);
         return vec4<f32>(mix(
             vec3<f32>(0.84, 0.17, 0.10),
             vec3<f32>(0.10, 0.72, 0.65),
@@ -1104,6 +1168,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     tuning = production_tuning();
     layer_visibility = vec4<f32>(1.0);
     landscape_visibility = vec4<f32>(1.0);
+    atmosphere_model = vec4<f32>(1.0);
     return final_scene_color(input);
 }
 
@@ -1112,6 +1177,7 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     tuning = playground_scene_tuning();
     layer_visibility = playground.layer_visibility;
     landscape_visibility = playground.landscape_visibility;
+    atmosphere_model = playground.wind_model;
     if playground.diagnostics.x == 0u {
         return final_scene_color(input);
     }

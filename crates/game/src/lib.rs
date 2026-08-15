@@ -7,6 +7,10 @@ use rapier2d::prelude::Vector;
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
+const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
+const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
+const UPPER_WIND_SCALE: f32 = 1.12;
+const THERMAL_WIND_SCALE_M2_S_C: f32 = 12_000.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
@@ -14,17 +18,37 @@ const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
-const CLOUD_COVER_OCTAVE_COUNT: usize = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AtmospherePrimary {
+    pub pressure_hpa: f32,
+    pub pressure_gradient_hpa_per_m: Vector,
+    pub synoptic_pressure_gradient_hpa_per_m: Vector,
+    pub low_temperature_c: f32,
+    pub upper_temperature_c: f32,
+    pub temperature_gradient_c_per_m: Vector,
+    pub water_vapor_g_kg: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
+    pub primary: AtmospherePrimary,
     pub wind_velocity_m_s: Vector,
-    pub high_cloud_wind_velocity_m_s: Vector,
+    pub upper_wind_velocity_m_s: Vector,
+    pub wind_shear_m_s: Vector,
+    pub relative_humidity: f32,
+    pub lift: f32,
     pub cloudiness: f32,
-    pub moisture: f32,
     pub instability: f32,
-    pub high_cloudiness: f32,
+    pub upper_cloudiness: f32,
     pub rain_intensity: f32,
+}
+
+#[derive(Clone, Copy)]
+struct PressureSample {
+    potential_m2_s: f64,
+    gradient_m_s: Vector,
+    synoptic_gradient_m_s: Vector,
 }
 
 #[derive(Clone, Copy)]
@@ -116,53 +140,144 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
 }
 
 pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> ProceduralWeather {
-    let cloud_noise = procedural_weather_noise(
-        match_seed,
-        tick,
-        position_m,
-        0x082e_fa98_ec4e_6c89,
-        4096.0,
-        CLOUD_COVER_OCTAVE_COUNT,
-    );
-    let cloudiness = cloud_cover_from_noise(cloud_noise);
-    let moisture = smoothstep_range(-0.5, 0.5, cloud_noise) as f32;
+    derive_weather(procedural_atmosphere_primary(match_seed, tick, position_m))
+}
+
+pub fn procedural_atmosphere_primary(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> AtmospherePrimary {
+    let pressure = procedural_pressure_sample(match_seed, tick, position_m);
+    let low_temperature_c = sample_low_temperature_c(match_seed, tick, position_m);
+    let upper_temperature_c = -20.0
+        + 9.0
+            * procedural_weather_noise(
+                match_seed,
+                tick,
+                position_m,
+                0xbe54_66cf_34e9_0c6c,
+                65_536.0,
+                4,
+            ) as f32;
+    let sample_distance_m = 256.0;
+    let temperature_gradient_c_per_m = Vector::new(
+        sample_low_temperature_c(
+            match_seed,
+            tick,
+            position_m + Vector::new(sample_distance_m, 0.0),
+        ) - sample_low_temperature_c(
+            match_seed,
+            tick,
+            position_m - Vector::new(sample_distance_m, 0.0),
+        ),
+        sample_low_temperature_c(
+            match_seed,
+            tick,
+            position_m + Vector::new(0.0, sample_distance_m),
+        ) - sample_low_temperature_c(
+            match_seed,
+            tick,
+            position_m - Vector::new(0.0, sample_distance_m),
+        ),
+    ) / (2.0 * sample_distance_m);
+    let water_vapor_g_kg = (7.0
+        + 7.0
+            * procedural_weather_noise(
+                match_seed,
+                tick,
+                position_m,
+                0x082e_fa98_ec4e_6c89,
+                3584.0,
+                5,
+            ) as f32)
+        .clamp(1.0, 14.0);
+
+    AtmospherePrimary {
+        pressure_hpa: 1013.25
+            + pressure.potential_m2_s as f32 / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+        pressure_gradient_hpa_per_m: pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+        synoptic_pressure_gradient_hpa_per_m: pressure.synoptic_gradient_m_s
+            / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+        low_temperature_c,
+        upper_temperature_c,
+        temperature_gradient_c_per_m,
+        water_vapor_g_kg,
+    }
+}
+
+pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
+    let wind_velocity_m_s = wind_from_pressure_gradient(primary.pressure_gradient_hpa_per_m);
+    let upper_pressure_wind_m_s = UPPER_WIND_SCALE
+        * wind_from_pressure_gradient(primary.synoptic_pressure_gradient_hpa_per_m);
+    let thermal_wind_m_s = THERMAL_WIND_SCALE_M2_S_C
+        * Vector::new(
+            -primary.temperature_gradient_c_per_m.y,
+            primary.temperature_gradient_c_per_m.x,
+        );
+    let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
+    let saturation_capacity_g_kg =
+        3.5 * libm::exp(0.055 * f64::from(primary.low_temperature_c + 5.0)) as f32;
+    let relative_humidity = (primary.water_vapor_g_kg / saturation_capacity_g_kg).clamp(0.0, 1.5);
     let instability = smoothstep_range(
-        -0.5,
-        0.5,
-        procedural_weather_noise(
+        28.0,
+        48.0,
+        f64::from(primary.low_temperature_c - primary.upper_temperature_c),
+    ) as f32;
+    let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
+    let gradient_lift = smoothstep_range(
+        0.0002,
+        0.0015,
+        f64::from(primary.pressure_gradient_hpa_per_m.length()),
+    ) as f32;
+    let frontal_lift = smoothstep_range(
+        0.00005,
+        0.0005,
+        f64::from(primary.temperature_gradient_c_per_m.length()),
+    ) as f32;
+    let lift = (0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
+    let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
+    let cloud_signal = 0.68 * condensation + 0.22 * lift + 0.10 * instability * condensation;
+    let cloudiness = smoothstep_range(0.55, 0.98, f64::from(cloud_signal)) as f32;
+    let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
+    let upper_cloudiness = smoothstep_range(0.68, 0.90, f64::from(upper_cloud_signal)) as f32;
+    let rain_signal = cloudiness * (0.55 + 0.25 * instability + 0.20 * lift);
+
+    ProceduralWeather {
+        primary,
+        wind_velocity_m_s,
+        upper_wind_velocity_m_s,
+        wind_shear_m_s: upper_wind_velocity_m_s - wind_velocity_m_s,
+        relative_humidity,
+        lift,
+        cloudiness,
+        instability,
+        upper_cloudiness,
+        rain_intensity: smoothstep_range(0.68, 0.92, f64::from(rain_signal)) as f32,
+    }
+}
+
+fn sample_low_temperature_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
+    16.0 + 13.0
+        * procedural_weather_noise(
             match_seed,
             tick,
             position_m,
             0x4528_21e6_38d0_1377,
-            16_384.0,
+            65_536.0,
             4,
-        ),
-    ) as f32;
-    let high_cloudiness = smoothstep_range(
-        0.35,
-        0.65,
-        procedural_weather_noise(
-            match_seed,
-            tick,
-            position_m,
-            0xbe54_66cf_34e9_0c6c,
-            32_768.0,
-            4,
-        ),
-    ) as f32;
-    let rain_signal = cloudiness * (0.65 + 0.35 * instability);
-    let wind_velocity_m_s = procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m);
-    let synoptic_wind_velocity_m_s = procedural_wind_velocity_m_s(match_seed, tick, position_m, 1);
-    let high_cloud_wind_velocity_m_s = 1.18 * synoptic_wind_velocity_m_s;
-    ProceduralWeather {
-        wind_velocity_m_s,
-        high_cloud_wind_velocity_m_s,
-        cloudiness,
-        moisture,
-        instability,
-        high_cloudiness,
-        rain_intensity: smoothstep_range(0.7, 0.95, f64::from(rain_signal)) as f32,
-    }
+        ) as f32
+}
+
+fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {
+    let along_isobar = Vector::new(
+        -pressure_gradient_hpa_per_m.y,
+        pressure_gradient_hpa_per_m.x,
+    );
+    let normalization = (1.0 + SURFACE_CROSS_ISOBAR_FRACTION.powi(2)).sqrt();
+    PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M
+        * (along_isobar - SURFACE_CROSS_ISOBAR_FRACTION * pressure_gradient_hpa_per_m)
+        / normalization
 }
 
 pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
@@ -202,20 +317,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
 }
 
 pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
-    cloud_cover_from_noise(procedural_weather_noise(
-        match_seed,
-        tick,
-        position_m,
-        0x082e_fa98_ec4e_6c89,
-        4096.0,
-        CLOUD_COVER_OCTAVE_COUNT,
-    ))
-}
-
-fn cloud_cover_from_noise(cloud_noise: f64) -> f32 {
-    let cloud_body = smoothstep_range(0.05, 0.15, cloud_noise);
-    let interior_density = smoothstep_range(0.15, 0.75, cloud_noise);
-    (cloud_body * (0.25 + 0.75 * interior_density)) as f32
+    procedural_weather(match_seed, tick, position_m).cloudiness
 }
 
 fn procedural_weather_noise(
@@ -303,20 +405,19 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     tick: u64,
     position_m: Vector,
 ) -> Vector {
-    procedural_wind_velocity_m_s(match_seed, tick, position_m, WIND_BANDS.len())
+    let pressure = procedural_pressure_sample(match_seed, tick, position_m);
+    wind_from_pressure_gradient(pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M)
 }
 
-fn procedural_wind_velocity_m_s(
-    match_seed: u64,
-    tick: u64,
-    position_m: Vector,
-    band_count: usize,
-) -> Vector {
+fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) -> PressureSample {
     let (transported_x_m, transported_y_m) =
         transported_weather_position_m(match_seed, tick, position_m);
-    let mut velocity_x_m_s = 0.0;
-    let mut velocity_y_m_s = 0.0;
-    for (band_index, band) in WIND_BANDS.iter().take(band_count).enumerate() {
+    let mut potential_m2_s = 0.0;
+    let mut gradient_x_m_s = 0.0;
+    let mut gradient_y_m_s = 0.0;
+    let mut synoptic_gradient_x_m_s = 0.0;
+    let mut synoptic_gradient_y_m_s = 0.0;
+    for (band_index, band) in WIND_BANDS.iter().enumerate() {
         let band_key = match_seed ^ (band_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let rotation = hash_unit(band_key ^ 0xa076_1d64_78bd_642f);
         let amplitude_m_s = WIND_WEIBULL_SCALE_M_S
@@ -338,11 +439,27 @@ fn procedural_wind_velocity_m_s(
             let (cosine_coefficient, sine_coefficient) = normal_pair(mode_key);
             let wave =
                 cosine_coefficient * libm::cos(phase_rad) + sine_coefficient * libm::sin(phase_rad);
-            velocity_x_m_s -= amplitude_m_s * direction_y * wave;
-            velocity_y_m_s += amplitude_m_s * direction_x * wave;
+            let gradient_x = amplitude_m_s * direction_x * wave;
+            let gradient_y = amplitude_m_s * direction_y * wave;
+            potential_m2_s += amplitude_m_s * wavelength_m / std::f64::consts::TAU
+                * (cosine_coefficient * libm::sin(phase_rad)
+                    - sine_coefficient * libm::cos(phase_rad));
+            gradient_x_m_s += gradient_x;
+            gradient_y_m_s += gradient_y;
+            if band_index == 0 {
+                synoptic_gradient_x_m_s += gradient_x;
+                synoptic_gradient_y_m_s += gradient_y;
+            }
         }
     }
-    Vector::new(velocity_x_m_s as f32, velocity_y_m_s as f32)
+    PressureSample {
+        potential_m2_s,
+        gradient_m_s: Vector::new(gradient_x_m_s as f32, gradient_y_m_s as f32),
+        synoptic_gradient_m_s: Vector::new(
+            synoptic_gradient_x_m_s as f32,
+            synoptic_gradient_y_m_s as f32,
+        ),
+    }
 }
 
 fn transported_weather_position_m(match_seed: u64, tick: u64, position_m: Vector) -> (f64, f64) {

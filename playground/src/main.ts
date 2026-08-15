@@ -12,15 +12,16 @@ type State = {
   time: number;
   timeRate: number;
   paused: boolean;
-  cover: number;
-  rain: number;
-  moisture: number;
-  instability: number;
-  upperCloud: number;
-  surfaceWindSpeed: number;
-  surfaceWindDirection: number;
-  synopticWindSpeed: number;
-  synopticWindDirection: number;
+  pressureHpa: number;
+  pressureGradient: number;
+  pressureGradientDirection: number;
+  synopticPressureGradient: number;
+  synopticPressureGradientDirection: number;
+  lowTemperature: number;
+  upperTemperature: number;
+  temperatureGradient: number;
+  temperatureGradientDirection: number;
+  waterVapor: number;
   sunAzimuth: number;
   sunElevation: number;
   sunIntensity: number;
@@ -51,12 +52,12 @@ type State = {
   vegetationVisible: number;
   surfaceTextureVisible: number;
   landscapeLightingVisible: number;
-  synopticWeight: number;
-  synopticComponentEnabled: number;
-  regionalWeight: number;
-  regionalComponentEnabled: number;
-  gustWeight: number;
-  gustEnabled: number;
+  pressureWindScale: number;
+  pressureCirculationEnabled: number;
+  crossIsobarScale: number;
+  crossIsobarEnabled: number;
+  thermalWindScale: number;
+  thermalWindEnabled: number;
   shelterStrength: number;
   shelterEnabled: number;
   landscapeCompositionEnabled: number;
@@ -88,9 +89,10 @@ type ControlGroup = {
 };
 
 type WeatherScenario = Pick<State,
-  | "cover" | "rain" | "moisture" | "instability" | "upperCloud"
-  | "surfaceWindSpeed" | "surfaceWindDirection"
-  | "synopticWindSpeed" | "synopticWindDirection"
+  | "pressureHpa" | "pressureGradient" | "pressureGradientDirection"
+  | "synopticPressureGradient" | "synopticPressureGradientDirection"
+  | "lowTemperature" | "upperTemperature"
+  | "temperatureGradient" | "temperatureGradientDirection" | "waterVapor"
   | "sunAzimuth" | "sunElevation" | "sunIntensity"
 >;
 
@@ -102,15 +104,16 @@ const defaults: State = {
   time: 37,
   timeRate: 1,
   paused: false,
-  cover: 0.48,
-  rain: 0,
-  moisture: 0.48,
-  instability: 0.82,
-  upperCloud: 0.04,
-  surfaceWindSpeed: 6.5,
-  surfaceWindDirection: 9,
-  synopticWindSpeed: 7.1,
-  synopticWindDirection: 9,
+  pressureHpa: 1004,
+  pressureGradient: 1.0,
+  pressureGradientDirection: -81,
+  synopticPressureGradient: 0.9,
+  synopticPressureGradientDirection: -81,
+  lowTemperature: 21,
+  upperTemperature: -18,
+  temperatureGradient: 0.12,
+  temperatureGradientDirection: -65,
+  waterVapor: 10,
   sunAzimuth: -126,
   sunElevation: 47,
   sunIntensity: 1,
@@ -141,12 +144,12 @@ const defaults: State = {
   vegetationVisible: 1,
   surfaceTextureVisible: 1,
   landscapeLightingVisible: 1,
-  synopticWeight: 1,
-  synopticComponentEnabled: 1,
-  regionalWeight: 1,
-  regionalComponentEnabled: 1,
-  gustWeight: 1,
-  gustEnabled: 1,
+  pressureWindScale: 1,
+  pressureCirculationEnabled: 1,
+  crossIsobarScale: 1,
+  crossIsobarEnabled: 1,
+  thermalWindScale: 1,
+  thermalWindEnabled: 1,
   shelterStrength: 1,
   shelterEnabled: 1,
   landscapeCompositionEnabled: 1,
@@ -167,20 +170,21 @@ const toggle = (key: NumericStateKey, label: string, kind: ControlKind): ToggleC
 
 const groups: ControlGroup[] = [
   {
-    domain: "weather", category: "Conditions", layer: "Atmosphere", controls: [
-      range("cover", "Low-cloud cover", "WORLD", 0, 1, 0.01),
-      range("upperCloud", "Upper-cloud cover", "WORLD", 0, 1, 0.01),
-      range("moisture", "Moisture", "WORLD", 0, 1, 0.01),
-      range("instability", "Instability", "WORLD", 0, 1, 0.01),
-      range("rain", "Rain", "WORLD", 0, 1, 0.01),
+    domain: "weather", category: "Conditions", layer: "Pressure", controls: [
+      range("pressureHpa", "Pressure · hPa", "WORLD", 970, 1040, 0.5),
+      range("pressureGradient", "Gradient · hPa/km", "WORLD", 0, 3, 0.02),
+      range("pressureGradientDirection", "Gradient direction", "WORLD", -180, 180, 1),
+      range("synopticPressureGradient", "Broad gradient · hPa/km", "WORLD", 0, 3, 0.02),
+      range("synopticPressureGradientDirection", "Broad direction", "WORLD", -180, 180, 1),
     ],
   },
   {
-    domain: "weather", category: "Conditions", layer: "Wind", controls: [
-      range("surfaceWindSpeed", "Surface speed", "WORLD", 0, 30, 0.1),
-      range("surfaceWindDirection", "Surface direction", "WORLD", -180, 180, 1),
-      range("synopticWindSpeed", "Synoptic speed", "WORLD", 0, 40, 0.1),
-      range("synopticWindDirection", "Synoptic direction", "WORLD", -180, 180, 1),
+    domain: "weather", category: "Conditions", layer: "Thermodynamics", controls: [
+      range("lowTemperature", "Low temperature · °C", "WORLD", -35, 45, 0.5),
+      range("upperTemperature", "Upper temperature · °C", "WORLD", -80, 10, 0.5),
+      range("temperatureGradient", "Horizontal ΔT · °C/km", "WORLD", 0, 1, 0.01),
+      range("temperatureGradientDirection", "ΔT direction", "WORLD", -180, 180, 1),
+      range("waterVapor", "Water vapour · g/kg", "WORLD", 0, 25, 0.1),
     ],
   },
   {
@@ -231,13 +235,13 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Wind model", layer: "Approximate components", controls: [
-      toggle("synopticComponentEnabled", "Synoptic component", "DEBUG"),
-      range("synopticWeight", "Synoptic weight", "MODEL", 0, 2, 0.05),
-      toggle("regionalComponentEnabled", "Regional component", "DEBUG"),
-      range("regionalWeight", "Regional weight", "MODEL", 0, 3, 0.05),
-      toggle("gustEnabled", "Gust component", "DEBUG"),
-      range("gustWeight", "Gust weight", "MODEL", 0, 3, 0.05),
+    domain: "weather", category: "Wind model", layer: "Derived flow", controls: [
+      toggle("pressureCirculationEnabled", "Pressure circulation", "DEBUG"),
+      range("pressureWindScale", "Pressure response", "MODEL", 0, 2, 0.05),
+      toggle("crossIsobarEnabled", "Cross-isobar flow", "DEBUG"),
+      range("crossIsobarScale", "Cross-isobar response", "MODEL", 0, 2, 0.05),
+      toggle("thermalWindEnabled", "Thermal-wind shear", "DEBUG"),
+      range("thermalWindScale", "Thermal response", "MODEL", 0, 2, 0.05),
       toggle("shelterEnabled", "Terrain shelter", "DEBUG"),
       range("shelterStrength", "Shelter strength", "MODEL", 0, 1, 0.05),
     ],
@@ -276,7 +280,7 @@ const subtoggleKeys = new Set<NumericStateKey>([
 ]);
 const subrangeKeys = new Set<NumericStateKey>([
   "sunAzimuth", "sunElevation", "sunIntensity",
-  "synopticWeight", "regionalWeight", "gustWeight", "shelterStrength",
+  "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
 
 const debugOptions: Record<Domain, Array<[number, string]>> = {
@@ -286,8 +290,8 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [6, "Low optical depth"], [7, "Low normals"], [8, "Upper optical depth"],
     [9, "Projected low shadow"], [10, "Projected upper shadow"], [11, "Combined transmittance"],
     [12, "Low height field"],
-    [16, "Surface wind"], [17, "Synoptic wind"], [18, "Regional residual"],
-    [19, "Approximate gusts"], [20, "Approximate combined wind"], [21, "Approximate shelter"],
+    [16, "Surface wind"], [17, "Upper wind"], [18, "Vertical wind shear"],
+    [19, "Pressure gradient"], [20, "Temperature gradient"], [21, "Terrain shelter"],
   ],
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
@@ -299,39 +303,45 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
 
 const weatherScenarios: Record<string, WeatherScenario> = {
   Clear: {
-    cover: 0.05, upperCloud: 0.02, moisture: 0.25, instability: 0.20, rain: 0,
-    surfaceWindSpeed: 3.5, surfaceWindDirection: 15,
-    synopticWindSpeed: 4.2, synopticWindDirection: 12,
+    pressureHpa: 1024, pressureGradient: 0.5, pressureGradientDirection: -75,
+    synopticPressureGradient: 0.45, synopticPressureGradientDirection: -75,
+    lowTemperature: 18, upperTemperature: -10,
+    temperatureGradient: 0.04, temperatureGradientDirection: -60, waterVapor: 4,
     sunAzimuth: -110, sunElevation: 58, sunIntensity: 1.05,
   },
   Fair: {
-    cover: 0.38, upperCloud: 0.08, moisture: 0.45, instability: 0.55, rain: 0,
-    surfaceWindSpeed: 6.5, surfaceWindDirection: 9,
-    synopticWindSpeed: 7.1, synopticWindDirection: 9,
+    pressureHpa: 1014, pressureGradient: 0.9, pressureGradientDirection: -81,
+    synopticPressureGradient: 0.8, synopticPressureGradientDirection: -81,
+    lowTemperature: 21, upperTemperature: -14,
+    temperatureGradient: 0.10, temperatureGradientDirection: -65, waterVapor: 8,
     sunAzimuth: -126, sunElevation: 47, sunIntensity: 1,
   },
-  Cloudy: {
-    cover: 0.72, upperCloud: 0.45, moisture: 0.76, instability: 0.48, rain: 0,
-    surfaceWindSpeed: 8, surfaceWindDirection: -15,
-    synopticWindSpeed: 11, synopticWindDirection: -8,
+  Moist: {
+    pressureHpa: 1005, pressureGradient: 1.2, pressureGradientDirection: -105,
+    synopticPressureGradient: 1.1, synopticPressureGradientDirection: -100,
+    lowTemperature: 19, upperTemperature: -18,
+    temperatureGradient: 0.18, temperatureGradientDirection: -30, waterVapor: 12,
     sunAzimuth: -140, sunElevation: 28, sunIntensity: 0.72,
   },
-  Rain: {
-    cover: 0.72, upperCloud: 0.68, moisture: 0.92, instability: 0.65, rain: 0.62,
-    surfaceWindSpeed: 11, surfaceWindDirection: -24,
-    synopticWindSpeed: 15, synopticWindDirection: -17,
+  Rainy: {
+    pressureHpa: 992, pressureGradient: 1.8, pressureGradientDirection: -115,
+    synopticPressureGradient: 1.5, synopticPressureGradientDirection: -108,
+    lowTemperature: 24, upperTemperature: -22,
+    temperatureGradient: 0.28, temperatureGradientDirection: -25, waterVapor: 17,
     sunAzimuth: -150, sunElevation: 22, sunIntensity: 0.46,
   },
-  Storm: {
-    cover: 0.80, upperCloud: 0.92, moisture: 0.98, instability: 0.96, rain: 0.92,
-    surfaceWindSpeed: 19, surfaceWindDirection: -38,
-    synopticWindSpeed: 25, synopticWindDirection: -25,
+  "Deep convection": {
+    pressureHpa: 980, pressureGradient: 2.6, pressureGradientDirection: -128,
+    synopticPressureGradient: 2.2, synopticPressureGradientDirection: -120,
+    lowTemperature: 32, upperTemperature: -34,
+    temperatureGradient: 0.42, temperatureGradientDirection: -20, waterVapor: 22,
     sunAzimuth: -165, sunElevation: 16, sunIntensity: 0.28,
   },
-  Shear: {
-    cover: 0.58, upperCloud: 0.72, moisture: 0.72, instability: 0.78, rain: 0.10,
-    surfaceWindSpeed: 6, surfaceWindDirection: -30,
-    synopticWindSpeed: 18, synopticWindDirection: 35,
+  "Strong shear": {
+    pressureHpa: 1002, pressureGradient: 0.8, pressureGradientDirection: -120,
+    synopticPressureGradient: 1.6, synopticPressureGradientDirection: -55,
+    lowTemperature: 25, upperTemperature: -24,
+    temperatureGradient: 0.65, temperatureGradientDirection: 20, waterVapor: 13,
     sunAzimuth: -118, sunElevation: 34, sunIntensity: 0.82,
   },
 };
@@ -362,12 +372,12 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
   },
   "weather:Wind model": {
     Production: {
-      synopticComponentEnabled: defaults.synopticComponentEnabled,
-      synopticWeight: defaults.synopticWeight,
-      regionalComponentEnabled: defaults.regionalComponentEnabled,
-      regionalWeight: defaults.regionalWeight,
-      gustEnabled: defaults.gustEnabled,
-      gustWeight: defaults.gustWeight,
+      pressureCirculationEnabled: defaults.pressureCirculationEnabled,
+      pressureWindScale: defaults.pressureWindScale,
+      crossIsobarEnabled: defaults.crossIsobarEnabled,
+      crossIsobarScale: defaults.crossIsobarScale,
+      thermalWindEnabled: defaults.thermalWindEnabled,
+      thermalWindScale: defaults.thermalWindScale,
       shelterEnabled: defaults.shelterEnabled,
       shelterStrength: defaults.shelterStrength,
     },
@@ -392,8 +402,6 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
 
 const state: State = { ...defaults };
 let activeDomain: Domain = "weather";
-let lowOffset: [number, number] = [0, 0];
-let upperOffset: [number, number] = [0, 0];
 
 const canvas = document.querySelector<HTMLCanvasElement>("#preview");
 const controls = document.querySelector<HTMLElement>("#controls");
@@ -424,6 +432,7 @@ const outputByKey = new Map<NumericStateKey, HTMLOutputElement>();
 const rangeByKey = new Map<NumericStateKey, RangeControl>();
 const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
 const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
+let derivedOutputElement: HTMLElement | undefined;
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -459,9 +468,9 @@ function updateDependentControls(): void {
     ["sunAzimuth", "sunElevation", "sunIntensity"],
     state.sunEnabled > 0.5,
   );
-  setControlsEnabled(["synopticWeight"], state.synopticComponentEnabled > 0.5);
-  setControlsEnabled(["regionalWeight"], state.regionalComponentEnabled > 0.5);
-  setControlsEnabled(["gustWeight"], state.gustEnabled > 0.5);
+  setControlsEnabled(["pressureWindScale"], state.pressureCirculationEnabled > 0.5);
+  setControlsEnabled(["crossIsobarScale"], state.crossIsobarEnabled > 0.5);
+  setControlsEnabled(["thermalWindScale"], state.thermalWindEnabled > 0.5);
   setControlsEnabled(["shelterStrength"], state.shelterEnabled > 0.5);
   setControlsEnabled(landscapeCompositionKeys, state.landscapeCompositionEnabled > 0.5);
 }
@@ -644,6 +653,14 @@ function renderControls(): void {
     }
     controlsElement.append(section);
   }
+  derivedOutputElement = undefined;
+  if (activeDomain === "weather") {
+    const derivedSection = document.createElement("section");
+    derivedSection.className = "control-category derived-output";
+    derivedSection.innerHTML = "<h2>Derived atmosphere · read only</h2><div class=\"derived-grid\"></div>";
+    derivedOutputElement = derivedSection.querySelector<HTMLElement>(".derived-grid")!;
+    controlsElement.append(derivedSection);
+  }
   const diagnosticSection = document.createElement("section");
   diagnosticSection.className = "control-category diagnostics";
   diagnosticSection.innerHTML = "<h2>Diagnostics</h2>";
@@ -727,7 +744,7 @@ worldToolbarElement.innerHTML = `
     <summary>World and playback</summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed <span class="kind kind-world">WORLD</span></label><input id="seed" type="text" value="${state.seed}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="time-rate">Time rate <span class="kind kind-world">WORLD</span></label><input id="time-rate" type="range" min="0" max="20" step="0.1" value="${state.timeRate}"><output>${format(state.timeRate, 0.1)}</output></div>
-    <div class="actions"><button id="pause">Pause</button><button id="zero-offset">Reset drift</button></div>
+    <div class="actions"><button id="pause">Pause</button></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
 const timeRateInput = worldToolbarElement.querySelector<HTMLInputElement>("#time-rate")!;
@@ -744,10 +761,6 @@ pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
   pauseButton.textContent = state.paused ? "Resume" : "Pause";
 });
-worldToolbarElement.querySelector<HTMLButtonElement>("#zero-offset")!.addEventListener("click", () => {
-  lowOffset = [0, 0];
-  upperOffset = [0, 0];
-});
 
 function syncControl(key: NumericStateKey): void {
   updateResetButton(key);
@@ -755,9 +768,9 @@ function syncControl(key: NumericStateKey): void {
     key === "lowCloudEnabled"
     || key === "upperCloudEnabled"
     || key === "sunEnabled"
-    || key === "synopticComponentEnabled"
-    || key === "regionalComponentEnabled"
-    || key === "gustEnabled"
+    || key === "pressureCirculationEnabled"
+    || key === "crossIsobarEnabled"
+    || key === "thermalWindEnabled"
     || key === "shelterEnabled"
     || key === "landscapeCompositionEnabled"
   ) updateDependentControls();
@@ -875,7 +888,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneBuffer = device.createBuffer({ size: 128, usage: 0x40 | 0x08 });
+const sceneBuffer = device.createBuffer({ size: 112, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: 144, usage: 0x40 | 0x08 });
 const sceneBindGroup = device.createBindGroup({
   layout: pipeline.getBindGroupLayout(0),
@@ -895,9 +908,9 @@ function splitSeed(value: string): [number, number] {
   }
 }
 
-function wind(speed: number, degrees: number): [number, number] {
+function directedVector(magnitude: number, degrees: number): [number, number] {
   const radians = degrees * Math.PI / 180;
-  return [speed * Math.cos(radians), speed * Math.sin(radians)];
+  return [magnitude * Math.cos(radians), magnitude * Math.sin(radians)];
 }
 
 function sunDirection(azimuthDegrees: number, elevationDegrees: number): [number, number, number] {
@@ -907,25 +920,107 @@ function sunDirection(azimuthDegrees: number, elevationDegrees: number): [number
   return [horizontal * Math.cos(azimuth), horizontal * Math.sin(azimuth), Math.sin(elevation)];
 }
 
+function smoothstepValue(lower: number, upper: number, value: number): number {
+  const amount = Math.min(1, Math.max(0, (value - lower) / (upper - lower)));
+  return amount * amount * (3 - 2 * amount);
+}
+
+function atmosphericOutputs(): Array<[string, string]> {
+  const pressureGradient = directedVector(state.pressureGradient / 1000, state.pressureGradientDirection);
+  const synopticGradient = directedVector(
+    state.synopticPressureGradient / 1000,
+    state.synopticPressureGradientDirection,
+  );
+  const temperatureGradient = directedVector(
+    state.temperatureGradient / 1000,
+    state.temperatureGradientDirection,
+  );
+  const pressureScale = 6000 * state.pressureCirculationEnabled * state.pressureWindScale;
+  const cross = 0.12 * state.crossIsobarEnabled * state.crossIsobarScale;
+  const pressureWind = (gradient: [number, number], scale = 1): [number, number] => [
+    pressureScale * scale * (-gradient[1] - cross * gradient[0]) / Math.sqrt(1 + cross * cross),
+    pressureScale * scale * (gradient[0] - cross * gradient[1]) / Math.sqrt(1 + cross * cross),
+  ];
+  const surface = pressureWind(pressureGradient);
+  const upperPressure = pressureWind(synopticGradient, 1.12);
+  const thermalScale = 12000 * state.thermalWindEnabled * state.thermalWindScale;
+  const upper: [number, number] = [
+    upperPressure[0] - thermalScale * temperatureGradient[1],
+    upperPressure[1] + thermalScale * temperatureGradient[0],
+  ];
+  const shear: [number, number] = [upper[0] - surface[0], upper[1] - surface[1]];
+  const speed = (value: [number, number]) => Math.hypot(...value);
+  const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
+  const humidity = Math.min(1.5, Math.max(
+    0,
+    state.waterVapor / (3.5 * Math.exp(0.055 * (state.lowTemperature + 5))),
+  ));
+  const instability = smoothstepValue(28, 48, state.lowTemperature - state.upperTemperature);
+  const pressureLift = 1 - smoothstepValue(990, 1012, state.pressureHpa);
+  const gradientLift = smoothstepValue(0.0002, 0.0015, Math.hypot(...pressureGradient));
+  const frontalLift = smoothstepValue(0.00005, 0.0005, Math.hypot(...temperatureGradient));
+  const lift = Math.min(1, Math.max(0, 0.45 * pressureLift + 0.35 * gradientLift + 0.2 * frontalLift));
+  const condensation = smoothstepValue(0.45, 0.95, humidity);
+  const lowCloud = smoothstepValue(
+    0.55,
+    0.98,
+    0.68 * condensation + 0.22 * lift + 0.1 * instability * condensation,
+  );
+  const upperCloud = smoothstepValue(
+    0.68,
+    0.9,
+    0.55 * condensation + 0.3 * lift + 0.15 * frontalLift,
+  );
+  const rain = smoothstepValue(0.68, 0.92, lowCloud * (0.55 + 0.25 * instability + 0.2 * lift));
+  return [
+    ["Surface wind", `${speed(surface).toFixed(1)} m/s · ${direction(surface).toFixed(0)}°`],
+    ["Upper wind", `${speed(upper).toFixed(1)} m/s · ${direction(upper).toFixed(0)}°`],
+    ["Vertical shear", `${speed(shear).toFixed(1)} m/s · ${direction(shear).toFixed(0)}°`],
+    ["Relative humidity", `${(humidity * 100).toFixed(0)} %`],
+    ["Instability", instability.toFixed(2)],
+    ["Lift", lift.toFixed(2)],
+    ["Low cloud", lowCloud.toFixed(2)],
+    ["Upper cloud", upperCloud.toFixed(2)],
+    ["Rain", rain.toFixed(2)],
+  ];
+}
+
+function updateDerivedOutput(): void {
+  if (!derivedOutputElement) return;
+  derivedOutputElement.replaceChildren(...atmosphericOutputs().flatMap(([label, value]) => {
+    const name = document.createElement("span");
+    name.textContent = label;
+    const output = document.createElement("output");
+    output.value = value;
+    return [name, output];
+  }));
+}
+
 function writeUniforms(): void {
-  const sceneData = new ArrayBuffer(128);
+  const sceneData = new ArrayBuffer(112);
   const sceneFloats = new Float32Array(sceneData);
   const sceneUints = new Uint32Array(sceneData);
   const aspect = previewCanvas.width / previewCanvas.height;
-  const surface = wind(state.surfaceWindSpeed, state.surfaceWindDirection);
-  const synoptic = wind(state.synopticWindSpeed, state.synopticWindDirection);
+  const pressureGradient = directedVector(state.pressureGradient / 1000, state.pressureGradientDirection);
+  const synopticGradient = directedVector(
+    state.synopticPressureGradient / 1000,
+    state.synopticPressureGradientDirection,
+  );
+  const temperatureGradient = directedVector(
+    state.temperatureGradient / 1000,
+    state.temperatureGradientDirection,
+  );
   sceneFloats.set([state.cameraX, state.cameraY, state.viewHeight * aspect, state.viewHeight], 0);
-  sceneFloats.set([surface[0], surface[1], state.cover, state.rain], 4);
-  sceneFloats.set([state.moisture, state.instability, state.upperCloud, 0], 8);
+  sceneFloats.set([state.pressureHpa, ...pressureGradient, 0], 4);
+  sceneFloats.set([...synopticGradient, state.lowTemperature, state.upperTemperature], 8);
+  sceneFloats.set([state.waterVapor, ...temperatureGradient, 0], 12);
   sceneFloats.set([
     ...sunDirection(state.sunAzimuth, state.sunElevation),
     state.sunEnabled * state.sunIntensity,
-  ], 12);
+  ], 16);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 16);
-  sceneFloats.set([...lowOffset, ...upperOffset], 20);
-  sceneFloats.set([...surface, ...synoptic], 24);
-  sceneFloats[28] = state.time;
+  sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 20);
+  sceneFloats[24] = state.time;
   device.queue.writeBuffer(sceneBuffer, 0, sceneData);
 
   const tuningData = new ArrayBuffer(144);
@@ -953,9 +1048,9 @@ function writeUniforms(): void {
     state.landscapeCompositionEnabled * state.landscapeLightingVisible,
   ], 24);
   tuningFloats.set([
-    state.synopticComponentEnabled * state.synopticWeight,
-    state.regionalComponentEnabled * state.regionalWeight,
-    state.gustEnabled * state.gustWeight,
+    state.pressureCirculationEnabled * state.pressureWindScale,
+    state.crossIsobarEnabled * state.crossIsobarScale,
+    state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
   ], 28);
   tuningUints.set([state.debugView, 0, 0, 0], 32);
@@ -1001,17 +1096,8 @@ function frame(now: number): void {
   if (!state.paused) {
     const simulationElapsed = elapsed * state.timeRate;
     state.time += simulationElapsed;
-    const surface = wind(state.surfaceWindSpeed, state.surfaceWindDirection);
-    const synoptic = wind(state.synopticWindSpeed, state.synopticWindDirection);
-    lowOffset = [
-      lowOffset[0] + surface[0] * simulationElapsed,
-      lowOffset[1] + surface[1] * simulationElapsed,
-    ];
-    upperOffset = [
-      upperOffset[0] + synoptic[0] * simulationElapsed,
-      upperOffset[1] + synoptic[1] * simulationElapsed,
-    ];
   }
+  updateDerivedOutput();
   writeUniforms();
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({

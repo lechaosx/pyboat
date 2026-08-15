@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use pyboat_game::{
-    dinghy_parameters, match_environment, procedural_cloud_cover, procedural_match_environment,
+    AtmospherePrimary, derive_weather, dinghy_parameters, match_environment,
+    procedural_atmosphere_primary, procedural_cloud_cover, procedural_match_environment,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s, procedural_weather,
 };
 use rapier2d::prelude::Vector;
@@ -202,6 +203,110 @@ fn procedural_cloud_cover_has_mostly_clear_skies_and_rare_storms() {
 }
 
 #[test]
+fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
+    let primary = AtmospherePrimary {
+        pressure_hpa: 1000.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        low_temperature_c: 20.0,
+        upper_temperature_c: -15.0,
+        temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 8.0,
+    };
+
+    let wind = derive_weather(primary).wind_velocity_m_s;
+
+    assert!(wind.y > 5.0, "surface wind was {wind:?}");
+    assert!(
+        wind.x < 0.0,
+        "surface wind did not cross toward low pressure: {wind:?}"
+    );
+    assert!(
+        wind.x.abs() < wind.y * 0.2,
+        "surface wind was not nearly isobaric: {wind:?}"
+    );
+}
+
+#[test]
+fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
+    let calm_aloft = AtmospherePrimary {
+        pressure_hpa: 1000.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
+        low_temperature_c: 24.0,
+        upper_temperature_c: -15.0,
+        temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 10.0,
+    };
+    let sheared = AtmospherePrimary {
+        temperature_gradient_c_per_m: Vector::new(0.0004, 0.0),
+        ..calm_aloft
+    };
+
+    let calm_weather = derive_weather(calm_aloft);
+    let sheared_weather = derive_weather(sheared);
+
+    assert_eq!(
+        calm_weather.wind_velocity_m_s,
+        sheared_weather.wind_velocity_m_s
+    );
+    assert!(
+        (sheared_weather.upper_wind_velocity_m_s - calm_weather.upper_wind_velocity_m_s).length()
+            > 2.0
+    );
+    assert_eq!(
+        sheared_weather.wind_shear_m_s,
+        sheared_weather.upper_wind_velocity_m_s - sheared_weather.wind_velocity_m_s
+    );
+}
+
+#[test]
+fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
+    let dry = AtmospherePrimary {
+        pressure_hpa: 990.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        low_temperature_c: 28.0,
+        upper_temperature_c: -20.0,
+        temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
+        water_vapor_g_kg: 4.0,
+    };
+    let moist = AtmospherePrimary {
+        water_vapor_g_kg: 18.0,
+        ..dry
+    };
+
+    let dry_weather = derive_weather(dry);
+    let moist_weather = derive_weather(moist);
+
+    assert!(moist_weather.relative_humidity > dry_weather.relative_humidity);
+    assert!(moist_weather.cloudiness > dry_weather.cloudiness);
+    assert!(moist_weather.rain_intensity > dry_weather.rain_intensity);
+}
+
+#[test]
+fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
+    let seed = 0x5eed;
+    let tick = 12_345;
+    let position_m = Vector::new(12.0, -7.0);
+    let primary = procedural_atmosphere_primary(seed, tick, position_m);
+
+    assert_eq!(
+        primary,
+        procedural_atmosphere_primary(seed, tick, position_m)
+    );
+    assert!(primary.pressure_hpa.is_finite());
+    assert!((-45.0..=45.0).contains(&primary.low_temperature_c));
+    assert!((-80.0..=10.0).contains(&primary.upper_temperature_c));
+    assert!((0.0..=25.0).contains(&primary.water_vapor_g_kg));
+
+    let nearby = procedural_atmosphere_primary(seed, tick + 1, position_m + Vector::new(1.0, 0.0));
+    assert!((nearby.pressure_hpa - primary.pressure_hpa).abs() < 0.1);
+    assert!((nearby.low_temperature_c - primary.low_temperature_c).abs() < 0.1);
+    assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
+}
+
+#[test]
 fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     let position_m = Vector::new(12.0, -7.0);
     let mut clear_samples = 0;
@@ -220,16 +325,16 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
         );
         let later_weather = procedural_weather(seed, 12_405, position_m);
         full_wind_change += (later_weather.wind_velocity_m_s - weather.wind_velocity_m_s).length();
-        upper_cloud_wind_change += (later_weather.high_cloud_wind_velocity_m_s
-            - weather.high_cloud_wind_velocity_m_s)
-            .length();
+        upper_cloud_wind_change +=
+            (later_weather.upper_wind_velocity_m_s - weather.upper_wind_velocity_m_s).length();
         assert_eq!(
             weather.cloudiness,
             procedural_cloud_cover(seed, 12_345, position_m)
         );
-        assert!((0.0..=1.0).contains(&weather.moisture));
+        assert!((0.0..=1.5).contains(&weather.relative_humidity));
+        assert!((0.0..=1.0).contains(&weather.lift));
         assert!((0.0..=1.0).contains(&weather.instability));
-        assert!((0.0..=1.0).contains(&weather.high_cloudiness));
+        assert!((0.0..=1.0).contains(&weather.upper_cloudiness));
         assert!((0.0..=1.0).contains(&weather.rain_intensity));
         if weather.rain_intensity > 0.0 {
             assert!(weather.cloudiness > 0.7);
@@ -238,7 +343,7 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
         rainy_samples += usize::from(weather.rain_intensity > 0.0);
         instability_range.0 = instability_range.0.min(weather.instability);
         instability_range.1 = instability_range.1.max(weather.instability);
-        high_cloud_samples += usize::from(weather.high_cloudiness > 0.0);
+        high_cloud_samples += usize::from(weather.upper_cloudiness > 0.0);
     }
 
     assert!(clear_samples > rainy_samples);
@@ -264,7 +369,7 @@ fn procedural_weather_upper_wind_is_seeded_coherent_and_faster_aloft() {
         assert_eq!(weather, procedural_weather(seed, 12_345, position_m));
 
         let sea = weather.wind_velocity_m_s;
-        let upper = weather.high_cloud_wind_velocity_m_s;
+        let upper = weather.upper_wind_velocity_m_s;
         if sea.length() < 1.0 || upper.length() < 1.0 {
             continue;
         }

@@ -180,16 +180,25 @@ decisions.
   64–512 m gust modes. One seed-derived 6 m/s transport vector translates the
   complete field without deforming it. Gust structures vary over approximately
   10.7–85 seconds, while the dominant weather structures pass over hours.
+- **[Explicit]** The spectral field is a scalar pressure potential. Its analytic
+  gradient drives a mostly isobaric surface wind with a small component toward
+  lower pressure; the lowest-frequency pressure gradient drives upper flow.
+  Horizontal temperature gradient adds a rotated thermal-wind term aloft, so
+  vertical shear is derived as upper minus surface wind. No fluid grid or storm
+  entity is simulated.
 - **[Explicit]** Match-wide weather state is distinct from its presentation.
-  Seed, tick, and position determine identical wind, coarse cloud cover, and
-  rain intensity for every participant. Fine cloud geometry may be
+  Seed, tick, and position determine identical pressure, low/upper temperature,
+  horizontal temperature gradient, and absolute moisture for every participant.
+  Wind, relative humidity, instability, lift, cloud potential, rain, and shear
+  are pure derived diagnostics. Fine cloud geometry may be
   generated independently per player but must look similar under the same local
   weather state.
 - **[Explicit]** The renderer samples the shared seeded weather at the local boat
-  and supplies its unsheltered surface and synoptic winds, moisture, instability,
-  low and upper cloudiness, and rain intensity as parameters to local procedural
-  rendering. That one state applies uniformly across the viewport, including at
-  extreme debug zoom.
+  and supplies only primary atmospheric fields and sun forcing to local
+  procedural rendering. WGSL recomputes the small intermediate expressions it
+  needs; derived atmospheric values and cloud offsets are not shader inputs. That
+  one primary sample applies uniformly across the viewport, including at extreme
+  debug zoom.
 - **[Explicit]** Visible clouds combine wind advection with time-varying noise so
   they move and evolve without a world-sized fluid simulation. Clouds do not
   participate in visibility or any other gameplay rule.
@@ -211,14 +220,14 @@ decisions.
   boat physics, not either presentation field.
 - **[Explicit]** Low-cloud appearance emerges continuously from weather and
   tuning parameters rather than distinct rendered cloud-family implementations.
-- **[Implicit]** Shared cloud cover is five octaves of smooth value noise over
-  4,096–256 m in the transported weather coordinates. A `0.05–0.15` body edge and
-  `0.15–0.75` interior mapping leave more than half of representative samples
-  clear, 10–40% cloudy, and fewer than 1% above 0.85 storm density. That field also
-  supplies continuous moisture. Four 16,384–2,048 m octaves supply independent
-  instability, and four 32,768–4,096 m octaves supply sparse high-cloud potential.
-  Rain intensity rises through `0.7–0.95` from cloudiness weighted 65–100% by
-  instability.
+- **[Implicit]** Absolute moisture is five octaves of transported smooth value
+  noise beginning at 3,584 m. Low and upper temperatures use separate broad
+  four-octave fields, and a finite spatial derivative of the low field supplies
+  horizontal temperature gradient. Saturation capacity converts temperature and
+  absolute moisture to relative humidity. Smooth combinations of humidity,
+  pressure deficit, pressure/temperature gradients, and lapse difference derive
+  lift, low/upper cloud potential, and rain. Representative low-cloud samples
+  remain more than half clear, 10–40% cloudy, and fewer than 1% above 0.85 density.
 - **[Explicit]** Near-land wind uses a simplified deterministic model of lee
   shelter over the sea. Match seed, tick, and position remain sufficient for every
   runtime to compute the same terrain-modified wind without transferring samples.
@@ -256,11 +265,11 @@ decisions.
   while beach, vegetation, rock, and snow retain sharp material boundaries.
   Broad geology varies beach width continuously from sea level, so sand does not
   appear as disconnected inland patches.
-- **[Implicit]** `pyboat-game::procedural_weather` composes unsheltered surface
-  wind, a coherent upper-cloud wind, moisture, instability, low and upper
-  cloudiness, and rain intensity. The browser integrates the complete
-  unsheltered surface wind into the visible offset and the dominant
-  32,768–131,072 m synoptic band at 118% speed into the upper offset. WGSL gives
+- **[Implicit]** `pyboat-game::procedural_atmosphere_primary` samples the primary
+  local state, and `derive_weather` computes informative/gameplay outcomes without
+  override paths. WGSL mirrors those short derivations from the primary uniform.
+  Each evolving cloud-noise time cell advects its samples with derived surface or
+  upper flow, avoiding CPU-integrated offsets. WGSL gives
   the low layer one seven-octave isotropic detail field and one four-octave broad
   formation mask. A tunable motion split divides translation between their
   coordinates. Detail-value and formation gates independently control whether
@@ -300,12 +309,13 @@ decisions.
   does not statically access the playground binding, its pipeline layout and
   runtime path contain no playground tuning or diagnostics.
 - **[Explicit]** Playground wind shelter may approximate the authoritative model.
-  The lab separately visualizes surface, synoptic, regional-residual, gust,
-  combined-wind, and shelter fields while leaving Rust gameplay physics
-  authoritative.
+  The lab separately visualizes derived surface wind, upper wind, vertical shear,
+  pressure gradient, temperature gradient, and shelter while leaving Rust
+  gameplay physics authoritative. Derived atmospheric results are read-only and
+  are never copied back into primary world inputs or shader uniforms.
 - **[Explicit]** World inputs have no reset-to-default control. Category presets
-  replace that concept; Weather scenarios interpolate the complete atmosphere,
-  wind, and sun input set while preserving renderer/model tuning, diagnostic
+  replace that concept; Weather scenarios interpolate the complete primary
+  atmosphere and sun input set while preserving renderer/model tuning, diagnostic
   state, seed, playback, camera, and zoom. Each implemented non-world category
   exposes a Production preset sourced from the same initial values as its
   individual reset controls.

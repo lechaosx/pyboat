@@ -8,7 +8,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
-use pyboat_game::procedural_weather;
+use pyboat_game::procedural_atmosphere_primary;
 use pyboat_protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
 use url::Url;
@@ -51,13 +51,12 @@ impl Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
-    weather: [f32; 4],
-    weather_structure: [f32; 4],
+    pressure: [f32; 4],
+    synoptic_pressure_and_temperature: [f32; 4],
+    moisture_and_temperature_gradient: [f32; 4],
     sun_direction_and_intensity: [f32; 4],
     match_seed: [u32; 2],
     cloud_visual_seed: [u32; 2],
-    cloud_offsets_m: [f32; 4],
-    wind_vectors_m_s: [f32; 4],
     time_seconds: f32,
     _padding: [u32; 3],
 }
@@ -72,8 +71,6 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    low_cloud_offset_m: Vector,
-    high_cloud_offset_m: Vector,
 }
 
 impl Renderer {
@@ -185,8 +182,6 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
-            low_cloud_offset_m: Vector::ZERO,
-            high_cloud_offset_m: Vector::ZERO,
         })
     }
 
@@ -198,7 +193,6 @@ impl Renderer {
         tick: u64,
         camera_m: Vector,
         view_height_m: f32,
-        elapsed_seconds: f32,
     ) -> Result<(), JsValue> {
         self.resize();
         let vertices = scene_vertices(
@@ -212,50 +206,41 @@ impl Renderer {
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
-        let weather = match_seed.map(|match_seed| procedural_weather(match_seed, tick, camera_m));
-        if let Some(weather) = weather {
-            self.low_cloud_offset_m += weather.wind_velocity_m_s * elapsed_seconds;
-            self.high_cloud_offset_m += weather.high_cloud_wind_velocity_m_s * elapsed_seconds;
-        }
+        let primary =
+            match_seed.map(|match_seed| procedural_atmosphere_primary(match_seed, tick, camera_m));
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::bytes_of(&SceneUniforms {
                 camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
-                weather: weather.map_or([0.0; 4], |weather| {
+                pressure: primary.map_or([0.0; 4], |primary| {
                     [
-                        weather.wind_velocity_m_s.x,
-                        weather.wind_velocity_m_s.y,
-                        weather.cloudiness,
-                        weather.rain_intensity,
+                        primary.pressure_hpa,
+                        primary.pressure_gradient_hpa_per_m.x,
+                        primary.pressure_gradient_hpa_per_m.y,
+                        0.0,
                     ]
                 }),
-                weather_structure: weather.map_or([0.0; 4], |weather| {
+                synoptic_pressure_and_temperature: primary.map_or([0.0; 4], |primary| {
                     [
-                        weather.moisture,
-                        weather.instability,
-                        weather.high_cloudiness,
+                        primary.synoptic_pressure_gradient_hpa_per_m.x,
+                        primary.synoptic_pressure_gradient_hpa_per_m.y,
+                        primary.low_temperature_c,
+                        primary.upper_temperature_c,
+                    ]
+                }),
+                moisture_and_temperature_gradient: primary.map_or([0.0; 4], |primary| {
+                    [
+                        primary.water_vapor_g_kg,
+                        primary.temperature_gradient_c_per_m.x,
+                        primary.temperature_gradient_c_per_m.y,
                         0.0,
                     ]
                 }),
                 sun_direction_and_intensity: [-0.55, -0.75, 1.0, 1.0],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
-                cloud_offsets_m: [
-                    self.low_cloud_offset_m.x,
-                    self.low_cloud_offset_m.y,
-                    self.high_cloud_offset_m.x,
-                    self.high_cloud_offset_m.y,
-                ],
-                wind_vectors_m_s: weather.map_or([0.0; 4], |weather| {
-                    [
-                        weather.wind_velocity_m_s.x,
-                        weather.wind_velocity_m_s.y,
-                        weather.high_cloud_wind_velocity_m_s.x,
-                        weather.high_cloud_wind_velocity_m_s.y,
-                    ]
-                }),
                 time_seconds: tick as f32 / 60.0,
                 _padding: [0; 3],
             }),
@@ -442,7 +427,6 @@ impl BrowserGame {
             client.prediction_tick,
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
-            elapsed_seconds,
         )
     }
 

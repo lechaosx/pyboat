@@ -136,25 +136,23 @@ At 32 m and 128 m baselines, keep generated 90th-percentile relief below the
 observed `1.94 m` and `2.92 m` rocky-coast upper bounds. Treat those data as
 roughness limits, not shoreline-contour targets. The source grids are public
 navigation bathymetry; calibration data stays outside the repository.
-Unsheltered wind is the sum of 48 divergence-free Fourier modes. Weather modes
+The procedural pressure potential is the sum of 48 Fourier modes. Weather modes
 carry 90% of component variance over 32,768–131,072 m wavelengths, regional modes
 carry 8% over 4,096–32,768 m, and gust modes carry 2% over 64–512 m. This gives an
 island-scale view a prevailing direction while distant regions remain unrelated.
-Seeded Box–Muller coefficients create isotropic Gaussian vector components, giving
+Rotating its analytic gradient produces isotropic Gaussian wind components, giving
 speed the configured `k = 2`, `λ = 9 m/s` Weibull marginal. `libm` supplies the
 shared software transcendental functions used by native and WebAssembly sampling.
 One seed-derived transport vector moves the entire frozen field, so spatial
 structures remain coherent instead of individual modes propagating in unrelated
-directions. Shared cloud cover evaluates five octaves of smooth value noise over
-4,096–256 m in the same transported coordinates. A 0.05–0.15 smoothstep forms its
-body; multiply it by an interior density rising from 0.25 to 1 through a
-0.15–0.75 smoothstep. More than half of representative samples must remain clear,
-10–40% must be cloudy, and density above 0.85 must be present but below 1%.
-`procedural_weather` packages that cloudiness and its continuous moisture signal
-with an unsheltered surface wind and a coherent upper-cloud wind. The upper wind
-is the dominant 32,768–131,072 m band at 118% speed. Independent four-octave fields provide instability over
-16,384–2,048 m and sparse high-cloud potential over 32,768–4,096 m. Rain maps the
-0.7–0.95 tail of cloudiness weighted 65–100% by instability. Final surface wind
+directions. `procedural_atmosphere_primary` samples pressure and its full/broad
+gradients, separate low/upper temperature fields, low-temperature gradient, and
+five-octave absolute moisture beginning at 3,584 m. `derive_weather` is the
+primary-to-derived boundary: it computes surface and upper wind, vertical shear,
+relative humidity, instability, lift, cloud potential, and rain. Do not add
+derived-value overrides. More than half of representative cloud samples must
+remain clear, 10–40% must be cloudy, and density above 0.85 must be present but
+below 1%. Final surface wind
 samples terrain at six fixed points from 16–512 m upwind. Elevation through 1.5 m
 scales obstruction, a 256 m rational distance falloff models recovery, and the
 strongest obstruction reduces speed by at most 70% without changing direction.
@@ -223,8 +221,9 @@ It imports `crates/browser/src/scene.wgsl` directly and needs WebGPU but no game
 server. Weather, Landscape, and Water tabs organize semantic layers and label
 controls as live world inputs, procedural-model tuning, fixed shader tuning, or
 playground-only diagnostics. Weather views expose low-cloud detail and formation
-fields, cloud height, both shadow layers, optical outputs, approximate wind
-components, and terrain shelter. Landscape views expose elevation, slope, normals, island fields,
+fields, cloud height, both shadow layers, optical outputs, primary atmospheric
+gradients, derived surface/upper wind and shear, and terrain shelter. The derived
+panel is read-only; scenarios change its primary causes. Landscape views expose elevation, slope, normals, island fields,
 coastal relief, vegetation, and beach geology. Water remains an explicit empty
 domain until its first current or wave slice exists.
 
@@ -236,7 +235,7 @@ functions. Keep shared functions dependent on that private state rather than the
 playground binding so production never statically accesses the lab interface.
 Dragging pans the preview, the mouse wheel zooms around its pointer position, and
 an architectural 1–2–5 scale bar reports physical distance. Weather scenarios
-crossfade the complete atmosphere, wind, and sun world state over 1.5 seconds.
+crossfade the complete primary atmosphere and sun world state over 1.5 seconds.
 World inputs have no default reset; changed shader, model, and debug values show
 individual reset buttons. Non-world categories also provide a Production preset
 for restoring their complete in-game tuning. A range-track click eases over 0.3
@@ -426,15 +425,15 @@ with altitude. Broad elevation and vegetation fields select alpine rock, sparse
 snow, grass, and clustered forest canopy. Separate finer fields grade colors
 inside those materials. Beach width varies with broad geology but always begins
 at sea level; steep rock can meet the water before beach classification.
-Each frame samples `procedural_weather` at the camera position. The scene uniform
-carries unsheltered surface and synoptic winds, moisture, instability, low/upper
-cloudiness, rain state, a fixed three-dimensional sun direction and intensity,
-predicted simulation time, a visual seed derived from the local player identity,
-and separately integrated visible/upper cloud offsets. WGSL uses the one weather
-sample uniformly across the viewport; it does not mirror the shared weather field
-per pixel. The visible offset advances with complete unsheltered surface wind; the
-upper offset advances with the lowest-frequency synoptic wind. One behavior
-parameter preserves the continuous detail-to-mask motion split.
+Each frame samples `procedural_atmosphere_primary` at the camera position. The
+scene uniform carries pressure and its full/broad gradients, low/upper
+temperature, horizontal temperature gradient, absolute moisture, sun forcing,
+predicted simulation time, and a visual seed derived from the local player
+identity. It carries no derived weather values or cloud offsets. WGSL mirrors the
+short primary-to-derived expressions it needs and uses the one primary sample
+uniformly across the viewport. Noise samples advect within each evolving time
+cell using derived surface or upper wind. One behavior parameter preserves the
+continuous detail-to-mask motion split.
 
 The visible layer combines one seven-octave evolving isotropic detail field with
 one four-octave broad formation mask. Detail coordinates never rotate or scale;

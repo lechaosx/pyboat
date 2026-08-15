@@ -189,6 +189,20 @@ details > :last-child { margin-bottom: 0.72rem; }
   text-transform: uppercase;
 }
 
+.derived-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem 0.8rem;
+  padding: 0.7rem;
+  color: var(--muted);
+  background: rgb(8 29 36 / 72%);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  font-size: 0.72rem;
+}
+
+.derived-grid output { color: #e8f1ef; }
+
 .category-presets {
   display: flex;
   align-items: center;

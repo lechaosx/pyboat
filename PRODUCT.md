@@ -79,6 +79,17 @@ This file records intended player experience, scope, and product behavior.
   grounded.
 - **[Explicit]** Weather, currents, waves, wind, and storms should be procedural
   but deterministic from a match seed across both space and time.
+- **[Explicit]** Weather models only the local atmosphere needed by an observer
+  moving through spacetime, without a global fluid simulation or explicit storm
+  objects and life cycles. Storm-like conditions emerge when the continuous
+  atmospheric fields align.
+- **[Explicit]** Pressure, low- and upper-level temperature, absolute moisture,
+  sun, and terrain forcing are primary conditions. Wind at both levels, relative
+  humidity, instability, lift, cloud potential, rain, gustiness, and wind shear
+  are derived outcomes and cannot be overridden directly.
+- **[Explicit]** Vertical wind shear is the difference between derived upper and
+  surface wind. Horizontal temperature gradients contribute a thermal-wind
+  change aloft, while horizontal shear emerges from spatial pressure variation.
 - **[Implicit]** The first implemented procedural-environment slice gives each
   Rust match seeded wind that changes smoothly across the world and over time.
   Water current remains still until a later environment slice.
@@ -196,7 +207,9 @@ This file records intended player experience, scope, and product behavior.
   than presenting one undifferentiated list of controls.
 - **[Explicit]** Weather diagnostics can independently display and enable cloud
   layers, detail and formation fields, masks, optical properties, projected
-  shadows, wind components, and approximate terrain shelter. Landscape
+  shadows, derived surface/upper wind and shear, primary gradients, and
+  approximate terrain shelter. Derived atmospheric values are read-only;
+  scenarios configure their primary causes. Landscape
   diagnostics likewise expose terrain composition fields and layers.
 - **[Explicit]** Independently meaningful rendered contributions have enable
   switches separate from their magnitude tuning. Master switches preserve and
@@ -215,7 +228,7 @@ This file records intended player experience, scope, and product behavior.
   than an impractically wide linear slider.
 - **[Explicit]** Live world inputs have no reset-to-default action because no one
   world state is canonical. Semantic categories may instead provide presets.
-  Weather Conditions exposes scenarios that set every atmosphere, wind, and sun
+  Weather Conditions exposes scenarios that set every primary atmosphere and sun
   world input while preserving shader and model tuning, debug state, camera, seed,
   playback, and zoom. Non-world categories initially provide a Production preset
   that restores the corresponding in-game tuning as a group. Clicking a slider

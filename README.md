@@ -47,8 +47,9 @@ The separate procedural world laboratory runs with `bun run dev:playground`. Its
 Weather, Landscape, and future Water domains render the production scene
 algorithms without a game server. Controls distinguish live world conditions,
 procedural-model tuning, fixed shader tuning, and playground-only diagnostics.
-Cloud masks, shadows, terrain fields, wind components, and approximate shelter
-can be inspected directly. Drag the preview to pan, use the mouse wheel to zoom
+Cloud masks, shadows, terrain fields, primary atmospheric gradients, derived wind
+and shear, and approximate shelter can be inspected directly. Derived weather is
+read-only; scenarios change pressure, temperature, moisture, and sun inputs. Drag the preview to pan, use the mouse wheel to zoom
 around the pointer, and adjust the time rate to inspect evolution. Weather
 scenarios and slider-track clicks transition smoothly, while dragging remains
 immediate. World inputs have no arbitrary default reset; changed tuning and debug
@@ -126,7 +127,8 @@ rendering predicted articulated boats with Rust `wgpu`. Use `W/S` for forward or
 reverse power and `A/D` to turn.
 The first connected gamepad uses its left stick for world-relative movement. The
 browser predicts the server's seeded weather locally. Players share the same
-wind, moisture, instability, cloudiness, and rain intensity at a position, while
+primary pressure, temperatures, and absolute moisture at a position; wind at both
+levels, humidity, instability, lift, clouds, rain, and shear derive from them, while
 fine cloud shapes are generated locally and remain presentation-only. The browser
 applies the weather at the local boat uniformly across the view. One visible layer
 of sparse wisps and occasional cumulus moves with the surface wind; its evolving
