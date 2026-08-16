@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, ProceduralWeather,
-    celestial_lighting, current_low_temperature_c, derive_weather,
+    celestial_lighting, current_air_temperature_c, derive_weather,
 };
 use rapier2d::prelude::Vector;
 use serde::Deserialize;
@@ -17,16 +17,16 @@ struct Scenario {
     pressure_gradient_direction: f32,
     synoptic_pressure_gradient: f32,
     synoptic_pressure_gradient_direction: f32,
-    low_temperature: f32,
-    temperature_anomaly: f32,
+    annual_mean_air_temperature: f32,
+    current_air_temperature_anomaly: f32,
     seasonal_temperature_range: f32,
     diurnal_temperature_range: f32,
-    upper_temperature: f32,
+    current_upper_air_temperature: f32,
     temperature_gradient: f32,
     temperature_gradient_direction: f32,
-    water_vapor: f32,
+    current_water_vapor: f32,
     aerosol_optical_depth: f32,
-    solar_latitude: f32,
+    geographic_latitude: f32,
     season_phase: f32,
     day_phase: f32,
     moon_phase: f32,
@@ -37,22 +37,22 @@ struct Scenario {
 impl Scenario {
     fn celestial_conditions(&self) -> CelestialConditions {
         CelestialConditions {
-            solar_latitude_degrees: self.solar_latitude,
+            geographic_latitude_degrees: self.geographic_latitude,
             season_phase: self.season_phase,
             day_phase: self.day_phase,
             moon_phase: self.moon_phase,
         }
     }
 
-    fn low_temperature_c(&self) -> f32 {
-        current_low_temperature_c(
+    fn current_air_temperature_c(&self) -> f32 {
+        current_air_temperature_c(
             ClimateConditions {
-                annual_mean_low_temperature_c: self.low_temperature,
+                annual_mean_air_temperature_c: self.annual_mean_air_temperature,
                 seasonal_temperature_range_c: self.seasonal_temperature_range,
                 diurnal_temperature_range_c: self.diurnal_temperature_range,
             },
             self.celestial_conditions(),
-        ) + self.temperature_anomaly
+        ) + self.current_air_temperature_anomaly
     }
 
     fn weather(&self) -> ProceduralWeather {
@@ -66,13 +66,13 @@ impl Scenario {
                 self.synoptic_pressure_gradient / 1000.0,
                 self.synoptic_pressure_gradient_direction,
             ),
-            low_temperature_c: self.low_temperature_c(),
-            upper_temperature_c: self.upper_temperature,
+            surface_air_temperature_c: self.current_air_temperature_c(),
+            upper_air_temperature_c: self.current_upper_air_temperature,
             temperature_gradient_c_per_m: directed_vector(
                 self.temperature_gradient / 1000.0,
                 self.temperature_gradient_direction,
             ),
-            water_vapor_g_kg: self.water_vapor,
+            water_vapor_g_kg: self.current_water_vapor,
         })
     }
 }
@@ -110,7 +110,7 @@ fn playground_scenarios_have_stable_unique_human_labels() {
     assert!(
         scenarios
             .iter()
-            .all(|scenario| scenario.solar_latitude.abs() <= 90.0)
+            .all(|scenario| scenario.geographic_latitude.abs() <= 90.0)
     );
     assert!(
         scenarios

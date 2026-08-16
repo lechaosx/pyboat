@@ -20,16 +20,16 @@ type State = {
   pressureGradientDirection: number;
   synopticPressureGradient: number;
   synopticPressureGradientDirection: number;
-  lowTemperature: number;
-  temperatureAnomaly: number;
+  annualMeanAirTemperature: number;
+  currentAirTemperatureAnomaly: number;
   seasonalTemperatureRange: number;
   diurnalTemperatureRange: number;
-  upperTemperature: number;
+  currentUpperAirTemperature: number;
   temperatureGradient: number;
   temperatureGradientDirection: number;
-  waterVapor: number;
+  currentWaterVapor: number;
   aerosolOpticalDepth: number;
-  solarLatitude: number;
+  geographicLatitude: number;
   seasonPhase: number;
   dayPhase: number;
   moonPhase: number;
@@ -52,6 +52,8 @@ type State = {
   terrainScale: number;
   elevationScale: number;
   cliffSlope: number;
+  waterAttenuationLength: number;
+  bottomLightContribution: number;
   lowCloudEnabled: number;
   lowCloudVisible: number;
   lowCloudShadow: number;
@@ -63,10 +65,8 @@ type State = {
   surfaceTextureVisible: number;
   landscapeLightingVisible: number;
   seasonalSnowVisible: number;
-  glaciersVisible: number;
   seasonalVegetationVisible: number;
   tidesEnabled: number;
-  seaIceVisible: number;
   pressureWindScale: number;
   pressureCirculationEnabled: number;
   crossIsobarScale: number;
@@ -84,33 +84,37 @@ type RangeControl = {
   type: "range";
   key: NumericStateKey;
   label: string;
-  kind: ControlKind;
   min: number;
   max: number;
   step: number;
+  toState?: (value: number) => number;
+  fromState?: (value: number) => number;
+  context?: (value: number) => string;
 };
 type ToggleControl = {
   type: "toggle";
   key: NumericStateKey;
   label: string;
-  kind: ControlKind;
 };
 type Control = RangeControl | ToggleControl;
 type ControlGroup = {
   domain: Domain;
   category: string;
   layer: string;
+  kind: ControlKind;
+  level?: "advanced" | "visibility";
   controls: Control[];
 };
 
 type WeatherScenario = Pick<State,
   | "pressureHpa" | "pressureGradient" | "pressureGradientDirection"
   | "synopticPressureGradient" | "synopticPressureGradientDirection"
-  | "lowTemperature" | "temperatureAnomaly" | "upperTemperature"
+  | "annualMeanAirTemperature" | "currentAirTemperatureAnomaly"
+  | "currentUpperAirTemperature"
   | "seasonalTemperatureRange" | "diurnalTemperatureRange"
-  | "temperatureGradient" | "temperatureGradientDirection" | "waterVapor"
+  | "temperatureGradient" | "temperatureGradientDirection" | "currentWaterVapor"
   | "aerosolOpticalDepth"
-  | "solarLatitude" | "seasonPhase" | "dayPhase" | "moonPhase"
+  | "geographicLatitude" | "seasonPhase" | "dayPhase" | "moonPhase"
   | "tidalRange" | "tidalPhaseOffset"
 >;
 type WeatherScenarioDefinition = WeatherScenario & {
@@ -134,16 +138,16 @@ const defaults: State = {
   pressureGradientDirection: -81,
   synopticPressureGradient: 0.85,
   synopticPressureGradientDirection: -81,
-  lowTemperature: 14,
-  temperatureAnomaly: 0,
+  annualMeanAirTemperature: 14,
+  currentAirTemperatureAnomaly: 0,
   seasonalTemperatureRange: 12,
   diurnalTemperatureRange: 4,
-  upperTemperature: -14,
+  currentUpperAirTemperature: -14,
   temperatureGradient: 0.12,
   temperatureGradientDirection: -65,
-  waterVapor: 13,
+  currentWaterVapor: 13,
   aerosolOpticalDepth: 0.08,
-  solarLatitude: 45,
+  geographicLatitude: 45,
   seasonPhase: 0.2521,
   dayPhase: 0.5833,
   moonPhase: 0.25,
@@ -166,6 +170,8 @@ const defaults: State = {
   terrainScale: 1,
   elevationScale: 3,
   cliffSlope: 0.08,
+  waterAttenuationLength: 12,
+  bottomLightContribution: 0.55,
   lowCloudEnabled: 1,
   lowCloudVisible: 1,
   lowCloudShadow: 1,
@@ -177,10 +183,8 @@ const defaults: State = {
   surfaceTextureVisible: 1,
   landscapeLightingVisible: 1,
   seasonalSnowVisible: 1,
-  glaciersVisible: 1,
   seasonalVegetationVisible: 1,
   tidesEnabled: 1,
-  seaIceVisible: 1,
   pressureWindScale: 1,
   pressureCirculationEnabled: 1,
   crossIsobarScale: 1,
@@ -196,137 +200,180 @@ const defaults: State = {
 const range = (
   key: NumericStateKey,
   label: string,
-  kind: ControlKind,
   min: number,
   max: number,
   step: number,
-): RangeControl => ({ type: "range", key, label, kind, min, max, step });
-const toggle = (key: NumericStateKey, label: string, kind: ControlKind): ToggleControl => (
-  { type: "toggle", key, label, kind }
+): RangeControl => ({ type: "range", key, label, min, max, step });
+const toggle = (key: NumericStateKey, label: string): ToggleControl => (
+  { type: "toggle", key, label }
 );
+
+const monthNames = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+const wrappedPhase = (phase: number): number => ((phase % 1) + 1) % 1;
+
+function lunarPhaseName(phase: number): string {
+  const names = [
+    "New moon", "Waxing crescent", "First quarter", "Waxing gibbous",
+    "Full moon", "Waning gibbous", "Last quarter", "Waning crescent",
+  ];
+  return names[Math.floor(wrappedPhase(phase) * 8 + 0.5) % 8];
+}
 
 const groups: ControlGroup[] = [
   {
-    domain: "weather", category: "Conditions", layer: "Pressure", controls: [
-      range("pressureHpa", "Pressure · hPa", "WORLD", 970, 1040, 0.5),
-      range("pressureGradient", "Gradient · hPa/km", "WORLD", 0, 3, 0.02),
-      range("pressureGradientDirection", "Gradient direction", "WORLD", -180, 180, 1),
-      range("synopticPressureGradient", "Broad gradient · hPa/km", "WORLD", 0, 3, 0.02),
-      range("synopticPressureGradientDirection", "Broad direction", "WORLD", -180, 180, 1),
+    domain: "weather", category: "Location & time", layer: "Place and sky", kind: "WORLD", controls: [
+      range("geographicLatitude", "Geographic latitude · °", -90, 90, 1),
+      {
+        ...range("seasonPhase", "Season · month", 1, 12.9999, 0.0001),
+        toState: (month) => (month - 1) / 12,
+        fromState: (phase) => 1 + 12 * wrappedPhase(phase),
+        context: (phase) => monthNames[Math.floor(12 * wrappedPhase(phase))],
+      },
+      {
+        ...range("dayPhase", "Local solar time · h", 0, 23.999, 0.001),
+        toState: (hours) => hours / 24,
+        fromState: (phase) => 24 * wrappedPhase(phase),
+        context: (phase) => `${(24 * wrappedPhase(phase)).toFixed(2)} h`,
+      },
+      {
+        ...range("moonPhase", "Lunar phase", 0, 1, 0.01),
+        context: lunarPhaseName,
+      },
     ],
   },
   {
-    domain: "weather", category: "Conditions", layer: "Thermodynamics", controls: [
-      range("lowTemperature", "Annual mean low temperature · °C", "WORLD", -35, 45, 0.5),
-      range("temperatureAnomaly", "Current temperature anomaly · °C", "WORLD", -25, 25, 0.5),
-      range("seasonalTemperatureRange", "Seasonal range · °C", "WORLD", 0, 40, 0.5),
-      range("diurnalTemperatureRange", "Daily range · °C", "WORLD", 0, 20, 0.5),
-      range("upperTemperature", "Upper temperature · °C", "WORLD", -80, 10, 0.5),
-      range("temperatureGradient", "Horizontal ΔT · °C/km", "WORLD", 0, 1, 0.01),
-      range("temperatureGradientDirection", "ΔT direction", "WORLD", -180, 180, 1),
-      range("waterVapor", "Water vapour · g/kg", "WORLD", 0, 25, 0.1),
+    domain: "weather", category: "Climate", layer: "Temperature normals", kind: "WORLD", controls: [
+      range("annualMeanAirTemperature", "Annual mean air temperature · °C", -35, 45, 0.5),
+      range("seasonalTemperatureRange", "Seasonal range · °C", 0, 40, 0.5),
+      range("diurnalTemperatureRange", "Daily range · °C", 0, 20, 0.5),
     ],
   },
   {
-    domain: "weather", category: "Conditions", layer: "Time and sky", controls: [
-      toggle("celestialLightingEnabled", "Celestial lighting", "DEBUG"),
-      range("solarLatitude", "Solar latitude · °", "WORLD", -90, 90, 1),
-      range("seasonPhase", "Season phase · 0 equinox, 0.25 north sun", "WORLD", 0, 1, 0.001),
-      range("dayPhase", "Day phase · 0 midnight, 0.5 noon", "WORLD", 0, 1, 0.001),
-      range("moonPhase", "Moon phase · 0 new, 0.5 full", "WORLD", 0, 1, 0.01),
+    domain: "weather", category: "Current weather", layer: "Pressure", kind: "WORLD", controls: [
+      range("pressureHpa", "Pressure · hPa", 970, 1040, 0.5),
+      range("pressureGradient", "Gradient · hPa/km", 0, 3, 0.02),
+      range("pressureGradientDirection", "Gradient direction", -180, 180, 1),
+      range("synopticPressureGradient", "Broad gradient · hPa/km", 0, 3, 0.02),
+      range("synopticPressureGradientDirection", "Broad direction", -180, 180, 1),
     ],
   },
   {
-    domain: "weather", category: "Conditions", layer: "Atmospheric optics", controls: [
-      range("aerosolOpticalDepth", "Aerosol optical depth", "WORLD", 0, 1, 0.01),
+    domain: "weather", category: "Current weather", layer: "Air and moisture", kind: "WORLD", controls: [
+      range("currentAirTemperatureAnomaly", "Air temperature anomaly · °C", -25, 25, 0.5),
+      range("currentUpperAirTemperature", "Upper-air temperature · °C", -80, 10, 0.5),
+      range("temperatureGradient", "Horizontal ΔT · °C/km", 0, 1, 0.01),
+      range("temperatureGradientDirection", "ΔT direction", -180, 180, 1),
+      range("currentWaterVapor", "Current water vapour · g/kg", 0, 25, 0.1),
     ],
   },
   {
-    domain: "weather", category: "Layers", layer: "Low cloud · visibility", controls: [
-      toggle("lowCloudEnabled", "Low-cloud layer", "DEBUG"),
-      toggle("lowCloudVisible", "Visible body", "DEBUG"),
-      toggle("lowCloudShadow", "Terrain shadow", "DEBUG"),
+    domain: "weather", category: "Current weather", layer: "Atmospheric optics", kind: "WORLD", controls: [
+      range("aerosolOpticalDepth", "Aerosol optical depth", 0, 1, 0.01),
     ],
   },
   {
-    domain: "weather", category: "Layers", layer: "Low cloud · detail", controls: [
-      range("detailCharacter", "Billowy character", "SHADER", 0, 1, 0.05),
-      range("detailBlobiness", "Detail blobiness", "SHADER", 0, 1, 0.05),
-      range("detailContrast", "Detail contrast", "SHADER", 0.25, 2.5, 0.05),
-      range("detailEdgeSoftness", "Body edge", "SHADER", 0.005, 0.25, 0.005),
+    domain: "weather", category: "Visibility", layer: "Lighting", kind: "DEBUG", level: "visibility", controls: [
+      toggle("celestialLightingEnabled", "Celestial lighting"),
     ],
   },
   {
-    domain: "weather", category: "Layers", layer: "Low cloud · formation", controls: [
-      range("maskInfluence", "Mask influence", "SHADER", 0, 1, 0.05),
-      range("maskScale", "Mask scale", "SHADER", 0.25, 4, 0.05),
-      range("maskElongation", "Mask elongation", "SHADER", 1, 16, 0.25),
-      range("maxVisibleCoverage", "Maximum coverage", "SHADER", 0, 1, 0.01),
-      range("motionInMask", "Motion in mask", "SHADER", 0, 1, 0.05),
+    domain: "weather", category: "Visibility", layer: "Low cloud", kind: "DEBUG", level: "visibility", controls: [
+      toggle("lowCloudEnabled", "Low-cloud layer"),
+      toggle("lowCloudVisible", "Visible body"),
+      toggle("lowCloudShadow", "Terrain shadow"),
     ],
   },
   {
-    domain: "weather", category: "Layers", layer: "Low cloud · material", controls: [
-      range("opticalDepth", "Optical depth", "SHADER", 0, 3, 0.05),
-      range("opacity", "Opacity", "SHADER", 0, 1.5, 0.05),
-      range("darkness", "Rain darkness", "SHADER", 0, 2, 0.05),
-      range("relief", "Height relief", "SHADER", 0, 2, 0.05),
+    domain: "weather", category: "Advanced tuning", layer: "Low-cloud shape", kind: "SHADER", level: "advanced", controls: [
+      range("detailCharacter", "Billow shape", 0, 1, 0.05),
+      range("detailBlobiness", "Cell separation", 0, 1, 0.05),
+      range("detailContrast", "Detail contrast", 0.25, 2.5, 0.05),
+      range("detailEdgeSoftness", "Body edge", 0.005, 0.25, 0.005),
     ],
   },
   {
-    domain: "weather", category: "Layers", layer: "Upper cloud · visibility", controls: [
-      toggle("upperCloudEnabled", "Upper-cloud layer", "DEBUG"),
-      toggle("upperCloudShadow", "Terrain shadow", "DEBUG"),
-      toggle("upperShadowOnLowCloud", "Shadow on low cloud", "DEBUG"),
+    domain: "weather", category: "Advanced tuning", layer: "Low-cloud coverage", kind: "SHADER", level: "advanced", controls: [
+      range("maskInfluence", "Mask influence", 0, 1, 0.05),
+      range("maskScale", "Mask scale", 0.25, 4, 0.05),
+      range("maskElongation", "Mask elongation", 1, 16, 0.25),
+      range("maxVisibleCoverage", "Maximum coverage", 0, 1, 0.01),
+      range("motionInMask", "Motion in mask", 0, 1, 0.05),
     ],
   },
   {
-    domain: "weather", category: "Wind model", layer: "Derived flow", controls: [
-      toggle("pressureCirculationEnabled", "Pressure circulation", "DEBUG"),
-      range("pressureWindScale", "Pressure response", "MODEL", 0, 2, 0.05),
-      toggle("crossIsobarEnabled", "Cross-isobar flow", "DEBUG"),
-      range("crossIsobarScale", "Cross-isobar response", "MODEL", 0, 2, 0.05),
-      toggle("thermalWindEnabled", "Thermal-wind shear", "DEBUG"),
-      range("thermalWindScale", "Thermal response", "MODEL", 0, 2, 0.05),
-      toggle("shelterEnabled", "Terrain shelter", "DEBUG"),
-      range("shelterStrength", "Shelter strength", "MODEL", 0, 1, 0.05),
+    domain: "weather", category: "Advanced tuning", layer: "Low-cloud appearance", kind: "SHADER", level: "advanced", controls: [
+      range("opticalDepth", "Optical depth", 0, 3, 0.05),
+      range("opacity", "Opacity", 0, 1.5, 0.05),
+      range("darkness", "Low-cloud darkening", 0, 2, 0.05),
+      range("relief", "Relief shading", 0, 2, 0.05),
     ],
   },
   {
-    domain: "landscape", category: "Structure", layer: "Terrain shape", controls: [
-      range("terrainScale", "Horizontal scale", "SHADER", 0.25, 4, 0.05),
-      range("elevationScale", "Elevation scale", "SHADER", 0.1, 3, 0.05),
-      range("cliffSlope", "Cliff slope", "SHADER", 0.01, 0.3, 0.005),
+    domain: "weather", category: "Visibility", layer: "Upper cloud", kind: "DEBUG", level: "visibility", controls: [
+      toggle("upperCloudEnabled", "Upper-cloud layer"),
+      toggle("upperCloudShadow", "Terrain shadow"),
+      toggle("upperShadowOnLowCloud", "Shadow on low cloud"),
     ],
   },
   {
-    domain: "landscape", category: "Layers", layer: "Composition", controls: [
-      toggle("landscapeCompositionEnabled", "Landscape composition", "DEBUG"),
-      toggle("coastalReliefVisible", "Coastal reef relief", "DEBUG"),
-      toggle("vegetationVisible", "Vegetation", "DEBUG"),
-      toggle("surfaceTextureVisible", "Surface texture", "DEBUG"),
-      toggle("landscapeLightingVisible", "Terrain lighting", "DEBUG"),
+    domain: "weather", category: "Advanced tuning", layer: "Wind components", kind: "DEBUG", level: "advanced", controls: [
+      toggle("pressureCirculationEnabled", "Pressure circulation"),
+      toggle("crossIsobarEnabled", "Cross-isobar flow"),
+      toggle("thermalWindEnabled", "Thermal-wind shear"),
+      toggle("shelterEnabled", "Terrain shelter"),
     ],
   },
   {
-    domain: "landscape", category: "Layers", layer: "Seasonal surface", controls: [
-      toggle("seasonalSnowVisible", "Seasonal snow", "DEBUG"),
-      toggle("glaciersVisible", "Glaciers", "DEBUG"),
-      toggle("seasonalVegetationVisible", "Vegetation seasons", "DEBUG"),
+    domain: "weather", category: "Advanced tuning", layer: "Wind response", kind: "MODEL", level: "advanced", controls: [
+      range("pressureWindScale", "Pressure response", 0, 2, 0.05),
+      range("crossIsobarScale", "Cross-isobar response", 0, 2, 0.05),
+      range("thermalWindScale", "Thermal response", 0, 2, 0.05),
+      range("shelterStrength", "Shelter strength", 0, 1, 0.05),
     ],
   },
   {
-    domain: "water", category: "Conditions", layer: "Astronomical tide", controls: [
-      toggle("tidesEnabled", "Tidal water height", "DEBUG"),
-      range("tidalRange", "Reference tidal range · m", "WORLD", 0, 5, 0.05),
-      range("tidalPhaseOffset", "Local phase offset", "WORLD", -0.5, 0.5, 0.005),
+    domain: "landscape", category: "Advanced tuning", layer: "Terrain shape", kind: "SHADER", level: "advanced", controls: [
+      range("terrainScale", "Horizontal scale", 0.25, 4, 0.05),
+      range("elevationScale", "Elevation scale", 0.1, 3, 0.05),
+      range("cliffSlope", "Cliff slope", 0.01, 0.3, 0.005),
     ],
   },
   {
-    domain: "water", category: "Layers", layer: "Frozen water", controls: [
-      toggle("seaIceVisible", "Sea ice", "DEBUG"),
+    domain: "landscape", category: "Visibility", layer: "Surface composition", kind: "DEBUG", level: "visibility", controls: [
+      toggle("landscapeCompositionEnabled", "Landscape composition"),
+      toggle("coastalReliefVisible", "Coastal reef relief"),
+      toggle("vegetationVisible", "Vegetation"),
+      toggle("surfaceTextureVisible", "Surface texture"),
+      toggle("landscapeLightingVisible", "Terrain lighting"),
     ],
   },
+  {
+    domain: "landscape", category: "Visibility", layer: "Climate layers", kind: "DEBUG", level: "visibility", controls: [
+      toggle("seasonalSnowVisible", "Seasonal snow"),
+      toggle("seasonalVegetationVisible", "Vegetation seasons"),
+    ],
+  },
+  {
+    domain: "water", category: "Local tide", layer: "Astronomical tide", kind: "WORLD", controls: [
+      toggle("tidesEnabled", "Tidal water height"),
+      range("tidalRange", "Reference tidal range · m", 0, 5, 0.05),
+      range("tidalPhaseOffset", "Local phase offset", -0.5, 0.5, 0.005),
+    ],
+  },
+  {
+    domain: "water", category: "Advanced tuning", layer: "Underwater optics", kind: "SHADER", level: "advanced", controls: [
+      range("waterAttenuationLength", "Attenuation length · m", 0.5, 40, 0.5),
+      range("bottomLightContribution", "Bottom light contribution", 0, 1, 0.01),
+    ],
+  },
+];
+
+const categoryOrder = [
+  "Location & time", "Climate", "Current weather", "Local tide", "Visibility", "Advanced tuning",
 ];
 
 const lowCloudDependentKeys = new Set<NumericStateKey>([
@@ -337,16 +384,15 @@ const lowCloudDependentKeys = new Set<NumericStateKey>([
 ]);
 const landscapeCompositionKeys = new Set<NumericStateKey>([
   "coastalReliefVisible", "vegetationVisible", "surfaceTextureVisible",
-  "landscapeLightingVisible", "seasonalSnowVisible", "glaciersVisible",
+  "landscapeLightingVisible", "seasonalSnowVisible",
   "seasonalVegetationVisible",
 ]);
 const tideKeys = new Set<NumericStateKey>(["tidalRange", "tidalPhaseOffset"]);
 const subtoggleKeys = new Set<NumericStateKey>([
   "lowCloudVisible", "lowCloudShadow", "upperCloudShadow", "upperShadowOnLowCloud",
-  ...landscapeCompositionKeys, "seaIceVisible",
+  ...landscapeCompositionKeys,
 ]);
 const subrangeKeys = new Set<NumericStateKey>([
-  "solarLatitude", "seasonPhase", "dayPhase", "moonPhase",
   "tidalRange", "tidalPhaseOffset",
   "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
@@ -365,15 +411,26 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
     [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
     [38, "Vegetation field"], [39, "Beach geology"], [40, "Seasonal snow"],
-    [41, "Glacier climate"], [42, "Autumn vegetation"],
+    [41, "Solid ice"], [42, "Autumn vegetation"],
   ],
-  water: [[0, "Final composition"], [48, "Tide height"], [49, "Sea ice climate"]],
+  water: [[0, "Final composition"], [48, "Tide height"]],
 };
 
 const weatherScenarios = scenarioDefinitions as WeatherScenarioDefinition[];
 
 const categoryPresets: Record<string, Record<string, Partial<State>>> = {
-  "weather:Layers": {
+  "weather:Visibility": {
+    Production: {
+      celestialLightingEnabled: defaults.celestialLightingEnabled,
+      lowCloudEnabled: defaults.lowCloudEnabled,
+      lowCloudVisible: defaults.lowCloudVisible,
+      lowCloudShadow: defaults.lowCloudShadow,
+      upperCloudEnabled: defaults.upperCloudEnabled,
+      upperCloudShadow: defaults.upperCloudShadow,
+      upperShadowOnLowCloud: defaults.upperShadowOnLowCloud,
+    },
+  },
+  "weather:Advanced tuning": {
     Production: {
       detailCharacter: defaults.detailCharacter,
       detailBlobiness: defaults.detailBlobiness,
@@ -388,16 +445,6 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       opacity: defaults.opacity,
       darkness: defaults.darkness,
       relief: defaults.relief,
-      lowCloudEnabled: defaults.lowCloudEnabled,
-      lowCloudVisible: defaults.lowCloudVisible,
-      lowCloudShadow: defaults.lowCloudShadow,
-      upperCloudEnabled: defaults.upperCloudEnabled,
-      upperCloudShadow: defaults.upperCloudShadow,
-      upperShadowOnLowCloud: defaults.upperShadowOnLowCloud,
-    },
-  },
-  "weather:Wind model": {
-    Production: {
       pressureCirculationEnabled: defaults.pressureCirculationEnabled,
       pressureWindScale: defaults.pressureWindScale,
       crossIsobarEnabled: defaults.crossIsobarEnabled,
@@ -408,14 +455,14 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       shelterStrength: defaults.shelterStrength,
     },
   },
-  "landscape:Structure": {
+  "landscape:Advanced tuning": {
     Production: {
       terrainScale: defaults.terrainScale,
       elevationScale: defaults.elevationScale,
       cliffSlope: defaults.cliffSlope,
     },
   },
-  "landscape:Layers": {
+  "landscape:Visibility": {
     Production: {
       landscapeCompositionEnabled: defaults.landscapeCompositionEnabled,
       coastalReliefVisible: defaults.coastalReliefVisible,
@@ -423,13 +470,13 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       surfaceTextureVisible: defaults.surfaceTextureVisible,
       landscapeLightingVisible: defaults.landscapeLightingVisible,
       seasonalSnowVisible: defaults.seasonalSnowVisible,
-      glaciersVisible: defaults.glaciersVisible,
       seasonalVegetationVisible: defaults.seasonalVegetationVisible,
     },
   },
-  "water:Layers": {
+  "water:Advanced tuning": {
     Production: {
-      seaIceVisible: defaults.seaIceVisible,
+      waterAttenuationLength: defaults.waterAttenuationLength,
+      bottomLightContribution: defaults.bottomLightContribution,
     },
   },
 };
@@ -463,13 +510,14 @@ const valueTransitions = new Map<NumericStateKey, ValueTransition>();
 let presetTransition: PresetTransition | undefined;
 const inputByKey = new Map<NumericStateKey, HTMLInputElement>();
 const outputByKey = new Map<NumericStateKey, HTMLInputElement>();
+const contextByKey = new Map<NumericStateKey, HTMLOutputElement>();
 const rangeByKey = new Map<NumericStateKey, RangeControl>();
 const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
 const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
 let derivedOutputElement: HTMLElement | undefined;
 
 function format(value: number, step: number): string {
-  return value.toFixed(step < 0.01 ? 3 : step < 1 ? 2 : 0);
+  return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
 }
 
 function tag(kind: ControlKind): HTMLSpanElement {
@@ -529,13 +577,13 @@ function resetButton(
   return button;
 }
 
-function createRangeControl(control: RangeControl): HTMLDivElement {
+function createRangeControl(control: RangeControl, kind: ControlKind): HTMLDivElement {
   const container = document.createElement("div");
   container.className = "control range-control";
   container.classList.toggle("subcontrol", subrangeKeys.has(control.key));
   const heading = document.createElement("label");
   heading.className = "control-name";
-  heading.append(document.createTextNode(control.label), tag(control.kind));
+  heading.textContent = control.label;
   const input = document.createElement("input");
   input.type = "range";
   input.id = `control-${control.key}`;
@@ -543,25 +591,28 @@ function createRangeControl(control: RangeControl): HTMLDivElement {
   input.min = String(control.min);
   input.max = String(control.max);
   input.step = String(control.step);
-  input.value = String(state[control.key]);
+  const controlValue = control.fromState?.(state[control.key]) ?? state[control.key];
+  input.value = String(controlValue);
   const output = document.createElement("input");
   output.type = "number";
   output.className = "range-value";
   output.min = String(control.min);
   output.max = String(control.max);
   output.step = String(control.step);
-  output.value = format(state[control.key], control.step);
+  output.value = format(controlValue, control.step);
   input.addEventListener("input", () => {
     presetTransition = undefined;
     valueTransitions.delete(control.key);
-    state[control.key] = Number(input.value);
+    const value = Number(input.value);
+    state[control.key] = control.toState?.(value) ?? value;
     syncControl(control.key);
   });
   output.addEventListener("input", () => {
     if (!Number.isFinite(output.valueAsNumber)) return;
     presetTransition = undefined;
     valueTransitions.delete(control.key);
-    state[control.key] = Math.min(control.max, Math.max(control.min, output.valueAsNumber));
+    const value = Math.min(control.max, Math.max(control.min, output.valueAsNumber));
+    state[control.key] = control.toState?.(value) ?? value;
     syncControl(control.key);
   });
   output.addEventListener("change", () => syncControl(control.key));
@@ -599,10 +650,17 @@ function createRangeControl(control: RangeControl): HTMLDivElement {
   });
   input.addEventListener("pointercancel", () => { pointerId = undefined; });
   container.append(heading, input, output);
-  if (control.kind === "WORLD") {
+  if (kind === "WORLD") {
     container.classList.add("no-reset");
   } else {
     container.append(resetButton(control.key, control.label));
+  }
+  if (control.context) {
+    const context = document.createElement("output");
+    context.className = "range-context";
+    context.value = control.context(state[control.key]);
+    container.append(context);
+    contextByKey.set(control.key, context);
   }
   inputByKey.set(control.key, input);
   outputByKey.set(control.key, output);
@@ -615,13 +673,14 @@ function rangeValueAtPointer(control: RangeControl, input: HTMLInputElement, cli
   const rect = input.getBoundingClientRect();
   const amount = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
   const value = control.min + amount * (control.max - control.min);
-  return Math.min(
+  const controlValue = Math.min(
     control.max,
     Math.max(control.min, Math.round(value / control.step) * control.step),
   );
+  return control.toState?.(controlValue) ?? controlValue;
 }
 
-function createToggleControl(control: ToggleControl): HTMLDivElement {
+function createToggleControl(control: ToggleControl, kind: ControlKind): HTMLDivElement {
   const container = document.createElement("div");
   container.className = "control toggle-control";
   container.classList.toggle("subtoggle", subtoggleKeys.has(control.key));
@@ -636,9 +695,9 @@ function createToggleControl(control: ToggleControl): HTMLDivElement {
   const heading = document.createElement("label");
   heading.className = "control-name";
   heading.htmlFor = input.id;
-  heading.append(document.createTextNode(control.label), tag(control.kind));
+  heading.textContent = control.label;
   container.append(input, heading);
-  if (control.kind === "WORLD") {
+  if (kind === "WORLD") {
     container.classList.add("no-reset");
   } else {
     container.append(resetButton(control.key, control.label));
@@ -652,11 +711,14 @@ function renderControls(): void {
   controlsElement.replaceChildren();
   inputByKey.clear();
   outputByKey.clear();
+  contextByKey.clear();
   rangeByKey.clear();
   resetByKey.clear();
   controlElementByKey.clear();
   const domainGroups = groups.filter((group) => group.domain === activeDomain);
-  for (const category of [...new Set(domainGroups.map((group) => group.category))]) {
+  const categories = [...new Set(domainGroups.map((group) => group.category))]
+    .sort((left, right) => categoryOrder.indexOf(left) - categoryOrder.indexOf(right));
+  for (const category of categories) {
     const section = document.createElement("section");
     section.className = "control-category";
     const title = document.createElement("h2");
@@ -686,12 +748,19 @@ function renderControls(): void {
     }
     for (const group of domainGroups.filter((candidate) => candidate.category === category)) {
       const details = document.createElement("details");
-      details.open = true;
+      details.className = group.level ? `control-group ${group.level}` : "control-group primary";
+      details.open = group.level === undefined;
       const summary = document.createElement("summary");
-      summary.textContent = group.layer;
+      const summaryName = document.createElement("span");
+      summaryName.textContent = group.layer;
+      summary.append(summaryName, tag(group.kind));
       details.append(summary);
       for (const control of group.controls) {
-        details.append(control.type === "range" ? createRangeControl(control) : createToggleControl(control));
+        details.append(
+          control.type === "range"
+            ? createRangeControl(control, group.kind)
+            : createToggleControl(control, group.kind),
+        );
       }
       section.append(details);
     }
@@ -789,11 +858,11 @@ function timeScaleToSlider(value: number): number {
 
 worldToolbarElement.innerHTML = `
   <details open>
-    <summary>World and playback</summary>
-    <div class="text-control no-reset"><label class="control-name" for="seed">Seed <span class="kind kind-world">WORLD</span></label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time <span class="kind kind-world">WORLD</span></label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time <span class="kind kind-world">WORLD</span></label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
-    <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together <span class="kind kind-world">WORLD</span></label></div>
+    <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
+    <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
+    <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
     <div class="actions"><button id="pause">Pause</button></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
@@ -870,10 +939,15 @@ function syncControl(key: NumericStateKey): void {
     input.checked = state[key] > 0.5;
     return;
   }
-  input.value = String(state[key]);
   const definition = rangeByKey.get(key);
   const output = outputByKey.get(key);
-  if (definition && output) output.value = format(state[key], definition.step);
+  if (definition && output) {
+    const value = definition.fromState?.(state[key]) ?? state[key];
+    input.value = String(value);
+    output.value = format(value, definition.step);
+    const context = contextByKey.get(key);
+    if (context && definition.context) context.value = definition.context(state[key]);
+  }
 }
 
 function advanceTransitions(elapsed: number): void {
@@ -985,7 +1059,7 @@ const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x2
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
 const sceneFloats = new Float32Array(32);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-const tuningFloats = new Float32Array(40);
+const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1012,33 +1086,31 @@ function directedVector(magnitude: number, degrees: number): [number, number] {
   return [magnitude * Math.cos(radians), magnitude * Math.sin(radians)];
 }
 
-function currentLowTemperature(): number {
-  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
+function currentAirTemperature(): number {
   const seasonalPhase = 2 * Math.PI * (state.seasonPhase - 0.09);
   const diurnalPhase = 2 * Math.PI * (state.dayPhase - 0.625);
-  return state.lowTemperature
-    + 0.5 * state.seasonalTemperatureRange * latitudeSeasonality()
-      * hemisphere * Math.sin(seasonalPhase)
+  return state.annualMeanAirTemperature
+    + 0.5 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
+      * Math.sin(seasonalPhase)
     + 0.5 * state.diurnalTemperatureRange * Math.cos(diurnalPhase)
-    + state.temperatureAnomaly;
+    + state.currentAirTemperatureAnomaly;
 }
 
-function latitudeSeasonality(): number {
-  return 0.15 + 0.85 * smoothstepValue(0, 45, Math.abs(state.solarLatitude));
+function seasonalLatitudeFactor(): number {
+  const magnitude = smoothstepValue(0, 45, Math.abs(state.geographicLatitude));
+  return state.geographicLatitude < 0 ? -magnitude : magnitude;
 }
 
 function groundTemperature(elevation: number): number {
-  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
-  return state.lowTemperature
-    + 0.42 * state.seasonalTemperatureRange * latitudeSeasonality() * hemisphere
+  return state.annualMeanAirTemperature
+    + 0.42 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
       * Math.sin(2 * Math.PI * (state.seasonPhase - 0.13))
     - 0.0065 * Math.max(elevation, 0);
 }
 
 function waterTemperature(): number {
-  const hemisphere = state.solarLatitude < 0 ? -1 : 1;
-  return state.lowTemperature
-    + 0.28 * state.seasonalTemperatureRange * latitudeSeasonality() * hemisphere
+  return state.annualMeanAirTemperature
+    + 0.28 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
       * Math.sin(2 * Math.PI * (state.seasonPhase - 0.175));
 }
 
@@ -1055,13 +1127,13 @@ type Light = { direction: [number, number, number]; intensity: number };
 type CelestialLighting = { sun: Light; moon: Light; ambient: number };
 
 function celestialDirection(declination: number, hourAngle: number): [number, number, number] {
-  const solarLatitude = state.solarLatitude * Math.PI / 180;
+  const latitude = state.geographicLatitude * Math.PI / 180;
   return [
     -Math.cos(declination) * Math.sin(hourAngle),
-    Math.sin(declination) * Math.cos(solarLatitude)
-      - Math.cos(declination) * Math.sin(solarLatitude) * Math.cos(hourAngle),
-    Math.sin(solarLatitude) * Math.sin(declination)
-      + Math.cos(solarLatitude) * Math.cos(declination) * Math.cos(hourAngle),
+    Math.sin(declination) * Math.cos(latitude)
+      - Math.cos(declination) * Math.sin(latitude) * Math.cos(hourAngle),
+    Math.sin(latitude) * Math.sin(declination)
+      + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle),
   ];
 }
 
@@ -1125,12 +1197,16 @@ function atmosphericOutputs(): Array<[string, string]> {
   const shear: [number, number] = [upper[0] - surface[0], upper[1] - surface[1]];
   const speed = (value: [number, number]) => Math.hypot(...value);
   const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
-  const lowTemperature = currentLowTemperature();
+  const airTemperature = currentAirTemperature();
   const humidity = Math.min(1.5, Math.max(
     0,
-    state.waterVapor / (3.5 * Math.exp(0.055 * (lowTemperature + 5))),
+    state.currentWaterVapor / (3.5 * Math.exp(0.055 * (airTemperature + 5))),
   ));
-  const instability = smoothstepValue(28, 48, lowTemperature - state.upperTemperature);
+  const instability = smoothstepValue(
+    28,
+    48,
+    airTemperature - state.currentUpperAirTemperature,
+  );
   const pressureLift = 1 - smoothstepValue(990, 1012, state.pressureHpa);
   const gradientLift = smoothstepValue(0.0002, 0.0015, Math.hypot(...pressureGradient));
   const frontalLift = smoothstepValue(0.00005, 0.0005, Math.hypot(...temperatureGradient));
@@ -1160,7 +1236,7 @@ function atmosphericOutputs(): Array<[string, string]> {
       + 0.18 * smoothstepValue(0.65, 1.1, humidity),
   );
   return [
-    ["Current low temperature", `${lowTemperature.toFixed(1)} °C`],
+    ["Current air temperature", `${airTemperature.toFixed(1)} °C`],
     ["Sun", `${angle(celestial.sun.direction)} · ${celestial.sun.intensity.toFixed(2)}`],
     ["Moon", `${angle(celestial.moon.direction)} · ${celestial.moon.intensity.toFixed(2)}`],
     ["Ambient light", (celestial.ambient * (1 - 0.42 * overcast)).toFixed(2)],
@@ -1178,19 +1254,21 @@ function atmosphericOutputs(): Array<[string, string]> {
 }
 
 function surfaceOutputs(): Array<[string, string]> {
-  const moisture = smoothstepValue(2, 10, state.waterVapor);
+  const moisture = smoothstepValue(2, 10, state.currentWaterVapor);
   const ground = groundTemperature(0);
   const alpineGround = groundTemperature(600);
   const water = waterTemperature();
   const snow = (1 - smoothstepValue(-6, 2, alpineGround)) * (0.35 + 0.65 * moisture);
-  const ice = 1 - smoothstepValue(-2.2, 1, water);
-  const glacier = (1 - smoothstepValue(-5, 1, state.lowTemperature - 3.9)) * moisture;
+  const annualCold = 1 - smoothstepValue(-5, 1, state.annualMeanAirTemperature);
+  const polarLatitude = smoothstepValue(55, 75, Math.abs(state.geographicLatitude));
+  const polarIceClosure = polarLatitude * smoothstepValue(0.97, 1, annualCold);
+  const solidIce = 1 - smoothstepValue(-5, 1, state.annualMeanAirTemperature - 3.9);
   return [
     ["Ground temperature", `${ground.toFixed(1)} °C`],
     ["Water temperature", `${water.toFixed(1)} °C`],
     ["Snow at 600 m", snow.toFixed(2)],
-    ["Sea ice climate", ice.toFixed(2)],
-    ["Glacier climate at 600 m", glacier.toFixed(2)],
+    ["Polar ice closure", polarIceClosure.toFixed(2)],
+    ["Solid ice at 600 m", solidIce.toFixed(2)],
     ["Tide height", `${tideHeight().toFixed(2)} m`],
   ];
 }
@@ -1220,11 +1298,20 @@ function writeUniforms(): void {
   );
   sceneFloats.set([state.cameraX, state.cameraY, state.viewHeight * aspect, state.viewHeight], 0);
   sceneFloats.set([state.pressureHpa, ...pressureGradient, state.seasonalTemperatureRange], 4);
-  sceneFloats.set([...synopticGradient, state.lowTemperature, state.upperTemperature], 8);
-  sceneFloats.set([state.waterVapor, ...temperatureGradient, state.diurnalTemperatureRange], 12);
-  sceneFloats.set([state.solarLatitude, state.seasonPhase, state.dayPhase, state.moonPhase], 16);
   sceneFloats.set([
-    state.tidesEnabled * state.tidalRange, state.tidalPhaseOffset, state.temperatureAnomaly, 0,
+    ...synopticGradient, state.annualMeanAirTemperature, state.currentUpperAirTemperature,
+  ], 8);
+  sceneFloats.set([
+    state.currentWaterVapor, ...temperatureGradient, state.diurnalTemperatureRange,
+  ], 12);
+  sceneFloats.set([
+    state.geographicLatitude, state.seasonPhase, state.dayPhase, state.moonPhase,
+  ], 16);
+  sceneFloats.set([
+    state.tidesEnabled * state.tidalRange,
+    state.tidalPhaseOffset,
+    state.currentAirTemperatureAnomaly,
+    0,
   ], 20);
   const [seedLow, seedHigh] = splitSeed(state.seed);
   sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 24);
@@ -1242,30 +1329,33 @@ function writeUniforms(): void {
   tuningFloats.set([state.motionInMask, 0, 0, 0], 12);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 16);
   tuningFloats.set([
+    state.waterAttenuationLength, state.bottomLightContribution, 0, 0,
+  ], 20);
+  tuningFloats.set([
     state.lowCloudEnabled * state.lowCloudVisible,
     state.lowCloudEnabled * state.lowCloudShadow,
     state.upperCloudEnabled * state.upperCloudShadow,
     state.lowCloudEnabled * state.upperCloudEnabled * state.upperShadowOnLowCloud,
-  ], 20);
+  ], 24);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.coastalReliefVisible,
     state.landscapeCompositionEnabled * state.vegetationVisible,
     state.landscapeCompositionEnabled * state.surfaceTextureVisible,
     state.landscapeCompositionEnabled * state.landscapeLightingVisible,
-  ], 24);
+  ], 28);
   tuningFloats.set([
     state.pressureCirculationEnabled * state.pressureWindScale,
     state.crossIsobarEnabled * state.crossIsobarScale,
     state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
-  ], 28);
+  ], 32);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.seasonalSnowVisible,
-    state.landscapeCompositionEnabled * state.glaciersVisible,
-    state.seaIceVisible,
+    0,
+    0,
     state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
-  ], 32);
-  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 36);
+  ], 36);
+  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 40);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 

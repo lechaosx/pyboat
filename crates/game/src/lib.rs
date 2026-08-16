@@ -20,6 +20,7 @@ const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
 const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
+const TERRAIN_SHOAL_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
 const WORLD_YEAR_DAYS: f64 = 360.0;
@@ -30,15 +31,15 @@ pub struct AtmospherePrimary {
     pub pressure_hpa: f32,
     pub pressure_gradient_hpa_per_m: Vector,
     pub synoptic_pressure_gradient_hpa_per_m: Vector,
-    pub low_temperature_c: f32,
-    pub upper_temperature_c: f32,
+    pub surface_air_temperature_c: f32,
+    pub upper_air_temperature_c: f32,
     pub temperature_gradient_c_per_m: Vector,
     pub water_vapor_g_kg: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CelestialConditions {
-    pub solar_latitude_degrees: f32,
+    pub geographic_latitude_degrees: f32,
     pub season_phase: f32,
     pub day_phase: f32,
     pub moon_phase: f32,
@@ -55,7 +56,7 @@ pub struct CelestialLighting {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClimateConditions {
-    pub annual_mean_low_temperature_c: f32,
+    pub annual_mean_air_temperature_c: f32,
     pub seasonal_temperature_range_c: f32,
     pub diurnal_temperature_range_c: f32,
 }
@@ -72,8 +73,8 @@ pub struct SurfaceClimate {
     pub ground_temperature_c: f32,
     pub water_temperature_c: f32,
     pub seasonal_snow_cover: f32,
-    pub sea_ice_cover: f32,
-    pub glacier_cover: f32,
+    pub polar_ice_closure: f32,
+    pub solid_ice_cover: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,7 +92,7 @@ pub struct ProceduralWeather {
 }
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
-    let latitude = f64::from(conditions.solar_latitude_degrees).to_radians();
+    let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
     let solar_longitude = std::f64::consts::TAU * f64::from(conditions.season_phase);
     let obliquity = 23.44_f64.to_radians();
     let solar_declination = libm::asin(libm::sin(obliquity) * libm::sin(solar_longitude));
@@ -123,31 +124,32 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
     }
 }
 
-pub fn current_low_temperature_c(
+pub fn current_air_temperature_c(
     climate: ClimateConditions,
     conditions: CelestialConditions,
 ) -> f32 {
-    let hemisphere = if conditions.solar_latitude_degrees < 0.0 {
-        -1.0
-    } else {
-        1.0
-    };
     let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.09);
     let diurnal_phase = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.625);
-    let latitude_seasonality = 0.15
-        + 0.85
-            * smoothstep_range(
-                0.0,
-                45.0,
-                f64::from(conditions.solar_latitude_degrees.abs()),
-            ) as f32;
-    climate.annual_mean_low_temperature_c
+    let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
+    climate.annual_mean_air_temperature_c
         + 0.5
             * climate.seasonal_temperature_range_c
-            * latitude_seasonality
-            * hemisphere
+            * latitude_factor
             * libm::sin(seasonal_phase) as f32
         + 0.5 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+}
+
+fn seasonal_latitude_factor(geographic_latitude_degrees: f32) -> f32 {
+    let magnitude = smoothstep_range(
+        0.0,
+        45.0,
+        f64::from(geographic_latitude_degrees.abs()),
+    ) as f32;
+    if geographic_latitude_degrees < 0.0 {
+        -magnitude
+    } else {
+        magnitude
+    }
 }
 
 pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> f32 {
@@ -162,7 +164,7 @@ pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> 
 
 pub fn world_celestial_conditions(world_time_seconds: f64) -> CelestialConditions {
     CelestialConditions {
-        solar_latitude_degrees: 45.0,
+        geographic_latitude_degrees: 45.0,
         season_phase: (0.2521 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
         day_phase: (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32,
@@ -199,7 +201,12 @@ pub fn procedural_water_depth_m(
     position_m: Vector,
 ) -> f32 {
     (procedural_water_height_m(match_seed, world_time_seconds, position_m)
-        - procedural_terrain_elevation_m(match_seed, position_m))
+        - procedural_solid_surface_elevation_m(
+            match_seed,
+            position_m,
+            14.0,
+            world_celestial_conditions(world_time_seconds).geographic_latitude_degrees,
+        ))
     .max(0.0)
 }
 
@@ -209,52 +216,46 @@ pub fn climate_surface(
     water_vapor_g_kg: f32,
     elevation_m: f32,
 ) -> SurfaceClimate {
-    let air_temperature_c = current_low_temperature_c(climate, conditions);
-    let hemisphere = if conditions.solar_latitude_degrees < 0.0 {
-        -1.0
-    } else {
-        1.0
-    };
-    let latitude_seasonality = 0.15
-        + 0.85
-            * smoothstep_range(
-                0.0,
-                45.0,
-                f64::from(conditions.solar_latitude_degrees.abs()),
-            ) as f32;
+    let air_temperature_c = current_air_temperature_c(climate, conditions);
+    let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
     let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.13);
-    let ground_temperature_c = climate.annual_mean_low_temperature_c
+    let ground_temperature_c = climate.annual_mean_air_temperature_c
         + 0.42
             * climate.seasonal_temperature_range_c
-            * latitude_seasonality
-            * hemisphere
+            * latitude_factor
             * libm::sin(seasonal_phase) as f32;
     let water_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.175);
-    let water_temperature_c = climate.annual_mean_low_temperature_c
+    let water_temperature_c = climate.annual_mean_air_temperature_c
         + 0.28
             * climate.seasonal_temperature_range_c
-            * latitude_seasonality
-            * hemisphere
+            * latitude_factor
             * libm::sin(water_phase) as f32;
     let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
     let moisture_support = smoothstep_range(2.0, 10.0, f64::from(water_vapor_g_kg)) as f32;
     let seasonal_snow_cover = (1.0
         - smoothstep_range(-6.0, 2.0, f64::from(ground_temperature_at_elevation_c)) as f32)
         * (0.35 + 0.65 * moisture_support);
-    let sea_ice_cover = 1.0 - smoothstep_range(-2.2, 1.0, f64::from(water_temperature_c)) as f32;
+    let annual_cold =
+        1.0 - smoothstep_range(-5.0, 1.0, f64::from(climate.annual_mean_air_temperature_c)) as f32;
+    let polar_latitude = smoothstep_range(
+        55.0,
+        75.0,
+        f64::from(conditions.geographic_latitude_degrees.abs()),
+    ) as f32;
+    let polar_ice_closure =
+        polar_latitude * smoothstep_range(0.97, 1.0, f64::from(annual_cold)) as f32;
     let annual_temperature_at_elevation_c =
-        climate.annual_mean_low_temperature_c - 0.0065 * elevation_m.max(0.0);
-    let glacier_cover = (1.0
-        - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_at_elevation_c)) as f32)
-        * moisture_support;
+        climate.annual_mean_air_temperature_c - 0.0065 * elevation_m.max(0.0);
+    let solid_ice_cover =
+        1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_at_elevation_c)) as f32;
 
     SurfaceClimate {
         air_temperature_c,
         ground_temperature_c,
         water_temperature_c,
         seasonal_snow_cover,
-        sea_ice_cover,
-        glacier_cover,
+        polar_ice_closure,
+        solid_ice_cover,
     }
 }
 
@@ -372,8 +373,8 @@ pub fn procedural_atmosphere_primary(
     position_m: Vector,
 ) -> AtmospherePrimary {
     let pressure = procedural_pressure_sample(match_seed, tick, position_m);
-    let low_temperature_c = sample_low_temperature_c(match_seed, tick, position_m);
-    let upper_temperature_c = -20.0
+    let surface_air_temperature_c = sample_surface_air_temperature_c(match_seed, tick, position_m);
+    let upper_air_temperature_c = -20.0
         + 9.0
             * procedural_weather_noise(
                 match_seed,
@@ -385,20 +386,20 @@ pub fn procedural_atmosphere_primary(
             ) as f32;
     let sample_distance_m = 256.0;
     let temperature_gradient_c_per_m = Vector::new(
-        sample_low_temperature_c(
+        sample_surface_air_temperature_c(
             match_seed,
             tick,
             position_m + Vector::new(sample_distance_m, 0.0),
-        ) - sample_low_temperature_c(
+        ) - sample_surface_air_temperature_c(
             match_seed,
             tick,
             position_m - Vector::new(sample_distance_m, 0.0),
         ),
-        sample_low_temperature_c(
+        sample_surface_air_temperature_c(
             match_seed,
             tick,
             position_m + Vector::new(0.0, sample_distance_m),
-        ) - sample_low_temperature_c(
+        ) - sample_surface_air_temperature_c(
             match_seed,
             tick,
             position_m - Vector::new(0.0, sample_distance_m),
@@ -422,8 +423,8 @@ pub fn procedural_atmosphere_primary(
         pressure_gradient_hpa_per_m: pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
         synoptic_pressure_gradient_hpa_per_m: pressure.synoptic_gradient_m_s
             / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-        low_temperature_c,
-        upper_temperature_c,
+        surface_air_temperature_c,
+        upper_air_temperature_c,
         temperature_gradient_c_per_m,
         water_vapor_g_kg,
     }
@@ -440,12 +441,12 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
         );
     let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
     let saturation_capacity_g_kg =
-        3.5 * libm::exp(0.055 * f64::from(primary.low_temperature_c + 5.0)) as f32;
+        3.5 * libm::exp(0.055 * f64::from(primary.surface_air_temperature_c + 5.0)) as f32;
     let relative_humidity = (primary.water_vapor_g_kg / saturation_capacity_g_kg).clamp(0.0, 1.5);
     let instability = smoothstep_range(
         28.0,
         48.0,
-        f64::from(primary.low_temperature_c - primary.upper_temperature_c),
+        f64::from(primary.surface_air_temperature_c - primary.upper_air_temperature_c),
     ) as f32;
     let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
     let gradient_lift = smoothstep_range(
@@ -480,7 +481,7 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
     }
 }
 
-fn sample_low_temperature_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
+fn sample_surface_air_temperature_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
     16.0 + 13.0
         * procedural_weather_noise(
             match_seed,
@@ -530,25 +531,83 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     // the remap at the shore would turn navigable coastal slopes into abyss walls.
     let offshore_amount = smoothstep_range(4.0, 24.0, base_depth_m);
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
-    let terrain_elevation_m =
+    let mut terrain_elevation_m =
         -(base_depth_m + offshore_amount * (ocean_floor_depth_m - base_depth_m));
+    let land_detail_mask = smoothstep_range(1.0, 3.0, base_elevation_m);
+    if land_detail_mask > 0.0 {
+        let land_ruggedness = smoothstep_range(
+            -0.3,
+            0.3,
+            terrain_fractal_noise(match_seed ^ 0x94d0_49bb_1331_11eb, position_m, 2048.0, 3),
+        );
+        let land_detail =
+            terrain_fractal_noise(match_seed ^ 0x2545_f491_4f6c_dd1d, position_m, 32.0, 4);
+        terrain_elevation_m +=
+            0.8 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
+    }
     // Reef gates use the pre-remap coast so open-ocean depth does not change the
     // distribution of channels and emergent rocks.
     let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
         * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));
     let rock_mask = smoothstep_range(-2.0, -0.8, base_elevation_m)
-        * (1.0 - smoothstep_range(-0.4, -0.1, base_elevation_m));
+        * (1.0 - smoothstep_range(1.2, 2.0, base_elevation_m));
     if seabed_mask == 0.0 && rock_mask == 0.0 {
         return terrain_elevation_m as f32;
     }
+    let shoal = terrain_fractal_noise(
+        match_seed ^ 0xd1b5_4a32_d192_ed03,
+        position_m,
+        256.0,
+        TERRAIN_SHOAL_OCTAVE_COUNT,
+    );
+    let reef_ruggedness = smoothstep_range(
+        -0.25,
+        0.25,
+        terrain_fractal_noise(match_seed ^ 0xbf58_476d_1ce4_e5b9, position_m, 2048.0, 3),
+    );
+    let coastal_rock_amount = smoothstep_range(
+        -0.25,
+        0.35,
+        terrain_fractal_noise(match_seed ^ 0x9e37_79b9_7f4a_7c15, position_m, 1536.0, 3),
+    );
+    let coastal_rock_relief_amount = smoothstep_range(0.45, 0.65, coastal_rock_amount);
     let reef = terrain_fractal_noise(
         match_seed ^ 0x5899_65cc_7537_4cc3,
         position_m,
         32.0,
         TERRAIN_REEF_OCTAVE_COUNT,
     );
-    let reef_peak = smoothstep_range(0.65, 0.85, reef);
-    (terrain_elevation_m + 0.6 * seabed_mask * reef + 2.0 * rock_mask * reef_peak) as f32
+    let reef_peak = smoothstep_range(0.72, 0.90, reef);
+    let coastal_detail_mask = seabed_mask.max(rock_mask);
+    (terrain_elevation_m
+        + 0.25 * seabed_mask * shoal
+        + coastal_detail_mask * coastal_rock_relief_amount * (0.05 + 1.55 * reef_ruggedness) * reef
+        + 2.0 * rock_mask * reef_peak) as f32
+}
+
+pub fn procedural_solid_surface_elevation_m(
+    match_seed: u64,
+    position_m: Vector,
+    annual_mean_air_temperature_c: f32,
+    geographic_latitude_degrees: f32,
+) -> f32 {
+    let bedrock_elevation_m = procedural_terrain_elevation_m(match_seed, position_m);
+    let annual_temperature_c =
+        annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
+    let cold = 1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_c)) as f32;
+    let polar_latitude =
+        smoothstep_range(55.0, 75.0, f64::from(geographic_latitude_degrees.abs())) as f32;
+    let coastal_support = smoothstep_range(-4.0, 4.0, f64::from(bedrock_elevation_m)) as f32;
+    let ocean_support = smoothstep_range(-6_000.0, 4.0, f64::from(bedrock_elevation_m)) as f32;
+    let water_reach = cold * (0.25 + 0.75 * polar_latitude);
+    let cold_water_support = coastal_support + water_reach * (ocean_support - coastal_support);
+    let expansion_amount = cold * cold_water_support;
+    let polar_closure = polar_latitude * smoothstep_range(0.97, 1.0, f64::from(cold)) as f32;
+    let ice_amount = expansion_amount + polar_closure * (1.0 - expansion_amount);
+    let ice_surface_m =
+        (20.0 * cold + 0.25 * bedrock_elevation_m.max(0.0)).max(bedrock_elevation_m + 4.0 * cold);
+    bedrock_elevation_m
+        .max(bedrock_elevation_m + ice_amount * (ice_surface_m - bedrock_elevation_m))
 }
 
 pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {

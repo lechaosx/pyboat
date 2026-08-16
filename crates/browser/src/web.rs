@@ -233,7 +233,7 @@ impl Renderer {
                         primary.synoptic_pressure_gradient_hpa_per_m.x,
                         primary.synoptic_pressure_gradient_hpa_per_m.y,
                         14.0,
-                        primary.upper_temperature_c,
+                        primary.upper_air_temperature_c,
                     ]
                 }),
                 moisture_and_temperature_gradient: primary.map_or([0.0; 4], |primary| {
@@ -245,7 +245,7 @@ impl Renderer {
                     ]
                 }),
                 celestial_conditions: [
-                    celestial.solar_latitude_degrees,
+                    celestial.geographic_latitude_degrees,
                     celestial.season_phase,
                     celestial.day_phase,
                     celestial.moon_phase,
@@ -253,7 +253,7 @@ impl Renderer {
                 world_surface_conditions: [
                     tide.reference_range_m,
                     tide.phase_offset,
-                    primary.map_or(0.0, |primary| primary.low_temperature_c - 16.0),
+                    primary.map_or(0.0, |primary| primary.surface_air_temperature_c - 16.0),
                     0.0,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],

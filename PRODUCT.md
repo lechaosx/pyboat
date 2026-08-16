@@ -38,7 +38,10 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Coast character varies from beach-dominant to mixed and
   beachless. Gentle shores can form connected beaches, cliffs continue below the
   waterline, shallow shelves give way to deep ocean basins, and rare trenches are
-  possible.
+  possible. Sediment beds remain smooth except for sparse rock outcrops, while
+  rock substrate varies from flat to rugged. Outcrops may remain submerged or
+  cross the waterline onto sandy, rocky, or pebbly beaches, including beaches
+  over rocky shallows.
 - **[Explicit]** Depth affects play: shallow water can slow and ground boats,
   rocks can damage them, small boats commonly find reef passages unavailable to
   larger ships, and spawns begin in safe water. Grounding has static hold and
@@ -56,21 +59,27 @@ current playable behavior; this file does not track delivery status.
   Spring/neap range follows moon phase, while local response may sacrifice global
   basin accuracy. Tidal height changes authoritative depth, grounding,
   navigability, and shoreline position.
-- **[Explicit]** Seasonal ground and water temperature, snow, sea ice, glaciers,
-  and vegetation derive analytically without stored per-location history.
+- **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
+  solid ice derive analytically without stored per-location history.
+- **[Explicit]** Solid ice is land for boats. It blends into exposed land but
+  ends at water with a sharp, readable boundary. Persistent polar cold expands
+  it across the sea and can close the sea entirely.
 
 ## Presentation
 
 - **[Explicit]** Procedural graphics communicate physical scale and environment.
   This includes wave lines around islands and moving ships. Water transitions
   continuously with depth and distinctly at the moving shoreline; land has
-  recognizable beach, vegetation, rock, snow, and glacier materials; cold water
-  can show broken sea ice.
+  recognizable beach, vegetation, rock, snow, and ice materials. The same solid
+  ice surface covers land and polar water rather than using a decorative
+  floating-ice layer.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beach begins at the waterline where geology permits it, and
   temperate vegetation may change seasonally without making tropical vegetation
   do the same. Material boundaries remain sharp except for the grass-to-forest
-  blend; color variation stays within each material.
+  blend; color variation stays within each material. Gameplay-scale relief comes
+  from the authoritative heightfield; smaller material detail may refine lighting
+  without changing collision.
 - **[Explicit]** Shared weather is deterministic, but fine cloud geometry is a
   local visual. The viewport uses weather at the local boat, and clouds never
   conceal players or affect gameplay.
@@ -78,6 +87,8 @@ current playable behavior; this file does not track delivery status.
   substantial ordinary clear space. A visible low layer supplies detail and wind
   cues; a higher layer appears through shadows. Both respond to celestial light,
   while aerosol, moisture, rain, and cloud cover shape scene color and mood.
+- **[Explicit]** Cloud bodies read as volumetric layers rather than terrain-like
+  height fields.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
   length communicates speed. The product does not overlay a world grid or field
   of wind arrows.
@@ -125,6 +136,17 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,
   immediate slider dragging, eased track clicks, and independent or locked
   real-time multipliers for cloud evolution and world time.
+- **[Explicit]** The lab presents local solar time in hours, season as an
+  approximate real-numbered month, and lunar phase with named landmarks while
+  retaining normalized runtime phases internally.
+- **[Explicit]** Underwater bottom visibility follows two-way exponential light
+  attenuation. The lab exposes attenuation length and bottom-light contribution
+  without changing physical terrain, depth, or grounding.
+- **[Explicit]** The lab orders physical inputs as location and time, climate,
+  current weather, and local tide. It keeps those inputs open by default and
+  separates visibility switches and advanced tuning into collapsed groups. Each
+  group carries one world, model, shader, or debug classification rather than
+  repeating classifications on individual controls.
 - **[Explicit]** Named weather and seasonal scenarios represent characteristic
   regimes, not generic intensity steps. A deterministic headless mode renders the
   same scenarios and emits images with readable condition summaries.

@@ -73,6 +73,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Tide contributes to authoritative and predicted depth as well as the
   rendered shoreline.
+- **[Explicit]** Solid ice extends the authoritative solid-surface field used for
+  depth and grounding. WGSL mirrors that surface, blends it into land, and
+  preserves a sharp water-facing boundary. Persistent polar cold expands this
+  surface through progressively deeper water and can close the sea.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only at
   positions where boats require it.
@@ -81,8 +85,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Gameplay and the procedural playground share production shader
   functions. Gameplay binds scene state and fixed production tuning; the lab adds
   live tuning and diagnostic state without adding that interface to production.
-- **[Explicit]** Celestial state is a fictional latitude with normalized day,
-  season, and moon phases. Rendering-grade astronomy derives light and tide;
+- **[Explicit]** Celestial state includes geographic latitude with normalized
+  day, season, and moon phases. Rendering-grade astronomy derives light and tide;
   ambient illumination remains separate from spatial direct-light shadows. Cloud
   shadow displacement follows physical layer height and light direction rather
   than a readability-compressed offset.

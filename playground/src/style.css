@@ -160,6 +160,9 @@ details {
 }
 
 summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.65rem 0.72rem;
   color: #c5d8d7;
   cursor: pointer;
@@ -167,6 +170,9 @@ summary {
   font-weight: 700;
   list-style-position: outside;
 }
+
+.control-group.advanced { border-color: rgb(173 142 232 / 24%); }
+.control-group.visibility { border-color: rgb(229 120 136 / 24%); }
 
 details > .control,
 details > .text-control,
@@ -301,6 +307,13 @@ select {
 .range-value::-webkit-outer-spin-button {
   margin: 0;
   appearance: none;
+}
+
+output.range-context {
+  grid-column: 2 / 4;
+  color: var(--muted);
+  font-size: 0.62rem;
+  text-align: left;
 }
 
 output {

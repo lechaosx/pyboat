@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_low_temperature_c, derive_weather, dinghy_parameters,
+    climate_surface, current_air_temperature_c, derive_weather, dinghy_parameters,
     match_environment, procedural_atmosphere_primary, procedural_cloud_cover,
-    procedural_match_environment, procedural_terrain_elevation_m,
-    procedural_unsheltered_wind_velocity_m_s, procedural_water_depth_m, procedural_weather,
-    tide_height_m,
+    procedural_match_environment, procedural_solid_surface_elevation_m,
+    procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
+    procedural_water_depth_m, procedural_weather, tide_height_m,
 };
 use rapier2d::prelude::Vector;
 
@@ -211,8 +211,8 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        low_temperature_c: 20.0,
-        upper_temperature_c: -15.0,
+        surface_air_temperature_c: 20.0,
+        upper_air_temperature_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
     };
@@ -236,8 +236,8 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
-        low_temperature_c: 24.0,
-        upper_temperature_c: -15.0,
+        surface_air_temperature_c: 24.0,
+        upper_air_temperature_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 10.0,
     };
@@ -269,8 +269,8 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        low_temperature_c: 28.0,
-        upper_temperature_c: -20.0,
+        surface_air_temperature_c: 28.0,
+        upper_air_temperature_c: -20.0,
         temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
         water_vapor_g_kg: 4.0,
     };
@@ -299,20 +299,20 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
         procedural_atmosphere_primary(seed, tick, position_m)
     );
     assert!(primary.pressure_hpa.is_finite());
-    assert!((-45.0..=45.0).contains(&primary.low_temperature_c));
-    assert!((-80.0..=10.0).contains(&primary.upper_temperature_c));
+    assert!((-45.0..=45.0).contains(&primary.surface_air_temperature_c));
+    assert!((-80.0..=10.0).contains(&primary.upper_air_temperature_c));
     assert!((0.0..=25.0).contains(&primary.water_vapor_g_kg));
 
     let nearby = procedural_atmosphere_primary(seed, tick + 1, position_m + Vector::new(1.0, 0.0));
     assert!((nearby.pressure_hpa - primary.pressure_hpa).abs() < 0.1);
-    assert!((nearby.low_temperature_c - primary.low_temperature_c).abs() < 0.1);
+    assert!((nearby.surface_air_temperature_c - primary.surface_air_temperature_c).abs() < 0.1);
     assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
 }
 
 #[test]
 fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
     let noon = celestial_lighting(CelestialConditions {
-        solar_latitude_degrees: 0.0,
+        geographic_latitude_degrees: 0.0,
         season_phase: 0.0,
         day_phase: 0.5,
         moon_phase: 0.0,
@@ -320,7 +320,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
     let midnight = celestial_lighting(CelestialConditions {
         day_phase: 0.0,
         ..CelestialConditions {
-            solar_latitude_degrees: 0.0,
+            geographic_latitude_degrees: 0.0,
             season_phase: 0.0,
             day_phase: 0.5,
             moon_phase: 0.0,
@@ -336,7 +336,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
 #[test]
 fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     let full_moon_midnight = celestial_lighting(CelestialConditions {
-        solar_latitude_degrees: 0.0,
+        geographic_latitude_degrees: 0.0,
         season_phase: 0.0,
         day_phase: 0.0,
         moon_phase: 0.5,
@@ -344,7 +344,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     let new_moon_midnight = celestial_lighting(CelestialConditions {
         moon_phase: 0.0,
         ..CelestialConditions {
-            solar_latitude_degrees: 0.0,
+            geographic_latitude_degrees: 0.0,
             season_phase: 0.0,
             day_phase: 0.0,
             moon_phase: 0.5,
@@ -360,7 +360,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 #[test]
 fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let summer = celestial_lighting(CelestialConditions {
-        solar_latitude_degrees: 55.0,
+        geographic_latitude_degrees: 55.0,
         season_phase: 0.25,
         day_phase: 0.5,
         moon_phase: 0.25,
@@ -368,7 +368,7 @@ fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let winter = celestial_lighting(CelestialConditions {
         season_phase: 0.75,
         ..CelestialConditions {
-            solar_latitude_degrees: 55.0,
+            geographic_latitude_degrees: 55.0,
             season_phase: 0.25,
             day_phase: 0.5,
             moon_phase: 0.25,
@@ -382,41 +382,41 @@ fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
 #[test]
 fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
     let climate = ClimateConditions {
-        annual_mean_low_temperature_c: 15.0,
+        annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 8.0,
     };
-    let northern_summer = current_low_temperature_c(
+    let northern_summer = current_air_temperature_c(
         climate,
         CelestialConditions {
-            solar_latitude_degrees: 55.0,
+            geographic_latitude_degrees: 55.0,
             season_phase: 0.34,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
-    let northern_winter = current_low_temperature_c(
+    let northern_winter = current_air_temperature_c(
         climate,
         CelestialConditions {
-            solar_latitude_degrees: 55.0,
+            geographic_latitude_degrees: 55.0,
             season_phase: 0.84,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
-    let southern_summer = current_low_temperature_c(
+    let southern_summer = current_air_temperature_c(
         climate,
         CelestialConditions {
-            solar_latitude_degrees: -55.0,
+            geographic_latitude_degrees: -55.0,
             season_phase: 0.84,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
     );
-    let summer_before_dawn = current_low_temperature_c(
+    let summer_before_dawn = current_air_temperature_c(
         climate,
         CelestialConditions {
-            solar_latitude_degrees: 55.0,
+            geographic_latitude_degrees: 55.0,
             season_phase: 0.34,
             day_phase: 0.125,
             moon_phase: 0.0,
@@ -429,17 +429,17 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
 }
 
 #[test]
-fn solar_latitude_suppresses_equatorial_temperature_seasons() {
+fn geographic_latitude_suppresses_equatorial_temperature_seasons() {
     let climate = ClimateConditions {
-        annual_mean_low_temperature_c: 15.0,
+        annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 0.0,
     };
-    let temperature = |solar_latitude_degrees, season_phase| {
-        current_low_temperature_c(
+    let temperature = |geographic_latitude_degrees, season_phase| {
+        current_air_temperature_c(
             climate,
             CelestialConditions {
-                solar_latitude_degrees,
+                geographic_latitude_degrees,
                 season_phase,
                 day_phase: 0.5,
                 moon_phase: 0.0,
@@ -453,9 +453,31 @@ fn solar_latitude_suppresses_equatorial_temperature_seasons() {
 }
 
 #[test]
+fn seasonal_temperature_is_continuous_across_the_equator() {
+    let climate = ClimateConditions {
+        annual_mean_air_temperature_c: 15.0,
+        seasonal_temperature_range_c: 20.0,
+        diurnal_temperature_range_c: 0.0,
+    };
+    let temperature = |geographic_latitude_degrees| {
+        current_air_temperature_c(
+            climate,
+            CelestialConditions {
+                geographic_latitude_degrees,
+                season_phase: 0.34,
+                day_phase: 0.5,
+                moon_phase: 0.0,
+            },
+        )
+    };
+
+    assert!((temperature(1.0) - temperature(-1.0)).abs() < 0.05);
+}
+
+#[test]
 fn aligned_sun_and_moon_produce_a_larger_tidal_range_than_quarter_phase() {
     let conditions = |day_phase, moon_phase| CelestialConditions {
-        solar_latitude_degrees: 45.0,
+        geographic_latitude_degrees: 45.0,
         season_phase: 0.25,
         day_phase,
         moon_phase,
@@ -475,15 +497,15 @@ fn aligned_sun_and_moon_produce_a_larger_tidal_range_than_quarter_phase() {
 }
 
 #[test]
-fn stateless_surface_climate_distinguishes_seasonal_snow_sea_ice_and_glaciers() {
+fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
     let cold = climate_surface(
         ClimateConditions {
-            annual_mean_low_temperature_c: -8.0,
+            annual_mean_air_temperature_c: -8.0,
             seasonal_temperature_range_c: 18.0,
             diurnal_temperature_range_c: 4.0,
         },
         CelestialConditions {
-            solar_latitude_degrees: 65.0,
+            geographic_latitude_degrees: 75.0,
             season_phase: 0.84,
             day_phase: 0.5,
             moon_phase: 0.0,
@@ -493,12 +515,12 @@ fn stateless_surface_climate_distinguishes_seasonal_snow_sea_ice_and_glaciers() 
     );
     let warm = climate_surface(
         ClimateConditions {
-            annual_mean_low_temperature_c: 22.0,
+            annual_mean_air_temperature_c: 22.0,
             seasonal_temperature_range_c: 8.0,
             diurnal_temperature_range_c: 4.0,
         },
         CelestialConditions {
-            solar_latitude_degrees: 15.0,
+            geographic_latitude_degrees: 15.0,
             season_phase: 0.34,
             day_phase: 0.5,
             moon_phase: 0.0,
@@ -508,11 +530,30 @@ fn stateless_surface_climate_distinguishes_seasonal_snow_sea_ice_and_glaciers() 
     );
 
     assert!(cold.seasonal_snow_cover > 0.8);
-    assert!(cold.sea_ice_cover > 0.8);
-    assert!(cold.glacier_cover > 0.8);
+    assert!(cold.polar_ice_closure > 0.8);
+    assert!(cold.solid_ice_cover > 0.8);
     assert!(warm.seasonal_snow_cover < 0.05);
-    assert!(warm.sea_ice_cover < 0.05);
-    assert!(warm.glacier_cover < 0.05);
+    assert!(warm.polar_ice_closure < 0.05);
+    assert!(warm.solid_ice_cover < 0.05);
+}
+
+#[test]
+fn perennial_ice_does_not_follow_instantaneous_water_vapor() {
+    let climate = ClimateConditions {
+        annual_mean_air_temperature_c: -8.0,
+        seasonal_temperature_range_c: 18.0,
+        diurnal_temperature_range_c: 4.0,
+    };
+    let conditions = CelestialConditions {
+        geographic_latitude_degrees: 75.0,
+        season_phase: 0.84,
+        day_phase: 0.5,
+        moon_phase: 0.0,
+    };
+    let dry = climate_surface(climate, conditions, 0.0, 600.0);
+    let humid = climate_surface(climate, conditions, 25.0, 600.0);
+
+    assert_eq!(dry.solid_ice_cover, humid.solid_ice_cover);
 }
 
 #[test]
@@ -528,6 +569,46 @@ fn astronomical_tide_changes_authoritative_water_depth() {
         procedural_match_environment(seed, six_hours_in_ticks, position_m).water_depth_m;
 
     assert!((high_tide_depth - low_tide_depth).abs() > 0.1);
+}
+
+#[test]
+fn solid_ice_extends_land_across_coastal_water() {
+    let seed = 0x5eed;
+    let position_m = (-128..=128)
+        .flat_map(|x| (-128..=128).map(move |y| Vector::new(x as f32 * 32.0, y as f32 * 32.0)))
+        .find(|position_m| {
+            (-12.0..=-8.0).contains(&procedural_terrain_elevation_m(seed, *position_m))
+        })
+        .expect("representative region should contain a shallow coast");
+    let bedrock_elevation_m = procedural_terrain_elevation_m(seed, position_m);
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -3.0, 75.0);
+
+    assert!(bedrock_elevation_m < 0.0);
+    assert!(ice_elevation_m > 0.0);
+}
+
+#[test]
+fn extreme_cold_closes_deep_water_with_solid_ice() {
+    let seed = 0x5eed;
+    let position_m = (-32..=32)
+        .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
+        .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -1_000.0)
+        .expect("representative region should contain deep ocean");
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -8.0, 75.0);
+
+    assert!(ice_elevation_m > 0.0);
+}
+
+#[test]
+fn midlatitude_cold_does_not_close_the_deep_ocean() {
+    let seed = 0x5eed;
+    let position_m = (-32..=32)
+        .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
+        .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -1_000.0)
+        .expect("representative region should contain deep ocean");
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -5.0, 45.0);
+
+    assert!(ice_elevation_m < 0.0);
 }
 
 #[test]
@@ -699,6 +780,10 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     let mut maximum_slope: f32 = 0.0;
     let mut relief_32_m = Vec::new();
     let mut relief_128_m = Vec::new();
+    let mut underwater_relief_16_m = Vec::new();
+    let mut intertidal_relief_16_m = Vec::new();
+    let mut beach_relief_16_m = Vec::new();
+    let mut shallow_patch_relief_16_m_p90 = Vec::new();
 
     for seed in [0, 1, 0x5eed, 0xdead_beef] {
         for patch_x in -24..=24 {
@@ -707,6 +792,7 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                 let mut has_navigable_water = false;
                 let mut deep_water = [[false; 8]; 8];
                 let mut shallow_water_samples = 0;
+                let mut shallow_patch_relief_16_m = Vec::new();
                 for sample_x in 0..8 {
                     for sample_y in 0..8 {
                         let position_m = Vector::new(
@@ -714,6 +800,29 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                             patch_y as f32 * 256.0 + (sample_y as f32 - 3.5) * 32.0,
                         );
                         let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                        let nearby_underwater_elevation_m = procedural_terrain_elevation_m(
+                            seed,
+                            position_m + Vector::new(16.0, 0.0),
+                        );
+                        if (-4.0..=-1.4).contains(&elevation_m)
+                            && (-4.0..=-1.4).contains(&nearby_underwater_elevation_m)
+                        {
+                            let relief_m = (nearby_underwater_elevation_m - elevation_m).abs();
+                            underwater_relief_16_m.push(relief_m);
+                            shallow_patch_relief_16_m.push(relief_m);
+                        }
+                        if (-1.3..=0.0).contains(&elevation_m)
+                            && (-1.3..=0.0).contains(&nearby_underwater_elevation_m)
+                        {
+                            intertidal_relief_16_m
+                                .push((nearby_underwater_elevation_m - elevation_m).abs());
+                        }
+                        if (0.0..=1.5).contains(&elevation_m)
+                            && (0.0..=1.5).contains(&nearby_underwater_elevation_m)
+                        {
+                            beach_relief_16_m
+                                .push((nearby_underwater_elevation_m - elevation_m).abs());
+                        }
                         for (distance_m, relief) in
                             [(32.0, &mut relief_32_m), (128.0, &mut relief_128_m)]
                         {
@@ -752,6 +861,11 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                         }
                     }
                 }
+                if shallow_patch_relief_16_m.len() >= 8 {
+                    shallow_patch_relief_16_m.sort_by(f32::total_cmp);
+                    shallow_patch_relief_16_m_p90
+                        .push(shallow_patch_relief_16_m[shallow_patch_relief_16_m.len() * 9 / 10]);
+                }
                 if has_outcrop && has_navigable_water && shallow_water_samples >= 8 {
                     mixed_coastal_patches += 1;
                     let has_deep_access = (0..8).any(|across| {
@@ -771,11 +885,38 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     assert!(maximum_slope > 0.15, "maximum slope was {maximum_slope}");
     relief_32_m.sort_by(f32::total_cmp);
     relief_128_m.sort_by(f32::total_cmp);
+    underwater_relief_16_m.sort_by(f32::total_cmp);
+    intertidal_relief_16_m.sort_by(f32::total_cmp);
+    beach_relief_16_m.sort_by(f32::total_cmp);
+    shallow_patch_relief_16_m_p90.sort_by(f32::total_cmp);
     let relief_32_m_p90 = relief_32_m[relief_32_m.len() * 9 / 10];
     let relief_128_m_p90 = relief_128_m[relief_128_m.len() * 9 / 10];
     assert!(
         relief_32_m_p90 <= 1.94,
         "32 m relief p90 was {relief_32_m_p90} m"
+    );
+    let underwater_relief_16_m_p90 = underwater_relief_16_m[underwater_relief_16_m.len() * 9 / 10];
+    assert!(
+        underwater_relief_16_m_p90 >= 0.5,
+        "16 m underwater relief p90 lost detail at {underwater_relief_16_m_p90} m"
+    );
+    let intertidal_relief_16_m_p90 = intertidal_relief_16_m[intertidal_relief_16_m.len() * 9 / 10];
+    assert!(
+        intertidal_relief_16_m_p90 >= 0.5,
+        "16 m intertidal relief p90 lost detail at {intertidal_relief_16_m_p90} m"
+    );
+    let beach_relief_16_m_p90 = beach_relief_16_m[beach_relief_16_m.len() * 9 / 10];
+    assert!(
+        beach_relief_16_m_p90 >= 0.5,
+        "16 m beach relief p90 lost detail at {beach_relief_16_m_p90} m"
+    );
+    let calm_shallow_patch_relief_m =
+        shallow_patch_relief_16_m_p90[shallow_patch_relief_16_m_p90.len() / 10];
+    let rugged_shallow_patch_relief_m =
+        shallow_patch_relief_16_m_p90[shallow_patch_relief_16_m_p90.len() * 9 / 10];
+    assert!(
+        rugged_shallow_patch_relief_m >= 3.3 * calm_shallow_patch_relief_m,
+        "shallow relief only varied from {calm_shallow_patch_relief_m} to {rugged_shallow_patch_relief_m} m"
     );
     assert!(
         relief_128_m_p90 <= 2.92,
@@ -819,6 +960,41 @@ fn procedural_shorelines_do_not_fragment_at_reef_scale() {
     assert!(
         shoreline_crossings <= coastal_transects * 2,
         "{shoreline_crossings} crossings fragmented {coastal_transects} coastal transects"
+    );
+}
+
+#[test]
+fn procedural_gentle_land_retains_zoomed_surface_relief() {
+    let mut relief_8_m = Vec::new();
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -64..=64 {
+            for y in -64..=64 {
+                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+                let left_32_m =
+                    procedural_terrain_elevation_m(seed, position_m - Vector::new(32.0, 0.0));
+                let right_32_m =
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(32.0, 0.0));
+                if (2.0..=100.0).contains(&left_32_m)
+                    && (2.0..=100.0).contains(&right_32_m)
+                    && (right_32_m - left_32_m).abs() <= 1.0
+                {
+                    let left_4_m =
+                        procedural_terrain_elevation_m(seed, position_m - Vector::new(4.0, 0.0));
+                    let right_4_m =
+                        procedural_terrain_elevation_m(seed, position_m + Vector::new(4.0, 0.0));
+                    relief_8_m.push((right_4_m - left_4_m).abs());
+                }
+            }
+        }
+    }
+
+    assert!(relief_8_m.len() >= 100);
+    relief_8_m.sort_by(f32::total_cmp);
+    let relief_8_m_p90 = relief_8_m[relief_8_m.len() * 9 / 10];
+    assert!(
+        relief_8_m_p90 >= 0.48,
+        "8 m gentle-land relief p90 lost detail at {relief_8_m_p90} m"
     );
 }
 

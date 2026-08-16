@@ -17,6 +17,7 @@ struct SceneTuning {
     cloud_rendering: vec4<f32>,
     cloud_behavior: vec4<f32>,
     terrain_tuning: vec4<f32>,
+    water_tuning: vec4<f32>,
 };
 
 struct PlaygroundUniforms {
@@ -25,6 +26,7 @@ struct PlaygroundUniforms {
     cloud_rendering: vec4<f32>,
     cloud_behavior: vec4<f32>,
     terrain_tuning: vec4<f32>,
+    water_tuning: vec4<f32>,
     layer_visibility: vec4<f32>,
     landscape_visibility: vec4<f32>,
     wind_model: vec4<f32>,
@@ -54,6 +56,8 @@ override CLOUD_MOTION_IN_MASK: f32 = 0.65;
 override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
+override WATER_ATTENUATION_LENGTH_M: f32 = 12.0;
+override WATER_BOTTOM_LIGHT_CONTRIBUTION: f32 = 0.55;
 
 // Entry points initialize private state so shared rendering functions work with
 // either production overrides or the playground tuning uniform.
@@ -96,39 +100,33 @@ fn upper_wind_m_s() -> vec2<f32> {
             * rotate_left(scene.moisture_and_temperature_gradient.yz);
 }
 
-fn current_low_temperature_c() -> f32 {
-    let hemisphere = select(1.0, -1.0, scene.celestial_conditions.x < 0.0);
-    let latitude_seasonality = 0.15
-        + 0.85 * smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
+fn current_air_temperature_c() -> f32 {
     let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.09);
     let diurnal_phase = TAU * (scene.celestial_conditions.z - 0.625);
     return scene.synoptic_pressure_and_temperature.z
-        + 0.5 * scene.pressure.w * latitude_seasonality * hemisphere * sin(seasonal_phase)
+        + 0.5 * scene.pressure.w * climate_seasonal_latitude_factor() * sin(seasonal_phase)
         + 0.5 * scene.moisture_and_temperature_gradient.w * cos(diurnal_phase)
         + scene.world_surface_conditions.z;
 }
 
-fn climate_latitude_seasonality() -> f32 {
-    return 0.15 + 0.85 * smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
-}
-
-fn climate_hemisphere() -> f32 {
-    return select(1.0, -1.0, scene.celestial_conditions.x < 0.0);
+fn climate_seasonal_latitude_factor() -> f32 {
+    let magnitude = smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
+    return select(magnitude, -magnitude, scene.celestial_conditions.x < 0.0);
 }
 
 fn ground_temperature_c(elevation_m: f32) -> f32 {
     let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.13);
     let sea_level_temperature = scene.synoptic_pressure_and_temperature.z
-        + 0.42 * scene.pressure.w * climate_latitude_seasonality()
-            * climate_hemisphere() * sin(seasonal_phase);
+        + 0.42 * scene.pressure.w * climate_seasonal_latitude_factor()
+            * sin(seasonal_phase);
     return sea_level_temperature - 0.0065 * max(elevation_m, 0.0);
 }
 
 fn water_temperature_c() -> f32 {
     let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.175);
     return scene.synoptic_pressure_and_temperature.z
-        + 0.28 * scene.pressure.w * climate_latitude_seasonality()
-            * climate_hemisphere() * sin(seasonal_phase);
+        + 0.28 * scene.pressure.w * climate_seasonal_latitude_factor()
+            * sin(seasonal_phase);
 }
 
 fn climate_moisture_support() -> f32 {
@@ -140,17 +138,6 @@ fn seasonal_snow_cover(elevation_m: f32) -> f32 {
     return cold * (0.35 + 0.65 * climate_moisture_support());
 }
 
-fn sea_ice_cover() -> f32 {
-    return 1.0 - smoothstep(-2.2, 1.0, water_temperature_c());
-}
-
-fn glacier_cover(elevation_m: f32) -> f32 {
-    let annual_temperature = scene.synoptic_pressure_and_temperature.z
-        - 0.0065 * max(elevation_m, 0.0);
-    return (1.0 - smoothstep(-5.0, 1.0, annual_temperature))
-        * climate_moisture_support();
-}
-
 fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
     let annual_temperature = scene.synoptic_pressure_and_temperature.z
         - 0.0065 * max(elevation_m, 0.0);
@@ -159,7 +146,8 @@ fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
     let cooling = smoothstep(
         0.10,
         0.80,
-        -climate_hemisphere() * cos(TAU * (scene.celestial_conditions.y - 0.13)),
+        -climate_seasonal_latitude_factor()
+            * cos(TAU * (scene.celestial_conditions.y - 0.13)),
     );
     let temperature = ground_temperature_c(elevation_m);
     let mild = smoothstep(-2.0, 8.0, temperature)
@@ -181,8 +169,8 @@ fn tide_height_m() -> f32 {
 }
 
 fn relative_humidity() -> f32 {
-    let low_temperature_c = current_low_temperature_c();
-    let saturation_capacity_g_kg = 3.5 * exp(0.055 * (low_temperature_c + 5.0));
+    let air_temperature_c = current_air_temperature_c();
+    let saturation_capacity_g_kg = 3.5 * exp(0.055 * (air_temperature_c + 5.0));
     return clamp(scene.moisture_and_temperature_gradient.x / saturation_capacity_g_kg, 0.0, 1.5);
 }
 
@@ -190,7 +178,7 @@ fn atmospheric_instability() -> f32 {
     return smoothstep(
         28.0,
         48.0,
-        current_low_temperature_c() - scene.synoptic_pressure_and_temperature.w,
+        current_air_temperature_c() - scene.synoptic_pressure_and_temperature.w,
     );
 }
 
@@ -284,6 +272,12 @@ fn production_tuning() -> SceneTuning {
             TERRAIN_CLIFF_SLOPE,
             0.0,
         ),
+        vec4<f32>(
+            WATER_ATTENUATION_LENGTH_M,
+            WATER_BOTTOM_LIGHT_CONTRIBUTION,
+            0.0,
+            0.0,
+        ),
     );
 }
 
@@ -294,6 +288,7 @@ fn playground_scene_tuning() -> SceneTuning {
         playground.cloud_rendering,
         playground.cloud_behavior,
         playground.terrain_tuning,
+        playground.water_tuning,
     );
 }
 
@@ -397,6 +392,11 @@ struct TerrainNoiseSample {
 struct TerrainSample {
     elevation_m: f32,
     gradient: vec2<f32>,
+    material_elevation_m: f32,
+    material_gradient: vec2<f32>,
+    ice_amount: f32,
+    coastal_rock_amount: f32,
+    coastal_outcrop_amount: f32,
 };
 
 fn terrain_value_noise(
@@ -609,16 +609,26 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         1.0,
         0.75 * convective_amount(),
     );
-    let billow_sign = select(-1.0, 1.0, raw_detail.value >= 0.0);
+    let billow_rounding = 0.05;
+    let rounded_magnitude = (
+        sqrt(raw_detail.value * raw_detail.value + billow_rounding * billow_rounding)
+            - billow_rounding
+    ) / (sqrt(1.0 + billow_rounding * billow_rounding) - billow_rounding);
+    let rounded_detail_value = 2.0 * rounded_magnitude - 1.0;
+    let rounded_detail_gradient = 2.0 * raw_detail.value * raw_detail.gradient
+        / (
+            sqrt(raw_detail.value * raw_detail.value + billow_rounding * billow_rounding)
+                * (sqrt(1.0 + billow_rounding * billow_rounding) - billow_rounding)
+        );
     var detail: TerrainNoiseSample;
     detail.value = mix(
         raw_detail.value,
-        2.0 * abs(raw_detail.value) - 1.0,
+        rounded_detail_value + 0.10,
         detail_character,
     );
     detail.gradient = mix(
         raw_detail.gradient,
-        2.0 * billow_sign * raw_detail.gradient,
+        rounded_detail_gradient,
         detail_character,
     );
     let detail_contrast = max(tuning.cloud_detail.z, 0.01);
@@ -728,7 +738,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         * (1.0 + 0.80 * rain);
     sample.height_m = height_m;
     sample.darkness = density
-        * (0.05 + 0.18 * stratiform_amount() + 1.10 * rain);
+        * (0.05 + 0.18 * stratiform_amount() + 0.18 * rain);
     sample.relief = height_m / height_scale_m;
     sample.gradient = height_gradient;
     sample.detail_amount = detail_amount;
@@ -910,6 +920,78 @@ fn terrain_smoothstep_sample(
     return sample;
 }
 
+fn solid_ice_sample(terrain: TerrainSample) -> TerrainSample {
+    var bedrock: TerrainNoiseSample;
+    bedrock.value = terrain.elevation_m;
+    bedrock.gradient = terrain.gradient;
+    var positive_bedrock: TerrainNoiseSample;
+    positive_bedrock.value = max(bedrock.value, 0.0);
+    positive_bedrock.gradient = select(vec2<f32>(0.0), bedrock.gradient, bedrock.value > 0.0);
+    var annual_temperature: TerrainNoiseSample;
+    annual_temperature.value = scene.synoptic_pressure_and_temperature.z
+        - 0.0065 * positive_bedrock.value;
+    annual_temperature.gradient = -0.0065 * positive_bedrock.gradient;
+    let warm = terrain_smoothstep_sample(-5.0, 1.0, annual_temperature);
+    var cold: TerrainNoiseSample;
+    cold.value = 1.0 - warm.value;
+    cold.gradient = -warm.gradient;
+    let polar_latitude = smoothstep(
+        55.0,
+        75.0,
+        abs(scene.celestial_conditions.x),
+    );
+    let water_reach_scale = 0.25 + 0.75 * polar_latitude;
+    var water_reach: TerrainNoiseSample;
+    water_reach.value = cold.value * water_reach_scale;
+    water_reach.gradient = cold.gradient * water_reach_scale;
+    let coastal_support = terrain_smoothstep_sample(-4.0, 4.0, bedrock);
+    let ocean_support = terrain_smoothstep_sample(-6000.0, 4.0, bedrock);
+    var cold_water_support: TerrainNoiseSample;
+    cold_water_support.value = mix(
+        coastal_support.value,
+        ocean_support.value,
+        water_reach.value,
+    );
+    cold_water_support.gradient = mix(
+        coastal_support.gradient,
+        ocean_support.gradient,
+        water_reach.value,
+    ) + water_reach.gradient * (ocean_support.value - coastal_support.value);
+    var expansion: TerrainNoiseSample;
+    expansion.value = cold.value * cold_water_support.value;
+    expansion.gradient = cold.gradient * cold_water_support.value
+        + cold_water_support.gradient * cold.value;
+    var polar_closure = terrain_smoothstep_sample(0.97, 1.0, cold);
+    polar_closure.value *= polar_latitude;
+    polar_closure.gradient *= polar_latitude;
+    let amount = mix(expansion.value, 1.0, polar_closure.value);
+    let amount_gradient = expansion.gradient * (1.0 - polar_closure.value)
+        + polar_closure.gradient * (1.0 - expansion.value);
+    let broad_surface = 20.0 * cold.value + 0.25 * positive_bedrock.value;
+    let broad_gradient = 20.0 * cold.gradient + 0.25 * positive_bedrock.gradient;
+    let local_surface = bedrock.value + 4.0 * cold.value;
+    let local_gradient = bedrock.gradient + 4.0 * cold.gradient;
+    let ice_surface = max(broad_surface, local_surface);
+    let ice_gradient = select(
+        local_gradient,
+        broad_gradient,
+        broad_surface >= local_surface,
+    );
+    let candidate_elevation = mix(bedrock.value, ice_surface, amount);
+    let candidate_gradient = mix(bedrock.gradient, ice_gradient, amount)
+        + amount_gradient * (ice_surface - bedrock.value);
+    let thickness = max(candidate_elevation - bedrock.value, 0.0);
+    var surface = terrain;
+    surface.elevation_m = max(bedrock.value, candidate_elevation);
+    surface.gradient = select(
+        bedrock.gradient,
+        candidate_gradient,
+        candidate_elevation > bedrock.value,
+    );
+    surface.ice_amount = smoothstep(0.1, 2.0, thickness);
+    return surface;
+}
+
 fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     // Keep the density composition synchronized with
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
@@ -965,89 +1047,224 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var terrain: TerrainSample;
     terrain.elevation_m = -deepened_depth_m;
     terrain.gradient = -deepened_depth_gradient;
+    terrain.material_elevation_m = terrain.elevation_m;
+    terrain.material_gradient = terrain.gradient;
+    terrain.ice_amount = 0.0;
+    terrain.coastal_rock_amount = 0.0;
+    terrain.coastal_outcrop_amount = 0.0;
+    let land_detail_mask = terrain_smoothstep_sample(1.0, 3.0, base);
+    if land_detail_mask.value > 0.0 {
+        let land_ruggedness_noise = terrain_fractal_sample(
+            vec2<u32>(0x133111ebu, 0x94d049bbu),
+            terrain_position_m,
+            2048.0,
+            3u,
+        );
+        let land_ruggedness = terrain_smoothstep_sample(
+            -0.3,
+            0.3,
+            land_ruggedness_noise,
+        );
+        let land_detail = terrain_fractal_sample(
+            vec2<u32>(0x4f6cdd1du, 0x2545f491u),
+            terrain_position_m,
+            32.0,
+            4u,
+        );
+        let land_detail_amount = 0.08 + 0.92 * land_ruggedness.value;
+        terrain.elevation_m += 0.8 * land_detail_mask.value
+            * land_detail_amount * land_detail.value * landscape_visibility.x;
+        terrain.gradient += 0.8 * landscape_visibility.x * (
+            land_detail_mask.gradient * land_detail_amount * land_detail.value
+                + land_ruggedness.gradient * 0.92
+                    * land_detail_mask.value * land_detail.value
+                + land_detail.gradient * land_detail_mask.value * land_detail_amount
+        );
+    }
     let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, base);
     let seabed_shore_rise = terrain_smoothstep_sample(-0.5, -0.1, base);
     let seabed_shore_gate_value = 1.0 - seabed_shore_rise.value;
     let seabed_mask_value = seabed_deep_gate.value * seabed_shore_gate_value;
     let rock_deep_gate = terrain_smoothstep_sample(-2.0, -0.8, base);
-    let rock_shore_rise = terrain_smoothstep_sample(-0.4, -0.1, base);
+    let rock_shore_rise = terrain_smoothstep_sample(1.2, 2.0, base);
     let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
     let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
     if seabed_mask_value == 0.0 && rock_mask_value == 0.0 {
         terrain.gradient /= tuning.terrain_tuning.x;
-        return terrain;
+        terrain.material_gradient /= tuning.terrain_tuning.x;
+        return solid_ice_sample(terrain);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
     let rock_mask_gradient = rock_deep_gate.gradient * rock_shore_gate_value
         - rock_shore_rise.gradient * rock_deep_gate.value;
+    let shoal = terrain_fractal_sample(
+        vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+        terrain_position_m,
+        256.0,
+        3u,
+    );
+    let reef_ruggedness_noise = terrain_fractal_sample(
+        vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+        terrain_position_m,
+        2048.0,
+        3u,
+    );
+    let reef_ruggedness = terrain_smoothstep_sample(-0.25, 0.25, reef_ruggedness_noise);
+    let coastal_substrate = terrain_fractal_sample(
+        vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+        terrain_position_m,
+        1536.0,
+        3u,
+    );
+    let coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
+    let coastal_rock_amount = coastal_rock.value;
+    let coastal_rock_relief = terrain_smoothstep_sample(0.45, 0.65, coastal_rock);
+    let reef_detail_amount = coastal_rock_relief.value
+        * (0.05 + 1.55 * reef_ruggedness.value);
     let reef = terrain_fractal_sample(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         terrain_position_m,
         32.0,
         4u,
     );
-    let reef_peak = terrain_smoothstep_sample(0.65, 0.85, reef);
-    terrain.elevation_m += 0.6 * seabed_mask_value * reef.value
+    let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
+    var coastal_detail_mask_value = seabed_mask_value;
+    var coastal_detail_mask_gradient = seabed_mask_gradient;
+    if rock_mask_value > seabed_mask_value {
+        coastal_detail_mask_value = rock_mask_value;
+        coastal_detail_mask_gradient = rock_mask_gradient;
+    }
+    terrain.elevation_m += 0.25 * seabed_mask_value * shoal.value
         * landscape_visibility.x
+        + coastal_detail_mask_value * reef_detail_amount * reef.value
+            * landscape_visibility.x
         + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x;
-    terrain.gradient += landscape_visibility.x * 0.6 * (
-        seabed_mask_gradient * reef.value + reef.gradient * seabed_mask_value
+    terrain.gradient += landscape_visibility.x * 0.25 * (
+        seabed_mask_gradient * shoal.value + shoal.gradient * seabed_mask_value
+    ) + landscape_visibility.x * (
+        coastal_detail_mask_gradient * reef_detail_amount * reef.value
+            + coastal_rock_relief.gradient
+                * (0.05 + 1.55 * reef_ruggedness.value)
+                * coastal_detail_mask_value * reef.value
+            + reef_ruggedness.gradient * 1.55
+                * coastal_rock_relief.value * coastal_detail_mask_value * reef.value
+            + reef.gradient * coastal_detail_mask_value * reef_detail_amount
     ) + landscape_visibility.x * 2.0 * (
         rock_mask_gradient * reef_peak.value + reef_peak.gradient * rock_mask_value
     );
+    terrain.coastal_rock_amount = landscape_visibility.x
+        * coastal_detail_mask_value * coastal_rock_amount;
+    terrain.coastal_outcrop_amount = landscape_visibility.x
+        * rock_mask_value * reef_peak.value;
     terrain.gradient /= tuning.terrain_tuning.x;
-    return terrain;
+    terrain.material_gradient /= tuning.terrain_tuning.x;
+    return solid_ice_sample(terrain);
 }
 
 fn terrain_rock_color(
     position_m: vec2<f32>,
     terrain_gradient: vec2<f32>,
+    material_gradient: vec2<f32>,
     elevation_m: f32,
 ) -> vec3<f32> {
-    let rock_texture = terrain_fractal_sample(
+    let rock_geology = terrain_fractal_sample(
         vec2<u32>(0x1f83d9abu, 0x5be0cd19u),
         position_m,
-        48.0,
-        4u,
-    );
-    let fine_texture = terrain_fractal_sample(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        384.0,
+        3u,
+    ).value;
+    let surface_height = terrain_fractal_sample(
+        vec2<u32>(0x243f6a88u, 0x85a308d3u),
         position_m,
-        12.0,
+        18.0,
         3u,
     );
+    let micro_height = terrain_fractal_sample(
+        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        position_m,
+        2.5,
+        3u,
+    );
+    let physical_ruggedness = smoothstep(
+        0.01,
+        0.08,
+        length(terrain_gradient - material_gradient),
+    );
+    let surface_height_m = mix(0.15, 0.70, physical_ruggedness);
+    let micro_height_m = mix(0.06, 0.22, physical_ruggedness);
     let light_direction = primary_light_direction();
-    let terrain_normal = normalize(vec3<f32>(-terrain_gradient, 1.0));
-    let terrain_light = smoothstep(-0.15, 0.88, dot(terrain_normal, light_direction));
-    let texture_normal = normalize(vec3<f32>(
-        -terrain_gradient - 1.8 * rock_texture.gradient - 0.35 * fine_texture.gradient,
+    let terrain_normal = normalize(vec3<f32>(
+        -terrain_gradient
+            - surface_height_m * surface_height.gradient
+            - micro_height_m * micro_height.gradient,
         1.0,
     ));
-    let texture_light = clamp(dot(texture_normal, light_direction), 0.0, 1.0);
-    let texture_grade = clamp(
-        0.48 + landscape_visibility.z * (0.16 * rock_texture.value + 0.07 * fine_texture.value),
+    let terrain_light = smoothstep(-0.15, 1.0, dot(terrain_normal, light_direction));
+    let geology_grade = clamp(
+        0.5 + 0.55 * landscape_visibility.z * rock_geology,
         0.0,
         1.0,
     );
     let rock_color = mix(
         vec3<f32>(0.25, 0.23, 0.20),
         vec3<f32>(0.49, 0.46, 0.40),
-        0.18 * smoothstep(20.0, 240.0, elevation_m) + 0.82 * texture_grade,
+        0.18 * smoothstep(20.0, 240.0, elevation_m) + 0.82 * geology_grade,
     );
+    let sky_light = mix(0.86, 1.0, smoothstep(0.65, 1.0, terrain_normal.z));
     let lighting_amount = landscape_visibility.w
         * clamp(direct_light_amount(), 0.0, 1.0);
-    return rock_color
-        * mix(1.0, mix(0.48, 1.20, terrain_light), lighting_amount)
-        * mix(1.0, mix(0.94, 1.06, texture_light), lighting_amount);
+    return rock_color * sky_light
+        * mix(1.0, mix(0.52, 1.20, terrain_light), lighting_amount);
+}
+
+fn ice_color(
+    position_m: vec2<f32>,
+    terrain_gradient: vec2<f32>,
+) -> vec3<f32> {
+    let surface = terrain_fractal_sample(
+        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
+        position_m,
+        96.0,
+        4u,
+    ).value;
+    let micro_height = terrain_fractal_sample(
+        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        position_m,
+        4.0,
+        2u,
+    );
+    let fine = terrain_fractal_sample(
+        vec2<u32>(0x13198a2eu, 0x03707344u),
+        position_m,
+        72.0,
+        3u,
+    ).value;
+    let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
+    let terrain_normal = normalize(vec3<f32>(
+        -terrain_gradient - 0.18 * micro_height.gradient,
+        1.0,
+    ));
+    let hill_light = clamp(dot(terrain_normal, primary_light_direction()), 0.0, 1.0);
+    let lighting_amount = landscape_visibility.w
+        * clamp(direct_light_amount(), 0.0, 1.0);
+    return mix(
+        vec3<f32>(0.56, 0.75, 0.80),
+        vec3<f32>(0.94, 0.97, 0.96),
+        clamp(0.45 + 0.35 * surface_grade + 0.22 * fine, 0.0, 1.0),
+    ) * mix(1.0, mix(0.76, 1.10, hill_light), lighting_amount);
 }
 
 fn terrain_color(
     position_m: vec2<f32>,
     elevation_m: f32,
     terrain_gradient: vec2<f32>,
+    material_elevation_m: f32,
+    material_gradient: vec2<f32>,
+    coastal_rock_amount: f32,
+    coastal_outcrop_amount: f32,
 ) -> vec3<f32> {
-    let slope = length(terrain_gradient);
+    let slope = length(material_gradient);
     let water_height_m = tide_height_m();
     if elevation_m < water_height_m {
         let depth_m = water_height_m - elevation_m;
@@ -1059,25 +1276,46 @@ fn terrain_color(
             open_water_color,
             smoothstep(0.0, 1.0, depth_m),
         );
-        let open_water = mix(water_color, deep_water_color, smoothstep(1.0, 4.0, depth_m));
-        let ice_climate = climate_visibility.z * sea_ice_cover();
-        if ice_climate <= 0.001 {
-            return open_water;
+        let open_water = mix(
+            water_color,
+            deep_water_color,
+            smoothstep(1.0, 4.0, depth_m),
+        );
+        let bottom_transmittance = exp(
+            -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
+        );
+        let fine_relief_amount = smoothstep(
+            0.015,
+            0.12,
+            length(terrain_gradient - material_gradient),
+        );
+        let submerged_rock_visibility = smoothstep(
+            0.45,
+            0.70,
+            max(coastal_rock_amount, coastal_outcrop_amount),
+        )
+            * fine_relief_amount * bottom_transmittance;
+        if submerged_rock_visibility > 0.001 {
+            let bottom_normal = normalize(vec3<f32>(-terrain_gradient, 1.0));
+            let bottom_light = smoothstep(
+                -0.15,
+                0.88,
+                dot(bottom_normal, primary_light_direction()),
+            );
+            let bottom_lighting_amount = landscape_visibility.w
+                * clamp(direct_light_amount(), 0.0, 1.0);
+            let bottom_light_grade = mix(
+                1.0,
+                mix(0.72, 1.20, bottom_light),
+                bottom_lighting_amount,
+            );
+            return open_water * mix(
+                1.0,
+                bottom_light_grade,
+                tuning.water_tuning.y * submerged_rock_visibility,
+            );
         }
-        let ice_noise = terrain_fractal_sample(
-            vec2<u32>(0x243f6a88u, 0x85a308d3u), position_m, 192.0, 2u,
-        ).value;
-        let ice_amount = ice_climate * smoothstep(
-            -0.04,
-            0.08,
-            ice_noise + 0.35 * (ice_climate - 0.5),
-        );
-        let ice_color = mix(
-            vec3<f32>(0.52, 0.67, 0.70),
-            vec3<f32>(0.88, 0.93, 0.92),
-            0.55 + 0.20 * ice_noise,
-        );
-        return mix(open_water, ice_color, ice_amount);
+        return open_water;
     }
 
     let surface = terrain_fractal_sample(
@@ -1086,52 +1324,80 @@ fn terrain_color(
         96.0,
         4u,
     ).value;
-    let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
+    let micro_height = terrain_fractal_sample(
+        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        position_m,
+        2.5,
+        3u,
+    );
+    let surface_grade = clamp(
+        0.5 + landscape_visibility.z
+            * (0.40 * surface + 0.22 * micro_height.value),
+        0.0,
+        1.0,
+    );
     let vegetation = terrain_fractal_sample(
         vec2<u32>(0x510e527fu, 0x9b05688cu),
         position_m,
         1536.0,
         4u,
     ).value;
-    let terrain_normal = normalize(vec3<f32>(-terrain_gradient, 1.0));
     let light_direction = primary_light_direction();
-    let hill_light = clamp(dot(terrain_normal, light_direction), 0.0, 1.0);
     let lighting_amount = landscape_visibility.w
         * clamp(direct_light_amount(), 0.0, 1.0);
-    let hill_grade = mix(1.0, mix(0.62, 1.18, hill_light), lighting_amount);
-    let altitude_exposure = smoothstep(50.0, 200.0, elevation_m);
+    let altitude_exposure = smoothstep(50.0, 200.0, material_elevation_m);
     let rock_slope_threshold = tuning.terrain_tuning.z * mix(3.0, 0.8, altitude_exposure);
-    let glacier_amount = smoothstep(
-        0.32,
-        0.78,
-        climate_visibility.y * glacier_cover(elevation_m) + 0.16 * surface,
-    );
-    if glacier_amount > 0.5 {
-        return mix(
-            vec3<f32>(0.48, 0.69, 0.74),
-            vec3<f32>(0.88, 0.94, 0.94),
-            0.45 + 0.35 * surface_grade,
-        ) * mix(1.0, mix(0.76, 1.10, hill_light), lighting_amount);
-    }
     let snow_amount = smoothstep(
         0.30,
         0.75,
-        climate_visibility.x * seasonal_snow_cover(elevation_m) + 0.18 * surface,
+        climate_visibility.x * seasonal_snow_cover(material_elevation_m) + 0.18 * surface,
     );
     if snow_amount > 0.5 {
+        let snow_normal = normalize(vec3<f32>(
+            -terrain_gradient - 0.22 * micro_height.gradient,
+            1.0,
+        ));
+        let snow_light = clamp(dot(snow_normal, light_direction), 0.0, 1.0);
         return mix(
             vec3<f32>(0.72, 0.76, 0.77),
             vec3<f32>(0.96, 0.97, 0.96),
             0.55 + 0.20 * surface_grade,
-        ) * mix(1.0, mix(0.78, 1.08, hill_light), lighting_amount);
+        ) * mix(1.0, mix(0.78, 1.08, snow_light), lighting_amount);
     }
     if slope >= rock_slope_threshold {
-        return terrain_rock_color(position_m, terrain_gradient, elevation_m);
+        return terrain_rock_color(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
+    }
+    if coastal_outcrop_amount > 0.25 {
+        return terrain_rock_color(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
     }
 
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
-    if elevation_m >= alpine_rock_line_m {
-        return terrain_rock_color(position_m, terrain_gradient, elevation_m);
+    if material_elevation_m >= alpine_rock_line_m {
+        return terrain_rock_color(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
+    }
+
+    if coastal_rock_amount > 0.45 {
+        return terrain_rock_color(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
     }
 
     let beach_geology = terrain_fractal_sample(
@@ -1140,16 +1406,41 @@ fn terrain_color(
         768.0,
         2u,
     ).value;
-    let beach_top_m = mix(0.08, 1.4, smoothstep(-0.30, 0.45, beach_geology));
-    if elevation_m < beach_top_m {
-        return mix(
-            vec3<f32>(0.67, 0.56, 0.34),
-            vec3<f32>(0.84, 0.76, 0.50),
-            0.35 + 0.30 * surface_grade,
-        ) * mix(1.0, mix(0.86, 1.06, hill_light), lighting_amount);
+    let beach_sediment = smoothstep(-0.35, 0.45, beach_geology);
+    let beach_bottom_m = mix(-0.15, -4.0, beach_sediment);
+    let beach_top_m = mix(-0.15, 1.4, beach_sediment);
+    let beach_micro_height_m = mix(
+        0.42,
+        0.10,
+        smoothstep(0.25, 0.85, beach_sediment),
+    );
+    let beach_normal = normalize(vec3<f32>(
+        -terrain_gradient - beach_micro_height_m * micro_height.gradient,
+        1.0,
+    ));
+    let beach_light = clamp(dot(beach_normal, light_direction), 0.0, 1.0);
+    let beach_color = mix(
+        vec3<f32>(0.67, 0.56, 0.34),
+        vec3<f32>(0.84, 0.76, 0.50),
+        0.35 + 0.30 * surface_grade,
+    ) * mix(1.0, mix(0.78, 1.10, beach_light), lighting_amount);
+    if material_elevation_m > beach_bottom_m && material_elevation_m < beach_top_m {
+        if beach_sediment > 0.5 {
+            return beach_color;
+        }
+        return terrain_rock_color(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
     }
 
-    let tree_line = 1.0 - smoothstep(150.0, 250.0, elevation_m);
+    if material_elevation_m < 0.15 {
+        return 0.82 * beach_color;
+    }
+
+    let tree_line = 1.0 - smoothstep(150.0, 250.0, material_elevation_m);
     let forest_amount = smoothstep(-0.18, 0.35, vegetation)
         * tree_line
         * (1.0 - smoothstep(0.04, 0.08, slope));
@@ -1158,30 +1449,44 @@ fn terrain_color(
         position_m,
         56.0,
         3u,
-    ).value;
-    let canopy_cluster = smoothstep(-0.22, 0.38, canopy_detail + 0.32 * vegetation);
+    );
+    let canopy_cluster = smoothstep(-0.22, 0.38, canopy_detail.value + 0.32 * vegetation);
+    let grass_normal = normalize(vec3<f32>(
+        -terrain_gradient - 0.45 * micro_height.gradient,
+        1.0,
+    ));
+    let grass_light = clamp(dot(grass_normal, light_direction), 0.0, 1.0);
+    let grass_grade = mix(1.0, mix(0.54, 1.23, grass_light), lighting_amount);
+    let canopy_normal = normalize(vec3<f32>(
+        -terrain_gradient - 3.5 * canopy_detail.gradient
+            - 0.24 * micro_height.gradient,
+        1.0,
+    ));
+    let canopy_light = clamp(dot(canopy_normal, light_direction), 0.0, 1.0);
+    let forest_grade = mix(1.0, mix(0.62, 1.18, canopy_light), lighting_amount);
     var grass_color = mix(
         vec3<f32>(0.09, 0.24, 0.10),
         vec3<f32>(0.32, 0.38, 0.17),
         0.20 * surface_grade
             + 0.20 * (0.5 + 0.5 * vegetation)
-            + 0.60 * smoothstep(8.0, 150.0, elevation_m),
-    ) * hill_grade;
+            + 0.18 * (0.5 + 0.5 * micro_height.value)
+            + 0.42 * smoothstep(8.0, 150.0, material_elevation_m),
+    ) * grass_grade;
     var forest_color = mix(
         vec3<f32>(0.03, 0.12, 0.06),
         vec3<f32>(0.09, 0.27, 0.11),
-        0.22 + 0.40 * canopy_cluster,
-    ) * hill_grade;
-    let autumn = climate_visibility.w * autumn_vegetation_amount(elevation_m);
-    let dormancy = climate_visibility.w * vegetation_dormancy(elevation_m);
-    grass_color = mix(grass_color, vec3<f32>(0.52, 0.28, 0.04) * hill_grade, 0.62 * autumn);
+        0.18 + 0.34 * canopy_cluster + 0.18 * (0.5 + 0.5 * micro_height.value),
+    ) * forest_grade;
+    let autumn = climate_visibility.w * autumn_vegetation_amount(material_elevation_m);
+    let dormancy = climate_visibility.w * vegetation_dormancy(material_elevation_m);
+    grass_color = mix(grass_color, vec3<f32>(0.52, 0.28, 0.04) * grass_grade, 0.62 * autumn);
     forest_color = mix(
         forest_color,
-        vec3<f32>(0.62, 0.18, 0.025) * hill_grade,
+        vec3<f32>(0.62, 0.18, 0.025) * forest_grade,
         0.80 * autumn * (0.45 + 0.55 * canopy_cluster),
     );
-    grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15) * hill_grade, 0.42 * dormancy);
-    forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10) * hill_grade, 0.32 * dormancy);
+    grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15) * grass_grade, 0.42 * dormancy);
+    forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10) * forest_grade, 0.32 * dormancy);
     return mix(
         grass_color,
         forest_color,
@@ -1195,8 +1500,11 @@ fn cloud_color(
     upper_transmittance: f32,
 ) -> vec3<f32> {
     let density = cloud_sample.density;
+    let relief_gradient = tuning.cloud_rendering.w * cloud_sample.gradient;
+    let limited_gradient = relief_gradient
+        / (1.0 + length(relief_gradient) / 0.25);
     let cloud_normal = normalize(vec3<f32>(
-        -tuning.cloud_rendering.w * cloud_sample.gradient,
+        -limited_gradient,
         1.0,
     ));
     let direct_facing = max(dot(cloud_normal, primary_light_direction()), 0.0);
@@ -1299,7 +1607,18 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             input.world_position_m,
             terrain.elevation_m,
             terrain.gradient,
+            terrain.material_elevation_m,
+            terrain.material_gradient,
+            terrain.coastal_rock_amount,
+            terrain.coastal_outcrop_amount,
         );
+        if terrain.elevation_m >= tide_height_m() {
+            surface_color = mix(
+                surface_color,
+                ice_color(input.world_position_m, terrain.gradient),
+                terrain.ice_amount,
+            );
+        }
         surface_color = cloud_shadow_color(
             surface_color,
             input.world_position_m,
@@ -1490,16 +1809,13 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);
     }
     if mode == 41u {
-        return vec4<f32>(scalar_debug_color(glacier_cover(terrain.elevation_m)), 1.0);
+        return vec4<f32>(scalar_debug_color(terrain.ice_amount), 1.0);
     }
     if mode == 42u {
         return vec4<f32>(scalar_debug_color(autumn_vegetation_amount(terrain.elevation_m)), 1.0);
     }
     if mode == 48u {
         return vec4<f32>(signed_debug_color(tide_height_m() / 2.0), 1.0);
-    }
-    if mode == 49u {
-        return vec4<f32>(scalar_debug_color(sea_ice_cover()), 1.0);
     }
     return final_scene_color(input);
 }
