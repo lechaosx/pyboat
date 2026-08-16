@@ -54,6 +54,9 @@ type State = {
   cliffSlope: number;
   waterAttenuationLength: number;
   bottomLightContribution: number;
+  landformReliefStrength: number;
+  landformShadowStrength: number;
+  landformShadowReach: number;
   lowCloudEnabled: number;
   lowCloudVisible: number;
   lowCloudShadow: number;
@@ -172,6 +175,9 @@ const defaults: State = {
   cliffSlope: 0.08,
   waterAttenuationLength: 12,
   bottomLightContribution: 0.55,
+  landformReliefStrength: 1,
+  landformShadowStrength: 0.7,
+  landformShadowReach: 320,
   lowCloudEnabled: 1,
   lowCloudVisible: 1,
   lowCloudShadow: 1,
@@ -343,6 +349,13 @@ const groups: ControlGroup[] = [
     ],
   },
   {
+    domain: "landscape", category: "Advanced tuning", layer: "Landform lighting", kind: "SHADER", level: "advanced", controls: [
+      range("landformReliefStrength", "Relief strength", 0, 2, 0.05),
+      range("landformShadowStrength", "Cast-shadow strength", 0, 1, 0.05),
+      range("landformShadowReach", "Shadow reach · m", 32, 1024, 16),
+    ],
+  },
+  {
     domain: "landscape", category: "Visibility", layer: "Surface composition", kind: "DEBUG", level: "visibility", controls: [
       toggle("landscapeCompositionEnabled", "Landscape composition"),
       toggle("coastalReliefVisible", "Coastal reef relief"),
@@ -460,6 +473,9 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       terrainScale: defaults.terrainScale,
       elevationScale: defaults.elevationScale,
       cliffSlope: defaults.cliffSlope,
+      landformReliefStrength: defaults.landformReliefStrength,
+      landformShadowStrength: defaults.landformShadowStrength,
+      landformShadowReach: defaults.landformShadowReach,
     },
   },
   "landscape:Visibility": {
@@ -1059,7 +1075,7 @@ const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x2
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
 const sceneFloats = new Float32Array(32);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-const tuningFloats = new Float32Array(44);
+const tuningFloats = new Float32Array(48);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1332,30 +1348,36 @@ function writeUniforms(): void {
     state.waterAttenuationLength, state.bottomLightContribution, 0, 0,
   ], 20);
   tuningFloats.set([
+    state.landformReliefStrength,
+    state.landformShadowStrength,
+    state.landformShadowReach,
+    0,
+  ], 24);
+  tuningFloats.set([
     state.lowCloudEnabled * state.lowCloudVisible,
     state.lowCloudEnabled * state.lowCloudShadow,
     state.upperCloudEnabled * state.upperCloudShadow,
     state.lowCloudEnabled * state.upperCloudEnabled * state.upperShadowOnLowCloud,
-  ], 24);
+  ], 28);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.coastalReliefVisible,
     state.landscapeCompositionEnabled * state.vegetationVisible,
     state.landscapeCompositionEnabled * state.surfaceTextureVisible,
     state.landscapeCompositionEnabled * state.landscapeLightingVisible,
-  ], 28);
+  ], 32);
   tuningFloats.set([
     state.pressureCirculationEnabled * state.pressureWindScale,
     state.crossIsobarEnabled * state.crossIsobarScale,
     state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
-  ], 32);
+  ], 36);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.seasonalSnowVisible,
     0,
     0,
     state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
-  ], 36);
-  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 40);
+  ], 40);
+  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 44);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 

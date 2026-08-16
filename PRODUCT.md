@@ -79,7 +79,10 @@ current playable behavior; this file does not track delivery status.
   do the same. Material boundaries remain sharp except for the grass-to-forest
   blend; color variation stays within each material. Gameplay-scale relief comes
   from the authoritative heightfield; smaller material detail may refine lighting
-  without changing collision.
+  without changing collision. Heightfield relief lighting and bounded cast
+  shadows add depth without displacing shorelines or changing collision. Visual
+  material structure is calibrated for boat-scale zoom and does not expose the
+  procedural sampling lattice.
 - **[Explicit]** Shared weather is deterministic, but fine cloud geometry is a
   local visual. The viewport uses weather at the local boat, and clouds never
   conceal players or affect gameplay.
@@ -142,6 +145,10 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Underwater bottom visibility follows two-way exponential light
   attenuation. The lab exposes attenuation length and bottom-light contribution
   without changing physical terrain, depth, or grounding.
+- **[Explicit]** Landform lighting follows the astronomical sun or moon angle,
+  including flat relief under directly overhead light. The lab exposes relief
+  strength, cast-shadow strength, and shadow reach while production retains a
+  moderate heightfield-lighting preset.
 - **[Explicit]** The lab orders physical inputs as location and time, climate,
   current weather, and local tide. It keeps those inputs open by default and
   separates visibility switches and advanced tuning into collapsed groups. Each
