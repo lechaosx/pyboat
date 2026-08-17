@@ -6,15 +6,20 @@
   [MAINTAINERS.md](MAINTAINERS.md) before planning or implementing changes.
 - Follow the documentation ownership map in
   [README.md](README.md#project-guide).
-- Update a decision record in the same change that introduces, changes, or
-  removes the decision.
+- Transform the canonical decision passage in the same change that introduces,
+  changes, or removes a decision. Revise it in place so it positively describes
+  the current snapshot; do not append migration history or frame the decision
+  against removed or otherwise irrelevant alternatives. Retain a contrast only
+  when rejecting that alternative is enduring rationale needed to apply the
+  decision correctly.
 - Mark a decision **[Explicit]** when the user requests or clearly endorses it,
   including when that endorsement happens after an agent first selected it. Mark
   agent-selected decisions **[Implicit]** until then; passive acceptance alone
   does not reclassify them.
 - Keep unresolved matters as open questions rather than decisions.
 - Keep delivery status out of decision records. `README.md` is the sole concise
-  summary of current playable behavior.
+  summary of current playable behavior; transform its existing summary instead
+  of accumulating parallel status passages.
 - Apply a staleness test before adding documentation: identify its canonical
   owner and the event that requires an update. If correctness depends on
   periodically comparing prose with code, and the prose adds no durable decision,
