@@ -1071,6 +1071,9 @@ fn solid_ice_sample(terrain: TerrainSample) -> TerrainSample {
     annual_temperature.value = scene.synoptic_pressure_and_temperature.z
         - 0.0065 * positive_bedrock.value;
     annual_temperature.gradient = -0.0065 * positive_bedrock.gradient;
+    if annual_temperature.value >= 1.0 {
+        return terrain;
+    }
     let warm = terrain_smoothstep_sample(-5.0, 1.0, annual_temperature);
     var cold: TerrainNoiseSample;
     cold.value = 1.0 - warm.value;
@@ -1469,13 +1472,7 @@ fn terrain_rock_surface(
     );
 }
 
-fn ice_surface(position_m: vec2<f32>) -> TerrainSurface {
-    let surface = material_fractal_sample(
-        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
-        position_m,
-        96.0,
-        4u,
-    ).value;
+fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
     let micro_height = material_fractal_sample(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
@@ -1508,9 +1505,10 @@ fn terrain_surface(
     material_gradient: vec2<f32>,
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
+    water_height_m: f32,
+    surface: f32,
 ) -> TerrainSurface {
     let slope = length(material_gradient);
-    let water_height_m = tide_height_m();
     if elevation_m < water_height_m {
         let depth_m = water_height_m - elevation_m;
         let shallow_color = vec3<f32>(0.12, 0.42, 0.5);
@@ -1567,12 +1565,6 @@ fn terrain_surface(
         return TerrainSurface(open_water, vec2<f32>(0.0), 1.0);
     }
 
-    let surface = material_fractal_sample(
-        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
-        position_m,
-        96.0,
-        4u,
-    ).value;
     let micro_height = material_fractal_sample(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
@@ -1850,6 +1842,17 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
     var surface_color = input.color;
     if input.is_terrain > 0.5 {
         let terrain = procedural_terrain_sample(input.world_position_m);
+        let water_height_m = tide_height_m();
+        let is_land = terrain.elevation_m >= water_height_m;
+        var land_surface = 0.0;
+        if is_land {
+            land_surface = material_fractal_sample(
+                vec2<u32>(0x6a09e667u, 0xbb67ae85u),
+                input.world_position_m,
+                96.0,
+                4u,
+            ).value;
+        }
         var surface = terrain_surface(
             input.world_position_m,
             terrain.elevation_m,
@@ -1858,25 +1861,29 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             terrain.material_gradient,
             terrain.coastal_rock_amount,
             terrain.coastal_outcrop_amount,
+            water_height_m,
+            land_surface,
         );
         var surface_light_grade = vec2<f32>(1.0);
-        if terrain.elevation_m >= tide_height_m() {
-            let ice = ice_surface(input.world_position_m);
-            surface.color = mix(
-                surface.color,
-                ice.color,
-                terrain.ice_amount,
-            );
-            surface.detail_gradient = mix(
-                surface.detail_gradient,
-                ice.detail_gradient,
-                terrain.ice_amount,
-            );
-            surface.roughness = mix(
-                surface.roughness,
-                ice.roughness,
-                terrain.ice_amount,
-            );
+        if is_land {
+            if terrain.ice_amount > 0.0 {
+                let ice = ice_surface(input.world_position_m, land_surface);
+                surface.color = mix(
+                    surface.color,
+                    ice.color,
+                    terrain.ice_amount,
+                );
+                surface.detail_gradient = mix(
+                    surface.detail_gradient,
+                    ice.detail_gradient,
+                    terrain.ice_amount,
+                );
+                surface.roughness = mix(
+                    surface.roughness,
+                    ice.roughness,
+                    terrain.ice_amount,
+                );
+            }
             surface_light_grade = landform_light_grade(
                 3.0 * terrain.gradient + surface.detail_gradient,
                 surface.roughness,
@@ -1884,7 +1891,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         }
         surface_color = surface.color;
         var terrain_shadow_transmittance = 1.0;
-        if terrain.elevation_m >= tide_height_m() {
+        if is_land {
             terrain_shadow_transmittance = landform_shadow_transmittance(
                 input.world_position_m,
                 terrain.elevation_m,
@@ -1893,7 +1900,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         surface_color = cloud_shadow_color(
             surface_color,
             input.world_position_m,
-            max(terrain.elevation_m, tide_height_m()),
+            max(terrain.elevation_m, water_height_m),
             terrain_shadow_transmittance,
             surface_light_grade,
         );
