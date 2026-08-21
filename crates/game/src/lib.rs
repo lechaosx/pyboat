@@ -913,7 +913,7 @@ fn terrain_simplex_fractal_noise(
     let mut amplitude_sum = 0.0;
     for octave in 0..octave_count {
         let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
-        value += amplitude * terrain_simplex_noise_sample(octave_seed, position_m, wavelength_m).0;
+        value += amplitude * terrain_simplex_noise(octave_seed, position_m, wavelength_m);
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
@@ -921,11 +921,11 @@ fn terrain_simplex_fractal_noise(
     value / amplitude_sum
 }
 
-fn terrain_simplex_noise_sample(
+fn terrain_simplex_noise(
     field_seed: u64,
     position_m: Vector,
     wavelength_m: f32,
-) -> (f32, Vector) {
+) -> f32 {
     const SKEW: f32 = 0.366_025_42;
     const UNSKEW: f32 = 0.211_324_87;
     const NORMALIZATION: f32 = 70.0;
@@ -949,7 +949,6 @@ fn terrain_simplex_noise_sample(
     let last_offset = first_offset - Vector::splat(1.0 - 2.0 * UNSKEW);
 
     let mut value = 0.0;
-    let mut gradient = Vector::ZERO;
     for (lattice_x, lattice_y, offset) in [
         (cell_x, cell_y, first_offset),
         (cell_x + middle_x, cell_y + middle_y, middle_offset),
@@ -962,16 +961,11 @@ fn terrain_simplex_noise_sample(
         let lattice_gradient = terrain_simplex_lattice_gradient(field_seed, lattice_x, lattice_y);
         let ramp = lattice_gradient.dot(offset);
         let attenuation_squared = attenuation * attenuation;
-        let attenuation_cubed = attenuation_squared * attenuation;
         let attenuation_fourth = attenuation_squared * attenuation_squared;
         value += attenuation_fourth * ramp;
-        gradient += attenuation_fourth * lattice_gradient - 8.0 * attenuation_cubed * ramp * offset;
     }
 
-    (
-        NORMALIZATION * value,
-        gradient * (NORMALIZATION / wavelength_m),
-    )
+    NORMALIZATION * value
 }
 
 fn terrain_simplex_lattice_gradient(field_seed: u64, x: i32, y: i32) -> Vector {
