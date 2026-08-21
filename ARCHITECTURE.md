@@ -123,8 +123,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   it uniformly across the viewport. WGSL recomputes short derivations rather than
   accepting derived-weather or integrated cloud-offset inputs.
 - **[Explicit]** Each procedural cloud layer uses one coherent three-dimensional
-  space-time gradient field: horizontal coordinates translate with the layer's
-  wind while the time coordinate evolves its shape. The field never rotates.
+  space-time simplex-gradient field: horizontal coordinates translate with the
+  layer's wind while the time coordinate evolves its shape. The field never
+  rotates. Four simplex contributions per octave avoid the cubic lattice and
+  halve the corner count of trilinear gradient noise. Low-cloud spectra extend
+  to roughly eight centimetres and upper-cloud spectra to roughly 16 metres;
+  unresolved octaves fade against the fragment's world-space pixel footprint.
   Low cloud follows complete unsheltered surface wind, while upper cloud follows
   broad synoptic wind; their seeds and transport remain independent. The visible
   low field is decorative, is capped at one-quarter wisp coverage, may cast local

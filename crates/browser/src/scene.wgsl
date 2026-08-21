@@ -72,7 +72,7 @@ var<private> sun_light_amount: f32;
 var<private> moon_light_amount: f32;
 var<private> ambient_light_color: vec3<f32>;
 var<private> sunset_scattering: f32;
-var<private> material_pixel_footprint_m: f32;
+var<private> visual_pixel_footprint_m: f32;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -114,7 +114,7 @@ const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(
     vec2<f32>(0.9238795, -0.3826834),
     vec2<f32>(0.9914449, -0.1305262),
 );
-const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 16>(
+const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 12>(
     vec3<f32>(0.70710677, 0.70710677, 0.0),
     vec3<f32>(-0.70710677, 0.70710677, 0.0),
     vec3<f32>(0.70710677, -0.70710677, 0.0),
@@ -126,10 +126,6 @@ const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 16>(
     vec3<f32>(0.0, 0.70710677, 0.70710677),
     vec3<f32>(0.0, -0.70710677, 0.70710677),
     vec3<f32>(0.0, 0.70710677, -0.70710677),
-    vec3<f32>(0.0, -0.70710677, -0.70710677),
-    vec3<f32>(0.70710677, 0.70710677, 0.0),
-    vec3<f32>(0.0, -0.70710677, 0.70710677),
-    vec3<f32>(-0.70710677, 0.70710677, 0.0),
     vec3<f32>(0.0, -0.70710677, -0.70710677),
 );
 
@@ -719,8 +715,8 @@ fn material_fractal_sample(
     var wavelength_m = initial_wavelength_m;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_visibility = smoothstep(
-            material_pixel_footprint_m,
-            2.0 * material_pixel_footprint_m,
+            visual_pixel_footprint_m,
+            2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
         if octave_visibility > 0.0 {
@@ -772,63 +768,84 @@ fn cloud_lattice_gradient(seed: vec2<u32>, x: i32, y: i32, z: i32) -> vec3<f32> 
             signed_u64(z),
             vec2<u32>(0x94d049bbu, 0x133111ebu),
         );
-    return CLOUD_GRADIENT_DIRECTIONS[terrain_hash(key).x & 15u];
+    return CLOUD_GRADIENT_DIRECTIONS[terrain_hash(key).x % 12u];
 }
 
-fn cloud_gradient_noise(
+fn cloud_simplex_noise(
     seed: vec2<u32>,
     position_m: vec2<f32>,
     wavelength_m: f32,
     evolution_coordinate: f32,
 ) -> TerrainNoiseSample {
+    let skew_factor = 0.33333334;
+    let unskew_factor = 0.16666667;
     let scaled_position = vec3<f32>(position_m / wavelength_m, evolution_coordinate);
-    let cell = vec3<i32>(floor(scaled_position));
-    let fraction = scaled_position - vec3<f32>(cell);
-    let blend = fraction * fraction * fraction
-        * (fraction * (fraction * 6.0 - 15.0) + 10.0);
-    let blend_derivative = 30.0 * fraction.xy * fraction.xy
-        * (fraction.xy * (fraction.xy - 2.0) + 1.0) / wavelength_m;
-
-    let gradient_000 = cloud_lattice_gradient(seed, cell.x, cell.y, cell.z);
-    let gradient_100 = cloud_lattice_gradient(seed, cell.x + 1, cell.y, cell.z);
-    let gradient_010 = cloud_lattice_gradient(seed, cell.x, cell.y + 1, cell.z);
-    let gradient_110 = cloud_lattice_gradient(seed, cell.x + 1, cell.y + 1, cell.z);
-    let gradient_001 = cloud_lattice_gradient(seed, cell.x, cell.y, cell.z + 1);
-    let gradient_101 = cloud_lattice_gradient(seed, cell.x + 1, cell.y, cell.z + 1);
-    let gradient_011 = cloud_lattice_gradient(seed, cell.x, cell.y + 1, cell.z + 1);
-    let gradient_111 = cloud_lattice_gradient(seed, cell.x + 1, cell.y + 1, cell.z + 1);
-
-    let value_000 = dot(gradient_000, fraction);
-    let value_100 = dot(gradient_100, fraction - vec3<f32>(1.0, 0.0, 0.0));
-    let value_010 = dot(gradient_010, fraction - vec3<f32>(0.0, 1.0, 0.0));
-    let value_110 = dot(gradient_110, fraction - vec3<f32>(1.0, 1.0, 0.0));
-    let value_001 = dot(gradient_001, fraction - vec3<f32>(0.0, 0.0, 1.0));
-    let value_101 = dot(gradient_101, fraction - vec3<f32>(1.0, 0.0, 1.0));
-    let value_011 = dot(gradient_011, fraction - vec3<f32>(0.0, 1.0, 1.0));
-    let value_111 = dot(gradient_111, fraction - vec3<f32>(1.0));
-
-    let value_00 = mix(value_000, value_100, blend.x);
-    let value_10 = mix(value_010, value_110, blend.x);
-    let value_01 = mix(value_001, value_101, blend.x);
-    let value_11 = mix(value_011, value_111, blend.x);
-    let gradient_00 = mix(gradient_000.xy, gradient_100.xy, blend.x) / wavelength_m
-        + vec2<f32>((value_100 - value_000) * blend_derivative.x, 0.0);
-    let gradient_10 = mix(gradient_010.xy, gradient_110.xy, blend.x) / wavelength_m
-        + vec2<f32>((value_110 - value_010) * blend_derivative.x, 0.0);
-    let gradient_01 = mix(gradient_001.xy, gradient_101.xy, blend.x) / wavelength_m
-        + vec2<f32>((value_101 - value_001) * blend_derivative.x, 0.0);
-    let gradient_11 = mix(gradient_011.xy, gradient_111.xy, blend.x) / wavelength_m
-        + vec2<f32>((value_111 - value_011) * blend_derivative.x, 0.0);
-    let value_0 = mix(value_00, value_10, blend.y);
-    let value_1 = mix(value_01, value_11, blend.y);
-    let gradient_0 = mix(gradient_00, gradient_10, blend.y)
-        + vec2<f32>(0.0, (value_10 - value_00) * blend_derivative.y);
-    let gradient_1 = mix(gradient_01, gradient_11, blend.y)
-        + vec2<f32>(0.0, (value_11 - value_01) * blend_derivative.y);
+    let skew = (scaled_position.x + scaled_position.y + scaled_position.z) * skew_factor;
+    let cell = vec3<i32>(floor(scaled_position + vec3<f32>(skew)));
+    let unskew = f32(cell.x + cell.y + cell.z) * unskew_factor;
+    let first_offset = scaled_position - (vec3<f32>(cell) - vec3<f32>(unskew));
+    var first_lattice_offset: vec3<i32>;
+    var second_lattice_offset: vec3<i32>;
+    if first_offset.x >= first_offset.y {
+        if first_offset.y >= first_offset.z {
+            first_lattice_offset = vec3<i32>(1, 0, 0);
+            second_lattice_offset = vec3<i32>(1, 1, 0);
+        } else if first_offset.x >= first_offset.z {
+            first_lattice_offset = vec3<i32>(1, 0, 0);
+            second_lattice_offset = vec3<i32>(1, 0, 1);
+        } else {
+            first_lattice_offset = vec3<i32>(0, 0, 1);
+            second_lattice_offset = vec3<i32>(1, 0, 1);
+        }
+    } else if first_offset.y < first_offset.z {
+        first_lattice_offset = vec3<i32>(0, 0, 1);
+        second_lattice_offset = vec3<i32>(0, 1, 1);
+    } else if first_offset.x < first_offset.z {
+        first_lattice_offset = vec3<i32>(0, 1, 0);
+        second_lattice_offset = vec3<i32>(0, 1, 1);
+    } else {
+        first_lattice_offset = vec3<i32>(0, 1, 0);
+        second_lattice_offset = vec3<i32>(1, 1, 0);
+    }
+    let second_offset = first_offset
+        - vec3<f32>(first_lattice_offset) + vec3<f32>(unskew_factor);
+    let third_offset = first_offset
+        - vec3<f32>(second_lattice_offset) + vec3<f32>(2.0 * unskew_factor);
+    let fourth_offset = first_offset - vec3<f32>(1.0 - 3.0 * unskew_factor);
 
     var sample: TerrainNoiseSample;
-    sample.value = 1.8 * mix(value_0, value_1, blend.z);
-    sample.gradient = 1.8 * mix(gradient_0, gradient_1, blend.z);
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    let lattice_offsets = array<vec3<i32>, 4>(
+        vec3<i32>(0),
+        first_lattice_offset,
+        second_lattice_offset,
+        vec3<i32>(1),
+    );
+    let offsets = array<vec3<f32>, 4>(
+        first_offset,
+        second_offset,
+        third_offset,
+        fourth_offset,
+    );
+    for (var vertex = 0u; vertex < 4u; vertex++) {
+        let offset = offsets[vertex];
+        let attenuation = 0.6 - dot(offset, offset);
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let lattice = cell + lattice_offsets[vertex];
+        let gradient = cloud_lattice_gradient(seed, lattice.x, lattice.y, lattice.z);
+        let ramp = dot(gradient, offset);
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        sample.value += attenuation_fourth * ramp;
+        sample.gradient += attenuation_fourth * gradient.xy
+            - 8.0 * attenuation_cubed * ramp * offset.xy;
+    }
+    sample.value *= 32.0;
+    sample.gradient *= 32.0 / wavelength_m;
     return sample;
 }
 
@@ -848,22 +865,29 @@ fn visual_cloud_noise_sample(
     var wavelength_m = initial_wavelength_m;
     let translated_position_m = position_m - velocity_m_s * scene.time_seconds;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.cloud_visual_seed
-            ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
-        let evolution_period_seconds = initial_evolution_period_seconds
-            * sqrt(wavelength_m / initial_wavelength_m);
-        let octave_sample = cloud_gradient_noise(
-            octave_seed,
-            translated_position_m,
+        let octave_visibility = smoothstep(
+            visual_pixel_footprint_m,
+            2.0 * visual_pixel_footprint_m,
             wavelength_m,
-            scene.time_seconds / evolution_period_seconds,
         );
-        sample.value += amplitude * octave_sample.value;
-        sample.gradient += amplitude * octave_sample.gradient;
+        if octave_visibility > 0.0 {
+            let octave_seed = scene.cloud_visual_seed
+                ^ field_salt
+                ^ multiply_u64(
+                    vec2<u32>(octave, 0u),
+                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+                );
+            let evolution_period_seconds = initial_evolution_period_seconds
+                * sqrt(wavelength_m / initial_wavelength_m);
+            let octave_sample = cloud_simplex_noise(
+                octave_seed,
+                translated_position_m,
+                wavelength_m,
+                scene.time_seconds / evolution_period_seconds,
+            );
+            sample.value += amplitude * octave_visibility * octave_sample.value;
+            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
+        }
         amplitude_sum += amplitude;
         amplitude *= 0.58;
         wavelength_m *= 0.5;
@@ -926,7 +950,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         surface_wind_m_s(),
         vec2<u32>(0x38d01377u, 0x452821e6u),
         640.0,
-        8u,
+        14u,
         evolution_period_seconds,
     );
     let detail_character = mix(
@@ -1059,7 +1083,7 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         upper_wind_m_s(),
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
-        4u,
+        6u,
         mix(5400.0, 1800.0, rain_intensity()),
     );
     let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain_intensity();
@@ -2523,7 +2547,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
 
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
-    material_pixel_footprint_m = max(
+    visual_pixel_footprint_m = max(
         0.0001,
         max(
             length(dpdx(input.world_position_m)),
@@ -2544,7 +2568,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
-    material_pixel_footprint_m = max(
+    visual_pixel_footprint_m = max(
         0.0001,
         max(
             length(dpdx(input.world_position_m)),
