@@ -459,6 +459,7 @@ struct TerrainSample {
     ice_amount: f32,
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
+    coastal_sediment_amount: f32,
 };
 
 struct TerrainSurface {
@@ -1323,6 +1324,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.ice_amount = 0.0;
     terrain.coastal_rock_amount = 0.0;
     terrain.coastal_outcrop_amount = 0.0;
+    terrain.coastal_sediment_amount = 0.0;
     let land_detail_mask = terrain_smoothstep_sample(1.0, 3.0, base);
     if land_detail_mask.value > 0.0 {
         let land_ruggedness_noise = terrain_fractal_sample(
@@ -1428,6 +1430,10 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * coastal_detail_mask_value * coastal_rock_amount;
     terrain.coastal_outcrop_amount = landscape_visibility.x
         * rock_mask_value * reef_peak.value;
+    terrain.coastal_sediment_amount = landscape_visibility.x
+        * coastal_detail_mask_value
+        * (1.0 - coastal_rock_amount)
+        * (1.0 - reef_ruggedness.value);
     terrain.gradient /= tuning.terrain_tuning.x;
     terrain.material_gradient /= tuning.terrain_tuning.x;
     return solid_ice_sample(terrain);
@@ -1635,6 +1641,7 @@ fn terrain_surface(
     material_gradient: vec2<f32>,
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
+    coastal_sediment_amount: f32,
     water_height_m: f32,
     surface: f32,
 ) -> TerrainSurface {
@@ -1769,13 +1776,7 @@ fn terrain_surface(
         );
     }
 
-    let beach_geology = material_fractal_sample(
-        vec2<u32>(0x3c6ef372u, 0xa54ff53au),
-        position_m,
-        768.0,
-        2u,
-    ).value;
-    let beach_sediment = smoothstep(-0.35, 0.45, beach_geology);
+    let beach_sediment = smoothstep(0.08, 0.42, coastal_sediment_amount);
     let beach_bottom_m = mix(-0.15, -4.0, beach_sediment);
     let beach_top_m = mix(-0.15, 1.4, beach_sediment);
     let beach_micro_height_m = mix(
@@ -1784,31 +1785,54 @@ fn terrain_surface(
         smoothstep(0.25, 0.85, beach_sediment),
     );
     let beach_color = mix(
-        vec3<f32>(0.67, 0.56, 0.34),
+        vec3<f32>(0.48, 0.43, 0.33),
         vec3<f32>(0.84, 0.76, 0.50),
-        0.35 + 0.30 * surface_grade,
+        clamp(0.18 + 0.62 * beach_sediment + 0.16 * surface_grade, 0.0, 1.0),
     );
     if material_elevation_m > beach_bottom_m && material_elevation_m < beach_top_m {
-        if beach_sediment > 0.5 {
+        if beach_sediment > 0.18 {
             return TerrainSurface(
                 beach_color,
                 beach_micro_height_m * micro_height.gradient,
                 0.82,
             );
         }
-        return terrain_rock_surface(
-            position_m,
-            terrain_gradient,
-            material_gradient,
-            elevation_m,
-        );
     }
 
-    if material_elevation_m < 0.15 {
+    let intertidal_ceiling_m = 0.5 * scene.world_surface_conditions.x;
+    if material_elevation_m < intertidal_ceiling_m {
+        if beach_sediment > 0.18 {
+            let exposed_dryness = smoothstep(
+                0.05,
+                0.8,
+                material_elevation_m - water_height_m,
+            );
+            return TerrainSurface(
+                mix(0.72 * beach_color, beach_color, exposed_dryness),
+                beach_micro_height_m * micro_height.gradient,
+                mix(0.90, 0.82, exposed_dryness),
+            );
+        }
+
+        let exposed_dryness = smoothstep(
+            0.05,
+            0.8,
+            material_elevation_m - water_height_m,
+        );
+        let intertidal_grade = clamp(
+            0.20 + 0.42 * surface_grade + 0.22 * coastal_rock_amount,
+            0.0,
+            1.0,
+        );
+        let intertidal_color = mix(
+            vec3<f32>(0.20, 0.22, 0.18),
+            vec3<f32>(0.43, 0.40, 0.31),
+            intertidal_grade,
+        );
         return TerrainSurface(
-            0.82 * beach_color,
-            beach_micro_height_m * micro_height.gradient,
-            0.82,
+            mix(0.70 * intertidal_color, intertidal_color, exposed_dryness),
+            mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
+            mix(0.96, 0.88, exposed_dryness),
         );
     }
 
@@ -1991,6 +2015,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             terrain.material_gradient,
             terrain.coastal_rock_amount,
             terrain.coastal_outcrop_amount,
+            terrain.coastal_sediment_amount,
             water_height_m,
             land_surface,
         );
@@ -2208,10 +2233,19 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(signed_debug_color(vegetation), 1.0);
     }
     if mode == 39u {
-        let geology = material_fractal_sample(
-            vec2<u32>(0x3c6ef372u, 0xa54ff53au), position_m, 768.0, 2u,
+        let substrate = terrain_fractal_sample(
+            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u), terrain_position_m, 1536.0, 3u,
         ).value;
-        return vec4<f32>(signed_debug_color(geology), 1.0);
+        let ruggedness_noise = terrain_fractal_sample(
+            vec2<u32>(0x1ce4e5b9u, 0xbf58476du), terrain_position_m, 2048.0, 3u,
+        ).value;
+        let rockiness = smoothstep(-0.25, 0.35, substrate);
+        let ruggedness = smoothstep(-0.25, 0.25, ruggedness_noise);
+        let sediment = (1.0 - rockiness) * (1.0 - ruggedness);
+        // Red is rocky substrate, green is depositional sediment, and blue is
+        // rugged exposure. Magenta therefore identifies reef-forming rock,
+        // while blue without red identifies low-sediment vegetated coast.
+        return vec4<f32>(rockiness, sediment, ruggedness, 1.0);
     }
     if mode == 40u {
         return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);

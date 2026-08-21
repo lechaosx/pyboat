@@ -58,6 +58,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   portable simplex-gradient kernel from kilometre to local-coast scale. This
   adds fractal contour detail without the extra field evaluations and increased
   fragmentation of domain warping.
+- **[Explicit]** Coastal appearance is the expression of shared latent physical
+  fields rather than independent material masks. Broad substrate rockiness and
+  coastal ruggedness cross the shoreline: rocky and reef-forming regions drive
+  land relief, submerged relief, and outcrops, while low-rock depositional regions
+  accumulate broad sand or pebble beaches and low-deposition regions allow
+  vegetation to reach the water. Local detail varies each expression without
+  changing its regional cause. Material zones span the configured astronomical
+  tidal range: low tide exposes wet rock or sediment, and ordinary vegetation
+  begins above the permanent intertidal band.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring

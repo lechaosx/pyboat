@@ -411,7 +411,7 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
     [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
-    [38, "Vegetation field"], [39, "Beach geology"], [40, "Seasonal snow"],
+    [38, "Vegetation field"], [39, "Coastal character · RGB"], [40, "Seasonal snow"],
     [41, "Solid ice"], [42, "Autumn vegetation"],
   ],
   water: [[0, "Final composition"], [48, "Tide height"]],

@@ -75,15 +75,17 @@ current playable behavior; this file does not track delivery status.
   ice surface covers land and polar water rather than using a decorative
   floating-ice layer.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
-  and altitude, beach begins at the waterline where geology permits it, and
-  temperate vegetation may change seasonally without making tropical vegetation
-  do the same. Material boundaries remain sharp except for the grass-to-forest
-  blend; color variation stays within each material. Gameplay-scale relief comes
-  from the authoritative heightfield; smaller material detail may refine lighting
-  without changing collision. Heightfield relief lighting and bounded cast
-  shadows add depth without displacing shorelines or changing collision. Visual
-  material structure is calibrated for boat-scale zoom and does not expose the
-  procedural sampling lattice.
+  and altitude, beaches span the intertidal zone where geology permits them, and
+  ordinary vegetation begins above the permanent tidal range so low tide exposes
+  plausible wet rock or sediment. Temperate vegetation may change seasonally
+  without making tropical vegetation do the same. Material boundaries remain
+  sharp except for the grass-to-forest blend; color variation stays within each
+  material. Gameplay-scale relief comes from the authoritative heightfield;
+  smaller material detail may refine lighting without changing collision.
+  Heightfield relief lighting and bounded cast shadows add depth without
+  displacing shorelines or changing collision. Visual material structure is
+  calibrated for boat-scale zoom and does not expose the procedural sampling
+  lattice.
 - **[Explicit]** Shared weather is deterministic, but fine cloud geometry is a
   local visual. The viewport uses weather at the local boat, and clouds never
   conceal players or affect gameplay.
