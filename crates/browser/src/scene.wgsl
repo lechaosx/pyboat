@@ -424,25 +424,6 @@ fn terrain_hash(initial_value: vec2<u32>) -> vec2<u32> {
     return value ^ shift_right_u64(value, 31u);
 }
 
-fn terrain_hash_unit(value: vec2<u32>) -> f32 {
-    let hash = terrain_hash(value);
-    return f32(hash.y) * 2.3283064365386963e-10
-        + f32(hash.x) * 5.421010862427522e-20;
-}
-
-fn terrain_lattice_value(seed: vec2<u32>, x: i32, y: i32) -> f32 {
-    let key = seed
-        ^ multiply_u64(
-            signed_u64(x),
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-        )
-        ^ multiply_u64(
-            signed_u64(y),
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        );
-    return 2.0 * terrain_hash_unit(key) - 1.0;
-}
-
 struct TerrainNoiseSample {
     value: f32,
     gradient: vec2<f32>,
@@ -464,81 +445,6 @@ struct TerrainSurface {
     detail_gradient: vec2<f32>,
     roughness: f32,
 };
-
-fn terrain_value_noise(
-    seed: vec2<u32>,
-    position_m: vec2<f32>,
-    wavelength_m: f32,
-) -> TerrainNoiseSample {
-    let scaled_position = position_m / wavelength_m;
-    let cell = vec2<i32>(floor(scaled_position));
-    let fraction = scaled_position - vec2<f32>(cell);
-    let blend = fraction * fraction * (vec2<f32>(3.0) - 2.0 * fraction);
-    let blend_derivative = 6.0 * fraction * (vec2<f32>(1.0) - fraction) / wavelength_m;
-    let bottom_left = terrain_lattice_value(seed, cell.x, cell.y);
-    let bottom_right = terrain_lattice_value(seed, cell.x + 1, cell.y);
-    let top_left = terrain_lattice_value(seed, cell.x, cell.y + 1);
-    let top_right = terrain_lattice_value(seed, cell.x + 1, cell.y + 1);
-    let bottom = mix(bottom_left, bottom_right, blend.x);
-    let top = mix(top_left, top_right, blend.x);
-
-    var sample: TerrainNoiseSample;
-    sample.value = mix(bottom, top, blend.y);
-    sample.gradient = vec2<f32>(
-        mix(bottom_right - bottom_left, top_right - top_left, blend.y)
-            * blend_derivative.x,
-        (top - bottom) * blend_derivative.y,
-    );
-    return sample;
-}
-
-fn terrain_fractal_sample(
-    field_salt: vec2<u32>,
-    position_m: vec2<f32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-) -> TerrainNoiseSample {
-    var sample: TerrainNoiseSample;
-    sample.value = 0.0;
-    sample.gradient = vec2<f32>(0.0);
-    var amplitude = 1.0;
-    var amplitude_sum = 0.0;
-    var wavelength_m = initial_wavelength_m;
-    let axis_hash = terrain_hash(scene.match_seed ^ field_salt);
-    var octave_axis = MATERIAL_GRADIENT_DIRECTIONS[axis_hash.x & 7u];
-    for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
-        let perpendicular_axis = rotate_left(octave_axis);
-        let octave_sample = terrain_value_noise(
-            octave_seed,
-            vec2<f32>(
-                dot(position_m, octave_axis),
-                dot(position_m, perpendicular_axis),
-            ),
-            wavelength_m,
-        );
-        sample.value += amplitude * octave_sample.value;
-        sample.gradient += amplitude * (
-            octave_axis * octave_sample.gradient.x
-                + perpendicular_axis * octave_sample.gradient.y
-        );
-        amplitude_sum += amplitude;
-        amplitude *= 0.5;
-        wavelength_m *= 0.5;
-        octave_axis = vec2<f32>(
-            0.6 * octave_axis.x - 0.8 * octave_axis.y,
-            0.8 * octave_axis.x + 0.6 * octave_axis.y,
-        );
-    }
-    sample.value /= amplitude_sum;
-    sample.gradient /= amplitude_sum;
-    return sample;
-}
 
 fn terrain_simplex_lattice_gradient(seed: vec2<u32>, x: i32, y: i32) -> vec2<f32> {
     let key = seed
