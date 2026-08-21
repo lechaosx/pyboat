@@ -673,9 +673,10 @@ fn procedural_weather_noise(
 ) -> f64 {
     let (transported_x_m, transported_y_m) =
         transported_weather_position_m(match_seed, tick, position_m);
-    terrain_fractal_noise(
+    terrain_fractal_noise_at(
         match_seed ^ salt,
-        Vector::new(transported_x_m as f32, transported_y_m as f32),
+        transported_x_m,
+        transported_y_m,
         wavelength_m,
         octave_count,
     )
@@ -693,7 +694,8 @@ fn procedural_weather_noise_sample(
         transported_weather_position_m(match_seed, tick, position_m);
     terrain_fractal_noise_sample(
         match_seed ^ salt,
-        Vector::new(transported_x_m as f32, transported_y_m as f32),
+        transported_x_m,
+        transported_y_m,
         wavelength_m,
         octave_count,
     )
@@ -702,6 +704,22 @@ fn procedural_weather_noise_sample(
 fn terrain_fractal_noise(
     field_seed: u64,
     position_m: Vector,
+    wavelength_m: f64,
+    octave_count: usize,
+) -> f64 {
+    terrain_fractal_noise_at(
+        field_seed,
+        f64::from(position_m.x),
+        f64::from(position_m.y),
+        wavelength_m,
+        octave_count,
+    )
+}
+
+fn terrain_fractal_noise_at(
+    field_seed: u64,
+    position_x_m: f64,
+    position_y_m: f64,
     mut wavelength_m: f64,
     octave_count: usize,
 ) -> f64 {
@@ -710,9 +728,10 @@ fn terrain_fractal_noise(
     let mut amplitude_sum = 0.0;
     for octave in 0..octave_count {
         noise += amplitude
-            * terrain_value_noise(
+            * terrain_value_noise_at(
                 field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-                position_m,
+                position_x_m,
+                position_y_m,
                 wavelength_m,
             );
         amplitude_sum += amplitude;
@@ -724,7 +743,8 @@ fn terrain_fractal_noise(
 
 fn terrain_fractal_noise_sample(
     field_seed: u64,
-    position_m: Vector,
+    position_x_m: f64,
+    position_y_m: f64,
     mut wavelength_m: f64,
     octave_count: usize,
 ) -> ScalarNoiseSample {
@@ -736,7 +756,8 @@ fn terrain_fractal_noise_sample(
     for octave in 0..octave_count {
         let sample = terrain_value_noise_sample(
             field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-            position_m,
+            position_x_m,
+            position_y_m,
             wavelength_m,
         );
         value += amplitude * sample.value;
@@ -753,9 +774,14 @@ fn terrain_fractal_noise_sample(
     }
 }
 
-fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -> f64 {
-    let x = f64::from(position_m.x) / wavelength_m;
-    let y = f64::from(position_m.y) / wavelength_m;
+fn terrain_value_noise_at(
+    match_seed: u64,
+    position_x_m: f64,
+    position_y_m: f64,
+    wavelength_m: f64,
+) -> f64 {
+    let x = position_x_m / wavelength_m;
+    let y = position_y_m / wavelength_m;
     let x0 = libm::floor(x) as i64;
     let y0 = libm::floor(y) as i64;
     let blend_x = smoothstep(x - x0 as f64);
@@ -775,11 +801,12 @@ fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -
 
 fn terrain_value_noise_sample(
     match_seed: u64,
-    position_m: Vector,
+    position_x_m: f64,
+    position_y_m: f64,
     wavelength_m: f64,
 ) -> ScalarNoiseSample {
-    let x = f64::from(position_m.x) / wavelength_m;
-    let y = f64::from(position_m.y) / wavelength_m;
+    let x = position_x_m / wavelength_m;
+    let y = position_y_m / wavelength_m;
     let x0 = libm::floor(x) as i64;
     let y0 = libm::floor(y) as i64;
     let fraction_x = x - x0 as f64;
@@ -888,6 +915,8 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
 }
 
 fn transported_weather_position_m(match_seed: u64, tick: u64, position_m: Vector) -> (f64, f64) {
+    // Keep accumulated transport in f64 through lattice sampling so long-running
+    // matches retain local spatial variation instead of stepping between f32 bins.
     let time_seconds = tick as f64 * f64::from(DT_SECONDS);
     let transport_direction_rad =
         std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);

@@ -378,6 +378,32 @@ fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
 }
 
 #[test]
+fn transported_weather_preserves_metre_scale_variation_after_years() {
+    const SAMPLE_COUNT: u64 = 128;
+    let tick = 1_u64 << 32;
+    let position_m = Vector::new(12.0, -7.0);
+    let displacement_m = Vector::new(1.0, 1.0);
+    let mut derivative_error = 0.0;
+
+    for seed in 0..SAMPLE_COUNT {
+        let primary = procedural_atmosphere_primary(seed, tick, position_m);
+        let nearby_temperature =
+            procedural_atmosphere_primary(seed, tick, position_m + displacement_m)
+                .surface_air_temperature_anomaly_c;
+        let predicted_change = primary.temperature_gradient_c_per_m.dot(displacement_m);
+        derivative_error +=
+            (nearby_temperature - primary.surface_air_temperature_anomaly_c - predicted_change)
+                .abs();
+    }
+
+    let mean_error = derivative_error / SAMPLE_COUNT as f32;
+    assert!(
+        mean_error < 1.0e-6,
+        "mean nearby derivative error was {mean_error}"
+    );
+}
+
+#[test]
 fn surface_and_upper_air_share_an_air_mass_anomaly_without_becoming_identical() {
     const SAMPLE_COUNT: u64 = 512;
     let tick = 12_345;
