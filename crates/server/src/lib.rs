@@ -405,6 +405,7 @@ where
         tokio::select! {
             result = &mut shutdown => {
                 result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
+                endpoint.close(VarInt::from_u32(1), b"Server shutting down");
                 for outbound in connections.values() {
                     outbound.send_replace(Some(OutboundMessage::Close));
                 }
@@ -418,6 +419,10 @@ where
                             game_match.remove_player(&player_id);
                         }
                     }
+                    // Keep the QUIC socket alive while its connection-close
+                    // frames drain; dropping the endpoint here can strand peers
+                    // until their idle timeout expires.
+                    endpoint.wait_idle().await;
                 })
                 .await;
                 return Ok(());
