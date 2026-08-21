@@ -2184,14 +2184,14 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(0.5 + 0.5 * normal, 1.0);
     }
     if mode == 35u {
-        let cluster = terrain_fractal_sample(
-            vec2<u32>(0x78bd642fu, 0xa0761d64u), terrain_position_m, 8192.0, 3u,
+        let cluster = terrain_simplex_fractal_sample(
+            vec2<u32>(0x78bd642fu, 0xa0761d64u), terrain_position_m, 8192.0, 3u, 0.5,
         ).value;
         return vec4<f32>(signed_debug_color(cluster), 1.0);
     }
     if mode == 36u {
-        let island = terrain_fractal_sample(
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u), terrain_position_m, 1024.0, 5u,
+        let island = terrain_simplex_fractal_sample(
+            vec2<u32>(0xa0b428dbu, 0xe7037ed1u), terrain_position_m, 1536.0, 5u, 0.35,
         ).value;
         return vec4<f32>(signed_debug_color(island), 1.0);
     }
