@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_air_temperature_c, derive_weather, dinghy_parameters,
-    match_environment, procedural_atmosphere_primary, procedural_cloud_cover,
+    climate_surface, current_500_hpa_air_temperature_c, current_air_temperature_c, derive_weather,
+    dinghy_parameters, match_environment, procedural_atmosphere_primary, procedural_cloud_cover,
     procedural_match_environment, procedural_solid_surface_elevation_m,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
     procedural_water_depth_m, procedural_weather, tide_height_m, world_celestial_conditions,
@@ -234,7 +234,7 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         surface_air_temperature_anomaly_c: 0.0,
-        upper_air_temperature_c: -15.0,
+        air_temperature_500_hpa_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
     };
@@ -259,7 +259,7 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         surface_air_temperature_anomaly_c: 0.0,
-        upper_air_temperature_c: -15.0,
+        air_temperature_500_hpa_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 10.0,
     };
@@ -292,7 +292,7 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         surface_air_temperature_anomaly_c: 0.0,
-        upper_air_temperature_c: -20.0,
+        air_temperature_500_hpa_c: -20.0,
         temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
         water_vapor_g_kg: 4.0,
     };
@@ -322,7 +322,7 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
     );
     assert!(primary.pressure_hpa.is_finite());
     assert!((-15.0..=15.0).contains(&primary.surface_air_temperature_anomaly_c));
-    assert!((-80.0..=10.0).contains(&primary.upper_air_temperature_c));
+    assert!((-80.0..=10.0).contains(&primary.air_temperature_500_hpa_c));
     assert!((0.0..=25.0).contains(&primary.water_vapor_g_kg));
 
     let nearby = procedural_atmosphere_primary(seed, tick + 1, position_m + Vector::new(1.0, 0.0));
@@ -333,6 +333,43 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
             < 0.1
     );
     assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
+}
+
+#[test]
+fn surface_and_upper_air_share_an_air_mass_anomaly_without_becoming_identical() {
+    const SAMPLE_COUNT: u64 = 512;
+    let tick = 12_345;
+    let climatology = current_500_hpa_air_temperature_c(
+        world_climate_conditions(),
+        world_celestial_conditions(tick as f64 / 60.0),
+    );
+    let mut surface_sum = 0.0;
+    let mut upper_sum = 0.0;
+    let mut surface_square_sum = 0.0;
+    let mut upper_square_sum = 0.0;
+    let mut product_sum = 0.0;
+
+    for seed in 0..SAMPLE_COUNT {
+        let primary = procedural_atmosphere_primary(seed, tick, Vector::new(12.0, -7.0));
+        let surface = f64::from(primary.surface_air_temperature_anomaly_c);
+        let upper = f64::from(primary.air_temperature_500_hpa_c - climatology);
+        surface_sum += surface;
+        upper_sum += upper;
+        surface_square_sum += surface * surface;
+        upper_square_sum += upper * upper;
+        product_sum += surface * upper;
+    }
+
+    let count = SAMPLE_COUNT as f64;
+    let covariance = product_sum - surface_sum * upper_sum / count;
+    let surface_variance = surface_square_sum - surface_sum * surface_sum / count;
+    let upper_variance = upper_square_sum - upper_sum * upper_sum / count;
+    let correlation = covariance / libm::sqrt(surface_variance * upper_variance);
+
+    assert!(
+        (0.25..0.90).contains(&correlation),
+        "correlation was {correlation}"
+    );
 }
 
 #[test]
@@ -471,6 +508,31 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
     assert!(northern_summer > northern_winter + 19.0);
     assert!((northern_summer - southern_summer).abs() < 0.01);
     assert!(northern_summer > summer_before_dawn + 7.9);
+}
+
+#[test]
+fn upper_air_climatology_has_muted_seasons_and_no_diurnal_cycle() {
+    let climate = ClimateConditions {
+        annual_mean_air_temperature_c: 15.0,
+        seasonal_temperature_range_c: 20.0,
+        diurnal_temperature_range_c: 8.0,
+    };
+    let conditions = |season_phase, day_phase| CelestialConditions {
+        geographic_latitude_degrees: 55.0,
+        season_phase,
+        day_phase,
+        moon_phase: 0.0,
+    };
+    let summer = current_500_hpa_air_temperature_c(climate, conditions(0.34, 0.625));
+    let summer_night = current_500_hpa_air_temperature_c(climate, conditions(0.34, 0.125));
+    let winter = current_500_hpa_air_temperature_c(climate, conditions(0.84, 0.625));
+    let surface_summer = current_air_temperature_c(climate, conditions(0.34, 0.625));
+    let surface_winter = current_air_temperature_c(climate, conditions(0.84, 0.625));
+
+    assert!((summer - summer_night).abs() < f32::EPSILON);
+    assert!(summer > winter);
+    assert!(summer - winter < 0.6 * (surface_summer - surface_winter));
+    assert!(summer - winter > 0.4 * (surface_summer - surface_winter));
 }
 
 #[test]

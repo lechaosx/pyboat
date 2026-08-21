@@ -682,7 +682,7 @@ fn capture_report<'a>(
             pressure_gradient_hpa_per_m: pressure_gradient,
             synoptic_pressure_gradient_hpa_per_m: synoptic_gradient,
             surface_air_temperature_anomaly_c: scenario.current_air_temperature_anomaly,
-            upper_air_temperature_c: scenario.current_upper_air_temperature,
+            air_temperature_500_hpa_c: scenario.current_upper_air_temperature,
             temperature_gradient_c_per_m: temperature_gradient,
             water_vapor_g_kg: scenario.current_water_vapor,
         },

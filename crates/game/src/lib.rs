@@ -14,6 +14,10 @@ const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
 const UPPER_WIND_SCALE: f32 = 1.12;
 const THERMAL_WIND_SCALE_M2_S_C: f32 = 12_000.0;
+const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
+const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
+const SURFACE_AIR_MASS_COUPLING_500_HPA: f32 = 0.45;
+const INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C: f32 = 6.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
@@ -32,7 +36,7 @@ pub struct AtmospherePrimary {
     pub pressure_gradient_hpa_per_m: Vector,
     pub synoptic_pressure_gradient_hpa_per_m: Vector,
     pub surface_air_temperature_anomaly_c: f32,
-    pub upper_air_temperature_c: f32,
+    pub air_temperature_500_hpa_c: f32,
     pub temperature_gradient_c_per_m: Vector,
     pub water_vapor_g_kg: f32,
 }
@@ -138,6 +142,21 @@ pub fn current_air_temperature_c(
             * latitude_factor
             * libm::sin(seasonal_phase) as f32
         + 0.5 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+}
+
+pub fn current_500_hpa_air_temperature_c(
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+) -> f32 {
+    let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.09);
+    let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
+    // The offset approximates the standard-atmosphere lapse from sea level to
+    // 500 hPa. The mid-troposphere follows half the surface seasonal amplitude.
+    climate.annual_mean_air_temperature_c - AIR_TEMPERATURE_500_HPA_OFFSET_C
+        + AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION
+            * climate.seasonal_temperature_range_c
+            * latitude_factor
+            * libm::sin(seasonal_phase) as f32
 }
 
 fn seasonal_latitude_factor(geographic_latitude_degrees: f32) -> f32 {
@@ -388,8 +407,12 @@ pub fn procedural_atmosphere_primary(
     let pressure = procedural_pressure_sample(match_seed, tick, position_m);
     let surface_air_temperature_anomaly_c =
         sample_surface_air_temperature_anomaly_c(match_seed, tick, position_m);
-    let upper_air_temperature_c = -20.0
-        + 9.0
+    let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(
+        world_climate_conditions(),
+        world_celestial_conditions(tick as f64 * f64::from(DT_SECONDS)),
+    ) + SURFACE_AIR_MASS_COUPLING_500_HPA
+        * surface_air_temperature_anomaly_c
+        + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C
             * procedural_weather_noise(
                 match_seed,
                 tick,
@@ -438,7 +461,7 @@ pub fn procedural_atmosphere_primary(
         synoptic_pressure_gradient_hpa_per_m: pressure.synoptic_gradient_m_s
             / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
         surface_air_temperature_anomaly_c,
-        upper_air_temperature_c,
+        air_temperature_500_hpa_c,
         temperature_gradient_c_per_m,
         water_vapor_g_kg,
     }
@@ -466,7 +489,7 @@ pub fn derive_weather(
     let instability = smoothstep_range(
         28.0,
         48.0,
-        f64::from(surface_air_temperature_c - primary.upper_air_temperature_c),
+        f64::from(surface_air_temperature_c - primary.air_temperature_500_hpa_c),
     ) as f32;
     let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
     let gradient_lift = smoothstep_range(

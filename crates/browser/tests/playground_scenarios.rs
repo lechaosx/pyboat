@@ -57,7 +57,7 @@ impl Scenario {
                     self.synoptic_pressure_gradient_direction,
                 ),
                 surface_air_temperature_anomaly_c: self.current_air_temperature_anomaly,
-                upper_air_temperature_c: self.current_upper_air_temperature,
+                air_temperature_500_hpa_c: self.current_upper_air_temperature,
                 temperature_gradient_c_per_m: directed_vector(
                     self.temperature_gradient / 1000.0,
                     self.temperature_gradient_direction,

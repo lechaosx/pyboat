@@ -235,7 +235,7 @@ impl Renderer {
                         primary.synoptic_pressure_gradient_hpa_per_m.x,
                         primary.synoptic_pressure_gradient_hpa_per_m.y,
                         climate.annual_mean_air_temperature_c,
-                        primary.upper_air_temperature_c,
+                        primary.air_temperature_500_hpa_c,
                     ]
                 }),
                 moisture_and_temperature_gradient: primary.map_or([0.0; 4], |primary| {

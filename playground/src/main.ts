@@ -270,7 +270,7 @@ const groups: ControlGroup[] = [
   {
     domain: "weather", category: "Current weather", layer: "Air and moisture", kind: "WORLD", controls: [
       range("currentAirTemperatureAnomaly", "Air temperature anomaly · °C", -25, 25, 0.5),
-      range("currentUpperAirTemperature", "Upper-air temperature · °C", -80, 10, 0.5),
+      range("currentUpperAirTemperature", "500 hPa temperature · °C", -80, 10, 0.5),
       range("temperatureGradient", "Horizontal ΔT · °C/km", 0, 1, 0.01),
       range("temperatureGradientDirection", "ΔT direction", -180, 180, 1),
       range("currentWaterVapor", "Current water vapour · g/kg", 0, 25, 0.1),
