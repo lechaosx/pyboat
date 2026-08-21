@@ -69,7 +69,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   begins above the permanent intertidal band. The same geology stretches the
   shallow signed landform before its transition to the ocean basin, giving
   rocky, reef-forming, and depositional coasts broader physical shelves while
-  low-support steep coasts can remain narrow.
+  low-support steep coasts can remain narrow. Fine signed relief shapes the
+  inner reef, intertidal rock, and sparse emergent peaks. A non-overlapping outer
+  rocky-shelf band adds portable multi-scale simplex relief that the shared
+  ruggedness field transforms toward connected ridges and cuts; depositional
+  shelves remain comparatively smooth.
 - **[Explicit]** Inland physical relief uses a portable simplex field spanning
   hill to boat scale. The shared broad coastal-ruggedness field continuously
   blends that relief from smooth rolling ground into ridged rock, correlating

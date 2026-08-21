@@ -1437,7 +1437,15 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     let rock_shore_rise = terrain_smoothstep_sample(1.2, 2.0, shaped_bed);
     let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
     let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
-    if seabed_mask_value == 0.0 && rock_mask_value == 0.0 {
+    let outer_reef_deep_gate = terrain_smoothstep_sample(-8.0, -6.0, shaped_bed);
+    let outer_reef_shore_rise = terrain_smoothstep_sample(-5.0, -4.0, shaped_bed);
+    let outer_reef_shore_gate_value = 1.0 - outer_reef_shore_rise.value;
+    let outer_reef_mask_value = outer_reef_deep_gate.value
+        * outer_reef_shore_gate_value;
+    if seabed_mask_value == 0.0
+        && rock_mask_value == 0.0
+        && outer_reef_mask_value == 0.0
+    {
         terrain.gradient /= tuning.terrain_tuning.x;
         terrain.material_gradient /= tuning.terrain_tuning.x;
         return solid_ice_sample(terrain);
@@ -1446,34 +1454,86 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
     let rock_mask_gradient = rock_deep_gate.gradient * rock_shore_gate_value
         - rock_shore_rise.gradient * rock_deep_gate.value;
-    let shoal = terrain_fractal_sample(
-        vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-        terrain_position_m,
-        256.0,
-        3u,
-    );
+    let outer_reef_mask_gradient = outer_reef_deep_gate.gradient
+        * outer_reef_shore_gate_value
+        - outer_reef_shore_rise.gradient * outer_reef_deep_gate.value;
+    var shoal: TerrainNoiseSample;
+    shoal.value = 0.0;
+    shoal.gradient = vec2<f32>(0.0);
+    if seabed_mask_value > 0.0 {
+        shoal = terrain_fractal_sample(
+            vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            terrain_position_m,
+            256.0,
+            3u,
+        );
+    }
     let coastal_rock_amount = coastal_rock.value;
     let coastal_rock_relief = terrain_smoothstep_sample(0.45, 0.65, coastal_rock);
     let reef_detail_amount = coastal_rock_relief.value
         * (0.05 + 1.55 * reef_ruggedness.value);
-    let reef = terrain_fractal_sample(
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
-        terrain_position_m,
-        32.0,
-        4u,
-    );
-    let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
     var coastal_detail_mask_value = seabed_mask_value;
     var coastal_detail_mask_gradient = seabed_mask_gradient;
     if rock_mask_value > seabed_mask_value {
         coastal_detail_mask_value = rock_mask_value;
         coastal_detail_mask_gradient = rock_mask_gradient;
     }
+    var reef: TerrainNoiseSample;
+    reef.value = 0.0;
+    reef.gradient = vec2<f32>(0.0);
+    if coastal_detail_mask_value > 0.0 {
+        reef = terrain_fractal_sample(
+            vec2<u32>(0x75374cc3u, 0x589965ccu),
+            terrain_position_m,
+            32.0,
+            4u,
+        );
+    }
+    let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
+    var outer_reef: TerrainNoiseSample;
+    outer_reef.value = 0.0;
+    outer_reef.gradient = vec2<f32>(0.0);
+    if outer_reef_mask_value > 0.0 {
+        outer_reef = terrain_simplex_fractal_sample(
+            vec2<u32>(0x9c88c6e3u, 0x8ebc6af0u),
+            terrain_position_m,
+            128.0,
+            5u,
+            0.6,
+        );
+    }
+    var ridged_outer_reef: TerrainNoiseSample;
+    ridged_outer_reef.value = 1.0 - 2.0 * abs(outer_reef.value);
+    ridged_outer_reef.gradient = -2.0
+        * select(-1.0, 1.0, outer_reef.value >= 0.0)
+        * outer_reef.gradient;
+    let outer_reef_ridge_blend = terrain_smoothstep_sample(
+        0.25,
+        0.80,
+        reef_ruggedness,
+    );
+    var shaped_outer_reef: TerrainNoiseSample;
+    shaped_outer_reef.value = mix(
+        outer_reef.value,
+        ridged_outer_reef.value,
+        outer_reef_ridge_blend.value,
+    ) - 0.3 * outer_reef_ridge_blend.value;
+    shaped_outer_reef.gradient = mix(
+        outer_reef.gradient,
+        ridged_outer_reef.gradient,
+        outer_reef_ridge_blend.value,
+    ) + outer_reef_ridge_blend.gradient
+        * (ridged_outer_reef.value - outer_reef.value - 0.3);
+    let outer_reef_detail_amount = coastal_rock_relief.value
+        * (0.12 + 1.68 * reef_ruggedness.value);
     terrain.elevation_m += 0.25 * seabed_mask_value * shoal.value
         * landscape_visibility.x
         + 1.5 * coastal_detail_mask_value * reef_detail_amount * reef.value
             * landscape_visibility.x
-        + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x;
+        + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x
+        + 1.2 * outer_reef_mask_value
+            * outer_reef_detail_amount * shaped_outer_reef.value
+            * landscape_visibility.x;
     terrain.gradient += landscape_visibility.x * 0.25 * (
         seabed_mask_gradient * shoal.value + shoal.gradient * seabed_mask_value
     ) + 1.5 * landscape_visibility.x * (
@@ -1486,13 +1546,28 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             + reef.gradient * coastal_detail_mask_value * reef_detail_amount
     ) + landscape_visibility.x * 2.0 * (
         rock_mask_gradient * reef_peak.value + reef_peak.gradient * rock_mask_value
+    ) + 1.2 * landscape_visibility.x * (
+        outer_reef_mask_gradient
+            * outer_reef_detail_amount * shaped_outer_reef.value
+            + coastal_rock_relief.gradient
+                * (0.12 + 1.68 * reef_ruggedness.value)
+                * outer_reef_mask_value * shaped_outer_reef.value
+            + reef_ruggedness.gradient * 1.68
+                * coastal_rock_relief.value
+                * outer_reef_mask_value * shaped_outer_reef.value
+            + shaped_outer_reef.gradient
+                * outer_reef_mask_value * outer_reef_detail_amount
     );
+    var visible_coastal_mask_value = coastal_detail_mask_value;
+    if outer_reef_mask_value > visible_coastal_mask_value {
+        visible_coastal_mask_value = outer_reef_mask_value;
+    }
     terrain.coastal_rock_amount = landscape_visibility.x
-        * coastal_detail_mask_value * coastal_rock_amount;
+        * visible_coastal_mask_value * coastal_rock_amount;
     terrain.coastal_outcrop_amount = landscape_visibility.x
         * rock_mask_value * reef_peak.value;
     terrain.coastal_sediment_amount = landscape_visibility.x
-        * coastal_detail_mask_value
+        * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value);
     terrain.gradient /= tuning.terrain_tuning.x;

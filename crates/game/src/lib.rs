@@ -703,24 +703,49 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         * (1.0 - smoothstep_range(-0.5, -0.1, terrain_elevation_m));
     let rock_mask = smoothstep_range(-2.0, -0.8, terrain_elevation_m)
         * (1.0 - smoothstep_range(1.2, 2.0, terrain_elevation_m));
-    if seabed_mask == 0.0 && rock_mask == 0.0 {
+    let outer_reef_mask = smoothstep_range(-8.0, -6.0, terrain_elevation_m)
+        * (1.0 - smoothstep_range(-5.0, -4.0, terrain_elevation_m));
+    if seabed_mask == 0.0 && rock_mask == 0.0 && outer_reef_mask == 0.0 {
         return terrain_elevation_m as f32;
     }
-    let shoal = terrain_fractal_noise(
-        match_seed ^ 0xd1b5_4a32_d192_ed03,
-        position_m,
-        256.0,
-        TERRAIN_SHOAL_OCTAVE_COUNT,
-    );
+    let shoal = if seabed_mask > 0.0 {
+        terrain_fractal_noise(
+            match_seed ^ 0xd1b5_4a32_d192_ed03,
+            position_m,
+            256.0,
+            TERRAIN_SHOAL_OCTAVE_COUNT,
+        )
+    } else {
+        0.0
+    };
     let coastal_rock_relief_amount = smoothstep_range(0.45, 0.65, coastal_rock_amount);
-    let reef = terrain_fractal_noise(
-        match_seed ^ 0x5899_65cc_7537_4cc3,
-        position_m,
-        32.0,
-        TERRAIN_REEF_OCTAVE_COUNT,
-    );
-    let reef_peak = smoothstep_range(0.72, 0.90, reef);
     let coastal_detail_mask = seabed_mask.max(rock_mask);
+    let reef = if coastal_detail_mask > 0.0 {
+        terrain_fractal_noise(
+            match_seed ^ 0x5899_65cc_7537_4cc3,
+            position_m,
+            32.0,
+            TERRAIN_REEF_OCTAVE_COUNT,
+        )
+    } else {
+        0.0
+    };
+    let reef_peak = smoothstep_range(0.72, 0.90, reef);
+    let outer_reef = if outer_reef_mask > 0.0 {
+        terrain_simplex_fractal_noise(
+            match_seed ^ 0x8ebc_6af0_9c88_c6e3,
+            position_m,
+            128.0,
+            5,
+            0.6,
+        ) as f64
+    } else {
+        0.0
+    };
+    let ridged_reef = 1.0 - 2.0 * outer_reef.abs();
+    let reef_ridge_blend = smoothstep_range(0.25, 0.80, reef_ruggedness);
+    let shaped_outer_reef =
+        lerp(outer_reef, ridged_reef, reef_ridge_blend) - 0.3 * reef_ridge_blend;
     (terrain_elevation_m
         + 0.25 * seabed_mask * shoal
         + 1.5
@@ -728,7 +753,12 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             * coastal_rock_relief_amount
             * (0.05 + 1.55 * reef_ruggedness)
             * reef
-        + 2.0 * rock_mask * reef_peak) as f32
+        + 2.0 * rock_mask * reef_peak
+        + 1.2
+            * outer_reef_mask
+            * coastal_rock_relief_amount
+            * (0.12 + 1.68 * reef_ruggedness)
+            * shaped_outer_reef) as f32
 }
 
 pub fn procedural_solid_surface_elevation_m(
