@@ -2,8 +2,9 @@
 
 This repository contains an early multiplayer, top-down naval combat game with
 readable, semi-realistic sailing. The browser and authoritative server provide a
-shared procedural world, prediction, ramming, damage, wrecks, weather, and
-terrain.
+deterministic sparse-island world with coherent coasts, physical depth,
+pressure-driven weather, and astronomical tides alongside prediction, ramming,
+damage, and persistent physical wrecks.
 
 The intended game grows this foundation into persistent, drop-in matches with
 varied ships, mostly automatic weapons, progression, and a vast procedural sea.
