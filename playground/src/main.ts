@@ -40,7 +40,7 @@ type State = {
   detailBlobiness: number;
   detailContrast: number;
   detailEdgeSoftness: number;
-  maxVisibleCoverage: number;
+  maxWispCoverage: number;
   opticalDepth: number;
   opacity: number;
   darkness: number;
@@ -157,7 +157,7 @@ const defaults: State = {
   detailBlobiness: 0.25,
   detailContrast: 1.15,
   detailEdgeSoftness: 0.06,
-  maxVisibleCoverage: 0.5,
+  maxWispCoverage: 0.25,
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
@@ -295,7 +295,7 @@ const groups: ControlGroup[] = [
   },
   {
     domain: "weather", category: "Advanced tuning", layer: "Low-cloud coverage", kind: "SHADER", level: "advanced", controls: [
-      range("maxVisibleCoverage", "Maximum coverage", 0, 1, 0.01),
+      range("maxWispCoverage", "Maximum wisp coverage", 0, 1, 0.01),
     ],
   },
   {
@@ -379,7 +379,7 @@ const categoryOrder = [
 
 const lowCloudDependentKeys = new Set<NumericStateKey>([
   "detailCharacter", "detailBlobiness", "detailContrast", "detailEdgeSoftness",
-  "maxVisibleCoverage",
+  "maxWispCoverage",
   "opticalDepth", "opacity", "darkness", "relief",
   "lowCloudVisible", "lowCloudShadow",
 ]);
@@ -437,7 +437,7 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       detailBlobiness: defaults.detailBlobiness,
       detailContrast: defaults.detailContrast,
       detailEdgeSoftness: defaults.detailEdgeSoftness,
-      maxVisibleCoverage: defaults.maxVisibleCoverage,
+      maxWispCoverage: defaults.maxWispCoverage,
       opticalDepth: defaults.opticalDepth,
       opacity: defaults.opacity,
       darkness: defaults.darkness,
@@ -1323,7 +1323,7 @@ function writeUniforms(): void {
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
   ], 0);
   tuningFloats.set([
-    state.maxVisibleCoverage, 0, 0, 0,
+    state.maxWispCoverage, 0, 0, 0,
   ], 4);
   tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 8);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);

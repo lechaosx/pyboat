@@ -84,7 +84,7 @@ struct SceneUniforms {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PlaygroundUniforms {
     cloud_detail: [f32; 4],
-    cloud_coverage: [f32; 4],
+    cloud_wisps: [f32; 4],
     cloud_rendering: [f32; 4],
     terrain_tuning: [f32; 4],
     water_tuning: [f32; 4],
@@ -358,7 +358,7 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
     });
     let playground_uniforms = PlaygroundUniforms {
         cloud_detail: [0.35, 0.25, 1.15, 0.06],
-        cloud_coverage: [0.5, 0.0, 0.0, 0.0],
+        cloud_wisps: [0.25, 0.0, 0.0, 0.0],
         cloud_rendering: [1.0; 4],
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         water_tuning: [12.0, 0.55, 0.0, 0.0],

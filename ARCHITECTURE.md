@@ -70,16 +70,18 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Rendering samples primary weather at the local boat and applies
   it uniformly across the viewport. WGSL recomputes short derivations rather than
   accepting derived-weather or integrated cloud-offset inputs.
-- **[Explicit]** Each visible cloud layer uses one coherent three-dimensional
+- **[Explicit]** Each procedural cloud layer uses one coherent three-dimensional
   space-time gradient field: horizontal coordinates translate with the layer's
   wind while the time coordinate evolves its shape. The field never rotates.
   Low cloud follows complete unsheltered surface wind, while upper cloud follows
-  broad synoptic wind; their seeds and transport remain independent. Weather-
-  derived coverage thresholds each field directly, and humidity, lift,
-  instability, shear, and rain control cloud family, evolution, optical depth,
-  relief, layer height, and shadows. Fine spatial scales evolve faster than broad
-  scales. There is no separate formation mask or whole-pattern lifetime
-  crossfade.
+  broad synoptic wind; their seeds and transport remain independent. The visible
+  low field is decorative, is capped at one-quarter wisp coverage, may cast local
+  shadows, and contributes little to ambient overcast. The invisible upper field
+  carries meteorological cloud coverage through broad shadows and lighting.
+  Humidity, lift, instability, shear, and rain control cloud family, evolution,
+  optical depth, relief, layer height, and shadows. Fine spatial scales evolve
+  faster than broad scales. There is no separate formation mask or whole-pattern
+  lifetime crossfade.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,

@@ -13,7 +13,7 @@ struct SceneUniforms {
 
 struct SceneTuning {
     cloud_detail: vec4<f32>,
-    cloud_coverage: vec4<f32>,
+    cloud_wisps: vec4<f32>,
     cloud_rendering: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
@@ -22,7 +22,7 @@ struct SceneTuning {
 
 struct PlaygroundUniforms {
     cloud_detail: vec4<f32>,
-    cloud_coverage: vec4<f32>,
+    cloud_wisps: vec4<f32>,
     cloud_rendering: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
@@ -44,7 +44,7 @@ override CLOUD_DETAIL_CHARACTER: f32 = 0.35;
 override CLOUD_DETAIL_BLOBINESS: f32 = 0.25;
 override CLOUD_DETAIL_CONTRAST: f32 = 1.15;
 override CLOUD_DETAIL_EDGE_SOFTNESS: f32 = 0.06;
-override CLOUD_MAX_VISIBLE_COVERAGE: f32 = 0.5;
+override CLOUD_MAX_WISP_COVERAGE: f32 = 0.25;
 override CLOUD_OPTICAL_DEPTH: f32 = 1.0;
 override CLOUD_OPACITY: f32 = 1.0;
 override CLOUD_DARKNESS: f32 = 1.0;
@@ -283,7 +283,7 @@ fn production_tuning() -> SceneTuning {
             CLOUD_DETAIL_EDGE_SOFTNESS,
         ),
         vec4<f32>(
-            CLOUD_MAX_VISIBLE_COVERAGE,
+            CLOUD_MAX_WISP_COVERAGE,
             0.0,
             0.0,
             0.0,
@@ -318,7 +318,7 @@ fn production_tuning() -> SceneTuning {
 fn playground_scene_tuning() -> SceneTuning {
     return SceneTuning(
         playground.cloud_detail,
-        playground.cloud_coverage,
+        playground.cloud_wisps,
         playground.cloud_rendering,
         playground.terrain_tuning,
         playground.water_tuning,
@@ -815,7 +815,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     );
 
     let target_coverage = clamp(
-        tuning.cloud_coverage.x * sqrt(cover),
+        tuning.cloud_wisps.x * sqrt(cover),
         0.0,
         0.95,
     );
@@ -838,7 +838,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         detail_blobiness,
     );
     let weather_presence = smoothstep(0.0, 0.08, cover);
-    let density = weather_presence * detail_envelope * material_density;
+    let density = weather_presence * detail_gate * detail_envelope;
     let detail_gate_gradient = smoothstep_gradient(
         body_threshold,
         body_threshold + edge_softness,
@@ -857,8 +857,8 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         detail_blobiness,
     );
     let density_gradient = weather_presence * (
-        detail_envelope_gradient * material_density
-        + detail_envelope * material_gradient
+        detail_gate_gradient * detail_envelope
+        + detail_gate * detail_envelope_gradient
     );
     let height_detail = 0.35 + 0.65 * detail_amount;
     let height_scale_m = mix(
@@ -997,7 +997,7 @@ fn calculate_atmospheric_ambient_color() -> vec3<f32> {
         0.62 * horizon_glow * sunset_scattering * sky_openness,
     );
     let overcast = clamp(
-        0.42 * low_cloud_coverage() + 0.58 * upper_cloud_coverage() + 0.30 * rain_intensity(),
+        0.08 * low_cloud_coverage() + 0.82 * upper_cloud_coverage() + 0.30 * rain_intensity(),
         0.0,
         1.0,
     );

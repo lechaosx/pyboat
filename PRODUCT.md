@@ -86,10 +86,12 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Shared weather is deterministic, but fine cloud geometry is a
   local visual. The viewport uses weather at the local boat, and clouds never
   conceal players or affect gameplay.
-- **[Explicit]** Clouds range from sparse wisps and cumulus to storm scud with
-  substantial ordinary clear space. A visible low layer supplies detail and wind
-  cues; a higher layer appears through shadows. Both respond to celestial light,
-  while aerosol, moisture, rain, and cloud cover shape scene color and mood.
+- **[Explicit]** A visible low layer supplies decorative wisps, detail, and wind
+  cues across at most about one quarter of the view. It may cast localized
+  shadows but contributes little to global overcast lighting. An invisible upper
+  cloud field represents meteorological coverage through broad shadows and
+  lighting. Both respond to celestial light, while aerosol, moisture, rain, and
+  cloud cover shape scene color and mood.
 - **[Explicit]** Cloud bodies read as volumetric layers rather than terrain-like
   height fields.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
