@@ -31,7 +31,7 @@ pub struct AtmospherePrimary {
     pub pressure_hpa: f32,
     pub pressure_gradient_hpa_per_m: Vector,
     pub synoptic_pressure_gradient_hpa_per_m: Vector,
-    pub surface_air_temperature_c: f32,
+    pub surface_air_temperature_anomaly_c: f32,
     pub upper_air_temperature_c: f32,
     pub temperature_gradient_c_per_m: Vector,
     pub water_vapor_g_kg: f32,
@@ -80,6 +80,7 @@ pub struct SurfaceClimate {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralWeather {
     pub primary: AtmospherePrimary,
+    pub surface_air_temperature_c: f32,
     pub wind_velocity_m_s: Vector,
     pub upper_wind_velocity_m_s: Vector,
     pub wind_shear_m_s: Vector,
@@ -170,6 +171,14 @@ pub fn world_celestial_conditions(world_time_seconds: f64) -> CelestialCondition
         day_phase: (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32,
         moon_phase: (0.25 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_CYCLE_DAYS))
             .rem_euclid(1.0) as f32,
+    }
+}
+
+pub fn world_climate_conditions() -> ClimateConditions {
+    ClimateConditions {
+        annual_mean_air_temperature_c: 14.0,
+        seasonal_temperature_range_c: 12.0,
+        diurnal_temperature_range_c: 4.0,
     }
 }
 
@@ -364,7 +373,11 @@ pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vect
 }
 
 pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> ProceduralWeather {
-    derive_weather(procedural_atmosphere_primary(match_seed, tick, position_m))
+    derive_weather(
+        procedural_atmosphere_primary(match_seed, tick, position_m),
+        world_climate_conditions(),
+        world_celestial_conditions(tick as f64 * f64::from(DT_SECONDS)),
+    )
 }
 
 pub fn procedural_atmosphere_primary(
@@ -373,7 +386,8 @@ pub fn procedural_atmosphere_primary(
     position_m: Vector,
 ) -> AtmospherePrimary {
     let pressure = procedural_pressure_sample(match_seed, tick, position_m);
-    let surface_air_temperature_c = sample_surface_air_temperature_c(match_seed, tick, position_m);
+    let surface_air_temperature_anomaly_c =
+        sample_surface_air_temperature_anomaly_c(match_seed, tick, position_m);
     let upper_air_temperature_c = -20.0
         + 9.0
             * procedural_weather_noise(
@@ -386,27 +400,27 @@ pub fn procedural_atmosphere_primary(
             ) as f32;
     let sample_distance_m = 256.0;
     let temperature_gradient_c_per_m = Vector::new(
-        sample_surface_air_temperature_c(
+        sample_surface_air_temperature_anomaly_c(
             match_seed,
             tick,
             position_m + Vector::new(sample_distance_m, 0.0),
-        ) - sample_surface_air_temperature_c(
+        ) - sample_surface_air_temperature_anomaly_c(
             match_seed,
             tick,
             position_m - Vector::new(sample_distance_m, 0.0),
         ),
-        sample_surface_air_temperature_c(
+        sample_surface_air_temperature_anomaly_c(
             match_seed,
             tick,
             position_m + Vector::new(0.0, sample_distance_m),
-        ) - sample_surface_air_temperature_c(
+        ) - sample_surface_air_temperature_anomaly_c(
             match_seed,
             tick,
             position_m - Vector::new(0.0, sample_distance_m),
         ),
     ) / (2.0 * sample_distance_m);
-    let water_vapor_g_kg = (7.0
-        + 7.0
+    let water_vapor_g_kg = (8.5
+        + 8.5
             * procedural_weather_noise(
                 match_seed,
                 tick,
@@ -423,14 +437,20 @@ pub fn procedural_atmosphere_primary(
         pressure_gradient_hpa_per_m: pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
         synoptic_pressure_gradient_hpa_per_m: pressure.synoptic_gradient_m_s
             / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-        surface_air_temperature_c,
+        surface_air_temperature_anomaly_c,
         upper_air_temperature_c,
         temperature_gradient_c_per_m,
         water_vapor_g_kg,
     }
 }
 
-pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
+pub fn derive_weather(
+    primary: AtmospherePrimary,
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+) -> ProceduralWeather {
+    let surface_air_temperature_c =
+        current_air_temperature_c(climate, conditions) + primary.surface_air_temperature_anomaly_c;
     let wind_velocity_m_s = wind_from_pressure_gradient(primary.pressure_gradient_hpa_per_m);
     let upper_pressure_wind_m_s = UPPER_WIND_SCALE
         * wind_from_pressure_gradient(primary.synoptic_pressure_gradient_hpa_per_m);
@@ -441,12 +461,12 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
         );
     let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
     let saturation_capacity_g_kg =
-        3.5 * libm::exp(0.055 * f64::from(primary.surface_air_temperature_c + 5.0)) as f32;
+        3.5 * libm::exp(0.055 * f64::from(surface_air_temperature_c + 5.0)) as f32;
     let relative_humidity = (primary.water_vapor_g_kg / saturation_capacity_g_kg).clamp(0.0, 1.5);
     let instability = smoothstep_range(
         28.0,
         48.0,
-        f64::from(primary.surface_air_temperature_c - primary.upper_air_temperature_c),
+        f64::from(surface_air_temperature_c - primary.upper_air_temperature_c),
     ) as f32;
     let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
     let gradient_lift = smoothstep_range(
@@ -465,10 +485,13 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
     let cloudiness = smoothstep_range(0.50, 0.98, f64::from(cloud_signal)) as f32;
     let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
     let upper_cloudiness = smoothstep_range(0.68, 0.90, f64::from(upper_cloud_signal)) as f32;
-    let rain_signal = cloudiness * (0.45 + 0.20 * instability + 0.45 * lift);
+    let rain_signal = smoothstep_range(0.65, 0.75, f64::from(cloudiness)) as f32
+        * cloudiness
+        * (0.45 + 0.20 * instability + 0.45 * lift);
 
     ProceduralWeather {
         primary,
+        surface_air_temperature_c,
         wind_velocity_m_s,
         upper_wind_velocity_m_s,
         wind_shear_m_s: upper_wind_velocity_m_s - wind_velocity_m_s,
@@ -481,16 +504,15 @@ pub fn derive_weather(primary: AtmospherePrimary) -> ProceduralWeather {
     }
 }
 
-fn sample_surface_air_temperature_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
-    16.0 + 13.0
-        * procedural_weather_noise(
-            match_seed,
-            tick,
-            position_m,
-            0x4528_21e6_38d0_1377,
-            65_536.0,
-            4,
-        ) as f32
+fn sample_surface_air_temperature_anomaly_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
+    13.0 * procedural_weather_noise(
+        match_seed,
+        tick,
+        position_m,
+        0x4528_21e6_38d0_1377,
+        65_536.0,
+        4,
+    ) as f32
 }
 
 fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {

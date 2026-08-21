@@ -6,9 +6,31 @@ use game::{
     match_environment, procedural_atmosphere_primary, procedural_cloud_cover,
     procedural_match_environment, procedural_solid_surface_elevation_m,
     procedural_terrain_elevation_m, procedural_unsheltered_wind_velocity_m_s,
-    procedural_water_depth_m, procedural_weather, tide_height_m,
+    procedural_water_depth_m, procedural_weather, tide_height_m, world_celestial_conditions,
+    world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
+
+fn derive_weather_at_surface_temperature(
+    mut primary: AtmospherePrimary,
+    surface_air_temperature_c: f32,
+) -> game::ProceduralWeather {
+    primary.surface_air_temperature_anomaly_c = 0.0;
+    derive_weather(
+        primary,
+        ClimateConditions {
+            annual_mean_air_temperature_c: surface_air_temperature_c,
+            seasonal_temperature_range_c: 0.0,
+            diurnal_temperature_range_c: 0.0,
+        },
+        CelestialConditions {
+            geographic_latitude_degrees: 0.0,
+            season_phase: 0.0,
+            day_phase: 0.0,
+            moon_phase: 0.0,
+        },
+    )
+}
 
 #[test]
 fn shared_dinghy_and_environment_preserve_the_accepted_tuning() {
@@ -211,13 +233,13 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        surface_air_temperature_c: 20.0,
+        surface_air_temperature_anomaly_c: 0.0,
         upper_air_temperature_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
     };
 
-    let wind = derive_weather(primary).wind_velocity_m_s;
+    let wind = derive_weather_at_surface_temperature(primary, 20.0).wind_velocity_m_s;
 
     assert!(wind.y > 5.0, "surface wind was {wind:?}");
     assert!(
@@ -236,7 +258,7 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
-        surface_air_temperature_c: 24.0,
+        surface_air_temperature_anomaly_c: 0.0,
         upper_air_temperature_c: -15.0,
         temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 10.0,
@@ -246,8 +268,8 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         ..calm_aloft
     };
 
-    let calm_weather = derive_weather(calm_aloft);
-    let sheared_weather = derive_weather(sheared);
+    let calm_weather = derive_weather_at_surface_temperature(calm_aloft, 24.0);
+    let sheared_weather = derive_weather_at_surface_temperature(sheared, 24.0);
 
     assert_eq!(
         calm_weather.wind_velocity_m_s,
@@ -269,7 +291,7 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        surface_air_temperature_c: 28.0,
+        surface_air_temperature_anomaly_c: 0.0,
         upper_air_temperature_c: -20.0,
         temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
         water_vapor_g_kg: 4.0,
@@ -279,8 +301,8 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         ..dry
     };
 
-    let dry_weather = derive_weather(dry);
-    let moist_weather = derive_weather(moist);
+    let dry_weather = derive_weather_at_surface_temperature(dry, 28.0);
+    let moist_weather = derive_weather_at_surface_temperature(moist, 28.0);
 
     assert!(moist_weather.relative_humidity > dry_weather.relative_humidity);
     assert!(moist_weather.cloudiness > dry_weather.cloudiness);
@@ -299,14 +321,37 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
         procedural_atmosphere_primary(seed, tick, position_m)
     );
     assert!(primary.pressure_hpa.is_finite());
-    assert!((-45.0..=45.0).contains(&primary.surface_air_temperature_c));
+    assert!((-15.0..=15.0).contains(&primary.surface_air_temperature_anomaly_c));
     assert!((-80.0..=10.0).contains(&primary.upper_air_temperature_c));
     assert!((0.0..=25.0).contains(&primary.water_vapor_g_kg));
 
     let nearby = procedural_atmosphere_primary(seed, tick + 1, position_m + Vector::new(1.0, 0.0));
     assert!((nearby.pressure_hpa - primary.pressure_hpa).abs() < 0.1);
-    assert!((nearby.surface_air_temperature_c - primary.surface_air_temperature_c).abs() < 0.1);
+    assert!(
+        (nearby.surface_air_temperature_anomaly_c - primary.surface_air_temperature_anomaly_c)
+            .abs()
+            < 0.1
+    );
     assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
+}
+
+#[test]
+fn procedural_weather_applies_climate_and_celestial_temperature_to_the_weather_anomaly() {
+    let seed = 0x5eed;
+    let tick = 12_345;
+    let position_m = Vector::new(12.0, -7.0);
+    let primary = procedural_atmosphere_primary(seed, tick, position_m);
+    let conditions = world_celestial_conditions(tick as f64 / 60.0);
+    let climate = world_climate_conditions();
+    let expected_surface_air_temperature_c =
+        current_air_temperature_c(climate, conditions) + primary.surface_air_temperature_anomaly_c;
+    let expected = derive_weather(primary, climate, conditions);
+
+    assert_eq!(procedural_weather(seed, tick, position_m), expected);
+    assert_eq!(
+        expected.surface_air_temperature_c,
+        expected_surface_air_temperature_c
+    );
 }
 
 #[test]

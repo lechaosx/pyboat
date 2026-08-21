@@ -231,7 +231,9 @@ fn upper_cloud_coverage() -> f32 {
 }
 
 fn rain_intensity() -> f32 {
-    let signal = low_cloud_coverage()
+    let cloudiness = low_cloud_coverage();
+    let signal = smoothstep(0.65, 0.75, cloudiness)
+        * cloudiness
         * (0.45 + 0.20 * atmospheric_instability() + 0.45 * atmospheric_lift());
     return smoothstep(0.55, 0.90, signal);
 }

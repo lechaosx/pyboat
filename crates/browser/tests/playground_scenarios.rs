@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, ProceduralWeather,
-    celestial_lighting, current_air_temperature_c, derive_weather,
+    celestial_lighting, derive_weather,
 };
 use rapier2d::prelude::Vector;
 use serde::Deserialize;
@@ -44,36 +44,33 @@ impl Scenario {
         }
     }
 
-    fn current_air_temperature_c(&self) -> f32 {
-        current_air_temperature_c(
+    fn weather(&self) -> ProceduralWeather {
+        derive_weather(
+            AtmospherePrimary {
+                pressure_hpa: self.pressure_hpa,
+                pressure_gradient_hpa_per_m: directed_vector(
+                    self.pressure_gradient / 1000.0,
+                    self.pressure_gradient_direction,
+                ),
+                synoptic_pressure_gradient_hpa_per_m: directed_vector(
+                    self.synoptic_pressure_gradient / 1000.0,
+                    self.synoptic_pressure_gradient_direction,
+                ),
+                surface_air_temperature_anomaly_c: self.current_air_temperature_anomaly,
+                upper_air_temperature_c: self.current_upper_air_temperature,
+                temperature_gradient_c_per_m: directed_vector(
+                    self.temperature_gradient / 1000.0,
+                    self.temperature_gradient_direction,
+                ),
+                water_vapor_g_kg: self.current_water_vapor,
+            },
             ClimateConditions {
                 annual_mean_air_temperature_c: self.annual_mean_air_temperature,
                 seasonal_temperature_range_c: self.seasonal_temperature_range,
                 diurnal_temperature_range_c: self.diurnal_temperature_range,
             },
             self.celestial_conditions(),
-        ) + self.current_air_temperature_anomaly
-    }
-
-    fn weather(&self) -> ProceduralWeather {
-        derive_weather(AtmospherePrimary {
-            pressure_hpa: self.pressure_hpa,
-            pressure_gradient_hpa_per_m: directed_vector(
-                self.pressure_gradient / 1000.0,
-                self.pressure_gradient_direction,
-            ),
-            synoptic_pressure_gradient_hpa_per_m: directed_vector(
-                self.synoptic_pressure_gradient / 1000.0,
-                self.synoptic_pressure_gradient_direction,
-            ),
-            surface_air_temperature_c: self.current_air_temperature_c(),
-            upper_air_temperature_c: self.current_upper_air_temperature,
-            temperature_gradient_c_per_m: directed_vector(
-                self.temperature_gradient / 1000.0,
-                self.temperature_gradient_direction,
-            ),
-            water_vapor_g_kg: self.current_water_vapor,
-        })
+        )
     }
 }
 

@@ -19,6 +19,7 @@
 				pkgs.rust-analyzer
 				pkgs.wasm-pack
 				pkgs.bun
+				pkgs.nodejs
 				pkgs.cargo-watch
 				pkgs.lld
 				pkgs.vulkan-loader

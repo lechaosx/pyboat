@@ -54,7 +54,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   client. Snapshots synchronize boats, not sampled environment fields or model
   parameters.
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
-  weather. Derived values have no override path.
+  weather. The seeded surface-air field is a weather anomaly; analytic climate,
+  season, and time of day supply its baseline in both Rust and WGSL before
+  humidity, instability, clouds, and rain are derived. Derived values have no
+  override path.
 - **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
   analytic gradient drives mostly isobaric surface wind. Broad pressure drives
   upper flow, horizontal temperature gradient contributes thermal wind, and

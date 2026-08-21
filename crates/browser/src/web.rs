@@ -10,6 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
     procedural_atmosphere_primary, procedural_tidal_conditions, world_celestial_conditions,
+    world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -213,6 +214,7 @@ impl Renderer {
         let primary =
             match_seed.map(|match_seed| procedural_atmosphere_primary(match_seed, tick, camera_m));
         let celestial = world_celestial_conditions(tick as f64 / 60.0);
+        let climate = world_climate_conditions();
         let tide = procedural_tidal_conditions(match_seed.unwrap_or(0), camera_m);
         let match_seed = match_seed.unwrap_or(0);
         self.queue.write_buffer(
@@ -225,14 +227,14 @@ impl Renderer {
                         primary.pressure_hpa,
                         primary.pressure_gradient_hpa_per_m.x,
                         primary.pressure_gradient_hpa_per_m.y,
-                        12.0,
+                        climate.seasonal_temperature_range_c,
                     ]
                 }),
                 synoptic_pressure_and_temperature: primary.map_or([0.0; 4], |primary| {
                     [
                         primary.synoptic_pressure_gradient_hpa_per_m.x,
                         primary.synoptic_pressure_gradient_hpa_per_m.y,
-                        14.0,
+                        climate.annual_mean_air_temperature_c,
                         primary.upper_air_temperature_c,
                     ]
                 }),
@@ -241,7 +243,7 @@ impl Renderer {
                         primary.water_vapor_g_kg,
                         primary.temperature_gradient_c_per_m.x,
                         primary.temperature_gradient_c_per_m.y,
-                        4.0,
+                        climate.diurnal_temperature_range_c,
                     ]
                 }),
                 celestial_conditions: [
@@ -253,7 +255,7 @@ impl Renderer {
                 world_surface_conditions: [
                     tide.reference_range_m,
                     tide.phase_offset,
-                    primary.map_or(0.0, |primary| primary.surface_air_temperature_c - 16.0),
+                    primary.map_or(0.0, |primary| primary.surface_air_temperature_anomaly_c),
                     0.0,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
