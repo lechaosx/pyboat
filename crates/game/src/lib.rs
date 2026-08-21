@@ -202,10 +202,12 @@ pub fn world_climate_conditions() -> ClimateConditions {
 }
 
 pub fn procedural_tidal_conditions(match_seed: u64, position_m: Vector) -> TidalConditions {
+    // Tide response and lag occupy independent seed domains; sharing terrain or
+    // hash-mixer constants would couple unrelated fields at aligned coordinates.
     let response =
-        terrain_fractal_noise(match_seed ^ 0x94d0_49bb_1331_11eb, position_m, 131_072.0, 3) as f32;
+        terrain_fractal_noise(match_seed ^ 0x6a09_e667_f3bc_c909, position_m, 131_072.0, 3) as f32;
     let lag =
-        terrain_fractal_noise(match_seed ^ 0xbf58_476d_1ce4_e5b9, position_m, 131_072.0, 3) as f32;
+        terrain_fractal_noise(match_seed ^ 0xbb67_ae85_84ca_a73b, position_m, 131_072.0, 3) as f32;
     TidalConditions {
         reference_range_m: 1.25 + 0.75 * response,
         phase_offset: 0.08 * lag,
