@@ -143,7 +143,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   thirty centimetres, but each octave fades out against the fragment's world-space
   pixel footprint before it can alias. Material relief remains single-sample,
   without parallax or per-material ray marching. Bounded broad-relief samples
-  provide cast shadows without displaced geometry.
+  provide cast shadows without displaced geometry. Where round-trip optical
+  transmittance is meaningful, shallow water mixes depth-attenuated bottom
+  reflectance into the water column; shared coastal geology selects sediment,
+  rock, and outcrop character, while filtered material gradients refine the
+  authoritative bottom normal without changing depth.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Explicit]** Gameplay and the procedural playground share production shader

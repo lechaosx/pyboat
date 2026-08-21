@@ -1852,37 +1852,72 @@ fn terrain_surface(
         let bottom_transmittance = exp(
             -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
         );
-        let fine_relief_amount = smoothstep(
-            0.015,
-            0.12,
-            length(terrain_gradient - material_gradient),
-        );
-        let submerged_rock_visibility = smoothstep(
-            0.45,
-            0.70,
-            max(coastal_rock_amount, coastal_outcrop_amount),
-        )
-            * fine_relief_amount * bottom_transmittance;
-        if submerged_rock_visibility > 0.001 {
-            let bottom_normal = normalize(vec3<f32>(-terrain_gradient, 1.0));
+        if bottom_transmittance > 0.02 {
+            let bottom_detail = material_fractal_sample(
+                vec2<u32>(0xa54ff53au, 0x3c6ef372u),
+                position_m,
+                8.0,
+                7u,
+            );
+            let rock_amount = smoothstep(
+                0.25,
+                0.75,
+                max(coastal_rock_amount, coastal_outcrop_amount),
+            );
+            let sediment_amount = smoothstep(0.08, 0.60, coastal_sediment_amount)
+                * (1.0 - rock_amount);
+            let silt_color = vec3<f32>(0.29, 0.32, 0.25);
+            let sediment_color = mix(
+                vec3<f32>(0.55, 0.49, 0.32),
+                vec3<f32>(0.66, 0.59, 0.38),
+                clamp(0.5 + 0.12 * bottom_detail.value, 0.0, 1.0),
+            );
+            let reef_structure = smoothstep(
+                0.55,
+                0.86,
+                1.0 - abs(bottom_detail.value),
+            );
+            let rock_color = mix(
+                vec3<f32>(0.14, 0.23, 0.21),
+                vec3<f32>(0.30, 0.42, 0.31),
+                clamp(
+                    0.18 + 0.62 * reef_structure + 0.28 * coastal_outcrop_amount,
+                    0.0,
+                    1.0,
+                ),
+            );
+            var bottom_color = mix(silt_color, sediment_color, sediment_amount);
+            bottom_color = mix(bottom_color, rock_color, rock_amount);
+            bottom_color *= 0.98 + mix(0.02, 0.16, rock_amount) * bottom_detail.value;
+            let visual_relief_m = mix(0.02, 0.38, rock_amount)
+                * mix(0.55, 1.0, bottom_transmittance);
+            let bottom_normal = normalize(vec3<f32>(
+                -(terrain_gradient + visual_relief_m * bottom_detail.gradient),
+                1.0,
+            ));
             let bottom_light = smoothstep(
                 -0.15,
                 0.88,
                 dot(bottom_normal, primary_light_direction()),
             );
-            let bottom_lighting_amount = landscape_visibility.w
-                * clamp(direct_light_amount(), 0.0, 1.0);
             let bottom_light_grade = mix(
                 1.0,
-                mix(0.72, 1.20, bottom_light),
-                bottom_lighting_amount,
+                mix(0.66, 1.22, bottom_light),
+                landscape_visibility.w * clamp(direct_light_amount(), 0.0, 1.0),
+            );
+            bottom_color *= bottom_light_grade;
+            let water_veiled_bottom = mix(
+                bottom_color * vec3<f32>(0.65, 0.88, 0.92),
+                shallow_color,
+                0.35 * (1.0 - bottom_transmittance),
+            );
+            let bottom_visibility = clamp(
+                1.35 * tuning.water_tuning.y * bottom_transmittance,
+                0.0,
+                0.78,
             );
             return TerrainSurface(
-                open_water * mix(
-                    1.0,
-                    bottom_light_grade,
-                    tuning.water_tuning.y * submerged_rock_visibility,
-                ),
+                mix(open_water, water_veiled_bottom, bottom_visibility),
                 vec2<f32>(0.0),
                 1.0,
             );

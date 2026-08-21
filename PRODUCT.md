@@ -70,10 +70,11 @@ current playable behavior; this file does not track delivery status.
 
 - **[Explicit]** Procedural graphics communicate physical scale and environment.
   This includes wave lines around islands and moving ships. Water transitions
-  continuously with depth and distinctly at the moving shoreline; land has
-  recognizable beach, vegetation, rock, snow, and ice materials. The same solid
-  ice surface covers land and polar water rather than using a decorative
-  floating-ice layer.
+  continuously with depth and distinctly at the moving shoreline. Clear shallow
+  water reveals complex sediment, rock, outcrop, and reef structure through
+  depth-attenuated bottom color and relief; land has recognizable beach,
+  vegetation, rock, snow, and ice materials. The same solid ice surface covers
+  land and polar water rather than using a decorative floating-ice layer.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes
