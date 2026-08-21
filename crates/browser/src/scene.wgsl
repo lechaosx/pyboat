@@ -1434,7 +1434,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     // Long terrain shadows follow island-scale relief; coastal detail remains
     // locally lit instead of multiplying the full terrain cost at every sample.
     let terrain_position_m = position_m / tuning.terrain_tuning.x;
-    let cluster = terrain_fractal_sample(
+    let cluster = terrain_simplex_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
         8192.0,
@@ -1446,7 +1446,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         1024.0,
         5u,
     ).value;
-    let unscaled_elevation_m = 18.0 * (0.68 * cluster + 0.32 * island - 0.35);
+    let unscaled_elevation_m = 18.0 * (0.68 * cluster + 0.32 * island - 0.30);
     let island_ruggedness = smoothstep(0.32, 0.58, cluster);
     let trench_depth = smoothstep(0.50, 0.74, -cluster);
     let elevation_scale = tuning.terrain_tuning.y
