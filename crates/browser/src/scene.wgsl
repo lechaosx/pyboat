@@ -508,6 +508,8 @@ fn terrain_fractal_sample(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
+    let axis_hash = terrain_hash(scene.match_seed ^ field_salt);
+    var octave_axis = MATERIAL_GRADIENT_DIRECTIONS[axis_hash.x & 7u];
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
@@ -515,12 +517,27 @@ fn terrain_fractal_sample(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
+        let perpendicular_axis = rotate_left(octave_axis);
+        let octave_sample = terrain_value_noise(
+            octave_seed,
+            vec2<f32>(
+                dot(position_m, octave_axis),
+                dot(position_m, perpendicular_axis),
+            ),
+            wavelength_m,
+        );
         sample.value += amplitude * octave_sample.value;
-        sample.gradient += amplitude * octave_sample.gradient;
+        sample.gradient += amplitude * (
+            octave_axis * octave_sample.gradient.x
+                + perpendicular_axis * octave_sample.gradient.y
+        );
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
+        octave_axis = vec2<f32>(
+            0.6 * octave_axis.x - 0.8 * octave_axis.y,
+            0.8 * octave_axis.x + 0.6 * octave_axis.y,
+        );
     }
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;

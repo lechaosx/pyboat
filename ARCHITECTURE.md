@@ -101,6 +101,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   within a narrow numeric tolerance and preserve categorical boundaries outside
   that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
   portability requirement.
+- **[Implicit]** Long-duration transported scalar weather and broad unthresholded
+  tide response retain double-precision value noise. Successive octaves rotate
+  their square lattices before sampling, preserving analytic world-space
+  gradients and long-time coordinate precision without coherent grid alignment.
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
   weather. The seeded surface-air field is a weather anomaly; analytic climate,
   season, and time of day supply its baseline in both Rust and WGSL before

@@ -66,6 +66,16 @@ const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
     (0.9238795, -0.3826834),
     (0.9914449, -0.1305262),
 ];
+const VALUE_NOISE_AXES: [(f64, f64); 8] = [
+    (1.0, 0.0),
+    (0.707_106_77, 0.707_106_77),
+    (0.0, 1.0),
+    (-0.707_106_77, 0.707_106_77),
+    (-1.0, 0.0),
+    (-0.707_106_77, -0.707_106_77),
+    (0.0, -1.0),
+    (0.707_106_77, -0.707_106_77),
+];
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
 const WORLD_YEAR_DAYS: f64 = 360.0;
 const WORLD_LUNAR_CYCLE_DAYS: f64 = 28.0;
@@ -959,17 +969,25 @@ fn terrain_fractal_noise_at(
     let mut noise = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
+    let (mut axis_x, mut axis_y) =
+        VALUE_NOISE_AXES[(wind_hash(field_seed) as usize) & (VALUE_NOISE_AXES.len() - 1)];
     for octave in 0..octave_count {
+        let rotated_x_m = axis_x * position_x_m + axis_y * position_y_m;
+        let rotated_y_m = -axis_y * position_x_m + axis_x * position_y_m;
         noise += amplitude
             * terrain_value_noise_at(
                 field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-                position_x_m,
-                position_y_m,
+                rotated_x_m,
+                rotated_y_m,
                 wavelength_m,
             );
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
+        (axis_x, axis_y) = (
+            0.6 * axis_x - 0.8 * axis_y,
+            0.8 * axis_x + 0.6 * axis_y,
+        );
     }
     noise / amplitude_sum
 }
@@ -986,19 +1004,29 @@ fn terrain_fractal_noise_sample(
     let mut gradient_y_per_m = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
+    let (mut axis_x, mut axis_y) =
+        VALUE_NOISE_AXES[(wind_hash(field_seed) as usize) & (VALUE_NOISE_AXES.len() - 1)];
     for octave in 0..octave_count {
+        let rotated_x_m = axis_x * position_x_m + axis_y * position_y_m;
+        let rotated_y_m = -axis_y * position_x_m + axis_x * position_y_m;
         let sample = terrain_value_noise_sample(
             field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-            position_x_m,
-            position_y_m,
+            rotated_x_m,
+            rotated_y_m,
             wavelength_m,
         );
         value += amplitude * sample.value;
-        gradient_x_per_m += amplitude * sample.gradient_x_per_m;
-        gradient_y_per_m += amplitude * sample.gradient_y_per_m;
+        gradient_x_per_m += amplitude
+            * (axis_x * sample.gradient_x_per_m - axis_y * sample.gradient_y_per_m);
+        gradient_y_per_m += amplitude
+            * (axis_y * sample.gradient_x_per_m + axis_x * sample.gradient_y_per_m);
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
+        (axis_x, axis_y) = (
+            0.6 * axis_x - 0.8 * axis_y,
+            0.8 * axis_x + 0.6 * axis_y,
+        );
     }
     ScalarNoiseSample {
         value: value / amplitude_sum,
