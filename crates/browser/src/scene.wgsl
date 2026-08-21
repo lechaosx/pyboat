@@ -1532,7 +1532,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var reef: TerrainNoiseSample;
     reef.value = 0.0;
     reef.gradient = vec2<f32>(0.0);
-    if coastal_detail_mask_value > 0.0 {
+    if coastal_detail_mask_value > 0.0 && coastal_rock_relief.value > 0.0 {
         reef = terrain_simplex_fractal_sample(
             vec2<u32>(0x75374cc3u, 0x589965ccu),
             terrain_position_m,
@@ -1545,7 +1545,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var outer_reef: TerrainNoiseSample;
     outer_reef.value = 0.0;
     outer_reef.gradient = vec2<f32>(0.0);
-    if outer_reef_mask_value > 0.0 {
+    if outer_reef_mask_value > 0.0 && coastal_rock_relief.value > 0.0 {
         outer_reef = terrain_simplex_fractal_sample(
             vec2<u32>(0x9c88c6e3u, 0x8ebc6af0u),
             terrain_position_m,
@@ -1582,7 +1582,8 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * landscape_visibility.x
         + 1.5 * coastal_detail_mask_value * reef_detail_amount * reef.value
             * landscape_visibility.x
-        + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x
+        + 2.0 * rock_mask_value
+            * coastal_rock_relief.value * reef_peak.value * landscape_visibility.x
         + 1.2 * outer_reef_mask_value
             * outer_reef_detail_amount * shaped_outer_reef.value
             * landscape_visibility.x;
@@ -1597,7 +1598,9 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
                 * coastal_rock_relief.value * coastal_detail_mask_value * reef.value
             + reef.gradient * coastal_detail_mask_value * reef_detail_amount
     ) + landscape_visibility.x * 2.0 * (
-        rock_mask_gradient * reef_peak.value + reef_peak.gradient * rock_mask_value
+        rock_mask_gradient * coastal_rock_relief.value * reef_peak.value
+            + coastal_rock_relief.gradient * rock_mask_value * reef_peak.value
+            + reef_peak.gradient * rock_mask_value * coastal_rock_relief.value
     ) + 1.2 * landscape_visibility.x * (
         outer_reef_mask_gradient
             * outer_reef_detail_amount * shaped_outer_reef.value
@@ -1617,7 +1620,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.coastal_rock_amount = landscape_visibility.x
         * visible_coastal_mask_value * coastal_rock_amount;
     terrain.coastal_outcrop_amount = landscape_visibility.x
-        * rock_mask_value * reef_peak.value;
+        * rock_mask_value * coastal_rock_relief.value * reef_peak.value;
     terrain.coastal_sediment_amount = landscape_visibility.x
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
