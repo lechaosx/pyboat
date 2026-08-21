@@ -38,11 +38,11 @@ current playable behavior; this file does not track delivery status.
   the parent landforms look noisy or assembled from separate objects.
 - **[Explicit]** Coast character varies from beach-dominant to mixed and
   beachless. Gentle shores can form connected beaches, cliffs continue below the
-  waterline, shallow shelves give way to deep ocean basins, and rare trenches are
-  possible. Sediment beds remain smooth except for sparse rock outcrops, while
-  rock substrate varies from flat to rugged. Outcrops may remain submerged or
-  cross the waterline onto sandy, rocky, or pebbly beaches, including beaches
-  over rocky shallows.
+  waterline, and geology-dependent shallow shelves give way to deep ocean basins
+  with rare trenches. Sediment beds remain smooth except for sparse rock
+  outcrops, while rock substrate varies from flat to rugged. Outcrops may remain
+  submerged or cross the waterline onto sandy, rocky, or pebbly beaches,
+  including beaches over rocky shallows.
 - **[Explicit]** Depth affects play: shallow water can slow and ground boats,
   rocks can damage them, small boats commonly find reef passages unavailable to
   larger ships, and spawns begin in safe water. Grounding has static hold and

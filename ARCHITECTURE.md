@@ -66,7 +66,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   vegetation to reach the water. Local detail varies each expression without
   changing its regional cause. Material zones span the configured astronomical
   tidal range: low tide exposes wet rock or sediment, and ordinary vegetation
-  begins above the permanent intertidal band.
+  begins above the permanent intertidal band. The same geology stretches the
+  shallow signed landform before its transition to the ocean basin, giving
+  rocky, reef-forming, and depositional coasts broader physical shelves while
+  low-support steep coasts can remain narrow.
 - **[Explicit]** Inland physical relief uses a portable simplex field spanning
   hill to boat scale. The shared broad coastal-ruggedness field continuously
   blends that relief from smooth rolling ground into ridged rock, correlating

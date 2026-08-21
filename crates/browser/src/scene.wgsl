@@ -1301,20 +1301,73 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var base_depth: TerrainNoiseSample;
     base_depth.value = -base.value;
     base_depth.gradient = -base.gradient;
-    let offshore_amount = terrain_smoothstep_sample(4.0, 24.0, base_depth);
+    var reef_ruggedness: TerrainNoiseSample;
+    reef_ruggedness.value = 0.0;
+    reef_ruggedness.gradient = vec2<f32>(0.0);
+    var coastal_rock: TerrainNoiseSample;
+    coastal_rock.value = 0.0;
+    coastal_rock.gradient = vec2<f32>(0.0);
+    if base.value > -32.0 && base.value < 4.0 {
+        let reef_ruggedness_noise = terrain_fractal_sample(
+            vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+            terrain_position_m,
+            2048.0,
+            3u,
+        );
+        reef_ruggedness = terrain_smoothstep_sample(
+            -0.25,
+            0.25,
+            reef_ruggedness_noise,
+        );
+        let coastal_substrate = terrain_fractal_sample(
+            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+            terrain_position_m,
+            1536.0,
+            3u,
+        );
+        coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
+    }
+    var coastal_sediment: TerrainNoiseSample;
+    coastal_sediment.value = (1.0 - coastal_rock.value)
+        * (1.0 - reef_ruggedness.value);
+    coastal_sediment.gradient = -coastal_rock.gradient
+        * (1.0 - reef_ruggedness.value)
+        - reef_ruggedness.gradient * (1.0 - coastal_rock.value);
+    var rock_shelf_support: TerrainNoiseSample;
+    rock_shelf_support.value = coastal_rock.value
+        * (1.0 - 0.65 * reef_ruggedness.value);
+    rock_shelf_support.gradient = coastal_rock.gradient
+        * (1.0 - 0.65 * reef_ruggedness.value)
+        - 0.65 * coastal_rock.value * reef_ruggedness.gradient;
+    var shelf_support = rock_shelf_support;
+    if 0.8 * coastal_sediment.value > shelf_support.value {
+        shelf_support.value = 0.8 * coastal_sediment.value;
+        shelf_support.gradient = 0.8 * coastal_sediment.gradient;
+    }
+    let shelf_extension = terrain_smoothstep_sample(0.45, 0.85, shelf_support);
+    var coastal_depth: TerrainNoiseSample;
+    if base_depth.value > 0.0 {
+        let coastal_depth_scale = 1.0 - 0.18 * shelf_extension.value;
+        coastal_depth.value = base_depth.value * coastal_depth_scale;
+        coastal_depth.gradient = base_depth.gradient * coastal_depth_scale
+            - 0.18 * base_depth.value * shelf_extension.gradient;
+    } else {
+        coastal_depth = base_depth;
+    }
+    let offshore_amount = terrain_smoothstep_sample(4.0, 24.0, coastal_depth);
     var ocean_floor_depth: TerrainNoiseSample;
     ocean_floor_depth.value = 3000.0 + 3000.0 * trench_depth.value;
     ocean_floor_depth.gradient = 3000.0 * trench_depth.gradient;
     let deepened_depth_m = mix(
-        base_depth.value,
+        coastal_depth.value,
         ocean_floor_depth.value,
         offshore_amount.value,
     );
     let deepened_depth_gradient = mix(
-        base_depth.gradient,
+        coastal_depth.gradient,
         ocean_floor_depth.gradient,
         offshore_amount.value,
-    ) + offshore_amount.gradient * (ocean_floor_depth.value - base_depth.value);
+    ) + offshore_amount.gradient * (ocean_floor_depth.value - coastal_depth.value);
 
     var terrain: TerrainSample;
     terrain.elevation_m = -deepened_depth_m;
@@ -1373,12 +1426,15 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
                     * land_detail_mask.value * land_detail_amount
         );
     }
-    let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, base);
-    let seabed_shore_rise = terrain_smoothstep_sample(-0.5, -0.1, base);
+    var shaped_bed: TerrainNoiseSample;
+    shaped_bed.value = terrain.elevation_m;
+    shaped_bed.gradient = terrain.gradient;
+    let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, shaped_bed);
+    let seabed_shore_rise = terrain_smoothstep_sample(-0.5, -0.1, shaped_bed);
     let seabed_shore_gate_value = 1.0 - seabed_shore_rise.value;
     let seabed_mask_value = seabed_deep_gate.value * seabed_shore_gate_value;
-    let rock_deep_gate = terrain_smoothstep_sample(-2.0, -0.8, base);
-    let rock_shore_rise = terrain_smoothstep_sample(1.2, 2.0, base);
+    let rock_deep_gate = terrain_smoothstep_sample(-2.0, -0.8, shaped_bed);
+    let rock_shore_rise = terrain_smoothstep_sample(1.2, 2.0, shaped_bed);
     let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
     let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
     if seabed_mask_value == 0.0 && rock_mask_value == 0.0 {
@@ -1396,20 +1452,6 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         256.0,
         3u,
     );
-    let reef_ruggedness_noise = terrain_fractal_sample(
-        vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
-        terrain_position_m,
-        2048.0,
-        3u,
-    );
-    let reef_ruggedness = terrain_smoothstep_sample(-0.25, 0.25, reef_ruggedness_noise);
-    let coastal_substrate = terrain_fractal_sample(
-        vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-        terrain_position_m,
-        1536.0,
-        3u,
-    );
-    let coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
     let coastal_rock_amount = coastal_rock.value;
     let coastal_rock_relief = terrain_smoothstep_sample(0.45, 0.65, coastal_rock);
     let reef_detail_amount = coastal_rock_relief.value

@@ -628,12 +628,50 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
     let base_depth_m = -base_elevation_m;
-    // Preserve measured coastal relief before deepening the open ocean; applying
-    // the remap at the shore would turn navigable coastal slopes into abyss walls.
-    let offshore_amount = smoothstep_range(4.0, 24.0, base_depth_m);
+    let (reef_ruggedness, coastal_rock_amount) = if base_elevation_m > -32.0
+        && base_elevation_m < 4.0
+    {
+        (
+            smoothstep_range(
+                -0.25,
+                0.25,
+                terrain_fractal_noise(
+                    match_seed ^ 0xbf58_476d_1ce4_e5b9,
+                    position_m,
+                    2048.0,
+                    3,
+                ),
+            ),
+            smoothstep_range(
+                -0.25,
+                0.35,
+                terrain_fractal_noise(
+                    match_seed ^ 0x9e37_79b9_7f4a_7c15,
+                    position_m,
+                    1536.0,
+                    3,
+                ),
+            ),
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    let coastal_sediment_amount =
+        (1.0 - coastal_rock_amount) * (1.0 - reef_ruggedness);
+    let rock_shelf_support = coastal_rock_amount * (1.0 - 0.65 * reef_ruggedness);
+    let shelf_support = rock_shelf_support.max(0.8 * coastal_sediment_amount);
+    let shelf_extension = smoothstep_range(0.45, 0.85, shelf_support);
+    // Shared coastal geology stretches the shallow part of the signed landform
+    // before it falls through the continental slope into the ocean basin.
+    let coastal_depth_m = if base_depth_m > 0.0 {
+        base_depth_m * (1.0 - 0.18 * shelf_extension)
+    } else {
+        base_depth_m
+    };
+    let offshore_amount = smoothstep_range(4.0, 24.0, coastal_depth_m);
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
     let mut terrain_elevation_m =
-        -(base_depth_m + offshore_amount * (ocean_floor_depth_m - base_depth_m));
+        -(coastal_depth_m + offshore_amount * (ocean_floor_depth_m - coastal_depth_m));
     let land_detail_mask = smoothstep_range(4.0, 12.0, base_elevation_m);
     if land_detail_mask > 0.0 {
         let land_ruggedness = smoothstep_range(
@@ -659,12 +697,12 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         terrain_elevation_m +=
             5.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * shaped_land_detail;
     }
-    // Reef gates use the pre-remap coast so open-ocean depth does not change the
-    // distribution of channels and emergent rocks.
-    let seabed_mask = smoothstep_range(-4.0, -2.5, base_elevation_m)
-        * (1.0 - smoothstep_range(-0.5, -0.1, base_elevation_m));
-    let rock_mask = smoothstep_range(-2.0, -0.8, base_elevation_m)
-        * (1.0 - smoothstep_range(1.2, 2.0, base_elevation_m));
+    // Reef gates follow the shaped shelf so detail occupies genuinely shallow
+    // water rather than a narrow band in the pre-slope density field.
+    let seabed_mask = smoothstep_range(-4.0, -2.5, terrain_elevation_m)
+        * (1.0 - smoothstep_range(-0.5, -0.1, terrain_elevation_m));
+    let rock_mask = smoothstep_range(-2.0, -0.8, terrain_elevation_m)
+        * (1.0 - smoothstep_range(1.2, 2.0, terrain_elevation_m));
     if seabed_mask == 0.0 && rock_mask == 0.0 {
         return terrain_elevation_m as f32;
     }
@@ -673,16 +711,6 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         position_m,
         256.0,
         TERRAIN_SHOAL_OCTAVE_COUNT,
-    );
-    let reef_ruggedness = smoothstep_range(
-        -0.25,
-        0.25,
-        terrain_fractal_noise(match_seed ^ 0xbf58_476d_1ce4_e5b9, position_m, 2048.0, 3),
-    );
-    let coastal_rock_amount = smoothstep_range(
-        -0.25,
-        0.35,
-        terrain_fractal_noise(match_seed ^ 0x9e37_79b9_7f4a_7c15, position_m, 1536.0, 3),
     );
     let coastal_rock_relief_amount = smoothstep_range(0.45, 0.65, coastal_rock_amount);
     let reef = terrain_fractal_noise(
