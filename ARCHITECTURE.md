@@ -76,8 +76,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   owns those transformations. A disconnected-body gate derives from the detail
   values rather than another noise field.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
-  models. Tide contributes to authoritative and predicted depth as well as the
-  rendered shoreline.
+  models. Broad tide response and phase fields represent unresolved basin
+  dynamics independently of terrain; bathymetry affects resulting water depth,
+  not tide generation. Tide contributes to authoritative and predicted depth as
+  well as the rendered shoreline.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
   depth and grounding. WGSL mirrors that surface, blends it into land, and
   preserves a sharp water-facing boundary. Persistent polar cold expands this
