@@ -72,6 +72,7 @@ var<private> sun_light_amount: f32;
 var<private> moon_light_amount: f32;
 var<private> ambient_light_color: vec3<f32>;
 var<private> sunset_scattering: f32;
+var<private> material_pixel_footprint_m: f32;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -700,26 +701,33 @@ fn material_fractal_sample(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
-        let perpendicular_axis = rotate_left(octave_axis);
-        let octave_sample = material_gradient_noise(
-            octave_seed,
-            vec2<f32>(
-                dot(position_m, octave_axis),
-                dot(position_m, perpendicular_axis),
-            ),
+        let octave_visibility = smoothstep(
+            material_pixel_footprint_m,
+            2.0 * material_pixel_footprint_m,
             wavelength_m,
         );
-        sample.value += amplitude * octave_sample.value;
-        sample.gradient += amplitude * (
-            octave_axis * octave_sample.gradient.x
-                + perpendicular_axis * octave_sample.gradient.y
-        );
+        if octave_visibility > 0.0 {
+            let octave_seed = scene.match_seed
+                ^ field_salt
+                ^ multiply_u64(
+                    vec2<u32>(octave, 0u),
+                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+                );
+            let perpendicular_axis = rotate_left(octave_axis);
+            let octave_sample = material_gradient_noise(
+                octave_seed,
+                vec2<f32>(
+                    dot(position_m, octave_axis),
+                    dot(position_m, perpendicular_axis),
+                ),
+                wavelength_m,
+            );
+            sample.value += amplitude * octave_visibility * octave_sample.value;
+            sample.gradient += amplitude * octave_visibility * (
+                octave_axis * octave_sample.gradient.x
+                    + perpendicular_axis * octave_sample.gradient.y
+            );
+        }
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.53;
@@ -1740,7 +1748,7 @@ fn terrain_rock_surface(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
         5.0,
-        3u,
+        6u,
     );
     let physical_ruggedness = smoothstep(
         0.01,
@@ -1793,7 +1801,7 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
         4.0,
-        2u,
+        6u,
     );
     let fine = material_fractal_sample(
         vec2<u32>(0x13198a2eu, 0x03707344u),
@@ -1886,7 +1894,7 @@ fn terrain_surface(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
         2.5,
-        3u,
+        6u,
     );
     let surface_grade = clamp(
         0.5 + landscape_visibility.z
@@ -2448,6 +2456,13 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
 
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+    material_pixel_footprint_m = max(
+        0.0001,
+        max(
+            length(dpdx(input.world_position_m)),
+            length(dpdy(input.world_position_m)),
+        ),
+    );
     tuning = production_tuning();
     layer_visibility = vec4<f32>(1.0);
     landscape_visibility = vec4<f32>(1.0);
@@ -2462,6 +2477,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
+    material_pixel_footprint_m = max(
+        0.0001,
+        max(
+            length(dpdx(input.world_position_m)),
+            length(dpdy(input.world_position_m)),
+        ),
+    );
     tuning = playground_scene_tuning();
     layer_visibility = playground.layer_visibility;
     landscape_visibility = playground.landscape_visibility;

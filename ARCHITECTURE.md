@@ -139,9 +139,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   seeded elevation at each pixel and zoom level; physics samples depth only at
   positions where boats require it. A single procedural surface normal combines
   the authoritative heightfield gradient with material-specific visual detail
-  before celestial lighting. Material relief remains single-sample, without
-  parallax or per-material ray marching. Bounded broad-relief samples provide
-  cast shadows without displaced geometry.
+  before celestial lighting. Appearance-only material spectra may extend below
+  thirty centimetres, but each octave fades out against the fragment's world-space
+  pixel footprint before it can alias. Material relief remains single-sample,
+  without parallax or per-material ray marching. Bounded broad-relief samples
+  provide cast shadows without displaced geometry.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Explicit]** Gameplay and the procedural playground share production shader
