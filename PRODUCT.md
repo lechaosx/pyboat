@@ -81,7 +81,8 @@ current playable behavior; this file does not track delivery status.
   without making tropical vegetation do the same. Material boundaries remain
   sharp except for the grass-to-forest blend; color variation stays within each
   material. Gameplay-scale relief comes from the authoritative heightfield;
-  smaller material detail may refine lighting without changing collision.
+  rough physical surfaces resolve to a one-metre wavelength, while smaller
+  material detail may refine lighting without changing collision.
   Heightfield relief lighting and bounded cast shadows add depth without
   displacing shorelines or changing collision. Visual material structure is
   calibrated for boat-scale zoom and does not expose the procedural sampling

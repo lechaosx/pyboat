@@ -1425,6 +1425,49 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
                 + shaped_land_detail.gradient
                     * land_detail_mask.value * land_detail_amount
         );
+        let land_micro_relief_amount = terrain_smoothstep_sample(
+            0.40,
+            0.70,
+            land_ruggedness,
+        );
+        if land_micro_relief_amount.value > 0.0 {
+            let land_micro_relief = terrain_simplex_fractal_sample(
+                vec2<u32>(0xfe94f82bu, 0x3c6ef372u),
+                terrain_position_m,
+                4.0,
+                3u,
+                0.6,
+            );
+            var ridged_micro_relief: TerrainNoiseSample;
+            ridged_micro_relief.value = 1.0 - 2.0 * abs(land_micro_relief.value);
+            ridged_micro_relief.gradient = -2.0
+                * select(-1.0, 1.0, land_micro_relief.value >= 0.0)
+                * land_micro_relief.gradient;
+            var shaped_micro_relief: TerrainNoiseSample;
+            shaped_micro_relief.value = mix(
+                land_micro_relief.value,
+                ridged_micro_relief.value,
+                ridge_blend.value,
+            );
+            shaped_micro_relief.gradient = mix(
+                land_micro_relief.gradient,
+                ridged_micro_relief.gradient,
+                ridge_blend.value,
+            ) + ridge_blend.gradient
+                * (ridged_micro_relief.value - land_micro_relief.value);
+            terrain.elevation_m += 0.35 * landscape_visibility.x
+                * land_detail_mask.value
+                * land_micro_relief_amount.value
+                * shaped_micro_relief.value;
+            terrain.gradient += 0.35 * landscape_visibility.x * (
+                land_detail_mask.gradient
+                    * land_micro_relief_amount.value * shaped_micro_relief.value
+                    + land_micro_relief_amount.gradient
+                        * land_detail_mask.value * shaped_micro_relief.value
+                    + shaped_micro_relief.gradient
+                        * land_detail_mask.value * land_micro_relief_amount.value
+            );
+        }
     }
     var shaped_bed: TerrainNoiseSample;
     shaped_bed.value = terrain.elevation_m;
@@ -1482,11 +1525,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     reef.value = 0.0;
     reef.gradient = vec2<f32>(0.0);
     if coastal_detail_mask_value > 0.0 {
-        reef = terrain_fractal_sample(
+        reef = terrain_simplex_fractal_sample(
             vec2<u32>(0x75374cc3u, 0x589965ccu),
             terrain_position_m,
             32.0,
-            4u,
+            6u,
+            0.55,
         );
     }
     let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
@@ -1498,7 +1542,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             vec2<u32>(0x9c88c6e3u, 0x8ebc6af0u),
             terrain_position_m,
             128.0,
-            5u,
+            8u,
             0.6,
         );
     }
@@ -2357,8 +2401,12 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(signed_debug_color(island), 1.0);
     }
     if mode == 37u {
-        let reef = terrain_fractal_sample(
-            vec2<u32>(0x75374cc3u, 0x589965ccu), terrain_position_m, 32.0, 4u,
+        let reef = terrain_simplex_fractal_sample(
+            vec2<u32>(0x75374cc3u, 0x589965ccu),
+            terrain_position_m,
+            32.0,
+            6u,
+            0.55,
         ).value;
         return vec4<f32>(signed_debug_color(reef), 1.0);
     }

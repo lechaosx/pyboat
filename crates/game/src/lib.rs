@@ -33,7 +33,10 @@ const LAND_WIND_MAX_SPEED_REDUCTION: f32 = 0.7;
 const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_SHOAL_OCTAVE_COUNT: usize = 3;
-const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
+const TERRAIN_LAND_RELIEF_OCTAVE_COUNT: usize = 6;
+const TERRAIN_LAND_MICRO_RELIEF_OCTAVE_COUNT: usize = 3;
+const TERRAIN_REEF_OCTAVE_COUNT: usize = 6;
+const TERRAIN_OUTER_REEF_OCTAVE_COUNT: usize = 8;
 // OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
 // features when a field is thresholded. Keep values and order synchronized with
 // `scene.wgsl` so its hash selects the same gradient.
@@ -688,7 +691,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             match_seed ^ 0x2545_f491_4f6c_dd1d,
             position_m,
             256.0,
-            6,
+            TERRAIN_LAND_RELIEF_OCTAVE_COUNT,
             0.65,
         ) as f64;
         let ridged_detail = 1.0 - 2.0 * land_detail.abs();
@@ -696,6 +699,20 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         let shaped_land_detail = lerp(land_detail, ridged_detail, ridge_blend);
         terrain_elevation_m +=
             5.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * shaped_land_detail;
+        let land_micro_relief_amount = smoothstep_range(0.40, 0.70, land_ruggedness);
+        if land_micro_relief_amount > 0.0 {
+            let land_micro_relief = terrain_simplex_fractal_noise(
+                match_seed ^ 0x3c6e_f372_fe94_f82b,
+                position_m,
+                4.0,
+                TERRAIN_LAND_MICRO_RELIEF_OCTAVE_COUNT,
+                0.6,
+            ) as f64;
+            let ridged_micro_relief = 1.0 - 2.0 * land_micro_relief.abs();
+            let shaped_micro_relief = lerp(land_micro_relief, ridged_micro_relief, ridge_blend);
+            terrain_elevation_m +=
+                0.35 * land_detail_mask * land_micro_relief_amount * shaped_micro_relief;
+        }
     }
     // Reef gates follow the shaped shelf so detail occupies genuinely shallow
     // water rather than a narrow band in the pre-slope density field.
@@ -721,12 +738,13 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let coastal_rock_relief_amount = smoothstep_range(0.45, 0.65, coastal_rock_amount);
     let coastal_detail_mask = seabed_mask.max(rock_mask);
     let reef = if coastal_detail_mask > 0.0 {
-        terrain_fractal_noise(
+        terrain_simplex_fractal_noise(
             match_seed ^ 0x5899_65cc_7537_4cc3,
             position_m,
             32.0,
             TERRAIN_REEF_OCTAVE_COUNT,
-        )
+            0.55,
+        ) as f64
     } else {
         0.0
     };
@@ -736,7 +754,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             match_seed ^ 0x8ebc_6af0_9c88_c6e3,
             position_m,
             128.0,
-            5,
+            TERRAIN_OUTER_REEF_OCTAVE_COUNT,
             0.6,
         ) as f64
     } else {

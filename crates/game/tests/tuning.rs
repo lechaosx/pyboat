@@ -1256,6 +1256,43 @@ fn procedural_gentle_land_retains_zoomed_surface_relief() {
 }
 
 #[test]
+fn procedural_rough_terrain_retains_metre_scale_relief() {
+    let mut metre_scale_residuals_m = Vec::new();
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for x in -64..=64 {
+            for y in -64..=64 {
+                let position_m = Vector::new(x as f32 * 128.0 + 0.37, y as f32 * 128.0 + 0.19);
+                let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                if !(-8.0..=200.0).contains(&elevation_m) {
+                    continue;
+                }
+                let left_4_m =
+                    procedural_terrain_elevation_m(seed, position_m - Vector::new(4.0, 0.0));
+                let right_4_m =
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(4.0, 0.0));
+                if (right_4_m - left_4_m).abs() < 0.5 {
+                    continue;
+                }
+                let left_1_m =
+                    procedural_terrain_elevation_m(seed, position_m - Vector::new(0.5, 0.0));
+                let right_1_m =
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(0.5, 0.0));
+                metre_scale_residuals_m.push((elevation_m - 0.5 * (left_1_m + right_1_m)).abs());
+            }
+        }
+    }
+
+    assert!(metre_scale_residuals_m.len() >= 100);
+    metre_scale_residuals_m.sort_by(f32::total_cmp);
+    let residual_p90_m = metre_scale_residuals_m[metre_scale_residuals_m.len() * 9 / 10];
+    assert!(
+        residual_p90_m >= 0.06,
+        "1 m rough-terrain relief residual p90 was {residual_p90_m} m"
+    );
+}
+
+#[test]
 fn procedural_islands_mix_gentle_beaches_with_steep_cliff_coasts() {
     let mut gentle_coast_points = 0;
     let mut cliff_coast_points = 0;

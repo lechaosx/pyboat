@@ -47,7 +47,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   multiple scales in uncompressed metres. Reefs and rocks are field features, not
   replicated objects. Land occupancy stays sparse enough for open water to remain
   overwhelmingly connected across representative seeds; this is a measured
-  statistical outcome rather than a structural guarantee.
+  statistical outcome rather than a structural guarantee. Rough physical
+  phenomena may retain a one-metre wavelength band, while genuinely smooth
+  surfaces remain low-frequency; finer structure is appearance-only and cannot
+  change depth, collision, or the shoreline.
 - **[Implicit]** Large-scale archipelago suitability uses three octaves of
   24-direction two-dimensional simplex-gradient noise. Its triangular lattice
   gives threshold contours substantially less directional structure than square
@@ -75,7 +78,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   ruggedness field transforms toward connected ridges and cuts; depositional
   shelves remain comparatively smooth.
 - **[Explicit]** Inland physical relief uses a portable simplex field spanning
-  hill to boat scale. The shared broad coastal-ruggedness field continuously
+  hill to one-metre scale. The shared broad coastal-ruggedness field continuously
   blends that relief from smooth rolling ground into ridged rock, correlating
   cliff-forming coasts with the terrain behind them without a separate mountain
   mask.
