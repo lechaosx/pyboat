@@ -96,6 +96,17 @@ pub struct ProceduralWeather {
     pub rain_intensity: f32,
 }
 
+struct ScalarNoiseSample {
+    value: f64,
+    gradient_x_per_m: f64,
+    gradient_y_per_m: f64,
+}
+
+struct TemperatureSample {
+    value: f32,
+    gradient_per_m: Vector,
+}
+
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
     let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
     let solar_longitude = std::f64::consts::TAU * f64::from(conditions.season_phase);
@@ -407,8 +418,9 @@ pub fn procedural_atmosphere_primary(
     position_m: Vector,
 ) -> AtmospherePrimary {
     let pressure = procedural_pressure_sample(match_seed, tick, position_m);
-    let surface_air_temperature_anomaly_c =
+    let surface_temperature =
         sample_surface_air_temperature_anomaly_c(match_seed, tick, position_m);
+    let surface_air_temperature_anomaly_c = surface_temperature.value;
     let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(
         world_climate_conditions(),
         world_celestial_conditions(tick as f64 * f64::from(DT_SECONDS)),
@@ -423,27 +435,6 @@ pub fn procedural_atmosphere_primary(
                 65_536.0,
                 4,
             ) as f32;
-    let sample_distance_m = 256.0;
-    let temperature_gradient_c_per_m = Vector::new(
-        sample_surface_air_temperature_anomaly_c(
-            match_seed,
-            tick,
-            position_m + Vector::new(sample_distance_m, 0.0),
-        ) - sample_surface_air_temperature_anomaly_c(
-            match_seed,
-            tick,
-            position_m - Vector::new(sample_distance_m, 0.0),
-        ),
-        sample_surface_air_temperature_anomaly_c(
-            match_seed,
-            tick,
-            position_m + Vector::new(0.0, sample_distance_m),
-        ) - sample_surface_air_temperature_anomaly_c(
-            match_seed,
-            tick,
-            position_m - Vector::new(0.0, sample_distance_m),
-        ),
-    ) / (2.0 * sample_distance_m);
     let water_vapor_g_kg = (8.5
         + 8.5
             * procedural_weather_noise(
@@ -464,7 +455,7 @@ pub fn procedural_atmosphere_primary(
             / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
         surface_air_temperature_anomaly_c,
         air_temperature_500_hpa_c,
-        temperature_gradient_c_per_m,
+        temperature_gradient_c_per_m: surface_temperature.gradient_per_m,
         water_vapor_g_kg,
     }
 }
@@ -529,15 +520,26 @@ pub fn derive_weather(
     }
 }
 
-fn sample_surface_air_temperature_anomaly_c(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
-    13.0 * procedural_weather_noise(
+fn sample_surface_air_temperature_anomaly_c(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> TemperatureSample {
+    let noise = procedural_weather_noise_sample(
         match_seed,
         tick,
         position_m,
         0x4528_21e6_38d0_1377,
         65_536.0,
         4,
-    ) as f32
+    );
+    TemperatureSample {
+        value: 13.0 * noise.value as f32,
+        gradient_per_m: Vector::new(
+            (13.0 * noise.gradient_x_per_m) as f32,
+            (13.0 * noise.gradient_y_per_m) as f32,
+        ),
+    }
 }
 
 fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {
@@ -679,6 +681,24 @@ fn procedural_weather_noise(
     )
 }
 
+fn procedural_weather_noise_sample(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    salt: u64,
+    wavelength_m: f64,
+    octave_count: usize,
+) -> ScalarNoiseSample {
+    let (transported_x_m, transported_y_m) =
+        transported_weather_position_m(match_seed, tick, position_m);
+    terrain_fractal_noise_sample(
+        match_seed ^ salt,
+        Vector::new(transported_x_m as f32, transported_y_m as f32),
+        wavelength_m,
+        octave_count,
+    )
+}
+
 fn terrain_fractal_noise(
     field_seed: u64,
     position_m: Vector,
@@ -702,6 +722,37 @@ fn terrain_fractal_noise(
     noise / amplitude_sum
 }
 
+fn terrain_fractal_noise_sample(
+    field_seed: u64,
+    position_m: Vector,
+    mut wavelength_m: f64,
+    octave_count: usize,
+) -> ScalarNoiseSample {
+    let mut value = 0.0;
+    let mut gradient_x_per_m = 0.0;
+    let mut gradient_y_per_m = 0.0;
+    let mut amplitude = 1.0;
+    let mut amplitude_sum = 0.0;
+    for octave in 0..octave_count {
+        let sample = terrain_value_noise_sample(
+            field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
+            position_m,
+            wavelength_m,
+        );
+        value += amplitude * sample.value;
+        gradient_x_per_m += amplitude * sample.gradient_x_per_m;
+        gradient_y_per_m += amplitude * sample.gradient_y_per_m;
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    ScalarNoiseSample {
+        value: value / amplitude_sum,
+        gradient_x_per_m: gradient_x_per_m / amplitude_sum,
+        gradient_y_per_m: gradient_y_per_m / amplitude_sum,
+    }
+}
+
 fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -> f64 {
     let x = f64::from(position_m.x) / wavelength_m;
     let y = f64::from(position_m.y) / wavelength_m;
@@ -720,6 +771,36 @@ fn terrain_value_noise(match_seed: u64, position_m: Vector, wavelength_m: f64) -
         blend_x,
     );
     lerp(bottom, top, blend_y)
+}
+
+fn terrain_value_noise_sample(
+    match_seed: u64,
+    position_m: Vector,
+    wavelength_m: f64,
+) -> ScalarNoiseSample {
+    let x = f64::from(position_m.x) / wavelength_m;
+    let y = f64::from(position_m.y) / wavelength_m;
+    let x0 = libm::floor(x) as i64;
+    let y0 = libm::floor(y) as i64;
+    let fraction_x = x - x0 as f64;
+    let fraction_y = y - y0 as f64;
+    let blend_x = smoothstep(fraction_x);
+    let blend_y = smoothstep(fraction_y);
+    let bottom_left = terrain_lattice_value(match_seed, x0, y0);
+    let bottom_right = terrain_lattice_value(match_seed, x0 + 1, y0);
+    let top_left = terrain_lattice_value(match_seed, x0, y0 + 1);
+    let top_right = terrain_lattice_value(match_seed, x0 + 1, y0 + 1);
+    let bottom = lerp(bottom_left, bottom_right, blend_x);
+    let top = lerp(top_left, top_right, blend_x);
+    let blend_derivative_x_per_m = 6.0 * fraction_x * (1.0 - fraction_x) / wavelength_m;
+    let blend_derivative_y_per_m = 6.0 * fraction_y * (1.0 - fraction_y) / wavelength_m;
+
+    ScalarNoiseSample {
+        value: lerp(bottom, top, blend_y),
+        gradient_x_per_m: lerp(bottom_right - bottom_left, top_right - top_left, blend_y)
+            * blend_derivative_x_per_m,
+        gradient_y_per_m: (top - bottom) * blend_derivative_y_per_m,
+    }
 }
 
 fn terrain_lattice_value(match_seed: u64, x: i64, y: i64) -> f64 {

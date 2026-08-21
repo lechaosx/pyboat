@@ -336,6 +336,48 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
 }
 
 #[test]
+fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
+    const SAMPLE_DISTANCE_M: f32 = 16.0;
+    const SAMPLE_COUNT: u64 = 128;
+    let mut error_sum = 0.0;
+
+    for seed in 0..SAMPLE_COUNT {
+        let position_m = Vector::new(371.0 * seed as f32 + 12.0, -193.0 * seed as f32 - 7.0);
+        let primary = procedural_atmosphere_primary(seed, 12_345, position_m);
+        let numerical_gradient = Vector::new(
+            procedural_atmosphere_primary(
+                seed,
+                12_345,
+                position_m + Vector::new(SAMPLE_DISTANCE_M, 0.0),
+            )
+            .surface_air_temperature_anomaly_c
+                - procedural_atmosphere_primary(
+                    seed,
+                    12_345,
+                    position_m - Vector::new(SAMPLE_DISTANCE_M, 0.0),
+                )
+                .surface_air_temperature_anomaly_c,
+            procedural_atmosphere_primary(
+                seed,
+                12_345,
+                position_m + Vector::new(0.0, SAMPLE_DISTANCE_M),
+            )
+            .surface_air_temperature_anomaly_c
+                - procedural_atmosphere_primary(
+                    seed,
+                    12_345,
+                    position_m - Vector::new(0.0, SAMPLE_DISTANCE_M),
+                )
+                .surface_air_temperature_anomaly_c,
+        ) / (2.0 * SAMPLE_DISTANCE_M);
+        error_sum += (primary.temperature_gradient_c_per_m - numerical_gradient).length();
+    }
+
+    let mean_error = error_sum / SAMPLE_COUNT as f32;
+    assert!(mean_error < 1.0e-8, "mean gradient error was {mean_error}");
+}
+
+#[test]
 fn surface_and_upper_air_share_an_air_mass_anomaly_without_becoming_identical() {
     const SAMPLE_COUNT: u64 = 512;
     let tick = 12_345;
