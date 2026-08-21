@@ -793,6 +793,30 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             * shaped_outer_reef) as f32
 }
 
+fn broad_landform_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+    // Keep this synchronized with `broad_landform_elevation_m` in `scene.wgsl`.
+    // Wind shelter and long shadows need island-scale blockers, not the complete
+    // metre-scale terrain spectrum used for depth and grounding.
+    let cluster = terrain_simplex_fractal_noise(
+        match_seed ^ 0xa076_1d64_78bd_642f,
+        position_m,
+        8192.0,
+        TERRAIN_CLUSTER_OCTAVE_COUNT,
+        0.5,
+    ) as f64;
+    let island = terrain_simplex_fractal_noise(
+        match_seed ^ 0xe703_7ed1_a0b4_28db,
+        position_m,
+        1536.0,
+        TERRAIN_ISLAND_OCTAVE_COUNT,
+        0.35,
+    ) as f64;
+    let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
+    let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
+    let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
+    (unscaled_elevation_m * 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth)) as f32
+}
+
 pub fn procedural_solid_surface_elevation_m(
     match_seed: u64,
     position_m: Vector,
@@ -1217,8 +1241,7 @@ fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -
     let upwind = -open_wind / speed_m_s;
     let mut shelter: f32 = 0.0;
     for distance_m in LAND_WIND_SAMPLE_DISTANCES_M {
-        let elevation_m =
-            procedural_terrain_elevation_m(match_seed, position_m + distance_m * upwind);
+        let elevation_m = broad_landform_elevation_m(match_seed, position_m + distance_m * upwind);
         let obstruction = (elevation_m / LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M).clamp(0.0, 1.0);
         let recovery = 1.0 / (1.0 + distance_m / LAND_WIND_RECOVERY_DISTANCE_M);
         shelter = shelter.max(obstruction * recovery);

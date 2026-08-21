@@ -164,6 +164,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   normal without changing depth.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
+- **[Implicit]** Authoritative wind shelter probes the same island-scale landform
+  used for long terrain shadows. Metre-scale terrain remains authoritative for
+  depth and grounding but does not multiply the cost of every shelter ray or act
+  as an aerodynamically significant blocker by itself.
 - **[Explicit]** Gameplay and the procedural playground share production shader
   functions. Gameplay binds scene state and fixed production tuning; the lab adds
   live tuning and diagnostic state without adding that interface to production.
