@@ -874,28 +874,24 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
         let rotation = hash_unit(band_key ^ 0xa076_1d64_78bd_642f);
         let amplitude_m_s = WIND_WEIBULL_SCALE_M_S
             * libm::sqrt(band.variance_fraction / WIND_MODES_PER_BAND as f64);
+        let wavelength_log_range = libm::log(band.maximum_wavelength_m / band.minimum_wavelength_m);
         for mode in 0..WIND_MODES_PER_BAND {
             let mode_key = band_key ^ (mode as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
             let direction_rad =
                 std::f64::consts::TAU * (mode as f64 / WIND_MODES_PER_BAND as f64 + rotation);
-            let direction_x = libm::cos(direction_rad);
-            let direction_y = libm::sin(direction_rad);
+            let (direction_y, direction_x) = libm::sincos(direction_rad);
             let wavelength_fraction = hash_unit(mode_key ^ 0x8ebc_6af0_9c88_c6e3);
-            let wavelength_m = band.minimum_wavelength_m
-                * libm::exp(
-                    libm::log(band.maximum_wavelength_m / band.minimum_wavelength_m)
-                        * wavelength_fraction,
-                );
+            let wavelength_m =
+                band.minimum_wavelength_m * libm::exp(wavelength_log_range * wavelength_fraction);
             let phase_rad = std::f64::consts::TAU
                 * ((transported_x_m * direction_x + transported_y_m * direction_y) / wavelength_m);
             let (cosine_coefficient, sine_coefficient) = normal_pair(mode_key);
-            let wave =
-                cosine_coefficient * libm::cos(phase_rad) + sine_coefficient * libm::sin(phase_rad);
+            let (phase_sine, phase_cosine) = libm::sincos(phase_rad);
+            let wave = cosine_coefficient * phase_cosine + sine_coefficient * phase_sine;
             let gradient_x = amplitude_m_s * direction_x * wave;
             let gradient_y = amplitude_m_s * direction_y * wave;
             potential_m2_s += amplitude_m_s * wavelength_m / std::f64::consts::TAU
-                * (cosine_coefficient * libm::sin(phase_rad)
-                    - sine_coefficient * libm::cos(phase_rad));
+                * (cosine_coefficient * phase_sine - sine_coefficient * phase_cosine);
             gradient_x_m_s += gradient_x;
             gradient_y_m_s += gradient_y;
             if band_index == 0 {
@@ -920,9 +916,10 @@ fn transported_weather_position_m(match_seed: u64, tick: u64, position_m: Vector
     let time_seconds = tick as f64 * f64::from(DT_SECONDS);
     let transport_direction_rad =
         std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
+    let (transport_direction_y, transport_direction_x) = libm::sincos(transport_direction_rad);
     (
-        f64::from(position_m.x) - 6.0 * libm::cos(transport_direction_rad) * time_seconds,
-        f64::from(position_m.y) - 6.0 * libm::sin(transport_direction_rad) * time_seconds,
+        f64::from(position_m.x) - 6.0 * transport_direction_x * time_seconds,
+        f64::from(position_m.y) - 6.0 * transport_direction_y * time_seconds,
     )
 }
 
@@ -946,7 +943,8 @@ fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -
 fn normal_pair(key: u64) -> (f64, f64) {
     let radius = libm::sqrt(-2.0 * libm::log(hash_unit(key ^ 0x5899_65cc_7537_4cc3)));
     let angle = std::f64::consts::TAU * hash_unit(key ^ 0x1d8e_4e27_c47d_124f);
-    (radius * libm::cos(angle), radius * libm::sin(angle))
+    let (sine, cosine) = libm::sincos(angle);
+    (radius * cosine, radius * sine)
 }
 
 fn hash_unit(value: u64) -> f64 {
