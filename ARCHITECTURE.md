@@ -45,7 +45,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 - **[Explicit]** Static terrain is a continuous seeded density field composed at
   multiple scales in uncompressed metres. Reefs and rocks are field features, not
-  replicated objects, and no continent-scale layer may close the dominant ocean.
+  replicated objects. Land occupancy stays sparse enough for open water to remain
+  overwhelmingly connected across representative seeds; this is a measured
+  statistical outcome rather than a structural guarantee.
+- **[Implicit]** Large-scale archipelago suitability uses three octaves of
+  24-direction two-dimensional simplex-gradient noise. Its triangular lattice
+  gives threshold contours substantially less directional structure than square
+  value noise while requiring only three lattice contributions per octave. A
+  high sea-level threshold keeps the land excursion set below the regime where
+  it commonly divides the sea.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring

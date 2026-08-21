@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
@@ -941,6 +941,89 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
     assert!(
         land_samples_with_distant_land * 2 > land_samples,
         "only {land_samples_with_distant_land} of {land_samples} land samples remained land 512 m away"
+    );
+}
+
+#[test]
+fn procedural_terrain_water_is_overwhelmingly_connected_to_open_sea() {
+    const SIDE: usize = 129;
+    let mut total_water_samples = 0;
+    let mut enclosed_water_samples = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        let mut water = vec![false; SIDE * SIDE];
+        for x in 0..SIDE {
+            for y in 0..SIDE {
+                let position_m = Vector::new(
+                    (x as f32 - (SIDE / 2) as f32) * 256.0,
+                    (y as f32 - (SIDE / 2) as f32) * 256.0,
+                );
+                water[y * SIDE + x] = procedural_terrain_elevation_m(seed, position_m) < 0.0;
+            }
+        }
+
+        let mut open_sea = vec![false; SIDE * SIDE];
+        let mut frontier = VecDeque::new();
+        for coordinate in 0..SIDE {
+            for index in [coordinate, (SIDE - 1) * SIDE + coordinate] {
+                if water[index] && !open_sea[index] {
+                    open_sea[index] = true;
+                    frontier.push_back(index);
+                }
+            }
+            for index in [coordinate * SIDE, coordinate * SIDE + SIDE - 1] {
+                if water[index] && !open_sea[index] {
+                    open_sea[index] = true;
+                    frontier.push_back(index);
+                }
+            }
+        }
+
+        while let Some(index) = frontier.pop_front() {
+            let x = index % SIDE;
+            let y = index / SIDE;
+            if x > 0 {
+                let neighbor = index - 1;
+                if water[neighbor] && !open_sea[neighbor] {
+                    open_sea[neighbor] = true;
+                    frontier.push_back(neighbor);
+                }
+            }
+            if x + 1 < SIDE {
+                let neighbor = index + 1;
+                if water[neighbor] && !open_sea[neighbor] {
+                    open_sea[neighbor] = true;
+                    frontier.push_back(neighbor);
+                }
+            }
+            if y > 0 {
+                let neighbor = index - SIDE;
+                if water[neighbor] && !open_sea[neighbor] {
+                    open_sea[neighbor] = true;
+                    frontier.push_back(neighbor);
+                }
+            }
+            if y + 1 < SIDE {
+                let neighbor = index + SIDE;
+                if water[neighbor] && !open_sea[neighbor] {
+                    open_sea[neighbor] = true;
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+
+        total_water_samples += water.iter().filter(|sample| **sample).count();
+        enclosed_water_samples += water
+            .iter()
+            .zip(open_sea.iter())
+            .filter(|(is_water, is_open_sea)| **is_water && !**is_open_sea)
+            .count();
+    }
+
+    assert!(total_water_samples > 0);
+    assert!(
+        enclosed_water_samples * 200 < total_water_samples,
+        "{enclosed_water_samples} of {total_water_samples} water samples were enclosed"
     );
 }
 

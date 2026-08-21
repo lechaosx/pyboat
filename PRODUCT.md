@@ -29,9 +29,10 @@ current playable behavior; this file does not track delivery status.
 
 ## World
 
-- **[Explicit]** A connected, dominant sea contains sparse clusters of large
-  procedural islands. It must not become a patchwork of equal land and water or
-  contain closed regional seas that isolate players.
+- **[Explicit]** A statistically connected, dominant sea contains natural-looking
+  sparse groups of large procedural islands. Land may be more fractal and rare
+  enclosed water may occur, but the world must not become a patchwork of equal
+  land and water or commonly isolate players from the open sea.
 - **[Explicit]** Large islands retain coherent silhouettes while smaller relief
   forms coasts, reefs, navigable channels, and occasional rocks without making
   the parent landforms look noisy or assembled from separate objects.

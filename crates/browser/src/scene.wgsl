@@ -85,6 +85,34 @@ const MATERIAL_GRADIENT_DIRECTIONS = array<vec2<f32>, 8>(
     vec2<f32>(0.0, -1.0),
     vec2<f32>(0.70710677, -0.70710677),
 );
+// Keep this CC0 OpenSimplex2 gradient order synchronized with `game` so CPU and
+// WGSL hashes select the same direction for authoritative terrain.
+const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(
+    vec2<f32>(0.9914449, 0.1305262),
+    vec2<f32>(0.9238795, 0.3826834),
+    vec2<f32>(0.7933533, 0.6087614),
+    vec2<f32>(0.6087614, 0.7933533),
+    vec2<f32>(0.3826834, 0.9238795),
+    vec2<f32>(0.1305262, 0.9914449),
+    vec2<f32>(-0.1305262, 0.9914449),
+    vec2<f32>(-0.3826834, 0.9238795),
+    vec2<f32>(-0.6087614, 0.7933533),
+    vec2<f32>(-0.7933533, 0.6087614),
+    vec2<f32>(-0.9238795, 0.3826834),
+    vec2<f32>(-0.9914449, 0.1305262),
+    vec2<f32>(-0.9914449, -0.1305262),
+    vec2<f32>(-0.9238795, -0.3826834),
+    vec2<f32>(-0.7933533, -0.6087614),
+    vec2<f32>(-0.6087614, -0.7933533),
+    vec2<f32>(-0.3826834, -0.9238795),
+    vec2<f32>(-0.1305262, -0.9914449),
+    vec2<f32>(0.1305262, -0.9914449),
+    vec2<f32>(0.3826834, -0.9238795),
+    vec2<f32>(0.6087614, -0.7933533),
+    vec2<f32>(0.7933533, -0.6087614),
+    vec2<f32>(0.9238795, -0.3826834),
+    vec2<f32>(0.9914449, -0.1305262),
+);
 const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 16>(
     vec3<f32>(0.70710677, 0.70710677, 0.0),
     vec3<f32>(-0.70710677, 0.70710677, 0.0),
@@ -486,6 +514,102 @@ fn terrain_fractal_sample(
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
         let octave_sample = terrain_value_noise(octave_seed, position_m, wavelength_m);
+        sample.value += amplitude * octave_sample.value;
+        sample.gradient += amplitude * octave_sample.gradient;
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    sample.value /= amplitude_sum;
+    sample.gradient /= amplitude_sum;
+    return sample;
+}
+
+fn terrain_simplex_lattice_gradient(seed: vec2<u32>, x: i32, y: i32) -> vec2<f32> {
+    let key = seed
+        ^ multiply_u64(
+            signed_u64(x),
+            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+        )
+        ^ multiply_u64(
+            signed_u64(y),
+            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        );
+    return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(key).x % 24u];
+}
+
+fn terrain_simplex_noise(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
+    let skew_factor = 0.36602542;
+    let unskew_factor = 0.21132487;
+    let scaled = position_m / wavelength_m;
+    let skew = (scaled.x + scaled.y) * skew_factor;
+    let cell = vec2<i32>(floor(scaled + vec2<f32>(skew)));
+    let unskew = f32(cell.x + cell.y) * unskew_factor;
+    let first_offset = scaled - (vec2<f32>(cell) - vec2<f32>(unskew));
+    let middle_lattice_offset = select(
+        vec2<i32>(0, 1),
+        vec2<i32>(1, 0),
+        first_offset.x > first_offset.y,
+    );
+    let middle_offset = first_offset
+        - vec2<f32>(middle_lattice_offset)
+        + vec2<f32>(unskew_factor);
+    let last_offset = first_offset - vec2<f32>(1.0 - 2.0 * unskew_factor);
+
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    let lattice_offsets = array<vec2<i32>, 3>(
+        vec2<i32>(0),
+        middle_lattice_offset,
+        vec2<i32>(1),
+    );
+    let offsets = array<vec2<f32>, 3>(first_offset, middle_offset, last_offset);
+    for (var vertex = 0u; vertex < 3u; vertex++) {
+        let offset = offsets[vertex];
+        let attenuation = 0.5 - dot(offset, offset);
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let lattice = cell + lattice_offsets[vertex];
+        let gradient = terrain_simplex_lattice_gradient(seed, lattice.x, lattice.y);
+        let ramp = dot(gradient, offset);
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        sample.value += attenuation_fourth * ramp;
+        sample.gradient += attenuation_fourth * gradient
+            - 8.0 * attenuation_cubed * ramp * offset;
+    }
+    sample.value *= 70.0;
+    sample.gradient *= 70.0 / wavelength_m;
+    return sample;
+}
+
+fn terrain_simplex_fractal_sample(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+) -> TerrainNoiseSample {
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_seed = scene.match_seed
+            ^ field_salt
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        let octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
@@ -1141,7 +1265,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
     // for physical depth.
     let terrain_position_m = position_m / tuning.terrain_tuning.x;
-    let cluster = terrain_fractal_sample(
+    let cluster = terrain_simplex_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
         8192.0,
@@ -1154,7 +1278,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         5u,
     );
     var unscaled: TerrainNoiseSample;
-    unscaled.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.35);
+    unscaled.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.30);
     unscaled.gradient = 18.0 * (0.68 * cluster.gradient + 0.32 * island.gradient);
     let island_ruggedness = terrain_smoothstep_sample(0.32, 0.58, cluster);
     var negative_cluster: TerrainNoiseSample;
@@ -1216,9 +1340,9 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             4u,
         );
         let land_detail_amount = 0.08 + 0.92 * land_ruggedness.value;
-        terrain.elevation_m += 0.8 * land_detail_mask.value
+        terrain.elevation_m += 4.0 * land_detail_mask.value
             * land_detail_amount * land_detail.value * landscape_visibility.x;
-        terrain.gradient += 0.8 * landscape_visibility.x * (
+        terrain.gradient += 4.0 * landscape_visibility.x * (
             land_detail_mask.gradient * land_detail_amount * land_detail.value
                 + land_ruggedness.gradient * 0.92
                     * land_detail_mask.value * land_detail.value
@@ -1281,12 +1405,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     }
     terrain.elevation_m += 0.25 * seabed_mask_value * shoal.value
         * landscape_visibility.x
-        + coastal_detail_mask_value * reef_detail_amount * reef.value
+        + 1.25 * coastal_detail_mask_value * reef_detail_amount * reef.value
             * landscape_visibility.x
         + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x;
     terrain.gradient += landscape_visibility.x * 0.25 * (
         seabed_mask_gradient * shoal.value + shoal.gradient * seabed_mask_value
-    ) + landscape_visibility.x * (
+    ) + 1.25 * landscape_visibility.x * (
         coastal_detail_mask_gradient * reef_detail_amount * reef.value
             + coastal_rock_relief.gradient
                 * (0.05 + 1.55 * reef_ruggedness.value)

@@ -34,6 +34,35 @@ const TERRAIN_CLUSTER_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_OCTAVE_COUNT: usize = 5;
 const TERRAIN_SHOAL_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 4;
+// OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
+// features when a field is thresholded. Keep values and order synchronized with
+// `scene.wgsl` so its hash selects the same gradient.
+const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
+    (0.9914449, 0.1305262),
+    (0.9238795, 0.3826834),
+    (0.7933533, 0.6087614),
+    (0.6087614, 0.7933533),
+    (0.3826834, 0.9238795),
+    (0.1305262, 0.9914449),
+    (-0.1305262, 0.9914449),
+    (-0.3826834, 0.9238795),
+    (-0.6087614, 0.7933533),
+    (-0.7933533, 0.6087614),
+    (-0.9238795, 0.3826834),
+    (-0.9914449, 0.1305262),
+    (-0.9914449, -0.1305262),
+    (-0.9238795, -0.3826834),
+    (-0.7933533, -0.6087614),
+    (-0.6087614, -0.7933533),
+    (-0.3826834, -0.9238795),
+    (-0.1305262, -0.9914449),
+    (0.1305262, -0.9914449),
+    (0.3826834, -0.9238795),
+    (0.6087614, -0.7933533),
+    (0.7933533, -0.6087614),
+    (0.9238795, -0.3826834),
+    (0.9914449, -0.1305262),
+];
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
 const WORLD_YEAR_DAYS: f64 = 360.0;
 const WORLD_LUNAR_CYCLE_DAYS: f64 = 28.0;
@@ -578,12 +607,12 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     // Keep this composition synchronized with `procedural_terrain_sample` in
     // `crates/browser/src/scene.wgsl`: Rust supplies physical depth while WGSL
     // renders the same shoreline.
-    let cluster = terrain_fractal_noise(
+    let cluster = terrain_simplex_fractal_noise(
         match_seed ^ 0xa076_1d64_78bd_642f,
         position_m,
         8192.0,
         TERRAIN_CLUSTER_OCTAVE_COUNT,
-    );
+    ) as f64;
     let island = terrain_fractal_noise(
         match_seed ^ 0xe703_7ed1_a0b4_28db,
         position_m,
@@ -591,7 +620,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         TERRAIN_ISLAND_OCTAVE_COUNT,
     );
     let local_density = 0.68 * cluster + 0.32 * island;
-    let unscaled_elevation_m = 18.0 * (local_density - 0.35);
+    let unscaled_elevation_m = 18.0 * (local_density - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
     let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
@@ -613,7 +642,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         let land_detail =
             terrain_fractal_noise(match_seed ^ 0x2545_f491_4f6c_dd1d, position_m, 32.0, 4);
         terrain_elevation_m +=
-            0.8 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
+            4.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
     }
     // Reef gates use the pre-remap coast so open-ocean depth does not change the
     // distribution of channels and emergent rocks.
@@ -651,7 +680,11 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let coastal_detail_mask = seabed_mask.max(rock_mask);
     (terrain_elevation_m
         + 0.25 * seabed_mask * shoal
-        + coastal_detail_mask * coastal_rock_relief_amount * (0.05 + 1.55 * reef_ruggedness) * reef
+        + 1.25
+            * coastal_detail_mask
+            * coastal_rock_relief_amount
+            * (0.05 + 1.55 * reef_ruggedness)
+            * reef
         + 2.0 * rock_mask * reef_peak) as f32
 }
 
@@ -737,6 +770,87 @@ fn terrain_fractal_noise(
         wavelength_m,
         octave_count,
     )
+}
+
+fn terrain_simplex_fractal_noise(
+    field_seed: u64,
+    position_m: Vector,
+    mut wavelength_m: f32,
+    octave_count: usize,
+) -> f32 {
+    let mut value = 0.0;
+    let mut amplitude = 1.0;
+    let mut amplitude_sum = 0.0;
+    for octave in 0..octave_count {
+        let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
+        value += amplitude * terrain_simplex_noise_sample(octave_seed, position_m, wavelength_m).0;
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    value / amplitude_sum
+}
+
+fn terrain_simplex_noise_sample(
+    field_seed: u64,
+    position_m: Vector,
+    wavelength_m: f32,
+) -> (f32, Vector) {
+    const SKEW: f32 = 0.366_025_42;
+    const UNSKEW: f32 = 0.211_324_87;
+    const NORMALIZATION: f32 = 70.0;
+
+    let scaled = position_m / wavelength_m;
+    let skew = (scaled.x + scaled.y) * SKEW;
+    let cell_x = libm::floorf(scaled.x + skew) as i32;
+    let cell_y = libm::floorf(scaled.y + skew) as i32;
+    let unskew = (cell_x + cell_y) as f32 * UNSKEW;
+    let first_offset = Vector::new(
+        scaled.x - (cell_x as f32 - unskew),
+        scaled.y - (cell_y as f32 - unskew),
+    );
+    let (middle_x, middle_y) = if first_offset.x > first_offset.y {
+        (1, 0)
+    } else {
+        (0, 1)
+    };
+    let middle_offset =
+        first_offset - Vector::new(middle_x as f32, middle_y as f32) + Vector::splat(UNSKEW);
+    let last_offset = first_offset - Vector::splat(1.0 - 2.0 * UNSKEW);
+
+    let mut value = 0.0;
+    let mut gradient = Vector::ZERO;
+    for (lattice_x, lattice_y, offset) in [
+        (cell_x, cell_y, first_offset),
+        (cell_x + middle_x, cell_y + middle_y, middle_offset),
+        (cell_x + 1, cell_y + 1, last_offset),
+    ] {
+        let attenuation = 0.5 - offset.dot(offset);
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let lattice_gradient = terrain_simplex_lattice_gradient(field_seed, lattice_x, lattice_y);
+        let ramp = lattice_gradient.dot(offset);
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        value += attenuation_fourth * ramp;
+        gradient += attenuation_fourth * lattice_gradient - 8.0 * attenuation_cubed * ramp * offset;
+    }
+
+    (
+        NORMALIZATION * value,
+        gradient * (NORMALIZATION / wavelength_m),
+    )
+}
+
+fn terrain_simplex_lattice_gradient(field_seed: u64, x: i32, y: i32) -> Vector {
+    let key = field_seed
+        ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (y as i64 as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
+    let index = (wind_hash(key) as u32 % SIMPLEX_GRADIENT_DIRECTIONS.len() as u32) as usize;
+    let (gradient_x, gradient_y) = SIMPLEX_GRADIENT_DIRECTIONS[index];
+    Vector::new(gradient_x, gradient_y)
 }
 
 fn terrain_fractal_noise_at(
