@@ -54,6 +54,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   value noise while requiring only three lattice contributions per octave. A
   high sea-level threshold keeps the land excursion set below the regime where
   it commonly divides the sea.
+- **[Implicit]** Independent island morphology uses five octaves of the same
+  portable simplex-gradient kernel from kilometre to local-coast scale. This
+  adds fractal contour detail without the extra field evaluations and increased
+  fragmentation of domain warping.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring

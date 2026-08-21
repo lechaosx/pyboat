@@ -595,6 +595,7 @@ fn terrain_simplex_fractal_sample(
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
+    persistence: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
@@ -613,7 +614,7 @@ fn terrain_simplex_fractal_sample(
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
-        amplitude *= 0.5;
+        amplitude *= persistence;
         wavelength_m *= 0.5;
     }
     sample.value /= amplitude_sum;
@@ -1270,16 +1271,18 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         terrain_position_m,
         8192.0,
         3u,
+        0.5,
     );
-    let island = terrain_fractal_sample(
+    let island = terrain_simplex_fractal_sample(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         terrain_position_m,
-        1024.0,
+        1536.0,
         5u,
+        0.35,
     );
     var unscaled: TerrainNoiseSample;
-    unscaled.value = 18.0 * (0.68 * cluster.value + 0.32 * island.value - 0.30);
-    unscaled.gradient = 18.0 * (0.68 * cluster.gradient + 0.32 * island.gradient);
+    unscaled.value = 18.0 * (0.78 * cluster.value + 0.22 * island.value - 0.30);
+    unscaled.gradient = 18.0 * (0.78 * cluster.gradient + 0.22 * island.gradient);
     let island_ruggedness = terrain_smoothstep_sample(0.32, 0.58, cluster);
     var negative_cluster: TerrainNoiseSample;
     negative_cluster.value = -cluster.value;
@@ -1340,9 +1343,9 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             4u,
         );
         let land_detail_amount = 0.08 + 0.92 * land_ruggedness.value;
-        terrain.elevation_m += 4.0 * land_detail_mask.value
+        terrain.elevation_m += 5.0 * land_detail_mask.value
             * land_detail_amount * land_detail.value * landscape_visibility.x;
-        terrain.gradient += 4.0 * landscape_visibility.x * (
+        terrain.gradient += 5.0 * landscape_visibility.x * (
             land_detail_mask.gradient * land_detail_amount * land_detail.value
                 + land_ruggedness.gradient * 0.92
                     * land_detail_mask.value * land_detail.value
@@ -1405,12 +1408,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     }
     terrain.elevation_m += 0.25 * seabed_mask_value * shoal.value
         * landscape_visibility.x
-        + 1.25 * coastal_detail_mask_value * reef_detail_amount * reef.value
+        + 1.5 * coastal_detail_mask_value * reef_detail_amount * reef.value
             * landscape_visibility.x
         + 2.0 * rock_mask_value * reef_peak.value * landscape_visibility.x;
     terrain.gradient += landscape_visibility.x * 0.25 * (
         seabed_mask_gradient * shoal.value + shoal.gradient * seabed_mask_value
-    ) + 1.25 * landscape_visibility.x * (
+    ) + 1.5 * landscape_visibility.x * (
         coastal_detail_mask_gradient * reef_detail_amount * reef.value
             + coastal_rock_relief.gradient
                 * (0.05 + 1.55 * reef_ruggedness.value)
@@ -1439,14 +1442,16 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         terrain_position_m,
         8192.0,
         3u,
+        0.5,
     ).value;
-    let island = terrain_fractal_sample(
+    let island = terrain_simplex_fractal_sample(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         terrain_position_m,
-        1024.0,
+        1536.0,
         5u,
+        0.35,
     ).value;
-    let unscaled_elevation_m = 18.0 * (0.68 * cluster + 0.32 * island - 0.30);
+    let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep(0.32, 0.58, cluster);
     let trench_depth = smoothstep(0.50, 0.74, -cluster);
     let elevation_scale = tuning.terrain_tuning.y

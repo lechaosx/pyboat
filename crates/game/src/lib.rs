@@ -612,14 +612,16 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         position_m,
         8192.0,
         TERRAIN_CLUSTER_OCTAVE_COUNT,
+        0.5,
     ) as f64;
-    let island = terrain_fractal_noise(
+    let island = terrain_simplex_fractal_noise(
         match_seed ^ 0xe703_7ed1_a0b4_28db,
         position_m,
-        1024.0,
+        1536.0,
         TERRAIN_ISLAND_OCTAVE_COUNT,
-    );
-    let local_density = 0.68 * cluster + 0.32 * island;
+        0.35,
+    ) as f64;
+    let local_density = 0.78 * cluster + 0.22 * island;
     let unscaled_elevation_m = 18.0 * (local_density - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
@@ -642,7 +644,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         let land_detail =
             terrain_fractal_noise(match_seed ^ 0x2545_f491_4f6c_dd1d, position_m, 32.0, 4);
         terrain_elevation_m +=
-            4.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
+            5.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
     }
     // Reef gates use the pre-remap coast so open-ocean depth does not change the
     // distribution of channels and emergent rocks.
@@ -680,7 +682,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let coastal_detail_mask = seabed_mask.max(rock_mask);
     (terrain_elevation_m
         + 0.25 * seabed_mask * shoal
-        + 1.25
+        + 1.5
             * coastal_detail_mask
             * coastal_rock_relief_amount
             * (0.05 + 1.55 * reef_ruggedness)
@@ -777,6 +779,7 @@ fn terrain_simplex_fractal_noise(
     position_m: Vector,
     mut wavelength_m: f32,
     octave_count: usize,
+    persistence: f32,
 ) -> f32 {
     let mut value = 0.0;
     let mut amplitude = 1.0;
@@ -785,7 +788,7 @@ fn terrain_simplex_fractal_noise(
         let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
         value += amplitude * terrain_simplex_noise_sample(octave_seed, position_m, wavelength_m).0;
         amplitude_sum += amplitude;
-        amplitude *= 0.5;
+        amplitude *= persistence;
         wavelength_m *= 0.5;
     }
     value / amplitude_sum
