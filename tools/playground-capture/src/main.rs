@@ -257,8 +257,8 @@ fn parse_seed(value: &str) -> Result<u64, String> {
 fn parse_debug_view(value: &str) -> Result<u32, String> {
     match value {
         "final" => Ok(0),
-        "low-density" => Ok(5),
-        "upper-depth" => Ok(8),
+        "low-density" => Ok(3),
+        "upper-depth" => Ok(6),
         "low-shadow" => Ok(9),
         "upper-shadow" => Ok(10),
         "surface-wind" => Ok(16),
