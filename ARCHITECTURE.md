@@ -53,6 +53,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The match seed is the only procedural-world datum sent to a
   client. Snapshots synchronize boats, not sampled environment fields or model
   parameters.
+- **[Explicit]** Procedural generator implementations remain portable between
+  Rust and WGSL even when a field is currently evaluated on only one side. Each
+  field may select the noise family and variant appropriate to its phenomenon,
+  but uses reproducible integer hashing, coordinate conventions, constants, and
+  `f32` operations that the other runtime can mirror. Shared evaluations agree
+  within a narrow numeric tolerance and preserve categorical boundaries outside
+  that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
+  portability requirement.
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
   weather. The seeded surface-air field is a weather anomaly; analytic climate,
   season, and time of day supply its baseline in both Rust and WGSL before
