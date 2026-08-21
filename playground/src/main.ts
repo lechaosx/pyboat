@@ -40,11 +40,7 @@ type State = {
   detailBlobiness: number;
   detailContrast: number;
   detailEdgeSoftness: number;
-  maskInfluence: number;
-  maskScale: number;
-  maskElongation: number;
   maxVisibleCoverage: number;
-  motionInMask: number;
   opticalDepth: number;
   opacity: number;
   darkness: number;
@@ -161,11 +157,7 @@ const defaults: State = {
   detailBlobiness: 0.25,
   detailContrast: 1.15,
   detailEdgeSoftness: 0.06,
-  maskInfluence: 0.85,
-  maskScale: 1,
-  maskElongation: 2.4,
   maxVisibleCoverage: 0.5,
-  motionInMask: 0.65,
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
@@ -303,11 +295,7 @@ const groups: ControlGroup[] = [
   },
   {
     domain: "weather", category: "Advanced tuning", layer: "Low-cloud coverage", kind: "SHADER", level: "advanced", controls: [
-      range("maskInfluence", "Mask influence", 0, 1, 0.05),
-      range("maskScale", "Mask scale", 0.25, 4, 0.05),
-      range("maskElongation", "Mask elongation", 1, 16, 0.25),
       range("maxVisibleCoverage", "Maximum coverage", 0, 1, 0.01),
-      range("motionInMask", "Motion in mask", 0, 1, 0.05),
     ],
   },
   {
@@ -391,7 +379,7 @@ const categoryOrder = [
 
 const lowCloudDependentKeys = new Set<NumericStateKey>([
   "detailCharacter", "detailBlobiness", "detailContrast", "detailEdgeSoftness",
-  "maskInfluence", "maskScale", "maskElongation", "maxVisibleCoverage", "motionInMask",
+  "maxVisibleCoverage",
   "opticalDepth", "opacity", "darkness", "relief",
   "lowCloudVisible", "lowCloudShadow",
 ]);
@@ -413,8 +401,8 @@ const subrangeKeys = new Set<NumericStateKey>([
 const debugOptions: Record<Domain, Array<[number, string]>> = {
   weather: [
     [0, "Final composition"], [1, "Low detail texture"], [2, "Low detail gate"],
-    [3, "Formation mask"], [4, "Formation gate"], [5, "Low density"],
-    [6, "Low optical depth"], [7, "Low normals"], [8, "Upper optical depth"],
+    [3, "Low density"], [4, "Low optical depth"], [5, "Low normals"],
+    [6, "Upper optical depth"],
     [9, "Projected low shadow"], [10, "Projected upper shadow"], [11, "Combined transmittance"],
     [12, "Low height field"],
     [16, "Surface wind"], [17, "Upper wind"], [18, "Vertical wind shear"],
@@ -449,11 +437,7 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
       detailBlobiness: defaults.detailBlobiness,
       detailContrast: defaults.detailContrast,
       detailEdgeSoftness: defaults.detailEdgeSoftness,
-      maskInfluence: defaults.maskInfluence,
-      maskScale: defaults.maskScale,
-      maskElongation: defaults.maskElongation,
       maxVisibleCoverage: defaults.maxVisibleCoverage,
-      motionInMask: defaults.motionInMask,
       opticalDepth: defaults.opticalDepth,
       opacity: defaults.opacity,
       darkness: defaults.darkness,
@@ -1075,7 +1059,7 @@ const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x2
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
 const sceneFloats = new Float32Array(32);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-const tuningFloats = new Float32Array(48);
+const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1339,45 +1323,44 @@ function writeUniforms(): void {
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
   ], 0);
   tuningFloats.set([
-    state.maskInfluence, state.maskScale, state.maskElongation, state.maxVisibleCoverage,
+    state.maxVisibleCoverage, 0, 0, 0,
   ], 4);
   tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 8);
-  tuningFloats.set([state.motionInMask, 0, 0, 0], 12);
-  tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 16);
+  tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);
   tuningFloats.set([
     state.waterAttenuationLength, state.bottomLightContribution, 0, 0,
-  ], 20);
+  ], 16);
   tuningFloats.set([
     state.landformReliefStrength,
     state.landformShadowStrength,
     state.landformShadowReach,
     0,
-  ], 24);
+  ], 20);
   tuningFloats.set([
     state.lowCloudEnabled * state.lowCloudVisible,
     state.lowCloudEnabled * state.lowCloudShadow,
     state.upperCloudEnabled * state.upperCloudShadow,
     state.lowCloudEnabled * state.upperCloudEnabled * state.upperShadowOnLowCloud,
-  ], 28);
+  ], 24);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.coastalReliefVisible,
     state.landscapeCompositionEnabled * state.vegetationVisible,
     state.landscapeCompositionEnabled * state.surfaceTextureVisible,
     state.landscapeCompositionEnabled * state.landscapeLightingVisible,
-  ], 32);
+  ], 28);
   tuningFloats.set([
     state.pressureCirculationEnabled * state.pressureWindScale,
     state.crossIsobarEnabled * state.crossIsobarScale,
     state.thermalWindEnabled * state.thermalWindScale,
     state.shelterEnabled * state.shelterStrength,
-  ], 36);
+  ], 32);
   tuningFloats.set([
     state.landscapeCompositionEnabled * state.seasonalSnowVisible,
     0,
     0,
     state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
-  ], 40);
-  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 44);
+  ], 36);
+  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 40);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 

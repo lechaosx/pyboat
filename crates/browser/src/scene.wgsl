@@ -13,9 +13,8 @@ struct SceneUniforms {
 
 struct SceneTuning {
     cloud_detail: vec4<f32>,
-    cloud_formation: vec4<f32>,
+    cloud_coverage: vec4<f32>,
     cloud_rendering: vec4<f32>,
-    cloud_behavior: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
@@ -23,9 +22,8 @@ struct SceneTuning {
 
 struct PlaygroundUniforms {
     cloud_detail: vec4<f32>,
-    cloud_formation: vec4<f32>,
+    cloud_coverage: vec4<f32>,
     cloud_rendering: vec4<f32>,
-    cloud_behavior: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
@@ -46,15 +44,11 @@ override CLOUD_DETAIL_CHARACTER: f32 = 0.35;
 override CLOUD_DETAIL_BLOBINESS: f32 = 0.25;
 override CLOUD_DETAIL_CONTRAST: f32 = 1.15;
 override CLOUD_DETAIL_EDGE_SOFTNESS: f32 = 0.06;
-override CLOUD_MASK_INFLUENCE: f32 = 0.85;
-override CLOUD_MASK_SCALE: f32 = 1.0;
-override CLOUD_MASK_ELONGATION: f32 = 2.4;
 override CLOUD_MAX_VISIBLE_COVERAGE: f32 = 0.5;
 override CLOUD_OPTICAL_DEPTH: f32 = 1.0;
 override CLOUD_OPACITY: f32 = 1.0;
 override CLOUD_DARKNESS: f32 = 1.0;
 override CLOUD_RELIEF: f32 = 1.0;
-override CLOUD_MOTION_IN_MASK: f32 = 0.65;
 override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
@@ -90,6 +84,24 @@ const MATERIAL_GRADIENT_DIRECTIONS = array<vec2<f32>, 8>(
     vec2<f32>(-0.70710677, -0.70710677),
     vec2<f32>(0.0, -1.0),
     vec2<f32>(0.70710677, -0.70710677),
+);
+const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 16>(
+    vec3<f32>(0.70710677, 0.70710677, 0.0),
+    vec3<f32>(-0.70710677, 0.70710677, 0.0),
+    vec3<f32>(0.70710677, -0.70710677, 0.0),
+    vec3<f32>(-0.70710677, -0.70710677, 0.0),
+    vec3<f32>(0.70710677, 0.0, 0.70710677),
+    vec3<f32>(-0.70710677, 0.0, 0.70710677),
+    vec3<f32>(0.70710677, 0.0, -0.70710677),
+    vec3<f32>(-0.70710677, 0.0, -0.70710677),
+    vec3<f32>(0.0, 0.70710677, 0.70710677),
+    vec3<f32>(0.0, -0.70710677, 0.70710677),
+    vec3<f32>(0.0, 0.70710677, -0.70710677),
+    vec3<f32>(0.0, -0.70710677, -0.70710677),
+    vec3<f32>(0.70710677, 0.70710677, 0.0),
+    vec3<f32>(0.0, -0.70710677, 0.70710677),
+    vec3<f32>(-0.70710677, 0.70710677, 0.0),
+    vec3<f32>(0.0, -0.70710677, -0.70710677),
 );
 
 fn rotate_left(vector: vec2<f32>) -> vec2<f32> {
@@ -271,10 +283,10 @@ fn production_tuning() -> SceneTuning {
             CLOUD_DETAIL_EDGE_SOFTNESS,
         ),
         vec4<f32>(
-            CLOUD_MASK_INFLUENCE,
-            CLOUD_MASK_SCALE,
-            CLOUD_MASK_ELONGATION,
             CLOUD_MAX_VISIBLE_COVERAGE,
+            0.0,
+            0.0,
+            0.0,
         ),
         vec4<f32>(
             CLOUD_OPTICAL_DEPTH,
@@ -282,7 +294,6 @@ fn production_tuning() -> SceneTuning {
             CLOUD_DARKNESS,
             CLOUD_RELIEF,
         ),
-        vec4<f32>(CLOUD_MOTION_IN_MASK, 0.0, 0.0, 0.0),
         vec4<f32>(
             TERRAIN_HORIZONTAL_SCALE,
             TERRAIN_ELEVATION_SCALE,
@@ -307,9 +318,8 @@ fn production_tuning() -> SceneTuning {
 fn playground_scene_tuning() -> SceneTuning {
     return SceneTuning(
         playground.cloud_detail,
-        playground.cloud_formation,
+        playground.cloud_coverage,
         playground.cloud_rendering,
-        playground.cloud_behavior,
         playground.terrain_tuning,
         playground.water_tuning,
         playground.landform_lighting,
@@ -597,13 +607,87 @@ fn material_fractal_sample(
     return sample;
 }
 
+fn cloud_lattice_gradient(seed: vec2<u32>, x: i32, y: i32, z: i32) -> vec3<f32> {
+    let key = seed
+        ^ multiply_u64(
+            signed_u64(x),
+            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+        )
+        ^ multiply_u64(
+            signed_u64(y),
+            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        )
+        ^ multiply_u64(
+            signed_u64(z),
+            vec2<u32>(0x94d049bbu, 0x133111ebu),
+        );
+    return CLOUD_GRADIENT_DIRECTIONS[terrain_hash(key).x & 15u];
+}
+
+fn cloud_gradient_noise(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+    evolution_coordinate: f32,
+) -> TerrainNoiseSample {
+    let scaled_position = vec3<f32>(position_m / wavelength_m, evolution_coordinate);
+    let cell = vec3<i32>(floor(scaled_position));
+    let fraction = scaled_position - vec3<f32>(cell);
+    let blend = fraction * fraction * fraction
+        * (fraction * (fraction * 6.0 - 15.0) + 10.0);
+    let blend_derivative = 30.0 * fraction.xy * fraction.xy
+        * (fraction.xy * (fraction.xy - 2.0) + 1.0) / wavelength_m;
+
+    let gradient_000 = cloud_lattice_gradient(seed, cell.x, cell.y, cell.z);
+    let gradient_100 = cloud_lattice_gradient(seed, cell.x + 1, cell.y, cell.z);
+    let gradient_010 = cloud_lattice_gradient(seed, cell.x, cell.y + 1, cell.z);
+    let gradient_110 = cloud_lattice_gradient(seed, cell.x + 1, cell.y + 1, cell.z);
+    let gradient_001 = cloud_lattice_gradient(seed, cell.x, cell.y, cell.z + 1);
+    let gradient_101 = cloud_lattice_gradient(seed, cell.x + 1, cell.y, cell.z + 1);
+    let gradient_011 = cloud_lattice_gradient(seed, cell.x, cell.y + 1, cell.z + 1);
+    let gradient_111 = cloud_lattice_gradient(seed, cell.x + 1, cell.y + 1, cell.z + 1);
+
+    let value_000 = dot(gradient_000, fraction);
+    let value_100 = dot(gradient_100, fraction - vec3<f32>(1.0, 0.0, 0.0));
+    let value_010 = dot(gradient_010, fraction - vec3<f32>(0.0, 1.0, 0.0));
+    let value_110 = dot(gradient_110, fraction - vec3<f32>(1.0, 1.0, 0.0));
+    let value_001 = dot(gradient_001, fraction - vec3<f32>(0.0, 0.0, 1.0));
+    let value_101 = dot(gradient_101, fraction - vec3<f32>(1.0, 0.0, 1.0));
+    let value_011 = dot(gradient_011, fraction - vec3<f32>(0.0, 1.0, 1.0));
+    let value_111 = dot(gradient_111, fraction - vec3<f32>(1.0));
+
+    let value_00 = mix(value_000, value_100, blend.x);
+    let value_10 = mix(value_010, value_110, blend.x);
+    let value_01 = mix(value_001, value_101, blend.x);
+    let value_11 = mix(value_011, value_111, blend.x);
+    let gradient_00 = mix(gradient_000.xy, gradient_100.xy, blend.x) / wavelength_m
+        + vec2<f32>((value_100 - value_000) * blend_derivative.x, 0.0);
+    let gradient_10 = mix(gradient_010.xy, gradient_110.xy, blend.x) / wavelength_m
+        + vec2<f32>((value_110 - value_010) * blend_derivative.x, 0.0);
+    let gradient_01 = mix(gradient_001.xy, gradient_101.xy, blend.x) / wavelength_m
+        + vec2<f32>((value_101 - value_001) * blend_derivative.x, 0.0);
+    let gradient_11 = mix(gradient_011.xy, gradient_111.xy, blend.x) / wavelength_m
+        + vec2<f32>((value_111 - value_011) * blend_derivative.x, 0.0);
+    let value_0 = mix(value_00, value_10, blend.y);
+    let value_1 = mix(value_01, value_11, blend.y);
+    let gradient_0 = mix(gradient_00, gradient_10, blend.y)
+        + vec2<f32>(0.0, (value_10 - value_00) * blend_derivative.y);
+    let gradient_1 = mix(gradient_01, gradient_11, blend.y)
+        + vec2<f32>(0.0, (value_11 - value_01) * blend_derivative.y);
+
+    var sample: TerrainNoiseSample;
+    sample.value = 1.8 * mix(value_0, value_1, blend.z);
+    sample.gradient = 1.8 * mix(gradient_0, gradient_1, blend.z);
+    return sample;
+}
+
 fn visual_cloud_noise_sample(
     position_m: vec2<f32>,
     velocity_m_s: vec2<f32>,
     field_salt: vec2<u32>,
     initial_wavelength_m: f32,
     octave_count: u32,
-    initial_lifetime_seconds: f32,
+    initial_evolution_period_seconds: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
@@ -611,6 +695,7 @@ fn visual_cloud_noise_sample(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
+    let translated_position_m = position_m - velocity_m_s * scene.time_seconds;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.cloud_visual_seed
             ^ field_salt
@@ -618,36 +703,16 @@ fn visual_cloud_noise_sample(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        let lifetime_seconds = initial_lifetime_seconds
+        let evolution_period_seconds = initial_evolution_period_seconds
             * sqrt(wavelength_m / initial_wavelength_m);
-        let scaled_time = scene.time_seconds / lifetime_seconds;
-        let time_cell = i32(floor(scaled_time));
-        let time_fraction = fract(scaled_time);
-        let time_blend = smoothstep(0.0, 1.0, time_fraction);
-        let first_seed = octave_seed
-            ^ multiply_u64(
-                signed_u64(time_cell),
-                vec2<u32>(0x94d049bbu, 0x133111ebu),
-            );
-        let second_seed = octave_seed
-            ^ multiply_u64(
-                signed_u64(time_cell + 1),
-                vec2<u32>(0x94d049bbu, 0x133111ebu),
-            );
-        let age_seconds = time_fraction * lifetime_seconds;
-        let first = terrain_value_noise(
-            first_seed,
-            position_m - velocity_m_s * age_seconds,
+        let octave_sample = cloud_gradient_noise(
+            octave_seed,
+            translated_position_m,
             wavelength_m,
+            scene.time_seconds / evolution_period_seconds,
         );
-        let second = terrain_value_noise(
-            second_seed,
-            position_m - velocity_m_s * (age_seconds - lifetime_seconds),
-            wavelength_m,
-        );
-        sample.value += amplitude * mix(first.value, second.value, time_blend);
-        let gradient_weight = amplitude * sqrt(wavelength_m / initial_wavelength_m);
-        sample.gradient += gradient_weight * mix(first.gradient, second.gradient, time_blend);
+        sample.value += amplitude * octave_sample.value;
+        sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
         amplitude *= 0.58;
         wavelength_m *= 0.5;
@@ -655,40 +720,6 @@ fn visual_cloud_noise_sample(
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
     return sample;
-}
-
-fn low_cloud_detail_coordinates(position_m: vec2<f32>) -> vec2<f32> {
-    return position_m;
-}
-
-fn low_cloud_mask_coordinates(position_m: vec2<f32>) -> vec2<f32> {
-    let wind = surface_wind_m_s();
-    let wind_angle = atan2(wind.y, wind.x);
-    let along_wind = vec2<f32>(cos(wind_angle), sin(wind_angle));
-    let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
-    let mask_scale = max(tuning.cloud_formation.y, 0.01)
-        * mix(1.0, 1.65, stratiform_amount());
-    let elongation = max(tuning.cloud_formation.z, 1.0)
-        * mix(1.0, 1.7, stratiform_amount())
-        * mix(1.0, 1.8, wind_shear_amount());
-    return vec2<f32>(
-        dot(position_m, along_wind) / elongation,
-        dot(position_m, across_wind),
-    ) / mask_scale;
-}
-
-fn low_cloud_mask_gradient_to_world(gradient: vec2<f32>) -> vec2<f32> {
-    let wind = surface_wind_m_s();
-    let wind_angle = atan2(wind.y, wind.x);
-    let along_wind = vec2<f32>(cos(wind_angle), sin(wind_angle));
-    let across_wind = vec2<f32>(-along_wind.y, along_wind.x);
-    let mask_scale = max(tuning.cloud_formation.y, 0.01)
-        * mix(1.0, 1.65, stratiform_amount());
-    let elongation = max(tuning.cloud_formation.z, 1.0)
-        * mix(1.0, 1.7, stratiform_amount())
-        * mix(1.0, 1.8, wind_shear_amount());
-    return along_wind * gradient.x / (elongation * mask_scale)
-        + across_wind * gradient.y / mask_scale;
 }
 
 fn smoothstep_gradient(
@@ -711,8 +742,6 @@ struct LowCloudSample {
     gradient: vec2<f32>,
     detail_amount: f32,
     detail_gate: f32,
-    mask_amount: f32,
-    mask_gate: f32,
 };
 
 struct UpperCloudSample {
@@ -732,22 +761,27 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         empty.gradient = vec2<f32>(0.0);
         empty.detail_amount = 0.0;
         empty.detail_gate = 0.0;
-        empty.mask_amount = 0.0;
-        empty.mask_gate = 0.0;
         return empty;
     }
+    let stratiform = stratiform_amount();
+    let convective = convective_amount();
+    let evolution_period_seconds = mix(
+        mix(1200.0, 3600.0, stratiform),
+        600.0,
+        convective,
+    ) * mix(1.0, 0.75, wind_shear_amount());
     let raw_detail = visual_cloud_noise_sample(
-        low_cloud_detail_coordinates(position_m),
-        surface_wind_m_s() * (1.0 - clamp(tuning.cloud_behavior.x, 0.0, 1.0)),
+        position_m,
+        surface_wind_m_s(),
         vec2<u32>(0x38d01377u, 0x452821e6u),
-        144.0,
-        7u,
-        150.0,
+        640.0,
+        8u,
+        evolution_period_seconds,
     );
     let detail_character = mix(
-        mix(clamp(tuning.cloud_detail.x, 0.0, 1.0), 0.05, 0.85 * stratiform_amount()),
+        mix(clamp(tuning.cloud_detail.x, 0.0, 1.0), 0.05, 0.85 * stratiform),
         1.0,
-        0.75 * convective_amount(),
+        0.75 * convective,
     );
     let billow_rounding = 0.05;
     let rounded_magnitude = (
@@ -780,18 +814,8 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         unclamped_detail_amount > 0.0 && unclamped_detail_amount < 1.0,
     );
 
-    let mask_noise = visual_cloud_noise_sample(
-        low_cloud_mask_coordinates(position_m),
-        low_cloud_mask_coordinates(
-            surface_wind_m_s() * clamp(tuning.cloud_behavior.x, 0.0, 1.0),
-        ),
-        vec2<u32>(0xa24baed4u, 0x94d049bbu),
-        640.0,
-        4u,
-        600.0,
-    );
     let target_coverage = clamp(
-        tuning.cloud_formation.w * sqrt(cover),
+        tuning.cloud_coverage.x * sqrt(cover),
         0.0,
         0.95,
     );
@@ -802,42 +826,24 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         body_threshold + edge_softness,
         detail_amount,
     );
-    let mask_amount = clamp(0.5 + 0.5 * mask_noise.value, 0.0, 1.0);
-    let mask_gradient = low_cloud_mask_gradient_to_world(0.5 * mask_noise.gradient);
-    let mask_gate = smoothstep(
-        body_threshold,
-        body_threshold + edge_softness,
-        mask_amount,
-    );
     let material_density = smoothstep(0.08, 0.72, detail_amount);
     let detail_blobiness = mix(
-        mix(clamp(tuning.cloud_detail.y, 0.0, 1.0), 0.0, stratiform_amount()),
+        mix(clamp(tuning.cloud_detail.y, 0.0, 1.0), 0.0, stratiform),
         1.0,
-        0.80 * convective_amount(),
+        0.80 * convective,
     );
     let detail_envelope = mix(
         material_density,
         detail_gate,
         detail_blobiness,
     );
-    let mask_envelope = mix(
-        1.0,
-        mask_gate,
-        clamp(tuning.cloud_formation.x, 0.0, 1.0),
-    );
     let weather_presence = smoothstep(0.0, 0.08, cover);
-    let density = weather_presence * detail_envelope * mask_envelope * material_density;
+    let density = weather_presence * detail_envelope * material_density;
     let detail_gate_gradient = smoothstep_gradient(
         body_threshold,
         body_threshold + edge_softness,
         detail_amount,
         detail_gradient,
-    );
-    let mask_gate_gradient = smoothstep_gradient(
-        body_threshold,
-        body_threshold + edge_softness,
-        mask_amount,
-        mask_gradient,
     );
     let material_gradient = smoothstep_gradient(
         0.08,
@@ -850,18 +856,15 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         detail_gate_gradient,
         detail_blobiness,
     );
-    let mask_envelope_gradient = mask_gate_gradient
-        * clamp(tuning.cloud_formation.x, 0.0, 1.0);
     let density_gradient = weather_presence * (
-        detail_envelope_gradient * mask_envelope * material_density
-        + detail_envelope * mask_envelope_gradient * material_density
-        + detail_envelope * mask_envelope * material_gradient
+        detail_envelope_gradient * material_density
+        + detail_envelope * material_gradient
     );
     let height_detail = 0.35 + 0.65 * detail_amount;
     let height_scale_m = mix(
-        mix(320.0, 120.0, stratiform_amount()),
+        mix(320.0, 120.0, stratiform),
         560.0,
-        convective_amount(),
+        convective,
     );
     let height_m = height_scale_m * density * density * height_detail;
     let height_gradient = height_scale_m * (
@@ -873,18 +876,16 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     sample.density = density;
     sample.optical_depth = density
         * (0.16 + 0.62 * detail_amount)
-        * mix(1.0, 1.35, stratiform_amount())
-        * mix(1.0, 1.65, convective_amount())
+        * mix(1.0, 1.35, stratiform)
+        * mix(1.0, 1.65, convective)
         * (1.0 + 0.80 * rain);
     sample.height_m = height_m;
     sample.darkness = density
-        * (0.05 + 0.18 * stratiform_amount() + 0.18 * rain);
+        * (0.05 + 0.18 * stratiform + 0.18 * rain);
     sample.relief = height_m / height_scale_m;
     sample.gradient = height_gradient;
     sample.detail_amount = detail_amount;
     sample.detail_gate = detail_gate;
-    sample.mask_amount = mask_amount;
-    sample.mask_gate = mask_gate;
     return sample;
 }
 
@@ -908,7 +909,7 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
         4u,
-        1400.0,
+        mix(5400.0, 1800.0, rain_intensity()),
     );
     let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain_intensity();
     let body = smoothstep(
@@ -1983,15 +1984,13 @@ fn wind_debug_color(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> vec3<f32> {
 
 fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     let position_m = input.world_position_m;
-    if mode >= 1u && mode <= 8u {
+    if mode >= 1u && mode <= 6u {
         let low = procedural_low_cloud_sample(position_m);
         if mode == 1u { return vec4<f32>(scalar_debug_color(low.detail_amount), 1.0); }
         if mode == 2u { return vec4<f32>(scalar_debug_color(low.detail_gate), 1.0); }
-        if mode == 3u { return vec4<f32>(scalar_debug_color(low.mask_amount), 1.0); }
-        if mode == 4u { return vec4<f32>(scalar_debug_color(low.mask_gate), 1.0); }
-        if mode == 5u { return vec4<f32>(scalar_debug_color(low.density), 1.0); }
-        if mode == 6u { return vec4<f32>(scalar_debug_color(low.optical_depth), 1.0); }
-        if mode == 7u {
+        if mode == 3u { return vec4<f32>(scalar_debug_color(low.density), 1.0); }
+        if mode == 4u { return vec4<f32>(scalar_debug_color(low.optical_depth), 1.0); }
+        if mode == 5u {
             let normal = normalize(vec3<f32>(-low.gradient, 1.0));
             return vec4<f32>(0.5 + 0.5 * normal, 1.0);
         }
