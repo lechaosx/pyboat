@@ -63,7 +63,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
   analytic gradient drives mostly isobaric surface wind. Broad pressure drives
   upper flow, horizontal temperature gradient contributes thermal wind, and
-  vertical shear is derived; there is no weather grid or storm entity.
+  vertical shear is derived. Pressure wavelength bands and scalar atmosphere
+  layers translate at distinct but correlated seeded velocities, so their
+  superposition evolves without stored history; there is no weather grid or
+  storm entity.
 - **[Explicit]** Rendering samples primary weather at the local boat and applies
   it uniformly across the viewport. WGSL recomputes short derivations rather than
   accepting derived-weather or integrated cloud-offset inputs.

@@ -18,6 +18,14 @@ const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
 const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
 const SURFACE_AIR_MASS_COUPLING_500_HPA: f32 = 0.45;
 const INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C: f32 = 6.0;
+const BASE_WEATHER_TRANSPORT_SPEED_M_S: f64 = 6.0;
+const WEATHER_TRANSPORT_DIRECTION_SPREAD_RAD: f64 = std::f64::consts::PI / 720.0;
+const SURFACE_AIR_TEMPERATURE_NOISE_SALT: u64 = 0x4528_21e6_38d0_1377;
+const AIR_TEMPERATURE_500_HPA_NOISE_SALT: u64 = 0xbe54_66cf_34e9_0c6c;
+const WATER_VAPOR_NOISE_SALT: u64 = 0x082e_fa98_ec4e_6c89;
+const SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE: f64 = 0.9;
+const AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE: f64 = 1.15;
+const WATER_VAPOR_TRANSPORT_SPEED_SCALE: f64 = 1.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
@@ -321,23 +329,33 @@ struct WindBand {
     minimum_wavelength_m: f64,
     maximum_wavelength_m: f64,
     variance_fraction: f64,
+    transport_salt: u64,
+    transport_speed_scale: f64,
 }
 
+// Pressure bands remain nearly co-moving because even sub-percent drift evolves
+// the 64 m gust modes quickly; scalar layers tolerate wider speed separation.
 const WIND_BANDS: [WindBand; 3] = [
     WindBand {
         minimum_wavelength_m: 32_768.0,
         maximum_wavelength_m: 131_072.0,
         variance_fraction: 0.90,
+        transport_salt: 0x510e_527f_ade6_82d1,
+        transport_speed_scale: 0.995,
     },
     WindBand {
         minimum_wavelength_m: 4096.0,
         maximum_wavelength_m: 32_768.0,
         variance_fraction: 0.08,
+        transport_salt: 0x9b05_688c_2b3e_6c1f,
+        transport_speed_scale: 1.0,
     },
     WindBand {
         minimum_wavelength_m: 64.0,
         maximum_wavelength_m: 512.0,
         variance_fraction: 0.02,
+        transport_salt: 0x1f83_d9ab_fb41_bd6b,
+        transport_speed_scale: 1.005,
     },
 ];
 
@@ -431,7 +449,8 @@ pub fn procedural_atmosphere_primary(
                 match_seed,
                 tick,
                 position_m,
-                0xbe54_66cf_34e9_0c6c,
+                AIR_TEMPERATURE_500_HPA_NOISE_SALT,
+                AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
                 65_536.0,
                 4,
             ) as f32;
@@ -441,7 +460,8 @@ pub fn procedural_atmosphere_primary(
                 match_seed,
                 tick,
                 position_m,
-                0x082e_fa98_ec4e_6c89,
+                WATER_VAPOR_NOISE_SALT,
+                WATER_VAPOR_TRANSPORT_SPEED_SCALE,
                 3584.0,
                 5,
             ) as f32)
@@ -529,7 +549,8 @@ fn sample_surface_air_temperature_anomaly_c(
         match_seed,
         tick,
         position_m,
-        0x4528_21e6_38d0_1377,
+        SURFACE_AIR_TEMPERATURE_NOISE_SALT,
+        SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
         65_536.0,
         4,
     );
@@ -668,11 +689,12 @@ fn procedural_weather_noise(
     tick: u64,
     position_m: Vector,
     salt: u64,
+    transport_speed_scale: f64,
     wavelength_m: f64,
     octave_count: usize,
 ) -> f64 {
     let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m);
+        transported_weather_position_m(match_seed, tick, position_m, salt, transport_speed_scale);
     terrain_fractal_noise_at(
         match_seed ^ salt,
         transported_x_m,
@@ -687,11 +709,12 @@ fn procedural_weather_noise_sample(
     tick: u64,
     position_m: Vector,
     salt: u64,
+    transport_speed_scale: f64,
     wavelength_m: f64,
     octave_count: usize,
 ) -> ScalarNoiseSample {
     let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m);
+        transported_weather_position_m(match_seed, tick, position_m, salt, transport_speed_scale);
     terrain_fractal_noise_sample(
         match_seed ^ salt,
         transported_x_m,
@@ -862,14 +885,19 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
     // Rotating the analytic gradient of one scalar potential gives coherent flow
     // without sources or sinks; `wind_from_pressure_gradient` then adds the small
     // cross-isobar component used by the surface model.
-    let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m);
     let mut potential_m2_s = 0.0;
     let mut gradient_x_m_s = 0.0;
     let mut gradient_y_m_s = 0.0;
     let mut synoptic_gradient_x_m_s = 0.0;
     let mut synoptic_gradient_y_m_s = 0.0;
     for (band_index, band) in WIND_BANDS.iter().enumerate() {
+        let (transported_x_m, transported_y_m) = transported_weather_position_m(
+            match_seed,
+            tick,
+            position_m,
+            band.transport_salt,
+            band.transport_speed_scale,
+        );
         let band_key = match_seed ^ (band_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let rotation = hash_unit(band_key ^ 0xa076_1d64_78bd_642f);
         let amplitude_m_s = WIND_WEIBULL_SCALE_M_S
@@ -910,17 +938,37 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
     }
 }
 
-fn transported_weather_position_m(match_seed: u64, tick: u64, position_m: Vector) -> (f64, f64) {
+fn transported_weather_position_m(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    transport_salt: u64,
+    speed_scale: f64,
+) -> (f64, f64) {
     // Keep accumulated transport in f64 through lattice sampling so long-running
     // matches retain local spatial variation instead of stepping between f32 bins.
     let time_seconds = tick as f64 * f64::from(DT_SECONDS);
-    let transport_direction_rad =
-        std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
-    let (transport_direction_y, transport_direction_x) = libm::sincos(transport_direction_rad);
+    let (transport_velocity_x_m_s, transport_velocity_y_m_s) =
+        weather_transport_velocity_m_s(match_seed, transport_salt, speed_scale);
     (
-        f64::from(position_m.x) - 6.0 * transport_direction_x * time_seconds,
-        f64::from(position_m.y) - 6.0 * transport_direction_y * time_seconds,
+        f64::from(position_m.x) - transport_velocity_x_m_s * time_seconds,
+        f64::from(position_m.y) - transport_velocity_y_m_s * time_seconds,
     )
+}
+
+fn weather_transport_velocity_m_s(
+    match_seed: u64,
+    transport_salt: u64,
+    speed_scale: f64,
+) -> (f64, f64) {
+    let base_direction_rad = std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
+    let direction_offset_rad = WEATHER_TRANSPORT_DIRECTION_SPREAD_RAD
+        * (2.0 * hash_unit(match_seed ^ transport_salt ^ 0x1319_8a2e_0370_7344) - 1.0);
+    let speed_variation =
+        0.9975 + 0.005 * hash_unit(match_seed ^ transport_salt ^ 0xa409_3822_299f_31d0);
+    let speed_m_s = BASE_WEATHER_TRANSPORT_SPEED_M_S * speed_scale * speed_variation;
+    let (direction_y, direction_x) = libm::sincos(base_direction_rad + direction_offset_rad);
+    (speed_m_s * direction_x, speed_m_s * direction_y)
 }
 
 fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -> Vector {
@@ -978,6 +1026,46 @@ pub fn computed_yaw_rate_torques_in_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stateless_weather_layers_use_correlated_distinct_transport() {
+        let match_seed = 0x5eed;
+        let surface = weather_transport_velocity_m_s(
+            match_seed,
+            SURFACE_AIR_TEMPERATURE_NOISE_SALT,
+            SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
+        );
+        let upper = weather_transport_velocity_m_s(
+            match_seed,
+            AIR_TEMPERATURE_500_HPA_NOISE_SALT,
+            AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
+        );
+        let moisture = weather_transport_velocity_m_s(
+            match_seed,
+            WATER_VAPOR_NOISE_SALT,
+            WATER_VAPOR_TRANSPORT_SPEED_SCALE,
+        );
+        let speed = |velocity: (f64, f64)| libm::hypot(velocity.0, velocity.1);
+        let alignment = |first: (f64, f64), second: (f64, f64)| {
+            (first.0 * second.0 + first.1 * second.1) / (speed(first) * speed(second))
+        };
+
+        assert!(alignment(surface, upper) > 0.9);
+        assert!(alignment(surface, moisture) > 0.9);
+        assert!(libm::hypot(surface.0 - upper.0, surface.1 - upper.1) > 0.1);
+        assert!(libm::hypot(surface.0 - moisture.0, surface.1 - moisture.1) > 0.1);
+        assert!(speed(upper) > speed(surface));
+
+        let band_speeds = WIND_BANDS.map(|band| {
+            speed(weather_transport_velocity_m_s(
+                match_seed,
+                band.transport_salt,
+                band.transport_speed_scale,
+            ))
+        });
+        assert!(band_speeds[0] < band_speeds[1]);
+        assert!(band_speeds[1] < band_speeds[2]);
+    }
 
     #[test]
     fn open_wind_has_uniform_direction_and_weibull_speed() {
