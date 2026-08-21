@@ -1325,33 +1325,52 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.coastal_rock_amount = 0.0;
     terrain.coastal_outcrop_amount = 0.0;
     terrain.coastal_sediment_amount = 0.0;
-    let land_detail_mask = terrain_smoothstep_sample(1.0, 3.0, base);
+    let land_detail_mask = terrain_smoothstep_sample(4.0, 12.0, base);
     if land_detail_mask.value > 0.0 {
         let land_ruggedness_noise = terrain_fractal_sample(
-            vec2<u32>(0x133111ebu, 0x94d049bbu),
+            vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
             2048.0,
             3u,
         );
         let land_ruggedness = terrain_smoothstep_sample(
-            -0.3,
-            0.3,
+            -0.25,
+            0.25,
             land_ruggedness_noise,
         );
-        let land_detail = terrain_fractal_sample(
+        let land_detail = terrain_simplex_fractal_sample(
             vec2<u32>(0x4f6cdd1du, 0x2545f491u),
             terrain_position_m,
-            32.0,
-            4u,
+            256.0,
+            6u,
+            0.65,
         );
+        var ridged_detail: TerrainNoiseSample;
+        ridged_detail.value = 1.0 - 2.0 * abs(land_detail.value);
+        ridged_detail.gradient = -2.0
+            * select(-1.0, 1.0, land_detail.value >= 0.0)
+            * land_detail.gradient;
+        let ridge_blend = terrain_smoothstep_sample(0.35, 0.75, land_ruggedness);
+        var shaped_land_detail: TerrainNoiseSample;
+        shaped_land_detail.value = mix(
+            land_detail.value,
+            ridged_detail.value,
+            ridge_blend.value,
+        );
+        shaped_land_detail.gradient = mix(
+            land_detail.gradient,
+            ridged_detail.gradient,
+            ridge_blend.value,
+        ) + ridge_blend.gradient * (ridged_detail.value - land_detail.value);
         let land_detail_amount = 0.08 + 0.92 * land_ruggedness.value;
         terrain.elevation_m += 5.0 * land_detail_mask.value
-            * land_detail_amount * land_detail.value * landscape_visibility.x;
+            * land_detail_amount * shaped_land_detail.value * landscape_visibility.x;
         terrain.gradient += 5.0 * landscape_visibility.x * (
-            land_detail_mask.gradient * land_detail_amount * land_detail.value
+            land_detail_mask.gradient * land_detail_amount * shaped_land_detail.value
                 + land_ruggedness.gradient * 0.92
-                    * land_detail_mask.value * land_detail.value
-                + land_detail.gradient * land_detail_mask.value * land_detail_amount
+                    * land_detail_mask.value * shaped_land_detail.value
+                + shaped_land_detail.gradient
+                    * land_detail_mask.value * land_detail_amount
         );
     }
     let seabed_deep_gate = terrain_smoothstep_sample(-4.0, -2.5, base);

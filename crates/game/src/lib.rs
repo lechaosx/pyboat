@@ -634,17 +634,30 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
     let mut terrain_elevation_m =
         -(base_depth_m + offshore_amount * (ocean_floor_depth_m - base_depth_m));
-    let land_detail_mask = smoothstep_range(1.0, 3.0, base_elevation_m);
+    let land_detail_mask = smoothstep_range(4.0, 12.0, base_elevation_m);
     if land_detail_mask > 0.0 {
         let land_ruggedness = smoothstep_range(
-            -0.3,
-            0.3,
-            terrain_fractal_noise(match_seed ^ 0x94d0_49bb_1331_11eb, position_m, 2048.0, 3),
+            -0.25,
+            0.25,
+            terrain_fractal_noise(
+                match_seed ^ 0xbf58_476d_1ce4_e5b9,
+                position_m,
+                2048.0,
+                3,
+            ),
         );
-        let land_detail =
-            terrain_fractal_noise(match_seed ^ 0x2545_f491_4f6c_dd1d, position_m, 32.0, 4);
+        let land_detail = terrain_simplex_fractal_noise(
+            match_seed ^ 0x2545_f491_4f6c_dd1d,
+            position_m,
+            256.0,
+            6,
+            0.65,
+        ) as f64;
+        let ridged_detail = 1.0 - 2.0 * land_detail.abs();
+        let ridge_blend = smoothstep_range(0.35, 0.75, land_ruggedness);
+        let shaped_land_detail = lerp(land_detail, ridged_detail, ridge_blend);
         terrain_elevation_m +=
-            5.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * land_detail;
+            5.0 * land_detail_mask * (0.08 + 0.92 * land_ruggedness) * shaped_land_detail;
     }
     // Reef gates use the pre-remap coast so open-ocean depth does not change the
     // distribution of channels and emergent rocks.

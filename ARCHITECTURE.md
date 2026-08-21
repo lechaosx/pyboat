@@ -67,6 +67,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   changing its regional cause. Material zones span the configured astronomical
   tidal range: low tide exposes wet rock or sediment, and ordinary vegetation
   begins above the permanent intertidal band.
+- **[Explicit]** Inland physical relief uses a portable simplex field spanning
+  hill to boat scale. The shared broad coastal-ruggedness field continuously
+  blends that relief from smooth rolling ground into ridged rock, correlating
+  cliff-forming coasts with the terrain behind them without a separate mountain
+  mask.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring
