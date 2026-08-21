@@ -638,22 +638,24 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             smoothstep_range(
                 -0.25,
                 0.25,
-                terrain_fractal_noise(
+                terrain_simplex_fractal_noise(
                     match_seed ^ 0xbf58_476d_1ce4_e5b9,
                     position_m,
                     2048.0,
                     3,
-                ),
+                    0.5,
+                ) as f64,
             ),
             smoothstep_range(
                 -0.25,
                 0.35,
-                terrain_fractal_noise(
+                terrain_simplex_fractal_noise(
                     match_seed ^ 0x9e37_79b9_7f4a_7c15,
                     position_m,
                     1536.0,
                     3,
-                ),
+                    0.5,
+                ) as f64,
             ),
         )
     } else {
@@ -680,12 +682,13 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         let land_ruggedness = smoothstep_range(
             -0.25,
             0.25,
-            terrain_fractal_noise(
+            terrain_simplex_fractal_noise(
                 match_seed ^ 0xbf58_476d_1ce4_e5b9,
                 position_m,
                 2048.0,
                 3,
-            ),
+                0.5,
+            ) as f64,
         );
         let land_detail = terrain_simplex_fractal_noise(
             match_seed ^ 0x2545_f491_4f6c_dd1d,
@@ -726,12 +729,13 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         return terrain_elevation_m as f32;
     }
     let shoal = if seabed_mask > 0.0 {
-        terrain_fractal_noise(
+        terrain_simplex_fractal_noise(
             match_seed ^ 0xd1b5_4a32_d192_ed03,
             position_m,
             256.0,
             TERRAIN_SHOAL_OCTAVE_COUNT,
-        )
+            0.5,
+        ) as f64
     } else {
         0.0
     };

@@ -1316,22 +1316,24 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     coastal_rock.value = 0.0;
     coastal_rock.gradient = vec2<f32>(0.0);
     if base.value > -32.0 && base.value < 4.0 {
-        let reef_ruggedness_noise = terrain_fractal_sample(
+        let reef_ruggedness_noise = terrain_simplex_fractal_sample(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
             2048.0,
             3u,
+            0.5,
         );
         reef_ruggedness = terrain_smoothstep_sample(
             -0.25,
             0.25,
             reef_ruggedness_noise,
         );
-        let coastal_substrate = terrain_fractal_sample(
+        let coastal_substrate = terrain_simplex_fractal_sample(
             vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
             terrain_position_m,
             1536.0,
             3u,
+            0.5,
         );
         coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
     }
@@ -1388,11 +1390,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.coastal_sediment_amount = 0.0;
     let land_detail_mask = terrain_smoothstep_sample(4.0, 12.0, base);
     if land_detail_mask.value > 0.0 {
-        let land_ruggedness_noise = terrain_fractal_sample(
+        let land_ruggedness_noise = terrain_simplex_fractal_sample(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
             2048.0,
             3u,
+            0.5,
         );
         let land_ruggedness = terrain_smoothstep_sample(
             -0.25,
@@ -1512,11 +1515,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     shoal.value = 0.0;
     shoal.gradient = vec2<f32>(0.0);
     if seabed_mask_value > 0.0 {
-        shoal = terrain_fractal_sample(
+        shoal = terrain_simplex_fractal_sample(
             vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             terrain_position_m,
             256.0,
             3u,
+            0.5,
         );
     }
     let coastal_rock_amount = coastal_rock.value;
@@ -2463,11 +2467,19 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(signed_debug_color(vegetation), 1.0);
     }
     if mode == 39u {
-        let substrate = terrain_fractal_sample(
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u), terrain_position_m, 1536.0, 3u,
+        let substrate = terrain_simplex_fractal_sample(
+            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+            terrain_position_m,
+            1536.0,
+            3u,
+            0.5,
         ).value;
-        let ruggedness_noise = terrain_fractal_sample(
-            vec2<u32>(0x1ce4e5b9u, 0xbf58476du), terrain_position_m, 2048.0, 3u,
+        let ruggedness_noise = terrain_simplex_fractal_sample(
+            vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+            terrain_position_m,
+            2048.0,
+            3u,
+            0.5,
         ).value;
         let rockiness = smoothstep(-0.25, 0.35, substrate);
         let ruggedness = smoothstep(-0.25, 0.25, ruggedness_noise);

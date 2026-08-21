@@ -82,6 +82,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   blends that relief from smooth rolling ground into ridged rock, correlating
   cliff-forming coasts with the terrain behind them without a separate mountain
   mask.
+- **[Implicit]** Broad coastal substrate, ruggedness, and shoal variation use the
+  portable two-dimensional simplex kernel. Their smooth thresholds and contours
+  therefore avoid the directional cells of square value noise while evaluating
+  one fewer lattice contribution per octave.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring
