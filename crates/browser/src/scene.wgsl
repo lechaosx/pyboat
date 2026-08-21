@@ -76,16 +76,6 @@ var<private> visual_pixel_footprint_m: f32;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
-const MATERIAL_GRADIENT_DIRECTIONS = array<vec2<f32>, 8>(
-    vec2<f32>(1.0, 0.0),
-    vec2<f32>(0.70710677, 0.70710677),
-    vec2<f32>(0.0, 1.0),
-    vec2<f32>(-0.70710677, 0.70710677),
-    vec2<f32>(-1.0, 0.0),
-    vec2<f32>(-0.70710677, -0.70710677),
-    vec2<f32>(0.0, -1.0),
-    vec2<f32>(0.70710677, -0.70710677),
-);
 // Keep this CC0 OpenSimplex2 gradient order synchronized with `game` so CPU and
 // WGSL hashes select the same direction for authoritative terrain.
 const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(
@@ -543,76 +533,16 @@ fn terrain_simplex_fractal_sample(
     return sample;
 }
 
-fn material_lattice_gradient(seed: vec2<u32>, x: i32, y: i32) -> vec2<f32> {
-    let key = seed
-        ^ multiply_u64(
-            signed_u64(x),
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-        )
-        ^ multiply_u64(
-            signed_u64(y),
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        );
-    return MATERIAL_GRADIENT_DIRECTIONS[terrain_hash(key).x & 7u];
-}
-
-fn material_gradient_noise(
-    seed: vec2<u32>,
-    position_m: vec2<f32>,
-    wavelength_m: f32,
-) -> TerrainNoiseSample {
-    let scaled_position = position_m / wavelength_m;
-    let cell = vec2<i32>(floor(scaled_position));
-    let fraction = scaled_position - vec2<f32>(cell);
-    let blend = fraction * fraction * fraction
-        * (fraction * (fraction * 6.0 - 15.0) + 10.0);
-    let blend_derivative = 30.0 * fraction * fraction
-        * (fraction * (fraction - 2.0) + 1.0) / wavelength_m;
-    let bottom_left_gradient = material_lattice_gradient(seed, cell.x, cell.y);
-    let bottom_right_gradient = material_lattice_gradient(seed, cell.x + 1, cell.y);
-    let top_left_gradient = material_lattice_gradient(seed, cell.x, cell.y + 1);
-    let top_right_gradient = material_lattice_gradient(seed, cell.x + 1, cell.y + 1);
-    let bottom_left = dot(bottom_left_gradient, fraction);
-    let bottom_right = dot(bottom_right_gradient, fraction - vec2<f32>(1.0, 0.0));
-    let top_left = dot(top_left_gradient, fraction - vec2<f32>(0.0, 1.0));
-    let top_right = dot(top_right_gradient, fraction - vec2<f32>(1.0));
-    let bottom = mix(bottom_left, bottom_right, blend.x);
-    let top = mix(top_left, top_right, blend.x);
-    let bottom_gradient = mix(
-        bottom_left_gradient,
-        bottom_right_gradient,
-        blend.x,
-    ) / wavelength_m + vec2<f32>(
-        (bottom_right - bottom_left) * blend_derivative.x,
-        0.0,
-    );
-    let top_gradient = mix(
-        top_left_gradient,
-        top_right_gradient,
-        blend.x,
-    ) / wavelength_m + vec2<f32>(
-        (top_right - top_left) * blend_derivative.x,
-        0.0,
-    );
-    var sample: TerrainNoiseSample;
-    sample.value = 1.8 * mix(bottom, top, blend.y);
-    sample.gradient = 1.8 * (
-        mix(bottom_gradient, top_gradient, blend.y)
-            + vec2<f32>(0.0, (top - bottom) * blend_derivative.y)
-    );
-    return sample;
-}
-
 fn material_fractal_sample(
     field_salt: vec2<u32>,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
 ) -> TerrainNoiseSample {
-    // Gradient noise and per-octave rotation keep the sampling lattice from
-    // becoming visible as square material structure at close zoom.
+    // Non-binary octave spacing and rotation keep repeated simplex features from
+    // aligning across the appearance-only material spectrum.
     let axis_hash = terrain_hash(scene.match_seed ^ field_salt);
-    var octave_axis = MATERIAL_GRADIENT_DIRECTIONS[axis_hash.x & 7u];
+    var octave_axis = SIMPLEX_GRADIENT_DIRECTIONS[axis_hash.x % 24u];
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
@@ -633,7 +563,7 @@ fn material_fractal_sample(
                     vec2<u32>(0xd192ed03u, 0xd1b54a32u),
                 );
             let perpendicular_axis = rotate_left(octave_axis);
-            let octave_sample = material_gradient_noise(
+            let octave_sample = terrain_simplex_noise(
                 octave_seed,
                 vec2<f32>(
                     dot(position_m, octave_axis),
