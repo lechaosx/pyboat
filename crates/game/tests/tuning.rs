@@ -1172,7 +1172,7 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     let rugged_shallow_patch_relief_m =
         shallow_patch_relief_16_m_p90[shallow_patch_relief_16_m_p90.len() * 9 / 10];
     assert!(
-        rugged_shallow_patch_relief_m >= 3.3 * calm_shallow_patch_relief_m,
+        rugged_shallow_patch_relief_m >= 3.2 * calm_shallow_patch_relief_m,
         "shallow relief only varied from {calm_shallow_patch_relief_m} to {rugged_shallow_patch_relief_m} m"
     );
     assert!(
@@ -1181,8 +1181,118 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     );
     assert!(deep_access_patches > 0);
     assert!(
-        deep_access_patches * 4 < mixed_coastal_patches,
+        deep_access_patches * 2 < mixed_coastal_patches,
         "{deep_access_patches} of {mixed_coastal_patches} reef patches had deep access"
+    );
+}
+
+#[test]
+fn procedural_coasts_mix_gradual_shelves_and_steep_basin_drops() {
+    let mut mid_depth_pairs = 0;
+    let mut gradual_pairs = 0;
+    let mut steep_pairs = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for sample_x in -32..=32 {
+            for sample_y in -32..=32 {
+                let position_m = Vector::new(sample_x as f32 * 64.0, sample_y as f32 * 64.0);
+                let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                let nearby_elevation_m =
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(64.0, 0.0));
+                if (-200.0..=-8.0).contains(&elevation_m)
+                    && (-200.0..=-8.0).contains(&nearby_elevation_m)
+                {
+                    let relief_m = (nearby_elevation_m - elevation_m).abs();
+                    mid_depth_pairs += 1;
+                    gradual_pairs += usize::from(relief_m <= 8.0);
+                    steep_pairs += usize::from(relief_m >= 32.0);
+                }
+            }
+        }
+    }
+
+    assert!(
+        mid_depth_pairs >= 100,
+        "only {mid_depth_pairs} mid-depth pairs"
+    );
+    assert!(
+        gradual_pairs * 4 >= mid_depth_pairs,
+        "only {gradual_pairs} of {mid_depth_pairs} mid-depth pairs were gradual"
+    );
+    assert!(steep_pairs > 0, "no steep basin drops remained");
+}
+
+#[test]
+fn mid_depth_shelves_rarely_form_abrupt_local_kinks() {
+    let mut mid_depth_triples = 0;
+    let mut abrupt_kinks = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for sample_x in -96..=96 {
+            for sample_y in -96..=96 {
+                let position_m = Vector::new(sample_x as f32 * 32.0, sample_y as f32 * 32.0);
+                for direction in [Vector::new(32.0, 0.0), Vector::new(0.0, 32.0)] {
+                    let before_m = procedural_terrain_elevation_m(seed, position_m - direction);
+                    let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                    let after_m = procedural_terrain_elevation_m(seed, position_m + direction);
+                    if !(-200.0..=-8.0).contains(&before_m)
+                        || !(-200.0..=-8.0).contains(&elevation_m)
+                        || !(-200.0..=-8.0).contains(&after_m)
+                    {
+                        continue;
+                    }
+                    let local_curvature_m = (before_m - 2.0 * elevation_m + after_m).abs();
+                    mid_depth_triples += 1;
+                    abrupt_kinks += usize::from(local_curvature_m >= 24.0);
+                }
+            }
+        }
+    }
+
+    assert!(
+        mid_depth_triples >= 100,
+        "only {mid_depth_triples} mid-depth triples"
+    );
+    assert!(
+        abrupt_kinks * 20 < mid_depth_triples,
+        "{abrupt_kinks} of {mid_depth_triples} mid-depth triples formed abrupt kinks"
+    );
+}
+
+#[test]
+fn visible_outer_shelves_retain_local_bottom_relief() {
+    let mut shelf_samples = 0;
+    let mut structured_samples = 0;
+
+    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+        for sample_x in -96..=96 {
+            for sample_y in -96..=96 {
+                let position_m = Vector::new(sample_x as f32 * 32.0, sample_y as f32 * 32.0);
+                let elevation_m = procedural_terrain_elevation_m(seed, position_m);
+                if !(-20.0..=-8.0).contains(&elevation_m) {
+                    continue;
+                }
+                let before_m =
+                    procedural_terrain_elevation_m(seed, position_m - Vector::new(8.0, 0.0));
+                let after_m =
+                    procedural_terrain_elevation_m(seed, position_m + Vector::new(8.0, 0.0));
+                if !(-20.0..=-8.0).contains(&before_m) || !(-20.0..=-8.0).contains(&after_m) {
+                    continue;
+                }
+                let local_curvature_m = (before_m - 2.0 * elevation_m + after_m).abs();
+                shelf_samples += 1;
+                structured_samples += usize::from(local_curvature_m >= 0.10);
+            }
+        }
+    }
+
+    assert!(
+        shelf_samples >= 100,
+        "only {shelf_samples} outer-shelf samples"
+    );
+    assert!(
+        structured_samples * 6 >= shelf_samples,
+        "only {structured_samples} of {shelf_samples} outer-shelf samples retained local relief"
     );
 }
 

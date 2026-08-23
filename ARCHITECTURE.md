@@ -69,12 +69,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   vegetation to reach the water. Local detail varies each expression without
   changing its regional cause. Material zones span the configured astronomical
   tidal range: low tide exposes wet rock or sediment, and ordinary vegetation
-  begins above the permanent intertidal band. The same geology stretches the
-  shallow signed landform before its transition to the ocean basin, giving
-  rocky, reef-forming, and depositional coasts broader physical shelves while
-  low-support steep coasts can remain narrow. Fine signed relief shapes the
-  inner reef, intertidal rock, and sparse emergent peaks. A non-overlapping outer
-  rocky-shelf band adds portable multi-scale simplex relief that the shared
+  begins above the permanent intertidal band. Below the shoreline, a monotonic
+  shelf-to-slope transfer of the signed landform field preserves its level sets,
+  so shelf geometry follows the coast and its physical width emerges from the
+  field gradient before depth reaches the ocean basin. Fine signed relief shapes
+  the inner reef, intertidal rock, and sparse emergent peaks. A non-overlapping
+  outer rocky-shelf band adds portable multi-scale simplex relief that the shared
   ruggedness field transforms toward connected ridges and cuts; depositional
   shelves remain comparatively smooth.
 - **[Explicit]** Inland physical relief uses a portable simplex field spanning
@@ -157,11 +157,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   rotations; each octave fades out against the fragment's world-space pixel
   footprint before it can alias. Material relief remains single-sample, without
   parallax or per-material ray marching. Bounded broad-relief samples provide
-  cast shadows without displaced geometry. Where round-trip optical transmittance
-  is meaningful, shallow water mixes depth-attenuated bottom reflectance into the
-  water column; shared coastal geology selects sediment, rock, and outcrop
-  character, while filtered material gradients refine the authoritative bottom
-  normal without changing depth.
+  cast shadows without displaced geometry. In clear shallow water, filtered
+  material reflectance produces scalar contrast through the water palette
+  according to round-trip optical transmittance. Reflective substrates remain
+  visible farther, but every substrate approaches a visible bottom signal as
+  water depth approaches zero. Underwater rendering adds neither a separate
+  visual-detail height field nor bottom-normal lighting.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Implicit]** Authoritative wind shelter probes the same island-scale landform

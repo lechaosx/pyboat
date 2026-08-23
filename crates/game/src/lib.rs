@@ -671,22 +671,10 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     } else {
         (0.0, 0.0)
     };
-    let coastal_sediment_amount =
-        (1.0 - coastal_rock_amount) * (1.0 - reef_ruggedness);
-    let rock_shelf_support = coastal_rock_amount * (1.0 - 0.65 * reef_ruggedness);
-    let shelf_support = rock_shelf_support.max(0.8 * coastal_sediment_amount);
-    let shelf_extension = smoothstep_range(0.45, 0.85, shelf_support);
-    // Shared coastal geology stretches the shallow part of the signed landform
-    // before it falls through the continental slope into the ocean basin.
-    let coastal_depth_m = if base_depth_m > 0.0 {
-        base_depth_m * (1.0 - 0.18 * shelf_extension)
-    } else {
-        base_depth_m
-    };
-    let offshore_amount = smoothstep_range(4.0, 24.0, coastal_depth_m);
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
-    let mut terrain_elevation_m =
-        -(coastal_depth_m + offshore_amount * (ocean_floor_depth_m - coastal_depth_m));
+    let positive_base_depth_m = base_depth_m.max(0.0);
+    let shaped_depth_m = base_depth_m + 0.03 * positive_base_depth_m.powi(4);
+    let mut terrain_elevation_m = -shaped_depth_m.min(ocean_floor_depth_m);
     let land_detail_mask = smoothstep_range(4.0, 12.0, base_elevation_m);
     if land_detail_mask > 0.0 {
         let land_ruggedness = smoothstep_range(
@@ -733,7 +721,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         * (1.0 - smoothstep_range(-0.5, -0.1, terrain_elevation_m));
     let rock_mask = smoothstep_range(-2.0, -0.8, terrain_elevation_m)
         * (1.0 - smoothstep_range(1.2, 2.0, terrain_elevation_m));
-    let outer_reef_mask = smoothstep_range(-8.0, -6.0, terrain_elevation_m)
+    let outer_reef_mask = smoothstep_range(-22.0, -18.0, terrain_elevation_m)
         * (1.0 - smoothstep_range(-5.0, -4.0, terrain_elevation_m));
     if seabed_mask == 0.0 && rock_mask == 0.0 && outer_reef_mask == 0.0 {
         return terrain_elevation_m as f32;
@@ -786,7 +774,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             * (0.05 + 1.55 * reef_ruggedness)
             * reef
         + 2.0 * rock_mask * coastal_rock_relief_amount * reef_peak
-        + 1.2
+        + 1.8
             * outer_reef_mask
             * coastal_rock_relief_amount
             * (0.12 + 1.68 * reef_ruggedness)

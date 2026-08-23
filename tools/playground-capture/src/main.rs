@@ -361,7 +361,7 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         cloud_wisps: [0.25, 0.0, 0.0, 0.0],
         cloud_rendering: [1.0; 4],
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
-        water_tuning: [12.0, 0.55, 0.0, 0.0],
+        water_tuning: [0.5, 1.0, 0.0, 0.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
         layer_visibility: [1.0; 4],
         landscape_visibility: [1.0; 4],

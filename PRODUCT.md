@@ -38,7 +38,7 @@ current playable behavior; this file does not track delivery status.
   the parent landforms look noisy or assembled from separate objects.
 - **[Explicit]** Coast character varies from beach-dominant to mixed and
   beachless. Gentle shores can form connected beaches, cliffs continue below the
-  waterline, and geology-dependent shallow shelves give way to deep ocean basins
+  waterline, and landform-derived shallow shelves give way to deep ocean basins
   with rare trenches. Sediment beds remain smooth except for sparse rock
   outcrops, while rock substrate varies from flat to rugged. Outcrops may remain
   submerged or cross the waterline onto sandy, rocky, or pebbly beaches,
@@ -71,10 +71,11 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Procedural graphics communicate physical scale and environment.
   This includes wave lines around islands and moving ships. Water transitions
   continuously with depth and distinctly at the moving shoreline. Clear shallow
-  water reveals complex sediment, rock, outcrop, and reef structure through
-  depth-attenuated bottom color and relief; land has recognizable beach,
-  vegetation, rock, snow, and ice materials. The same solid ice surface covers
-  land and polar water rather than using a decorative floating-ice layer.
+  water reveals bottom, outcrop, and reef structure through depth-attenuated,
+  water-tinted reflectance and relief while retaining a cohesive color; land has
+  recognizable beach, vegetation, rock, snow, and ice materials. The same solid
+  ice surface covers land and polar water rather than using a decorative
+  floating-ice layer.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes
@@ -152,8 +153,11 @@ current playable behavior; this file does not track delivery status.
   approximate real-numbered month, and lunar phase with named landmarks while
   retaining normalized runtime phases internally.
 - **[Explicit]** Underwater bottom visibility follows two-way exponential light
-  attenuation. The lab exposes attenuation length and bottom-light contribution
-  without changing physical terrain, depth, or grounding.
+  attenuation. Substrate reflectance determines how much bottom contrast survives
+  without tinting the water by material. Underwater structure comes from
+  authoritative depth and material rather than a separate visual-detail texture
+  or bottom-normal lighting. The lab exposes bottom attenuation length in metres
+  and bottom visibility without changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a

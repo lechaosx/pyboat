@@ -52,8 +52,8 @@ override CLOUD_RELIEF: f32 = 1.0;
 override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
-override WATER_ATTENUATION_LENGTH_M: f32 = 12.0;
-override WATER_BOTTOM_LIGHT_CONTRIBUTION: f32 = 0.55;
+override WATER_ATTENUATION_LENGTH_M: f32 = 0.5;
+override WATER_BOTTOM_VISIBILITY: f32 = 1.0;
 override LANDFORM_RELIEF_STRENGTH: f32 = 1.0;
 override LANDFORM_SHADOW_STRENGTH: f32 = 0.7;
 override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
@@ -317,7 +317,7 @@ fn production_tuning() -> SceneTuning {
         ),
         vec4<f32>(
             WATER_ATTENUATION_LENGTH_M,
-            WATER_BOTTOM_LIGHT_CONTRIBUTION,
+            WATER_BOTTOM_VISIBILITY,
             0.0,
             0.0,
         ),
@@ -1220,41 +1220,29 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     coastal_sediment.gradient = -coastal_rock.gradient
         * (1.0 - reef_ruggedness.value)
         - reef_ruggedness.gradient * (1.0 - coastal_rock.value);
-    var rock_shelf_support: TerrainNoiseSample;
-    rock_shelf_support.value = coastal_rock.value
-        * (1.0 - 0.65 * reef_ruggedness.value);
-    rock_shelf_support.gradient = coastal_rock.gradient
-        * (1.0 - 0.65 * reef_ruggedness.value)
-        - 0.65 * coastal_rock.value * reef_ruggedness.gradient;
-    var shelf_support = rock_shelf_support;
-    if 0.8 * coastal_sediment.value > shelf_support.value {
-        shelf_support.value = 0.8 * coastal_sediment.value;
-        shelf_support.gradient = 0.8 * coastal_sediment.gradient;
-    }
-    let shelf_extension = terrain_smoothstep_sample(0.45, 0.85, shelf_support);
-    var coastal_depth: TerrainNoiseSample;
-    if base_depth.value > 0.0 {
-        let coastal_depth_scale = 1.0 - 0.18 * shelf_extension.value;
-        coastal_depth.value = base_depth.value * coastal_depth_scale;
-        coastal_depth.gradient = base_depth.gradient * coastal_depth_scale
-            - 0.18 * base_depth.value * shelf_extension.gradient;
-    } else {
-        coastal_depth = base_depth;
-    }
-    let offshore_amount = terrain_smoothstep_sample(4.0, 24.0, coastal_depth);
     var ocean_floor_depth: TerrainNoiseSample;
     ocean_floor_depth.value = 3000.0 + 3000.0 * trench_depth.value;
     ocean_floor_depth.gradient = 3000.0 * trench_depth.gradient;
-    let deepened_depth_m = mix(
-        coastal_depth.value,
+    let positive_base_depth_m = max(base_depth.value, 0.0);
+    var shaped_depth: TerrainNoiseSample;
+    shaped_depth.value = base_depth.value
+        + 0.03 * positive_base_depth_m * positive_base_depth_m
+            * positive_base_depth_m * positive_base_depth_m;
+    shaped_depth.gradient = base_depth.gradient;
+    if positive_base_depth_m > 0.0 {
+        shaped_depth.gradient *= 1.0
+            + 0.12 * positive_base_depth_m * positive_base_depth_m
+                * positive_base_depth_m;
+    }
+    let deepened_depth_m = min(
+        shaped_depth.value,
         ocean_floor_depth.value,
-        offshore_amount.value,
     );
-    let deepened_depth_gradient = mix(
-        coastal_depth.gradient,
+    let deepened_depth_gradient = select(
         ocean_floor_depth.gradient,
-        offshore_amount.value,
-    ) + offshore_amount.gradient * (ocean_floor_depth.value - coastal_depth.value);
+        shaped_depth.gradient,
+        shaped_depth.value <= ocean_floor_depth.value,
+    );
 
     var terrain: TerrainSample;
     terrain.elevation_m = -deepened_depth_m;
@@ -1368,7 +1356,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     let rock_shore_rise = terrain_smoothstep_sample(1.2, 2.0, shaped_bed);
     let rock_shore_gate_value = 1.0 - rock_shore_rise.value;
     let rock_mask_value = rock_deep_gate.value * rock_shore_gate_value;
-    let outer_reef_deep_gate = terrain_smoothstep_sample(-8.0, -6.0, shaped_bed);
+    let outer_reef_deep_gate = terrain_smoothstep_sample(-22.0, -18.0, shaped_bed);
     let outer_reef_shore_rise = terrain_smoothstep_sample(-5.0, -4.0, shaped_bed);
     let outer_reef_shore_gate_value = 1.0 - outer_reef_shore_rise.value;
     let outer_reef_mask_value = outer_reef_deep_gate.value
@@ -1465,7 +1453,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             * landscape_visibility.x
         + 2.0 * rock_mask_value
             * coastal_rock_relief.value * reef_peak.value * landscape_visibility.x
-        + 1.2 * outer_reef_mask_value
+        + 1.8 * outer_reef_mask_value
             * outer_reef_detail_amount * shaped_outer_reef.value
             * landscape_visibility.x;
     terrain.gradient += landscape_visibility.x * 0.25 * (
@@ -1482,7 +1470,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         rock_mask_gradient * coastal_rock_relief.value * reef_peak.value
             + coastal_rock_relief.gradient * rock_mask_value * reef_peak.value
             + reef_peak.gradient * rock_mask_value * coastal_rock_relief.value
-    ) + 1.2 * landscape_visibility.x * (
+    ) + 1.8 * landscape_visibility.x * (
         outer_reef_mask_gradient
             * outer_reef_detail_amount * shaped_outer_reef.value
             + coastal_rock_relief.gradient
@@ -1497,6 +1485,11 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var visible_coastal_mask_value = coastal_detail_mask_value;
     if outer_reef_mask_value > visible_coastal_mask_value {
         visible_coastal_mask_value = outer_reef_mask_value;
+    }
+    let submerged_material_mask_value = 1.0
+        - smoothstep(-0.1, 0.0, terrain.elevation_m);
+    if submerged_material_mask_value > visible_coastal_mask_value {
+        visible_coastal_mask_value = submerged_material_mask_value;
     }
     terrain.coastal_rock_amount = landscape_visibility.x
         * visible_coastal_mask_value * coastal_rock_amount;
@@ -1720,29 +1713,11 @@ fn terrain_surface(
     let slope = length(material_gradient);
     if elevation_m < water_height_m {
         let depth_m = water_height_m - elevation_m;
-        let shallow_color = vec3<f32>(0.12, 0.42, 0.5);
-        let open_water_color = vec3<f32>(0.04, 0.19, 0.25);
-        let deep_water_color = vec3<f32>(0.025, 0.11, 0.15);
-        let water_color = mix(
-            shallow_color,
-            open_water_color,
-            smoothstep(0.0, 1.0, depth_m),
-        );
-        let open_water = mix(
-            water_color,
-            deep_water_color,
-            smoothstep(1.0, 4.0, depth_m),
-        );
+        let water_color = vec3<f32>(0.025, 0.11, 0.15);
         let bottom_transmittance = exp(
             -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
         );
         if bottom_transmittance > 0.02 {
-            let bottom_detail = material_fractal_sample(
-                vec2<u32>(0xa54ff53au, 0x3c6ef372u),
-                position_m,
-                8.0,
-                7u,
-            );
             let rock_amount = smoothstep(
                 0.25,
                 0.75,
@@ -1750,63 +1725,32 @@ fn terrain_surface(
             );
             let sediment_amount = smoothstep(0.08, 0.60, coastal_sediment_amount)
                 * (1.0 - rock_amount);
-            let silt_color = vec3<f32>(0.29, 0.32, 0.25);
-            let sediment_color = mix(
-                vec3<f32>(0.55, 0.49, 0.32),
-                vec3<f32>(0.66, 0.59, 0.38),
-                clamp(0.5 + 0.12 * bottom_detail.value, 0.0, 1.0),
+            let sediment_reflectance = 0.84;
+            let rock_reflectance = mix(
+                0.56,
+                0.72,
+                coastal_outcrop_amount,
             );
-            let reef_structure = smoothstep(
-                0.55,
-                0.86,
-                1.0 - abs(bottom_detail.value),
-            );
-            let rock_color = mix(
-                vec3<f32>(0.14, 0.23, 0.21),
-                vec3<f32>(0.30, 0.42, 0.31),
-                clamp(
-                    0.18 + 0.62 * reef_structure + 0.28 * coastal_outcrop_amount,
-                    0.0,
-                    1.0,
-                ),
-            );
-            var bottom_color = mix(silt_color, sediment_color, sediment_amount);
-            bottom_color = mix(bottom_color, rock_color, rock_amount);
-            bottom_color *= 0.98 + mix(0.02, 0.16, rock_amount) * bottom_detail.value;
-            let visual_relief_m = mix(0.02, 0.38, rock_amount)
-                * mix(0.55, 1.0, bottom_transmittance);
-            let bottom_normal = normalize(vec3<f32>(
-                -(terrain_gradient + visual_relief_m * bottom_detail.gradient),
-                1.0,
-            ));
-            let bottom_light = smoothstep(
-                -0.15,
-                0.88,
-                dot(bottom_normal, primary_light_direction()),
-            );
-            let bottom_light_grade = mix(
-                1.0,
-                mix(0.66, 1.22, bottom_light),
-                landscape_visibility.w * clamp(direct_light_amount(), 0.0, 1.0),
-            );
-            bottom_color *= bottom_light_grade;
+            var bottom_reflectance = mix(0.32, sediment_reflectance, sediment_amount);
+            bottom_reflectance = mix(bottom_reflectance, rock_reflectance, rock_amount);
+            let bottom_water_color = water_color * (1.0 + 3.0 * bottom_reflectance);
             let water_veiled_bottom = mix(
-                bottom_color * vec3<f32>(0.65, 0.88, 0.92),
-                shallow_color,
+                bottom_water_color,
+                water_color,
                 0.35 * (1.0 - bottom_transmittance),
             );
             let bottom_visibility = clamp(
-                1.35 * tuning.water_tuning.y * bottom_transmittance,
+                tuning.water_tuning.y * bottom_transmittance,
                 0.0,
-                0.78,
+                1.0,
             );
             return TerrainSurface(
-                mix(open_water, water_veiled_bottom, bottom_visibility),
+                mix(water_color, water_veiled_bottom, bottom_visibility),
                 vec2<f32>(0.0),
                 1.0,
             );
         }
-        return TerrainSurface(open_water, vec2<f32>(0.0), 1.0);
+        return TerrainSurface(water_color, vec2<f32>(0.0), 1.0);
     }
 
     let micro_height = material_fractal_sample(

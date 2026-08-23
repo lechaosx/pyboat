@@ -49,7 +49,7 @@ type State = {
   elevationScale: number;
   cliffSlope: number;
   waterAttenuationLength: number;
-  bottomLightContribution: number;
+  bottomVisibility: number;
   landformReliefStrength: number;
   landformShadowStrength: number;
   landformShadowReach: number;
@@ -165,8 +165,8 @@ const defaults: State = {
   terrainScale: 1,
   elevationScale: 3,
   cliffSlope: 0.08,
-  waterAttenuationLength: 12,
-  bottomLightContribution: 0.55,
+  waterAttenuationLength: 0.5,
+  bottomVisibility: 1,
   landformReliefStrength: 1,
   landformShadowStrength: 0.7,
   landformShadowReach: 320,
@@ -366,9 +366,9 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "water", category: "Advanced tuning", layer: "Underwater optics", kind: "SHADER", level: "advanced", controls: [
-      range("waterAttenuationLength", "Attenuation length · m", 0.5, 40, 0.5),
-      range("bottomLightContribution", "Bottom light contribution", 0, 1, 0.01),
+    domain: "water", category: "Advanced tuning", layer: "Underwater visibility", kind: "SHADER", level: "advanced", controls: [
+      range("waterAttenuationLength", "Bottom attenuation length · m", 0, 1, 0.01),
+      range("bottomVisibility", "Bottom visibility", 0, 2, 0.02),
     ],
   },
 ];
@@ -476,7 +476,7 @@ const categoryPresets: Record<string, Record<string, Partial<State>>> = {
   "water:Advanced tuning": {
     Production: {
       waterAttenuationLength: defaults.waterAttenuationLength,
-      bottomLightContribution: defaults.bottomLightContribution,
+      bottomVisibility: defaults.bottomVisibility,
     },
   },
 };
@@ -1328,7 +1328,7 @@ function writeUniforms(): void {
   tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 8);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);
   tuningFloats.set([
-    state.waterAttenuationLength, state.bottomLightContribution, 0, 0,
+    state.waterAttenuationLength, state.bottomVisibility, 0, 0,
   ], 16);
   tuningFloats.set([
     state.landformReliefStrength,
