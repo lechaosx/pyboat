@@ -1,8 +1,8 @@
 use browser::MultiplayerClient;
 use game::{procedural_match_environment, procedural_water_depth_m};
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use simulation::{DT_SECONDS, apparent_flow};
 use rapier2d::prelude::Vector;
+use simulation::{DT_SECONDS, WorldGeometry, apparent_flow};
 
 fn boat(id: &str, x: f32) -> BoatSnapshot {
     BoatSnapshot {
@@ -32,6 +32,7 @@ fn multiplayer_client_discards_boats_omitted_from_interest() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     client.accept(ServerMessage::Snapshot {
         tick: 1,
@@ -61,6 +62,7 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
 
     assert!(client.take_inputs(DT_SECONDS / 2.0).is_empty());
@@ -97,6 +99,7 @@ fn multiplayer_client_sends_viewport_only_when_connected_and_changed() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     assert_eq!(
         client.update_viewport(15.0),
@@ -118,6 +121,7 @@ fn multiplayer_client_keeps_cruising_and_marks_remote_boats_dead_after_disconnec
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -152,6 +156,7 @@ fn destroyed_player_spectates_their_passive_wreck_without_sending_input() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -178,9 +183,11 @@ fn destroyed_player_spectates_their_passive_wreck_without_sending_input() {
 #[test]
 fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     let mut client = MultiplayerClient::new();
+    let world_geometry = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry,
     });
     client.accept(ServerMessage::Snapshot {
         tick: 9,
@@ -193,7 +200,12 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
     assert_eq!(client.view().unwrap().speed_m_s, 5.0);
-    let environment = procedural_match_environment(42, 9, client.camera_m().unwrap());
+    let environment =
+        procedural_match_environment(world_geometry, 42, 9, client.camera_m().unwrap());
+    assert_ne!(
+        environment,
+        procedural_match_environment(WorldGeometry::default(), 42, 9, client.camera_m().unwrap(),)
+    );
     assert_eq!(
         client.view().unwrap().apparent_wind_speed_m_s,
         apparent_flow(environment.true_wind_velocity_m_s, Vector::new(3.0, 4.0)).length(),
@@ -204,7 +216,9 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
 #[test]
 fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     let match_seed = 42;
-    let depth_at = |position_m| procedural_water_depth_m(match_seed, 9.0 / 60.0, position_m);
+    let depth_at = |position_m| {
+        procedural_water_depth_m(WorldGeometry::default(), match_seed, 9.0 / 60.0, position_m)
+    };
     let mut position_m = None;
     'search: for x in -64..64 {
         for y in -64..=64 {
@@ -237,6 +251,7 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", position_m.x);
     local.y = position_m.y;
@@ -247,7 +262,9 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     });
 
     let view = client.view().unwrap();
-    let expected_depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
+    let expected_depth_m =
+        procedural_match_environment(WorldGeometry::default(), match_seed, 9, position_m)
+            .water_depth_m;
     assert_eq!(view.water_depth_m, expected_depth_m);
     assert_eq!(view.bottom_clearance_m, expected_depth_m - 0.6);
     assert_eq!(view.bottom_contact_fraction, (0.6 - expected_depth_m) / 0.6);
@@ -259,6 +276,7 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 7.0);
     local.y = 2.0;
@@ -283,22 +301,28 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     assert_eq!(
         windsock.apparent_wind_velocity_m_s,
         apparent_flow(
-            procedural_match_environment(42, 9, position_m).true_wind_velocity_m_s,
+            procedural_match_environment(WorldGeometry::default(), 42, 9, position_m)
+                .true_wind_velocity_m_s,
             Vector::new(local.vx, local.vy),
         )
     );
 }
 
 #[test]
-fn multiplayer_client_exposes_the_match_seed_for_gpu_terrain() {
+fn multiplayer_client_exposes_the_match_configuration() {
     let mut client = MultiplayerClient::new();
     assert_eq!(client.match_seed(), None);
+    assert_eq!(client.world_geometry(), None);
+
+    let world_geometry = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry,
     });
     assert_eq!(client.match_seed(), Some(42));
+    assert_eq!(client.world_geometry(), Some(world_geometry));
 }
 
 #[test]
@@ -307,7 +331,13 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
         for x in -128..=128 {
             for y in -128..=128 {
                 let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
-                let depth_m = procedural_match_environment(match_seed, 9, position_m).water_depth_m;
+                let depth_m = procedural_match_environment(
+                    WorldGeometry::default(),
+                    match_seed,
+                    9,
+                    position_m,
+                )
+                .water_depth_m;
                 if predicate(depth_m) {
                     return position_m;
                 }
@@ -321,6 +351,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
         client.accept(ServerMessage::Welcome {
             player_id: "player-1".to_owned(),
             match_seed,
+            world_geometry: WorldGeometry::default(),
         });
         let mut local = boat("player-1", position_m.x);
         local.y = position_m.y;
@@ -355,6 +386,7 @@ fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.health = 70.0;
@@ -385,6 +417,7 @@ fn multiplayer_prediction_does_not_control_wrecks() {
         client.accept(ServerMessage::Welcome {
             player_id: "player-1".to_owned(),
             match_seed: 42,
+            world_geometry: WorldGeometry::default(),
         });
         let mut local = boat("player-1", 0.0);
         local.y = 0.0;
@@ -420,6 +453,7 @@ fn multiplayer_client_predicts_local_input_before_server_acknowledgement() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -446,6 +480,7 @@ fn multiplayer_client_replays_input_emitted_before_the_first_snapshot() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     client.set_motion_intent(1.0, 1.0);
     client.take_inputs(DT_SECONDS);
@@ -472,6 +507,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", -3.0);
     local.y = 0.0;
@@ -504,11 +540,51 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
 }
 
 #[test]
+fn multiplayer_prediction_matches_authoritative_torus_collision_rules() {
+    let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+        world_geometry: world,
+    });
+    let mut local = boat("player-1", 3_997.0);
+    local.y = 0.0;
+    local.vx = 5.0;
+    local.vy = 0.0;
+    local.angle = 0.0;
+    local.angular_velocity = 0.0;
+    local.forward = Some(0.0);
+    local.turn = Some(0.0);
+    local.acknowledged_input = Some(0);
+    let mut other = boat("player-2", -3_997.0);
+    other.y = 0.0;
+    other.vx = -5.0;
+    other.vy = 0.0;
+    other.angle = std::f32::consts::PI;
+    other.angular_velocity = 0.0;
+    other.forward = Some(0.0);
+    other.turn = Some(0.0);
+    other.acknowledged_input = None;
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local, other],
+        removed_player_ids: Vec::new(),
+    });
+
+    client.take_inputs(0.25);
+    client.take_inputs(0.25);
+
+    assert!(client.view().unwrap().speed_m_s < 3.0);
+}
+
+#[test]
 fn multiplayer_client_extrapolates_distant_boats_for_at_most_quarter_second() {
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -545,6 +621,7 @@ fn multiplayer_client_smooths_authoritative_position_corrections() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -577,6 +654,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -608,6 +686,7 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -664,6 +743,7 @@ fn multiplayer_client_preserves_visual_velocity_across_kinematic_corrections() {
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
+        world_geometry: WorldGeometry::default(),
     });
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
@@ -699,4 +779,69 @@ fn multiplayer_client_preserves_visual_velocity_across_kinematic_corrections() {
     client.take_inputs(0.001);
 
     assert!(client.scenes()[1].hull_m[0].x > before);
+}
+
+#[test]
+fn multiplayer_correction_stays_local_when_authority_crosses_a_seam() {
+    let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+        world_geometry: world,
+    });
+    let mut local = boat("player-1", 3_999.9);
+    local.y = 0.0;
+    local.vx = 0.0;
+    local.vy = 0.0;
+    local.acknowledged_input = Some(0);
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local.clone()],
+        removed_player_ids: Vec::new(),
+    });
+    local.x = -3_999.9;
+    client.accept(ServerMessage::Snapshot {
+        tick: 2,
+        boats: vec![local],
+        removed_player_ids: Vec::new(),
+    });
+
+    client.take_inputs(0.05);
+
+    let position_m = client.camera_m().unwrap();
+    let displacement_m = Vector::from(
+        world.minimum_image_displacement_m((position_m - Vector::new(3_999.9, 0.0)).into()),
+    );
+    assert!(displacement_m.length() < 0.2);
+}
+
+#[test]
+fn multiplayer_renders_corner_neighbors_in_the_local_minimum_image() {
+    let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+        world_geometry: world,
+    });
+    let mut local = boat("player-1", 3_999.0);
+    local.y = 3_999.0;
+    local.vx = 0.0;
+    local.vy = 0.0;
+    local.acknowledged_input = Some(0);
+    let mut remote = boat("player-2", -3_999.0);
+    remote.y = -3_999.0;
+    remote.vx = 0.0;
+    remote.vy = 0.0;
+    remote.forward = None;
+    remote.turn = None;
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local, remote],
+        removed_player_ids: Vec::new(),
+    });
+
+    let scenes = client.scenes();
+    assert!((scenes[1].hull_m[0] - scenes[0].hull_m[0]).length() < 4.0);
 }

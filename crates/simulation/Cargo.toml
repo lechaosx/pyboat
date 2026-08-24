@@ -6,3 +6,4 @@ rust-version = "1.89"
 
 [dependencies]
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
+serde = { version = "1.0.229", features = ["derive"] }

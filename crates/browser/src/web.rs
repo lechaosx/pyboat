@@ -9,11 +9,12 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    procedural_atmosphere_primary, procedural_tidal_conditions, world_celestial_conditions,
-    world_climate_conditions,
+    PeriodicNoiseBasis, periodic_noise_octave_diagnostic, procedural_atmosphere_primary,
+    procedural_tidal_conditions, world_celestial_conditions, world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
+use simulation::WorldGeometry;
 use url::Url;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -22,12 +23,157 @@ use web_transport_wasm::{ClientBuilder, Session};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock, scale_bar,
-    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock, cloud_anchor_time,
+    sample_world_geometry, scale_bar, viewport_interest_radius_m, windsock_extension,
+    zoom_view_height_m,
 };
 
 const MAX_VERTICES: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
+const LOW_CLOUD_REFRESH_TICKS: u64 = 108_000;
+const UPPER_CLOUD_REFRESH_TICKS: u64 = 216_000;
+
+#[wasm_bindgen]
+pub struct PlaygroundWorldGeometrySample {
+    raw_x_m: f32,
+    raw_y_m: f32,
+    wrapped_x_m: f32,
+    wrapped_y_m: f32,
+    normalized_x: f32,
+    normalized_y: f32,
+    latitude_degrees: f32,
+    local_solar_phase: f32,
+}
+
+#[wasm_bindgen]
+pub struct PlaygroundNoiseOctaveDiagnostic {
+    basis: String,
+    requested_wavelength_m: f32,
+    effective_wavelength_x_m: f32,
+    effective_wavelength_y_m: f32,
+    relative_error_x: f32,
+    relative_error_y: f32,
+}
+
+#[wasm_bindgen]
+impl PlaygroundNoiseOctaveDiagnostic {
+    #[wasm_bindgen(getter)]
+    pub fn basis(&self) -> String {
+        self.basis.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn requested_wavelength_m(&self) -> f32 {
+        self.requested_wavelength_m
+    }
+    #[wasm_bindgen(getter)]
+    pub fn effective_wavelength_x_m(&self) -> f32 {
+        self.effective_wavelength_x_m
+    }
+    #[wasm_bindgen(getter)]
+    pub fn effective_wavelength_y_m(&self) -> f32 {
+        self.effective_wavelength_y_m
+    }
+    #[wasm_bindgen(getter)]
+    pub fn relative_error_x(&self) -> f32 {
+        self.relative_error_x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn relative_error_y(&self) -> f32 {
+        self.relative_error_y
+    }
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_noise_octave(
+    width_m: f32,
+    height_m: f32,
+    circle_embedded: bool,
+    requested_wavelength_m: f32,
+) -> Result<PlaygroundNoiseOctaveDiagnostic, JsValue> {
+    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let basis = if circle_embedded {
+        PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+    } else {
+        PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+    };
+    let diagnostic = periodic_noise_octave_diagnostic(geometry, basis, requested_wavelength_m);
+    Ok(PlaygroundNoiseOctaveDiagnostic {
+        basis: match basis {
+            PeriodicNoiseBasis::PeriodicTriangularSimplex2d => "2D periodic".to_owned(),
+            PeriodicNoiseBasis::CircleEmbeddedSimplex4d => "4D circle".to_owned(),
+        },
+        requested_wavelength_m: diagnostic.requested_wavelength_m,
+        effective_wavelength_x_m: diagnostic.effective_wavelength_x_m,
+        effective_wavelength_y_m: diagnostic.effective_wavelength_y_m,
+        relative_error_x: diagnostic.relative_error_x,
+        relative_error_y: diagnostic.relative_error_y,
+    })
+}
+
+#[wasm_bindgen]
+impl PlaygroundWorldGeometrySample {
+    #[wasm_bindgen(getter)]
+    pub fn raw_x_m(&self) -> f32 {
+        self.raw_x_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn raw_y_m(&self) -> f32 {
+        self.raw_y_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn wrapped_x_m(&self) -> f32 {
+        self.wrapped_x_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn wrapped_y_m(&self) -> f32 {
+        self.wrapped_y_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn normalized_x(&self) -> f32 {
+        self.normalized_x
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn normalized_y(&self) -> f32 {
+        self.normalized_y
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn latitude_degrees(&self) -> f32 {
+        self.latitude_degrees
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn local_solar_phase(&self) -> f32 {
+        self.local_solar_phase
+    }
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_world_geometry(
+    width_m: f32,
+    height_m: f32,
+    raw_x_m: f32,
+    raw_y_m: f32,
+    global_day_phase: f32,
+) -> Result<PlaygroundWorldGeometrySample, JsValue> {
+    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let sample = sample_world_geometry(geometry, [raw_x_m, raw_y_m], global_day_phase);
+    Ok(PlaygroundWorldGeometrySample {
+        raw_x_m: sample.raw_center_m[0],
+        raw_y_m: sample.raw_center_m[1],
+        wrapped_x_m: sample.wrapped_center_m[0],
+        wrapped_y_m: sample.wrapped_center_m[1],
+        normalized_x: sample.normalized_torus[0],
+        normalized_y: sample.normalized_torus[1],
+        latitude_degrees: sample.latitude_degrees,
+        local_solar_phase: sample.local_solar_phase,
+    })
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -60,10 +206,11 @@ struct SceneUniforms {
     celestial_conditions: [f32; 4],
     world_surface_conditions: [f32; 4],
     match_seed: [u32; 2],
-    cloud_visual_seed: [u32; 2],
-    time_seconds: f32,
-    aerosol_optical_depth: f32,
-    _padding: [u32; 2],
+    low_cloud_epoch: [u32; 2],
+    aerosol_and_padding: [f32; 2],
+    world_size_m: [f32; 2],
+    upper_cloud_epoch: [u32; 2],
+    cloud_anchor_phase: [f32; 2],
 }
 
 struct Renderer {
@@ -194,7 +341,7 @@ impl Renderer {
         &mut self,
         scenes: &[BoatScene],
         match_seed: Option<u64>,
-        cloud_visual_seed: u64,
+        world_geometry: WorldGeometry,
         tick: u64,
         camera_m: Vector,
         view_height_m: f32,
@@ -211,17 +358,26 @@ impl Renderer {
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
-        let primary =
-            match_seed.map(|match_seed| procedural_atmosphere_primary(match_seed, tick, camera_m));
-        let celestial = world_celestial_conditions(tick as f64 / 60.0);
+        let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
+        let primary = match_seed.map(|match_seed| {
+            procedural_atmosphere_primary(world_geometry, match_seed, tick, camera_m)
+        });
+        let celestial = world_celestial_conditions(world_geometry, tick as f64 / 60.0, camera_m);
         let climate = world_climate_conditions();
-        let tide = procedural_tidal_conditions(match_seed.unwrap_or(0), camera_m);
+        let tide = procedural_tidal_conditions(world_geometry, match_seed.unwrap_or(0), camera_m);
         let match_seed = match_seed.unwrap_or(0);
+        let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
+        let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::bytes_of(&SceneUniforms {
-                camera_and_view_m: [camera_m.x, camera_m.y, view_width_m, view_height_m],
+                camera_and_view_m: [
+                    canonical_camera_m[0],
+                    canonical_camera_m[1],
+                    view_width_m,
+                    view_height_m,
+                ],
                 pressure: primary.map_or([0.0; 4], |primary| {
                     [
                         primary.pressure_hpa,
@@ -259,10 +415,17 @@ impl Renderer {
                     0.0,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
-                cloud_visual_seed: [cloud_visual_seed as u32, (cloud_visual_seed >> 32) as u32],
-                time_seconds: tick as f32 / 60.0,
-                aerosol_optical_depth: 0.08,
-                _padding: [0; 2],
+                low_cloud_epoch: [
+                    low_cloud_time.epoch as u32,
+                    (low_cloud_time.epoch >> 32) as u32,
+                ],
+                aerosol_and_padding: [0.08, 0.0],
+                world_size_m: [world_geometry.width_m(), world_geometry.height_m()],
+                upper_cloud_epoch: [
+                    upper_cloud_time.epoch as u32,
+                    (upper_cloud_time.epoch >> 32) as u32,
+                ],
+                cloud_anchor_phase: [low_cloud_time.phase, upper_cloud_time.phase],
             }),
         );
 
@@ -443,7 +606,7 @@ impl BrowserGame {
         self.renderer.render(
             &client.scenes(),
             client.match_seed(),
-            client.player_id().map(cloud_visual_seed).unwrap_or(0),
+            client.world_geometry().unwrap_or_default(),
             client.prediction_tick,
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
@@ -773,12 +936,6 @@ fn configured_certificate_hash() -> Result<Option<Vec<u8>>, JsValue> {
         ));
     }
     Ok(Some(bytes))
-}
-
-fn cloud_visual_seed(player_id: &str) -> u64 {
-    player_id.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
 }
 
 fn server_url() -> Result<String, JsValue> {

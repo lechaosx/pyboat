@@ -6,9 +6,11 @@ struct SceneUniforms {
     celestial_conditions: vec4<f32>,
     world_surface_conditions: vec4<f32>,
     match_seed: vec2<u32>,
-    cloud_visual_seed: vec2<u32>,
-    time_seconds: f32,
-    aerosol_optical_depth: f32,
+    low_cloud_epoch: vec2<u32>,
+    aerosol_and_padding: vec2<f32>,
+    world_size_m: vec2<f32>,
+    upper_cloud_epoch: vec2<u32>,
+    cloud_anchor_phase: vec2<f32>,
 };
 
 struct SceneTuning {
@@ -76,6 +78,10 @@ var<private> visual_pixel_footprint_m: f32;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
+const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: u32 = 3u;
+const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: u32 = 3u;
+const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: u32 = 3u;
+const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: u32 = 0u;
 // Keep this CC0 OpenSimplex2 gradient order synchronized with `game` so CPU and
 // WGSL hashes select the same direction for authoritative terrain.
 const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(
@@ -104,21 +110,6 @@ const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(
     vec2<f32>(0.9238795, -0.3826834),
     vec2<f32>(0.9914449, -0.1305262),
 );
-const CLOUD_GRADIENT_DIRECTIONS = array<vec3<f32>, 12>(
-    vec3<f32>(0.70710677, 0.70710677, 0.0),
-    vec3<f32>(-0.70710677, 0.70710677, 0.0),
-    vec3<f32>(0.70710677, -0.70710677, 0.0),
-    vec3<f32>(-0.70710677, -0.70710677, 0.0),
-    vec3<f32>(0.70710677, 0.0, 0.70710677),
-    vec3<f32>(-0.70710677, 0.0, 0.70710677),
-    vec3<f32>(0.70710677, 0.0, -0.70710677),
-    vec3<f32>(-0.70710677, 0.0, -0.70710677),
-    vec3<f32>(0.0, 0.70710677, 0.70710677),
-    vec3<f32>(0.0, -0.70710677, 0.70710677),
-    vec3<f32>(0.0, 0.70710677, -0.70710677),
-    vec3<f32>(0.0, -0.70710677, -0.70710677),
-);
-
 fn rotate_left(vector: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(-vector.y, vector.x);
 }
@@ -138,7 +129,7 @@ fn upper_wind_m_s() -> vec2<f32> {
         * (rotate_left(gradient) - cross_isobar_fraction * gradient)
         / sqrt(1.0 + cross_isobar_fraction * cross_isobar_fraction);
     return 1.12 * pressure_wind
-        + 12000.0 * atmosphere_model.z
+        + 2000.0 * atmosphere_model.z
             * rotate_left(scene.moisture_and_temperature_gradient.yz);
 }
 
@@ -367,6 +358,18 @@ fn vertex(input: VertexInput) -> VertexOutput {
     return output;
 }
 
+fn canonical_world_component(value_m: f32, period_m: f32) -> f32 {
+    let wrapped_m = value_m - floor(value_m / period_m) * period_m;
+    return select(wrapped_m, wrapped_m - period_m, wrapped_m >= 0.5 * period_m);
+}
+
+fn canonical_world_position(position_m: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        canonical_world_component(position_m.x, scene.world_size_m.x),
+        canonical_world_component(position_m.y, scene.world_size_m.y),
+    );
+}
+
 fn multiply_high_u32(a: u32, b: u32) -> u32 {
     let a_low = a & 0xffffu;
     let a_high = a >> 16u;
@@ -436,14 +439,28 @@ struct TerrainSurface {
     roughness: f32,
 };
 
-fn terrain_simplex_lattice_gradient(seed: vec2<u32>, x: i32, y: i32) -> vec2<f32> {
+fn positive_mod(value: i32, period: i32) -> i32 {
+    return ((value % period) + period) % period;
+}
+
+fn terrain_simplex_lattice_gradient(
+    seed: vec2<u32>,
+    x: i32,
+    y: i32,
+    x_cycles: i32,
+    y_cycles: i32,
+) -> vec2<f32> {
+    // These residues are the integer axes of the triangular lattice. Integer
+    // cycle counts make each rectangular world period an exact lattice shift.
+    let periodic_x = positive_mod(x - y, 2 * x_cycles);
+    let periodic_y = positive_mod(x + y, 2 * y_cycles);
     let key = seed
         ^ multiply_u64(
-            signed_u64(x),
+            signed_u64(periodic_x),
             vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
         )
         ^ multiply_u64(
-            signed_u64(y),
+            signed_u64(periodic_y),
             vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         );
     return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(key).x % 24u];
@@ -456,7 +473,23 @@ fn terrain_simplex_noise(
 ) -> TerrainNoiseSample {
     let skew_factor = 0.36602542;
     let unskew_factor = 0.21132487;
-    let scaled = position_m / wavelength_m;
+    let x_cycles = max(1, i32(round(scene.world_size_m.x / (sqrt(2.0) * wavelength_m))));
+    let y_cycles = max(1, i32(round(
+        scene.world_size_m.y * sqrt(1.5) / wavelength_m,
+    )));
+    let canonical_position = canonical_world_position(position_m);
+    let positive_position = select(
+        canonical_position,
+        canonical_position + scene.world_size_m,
+        canonical_position < vec2<f32>(0.0),
+    );
+    let normalized_position = positive_position / scene.world_size_m;
+    let scaled = vec2<f32>(
+        f32(x_cycles) * normalized_position.x
+            + f32(y_cycles) * normalized_position.y / sqrt(3.0),
+        -f32(x_cycles) * normalized_position.x
+            + f32(y_cycles) * normalized_position.y / sqrt(3.0),
+    );
     let skew = (scaled.x + scaled.y) * skew_factor;
     let cell = vec2<i32>(floor(scaled + vec2<f32>(skew)));
     let unskew = f32(cell.x + cell.y) * unskew_factor;
@@ -487,7 +520,13 @@ fn terrain_simplex_noise(
             continue;
         }
         let lattice = cell + lattice_offsets[vertex];
-        let gradient = terrain_simplex_lattice_gradient(seed, lattice.x, lattice.y);
+        let gradient = terrain_simplex_lattice_gradient(
+            seed,
+            lattice.x,
+            lattice.y,
+            x_cycles,
+            y_cycles,
+        );
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
         let attenuation_cubed = attenuation_squared * attenuation;
@@ -497,7 +536,98 @@ fn terrain_simplex_noise(
             - 8.0 * attenuation_cubed * ramp * offset;
     }
     sample.value *= 70.0;
-    sample.gradient *= 70.0 / wavelength_m;
+    let scaled_gradient = 70.0 * sample.gradient;
+    sample.gradient = vec2<f32>(
+        f32(x_cycles) / scene.world_size_m.x * (scaled_gradient.x - scaled_gradient.y),
+        f32(y_cycles) / (sqrt(3.0) * scene.world_size_m.y)
+            * (scaled_gradient.x + scaled_gradient.y),
+    );
+    return sample;
+}
+
+fn terrain_simplex_lattice_gradient_4d(
+    seed: vec2<u32>,
+    lattice: vec4<i32>,
+) -> vec4<f32> {
+    let key = seed
+        ^ multiply_u64(signed_u64(lattice.x), vec2<u32>(0x7f4a7c15u, 0x9e3779b9u))
+        ^ multiply_u64(signed_u64(lattice.y), vec2<u32>(0xa0b428dbu, 0xe7037ed1u))
+        ^ multiply_u64(signed_u64(lattice.z), vec2<u32>(0x1ce4e5b9u, 0xbf58476du))
+        ^ multiply_u64(signed_u64(lattice.w), vec2<u32>(0x133111ebu, 0x94d049bbu));
+    let hash = terrain_hash(key).x;
+    let zero_axis = hash & 3u;
+    var sign_bit = 2u;
+    var gradient = vec4<f32>(0.0);
+    for (var axis = 0u; axis < 4u; axis++) {
+        if axis != zero_axis {
+            gradient[axis] = select(1.0, -1.0, (hash & (1u << sign_bit)) != 0u);
+            sign_bit += 1u;
+        }
+    }
+    return gradient;
+}
+
+fn terrain_simplex_noise_4d(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
+    let canonical_position = canonical_world_position(position_m);
+    let angle = TAU * canonical_position / scene.world_size_m;
+    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
+    let point = vec4<f32>(
+        circle_radius.x * cos(angle.x),
+        circle_radius.x * sin(angle.x),
+        circle_radius.y * cos(angle.y),
+        circle_radius.y * sin(angle.y),
+    );
+    let skew_factor = 0.309017;
+    let unskew_factor = 0.1381966;
+    let skew = dot(point, vec4<f32>(skew_factor));
+    let lattice = vec4<i32>(floor(point + vec4<f32>(skew)));
+    let unskew = f32(lattice.x + lattice.y + lattice.z + lattice.w) * unskew_factor;
+    let first = point - (vec4<f32>(lattice) - vec4<f32>(unskew));
+    var rank = vec4<i32>(0);
+    if first.x > first.y { rank.x += 1; } else { rank.y += 1; }
+    if first.x > first.z { rank.x += 1; } else { rank.z += 1; }
+    if first.x > first.w { rank.x += 1; } else { rank.w += 1; }
+    if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
+    if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
+    if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
+
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    var input_gradient = vec4<f32>(0.0);
+    for (var vertex = 0i; vertex < 5i; vertex++) {
+        let threshold = 4i - vertex;
+        var lattice_offset = vec4<i32>(0);
+        if vertex > 0i {
+            lattice_offset = select(
+                vec4<i32>(0),
+                vec4<i32>(1),
+                rank >= vec4<i32>(threshold),
+            );
+        }
+        let offset = first - vec4<f32>(lattice_offset)
+            + vec4<f32>(f32(vertex) * unskew_factor);
+        let attenuation = 0.6 - dot(offset, offset);
+        if attenuation > 0.0 {
+            let gradient = terrain_simplex_lattice_gradient_4d(seed, lattice + lattice_offset);
+            let ramp = dot(gradient, offset);
+            let attenuation_squared = attenuation * attenuation;
+            let attenuation_cubed = attenuation_squared * attenuation;
+            let attenuation_fourth = attenuation_squared * attenuation_squared;
+            sample.value += attenuation_fourth * ramp;
+            input_gradient += attenuation_fourth * gradient
+                - 8.0 * attenuation_cubed * ramp * offset;
+        }
+    }
+    // Keep this RMS calibration synchronized with the portable Rust kernel.
+    sample.value *= 33.4;
+    sample.gradient = 33.4 * vec2<f32>(
+        -sin(angle.x) * input_gradient.x + cos(angle.x) * input_gradient.y,
+        -sin(angle.y) * input_gradient.z + cos(angle.y) * input_gradient.w,
+    ) / wavelength_m;
     return sample;
 }
 
@@ -507,13 +637,14 @@ fn terrain_simplex_fractal_sample(
     initial_wavelength_m: f32,
     octave_count: u32,
     persistence: f32,
+    circle_octave_count: u32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
-    var wavelength_m = initial_wavelength_m;
+    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
@@ -521,7 +652,12 @@ fn terrain_simplex_fractal_sample(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        let octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
+        var octave_sample: TerrainNoiseSample;
+        if octave < circle_octave_count {
+            octave_sample = terrain_simplex_noise_4d(octave_seed, position_m, wavelength_m);
+        } else {
+            octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
+        }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
@@ -539,10 +675,6 @@ fn material_fractal_sample(
     initial_wavelength_m: f32,
     octave_count: u32,
 ) -> TerrainNoiseSample {
-    // Non-binary octave spacing and rotation keep repeated simplex features from
-    // aligning across the appearance-only material spectrum.
-    let axis_hash = terrain_hash(scene.match_seed ^ field_salt);
-    var octave_axis = SIMPLEX_GRADIENT_DIRECTIONS[axis_hash.x % 24u];
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
@@ -562,126 +694,20 @@ fn material_fractal_sample(
                     vec2<u32>(octave, 0u),
                     vec2<u32>(0xd192ed03u, 0xd1b54a32u),
                 );
-            let perpendicular_axis = rotate_left(octave_axis);
             let octave_sample = terrain_simplex_noise(
                 octave_seed,
-                vec2<f32>(
-                    dot(position_m, octave_axis),
-                    dot(position_m, perpendicular_axis),
-                ),
+                position_m,
                 wavelength_m,
             );
             sample.value += amplitude * octave_visibility * octave_sample.value;
-            sample.gradient += amplitude * octave_visibility * (
-                octave_axis * octave_sample.gradient.x
-                    + perpendicular_axis * octave_sample.gradient.y
-            );
+            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
         }
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.53;
-        octave_axis = vec2<f32>(
-            0.6 * octave_axis.x - 0.8 * octave_axis.y,
-            0.8 * octave_axis.x + 0.6 * octave_axis.y,
-        );
     }
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
-    return sample;
-}
-
-fn cloud_lattice_gradient(seed: vec2<u32>, x: i32, y: i32, z: i32) -> vec3<f32> {
-    let key = seed
-        ^ multiply_u64(
-            signed_u64(x),
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-        )
-        ^ multiply_u64(
-            signed_u64(y),
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        )
-        ^ multiply_u64(
-            signed_u64(z),
-            vec2<u32>(0x94d049bbu, 0x133111ebu),
-        );
-    return CLOUD_GRADIENT_DIRECTIONS[terrain_hash(key).x % 12u];
-}
-
-fn cloud_simplex_noise(
-    seed: vec2<u32>,
-    position_m: vec2<f32>,
-    wavelength_m: f32,
-    evolution_coordinate: f32,
-) -> TerrainNoiseSample {
-    let skew_factor = 0.33333334;
-    let unskew_factor = 0.16666667;
-    let scaled_position = vec3<f32>(position_m / wavelength_m, evolution_coordinate);
-    let skew = (scaled_position.x + scaled_position.y + scaled_position.z) * skew_factor;
-    let cell = vec3<i32>(floor(scaled_position + vec3<f32>(skew)));
-    let unskew = f32(cell.x + cell.y + cell.z) * unskew_factor;
-    let first_offset = scaled_position - (vec3<f32>(cell) - vec3<f32>(unskew));
-    var first_lattice_offset: vec3<i32>;
-    var second_lattice_offset: vec3<i32>;
-    if first_offset.x >= first_offset.y {
-        if first_offset.y >= first_offset.z {
-            first_lattice_offset = vec3<i32>(1, 0, 0);
-            second_lattice_offset = vec3<i32>(1, 1, 0);
-        } else if first_offset.x >= first_offset.z {
-            first_lattice_offset = vec3<i32>(1, 0, 0);
-            second_lattice_offset = vec3<i32>(1, 0, 1);
-        } else {
-            first_lattice_offset = vec3<i32>(0, 0, 1);
-            second_lattice_offset = vec3<i32>(1, 0, 1);
-        }
-    } else if first_offset.y < first_offset.z {
-        first_lattice_offset = vec3<i32>(0, 0, 1);
-        second_lattice_offset = vec3<i32>(0, 1, 1);
-    } else if first_offset.x < first_offset.z {
-        first_lattice_offset = vec3<i32>(0, 1, 0);
-        second_lattice_offset = vec3<i32>(0, 1, 1);
-    } else {
-        first_lattice_offset = vec3<i32>(0, 1, 0);
-        second_lattice_offset = vec3<i32>(1, 1, 0);
-    }
-    let second_offset = first_offset
-        - vec3<f32>(first_lattice_offset) + vec3<f32>(unskew_factor);
-    let third_offset = first_offset
-        - vec3<f32>(second_lattice_offset) + vec3<f32>(2.0 * unskew_factor);
-    let fourth_offset = first_offset - vec3<f32>(1.0 - 3.0 * unskew_factor);
-
-    var sample: TerrainNoiseSample;
-    sample.value = 0.0;
-    sample.gradient = vec2<f32>(0.0);
-    let lattice_offsets = array<vec3<i32>, 4>(
-        vec3<i32>(0),
-        first_lattice_offset,
-        second_lattice_offset,
-        vec3<i32>(1),
-    );
-    let offsets = array<vec3<f32>, 4>(
-        first_offset,
-        second_offset,
-        third_offset,
-        fourth_offset,
-    );
-    for (var vertex = 0u; vertex < 4u; vertex++) {
-        let offset = offsets[vertex];
-        let attenuation = 0.6 - dot(offset, offset);
-        if attenuation <= 0.0 {
-            continue;
-        }
-        let lattice = cell + lattice_offsets[vertex];
-        let gradient = cloud_lattice_gradient(seed, lattice.x, lattice.y, lattice.z);
-        let ramp = dot(gradient, offset);
-        let attenuation_squared = attenuation * attenuation;
-        let attenuation_cubed = attenuation_squared * attenuation;
-        let attenuation_fourth = attenuation_squared * attenuation_squared;
-        sample.value += attenuation_fourth * ramp;
-        sample.gradient += attenuation_fourth * gradient.xy
-            - 8.0 * attenuation_cubed * ramp * offset.xy;
-    }
-    sample.value *= 32.0;
-    sample.gradient *= 32.0 / wavelength_m;
     return sample;
 }
 
@@ -691,7 +717,9 @@ fn visual_cloud_noise_sample(
     field_salt: vec2<u32>,
     initial_wavelength_m: f32,
     octave_count: u32,
-    initial_evolution_period_seconds: f32,
+    anchor_epoch: vec2<u32>,
+    anchor_phase: f32,
+    refresh_period_seconds: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
@@ -699,7 +727,15 @@ fn visual_cloud_noise_sample(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    let translated_position_m = position_m - velocity_m_s * scene.time_seconds;
+    let next_epoch = anchor_epoch + vec2<u32>(1u, select(0u, 1u, anchor_epoch.x == 0xffffffffu));
+    let phase = clamp(anchor_phase, 0.0, 1.0);
+    let smoother_phase = phase * phase * phase
+        * (phase * (phase * 6.0 - 15.0) + 10.0);
+    let angle = 0.5 * PI * smoother_phase;
+    let current_position_m = position_m
+        - velocity_m_s * (phase * refresh_period_seconds);
+    let next_position_m = position_m
+        + velocity_m_s * ((1.0 - phase) * refresh_period_seconds);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_visibility = smoothstep(
             visual_pixel_footprint_m,
@@ -707,20 +743,33 @@ fn visual_cloud_noise_sample(
             wavelength_m,
         );
         if octave_visibility > 0.0 {
-            let octave_seed = scene.cloud_visual_seed
+            let octave_seed = scene.match_seed
                 ^ field_salt
                 ^ multiply_u64(
                     vec2<u32>(octave, 0u),
                     vec2<u32>(0xd192ed03u, 0xd1b54a32u),
                 );
-            let evolution_period_seconds = initial_evolution_period_seconds
-                * sqrt(wavelength_m / initial_wavelength_m);
-            let octave_sample = cloud_simplex_noise(
-                octave_seed,
-                translated_position_m,
+            let current_sample = terrain_simplex_noise(
+                octave_seed ^ multiply_u64(
+                    anchor_epoch,
+                    vec2<u32>(0x94d049bbu, 0x133111ebu),
+                ),
+                current_position_m,
                 wavelength_m,
-                scene.time_seconds / evolution_period_seconds,
             );
+            let next_sample = terrain_simplex_noise(
+                octave_seed ^ multiply_u64(
+                    next_epoch,
+                    vec2<u32>(0x94d049bbu, 0x133111ebu),
+                ),
+                next_position_m,
+                wavelength_m,
+            );
+            var octave_sample: TerrainNoiseSample;
+            octave_sample.value = cos(angle) * current_sample.value
+                + sin(angle) * next_sample.value;
+            octave_sample.gradient = cos(angle) * current_sample.gradient
+                + sin(angle) * next_sample.gradient;
             sample.value += amplitude * octave_visibility * octave_sample.value;
             sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
         }
@@ -776,18 +825,15 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     }
     let stratiform = stratiform_amount();
     let convective = convective_amount();
-    let evolution_period_seconds = mix(
-        mix(1200.0, 3600.0, stratiform),
-        600.0,
-        convective,
-    ) * mix(1.0, 0.75, wind_shear_amount());
     let raw_detail = visual_cloud_noise_sample(
         position_m,
         surface_wind_m_s(),
         vec2<u32>(0x38d01377u, 0x452821e6u),
         640.0,
         14u,
-        evolution_period_seconds,
+        scene.low_cloud_epoch,
+        scene.cloud_anchor_phase.x,
+        1800.0,
     );
     let detail_character = mix(
         mix(clamp(tuning.cloud_detail.x, 0.0, 1.0), 0.05, 0.85 * stratiform),
@@ -920,7 +966,9 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
         6u,
-        mix(5400.0, 1800.0, rain_intensity()),
+        scene.upper_cloud_epoch,
+        scene.cloud_anchor_phase.y,
+        3600.0,
     );
     let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain_intensity();
     let body = smoothstep(
@@ -1022,7 +1070,7 @@ fn atmospheric_ambient_color() -> vec3<f32> {
 }
 
 fn calculate_sunset_scattering() -> f32 {
-    let aerosol = smoothstep(0.06, 0.40, clamp(scene.aerosol_optical_depth, 0.0, 1.0));
+    let aerosol = smoothstep(0.06, 0.40, clamp(scene.aerosol_and_padding.x, 0.0, 1.0));
     let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
@@ -1151,13 +1199,14 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     // Keep the density composition synchronized with
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
     // for physical depth.
-    let terrain_position_m = position_m / tuning.terrain_tuning.x;
+    let terrain_position_m = position_m;
     let cluster = terrain_simplex_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
         8192.0,
         3u,
         0.5,
+        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     );
     let island = terrain_simplex_fractal_sample(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
@@ -1165,6 +1214,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         1536.0,
         5u,
         0.35,
+        TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     );
     var unscaled: TerrainNoiseSample;
     unscaled.value = 18.0 * (0.78 * cluster.value + 0.22 * island.value - 0.30);
@@ -1199,6 +1249,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             2048.0,
             3u,
             0.5,
+            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         reef_ruggedness = terrain_smoothstep_sample(
             -0.25,
@@ -1211,6 +1262,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             1536.0,
             3u,
             0.5,
+            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
     }
@@ -1226,12 +1278,12 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     let positive_base_depth_m = max(base_depth.value, 0.0);
     var shaped_depth: TerrainNoiseSample;
     shaped_depth.value = base_depth.value
-        + 0.03 * positive_base_depth_m * positive_base_depth_m
+        + 0.015 * positive_base_depth_m * positive_base_depth_m
             * positive_base_depth_m * positive_base_depth_m;
     shaped_depth.gradient = base_depth.gradient;
     if positive_base_depth_m > 0.0 {
         shaped_depth.gradient *= 1.0
-            + 0.12 * positive_base_depth_m * positive_base_depth_m
+            + 0.06 * positive_base_depth_m * positive_base_depth_m
                 * positive_base_depth_m;
     }
     let deepened_depth_m = min(
@@ -1261,6 +1313,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             2048.0,
             3u,
             0.5,
+            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         let land_ruggedness = terrain_smoothstep_sample(
             -0.25,
@@ -1273,6 +1326,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             256.0,
             6u,
             0.65,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
         var ridged_detail: TerrainNoiseSample;
         ridged_detail.value = 1.0 - 2.0 * abs(land_detail.value);
@@ -1313,6 +1367,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
                 4.0,
                 3u,
                 0.6,
+                FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
             );
             var ridged_micro_relief: TerrainNoiseSample;
             ridged_micro_relief.value = 1.0 - 2.0 * abs(land_micro_relief.value);
@@ -1365,8 +1420,6 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         && rock_mask_value == 0.0
         && outer_reef_mask_value == 0.0
     {
-        terrain.gradient /= tuning.terrain_tuning.x;
-        terrain.material_gradient /= tuning.terrain_tuning.x;
         return solid_ice_sample(terrain);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
@@ -1386,10 +1439,11 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             256.0,
             3u,
             0.5,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
     }
     let coastal_rock_amount = coastal_rock.value;
-    let coastal_rock_relief = terrain_smoothstep_sample(0.45, 0.65, coastal_rock);
+    let coastal_rock_relief = terrain_smoothstep_sample(0.42, 0.60, coastal_rock);
     let reef_detail_amount = coastal_rock_relief.value
         * (0.05 + 1.55 * reef_ruggedness.value);
     var coastal_detail_mask_value = seabed_mask_value;
@@ -1408,6 +1462,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             32.0,
             6u,
             0.55,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
     }
     let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
@@ -1421,6 +1476,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             128.0,
             8u,
             0.6,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
     }
     var ridged_outer_reef: TerrainNoiseSample;
@@ -1449,7 +1505,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * (0.12 + 1.68 * reef_ruggedness.value);
     terrain.elevation_m += 0.25 * seabed_mask_value * shoal.value
         * landscape_visibility.x
-        + 1.5 * coastal_detail_mask_value * reef_detail_amount * reef.value
+        + 1.6 * coastal_detail_mask_value * reef_detail_amount * reef.value
             * landscape_visibility.x
         + 2.0 * rock_mask_value
             * coastal_rock_relief.value * reef_peak.value * landscape_visibility.x
@@ -1458,7 +1514,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             * landscape_visibility.x;
     terrain.gradient += landscape_visibility.x * 0.25 * (
         seabed_mask_gradient * shoal.value + shoal.gradient * seabed_mask_value
-    ) + 1.5 * landscape_visibility.x * (
+    ) + 1.6 * landscape_visibility.x * (
         coastal_detail_mask_gradient * reef_detail_amount * reef.value
             + coastal_rock_relief.gradient
                 * (0.05 + 1.55 * reef_ruggedness.value)
@@ -1499,21 +1555,20 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value);
-    terrain.gradient /= tuning.terrain_tuning.x;
-    terrain.material_gradient /= tuning.terrain_tuning.x;
     return solid_ice_sample(terrain);
 }
 
 fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     // Long terrain shadows follow island-scale relief; coastal detail remains
     // locally lit instead of multiplying the full terrain cost at every sample.
-    let terrain_position_m = position_m / tuning.terrain_tuning.x;
+    let terrain_position_m = position_m;
     let cluster = terrain_simplex_fractal_sample(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
         8192.0,
         3u,
         0.5,
+        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     ).value;
     let island = terrain_simplex_fractal_sample(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
@@ -1521,6 +1576,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         1536.0,
         5u,
         0.35,
+        TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     ).value;
     let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep(0.32, 0.58, cluster);
@@ -2168,7 +2224,7 @@ fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
     return 1.0 - 0.70 * clamp(playground.wind_model.w, 0.0, 1.0) * obstruction;
 }
 
-fn wind_debug_color(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> vec3<f32> {
+fn wind_debug_color(wind_m_s: vec2<f32>) -> vec3<f32> {
     let speed = length(wind_m_s);
     if speed < 0.01 {
         return vec3<f32>(0.06, 0.075, 0.085);
@@ -2179,12 +2235,7 @@ fn wind_debug_color(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> vec3<f32> {
         0.5 + 0.5 * direction.y,
         0.5 - 0.5 * direction.x,
     );
-    let stripe = 0.78 + 0.22 * smoothstep(
-        0.60,
-        1.0,
-        cos(dot(position_m, direction) * 0.08 - scene.time_seconds * 2.0),
-    );
-    return direction_color * mix(0.35, 1.0, smoothstep(0.0, 20.0, speed)) * stripe;
+    return direction_color * mix(0.35, 1.0, smoothstep(0.0, 20.0, speed));
 }
 
 fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
@@ -2234,12 +2285,12 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         let upper = upper_wind_m_s();
         let shear = upper - surface;
         let pressure_gradient = 6000.0 * scene.pressure.yz;
-        let temperature_gradient = 12000.0 * scene.moisture_and_temperature_gradient.yz;
-        if mode == 16u { return vec4<f32>(wind_debug_color(position_m, surface), 1.0); }
-        if mode == 17u { return vec4<f32>(wind_debug_color(position_m, upper), 1.0); }
-        if mode == 18u { return vec4<f32>(wind_debug_color(position_m, shear), 1.0); }
-        if mode == 19u { return vec4<f32>(wind_debug_color(position_m, pressure_gradient), 1.0); }
-        if mode == 20u { return vec4<f32>(wind_debug_color(position_m, temperature_gradient), 1.0); }
+        let temperature_gradient = 2000.0 * scene.moisture_and_temperature_gradient.yz;
+        if mode == 16u { return vec4<f32>(wind_debug_color(surface), 1.0); }
+        if mode == 17u { return vec4<f32>(wind_debug_color(upper), 1.0); }
+        if mode == 18u { return vec4<f32>(wind_debug_color(shear), 1.0); }
+        if mode == 19u { return vec4<f32>(wind_debug_color(pressure_gradient), 1.0); }
+        if mode == 20u { return vec4<f32>(wind_debug_color(temperature_gradient), 1.0); }
         let shelter = approximate_shelter(position_m, surface);
         return vec4<f32>(mix(
             vec3<f32>(0.84, 0.17, 0.10),
@@ -2247,7 +2298,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             shelter,
         ), 1.0);
     }
-    let terrain_position_m = position_m / tuning.terrain_tuning.x;
+    let terrain_position_m = position_m;
     let terrain = procedural_terrain_sample(position_m);
     if mode == 32u {
         return vec4<f32>(signed_debug_color(terrain.elevation_m / 12.0), 1.0);
@@ -2262,12 +2313,14 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode == 35u {
         let cluster = terrain_simplex_fractal_sample(
             vec2<u32>(0x78bd642fu, 0xa0761d64u), terrain_position_m, 8192.0, 3u, 0.5,
+            TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
         ).value;
         return vec4<f32>(signed_debug_color(cluster), 1.0);
     }
     if mode == 36u {
         let island = terrain_simplex_fractal_sample(
             vec2<u32>(0xa0b428dbu, 0xe7037ed1u), terrain_position_m, 1536.0, 5u, 0.35,
+            TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
         ).value;
         return vec4<f32>(signed_debug_color(island), 1.0);
     }
@@ -2278,6 +2331,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             32.0,
             6u,
             0.55,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         ).value;
         return vec4<f32>(signed_debug_color(reef), 1.0);
     }
@@ -2294,6 +2348,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             1536.0,
             3u,
             0.5,
+            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         ).value;
         let ruggedness_noise = terrain_simplex_fractal_sample(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
@@ -2301,6 +2356,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             2048.0,
             3u,
             0.5,
+            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         ).value;
         let rockiness = smoothstep(-0.25, 0.35, substrate);
         let ruggedness = smoothstep(-0.25, 0.25, ruggedness_noise);
@@ -2343,7 +2399,9 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();
     ambient_light_color = calculate_atmospheric_ambient_color();
-    return final_scene_color(input);
+    var periodic_input = input;
+    periodic_input.world_position_m = canonical_world_position(input.world_position_m);
+    return final_scene_color(periodic_input);
 }
 
 @fragment
@@ -2364,8 +2422,10 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();
     ambient_light_color = calculate_atmospheric_ambient_color();
+    var periodic_input = input;
+    periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     if playground.diagnostics.x == 0u {
-        return final_scene_color(input);
+        return final_scene_color(periodic_input);
     }
-    return playground_debug_color(input, playground.diagnostics.x);
+    return playground_debug_color(periodic_input, playground.diagnostics.x);
 }

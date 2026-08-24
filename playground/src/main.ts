@@ -1,3 +1,4 @@
+import { sample_playground_noise_octave, sample_playground_world_geometry } from "browser";
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
 import scenarioDefinitions from "../scenarios.json";
 import "./style.css";
@@ -9,6 +10,8 @@ type State = {
   seed: string;
   cameraX: number;
   cameraY: number;
+  worldWidthM: number;
+  worldHeightM: number;
   viewHeight: number;
   time: number;
   cloudTimeScale: number;
@@ -75,6 +78,7 @@ type State = {
   shelterStrength: number;
   shelterEnabled: number;
   landscapeCompositionEnabled: number;
+  geometryGuideVisible: number;
   debugView: number;
 };
 
@@ -126,6 +130,8 @@ const defaults: State = {
   seed: "0x5eed",
   cameraX: 0,
   cameraY: 0,
+  worldWidthM: 64_000,
+  worldHeightM: 64_000,
   viewHeight: 480,
   time: 37,
   cloudTimeScale: 1,
@@ -192,6 +198,7 @@ const defaults: State = {
   shelterStrength: 1,
   shelterEnabled: 1,
   landscapeCompositionEnabled: 1,
+  geometryGuideVisible: 0,
   debugView: 0,
 };
 
@@ -485,6 +492,7 @@ const state: State = { ...defaults };
 let activeDomain: Domain = "weather";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#preview");
+const geometryOverlay = document.querySelector<HTMLCanvasElement>("#geometry-overlay");
 const controls = document.querySelector<HTMLElement>("#controls");
 const domains = document.querySelector<HTMLElement>("#domains");
 const presets = document.querySelector<HTMLElement>("#presets");
@@ -492,10 +500,15 @@ const worldToolbar = document.querySelector<HTMLElement>("#world-toolbar");
 const status = document.querySelector<HTMLElement>("#status");
 const scaleLine = document.querySelector<HTMLElement>("#scale-line");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
-if (!canvas || !controls || !domains || !presets || !worldToolbar || !status || !scaleLine || !scaleLabel) {
+const geometryGuideLabel = document.querySelector<HTMLElement>(".geometry-guide-label");
+if (!canvas || !geometryOverlay || !controls || !domains || !presets || !worldToolbar || !status || !scaleLine || !scaleLabel || !geometryGuideLabel) {
   throw new Error("Procedural lab page is incomplete");
 }
 const previewCanvas = canvas;
+const geometryOverlayCanvas = geometryOverlay;
+const geometryOverlayRenderingContext = geometryOverlayCanvas.getContext("2d");
+if (!geometryOverlayRenderingContext) throw new Error("World geometry diagnostic is unavailable");
+const geometryOverlayContext: CanvasRenderingContext2D = geometryOverlayRenderingContext;
 const controlsElement = controls;
 const domainsElement = domains;
 const presetsElement = presets;
@@ -503,6 +516,7 @@ const worldToolbarElement = worldToolbar;
 const statusElement = status;
 const scaleLineElement = scaleLine;
 const scaleLabelElement = scaleLabel;
+const geometryGuideLabelElement = geometryGuideLabel;
 
 type ValueTransition = { elapsed: number; from: number; to: number };
 type PresetTransition = { elapsed: number; from: Partial<State>; to: Partial<State> };
@@ -515,6 +529,8 @@ const rangeByKey = new Map<NumericStateKey, RangeControl>();
 const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
 const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
 let derivedOutputElement: HTMLElement | undefined;
+let renderedCameraX = 0;
+let renderedCameraY = 0;
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -860,12 +876,22 @@ worldToolbarElement.innerHTML = `
   <details open>
     <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-width">World width · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-height">World height · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
+    <div class="control toggle-control no-reset"><input id="show-seams" type="checkbox"><label class="control-name" for="show-seams">Show seams</label></div>
     <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
     <div class="actions"><button id="pause">Pause</button></div>
+    <div class="geometry-measurements"><h3>View-center geometry</h3><div id="geometry-measurements" class="derived-grid"></div></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
+const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width")!;
+const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
+const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
+const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
+const showSeamsInput = worldToolbarElement.querySelector<HTMLInputElement>("#show-seams")!;
+const geometryMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#geometry-measurements")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
 const worldTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
@@ -874,6 +900,43 @@ const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>(
 const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
+});
+function setWorldDimension(
+  key: "worldWidthM" | "worldHeightM",
+  valueKm: number,
+  rangeInput: HTMLInputElement,
+  valueInput: HTMLInputElement,
+): void {
+  const clampedKm = Math.min(256, Math.max(8, valueKm));
+  state[key] = clampedKm * 1000;
+  rangeInput.value = String(clampedKm);
+  valueInput.value = String(clampedKm);
+}
+worldWidthInput.addEventListener("input", () => {
+  setWorldDimension("worldWidthM", worldWidthInput.valueAsNumber, worldWidthInput, worldWidthValueInput);
+});
+worldWidthValueInput.addEventListener("input", () => {
+  if (Number.isFinite(worldWidthValueInput.valueAsNumber)) {
+    setWorldDimension("worldWidthM", worldWidthValueInput.valueAsNumber, worldWidthInput, worldWidthValueInput);
+  }
+});
+worldWidthValueInput.addEventListener("change", () => {
+  setWorldDimension("worldWidthM", state.worldWidthM / 1000, worldWidthInput, worldWidthValueInput);
+});
+worldHeightInput.addEventListener("input", () => {
+  setWorldDimension("worldHeightM", worldHeightInput.valueAsNumber, worldHeightInput, worldHeightValueInput);
+});
+worldHeightValueInput.addEventListener("input", () => {
+  if (Number.isFinite(worldHeightValueInput.valueAsNumber)) {
+    setWorldDimension("worldHeightM", worldHeightValueInput.valueAsNumber, worldHeightInput, worldHeightValueInput);
+  }
+});
+worldHeightValueInput.addEventListener("change", () => {
+  setWorldDimension("worldHeightM", state.worldHeightM / 1000, worldHeightInput, worldHeightValueInput);
+});
+showSeamsInput.checked = state.geometryGuideVisible > 0.5;
+showSeamsInput.addEventListener("change", () => {
+  state.geometryGuideVisible = Number(showSeamsInput.checked);
 });
 function syncTimeScaleInputs(): void {
   cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
@@ -1057,7 +1120,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(32);
+const sceneFloats = new Float32Array(36);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1189,7 +1252,7 @@ function atmosphericOutputs(): Array<[string, string]> {
   ];
   const surface = pressureWind(pressureGradient);
   const upperPressure = pressureWind(synopticGradient, 1.12);
-  const thermalScale = 12000 * state.thermalWindEnabled * state.thermalWindScale;
+  const thermalScale = 2000 * state.thermalWindEnabled * state.thermalWindScale;
   const upper: [number, number] = [
     upperPressure[0] - thermalScale * temperatureGradient[1],
     upperPressure[1] + thermalScale * temperatureGradient[0],
@@ -1285,6 +1348,117 @@ function updateDerivedOutput(): void {
   }));
 }
 
+function updateGeometryMeasurements(): void {
+  const sample = sample_playground_world_geometry(
+    state.worldWidthM,
+    state.worldHeightM,
+    state.cameraX,
+    state.cameraY,
+    state.dayPhase,
+  );
+  const values: Array<[string, string]> = [
+    ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
+    ["Canonical center", `${sample.wrapped_x_m.toFixed(1)}, ${sample.wrapped_y_m.toFixed(1)} m`],
+    ["Normalized torus", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
+    ["Signed latitude", `${sample.latitude_degrees.toFixed(3)}°`],
+    ["Local solar phase", `${sample.local_solar_phase.toFixed(4)} · ${(sample.local_solar_phase * 24).toFixed(2)} h`],
+  ];
+  const octaveDefinitions: Array<[string, boolean, number]> = activeDomain === "weather"
+    ? [["Weather macro octave", true, 65536], ["Cloud detail octave", false, 640]]
+    : activeDomain === "landscape"
+      ? [["Terrain macro octave", true, 8192], ["Terrain relief octave", false, 256]]
+      : [["Tide response octave", true, 131072], ["Reef detail octave", false, 32]];
+  for (const [label, circleEmbedded, wavelengthM] of octaveDefinitions) {
+    const octave = sample_playground_noise_octave(
+      state.worldWidthM,
+      state.worldHeightM,
+      circleEmbedded,
+      wavelengthM,
+    );
+    const error = 100 * Math.max(octave.relative_error_x, octave.relative_error_y);
+    values.push([
+      label,
+      `${octave.basis} · requested ${octave.requested_wavelength_m.toFixed(0)} m · effective ${octave.effective_wavelength_x_m.toFixed(1)} × ${octave.effective_wavelength_y_m.toFixed(1)} m · ${error.toFixed(2)}% max error`,
+    ]);
+    octave.free();
+  }
+  renderedCameraX = sample.wrapped_x_m;
+  renderedCameraY = sample.wrapped_y_m;
+  sample.free();
+  geometryMeasurementsElement.replaceChildren(...values.flatMap(([label, value]) => {
+    const name = document.createElement("span");
+    name.textContent = label;
+    const output = document.createElement("output");
+    output.value = value;
+    return [name, output];
+  }));
+}
+
+function drawPeriodicGuideLines(
+  periodM: number,
+  offsetM: number,
+  minimumM: number,
+  maximumM: number,
+  vertical: boolean,
+): void {
+  const firstIndex = Math.ceil((minimumM - offsetM) / periodM);
+  const lastIndex = Math.floor((maximumM - offsetM) / periodM);
+  const pixelsPerMetre = geometryOverlayCanvas.clientHeight / state.viewHeight;
+  if (periodM * pixelsPerMetre < 4) return;
+  let index = firstIndex;
+  geometryOverlayContext.beginPath();
+  while (index <= lastIndex) {
+    const positionM = offsetM + index * periodM;
+    if (vertical) {
+      const x = geometryOverlayCanvas.clientWidth / 2 + (positionM - state.cameraX) * pixelsPerMetre;
+      geometryOverlayContext.moveTo(x, 0);
+      geometryOverlayContext.lineTo(x, geometryOverlayCanvas.clientHeight);
+    } else {
+      const y = geometryOverlayCanvas.clientHeight / 2 + (positionM - state.cameraY) * pixelsPerMetre;
+      geometryOverlayContext.moveTo(0, y);
+      geometryOverlayContext.lineTo(geometryOverlayCanvas.clientWidth, y);
+    }
+    index += 1;
+  }
+  geometryOverlayContext.stroke();
+}
+
+function drawGeometryOverlay(): void {
+  const widthM = state.viewHeight * geometryOverlayCanvas.clientWidth / geometryOverlayCanvas.clientHeight;
+  const minimumX = state.cameraX - widthM / 2;
+  const maximumX = state.cameraX + widthM / 2;
+  const minimumY = state.cameraY - state.viewHeight / 2;
+  const maximumY = state.cameraY + state.viewHeight / 2;
+  const pixelScaleX = geometryOverlayCanvas.width / geometryOverlayCanvas.clientWidth;
+  const pixelScaleY = geometryOverlayCanvas.height / geometryOverlayCanvas.clientHeight;
+  geometryOverlayContext.setTransform(pixelScaleX, 0, 0, pixelScaleY, 0, 0);
+  geometryOverlayContext.clearRect(0, 0, geometryOverlayCanvas.clientWidth, geometryOverlayCanvas.clientHeight);
+  const showGuide = state.geometryGuideVisible > 0.5;
+  geometryGuideLabelElement.hidden = !showGuide;
+  if (showGuide) {
+    geometryOverlayContext.lineWidth = 1;
+    geometryOverlayContext.strokeStyle = "rgb(105 189 232 / 68%)";
+    geometryOverlayContext.setLineDash([]);
+    drawPeriodicGuideLines(state.worldWidthM, 0, minimumX, maximumX, true);
+    drawPeriodicGuideLines(state.worldHeightM, 0, minimumY, maximumY, false);
+    geometryOverlayContext.strokeStyle = "rgb(229 120 136 / 82%)";
+    geometryOverlayContext.setLineDash([7, 5]);
+    drawPeriodicGuideLines(state.worldWidthM, state.worldWidthM / 2, minimumX, maximumX, true);
+    drawPeriodicGuideLines(state.worldHeightM, state.worldHeightM / 2, minimumY, maximumY, false);
+  }
+  geometryOverlayContext.setLineDash([]);
+  geometryOverlayContext.strokeStyle = "#ff334f";
+  geometryOverlayContext.lineWidth = 2;
+  const centerX = geometryOverlayCanvas.clientWidth / 2;
+  const centerY = geometryOverlayCanvas.clientHeight / 2;
+  geometryOverlayContext.beginPath();
+  geometryOverlayContext.moveTo(centerX - 9, centerY);
+  geometryOverlayContext.lineTo(centerX + 9, centerY);
+  geometryOverlayContext.moveTo(centerX, centerY - 9);
+  geometryOverlayContext.lineTo(centerX, centerY + 9);
+  geometryOverlayContext.stroke();
+}
+
 function writeUniforms(): void {
   const aspect = previewCanvas.width / previewCanvas.height;
   const pressureGradient = directedVector(state.pressureGradient / 1000, state.pressureGradientDirection);
@@ -1296,7 +1470,12 @@ function writeUniforms(): void {
     state.temperatureGradient / 1000,
     state.temperatureGradientDirection,
   );
-  sceneFloats.set([state.cameraX, state.cameraY, state.viewHeight * aspect, state.viewHeight], 0);
+  sceneFloats.set([
+    renderedCameraX,
+    renderedCameraY,
+    state.viewHeight * aspect,
+    state.viewHeight,
+  ], 0);
   sceneFloats.set([state.pressureHpa, ...pressureGradient, state.seasonalTemperatureRange], 4);
   sceneFloats.set([
     ...synopticGradient, state.annualMeanAirTemperature, state.currentUpperAirTemperature,
@@ -1314,9 +1493,24 @@ function writeUniforms(): void {
     0,
   ], 20);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  sceneUints.set([seedLow, seedHigh, seedLow ^ 0x6174, seedHigh ^ 0x7079626f], 24);
-  sceneFloats[28] = state.time;
-  sceneFloats[29] = state.aerosolOpticalDepth;
+  const lowCloudEpoch = BigInt(Math.floor(state.time / 1800));
+  const upperCloudEpoch = BigInt(Math.floor(state.time / 3600));
+  sceneUints.set([
+    seedLow,
+    seedHigh,
+    Number(lowCloudEpoch & 0xffff_ffffn),
+    Number((lowCloudEpoch >> 32n) & 0xffff_ffffn),
+  ], 24);
+  sceneFloats.set([state.aerosolOpticalDepth, 0], 28);
+  sceneFloats.set([state.worldWidthM, state.worldHeightM], 30);
+  sceneUints.set([
+    Number(upperCloudEpoch & 0xffff_ffffn),
+    Number((upperCloudEpoch >> 32n) & 0xffff_ffffn),
+  ], 32);
+  sceneFloats.set([
+    (state.time % 1800) / 1800,
+    (state.time % 3600) / 3600,
+  ], 34);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
@@ -1371,6 +1565,8 @@ function resize(): void {
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;
+    geometryOverlayCanvas.width = width;
+    geometryOverlayCanvas.height = height;
   }
 }
 
@@ -1417,6 +1613,7 @@ function frame(now: number): void {
     syncControl("moonPhase");
   }
   updateDerivedOutput();
+  updateGeometryMeasurements();
   writeUniforms();
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
@@ -1434,6 +1631,7 @@ function frame(now: number): void {
   pass.draw(6);
   pass.end();
   device.queue.submit([encoder.finish()]);
+  drawGeometryOverlay();
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
     : `${previewCanvas.width} × ${previewCanvas.height} · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;

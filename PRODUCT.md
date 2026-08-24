@@ -29,6 +29,14 @@ current playable behavior; this file does not track delivery status.
 
 ## World
 
+- **[Explicit]** The playable world is a rectangular topological torus with
+  independently selectable width and height and a square default. Crossing an
+  edge returns to the opposite edge without a visible or physical seam; boats
+  can keep sailing laps and interact across either edge and their corners.
+- **[Explicit]** Wrapped north-south position maps to signed latitude: the lower
+  branch is -90 degrees, the upper limiting edge approaches +90 degrees, and
+  those identified edges form one long polar loop. The two hemispheres have
+  opposite seasons; their seasonal state may change sharply across that loop.
 - **[Explicit]** A statistically connected, dominant sea contains natural-looking
   sparse groups of large procedural islands. Land may be more fractal and rare
   enclosed water may occur, but the world must not become a patchwork of equal
@@ -49,6 +57,8 @@ current playable behavior; this file does not track delivery status.
   lower sliding resistance rather than perpetual creep.
 - **[Explicit]** Weather, wind, currents, waves, storms, seasons, and tides are
   procedural and deterministic from match state across space and time.
+- **[Explicit]** Broad procedural phenomena retain their intended local physical
+  wavelength as the independently selectable world width and height change.
 - **[Explicit]** Environment models are locally plausible and stateless rather
   than global fluid, climate, storm-lifecycle, or ocean-basin simulations.
   Storm-like conditions emerge from continuous atmospheric fields.
@@ -91,9 +101,9 @@ current playable behavior; this file does not track delivery status.
   displacing shorelines or changing collision. Visual material structure is
   calibrated for boat-scale zoom and does not expose the procedural sampling
   lattice.
-- **[Explicit]** Shared weather is deterministic, but fine cloud geometry is a
-  local visual. The viewport uses weather at the local boat, and clouds never
-  conceal players or affect gameplay.
+- **[Explicit]** Fine cloud geometry is a stateless deterministic match field
+  sampled for each viewport, while local weather at the boat shapes its visible
+  coverage. Clouds never conceal players or affect gameplay.
 - **[Explicit]** A visible low layer supplies decorative wisps, detail, and wind
   cues across at most about one quarter of the view. It may cast localized
   shadows but contributes little to global overcast lighting. An invisible upper
@@ -149,6 +159,14 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,
   immediate slider dragging, eased track clicks, and independent or locked
   real-time multipliers for cloud evolution and world time.
+- **[Explicit]** The lab exposes independent world-width and world-height
+  sliders, initialized to the square production default. A red cross marks the
+  view-center sample, whose raw and canonical coordinates, normalized torus
+  coordinates, signed latitude, and local solar phase remain visible while
+  panning. The procedural scene repeats seamlessly at the selected rectangle's
+  longitude and identified polar seams, and changing either dimension regenerates
+  its spatial realization. An opt-in diagnostic guide repeats the reference
+  meridian, equator, and both seams over the scene.
 - **[Explicit]** The lab presents local solar time in hours, season as an
   approximate real-numbered month, and lunar phase with named landmarks while
   retaining normalized runtime phases internally.

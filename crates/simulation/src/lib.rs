@@ -1,15 +1,159 @@
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    error::Error,
+    fmt,
+};
 
 use rapier2d::prelude::{
-    Aabb, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
+    ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
     IntegrationParameters, MassProperties, MotorModel, PhysicsWorld, RevoluteJointBuilder,
     RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType, Rotation, Vector,
 };
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub const DT_SECONDS: f32 = 1.0 / 60.0;
+// Opposing hull extrema at this speed remain below half the minimum supported beam per 1/32 tick.
+pub const MAXIMUM_SHARED_HULL_POINT_SPEED_M_S: f32 = 700.0;
 const CONTROL_SELECTION_TIE_TOLERANCE: f32 = 1.0e-6;
 const GRAVITY_ACCELERATION_M_S2: f32 = 9.81;
 const STATIC_GROUND_SPEED_THRESHOLD_M_S: f32 = 0.02;
+const CONTACT_CHART_HYSTERESIS_M: f32 = 0.5;
+const SPATIAL_CELL_M: f32 = 16.0;
+const MAXIMUM_COLLISION_SUBSTEPS: usize = 32;
+const MINIMUM_SHARED_HULL_BEAM_M: f32 = 1.5;
+
+const DEFAULT_WORLD_SIDE_M: f32 = 64_000.0;
+const MINIMUM_WORLD_SIDE_M: f32 = 8_000.0;
+const MAXIMUM_WORLD_SIDE_M: f32 = 256_000.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct WorldGeometry {
+    width_m: f32,
+    height_m: f32,
+}
+
+impl WorldGeometry {
+    pub fn new(width_m: f32, height_m: f32) -> Result<Self, WorldGeometryError> {
+        if !valid_world_dimension(width_m) || !valid_world_dimension(height_m) {
+            return Err(WorldGeometryError);
+        }
+        Ok(Self { width_m, height_m })
+    }
+
+    pub fn width_m(self) -> f32 {
+        self.width_m
+    }
+
+    pub fn height_m(self) -> f32 {
+        self.height_m
+    }
+
+    pub fn wrap_position_m(self, position_m: [f32; 2]) -> [f32; 2] {
+        [
+            wrap_component(position_m[0], self.width_m),
+            wrap_component(position_m[1], self.height_m),
+        ]
+    }
+
+    pub fn minimum_image_displacement_m(self, displacement_m: [f32; 2]) -> [f32; 2] {
+        [
+            minimum_image_component(displacement_m[0], self.width_m),
+            minimum_image_component(displacement_m[1], self.height_m),
+        ]
+    }
+
+    pub fn normalized_torus_coordinates(self, position_m: [f32; 2]) -> [f32; 2] {
+        let wrapped_m = self.wrap_position_m(position_m);
+        [
+            normalized_component(wrapped_m[0], self.width_m),
+            normalized_component(wrapped_m[1], self.height_m),
+        ]
+    }
+
+    pub fn latitude_degrees(self, y_m: f32) -> f32 {
+        wrap_component(y_m, self.height_m) / self.height_m * 180.0
+    }
+
+    pub fn local_solar_phase(self, global_day_phase: f32, x_m: f32) -> f32 {
+        (global_day_phase.rem_euclid(1.0) + x_m.rem_euclid(self.width_m) / self.width_m)
+            .rem_euclid(1.0)
+    }
+}
+
+impl Default for WorldGeometry {
+    fn default() -> Self {
+        Self {
+            width_m: DEFAULT_WORLD_SIDE_M,
+            height_m: DEFAULT_WORLD_SIDE_M,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WorldGeometry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedWorldGeometry {
+            width_m: f32,
+            height_m: f32,
+        }
+
+        let geometry = SerializedWorldGeometry::deserialize(deserializer)?;
+        Self::new(geometry.width_m, geometry.height_m).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldGeometryError;
+
+impl fmt::Display for WorldGeometryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .write_str("world dimensions must be finite values from 8000 through 256000 metres")
+    }
+}
+
+impl Error for WorldGeometryError {}
+
+fn valid_world_dimension(dimension_m: f32) -> bool {
+    let half_m = dimension_m / 2.0;
+    dimension_m.is_finite()
+        && (MINIMUM_WORLD_SIDE_M..=MAXIMUM_WORLD_SIDE_M).contains(&dimension_m)
+        && half_m * 2.0 == dimension_m
+}
+
+fn minimum_image_component(displacement_m: f32, period_m: f32) -> f32 {
+    let half_period_m = period_m / 2.0;
+    if displacement_m > -half_period_m && displacement_m <= half_period_m {
+        return displacement_m;
+    }
+    let wrapped_m = displacement_m.rem_euclid(period_m);
+    if wrapped_m > half_period_m {
+        wrapped_m - period_m
+    } else {
+        wrapped_m
+    }
+}
+
+fn wrap_component(value: f32, period: f32) -> f32 {
+    let half_period = period / 2.0;
+    if value >= -half_period && value < half_period {
+        return value;
+    }
+    let wrapped = value.rem_euclid(period);
+    if wrapped >= half_period {
+        wrapped - period
+    } else {
+        wrapped
+    }
+}
+
+fn normalized_component(wrapped: f32, period: f32) -> f32 {
+    const UNIT_UPPER_BOUND: f32 = f32::from_bits(1.0_f32.to_bits() - 1);
+    (wrapped / period + 0.5).min(UNIT_UPPER_BOUND)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullParameters {
@@ -190,9 +334,154 @@ struct SharedBoat {
     boat: Boat,
 }
 
+struct WrappedSpatialIndex {
+    world_geometry: WorldGeometry,
+    columns: i32,
+    rows: i32,
+    cell_width_m: f32,
+    cell_height_m: f32,
+    cells: HashMap<(i32, i32), Vec<usize>>,
+}
+
+impl WrappedSpatialIndex {
+    fn new(world_geometry: WorldGeometry, positions_m: &[Vector]) -> Self {
+        Self::new_with_extents(world_geometry, positions_m, &vec![0.0; positions_m.len()])
+    }
+
+    fn new_with_extents(
+        world_geometry: WorldGeometry,
+        positions_m: &[Vector],
+        extents_m: &[f32],
+    ) -> Self {
+        assert_eq!(positions_m.len(), extents_m.len());
+        let columns = (world_geometry.width_m() / SPATIAL_CELL_M).floor() as i32;
+        let rows = (world_geometry.height_m() / SPATIAL_CELL_M).floor() as i32;
+        let cell_width_m = world_geometry.width_m() / columns as f32;
+        let cell_height_m = world_geometry.height_m() / rows as f32;
+        let mut cells = HashMap::<_, Vec<_>>::new();
+        for (index, (position_m, extent_m)) in positions_m
+            .iter()
+            .copied()
+            .zip(extents_m.iter().copied())
+            .enumerate()
+        {
+            let wrapped_m = Vector::from(world_geometry.wrap_position_m(position_m.into()));
+            let center_x_m = wrapped_m.x + world_geometry.width_m() / 2.0;
+            let center_y_m = wrapped_m.y + world_geometry.height_m() / 2.0;
+            for column in wrapped_cell_indices(center_x_m, extent_m, cell_width_m, columns) {
+                for row in wrapped_cell_indices(center_y_m, extent_m, cell_height_m, rows) {
+                    cells.entry((column, row)).or_default().push(index);
+                }
+            }
+        }
+        Self {
+            world_geometry,
+            columns,
+            rows,
+            cell_width_m,
+            cell_height_m,
+            cells,
+        }
+    }
+
+    fn query(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
+        let wrapped_m = Vector::from(self.world_geometry.wrap_position_m(center_m.into()));
+        let center_x_m = wrapped_m.x + self.world_geometry.width_m() / 2.0;
+        let center_y_m = wrapped_m.y + self.world_geometry.height_m() / 2.0;
+        let mut indices = BTreeSet::new();
+        for column in wrapped_cell_indices(center_x_m, radius_m, self.cell_width_m, self.columns) {
+            for row in wrapped_cell_indices(center_y_m, radius_m, self.cell_height_m, self.rows) {
+                if let Some(cell_indices) = self.cells.get(&(column, row)) {
+                    indices.extend(cell_indices.iter().copied());
+                }
+            }
+        }
+        indices.into_iter().collect()
+    }
+}
+
+fn wrapped_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32, count: i32) -> Vec<i32> {
+    if extent_m * 2.0 >= cell_size_m * count as f32 {
+        return (0..count).collect();
+    }
+    let minimum = ((center_m - extent_m) / cell_size_m).floor() as i32;
+    let maximum = ((center_m + extent_m) / cell_size_m).floor() as i32;
+    (minimum..=maximum)
+        .map(|cell| cell.rem_euclid(count))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+struct CandidateSearch {
+    pairs: Vec<(usize, usize)>,
+    #[cfg(test)]
+    exact_checks: usize,
+}
+
+fn wrapped_candidate_pairs(
+    world_geometry: WorldGeometry,
+    positions_m: &[Vector],
+    search_radii_m: &[f32],
+) -> CandidateSearch {
+    let index = WrappedSpatialIndex::new_with_extents(world_geometry, positions_m, search_radii_m);
+    let mut pairs = Vec::new();
+    #[cfg(test)]
+    let mut exact_checks = 0;
+    for first in 0..positions_m.len() {
+        for second in index.query(positions_m[first], search_radii_m[first]) {
+            if second <= first {
+                continue;
+            }
+            #[cfg(test)]
+            {
+                exact_checks += 1;
+            }
+            let displacement_m =
+                Vector::from(index.world_geometry.minimum_image_displacement_m(
+                    (positions_m[second] - positions_m[first]).into(),
+                ));
+            let pair_radius_m = search_radii_m[first] + search_radii_m[second];
+            if displacement_m.length_squared() <= pair_radius_m * pair_radius_m {
+                pairs.push((first, second));
+            }
+        }
+    }
+    CandidateSearch {
+        pairs,
+        #[cfg(test)]
+        exact_checks,
+    }
+}
+
+fn collision_substep_policy(swept_distance_m: f32, collision_resolution_m: f32) -> usize {
+    let required_substeps = (swept_distance_m / collision_resolution_m).ceil().max(1.0) as usize;
+    required_substeps.min(MAXIMUM_COLLISION_SUBSTEPS)
+}
+
+fn supported_shared_motion(parameters: BoatParameters, mut motion: BoatMotion) -> BoatMotion {
+    if !motion.velocity_m_s.is_finite() || !motion.angular_velocity_rad_s.is_finite() {
+        motion.velocity_m_s = Vector::ZERO;
+        motion.angular_velocity_rad_s = 0.0;
+        return motion;
+    }
+    let hull = parameters.hull;
+    let hull_radius_m = (hull.length_m / 2.0).hypot(hull.beam_m / 2.0);
+    let point_speed_m_s =
+        motion.velocity_m_s.length() + motion.angular_velocity_rad_s.abs() * hull_radius_m;
+    if point_speed_m_s > MAXIMUM_SHARED_HULL_POINT_SPEED_M_S {
+        let scale = MAXIMUM_SHARED_HULL_POINT_SPEED_M_S / point_speed_m_s;
+        motion.velocity_m_s *= scale;
+        motion.angular_velocity_rad_s *= scale;
+    }
+    motion
+}
+
 pub struct SharedSimulation {
     boats: Vec<SharedBoat>,
     boat_indices_by_collider: HashMap<ColliderHandle, usize>,
+    world_geometry: WorldGeometry,
+    spatial_index: WrappedSpatialIndex,
     pub world: PhysicsWorld,
 }
 
@@ -1218,14 +1507,30 @@ impl Simulation {
 
 impl SharedSimulation {
     pub fn new() -> Self {
+        Self::new_with_world_geometry(WorldGeometry::default())
+    }
+
+    pub fn new_with_world_geometry(world_geometry: WorldGeometry) -> Self {
         Self {
             boats: Vec::new(),
             boat_indices_by_collider: HashMap::new(),
+            world_geometry,
+            spatial_index: WrappedSpatialIndex::new(world_geometry, &[]),
             world: physics_world(),
         }
     }
 
-    pub fn add_boat(&mut self, parameters: BoatParameters, motion: BoatMotion) -> usize {
+    pub fn add_boat(&mut self, parameters: BoatParameters, mut motion: BoatMotion) -> usize {
+        assert!(
+            parameters.hull.beam_m.is_finite()
+                && parameters.hull.beam_m >= MINIMUM_SHARED_HULL_BEAM_M,
+            "shared simulation hull beam must be at least {MINIMUM_SHARED_HULL_BEAM_M} metres"
+        );
+        motion.position_m = Vector::from(
+            self.world_geometry
+                .wrap_position_m(motion.position_m.into()),
+        );
+        motion = supported_shared_motion(parameters, motion);
         let boat = create_boat(
             parameters,
             motion,
@@ -1237,6 +1542,7 @@ impl SharedSimulation {
         self.boat_indices_by_collider
             .insert(boat.hull.collider, index);
         self.boats.push(SharedBoat { parameters, boat });
+        self.refresh_spatial_index();
         index
     }
 
@@ -1257,22 +1563,21 @@ impl SharedSimulation {
                 true,
             );
         }
+        self.refresh_spatial_index();
     }
 
     pub fn boats_within_radius(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
-        let query_bounds = Aabb::from_half_extents(center_m, Vector::new(radius_m, radius_m));
         let radius_squared_m2 = radius_m * radius_m;
-        let mut boats = self
-            .world
-            .query_pipeline()
-            .intersect_aabb_conservative(query_bounds)
-            .filter_map(|(collider, _)| self.boat_indices_by_collider.get(&collider).copied())
+        self.spatial_index
+            .query(center_m, radius_m)
+            .into_iter()
             .filter(|boat| {
-                (self.motion(*boat).position_m - center_m).length_squared() <= radius_squared_m2
+                let displacement_m = self.world_geometry.minimum_image_displacement_m(
+                    (self.motion(*boat).position_m - center_m).into(),
+                );
+                Vector::from(displacement_m).length_squared() <= radius_squared_m2
             })
-            .collect::<Vec<_>>();
-        boats.sort_unstable();
-        boats
+            .collect::<Vec<_>>()
     }
 
     pub fn advance(
@@ -1281,6 +1586,7 @@ impl SharedSimulation {
         actuator_torques: &[ActuatorTorques],
     ) -> Vec<HullContact> {
         assert_eq!(actuator_torques.len(), self.boats.len());
+        let substeps = self.prepare_contact_charts();
         for (boat, actuator_torques) in self.boats.iter().zip(actuator_torques) {
             apply_boat_forces(
                 &mut self.world,
@@ -1290,8 +1596,7 @@ impl SharedSimulation {
                 *actuator_torques,
             );
         }
-        self.world.step();
-        self.hull_contacts()
+        self.step_and_collect_contacts(substeps)
     }
 
     pub fn advance_with_environments(
@@ -1301,6 +1606,7 @@ impl SharedSimulation {
     ) -> Vec<HullContact> {
         assert_eq!(environments.len(), self.boats.len());
         assert_eq!(actuator_torques.len(), self.boats.len());
+        let substeps = self.prepare_contact_charts();
         for ((boat, environment), actuator_torques) in
             self.boats.iter().zip(environments).zip(actuator_torques)
         {
@@ -1312,16 +1618,185 @@ impl SharedSimulation {
                 *actuator_torques,
             );
         }
-        self.world.step();
-        self.hull_contacts()
+        self.step_and_collect_contacts(substeps)
     }
 
     pub fn motion(&self, boat: usize) -> BoatMotion {
-        read_motion(&self.boats[boat].boat, &self.world.bodies)
+        let mut motion = read_motion(&self.boats[boat].boat, &self.world.bodies);
+        motion.position_m = Vector::from(
+            self.world_geometry
+                .wrap_position_m(motion.position_m.into()),
+        );
+        motion
+    }
+
+    fn refresh_spatial_index(&mut self) {
+        let positions_m = self
+            .boats
+            .iter()
+            .map(|boat| {
+                let position_m = self.world.bodies[boat.boat.hull.body].translation();
+                Vector::from(self.world_geometry.wrap_position_m(position_m.into()))
+            })
+            .collect::<Vec<_>>();
+        self.spatial_index = WrappedSpatialIndex::new(self.world_geometry, &positions_m);
+    }
+
+    fn enforce_supported_motion(&mut self) {
+        for boat in &self.boats {
+            let motion = read_motion(&boat.boat, &self.world.bodies);
+            let supported = supported_shared_motion(boat.parameters, motion);
+            if supported != motion {
+                restore_motion(
+                    &boat.boat,
+                    boat.parameters,
+                    supported,
+                    &mut self.world.bodies,
+                );
+            }
+        }
+    }
+
+    fn prepare_contact_charts(&mut self) -> usize {
+        self.enforce_supported_motion();
+        let motions = self
+            .boats
+            .iter()
+            .map(|boat| read_motion(&boat.boat, &self.world.bodies))
+            .collect::<Vec<_>>();
+        let canonical_positions = motions
+            .iter()
+            .map(|motion| {
+                Vector::from(
+                    self.world_geometry
+                        .wrap_position_m(motion.position_m.into()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let hull_radii_m = self
+            .boats
+            .iter()
+            .map(|boat| {
+                let hull = boat.parameters.hull;
+                (hull.length_m / 2.0).hypot(hull.beam_m / 2.0)
+            })
+            .collect::<Vec<_>>();
+        let search_radii_m = motions
+            .iter()
+            .zip(&hull_radii_m)
+            .map(|(motion, radius_m)| {
+                radius_m
+                    + (motion.velocity_m_s.length()
+                        + motion.angular_velocity_rad_s.abs() * radius_m)
+                        * DT_SECONDS
+                    + CONTACT_CHART_HYSTERESIS_M / 2.0
+            })
+            .collect::<Vec<_>>();
+        let candidate_search =
+            wrapped_candidate_pairs(self.world_geometry, &canonical_positions, &search_radii_m);
+        let mut neighbors = vec![Vec::new(); self.boats.len()];
+        let mut substeps = 1;
+        for (first, second) in candidate_search.pairs {
+            let first_radius_m = hull_radii_m[first];
+            let second_radius_m = hull_radii_m[second];
+            let swept_distance_m = ((motions[second].velocity_m_s - motions[first].velocity_m_s)
+                .length()
+                + motions[first].angular_velocity_rad_s.abs() * first_radius_m
+                + motions[second].angular_velocity_rad_s.abs() * second_radius_m)
+                * DT_SECONDS;
+            let displacement_m = Vector::from(self.world_geometry.minimum_image_displacement_m(
+                (canonical_positions[second] - canonical_positions[first]).into(),
+            ));
+            let candidate_distance_m =
+                first_radius_m + second_radius_m + swept_distance_m + CONTACT_CHART_HYSTERESIS_M;
+            if displacement_m.length_squared() > candidate_distance_m * candidate_distance_m {
+                continue;
+            }
+            neighbors[first].push(second);
+            neighbors[second].push(first);
+            let collision_resolution_m = self.boats[first]
+                .parameters
+                .hull
+                .beam_m
+                .min(self.boats[second].parameters.hull.beam_m)
+                / 2.0;
+            substeps = substeps.max(collision_substep_policy(
+                swept_distance_m,
+                collision_resolution_m,
+            ));
+        }
+
+        let mut chart_positions = vec![Vector::ZERO; self.boats.len()];
+        let mut visited = vec![false; self.boats.len()];
+        for root in 0..self.boats.len() {
+            if visited[root] {
+                continue;
+            }
+            visited[root] = true;
+            chart_positions[root] = canonical_positions[root];
+            let mut queue = VecDeque::from([root]);
+            while let Some(first) = queue.pop_front() {
+                for &second in &neighbors[first] {
+                    if visited[second] {
+                        continue;
+                    }
+                    let displacement_m = self.world_geometry.minimum_image_displacement_m(
+                        (canonical_positions[second] - canonical_positions[first]).into(),
+                    );
+                    chart_positions[second] = chart_positions[first] + Vector::from(displacement_m);
+                    visited[second] = true;
+                    queue.push_back(second);
+                }
+            }
+        }
+
+        for (boat, target_position_m) in self.boats.iter().zip(chart_positions) {
+            let current_position_m = self.world.bodies[boat.boat.hull.body].translation();
+            let translation_m = target_position_m - current_position_m;
+            if translation_m == Vector::ZERO {
+                continue;
+            }
+            // A chart change must preserve every joint anchor in the assembly.
+            for body in [boat.boat.hull.body, boat.boat.sail, boat.boat.rudder] {
+                let position_m = self.world.bodies[body].translation() + translation_m;
+                self.world.bodies[body].set_translation(position_m, true);
+            }
+        }
+        substeps
+    }
+
+    fn step_and_collect_contacts(&mut self, substeps: usize) -> Vec<HullContact> {
+        self.world.integration_parameters.dt = DT_SECONDS / substeps as f32;
+        let mut contacts_by_pair = HashMap::<(usize, usize), HullContact>::new();
+        for _ in 0..substeps {
+            self.world.step();
+            for mut contact in self.hull_contacts() {
+                if contact.first_boat > contact.second_boat {
+                    std::mem::swap(&mut contact.first_boat, &mut contact.second_boat);
+                    std::mem::swap(
+                        &mut contact.first_contact_local_m,
+                        &mut contact.second_contact_local_m,
+                    );
+                }
+                contacts_by_pair
+                    .entry((contact.first_boat, contact.second_boat))
+                    .and_modify(|aggregate| {
+                        aggregate.impulse_magnitude_n_s += contact.impulse_magnitude_n_s;
+                    })
+                    .or_insert(contact);
+            }
+            self.enforce_supported_motion();
+        }
+        self.world.integration_parameters.dt = DT_SECONDS;
+        self.refresh_spatial_index();
+        let mut contacts = contacts_by_pair.into_values().collect::<Vec<_>>();
+        contacts.sort_unstable_by_key(|contact| (contact.first_boat, contact.second_boat));
+        contacts
     }
 
     fn hull_contacts(&self) -> Vec<HullContact> {
-        self.world
+        let mut contacts = self
+            .world
             .contact_pairs()
             .filter(|pair| pair.has_any_active_contact())
             .filter_map(|pair| {
@@ -1352,6 +1827,68 @@ impl SharedSimulation {
                     second_contact_local_m: second_contact_local_m / contact_count as f32,
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        contacts.sort_unstable_by_key(|contact| {
+            (
+                contact.first_boat.min(contact.second_boat),
+                contact.first_boat.max(contact.second_boat),
+            )
+        });
+        contacts
+    }
+}
+
+#[cfg(test)]
+mod torus_spatial_tests {
+    use super::*;
+
+    #[test]
+    fn wrapped_candidate_search_excludes_remote_quadratic_pairs() {
+        let world_geometry = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let mut positions_m = (0..1_000)
+            .map(|index| {
+                Vector::new(
+                    -3_000.0 + (index % 100) as f32 * 40.0,
+                    -3_000.0 + (index / 100) as f32 * 40.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        positions_m.extend([
+            Vector::new(3_999.0, 1_000.0),
+            Vector::new(-3_999.0, 1_000.0),
+        ]);
+        let search =
+            wrapped_candidate_pairs(world_geometry, &positions_m, &vec![3.0; positions_m.len()]);
+
+        assert_eq!(search.pairs, vec![(1_000, 1_001)]);
+        assert!(search.exact_checks < positions_m.len() * 4);
+    }
+
+    #[test]
+    fn one_large_swept_extent_does_not_expand_every_ordinary_query() {
+        let world_geometry = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let mut positions_m = (0..1_000)
+            .map(|index| {
+                Vector::new(
+                    -3_000.0 + (index % 100) as f32 * 40.0,
+                    -3_000.0 + (index / 100) as f32 * 40.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        positions_m.push(Vector::new(0.0, -2_800.0));
+        let mut search_radii_m = vec![3.0; positions_m.len()];
+        search_radii_m[1_000] = 1_000.0;
+        let search = wrapped_candidate_pairs(world_geometry, &positions_m, &search_radii_m);
+
+        assert!(search.pairs.contains(&(575, 1_000)));
+        assert!(!search.pairs.contains(&(0, 1_000)));
+        assert!(search.exact_checks < positions_m.len() * 4);
+    }
+
+    #[test]
+    fn collision_substeps_cover_maximum_supported_opposing_motion() {
+        let swept_distance_m = 2.0 * MAXIMUM_SHARED_HULL_POINT_SPEED_M_S * DT_SECONDS;
+        assert_eq!(collision_substep_policy(swept_distance_m, 0.75), 32);
+        assert!(swept_distance_m / (MAXIMUM_COLLISION_SUBSTEPS as f32) < 0.75);
     }
 }

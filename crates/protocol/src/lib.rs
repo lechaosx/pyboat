@@ -1,10 +1,11 @@
 use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
+pub use simulation::WorldGeometry;
 
 // Postcard encodes these enums and structs positionally. Reordering or changing
 // fields is a wire-contract change and requires a new version.
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -23,6 +24,7 @@ pub enum ServerMessage {
     Welcome {
         player_id: String,
         match_seed: u64,
+        world_geometry: WorldGeometry,
     },
     Snapshot {
         tick: u64,

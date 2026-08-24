@@ -4,6 +4,7 @@ use protocol::{
     BoatSnapshot, ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_server_message,
     encode_client_message,
 };
+use simulation::WorldGeometry;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
@@ -34,9 +35,13 @@ fn server_endpoint() -> (
 }
 
 fn start_server() -> TestServer {
+    start_server_with_world_geometry(WorldGeometry::default())
+}
+
+fn start_server_with_world_geometry(world_geometry: WorldGeometry) -> TestServer {
     let (endpoint, certificate_hash) = server_endpoint();
     let address = endpoint.local_addr().unwrap();
-    let task = tokio::spawn(server::serve(endpoint));
+    let task = tokio::spawn(server::serve_with_world_geometry(endpoint, world_geometry));
     TestServer {
         address,
         certificate_hash,
@@ -121,7 +126,7 @@ fn close(client: &TestClient) {
 }
 
 #[tokio::test]
-async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
+async fn concurrent_connections_receive_distinct_ids_and_one_match_configuration() {
     let server = start_server();
     let (first, first_welcome) = connect(&server).await;
     let (second, second_welcome) = connect(&server).await;
@@ -129,6 +134,7 @@ async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
     let ServerMessage::Welcome {
         player_id: first_player_id,
         match_seed: first_match_seed,
+        world_geometry: first_world_geometry,
     } = first_welcome
     else {
         panic!("expected first welcome message");
@@ -136,6 +142,7 @@ async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
     let ServerMessage::Welcome {
         player_id: second_player_id,
         match_seed: second_match_seed,
+        world_geometry: second_world_geometry,
     } = second_welcome
     else {
         panic!("expected second welcome message");
@@ -143,9 +150,30 @@ async fn concurrent_connections_receive_distinct_ids_and_one_match_seed() {
     assert_eq!(first_player_id, "player-1");
     assert_eq!(second_player_id, "player-2");
     assert_eq!(first_match_seed, second_match_seed);
+    assert_eq!(first_world_geometry, WorldGeometry::default());
+    assert_eq!(first_world_geometry, second_world_geometry);
 
     close(&first);
     close(&second);
+    server.task.abort();
+}
+
+#[tokio::test]
+async fn server_welcome_propagates_selected_rectangular_world_geometry() {
+    let world_geometry = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let server = start_server_with_world_geometry(world_geometry);
+    let (client, welcome) = connect(&server).await;
+
+    let ServerMessage::Welcome {
+        world_geometry: received,
+        ..
+    } = welcome
+    else {
+        panic!("expected welcome message");
+    };
+    assert_eq!(received, world_geometry);
+
+    close(&client);
     server.task.abort();
 }
 

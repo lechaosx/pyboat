@@ -7,10 +7,19 @@
   </head>
   <body>
     <main>
-      <canvas id="preview" aria-label="Procedural world preview"></canvas>
-      <div class="scale-bar" aria-label="Map scale">
-        <div id="scale-line"><span></span><span></span><span></span><span></span></div>
-        <div class="scale-labels"><span>0</span><span id="scale-label">200 m</span></div>
+      <div class="render-view">
+        <canvas id="preview" aria-label="Procedural world preview"></canvas>
+        <canvas id="geometry-overlay" aria-label="World geometry diagnostic"></canvas>
+        <div class="geometry-guide-label" aria-hidden="true" hidden>
+          <strong>GEOMETRY GUIDE</strong>
+          <span>reference / equator</span>
+          <span>identified seams</span>
+          <small>Procedural scene and gameplay physics repeat across both seams.</small>
+        </div>
+        <div class="scale-bar" aria-label="Map scale">
+          <div id="scale-line"><span></span><span></span><span></span><span></span></div>
+          <div class="scale-labels"><span>0</span><span id="scale-label">200 m</span></div>
+        </div>
       </div>
       <aside>
         <header>

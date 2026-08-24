@@ -7,6 +7,7 @@ use game::{
 };
 use rapier2d::prelude::Vector;
 use serde::{Deserialize, Serialize};
+use simulation::WorldGeometry;
 use wgpu::util::DeviceExt;
 
 const SHADER: &str = include_str!("../../../crates/browser/src/scene.wgsl");
@@ -50,6 +51,8 @@ struct Options {
     height: u32,
     camera_x_m: f32,
     camera_y_m: f32,
+    world_width_m: f32,
+    world_height_m: f32,
     view_height_m: f32,
     seed: u64,
     time_seconds: f32,
@@ -74,10 +77,11 @@ struct SceneUniforms {
     celestial_conditions: [f32; 4],
     world_surface_conditions: [f32; 4],
     match_seed: [u32; 2],
-    cloud_visual_seed: [u32; 2],
-    time_seconds: f32,
-    aerosol_optical_depth: f32,
-    padding: [u32; 2],
+    low_cloud_epoch: [u32; 2],
+    aerosol_and_padding: [f32; 2],
+    world_size_m: [f32; 2],
+    upper_cloud_epoch: [u32; 2],
+    cloud_anchor_phase: [f32; 2],
 }
 
 #[repr(C)]
@@ -139,6 +143,8 @@ struct ImageMetrics {
     dark_pixel_fraction: f32,
     bright_pixel_fraction: f32,
     warm_pixel_fraction: f32,
+    center_vertical_rgb_step: f32,
+    center_horizontal_rgb_step: f32,
 }
 
 #[derive(Serialize)]
@@ -149,6 +155,7 @@ struct CaptureReport<'a> {
     width: u32,
     height: u32,
     camera_m: [f32; 2],
+    world_size_m: [f32; 2],
     view_height_m: f32,
     seed: u64,
     time_seconds: f32,
@@ -200,6 +207,8 @@ fn parse_options() -> Result<Options, String> {
         height: 600,
         camera_x_m: 0.0,
         camera_y_m: 0.0,
+        world_width_m: 64_000.0,
+        world_height_m: 64_000.0,
         view_height_m: 480.0,
         seed: 0x5eed,
         time_seconds: 37.0,
@@ -221,6 +230,8 @@ fn parse_options() -> Result<Options, String> {
             "--height" => options.height = parse(&value(&mut arguments)?, &argument)?,
             "--camera-x" => options.camera_x_m = parse(&value(&mut arguments)?, &argument)?,
             "--camera-y" => options.camera_y_m = parse(&value(&mut arguments)?, &argument)?,
+            "--world-width" => options.world_width_m = parse(&value(&mut arguments)?, &argument)?,
+            "--world-height" => options.world_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--view-height" => options.view_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--seed" => options.seed = parse_seed(&value(&mut arguments)?)?,
             "--time" => options.time_seconds = parse(&value(&mut arguments)?, &argument)?,
@@ -237,6 +248,11 @@ fn parse_options() -> Result<Options, String> {
     }
     if options.width == 0 || options.height == 0 {
         return Err("capture dimensions must be positive".to_owned());
+    }
+    if !(8_000.0..=256_000.0).contains(&options.world_width_m)
+        || !(8_000.0..=256_000.0).contains(&options.world_height_m)
+    {
+        return Err("world dimensions must be between 8000 and 256000 metres".to_owned());
     }
     Ok(options)
 }
@@ -281,6 +297,7 @@ fn print_help() {
            --output-dir PATH      directory for --all (default playground-captures)\n\
            --width N --height N   output dimensions (default 960x600)\n\
            --camera-x M --camera-y M  world-space camera centre\n\
+           --world-width M --world-height M  periodic world size (default 64000 each)\n\
            --view-height METRES   vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
            --time SECONDS         deterministic animation time\n\
@@ -473,11 +490,16 @@ fn render_scenario(
         day_phase: scenario.day_phase,
         moon_phase: scenario.moon_phase,
     };
-    let cloud_seed = options.seed ^ 0x7079_626f_6174;
+    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .map_err(|error| error.to_string())?;
+    let canonical_camera_m =
+        world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let low_cloud_epoch = (options.time_seconds / 1800.0).floor() as u64;
+    let upper_cloud_epoch = (options.time_seconds / 3600.0).floor() as u64;
     let uniforms = SceneUniforms {
         camera_and_view_m: [
-            options.camera_x_m,
-            options.camera_y_m,
+            canonical_camera_m[0],
+            canonical_camera_m[1],
             options.view_height_m * options.width as f32 / options.height as f32,
             options.view_height_m,
         ],
@@ -512,10 +534,14 @@ fn render_scenario(
             0.0,
         ],
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
-        cloud_visual_seed: [cloud_seed as u32, (cloud_seed >> 32) as u32],
-        time_seconds: options.time_seconds,
-        aerosol_optical_depth: scenario.aerosol_optical_depth,
-        padding: [0; 2],
+        low_cloud_epoch: [low_cloud_epoch as u32, (low_cloud_epoch >> 32) as u32],
+        aerosol_and_padding: [scenario.aerosol_optical_depth, 0.0],
+        world_size_m: [options.world_width_m, options.world_height_m],
+        upper_cloud_epoch: [upper_cloud_epoch as u32, (upper_cloud_epoch >> 32) as u32],
+        cloud_anchor_phase: [
+            options.time_seconds.rem_euclid(1800.0) / 1800.0,
+            options.time_seconds.rem_euclid(3600.0) / 3600.0,
+        ],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),
@@ -693,6 +719,7 @@ fn capture_report<'a>(
         width: options.width,
         height: options.height,
         camera_m: [options.camera_x_m, options.camera_y_m],
+        world_size_m: [options.world_width_m, options.world_height_m],
         view_height_m: options.view_height_m,
         seed: options.seed,
         time_seconds: options.time_seconds,
@@ -723,11 +750,11 @@ fn capture_report<'a>(
             upper_cloudiness: weather.upper_cloudiness,
             rain_intensity: weather.rain_intensity,
         },
-        image_metrics: image_metrics(rgba),
+        image_metrics: image_metrics(rgba, options.width, options.height),
     }
 }
 
-fn image_metrics(rgba: &[u8]) -> ImageMetrics {
+fn image_metrics(rgba: &[u8], width: u32, height: u32) -> ImageMetrics {
     let pixel_count = rgba.len() as f32 / 4.0;
     let channel_mean = |channel: usize| {
         rgba.chunks_exact(4)
@@ -745,6 +772,35 @@ fn image_metrics(rgba: &[u8]) -> ImageMetrics {
         })
         .count() as f32
         / pixel_count;
+    let pixel_rgb_step = |first: usize, second: usize| {
+        (0..3)
+            .map(|channel| {
+                (f32::from(rgba[4 * first + channel]) - f32::from(rgba[4 * second + channel])).abs()
+                    / 255.0
+            })
+            .sum::<f32>()
+            / 3.0
+    };
+    let center_x = width as usize / 2;
+    let center_y = height as usize / 2;
+    let center_vertical_rgb_step = (0..height as usize)
+        .map(|y| {
+            pixel_rgb_step(
+                y * width as usize + center_x.saturating_sub(1),
+                y * width as usize + center_x,
+            )
+        })
+        .sum::<f32>()
+        / height as f32;
+    let center_horizontal_rgb_step = (0..width as usize)
+        .map(|x| {
+            pixel_rgb_step(
+                center_y.saturating_sub(1) * width as usize + x,
+                center_y * width as usize + x,
+            )
+        })
+        .sum::<f32>()
+        / width as f32;
     let mut luminances: Vec<f32> = rgba
         .chunks_exact(4)
         .map(|pixel| {
@@ -776,6 +832,8 @@ fn image_metrics(rgba: &[u8]) -> ImageMetrics {
         bright_pixel_fraction: luminances.iter().filter(|value| **value > 0.55).count() as f32
             / luminances.len() as f32,
         warm_pixel_fraction,
+        center_vertical_rgb_step,
+        center_horizontal_rgb_step,
     }
 }
 

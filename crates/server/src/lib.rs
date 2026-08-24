@@ -13,10 +13,11 @@ use game::{
 use protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
+use rapier2d::prelude::Vector;
 use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation,
+    WorldGeometry,
 };
-use rapier2d::prelude::Vector;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{interval, timeout};
 use wtransport::{
@@ -100,18 +101,25 @@ struct GameMatch {
     players: Vec<Player>,
     active_hull_contacts: HashSet<(String, String)>,
     match_seed: u64,
+    world_geometry: WorldGeometry,
     spawn_origin_m: Option<Vector>,
     tick: u64,
 }
 
 impl GameMatch {
+    #[cfg(test)]
     fn new(match_seed: u64) -> Self {
+        Self::new_with_world_geometry(match_seed, WorldGeometry::default())
+    }
+
+    fn new_with_world_geometry(match_seed: u64, world_geometry: WorldGeometry) -> Self {
         Self {
             parameters: dinghy_parameters(),
-            simulation: SharedSimulation::new(),
+            simulation: SharedSimulation::new_with_world_geometry(world_geometry),
             players: Vec::new(),
             active_hull_contacts: HashSet::new(),
             match_seed,
+            world_geometry,
             spawn_origin_m: None,
             tick: 0,
         }
@@ -120,7 +128,12 @@ impl GameMatch {
     fn add_player(&mut self, player_id: String, player_number: u64) {
         let spawn_origin_m = self.spawn_origin_m.unwrap_or(Vector::ZERO);
         let fleet_radius_m = (0..self.players.len())
-            .map(|boat| (self.simulation.motion(boat).position_m - spawn_origin_m).length())
+            .map(|boat| {
+                Vector::from(self.world_geometry.minimum_image_displacement_m(
+                    (self.simulation.motion(boat).position_m - spawn_origin_m).into(),
+                ))
+                .length()
+            })
             .fold(0.0_f32, f32::max);
         let minimum_radius_m = if self.players.is_empty() {
             0.0
@@ -140,8 +153,15 @@ impl GameMatch {
                     + std::f32::consts::TAU * candidate as f32 / SPAWN_BEARING_CANDIDATES as f32;
                 let candidate_m =
                     spawn_origin_m + Vector::new(bearing_rad.cos(), bearing_rad.sin()) * radius_m;
-                if procedural_match_environment(self.match_seed, self.tick, candidate_m)
-                    .water_depth_m
+                let candidate_m =
+                    Vector::from(self.world_geometry.wrap_position_m(candidate_m.into()));
+                if procedural_match_environment(
+                    self.world_geometry,
+                    self.match_seed,
+                    self.tick,
+                    candidate_m,
+                )
+                .water_depth_m
                     >= MINIMUM_SPAWN_WATER_DEPTH_M
                 {
                     break 'spawn candidate_m;
@@ -153,8 +173,13 @@ impl GameMatch {
             radius_m = radius_m.max(minimum_radius_m) + SPAWN_CLEARANCE_M;
         };
         self.spawn_origin_m.get_or_insert(position_m);
-        let wind = procedural_match_environment(self.match_seed, self.tick, position_m)
-            .true_wind_velocity_m_s;
+        let wind = procedural_match_environment(
+            self.world_geometry,
+            self.match_seed,
+            self.tick,
+            position_m,
+        )
+        .true_wind_velocity_m_s;
         self.simulation.add_boat(
             self.parameters,
             BoatMotion {
@@ -236,8 +261,12 @@ impl GameMatch {
         let mut actuator_torques = Vec::with_capacity(self.players.len());
         for (boat, player) in self.players.iter_mut().enumerate() {
             let motion = self.simulation.motion(boat);
-            let environment =
-                procedural_match_environment(self.match_seed, self.tick, motion.position_m);
+            let environment = procedural_match_environment(
+                self.world_geometry,
+                self.match_seed,
+                self.tick,
+                motion.position_m,
+            );
             environments.push(environment);
             if player.wreck {
                 actuator_torques.push(ActuatorTorques::default());
@@ -345,8 +374,12 @@ impl GameMatch {
             .map(|&boat| {
                 let player = &self.players[boat];
                 let motion = self.simulation.motion(boat);
-                let include_intent = (motion.position_m - viewer_position_m).length_squared()
-                    <= PHYSICS_BUBBLE_RADIUS_M * PHYSICS_BUBBLE_RADIUS_M;
+                let include_intent =
+                    Vector::from(self.world_geometry.minimum_image_displacement_m(
+                        (motion.position_m - viewer_position_m).into(),
+                    ))
+                    .length_squared()
+                        <= PHYSICS_BUBBLE_RADIUS_M * PHYSICS_BUBBLE_RADIUS_M;
                 BoatSnapshot {
                     id: player.id.clone(),
                     health: player.health,
@@ -387,7 +420,15 @@ pub fn endpoint(address: SocketAddr, identity: Identity) -> ServerResult<Endpoin
 }
 
 pub async fn serve(endpoint: Endpoint<Server>) -> ServerResult<()> {
-    serve_until(endpoint, pending::<Result<(), io::Error>>()).await
+    serve_with_world_geometry(endpoint, WorldGeometry::default()).await
+}
+
+pub async fn serve_with_world_geometry(
+    endpoint: Endpoint<Server>,
+    world_geometry: WorldGeometry,
+) -> ServerResult<()> {
+    serve_with_world_geometry_until(endpoint, world_geometry, pending::<Result<(), io::Error>>())
+        .await
 }
 
 pub async fn serve_until<F, E>(endpoint: Endpoint<Server>, shutdown: F) -> ServerResult<()>
@@ -395,9 +436,21 @@ where
     F: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
 {
+    serve_with_world_geometry_until(endpoint, WorldGeometry::default(), shutdown).await
+}
+
+pub async fn serve_with_world_geometry_until<F, E>(
+    endpoint: Endpoint<Server>,
+    world_geometry: WorldGeometry,
+    shutdown: F,
+) -> ServerResult<()>
+where
+    F: Future<Output = Result<(), E>>,
+    E: Error + Send + Sync + 'static,
+{
     let (events, mut incoming_events) = mpsc::unbounded_channel();
     let mut connections: HashMap<String, watch::Sender<Option<OutboundMessage>>> = HashMap::new();
-    let mut game_match = GameMatch::new(new_match_seed());
+    let mut game_match = GameMatch::new_with_world_geometry(new_match_seed(), world_geometry);
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
     tokio::pin!(shutdown);
@@ -452,6 +505,7 @@ where
                             player_id,
                             player_number,
                             game_match.match_seed,
+                            game_match.world_geometry,
                             events,
                         ).await {
                             eprintln!("WebTransport connection failed: {error}");
@@ -507,6 +561,7 @@ async fn handle_connection(
     player_id: String,
     player_number: u64,
     match_seed: u64,
+    world_geometry: WorldGeometry,
     events: mpsc::UnboundedSender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
     let (outbound, mut outbound_updates) = watch::channel(None);
@@ -525,6 +580,7 @@ async fn handle_connection(
     let welcome = encode_server_message(&ServerMessage::Welcome {
         player_id: player_id.clone(),
         match_seed,
+        world_geometry,
     })?;
     send_reliable_message(&connection, &welcome).await?;
     let (mut incoming_messages, receive_tasks) = receive_messages(&connection);
@@ -684,6 +740,125 @@ fn new_match_seed() -> u64 {
 mod tests {
     use super::*;
 
+    fn game_match_with_boats(world_geometry: WorldGeometry, positions_m: &[Vector]) -> GameMatch {
+        let parameters = dinghy_parameters();
+        let mut simulation = SharedSimulation::new_with_world_geometry(world_geometry);
+        let mut players = Vec::new();
+        for (index, position_m) in positions_m.iter().copied().enumerate() {
+            simulation.add_boat(
+                parameters,
+                BoatMotion {
+                    position_m,
+                    velocity_m_s: Vector::ZERO,
+                    angle_rad: 0.0,
+                    angular_velocity_rad_s: 0.0,
+                    sail_angle_rad: 0.0,
+                    sail_angular_velocity_rad_s: 0.0,
+                    rudder_angle_rad: 0.0,
+                    rudder_angular_velocity_rad_s: 0.0,
+                },
+            );
+            players.push(Player {
+                id: format!("player-{}", index + 1),
+                intent: MotionIntent::default(),
+                acknowledged_input: 0,
+                last_received_input: 0,
+                pending_inputs: VecDeque::new(),
+                visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+                health: BOAT_MAX_HEALTH,
+                last_hit_tick: None,
+                wreck: false,
+            });
+        }
+        GameMatch {
+            parameters,
+            simulation,
+            players,
+            active_hull_contacts: HashSet::new(),
+            match_seed: 42,
+            world_geometry,
+            spawn_origin_m: None,
+            tick: 0,
+        }
+    }
+
+    fn ram_result(
+        offset_m: Vector,
+        speed_m_s: f32,
+        half_separation_m: f32,
+    ) -> (f32, [f32; 2], [bool; 2]) {
+        let world_geometry = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let mut parameters = dinghy_parameters();
+        parameters.air_density_kg_m3 = 0.0;
+        parameters.water_density_kg_m3 = 0.0;
+        let mut simulation = SharedSimulation::new_with_world_geometry(world_geometry);
+        for (position_m, velocity_m_s) in [
+            (
+                offset_m + Vector::new(-half_separation_m, 0.0),
+                Vector::new(speed_m_s, 0.0),
+            ),
+            (
+                offset_m + Vector::new(half_separation_m, 0.0),
+                Vector::new(-speed_m_s, 0.0),
+            ),
+        ] {
+            simulation.add_boat(
+                parameters,
+                BoatMotion {
+                    position_m,
+                    velocity_m_s,
+                    angle_rad: 0.0,
+                    angular_velocity_rad_s: 0.0,
+                    sail_angle_rad: 0.0,
+                    sail_angular_velocity_rad_s: 0.0,
+                    rudder_angle_rad: 0.0,
+                    rudder_angular_velocity_rad_s: 0.0,
+                },
+            );
+        }
+        let mut game_match = GameMatch {
+            parameters,
+            simulation,
+            players: (1..=2)
+                .map(|number| Player {
+                    id: format!("player-{number}"),
+                    intent: MotionIntent::default(),
+                    acknowledged_input: 0,
+                    last_received_input: 0,
+                    pending_inputs: VecDeque::new(),
+                    visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+                    health: BOAT_MAX_HEALTH,
+                    last_hit_tick: None,
+                    wreck: false,
+                })
+                .collect(),
+            active_hull_contacts: HashSet::new(),
+            match_seed: 42,
+            world_geometry,
+            spawn_origin_m: None,
+            tick: 0,
+        };
+        let mut maximum_impulse_n_s = 0.0_f32;
+        for _ in 0..30 {
+            let contacts = game_match.simulation.advance(
+                simulation::Environment::default(),
+                &[ActuatorTorques::default(), ActuatorTorques::default()],
+            );
+            maximum_impulse_n_s = contacts
+                .iter()
+                .fold(maximum_impulse_n_s, |maximum, contact| {
+                    maximum.max(contact.impulse_magnitude_n_s)
+                });
+            game_match.apply_hull_contacts(&contacts);
+            game_match.tick += 1;
+        }
+        (
+            maximum_impulse_n_s,
+            [game_match.players[0].health, game_match.players[1].health],
+            [game_match.players[0].wreck, game_match.players[1].wreck],
+        )
+    }
+
     fn player<'a>(game_match: &'a GameMatch, player_id: &str) -> &'a Player {
         game_match
             .players
@@ -712,6 +887,7 @@ mod tests {
                 );
             }
             let environment = procedural_match_environment(
+                game_match.world_geometry,
                 game_match.match_seed,
                 game_match.tick,
                 spawned.position_m,
@@ -778,6 +954,50 @@ mod tests {
         game_match.apply_hull_contacts(&[]);
         game_match.apply_hull_contacts(&[contact]);
         assert!(player(&game_match, "player-1").health < after_first_contact);
+    }
+
+    #[test]
+    fn wrapped_interest_and_physics_bubble_include_corner_neighbors() {
+        let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let game_match = game_match_with_boats(
+            world,
+            &[
+                Vector::new(3_999.0, 3_999.0),
+                Vector::new(-3_999.0, -3_999.0),
+                Vector::new(-3_980.0, -3_980.0),
+            ],
+        );
+
+        assert_eq!(game_match.visible_boats("player-1"), vec![0, 1]);
+        let ServerMessage::Snapshot { boats, .. } = game_match.snapshot_for("player-1", &[0, 1, 2])
+        else {
+            unreachable!();
+        };
+        assert!(boats[1].forward.is_some());
+        assert!(boats[1].turn.is_some());
+        assert!(boats[2].forward.is_none());
+        assert!(boats[2].turn.is_none());
+    }
+
+    #[test]
+    fn collision_damage_and_wreck_outcome_match_across_the_x_seam() {
+        let central = ram_result(Vector::ZERO, 6.0, 2.5);
+        let seam = ram_result(Vector::new(4_000.0, 0.0), 6.0, 2.5);
+
+        assert!((central.1[0] - seam.1[0]).abs() < 1.0);
+        assert!((central.1[1] - seam.1[1]).abs() < 1.0);
+        assert_eq!(central.2, seam.2);
+    }
+
+    #[test]
+    fn bounded_high_speed_collision_damage_matches_across_the_x_seam() {
+        let central = ram_result(Vector::ZERO, 10_000.0, 8.0);
+        let seam = ram_result(Vector::new(4_000.0, 0.0), 10_000.0, 8.0);
+
+        assert!(central.0 > 0.0);
+        assert!((central.0 - seam.0).abs() < 5.0);
+        assert_eq!(central.1, seam.1);
+        assert_eq!(central.2, seam.2);
     }
 
     #[test]

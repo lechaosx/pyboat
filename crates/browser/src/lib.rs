@@ -5,11 +5,11 @@ use game::{
     match_environment, procedural_match_environment,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
+use rapier2d::prelude::{Rotation, Vector};
 use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
-    MotionIntent, SharedSimulation, apparent_flow, hull_outline_m,
+    MotionIntent, SharedSimulation, WorldGeometry, apparent_flow, hull_outline_m,
 };
-use rapier2d::prelude::{Rotation, Vector};
 
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -22,6 +22,46 @@ const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldGeometrySample {
+    pub raw_center_m: [f32; 2],
+    pub wrapped_center_m: [f32; 2],
+    pub normalized_torus: [f32; 2],
+    pub latitude_degrees: f32,
+    pub local_solar_phase: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CloudAnchorTime {
+    pub epoch: u64,
+    pub age_ticks: u64,
+    pub phase: f32,
+}
+
+pub fn cloud_anchor_time(tick: u64, period_ticks: u64) -> CloudAnchorTime {
+    let epoch = tick / period_ticks;
+    let age_ticks = tick % period_ticks;
+    CloudAnchorTime {
+        epoch,
+        age_ticks,
+        phase: age_ticks as f32 / period_ticks as f32,
+    }
+}
+
+pub fn sample_world_geometry(
+    geometry: WorldGeometry,
+    raw_center_m: [f32; 2],
+    global_day_phase: f32,
+) -> WorldGeometrySample {
+    WorldGeometrySample {
+        raw_center_m,
+        wrapped_center_m: geometry.wrap_position_m(raw_center_m),
+        normalized_torus: geometry.normalized_torus_coordinates(raw_center_m),
+        latitude_degrees: geometry.latitude_degrees(raw_center_m[1]),
+        local_solar_phase: geometry.local_solar_phase(global_day_phase, raw_center_m[0]),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatScene {
@@ -104,6 +144,7 @@ struct MotionCorrection {
 pub struct MultiplayerClient {
     player_id: Option<String>,
     match_seed: Option<u64>,
+    world_geometry: Option<WorldGeometry>,
     connection_active: bool,
     boats: HashMap<String, ReplicatedBoat>,
     snapshot_received_at_seconds: HashMap<String, f32>,
@@ -132,6 +173,7 @@ impl MultiplayerClient {
         Self {
             player_id: None,
             match_seed: None,
+            world_geometry: None,
             connection_active: false,
             boats: HashMap::new(),
             snapshot_received_at_seconds: HashMap::new(),
@@ -155,9 +197,11 @@ impl MultiplayerClient {
             ServerMessage::Welcome {
                 player_id,
                 match_seed,
+                world_geometry,
             } => {
                 self.player_id = Some(player_id);
                 self.match_seed = Some(match_seed);
+                self.world_geometry = Some(world_geometry);
                 self.connection_active = true;
             }
             ServerMessage::Snapshot {
@@ -201,6 +245,10 @@ impl MultiplayerClient {
 
     pub fn match_seed(&self) -> Option<u64> {
         self.match_seed
+    }
+
+    pub fn world_geometry(&self) -> Option<WorldGeometry> {
+        self.world_geometry
     }
 
     pub fn disconnect(&mut self) {
@@ -306,13 +354,20 @@ impl MultiplayerClient {
     }
 
     pub fn camera_m(&self) -> Option<Vector> {
-        Some(self.local_motion()?.position_m)
+        let position_m = self.local_motion()?.position_m;
+        Some(Vector::from(
+            self.world_geometry?.wrap_position_m(position_m.into()),
+        ))
     }
 
     pub fn view(&self) -> Option<DemoView> {
         let motion = self.local_motion()?;
-        let environment =
-            procedural_match_environment(self.match_seed?, self.prediction_tick, motion.position_m);
+        let environment = procedural_match_environment(
+            self.world_geometry?,
+            self.match_seed?,
+            self.prediction_tick,
+            motion.position_m,
+        );
         let draft_m = dinghy_parameters().draft_m;
         let upwind_angle_rad = environment
             .true_wind_velocity_m_s
@@ -340,6 +395,7 @@ impl MultiplayerClient {
     }
 
     pub fn scenes(&self) -> Vec<BoatScene> {
+        let local_position_m = self.local_motion().map(|motion| motion.position_m);
         let mut boats = self.boats.values().collect::<Vec<_>>();
         boats.sort_by(|first, second| {
             let first_is_local = self.player_id() == Some(first.snapshot.id.as_str());
@@ -351,7 +407,15 @@ impl MultiplayerClient {
         boats
             .into_iter()
             .filter_map(|boat| {
-                self.render_motion(&boat.snapshot.id).map(|motion| {
+                self.render_motion(&boat.snapshot.id).map(|mut motion| {
+                    if let (Some(world_geometry), Some(local_position_m)) =
+                        (self.world_geometry, local_position_m)
+                    {
+                        motion.position_m = local_position_m
+                            + Vector::from(world_geometry.minimum_image_displacement_m(
+                                (motion.position_m - local_position_m).into(),
+                            ));
+                    }
                     let mut scene = boat_scene(dinghy_parameters(), motion);
                     scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
                     if scene.is_local {
@@ -359,6 +423,7 @@ impl MultiplayerClient {
                             anchor_m: scene.hull_m[0],
                             apparent_wind_velocity_m_s: apparent_flow(
                                 procedural_match_environment(
+                                    self.world_geometry.unwrap_or_default(),
                                     match_seed,
                                     self.prediction_tick,
                                     motion.position_m,
@@ -396,7 +461,8 @@ impl MultiplayerClient {
             return;
         };
 
-        let mut prediction = SharedSimulation::new();
+        let mut prediction =
+            SharedSimulation::new_with_world_geometry(self.world_geometry.unwrap_or_default());
         let mut predicted_boats = HashMap::new();
         for player_id in visible_player_ids {
             let boat = &self.boats[player_id];
@@ -448,8 +514,12 @@ impl MultiplayerClient {
         let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
         for boat in self.predicted_boats.values() {
             let motion = self.prediction.motion(boat.index);
-            let environment =
-                procedural_match_environment(match_seed, self.prediction_tick, motion.position_m);
+            let environment = procedural_match_environment(
+                self.world_geometry.unwrap_or_default(),
+                match_seed,
+                self.prediction_tick,
+                motion.position_m,
+            );
             environments[boat.index] = environment;
             if !boat.wreck {
                 actuator_torques[boat.index] =
@@ -478,7 +548,13 @@ impl MultiplayerClient {
             self.corrections.insert(
                 player_id.clone(),
                 MotionCorrection {
-                    position_m: previous.position_m - current.position_m,
+                    position_m: Vector::from(
+                        self.world_geometry
+                            .unwrap_or_default()
+                            .minimum_image_displacement_m(
+                                (previous.position_m - current.position_m).into(),
+                            ),
+                    ),
                     velocity_m_s: previous.velocity_m_s - current.velocity_m_s,
                     angle_rad: shortest_angle(previous.angle_rad - current.angle_rad),
                     angular_velocity_rad_s: previous.angular_velocity_rad_s
@@ -507,6 +583,11 @@ impl MultiplayerClient {
         let received_at = self.snapshot_received_at_seconds[player_id];
         let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
         motion.position_m += motion.velocity_m_s * seconds;
+        motion.position_m = Vector::from(
+            self.world_geometry
+                .unwrap_or_default()
+                .wrap_position_m(motion.position_m.into()),
+        );
         motion.angle_rad += motion.angular_velocity_rad_s * seconds;
         motion.sail_angle_rad += motion.sail_angular_velocity_rad_s * seconds;
         motion.rudder_angle_rad += motion.rudder_angular_velocity_rad_s * seconds;
@@ -546,6 +627,11 @@ impl MultiplayerClient {
             motion.rudder_angle_rad += rudder_angle_rad;
             motion.rudder_angular_velocity_rad_s += rudder_angular_velocity_rad_s;
         }
+        motion.position_m = Vector::from(
+            self.world_geometry
+                .unwrap_or_default()
+                .wrap_position_m(motion.position_m.into()),
+        );
         Some(motion)
     }
 }
@@ -843,6 +929,7 @@ mod tests {
         client.accept(ServerMessage::Welcome {
             player_id: "player-1".to_owned(),
             match_seed: 42,
+            world_geometry: WorldGeometry::default(),
         });
 
         for _ in 0..10 {

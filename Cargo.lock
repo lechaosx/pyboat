@@ -1229,6 +1229,7 @@ dependencies = [
  "rapier2d",
  "serde",
  "serde_json",
+ "simulation",
  "wgpu",
 ]
 
@@ -1334,6 +1335,7 @@ version = "0.1.0"
 dependencies = [
  "postcard",
  "serde",
+ "simulation",
 ]
 
 [[package]]
@@ -1769,6 +1771,7 @@ name = "simulation"
 version = "0.1.0"
 dependencies = [
  "rapier2d",
+ "serde",
 ]
 
 [[package]]

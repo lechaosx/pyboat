@@ -1,28 +1,31 @@
 //! Procedural transcendental functions use `libm` so native and WebAssembly
 //! builds do not silently diverge through platform math implementations.
 
+use rapier2d::prelude::Vector;
 use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
-    MotionIntent, computed_maximum_yaw_rate_rad_s, surface_control_input,
+    MotionIntent, WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input,
     surface_target_control_torques, yaw_rate_move_control,
 };
-use rapier2d::prelude::Vector;
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
 const UPPER_WIND_SCALE: f32 = 1.12;
-const THERMAL_WIND_SCALE_M2_S_C: f32 = 12_000.0;
+const THERMAL_WIND_SCALE_M2_S_C: f32 = 2_000.0;
 const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
 const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
 const SURFACE_AIR_MASS_COUPLING_500_HPA: f32 = 0.45;
-const INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C: f32 = 6.0;
+const INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C: f32 = 19.0;
 const BASE_WEATHER_TRANSPORT_SPEED_M_S: f64 = 6.0;
 const WEATHER_TRANSPORT_DIRECTION_SPREAD_RAD: f64 = std::f64::consts::PI / 720.0;
 const SURFACE_AIR_TEMPERATURE_NOISE_SALT: u64 = 0x4528_21e6_38d0_1377;
 const AIR_TEMPERATURE_500_HPA_NOISE_SALT: u64 = 0xbe54_66cf_34e9_0c6c;
 const WATER_VAPOR_NOISE_SALT: u64 = 0x082e_fa98_ec4e_6c89;
+// Four-dimensional slices need a lower field gain to preserve the calibrated
+// clear/cloudy/storm occupancy of the derived weather transfer functions.
+const WEATHER_NOISE_SCALE: f64 = 0.75;
 const SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE: f64 = 0.9;
 const AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE: f64 = 1.15;
 const WATER_VAPOR_TRANSPORT_SPEED_SCALE: f64 = 1.0;
@@ -37,6 +40,12 @@ const TERRAIN_LAND_RELIEF_OCTAVE_COUNT: usize = 6;
 const TERRAIN_LAND_MICRO_RELIEF_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REEF_OCTAVE_COUNT: usize = 6;
 const TERRAIN_OUTER_REEF_OCTAVE_COUNT: usize = 8;
+const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: usize = 3;
+const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: usize = 3;
+const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: usize = 3;
+const TIDE_OCTAVE_COUNT: usize = 3;
+const TIDE_CIRCLE_OCTAVE_COUNT: usize = 3;
+const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: usize = 0;
 // OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
 // features when a field is thresholded. Keep values and order synchronized with
 // `scene.wgsl` so its hash selects the same gradient.
@@ -66,19 +75,65 @@ const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
     (0.9238795, -0.3826834),
     (0.9914449, -0.1305262),
 ];
-const VALUE_NOISE_AXES: [(f64, f64); 8] = [
-    (1.0, 0.0),
-    (0.707_106_77, 0.707_106_77),
-    (0.0, 1.0),
-    (-0.707_106_77, 0.707_106_77),
-    (-1.0, 0.0),
-    (-0.707_106_77, -0.707_106_77),
-    (0.0, -1.0),
-    (0.707_106_77, -0.707_106_77),
-];
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
 const WORLD_YEAR_DAYS: f64 = 360.0;
 const WORLD_LUNAR_CYCLE_DAYS: f64 = 28.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeriodicNoiseBasis {
+    PeriodicTriangularSimplex2d,
+    CircleEmbeddedSimplex4d,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PeriodicNoiseOctaveDiagnostic {
+    pub basis: PeriodicNoiseBasis,
+    pub requested_wavelength_m: f32,
+    pub effective_wavelength_x_m: f32,
+    pub effective_wavelength_y_m: f32,
+    pub relative_error_x: f32,
+    pub relative_error_y: f32,
+}
+
+pub fn periodic_noise_octave_diagnostic(
+    world_geometry: WorldGeometry,
+    basis: PeriodicNoiseBasis,
+    requested_wavelength_m: f32,
+) -> PeriodicNoiseOctaveDiagnostic {
+    let (effective_wavelength_x_m, effective_wavelength_y_m) = match basis {
+        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => {
+            periodic_simplex_effective_wavelengths(world_geometry, requested_wavelength_m)
+        }
+        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => {
+            (requested_wavelength_m, requested_wavelength_m)
+        }
+    };
+    PeriodicNoiseOctaveDiagnostic {
+        basis,
+        requested_wavelength_m,
+        effective_wavelength_x_m,
+        effective_wavelength_y_m,
+        relative_error_x: (effective_wavelength_x_m / requested_wavelength_m - 1.0).abs(),
+        relative_error_y: (effective_wavelength_y_m / requested_wavelength_m - 1.0).abs(),
+    }
+}
+
+fn periodic_simplex_effective_wavelengths(
+    world_geometry: WorldGeometry,
+    requested_wavelength_m: f32,
+) -> (f32, f32) {
+    let horizontal_modes = (world_geometry.width_m()
+        / (std::f32::consts::SQRT_2 * requested_wavelength_m))
+        .round()
+        .max(1.0);
+    let vertical_modes = (world_geometry.height_m() * libm::sqrtf(1.5) / requested_wavelength_m)
+        .round()
+        .max(1.0);
+    (
+        world_geometry.width_m() / (std::f32::consts::SQRT_2 * horizontal_modes),
+        world_geometry.height_m() * libm::sqrtf(1.5) / vertical_modes,
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AtmospherePrimary {
@@ -157,6 +212,37 @@ struct TemperatureSample {
     gradient_per_m: Vector,
 }
 
+#[derive(Clone, Copy)]
+struct WeatherNoiseParameters {
+    salt: u64,
+    transport_speed_scale: f64,
+    wavelength_m: f64,
+    octave_count: usize,
+    circle_octave_count: usize,
+}
+
+const SURFACE_AIR_TEMPERATURE_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
+    salt: SURFACE_AIR_TEMPERATURE_NOISE_SALT,
+    transport_speed_scale: SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
+    wavelength_m: 65_536.0,
+    octave_count: 4,
+    circle_octave_count: 4,
+};
+const AIR_TEMPERATURE_500_HPA_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
+    salt: AIR_TEMPERATURE_500_HPA_NOISE_SALT,
+    transport_speed_scale: AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
+    wavelength_m: 65_536.0,
+    octave_count: 4,
+    circle_octave_count: 4,
+};
+const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
+    salt: WATER_VAPOR_NOISE_SALT,
+    transport_speed_scale: WATER_VAPOR_TRANSPORT_SPEED_SCALE,
+    wavelength_m: 3584.0,
+    octave_count: 5,
+    circle_octave_count: 4,
+};
+
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
     let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
     let solar_longitude = std::f64::consts::TAU * f64::from(conditions.season_phase);
@@ -221,11 +307,8 @@ pub fn current_500_hpa_air_temperature_c(
 }
 
 fn seasonal_latitude_factor(geographic_latitude_degrees: f32) -> f32 {
-    let magnitude = smoothstep_range(
-        0.0,
-        45.0,
-        f64::from(geographic_latitude_degrees.abs()),
-    ) as f32;
+    let magnitude =
+        smoothstep_range(0.0, 45.0, f64::from(geographic_latitude_degrees.abs())) as f32;
     if geographic_latitude_degrees < 0.0 {
         -magnitude
     } else {
@@ -243,12 +326,17 @@ pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> 
     0.5 * tide.reference_range_m * ((lunar_tide + solar_tide) / 1.46) as f32
 }
 
-pub fn world_celestial_conditions(world_time_seconds: f64) -> CelestialConditions {
+pub fn world_celestial_conditions(
+    world_geometry: WorldGeometry,
+    world_time_seconds: f64,
+    position_m: Vector,
+) -> CelestialConditions {
+    let global_day_phase = (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32;
     CelestialConditions {
-        geographic_latitude_degrees: 45.0,
+        geographic_latitude_degrees: world_geometry.latitude_degrees(position_m.y),
         season_phase: (0.2521 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
-        day_phase: (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32,
+        day_phase: world_geometry.local_solar_phase(global_day_phase, position_m.x),
         moon_phase: (0.25 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_CYCLE_DAYS))
             .rem_euclid(1.0) as f32,
     }
@@ -262,13 +350,29 @@ pub fn world_climate_conditions() -> ClimateConditions {
     }
 }
 
-pub fn procedural_tidal_conditions(match_seed: u64, position_m: Vector) -> TidalConditions {
+pub fn procedural_tidal_conditions(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+) -> TidalConditions {
     // Tide response and lag occupy independent seed domains; sharing terrain or
     // hash-mixer constants would couple unrelated fields at aligned coordinates.
-    let response =
-        terrain_fractal_noise(match_seed ^ 0x6a09_e667_f3bc_c909, position_m, 131_072.0, 3) as f32;
-    let lag =
-        terrain_fractal_noise(match_seed ^ 0xbb67_ae85_84ca_a73b, position_m, 131_072.0, 3) as f32;
+    let response = terrain_fractal_noise(
+        world_geometry,
+        match_seed ^ 0x6a09_e667_f3bc_c909,
+        position_m,
+        131_072.0,
+        TIDE_OCTAVE_COUNT,
+        TIDE_CIRCLE_OCTAVE_COUNT,
+    ) as f32;
+    let lag = terrain_fractal_noise(
+        world_geometry,
+        match_seed ^ 0xbb67_ae85_84ca_a73b,
+        position_m,
+        131_072.0,
+        TIDE_OCTAVE_COUNT,
+        TIDE_CIRCLE_OCTAVE_COUNT,
+    ) as f32;
     TidalConditions {
         reference_range_m: 1.25 + 0.75 * response,
         phase_offset: 0.08 * lag,
@@ -276,27 +380,31 @@ pub fn procedural_tidal_conditions(match_seed: u64, position_m: Vector) -> Tidal
 }
 
 pub fn procedural_water_height_m(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     world_time_seconds: f64,
     position_m: Vector,
 ) -> f32 {
     tide_height_m(
-        procedural_tidal_conditions(match_seed, position_m),
-        world_celestial_conditions(world_time_seconds),
+        procedural_tidal_conditions(world_geometry, match_seed, position_m),
+        world_celestial_conditions(world_geometry, world_time_seconds, position_m),
     )
 }
 
 pub fn procedural_water_depth_m(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     world_time_seconds: f64,
     position_m: Vector,
 ) -> f32 {
-    (procedural_water_height_m(match_seed, world_time_seconds, position_m)
+    let geographic_latitude_degrees = world_geometry.latitude_degrees(position_m.y);
+    (procedural_water_height_m(world_geometry, match_seed, world_time_seconds, position_m)
         - procedural_solid_surface_elevation_m(
+            world_geometry,
             match_seed,
             position_m,
             14.0,
-            world_celestial_conditions(world_time_seconds).geographic_latitude_degrees,
+            geographic_latitude_degrees,
         ))
     .max(0.0)
 }
@@ -455,57 +563,83 @@ pub fn match_environment() -> Environment {
     }
 }
 
-pub fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
-    let open_wind = procedural_unsheltered_wind_velocity_m_s(match_seed, tick, position_m);
+pub fn procedural_match_environment(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> Environment {
+    let open_wind =
+        procedural_unsheltered_wind_velocity_m_s(world_geometry, match_seed, tick, position_m);
     Environment {
-        true_wind_velocity_m_s: land_sheltered_wind(match_seed, position_m, open_wind),
+        true_wind_velocity_m_s: land_sheltered_wind(
+            world_geometry,
+            match_seed,
+            position_m,
+            open_wind,
+        ),
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: procedural_water_depth_m(match_seed, tick as f64 / 60.0, position_m),
+        water_depth_m: procedural_water_depth_m(
+            world_geometry,
+            match_seed,
+            tick as f64 / 60.0,
+            position_m,
+        ),
     }
 }
 
-pub fn procedural_weather(match_seed: u64, tick: u64, position_m: Vector) -> ProceduralWeather {
+pub fn procedural_weather(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> ProceduralWeather {
     derive_weather(
-        procedural_atmosphere_primary(match_seed, tick, position_m),
+        procedural_atmosphere_primary(world_geometry, match_seed, tick, position_m),
         world_climate_conditions(),
-        world_celestial_conditions(tick as f64 * f64::from(DT_SECONDS)),
+        world_celestial_conditions(
+            world_geometry,
+            tick as f64 * f64::from(DT_SECONDS),
+            position_m,
+        ),
     )
 }
 
 pub fn procedural_atmosphere_primary(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
 ) -> AtmospherePrimary {
-    let pressure = procedural_pressure_sample(match_seed, tick, position_m);
+    let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
     let surface_temperature =
-        sample_surface_air_temperature_anomaly_c(match_seed, tick, position_m);
+        sample_surface_air_temperature_anomaly_c(world_geometry, match_seed, tick, position_m);
     let surface_air_temperature_anomaly_c = surface_temperature.value;
     let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(
         world_climate_conditions(),
-        world_celestial_conditions(tick as f64 * f64::from(DT_SECONDS)),
+        world_celestial_conditions(
+            world_geometry,
+            tick as f64 * f64::from(DT_SECONDS),
+            position_m,
+        ),
     ) + SURFACE_AIR_MASS_COUPLING_500_HPA
         * surface_air_temperature_anomaly_c
         + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C
             * procedural_weather_noise(
+                world_geometry,
                 match_seed,
                 tick,
                 position_m,
-                AIR_TEMPERATURE_500_HPA_NOISE_SALT,
-                AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
-                65_536.0,
-                4,
+                AIR_TEMPERATURE_500_HPA_NOISE,
             ) as f32;
-    let water_vapor_g_kg = (8.5
-        + 8.5
+    let water_vapor_g_kg = (7.5
+        + 4.0
             * procedural_weather_noise(
+                world_geometry,
                 match_seed,
                 tick,
                 position_m,
-                WATER_VAPOR_NOISE_SALT,
-                WATER_VAPOR_TRANSPORT_SPEED_SCALE,
-                3584.0,
-                5,
+                WATER_VAPOR_NOISE,
             ) as f32)
         .clamp(1.0, 14.0);
 
@@ -583,18 +717,17 @@ pub fn derive_weather(
 }
 
 fn sample_surface_air_temperature_anomaly_c(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
 ) -> TemperatureSample {
     let noise = procedural_weather_noise_sample(
+        world_geometry,
         match_seed,
         tick,
         position_m,
-        SURFACE_AIR_TEMPERATURE_NOISE_SALT,
-        SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
-        65_536.0,
-        4,
+        SURFACE_AIR_TEMPERATURE_NOISE,
     );
     TemperatureSample {
         value: 13.0 * noise.value as f32,
@@ -616,23 +749,31 @@ fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {
         / normalization
 }
 
-pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+pub fn procedural_terrain_elevation_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+) -> f32 {
     // Keep this composition synchronized with `procedural_terrain_sample` in
     // `crates/browser/src/scene.wgsl`: Rust supplies physical depth while WGSL
     // renders the same shoreline.
     let cluster = terrain_simplex_fractal_noise(
+        world_geometry,
         match_seed ^ 0xa076_1d64_78bd_642f,
         position_m,
         8192.0,
         TERRAIN_CLUSTER_OCTAVE_COUNT,
         0.5,
+        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     ) as f64;
     let island = terrain_simplex_fractal_noise(
+        world_geometry,
         match_seed ^ 0xe703_7ed1_a0b4_28db,
         position_m,
         1536.0,
         TERRAIN_ISLAND_OCTAVE_COUNT,
         0.35,
+        TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     ) as f64;
     let local_density = 0.78 * cluster + 0.22 * island;
     let unscaled_elevation_m = 18.0 * (local_density - 0.30);
@@ -640,40 +781,43 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
     let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
+    let (reef_ruggedness, coastal_rock_amount) =
+        if base_elevation_m > -32.0 && base_elevation_m < 4.0 {
+            (
+                smoothstep_range(
+                    -0.25,
+                    0.25,
+                    terrain_simplex_fractal_noise(
+                        world_geometry,
+                        match_seed ^ 0xbf58_476d_1ce4_e5b9,
+                        position_m,
+                        2048.0,
+                        3,
+                        0.5,
+                        TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
+                    ) as f64,
+                ),
+                smoothstep_range(
+                    -0.25,
+                    0.35,
+                    terrain_simplex_fractal_noise(
+                        world_geometry,
+                        match_seed ^ 0x9e37_79b9_7f4a_7c15,
+                        position_m,
+                        1536.0,
+                        3,
+                        0.5,
+                        TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
+                    ) as f64,
+                ),
+            )
+        } else {
+            (0.0, 0.0)
+        };
     let base_depth_m = -base_elevation_m;
-    let (reef_ruggedness, coastal_rock_amount) = if base_elevation_m > -32.0
-        && base_elevation_m < 4.0
-    {
-        (
-            smoothstep_range(
-                -0.25,
-                0.25,
-                terrain_simplex_fractal_noise(
-                    match_seed ^ 0xbf58_476d_1ce4_e5b9,
-                    position_m,
-                    2048.0,
-                    3,
-                    0.5,
-                ) as f64,
-            ),
-            smoothstep_range(
-                -0.25,
-                0.35,
-                terrain_simplex_fractal_noise(
-                    match_seed ^ 0x9e37_79b9_7f4a_7c15,
-                    position_m,
-                    1536.0,
-                    3,
-                    0.5,
-                ) as f64,
-            ),
-        )
-    } else {
-        (0.0, 0.0)
-    };
     let ocean_floor_depth_m = 3_000.0 + 3_000.0 * trench_depth;
     let positive_base_depth_m = base_depth_m.max(0.0);
-    let shaped_depth_m = base_depth_m + 0.03 * positive_base_depth_m.powi(4);
+    let shaped_depth_m = base_depth_m + 0.015 * positive_base_depth_m.powi(4);
     let mut terrain_elevation_m = -shaped_depth_m.min(ocean_floor_depth_m);
     let land_detail_mask = smoothstep_range(4.0, 12.0, base_elevation_m);
     if land_detail_mask > 0.0 {
@@ -681,19 +825,23 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             -0.25,
             0.25,
             terrain_simplex_fractal_noise(
+                world_geometry,
                 match_seed ^ 0xbf58_476d_1ce4_e5b9,
                 position_m,
                 2048.0,
                 3,
                 0.5,
+                TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
             ) as f64,
         );
         let land_detail = terrain_simplex_fractal_noise(
+            world_geometry,
             match_seed ^ 0x2545_f491_4f6c_dd1d,
             position_m,
             256.0,
             TERRAIN_LAND_RELIEF_OCTAVE_COUNT,
             0.65,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         ) as f64;
         let ridged_detail = 1.0 - 2.0 * land_detail.abs();
         let ridge_blend = smoothstep_range(0.35, 0.75, land_ruggedness);
@@ -703,11 +851,13 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         let land_micro_relief_amount = smoothstep_range(0.40, 0.70, land_ruggedness);
         if land_micro_relief_amount > 0.0 {
             let land_micro_relief = terrain_simplex_fractal_noise(
+                world_geometry,
                 match_seed ^ 0x3c6e_f372_fe94_f82b,
                 position_m,
                 4.0,
                 TERRAIN_LAND_MICRO_RELIEF_OCTAVE_COUNT,
                 0.6,
+                FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
             ) as f64;
             let ridged_micro_relief = 1.0 - 2.0 * land_micro_relief.abs();
             let shaped_micro_relief = lerp(land_micro_relief, ridged_micro_relief, ridge_blend);
@@ -728,24 +878,28 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     }
     let shoal = if seabed_mask > 0.0 {
         terrain_simplex_fractal_noise(
+            world_geometry,
             match_seed ^ 0xd1b5_4a32_d192_ed03,
             position_m,
             256.0,
             TERRAIN_SHOAL_OCTAVE_COUNT,
             0.5,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         ) as f64
     } else {
         0.0
     };
-    let coastal_rock_relief_amount = smoothstep_range(0.45, 0.65, coastal_rock_amount);
+    let coastal_rock_relief_amount = smoothstep_range(0.42, 0.60, coastal_rock_amount);
     let coastal_detail_mask = seabed_mask.max(rock_mask);
     let reef = if coastal_detail_mask > 0.0 && coastal_rock_relief_amount > 0.0 {
         terrain_simplex_fractal_noise(
+            world_geometry,
             match_seed ^ 0x5899_65cc_7537_4cc3,
             position_m,
             32.0,
             TERRAIN_REEF_OCTAVE_COUNT,
             0.55,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         ) as f64
     } else {
         0.0
@@ -753,11 +907,13 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
     let reef_peak = smoothstep_range(0.72, 0.90, reef);
     let outer_reef = if outer_reef_mask > 0.0 && coastal_rock_relief_amount > 0.0 {
         terrain_simplex_fractal_noise(
+            world_geometry,
             match_seed ^ 0x8ebc_6af0_9c88_c6e3,
             position_m,
             128.0,
             TERRAIN_OUTER_REEF_OCTAVE_COUNT,
             0.6,
+            FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         ) as f64
     } else {
         0.0
@@ -768,7 +924,7 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
         lerp(outer_reef, ridged_reef, reef_ridge_blend) - 0.3 * reef_ridge_blend;
     (terrain_elevation_m
         + 0.25 * seabed_mask * shoal
-        + 1.5
+        + 1.6
             * coastal_detail_mask
             * coastal_rock_relief_amount
             * (0.05 + 1.55 * reef_ruggedness)
@@ -781,23 +937,31 @@ pub fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f3
             * shaped_outer_reef) as f32
 }
 
-fn broad_landform_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+fn broad_landform_elevation_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+) -> f32 {
     // Keep this synchronized with `broad_landform_elevation_m` in `scene.wgsl`.
     // Wind shelter and long shadows need island-scale blockers, not the complete
     // metre-scale terrain spectrum used for depth and grounding.
     let cluster = terrain_simplex_fractal_noise(
+        world_geometry,
         match_seed ^ 0xa076_1d64_78bd_642f,
         position_m,
         8192.0,
         TERRAIN_CLUSTER_OCTAVE_COUNT,
         0.5,
+        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     ) as f64;
     let island = terrain_simplex_fractal_noise(
+        world_geometry,
         match_seed ^ 0xe703_7ed1_a0b4_28db,
         position_m,
         1536.0,
         TERRAIN_ISLAND_OCTAVE_COUNT,
         0.35,
+        TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     ) as f64;
     let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
@@ -806,12 +970,14 @@ fn broad_landform_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
 }
 
 pub fn procedural_solid_surface_elevation_m(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     position_m: Vector,
     annual_mean_air_temperature_c: f32,
     geographic_latitude_degrees: f32,
 ) -> f32 {
-    let bedrock_elevation_m = procedural_terrain_elevation_m(match_seed, position_m);
+    let bedrock_elevation_m =
+        procedural_terrain_elevation_m(world_geometry, match_seed, position_m);
     let annual_temperature_c =
         annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
     let cold = 1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_c)) as f32;
@@ -830,78 +996,112 @@ pub fn procedural_solid_surface_elevation_m(
         .max(bedrock_elevation_m + ice_amount * (ice_surface_m - bedrock_elevation_m))
 }
 
-pub fn procedural_cloud_cover(match_seed: u64, tick: u64, position_m: Vector) -> f32 {
-    procedural_weather(match_seed, tick, position_m).cloudiness
+pub fn procedural_cloud_cover(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> f32 {
+    procedural_weather(world_geometry, match_seed, tick, position_m).cloudiness
 }
 
 fn procedural_weather_noise(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
-    salt: u64,
-    transport_speed_scale: f64,
-    wavelength_m: f64,
-    octave_count: usize,
+    parameters: WeatherNoiseParameters,
 ) -> f64 {
-    let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m, salt, transport_speed_scale);
-    terrain_fractal_noise_at(
-        match_seed ^ salt,
-        transported_x_m,
-        transported_y_m,
-        wavelength_m,
-        octave_count,
-    )
+    let (transported_x_m, transported_y_m) = transported_weather_position_m(
+        world_geometry,
+        match_seed,
+        tick,
+        position_m,
+        parameters.salt,
+        parameters.transport_speed_scale,
+    );
+    WEATHER_NOISE_SCALE
+        * terrain_fractal_noise_at(
+            world_geometry,
+            match_seed ^ parameters.salt,
+            transported_x_m,
+            transported_y_m,
+            parameters.wavelength_m,
+            parameters.octave_count,
+            parameters.circle_octave_count,
+        )
 }
 
 fn procedural_weather_noise_sample(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
-    salt: u64,
-    transport_speed_scale: f64,
-    wavelength_m: f64,
-    octave_count: usize,
+    parameters: WeatherNoiseParameters,
 ) -> ScalarNoiseSample {
-    let (transported_x_m, transported_y_m) =
-        transported_weather_position_m(match_seed, tick, position_m, salt, transport_speed_scale);
-    terrain_fractal_noise_sample(
-        match_seed ^ salt,
+    let (transported_x_m, transported_y_m) = transported_weather_position_m(
+        world_geometry,
+        match_seed,
+        tick,
+        position_m,
+        parameters.salt,
+        parameters.transport_speed_scale,
+    );
+    let mut sample = terrain_fractal_noise_sample(
+        world_geometry,
+        match_seed ^ parameters.salt,
         transported_x_m,
         transported_y_m,
-        wavelength_m,
-        octave_count,
-    )
+        parameters.wavelength_m,
+        parameters.octave_count,
+        parameters.circle_octave_count,
+    );
+    sample.value *= WEATHER_NOISE_SCALE;
+    sample.gradient_x_per_m *= WEATHER_NOISE_SCALE;
+    sample.gradient_y_per_m *= WEATHER_NOISE_SCALE;
+    sample
 }
 
 fn terrain_fractal_noise(
+    world_geometry: WorldGeometry,
     field_seed: u64,
     position_m: Vector,
     wavelength_m: f64,
     octave_count: usize,
+    circle_octave_count: usize,
 ) -> f64 {
     terrain_fractal_noise_at(
+        world_geometry,
         field_seed,
         f64::from(position_m.x),
         f64::from(position_m.y),
         wavelength_m,
         octave_count,
+        circle_octave_count,
     )
 }
 
 fn terrain_simplex_fractal_noise(
+    world_geometry: WorldGeometry,
     field_seed: u64,
     position_m: Vector,
     mut wavelength_m: f32,
     octave_count: usize,
     persistence: f32,
+    circle_octave_count: usize,
 ) -> f32 {
     let mut value = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
     for octave in 0..octave_count {
         let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
-        value += amplitude * terrain_simplex_noise(octave_seed, position_m, wavelength_m);
+        let basis = if octave < circle_octave_count {
+            PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+        } else {
+            PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+        };
+        value += amplitude
+            * terrain_simplex_noise(world_geometry, octave_seed, position_m, wavelength_m, basis);
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
@@ -910,6 +1110,24 @@ fn terrain_simplex_fractal_noise(
 }
 
 fn terrain_simplex_noise(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
+    position_m: Vector,
+    wavelength_m: f32,
+    basis: PeriodicNoiseBasis,
+) -> f32 {
+    match basis {
+        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => {
+            terrain_simplex_noise_2d(world_geometry, field_seed, position_m, wavelength_m)
+        }
+        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => {
+            terrain_simplex_noise_4d(world_geometry, field_seed, position_m, wavelength_m).0
+        }
+    }
+}
+
+fn terrain_simplex_noise_2d(
+    world_geometry: WorldGeometry,
     field_seed: u64,
     position_m: Vector,
     wavelength_m: f32,
@@ -918,7 +1136,24 @@ fn terrain_simplex_noise(
     const UNSKEW: f32 = 0.211_324_87;
     const NORMALIZATION: f32 = 70.0;
 
-    let scaled = position_m / wavelength_m;
+    let wrapped_m = world_geometry.wrap_position_m([position_m.x, position_m.y]);
+    let horizontal_modes = ((f64::from(world_geometry.width_m())
+        / (f64::from(wavelength_m) * std::f64::consts::SQRT_2))
+        .round()
+        .clamp(1.0, f64::from(i32::MAX / 4))) as i32;
+    let vertical_modes = ((f64::from(world_geometry.height_m()) * libm::sqrt(1.5)
+        / f64::from(wavelength_m))
+    .round()
+    .clamp(1.0, f64::from(i32::MAX / 4))) as i32;
+    let horizontal_phase = wrapped_m[0].rem_euclid(world_geometry.width_m())
+        * horizontal_modes as f32
+        / world_geometry.width_m();
+    let vertical_phase = wrapped_m[1].rem_euclid(world_geometry.height_m()) * vertical_modes as f32
+        / (world_geometry.height_m() * 1.732_050_8);
+    let scaled = Vector::new(
+        horizontal_phase + vertical_phase,
+        -horizontal_phase + vertical_phase,
+    );
     let skew = (scaled.x + scaled.y) * SKEW;
     let cell_x = libm::floorf(scaled.x + skew) as i32;
     let cell_y = libm::floorf(scaled.y + skew) as i32;
@@ -946,7 +1181,13 @@ fn terrain_simplex_noise(
         if attenuation <= 0.0 {
             continue;
         }
-        let lattice_gradient = terrain_simplex_lattice_gradient(field_seed, lattice_x, lattice_y);
+        let lattice_gradient = terrain_simplex_lattice_gradient(
+            field_seed,
+            lattice_x,
+            lattice_y,
+            horizontal_modes,
+            vertical_modes,
+        );
         let ramp = lattice_gradient.dot(offset);
         let attenuation_squared = attenuation * attenuation;
         let attenuation_fourth = attenuation_squared * attenuation_squared;
@@ -956,83 +1197,196 @@ fn terrain_simplex_noise(
     NORMALIZATION * value
 }
 
-fn terrain_simplex_lattice_gradient(field_seed: u64, x: i32, y: i32) -> Vector {
+fn terrain_simplex_noise_4d(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
+    position_m: Vector,
+    wavelength_m: f32,
+) -> (f32, Vector) {
+    const SKEW: f32 = 0.309_017;
+    const UNSKEW: f32 = 0.138_196_6;
+    // Matches the portable 2D kernel's RMS value over representative seeds.
+    const NORMALIZATION: f32 = 33.4;
+
+    let wrapped_m = world_geometry.wrap_position_m([position_m.x, position_m.y]);
+    let angle_x = std::f32::consts::TAU * wrapped_m[0] / world_geometry.width_m();
+    let angle_y = std::f32::consts::TAU * wrapped_m[1] / world_geometry.height_m();
+    let (sin_x, cos_x) = (libm::sinf(angle_x), libm::cosf(angle_x));
+    let (sin_y, cos_y) = (libm::sinf(angle_y), libm::cosf(angle_y));
+    let circle_x = world_geometry.width_m() / (std::f32::consts::TAU * wavelength_m);
+    let circle_y = world_geometry.height_m() / (std::f32::consts::TAU * wavelength_m);
+    let point = [
+        circle_x * cos_x,
+        circle_x * sin_x,
+        circle_y * cos_y,
+        circle_y * sin_y,
+    ];
+    let skew = point.iter().sum::<f32>() * SKEW;
+    let lattice = point.map(|coordinate| libm::floorf(coordinate + skew) as i32);
+    let unskew = lattice.iter().sum::<i32>() as f32 * UNSKEW;
+    let first =
+        std::array::from_fn::<_, 4, _>(|axis| point[axis] - (lattice[axis] as f32 - unskew));
+    let mut rank = [0_u8; 4];
+    for first_axis in 0..4 {
+        for second_axis in first_axis + 1..4 {
+            if first[first_axis] > first[second_axis] {
+                rank[first_axis] += 1;
+            } else {
+                rank[second_axis] += 1;
+            }
+        }
+    }
+
+    let mut value = 0.0;
+    let mut input_gradient = [0.0; 4];
+    for vertex in 0..5 {
+        let threshold = 4_u8.saturating_sub(vertex as u8);
+        let offset_lattice = rank.map(|axis_rank| i32::from(vertex > 0 && axis_rank >= threshold));
+        let offset = std::array::from_fn::<_, 4, _>(|axis| {
+            first[axis] - offset_lattice[axis] as f32 + vertex as f32 * UNSKEW
+        });
+        let attenuation = 0.6
+            - offset
+                .iter()
+                .map(|component| component * component)
+                .sum::<f32>();
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let gradient = terrain_simplex_lattice_gradient_4d(
+            field_seed,
+            std::array::from_fn(|axis| lattice[axis] + offset_lattice[axis]),
+        );
+        let ramp = (0..4)
+            .map(|axis| gradient[axis] * offset[axis])
+            .sum::<f32>();
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        value += attenuation_fourth * ramp;
+        for axis in 0..4 {
+            input_gradient[axis] +=
+                attenuation_fourth * gradient[axis] - 8.0 * attenuation_cubed * ramp * offset[axis];
+        }
+    }
+
+    let gradient_per_m = Vector::new(
+        NORMALIZATION * (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
+        NORMALIZATION * (-sin_y * input_gradient[2] + cos_y * input_gradient[3]) / wavelength_m,
+    );
+    (NORMALIZATION * value, gradient_per_m)
+}
+
+fn terrain_simplex_lattice_gradient_4d(field_seed: u64, lattice: [i32; 4]) -> [f32; 4] {
     let key = field_seed
-        ^ (x as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        ^ (y as i64 as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        ^ (lattice[0] as i64 as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (lattice[1] as i64 as u64).wrapping_mul(0xe703_7ed1_a0b4_28db)
+        ^ (lattice[2] as i64 as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ (lattice[3] as i64 as u64).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let hash = wind_hash(key) as u32;
+    let zero_axis = (hash & 3) as usize;
+    let mut gradient = [0.0; 4];
+    let mut sign_bit = 2;
+    for (axis, component) in gradient.iter_mut().enumerate() {
+        if axis != zero_axis {
+            *component = if hash & (1 << sign_bit) == 0 {
+                1.0
+            } else {
+                -1.0
+            };
+            sign_bit += 1;
+        }
+    }
+    gradient
+}
+
+fn terrain_simplex_lattice_gradient(
+    field_seed: u64,
+    x: i32,
+    y: i32,
+    horizontal_modes: i32,
+    vertical_modes: i32,
+) -> Vector {
+    // x-y and x+y are the rectangular axes of the triangular lattice. Integer
+    // mode counts therefore turn each world period into an exact lattice shift.
+    let horizontal_lattice =
+        (i64::from(x) - i64::from(y)).rem_euclid(2 * i64::from(horizontal_modes));
+    let vertical_lattice = (i64::from(x) + i64::from(y)).rem_euclid(2 * i64::from(vertical_modes));
+    let key = field_seed
+        ^ (horizontal_lattice as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (vertical_lattice as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
     let index = (wind_hash(key) as u32 % SIMPLEX_GRADIENT_DIRECTIONS.len() as u32) as usize;
     let (gradient_x, gradient_y) = SIMPLEX_GRADIENT_DIRECTIONS[index];
     Vector::new(gradient_x, gradient_y)
 }
 
 fn terrain_fractal_noise_at(
+    world_geometry: WorldGeometry,
     field_seed: u64,
     position_x_m: f64,
     position_y_m: f64,
     mut wavelength_m: f64,
     octave_count: usize,
+    circle_octave_count: usize,
 ) -> f64 {
     let mut noise = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
-    let (mut axis_x, mut axis_y) =
-        VALUE_NOISE_AXES[(wind_hash(field_seed) as usize) & (VALUE_NOISE_AXES.len() - 1)];
     for octave in 0..octave_count {
-        let rotated_x_m = axis_x * position_x_m + axis_y * position_y_m;
-        let rotated_y_m = -axis_y * position_x_m + axis_x * position_y_m;
         noise += amplitude
-            * terrain_value_noise_at(
+            * hybrid_simplex_noise_sample_f64(
+                world_geometry,
                 field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-                rotated_x_m,
-                rotated_y_m,
+                position_x_m,
+                position_y_m,
                 wavelength_m,
-            );
+                if octave < circle_octave_count {
+                    PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+                } else {
+                    PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+                },
+            )
+            .value;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
-        (axis_x, axis_y) = (
-            0.6 * axis_x - 0.8 * axis_y,
-            0.8 * axis_x + 0.6 * axis_y,
-        );
     }
     noise / amplitude_sum
 }
 
 fn terrain_fractal_noise_sample(
+    world_geometry: WorldGeometry,
     field_seed: u64,
     position_x_m: f64,
     position_y_m: f64,
     mut wavelength_m: f64,
     octave_count: usize,
+    circle_octave_count: usize,
 ) -> ScalarNoiseSample {
     let mut value = 0.0;
     let mut gradient_x_per_m = 0.0;
     let mut gradient_y_per_m = 0.0;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
-    let (mut axis_x, mut axis_y) =
-        VALUE_NOISE_AXES[(wind_hash(field_seed) as usize) & (VALUE_NOISE_AXES.len() - 1)];
     for octave in 0..octave_count {
-        let rotated_x_m = axis_x * position_x_m + axis_y * position_y_m;
-        let rotated_y_m = -axis_y * position_x_m + axis_x * position_y_m;
-        let sample = terrain_value_noise_sample(
+        let sample = hybrid_simplex_noise_sample_f64(
+            world_geometry,
             field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-            rotated_x_m,
-            rotated_y_m,
+            position_x_m,
+            position_y_m,
             wavelength_m,
+            if octave < circle_octave_count {
+                PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+            } else {
+                PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+            },
         );
         value += amplitude * sample.value;
-        gradient_x_per_m += amplitude
-            * (axis_x * sample.gradient_x_per_m - axis_y * sample.gradient_y_per_m);
-        gradient_y_per_m += amplitude
-            * (axis_y * sample.gradient_x_per_m + axis_x * sample.gradient_y_per_m);
+        gradient_x_per_m += amplitude * sample.gradient_x_per_m;
+        gradient_y_per_m += amplitude * sample.gradient_y_per_m;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
-        (axis_x, axis_y) = (
-            0.6 * axis_x - 0.8 * axis_y,
-            0.8 * axis_x + 0.6 * axis_y,
-        );
     }
     ScalarNoiseSample {
         value: value / amplitude_sum,
@@ -1041,67 +1395,242 @@ fn terrain_fractal_noise_sample(
     }
 }
 
-fn terrain_value_noise_at(
-    match_seed: u64,
+fn hybrid_simplex_noise_sample_f64(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
     position_x_m: f64,
     position_y_m: f64,
     wavelength_m: f64,
-) -> f64 {
-    let x = position_x_m / wavelength_m;
-    let y = position_y_m / wavelength_m;
-    let x0 = libm::floor(x) as i64;
-    let y0 = libm::floor(y) as i64;
-    let blend_x = smoothstep(x - x0 as f64);
-    let blend_y = smoothstep(y - y0 as f64);
-    let bottom = lerp(
-        terrain_lattice_value(match_seed, x0, y0),
-        terrain_lattice_value(match_seed, x0 + 1, y0),
-        blend_x,
-    );
-    let top = lerp(
-        terrain_lattice_value(match_seed, x0, y0 + 1),
-        terrain_lattice_value(match_seed, x0 + 1, y0 + 1),
-        blend_x,
-    );
-    lerp(bottom, top, blend_y)
+    basis: PeriodicNoiseBasis,
+) -> ScalarNoiseSample {
+    match basis {
+        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => periodic_simplex_noise_sample_f64(
+            world_geometry,
+            field_seed,
+            position_x_m,
+            position_y_m,
+            wavelength_m,
+        ),
+        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => circle_embedded_simplex_noise_sample_f64(
+            world_geometry,
+            field_seed,
+            position_x_m,
+            position_y_m,
+            wavelength_m,
+        ),
+    }
 }
 
-fn terrain_value_noise_sample(
-    match_seed: u64,
+fn circle_embedded_simplex_noise_sample_f64(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
     position_x_m: f64,
     position_y_m: f64,
     wavelength_m: f64,
 ) -> ScalarNoiseSample {
-    let x = position_x_m / wavelength_m;
-    let y = position_y_m / wavelength_m;
-    let x0 = libm::floor(x) as i64;
-    let y0 = libm::floor(y) as i64;
-    let fraction_x = x - x0 as f64;
-    let fraction_y = y - y0 as f64;
-    let blend_x = smoothstep(fraction_x);
-    let blend_y = smoothstep(fraction_y);
-    let bottom_left = terrain_lattice_value(match_seed, x0, y0);
-    let bottom_right = terrain_lattice_value(match_seed, x0 + 1, y0);
-    let top_left = terrain_lattice_value(match_seed, x0, y0 + 1);
-    let top_right = terrain_lattice_value(match_seed, x0 + 1, y0 + 1);
-    let bottom = lerp(bottom_left, bottom_right, blend_x);
-    let top = lerp(top_left, top_right, blend_x);
-    let blend_derivative_x_per_m = 6.0 * fraction_x * (1.0 - fraction_x) / wavelength_m;
-    let blend_derivative_y_per_m = 6.0 * fraction_y * (1.0 - fraction_y) / wavelength_m;
+    const SKEW: f64 = 0.309_016_994_374_947_45;
+    const UNSKEW: f64 = 0.138_196_601_125_010_5;
+    const NORMALIZATION: f64 = 33.4;
+
+    let width_m = f64::from(world_geometry.width_m());
+    let height_m = f64::from(world_geometry.height_m());
+    let angle_x = std::f64::consts::TAU * position_x_m.rem_euclid(width_m) / width_m;
+    let angle_y = std::f64::consts::TAU * position_y_m.rem_euclid(height_m) / height_m;
+    let (sin_x, cos_x) = (libm::sin(angle_x), libm::cos(angle_x));
+    let (sin_y, cos_y) = (libm::sin(angle_y), libm::cos(angle_y));
+    let circle_x = width_m / (std::f64::consts::TAU * wavelength_m);
+    let circle_y = height_m / (std::f64::consts::TAU * wavelength_m);
+    let point = [
+        circle_x * cos_x,
+        circle_x * sin_x,
+        circle_y * cos_y,
+        circle_y * sin_y,
+    ];
+    let skew = point.iter().sum::<f64>() * SKEW;
+    let lattice = point.map(|coordinate| libm::floor(coordinate + skew) as i64);
+    let unskew = lattice.iter().sum::<i64>() as f64 * UNSKEW;
+    let first =
+        std::array::from_fn::<_, 4, _>(|axis| point[axis] - (lattice[axis] as f64 - unskew));
+    let mut rank = [0_u8; 4];
+    for first_axis in 0..4 {
+        for second_axis in first_axis + 1..4 {
+            if first[first_axis] > first[second_axis] {
+                rank[first_axis] += 1;
+            } else {
+                rank[second_axis] += 1;
+            }
+        }
+    }
+
+    let mut value = 0.0;
+    let mut input_gradient = [0.0; 4];
+    for vertex in 0..5 {
+        let threshold = 4_u8.saturating_sub(vertex as u8);
+        let offset_lattice = rank.map(|axis_rank| i64::from(vertex > 0 && axis_rank >= threshold));
+        let offset = std::array::from_fn::<_, 4, _>(|axis| {
+            first[axis] - offset_lattice[axis] as f64 + vertex as f64 * UNSKEW
+        });
+        let attenuation = 0.6
+            - offset
+                .iter()
+                .map(|component| component * component)
+                .sum::<f64>();
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let gradient = terrain_simplex_lattice_gradient_4d_f64(
+            field_seed,
+            std::array::from_fn(|axis| lattice[axis] + offset_lattice[axis]),
+        );
+        let ramp = (0..4)
+            .map(|axis| gradient[axis] * offset[axis])
+            .sum::<f64>();
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        value += attenuation_fourth * ramp;
+        for axis in 0..4 {
+            input_gradient[axis] +=
+                attenuation_fourth * gradient[axis] - 8.0 * attenuation_cubed * ramp * offset[axis];
+        }
+    }
 
     ScalarNoiseSample {
-        value: lerp(bottom, top, blend_y),
-        gradient_x_per_m: lerp(bottom_right - bottom_left, top_right - top_left, blend_y)
-            * blend_derivative_x_per_m,
-        gradient_y_per_m: (top - bottom) * blend_derivative_y_per_m,
+        value: NORMALIZATION * value,
+        gradient_x_per_m: NORMALIZATION * (-sin_x * input_gradient[0] + cos_x * input_gradient[1])
+            / wavelength_m,
+        gradient_y_per_m: NORMALIZATION * (-sin_y * input_gradient[2] + cos_y * input_gradient[3])
+            / wavelength_m,
     }
 }
 
-fn terrain_lattice_value(match_seed: u64, x: i64, y: i64) -> f64 {
-    let key = match_seed
-        ^ (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        ^ (y as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
-    2.0 * hash_unit(key) - 1.0
+fn terrain_simplex_lattice_gradient_4d_f64(field_seed: u64, lattice: [i64; 4]) -> [f64; 4] {
+    let key = field_seed
+        ^ (lattice[0] as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (lattice[1] as u64).wrapping_mul(0xe703_7ed1_a0b4_28db)
+        ^ (lattice[2] as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ (lattice[3] as u64).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let hash = wind_hash(key) as u32;
+    let zero_axis = (hash & 3) as usize;
+    let mut gradient = [0.0; 4];
+    let mut sign_bit = 2;
+    for (axis, component) in gradient.iter_mut().enumerate() {
+        if axis != zero_axis {
+            *component = if hash & (1 << sign_bit) == 0 {
+                1.0
+            } else {
+                -1.0
+            };
+            sign_bit += 1;
+        }
+    }
+    gradient
+}
+
+fn periodic_simplex_noise_sample_f64(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
+    position_x_m: f64,
+    position_y_m: f64,
+    wavelength_m: f64,
+) -> ScalarNoiseSample {
+    const SKEW: f64 = 0.366_025_403_784_438_65;
+    const UNSKEW: f64 = 0.211_324_865_405_187_13;
+    const SQRT_3: f64 = 1.732_050_807_568_877_2;
+    const NORMALIZATION: f64 = 70.0;
+
+    let width_m = f64::from(world_geometry.width_m());
+    let height_m = f64::from(world_geometry.height_m());
+    let horizontal_modes = (width_m / (std::f64::consts::SQRT_2 * wavelength_m))
+        .round()
+        .clamp(1.0, i64::MAX as f64 / 4.0) as i64;
+    let vertical_modes = (height_m * libm::sqrt(1.5) / wavelength_m)
+        .round()
+        .clamp(1.0, i64::MAX as f64 / 4.0) as i64;
+    let horizontal_phase = position_x_m.rem_euclid(width_m) * horizontal_modes as f64 / width_m;
+    let vertical_phase =
+        position_y_m.rem_euclid(height_m) * vertical_modes as f64 / (SQRT_3 * height_m);
+    let scaled_x = horizontal_phase + vertical_phase;
+    let scaled_y = -horizontal_phase + vertical_phase;
+    let skew = (scaled_x + scaled_y) * SKEW;
+    let cell_x = libm::floor(scaled_x + skew) as i64;
+    let cell_y = libm::floor(scaled_y + skew) as i64;
+    let unskew = (cell_x + cell_y) as f64 * UNSKEW;
+    let first_offset_x = scaled_x - (cell_x as f64 - unskew);
+    let first_offset_y = scaled_y - (cell_y as f64 - unskew);
+    let (middle_x, middle_y) = if first_offset_x > first_offset_y {
+        (1_i64, 0_i64)
+    } else {
+        (0_i64, 1_i64)
+    };
+    let middle_offset_x = first_offset_x - middle_x as f64 + UNSKEW;
+    let middle_offset_y = first_offset_y - middle_y as f64 + UNSKEW;
+    let last_offset_x = first_offset_x - (1.0 - 2.0 * UNSKEW);
+    let last_offset_y = first_offset_y - (1.0 - 2.0 * UNSKEW);
+
+    let mut value = 0.0;
+    let mut gradient_scaled_x = 0.0;
+    let mut gradient_scaled_y = 0.0;
+    for (lattice_x, lattice_y, offset_x, offset_y) in [
+        (cell_x, cell_y, first_offset_x, first_offset_y),
+        (
+            cell_x + middle_x,
+            cell_y + middle_y,
+            middle_offset_x,
+            middle_offset_y,
+        ),
+        (cell_x + 1, cell_y + 1, last_offset_x, last_offset_y),
+    ] {
+        let attenuation = 0.5 - offset_x * offset_x - offset_y * offset_y;
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let gradient = periodic_simplex_lattice_gradient_f64(
+            field_seed,
+            lattice_x,
+            lattice_y,
+            horizontal_modes,
+            vertical_modes,
+        );
+        let ramp = gradient.0 * offset_x + gradient.1 * offset_y;
+        let attenuation_squared = attenuation * attenuation;
+        let attenuation_cubed = attenuation_squared * attenuation;
+        let attenuation_fourth = attenuation_squared * attenuation_squared;
+        value += attenuation_fourth * ramp;
+        gradient_scaled_x +=
+            attenuation_fourth * gradient.0 - 8.0 * attenuation_cubed * ramp * offset_x;
+        gradient_scaled_y +=
+            attenuation_fourth * gradient.1 - 8.0 * attenuation_cubed * ramp * offset_y;
+    }
+
+    let horizontal_scale_per_m = horizontal_modes as f64 / width_m;
+    let vertical_scale_per_m = vertical_modes as f64 / (SQRT_3 * height_m);
+    ScalarNoiseSample {
+        value: NORMALIZATION * value,
+        gradient_x_per_m: NORMALIZATION
+            * horizontal_scale_per_m
+            * (gradient_scaled_x - gradient_scaled_y),
+        gradient_y_per_m: NORMALIZATION
+            * vertical_scale_per_m
+            * (gradient_scaled_x + gradient_scaled_y),
+    }
+}
+
+fn periodic_simplex_lattice_gradient_f64(
+    field_seed: u64,
+    x: i64,
+    y: i64,
+    horizontal_modes: i64,
+    vertical_modes: i64,
+) -> (f64, f64) {
+    let horizontal_lattice = (x - y).rem_euclid(2 * horizontal_modes);
+    let vertical_lattice = (x + y).rem_euclid(2 * vertical_modes);
+    let key = field_seed
+        ^ (horizontal_lattice as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (vertical_lattice as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
+    let index = (wind_hash(key) as u32 % SIMPLEX_GRADIENT_DIRECTIONS.len() as u32) as usize;
+    let (gradient_x, gradient_y) = SIMPLEX_GRADIENT_DIRECTIONS[index];
+    (f64::from(gradient_x), f64::from(gradient_y))
 }
 
 fn smoothstep(value: f64) -> f64 {
@@ -1117,15 +1646,21 @@ fn lerp(first: f64, second: f64, amount: f64) -> f64 {
 }
 
 pub fn procedural_unsheltered_wind_velocity_m_s(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
 ) -> Vector {
-    let pressure = procedural_pressure_sample(match_seed, tick, position_m);
+    let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
     wind_from_pressure_gradient(pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M)
 }
 
-fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) -> PressureSample {
+fn procedural_pressure_sample(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> PressureSample {
     // Rotating the analytic gradient of one scalar potential gives coherent flow
     // without sources or sinks; `wind_from_pressure_gradient` then adds the small
     // cross-isobar component used by the surface model.
@@ -1136,6 +1671,7 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
     let mut synoptic_gradient_y_m_s = 0.0;
     for (band_index, band) in WIND_BANDS.iter().enumerate() {
         let (transported_x_m, transported_y_m) = transported_weather_position_m(
+            world_geometry,
             match_seed,
             tick,
             position_m,
@@ -1147,6 +1683,10 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
         let amplitude_m_s = WIND_WEIBULL_SCALE_M_S
             * libm::sqrt(band.variance_fraction / WIND_MODES_PER_BAND as f64);
         let wavelength_log_range = libm::log(band.maximum_wavelength_m / band.minimum_wavelength_m);
+        let width_m = f64::from(world_geometry.width_m());
+        let height_m = f64::from(world_geometry.height_m());
+        let wrapped_x_m = transported_x_m.rem_euclid(width_m);
+        let wrapped_y_m = transported_y_m.rem_euclid(height_m);
         for mode in 0..WIND_MODES_PER_BAND {
             let mode_key = band_key ^ (mode as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
             let direction_rad =
@@ -1155,21 +1695,34 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
             let wavelength_fraction = hash_unit(mode_key ^ 0x8ebc_6af0_9c88_c6e3);
             let wavelength_m =
                 band.minimum_wavelength_m * libm::exp(wavelength_log_range * wavelength_fraction);
+            let mut mode_x = libm::round(direction_x * width_m / wavelength_m) as i64;
+            let mut mode_y = libm::round(direction_y * height_m / wavelength_m) as i64;
+            if mode_x == 0 && mode_y == 0 {
+                if direction_x.abs() >= direction_y.abs() {
+                    mode_x = if direction_x < 0.0 { -1 } else { 1 };
+                } else {
+                    mode_y = if direction_y < 0.0 { -1 } else { 1 };
+                }
+            }
+            let frequency_x_per_m = mode_x as f64 / width_m;
+            let frequency_y_per_m = mode_y as f64 / height_m;
+            let spatial_frequency_per_m = libm::hypot(frequency_x_per_m, frequency_y_per_m);
+            let direction_x = frequency_x_per_m / spatial_frequency_per_m;
+            let direction_y = frequency_y_per_m / spatial_frequency_per_m;
             let phase_rad = std::f64::consts::TAU
-                * ((transported_x_m * direction_x + transported_y_m * direction_y) / wavelength_m);
+                * (wrapped_x_m * frequency_x_per_m + wrapped_y_m * frequency_y_per_m);
             let (cosine_coefficient, sine_coefficient) = normal_pair(mode_key);
             let (phase_sine, phase_cosine) = libm::sincos(phase_rad);
             let wave = cosine_coefficient * phase_cosine + sine_coefficient * phase_sine;
             let gradient_x = amplitude_m_s * direction_x * wave;
             let gradient_y = amplitude_m_s * direction_y * wave;
-            potential_m2_s += amplitude_m_s * wavelength_m / std::f64::consts::TAU
+            potential_m2_s += amplitude_m_s / (std::f64::consts::TAU * spatial_frequency_per_m)
                 * (cosine_coefficient * phase_sine - sine_coefficient * phase_cosine);
             gradient_x_m_s += gradient_x;
             gradient_y_m_s += gradient_y;
-            if band_index == 0 {
-                synoptic_gradient_x_m_s += gradient_x;
-                synoptic_gradient_y_m_s += gradient_y;
-            }
+            let upper_band_coupling = if band_index == 0 { 1.0 } else { 0.20 };
+            synoptic_gradient_x_m_s += upper_band_coupling * gradient_x;
+            synoptic_gradient_y_m_s += upper_band_coupling * gradient_y;
         }
     }
     PressureSample {
@@ -1183,21 +1736,38 @@ fn procedural_pressure_sample(match_seed: u64, tick: u64, position_m: Vector) ->
 }
 
 fn transported_weather_position_m(
+    world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: Vector,
     transport_salt: u64,
     speed_scale: f64,
 ) -> (f64, f64) {
-    // Keep accumulated transport in f64 through lattice sampling so long-running
-    // matches retain local spatial variation instead of stepping between f32 bins.
-    let time_seconds = tick as f64 * f64::from(DT_SECONDS);
     let (transport_velocity_x_m_s, transport_velocity_y_m_s) =
         weather_transport_velocity_m_s(match_seed, transport_salt, speed_scale);
+    let width_m = f64::from(world_geometry.width_m());
+    let height_m = f64::from(world_geometry.height_m());
     (
-        f64::from(position_m.x) - transport_velocity_x_m_s * time_seconds,
-        f64::from(position_m.y) - transport_velocity_y_m_s * time_seconds,
+        (f64::from(position_m.x).rem_euclid(width_m)
+            - periodic_transport_displacement_m(tick, transport_velocity_x_m_s, width_m))
+        .rem_euclid(width_m),
+        (f64::from(position_m.y).rem_euclid(height_m)
+            - periodic_transport_displacement_m(tick, transport_velocity_y_m_s, height_m))
+        .rem_euclid(height_m),
     )
+}
+
+fn periodic_transport_displacement_m(tick: u64, velocity_m_s: f64, period_m: f64) -> f64 {
+    let displacement_per_tick_m = velocity_m_s * f64::from(DT_SECONDS);
+    let mut displacement_m = 0.0;
+    // Base-2^16 Horner reduction retains every tick bit without ever converting
+    // the full u64 to f64, so adjacent late-match ticks keep distinct phases.
+    for shift in [48, 32, 16, 0] {
+        let chunk = ((tick >> shift) & 0xffff) as f64;
+        displacement_m =
+            (displacement_m * 65_536.0 + chunk * displacement_per_tick_m).rem_euclid(period_m);
+    }
+    displacement_m
 }
 
 fn weather_transport_velocity_m_s(
@@ -1215,7 +1785,12 @@ fn weather_transport_velocity_m_s(
     (speed_m_s * direction_x, speed_m_s * direction_y)
 }
 
-fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -> Vector {
+fn land_sheltered_wind(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+    open_wind: Vector,
+) -> Vector {
     let speed_m_s = open_wind.length();
     if speed_m_s == 0.0 {
         return open_wind;
@@ -1223,7 +1798,11 @@ fn land_sheltered_wind(match_seed: u64, position_m: Vector, open_wind: Vector) -
     let upwind = -open_wind / speed_m_s;
     let mut shelter: f32 = 0.0;
     for distance_m in LAND_WIND_SAMPLE_DISTANCES_M {
-        let elevation_m = broad_landform_elevation_m(match_seed, position_m + distance_m * upwind);
+        let elevation_m = broad_landform_elevation_m(
+            world_geometry,
+            match_seed,
+            position_m + distance_m * upwind,
+        );
         let obstruction = (elevation_m / LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M).clamp(0.0, 1.0);
         let recovery = 1.0 / (1.0 + distance_m / LAND_WIND_RECOVERY_DISTANCE_M);
         shelter = shelter.max(obstruction * recovery);
@@ -1270,6 +1849,27 @@ pub fn computed_yaw_rate_torques_in_environment(
 mod tests {
     use super::*;
 
+    fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
+        super::procedural_match_environment(WorldGeometry::default(), match_seed, tick, position_m)
+    }
+
+    fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
+        super::procedural_terrain_elevation_m(WorldGeometry::default(), match_seed, position_m)
+    }
+
+    fn procedural_unsheltered_wind_velocity_m_s(
+        match_seed: u64,
+        tick: u64,
+        position_m: Vector,
+    ) -> Vector {
+        super::procedural_unsheltered_wind_velocity_m_s(
+            WorldGeometry::default(),
+            match_seed,
+            tick,
+            position_m,
+        )
+    }
+
     #[test]
     fn stateless_weather_layers_use_correlated_distinct_transport() {
         let match_seed = 0x5eed;
@@ -1308,6 +1908,145 @@ mod tests {
         });
         assert!(band_speeds[0] < band_speeds[1]);
         assert!(band_speeds[1] < band_speeds[2]);
+    }
+
+    #[test]
+    fn semantic_noise_partition_is_fixed() {
+        assert_eq!(
+            TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
+            TERRAIN_CLUSTER_OCTAVE_COUNT
+        );
+        assert_eq!(TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT, 3);
+        assert_eq!(TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT, 3);
+        assert_eq!(FINE_TERRAIN_CIRCLE_OCTAVE_COUNT, 0);
+        assert_eq!(TIDE_CIRCLE_OCTAVE_COUNT, 3);
+        assert_eq!(TIDE_CIRCLE_OCTAVE_COUNT, TIDE_OCTAVE_COUNT);
+        assert_eq!(
+            SURFACE_AIR_TEMPERATURE_NOISE.circle_octave_count,
+            SURFACE_AIR_TEMPERATURE_NOISE.octave_count,
+        );
+        assert_eq!(
+            AIR_TEMPERATURE_500_HPA_NOISE.circle_octave_count,
+            AIR_TEMPERATURE_500_HPA_NOISE.octave_count,
+        );
+        assert_eq!(WATER_VAPOR_NOISE.circle_octave_count, 4);
+    }
+
+    #[test]
+    fn circle_embedded_noise_gradient_matches_finite_difference_at_rectangular_seams() {
+        let epsilon_m = 0.125;
+        for world in [
+            WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
+            WorldGeometry::new(80_000.0, 40_000.0).unwrap(),
+            WorldGeometry::new(256_000.0, 8_000.0).unwrap(),
+        ] {
+            let half_width = f64::from(world.width_m()) / 2.0;
+            let half_height = f64::from(world.height_m()) / 2.0;
+            for (x, y) in [
+                (-half_width, 0.173 * half_height),
+                (0.291 * half_width, -half_height),
+                (-half_width, -half_height),
+            ] {
+                let sample =
+                    circle_embedded_simplex_noise_sample_f64(world, 0x5eed_cafe, x, y, 8192.0);
+                let x_low = circle_embedded_simplex_noise_sample_f64(
+                    world,
+                    0x5eed_cafe,
+                    x - epsilon_m,
+                    y,
+                    8192.0,
+                )
+                .value;
+                let x_high = circle_embedded_simplex_noise_sample_f64(
+                    world,
+                    0x5eed_cafe,
+                    x + epsilon_m,
+                    y,
+                    8192.0,
+                )
+                .value;
+                let y_low = circle_embedded_simplex_noise_sample_f64(
+                    world,
+                    0x5eed_cafe,
+                    x,
+                    y - epsilon_m,
+                    8192.0,
+                )
+                .value;
+                let y_high = circle_embedded_simplex_noise_sample_f64(
+                    world,
+                    0x5eed_cafe,
+                    x,
+                    y + epsilon_m,
+                    8192.0,
+                )
+                .value;
+                assert!(
+                    ((x_high - x_low) / (2.0 * epsilon_m) - sample.gradient_x_per_m).abs() < 1.0e-8
+                );
+                assert!(
+                    ((y_high - y_low) / (2.0 * epsilon_m) - sample.gradient_y_per_m).abs() < 1.0e-8
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn circle_embedded_noise_keeps_local_gradient_scale_across_world_sizes() {
+        let wavelength_m = 8192.0;
+        let mut scaled_rms = Vec::new();
+        for world in [
+            WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
+            WorldGeometry::new(80_000.0, 40_000.0).unwrap(),
+            WorldGeometry::new(256_000.0, 8_000.0).unwrap(),
+        ] {
+            let mut square_sum = 0.0;
+            for x_index in 0..16 {
+                for y_index in 0..16 {
+                    let x = f64::from(world.width_m()) * (x_index as f64 + 0.37) / 16.0;
+                    let y = f64::from(world.height_m()) * (y_index as f64 + 0.61) / 16.0;
+                    let sample = circle_embedded_simplex_noise_sample_f64(
+                        world,
+                        0x5eed_cafe ^ (x_index * 16 + y_index) as u64,
+                        x,
+                        y,
+                        wavelength_m,
+                    );
+                    square_sum += sample.gradient_x_per_m * sample.gradient_x_per_m
+                        + sample.gradient_y_per_m * sample.gradient_y_per_m;
+                }
+            }
+            scaled_rms.push(wavelength_m * libm::sqrt(square_sum / 256.0));
+        }
+        let minimum = scaled_rms.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = scaled_rms.iter().copied().fold(0.0, f64::max);
+        assert!(maximum / minimum < 1.35, "{scaled_rms:?}");
+    }
+
+    #[test]
+    fn portable_circle_noise_tracks_double_precision_reference() {
+        for world in [
+            WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
+            WorldGeometry::new(80_000.0, 40_000.0).unwrap(),
+            WorldGeometry::new(256_000.0, 8_000.0).unwrap(),
+        ] {
+            for position_m in [
+                Vector::new(13.25, -7.5),
+                Vector::new(0.173 * world.width_m(), -0.291 * world.height_m()),
+            ] {
+                let portable = terrain_simplex_noise_4d(world, 0x5eed_cafe, position_m, 8192.0);
+                let reference = circle_embedded_simplex_noise_sample_f64(
+                    world,
+                    0x5eed_cafe,
+                    f64::from(position_m.x),
+                    f64::from(position_m.y),
+                    8192.0,
+                );
+                assert!((f64::from(portable.0) - reference.value).abs() < 2.0e-4);
+                assert!((f64::from(portable.1.x) - reference.gradient_x_per_m).abs() < 2.0e-7);
+                assert!((f64::from(portable.1.y) - reference.gradient_y_per_m).abs() < 2.0e-7);
+            }
+        }
     }
 
     #[test]

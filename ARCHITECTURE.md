@@ -13,9 +13,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Rust is the gameplay runtime. The same simulation compiles
   to WebAssembly for the browser and runs natively on the dedicated server.
 - **[Implicit]** The runtime-independent `simulation` crate owns reusable physics
-  and control behavior. `game` owns concrete game policy, tuning, control
-  composition, and procedural environment sampling shared by native and browser
-  runtimes.
+  and control behavior and canonical world-coordinate geometry. `game` owns
+  concrete game policy, tuning, control composition, and procedural environment
+  sampling shared by native and browser runtimes. Transport serializes the
+  canonical geometry type rather than owning a parallel wire representation.
 - **[Explicit]** Rapier 2D provides target rigid-body physics on native and
   WebAssembly builds.
 - **[Explicit]** The browser renderer is Rust `wgpu`, initially WebGPU-only rather
@@ -29,6 +30,33 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 - **[Explicit]** The dedicated server is authoritative. Clients predict locally
   and reconcile corrections without exposing them where practical.
+- **[Explicit]** Each match has a rectangular `WorldGeometry` with independently
+  selectable width and height in metres. It defines canonical wrapped coordinates
+  in `[-width/2, width/2) x [-height/2, height/2)` and minimum-image displacement
+  independently on each axis. Authoritative simulation, client prediction,
+  reconciliation, rendering placement, spatial interest, and replication use
+  that shared geometry, so positions remain canonical and interaction crosses
+  either seam and their corners. The origin is the equator and reference
+  meridian.
+- **[Explicit]** Rapier steps finite planar charts of the torus. Each tick uses
+  per-hull swept extents in wrapped fixed-size spatial cells and exact
+  minimum-image swept proximity to form deterministic contact components, then
+  places every complete articulated boat assembly in a common chart. Shared
+  simulation supports hull beams of at least 1.5 m and bounds each hull's linear
+  speed plus angular extremity speed to 700 m/s, over an order of magnitude above
+  the tuned vessel's reachable speed. Non-finite motion becomes rest and
+  over-limit linear and angular motion scale together at the shared simulation
+  boundary, so authority and prediction apply the same rule. Thirty-two substeps
+  therefore resolve opposing supported hull extrema to half the minimum beam
+  without relying on dynamic-body CCD. Damage comes only from pair-specific
+  solver contacts. The same wrapped index narrows interest queries. Chart changes
+  move whole assemblies without changing their canonical logical position; no
+  one-sided collision ghosts participate in the solver.
+- **[Implicit]** Geometry dimensions use `f32` and accept exactly representable
+  values from 8,000 through 256,000 metres on each axis. Exact half-period
+  minimum-image ties select the positive half-period on either axis. The
+  production default is a 64,000 m square, while server construction accepts any
+  validated rectangle.
 - **[Implicit]** Each match advances all boats and wrecks together in one
   fixed-step physics world. Runtime adapters gather asynchronous work
   before a synchronous tick and publish results afterward; simulation never
@@ -51,16 +79,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   phenomena may retain a one-metre wavelength band, while genuinely smooth
   surfaces remain low-frequency; finer structure is appearance-only and cannot
   change depth, collision, or the shoreline.
-- **[Implicit]** Large-scale archipelago suitability uses three octaves of
-  24-direction two-dimensional simplex-gradient noise. Its triangular lattice
-  gives threshold contours substantially less directional structure than square
-  value noise while requiring only three lattice contributions per octave. A
-  high sea-level threshold keeps the land excursion set below the regime where
-  it commonly divides the sea.
-- **[Implicit]** Independent island morphology uses five octaves of the same
-  portable simplex-gradient kernel from kilometre to local-coast scale. This
-  adds fractal contour detail without the extra field evaluations and increased
-  fragmentation of domain warping.
+- **[Explicit]** Large-scale archipelago suitability uses three octaves of
+  four-dimensional simplex-gradient noise sampled through metre-scale circle
+  embeddings of both world axes. Independent island morphology uses the same
+  basis for its first three octaves and periodic two-dimensional triangular
+  simplex for its two finer octaves. A high sea-level threshold keeps the land
+  excursion set below the regime where it commonly divides the sea.
 - **[Explicit]** Coastal appearance is the expression of shared latent physical
   fields rather than independent material masks. Broad substrate rockiness and
   coastal ruggedness cross the shoreline: rocky and reef-forming regions drive
@@ -82,17 +106,28 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   blends that relief from smooth rolling ground into ridged rock, correlating
   cliff-forming coasts with the terrain behind them without a separate mountain
   mask.
-- **[Implicit]** Broad coastal substrate, ruggedness, and shoal variation use the
-  portable two-dimensional simplex kernel. Their smooth thresholds and contours
-  therefore avoid the directional cells of square value noise while evaluating
-  one fewer lattice contribution per octave.
+- **[Explicit]** Broad coastal substrate and ruggedness use circle-embedded
+  four-dimensional simplex. Shoal and finer physical relief use periodic
+  two-dimensional triangular simplex.
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring
   sampled fields through the protocol.
-- **[Explicit]** The match seed is the only procedural-world datum sent to a
-  client. Snapshots synchronize boats, not sampled environment fields or model
-  parameters.
+- **[Explicit]** The match seed and world geometry are the procedural-world data
+  sent to a client. Snapshots synchronize boats, not sampled environment fields
+  or model parameters.
+- **[Explicit]** Every seeded spatial field participating in the toroidal world
+  is evaluated periodically across both independently sized axes without a seam
+  in its value or gradient. Canonicalizing sample coordinates alone does not make
+  an ordinary noise field periodic.
+- **[Explicit]** Noise basis is a fixed semantic property of each field and
+  octave, independent of world geometry. Broad terrain, macro transported scalar
+  weather, and tide response use a four-dimensional circle embedding with radii
+  `width / 2π` and `height / 2π`, preserving the requested local metre scale
+  without stretching either axis. Fine physical terrain, material spectra, and
+  cloud detail use periodic two-dimensional triangular simplex. Changing the
+  supported geometry range never silently reclassifies an octave; any partition
+  change is an explicit, profiled retuning decision.
 - **[Explicit]** Procedural generator implementations remain portable between
   Rust and WGSL even when a field is currently evaluated on only one side. Each
   field may select the noise family and variant appropriate to its phenomenon,
@@ -101,10 +136,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   within a narrow numeric tolerance and preserve categorical boundaries outside
   that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
   portability requirement.
-- **[Implicit]** Long-duration transported scalar weather and broad unthresholded
-  tide response retain double-precision value noise. Successive octaves rotate
-  their square lattices before sampling, preserving analytic world-space
-  gradients and long-time coordinate precision without coherent grid alignment.
+- **[Explicit]** Long-duration transported scalar weather macro octaves and
+  broad unthresholded tide response use double-precision circle-embedded
+  four-dimensional simplex noise with analytic chain-rule world-space gradients;
+  the finest water-vapor octave remains periodic two-dimensional simplex.
+  Transported phases reduce on the torus before evaluation, preserving long-time
+  precision without repeating time.
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
   weather. The seeded surface-air field is a weather anomaly; analytic climate,
   season, and time of day supply its baseline in both Rust and WGSL before
@@ -118,26 +155,26 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   vertical shear is derived. Pressure wavelength bands and scalar atmosphere
   layers translate at distinct but correlated seeded velocities, so their
   superposition evolves without stored history; there is no weather grid or
-  storm entity.
+  storm entity. **[Implicit]** Pressure directions are quantized to integer
+  wavevectors of the rectangular torus so the potential and its analytic gradient
+  join continuously on both seams.
 - **[Explicit]** Rendering samples primary weather at the local boat and applies
   it uniformly across the viewport. WGSL recomputes short derivations rather than
   accepting derived-weather or integrated cloud-offset inputs.
-- **[Explicit]** Each procedural cloud layer uses one coherent three-dimensional
-  space-time simplex-gradient field: horizontal coordinates translate with the
-  layer's wind while the time coordinate evolves its shape. The field never
-  rotates. Four simplex contributions per octave avoid the cubic lattice and
-  halve the corner count of trilinear gradient noise. Low-cloud spectra extend
-  to roughly eight centimetres and upper-cloud spectra to roughly 16 metres;
-  unresolved octaves fade against the fragment's world-space pixel footprint.
-  Low cloud follows complete unsheltered surface wind, while upper cloud follows
-  broad synoptic wind; their seeds and transport remain independent. The visible
-  low field is decorative, is capped at one-quarter wisp coverage, may cast local
-  shadows, and contributes little to ambient overcast. The invisible upper field
-  carries meteorological cloud coverage through broad shadows and lighting.
-  Humidity, lift, instability, shear, and rain control cloud family, evolution,
-  optical depth, relief, layer height, and shadows. Fine spatial scales evolve
-  faster than broad scales. There is no separate formation mask or whole-pattern
-  lifetime crossfade.
+- **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
+  two-dimensional latent field. Adjacent deterministic temporal anchors are
+  transported for only one bounded interval by the layer wind and combined with
+  a smootherstep-timed orthogonal blend, so any absolute tick is directly
+  queryable without accumulated simulation error or midpoint variance loss.
+  Low cloud uses complete unsheltered surface wind and upper cloud uses broad
+  synoptic wind sampled for the view; player identity does not affect either
+  field. **[Implicit]** The current renderer uses one frozen local velocity for
+  each finite flow map, a 30-minute low-layer anchor interval, and a 60-minute
+  upper-layer interval. Unresolved octaves fade against the fragment's
+  world-space pixel footprint. Existing weather-dependent transfer functions
+  continue to shape the latent fields into the visible decorative low layer and
+  the invisible upper coverage layer, including their lighting and projected
+  shadows.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -153,16 +190,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   the authoritative heightfield gradient with material-specific visual detail
   before celestial lighting. Appearance-only material spectra may extend below
   thirty centimetres. **[Implicit]** Those spectra use the portable 24-direction
-  two-dimensional simplex kernel with non-binary octave spacing and successive
-  rotations; each octave fades out against the fragment's world-space pixel
-  footprint before it can alias. Material relief remains single-sample, without
-  parallax or per-material ray marching. Bounded broad-relief samples provide
-  cast shadows without displaced geometry. In clear shallow water, filtered
-  material reflectance produces scalar contrast through the water palette
-  according to round-trip optical transmittance. Reflective substrates remain
-  visible farther, but every substrate approaches a visible bottom signal as
-  water depth approaches zero. Underwater rendering adds neither a separate
-  visual-detail height field nor bottom-normal lighting.
+  periodic two-dimensional simplex kernel with non-binary octave spacing; each
+  octave chooses integer cycle counts for both world axes and fades out against
+  the fragment's world-space pixel footprint before it can alias. Material
+  relief remains single-sample, without parallax or per-material ray marching.
+  Bounded broad-relief samples provide cast shadows without displaced geometry.
+  In clear shallow water, filtered material reflectance produces scalar contrast
+  through the water palette according to round-trip optical transmittance.
+  Reflective substrates remain visible farther, but every substrate approaches a
+  visible bottom signal as water depth approaches zero. Underwater rendering
+  adds neither a separate visual-detail height field nor bottom-normal lighting.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Implicit]** Authoritative wind shelter probes the same island-scale landform
@@ -177,13 +214,34 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   ambient illumination remains separate from spatial direct-light shadows. Cloud
   shadow displacement follows physical layer height and light direction rather
   than a readability-compressed offset.
+- **[Explicit]** Canonical normalized north-south position maps linearly from
+  -90 degrees at the lower branch through the equator to the limiting +90-degree
+  upper edge. The identified latitude edge is one polar loop, and opposite
+  hemisphere seasons may be discontinuous there.
+- **[Implicit]** Canonical normalized east-west position is longitude. Local
+  solar phase is the wrapped sum of global day phase and normalized longitude;
+  season and lunar phase remain global.
 - **[Explicit]** Playground diagnostics may approximate authoritative shelter but
   never feed derived results back into primary inputs or gameplay physics.
+- **[Explicit]** The playground samples its view-center geometry through the
+  browser's Rust/WASM boundary, so coordinate wrapping, normalization, signed
+  latitude, and local solar phase use canonical `WorldGeometry` math. Its DOM
+  overlay marks the raw view center and can draw opt-in repeated reference and
+  seam lines. The selected rectangle drives the production procedural scene
+  shader, whose terrain, material detail, and cloud fields repeat continuously
+  while raw camera coordinates remain unbounded for panning and measurement.
+  Its geometry diagnostic reports each representative octave's fixed basis,
+  requested wavelength, effective per-axis wavelength, and relative error.
+- **[Implicit]** Playground world-width and world-height controls cover 8 km to
+  256 km independently in 1 km steps, with the 64 km square match default.
 
 ## Transport
 
 - **[Explicit]** The stack uses versioned, Postcard-encoded binary messages over
   WebTransport.
+- **[Implicit]** The versioned welcome message carries player identity, match
+  seed, and validated world geometry. Server and browser retain the same
+  geometry for authoritative and predicted match inputs.
 - **[Explicit]** WebTransport is always encrypted. Local development pins a
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.
@@ -205,10 +263,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   leaving it, and accepting authoritative corrections, must not visibly snap or
   jerk boats.
 - **[Implicit]** Nearby boats share the local prediction world; distant boats use
-  bounded kinematic extrapolation.
+  bounded kinematic extrapolation. Extrapolated positions wrap canonically, while
+  render placement and correction offsets use the minimum image relative to the
+  local boat.
 - **[Explicit]** Boats sufficiently outside the viewport may be omitted from a
-  recipient's snapshots, and server lookup uses a maintained spatial query
-  system.
+  recipient's snapshots. Server visibility and physics-bubble membership use
+  toroidal minimum-image distance.
 
 ## Operations
 
