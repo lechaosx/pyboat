@@ -144,11 +144,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   precision without repeating time.
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
   weather. The seeded surface-air field is a weather anomaly; analytic climate,
-  season, and time of day supply its baseline in both Rust and WGSL before
-  humidity, instability, clouds, and rain are derived. Upper air is an absolute
-  500 hPa temperature generated from a climate baseline with muted seasonality,
-  a shared surface air-mass anomaly, and independent upper-level variability;
-  it has no diurnal cycle. Derived values have no override path.
+  signed latitude, season, and local solar time supply its baseline in both Rust
+  and WGSL before humidity, instability, clouds, and rain are derived. Specific
+  humidity follows local climatic saturation capacity plus its seeded anomaly.
+  Upper air is an absolute 500 hPa temperature generated from a climate baseline
+  with muted seasonality, a shared surface air-mass anomaly, and independent
+  upper-level variability; it has no diurnal cycle. Derived values have no
+  override path. **[Implicit]** The compact ocean-moderated calibration spans
+  27 °C annual mean and a 3 °C seasonal range at the equator to -18 °C and a
+  44 °C seasonal range at either pole; the daily range decreases from 6 °C to
+  3 °C over the same latitude gradient.
 - **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
   analytic gradient drives mostly isobaric surface wind. Broad pressure drives
   upper flow, horizontal temperature gradient contributes thermal wind, and
@@ -218,14 +223,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
   hemisphere seasons may be discontinuous there.
-- **[Implicit]** Canonical normalized east-west position is longitude. Local
+- **[Explicit]** Canonical normalized east-west position is longitude. Local
   solar phase is the wrapped sum of global day phase and normalized longitude;
   season and lunar phase remain global.
 - **[Explicit]** Playground diagnostics may approximate authoritative shelter but
   never feed derived results back into primary inputs or gameplay physics.
-- **[Explicit]** The playground samples its view-center geometry through the
-  browser's Rust/WASM boundary, so coordinate wrapping, normalization, signed
-  latitude, and local solar phase use canonical `WorldGeometry` math. Its DOM
+- **[Explicit]** The playground samples its view-center geometry and opt-in live
+  physical causes through the browser's Rust/WASM boundary. Coordinate wrapping,
+  normalization, signed latitude, local solar phase, climate, primary weather,
+  derived weather, tide, and surface climate therefore use the production Rust
+  sampler. Manual scenarios remain available as primary-cause overrides. Its DOM
   overlay marks the raw view center and can draw opt-in repeated reference and
   seam lines. The selected rectangle drives the production procedural scene
   shader, whose terrain, material detail, and cloud fields repeat continuously

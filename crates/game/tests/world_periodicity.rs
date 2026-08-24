@@ -389,11 +389,6 @@ fn assert_nonseasonal_field_sides_close(
         high_primary.temperature_gradient_c_per_m,
         2.0e-5,
     );
-    assert_close(
-        low_primary.water_vapor_g_kg,
-        high_primary.water_vapor_g_kg,
-        0.005,
-    );
     let time_seconds = tick as f64 / 60.0;
     assert_close(
         procedural_water_height_m(world, seed, time_seconds, low),

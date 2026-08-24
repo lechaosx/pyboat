@@ -9,7 +9,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    PeriodicNoiseBasis, periodic_noise_octave_diagnostic, procedural_atmosphere_primary,
+    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
     procedural_tidal_conditions, world_celestial_conditions, world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
@@ -24,8 +24,8 @@ use wgpu::CurrentSurfaceTexture;
 
 use crate::{
     BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock, cloud_anchor_time,
-    sample_world_geometry, scale_bar, viewport_interest_radius_m, windsock_extension,
-    zoom_view_height_m,
+    sample_production_world_environment, sample_world_geometry, scale_bar,
+    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 
 const MAX_VERTICES: usize = 32768;
@@ -53,6 +53,187 @@ pub struct PlaygroundNoiseOctaveDiagnostic {
     effective_wavelength_y_m: f32,
     relative_error_x: f32,
     relative_error_y: f32,
+}
+
+#[wasm_bindgen]
+pub struct PlaygroundEnvironmentSample {
+    geographic_latitude_degrees: f32,
+    season_phase: f32,
+    day_phase: f32,
+    moon_phase: f32,
+    annual_mean_air_temperature_c: f32,
+    seasonal_temperature_range_c: f32,
+    diurnal_temperature_range_c: f32,
+    pressure_hpa: f32,
+    pressure_gradient_x_hpa_per_m: f32,
+    pressure_gradient_y_hpa_per_m: f32,
+    synoptic_pressure_gradient_x_hpa_per_m: f32,
+    synoptic_pressure_gradient_y_hpa_per_m: f32,
+    surface_air_temperature_anomaly_c: f32,
+    air_temperature_500_hpa_c: f32,
+    temperature_gradient_x_c_per_m: f32,
+    temperature_gradient_y_c_per_m: f32,
+    water_vapor_g_kg: f32,
+    reference_tidal_range_m: f32,
+    tidal_phase_offset: f32,
+    surface_air_temperature_c: f32,
+    wind_x_m_s: f32,
+    wind_y_m_s: f32,
+    upper_wind_x_m_s: f32,
+    upper_wind_y_m_s: f32,
+    relative_humidity: f32,
+    lift: f32,
+    cloudiness: f32,
+    instability: f32,
+    upper_cloudiness: f32,
+    rain_intensity: f32,
+    sun_x: f32,
+    sun_y: f32,
+    sun_z: f32,
+    sun_intensity: f32,
+    moon_x: f32,
+    moon_y: f32,
+    moon_z: f32,
+    moon_intensity: f32,
+    ambient_intensity: f32,
+    ground_temperature_c: f32,
+    water_temperature_c: f32,
+    seasonal_snow_cover: f32,
+    polar_ice_closure: f32,
+    solid_ice_cover: f32,
+    water_height_m: f32,
+    water_depth_m: f32,
+}
+
+macro_rules! environment_sample_getters {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[wasm_bindgen]
+            impl PlaygroundEnvironmentSample {
+                #[wasm_bindgen(getter)]
+                pub fn $name(&self) -> f32 {
+                    self.$name
+                }
+            }
+        )+
+    };
+}
+
+environment_sample_getters!(
+    geographic_latitude_degrees,
+    season_phase,
+    day_phase,
+    moon_phase,
+    annual_mean_air_temperature_c,
+    seasonal_temperature_range_c,
+    diurnal_temperature_range_c,
+    pressure_hpa,
+    pressure_gradient_x_hpa_per_m,
+    pressure_gradient_y_hpa_per_m,
+    synoptic_pressure_gradient_x_hpa_per_m,
+    synoptic_pressure_gradient_y_hpa_per_m,
+    surface_air_temperature_anomaly_c,
+    air_temperature_500_hpa_c,
+    temperature_gradient_x_c_per_m,
+    temperature_gradient_y_c_per_m,
+    water_vapor_g_kg,
+    reference_tidal_range_m,
+    tidal_phase_offset,
+    surface_air_temperature_c,
+    wind_x_m_s,
+    wind_y_m_s,
+    upper_wind_x_m_s,
+    upper_wind_y_m_s,
+    relative_humidity,
+    lift,
+    cloudiness,
+    instability,
+    upper_cloudiness,
+    rain_intensity,
+    sun_x,
+    sun_y,
+    sun_z,
+    sun_intensity,
+    moon_x,
+    moon_y,
+    moon_z,
+    moon_intensity,
+    ambient_intensity,
+    ground_temperature_c,
+    water_temperature_c,
+    seasonal_snow_cover,
+    polar_ice_closure,
+    solid_ice_cover,
+    water_height_m,
+    water_depth_m,
+);
+
+#[wasm_bindgen]
+pub fn sample_playground_environment(
+    width_m: f32,
+    height_m: f32,
+    match_seed: u64,
+    tick: u64,
+    center_x_m: f32,
+    center_y_m: f32,
+) -> Result<PlaygroundEnvironmentSample, JsValue> {
+    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let sample = sample_production_world_environment(
+        geometry,
+        match_seed,
+        tick,
+        Vector::new(center_x_m, center_y_m),
+    );
+    let primary = sample.weather.primary;
+    let lighting = celestial_lighting(sample.celestial);
+    Ok(PlaygroundEnvironmentSample {
+        geographic_latitude_degrees: sample.celestial.geographic_latitude_degrees,
+        season_phase: sample.celestial.season_phase,
+        day_phase: sample.celestial.day_phase,
+        moon_phase: sample.celestial.moon_phase,
+        annual_mean_air_temperature_c: sample.climate.annual_mean_air_temperature_c,
+        seasonal_temperature_range_c: sample.climate.seasonal_temperature_range_c,
+        diurnal_temperature_range_c: sample.climate.diurnal_temperature_range_c,
+        pressure_hpa: primary.pressure_hpa,
+        pressure_gradient_x_hpa_per_m: primary.pressure_gradient_hpa_per_m.x,
+        pressure_gradient_y_hpa_per_m: primary.pressure_gradient_hpa_per_m.y,
+        synoptic_pressure_gradient_x_hpa_per_m: primary.synoptic_pressure_gradient_hpa_per_m.x,
+        synoptic_pressure_gradient_y_hpa_per_m: primary.synoptic_pressure_gradient_hpa_per_m.y,
+        surface_air_temperature_anomaly_c: primary.surface_air_temperature_anomaly_c,
+        air_temperature_500_hpa_c: primary.air_temperature_500_hpa_c,
+        temperature_gradient_x_c_per_m: primary.temperature_gradient_c_per_m.x,
+        temperature_gradient_y_c_per_m: primary.temperature_gradient_c_per_m.y,
+        water_vapor_g_kg: primary.water_vapor_g_kg,
+        reference_tidal_range_m: sample.tide.reference_range_m,
+        tidal_phase_offset: sample.tide.phase_offset,
+        surface_air_temperature_c: sample.weather.surface_air_temperature_c,
+        wind_x_m_s: sample.weather.wind_velocity_m_s.x,
+        wind_y_m_s: sample.weather.wind_velocity_m_s.y,
+        upper_wind_x_m_s: sample.weather.upper_wind_velocity_m_s.x,
+        upper_wind_y_m_s: sample.weather.upper_wind_velocity_m_s.y,
+        relative_humidity: sample.weather.relative_humidity,
+        lift: sample.weather.lift,
+        cloudiness: sample.weather.cloudiness,
+        instability: sample.weather.instability,
+        upper_cloudiness: sample.weather.upper_cloudiness,
+        rain_intensity: sample.weather.rain_intensity,
+        sun_x: lighting.sun_direction[0],
+        sun_y: lighting.sun_direction[1],
+        sun_z: lighting.sun_direction[2],
+        sun_intensity: lighting.sun_intensity,
+        moon_x: lighting.moon_direction[0],
+        moon_y: lighting.moon_direction[1],
+        moon_z: lighting.moon_direction[2],
+        moon_intensity: lighting.moon_intensity,
+        ambient_intensity: lighting.ambient_intensity,
+        ground_temperature_c: sample.surface_climate.ground_temperature_c,
+        water_temperature_c: sample.surface_climate.water_temperature_c,
+        seasonal_snow_cover: sample.surface_climate.seasonal_snow_cover,
+        polar_ice_closure: sample.surface_climate.polar_ice_closure,
+        solid_ice_cover: sample.surface_climate.solid_ice_cover,
+        water_height_m: sample.water_height_m,
+        water_depth_m: sample.environment.water_depth_m,
+    })
 }
 
 #[wasm_bindgen]
@@ -359,12 +540,22 @@ impl Renderer {
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
-        let primary = match_seed.map(|match_seed| {
-            procedural_atmosphere_primary(world_geometry, match_seed, tick, camera_m)
+        let production = match_seed.map(|match_seed| {
+            sample_production_world_environment(world_geometry, match_seed, tick, camera_m)
         });
-        let celestial = world_celestial_conditions(world_geometry, tick as f64 / 60.0, camera_m);
-        let climate = world_climate_conditions();
-        let tide = procedural_tidal_conditions(world_geometry, match_seed.unwrap_or(0), camera_m);
+        let celestial = production.map_or_else(
+            || world_celestial_conditions(world_geometry, tick as f64 / 60.0, camera_m),
+            |sample| sample.celestial,
+        );
+        let climate = production.map_or_else(
+            || world_climate_conditions(celestial.geographic_latitude_degrees),
+            |sample| sample.climate,
+        );
+        let tide = production.map_or_else(
+            || procedural_tidal_conditions(world_geometry, 0, camera_m),
+            |sample| sample.tide,
+        );
+        let primary = production.map(|sample| sample.weather.primary);
         let match_seed = match_seed.unwrap_or(0);
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);

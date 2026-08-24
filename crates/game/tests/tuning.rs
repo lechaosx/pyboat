@@ -486,9 +486,10 @@ fn transported_weather_preserves_metre_scale_variation_after_years() {
 fn surface_and_upper_air_share_an_air_mass_anomaly_without_becoming_identical() {
     const SAMPLE_COUNT: u64 = 512;
     let tick = 12_345;
+    let conditions = world_celestial_conditions(tick as f64 / 60.0);
     let climatology = current_500_hpa_air_temperature_c(
-        world_climate_conditions(),
-        world_celestial_conditions(tick as f64 / 60.0),
+        world_climate_conditions(conditions.geographic_latitude_degrees),
+        conditions,
     );
     let mut surface_sum = 0.0;
     let mut upper_sum = 0.0;
@@ -526,7 +527,7 @@ fn procedural_weather_applies_climate_and_celestial_temperature_to_the_weather_a
     let position_m = Vector::new(12.0, -7.0);
     let primary = procedural_atmosphere_primary(seed, tick, position_m);
     let conditions = world_celestial_conditions(tick as f64 / 60.0);
-    let climate = world_climate_conditions();
+    let climate = world_climate_conditions(conditions.geographic_latitude_degrees);
     let expected_surface_air_temperature_c =
         current_air_temperature_c(climate, conditions) + primary.surface_air_temperature_anomaly_c;
     let expected = derive_weather(primary, climate, conditions);

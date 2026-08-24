@@ -1,4 +1,8 @@
-import { sample_playground_noise_octave, sample_playground_world_geometry } from "browser";
+import {
+  sample_playground_environment,
+  sample_playground_noise_octave,
+  sample_playground_world_geometry,
+} from "browser";
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
 import scenarioDefinitions from "../scenarios.json";
 import "./style.css";
@@ -18,6 +22,8 @@ type State = {
   worldTimeScale: number;
   timeScalesLocked: boolean;
   paused: boolean;
+  liveWorld: boolean;
+  worldTimeSeconds: number;
   pressureHpa: number;
   pressureGradient: number;
   pressureGradientDirection: number;
@@ -82,7 +88,10 @@ type State = {
   debugView: number;
 };
 
-type NumericStateKey = Exclude<keyof State, "seed" | "paused" | "timeScalesLocked">;
+type NumericStateKey = Exclude<
+  keyof State,
+  "seed" | "paused" | "timeScalesLocked" | "liveWorld"
+>;
 type RangeControl = {
   type: "range";
   key: NumericStateKey;
@@ -138,6 +147,8 @@ const defaults: State = {
   worldTimeScale: 0,
   timeScalesLocked: false,
   paused: false,
+  liveWorld: false,
+  worldTimeSeconds: 0,
   pressureHpa: 1008,
   pressureGradient: 1.0,
   pressureGradientDirection: -81,
@@ -396,6 +407,14 @@ const landscapeCompositionKeys = new Set<NumericStateKey>([
   "seasonalVegetationVisible",
 ]);
 const tideKeys = new Set<NumericStateKey>(["tidalRange", "tidalPhaseOffset"]);
+const sampledCauseKeys = new Set<NumericStateKey>([
+  "pressureHpa", "pressureGradient", "pressureGradientDirection",
+  "synopticPressureGradient", "synopticPressureGradientDirection",
+  "annualMeanAirTemperature", "currentAirTemperatureAnomaly",
+  "seasonalTemperatureRange", "diurnalTemperatureRange", "currentUpperAirTemperature",
+  "temperatureGradient", "temperatureGradientDirection", "currentWaterVapor",
+  "geographicLatitude", "seasonPhase", "dayPhase", "moonPhase", "tidalRange", "tidalPhaseOffset",
+]);
 const subtoggleKeys = new Set<NumericStateKey>([
   "lowCloudVisible", "lowCloudShadow", "upperCloudShadow", "upperShadowOnLowCloud",
   ...landscapeCompositionKeys,
@@ -568,6 +587,7 @@ function updateDependentControls(): void {
   setControlsEnabled(["shelterStrength"], state.shelterEnabled > 0.5);
   setControlsEnabled(landscapeCompositionKeys, state.landscapeCompositionEnabled > 0.5);
   setControlsEnabled(tideKeys, state.tidesEnabled > 0.5);
+  setControlsEnabled(sampledCauseKeys, !state.liveWorld);
 }
 
 function resetButton(
@@ -852,6 +872,7 @@ function renderScenarios(): void {
     button.textContent = label;
     button.title = description;
     button.addEventListener("click", () => {
+      setLiveWorld(false);
       valueTransitions.clear();
       const from: Partial<State> = {};
       for (const key of Object.keys(values) as NumericStateKey[]) {
@@ -876,6 +897,7 @@ worldToolbarElement.innerHTML = `
   <details open>
     <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
+    <div class="control toggle-control no-reset"><input id="live-world" type="checkbox"><label class="control-name" for="live-world">Sample live world at view center</label></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-width">World width · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-height">World height · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
     <div class="control toggle-control no-reset"><input id="show-seams" type="checkbox"><label class="control-name" for="show-seams">Show seams</label></div>
@@ -886,6 +908,7 @@ worldToolbarElement.innerHTML = `
     <div class="geometry-measurements"><h3>View-center geometry</h3><div id="geometry-measurements" class="derived-grid"></div></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
+const liveWorldInput = worldToolbarElement.querySelector<HTMLInputElement>("#live-world")!;
 const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width")!;
 const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
@@ -901,6 +924,14 @@ const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
 });
+function setLiveWorld(enabled: boolean): void {
+  state.liveWorld = enabled;
+  liveWorldInput.checked = enabled;
+  presetTransition = undefined;
+  valueTransitions.clear();
+  updateDependentControls();
+}
+liveWorldInput.addEventListener("change", () => setLiveWorld(liveWorldInput.checked));
 function setWorldDimension(
   key: "worldWidthM" | "worldHeightM",
   valueKm: number,
@@ -1144,6 +1175,117 @@ function splitSeed(value: string): [number, number] {
   }
 }
 
+type LiveWorldOutputs = {
+  surfaceAirTemperatureC: number;
+  surfaceWind: [number, number];
+  upperWind: [number, number];
+  relativeHumidity: number;
+  instability: number;
+  lift: number;
+  cloudiness: number;
+  upperCloudiness: number;
+  rainIntensity: number;
+  sunDirection: [number, number, number];
+  sunIntensity: number;
+  moonDirection: [number, number, number];
+  moonIntensity: number;
+  ambientIntensity: number;
+  groundTemperatureC: number;
+  waterTemperatureC: number;
+  seasonalSnowCover: number;
+  polarIceClosure: number;
+  solidIceCover: number;
+  waterHeightM: number;
+  waterDepthM: number;
+};
+
+let liveWorldOutputs: LiveWorldOutputs | undefined;
+
+function parsedSeed(): bigint {
+  try {
+    return BigInt.asUintN(64, BigInt(state.seed));
+  } catch {
+    return 0x5eedn;
+  }
+}
+
+function magnitudeAndDirection(vector: [number, number]): [number, number] {
+  return [Math.hypot(...vector), Math.atan2(vector[1], vector[0]) * 180 / Math.PI];
+}
+
+function sampleLiveWorld(): void {
+  if (!state.liveWorld) {
+    liveWorldOutputs = undefined;
+    return;
+  }
+  const sample = sample_playground_environment(
+    state.worldWidthM,
+    state.worldHeightM,
+    parsedSeed(),
+    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
+    state.cameraX,
+    state.cameraY,
+  );
+  const [pressureGradient, pressureGradientDirection] = magnitudeAndDirection([
+    sample.pressure_gradient_x_hpa_per_m,
+    sample.pressure_gradient_y_hpa_per_m,
+  ]);
+  const [synopticPressureGradient, synopticPressureGradientDirection] = magnitudeAndDirection([
+    sample.synoptic_pressure_gradient_x_hpa_per_m,
+    sample.synoptic_pressure_gradient_y_hpa_per_m,
+  ]);
+  const [temperatureGradient, temperatureGradientDirection] = magnitudeAndDirection([
+    sample.temperature_gradient_x_c_per_m,
+    sample.temperature_gradient_y_c_per_m,
+  ]);
+  Object.assign(state, {
+    geographicLatitude: sample.geographic_latitude_degrees,
+    seasonPhase: sample.season_phase,
+    dayPhase: sample.day_phase,
+    moonPhase: sample.moon_phase,
+    annualMeanAirTemperature: sample.annual_mean_air_temperature_c,
+    seasonalTemperatureRange: sample.seasonal_temperature_range_c,
+    diurnalTemperatureRange: sample.diurnal_temperature_range_c,
+    pressureHpa: sample.pressure_hpa,
+    pressureGradient: pressureGradient * 1000,
+    pressureGradientDirection,
+    synopticPressureGradient: synopticPressureGradient * 1000,
+    synopticPressureGradientDirection,
+    currentAirTemperatureAnomaly: sample.surface_air_temperature_anomaly_c,
+    currentUpperAirTemperature: sample.air_temperature_500_hpa_c,
+    temperatureGradient: temperatureGradient * 1000,
+    temperatureGradientDirection,
+    currentWaterVapor: sample.water_vapor_g_kg,
+    tidalRange: sample.reference_tidal_range_m,
+    tidalPhaseOffset: sample.tidal_phase_offset,
+  });
+  liveWorldOutputs = {
+    surfaceAirTemperatureC: sample.surface_air_temperature_c,
+    surfaceWind: [sample.wind_x_m_s, sample.wind_y_m_s],
+    upperWind: [sample.upper_wind_x_m_s, sample.upper_wind_y_m_s],
+    relativeHumidity: sample.relative_humidity,
+    instability: sample.instability,
+    lift: sample.lift,
+    cloudiness: sample.cloudiness,
+    upperCloudiness: sample.upper_cloudiness,
+    rainIntensity: sample.rain_intensity,
+    sunDirection: [sample.sun_x, sample.sun_y, sample.sun_z],
+    sunIntensity: sample.sun_intensity,
+    moonDirection: [sample.moon_x, sample.moon_y, sample.moon_z],
+    moonIntensity: sample.moon_intensity,
+    ambientIntensity: sample.ambient_intensity,
+    groundTemperatureC: sample.ground_temperature_c,
+    waterTemperatureC: sample.water_temperature_c,
+    seasonalSnowCover: sample.seasonal_snow_cover,
+    polarIceClosure: sample.polar_ice_closure,
+    solidIceCover: sample.solid_ice_cover,
+    waterHeightM: sample.water_height_m,
+    waterDepthM: sample.water_depth_m,
+  };
+  for (const key of sampledCauseKeys) syncControl(key);
+  sample.free();
+}
+
 function directedVector(magnitude: number, degrees: number): [number, number] {
   const radians = degrees * Math.PI / 180;
   return [magnitude * Math.cos(radians), magnitude * Math.sin(radians)];
@@ -1235,6 +1377,35 @@ function smoothstepValue(lower: number, upper: number, value: number): number {
 }
 
 function atmosphericOutputs(): Array<[string, string]> {
+  if (liveWorldOutputs) {
+    const output = liveWorldOutputs;
+    const speed = (value: [number, number]) => Math.hypot(...value);
+    const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
+    const angle = (value: [number, number, number]): string => {
+      const elevation = Math.asin(value[2]) * 180 / Math.PI;
+      const azimuth = Math.atan2(value[0], value[1]) * 180 / Math.PI;
+      return `${elevation.toFixed(1)}° elevation · ${azimuth.toFixed(0)}° azimuth`;
+    };
+    const shear: [number, number] = [
+      output.upperWind[0] - output.surfaceWind[0],
+      output.upperWind[1] - output.surfaceWind[1],
+    ];
+    return [
+      ["Current air temperature", `${output.surfaceAirTemperatureC.toFixed(1)} °C`],
+      ["Sun", `${angle(output.sunDirection)} · ${output.sunIntensity.toFixed(2)}`],
+      ["Moon", `${angle(output.moonDirection)} · ${output.moonIntensity.toFixed(2)}`],
+      ["Astronomical ambient", output.ambientIntensity.toFixed(2)],
+      ["Surface wind", `${speed(output.surfaceWind).toFixed(1)} m/s · ${direction(output.surfaceWind).toFixed(0)}°`],
+      ["Upper wind", `${speed(output.upperWind).toFixed(1)} m/s · ${direction(output.upperWind).toFixed(0)}°`],
+      ["Vertical shear", `${speed(shear).toFixed(1)} m/s · ${direction(shear).toFixed(0)}°`],
+      ["Relative humidity", `${(output.relativeHumidity * 100).toFixed(0)} %`],
+      ["Instability", output.instability.toFixed(2)],
+      ["Lift", output.lift.toFixed(2)],
+      ["Low cloud", output.cloudiness.toFixed(2)],
+      ["Upper cloud", output.upperCloudiness.toFixed(2)],
+      ["Rain", output.rainIntensity.toFixed(2)],
+    ];
+  }
   const pressureGradient = directedVector(state.pressureGradient / 1000, state.pressureGradientDirection);
   const synopticGradient = directedVector(
     state.synopticPressureGradient / 1000,
@@ -1317,6 +1488,17 @@ function atmosphericOutputs(): Array<[string, string]> {
 }
 
 function surfaceOutputs(): Array<[string, string]> {
+  if (liveWorldOutputs) {
+    return [
+      ["Ground temperature", `${liveWorldOutputs.groundTemperatureC.toFixed(1)} °C`],
+      ["Water temperature", `${liveWorldOutputs.waterTemperatureC.toFixed(1)} °C`],
+      ["Seasonal snow", liveWorldOutputs.seasonalSnowCover.toFixed(2)],
+      ["Polar ice closure", liveWorldOutputs.polarIceClosure.toFixed(2)],
+      ["Solid ice", liveWorldOutputs.solidIceCover.toFixed(2)],
+      ["Tide height", `${liveWorldOutputs.waterHeightM.toFixed(2)} m`],
+      ["Water depth", `${liveWorldOutputs.waterDepthM.toFixed(2)} m`],
+    ];
+  }
   const moisture = smoothstepValue(2, 10, state.currentWaterVapor);
   const ground = groundTemperature(0);
   const alpineGround = groundTemperature(600);
@@ -1357,11 +1539,12 @@ function updateGeometryMeasurements(): void {
     state.dayPhase,
   );
   const values: Array<[string, string]> = [
+    ["Physical causes", state.liveWorld ? "Live production sample" : "Manual scenario"],
     ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
     ["Canonical center", `${sample.wrapped_x_m.toFixed(1)}, ${sample.wrapped_y_m.toFixed(1)} m`],
     ["Normalized torus", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
-    ["Signed latitude", `${sample.latitude_degrees.toFixed(3)}°`],
-    ["Local solar phase", `${sample.local_solar_phase.toFixed(4)} · ${(sample.local_solar_phase * 24).toFixed(2)} h`],
+    ["Signed latitude", `${(state.liveWorld ? state.geographicLatitude : sample.latitude_degrees).toFixed(3)}°`],
+    ["Local solar phase", `${(state.liveWorld ? state.dayPhase : sample.local_solar_phase).toFixed(4)} · ${((state.liveWorld ? state.dayPhase : sample.local_solar_phase) * 24).toFixed(2)} h`],
   ];
   const octaveDefinitions: Array<[string, boolean, number]> = activeDomain === "weather"
     ? [["Weather macro octave", true, 65536], ["Cloud detail octave", false, 640]]
@@ -1605,6 +1788,7 @@ function frame(now: number): void {
     const simulationElapsed = elapsed * state.cloudTimeScale;
     state.time += simulationElapsed;
     const worldElapsed = elapsed * state.worldTimeScale;
+    state.worldTimeSeconds += worldElapsed;
     state.dayPhase = (state.dayPhase + worldElapsed / worldDaySeconds) % 1;
     state.seasonPhase = (state.seasonPhase + worldElapsed / (worldDaySeconds * worldYearDays)) % 1;
     state.moonPhase = (state.moonPhase + worldElapsed / (worldDaySeconds * lunarCycleDays)) % 1;
@@ -1612,6 +1796,7 @@ function frame(now: number): void {
     syncControl("seasonPhase");
     syncControl("moonPhase");
   }
+  sampleLiveWorld();
   updateDerivedOutput();
   updateGeometryMeasurements();
   writeUniforms();
@@ -1634,7 +1819,7 @@ function frame(now: number): void {
   drawGeometryOverlay();
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.liveWorld ? "live world" : "manual scenario"} · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
   requestAnimationFrame(frame);
 }
 

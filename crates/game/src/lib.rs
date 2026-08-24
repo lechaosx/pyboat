@@ -201,6 +201,17 @@ pub struct ProceduralWeather {
     pub rain_intensity: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldEnvironment {
+    pub celestial: CelestialConditions,
+    pub climate: ClimateConditions,
+    pub weather: ProceduralWeather,
+    pub tide: TidalConditions,
+    pub surface_climate: SurfaceClimate,
+    pub water_height_m: f32,
+    pub environment: Environment,
+}
+
 struct ScalarNoiseSample {
     value: f64,
     gradient_x_per_m: f64,
@@ -342,11 +353,15 @@ pub fn world_celestial_conditions(
     }
 }
 
-pub fn world_climate_conditions() -> ClimateConditions {
+pub fn world_climate_conditions(geographic_latitude_degrees: f32) -> ClimateConditions {
+    let polar_fraction = libm::powf(
+        (geographic_latitude_degrees.abs() / 90.0).clamp(0.0, 1.0),
+        1.5,
+    );
     ClimateConditions {
-        annual_mean_air_temperature_c: 14.0,
-        seasonal_temperature_range_c: 12.0,
-        diurnal_temperature_range_c: 4.0,
+        annual_mean_air_temperature_c: 27.0 - 45.0 * polar_fraction,
+        seasonal_temperature_range_c: 3.0 + 41.0 * libm::powf(polar_fraction, 0.9),
+        diurnal_temperature_range_c: 6.0 - 3.0 * polar_fraction,
     }
 }
 
@@ -398,12 +413,13 @@ pub fn procedural_water_depth_m(
     position_m: Vector,
 ) -> f32 {
     let geographic_latitude_degrees = world_geometry.latitude_degrees(position_m.y);
+    let climate = world_climate_conditions(geographic_latitude_degrees);
     (procedural_water_height_m(world_geometry, match_seed, world_time_seconds, position_m)
         - procedural_solid_surface_elevation_m(
             world_geometry,
             match_seed,
             position_m,
-            14.0,
+            climate.annual_mean_air_temperature_c,
             geographic_latitude_degrees,
         ))
     .max(0.0)
@@ -569,22 +585,61 @@ pub fn procedural_match_environment(
     tick: u64,
     position_m: Vector,
 ) -> Environment {
-    let open_wind =
-        procedural_unsheltered_wind_velocity_m_s(world_geometry, match_seed, tick, position_m);
-    Environment {
+    procedural_world_environment(world_geometry, match_seed, tick, position_m).environment
+}
+
+pub fn procedural_world_environment(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+) -> WorldEnvironment {
+    let world_time_seconds = tick as f64 * f64::from(DT_SECONDS);
+    let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
+    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
+    let primary = procedural_atmosphere_primary_with_conditions(
+        world_geometry,
+        match_seed,
+        tick,
+        position_m,
+        climate,
+        celestial,
+    );
+    let weather = derive_weather(primary, climate, celestial);
+    let tide = procedural_tidal_conditions(world_geometry, match_seed, position_m);
+    let water_height_m = tide_height_m(tide, celestial);
+    let terrain_elevation_m =
+        procedural_terrain_elevation_m(world_geometry, match_seed, position_m);
+    let solid_surface_elevation_m = solid_surface_elevation_from_bedrock_m(
+        terrain_elevation_m,
+        climate.annual_mean_air_temperature_c,
+        celestial.geographic_latitude_degrees,
+    );
+    let surface_climate = climate_surface(
+        climate,
+        celestial,
+        weather.primary.water_vapor_g_kg,
+        terrain_elevation_m,
+    );
+    let environment = Environment {
         true_wind_velocity_m_s: land_sheltered_wind(
             world_geometry,
             match_seed,
             position_m,
-            open_wind,
+            weather.wind_velocity_m_s,
         ),
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: procedural_water_depth_m(
-            world_geometry,
-            match_seed,
-            tick as f64 / 60.0,
-            position_m,
-        ),
+        water_depth_m: (water_height_m - solid_surface_elevation_m).max(0.0),
+    };
+
+    WorldEnvironment {
+        celestial,
+        climate,
+        weather,
+        tide,
+        surface_climate,
+        water_height_m,
+        environment,
     }
 }
 
@@ -594,14 +649,23 @@ pub fn procedural_weather(
     tick: u64,
     position_m: Vector,
 ) -> ProceduralWeather {
+    let celestial = world_celestial_conditions(
+        world_geometry,
+        tick as f64 * f64::from(DT_SECONDS),
+        position_m,
+    );
+    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
     derive_weather(
-        procedural_atmosphere_primary(world_geometry, match_seed, tick, position_m),
-        world_climate_conditions(),
-        world_celestial_conditions(
+        procedural_atmosphere_primary_with_conditions(
             world_geometry,
-            tick as f64 * f64::from(DT_SECONDS),
+            match_seed,
+            tick,
             position_m,
+            climate,
+            celestial,
         ),
+        climate,
+        celestial,
     )
 }
 
@@ -611,19 +675,35 @@ pub fn procedural_atmosphere_primary(
     tick: u64,
     position_m: Vector,
 ) -> AtmospherePrimary {
+    let celestial = world_celestial_conditions(
+        world_geometry,
+        tick as f64 * f64::from(DT_SECONDS),
+        position_m,
+    );
+    procedural_atmosphere_primary_with_conditions(
+        world_geometry,
+        match_seed,
+        tick,
+        position_m,
+        world_climate_conditions(celestial.geographic_latitude_degrees),
+        celestial,
+    )
+}
+
+fn procedural_atmosphere_primary_with_conditions(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    climate: ClimateConditions,
+    celestial: CelestialConditions,
+) -> AtmospherePrimary {
     let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
     let surface_temperature =
         sample_surface_air_temperature_anomaly_c(world_geometry, match_seed, tick, position_m);
     let surface_air_temperature_anomaly_c = surface_temperature.value;
-    let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(
-        world_climate_conditions(),
-        world_celestial_conditions(
-            world_geometry,
-            tick as f64 * f64::from(DT_SECONDS),
-            position_m,
-        ),
-    ) + SURFACE_AIR_MASS_COUPLING_500_HPA
-        * surface_air_temperature_anomaly_c
+    let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(climate, celestial)
+        + SURFACE_AIR_MASS_COUPLING_500_HPA * surface_air_temperature_anomaly_c
         + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C
             * procedural_weather_noise(
                 world_geometry,
@@ -632,16 +712,20 @@ pub fn procedural_atmosphere_primary(
                 position_m,
                 AIR_TEMPERATURE_500_HPA_NOISE,
             ) as f32;
-    let water_vapor_g_kg = (7.5
-        + 4.0
+    let climate_air_temperature_c = current_air_temperature_c(climate, celestial);
+    let climate_saturation_capacity_g_kg =
+        3.5 * libm::exp(0.055 * f64::from(climate_air_temperature_c + 5.0)) as f32;
+    let water_vapor_fraction = 0.67
+        + 0.4
             * procedural_weather_noise(
                 world_geometry,
                 match_seed,
                 tick,
                 position_m,
                 WATER_VAPOR_NOISE,
-            ) as f32)
-        .clamp(1.0, 14.0);
+            ) as f32;
+    let water_vapor_g_kg =
+        (climate_saturation_capacity_g_kg * water_vapor_fraction).clamp(0.5, 25.0);
 
     AtmospherePrimary {
         pressure_hpa: 1013.25
@@ -978,6 +1062,18 @@ pub fn procedural_solid_surface_elevation_m(
 ) -> f32 {
     let bedrock_elevation_m =
         procedural_terrain_elevation_m(world_geometry, match_seed, position_m);
+    solid_surface_elevation_from_bedrock_m(
+        bedrock_elevation_m,
+        annual_mean_air_temperature_c,
+        geographic_latitude_degrees,
+    )
+}
+
+fn solid_surface_elevation_from_bedrock_m(
+    bedrock_elevation_m: f32,
+    annual_mean_air_temperature_c: f32,
+    geographic_latitude_degrees: f32,
+) -> f32 {
     let annual_temperature_c =
         annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
     let cold = 1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_c)) as f32;

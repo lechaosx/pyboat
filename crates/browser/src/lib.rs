@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use game::{
-    computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
-    match_environment, procedural_match_environment,
+    WorldEnvironment, computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment,
+    dinghy_parameters, match_environment, procedural_match_environment,
+    procedural_world_environment,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::{Rotation, Vector};
@@ -61,6 +62,15 @@ pub fn sample_world_geometry(
         latitude_degrees: geometry.latitude_degrees(raw_center_m[1]),
         local_solar_phase: geometry.local_solar_phase(global_day_phase, raw_center_m[0]),
     }
+}
+
+pub fn sample_production_world_environment(
+    geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    center_m: Vector,
+) -> WorldEnvironment {
+    procedural_world_environment(geometry, match_seed, tick, center_m)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
