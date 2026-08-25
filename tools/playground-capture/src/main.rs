@@ -3,7 +3,8 @@ use std::{env, fs, path::PathBuf};
 use bytemuck::{Pod, Zeroable};
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_air_temperature_c, derive_weather, tide_height_m,
+    climate_surface, current_air_temperature_c, derive_weather, surface_weather_transport,
+    tide_height_m,
 };
 use rapier2d::prelude::Vector;
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,8 @@ struct SceneUniforms {
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
     cloud_anchor_phase: [f32; 2],
+    surface_weather_transport_m: [f32; 4],
+    world_phases: [f32; 4],
 }
 
 #[repr(C)]
@@ -496,6 +499,8 @@ fn render_scenario(
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
     let low_cloud_epoch = (options.time_seconds / 1800.0).floor() as u64;
     let upper_cloud_epoch = (options.time_seconds / 3600.0).floor() as u64;
+    let tick = (options.time_seconds / simulation::DT_SECONDS) as u64;
+    let surface_weather_transport = surface_weather_transport(world_geometry, options.seed, tick);
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -541,6 +546,18 @@ fn render_scenario(
         cloud_anchor_phase: [
             options.time_seconds.rem_euclid(1800.0) / 1800.0,
             options.time_seconds.rem_euclid(3600.0) / 3600.0,
+        ],
+        surface_weather_transport_m: [
+            surface_weather_transport.air_temperature_offset_m.x,
+            surface_weather_transport.air_temperature_offset_m.y,
+            surface_weather_transport.water_vapor_offset_m.x,
+            surface_weather_transport.water_vapor_offset_m.y,
+        ],
+        world_phases: [
+            conditions.day_phase,
+            conditions.season_phase,
+            conditions.moon_phase,
+            0.0,
         ],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

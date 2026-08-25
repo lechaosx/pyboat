@@ -163,20 +163,31 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   storm entity. **[Implicit]** Pressure directions are quantized to integer
   wavevectors of the rectangular torus so the potential and its analytic gradient
   join continuously on both seams.
-- **[Explicit]** Rendering samples primary weather at the local boat and applies
-  it uniformly across the viewport. WGSL recomputes short derivations rather than
-  accepting derived-weather or integrated cloud-offset inputs.
+- **[Explicit]** Surface rendering derives signed latitude, local solar time,
+  climate, transported surface temperature and moisture, snow and solid ice,
+  astronomical tide, and celestial lighting at every rendered world position.
+  Its procedural inputs are match seed, geometry, global day/season/lunar phase,
+  and tick; the view-center Rust sample is diagnostic and never drives the
+  surface scene. **[Implicit]** The host reduces the tick to bounded toroidal
+  transport offsets before upload so WGSL never converts total time to `f32`.
+  As a temporary cloud-only exception, the current client may apply
+  center-sampled primary weather and layer winds uniformly until the shared-cloud
+  replacement owns spatial forcing. WGSL recomputes short derivations rather
+  than accepting derived weather.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
-  two-dimensional latent field. Adjacent deterministic temporal anchors are
+  latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with
   a smootherstep-timed orthogonal blend, so any absolute tick is directly
   queryable without accumulated simulation error or midpoint variance loss.
   Low cloud uses complete unsheltered surface wind and upper cloud uses broad
   synoptic wind sampled for the view; player identity does not affect either
-  field. **[Implicit]** The current renderer uses one frozen local velocity for
-  each finite flow map, a 30-minute low-layer anchor interval, and a 60-minute
-  upper-layer interval. Unresolved octaves fade against the fragment's
-  world-space pixel footprint. Existing weather-dependent transfer functions
+  field. **[Implicit]** Cloud octaves use circle-embedded four-dimensional
+  simplex noise, avoiding the finite-precision phase joins that thresholding can
+  expose in the cheaper periodic two-dimensional kernel. The current renderer
+  uses one frozen local velocity for each finite flow map, a 30-minute low-layer
+  anchor interval, and a 60-minute upper-layer interval. Unresolved octaves fade
+  against the fragment's world-space pixel footprint. Existing weather-dependent
+  transfer functions
   continue to shape the latent fields into the visible decorative low layer and
   the invisible upper coverage layer, including their lighting and projected
   shadows.
@@ -188,7 +199,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
   depth and grounding. WGSL mirrors that surface, blends it into land, and
   preserves a sharp water-facing boundary. Persistent polar cold expands this
-  surface through progressively deeper water and can close the sea.
+  surface through progressively deeper water according to local depth and the
+  broad noise field that also forms islands. This remains a stateless field
+  evaluation rather than an island-distance or propagation solve. Normal polar
+  closure saturates before the pole so the pole is fully frozen without making
+  the advancing edge a latitude contour; a separate extreme-cold response can
+  close deep water farther from the pole.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only at
   positions where boats require it. A single procedural surface normal combines
@@ -216,9 +232,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   live tuning and diagnostic state without adding that interface to production.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day, season, and moon phases. Rendering-grade astronomy derives light and tide;
-  ambient illumination remains separate from spatial direct-light shadows. Cloud
-  shadow displacement follows physical layer height and light direction rather
-  than a readability-compressed offset.
+  direct sun and moon intensity both respond to source elevation, while ambient
+  illumination remains separate from spatial direct-light shadows. Cloud shadow
+  displacement follows physical layer height and light direction rather than a
+  readability-compressed offset.
 - **[Explicit]** Canonical normalized north-south position maps linearly from
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
@@ -228,16 +245,17 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   season and lunar phase remain global.
 - **[Explicit]** Playground diagnostics may approximate authoritative shelter but
   never feed derived results back into primary inputs or gameplay physics.
-- **[Explicit]** The playground samples its view-center geometry and opt-in live
-  physical causes through the browser's Rust/WASM boundary. Coordinate wrapping,
-  normalization, signed latitude, local solar phase, climate, primary weather,
-  derived weather, tide, and surface climate therefore use the production Rust
-  sampler. Manual scenarios remain available as primary-cause overrides. Its DOM
-  overlay marks the raw view center and can draw opt-in repeated reference and
-  seam lines. The selected rectangle drives the production procedural scene
-  shader, whose terrain, material detail, and cloud fields repeat continuously
-  while raw camera coordinates remain unbounded for panning and measurement.
-  Its geometry diagnostic reports each representative octave's fixed basis,
+- **[Explicit]** The playground always samples live production state through the
+  browser's Rust/WASM boundary and retains manual scenarios as primary-cause
+  overrides. Its view-center geometry and environment sample is diagnostic; the
+  production scene independently evaluates spatial surface conditions at each
+  rendered world position. The DOM overlay marks the raw view center and always
+  repeats the reference meridian, equator, and both seams. The selected rectangle
+  drives the production procedural scene shader. Its seeded noises, terrain,
+  material detail, tide, and cloud fields repeat continuously while
+  latitude-derived seasonal state retains the accepted polar-loop discontinuity
+  and raw camera coordinates remain unbounded for panning and measurement. Its
+  geometry diagnostic reports each representative octave's fixed basis,
   requested wavelength, effective per-axis wavelength, and relative error.
 - **[Implicit]** Playground world-width and world-height controls cover 8 km to
   256 km independently in 1 km steps, with the 64 km square match default.

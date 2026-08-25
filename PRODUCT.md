@@ -74,7 +74,10 @@ current playable behavior; this file does not track delivery status.
   solid ice derive analytically without stored per-location history.
 - **[Explicit]** Solid ice is land for boats. It blends into exposed land but
   ends at water with a sharp, readable boundary. Persistent polar cold expands
-  it across the sea and can close the sea entirely.
+  it across the sea using the same procedural causes that shape islands together
+  with local depth. The pole itself is fully frozen, while the advancing cap edge
+  remains irregular instead of following a latitude-only cutoff. Extreme
+  persistent cold can close the deep sea entirely.
 
 ## Presentation
 
@@ -163,10 +166,13 @@ current playable behavior; this file does not track delivery status.
   sliders, initialized to the square production default. A red cross marks the
   view-center sample, whose raw and canonical coordinates, normalized torus
   coordinates, signed latitude, and local solar phase remain visible while
-  panning. The procedural scene repeats seamlessly at the selected rectangle's
-  longitude and identified polar seams, and changing either dimension regenerates
-  its spatial realization. An opt-in diagnostic guide repeats the reference
-  meridian, equator, and both seams over the scene.
+  panning. The procedural noises repeat seamlessly at the selected rectangle's
+  longitude and identified polar seams, while latitude-derived seasonal state
+  retains the accepted discontinuity at the polar loop. Changing either
+  dimension regenerates the spatial realization. A persistent diagnostic guide
+  repeats the reference meridian, equator, and both seams over the scene. The lab
+  always samples the live spatial world; scenarios remain primary-cause
+  overrides rather than a switch to a separate nonspatial scene.
 - **[Explicit]** The lab presents local solar time in hours, season as an
   approximate real-numbered month, and lunar phase with named landmarks while
   retaining normalized runtime phases internally.

@@ -1,6 +1,7 @@
 import {
   sample_playground_environment,
   sample_playground_noise_octave,
+  sample_playground_surface_weather_transport,
   sample_playground_world_geometry,
 } from "browser";
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
@@ -22,7 +23,6 @@ type State = {
   worldTimeScale: number;
   timeScalesLocked: boolean;
   paused: boolean;
-  liveWorld: boolean;
   worldTimeSeconds: number;
   pressureHpa: number;
   pressureGradient: number;
@@ -84,13 +84,12 @@ type State = {
   shelterStrength: number;
   shelterEnabled: number;
   landscapeCompositionEnabled: number;
-  geometryGuideVisible: number;
   debugView: number;
 };
 
 type NumericStateKey = Exclude<
   keyof State,
-  "seed" | "paused" | "timeScalesLocked" | "liveWorld"
+  "seed" | "paused" | "timeScalesLocked"
 >;
 type RangeControl = {
   type: "range";
@@ -147,7 +146,6 @@ const defaults: State = {
   worldTimeScale: 0,
   timeScalesLocked: false,
   paused: false,
-  liveWorld: false,
   worldTimeSeconds: 0,
   pressureHpa: 1008,
   pressureGradient: 1.0,
@@ -209,7 +207,6 @@ const defaults: State = {
   shelterStrength: 1,
   shelterEnabled: 1,
   landscapeCompositionEnabled: 1,
-  geometryGuideVisible: 0,
   debugView: 0,
 };
 
@@ -407,14 +404,6 @@ const landscapeCompositionKeys = new Set<NumericStateKey>([
   "seasonalVegetationVisible",
 ]);
 const tideKeys = new Set<NumericStateKey>(["tidalRange", "tidalPhaseOffset"]);
-const sampledCauseKeys = new Set<NumericStateKey>([
-  "pressureHpa", "pressureGradient", "pressureGradientDirection",
-  "synopticPressureGradient", "synopticPressureGradientDirection",
-  "annualMeanAirTemperature", "currentAirTemperatureAnomaly",
-  "seasonalTemperatureRange", "diurnalTemperatureRange", "currentUpperAirTemperature",
-  "temperatureGradient", "temperatureGradientDirection", "currentWaterVapor",
-  "geographicLatitude", "seasonPhase", "dayPhase", "moonPhase", "tidalRange", "tidalPhaseOffset",
-]);
 const subtoggleKeys = new Set<NumericStateKey>([
   "lowCloudVisible", "lowCloudShadow", "upperCloudShadow", "upperShadowOnLowCloud",
   ...landscapeCompositionKeys,
@@ -433,14 +422,18 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [12, "Low height field"],
     [16, "Surface wind"], [17, "Upper wind"], [18, "Vertical wind shear"],
     [19, "Pressure gradient"], [20, "Temperature gradient"], [21, "Terrain shelter"],
+    [49, "Signed latitude"], [50, "Local solar time"],
+    [52, "Surface air temperature"], [56, "Solar elevation"],
   ],
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
     [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
     [38, "Vegetation field"], [39, "Coastal character · RGB"], [40, "Seasonal snow"],
     [41, "Solid ice"], [42, "Autumn vegetation"],
+    [51, "Annual climate"], [53, "Spatial snow"], [54, "Spatial ice climate"],
+    [57, "Climate / snow / ice · RGB"],
   ],
-  water: [[0, "Final composition"], [48, "Tide height"]],
+  water: [[0, "Final composition"], [48, "Tide height"], [55, "Spatial tide height"]],
 };
 
 const weatherScenarios = scenarioDefinitions as WeatherScenarioDefinition[];
@@ -587,7 +580,6 @@ function updateDependentControls(): void {
   setControlsEnabled(["shelterStrength"], state.shelterEnabled > 0.5);
   setControlsEnabled(landscapeCompositionKeys, state.landscapeCompositionEnabled > 0.5);
   setControlsEnabled(tideKeys, state.tidesEnabled > 0.5);
-  setControlsEnabled(sampledCauseKeys, !state.liveWorld);
 }
 
 function resetButton(
@@ -872,7 +864,6 @@ function renderScenarios(): void {
     button.textContent = label;
     button.title = description;
     button.addEventListener("click", () => {
-      setLiveWorld(false);
       valueTransitions.clear();
       const from: Partial<State> = {};
       for (const key of Object.keys(values) as NumericStateKey[]) {
@@ -897,10 +888,8 @@ worldToolbarElement.innerHTML = `
   <details open>
     <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control toggle-control no-reset"><input id="live-world" type="checkbox"><label class="control-name" for="live-world">Sample live world at view center</label></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-width">World width · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-height">World height · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
-    <div class="control toggle-control no-reset"><input id="show-seams" type="checkbox"><label class="control-name" for="show-seams">Show seams</label></div>
     <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
@@ -908,12 +897,10 @@ worldToolbarElement.innerHTML = `
     <div class="geometry-measurements"><h3>View-center geometry</h3><div id="geometry-measurements" class="derived-grid"></div></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
-const liveWorldInput = worldToolbarElement.querySelector<HTMLInputElement>("#live-world")!;
 const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width")!;
 const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
 const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
-const showSeamsInput = worldToolbarElement.querySelector<HTMLInputElement>("#show-seams")!;
 const geometryMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#geometry-measurements")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
@@ -924,14 +911,6 @@ const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
 });
-function setLiveWorld(enabled: boolean): void {
-  state.liveWorld = enabled;
-  liveWorldInput.checked = enabled;
-  presetTransition = undefined;
-  valueTransitions.clear();
-  updateDependentControls();
-}
-liveWorldInput.addEventListener("change", () => setLiveWorld(liveWorldInput.checked));
 function setWorldDimension(
   key: "worldWidthM" | "worldHeightM",
   valueKm: number,
@@ -964,10 +943,6 @@ worldHeightValueInput.addEventListener("input", () => {
 });
 worldHeightValueInput.addEventListener("change", () => {
   setWorldDimension("worldHeightM", state.worldHeightM / 1000, worldHeightInput, worldHeightValueInput);
-});
-showSeamsInput.checked = state.geometryGuideVisible > 0.5;
-showSeamsInput.addEventListener("change", () => {
-  state.geometryGuideVisible = Number(showSeamsInput.checked);
 });
 function syncTimeScaleInputs(): void {
   cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
@@ -1151,7 +1126,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(36);
+const sceneFloats = new Float32Array(44);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1175,7 +1150,7 @@ function splitSeed(value: string): [number, number] {
   }
 }
 
-type LiveWorldOutputs = {
+type WorldCenterDiagnostics = {
   surfaceAirTemperatureC: number;
   surfaceWind: [number, number];
   upperWind: [number, number];
@@ -1199,7 +1174,7 @@ type LiveWorldOutputs = {
   waterDepthM: number;
 };
 
-let liveWorldOutputs: LiveWorldOutputs | undefined;
+let worldCenterDiagnostics: WorldCenterDiagnostics | undefined;
 
 function parsedSeed(): bigint {
   try {
@@ -1209,15 +1184,7 @@ function parsedSeed(): bigint {
   }
 }
 
-function magnitudeAndDirection(vector: [number, number]): [number, number] {
-  return [Math.hypot(...vector), Math.atan2(vector[1], vector[0]) * 180 / Math.PI];
-}
-
-function sampleLiveWorld(): void {
-  if (!state.liveWorld) {
-    liveWorldOutputs = undefined;
-    return;
-  }
+function sampleWorldCenterDiagnostics(): void {
   const sample = sample_playground_environment(
     state.worldWidthM,
     state.worldHeightM,
@@ -1226,40 +1193,7 @@ function sampleLiveWorld(): void {
     state.cameraX,
     state.cameraY,
   );
-  const [pressureGradient, pressureGradientDirection] = magnitudeAndDirection([
-    sample.pressure_gradient_x_hpa_per_m,
-    sample.pressure_gradient_y_hpa_per_m,
-  ]);
-  const [synopticPressureGradient, synopticPressureGradientDirection] = magnitudeAndDirection([
-    sample.synoptic_pressure_gradient_x_hpa_per_m,
-    sample.synoptic_pressure_gradient_y_hpa_per_m,
-  ]);
-  const [temperatureGradient, temperatureGradientDirection] = magnitudeAndDirection([
-    sample.temperature_gradient_x_c_per_m,
-    sample.temperature_gradient_y_c_per_m,
-  ]);
-  Object.assign(state, {
-    geographicLatitude: sample.geographic_latitude_degrees,
-    seasonPhase: sample.season_phase,
-    dayPhase: sample.day_phase,
-    moonPhase: sample.moon_phase,
-    annualMeanAirTemperature: sample.annual_mean_air_temperature_c,
-    seasonalTemperatureRange: sample.seasonal_temperature_range_c,
-    diurnalTemperatureRange: sample.diurnal_temperature_range_c,
-    pressureHpa: sample.pressure_hpa,
-    pressureGradient: pressureGradient * 1000,
-    pressureGradientDirection,
-    synopticPressureGradient: synopticPressureGradient * 1000,
-    synopticPressureGradientDirection,
-    currentAirTemperatureAnomaly: sample.surface_air_temperature_anomaly_c,
-    currentUpperAirTemperature: sample.air_temperature_500_hpa_c,
-    temperatureGradient: temperatureGradient * 1000,
-    temperatureGradientDirection,
-    currentWaterVapor: sample.water_vapor_g_kg,
-    tidalRange: sample.reference_tidal_range_m,
-    tidalPhaseOffset: sample.tidal_phase_offset,
-  });
-  liveWorldOutputs = {
+  worldCenterDiagnostics = {
     surfaceAirTemperatureC: sample.surface_air_temperature_c,
     surfaceWind: [sample.wind_x_m_s, sample.wind_y_m_s],
     upperWind: [sample.upper_wind_x_m_s, sample.upper_wind_y_m_s],
@@ -1282,7 +1216,6 @@ function sampleLiveWorld(): void {
     waterHeightM: sample.water_height_m,
     waterDepthM: sample.water_depth_m,
   };
-  for (const key of sampledCauseKeys) syncControl(key);
   sample.free();
 }
 
@@ -1377,8 +1310,8 @@ function smoothstepValue(lower: number, upper: number, value: number): number {
 }
 
 function atmosphericOutputs(): Array<[string, string]> {
-  if (liveWorldOutputs) {
-    const output = liveWorldOutputs;
+  if (worldCenterDiagnostics) {
+    const output = worldCenterDiagnostics;
     const speed = (value: [number, number]) => Math.hypot(...value);
     const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
     const angle = (value: [number, number, number]): string => {
@@ -1488,15 +1421,15 @@ function atmosphericOutputs(): Array<[string, string]> {
 }
 
 function surfaceOutputs(): Array<[string, string]> {
-  if (liveWorldOutputs) {
+  if (worldCenterDiagnostics) {
     return [
-      ["Ground temperature", `${liveWorldOutputs.groundTemperatureC.toFixed(1)} °C`],
-      ["Water temperature", `${liveWorldOutputs.waterTemperatureC.toFixed(1)} °C`],
-      ["Seasonal snow", liveWorldOutputs.seasonalSnowCover.toFixed(2)],
-      ["Polar ice closure", liveWorldOutputs.polarIceClosure.toFixed(2)],
-      ["Solid ice", liveWorldOutputs.solidIceCover.toFixed(2)],
-      ["Tide height", `${liveWorldOutputs.waterHeightM.toFixed(2)} m`],
-      ["Water depth", `${liveWorldOutputs.waterDepthM.toFixed(2)} m`],
+      ["Ground temperature", `${worldCenterDiagnostics.groundTemperatureC.toFixed(1)} °C`],
+      ["Water temperature", `${worldCenterDiagnostics.waterTemperatureC.toFixed(1)} °C`],
+      ["Seasonal snow", worldCenterDiagnostics.seasonalSnowCover.toFixed(2)],
+      ["Polar ice closure", worldCenterDiagnostics.polarIceClosure.toFixed(2)],
+      ["Solid ice", worldCenterDiagnostics.solidIceCover.toFixed(2)],
+      ["Tide height", `${worldCenterDiagnostics.waterHeightM.toFixed(2)} m`],
+      ["Water depth", `${worldCenterDiagnostics.waterDepthM.toFixed(2)} m`],
     ];
   }
   const moisture = smoothstepValue(2, 10, state.currentWaterVapor);
@@ -1539,12 +1472,12 @@ function updateGeometryMeasurements(): void {
     state.dayPhase,
   );
   const values: Array<[string, string]> = [
-    ["Physical causes", state.liveWorld ? "Live production sample" : "Manual scenario"],
+    ["Physical causes", "Live world with scenario overrides"],
     ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
     ["Canonical center", `${sample.wrapped_x_m.toFixed(1)}, ${sample.wrapped_y_m.toFixed(1)} m`],
     ["Normalized torus", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
-    ["Signed latitude", `${(state.liveWorld ? state.geographicLatitude : sample.latitude_degrees).toFixed(3)}°`],
-    ["Local solar phase", `${(state.liveWorld ? state.dayPhase : sample.local_solar_phase).toFixed(4)} · ${((state.liveWorld ? state.dayPhase : sample.local_solar_phase) * 24).toFixed(2)} h`],
+    ["Signed latitude", `${sample.latitude_degrees.toFixed(3)}°`],
+    ["Local solar phase", `${sample.local_solar_phase.toFixed(4)} · ${(sample.local_solar_phase * 24).toFixed(2)} h`],
   ];
   const octaveDefinitions: Array<[string, boolean, number]> = activeDomain === "weather"
     ? [["Weather macro octave", true, 65536], ["Cloud detail octave", false, 640]]
@@ -1616,19 +1549,16 @@ function drawGeometryOverlay(): void {
   const pixelScaleY = geometryOverlayCanvas.height / geometryOverlayCanvas.clientHeight;
   geometryOverlayContext.setTransform(pixelScaleX, 0, 0, pixelScaleY, 0, 0);
   geometryOverlayContext.clearRect(0, 0, geometryOverlayCanvas.clientWidth, geometryOverlayCanvas.clientHeight);
-  const showGuide = state.geometryGuideVisible > 0.5;
-  geometryGuideLabelElement.hidden = !showGuide;
-  if (showGuide) {
-    geometryOverlayContext.lineWidth = 1;
-    geometryOverlayContext.strokeStyle = "rgb(105 189 232 / 68%)";
-    geometryOverlayContext.setLineDash([]);
-    drawPeriodicGuideLines(state.worldWidthM, 0, minimumX, maximumX, true);
-    drawPeriodicGuideLines(state.worldHeightM, 0, minimumY, maximumY, false);
-    geometryOverlayContext.strokeStyle = "rgb(229 120 136 / 82%)";
-    geometryOverlayContext.setLineDash([7, 5]);
-    drawPeriodicGuideLines(state.worldWidthM, state.worldWidthM / 2, minimumX, maximumX, true);
-    drawPeriodicGuideLines(state.worldHeightM, state.worldHeightM / 2, minimumY, maximumY, false);
-  }
+  geometryGuideLabelElement.hidden = false;
+  geometryOverlayContext.lineWidth = 1;
+  geometryOverlayContext.strokeStyle = "rgb(105 189 232 / 68%)";
+  geometryOverlayContext.setLineDash([]);
+  drawPeriodicGuideLines(state.worldWidthM, 0, minimumX, maximumX, true);
+  drawPeriodicGuideLines(state.worldHeightM, 0, minimumY, maximumY, false);
+  geometryOverlayContext.strokeStyle = "rgb(229 120 136 / 82%)";
+  geometryOverlayContext.setLineDash([7, 5]);
+  drawPeriodicGuideLines(state.worldWidthM, state.worldWidthM / 2, minimumX, maximumX, true);
+  drawPeriodicGuideLines(state.worldHeightM, state.worldHeightM / 2, minimumY, maximumY, false);
   geometryOverlayContext.setLineDash([]);
   geometryOverlayContext.strokeStyle = "#ff334f";
   geometryOverlayContext.lineWidth = 2;
@@ -1694,6 +1624,20 @@ function writeUniforms(): void {
     (state.time % 1800) / 1800,
     (state.time % 3600) / 3600,
   ], 34);
+  const transport = sample_playground_surface_weather_transport(
+    state.worldWidthM,
+    state.worldHeightM,
+    parsedSeed(),
+    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
+  );
+  sceneFloats.set([
+    transport.air_temperature_x_m,
+    transport.air_temperature_y_m,
+    transport.water_vapor_x_m,
+    transport.water_vapor_y_m,
+  ], 36);
+  transport.free();
+  sceneFloats.set([state.dayPhase, state.seasonPhase, state.moonPhase, 0], 40);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
@@ -1796,7 +1740,7 @@ function frame(now: number): void {
     syncControl("seasonPhase");
     syncControl("moonPhase");
   }
-  sampleLiveWorld();
+  sampleWorldCenterDiagnostics();
   updateDerivedOutput();
   updateGeometryMeasurements();
   writeUniforms();
@@ -1819,7 +1763,7 @@ function frame(now: number): void {
   drawGeometryOverlay();
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · ${state.liveWorld ? "live world" : "manual scenario"} · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · live world with scenario overrides · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
   requestAnimationFrame(frame);
 }
 

@@ -588,6 +588,24 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 }
 
 #[test]
+fn moonlight_strength_follows_moon_elevation() {
+    let overhead_conditions = CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: 0.0,
+        day_phase: 0.0,
+        moon_phase: 0.5,
+    };
+    let overhead = celestial_lighting(overhead_conditions);
+    let low = celestial_lighting(CelestialConditions {
+        day_phase: 0.20,
+        ..overhead_conditions
+    });
+
+    assert!(overhead.moon_direction[2] > low.moon_direction[2]);
+    assert!(overhead.moon_intensity > 1.3 * low.moon_intensity);
+}
+
+#[test]
 fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let summer = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 55.0,
@@ -755,7 +773,7 @@ fn aligned_sun_and_moon_produce_a_larger_tidal_range_than_quarter_phase() {
 fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
     let cold = climate_surface(
         ClimateConditions {
-            annual_mean_air_temperature_c: -8.0,
+            annual_mean_air_temperature_c: -30.0,
             seasonal_temperature_range_c: 18.0,
             diurnal_temperature_range_c: 4.0,
         },
@@ -783,10 +801,44 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
         8.0,
         600.0,
     );
+    let ordinary_polar_cold = climate_surface(
+        ClimateConditions {
+            annual_mean_air_temperature_c: -8.0,
+            seasonal_temperature_range_c: 18.0,
+            diurnal_temperature_range_c: 4.0,
+        },
+        CelestialConditions {
+            geographic_latitude_degrees: 75.0,
+            season_phase: 0.84,
+            day_phase: 0.5,
+            moon_phase: 0.0,
+        },
+        8.0,
+        600.0,
+    );
+    let normal_pole = climate_surface(
+        ClimateConditions {
+            annual_mean_air_temperature_c: -18.0,
+            seasonal_temperature_range_c: 44.0,
+            diurnal_temperature_range_c: 3.0,
+        },
+        CelestialConditions {
+            geographic_latitude_degrees: 90.0,
+            season_phase: 0.84,
+            day_phase: 0.5,
+            moon_phase: 0.0,
+        },
+        4.0,
+        -3_000.0,
+    );
 
     assert!(cold.seasonal_snow_cover > 0.8);
     assert!(cold.polar_ice_closure > 0.8);
     assert!(cold.solid_ice_cover > 0.8);
+    assert!(ordinary_polar_cold.polar_ice_closure < 0.05);
+    assert!(ordinary_polar_cold.solid_ice_cover > 0.8);
+    assert!(normal_pole.polar_ice_closure > 0.99);
+    assert!(normal_pole.solid_ice_cover > 0.99);
     assert!(warm.seasonal_snow_cover < 0.05);
     assert!(warm.polar_ice_closure < 0.05);
     assert!(warm.solid_ice_cover < 0.05);
@@ -849,9 +901,60 @@ fn extreme_cold_closes_deep_water_with_solid_ice() {
         .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
         .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -1_000.0)
         .expect("representative region should contain deep ocean");
-    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -8.0, 75.0);
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -30.0, 75.0);
 
     assert!(ice_elevation_m > 0.0);
+}
+
+#[test]
+fn normal_polar_climate_closes_deep_water_at_the_pole() {
+    let seed = 0x5eed;
+    let position_m = (-32..=32)
+        .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
+        .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -1_000.0)
+        .expect("representative region should contain deep ocean");
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -18.0, 90.0);
+
+    assert!(ice_elevation_m > 0.0);
+}
+
+#[test]
+fn normal_polar_ice_front_is_not_a_latitude_line() {
+    let world = WorldGeometry::default();
+    let seed = 0x5eed;
+    let latitude = 85.0;
+    let annual_mean = world_climate_conditions(latitude).annual_mean_air_temperature_c;
+    let mut frozen_deep_water = 0;
+    let mut open_deep_water = 0;
+
+    for longitude_index in 0..512 {
+        let position = Vector::new(
+            world.width_m() * (longitude_index as f32 / 512.0 - 0.5),
+            world.height_m() * latitude / 180.0,
+        );
+        let bedrock = procedural_terrain_elevation_m_in_world(world, seed, position);
+        if bedrock > -2_000.0 {
+            continue;
+        }
+        let solid = procedural_solid_surface_elevation_m_in_world(
+            world,
+            seed,
+            position,
+            annual_mean,
+            latitude,
+        );
+        if solid >= 0.0 {
+            frozen_deep_water += 1;
+        } else {
+            open_deep_water += 1;
+        }
+    }
+
+    assert!(
+        frozen_deep_water >= 8,
+        "only {frozen_deep_water} frozen samples"
+    );
+    assert!(open_deep_water >= 8, "only {open_deep_water} open samples");
 }
 
 #[test]

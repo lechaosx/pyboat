@@ -1,6 +1,6 @@
 use game::{
-    current_air_temperature_c, procedural_world_environment, world_celestial_conditions,
-    world_climate_conditions,
+    current_air_temperature_c, procedural_world_environment, surface_weather_transport,
+    world_celestial_conditions, world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::{DT_SECONDS, WorldGeometry};
@@ -102,4 +102,26 @@ fn world_environment_is_deterministic_and_continuous_away_from_the_polar_branch(
     assert!((sample.celestial.day_phase - nearby.celestial.day_phase).abs() < 0.001);
     let expected = world_celestial_conditions(world, TICK as f64 * f64::from(DT_SECONDS), position);
     assert_eq!(sample.celestial, expected);
+}
+
+#[test]
+fn renderer_weather_transport_stays_bounded_and_advances_at_huge_ticks() {
+    let world = geometry();
+    let before = surface_weather_transport(world, SEED, u64::MAX - 1);
+    let after = surface_weather_transport(world, SEED, u64::MAX);
+
+    for offset in [
+        before.air_temperature_offset_m,
+        before.water_vapor_offset_m,
+        after.air_temperature_offset_m,
+        after.water_vapor_offset_m,
+    ] {
+        assert!((0.0..world.width_m()).contains(&offset.x));
+        assert!((0.0..world.height_m()).contains(&offset.y));
+    }
+    assert_ne!(
+        before.air_temperature_offset_m,
+        after.air_temperature_offset_m
+    );
+    assert_ne!(before.water_vapor_offset_m, after.water_vapor_offset_m);
 }

@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
     PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
-    procedural_tidal_conditions, world_celestial_conditions, world_climate_conditions,
+    surface_weather_transport, world_celestial_conditions, world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -237,6 +237,54 @@ pub fn sample_playground_environment(
 }
 
 #[wasm_bindgen]
+pub struct PlaygroundSurfaceWeatherTransport {
+    air_temperature_x_m: f32,
+    air_temperature_y_m: f32,
+    water_vapor_x_m: f32,
+    water_vapor_y_m: f32,
+}
+
+#[wasm_bindgen]
+impl PlaygroundSurfaceWeatherTransport {
+    #[wasm_bindgen(getter)]
+    pub fn air_temperature_x_m(&self) -> f32 {
+        self.air_temperature_x_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn air_temperature_y_m(&self) -> f32 {
+        self.air_temperature_y_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn water_vapor_x_m(&self) -> f32 {
+        self.water_vapor_x_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn water_vapor_y_m(&self) -> f32 {
+        self.water_vapor_y_m
+    }
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_surface_weather_transport(
+    width_m: f32,
+    height_m: f32,
+    match_seed: u64,
+    tick: u64,
+) -> Result<PlaygroundSurfaceWeatherTransport, JsValue> {
+    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let transport = surface_weather_transport(geometry, match_seed, tick);
+    Ok(PlaygroundSurfaceWeatherTransport {
+        air_temperature_x_m: transport.air_temperature_offset_m.x,
+        air_temperature_y_m: transport.air_temperature_offset_m.y,
+        water_vapor_x_m: transport.water_vapor_offset_m.x,
+        water_vapor_y_m: transport.water_vapor_offset_m.y,
+    })
+}
+
+#[wasm_bindgen]
 impl PlaygroundNoiseOctaveDiagnostic {
     #[wasm_bindgen(getter)]
     pub fn basis(&self) -> String {
@@ -392,6 +440,8 @@ struct SceneUniforms {
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
     cloud_anchor_phase: [f32; 2],
+    surface_weather_transport_m: [f32; 4],
+    world_phases: [f32; 4],
 }
 
 struct Renderer {
@@ -551,14 +601,11 @@ impl Renderer {
             || world_climate_conditions(celestial.geographic_latitude_degrees),
             |sample| sample.climate,
         );
-        let tide = production.map_or_else(
-            || procedural_tidal_conditions(world_geometry, 0, camera_m),
-            |sample| sample.tide,
-        );
         let primary = production.map(|sample| sample.weather.primary);
         let match_seed = match_seed.unwrap_or(0);
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
+        let surface_weather_transport = surface_weather_transport(world_geometry, match_seed, tick);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -600,8 +647,8 @@ impl Renderer {
                     celestial.moon_phase,
                 ],
                 world_surface_conditions: [
-                    tide.reference_range_m,
-                    tide.phase_offset,
+                    1.25,
+                    0.0,
                     primary.map_or(0.0, |primary| primary.surface_air_temperature_anomaly_c),
                     0.0,
                 ],
@@ -617,6 +664,21 @@ impl Renderer {
                     (upper_cloud_time.epoch >> 32) as u32,
                 ],
                 cloud_anchor_phase: [low_cloud_time.phase, upper_cloud_time.phase],
+                surface_weather_transport_m: [
+                    surface_weather_transport.air_temperature_offset_m.x,
+                    surface_weather_transport.air_temperature_offset_m.y,
+                    surface_weather_transport.water_vapor_offset_m.x,
+                    surface_weather_transport.water_vapor_offset_m.y,
+                ],
+                world_phases: [
+                    (celestial.day_phase
+                        - camera_m.x.rem_euclid(world_geometry.width_m())
+                            / world_geometry.width_m())
+                    .rem_euclid(1.0),
+                    celestial.season_phase,
+                    celestial.moon_phase,
+                    0.0,
+                ],
             }),
         );
 
