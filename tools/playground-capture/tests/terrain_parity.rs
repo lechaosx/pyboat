@@ -116,6 +116,15 @@ fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
     assert!(solar_range > 0.30);
 }
 
+#[test]
+fn cloud_formation_is_spatial_across_world() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let formation = render_debug_image(world, 58, 16, 8);
+
+    assert_grayscale(&formation);
+    assert!(channel_range(&formation, 0) > 0.20);
+}
+
 fn representative_shore(world: WorldGeometry) -> Vector {
     for x_index in -32..=32 {
         for y_index in -32..=32 {
@@ -238,6 +247,27 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
         .collect();
     columns.iter().copied().fold(f32::NEG_INFINITY, f32::max)
         - columns.iter().copied().fold(f32::INFINITY, f32::min)
+}
+
+fn assert_grayscale(bytes: &[u8]) {
+    for pixel in bytes.chunks_exact(4) {
+        assert!(pixel[0].abs_diff(pixel[1]) <= 1, "{pixel:?}");
+        assert!(pixel[1].abs_diff(pixel[2]) <= 1, "{pixel:?}");
+    }
+}
+
+fn channel_range(bytes: &[u8], channel: usize) -> f32 {
+    let minimum = bytes
+        .chunks_exact(4)
+        .map(|pixel| pixel[channel])
+        .min()
+        .unwrap();
+    let maximum = bytes
+        .chunks_exact(4)
+        .map(|pixel| pixel[channel])
+        .max()
+        .unwrap();
+    f32::from(maximum - minimum) / 255.0
 }
 
 fn signed_debug_pixel(value: f32) -> [u8; 4] {

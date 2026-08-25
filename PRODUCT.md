@@ -104,15 +104,18 @@ current playable behavior; this file does not track delivery status.
   displacing shorelines or changing collision. Visual material structure is
   calibrated for boat-scale zoom and does not expose the procedural sampling
   lattice.
-- **[Explicit]** Fine cloud geometry is a stateless deterministic match field
-  sampled for each viewport, while local weather at the boat shapes its visible
-  coverage. Clouds never conceal players or affect gameplay.
+- **[Explicit]** Cloud geometry and formation are stateless deterministic match
+  fields queryable throughout the world. Spatial temperature and moisture shape
+  local formation while pressure-derived layer winds transport the fine cloud
+  structure. Clouds never conceal players or affect gameplay.
 - **[Explicit]** A visible low layer supplies decorative wisps, detail, and wind
   cues across at most about one quarter of the view. It may cast localized
   shadows but contributes little to global overcast lighting. An invisible upper
   cloud field represents meteorological coverage through broad shadows and
-  lighting. Both respond to celestial light, while aerosol, moisture, rain, and
-  cloud cover shape scene color and mood.
+  lighting. Zero thickness means no cloud; positive thickness continuously
+  controls relief, opacity, optical depth, and both layers' shadows instead of
+  making every cloud body equally translucent. Both respond to celestial light,
+  while aerosol, moisture, rain, and cloud cover shape scene color and mood.
 - **[Explicit]** Cloud bodies read as volumetric layers rather than terrain-like
   height fields.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible

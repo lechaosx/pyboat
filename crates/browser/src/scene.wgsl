@@ -38,6 +38,16 @@ struct PlaygroundUniforms {
     diagnostics: vec4<u32>,
 };
 
+struct CloudWeatherSample {
+    relative_humidity: f32,
+    instability: f32,
+    low_coverage: f32,
+    upper_coverage: f32,
+    rain: f32,
+    stratiform: f32,
+    convective: f32,
+};
+
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
 
@@ -80,6 +90,7 @@ var<private> visual_pixel_footprint_m: f32;
 var<private> surface_position_m: vec2<f32>;
 var<private> surface_tidal_range_m: f32;
 var<private> surface_tidal_phase_offset: f32;
+var<private> surface_cloud_weather: CloudWeatherSample;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -138,71 +149,81 @@ fn upper_wind_m_s() -> vec2<f32> {
             * rotate_left(scene.moisture_and_temperature_gradient.yz);
 }
 
-fn cloud_current_air_temperature_c() -> f32 {
-    let seasonal_phase = TAU * (scene.celestial_conditions.y - 0.09);
-    let diurnal_phase = TAU * (scene.celestial_conditions.z - 0.625);
-    return scene.synoptic_pressure_and_temperature.z
-        + 0.5 * scene.pressure.w * cloud_seasonal_latitude_factor() * sin(seasonal_phase)
-        + 0.5 * scene.moisture_and_temperature_gradient.w * cos(diurnal_phase)
-        + scene.world_surface_conditions.z;
-}
-
-fn cloud_seasonal_latitude_factor() -> f32 {
-    let magnitude = smoothstep(0.0, 45.0, abs(scene.celestial_conditions.x));
-    return select(magnitude, -magnitude, scene.celestial_conditions.x < 0.0);
+fn surface_latitude_degrees_at(position_m: vec2<f32>) -> f32 {
+    return 180.0 * position_m.y / scene.world_size_m.y;
 }
 
 fn surface_latitude_degrees() -> f32 {
-    return 180.0 * surface_position_m.y / scene.world_size_m.y;
+    return surface_latitude_degrees_at(surface_position_m);
+}
+
+fn surface_local_solar_phase_at(position_m: vec2<f32>) -> f32 {
+    return fract(scene.world_phases.x + position_m.x / scene.world_size_m.x);
 }
 
 fn surface_local_solar_phase() -> f32 {
-    return fract(scene.world_phases.x + surface_position_m.x / scene.world_size_m.x);
+    return surface_local_solar_phase_at(surface_position_m);
 }
 
-fn surface_seasonal_latitude_factor() -> f32 {
-    let latitude = surface_latitude_degrees();
+fn surface_seasonal_latitude_factor_at(position_m: vec2<f32>) -> f32 {
+    let latitude = surface_latitude_degrees_at(position_m);
     let magnitude = smoothstep(0.0, 45.0, abs(latitude));
     return select(magnitude, -magnitude, latitude < 0.0);
 }
 
-fn surface_polar_fraction() -> f32 {
-    return pow(clamp(abs(surface_latitude_degrees()) / 90.0, 0.0, 1.0), 1.5);
+fn surface_seasonal_latitude_factor() -> f32 {
+    return surface_seasonal_latitude_factor_at(surface_position_m);
+}
+
+fn surface_polar_fraction_at(position_m: vec2<f32>) -> f32 {
+    return pow(clamp(abs(surface_latitude_degrees_at(position_m)) / 90.0, 0.0, 1.0), 1.5);
+}
+
+fn surface_annual_mean_air_temperature_c_at(position_m: vec2<f32>) -> f32 {
+    return 27.0 - 45.0 * surface_polar_fraction_at(position_m);
 }
 
 fn surface_annual_mean_air_temperature_c() -> f32 {
-    return 27.0 - 45.0 * surface_polar_fraction();
+    return surface_annual_mean_air_temperature_c_at(surface_position_m);
+}
+
+fn surface_seasonal_temperature_range_c_at(position_m: vec2<f32>) -> f32 {
+    return 3.0 + 41.0 * pow(surface_polar_fraction_at(position_m), 0.9);
 }
 
 fn surface_seasonal_temperature_range_c() -> f32 {
-    return 3.0 + 41.0 * pow(surface_polar_fraction(), 0.9);
+    return surface_seasonal_temperature_range_c_at(surface_position_m);
+}
+
+fn surface_diurnal_temperature_range_c_at(position_m: vec2<f32>) -> f32 {
+    return 6.0 - 3.0 * surface_polar_fraction_at(position_m);
 }
 
 fn surface_diurnal_temperature_range_c() -> f32 {
-    return 6.0 - 3.0 * surface_polar_fraction();
+    return surface_diurnal_temperature_range_c_at(surface_position_m);
 }
 
-fn surface_air_temperature_anomaly_c() -> f32 {
+fn surface_air_temperature_anomaly_c_at(position_m: vec2<f32>) -> f32 {
     return 13.0 * 0.75 * spatial_weather_fractal(
         vec2<u32>(0x38d01377u, 0x452821e6u),
-        surface_position_m - scene.surface_weather_transport_m.xy,
+        position_m - scene.surface_weather_transport_m.xy,
         65536.0,
         4u,
         4u,
     );
 }
 
-fn surface_water_vapor_g_kg() -> f32 {
+fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
     let seasonal_phase = TAU * (scene.world_phases.y - 0.09);
-    let climate_temperature_c = surface_annual_mean_air_temperature_c()
-        + 0.5 * surface_seasonal_temperature_range_c()
-            * surface_seasonal_latitude_factor() * sin(seasonal_phase)
-        + 0.5 * surface_diurnal_temperature_range_c()
-            * cos(TAU * (surface_local_solar_phase() - 0.625));
+    let climate_temperature_c = surface_annual_mean_air_temperature_c_at(position_m)
+        + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
+            * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase)
+        + 0.5 * surface_diurnal_temperature_range_c_at(position_m)
+            * cos(TAU * (surface_local_solar_phase_at(position_m) - 0.625));
     let capacity_g_kg = 3.5 * exp(0.055 * (climate_temperature_c + 5.0));
     let noise = 0.75 * spatial_weather_fractal(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
-        surface_position_m - scene.surface_weather_transport_m.zw,
+        position_m - scene.surface_weather_transport_m.zw,
         3584.0,
         5u,
         4u,
@@ -210,14 +231,22 @@ fn surface_water_vapor_g_kg() -> f32 {
     return clamp(capacity_g_kg * (0.67 + 0.4 * noise), 0.5, 25.0);
 }
 
-fn surface_current_air_temperature_c() -> f32 {
+fn surface_water_vapor_g_kg() -> f32 {
+    return surface_water_vapor_g_kg_at(surface_position_m);
+}
+
+fn surface_current_air_temperature_c_at(position_m: vec2<f32>) -> f32 {
     let seasonal_phase = TAU * (scene.world_phases.y - 0.09);
-    let diurnal_phase = TAU * (surface_local_solar_phase() - 0.625);
-    return surface_annual_mean_air_temperature_c()
-        + 0.5 * surface_seasonal_temperature_range_c()
-            * surface_seasonal_latitude_factor() * sin(seasonal_phase)
-        + 0.5 * surface_diurnal_temperature_range_c() * cos(diurnal_phase)
-        + surface_air_temperature_anomaly_c();
+    let diurnal_phase = TAU * (surface_local_solar_phase_at(position_m) - 0.625);
+    return surface_annual_mean_air_temperature_c_at(position_m)
+        + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
+            * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase)
+        + 0.5 * surface_diurnal_temperature_range_c_at(position_m) * cos(diurnal_phase)
+        + surface_air_temperature_anomaly_c_at(position_m);
+}
+
+fn surface_current_air_temperature_c() -> f32 {
+    return surface_current_air_temperature_c_at(surface_position_m);
 }
 
 fn ground_temperature_c(elevation_m: f32) -> f32 {
@@ -297,21 +326,19 @@ fn initialize_surface_tide() {
         );
 }
 
-fn relative_humidity() -> f32 {
-    let air_temperature_c = cloud_current_air_temperature_c();
+fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    let air_temperature_c = surface_current_air_temperature_c_at(position_m);
     let saturation_capacity_g_kg = 3.5 * exp(0.055 * (air_temperature_c + 5.0));
-    return clamp(scene.moisture_and_temperature_gradient.x / saturation_capacity_g_kg, 0.0, 1.5);
-}
-
-fn atmospheric_instability() -> f32 {
-    return smoothstep(
+    let relative_humidity = clamp(
+        surface_water_vapor_g_kg_at(position_m) / saturation_capacity_g_kg,
+        0.0,
+        1.5,
+    );
+    let instability = smoothstep(
         28.0,
         48.0,
-        cloud_current_air_temperature_c() - scene.synoptic_pressure_and_temperature.w,
+        air_temperature_c - scene.synoptic_pressure_and_temperature.w,
     );
-}
-
-fn atmospheric_lift() -> f32 {
     let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, scene.pressure.x);
     let gradient_lift = smoothstep(0.0002, 0.0015, length(scene.pressure.yz));
     let frontal_lift = smoothstep(
@@ -319,57 +346,63 @@ fn atmospheric_lift() -> f32 {
         0.0005,
         length(scene.moisture_and_temperature_gradient.yz),
     );
-    return clamp(0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift, 0.0, 1.0);
+    let lift = clamp(
+        0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift,
+        0.0,
+        1.0,
+    );
+    let condensation = smoothstep(0.45, 0.95, relative_humidity);
+    let signal = 0.68 * condensation
+        + 0.22 * lift
+        + 0.10 * instability * condensation;
+    let low_coverage = smoothstep(0.50, 0.98, signal);
+    let upper_coverage = smoothstep(
+        0.68,
+        0.90,
+        0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift,
+    );
+    let rain_signal = smoothstep(0.65, 0.75, low_coverage)
+        * low_coverage
+        * (0.45 + 0.20 * instability + 0.45 * lift);
+    let rain = smoothstep(0.55, 0.90, rain_signal);
+
+    var weather: CloudWeatherSample;
+    weather.relative_humidity = relative_humidity;
+    weather.instability = instability;
+    weather.low_coverage = low_coverage;
+    weather.upper_coverage = upper_coverage;
+    weather.rain = rain;
+    weather.stratiform = clamp(
+        smoothstep(0.78, 1.05, relative_humidity)
+            * (1.0 - instability)
+            * smoothstep(0.18, 0.75, lift),
+        0.0,
+        1.0,
+    );
+    weather.convective = clamp(
+        instability
+            * smoothstep(0.35, 0.85, lift)
+            * mix(0.45, 1.0, rain),
+        0.0,
+        1.0,
+    );
+    return weather;
+}
+
+fn relative_humidity() -> f32 {
+    return surface_cloud_weather.relative_humidity;
 }
 
 fn low_cloud_coverage() -> f32 {
-    let condensation = smoothstep(0.45, 0.95, relative_humidity());
-    let signal = 0.68 * condensation
-        + 0.22 * atmospheric_lift()
-        + 0.10 * atmospheric_instability() * condensation;
-    return smoothstep(0.50, 0.98, signal);
+    return surface_cloud_weather.low_coverage;
 }
 
 fn upper_cloud_coverage() -> f32 {
-    let condensation = smoothstep(0.45, 0.95, relative_humidity());
-    let frontal_lift = smoothstep(
-        0.00005,
-        0.0005,
-        length(scene.moisture_and_temperature_gradient.yz),
-    );
-    return smoothstep(
-        0.68,
-        0.90,
-        0.55 * condensation + 0.30 * atmospheric_lift() + 0.15 * frontal_lift,
-    );
+    return surface_cloud_weather.upper_coverage;
 }
 
 fn rain_intensity() -> f32 {
-    let cloudiness = low_cloud_coverage();
-    let signal = smoothstep(0.65, 0.75, cloudiness)
-        * cloudiness
-        * (0.45 + 0.20 * atmospheric_instability() + 0.45 * atmospheric_lift());
-    return smoothstep(0.55, 0.90, signal);
-}
-
-fn stratiform_amount() -> f32 {
-    return clamp(
-        smoothstep(0.78, 1.05, relative_humidity())
-            * (1.0 - atmospheric_instability())
-            * smoothstep(0.18, 0.75, atmospheric_lift()),
-        0.0,
-        1.0,
-    );
-}
-
-fn convective_amount() -> f32 {
-    return clamp(
-        atmospheric_instability()
-            * smoothstep(0.35, 0.85, atmospheric_lift())
-            * mix(0.45, 1.0, rain_intensity()),
-        0.0,
-        1.0,
-    );
+    return surface_cloud_weather.rain;
 }
 
 fn wind_shear_amount() -> f32 {
@@ -856,6 +889,7 @@ fn visual_cloud_noise_sample(
     anchor_epoch: vec2<u32>,
     anchor_phase: f32,
     refresh_period_seconds: f32,
+    pixel_footprint_m: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
@@ -874,8 +908,8 @@ fn visual_cloud_noise_sample(
         + velocity_m_s * ((1.0 - phase) * refresh_period_seconds);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_visibility = smoothstep(
-            visual_pixel_footprint_m,
-            2.0 * visual_pixel_footprint_m,
+            pixel_footprint_m,
+            2.0 * pixel_footprint_m,
             wavelength_m,
         );
         if octave_visibility > 0.0 {
@@ -918,18 +952,8 @@ fn visual_cloud_noise_sample(
     return sample;
 }
 
-fn smoothstep_gradient(
-    lower: f32,
-    upper: f32,
-    value: f32,
-    gradient: vec2<f32>,
-) -> vec2<f32> {
-    let amount = clamp((value - lower) / (upper - lower), 0.0, 1.0);
-    let inside = select(0.0, 1.0, value > lower && value < upper);
-    return gradient * inside * 6.0 * amount * (1.0 - amount) / (upper - lower);
-}
-
 struct LowCloudSample {
+    thickness: f32,
     density: f32,
     optical_depth: f32,
     height_m: f32,
@@ -941,14 +965,20 @@ struct LowCloudSample {
 };
 
 struct UpperCloudSample {
+    thickness: f32,
     optical_depth: f32,
 };
 
-fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
-    let cover = low_cloud_coverage();
-    let rain = rain_intensity();
+fn procedural_low_cloud_sample_with_weather(
+    position_m: vec2<f32>,
+    weather: CloudWeatherSample,
+    pixel_footprint_m: f32,
+) -> LowCloudSample {
+    let cover = weather.low_coverage;
+    let rain = weather.rain;
     if cover <= 0.0 {
         var empty: LowCloudSample;
+        empty.thickness = 0.0;
         empty.density = 0.0;
         empty.optical_depth = 0.0;
         empty.height_m = 0.0;
@@ -959,8 +989,8 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         empty.detail_gate = 0.0;
         return empty;
     }
-    let stratiform = stratiform_amount();
-    let convective = convective_amount();
+    let stratiform = weather.stratiform;
+    let convective = weather.convective;
     let raw_detail = visual_cloud_noise_sample(
         position_m,
         surface_wind_m_s(),
@@ -970,6 +1000,7 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
         scene.low_cloud_epoch,
         scene.cloud_anchor_phase.x,
         1800.0,
+        pixel_footprint_m,
     );
     let detail_character = mix(
         mix(clamp(tuning.cloud_detail.x, 0.0, 1.0), 0.05, 0.85 * stratiform),
@@ -1014,85 +1045,93 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     );
     let body_threshold = mix(0.78, 0.32, sqrt(target_coverage));
     let edge_softness = max(tuning.cloud_detail.w, 0.005);
-    let detail_gate = smoothstep(
-        body_threshold,
-        body_threshold + edge_softness,
-        detail_amount,
-    );
-    let material_density = smoothstep(0.08, 0.72, detail_amount);
     let detail_blobiness = mix(
         mix(clamp(tuning.cloud_detail.y, 0.0, 1.0), 0.0, stratiform),
         1.0,
         0.80 * convective,
     );
-    let detail_envelope = mix(
-        material_density,
-        detail_gate,
-        detail_blobiness,
-    );
     let weather_presence = smoothstep(0.0, 0.08, cover);
-    let density = weather_presence * detail_gate * detail_envelope;
-    let detail_gate_gradient = smoothstep_gradient(
-        body_threshold,
-        body_threshold + edge_softness,
-        detail_amount,
-        detail_gradient,
+    let thickness_span = max(1.0 - body_threshold, edge_softness);
+    let raw_thickness = clamp(
+        (detail_amount - body_threshold) / thickness_span,
+        0.0,
+        1.0,
     );
-    let material_gradient = smoothstep_gradient(
-        0.08,
-        0.72,
-        detail_amount,
-        detail_gradient,
+    let rounded_thickness = raw_thickness * raw_thickness
+        * (3.0 - 2.0 * raw_thickness);
+    let thickness = weather_presence * mix(
+        raw_thickness,
+        rounded_thickness,
+        0.45 * detail_blobiness,
     );
-    let detail_envelope_gradient = mix(
-        material_gradient,
-        detail_gate_gradient,
-        detail_blobiness,
+    let thickness_inside = select(
+        0.0,
+        1.0,
+        detail_amount > body_threshold && detail_amount < 1.0,
     );
-    let density_gradient = weather_presence * (
-        detail_gate_gradient * detail_envelope
-        + detail_gate * detail_envelope_gradient
+    let raw_thickness_gradient = thickness_inside * detail_gradient / thickness_span;
+    let rounded_thickness_gradient = 6.0
+        * raw_thickness * (1.0 - raw_thickness) * raw_thickness_gradient;
+    let thickness_gradient = weather_presence * mix(
+        raw_thickness_gradient,
+        rounded_thickness_gradient,
+        0.45 * detail_blobiness,
     );
+    let density = thickness;
     let height_detail = 0.35 + 0.65 * detail_amount;
     let height_scale_m = mix(
         mix(320.0, 120.0, stratiform),
         560.0,
         convective,
     );
-    let height_m = height_scale_m * density * density * height_detail;
+    let height_m = height_scale_m * thickness * height_detail;
     let height_gradient = height_scale_m * (
-        2.0 * density * density_gradient * height_detail
-        + 0.65 * density * density * detail_gradient
+        thickness_gradient * height_detail
+        + 0.65 * thickness * detail_gradient
     );
 
     var sample: LowCloudSample;
+    sample.thickness = thickness;
     sample.density = density;
-    sample.optical_depth = density
-        * (0.16 + 0.62 * detail_amount)
+    sample.optical_depth = thickness
+        * (0.30 + 1.20 * detail_amount)
         * mix(1.0, 1.35, stratiform)
         * mix(1.0, 1.65, convective)
         * (1.0 + 0.80 * rain);
     sample.height_m = height_m;
-    sample.darkness = density
+    sample.darkness = thickness
         * (0.05 + 0.18 * stratiform + 0.18 * rain);
     sample.relief = height_m / height_scale_m;
     sample.gradient = height_gradient;
     sample.detail_amount = detail_amount;
-    sample.detail_gate = detail_gate;
+    sample.detail_gate = smoothstep(0.0, edge_softness, thickness);
     return sample;
 }
 
-fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
+fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
+    return procedural_low_cloud_sample_with_weather(
+        position_m,
+        cloud_weather_at(position_m),
+        visual_pixel_footprint_m,
+    );
+}
+
+fn procedural_upper_cloud_sample_filtered(
+    position_m: vec2<f32>,
+    pixel_footprint_m: f32,
+) -> UpperCloudSample {
+    let weather = cloud_weather_at(position_m);
     let upper_coverage = clamp(
         max(
-            upper_cloud_coverage(),
-            0.30 * low_cloud_coverage() + 0.70 * rain_intensity(),
+            weather.upper_coverage,
+            0.30 * weather.low_coverage + 0.70 * weather.rain,
         ),
         0.0,
         1.0,
     );
     if upper_coverage <= 0.0 {
         var empty: UpperCloudSample;
+        empty.thickness = 0.0;
         empty.optical_depth = 0.0;
         return empty;
     }
@@ -1105,16 +1144,30 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         scene.upper_cloud_epoch,
         scene.cloud_anchor_phase.y,
         3600.0,
+        pixel_footprint_m,
     );
-    let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain_intensity();
-    let body = smoothstep(
-        upper_threshold,
-        upper_threshold + 0.10,
-        upper_noise.value,
+    let rain = weather.rain;
+    let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain;
+    let thickness = smoothstep(0.0, 0.08, upper_coverage) * clamp(
+        (upper_noise.value - upper_threshold) / max(1.0 - upper_threshold, 0.10),
+        0.0,
+        1.0,
     );
     var sample: UpperCloudSample;
-    sample.optical_depth = body * upper_coverage * (0.40 + 0.80 * rain_intensity());
+    sample.thickness = thickness;
+    sample.optical_depth = thickness * (0.45 + 1.15 * rain);
     return sample;
+}
+
+fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
+    return procedural_upper_cloud_sample_filtered(
+        position_m,
+        visual_pixel_footprint_m,
+    );
+}
+
+fn low_cloud_base_height_m(weather: CloudWeatherSample) -> f32 {
+    return 650.0 + 650.0 * weather.instability + 550.0 * weather.rain;
 }
 
 fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
@@ -1237,9 +1290,50 @@ fn projected_cloud_position(
     source_height_m: f32,
     cloud_height_m: f32,
 ) -> vec2<f32> {
-    let sun = primary_light_direction();
-    return position_m
-        + (cloud_height_m - source_height_m) * sun.xy / max(sun.z, 0.001);
+    let light = primary_light_direction();
+    let height_m = max(cloud_height_m - source_height_m, 0.0);
+    let horizontal_light = length(light.xy);
+    if height_m <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
+        return position_m;
+    }
+    let longitude = TAU * position_m.x / scene.world_size_m.x;
+    let latitude = PI * position_m.y / scene.world_size_m.y;
+    let longitude_sin = sin(longitude);
+    let longitude_cos = cos(longitude);
+    let latitude_sin = sin(latitude);
+    let latitude_cos = cos(latitude);
+    let up = vec3<f32>(
+        latitude_cos * longitude_cos,
+        latitude_cos * longitude_sin,
+        latitude_sin,
+    );
+    let east = vec3<f32>(-longitude_sin, longitude_cos, 0.0);
+    let north = vec3<f32>(
+        -latitude_sin * longitude_cos,
+        -latitude_sin * longitude_sin,
+        latitude_cos,
+    );
+    let world_light = light.x * east + light.y * north + light.z * up;
+    let world_radius_m = scene.world_size_m.x / TAU;
+    let source_radius_m = world_radius_m + max(source_height_m, 0.0);
+    let cloud_radius_m = world_radius_m + cloud_height_m;
+    let ray_origin = source_radius_m * up;
+    let origin_along_ray_m = dot(ray_origin, world_light);
+    let ray_distance_m = -origin_along_ray_m + sqrt(
+        origin_along_ray_m * origin_along_ray_m
+            + cloud_radius_m * cloud_radius_m
+            - source_radius_m * source_radius_m,
+    );
+    let cloud_position = ray_origin + ray_distance_m * world_light;
+    let cloud_direction = normalize(cloud_position);
+    return vec2<f32>(
+        scene.world_size_m.x * atan2(cloud_direction.y, cloud_direction.x) / TAU,
+        scene.world_size_m.y * asin(clamp(cloud_direction.z, -1.0, 1.0)) / PI,
+    );
+}
+
+fn cloud_shadow_contrast() -> f32 {
+    return smoothstep(0.04, 0.22, primary_light_direction().z);
 }
 
 fn terrain_smoothstep_sample(
@@ -2228,7 +2322,12 @@ fn upper_cloud_transmittance_at_low_cloud(
     ));
     return mix(
         1.0,
-        exp(-0.85 * tuning.cloud_rendering.x * upper.optical_depth),
+        exp(
+            -0.85
+                * tuning.cloud_rendering.x
+                * cloud_shadow_contrast()
+                * upper.optical_depth,
+        ),
         layer_visibility.w,
     );
 }
@@ -2240,29 +2339,51 @@ fn cloud_shadow_color(
     terrain_shadow_transmittance: f32,
     landform_grade: vec2<f32>,
 ) -> vec3<f32> {
-    let low_height_m = 650.0
-        + 650.0 * atmospheric_instability()
-        + 550.0 * rain_intensity();
+    let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
     let upper_height_m = 6200.0;
     let surface_height_m = max(elevation_m, 0.0);
+    let projected_low_position_m = projected_cloud_position(
+        position_m,
+        surface_height_m,
+        low_height_m,
+    );
+    let projected_upper_position_m = projected_cloud_position(
+        position_m,
+        surface_height_m,
+        upper_height_m,
+    );
+    let projected_low_footprint_m = max(
+        length(dpdx(projected_low_position_m)),
+        length(dpdy(projected_low_position_m)),
+    );
+    let projected_upper_footprint_m = max(
+        length(dpdx(projected_upper_position_m)),
+        length(dpdy(projected_upper_position_m)),
+    );
     if direct_light_amount() <= 0.0 {
         return surface_color * landform_grade.x * ambient_contribution_color();
     }
     var shadow_depth = 0.0;
     if layer_visibility.y > 0.0 {
-        let projected_low = procedural_low_cloud_sample(
-            projected_cloud_position(position_m, surface_height_m, low_height_m),
+        let projected_low = procedural_low_cloud_sample_with_weather(
+            projected_low_position_m,
+            cloud_weather_at(projected_low_position_m),
+            projected_low_footprint_m,
         );
         shadow_depth += layer_visibility.y * projected_low.optical_depth;
     }
     if layer_visibility.z > 0.0 {
-        let projected_upper = procedural_upper_cloud_sample(
-            projected_cloud_position(position_m, surface_height_m, upper_height_m),
+        let projected_upper = procedural_upper_cloud_sample_filtered(
+            projected_upper_position_m,
+            projected_upper_footprint_m,
         );
         shadow_depth += layer_visibility.z * projected_upper.optical_depth;
     }
     let shadow_transmittance = exp(
-        -0.85 * tuning.cloud_rendering.x * shadow_depth,
+        -0.85
+            * tuning.cloud_rendering.x
+            * cloud_shadow_contrast()
+            * shadow_depth,
     );
     let direct_transmittance = mix(
         1.0,
@@ -2346,11 +2467,13 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             surface_light_grade,
         );
         if layer_visibility.x > 0.0 {
-            let low_height_m = 650.0
-                + 650.0 * atmospheric_instability()
-                + 550.0 * rain_intensity();
+            let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
             let upper_height_m = 6200.0;
-            let low_cloud = procedural_low_cloud_sample(input.world_position_m);
+            let low_cloud = procedural_low_cloud_sample_with_weather(
+                input.world_position_m,
+                surface_cloud_weather,
+                visual_pixel_footprint_m,
+            );
             var upper_transmittance = 1.0;
             if low_cloud.density > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(
@@ -2439,15 +2562,30 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode >= 9u && mode <= 11u {
         let terrain = procedural_terrain_sample(position_m);
         let surface_height_m = max(terrain.elevation_m, tide_height_m());
-        let low_height_m = 650.0
-            + 650.0 * atmospheric_instability()
-            + 550.0 * rain_intensity();
-        let low = procedural_low_cloud_sample(projected_cloud_position(
+        let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
+        let projected_low_position_m = projected_cloud_position(
             position_m, surface_height_m, low_height_m,
-        ));
-        let upper = procedural_upper_cloud_sample(projected_cloud_position(
+        );
+        let projected_upper_position_m = projected_cloud_position(
             position_m, surface_height_m, 6200.0,
-        ));
+        );
+        let projected_low_footprint_m = max(
+            length(dpdx(projected_low_position_m)),
+            length(dpdy(projected_low_position_m)),
+        );
+        let projected_upper_footprint_m = max(
+            length(dpdx(projected_upper_position_m)),
+            length(dpdy(projected_upper_position_m)),
+        );
+        let low = procedural_low_cloud_sample_with_weather(
+            projected_low_position_m,
+            cloud_weather_at(projected_low_position_m),
+            projected_low_footprint_m,
+        );
+        let upper = procedural_upper_cloud_sample_filtered(
+            projected_upper_position_m,
+            projected_upper_footprint_m,
+        );
         if mode == 9u {
             return vec4<f32>(scalar_debug_color(low.optical_depth), 1.0);
         }
@@ -2455,7 +2593,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             return vec4<f32>(scalar_debug_color(upper.optical_depth), 1.0);
         }
         let transmittance = exp(
-            -0.85 * tuning.cloud_rendering.x * (low.optical_depth + upper.optical_depth),
+            -0.85
+                * tuning.cloud_rendering.x
+                * cloud_shadow_contrast()
+                * (low.optical_depth + upper.optical_depth),
         );
         return vec4<f32>(scalar_debug_color(transmittance), 1.0);
     }
@@ -2614,6 +2755,18 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             1.0,
         );
     }
+    if mode == 58u {
+        let formation = surface_cloud_weather.low_coverage;
+        return vec4<f32>(vec3<f32>(formation), 1.0);
+    }
+    if mode == 59u {
+        let thickness = procedural_low_cloud_sample_with_weather(
+            position_m,
+            surface_cloud_weather,
+            visual_pixel_footprint_m,
+        ).thickness;
+        return vec4<f32>(vec3<f32>(thickness), 1.0);
+    }
     return final_scene_color(input);
 }
 
@@ -2635,6 +2788,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
+    surface_cloud_weather = cloud_weather_at(surface_position_m);
     initialize_surface_tide();
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();
@@ -2660,6 +2814,7 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
+    surface_cloud_weather = cloud_weather_at(surface_position_m);
     initialize_surface_tide();
     initialize_celestial_lighting();
     sunset_scattering = calculate_sunset_scattering();

@@ -170,10 +170,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   and tick; the view-center Rust sample is diagnostic and never drives the
   surface scene. **[Implicit]** The host reduces the tick to bounded toroidal
   transport offsets before upload so WGSL never converts total time to `f32`.
-  As a temporary cloud-only exception, the current client may apply
-  center-sampled primary weather and layer winds uniformly until the shared-cloud
-  replacement owns spatial forcing. WGSL recomputes short derivations rather
-  than accepting derived weather.
+  As a temporary cloud-only exception, pressure-gradient forcing and layer winds
+  remain view-sampled inputs to cloud transport. Spatial temperature and moisture
+  are evaluated in WGSL rather than accepting center-derived weather.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
   latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with
@@ -186,11 +185,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   expose in the cheaper periodic two-dimensional kernel. The current renderer
   uses one frozen local velocity for each finite flow map, a 30-minute low-layer
   anchor interval, and a 60-minute upper-layer interval. Unresolved octaves fade
-  against the fragment's world-space pixel footprint. Existing weather-dependent
-  transfer functions
-  continue to shape the latent fields into the visible decorative low layer and
-  the invisible upper coverage layer, including their lighting and projected
-  shadows.
+  against the fragment's world-space pixel footprint. Spatial transported
+  temperature and moisture derive cloud formation at the queried position. A
+  continuous positive excess of the latent field over the local formation
+  threshold is cloud thickness, while non-positive excess is clear air.
+  Low-layer height and relief and both layers' optical depth therefore vary with
+  thickness, including in projected shadows. A query derives humidity,
+  instability, coverage, rain, and cloud type from one local weather evaluation
+  before sampling cloud detail.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -234,8 +236,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   day, season, and moon phases. Rendering-grade astronomy derives light and tide;
   direct sun and moon intensity both respond to source elevation, while ambient
   illumination remains separate from spatial direct-light shadows. Cloud shadow
-  displacement follows physical layer height and light direction rather than a
-  readability-compressed offset.
+  displacement follows physical layer height and light direction at every zoom.
+  The ray intersects a spherical cloud shell over the curved-world horizon and
+  converts the result back to the world's longitude-latitude map. World width is
+  the reference circumference while independently selected height controls the
+  map's latitude scale. Grazing rays therefore remain finite without a
+  screen-space cap or zoom-dependent approximation. Their contrast falls toward
+  the horizon, approximating the widening finite-source penumbra and increasing
+  share of diffuse sky illumination.
 - **[Explicit]** Canonical normalized north-south position maps linearly from
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
