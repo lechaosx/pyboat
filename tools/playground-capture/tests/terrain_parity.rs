@@ -1,6 +1,9 @@
 use std::{fs, io::BufReader, process::Command};
 
-use game::{procedural_terrain_elevation_m, procedural_world_environment};
+use game::{
+    CelestialConditions, climate_surface, procedural_solid_surface_elevation_m,
+    procedural_terrain_elevation_m, procedural_world_environment, world_climate_conditions,
+};
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
 
@@ -93,6 +96,68 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 }
 
 #[test]
+fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let season_phase = 0.84;
+    let position_m = (0..512)
+        .map(|index| {
+            Vector::new(
+                world.width_m() * (index as f32 / 512.0 - 0.5),
+                0.4 * world.height_m(),
+            )
+        })
+        .find(|position_m| {
+            let latitude = world.latitude_degrees(position_m.y);
+            let climate = world_climate_conditions(latitude);
+            let conditions = CelestialConditions {
+                geographic_latitude_degrees: latitude,
+                season_phase,
+                day_phase: 0.45,
+                moon_phase: 0.5,
+            };
+            let bedrock = procedural_terrain_elevation_m(world, SEED, *position_m);
+            let water_temperature_c =
+                climate_surface(climate, conditions, 9.0, -2.0, 0.0, bedrock).water_temperature_c;
+            bedrock < 0.0
+                && procedural_solid_surface_elevation_m(
+                    world,
+                    SEED,
+                    *position_m,
+                    climate.annual_mean_air_temperature_c,
+                    water_temperature_c,
+                ) > 0.0
+        })
+        .expect("winter polar region should contain sea ice");
+    let latitude = world.latitude_degrees(position_m.y);
+    let climate = world_climate_conditions(latitude);
+    let conditions = CelestialConditions {
+        geographic_latitude_degrees: latitude,
+        season_phase,
+        day_phase: 0.45,
+        moon_phase: 0.5,
+    };
+    let bedrock = procedural_terrain_elevation_m(world, SEED, position_m);
+    let water_temperature_c =
+        climate_surface(climate, conditions, 9.0, -2.0, 0.0, bedrock).water_temperature_c;
+    let solid_surface = procedural_solid_surface_elevation_m(
+        world,
+        SEED,
+        position_m,
+        climate.annual_mean_air_temperature_c,
+        water_temperature_c,
+    );
+    let actual = render_debug_image_at(world, position_m, "polar-freeze", 32, 1, 1);
+    let expected = signed_debug_pixel(solid_surface / 12.0);
+
+    for channel in 0..3 {
+        assert!(
+            actual[channel].abs_diff(expected[channel]) <= 3,
+            "at {position_m:?}: {actual:?} != {expected:?} for solid surface {solid_surface}",
+        );
+    }
+}
+
+#[test]
 fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let climate = render_debug_image(world, 57, 32, 16);
@@ -114,6 +179,27 @@ fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
 
     let solar_range = column_luminance_range(&solar, 32, 16);
     assert!(solar_range > 0.30);
+}
+
+#[test]
+fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let northern_summer = render_debug_image_for_scenario(world, "summer-midnight", 57, 32, 16);
+    let northern_winter = render_debug_image_for_scenario(world, "polar-freeze", 57, 32, 16);
+
+    let summer_south_snow = mean_channel(&northern_summer, 32, 0..8, 1);
+    let winter_south_snow = mean_channel(&northern_winter, 32, 0..8, 1);
+    let summer_north_snow = mean_channel(&northern_summer, 32, 8..16, 1);
+    let winter_north_snow = mean_channel(&northern_winter, 32, 8..16, 1);
+    assert!(winter_north_snow > summer_north_snow + 0.08);
+    assert!(summer_south_snow > winter_south_snow + 0.08);
+
+    let summer_south_ice = mean_channel(&northern_summer, 32, 0..8, 2);
+    let winter_south_ice = mean_channel(&northern_winter, 32, 0..8, 2);
+    let summer_north_ice = mean_channel(&northern_summer, 32, 8..16, 2);
+    let winter_north_ice = mean_channel(&northern_winter, 32, 8..16, 2);
+    assert!(winter_north_ice > summer_north_ice + 0.05);
+    assert!(summer_south_ice > winter_south_ice + 0.05);
 }
 
 #[test]
@@ -150,18 +236,29 @@ fn read_pixel(path: &std::path::Path) -> [u8; 4] {
 }
 
 fn render_debug_pixel(world: WorldGeometry, position_m: Vector, mode: u32) -> [u8; 4] {
-    render_debug_image_at(world, position_m, mode, 1, 1)
+    render_debug_image_at(world, position_m, "fair-cumulus", mode, 1, 1)
         .try_into()
         .unwrap()
 }
 
 fn render_debug_image(world: WorldGeometry, mode: u32, width: u32, height: u32) -> Vec<u8> {
-    render_debug_image_at(world, Vector::ZERO, mode, width, height)
+    render_debug_image_for_scenario(world, "fair-cumulus", mode, width, height)
+}
+
+fn render_debug_image_for_scenario(
+    world: WorldGeometry,
+    scenario: &str,
+    mode: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    render_debug_image_at(world, Vector::ZERO, scenario, mode, width, height)
 }
 
 fn render_debug_image_at(
     world: WorldGeometry,
     position_m: Vector,
+    scenario: &str,
     mode: u32,
     width: u32,
     height: u32,
@@ -173,7 +270,7 @@ fn render_debug_image_at(
     let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
         .args([
             "--scenario",
-            "fair-cumulus",
+            scenario,
             "--width",
             &width.to_string(),
             "--height",

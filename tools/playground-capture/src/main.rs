@@ -709,7 +709,6 @@ fn capture_report<'a>(
     let current_air_temperature =
         current_air_temperature_c(climate, conditions) + scenario.current_air_temperature_anomaly;
     let celestial = celestial_lighting(conditions);
-    let surface = climate_surface(climate, conditions, scenario.current_water_vapor, 600.0);
     let tide_height = tide_height_m(
         TidalConditions {
             reference_range_m: scenario.tidal_range,
@@ -729,6 +728,14 @@ fn capture_report<'a>(
         },
         climate,
         conditions,
+    );
+    let surface = climate_surface(
+        climate,
+        conditions,
+        scenario.current_water_vapor,
+        scenario.current_air_temperature_anomaly,
+        weather.rain_intensity,
+        600.0,
     );
     CaptureReport {
         scenario,

@@ -461,8 +461,8 @@ fn tide_water_surface_winds_weather_and_environment_repeat() {
         1.0e-4,
     );
     assert_close(
-        procedural_solid_surface_elevation_m(world, SEED, position, 14.0, -58.5),
-        procedural_solid_surface_elevation_m(world, SEED, repeated, 14.0, -58.5),
+        procedural_solid_surface_elevation_m(world, SEED, position, 14.0, 14.0),
+        procedural_solid_surface_elevation_m(world, SEED, repeated, 14.0, 14.0),
         1.0e-4,
     );
     assert_vector_close(

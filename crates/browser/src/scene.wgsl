@@ -217,9 +217,7 @@ fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
     let seasonal_phase = TAU * (scene.world_phases.y - 0.09);
     let climate_temperature_c = surface_annual_mean_air_temperature_c_at(position_m)
         + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
-            * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase)
-        + 0.5 * surface_diurnal_temperature_range_c_at(position_m)
-            * cos(TAU * (surface_local_solar_phase_at(position_m) - 0.625));
+            * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
     let capacity_g_kg = 3.5 * exp(0.055 * (climate_temperature_c + 5.0));
     let noise = 0.75 * spatial_weather_fractal(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
@@ -228,7 +226,7 @@ fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
         5u,
         4u,
     );
-    return clamp(capacity_g_kg * (0.67 + 0.4 * noise), 0.5, 25.0);
+    return clamp(capacity_g_kg * (0.67 + 0.65 * noise), 0.5, 25.0);
 }
 
 fn surface_water_vapor_g_kg() -> f32 {
@@ -251,10 +249,14 @@ fn surface_current_air_temperature_c() -> f32 {
 
 fn ground_temperature_c(elevation_m: f32) -> f32 {
     let seasonal_phase = TAU * (scene.world_phases.y - 0.13);
+    let diurnal_phase = TAU * (surface_local_solar_phase() - 0.625);
     let sea_level_temperature = surface_annual_mean_air_temperature_c()
         + 0.42 * surface_seasonal_temperature_range_c() * surface_seasonal_latitude_factor()
-            * sin(seasonal_phase);
-    return sea_level_temperature - 0.0065 * max(elevation_m, 0.0);
+            * sin(seasonal_phase)
+        + 0.15 * surface_diurnal_temperature_range_c() * cos(diurnal_phase);
+    return sea_level_temperature
+        + 0.25 * surface_air_temperature_anomaly_c_at(surface_position_m)
+        - 0.0065 * max(elevation_m, 0.0);
 }
 
 fn water_temperature_c() -> f32 {
@@ -269,8 +271,16 @@ fn climate_moisture_support() -> f32 {
 }
 
 fn seasonal_snow_cover(elevation_m: f32) -> f32 {
-    let cold = 1.0 - smoothstep(-6.0, 2.0, ground_temperature_c(elevation_m));
-    return cold * (0.35 + 0.65 * climate_moisture_support());
+    let ground_temperature = ground_temperature_c(elevation_m);
+    let air_temperature = surface_current_air_temperature_c()
+        - 0.0065 * max(elevation_m, 0.0);
+    let persistent_cold = 1.0 - smoothstep(-4.0, 4.0, ground_temperature);
+    let persistent_snow = persistent_cold * (0.35 + 0.65 * climate_moisture_support());
+    let snowfall_cold = 1.0 - smoothstep(-1.0, 2.0, air_temperature);
+    let fresh_snow = surface_cloud_weather.rain * snowfall_cold;
+    let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
+    let melt = smoothstep(0.0, 6.0, air_temperature);
+    return snow_before_melt * (1.0 - 0.7 * melt);
 }
 
 fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
@@ -557,6 +567,8 @@ struct TerrainSample {
     material_elevation_m: f32,
     material_gradient: vec2<f32>,
     ice_amount: f32,
+    water_ice_amount: f32,
+    bedrock_elevation_m: f32,
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
     coastal_sediment_amount: f32,
@@ -1354,18 +1366,48 @@ fn terrain_smoothstep_sample(
 
 fn solid_ice_sample(
     terrain: TerrainSample,
-    polar_landform: TerrainNoiseSample,
+    maritime_temperature: TerrainNoiseSample,
 ) -> TerrainSample {
     var bedrock: TerrainNoiseSample;
     bedrock.value = terrain.elevation_m;
     bedrock.gradient = terrain.gradient;
+    if bedrock.value < 0.0 {
+        var effective_water_temperature: TerrainNoiseSample;
+        let maritime_scale = 12.0 * (
+            1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees()))
+        );
+        effective_water_temperature.value = water_temperature_c()
+            + maritime_scale * maritime_temperature.value;
+        effective_water_temperature.gradient = maritime_scale * maritime_temperature.gradient;
+        let open_water = terrain_smoothstep_sample(-2.0, 0.0, effective_water_temperature);
+        let cover = 1.0 - open_water.value;
+        if cover <= 0.5 {
+            return terrain;
+        }
+        var surface = terrain;
+        surface.elevation_m = 0.25 + 1.75 * cover;
+        surface.gradient = -1.75 * open_water.gradient;
+        surface.ice_amount = smoothstep(0.5, 0.65, cover);
+        surface.water_ice_amount = cover;
+        surface.bedrock_elevation_m = bedrock.value;
+        return surface;
+    }
     var positive_bedrock: TerrainNoiseSample;
     positive_bedrock.value = max(bedrock.value, 0.0);
     positive_bedrock.gradient = select(vec2<f32>(0.0), bedrock.gradient, bedrock.value > 0.0);
     var annual_temperature: TerrainNoiseSample;
     annual_temperature.value = surface_annual_mean_air_temperature_c()
         - 0.0065 * positive_bedrock.value;
-    annual_temperature.gradient = -0.0065 * positive_bedrock.gradient;
+    let latitude = surface_latitude_degrees();
+    let normalized_latitude = clamp(abs(latitude) / 90.0, 0.0, 1.0);
+    let latitude_sign = select(-1.0, 1.0, latitude >= 0.0);
+    let climate_gradient_y = select(
+        0.0,
+        -135.0 * sqrt(normalized_latitude) * latitude_sign / scene.world_size_m.y,
+        normalized_latitude > 0.0,
+    );
+    annual_temperature.gradient = vec2<f32>(0.0, climate_gradient_y)
+        - 0.0065 * positive_bedrock.gradient;
     if annual_temperature.value >= 1.0 {
         return terrain;
     }
@@ -1373,76 +1415,8 @@ fn solid_ice_sample(
     var cold: TerrainNoiseSample;
     cold.value = 1.0 - warm.value;
     cold.gradient = -warm.gradient;
-    let polar_latitude = smoothstep(
-        55.0,
-        75.0,
-        abs(surface_latitude_degrees()),
-    );
-    let water_reach_scale = 0.25 + 0.75 * polar_latitude;
-    var water_reach: TerrainNoiseSample;
-    water_reach.value = cold.value * water_reach_scale;
-    water_reach.gradient = cold.gradient * water_reach_scale;
-    let coastal_support = terrain_smoothstep_sample(-4.0, 4.0, bedrock);
-    let ocean_support = terrain_smoothstep_sample(-6000.0, 4.0, bedrock);
-    var cold_water_support: TerrainNoiseSample;
-    cold_water_support.value = mix(
-        coastal_support.value,
-        ocean_support.value,
-        water_reach.value,
-    );
-    cold_water_support.gradient = mix(
-        coastal_support.gradient,
-        ocean_support.gradient,
-        water_reach.value,
-    ) + water_reach.gradient * (ocean_support.value - coastal_support.value);
-    var expansion: TerrainNoiseSample;
-    expansion.value = cold.value * cold_water_support.value;
-    expansion.gradient = cold.gradient * cold_water_support.value
-        + cold_water_support.gradient * cold.value;
-    let normal_front_latitude = 85.0
-        - 3.0 * polar_landform.value
-        - 2.0 * ocean_support.value;
-    let normal_front_gradient = -3.0 * polar_landform.gradient
-        - 2.0 * ocean_support.gradient;
-    let normal_front_phase = clamp(
-        (abs(surface_latitude_degrees()) - normal_front_latitude) / 2.0,
-        0.0,
-        1.0,
-    );
-    let normal_front_amount = normal_front_phase * normal_front_phase
-        * (3.0 - 2.0 * normal_front_phase);
-    let normal_front_inside = select(
-        0.0,
-        1.0,
-        normal_front_phase > 0.0 && normal_front_phase < 1.0,
-    );
-    let latitude_gradient = vec2<f32>(
-        0.0,
-        select(
-            -180.0 / scene.world_size_m.y,
-            180.0 / scene.world_size_m.y,
-            surface_latitude_degrees() >= 0.0,
-        ),
-    );
-    let normal_front_amount_gradient = normal_front_inside
-        * 6.0 * normal_front_phase * (1.0 - normal_front_phase)
-        * (latitude_gradient - normal_front_gradient)
-        / 2.0;
-    var normal_pole_closure: TerrainNoiseSample;
-    normal_pole_closure.value = normal_front_amount * cold.value;
-    normal_pole_closure.gradient = normal_front_amount * cold.gradient
-        + normal_front_amount_gradient * cold.value;
-    var extreme_closure = terrain_smoothstep_sample(-30.0, -20.0, annual_temperature);
-    extreme_closure.value = polar_latitude * (1.0 - extreme_closure.value);
-    extreme_closure.gradient = -polar_latitude * extreme_closure.gradient;
-    var polar_closure: TerrainNoiseSample;
-    polar_closure.value = normal_pole_closure.value
-        + extreme_closure.value * (1.0 - normal_pole_closure.value);
-    polar_closure.gradient = normal_pole_closure.gradient * (1.0 - extreme_closure.value)
-        + extreme_closure.gradient * (1.0 - normal_pole_closure.value);
-    let amount = mix(expansion.value, 1.0, polar_closure.value);
-    let amount_gradient = expansion.gradient * (1.0 - polar_closure.value)
-        + polar_closure.gradient * (1.0 - expansion.value);
+    let amount = cold.value;
+    let amount_gradient = cold.gradient;
     let broad_surface = 20.0 * cold.value + 0.25 * positive_bedrock.value;
     let broad_gradient = 20.0 * cold.gradient + 0.25 * positive_bedrock.gradient;
     let local_surface = bedrock.value + 4.0 * cold.value;
@@ -1575,6 +1549,8 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.material_elevation_m = terrain.elevation_m;
     terrain.material_gradient = terrain.gradient;
     terrain.ice_amount = 0.0;
+    terrain.water_ice_amount = 0.0;
+    terrain.bedrock_elevation_m = terrain.elevation_m;
     terrain.coastal_rock_amount = 0.0;
     terrain.coastal_outcrop_amount = 0.0;
     terrain.coastal_sediment_amount = 0.0;
@@ -1693,7 +1669,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         && rock_mask_value == 0.0
         && outer_reef_mask_value == 0.0
     {
-        return solid_ice_sample(terrain, island);
+        return solid_ice_sample(terrain, cluster);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
@@ -1828,7 +1804,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value);
-    return solid_ice_sample(terrain, island);
+    return solid_ice_sample(terrain, cluster);
 }
 
 fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
@@ -2024,6 +2000,54 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
         ),
         0.18 * micro_height.gradient,
         0.32,
+    );
+}
+
+fn sea_ice_surface(
+    position_m: vec2<f32>,
+    cover: f32,
+    bedrock_elevation_m: f32,
+) -> TerrainSurface {
+    let broad = material_fractal_sample(
+        vec2<u32>(0xa4093822u, 0x299f31d0u),
+        position_m,
+        768.0,
+        4u,
+    );
+    let fine = material_fractal_sample(
+        vec2<u32>(0x13198a2eu, 0x03707344u),
+        position_m,
+        72.0,
+        3u,
+    );
+    let micro = material_fractal_sample(
+        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        position_m,
+        4.0,
+        6u,
+    );
+    let shallow = smoothstep(-120.0, -3.0, bedrock_elevation_m);
+    let compactness = smoothstep(0.50, 0.90, cover);
+    let plate_boundary = 1.0 - smoothstep(0.0, 0.16, abs(broad.value));
+    let surface_grade = clamp(
+        0.55
+            + 0.28 * broad.value
+            + 0.10 * fine.value
+            + 0.10 * compactness
+            - 0.12 * plate_boundary,
+        0.0,
+        1.0,
+    );
+    let deep_color = mix(
+        vec3<f32>(0.48, 0.68, 0.75),
+        vec3<f32>(0.94, 0.98, 0.98),
+        surface_grade,
+    );
+    let shallow_color = mix(deep_color, vec3<f32>(0.69, 0.87, 0.88), 0.24);
+    return TerrainSurface(
+        mix(deep_color, shallow_color, shallow),
+        1.6 * broad.gradient + 0.32 * fine.gradient + 0.18 * micro.gradient,
+        clamp(0.30 + 0.20 * plate_boundary + 0.10 * shallow, 0.0, 1.0),
     );
 }
 
@@ -2406,7 +2430,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         let water_height_m = tide_height_m();
         let is_land = terrain.elevation_m >= water_height_m;
         var land_surface = 0.0;
-        if is_land {
+        if is_land && terrain.water_ice_amount == 0.0 {
             land_surface = material_fractal_sample(
                 vec2<u32>(0x6a09e667u, 0xbb67ae85u),
                 input.world_position_m,
@@ -2414,21 +2438,30 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 4u,
             ).value;
         }
-        var surface = terrain_surface(
-            input.world_position_m,
-            terrain.elevation_m,
-            terrain.gradient,
-            terrain.material_elevation_m,
-            terrain.material_gradient,
-            terrain.coastal_rock_amount,
-            terrain.coastal_outcrop_amount,
-            terrain.coastal_sediment_amount,
-            water_height_m,
-            land_surface,
-        );
+        var surface: TerrainSurface;
+        if terrain.water_ice_amount > 0.0 {
+            surface = sea_ice_surface(
+                input.world_position_m,
+                terrain.water_ice_amount,
+                terrain.bedrock_elevation_m,
+            );
+        } else {
+            surface = terrain_surface(
+                input.world_position_m,
+                terrain.elevation_m,
+                terrain.gradient,
+                terrain.material_elevation_m,
+                terrain.material_gradient,
+                terrain.coastal_rock_amount,
+                terrain.coastal_outcrop_amount,
+                terrain.coastal_sediment_amount,
+                water_height_m,
+                land_surface,
+            );
+        }
         var surface_light_grade = vec2<f32>(1.0);
         if is_land {
-            if terrain.ice_amount > 0.0 {
+            if terrain.water_ice_amount == 0.0 && terrain.ice_amount > 0.0 {
                 let ice = ice_surface(input.world_position_m, land_surface);
                 surface.color = mix(
                     surface.color,
@@ -2716,30 +2749,22 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);
     }
     if mode == 54u {
-        let annual_temperature_c = surface_annual_mean_air_temperature_c()
-            - 0.0065 * max(terrain.elevation_m, 0.0);
-        let cold = 1.0 - smoothstep(-5.0, 1.0, annual_temperature_c);
-        let ocean_support = smoothstep(-6000.0, 4.0, terrain.elevation_m);
-        let polar_landform = terrain_simplex_fractal_sample(
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        let maritime_temperature = 12.0
+            * (1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees())))
+            * terrain_simplex_fractal_sample(
+            vec2<u32>(0x78bd642fu, 0xa0761d64u),
             surface_position_m,
-            1536.0,
-            5u,
-            0.35,
-            TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
+            8192.0,
+            3u,
+            0.5,
+            TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
         ).value;
-        let normal_front_latitude = 85.0 - 3.0 * polar_landform - 2.0 * ocean_support;
-        let normal_pole_closure = smoothstep(
-            normal_front_latitude,
-            normal_front_latitude + 2.0,
-            abs(surface_latitude_degrees()),
-        ) * cold;
-        let extreme_closure = smoothstep(55.0, 75.0, abs(surface_latitude_degrees()))
-            * (1.0 - smoothstep(-30.0, -20.0, annual_temperature_c));
-        return vec4<f32>(scalar_debug_color(
-            normal_pole_closure
-                + extreme_closure * (1.0 - normal_pole_closure),
-        ), 1.0);
+        let water_ice = 1.0 - smoothstep(
+            -2.0,
+            0.0,
+            water_temperature_c() + maritime_temperature,
+        );
+        return vec4<f32>(scalar_debug_color(water_ice), 1.0);
     }
     if mode == 55u {
         return vec4<f32>(signed_debug_color(tide_height_m() / 2.0), 1.0);

@@ -422,15 +422,15 @@ pub fn procedural_water_depth_m(
     world_time_seconds: f64,
     position_m: Vector,
 ) -> f32 {
-    let geographic_latitude_degrees = world_geometry.latitude_degrees(position_m.y);
-    let climate = world_climate_conditions(geographic_latitude_degrees);
+    let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
+    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
     (procedural_water_height_m(world_geometry, match_seed, world_time_seconds, position_m)
         - procedural_solid_surface_elevation_m(
             world_geometry,
             match_seed,
             position_m,
             climate.annual_mean_air_temperature_c,
-            geographic_latitude_degrees,
+            seasonal_water_temperature_c(climate, celestial),
         ))
     .max(0.0)
 }
@@ -439,50 +439,40 @@ pub fn climate_surface(
     climate: ClimateConditions,
     conditions: CelestialConditions,
     water_vapor_g_kg: f32,
+    surface_air_temperature_anomaly_c: f32,
+    precipitation_intensity: f32,
     elevation_m: f32,
 ) -> SurfaceClimate {
-    let air_temperature_c = current_air_temperature_c(climate, conditions);
+    let air_temperature_c =
+        current_air_temperature_c(climate, conditions) + surface_air_temperature_anomaly_c;
     let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
     let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.13);
+    let diurnal_phase = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.625);
     let ground_temperature_c = climate.annual_mean_air_temperature_c
         + 0.42
             * climate.seasonal_temperature_range_c
             * latitude_factor
-            * libm::sin(seasonal_phase) as f32;
-    let water_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.175);
-    let water_temperature_c = climate.annual_mean_air_temperature_c
-        + 0.28
-            * climate.seasonal_temperature_range_c
-            * latitude_factor
-            * libm::sin(water_phase) as f32;
+            * libm::sin(seasonal_phase) as f32
+        + 0.15 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+        + 0.25 * surface_air_temperature_anomaly_c;
+    let water_temperature_c = seasonal_water_temperature_c(climate, conditions);
     let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
+    let air_temperature_at_elevation_c = air_temperature_c - 0.0065 * elevation_m.max(0.0);
     let moisture_support = smoothstep_range(2.0, 10.0, f64::from(water_vapor_g_kg)) as f32;
-    let seasonal_snow_cover = (1.0
-        - smoothstep_range(-6.0, 2.0, f64::from(ground_temperature_at_elevation_c)) as f32)
-        * (0.35 + 0.65 * moisture_support);
-    let polar_latitude = smoothstep_range(
-        55.0,
-        75.0,
-        f64::from(conditions.geographic_latitude_degrees.abs()),
-    ) as f32;
-    let extreme_cold = 1.0
-        - smoothstep_range(
-            -30.0,
-            -20.0,
-            f64::from(climate.annual_mean_air_temperature_c),
-        ) as f32;
+    let persistent_cold =
+        1.0 - smoothstep_range(-4.0, 4.0, f64::from(ground_temperature_at_elevation_c)) as f32;
+    let persistent_snow = persistent_cold * (0.35 + 0.65 * moisture_support);
+    let snowfall_cold =
+        1.0 - smoothstep_range(-1.0, 2.0, f64::from(air_temperature_at_elevation_c)) as f32;
+    let fresh_snow = precipitation_intensity.clamp(0.0, 1.0) * snowfall_cold;
+    let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
+    let melt = smoothstep_range(0.0, 6.0, f64::from(air_temperature_at_elevation_c)) as f32;
+    let seasonal_snow_cover = snow_before_melt * (1.0 - 0.7 * melt);
     let annual_temperature_at_elevation_c =
         climate.annual_mean_air_temperature_c - 0.0065 * elevation_m.max(0.0);
     let solid_ice_cover =
         1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_at_elevation_c)) as f32;
-    let normal_pole_closure = normal_polar_ice_closure(
-        elevation_m,
-        climate.annual_mean_air_temperature_c,
-        conditions.geographic_latitude_degrees,
-        -0.75,
-    );
-    let extreme_closure = polar_latitude * extreme_cold;
-    let polar_ice_closure = normal_pole_closure + extreme_closure * (1.0 - normal_pole_closure);
+    let polar_ice_closure = water_ice_cover(elevation_m, water_temperature_c);
 
     SurfaceClimate {
         air_temperature_c,
@@ -491,6 +481,27 @@ pub fn climate_surface(
         seasonal_snow_cover,
         polar_ice_closure,
         solid_ice_cover,
+    }
+}
+
+fn seasonal_water_temperature_c(
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+) -> f32 {
+    let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
+    let water_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.175);
+    climate.annual_mean_air_temperature_c
+        + 0.28
+            * climate.seasonal_temperature_range_c
+            * latitude_factor
+            * libm::sin(water_phase) as f32
+}
+
+fn water_ice_cover(bedrock_elevation_m: f32, effective_water_temperature_c: f32) -> f32 {
+    if bedrock_elevation_m >= 0.0 {
+        0.0
+    } else {
+        1.0 - smoothstep_range(-2.0, 0.0, f64::from(effective_water_temperature_c)) as f32
     }
 }
 
@@ -628,25 +639,24 @@ pub fn procedural_world_environment(
     let weather = derive_weather(primary, climate, celestial);
     let tide = procedural_tidal_conditions(world_geometry, match_seed, position_m);
     let water_height_m = tide_height_m(tide, celestial);
-    let (terrain_elevation_m, polar_landform) =
-        procedural_terrain_elevation_and_island_noise(world_geometry, match_seed, position_m);
-    let solid_surface_elevation_m = solid_surface_elevation_from_bedrock_m(
-        terrain_elevation_m,
-        climate.annual_mean_air_temperature_c,
-        celestial.geographic_latitude_degrees,
-        polar_landform,
-    );
+    let terrain = procedural_terrain_surface_causes(world_geometry, match_seed, position_m);
+    let terrain_elevation_m = terrain.elevation_m;
     let mut surface_climate = climate_surface(
         climate,
         celestial,
         weather.primary.water_vapor_g_kg,
+        weather.primary.surface_air_temperature_anomaly_c,
+        weather.rain_intensity,
         terrain_elevation_m,
     );
-    surface_climate.polar_ice_closure = normal_polar_ice_closure(
+    let solid_surface_elevation_m = solid_surface_elevation_from_bedrock_m(
         terrain_elevation_m,
         climate.annual_mean_air_temperature_c,
-        celestial.geographic_latitude_degrees,
-        polar_landform,
+        surface_climate.water_temperature_c + terrain.maritime_temperature_anomaly_c,
+    );
+    surface_climate.polar_ice_closure = water_ice_cover(
+        terrain_elevation_m,
+        surface_climate.water_temperature_c + terrain.maritime_temperature_anomaly_c,
     );
     let environment = Environment {
         true_wind_velocity_m_s: land_sheltered_wind(
@@ -739,11 +749,17 @@ fn procedural_atmosphere_primary_with_conditions(
                 position_m,
                 AIR_TEMPERATURE_500_HPA_NOISE,
             ) as f32;
-    let climate_air_temperature_c = current_air_temperature_c(climate, celestial);
+    let climate_air_temperature_c = current_air_temperature_c(
+        ClimateConditions {
+            diurnal_temperature_range_c: 0.0,
+            ..climate
+        },
+        celestial,
+    );
     let climate_saturation_capacity_g_kg =
         3.5 * libm::exp(0.055 * f64::from(climate_air_temperature_c + 5.0)) as f32;
     let water_vapor_fraction = 0.67
-        + 0.4
+        + 0.65
             * procedural_weather_noise(
                 world_geometry,
                 match_seed,
@@ -865,14 +881,20 @@ pub fn procedural_terrain_elevation_m(
     match_seed: u64,
     position_m: Vector,
 ) -> f32 {
-    procedural_terrain_elevation_and_island_noise(world_geometry, match_seed, position_m).0
+    procedural_terrain_surface_causes(world_geometry, match_seed, position_m).elevation_m
 }
 
-fn procedural_terrain_elevation_and_island_noise(
+#[derive(Clone, Copy)]
+struct TerrainSurfaceCauses {
+    elevation_m: f32,
+    maritime_temperature_anomaly_c: f32,
+}
+
+fn procedural_terrain_surface_causes(
     world_geometry: WorldGeometry,
     match_seed: u64,
     position_m: Vector,
-) -> (f32, f32) {
+) -> TerrainSurfaceCauses {
     // Keep this composition synchronized with `procedural_terrain_sample` in
     // `crates/browser/src/scene.wgsl`: Rust supplies physical depth while WGSL
     // renders the same shoreline.
@@ -895,6 +917,13 @@ fn procedural_terrain_elevation_and_island_noise(
         TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     ) as f64;
     let local_density = 0.78 * cluster + 0.22 * island;
+    let polar_taper = 1.0
+        - smoothstep_range(
+            75.0,
+            90.0,
+            f64::from(world_geometry.latitude_degrees(position_m.y).abs()),
+        );
+    let maritime_temperature_anomaly_c = (12.0 * polar_taper * cluster) as f32;
     let unscaled_elevation_m = 18.0 * (local_density - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
@@ -993,7 +1022,10 @@ fn procedural_terrain_elevation_and_island_noise(
     let outer_reef_mask = smoothstep_range(-22.0, -18.0, terrain_elevation_m)
         * (1.0 - smoothstep_range(-5.0, -4.0, terrain_elevation_m));
     if seabed_mask == 0.0 && rock_mask == 0.0 && outer_reef_mask == 0.0 {
-        return (terrain_elevation_m as f32, island as f32);
+        return TerrainSurfaceCauses {
+            elevation_m: terrain_elevation_m as f32,
+            maritime_temperature_anomaly_c,
+        };
     }
     let shoal = if seabed_mask > 0.0 {
         terrain_simplex_fractal_noise(
@@ -1041,8 +1073,8 @@ fn procedural_terrain_elevation_and_island_noise(
     let reef_ridge_blend = smoothstep_range(0.25, 0.80, reef_ruggedness);
     let shaped_outer_reef =
         lerp(outer_reef, ridged_reef, reef_ridge_blend) - 0.3 * reef_ridge_blend;
-    (
-        (terrain_elevation_m
+    TerrainSurfaceCauses {
+        elevation_m: (terrain_elevation_m
             + 0.25 * seabed_mask * shoal
             + 1.6
                 * coastal_detail_mask
@@ -1055,8 +1087,8 @@ fn procedural_terrain_elevation_and_island_noise(
                 * coastal_rock_relief_amount
                 * (0.12 + 1.68 * reef_ruggedness)
                 * shaped_outer_reef) as f32,
-        island as f32,
-    )
+        maritime_temperature_anomaly_c,
+    }
 }
 
 fn broad_landform_elevation_m(
@@ -1096,70 +1128,35 @@ pub fn procedural_solid_surface_elevation_m(
     match_seed: u64,
     position_m: Vector,
     annual_mean_air_temperature_c: f32,
-    geographic_latitude_degrees: f32,
+    water_temperature_c: f32,
 ) -> f32 {
-    let (bedrock_elevation_m, polar_landform) =
-        procedural_terrain_elevation_and_island_noise(world_geometry, match_seed, position_m);
+    let terrain = procedural_terrain_surface_causes(world_geometry, match_seed, position_m);
     solid_surface_elevation_from_bedrock_m(
-        bedrock_elevation_m,
+        terrain.elevation_m,
         annual_mean_air_temperature_c,
-        geographic_latitude_degrees,
-        polar_landform,
+        water_temperature_c + terrain.maritime_temperature_anomaly_c,
     )
-}
-
-fn normal_polar_ice_closure(
-    bedrock_elevation_m: f32,
-    annual_mean_air_temperature_c: f32,
-    geographic_latitude_degrees: f32,
-    polar_landform: f32,
-) -> f32 {
-    let cold = 1.0
-        - smoothstep_range(
-            -5.0,
-            1.0,
-            f64::from(annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0)),
-        ) as f32;
-    let depth_support = smoothstep_range(-6_000.0, 4.0, f64::from(bedrock_elevation_m)) as f32;
-    let front_latitude = 85.0 - 3.0 * polar_landform - 2.0 * depth_support;
-    smoothstep_range(
-        f64::from(front_latitude),
-        f64::from(front_latitude + 2.0),
-        f64::from(geographic_latitude_degrees.abs()),
-    ) as f32
-        * cold
 }
 
 fn solid_surface_elevation_from_bedrock_m(
     bedrock_elevation_m: f32,
     annual_mean_air_temperature_c: f32,
-    geographic_latitude_degrees: f32,
-    polar_landform: f32,
+    effective_water_temperature_c: f32,
 ) -> f32 {
     let annual_temperature_c =
         annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
     let cold = 1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_c)) as f32;
-    let polar_latitude =
-        smoothstep_range(55.0, 75.0, f64::from(geographic_latitude_degrees.abs())) as f32;
-    let coastal_support = smoothstep_range(-4.0, 4.0, f64::from(bedrock_elevation_m)) as f32;
-    let ocean_support = smoothstep_range(-6_000.0, 4.0, f64::from(bedrock_elevation_m)) as f32;
-    let water_reach = cold * (0.25 + 0.75 * polar_latitude);
-    let cold_water_support = coastal_support + water_reach * (ocean_support - coastal_support);
-    let expansion_amount = cold * cold_water_support;
-    let normal_pole_closure = normal_polar_ice_closure(
-        bedrock_elevation_m,
-        annual_mean_air_temperature_c,
-        geographic_latitude_degrees,
-        polar_landform,
-    );
-    let extreme_closure = polar_latitude
-        * (1.0 - smoothstep_range(-30.0, -20.0, f64::from(annual_temperature_c)) as f32);
-    let polar_closure = normal_pole_closure + extreme_closure * (1.0 - normal_pole_closure);
-    let ice_amount = expansion_amount + polar_closure * (1.0 - expansion_amount);
+    if bedrock_elevation_m < 0.0 {
+        let cover = water_ice_cover(bedrock_elevation_m, effective_water_temperature_c);
+        return if cover > 0.5 {
+            0.25 + 1.75 * cover
+        } else {
+            bedrock_elevation_m
+        };
+    }
     let ice_surface_m =
         (20.0 * cold + 0.25 * bedrock_elevation_m.max(0.0)).max(bedrock_elevation_m + 4.0 * cold);
-    bedrock_elevation_m
-        .max(bedrock_elevation_m + ice_amount * (ice_surface_m - bedrock_elevation_m))
+    bedrock_elevation_m.max(bedrock_elevation_m + cold * (ice_surface_m - bedrock_elevation_m))
 }
 
 pub fn procedural_cloud_cover(

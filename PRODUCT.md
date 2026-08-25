@@ -71,13 +71,20 @@ current playable behavior; this file does not track delivery status.
   basin accuracy. Tidal height changes authoritative depth, grounding,
   navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
-  solid ice derive analytically without stored per-location history.
+  solid ice derive analytically without stored per-location history. Day and
+  night visibly change air and ground temperature upstream of humidity,
+  instability, and precipitation. Cold precipitation can give temperate winter
+  land fresh snow while nearby open water remains unfrozen; warmer daytime air
+  promotes melt. Ground temperature responds more slowly than air so seasonal
+  snow persists without mirroring every weather fluctuation.
 - **[Explicit]** Solid ice is land for boats. It blends into exposed land but
-  ends at water with a sharp, readable boundary. Persistent polar cold expands
-  it across the sea using the same procedural causes that shape islands together
-  with local depth. The pole itself is fully frozen, while the advancing cap edge
-  remains irregular instead of following a latitude-only cutoff. Extreme
-  persistent cold can close the deep sea entirely.
+  ends at water with a sharp, readable boundary. The edge emerges from physical
+  climate and procedural environment rather than an authored latitude contour
+  or island-distance field. The pole itself remains fully frozen while each
+  hemisphere's cap advances in winter and retreats in summer.
+- **[Implicit]** The current stateless sea-ice approximation combines seasonal
+  sea-surface temperature with broad maritime heat variation. Water depth does
+  not directly decide whether floating ice can form.
 
 ## Presentation
 
@@ -88,7 +95,9 @@ current playable behavior; this file does not track delivery status.
   water-tinted reflectance and relief while retaining a cohesive color; land has
   recognizable beach, vegetation, rock, snow, and ice materials. The same solid
   ice surface covers land and polar water rather than using a decorative
-  floating-ice layer.
+  floating-ice layer. Frozen water is opaque and has readable floe-scale
+  structure, fine relief, and a distinct shallow-ice response instead of a
+  uniform or see-through fill.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes

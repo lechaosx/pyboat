@@ -4,13 +4,13 @@ This repository contains an early multiplayer, top-down naval combat game with
 readable, semi-realistic sailing. The browser and authoritative server provide a
 deterministic rectangular procedural world whose terrain and seeded procedural
 fields repeat seamlessly. Each rendered position receives its own longitude,
-latitude-calibrated climate and opposite-hemisphere season, surface temperature,
-snow and ice, astronomical tide, and celestial lighting, alongside coherent
-coasts, physical depth, pressure-driven weather, and spatially formed clouds
-whose thickness varies their opacity and shadows. Prediction, ramming, damage,
-and persistent physical wrecks remain deterministic. Boats sail repeated
-toroidal laps and remain visible, predictable, and physically interactive across
-both seams and their corners.
+latitude-calibrated climate and opposite-hemisphere season, weather-responsive
+snow and temperature-shaped sea ice, astronomical tide, and celestial lighting,
+alongside coherent coasts, physical depth, pressure-driven weather, and spatially
+formed clouds whose thickness varies their opacity and shadows. Prediction,
+ramming, damage, and persistent physical wrecks remain deterministic. Boats
+sail repeated toroidal laps and remain visible, predictable, and physically
+interactive across both seams and their corners.
 
 The intended game grows this foundation into persistent, drop-in matches with
 varied ships, mostly automatic weapons, progression, and a vast procedural sea.

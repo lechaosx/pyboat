@@ -197,16 +197,27 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
   not tide generation. Tide contributes to authoritative and predicted depth as
-  well as the rendered shoreline.
+  well as the rendered shoreline. **[Implicit]** Ground temperature retains the
+  seasonal cycle while taking attenuated contributions from the daily cycle and
+  current surface-air anomaly. Stateless equilibrium snow combines that slower
+  cold/moist ground response with current cold precipitation, then reduces cover
+  under above-freezing air. This represents accumulation and melt without a
+  stored snowpack. Transported absolute water vapor follows the seasonal climate
+  baseline rather than the daily temperature cycle; day/night temperature
+  instead changes saturation, humidity, instability, and precipitation.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
   depth and grounding. WGSL mirrors that surface, blends it into land, and
-  preserves a sharp water-facing boundary. Persistent polar cold expands this
-  surface through progressively deeper water according to local depth and the
-  broad noise field that also forms islands. This remains a stateless field
-  evaluation rather than an island-distance or propagation solve. Normal polar
-  closure saturates before the pole so the pole is fully frozen without making
-  the advancing edge a latitude contour; a separate extreme-cold response can
-  close deep water farther from the pole.
+  preserves a sharp water-facing boundary. Latitude enters only through climate.
+  The field remains stateless rather than an authored latitude front,
+  island-distance field, or propagation solve, and the calibrated polar climate
+  remains frozen through summer.
+- **[Implicit]** Seasonal water temperature combines with a broad periodic
+  maritime heat anomaly derived from an already-sampled landform field. This
+  varies the cap without another noise evaluation, while water depth does not
+  directly decide whether floating sea ice can form. Once frozen, water uses an
+  opaque ice material rather than blending the seabed/land material through it.
+  Ice cover, periodic floe and fine-relief fields, and a shallow-water tint vary
+  that material without changing the authoritative solid surface.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only at
   positions where boats require it. A single procedural surface normal combines
