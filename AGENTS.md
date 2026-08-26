@@ -16,6 +16,8 @@
   including when that endorsement happens after an agent first selected it. Mark
   agent-selected decisions **[Implicit]** until then; passive acceptance alone
   does not reclassify them.
+- Keep one decision per marked list item so its classification and future updates
+  remain unambiguous.
 - Flag a proposed decision change to the user before making it. An agent may
   change an **[Implicit]** decision after flagging it, but must receive the
   user's explicit acknowledgement before changing an **[Explicit]** decision.

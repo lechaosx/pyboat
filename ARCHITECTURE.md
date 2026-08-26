@@ -71,6 +71,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 ## Procedural environment and rendering
 
+- **[Explicit]** Environment models are locally plausible deterministic,
+  stateless queries rather than global fluid, climate, storm-lifecycle, or
+  ocean-basin simulations.
+
+### Terrain
+
 - **[Explicit]** Static terrain is a continuous seeded density field composed at
   multiple scales in uncompressed metres. Reefs and rocks are field features, not
   replicated objects. Land occupancy stays sparse enough for open water to remain
@@ -111,13 +117,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   capacities. Rock exposure is their continuous union; sediment, wet ground,
   and vegetation consume the remaining surface in turn, and snow overlays the
   resulting color, detail gradient, and roughness. No categorical material ID or
-  distance from an inferred boundary participates. **[Implicit]** Cover response
-  uses the existing hill-to-eight-metre physical relief but excludes metre-scale
-  micro-relief, preventing broad contour zoning without turning cover into
-  aliased speckle.
+  distance from an inferred boundary participates.
+- **[Implicit]** Cover response uses the existing hill-to-eight-metre physical
+  relief but excludes metre-scale micro-relief, preventing broad contour zoning
+  without turning cover into aliased speckle.
 - **[Explicit]** Broad coastal substrate and ruggedness use circle-embedded
   four-dimensional simplex. Shoal and finer physical relief use periodic
   two-dimensional triangular simplex.
+
+### Shared procedural fields
+
 - **[Implicit]** `game` is authoritative for deterministic terrain,
   atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
   sample from match seed, tick, and world position rather than transferring
@@ -151,40 +160,48 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   the finest water-vapor octave remains periodic two-dimensional simplex.
   Transported phases reduce on the torus before evaluation, preserving long-time
   precision without repeating time.
+
+### Atmosphere and climate
+
 - **[Explicit]** Primary atmosphere and climate state is distinct from derived
   weather. The seeded surface-air field is a weather anomaly; analytic climate,
   signed latitude, season, and local solar time supply its baseline in both Rust
-  and WGSL before humidity, instability, clouds, and rain are derived. Specific
-  humidity follows local climatic saturation capacity plus its seeded anomaly.
-  Upper air is an absolute 500 hPa temperature generated from a climate baseline
-  with muted seasonality, a shared surface air-mass anomaly, and independent
-  upper-level variability; it has no diurnal cycle. Derived values have no
-  override path. **[Explicit]** Compact latitude-knot curves fit observed daily
-  land-temperature statistics by absolute latitude. Annual means and medians,
-  seasonal range, day/night range, and tail probabilities calibrate the
-  baseline cycles and seeded anomaly amplitude. Smooth interpolation keeps the
-  temperature field and its analytic gradient coherent between sampled bands.
-  Water has a separate ocean-moderated climatology so land-air variability can
-  drive temperate snow and heat extremes without forcing sea ice to follow.
+  and WGSL. Derived values have no override path.
+- **[Explicit]** Smooth latitude-knot curves fit observed daily land-temperature
+  means, medians, seasonal and diurnal variability, and representative warm and
+  cold tail probabilities.
+- **[Explicit]** Specific humidity follows climatic saturation capacity plus a
+  seeded anomaly.
+- **[Explicit]** Absolute 500 hPa temperature has muted seasonality, a shared
+  surface air-mass anomaly, independent variability, and no diurnal cycle.
+- **[Explicit]** Water uses separate ocean-moderated climatology.
+- **[Explicit]** At a fixed place and time, unsheltered wind speed follows a
+  Weibull distribution with `k = 2` and `lambda = 9 m/s`.
+- **[Explicit]** Wind direction and speed vary continuously from gust to broad
+  weather scales.
+- **[Explicit]** Deterministic terrain shelter weakens wind in the lee of land
+  over nearby water.
 - **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
   analytic gradient drives mostly isobaric surface wind. Broad pressure drives
   upper flow, horizontal temperature gradient contributes thermal wind, and
   vertical shear is derived. Pressure wavelength bands and scalar atmosphere
   layers translate at distinct but correlated seeded velocities, so their
   superposition evolves without stored history; there is no weather grid or
-  storm entity. **[Implicit]** Pressure directions are quantized to integer
-  wavevectors of the rectangular torus so the potential and its analytic gradient
-  join continuously on both seams.
+  storm entity.
+- **[Implicit]** Pressure directions are quantized to integer wavevectors of the
+  rectangular torus so the potential and its analytic gradient join continuously
+  on both seams.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, transported surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
   Its procedural inputs are match seed, geometry, global day/season/lunar phase,
   and tick; the view-center Rust sample is diagnostic and never drives the
-  surface scene. **[Implicit]** The host reduces the tick to bounded toroidal
-  transport offsets before upload so WGSL never converts total time to `f32`.
-  **[Implicit]** Cloud formation bilinearly samples a fixed 16 by 16 periodic
-  lattice of the authoritative analytic pressure field. The host regenerates the
-  transient lattice from match state; it is not simulation state or a storm grid.
+  surface scene.
+- **[Implicit]** The host reduces the tick to bounded toroidal transport offsets
+  before upload so WGSL never converts total time to `f32`.
+- **[Implicit]** Cloud formation bilinearly samples a fixed 16 by 16 periodic
+  lattice of the authoritative analytic pressure field. The host regenerates
+  the transient lattice from match state; it is not simulation state or a storm grid.
   This keeps fragment cost and world-size tuning predictable without evaluating
   all 48 spectral pressure modes per pixel. As a temporary cloud-only exception,
   layer winds remain view-sampled inputs to cloud transport. Spatial temperature
@@ -196,9 +213,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   queryable without accumulated simulation error or midpoint variance loss.
   Low cloud uses complete unsheltered surface wind and upper cloud uses broad
   synoptic wind sampled for the view; player identity does not affect either
-  field. **[Implicit]** Cloud octaves use circle-embedded four-dimensional
-  simplex noise, avoiding the finite-precision phase joins that thresholding can
-  expose in the cheaper periodic two-dimensional kernel. The current renderer
+  field.
+- **[Implicit]** Cloud octaves use circle-embedded four-dimensional simplex noise,
+  avoiding the finite-precision phase joins that thresholding can expose in the
+  cheaper periodic two-dimensional kernel. The current renderer
   uses one frozen local velocity for each finite flow map, a 30-minute low-layer
   anchor interval, and a 60-minute upper-layer interval. Unresolved octaves fade
   against the fragment's world-space pixel footprint. Spatial transported
@@ -213,43 +231,38 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
   not tide generation. Tide contributes to authoritative and predicted depth as
-  well as the rendered shoreline. **[Explicit]** Stateless equilibrium snow is
-  a visually exaggerated temperature-index snowpack: the shared latitude,
-  season, elevation, and weather state drives ground-temperature retention,
-  temperature-relative humidity, cold-precipitation accumulation, and
-  above-freezing melt. Retention is the several-day freezing opportunity implied
-  by the calibrated daily temperature distribution, so cover changes continuously
-  through the winter poleward gradient instead of collapsing into a binary snow
-  boundary. Sea ice is not an input, so
-  snow-covered land and frozen water can still diverge. **[Implicit]** Ground
-  temperature retains the seasonal cycle while taking attenuated contributions
-  from the daily cycle and current surface-air anomaly. Transported absolute
-  water vapor follows the seasonal climate baseline rather than the daily
-  temperature cycle; local saturation converts it to the relative humidity used
-  by clouds, precipitation, and snow. Perennial land ice uses a colder annual
-  temperature range, including elevation lapse, so it does not replace ordinary
-  seasonal snow across low polar islands.
+  well as the rendered shoreline.
+- **[Explicit]** Stateless equilibrium snow exaggerates a temperature-index
+  snowpack driven by several-day freezing opportunity, relative humidity, cold
+  precipitation, elevation, and above-freezing melt; sea ice is not an input.
+- **[Implicit]** Ground temperature attenuates the daily cycle and current air
+  anomaly while retaining the seasonal cycle.
+- **[Implicit]** Transported absolute water vapor follows seasonal climate, and
+  local saturation supplies relative humidity.
+- **[Implicit]** Perennial land ice requires a colder annual climate or
+  sufficient elevation.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
   depth and grounding. WGSL mirrors that surface, blends it into land, and
-  preserves a sharp water-facing boundary. Latitude enters only through climate.
-  The field remains stateless rather than an authored latitude front,
-  island-distance field, or propagation solve, and the calibrated polar climate
-  remains frozen through summer.
+  preserves a sharp water-facing boundary.
+- **[Explicit]** Solid ice derives from climate rather than an authored latitude
+  front, island-distance field, or propagation solve. The calibrated polar
+  climate remains frozen through summer.
 - **[Implicit]** Seasonal water temperature combines with a broad periodic
-  maritime heat anomaly derived from an already-sampled landform field. Ocean
-  moderation warms subpolar water relative to air without warming the equator
-  or pole, keeping the winter ice front substantially more polar than seasonal
-  snow. Water depth does not directly decide whether floating sea ice can form.
-  Once frozen, water uses an opaque ice material rather than blending the
-  seabed/land material through it. Ice cover, periodic floe and fine-relief
-  fields, and a shallow-water tint vary that material without changing the
-  authoritative solid surface.
+  maritime heat anomaly derived from an existing landform field, producing a
+  small, variable cap independently of water depth.
+- **[Implicit]** Frozen water uses an opaque ice material varied by cover, floe,
+  fine relief, and shallow-water tint without changing the authoritative solid
+  surface.
+
+### Browser rendering and playground
+
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
-  seeded elevation at each pixel and zoom level; physics samples depth only at
-  positions where boats require it. A single procedural surface normal combines
-  the authoritative heightfield gradient with material-specific visual detail
-  before celestial lighting. Appearance-only material spectra may extend below
-  thirty centimetres. **[Implicit]** Those spectra use the portable 24-direction
+  seeded elevation at each pixel and zoom level; physics samples depth only where
+  boats require it.
+- **[Explicit]** A single procedural surface normal combines the authoritative
+  heightfield gradient with material-specific visual detail before celestial
+  lighting. Appearance-only material spectra may extend below thirty centimetres.
+- **[Implicit]** Appearance-only material spectra use the portable 24-direction
   periodic two-dimensional simplex kernel with non-binary octave spacing; each
   octave chooses integer cycle counts for both world axes and fades out against
   the fragment's world-space pixel footprint before it can alias. Material
@@ -272,23 +285,20 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day, season, and moon phases. Rendering-grade astronomy derives light and tide;
   season phase zero is the northern winter solstice while its approximate month
-  presentation labels the first interval January. Direct sun and moon intensity
-  both respond to source elevation, while ambient illumination remains separate
-  from spatial direct-light shadows. Cloud shadow
-  displacement follows physical layer height and light direction at every zoom.
-  The ray intersects a spherical cloud shell over the curved-world horizon and
-  converts the result back to the world's longitude-latitude map. World width is
-  the reference circumference while independently selected height controls the
-  map's latitude scale. Grazing rays therefore remain finite without a
-  screen-space cap or zoom-dependent approximation. Their contrast falls toward
-  the horizon, approximating the widening finite-source penumbra and increasing
-  share of diffuse sky illumination.
+  presentation labels the first interval January.
+- **[Explicit]** Direct sun and moon intensity follows source elevation while
+  ambient light remains separate.
+- **[Explicit]** Cloud-shadow displacement follows physical layer height and
+  light direction at every zoom. Rays intersect a spherical shell using world
+  width as circumference and world height as latitude scale; grazing shadows
+  remain finite and fade toward the horizon.
 - **[Explicit]** Canonical normalized north-south position maps linearly from
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
-  hemisphere seasons may be discontinuous there. **[Implicit]** World and view
-  coordinates use positive X for east/right and positive Y for north/up. Input
-  adapters convert down-positive device coordinates at their boundaries.
+  hemisphere seasons may be discontinuous there.
+- **[Implicit]** World and view coordinates use positive X for east/right and
+  positive Y for north/up. Input adapters convert down-positive device
+  coordinates at their boundaries.
 - **[Explicit]** Canonical normalized east-west position is longitude. Local
   solar phase is the wrapped sum of global day phase and normalized longitude;
   season and lunar phase remain global.
@@ -296,16 +306,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   never feed derived results back into primary inputs or gameplay physics.
 - **[Explicit]** The playground always samples live production state through the
   browser's Rust/WASM boundary and retains manual scenarios as primary-cause
-  overrides. Its view-center geometry and environment sample is diagnostic; the
-  production scene independently evaluates spatial surface conditions at each
-  rendered world position. The DOM overlay marks the raw view center and always
-  repeats the reference meridian, equator, and both seams. The selected rectangle
-  drives the production procedural scene shader. Its seeded noises, terrain,
-  material detail, tide, and cloud fields repeat continuously while
-  latitude-derived seasonal state retains the accepted polar-loop discontinuity
-  and raw camera coordinates remain unbounded for panning and measurement. Its
-  geometry diagnostic reports each representative octave's fixed basis,
-  requested wavelength, effective per-axis wavelength, and relative error.
+  overrides. The view-center sample is diagnostic; the production shader derives
+  each rendered position independently. The overlay marks the raw center,
+  reference meridian, equator, and seams. Procedural fields repeat over the
+  selected rectangle while seasonal latitude retains the accepted polar-loop
+  discontinuity, and raw camera coordinates remain unbounded.
+- **[Explicit]** The geometry diagnostic reports each representative octave's
+  fixed basis, requested wavelength, effective per-axis wavelength, and relative
+  error.
 - **[Implicit]** Playground world-width and world-height controls cover 8 km to
   256 km independently in 1 km steps, with the 64 km square match default.
 
@@ -350,9 +358,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   work may suspend.
 - **[Explicit]** Visual procedural-world work uses the interactive playground and
   deterministic headless capture rather than a separate native showcase or a
-  checked-in image collection. Headless capture requires a hardware Vulkan GPU
-  and rejects CPU, software, and unclassified adapters instead of entering a
-  non-realtime rendering path.
+  checked-in image collection.
+- **[Explicit]** Headless capture renders the named scenarios with readable
+  condition summaries.
+- **[Explicit]** Capture requires a hardware Vulkan GPU and has no
+  software-rendering path.
 
 ## Open questions
 

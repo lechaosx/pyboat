@@ -33,10 +33,9 @@ current playable behavior; this file does not track delivery status.
   independently selectable width and height and a square default. Crossing an
   edge returns to the opposite edge without a visible or physical seam; boats
   can keep sailing laps and interact across either edge and their corners.
-- **[Explicit]** Wrapped north-south position maps to signed latitude: the lower
-  branch is -90 degrees, the upper limiting edge approaches +90 degrees, and
-  those identified edges form one long polar loop. The two hemispheres have
-  opposite seasons; their seasonal state may change sharply across that loop.
+- **[Explicit]** The north-south wrap joins the poles into one long loop. The two
+  hemispheres have opposite seasons, whose state may change sharply across that
+  loop.
 - **[Explicit]** A statistically connected, dominant sea contains natural-looking
   sparse groups of large procedural islands. Land may be more fractal and rare
   enclosed water may occur, but the world must not become a patchwork of equal
@@ -57,48 +56,33 @@ current playable behavior; this file does not track delivery status.
   lower sliding resistance rather than perpetual creep.
 - **[Explicit]** Weather, wind, currents, waves, storms, seasons, and tides are
   procedural and deterministic from match state across space and time.
-- **[Explicit]** Broad procedural phenomena retain their intended local physical
-  wavelength as the independently selectable world width and height change.
-- **[Explicit]** Environment models are locally plausible and stateless rather
-  than global fluid, climate, storm-lifecycle, or ocean-basin simulations.
-  Storm-like conditions emerge from continuous atmospheric fields. **[Implicit]**
-  The default world is humid and varied enough that severe rain is normally
-  active somewhere at world scale, without guaranteeing or placing a storm.
+- **[Explicit]** Storm-like conditions emerge continuously rather than appearing
+  as placed events.
+- **[Implicit]** The default world is humid and varied enough that severe rain is
+  normally active somewhere at world scale, without guaranteeing or placing a
+  storm.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
-  gust to broad weather system, and follows a Weibull speed distribution with
-  `k = 2` and `λ = 9 m/s` at a fixed place and time. Land provides simplified,
-  deterministic lee shelter over nearby water.
-- **[Explicit]** Sun and moon state produces a stateless astronomical tide.
-  Spring/neap range follows moon phase, while local response may sacrifice global
-  basin accuracy. Tidal height changes authoritative depth, grounding,
-  navigability, and shoreline position.
+  gust to broad weather system, and weakens in the lee of land over nearby water.
+- **[Explicit]** Sun and moon state drives tides whose height changes depth,
+  grounding, navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
-  solid ice derive analytically without stored per-location history. Day and
-  night visibly change air and ground temperature upstream of humidity,
-  instability, and precipitation. Latitude climate is a compact caricature fitted
-  to observed daily land temperatures: it preserves annual means and medians,
-  seasonal and day/night ranges, and representative warm and cold tail
-  probabilities instead of inventing separate biome thresholds. Snow uses the
-  resulting probability of freezing in a readable accumulation-and-melt
-  balance: poleward winter cooling and elevation increase retained cover,
-  relative humidity supplies moisture, cold precipitation adds fresh snow, and
-  warmer air promotes melt. The spatial and seasonal contrast is deliberately
-  exaggerated. Cold precipitation can therefore give temperate winter land
-  fresh snow while nearby open water remains unfrozen. Snow cover and sea ice
-  remain independent: exceptionally warm air and ground can clear land beside
-  frozen sea, while cold precipitation can cover land beside open water.
-  Perennial land ice is reserved for colder annual conditions or elevation so
-  ordinary polar lowlands still change with season.
+  solid ice derive analytically without stored per-location history.
+- **[Explicit]** Day and night visibly change air and ground temperature upstream
+  of humidity, instability, and precipitation. Latitude climate caricatures
+  observed daily land-temperature distributions, including their seasonal,
+  day/night, and extreme variation.
+- **[Explicit]** Snow responds to freezing opportunity, humidity, cold
+  precipitation, elevation, and melt independently of sea ice. It can therefore
+  reach temperate land beyond the smaller sea-ice cap, while exceptional warmth
+  can clear land beside frozen water and cold precipitation can cover land beside
+  open water.
+- **[Explicit]** Perennial land ice is reserved for colder annual conditions or
+  elevation so ordinary polar lowlands still change with season.
 - **[Explicit]** Solid ice is land for boats. It blends into exposed land but
   ends at water with a sharp, readable boundary. The edge emerges from physical
   climate and procedural environment rather than an authored latitude contour
   or island-distance field. The pole itself remains fully frozen while each
-  hemisphere's cap advances in winter and retreats in summer. Seasonal snow can
-  extend substantially farther toward the equator than the comparatively small
-  sea-ice cap.
-- **[Implicit]** The current stateless sea-ice approximation combines seasonal
-  sea-surface temperature with broad maritime heat variation. Water depth does
-  not directly decide whether floating ice can form.
+  hemisphere's cap advances in winter and retreats in summer.
 
 ## Presentation
 
@@ -120,30 +104,17 @@ current playable behavior; this file does not track delivery status.
   grass, forest, and snow compete as continuous covers derived from their
   physical causes. Their ecotones therefore differ without classified zones,
   authored boundary distances, or one shared decorative edge treatment; true
-  shoreline and solid-ice phase boundaries remain readable. Gameplay-scale
-  relief comes from the authoritative heightfield;
-  rough physical surfaces resolve to a one-metre wavelength, while smaller
-  material detail extends below thirty centimetres and refines lighting without
-  changing collision. Unresolved detail filters out with screen scale instead of
-  aliasing.
-  Heightfield relief lighting and bounded cast shadows add depth without
-  displacing shorelines or changing collision. Visual material structure is
-  calibrated for boat-scale zoom and does not expose the procedural sampling
-  lattice.
-- **[Explicit]** Cloud geometry and formation are stateless deterministic match
-  fields queryable throughout the world. Spatial temperature and moisture shape
-  local formation while pressure-derived layer winds transport the fine cloud
-  structure. Clouds never conceal players or affect gameplay.
-- **[Explicit]** A visible low layer supplies decorative wisps, detail, and wind
-  cues across at most about one quarter of the view. It may cast localized
-  shadows but contributes little to global overcast lighting. An invisible upper
-  cloud field represents meteorological coverage through broad shadows and
-  lighting. Zero thickness means no cloud; positive thickness continuously
-  controls relief, opacity, optical depth, and both layers' shadows instead of
-  making every cloud body equally translucent. Both respond to celestial light,
-  while aerosol, moisture, rain, and cloud cover shape scene color and mood.
-- **[Explicit]** Cloud bodies read as volumetric layers rather than terrain-like
-  height fields.
+  shoreline and solid-ice phase boundaries remain readable. Relief lighting and
+  bounded shadows add depth without moving shorelines or collision. Material
+  detail remains stable across boat-scale zoom rather than aliasing or revealing
+  its procedural sampling lattice.
+- **[Explicit]** Clouds are weather-shaped volumetric layers that never conceal
+  players or affect gameplay.
+- **[Explicit]** Low wisps add detail, local shadows, and wind cues across at most
+  about one quarter of the view. Unseen upper coverage creates broad shadows and
+  overcast lighting.
+- **[Explicit]** Clouds respond to celestial light, while aerosol, moisture,
+  rain, coverage, and varying thickness shape scene color and mood.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
   length communicates speed. The product does not overlay a world grid or field
   of wind arrows.
@@ -195,38 +166,27 @@ current playable behavior; this file does not track delivery status.
   sliders, initialized to the square production default. A red cross marks the
   view-center sample, whose raw and canonical coordinates, normalized torus
   coordinates, signed latitude, and local solar phase remain visible while
-  panning. The procedural noises repeat seamlessly at the selected rectangle's
-  longitude and identified polar seams, while latitude-derived seasonal state
-  retains the accepted discontinuity at the polar loop. Changing either
-  dimension regenerates the spatial realization. A persistent diagnostic guide
-  repeats the reference meridian, equator, and both seams over the scene. The lab
-  always samples the live spatial world; scenarios remain primary-cause
-  overrides rather than a switch to a separate nonspatial scene.
+  panning. A guide repeats the reference meridian, equator, and seams. The live
+  spatial world repeats at the selected rectangle's seams, apart from the
+  accepted seasonal discontinuity at the polar loop; changing either dimension
+  regenerates it. Scenarios remain primary-cause overrides.
 - **[Explicit]** The lab presents local solar time in hours, season as an
   approximate real-numbered month, and lunar phase with named landmarks while
   retaining normalized runtime phases internally. Season phase zero is the
   northern winter solstice and remains in the January-labelled portion of the
   control.
-- **[Explicit]** Underwater bottom visibility follows two-way exponential light
-  attenuation. Substrate reflectance determines how much bottom contrast survives
-  without tinting the water by material. Underwater structure comes from
-  authoritative depth and material rather than a separate visual-detail texture
-  or bottom-normal lighting. The lab exposes bottom attenuation length in metres
-  and bottom visibility without changing physical terrain, depth, or grounding.
+- **[Explicit]** The lab exposes bottom attenuation length and visibility without
+  changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** The lab keeps world geometry, playback, and the global clock
-  immediately accessible. Spatial latitude, climate, moisture, and temperature
-  are production-derived read-only measurements rather than manual sliders.
-  Functional scenario overrides, visibility switches, tuning, and detailed
-  geometry diagnostics remain available in collapsed groups. Each group carries
-  one world, model, shader, or debug classification rather than repeating
-  classifications on individual controls.
+- **[Explicit]** World geometry, playback, and the global clock remain immediately
+  accessible. Production-derived spatial measurements are read-only; scenario
+  overrides, visibility, tuning, and detailed diagnostics use collapsed semantic
+  groups.
 - **[Explicit]** Named weather and seasonal scenarios represent characteristic
-  regimes, not generic intensity steps. A deterministic headless mode renders the
-  same scenarios and emits images with readable condition summaries.
+  regimes, not generic intensity steps.
 
 ## Open questions
 
