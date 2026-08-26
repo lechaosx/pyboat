@@ -106,6 +106,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   blends that relief from smooth rolling ground into ridged rock, correlating
   cliff-forming coasts with the terrain behind them without a separate mountain
   mask.
+- **[Explicit]** Terrain appearance retains slope, elevation, coastal geology,
+  deposition, tidal exposure, vegetation, canopy, and snow as continuous cover
+  capacities. Rock exposure is their continuous union; sediment, wet ground,
+  and vegetation consume the remaining surface in turn, and snow overlays the
+  resulting color, detail gradient, and roughness. No categorical material ID or
+  distance from an inferred boundary participates. **[Implicit]** Cover response
+  uses the existing hill-to-eight-metre physical relief but excludes metre-scale
+  micro-relief, preventing broad contour zoning without turning cover into
+  aliased speckle.
 - **[Explicit]** Broad coastal substrate and ruggedness use circle-embedded
   four-dimensional simplex. Shoal and finer physical relief use periodic
   two-dimensional triangular simplex.

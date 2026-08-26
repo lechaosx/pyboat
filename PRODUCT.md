@@ -107,9 +107,12 @@ current playable behavior; this file does not track delivery status.
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes
   plausible wet rock or sediment. Temperate vegetation may change seasonally
-  without making tropical vegetation do the same. Material boundaries remain
-  sharp except for the grass-to-forest blend; color variation stays within each
-  material. Gameplay-scale relief comes from the authoritative heightfield;
+  without making tropical vegetation do the same. Rock, sediment, wet ground,
+  grass, forest, and snow compete as continuous covers derived from their
+  physical causes. Their ecotones therefore differ without classified zones,
+  authored boundary distances, or one shared decorative edge treatment; true
+  shoreline and solid-ice phase boundaries remain readable. Gameplay-scale
+  relief comes from the authoritative heightfield;
   rough physical surfaces resolve to a one-metre wavelength, while smaller
   material detail extends below thirty centimetres and refines lighting without
   changing collision. Unresolved detail filters out with screen scale instead of

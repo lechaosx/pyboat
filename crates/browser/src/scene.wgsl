@@ -1640,6 +1640,8 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
                 + shaped_land_detail.gradient
                     * land_detail_mask.value * land_detail_amount
         );
+        terrain.material_elevation_m = terrain.elevation_m;
+        terrain.material_gradient = terrain.gradient;
         let land_micro_relief_amount = terrain_smoothstep_sample(
             0.40,
             0.70,
@@ -2087,6 +2089,19 @@ fn sea_ice_surface(
     );
 }
 
+fn blend_terrain_surface(
+    first: TerrainSurface,
+    second: TerrainSurface,
+    amount: f32,
+) -> TerrainSurface {
+    let blend = clamp(amount, 0.0, 1.0);
+    return TerrainSurface(
+        mix(first.color, second.color, blend),
+        mix(first.detail_gradient, second.detail_gradient, blend),
+        mix(first.roughness, second.roughness, blend),
+    );
+}
+
 fn terrain_surface(
     position_m: vec2<f32>,
     elevation_m: f32,
@@ -2173,52 +2188,24 @@ fn terrain_surface(
             maritime_temperature_anomaly_c,
         ) + 0.18 * surface,
     );
-    if snow_amount > 0.5 {
-        return TerrainSurface(
-            mix(
-                vec3<f32>(0.72, 0.76, 0.77),
-                vec3<f32>(0.96, 0.97, 0.96),
-                0.55 + 0.20 * surface_grade,
-            ),
-            0.22 * micro_height.gradient,
-            0.70,
-        );
-    }
-    if slope >= rock_slope_threshold {
-        return terrain_rock_surface(
-            position_m,
-            terrain_gradient,
-            material_gradient,
-            elevation_m,
-        );
-    }
-    if coastal_outcrop_amount > 0.25 {
-        return terrain_rock_surface(
-            position_m,
-            terrain_gradient,
-            material_gradient,
-            elevation_m,
-        );
-    }
-
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
-    if material_elevation_m >= alpine_rock_line_m {
-        return terrain_rock_surface(
-            position_m,
-            terrain_gradient,
-            material_gradient,
-            elevation_m,
-        );
-    }
-
-    if coastal_rock_amount > 0.45 {
-        return terrain_rock_surface(
-            position_m,
-            terrain_gradient,
-            material_gradient,
-            elevation_m,
-        );
-    }
+    let slope_rock = smoothstep(
+        0.65 * rock_slope_threshold,
+        1.35 * rock_slope_threshold,
+        slope,
+    );
+    let outcrop_rock = smoothstep(0.05, 0.65, coastal_outcrop_amount);
+    let alpine_rock = smoothstep(
+        alpine_rock_line_m - 35.0,
+        alpine_rock_line_m + 55.0,
+        material_elevation_m,
+    );
+    let coastal_rock = smoothstep(0.10, 0.82, coastal_rock_amount);
+    let rock_cover = 1.0
+        - (1.0 - slope_rock)
+            * (1.0 - outcrop_rock)
+            * (1.0 - alpine_rock)
+            * (1.0 - coastal_rock);
 
     let beach_sediment = smoothstep(0.08, 0.42, coastal_sediment_amount);
     let beach_bottom_m = mix(-0.15, -4.0, beach_sediment);
@@ -2233,52 +2220,49 @@ fn terrain_surface(
         vec3<f32>(0.84, 0.76, 0.50),
         clamp(0.18 + 0.62 * beach_sediment + 0.16 * surface_grade, 0.0, 1.0),
     );
-    if material_elevation_m > beach_bottom_m && material_elevation_m < beach_top_m {
-        if beach_sediment > 0.18 {
-            return TerrainSurface(
-                beach_color,
-                beach_micro_height_m * micro_height.gradient,
-                0.82,
-            );
-        }
-    }
-
+    let beach_elevation = smoothstep(
+        beach_bottom_m - 0.8,
+        beach_bottom_m + 0.3,
+        material_elevation_m,
+    ) * (1.0 - smoothstep(
+        beach_top_m - 0.2,
+        beach_top_m + 1.5,
+        material_elevation_m,
+    ));
+    let sediment_capacity = beach_sediment
+        * beach_elevation
+        * (1.0 - smoothstep(0.10, 0.30, slope));
     let intertidal_ceiling_m = 0.5 * tide_reference_range_m();
-    if material_elevation_m < intertidal_ceiling_m {
-        if beach_sediment > 0.18 {
-            let exposed_dryness = smoothstep(
-                0.05,
-                0.8,
-                material_elevation_m - water_height_m,
-            );
-            return TerrainSurface(
-                mix(0.72 * beach_color, beach_color, exposed_dryness),
-                beach_micro_height_m * micro_height.gradient,
-                mix(0.90, 0.82, exposed_dryness),
-            );
-        }
-
-        let exposed_dryness = smoothstep(
-            0.05,
-            0.8,
-            material_elevation_m - water_height_m,
-        );
-        let intertidal_grade = clamp(
-            0.20 + 0.42 * surface_grade + 0.22 * coastal_rock_amount,
-            0.0,
-            1.0,
-        );
-        let intertidal_color = mix(
-            vec3<f32>(0.20, 0.22, 0.18),
-            vec3<f32>(0.43, 0.40, 0.31),
-            intertidal_grade,
-        );
-        return TerrainSurface(
-            mix(0.70 * intertidal_color, intertidal_color, exposed_dryness),
-            mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
-            mix(0.96, 0.88, exposed_dryness),
-        );
-    }
+    let intertidal_capacity = 1.0 - smoothstep(
+        intertidal_ceiling_m - 0.2,
+        intertidal_ceiling_m + 1.0,
+        material_elevation_m,
+    );
+    let exposed_dryness = smoothstep(
+        0.05,
+        0.8,
+        material_elevation_m - water_height_m,
+    );
+    let intertidal_grade = clamp(
+        0.20 + 0.42 * surface_grade + 0.22 * coastal_rock_amount,
+        0.0,
+        1.0,
+    );
+    let intertidal_color = mix(
+        vec3<f32>(0.20, 0.22, 0.18),
+        vec3<f32>(0.43, 0.40, 0.31),
+        intertidal_grade,
+    );
+    let intertidal_surface = TerrainSurface(
+        mix(0.70 * intertidal_color, intertidal_color, exposed_dryness),
+        mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
+        mix(0.96, 0.88, exposed_dryness),
+    );
+    let beach_surface = TerrainSurface(
+        mix(0.72 * beach_color, beach_color, exposed_dryness),
+        beach_micro_height_m * micro_height.gradient,
+        mix(0.90, 0.82, exposed_dryness),
+    );
 
     let tree_line = 1.0 - smoothstep(150.0, 250.0, material_elevation_m);
     let forest_amount = smoothstep(-0.18, 0.35, vegetation)
@@ -2315,7 +2299,7 @@ fn terrain_surface(
     grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15), 0.42 * dormancy);
     forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10), 0.32 * dormancy);
     let forest_visibility = forest_amount * canopy_cluster * landscape_visibility.y;
-    return TerrainSurface(
+    let vegetation_surface = TerrainSurface(
         mix(grass_color, forest_color, forest_visibility),
         mix(
             0.45 * micro_height.gradient,
@@ -2324,6 +2308,44 @@ fn terrain_surface(
         ),
         mix(0.88, 0.96, forest_visibility),
     );
+    let non_rock_cover = 1.0 - rock_cover;
+    let sediment_cover = non_rock_cover * sediment_capacity;
+    let non_rock_sediment_cover = non_rock_cover - sediment_cover;
+    let intertidal_cover = non_rock_sediment_cover * intertidal_capacity;
+    let vegetation_cover = non_rock_sediment_cover - intertidal_cover;
+    var rock_surface = vegetation_surface;
+    if rock_cover > 0.0 {
+        rock_surface = terrain_rock_surface(
+            position_m,
+            terrain_gradient,
+            material_gradient,
+            elevation_m,
+        );
+    }
+    let composed_surface = TerrainSurface(
+        vegetation_cover * vegetation_surface.color
+            + intertidal_cover * intertidal_surface.color
+            + sediment_cover * beach_surface.color
+            + rock_cover * rock_surface.color,
+        vegetation_cover * vegetation_surface.detail_gradient
+            + intertidal_cover * intertidal_surface.detail_gradient
+            + sediment_cover * beach_surface.detail_gradient
+            + rock_cover * rock_surface.detail_gradient,
+        vegetation_cover * vegetation_surface.roughness
+            + intertidal_cover * intertidal_surface.roughness
+            + sediment_cover * beach_surface.roughness
+            + rock_cover * rock_surface.roughness,
+    );
+    let snow_surface = TerrainSurface(
+        mix(
+            vec3<f32>(0.72, 0.76, 0.77),
+            vec3<f32>(0.96, 0.97, 0.96),
+            0.55 + 0.20 * surface_grade,
+        ),
+        0.22 * micro_height.gradient,
+        0.70,
+    );
+    return blend_terrain_surface(composed_surface, snow_surface, snow_amount);
 }
 
 fn cloud_color(
