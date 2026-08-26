@@ -204,7 +204,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   under above-freezing air. This represents accumulation and melt without a
   stored snowpack. Transported absolute water vapor follows the seasonal climate
   baseline rather than the daily temperature cycle; day/night temperature
-  instead changes saturation, humidity, instability, and precipitation.
+  instead changes saturation, humidity, instability, and precipitation. The
+  same local seasonal-water and maritime-temperature cause that closes sea ice
+  supplies a snow-cover floor on land. Perennial land ice uses a colder annual
+  temperature range, including elevation lapse, so it does not replace ordinary
+  seasonal snow across low polar islands.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
   depth and grounding. WGSL mirrors that surface, blends it into land, and
   preserves a sharp water-facing boundary. Latitude enters only through climate.

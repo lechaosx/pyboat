@@ -280,7 +280,17 @@ fn seasonal_snow_cover(elevation_m: f32) -> f32 {
     let fresh_snow = surface_cloud_weather.rain * snowfall_cold;
     let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
     let melt = smoothstep(0.0, 6.0, air_temperature);
-    return snow_before_melt * (1.0 - 0.7 * melt);
+    let freezing_climate = 1.0 - smoothstep(-2.0, 0.0, water_temperature_c());
+    return max(snow_before_melt * (1.0 - 0.7 * melt), freezing_climate);
+}
+
+fn local_snow_cover(elevation_m: f32, maritime_temperature_anomaly_c: f32) -> f32 {
+    let local_freezing_climate = 1.0 - smoothstep(
+        -2.0,
+        0.0,
+        water_temperature_c() + maritime_temperature_anomaly_c,
+    );
+    return max(seasonal_snow_cover(elevation_m), local_freezing_climate);
 }
 
 fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
@@ -569,6 +579,7 @@ struct TerrainSample {
     ice_amount: f32,
     water_ice_amount: f32,
     bedrock_elevation_m: f32,
+    maritime_temperature_anomaly_c: f32,
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
     coastal_sediment_amount: f32,
@@ -1368,23 +1379,24 @@ fn solid_ice_sample(
     terrain: TerrainSample,
     maritime_temperature: TerrainNoiseSample,
 ) -> TerrainSample {
+    var surface = terrain;
+    let maritime_scale = 12.0 * (
+        1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees()))
+    );
+    surface.maritime_temperature_anomaly_c = maritime_scale * maritime_temperature.value;
     var bedrock: TerrainNoiseSample;
     bedrock.value = terrain.elevation_m;
     bedrock.gradient = terrain.gradient;
     if bedrock.value < 0.0 {
         var effective_water_temperature: TerrainNoiseSample;
-        let maritime_scale = 12.0 * (
-            1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees()))
-        );
         effective_water_temperature.value = water_temperature_c()
             + maritime_scale * maritime_temperature.value;
         effective_water_temperature.gradient = maritime_scale * maritime_temperature.gradient;
         let open_water = terrain_smoothstep_sample(-2.0, 0.0, effective_water_temperature);
         let cover = 1.0 - open_water.value;
         if cover <= 0.5 {
-            return terrain;
+            return surface;
         }
-        var surface = terrain;
         surface.elevation_m = 0.25 + 1.75 * cover;
         surface.gradient = -1.75 * open_water.gradient;
         surface.ice_amount = smoothstep(0.5, 0.65, cover);
@@ -1408,10 +1420,10 @@ fn solid_ice_sample(
     );
     annual_temperature.gradient = vec2<f32>(0.0, climate_gradient_y)
         - 0.0065 * positive_bedrock.gradient;
-    if annual_temperature.value >= 1.0 {
-        return terrain;
+    if annual_temperature.value >= -8.0 {
+        return surface;
     }
-    let warm = terrain_smoothstep_sample(-5.0, 1.0, annual_temperature);
+    let warm = terrain_smoothstep_sample(-12.0, -8.0, annual_temperature);
     var cold: TerrainNoiseSample;
     cold.value = 1.0 - warm.value;
     cold.gradient = -warm.gradient;
@@ -1431,7 +1443,6 @@ fn solid_ice_sample(
     let candidate_gradient = mix(bedrock.gradient, ice_gradient, amount)
         + amount_gradient * (ice_surface - bedrock.value);
     let thickness = max(candidate_elevation - bedrock.value, 0.0);
-    var surface = terrain;
     surface.elevation_m = max(bedrock.value, candidate_elevation);
     surface.gradient = select(
         bedrock.gradient,
@@ -1551,6 +1562,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.ice_amount = 0.0;
     terrain.water_ice_amount = 0.0;
     terrain.bedrock_elevation_m = terrain.elevation_m;
+    terrain.maritime_temperature_anomaly_c = 0.0;
     terrain.coastal_rock_amount = 0.0;
     terrain.coastal_outcrop_amount = 0.0;
     terrain.coastal_sediment_amount = 0.0;
@@ -2060,6 +2072,7 @@ fn terrain_surface(
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
     coastal_sediment_amount: f32,
+    maritime_temperature_anomaly_c: f32,
     water_height_m: f32,
     surface: f32,
 ) -> TerrainSurface {
@@ -2131,7 +2144,10 @@ fn terrain_surface(
     let snow_amount = smoothstep(
         0.30,
         0.75,
-        climate_visibility.x * seasonal_snow_cover(material_elevation_m) + 0.18 * surface,
+        climate_visibility.x * local_snow_cover(
+            material_elevation_m,
+            maritime_temperature_anomaly_c,
+        ) + 0.18 * surface,
     );
     if snow_amount > 0.5 {
         return TerrainSurface(
@@ -2455,6 +2471,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 terrain.coastal_rock_amount,
                 terrain.coastal_outcrop_amount,
                 terrain.coastal_sediment_amount,
+                terrain.maritime_temperature_anomaly_c,
                 water_height_m,
                 land_surface,
             );
@@ -2720,7 +2737,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(rockiness, sediment, ruggedness, 1.0);
     }
     if mode == 40u {
-        return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);
+        return vec4<f32>(scalar_debug_color(local_snow_cover(
+            terrain.elevation_m,
+            terrain.maritime_temperature_anomaly_c,
+        )), 1.0);
     }
     if mode == 41u {
         return vec4<f32>(scalar_debug_color(terrain.ice_amount), 1.0);
@@ -2746,7 +2766,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(signed_debug_color(surface_current_air_temperature_c() / 40.0), 1.0);
     }
     if mode == 53u {
-        return vec4<f32>(scalar_debug_color(seasonal_snow_cover(terrain.elevation_m)), 1.0);
+        return vec4<f32>(scalar_debug_color(local_snow_cover(
+            terrain.elevation_m,
+            terrain.maritime_temperature_anomaly_c,
+        )), 1.0);
     }
     if mode == 54u {
         let maritime_temperature = 12.0
@@ -2775,7 +2798,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode == 57u {
         return vec4<f32>(
             clamp((surface_annual_mean_air_temperature_c() + 18.0) / 45.0, 0.0, 1.0),
-            seasonal_snow_cover(terrain.elevation_m),
+            local_snow_cover(
+                terrain.elevation_m,
+                terrain.maritime_temperature_anomaly_c,
+            ),
             terrain.ice_amount,
             1.0,
         );

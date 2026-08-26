@@ -467,11 +467,12 @@ pub fn climate_surface(
     let fresh_snow = precipitation_intensity.clamp(0.0, 1.0) * snowfall_cold;
     let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
     let melt = smoothstep_range(0.0, 6.0, f64::from(air_temperature_at_elevation_c)) as f32;
-    let seasonal_snow_cover = snow_before_melt * (1.0 - 0.7 * melt);
+    let seasonal_snow_cover =
+        (snow_before_melt * (1.0 - 0.7 * melt)).max(water_freezing_potential(water_temperature_c));
     let annual_temperature_at_elevation_c =
         climate.annual_mean_air_temperature_c - 0.0065 * elevation_m.max(0.0);
     let solid_ice_cover =
-        1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_at_elevation_c)) as f32;
+        1.0 - smoothstep_range(-12.0, -8.0, f64::from(annual_temperature_at_elevation_c)) as f32;
     let polar_ice_closure = water_ice_cover(elevation_m, water_temperature_c);
 
     SurfaceClimate {
@@ -501,8 +502,12 @@ fn water_ice_cover(bedrock_elevation_m: f32, effective_water_temperature_c: f32)
     if bedrock_elevation_m >= 0.0 {
         0.0
     } else {
-        1.0 - smoothstep_range(-2.0, 0.0, f64::from(effective_water_temperature_c)) as f32
+        water_freezing_potential(effective_water_temperature_c)
     }
+}
+
+fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
+    1.0 - smoothstep_range(-2.0, 0.0, f64::from(effective_water_temperature_c)) as f32
 }
 
 fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32; 3] {
@@ -658,6 +663,12 @@ pub fn procedural_world_environment(
         terrain_elevation_m,
         surface_climate.water_temperature_c + terrain.maritime_temperature_anomaly_c,
     );
+    surface_climate.seasonal_snow_cover =
+        surface_climate
+            .seasonal_snow_cover
+            .max(water_freezing_potential(
+                surface_climate.water_temperature_c + terrain.maritime_temperature_anomaly_c,
+            ));
     let environment = Environment {
         true_wind_velocity_m_s: land_sheltered_wind(
             world_geometry,
@@ -1145,7 +1156,7 @@ fn solid_surface_elevation_from_bedrock_m(
 ) -> f32 {
     let annual_temperature_c =
         annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
-    let cold = 1.0 - smoothstep_range(-5.0, 1.0, f64::from(annual_temperature_c)) as f32;
+    let cold = 1.0 - smoothstep_range(-12.0, -8.0, f64::from(annual_temperature_c)) as f32;
     if bedrock_elevation_m < 0.0 {
         let cover = water_ice_cover(bedrock_elevation_m, effective_water_temperature_c);
         return if cover > 0.5 {

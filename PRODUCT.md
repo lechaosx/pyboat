@@ -76,7 +76,10 @@ current playable behavior; this file does not track delivery status.
   instability, and precipitation. Cold precipitation can give temperate winter
   land fresh snow while nearby open water remains unfrozen; warmer daytime air
   promotes melt. Ground temperature responds more slowly than air so seasonal
-  snow persists without mirroring every weather fluctuation.
+  snow persists without mirroring every weather fluctuation. Where the local
+  seasonal climate is cold enough to freeze seawater, exposed land is reliably
+  snow covered; perennial land ice is reserved for colder annual conditions or
+  elevation so ordinary polar lowlands still change with season.
 - **[Explicit]** Solid ice is land for boats. It blends into exposed land but
   ends at water with a sharp, readable boundary. The edge emerges from physical
   climate and procedural environment rather than an authored latitude contour

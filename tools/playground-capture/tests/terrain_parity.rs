@@ -264,8 +264,10 @@ fn render_debug_image_at(
     height: u32,
 ) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{mode}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{scenario}-{:08x}-{:08x}-{mode}-{width}x{height}.png",
         std::process::id(),
+        position_m.x.to_bits(),
+        position_m.y.to_bits(),
     ));
     let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
         .args([

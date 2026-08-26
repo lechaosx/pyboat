@@ -891,6 +891,25 @@ fn sea_ice_responds_to_seasonal_water_temperature() {
 }
 
 #[test]
+fn sea_ice_forming_winter_assures_snow_without_making_low_land_a_glacier() {
+    let climate = world_climate_conditions(75.0);
+    let conditions = |season_phase| CelestialConditions {
+        geographic_latitude_degrees: 75.0,
+        season_phase,
+        day_phase: 0.125,
+        moon_phase: 0.0,
+    };
+    let summer_land = climate_surface(climate, conditions(0.425), 6.0, 0.0, 0.0, 0.0);
+    let winter_land = climate_surface(climate, conditions(0.925), 6.0, 0.0, 0.0, 0.0);
+    let winter_sea = climate_surface(climate, conditions(0.925), 6.0, 0.0, 0.0, -1_000.0);
+
+    assert!(winter_sea.polar_ice_closure > 0.95);
+    assert!(winter_land.seasonal_snow_cover > 0.95);
+    assert!(winter_land.seasonal_snow_cover > summer_land.seasonal_snow_cover + 0.5);
+    assert!(winter_land.solid_ice_cover < 0.05);
+}
+
+#[test]
 fn sea_ice_is_not_a_direct_function_of_ocean_depth() {
     let climate = ClimateConditions {
         annual_mean_air_temperature_c: -8.0,
