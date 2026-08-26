@@ -9,7 +9,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
+    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic, render_pressure_grid,
     surface_weather_transport, world_celestial_conditions, world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
@@ -285,6 +285,21 @@ pub fn sample_playground_surface_weather_transport(
 }
 
 #[wasm_bindgen]
+pub fn sample_playground_pressure_grid(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    tick: u64,
+) -> Result<Vec<f32>, JsValue> {
+    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    Ok(render_pressure_grid(geometry, match_seed, tick)
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+#[wasm_bindgen]
 impl PlaygroundNoiseOctaveDiagnostic {
     #[wasm_bindgen(getter)]
     pub fn basis(&self) -> String {
@@ -442,6 +457,7 @@ struct SceneUniforms {
     cloud_anchor_phase: [f32; 2],
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
+    pressure_grid: [[f32; 4]; 256],
 }
 
 struct Renderer {
@@ -606,6 +622,7 @@ impl Renderer {
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
         let surface_weather_transport = surface_weather_transport(world_geometry, match_seed, tick);
+        let pressure_grid = render_pressure_grid(world_geometry, match_seed, tick);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -679,6 +696,7 @@ impl Renderer {
                     celestial.moon_phase,
                     0.0,
                 ],
+                pressure_grid,
             }),
         );
 

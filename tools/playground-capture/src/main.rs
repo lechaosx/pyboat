@@ -3,8 +3,8 @@ use std::{env, fs, path::PathBuf};
 use bytemuck::{Pod, Zeroable};
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_air_temperature_c, derive_weather, surface_weather_transport,
-    tide_height_m,
+    climate_surface, current_air_temperature_c, derive_weather, render_pressure_grid,
+    surface_weather_transport, tide_height_m,
 };
 use rapier2d::prelude::Vector;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,7 @@ struct SceneUniforms {
     cloud_anchor_phase: [f32; 2],
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
+    pressure_grid: [[f32; 4]; 256],
 }
 
 #[repr(C)]
@@ -559,6 +560,7 @@ fn render_scenario(
             conditions.moon_phase,
             0.0,
         ],
+        pressure_grid: render_pressure_grid(world_geometry, options.seed, tick),
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

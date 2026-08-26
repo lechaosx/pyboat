@@ -10,6 +10,7 @@ use simulation::{
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 const WIND_MODES_PER_BAND: usize = 16;
+pub const RENDER_PRESSURE_GRID_SIDE: usize = 16;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
 const UPPER_WIND_SCALE: f32 = 1.12;
@@ -769,7 +770,7 @@ fn procedural_atmosphere_primary_with_conditions(
     );
     let climate_saturation_capacity_g_kg =
         3.5 * libm::exp(0.055 * f64::from(climate_air_temperature_c + 5.0)) as f32;
-    let water_vapor_fraction = 0.67
+    let water_vapor_fraction = 0.72
         + 0.65
             * procedural_weather_noise(
                 world_geometry,
@@ -1850,6 +1851,30 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
 ) -> Vector {
     let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
     wind_from_pressure_gradient(pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M)
+}
+
+pub fn render_pressure_grid(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+) -> [[f32; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE] {
+    let mut grid = [[0.0; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE];
+    for y in 0..RENDER_PRESSURE_GRID_SIDE {
+        for x in 0..RENDER_PRESSURE_GRID_SIDE {
+            let position_m = Vector::new(
+                x as f32 * world_geometry.width_m() / RENDER_PRESSURE_GRID_SIDE as f32,
+                y as f32 * world_geometry.height_m() / RENDER_PRESSURE_GRID_SIDE as f32,
+            );
+            let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
+            grid[y * RENDER_PRESSURE_GRID_SIDE + x] = [
+                1013.25 + pressure.potential_m2_s as f32 / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+                pressure.gradient_m_s.x / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+                pressure.gradient_m_s.y / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+                0.0,
+            ];
+        }
+    }
+    grid
 }
 
 fn procedural_pressure_sample(

@@ -13,6 +13,7 @@ struct SceneUniforms {
     cloud_anchor_phase: vec2<f32>,
     surface_weather_transport_m: vec4<f32>,
     world_phases: vec4<f32>,
+    pressure_grid: array<vec4<f32>, 256>,
 };
 
 struct SceneTuning {
@@ -130,6 +131,28 @@ fn rotate_left(vector: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(-vector.y, vector.x);
 }
 
+fn pressure_grid_sample(position_m: vec2<f32>) -> vec3<f32> {
+    let coordinate = fract(position_m / scene.world_size_m) * 16.0;
+    let lower = vec2<u32>(floor(coordinate)) % vec2<u32>(16u);
+    let upper = (lower + vec2<u32>(1u)) % vec2<u32>(16u);
+    let amount = fract(coordinate);
+    let lower_left = scene.pressure_grid[lower.y * 16u + lower.x].xyz;
+    let lower_right = scene.pressure_grid[lower.y * 16u + upper.x].xyz;
+    let upper_left = scene.pressure_grid[upper.y * 16u + lower.x].xyz;
+    let upper_right = scene.pressure_grid[upper.y * 16u + upper.x].xyz;
+    return mix(
+        mix(lower_left, lower_right, amount.x),
+        mix(upper_left, upper_right, amount.x),
+        amount.y,
+    );
+}
+
+fn pressure_at(position_m: vec2<f32>) -> vec3<f32> {
+    return scene.pressure.xyz
+        + pressure_grid_sample(position_m)
+        - pressure_grid_sample(scene.camera_and_view_m.xy);
+}
+
 fn surface_wind_m_s() -> vec2<f32> {
     let cross_isobar_fraction = 0.12 * atmosphere_model.y;
     let gradient = scene.pressure.yz;
@@ -226,7 +249,7 @@ fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
         5u,
         4u,
     );
-    return clamp(capacity_g_kg * (0.67 + 0.65 * noise), 0.5, 25.0);
+    return clamp(capacity_g_kg * (0.72 + 0.65 * noise), 0.5, 25.0);
 }
 
 fn surface_water_vapor_g_kg() -> f32 {
@@ -347,6 +370,7 @@ fn initialize_surface_tide() {
 }
 
 fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    let pressure = pressure_at(position_m);
     let air_temperature_c = surface_current_air_temperature_c_at(position_m);
     let saturation_capacity_g_kg = 3.5 * exp(0.055 * (air_temperature_c + 5.0));
     let relative_humidity = clamp(
@@ -359,8 +383,8 @@ fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
         48.0,
         air_temperature_c - scene.synoptic_pressure_and_temperature.w,
     );
-    let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, scene.pressure.x);
-    let gradient_lift = smoothstep(0.0002, 0.0015, length(scene.pressure.yz));
+    let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, pressure.x);
+    let gradient_lift = smoothstep(0.0002, 0.0015, length(pressure.yz));
     let frontal_lift = smoothstep(
         0.00005,
         0.0005,
@@ -2817,6 +2841,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             visual_pixel_footprint_m,
         ).thickness;
         return vec4<f32>(vec3<f32>(thickness), 1.0);
+    }
+    if mode == 60u {
+        let pressure = clamp((pressure_at(surface_position_m).x - 990.0) / 45.0, 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(pressure), 1.0);
     }
     return final_scene_color(input);
 }

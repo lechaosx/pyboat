@@ -61,7 +61,9 @@ current playable behavior; this file does not track delivery status.
   wavelength as the independently selectable world width and height change.
 - **[Explicit]** Environment models are locally plausible and stateless rather
   than global fluid, climate, storm-lifecycle, or ocean-basin simulations.
-  Storm-like conditions emerge from continuous atmospheric fields.
+  Storm-like conditions emerge from continuous atmospheric fields. **[Implicit]**
+  The default world is humid and varied enough that severe rain is normally
+  active somewhere at world scale, without guaranteeing or placing a storm.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
   gust to broad weather system, and follows a Weibull speed distribution with
   `k = 2` and `λ = 9 m/s` at a fixed place and time. Land provides simplified,

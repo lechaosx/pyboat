@@ -170,9 +170,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   and tick; the view-center Rust sample is diagnostic and never drives the
   surface scene. **[Implicit]** The host reduces the tick to bounded toroidal
   transport offsets before upload so WGSL never converts total time to `f32`.
-  As a temporary cloud-only exception, pressure-gradient forcing and layer winds
-  remain view-sampled inputs to cloud transport. Spatial temperature and moisture
-  are evaluated in WGSL rather than accepting center-derived weather.
+  **[Implicit]** Cloud formation bilinearly samples a fixed 16 by 16 periodic
+  lattice of the authoritative analytic pressure field. The host regenerates the
+  transient lattice from match state; it is not simulation state or a storm grid.
+  This keeps fragment cost and world-size tuning predictable without evaluating
+  all 48 spectral pressure modes per pixel. As a temporary cloud-only exception,
+  layer winds remain view-sampled inputs to cloud transport. Spatial temperature
+  and moisture are evaluated in WGSL rather than accepting center-derived weather.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
   latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with

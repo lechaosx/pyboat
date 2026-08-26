@@ -1,6 +1,7 @@
 import {
   sample_playground_environment,
   sample_playground_noise_octave,
+  sample_playground_pressure_grid,
   sample_playground_surface_weather_transport,
   sample_playground_world_geometry,
 } from "browser";
@@ -424,6 +425,7 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [19, "Pressure gradient"], [20, "Temperature gradient"], [21, "Terrain shelter"],
     [49, "Signed latitude"], [50, "Local solar time"],
     [52, "Surface air temperature"], [56, "Solar elevation"],
+    [58, "Cloud formation"], [59, "Cloud thickness"], [60, "Surface pressure"],
   ],
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
@@ -1126,7 +1128,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(44);
+const sceneFloats = new Float32Array(44 + 16 * 16 * 4);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1638,6 +1640,12 @@ function writeUniforms(): void {
   ], 36);
   transport.free();
   sceneFloats.set([state.dayPhase, state.seasonPhase, state.moonPhase, 0], 40);
+  sceneFloats.set(sample_playground_pressure_grid(
+    state.worldWidthM,
+    state.worldHeightM,
+    parsedSeed(),
+    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
+  ), 44);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([

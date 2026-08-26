@@ -6,8 +6,8 @@ deterministic rectangular procedural world whose terrain and seeded procedural
 fields repeat seamlessly. Each rendered position receives its own longitude,
 latitude-calibrated climate and opposite-hemisphere season, weather-responsive
 snow and temperature-shaped sea ice, astronomical tide, and celestial lighting,
-alongside coherent coasts, physical depth, pressure-driven weather, and spatially
-formed clouds whose thickness varies their opacity and shadows. Prediction,
+alongside coherent coasts, physical depth, world-scale pressure-driven weather,
+and spatially formed clouds whose thickness varies their opacity and shadows. Prediction,
 ramming, damage, and persistent physical wrecks remain deterministic. Boats
 sail repeated toroidal laps and remain visible, predictable, and physically
 interactive across both seams and their corners.

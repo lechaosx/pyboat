@@ -211,6 +211,15 @@ fn cloud_formation_is_spatial_across_world() {
     assert!(channel_range(&formation, 0) > 0.20);
 }
 
+#[test]
+fn rendered_pressure_is_spatial_across_world() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let pressure = render_debug_image(world, 60, 32, 16);
+
+    assert_grayscale(&pressure);
+    assert!(channel_range(&pressure, 0) > 0.15);
+}
+
 fn representative_shore(world: WorldGeometry) -> Vector {
     for x_index in -32..=32 {
         for y_index in -32..=32 {
