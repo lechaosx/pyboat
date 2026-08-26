@@ -159,7 +159,7 @@ async fn concurrent_connections_receive_distinct_ids_and_one_match_configuration
 }
 
 #[tokio::test]
-async fn server_welcome_propagates_selected_rectangular_world_geometry() {
+async fn server_welcome_propagates_selected_cylindrical_world_geometry() {
     let world_geometry = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let server = start_server_with_world_geometry(world_geometry);
     let (client, welcome) = connect(&server).await;

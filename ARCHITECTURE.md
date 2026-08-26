@@ -30,16 +30,17 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 - **[Explicit]** The dedicated server is authoritative. Clients predict locally
   and reconcile corrections without exposing them where practical.
-- **[Explicit]** Each match has a rectangular `WorldGeometry` with independently
-  selectable width and height in metres. It defines canonical wrapped coordinates
-  in `[-width/2, width/2) x [-height/2, height/2)` and minimum-image displacement
-  independently on each axis. Authoritative simulation, client prediction,
-  reconciliation, rendering placement, spatial interest, and replication use
-  that shared geometry, so positions remain canonical and interaction crosses
-  either seam and their corners. The origin is the equator and reference
+- **[Explicit]** Each match has a cylindrical `WorldGeometry` with independently
+  selectable longitude circumference and pole-to-pole span in metres. It defines
+  canonical coordinates in `[-width/2, width/2) x R`; minimum-image displacement
+  wraps only longitude. Latitude is `180 * y / height` inside the geographic span
+  and clamps to the exact poles beyond it. Authoritative simulation, client
+  prediction, reconciliation, rendering placement, spatial interest, and
+  replication use that shared geometry. The origin is the equator and reference
   meridian.
-- **[Explicit]** Rapier steps finite planar charts of the torus. Each tick uses
-  per-hull swept extents in wrapped fixed-size spatial cells and exact
+- **[Explicit]** Rapier steps finite planar charts of the cylinder. Each tick uses
+  per-hull swept extents in longitude-wrapped fixed-size spatial columns and
+  unbounded north-south rows, plus exact
   minimum-image swept proximity to form deterministic contact components, then
   places every complete articulated boat assembly in a common chart. Shared
   simulation supports hull beams of at least 1.5 m and bounds each hull's linear
@@ -49,9 +50,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   boundary, so authority and prediction apply the same rule. Thirty-two substeps
   therefore resolve opposing supported hull extrema to half the minimum beam
   without relying on dynamic-body CCD. Damage comes only from pair-specific
-  solver contacts. The same wrapped index narrows interest queries. Chart changes
-  move whole assemblies without changing their canonical logical position; no
-  one-sided collision ghosts participate in the solver.
+  solver contacts. The same cylindrical index narrows interest queries. Chart
+  changes move whole assemblies without changing their canonical logical
+  position; no one-sided collision ghosts participate in the solver.
 - **[Implicit]** Geometry dimensions use `f32` and accept exactly representable
   values from 8,000 through 256,000 metres on each axis. Exact half-period
   minimum-image ties select the positive half-period on either axis. The
@@ -134,10 +135,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The match seed and world geometry are the procedural-world data
   sent to a client. Snapshots synchronize boats, not sampled environment fields
   or model parameters.
-- **[Explicit]** Every seeded spatial field participating in the toroidal world
-  is evaluated periodically across both independently sized axes without a seam
-  in its value or gradient. Canonicalizing sample coordinates alone does not make
-  an ordinary noise field periodic.
+- **[Explicit]** Every seeded spatial field joins without a value or gradient seam
+  across the longitude period. Canonicalizing sample coordinates alone does not
+  make an ordinary noise field periodic.
+- **[Implicit]** Existing terrain, weather, tide, material, and cloud noise retains
+  its calibrated north-south procedural period beneath the polar exterior. That
+  internal repetition is not coordinate equivalence: physics, visibility,
+  latitude, climate, and rendering position never wrap north-south, and opaque
+  authoritative ice hides the repeated substrate beyond the poles.
 - **[Explicit]** Noise basis is a fixed semantic property of each field and
   octave, independent of world geometry. Broad terrain, macro transported scalar
   weather, and tide response use a four-dimensional circle embedding with radii
@@ -158,8 +163,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   broad unthresholded tide response use double-precision circle-embedded
   four-dimensional simplex noise with analytic chain-rule world-space gradients;
   the finest water-vapor octave remains periodic two-dimensional simplex.
-  Transported phases reduce on the torus before evaluation, preserving long-time
-  precision without repeating time.
+  Transported phases reduce on their procedural periods before evaluation,
+  preserving long-time precision without repeating time.
 
 ### Atmosphere and climate
 
@@ -189,15 +194,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   superposition evolves without stored history; there is no weather grid or
   storm entity.
 - **[Implicit]** Pressure directions are quantized to integer wavevectors of the
-  rectangular torus so the potential and its analytic gradient join continuously
-  on both seams.
+  procedural calibration rectangle, so the potential and its analytic gradient
+  join continuously at the longitude seam.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, transported surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
   Its procedural inputs are match seed, geometry, global day/season/lunar phase,
   and tick; the view-center Rust sample is diagnostic and never drives the
   surface scene.
-- **[Implicit]** The host reduces the tick to bounded toroidal transport offsets
+- **[Implicit]** The host reduces the tick to bounded procedural transport offsets
   before upload so WGSL never converts total time to `f32`.
 - **[Implicit]** Cloud formation bilinearly samples a fixed 16 by 16 periodic
   lattice of the authoritative analytic pressure field. The host regenerates
@@ -318,14 +323,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   attenuation.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
-  width as circumference and world height as latitude scale; grazing shadows
-  remain finite and fade toward the horizon. The apparent angular radius of the
-  sun and moon supplies a physical minimum filter footprint for cloud shadows
-  and a distance-proportional penumbra for landform shadows.
-- **[Explicit]** Canonical normalized north-south position maps linearly from
-  -90 degrees at the lower branch through the equator to the limiting +90-degree
-  upper edge. The identified latitude edge is one polar loop, and opposite
-  hemisphere seasons may be discontinuous there.
+  width as circumference and the clamped physical latitude derived from the
+  pole-to-pole span; the non-geographic polar apron retains its local planar
+  offset. Grazing shadows remain finite and fade toward the horizon. The apparent
+  angular radius of the sun and moon supplies a physical minimum filter footprint
+  for cloud shadows and a distance-proportional penumbra for landform shadows.
+- **[Explicit]** North-south position maps linearly from -90 degrees at the
+  finite southern pole through the equator to +90 degrees at the finite northern
+  pole. Latitude remains clamped beyond those coordinates, so neither climate
+  nor seasonal forcing has a north-south seam.
 - **[Implicit]** World and view coordinates use positive X for east/right and
   positive Y for north/up. Input adapters convert down-positive device
   coordinates at their boundaries.
@@ -338,14 +344,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   browser's Rust/WASM boundary and retains manual scenarios as primary-cause
   overrides. The view-center sample is diagnostic; the production shader derives
   each rendered position independently. The overlay marks the raw center,
-  reference meridian, equator, and seams. Procedural fields repeat over the
-  selected rectangle while seasonal latitude retains the accepted polar-loop
-  discontinuity, and raw camera coordinates remain unbounded.
+  repeated reference meridians and longitude seams, the equator, and both finite
+  poles. Raw camera coordinates remain unbounded north-south.
 - **[Explicit]** The geometry diagnostic reports each representative octave's
   fixed basis, requested wavelength, effective per-axis wavelength, and relative
   error.
-- **[Implicit]** Playground world-width and world-height controls cover 8 km to
-  256 km independently in 1 km steps, with the 64 km square match default.
+- **[Implicit]** Playground longitude-circumference and pole-to-pole-span controls
+  cover 8 km to 256 km independently in 1 km steps, with equal 64 km defaults.
 
 ## Transport
 
@@ -375,12 +380,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   leaving it, and accepting authoritative corrections, must not visibly snap or
   jerk boats.
 - **[Implicit]** Nearby boats share the local prediction world; distant boats use
-  bounded kinematic extrapolation. Extrapolated positions wrap canonically, while
-  render placement and correction offsets use the minimum image relative to the
-  local boat.
+  bounded kinematic extrapolation. Extrapolated longitude wraps canonically,
+  while render placement and correction offsets use cylindrical minimum-image
+  displacement relative to the local boat.
 - **[Explicit]** Boats sufficiently outside the viewport may be omitted from a
   recipient's snapshots. Server visibility and physics-bubble membership use
-  toroidal minimum-image distance.
+  longitude minimum-image displacement and ordinary north-south distance.
 
 ## Operations
 

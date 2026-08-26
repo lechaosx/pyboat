@@ -73,27 +73,38 @@ fn hemispheres_have_opposite_seasons_while_global_phases_match() {
 }
 
 #[test]
-fn polar_loop_keeps_the_endorsed_seasonal_forcing_discontinuity() {
+fn latitude_reaches_each_pole_and_remains_clamped_beyond_it() {
     let world = geometry();
-    let epsilon_m = 0.125;
-    let lower =
-        procedural_world_environment(world, SEED, TICK, Vector::new(0.0, -world.height_m() / 2.0));
-    let upper = procedural_world_environment(
-        world,
-        SEED,
-        TICK,
-        Vector::new(0.0, world.height_m() / 2.0 - epsilon_m),
-    );
-
-    assert_eq!(lower.celestial.geographic_latitude_degrees, -90.0);
-    assert!(upper.celestial.geographic_latitude_degrees > 89.99);
-    let lower_temperature = current_air_temperature_c(lower.climate, lower.celestial);
-    let upper_temperature = current_air_temperature_c(upper.climate, upper.celestial);
-    assert!((lower_temperature - upper_temperature).abs() > 20.0);
+    let half_height = world.height_m() / 2.0;
+    for (y_m, expected_latitude) in [
+        (-2.0 * half_height, -90.0),
+        (-half_height, -90.0),
+        (0.0, 0.0),
+        (half_height, 90.0),
+        (2.0 * half_height, 90.0),
+    ] {
+        let conditions = world_celestial_conditions(world, 0.0, Vector::new(0.0, y_m));
+        assert_eq!(conditions.geographic_latitude_degrees, expected_latitude);
+    }
 }
 
 #[test]
-fn world_environment_is_deterministic_and_continuous_away_from_the_polar_branch() {
+fn polar_exterior_is_authoritative_solid_surface_at_every_longitude() {
+    let world = geometry();
+    for y_m in [-world.height_m(), world.height_m()] {
+        for longitude_index in 0..16 {
+            let x_m =
+                -world.width_m() / 2.0 + (longitude_index as f32 + 0.5) * world.width_m() / 16.0;
+            let environment =
+                procedural_world_environment(world, SEED, TICK, Vector::new(x_m, y_m));
+            assert_eq!(environment.environment.water_depth_m, 0.0);
+            assert!(environment.surface_climate.solid_ice_cover > 0.99);
+        }
+    }
+}
+
+#[test]
+fn world_environment_is_deterministic_and_locally_continuous() {
     let world = geometry();
     let position = Vector::new(12_345.0, 4_321.0);
     let sample = procedural_world_environment(world, SEED, TICK, position);

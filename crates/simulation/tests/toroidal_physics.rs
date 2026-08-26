@@ -71,7 +71,7 @@ fn advance(simulation: &mut SharedSimulation, boat_count: usize) -> Vec<HullCont
 }
 
 #[test]
-fn logical_positions_wrap_after_repeated_x_y_and_corner_laps() {
+fn logical_positions_wrap_longitude_and_preserve_unbounded_north_south_position() {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let mut simulation = SharedSimulation::new_with_world_geometry(world);
     let positions = [
@@ -93,12 +93,12 @@ fn logical_positions_wrap_after_repeated_x_y_and_corner_laps() {
 }
 
 #[test]
-fn moving_boats_complete_repeated_x_y_and_corner_laps() {
+fn moving_boats_complete_longitude_laps_without_north_south_wrapping() {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
-    for (velocity_m_s, ticks) in [
-        (Vector::new(400.0, 0.0), 2_400),
-        (Vector::new(0.0, 400.0), 2_400),
-        (Vector::new(240.0, 240.0), 4_000),
+    for (velocity_m_s, ticks, expected_m) in [
+        (Vector::new(400.0, 0.0), 2_400, Vector::ZERO),
+        (Vector::new(0.0, 400.0), 2_400, Vector::new(0.0, 16_000.0)),
+        (Vector::new(240.0, 240.0), 4_000, Vector::new(0.0, 16_000.0)),
     ] {
         let mut simulation = SharedSimulation::new_with_world_geometry(world);
         simulation.add_boat(parameters(), motion(Vector::ZERO, velocity_m_s, 0.0));
@@ -106,7 +106,7 @@ fn moving_boats_complete_repeated_x_y_and_corner_laps() {
             advance(&mut simulation, 1);
         }
         assert!(
-            simulation.motion(0).position_m.length() < 10.0,
+            (simulation.motion(0).position_m - expected_m).length() < 10.0,
             "{:?}",
             simulation.motion(0)
         );
@@ -114,23 +114,23 @@ fn moving_boats_complete_repeated_x_y_and_corner_laps() {
 }
 
 #[test]
-fn wrapped_radius_query_finds_x_y_and_corner_neighbors() {
+fn wrapped_radius_query_finds_longitude_neighbors_but_not_north_south_images() {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let half = world.width_m() / 2.0;
     let mut simulation = SharedSimulation::new_with_world_geometry(world);
     for position_m in [
-        Vector::new(half - 1.0, half - 1.0),
-        Vector::new(-half + 2.0, half - 1.0),
-        Vector::new(half - 1.0, -half + 2.0),
-        Vector::new(-half + 2.0, -half + 2.0),
+        Vector::new(half - 1.0, 0.0),
+        Vector::new(-half + 2.0, 0.0),
+        Vector::new(half - 1.0, world.height_m() - 2.0),
+        Vector::new(-half + 2.0, -world.height_m() + 2.0),
     ] {
         simulation.add_boat(parameters(), motion(position_m, Vector::ZERO, 0.0));
     }
     advance(&mut simulation, 4);
 
     assert_eq!(
-        simulation.boats_within_radius(Vector::new(half - 1.0, half - 1.0), 4.5),
-        vec![0, 1, 2, 3]
+        simulation.boats_within_radius(Vector::new(half - 1.0, 0.0), 4.5),
+        vec![0, 1]
     );
 }
 
@@ -177,9 +177,9 @@ fn ram(offset_m: Vector) -> (f32, [Vector; 2], usize) {
 }
 
 #[test]
-fn corner_seam_ram_matches_the_same_ram_at_world_center() {
+fn longitude_seam_ram_matches_the_same_ram_at_world_center() {
     let central = ram(Vector::ZERO);
-    let seam = ram(Vector::new(4_000.0, 4_000.0));
+    let seam = ram(Vector::new(4_000.0, 0.0));
 
     assert!(central.0 > 100.0);
     assert!(

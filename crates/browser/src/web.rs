@@ -37,8 +37,8 @@ const UPPER_CLOUD_REFRESH_TICKS: u64 = 216_000;
 pub struct PlaygroundWorldGeometrySample {
     raw_x_m: f32,
     raw_y_m: f32,
-    wrapped_x_m: f32,
-    wrapped_y_m: f32,
+    canonical_x_m: f32,
+    canonical_y_m: f32,
     normalized_x: f32,
     normalized_y: f32,
     latitude_degrees: f32,
@@ -367,13 +367,13 @@ impl PlaygroundWorldGeometrySample {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn wrapped_x_m(&self) -> f32 {
-        self.wrapped_x_m
+    pub fn canonical_x_m(&self) -> f32 {
+        self.canonical_x_m
     }
 
     #[wasm_bindgen(getter)]
-    pub fn wrapped_y_m(&self) -> f32 {
-        self.wrapped_y_m
+    pub fn canonical_y_m(&self) -> f32 {
+        self.canonical_y_m
     }
 
     #[wasm_bindgen(getter)]
@@ -410,10 +410,10 @@ pub fn sample_playground_world_geometry(
     Ok(PlaygroundWorldGeometrySample {
         raw_x_m: sample.raw_center_m[0],
         raw_y_m: sample.raw_center_m[1],
-        wrapped_x_m: sample.wrapped_center_m[0],
-        wrapped_y_m: sample.wrapped_center_m[1],
-        normalized_x: sample.normalized_torus[0],
-        normalized_y: sample.normalized_torus[1],
+        canonical_x_m: sample.canonical_center_m[0],
+        canonical_y_m: sample.canonical_center_m[1],
+        normalized_x: sample.normalized_world[0],
+        normalized_y: sample.normalized_world[1],
         latitude_degrees: sample.latitude_degrees,
         local_solar_phase: sample.local_solar_phase,
     })

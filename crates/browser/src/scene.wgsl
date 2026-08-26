@@ -174,7 +174,7 @@ fn upper_wind_m_s() -> vec2<f32> {
 }
 
 fn surface_latitude_degrees_at(position_m: vec2<f32>) -> f32 {
-    return 180.0 * position_m.y / scene.world_size_m.y;
+    return clamp(180.0 * position_m.y / scene.world_size_m.y, -90.0, 90.0);
 }
 
 fn surface_latitude_degrees() -> f32 {
@@ -586,7 +586,7 @@ fn canonical_world_component(value_m: f32, period_m: f32) -> f32 {
 fn canonical_world_position(position_m: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(
         canonical_world_component(position_m.x, scene.world_size_m.x),
-        canonical_world_component(position_m.y, scene.world_size_m.y),
+        position_m.y,
     );
 }
 
@@ -674,7 +674,7 @@ fn terrain_simplex_lattice_gradient(
     y_cycles: i32,
 ) -> vec2<f32> {
     // These residues are the integer axes of the triangular lattice. Integer
-    // cycle counts make each rectangular world period an exact lattice shift.
+    // cycle counts make each procedural calibration period an exact lattice shift.
     let periodic_x = positive_mod(x - y, 2 * x_cycles);
     let periodic_y = positive_mod(x + y, 2 * y_cycles);
     let key = seed
@@ -1403,7 +1403,13 @@ fn projected_cloud_position(
         return position_m;
     }
     let longitude = TAU * position_m.x / scene.world_size_m.x;
-    let latitude = PI * position_m.y / scene.world_size_m.y;
+    let polar_y_m = clamp(
+        position_m.y,
+        -0.5 * scene.world_size_m.y,
+        0.5 * scene.world_size_m.y,
+    );
+    let polar_excess_y_m = position_m.y - polar_y_m;
+    let latitude = PI * polar_y_m / scene.world_size_m.y;
     let longitude_sin = sin(longitude);
     let longitude_cos = cos(longitude);
     let latitude_sin = sin(latitude);
@@ -1434,7 +1440,8 @@ fn projected_cloud_position(
     let cloud_direction = normalize(cloud_position);
     return vec2<f32>(
         scene.world_size_m.x * atan2(cloud_direction.y, cloud_direction.x) / TAU,
-        scene.world_size_m.y * asin(clamp(cloud_direction.z, -1.0, 1.0)) / PI,
+        polar_excess_y_m
+            + scene.world_size_m.y * asin(clamp(cloud_direction.z, -1.0, 1.0)) / PI,
     );
 }
 

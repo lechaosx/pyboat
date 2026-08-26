@@ -884,8 +884,8 @@ worldToolbarElement.innerHTML = `
   <details open>
     <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
     <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-width">World width · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-height">World height · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude circumference · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
@@ -1492,8 +1492,8 @@ function updateGeometryMeasurements(): void {
   const values: Array<[string, string]> = [
     ["Physical causes", "Live world with scenario overrides"],
     ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
-    ["Canonical center", `${sample.wrapped_x_m.toFixed(1)}, ${sample.wrapped_y_m.toFixed(1)} m`],
-    ["Normalized torus", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
+    ["Cylinder center", `${sample.canonical_x_m.toFixed(1)}, ${sample.canonical_y_m.toFixed(1)} m`],
+    ["Normalized geography", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
     ["Signed latitude", `${sample.latitude_degrees.toFixed(3)}°`],
     ["Local solar phase", `${sample.local_solar_phase.toFixed(4)} · ${(sample.local_solar_phase * 24).toFixed(2)} h`],
   ];
@@ -1516,8 +1516,8 @@ function updateGeometryMeasurements(): void {
     ]);
     octave.free();
   }
-  renderedCameraX = sample.wrapped_x_m;
-  renderedCameraY = sample.wrapped_y_m;
+  renderedCameraX = sample.canonical_x_m;
+  renderedCameraY = sample.canonical_y_m;
   sample.free();
   geometryMeasurementsElement.replaceChildren(...values.flatMap(([label, value]) => {
     const name = document.createElement("span");
@@ -1564,6 +1564,21 @@ function drawPeriodicGuideLines(
   geometryOverlayContext.stroke();
 }
 
+function drawGuideLine(positionM: number, vertical: boolean): void {
+  const pixelsPerMetre = geometryOverlayCanvas.clientHeight / state.viewHeight;
+  geometryOverlayContext.beginPath();
+  if (vertical) {
+    const [x] = worldToOverlayPoint(positionM, state.cameraY, pixelsPerMetre);
+    geometryOverlayContext.moveTo(x, 0);
+    geometryOverlayContext.lineTo(x, geometryOverlayCanvas.clientHeight);
+  } else {
+    const [, y] = worldToOverlayPoint(state.cameraX, positionM, pixelsPerMetre);
+    geometryOverlayContext.moveTo(0, y);
+    geometryOverlayContext.lineTo(geometryOverlayCanvas.clientWidth, y);
+  }
+  geometryOverlayContext.stroke();
+}
+
 function drawGeometryOverlay(): void {
   const widthM = state.viewHeight * geometryOverlayCanvas.clientWidth / geometryOverlayCanvas.clientHeight;
   const minimumX = state.cameraX - widthM / 2;
@@ -1579,11 +1594,13 @@ function drawGeometryOverlay(): void {
   geometryOverlayContext.strokeStyle = "rgb(105 189 232 / 68%)";
   geometryOverlayContext.setLineDash([]);
   drawPeriodicGuideLines(state.worldWidthM, 0, minimumX, maximumX, true);
-  drawPeriodicGuideLines(state.worldHeightM, 0, minimumY, maximumY, false);
+  if (minimumY <= 0 && maximumY >= 0) drawGuideLine(0, false);
   geometryOverlayContext.strokeStyle = "rgb(229 120 136 / 82%)";
   geometryOverlayContext.setLineDash([7, 5]);
   drawPeriodicGuideLines(state.worldWidthM, state.worldWidthM / 2, minimumX, maximumX, true);
-  drawPeriodicGuideLines(state.worldHeightM, state.worldHeightM / 2, minimumY, maximumY, false);
+  for (const poleY of [-state.worldHeightM / 2, state.worldHeightM / 2]) {
+    if (minimumY <= poleY && maximumY >= poleY) drawGuideLine(poleY, false);
+  }
   geometryOverlayContext.setLineDash([]);
   geometryOverlayContext.strokeStyle = "#ff334f";
   geometryOverlayContext.lineWidth = 2;

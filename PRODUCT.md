@@ -29,13 +29,15 @@ current playable behavior; this file does not track delivery status.
 
 ## World
 
-- **[Explicit]** The playable world is a rectangular topological torus with
-  independently selectable width and height and a square default. Crossing an
-  edge returns to the opposite edge without a visible or physical seam; boats
-  can keep sailing laps and interact across either edge and their corners.
-- **[Explicit]** The north-south wrap joins the poles into one long loop. The two
-  hemispheres have opposite seasons, whose state may change sharply across that
-  loop.
+- **[Explicit]** The playable world is an infinite cylinder. Its selectable
+  width is a wrapped longitude circumference, while its selectable height is the
+  finite pole-to-pole geographic span; their numeric defaults are equal. Boats
+  can sail longitude laps and interact across that seam.
+- **[Explicit]** North-south position is unbounded and does not wrap. Latitude
+  maps linearly from the equator to exact finite poles and remains clamped at
+  -90 or +90 degrees beyond them. The camera therefore cannot reveal a world
+  edge, while the indefinitely continuing authoritative polar ice prevents
+  boats from travelling through the non-geographic exterior.
 - **[Explicit]** A statistically connected, dominant sea contains natural-looking
   sparse groups of large procedural islands. Land may be more fractal and rare
   enclosed water may occur, but the world must not become a patchwork of equal
@@ -178,14 +180,13 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,
   immediate slider dragging, eased track clicks, and independent or locked
   real-time multipliers for cloud evolution and world time.
-- **[Explicit]** The lab exposes independent world-width and world-height
-  sliders, initialized to the square production default. A red cross marks the
-  view-center sample, whose raw and canonical coordinates, normalized torus
-  coordinates, signed latitude, and local solar phase remain visible while
-  panning. A guide repeats the reference meridian, equator, and seams. The live
-  spatial world repeats at the selected rectangle's seams, apart from the
-  accepted seasonal discontinuity at the polar loop; changing either dimension
-  regenerates it. Scenarios remain primary-cause overrides.
+- **[Explicit]** The lab exposes independent longitude-circumference and
+  pole-to-pole-span sliders, initialized to equal production defaults. A red
+  cross marks the view-center sample, whose raw and cylindrical coordinates,
+  normalized geographic coordinates, signed latitude, and local solar phase
+  remain visible while panning. A guide repeats the reference meridian and
+  longitude seams and marks the equator and finite poles. Changing either scale
+  regenerates the live spatial world; scenarios remain primary-cause overrides.
 - **[Explicit]** The lab presents local solar time in hours, season as an
   approximate real-numbered month, and lunar phase with named landmarks while
   retaining normalized runtime phases internally. Season phase zero is the

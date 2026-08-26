@@ -290,7 +290,7 @@ fn terrain_one_sided_values_and_derivatives_meet_at_rectangular_seams() {
 }
 
 #[test]
-fn every_primary_atmosphere_field_repeats_on_the_torus() {
+fn every_primary_atmosphere_field_repeats_on_the_procedural_calibration_rectangle() {
     let world = geometry();
     let position = Vector::new(-31.75, 14.5);
     let primary = procedural_atmosphere_primary(world, SEED, TICK, position);

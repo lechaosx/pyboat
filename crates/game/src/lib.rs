@@ -1570,7 +1570,8 @@ fn terrain_simplex_lattice_gradient(
     vertical_modes: i32,
 ) -> Vector {
     // x-y and x+y are the rectangular axes of the triangular lattice. Integer
-    // mode counts therefore turn each world period into an exact lattice shift.
+    // mode counts therefore turn each procedural calibration period into an
+    // exact lattice shift.
     let horizontal_lattice =
         (i64::from(x) - i64::from(y)).rem_euclid(2 * i64::from(horizontal_modes));
     let vertical_lattice = (i64::from(x) + i64::from(y)).rem_euclid(2 * i64::from(vertical_modes));

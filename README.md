@@ -2,13 +2,14 @@
 
 This repository contains an early multiplayer, top-down naval combat game with
 readable, semi-realistic sailing. The browser and authoritative server provide a
-deterministic rectangular procedural world whose terrain and seeded procedural
-fields repeat seamlessly. Each position has longitude and local solar time,
+deterministic cylindrical procedural world whose longitude repeats seamlessly
+and whose unbounded polar exterior is solid ice. Each position has longitude
+and local solar time,
 latitude-calibrated opposite seasons, weather-responsive snow, sea ice, tide,
 lighting, moving precipitation-responsive open-water material, depth, and
 spatial weather. Prediction, ramming, damage, and persistent wrecks remain
-deterministic. Boats sail repeated toroidal laps and interact across both seams
-and their corners.
+deterministic. Boats sail longitude laps and interact across that seam, while
+latitude reaches finite north and south poles without a world edge.
 
 The intended game grows this foundation into persistent, drop-in matches with
 varied ships, mostly automatic weapons, progression, and a vast procedural sea.

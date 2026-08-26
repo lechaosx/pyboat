@@ -27,8 +27,8 @@ const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldGeometrySample {
     pub raw_center_m: [f32; 2],
-    pub wrapped_center_m: [f32; 2],
-    pub normalized_torus: [f32; 2],
+    pub canonical_center_m: [f32; 2],
+    pub normalized_world: [f32; 2],
     pub latitude_degrees: f32,
     pub local_solar_phase: f32,
 }
@@ -57,8 +57,8 @@ pub fn sample_world_geometry(
 ) -> WorldGeometrySample {
     WorldGeometrySample {
         raw_center_m,
-        wrapped_center_m: geometry.wrap_position_m(raw_center_m),
-        normalized_torus: geometry.normalized_torus_coordinates(raw_center_m),
+        canonical_center_m: geometry.wrap_position_m(raw_center_m),
+        normalized_world: geometry.normalized_world_coordinates(raw_center_m),
         latitude_degrees: geometry.latitude_degrees(raw_center_m[1]),
         local_solar_phase: geometry.local_solar_phase(global_day_phase, raw_center_m[0]),
     }

@@ -1,7 +1,7 @@
 use simulation::WorldGeometry;
 
 #[test]
-fn rectangular_geometry_wraps_each_axis_independently() {
+fn cylinder_wraps_longitude_and_preserves_north_south_position() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
     assert_eq!(world.width_m(), 80_000.0);
@@ -9,46 +9,48 @@ fn rectangular_geometry_wraps_each_axis_independently() {
     assert_eq!(world.wrap_position_m([80_125.0, -25.0]), [125.0, -25.0]);
     assert_eq!(
         world.wrap_position_m([40_000.0, 20_000.0]),
-        [-40_000.0, -20_000.0]
+        [-40_000.0, 20_000.0]
     );
 }
 
 #[test]
-fn wrapping_is_periodic_and_idempotent() {
+fn longitude_wrapping_is_periodic_and_idempotent() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let position = [-12_345.5, 98_765.25];
     let wrapped = world.wrap_position_m(position);
 
     assert_eq!(
-        world.wrap_position_m([position[0] + 3.0 * 80_000.0, position[1] - 2.0 * 40_000.0]),
+        world.wrap_position_m([position[0] + 3.0 * 80_000.0, position[1]]),
         wrapped,
     );
+    assert_eq!(wrapped[1], position[1]);
     assert_eq!(world.wrap_position_m(wrapped), wrapped);
 }
 
 #[test]
-fn minimum_image_uses_positive_half_period_for_exact_ties() {
+fn minimum_image_wraps_longitude_only() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
     assert_eq!(
         world.minimum_image_displacement_m([79_000.0, -39_000.0]),
-        [-1_000.0, 1_000.0],
+        [-1_000.0, -39_000.0],
     );
     assert_eq!(
         world.minimum_image_displacement_m([40_000.0, -20_000.0]),
-        [40_000.0, 20_000.0],
+        [40_000.0, -20_000.0],
     );
 }
 
 #[test]
-fn latitude_maps_the_wrapped_y_branch_to_two_hemispheres() {
+fn latitude_reaches_finite_poles_and_clamps_beyond_them() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
     assert_eq!(world.latitude_degrees(-20_000.0), -90.0);
     assert_eq!(world.latitude_degrees(0.0), 0.0);
     assert_eq!(world.latitude_degrees(10_000.0), 45.0);
-    assert_eq!(world.latitude_degrees(20_000.0), -90.0);
-    assert_eq!(world.latitude_degrees(-30_000.0), 45.0);
+    assert_eq!(world.latitude_degrees(20_000.0), 90.0);
+    assert_eq!(world.latitude_degrees(-30_000.0), -90.0);
+    assert_eq!(world.latitude_degrees(30_000.0), 90.0);
     assert!(world.latitude_degrees(20_000.0 - 0.125) > 89.99);
 }
 
@@ -66,17 +68,17 @@ fn local_solar_phase_wraps_with_longitude() {
 }
 
 #[test]
-fn normalized_torus_coordinates_wrap_into_unit_rectangle() {
+fn normalized_world_coordinates_wrap_longitude_and_clamp_at_the_poles() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
-    assert_eq!(world.normalized_torus_coordinates([0.0, 0.0]), [0.5, 0.5]);
+    assert_eq!(world.normalized_world_coordinates([0.0, 0.0]), [0.5, 0.5]);
     assert_eq!(
-        world.normalized_torus_coordinates([-40_000.0, -20_000.0]),
+        world.normalized_world_coordinates([-40_000.0, -20_000.0]),
         [0.0, 0.0]
     );
     assert_eq!(
-        world.normalized_torus_coordinates([60_000.0, 30_000.0]),
-        [0.25, 0.25]
+        world.normalized_world_coordinates([60_000.0, 30_000.0]),
+        [0.25, 1.0]
     );
 }
 
@@ -123,11 +125,10 @@ fn upper_adjacent_coordinate_remains_on_the_upper_branch() {
         [upper_adjacent_m; 2]
     );
     assert!(world.latitude_degrees(upper_adjacent_m) > 89.0);
-    assert!(
-        world
-            .normalized_torus_coordinates([upper_adjacent_m; 2])
-            .into_iter()
-            .all(|coordinate| coordinate < 1.0)
+    assert!(world.normalized_world_coordinates([upper_adjacent_m; 2])[0] < 1.0);
+    assert_eq!(
+        world.normalized_world_coordinates([upper_adjacent_m; 2])[1],
+        1.0
     );
 }
 

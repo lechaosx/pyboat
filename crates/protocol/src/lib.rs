@@ -5,7 +5,7 @@ pub use simulation::WorldGeometry;
 
 // Postcard encodes these enums and structs positionally. Reordering or changing
 // fields is a wire-contract change and requires a new version.
-pub const PROTOCOL_VERSION: u8 = 2;
+pub const PROTOCOL_VERSION: u8 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {

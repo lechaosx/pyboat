@@ -10,9 +10,9 @@ fn playground_geometry_sample_uses_canonical_world_math() {
     let sample = sample_world_geometry(geometry, [60_000.0, 30_000.0], 0.875);
 
     assert_eq!(sample.raw_center_m, [60_000.0, 30_000.0]);
-    assert_eq!(sample.wrapped_center_m, [-20_000.0, -10_000.0]);
-    assert_eq!(sample.normalized_torus, [0.25, 0.25]);
-    assert_eq!(sample.latitude_degrees, -45.0);
+    assert_eq!(sample.canonical_center_m, [-20_000.0, 30_000.0]);
+    assert_eq!(sample.normalized_world, [0.25, 1.0]);
+    assert_eq!(sample.latitude_degrees, 90.0);
     assert_eq!(sample.local_solar_phase, 0.625);
 }
 
@@ -45,6 +45,6 @@ fn server_browser_and_playground_center_use_the_production_environment_sampler()
         browser.environment,
         procedural_match_environment(geometry, 0x5eed, 12_345, center_m)
     );
-    assert_eq!(browser.celestial.geographic_latitude_degrees, -45.0);
+    assert_eq!(browser.celestial.geographic_latitude_degrees, 90.0);
     assert_eq!(browser.celestial.day_phase, production.celestial.day_phase);
 }

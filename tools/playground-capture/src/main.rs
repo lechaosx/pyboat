@@ -301,7 +301,7 @@ fn print_help() {
            --output-dir PATH      directory for --all (default playground-captures)\n\
            --width N --height N   output dimensions (default 960x600)\n\
            --camera-x M --camera-y M  world-space camera centre\n\
-           --world-width M --world-height M  periodic world size (default 64000 each)\n\
+           --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
            --view-height METRES   vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
            --time SECONDS         deterministic animation time\n\

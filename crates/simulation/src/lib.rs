@@ -49,29 +49,26 @@ impl WorldGeometry {
     }
 
     pub fn wrap_position_m(self, position_m: [f32; 2]) -> [f32; 2] {
-        [
-            wrap_component(position_m[0], self.width_m),
-            wrap_component(position_m[1], self.height_m),
-        ]
+        [wrap_component(position_m[0], self.width_m), position_m[1]]
     }
 
     pub fn minimum_image_displacement_m(self, displacement_m: [f32; 2]) -> [f32; 2] {
         [
             minimum_image_component(displacement_m[0], self.width_m),
-            minimum_image_component(displacement_m[1], self.height_m),
+            displacement_m[1],
         ]
     }
 
-    pub fn normalized_torus_coordinates(self, position_m: [f32; 2]) -> [f32; 2] {
+    pub fn normalized_world_coordinates(self, position_m: [f32; 2]) -> [f32; 2] {
         let wrapped_m = self.wrap_position_m(position_m);
         [
             normalized_component(wrapped_m[0], self.width_m),
-            normalized_component(wrapped_m[1], self.height_m),
+            (wrapped_m[1] / self.height_m + 0.5).clamp(0.0, 1.0),
         ]
     }
 
     pub fn latitude_degrees(self, y_m: f32) -> f32 {
-        wrap_component(y_m, self.height_m) / self.height_m * 180.0
+        (y_m / self.height_m * 180.0).clamp(-90.0, 90.0)
     }
 
     pub fn local_solar_phase(self, global_day_phase: f32, x_m: f32) -> f32 {
@@ -334,16 +331,14 @@ struct SharedBoat {
     boat: Boat,
 }
 
-struct WrappedSpatialIndex {
+struct CylindricalSpatialIndex {
     world_geometry: WorldGeometry,
     columns: i32,
-    rows: i32,
     cell_width_m: f32,
-    cell_height_m: f32,
     cells: HashMap<(i32, i32), Vec<usize>>,
 }
 
-impl WrappedSpatialIndex {
+impl CylindricalSpatialIndex {
     fn new(world_geometry: WorldGeometry, positions_m: &[Vector]) -> Self {
         Self::new_with_extents(world_geometry, positions_m, &vec![0.0; positions_m.len()])
     }
@@ -355,9 +350,7 @@ impl WrappedSpatialIndex {
     ) -> Self {
         assert_eq!(positions_m.len(), extents_m.len());
         let columns = (world_geometry.width_m() / SPATIAL_CELL_M).floor() as i32;
-        let rows = (world_geometry.height_m() / SPATIAL_CELL_M).floor() as i32;
         let cell_width_m = world_geometry.width_m() / columns as f32;
-        let cell_height_m = world_geometry.height_m() / rows as f32;
         let mut cells = HashMap::<_, Vec<_>>::new();
         for (index, (position_m, extent_m)) in positions_m
             .iter()
@@ -367,9 +360,8 @@ impl WrappedSpatialIndex {
         {
             let wrapped_m = Vector::from(world_geometry.wrap_position_m(position_m.into()));
             let center_x_m = wrapped_m.x + world_geometry.width_m() / 2.0;
-            let center_y_m = wrapped_m.y + world_geometry.height_m() / 2.0;
             for column in wrapped_cell_indices(center_x_m, extent_m, cell_width_m, columns) {
-                for row in wrapped_cell_indices(center_y_m, extent_m, cell_height_m, rows) {
+                for row in linear_cell_indices(wrapped_m.y, extent_m, SPATIAL_CELL_M) {
                     cells.entry((column, row)).or_default().push(index);
                 }
             }
@@ -377,9 +369,7 @@ impl WrappedSpatialIndex {
         Self {
             world_geometry,
             columns,
-            rows,
             cell_width_m,
-            cell_height_m,
             cells,
         }
     }
@@ -387,10 +377,9 @@ impl WrappedSpatialIndex {
     fn query(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
         let wrapped_m = Vector::from(self.world_geometry.wrap_position_m(center_m.into()));
         let center_x_m = wrapped_m.x + self.world_geometry.width_m() / 2.0;
-        let center_y_m = wrapped_m.y + self.world_geometry.height_m() / 2.0;
         let mut indices = BTreeSet::new();
         for column in wrapped_cell_indices(center_x_m, radius_m, self.cell_width_m, self.columns) {
-            for row in wrapped_cell_indices(center_y_m, radius_m, self.cell_height_m, self.rows) {
+            for row in linear_cell_indices(wrapped_m.y, radius_m, SPATIAL_CELL_M) {
                 if let Some(cell_indices) = self.cells.get(&(column, row)) {
                     indices.extend(cell_indices.iter().copied());
                 }
@@ -398,6 +387,12 @@ impl WrappedSpatialIndex {
         }
         indices.into_iter().collect()
     }
+}
+
+fn linear_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32) -> Vec<i32> {
+    let minimum = ((center_m - extent_m) / cell_size_m).floor() as i32;
+    let maximum = ((center_m + extent_m) / cell_size_m).floor() as i32;
+    (minimum..=maximum).collect()
 }
 
 fn wrapped_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32, count: i32) -> Vec<i32> {
@@ -419,12 +414,13 @@ struct CandidateSearch {
     exact_checks: usize,
 }
 
-fn wrapped_candidate_pairs(
+fn cylindrical_candidate_pairs(
     world_geometry: WorldGeometry,
     positions_m: &[Vector],
     search_radii_m: &[f32],
 ) -> CandidateSearch {
-    let index = WrappedSpatialIndex::new_with_extents(world_geometry, positions_m, search_radii_m);
+    let index =
+        CylindricalSpatialIndex::new_with_extents(world_geometry, positions_m, search_radii_m);
     let mut pairs = Vec::new();
     #[cfg(test)]
     let mut exact_checks = 0;
@@ -481,7 +477,7 @@ pub struct SharedSimulation {
     boats: Vec<SharedBoat>,
     boat_indices_by_collider: HashMap<ColliderHandle, usize>,
     world_geometry: WorldGeometry,
-    spatial_index: WrappedSpatialIndex,
+    spatial_index: CylindricalSpatialIndex,
     pub world: PhysicsWorld,
 }
 
@@ -1515,7 +1511,7 @@ impl SharedSimulation {
             boats: Vec::new(),
             boat_indices_by_collider: HashMap::new(),
             world_geometry,
-            spatial_index: WrappedSpatialIndex::new(world_geometry, &[]),
+            spatial_index: CylindricalSpatialIndex::new(world_geometry, &[]),
             world: physics_world(),
         }
     }
@@ -1639,7 +1635,7 @@ impl SharedSimulation {
                 Vector::from(self.world_geometry.wrap_position_m(position_m.into()))
             })
             .collect::<Vec<_>>();
-        self.spatial_index = WrappedSpatialIndex::new(self.world_geometry, &positions_m);
+        self.spatial_index = CylindricalSpatialIndex::new(self.world_geometry, &positions_m);
     }
 
     fn enforce_supported_motion(&mut self) {
@@ -1693,7 +1689,7 @@ impl SharedSimulation {
             })
             .collect::<Vec<_>>();
         let candidate_search =
-            wrapped_candidate_pairs(self.world_geometry, &canonical_positions, &search_radii_m);
+            cylindrical_candidate_pairs(self.world_geometry, &canonical_positions, &search_radii_m);
         let mut neighbors = vec![Vec::new(); self.boats.len()];
         let mut substeps = 1;
         for (first, second) in candidate_search.pairs {
@@ -1839,7 +1835,7 @@ impl SharedSimulation {
 }
 
 #[cfg(test)]
-mod torus_spatial_tests {
+mod cylinder_spatial_tests {
     use super::*;
 
     #[test]
@@ -1857,8 +1853,11 @@ mod torus_spatial_tests {
             Vector::new(3_999.0, 1_000.0),
             Vector::new(-3_999.0, 1_000.0),
         ]);
-        let search =
-            wrapped_candidate_pairs(world_geometry, &positions_m, &vec![3.0; positions_m.len()]);
+        let search = cylindrical_candidate_pairs(
+            world_geometry,
+            &positions_m,
+            &vec![3.0; positions_m.len()],
+        );
 
         assert_eq!(search.pairs, vec![(1_000, 1_001)]);
         assert!(search.exact_checks < positions_m.len() * 4);
@@ -1878,7 +1877,7 @@ mod torus_spatial_tests {
         positions_m.push(Vector::new(0.0, -2_800.0));
         let mut search_radii_m = vec![3.0; positions_m.len()];
         search_radii_m[1_000] = 1_000.0;
-        let search = wrapped_candidate_pairs(world_geometry, &positions_m, &search_radii_m);
+        let search = cylindrical_candidate_pairs(world_geometry, &positions_m, &search_radii_m);
 
         assert!(search.pairs.contains(&(575, 1_000)));
         assert!(!search.pairs.contains(&(0, 1_000)));

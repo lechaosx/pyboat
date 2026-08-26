@@ -540,7 +540,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
 }
 
 #[test]
-fn multiplayer_prediction_matches_authoritative_torus_collision_rules() {
+fn multiplayer_prediction_matches_authoritative_cylinder_collision_rules() {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
@@ -817,7 +817,7 @@ fn multiplayer_correction_stays_local_when_authority_crosses_a_seam() {
 }
 
 #[test]
-fn multiplayer_renders_corner_neighbors_in_the_local_minimum_image() {
+fn multiplayer_renders_longitude_neighbors_in_the_local_minimum_image() {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let mut client = MultiplayerClient::new();
     client.accept(ServerMessage::Welcome {
@@ -826,12 +826,12 @@ fn multiplayer_renders_corner_neighbors_in_the_local_minimum_image() {
         world_geometry: world,
     });
     let mut local = boat("player-1", 3_999.0);
-    local.y = 3_999.0;
+    local.y = 100.0;
     local.vx = 0.0;
     local.vy = 0.0;
     local.acknowledged_input = Some(0);
     let mut remote = boat("player-2", -3_999.0);
-    remote.y = -3_999.0;
+    remote.y = 100.0;
     remote.vx = 0.0;
     remote.vy = 0.0;
     remote.forward = None;
@@ -844,4 +844,34 @@ fn multiplayer_renders_corner_neighbors_in_the_local_minimum_image() {
 
     let scenes = client.scenes();
     assert!((scenes[1].hull_m[0] - scenes[0].hull_m[0]).length() < 4.0);
+}
+
+#[test]
+fn multiplayer_does_not_fold_north_and_south_poles_together() {
+    let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+        world_geometry: world,
+    });
+    let mut local = boat("player-1", 0.0);
+    local.y = 3_999.0;
+    local.vx = 0.0;
+    local.vy = 0.0;
+    local.acknowledged_input = Some(0);
+    let mut remote = boat("player-2", 0.0);
+    remote.y = -3_999.0;
+    remote.vx = 0.0;
+    remote.vy = 0.0;
+    remote.forward = None;
+    remote.turn = None;
+    client.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local, remote],
+        removed_player_ids: Vec::new(),
+    });
+
+    let scenes = client.scenes();
+    assert!((scenes[1].hull_m[0] - scenes[0].hull_m[0]).length() > 7_000.0);
 }
