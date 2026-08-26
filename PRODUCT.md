@@ -115,6 +115,11 @@ current playable behavior; this file does not track delivery status.
   overcast lighting.
 - **[Explicit]** Clouds respond to celestial light, while aerosol, moisture,
   rain, coverage, and varying thickness shape scene color and mood.
+- **[Explicit]** Directional sun and moon light and diffuse sky-and-cloud light
+  independently affect terrain, water, and visible lower clouds. Gray overcast
+  can remain softly luminous while severe storm cover darkens a noon scene.
+  Celestial discs retain a physical penumbra, so cloud and landform shadows do
+  not become point-source sharp at high zoom.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
   length communicates speed. The product does not overlay a world grid or field
   of wind arrows.

@@ -286,12 +286,18 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   day, season, and moon phases. Rendering-grade astronomy derives light and tide;
   season phase zero is the northern winter solstice while its approximate month
   presentation labels the first interval January.
-- **[Explicit]** Direct sun and moon intensity follows source elevation while
-  ambient light remains separate.
+- **[Explicit]** Direct sun and moon intensity and color follow each source's
+  elevation and orientation, while diffuse atmospheric light remains a separate
+  RGB contribution. Both terms light the surface and visible lower clouds.
+  Atmospheric moisture and cover tint diffuse light; overcast attenuates it
+  moderately while rain under deep upper cover supplies stronger storm
+  attenuation.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
   width as circumference and world height as latitude scale; grazing shadows
-  remain finite and fade toward the horizon.
+  remain finite and fade toward the horizon. The apparent angular radius of the
+  sun and moon supplies a physical minimum filter footprint for cloud shadows
+  and a distance-proportional penumbra for landform shadows.
 - **[Explicit]** Canonical normalized north-south position maps linearly from
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
