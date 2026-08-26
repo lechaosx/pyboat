@@ -203,11 +203,13 @@ current playable behavior; this file does not track delivery status.
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** The lab orders physical inputs as location and time, climate,
-  current weather, and local tide. It keeps those inputs open by default and
-  separates visibility switches and advanced tuning into collapsed groups. Each
-  group carries one world, model, shader, or debug classification rather than
-  repeating classifications on individual controls.
+- **[Explicit]** The lab keeps world geometry, playback, and the global clock
+  immediately accessible. Spatial latitude, climate, moisture, and temperature
+  are production-derived read-only measurements rather than manual sliders.
+  Functional scenario overrides, visibility switches, tuning, and detailed
+  geometry diagnostics remain available in collapsed groups. Each group carries
+  one world, model, shader, or debug classification rather than repeating
+  classifications on individual controls.
 - **[Explicit]** Named weather and seasonal scenarios represent characteristic
   regimes, not generic intensity steps. A deterministic headless mode renders the
   same scenarios and emits images with readable condition summaries.

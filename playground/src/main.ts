@@ -239,8 +239,7 @@ function lunarPhaseName(phase: number): string {
 
 const groups: ControlGroup[] = [
   {
-    domain: "weather", category: "Location & time", layer: "Place and sky", kind: "WORLD", controls: [
-      range("geographicLatitude", "Geographic latitude · °", -90, 90, 1),
+    domain: "weather", category: "World clock", layer: "Sun, season, and moon", kind: "WORLD", controls: [
       {
         ...range("seasonPhase", "Season · month", 1, 12.9999, 0.0001),
         toState: (month) => (month - 1) / 12,
@@ -260,14 +259,7 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Climate", layer: "Temperature normals", kind: "WORLD", controls: [
-      range("annualMeanAirTemperature", "Annual mean air temperature · °C", -35, 45, 0.5),
-      range("seasonalTemperatureRange", "Seasonal range · °C", 0, 40, 0.5),
-      range("diurnalTemperatureRange", "Daily range · °C", 0, 20, 0.5),
-    ],
-  },
-  {
-    domain: "weather", category: "Current weather", layer: "Pressure", kind: "WORLD", controls: [
+    domain: "weather", category: "Scenario overrides", layer: "Pressure", kind: "WORLD", level: "advanced", controls: [
       range("pressureHpa", "Pressure · hPa", 970, 1040, 0.5),
       range("pressureGradient", "Gradient · hPa/km", 0, 3, 0.02),
       range("pressureGradientDirection", "Gradient direction", -180, 180, 1),
@@ -276,16 +268,14 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Current weather", layer: "Air and moisture", kind: "WORLD", controls: [
-      range("currentAirTemperatureAnomaly", "Air temperature anomaly · °C", -25, 25, 0.5),
+    domain: "weather", category: "Scenario overrides", layer: "Upper air", kind: "WORLD", level: "advanced", controls: [
       range("currentUpperAirTemperature", "500 hPa temperature · °C", -80, 10, 0.5),
       range("temperatureGradient", "Horizontal ΔT · °C/km", 0, 1, 0.01),
       range("temperatureGradientDirection", "ΔT direction", -180, 180, 1),
-      range("currentWaterVapor", "Current water vapour · g/kg", 0, 25, 0.1),
     ],
   },
   {
-    domain: "weather", category: "Current weather", layer: "Atmospheric optics", kind: "WORLD", controls: [
+    domain: "weather", category: "Scenario overrides", layer: "Atmospheric optics", kind: "WORLD", level: "advanced", controls: [
       range("aerosolOpticalDepth", "Aerosol optical depth", 0, 1, 0.01),
     ],
   },
@@ -390,7 +380,7 @@ const groups: ControlGroup[] = [
 ];
 
 const categoryOrder = [
-  "Location & time", "Climate", "Current weather", "Local tide", "Visibility", "Advanced tuning",
+  "World clock", "Scenario overrides", "Local tide", "Visibility", "Advanced tuning",
 ];
 
 const lowCloudDependentKeys = new Set<NumericStateKey>([
@@ -896,6 +886,9 @@ worldToolbarElement.innerHTML = `
     <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
     <div class="actions"><button id="pause">Pause</button></div>
+  </details>
+  <details>
+    <summary><span>View-center diagnostics</span><span class="kind kind-debug">DEBUG</span></summary>
     <div class="geometry-measurements"><h3>View-center geometry</h3><div id="geometry-measurements" class="derived-grid"></div></div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
