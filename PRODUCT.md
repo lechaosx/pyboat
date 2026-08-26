@@ -78,27 +78,31 @@ current playable behavior; this file does not track delivery status.
   open water.
 - **[Explicit]** Perennial land ice is reserved for colder annual conditions or
   elevation so ordinary polar lowlands still change with season.
-- **[Explicit]** Solid ice is land for boats. It blends into exposed land but
-  ends at water with a sharp, readable boundary. The edge emerges from physical
-  climate and procedural environment rather than an authored latitude contour
-  or island-distance field. The pole itself remains fully frozen while each
-  hemisphere's cap advances in winter and retreats in summer.
+- **[Explicit]** Solid ice is immovable land for boats. It blends into exposed
+  land but ends at water with a sharp, readable boundary. The edge emerges from
+  physical climate and procedural environment rather than an authored latitude
+  contour or island-distance field. The pole itself remains fully frozen while
+  each hemisphere's cap advances in winter and retreats in summer.
 
 ## Presentation
 
-- **[Explicit]** Procedural graphics communicate physical scale and environment.
-  This includes wave lines around islands and moving ships. Water transitions
-  continuously with depth and distinctly at the moving shoreline. Clear shallow
-  water reveals bottom, outcrop, and reef structure through depth-attenuated,
-  water-tinted reflectance and relief while retaining a cohesive color. Open
-  water has moving, metre-scale surface structure whose normals respond to
-  diffuse sky light and directional celestial light, remain stable at boat zoom,
-  and filter away at wider scales. This visual material does not stand in for
-  authoritative waves or their gameplay effects. Land has recognizable beach,
-  vegetation, rock, snow, and ice materials. The same solid ice surface covers
-  land and polar water rather than using a decorative floating-ice layer. Frozen
-  water is opaque and has readable floe-scale structure, fine relief, and a
-  distinct shallow-ice response instead of a uniform or see-through fill.
+- **[Explicit]** Procedural graphics communicate physical scale and environment,
+  including wave lines around islands and moving ships.
+- **[Explicit]** Water transitions continuously with depth and distinctly at the
+  moving shoreline. Clear shallow water reveals bottom, outcrop, and reef
+  structure through depth-attenuated, water-tinted reflectance and relief while
+  retaining a cohesive color. Open water has moving, metre-scale surface
+  structure whose normals respond to diffuse sky light and directional
+  celestial light, remain stable at boat zoom, and filter away at wider scales.
+  This visual material does not stand in for authoritative waves or their
+  gameplay effects.
+- **[Explicit]** Land has recognizable beach, vegetation, rock, snow, and ice
+  materials.
+- **[Explicit]** The same authoritative, immovable solid-ice surface covers land
+  and polar water rather than using a decorative or independently moving floe
+  layer. Frozen water is opaque and has flat, angular plate-scale structure,
+  fine relief, and a bedrock-derived shallow and shore response instead of a
+  uniform or see-through fill.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes

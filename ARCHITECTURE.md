@@ -250,9 +250,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Implicit]** Seasonal water temperature combines with a broad periodic
   maritime heat anomaly derived from an existing landform field, producing a
   small, variable cap independently of water depth.
-- **[Implicit]** Frozen water uses an opaque ice material varied by cover, floe,
-  fine relief, and shallow-water tint without changing the authoritative solid
-  surface.
+- **[Explicit]** Frozen water renders the authoritative immovable solid body
+  directly. Its opaque material distinguishes plate interiors, fractures,
+  shores, and bedrock-controlled shallows without creating independent movable
+  floes or a second collision surface.
+- **[Implicit]** Plate interiors come from a seeded periodic jittered Voronoi
+  field with approximately 192-metre cells and a fixed nine-candidate search.
+  Nearest-cell identity supplies a constant plate tilt; the nearest/second-nearest
+  gap supplies angular fractures whose visibility follows existing broad ice
+  variation. Fragment-footprint filtering removes the network before it aliases.
 
 ### Browser rendering and playground
 

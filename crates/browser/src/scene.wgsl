@@ -2134,15 +2134,95 @@ fn sea_ice_surface(
         4.0,
         6u,
     );
+    let slab_cycles = max(
+        vec2<i32>(1),
+        vec2<i32>(round(scene.world_size_m / 192.0)),
+    );
+    let slab_size_m = scene.world_size_m / vec2<f32>(slab_cycles);
+    let canonical_position = canonical_world_position(position_m);
+    let positive_position = select(
+        canonical_position,
+        canonical_position + scene.world_size_m,
+        canonical_position < vec2<f32>(0.0),
+    );
+    let slab_position = positive_position
+        / scene.world_size_m
+        * vec2<f32>(slab_cycles);
+    let slab_base = vec2<i32>(floor(slab_position));
+    let slab_local = fract(slab_position);
+    var nearest_distance_m = 1e9;
+    var second_distance_m = 1e9;
+    var slab_hash = vec2<u32>(0u);
+    for (var offset_y = -1; offset_y <= 1; offset_y++) {
+        for (var offset_x = -1; offset_x <= 1; offset_x++) {
+            let unwrapped_cell = slab_base + vec2<i32>(offset_x, offset_y);
+            let wrapped_cell = vec2<i32>(
+                positive_mod(unwrapped_cell.x, slab_cycles.x),
+                positive_mod(unwrapped_cell.y, slab_cycles.y),
+            );
+            let candidate_hash = terrain_hash(
+                scene.match_seed
+                    ^ multiply_u64(
+                        signed_u64(wrapped_cell.x),
+                        vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+                    )
+                    ^ multiply_u64(
+                        signed_u64(wrapped_cell.y),
+                        vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+                    ),
+            );
+            let jitter = 0.05 + 0.90 * vec2<f32>(
+                visual_hash_unit(candidate_hash.x),
+                visual_hash_unit(candidate_hash.y),
+            );
+            let delta_m = (
+                vec2<f32>(f32(offset_x), f32(offset_y)) + jitter - slab_local
+            ) * slab_size_m;
+            let distance_m = length(delta_m);
+            if distance_m < nearest_distance_m {
+                second_distance_m = nearest_distance_m;
+                nearest_distance_m = distance_m;
+                slab_hash = candidate_hash;
+            } else if distance_m < second_distance_m {
+                second_distance_m = distance_m;
+            }
+        }
+    }
+    let slab_visibility = 1.0 - smoothstep(
+        0.18 * min(slab_size_m.x, slab_size_m.y),
+        0.45 * min(slab_size_m.x, slab_size_m.y),
+        visual_pixel_footprint_m,
+    );
+    let fracture_geometry = 1.0 - smoothstep(
+        1.5,
+        5.0 + visual_pixel_footprint_m,
+        second_distance_m - nearest_distance_m,
+    );
+    let fracture_stress = smoothstep(
+        -0.45,
+        0.45,
+        0.72 * broad.value + 0.28 * fine.value,
+    );
+    let fracture = slab_visibility
+        * fracture_geometry
+        * mix(0.22, 1.0, fracture_stress);
+    let slab_tone = visual_hash_unit(slab_hash.x);
+    let slab_tilt = 0.025 * vec2<f32>(
+        2.0 * visual_hash_unit(slab_hash.x ^ 0x9e3779b9u) - 1.0,
+        2.0 * visual_hash_unit(slab_hash.y ^ 0x7f4a7c15u) - 1.0,
+    );
     let shallow = smoothstep(-120.0, -3.0, bedrock_elevation_m);
+    let shore = smoothstep(-18.0, -1.0, bedrock_elevation_m);
     let compactness = smoothstep(0.50, 0.90, cover);
     let plate_boundary = 1.0 - smoothstep(0.0, 0.16, abs(broad.value));
     let surface_grade = clamp(
         0.55
             + 0.28 * broad.value
             + 0.10 * fine.value
+            + 0.12 * slab_visibility * (slab_tone - 0.5)
             + 0.10 * compactness
-            - 0.12 * plate_boundary,
+            - 0.12 * plate_boundary
+            - 0.22 * fracture,
         0.0,
         1.0,
     );
@@ -2151,11 +2231,21 @@ fn sea_ice_surface(
         vec3<f32>(0.94, 0.98, 0.98),
         surface_grade,
     );
-    let shallow_color = mix(deep_color, vec3<f32>(0.69, 0.87, 0.88), 0.24);
+    let shallow_color = mix(
+        deep_color,
+        vec3<f32>(0.56, 0.82, 0.85),
+        0.28 + 0.18 * shore,
+    );
     return TerrainSurface(
         mix(deep_color, shallow_color, shallow),
-        1.6 * broad.gradient + 0.32 * fine.gradient + 0.18 * micro.gradient,
-        clamp(0.30 + 0.20 * plate_boundary + 0.10 * shallow, 0.0, 1.0),
+        mix(slab_visibility * slab_tilt, 0.45 * broad.gradient, fracture)
+            + 0.20 * fine.gradient
+            + 0.16 * micro.gradient,
+        clamp(
+            0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow,
+            0.0,
+            1.0,
+        ),
     );
 }
 
@@ -2663,7 +2753,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 3.0 * terrain.gradient + surface.detail_gradient,
                 surface.roughness,
             );
-        } else if terrain.water_ice_amount == 0.0 {
+        } else {
             surface_light_grade = landform_light_grade(
                 surface.detail_gradient,
                 surface.roughness,
