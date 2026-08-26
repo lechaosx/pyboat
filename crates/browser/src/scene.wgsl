@@ -2266,6 +2266,129 @@ fn visual_hash_unit(value: u32) -> f32 {
     return f32(value >> 8u) / 16777216.0;
 }
 
+fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    let precipitation = surface_cloud_weather.rain;
+    if precipitation <= 0.001 || visual_pixel_footprint_m >= 0.30 {
+        return sample;
+    }
+    let cell_cycles = max(
+        vec2<i32>(1),
+        vec2<i32>(round(scene.world_size_m / 1.50)),
+    );
+    let cell_size_m = scene.world_size_m / vec2<f32>(cell_cycles);
+    let canonical_position = canonical_world_position(position_m);
+    let positive_position = select(
+        canonical_position,
+        canonical_position + scene.world_size_m,
+        canonical_position < vec2<f32>(0.0),
+    );
+    let cell_position = positive_position
+        / scene.world_size_m
+        * vec2<f32>(cell_cycles);
+    let base_cell = vec2<i32>(floor(cell_position));
+    let cell_local = fract(cell_position);
+    let cycles_per_anchor = 2400u;
+    let anchor_cycles = multiply_u64(
+        scene.low_cloud_epoch,
+        vec2<u32>(cycles_per_anchor, 0u),
+    );
+    let snow_fraction = 1.0 - smoothstep(
+        -1.0,
+        2.0,
+        surface_current_air_temperature_c(),
+    );
+    for (var offset_y = -1; offset_y <= 1; offset_y++) {
+        for (var offset_x = -1; offset_x <= 1; offset_x++) {
+            let unwrapped_cell = base_cell + vec2<i32>(offset_x, offset_y);
+            let wrapped_cell = vec2<i32>(
+                positive_mod(unwrapped_cell.x, cell_cycles.x),
+                positive_mod(unwrapped_cell.y, cell_cycles.y),
+            );
+            let cell_hash = terrain_hash(
+                scene.match_seed
+                    ^ multiply_u64(
+                        signed_u64(wrapped_cell.x),
+                        vec2<u32>(0x243f6a88u, 0x85a308d3u),
+                    )
+                    ^ multiply_u64(
+                        signed_u64(wrapped_cell.y),
+                        vec2<u32>(0x13198a2eu, 0x03707344u),
+                    ),
+            );
+            let local_cycle_time = scene.cloud_anchor_phase.x
+                * f32(cycles_per_anchor)
+                + visual_hash_unit(cell_hash.x);
+            let local_cycle = u32(floor(local_cycle_time));
+            let age = fract(local_cycle_time);
+            let impact_low = anchor_cycles.x + local_cycle;
+            let impact_epoch = vec2<u32>(
+                impact_low,
+                anchor_cycles.y + select(0u, 1u, impact_low < anchor_cycles.x),
+            );
+            let impact_hash = terrain_hash(
+                cell_hash
+                    ^ multiply_u64(
+                        impact_epoch,
+                        vec2<u32>(0x94d049bbu, 0x133111ebu),
+                    ),
+            );
+            let presence = smoothstep(
+                visual_hash_unit(impact_hash.x) - 0.10,
+                visual_hash_unit(impact_hash.x) + 0.10,
+                precipitation,
+            );
+            if presence <= 0.0 {
+                continue;
+            }
+            let impact_position = 0.05 + 0.90 * vec2<f32>(
+                visual_hash_unit(impact_hash.x ^ 0x9e3779b9u),
+                visual_hash_unit(impact_hash.y ^ 0x7f4a7c15u),
+            );
+            let delta_m = (
+                cell_local
+                    - vec2<f32>(f32(offset_x), f32(offset_y))
+                    - impact_position
+            ) * cell_size_m;
+            let distance_m = length(delta_m);
+            let radial_direction = select(
+                vec2<f32>(0.0),
+                delta_m / distance_m,
+                distance_m > 0.0001,
+            );
+            let life_envelope = sin(PI * age);
+            let ring_radius_m = mix(0.018, 0.22, age);
+            let ring_width_m = max(0.012, 0.55 * visual_pixel_footprint_m);
+            let ring_offset = (distance_m - ring_radius_m) / ring_width_m;
+            let rain_profile = exp(-ring_offset * ring_offset);
+            let rain_contact = precipitation
+                * presence
+                * life_envelope
+                * rain_profile;
+            let rain_height_m = 0.010 * rain_contact;
+            let rain_gradient = rain_height_m
+                * (-2.0 * ring_offset / ring_width_m)
+                * radial_direction;
+            let snow_radius_m = max(0.035, 0.55 * visual_pixel_footprint_m);
+            let snow_offset = distance_m / snow_radius_m;
+            let snow_profile = exp(-snow_offset * snow_offset);
+            let snow_contact = precipitation
+                * presence
+                * life_envelope
+                * snow_profile;
+            let snow_height_m = 0.0012 * snow_contact;
+            let snow_gradient = snow_height_m
+                * (-2.0 * snow_offset / snow_radius_m)
+                * radial_direction;
+            sample.value += mix(rain_contact, snow_contact, snow_fraction);
+            sample.gradient += mix(rain_gradient, snow_gradient, snow_fraction);
+        }
+    }
+    return sample;
+}
+
 fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let random = terrain_hash(
         scene.match_seed ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u),
@@ -2292,10 +2415,16 @@ fn visual_water_surface(
     base_color: vec3<f32>,
 ) -> TerrainSurface {
     let normal_detail = visual_water_normal_sample(position_m);
+    let precipitation_contact = precipitation_water_contact_sample(position_m);
+    let undisturbed_gradient = mix(
+        normal_detail.gradient,
+        0.35 * normal_detail.gradient,
+        clamp(2.0 * precipitation_contact.value, 0.0, 1.0),
+    );
     return TerrainSurface(
         base_color,
-        normal_detail.gradient,
-        0.12,
+        undisturbed_gradient + precipitation_contact.gradient,
+        mix(0.12, 0.24, surface_cloud_weather.rain),
     );
 }
 
@@ -2693,6 +2822,30 @@ fn cloud_shadow_color(
     );
 }
 
+fn precipitation_haze_color(surface_color: vec3<f32>) -> vec3<f32> {
+    let precipitation = surface_cloud_weather.rain;
+    if precipitation <= 0.001 {
+        return surface_color;
+    }
+    let snow_fraction = 1.0 - smoothstep(
+        -1.0,
+        2.0,
+        surface_current_air_temperature_c(),
+    );
+    let distance_amount = smoothstep(
+        180.0,
+        3500.0,
+        scene.camera_and_view_m.w,
+    );
+    let haze_amount = precipitation * mix(0.025, 0.22, distance_amount);
+    let haze_color = mix(
+        0.62 * atmospheric_ambient_color(),
+        vec3<f32>(0.72, 0.76, 0.78) * atmospheric_ambient_color(),
+        snow_fraction,
+    );
+    return mix(surface_color, haze_color, haze_amount);
+}
+
 fn final_scene_color(input: VertexOutput) -> vec4<f32> {
     var surface_color = input.color;
     if input.is_terrain > 0.5 {
@@ -2774,6 +2927,7 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             terrain_shadow_transmittance,
             surface_light_grade,
         );
+        surface_color = precipitation_haze_color(surface_color);
         if layer_visibility.x > 0.0 {
             let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
             let upper_height_m = 6200.0;
@@ -3074,6 +3228,11 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode == 62u {
         let normal_detail = visual_water_normal_sample(position_m);
         let normal = normalize(vec3<f32>(-normal_detail.gradient, 1.0));
+        return vec4<f32>(0.5 + 0.5 * normal, 1.0);
+    }
+    if mode == 63u {
+        let contact = precipitation_water_contact_sample(position_m);
+        let normal = normalize(vec3<f32>(-20.0 * contact.gradient, 1.0));
         return vec4<f32>(0.5 + 0.5 * normal, 1.0);
     }
     return final_scene_color(input);

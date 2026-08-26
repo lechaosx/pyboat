@@ -127,6 +127,10 @@ current playable behavior; this file does not track delivery status.
   can remain softly luminous while severe storm cover darkens a noon scene.
   Celestial discs retain a physical penumbra, so cloud and landform shadows do
   not become point-source sharp at high zoom.
+- **[Explicit]** Rain and snow meet open water in world space. Close views may
+  resolve physically small surface contacts, while wider views replace
+  unresolved precipitation with atmospheric haze rather than enlarged drops or
+  screen-aligned streaks.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
   length communicates speed. The product does not overlay a world grid or field
   of wind arrows.

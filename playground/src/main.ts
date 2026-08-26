@@ -428,6 +428,7 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
   water: [
     [0, "Final composition"], [48, "Tide height"], [55, "Spatial tide height"],
     [62, "Visual water normals"],
+    [63, "Precipitation contact normals"],
   ],
 };
 

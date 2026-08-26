@@ -286,6 +286,17 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   fragment footprint filters unresolved octaves, and the resulting normal and
   low roughness enter the shared diffuse and directional surface-light model.
   This field changes neither authoritative water height nor boat physics.
+- **[Explicit]** Visible precipitation contacts the world-space open-water
+  surface. Individual contacts retain physical scale and filter out when the
+  fragment footprint cannot resolve them; spatial precipitation then reduces
+  distant surface contrast through atmospheric haze. No screen-space falling
+  streak represents rain.
+- **[Implicit]** A fixed 3-by-3 search over periodic 1.5-metre cells renders a
+  deterministic representative subset of precipitation contacts. Each cell has
+  a jittered impact and 0.75-second lifecycle derived from the bounded low-cloud
+  anchor clock. Rain rings expand from 1.8 to 22 centimetres; cold precipitation
+  produces smaller melting dimples. The contact path exits before its search in
+  dry weather or above a 30-centimetre fragment footprint.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Implicit]** Authoritative wind shelter probes the same island-scale landform
