@@ -142,8 +142,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   octave, independent of world geometry. Broad terrain, macro transported scalar
   weather, and tide response use a four-dimensional circle embedding with radii
   `width / 2π` and `height / 2π`, preserving the requested local metre scale
-  without stretching either axis. Fine physical terrain, material spectra, and
-  cloud detail use periodic two-dimensional triangular simplex. Changing the
+  without stretching either axis. Fine physical terrain and material spectra
+  use periodic two-dimensional triangular simplex. Changing the
   supported geometry range never silently reclassifies an octave; any partition
   change is an explicit, profiled retuning decision.
 - **[Explicit]** Procedural generator implementations remain portable between
@@ -273,6 +273,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Reflective substrates remain visible farther, but every substrate approaches a
   visible bottom signal as water depth approaches zero. Underwater rendering
   adds neither a separate visual-detail height field nor bottom-normal lighting.
+- **[Implicit]** Unfrozen water adds an appearance-only normal field from four
+  fixed, metre-scale octaves of the same periodic circle-simplex and finite-anchor
+  transport used by other moving visual fields. Its seeded direction, octave
+  count, refresh horizon, and evaluation cost do not depend on world size. The
+  fragment footprint filters unresolved octaves, and the resulting normal and
+  low roughness enter the shared diffuse and directional surface-light model.
+  This field changes neither authoritative water height nor boat physics.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
   derivations. Rust remains authoritative when a rendering approximation differs.
 - **[Implicit]** Authoritative wind shelter probes the same island-scale landform

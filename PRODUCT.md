@@ -90,12 +90,15 @@ current playable behavior; this file does not track delivery status.
   This includes wave lines around islands and moving ships. Water transitions
   continuously with depth and distinctly at the moving shoreline. Clear shallow
   water reveals bottom, outcrop, and reef structure through depth-attenuated,
-  water-tinted reflectance and relief while retaining a cohesive color; land has
-  recognizable beach, vegetation, rock, snow, and ice materials. The same solid
-  ice surface covers land and polar water rather than using a decorative
-  floating-ice layer. Frozen water is opaque and has readable floe-scale
-  structure, fine relief, and a distinct shallow-ice response instead of a
-  uniform or see-through fill.
+  water-tinted reflectance and relief while retaining a cohesive color. Open
+  water has moving, metre-scale surface structure whose normals respond to
+  diffuse sky light and directional celestial light, remain stable at boat zoom,
+  and filter away at wider scales. This visual material does not stand in for
+  authoritative waves or their gameplay effects. Land has recognizable beach,
+  vegetation, rock, snow, and ice materials. The same solid ice surface covers
+  land and polar water rather than using a decorative floating-ice layer. Frozen
+  water is opaque and has readable floe-scale structure, fine relief, and a
+  distinct shallow-ice response instead of a uniform or see-through fill.
 - **[Explicit]** Terrain shading reads as relief. Rock exposure responds to slope
   and altitude, beaches span the intertidal zone where geology permits them, and
   ordinary vegetation begins above the permanent tidal range so low tide exposes

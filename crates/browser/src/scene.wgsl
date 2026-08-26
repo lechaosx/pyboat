@@ -974,7 +974,7 @@ fn material_fractal_sample(
     return sample;
 }
 
-fn visual_cloud_noise_sample(
+fn visual_advected_noise_sample(
     position_m: vec2<f32>,
     velocity_m_s: vec2<f32>,
     field_salt: vec2<u32>,
@@ -1085,7 +1085,7 @@ fn procedural_low_cloud_sample_with_weather(
     }
     let stratiform = weather.stratiform;
     let convective = weather.convective;
-    let raw_detail = visual_cloud_noise_sample(
+    let raw_detail = visual_advected_noise_sample(
         position_m,
         surface_wind_m_s(),
         vec2<u32>(0x38d01377u, 0x452821e6u),
@@ -1229,7 +1229,7 @@ fn procedural_upper_cloud_sample_filtered(
         empty.optical_depth = 0.0;
         return empty;
     }
-    let upper_noise = visual_cloud_noise_sample(
+    let upper_noise = visual_advected_noise_sample(
         position_m,
         upper_wind_m_s(),
         vec2<u32>(0x75374cc3u, 0x589965ccu),
@@ -2172,6 +2172,43 @@ fn blend_terrain_surface(
     );
 }
 
+fn visual_hash_unit(value: u32) -> f32 {
+    return f32(value >> 8u) / 16777216.0;
+}
+
+fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    let random = terrain_hash(
+        scene.match_seed ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u),
+    );
+    let direction_angle = TAU * visual_hash_unit(random.x);
+    let velocity_m_s = 0.65 * vec2<f32>(cos(direction_angle), sin(direction_angle));
+    var sample = visual_advected_noise_sample(
+        position_m,
+        velocity_m_s,
+        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
+        18.0,
+        4u,
+        scene.low_cloud_epoch,
+        scene.cloud_anchor_phase.x,
+        1800.0,
+        visual_pixel_footprint_m,
+    );
+    sample.gradient *= 1.6;
+    return sample;
+}
+
+fn visual_water_surface(
+    position_m: vec2<f32>,
+    base_color: vec3<f32>,
+) -> TerrainSurface {
+    let normal_detail = visual_water_normal_sample(position_m);
+    return TerrainSurface(
+        base_color,
+        normal_detail.gradient,
+        0.12,
+    );
+}
+
 fn terrain_surface(
     position_m: vec2<f32>,
     elevation_m: f32,
@@ -2218,13 +2255,12 @@ fn terrain_surface(
                 0.0,
                 1.0,
             );
-            return TerrainSurface(
+            return visual_water_surface(
+                position_m,
                 mix(water_color, water_veiled_bottom, bottom_visibility),
-                vec2<f32>(0.0),
-                1.0,
             );
         }
-        return TerrainSurface(water_color, vec2<f32>(0.0), 1.0);
+        return visual_water_surface(position_m, water_color);
     }
 
     let micro_height = material_fractal_sample(
@@ -2627,6 +2663,11 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 3.0 * terrain.gradient + surface.detail_gradient,
                 surface.roughness,
             );
+        } else if terrain.water_ice_amount == 0.0 {
+            surface_light_grade = landform_light_grade(
+                surface.detail_gradient,
+                surface.roughness,
+            );
         }
         surface_color = surface.color;
         var terrain_shadow_transmittance = 1.0;
@@ -2939,6 +2980,11 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode == 60u {
         let pressure = clamp((pressure_at(surface_position_m).x - 990.0) / 45.0, 0.0, 1.0);
         return vec4<f32>(vec3<f32>(pressure), 1.0);
+    }
+    if mode == 62u {
+        let normal_detail = visual_water_normal_sample(position_m);
+        let normal = normalize(vec3<f32>(-normal_detail.gradient, 1.0));
+        return vec4<f32>(0.5 + 0.5 * normal, 1.0);
     }
     return final_scene_color(input);
 }

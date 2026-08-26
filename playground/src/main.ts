@@ -425,7 +425,10 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [51, "Annual climate"], [53, "Spatial snow"], [54, "Spatial ice climate"],
     [57, "Climate / snow / ice · RGB"],
   ],
-  water: [[0, "Final composition"], [48, "Tide height"], [55, "Spatial tide height"]],
+  water: [
+    [0, "Final composition"], [48, "Tide height"], [55, "Spatial tide height"],
+    [62, "Visual water normals"],
+  ],
 };
 
 const weatherScenarios = scenarioDefinitions as WeatherScenarioDefinition[];

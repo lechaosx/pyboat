@@ -5,9 +5,9 @@ readable, semi-realistic sailing. The browser and authoritative server provide a
 deterministic rectangular procedural world whose terrain and seeded procedural
 fields repeat seamlessly. Each position has longitude and local solar time,
 latitude-calibrated opposite seasons, weather-responsive snow, sea ice, tide,
-lighting, depth, and spatial weather. Prediction, ramming, damage, and persistent
-wrecks remain deterministic. Boats sail repeated toroidal laps and interact
-across both seams and their corners.
+lighting, moving open-water surface material, depth, and spatial weather.
+Prediction, ramming, damage, and persistent wrecks remain deterministic. Boats
+sail repeated toroidal laps and interact across both seams and their corners.
 
 The intended game grows this foundation into persistent, drop-in matches with
 varied ships, mostly automatic weapons, progression, and a vast procedural sea.
