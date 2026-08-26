@@ -912,14 +912,14 @@ impl BrowserGame {
         &mut self,
         keyboard_forward: f32,
         keyboard_turn: f32,
-        gamepad_x: f32,
-        gamepad_y: f32,
+        world_x: f32,
+        world_y: f32,
     ) {
         self.client.borrow_mut().set_player_input(
             keyboard_forward,
             keyboard_turn,
-            gamepad_x,
-            gamepad_y,
+            world_x,
+            world_y,
         );
     }
 
@@ -1398,23 +1398,20 @@ fn vertex(
     view_height_m: f32,
 ) -> Vertex {
     Vertex {
-        position: clip_position(point_m, camera_m, view_width_m, view_height_m),
+        position: world_to_clip_position(point_m, camera_m, view_width_m, view_height_m),
         color,
         is_terrain: 0.0,
     }
 }
 
-fn clip_position(
+fn world_to_clip_position(
     point_m: Vector,
     camera_m: Vector,
     view_width_m: f32,
     view_height_m: f32,
 ) -> [f32; 2] {
     let relative_m = point_m - camera_m;
-    [
-        2.0 * relative_m.x / view_width_m,
-        -2.0 * relative_m.y / view_height_m,
-    ]
+    [relative_m.x / view_width_m, relative_m.y / view_height_m].map(|component| 2.0 * component)
 }
 
 fn js_error(error: impl ToString) -> JsValue {

@@ -5,8 +5,8 @@ use browser::{
     windsock_extension, zoom_view_height_m,
 };
 use game::dinghy_parameters;
-use simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 use rapier2d::prelude::Vector;
+use simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 
 const SCENE_SHADER: &str = include_str!("../src/scene.wgsl");
 
@@ -134,13 +134,13 @@ fn demo_clamps_and_applies_player_motion_intent() {
 }
 
 #[test]
-fn demo_maps_keyboard_and_world_relative_gamepad_motion() {
+fn demo_maps_keyboard_and_world_relative_motion() {
     let mut demo = Demo::new();
 
-    demo.set_player_input(1.0, -1.0, 0.0, -1.0);
+    demo.set_player_input(1.0, -1.0, 0.0, 1.0);
     let gamepad = demo.motion_intent();
-    assert!((gamepad.forward + 1.0).abs() < 1.0e-5);
-    assert!((gamepad.turn - 1.0).abs() < 1.0e-5);
+    assert!((gamepad.forward - 1.0).abs() < 1.0e-5);
+    assert!((gamepad.turn + 1.0).abs() < 1.0e-5);
 
     demo.set_player_input(1.0, -1.0, 0.0, 0.0);
     assert_eq!(

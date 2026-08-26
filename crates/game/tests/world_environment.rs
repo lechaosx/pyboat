@@ -29,16 +29,26 @@ fn longitude_sets_local_solar_time_without_changing_global_cycles() {
 #[test]
 fn latitude_calibrates_equatorial_temperate_and_polar_climate() {
     let equator = world_climate_conditions(0.0);
-    let temperate = world_climate_conditions(45.0);
+    let subtropical = world_climate_conditions(30.0);
+    let temperate = world_climate_conditions(50.0);
+    let subpolar = world_climate_conditions(70.0);
     let pole = world_climate_conditions(90.0);
 
-    assert!((equator.annual_mean_air_temperature_c - 27.0).abs() < 0.01);
-    assert!((pole.annual_mean_air_temperature_c + 18.0).abs() < 0.01);
-    assert!((10.0..13.0).contains(&temperate.annual_mean_air_temperature_c));
-    assert!(equator.seasonal_temperature_range_c <= 3.01);
-    assert!((18.0..21.0).contains(&temperate.seasonal_temperature_range_c));
-    assert!(pole.seasonal_temperature_range_c >= 43.99);
-    assert!(equator.diurnal_temperature_range_c > pole.diurnal_temperature_range_c);
+    assert!((equator.annual_mean_air_temperature_c - 27.4).abs() < 0.2);
+    assert!((subtropical.annual_mean_air_temperature_c - 21.9).abs() < 0.2);
+    assert!((temperate.annual_mean_air_temperature_c - 8.0).abs() < 0.2);
+    assert!((subpolar.annual_mean_air_temperature_c + 7.9).abs() < 0.2);
+    assert!((pole.annual_mean_air_temperature_c + 15.0).abs() < 0.01);
+    assert!((equator.seasonal_temperature_range_c - 2.0).abs() < 0.2);
+    assert!((subtropical.seasonal_temperature_range_c - 15.3).abs() < 0.2);
+    assert!((temperate.seasonal_temperature_range_c - 21.3).abs() < 0.2);
+    assert!((subpolar.seasonal_temperature_range_c - 31.6).abs() < 0.2);
+    assert!((pole.seasonal_temperature_range_c - 20.0).abs() < 0.2);
+    assert!((equator.diurnal_temperature_range_c - 4.4).abs() < 0.2);
+    assert!((subtropical.diurnal_temperature_range_c - 9.5).abs() < 0.2);
+    assert!((temperate.diurnal_temperature_range_c - 6.1).abs() < 0.2);
+    assert!((subpolar.diurnal_temperature_range_c - 4.5).abs() < 0.2);
+    assert!((pole.diurnal_temperature_range_c - 2.5).abs() < 0.2);
 }
 
 #[test]

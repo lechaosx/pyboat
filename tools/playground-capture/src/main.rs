@@ -320,11 +320,19 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
     });
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
-            force_fallback_adapter: true,
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
             ..Default::default()
         })
         .await
         .map_err(|error| format!("no headless Vulkan adapter available: {error}"))?;
+    let adapter_info = adapter.get_info();
+    if !capture_adapter_is_hardware(adapter_info.device_type) {
+        return Err(format!(
+            "hardware Vulkan GPU required; refusing adapter {} ({:?})",
+            adapter_info.name, adapter_info.device_type
+        ));
+    }
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Playground capture device"),
@@ -431,6 +439,15 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         println!("{}", serde_json::to_string(&report).unwrap());
     }
     Ok(())
+}
+
+fn capture_adapter_is_hardware(device_type: wgpu::DeviceType) -> bool {
+    matches!(
+        device_type,
+        wgpu::DeviceType::IntegratedGpu
+            | wgpu::DeviceType::DiscreteGpu
+            | wgpu::DeviceType::VirtualGpu
+    )
 }
 
 fn uniform_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
@@ -707,6 +724,8 @@ fn capture_report<'a>(
         annual_mean_air_temperature_c: scenario.annual_mean_air_temperature,
         seasonal_temperature_range_c: scenario.seasonal_temperature_range,
         diurnal_temperature_range_c: scenario.diurnal_temperature_range,
+        annual_mean_water_temperature_c: scenario.annual_mean_air_temperature,
+        seasonal_water_temperature_range_c: scenario.seasonal_temperature_range,
     };
     let current_air_temperature =
         current_air_temperature_c(climate, conditions) + scenario.current_air_temperature_anomaly;

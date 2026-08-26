@@ -159,10 +159,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Upper air is an absolute 500 hPa temperature generated from a climate baseline
   with muted seasonality, a shared surface air-mass anomaly, and independent
   upper-level variability; it has no diurnal cycle. Derived values have no
-  override path. **[Implicit]** The compact ocean-moderated calibration spans
-  27 °C annual mean and a 3 °C seasonal range at the equator to -18 °C and a
-  44 °C seasonal range at either pole; the daily range decreases from 6 °C to
-  3 °C over the same latitude gradient.
+  override path. **[Explicit]** Compact latitude-knot curves fit observed daily
+  land-temperature statistics by absolute latitude. Annual means and medians,
+  seasonal range, day/night range, and tail probabilities calibrate the
+  baseline cycles and seeded anomaly amplitude. Smooth interpolation keeps the
+  temperature field and its analytic gradient coherent between sampled bands.
+  Water has a separate ocean-moderated climatology so land-air variability can
+  drive temperate snow and heat extremes without forcing sea ice to follow.
 - **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
   analytic gradient drives mostly isobaric surface wind. Broad pressure drives
   upper flow, horizontal temperature gradient contributes thermal wind, and
@@ -210,16 +213,20 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
   not tide generation. Tide contributes to authoritative and predicted depth as
-  well as the rendered shoreline. **[Implicit]** Ground temperature retains the
-  seasonal cycle while taking attenuated contributions from the daily cycle and
-  current surface-air anomaly. Stateless equilibrium snow combines that slower
-  cold/moist ground response with current cold precipitation, then reduces cover
-  under above-freezing air. This represents accumulation and melt without a
-  stored snowpack. Transported absolute water vapor follows the seasonal climate
-  baseline rather than the daily temperature cycle; day/night temperature
-  instead changes saturation, humidity, instability, and precipitation. The
-  same local seasonal-water and maritime-temperature cause that closes sea ice
-  supplies a snow-cover floor on land. Perennial land ice uses a colder annual
+  well as the rendered shoreline. **[Explicit]** Stateless equilibrium snow is
+  a visually exaggerated temperature-index snowpack: the shared latitude,
+  season, elevation, and weather state drives ground-temperature retention,
+  temperature-relative humidity, cold-precipitation accumulation, and
+  above-freezing melt. Retention is the several-day freezing opportunity implied
+  by the calibrated daily temperature distribution, so cover changes continuously
+  through the winter poleward gradient instead of collapsing into a binary snow
+  boundary. Sea ice is not an input, so
+  snow-covered land and frozen water can still diverge. **[Implicit]** Ground
+  temperature retains the seasonal cycle while taking attenuated contributions
+  from the daily cycle and current surface-air anomaly. Transported absolute
+  water vapor follows the seasonal climate baseline rather than the daily
+  temperature cycle; local saturation converts it to the relative humidity used
+  by clouds, precipitation, and snow. Perennial land ice uses a colder annual
   temperature range, including elevation lapse, so it does not replace ordinary
   seasonal snow across low polar islands.
 - **[Explicit]** Solid ice extends the authoritative solid-surface field used for
@@ -229,12 +236,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   island-distance field, or propagation solve, and the calibrated polar climate
   remains frozen through summer.
 - **[Implicit]** Seasonal water temperature combines with a broad periodic
-  maritime heat anomaly derived from an already-sampled landform field. This
-  varies the cap without another noise evaluation, while water depth does not
-  directly decide whether floating sea ice can form. Once frozen, water uses an
-  opaque ice material rather than blending the seabed/land material through it.
-  Ice cover, periodic floe and fine-relief fields, and a shallow-water tint vary
-  that material without changing the authoritative solid surface.
+  maritime heat anomaly derived from an already-sampled landform field. Ocean
+  moderation warms subpolar water relative to air without warming the equator
+  or pole, keeping the winter ice front substantially more polar than seasonal
+  snow. Water depth does not directly decide whether floating sea ice can form.
+  Once frozen, water uses an opaque ice material rather than blending the
+  seabed/land material through it. Ice cover, periodic floe and fine-relief
+  fields, and a shallow-water tint vary that material without changing the
+  authoritative solid surface.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only at
   positions where boats require it. A single procedural surface normal combines
@@ -262,8 +271,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   live tuning and diagnostic state without adding that interface to production.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day, season, and moon phases. Rendering-grade astronomy derives light and tide;
-  direct sun and moon intensity both respond to source elevation, while ambient
-  illumination remains separate from spatial direct-light shadows. Cloud shadow
+  season phase zero is the northern winter solstice while its approximate month
+  presentation labels the first interval January. Direct sun and moon intensity
+  both respond to source elevation, while ambient illumination remains separate
+  from spatial direct-light shadows. Cloud shadow
   displacement follows physical layer height and light direction at every zoom.
   The ray intersects a spherical cloud shell over the curved-world horizon and
   converts the result back to the world's longitude-latitude map. World width is
@@ -275,7 +286,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Canonical normalized north-south position maps linearly from
   -90 degrees at the lower branch through the equator to the limiting +90-degree
   upper edge. The identified latitude edge is one polar loop, and opposite
-  hemisphere seasons may be discontinuous there.
+  hemisphere seasons may be discontinuous there. **[Implicit]** World and view
+  coordinates use positive X for east/right and positive Y for north/up. Input
+  adapters convert down-positive device coordinates at their boundaries.
 - **[Explicit]** Canonical normalized east-west position is longitude. Local
   solar phase is the wrapped sum of global day phase and normalized longitude;
   season and lunar phase remain global.
@@ -337,7 +350,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   work may suspend.
 - **[Explicit]** Visual procedural-world work uses the interactive playground and
   deterministic headless capture rather than a separate native showcase or a
-  checked-in image collection.
+  checked-in image collection. Headless capture requires a hardware Vulkan GPU
+  and rejects CPU, software, and unclassified adapters instead of entering a
+  non-realtime rendering path.
 
 ## Open questions
 

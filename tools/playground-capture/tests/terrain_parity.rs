@@ -98,7 +98,7 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 #[test]
 fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let season_phase = 0.84;
+    let season_phase = 0.09;
     let position_m = (0..512)
         .map(|index| {
             Vector::new(
@@ -182,22 +182,35 @@ fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
 }
 
 #[test]
+fn whole_world_capture_places_north_at_the_top() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let latitude = render_debug_image(world, 49, 8, 8);
+
+    let top_red = mean_channel(&latitude, 8, 0..1, 0);
+    let top_blue = mean_channel(&latitude, 8, 0..1, 2);
+    let bottom_red = mean_channel(&latitude, 8, 7..8, 0);
+    let bottom_blue = mean_channel(&latitude, 8, 7..8, 2);
+    assert!(top_red > top_blue);
+    assert!(bottom_blue > bottom_red);
+}
+
+#[test]
 fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let northern_summer = render_debug_image_for_scenario(world, "summer-midnight", 57, 32, 16);
     let northern_winter = render_debug_image_for_scenario(world, "polar-freeze", 57, 32, 16);
 
-    let summer_south_snow = mean_channel(&northern_summer, 32, 0..8, 1);
-    let winter_south_snow = mean_channel(&northern_winter, 32, 0..8, 1);
-    let summer_north_snow = mean_channel(&northern_summer, 32, 8..16, 1);
-    let winter_north_snow = mean_channel(&northern_winter, 32, 8..16, 1);
+    let summer_north_snow = mean_channel(&northern_summer, 32, 0..8, 1);
+    let winter_north_snow = mean_channel(&northern_winter, 32, 0..8, 1);
+    let summer_south_snow = mean_channel(&northern_summer, 32, 8..16, 1);
+    let winter_south_snow = mean_channel(&northern_winter, 32, 8..16, 1);
     assert!(winter_north_snow > summer_north_snow + 0.08);
     assert!(summer_south_snow > winter_south_snow + 0.08);
 
-    let summer_south_ice = mean_channel(&northern_summer, 32, 0..8, 2);
-    let winter_south_ice = mean_channel(&northern_winter, 32, 0..8, 2);
-    let summer_north_ice = mean_channel(&northern_summer, 32, 8..16, 2);
-    let winter_north_ice = mean_channel(&northern_winter, 32, 8..16, 2);
+    let summer_north_ice = mean_channel(&northern_summer, 32, 0..8, 2);
+    let winter_north_ice = mean_channel(&northern_winter, 32, 0..8, 2);
+    let summer_south_ice = mean_channel(&northern_summer, 32, 8..16, 2);
+    let winter_south_ice = mean_channel(&northern_winter, 32, 8..16, 2);
     assert!(winter_north_ice > summer_north_ice + 0.05);
     assert!(summer_south_ice > winter_south_ice + 0.05);
 }

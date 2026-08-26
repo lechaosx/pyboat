@@ -75,18 +75,27 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
   solid ice derive analytically without stored per-location history. Day and
   night visibly change air and ground temperature upstream of humidity,
-  instability, and precipitation. Cold precipitation can give temperate winter
-  land fresh snow while nearby open water remains unfrozen; warmer daytime air
-  promotes melt. Ground temperature responds more slowly than air so seasonal
-  snow persists without mirroring every weather fluctuation. Where the local
-  seasonal climate is cold enough to freeze seawater, exposed land is reliably
-  snow covered; perennial land ice is reserved for colder annual conditions or
-  elevation so ordinary polar lowlands still change with season.
+  instability, and precipitation. Latitude climate is a compact caricature fitted
+  to observed daily land temperatures: it preserves annual means and medians,
+  seasonal and day/night ranges, and representative warm and cold tail
+  probabilities instead of inventing separate biome thresholds. Snow uses the
+  resulting probability of freezing in a readable accumulation-and-melt
+  balance: poleward winter cooling and elevation increase retained cover,
+  relative humidity supplies moisture, cold precipitation adds fresh snow, and
+  warmer air promotes melt. The spatial and seasonal contrast is deliberately
+  exaggerated. Cold precipitation can therefore give temperate winter land
+  fresh snow while nearby open water remains unfrozen. Snow cover and sea ice
+  remain independent: exceptionally warm air and ground can clear land beside
+  frozen sea, while cold precipitation can cover land beside open water.
+  Perennial land ice is reserved for colder annual conditions or elevation so
+  ordinary polar lowlands still change with season.
 - **[Explicit]** Solid ice is land for boats. It blends into exposed land but
   ends at water with a sharp, readable boundary. The edge emerges from physical
   climate and procedural environment rather than an authored latitude contour
   or island-distance field. The pole itself remains fully frozen while each
-  hemisphere's cap advances in winter and retreats in summer.
+  hemisphere's cap advances in winter and retreats in summer. Seasonal snow can
+  extend substantially farther toward the equator than the comparatively small
+  sea-ice cap.
 - **[Implicit]** The current stateless sea-ice approximation combines seasonal
   sea-surface temperature with broad maritime heat variation. Water depth does
   not directly decide whether floating ice can form.
@@ -195,7 +204,9 @@ current playable behavior; this file does not track delivery status.
   overrides rather than a switch to a separate nonspatial scene.
 - **[Explicit]** The lab presents local solar time in hours, season as an
   approximate real-numbered month, and lunar phase with named landmarks while
-  retaining normalized runtime phases internally.
+  retaining normalized runtime phases internally. Season phase zero is the
+  northern winter solstice and remains in the January-labelled portion of the
+  control.
 - **[Explicit]** Underwater bottom visibility follows two-way exponential light
   attenuation. Substrate reflectance determines how much bottom contrast survives
   without tinting the water by material. Underwater structure comes from

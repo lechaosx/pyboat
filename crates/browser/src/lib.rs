@@ -307,11 +307,11 @@ impl MultiplayerClient {
         &mut self,
         keyboard_forward: f32,
         keyboard_turn: f32,
-        gamepad_x: f32,
-        gamepad_y: f32,
+        world_x: f32,
+        world_y: f32,
     ) {
         self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = Vector::new(gamepad_x, gamepad_y);
+        let world_motion = Vector::new(world_x, world_y);
         let length = world_motion.length();
         let magnitude = length.min(1.0);
         if magnitude == 0.0 {
@@ -764,11 +764,11 @@ impl Demo {
         &mut self,
         keyboard_forward: f32,
         keyboard_turn: f32,
-        gamepad_x: f32,
-        gamepad_y: f32,
+        world_x: f32,
+        world_y: f32,
     ) {
         self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = Vector::new(gamepad_x, gamepad_y);
+        let world_motion = Vector::new(world_x, world_y);
         let length = world_motion.length();
         let magnitude = length.min(1.0);
         if magnitude == 0.0 {

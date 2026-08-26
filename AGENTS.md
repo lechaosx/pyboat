@@ -16,6 +16,10 @@
   including when that endorsement happens after an agent first selected it. Mark
   agent-selected decisions **[Implicit]** until then; passive acceptance alone
   does not reclassify them.
+- Flag a proposed decision change to the user before making it. An agent may
+  change an **[Implicit]** decision after flagging it, but must receive the
+  user's explicit acknowledgement before changing an **[Explicit]** decision.
+  Human-authored decisions are always **[Explicit]**.
 - Keep unresolved matters as open questions rather than decisions.
 - Keep delivery status out of decision records. `README.md` is the sole concise
   summary of current playable behavior; transform its existing summary instead

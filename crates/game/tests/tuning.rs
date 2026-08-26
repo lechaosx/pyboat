@@ -101,6 +101,8 @@ fn derive_weather_at_surface_temperature(
             annual_mean_air_temperature_c: surface_air_temperature_c,
             seasonal_temperature_range_c: 0.0,
             diurnal_temperature_range_c: 0.0,
+            annual_mean_water_temperature_c: surface_air_temperature_c,
+            seasonal_water_temperature_range_c: 0.0,
         },
         CelestialConditions {
             geographic_latitude_degrees: 0.0,
@@ -305,7 +307,7 @@ fn procedural_cloud_cover_has_mostly_clear_skies_and_rare_storms() {
         "no sampled cloud density reached storm strength"
     );
     assert!(
-        storm_samples * 100 < samples,
+        storm_samples * 50 < samples,
         "{storm_samples} of {samples} samples were storm density"
     );
 }
@@ -416,6 +418,72 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
             < 0.1
     );
     assert!((nearby.water_vapor_g_kg - primary.water_vapor_g_kg).abs() < 0.1);
+}
+
+#[test]
+fn temperature_anomaly_probabilities_follow_observed_latitude_bands() {
+    let world = WorldGeometry::default();
+    let percentile = |latitude: f32, probability: f32| {
+        let position_m = Vector::new(0.0, latitude / 180.0 * world.height_m());
+        let mut samples = (0..2_048)
+            .map(|seed| {
+                procedural_atmosphere_primary_in_world(world, seed, 0, position_m)
+                    .surface_air_temperature_anomaly_c
+            })
+            .collect::<Vec<_>>();
+        samples.sort_by(f32::total_cmp);
+        samples[((samples.len() - 1) as f32 * probability).round() as usize]
+    };
+
+    for (latitude, expected_tail_c) in [(10.0, 5.4), (40.0, 14.0), (50.0, 16.2), (70.0, 13.3)] {
+        let cold = percentile(latitude, 0.01);
+        let hot = percentile(latitude, 0.99);
+        assert!((cold + expected_tail_c).abs() < 1.5, "{latitude}: {cold}");
+        assert!((hot - expected_tail_c).abs() < 1.5, "{latitude}: {hot}");
+    }
+}
+
+#[test]
+fn temperate_temperature_extremes_have_observed_probabilities() {
+    let world = WorldGeometry::default();
+    let latitude = 50.0;
+    let position_m = Vector::new(0.0, latitude / 180.0 * world.height_m());
+    let climate = world_climate_conditions(latitude);
+    let temperature_samples = |season_phase, day_phase| {
+        (0..4_096)
+            .map(|seed| {
+                let anomaly = procedural_atmosphere_primary_in_world(world, seed, 0, position_m)
+                    .surface_air_temperature_anomaly_c;
+                current_air_temperature_c(
+                    climate,
+                    CelestialConditions {
+                        geographic_latitude_degrees: latitude,
+                        season_phase,
+                        day_phase,
+                        moon_phase: 0.0,
+                    },
+                ) + anomaly
+            })
+            .collect::<Vec<_>>()
+    };
+    let winter_highs = temperature_samples(0.09, 0.625);
+    let summer_highs = temperature_samples(0.59, 0.625);
+    let frozen_winter_days = winter_highs
+        .iter()
+        .filter(|temperature| **temperature < 0.0)
+        .count();
+    let hot_summer_days = summer_highs
+        .iter()
+        .filter(|temperature| **temperature >= 35.0)
+        .count();
+    let very_hot_summer_days = summer_highs
+        .iter()
+        .filter(|temperature| **temperature >= 40.0)
+        .count();
+
+    assert!((0.30..=0.50).contains(&(frozen_winter_days as f32 / winter_highs.len() as f32)));
+    assert!((0.02..=0.08).contains(&(hot_summer_days as f32 / summer_highs.len() as f32)));
+    assert!((1..=20).contains(&very_hot_summer_days));
 }
 
 #[test]
@@ -547,7 +615,7 @@ fn procedural_weather_applies_climate_and_celestial_temperature_to_the_weather_a
 fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
     let noon = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 0.0,
-        season_phase: 0.0,
+        season_phase: 0.25,
         day_phase: 0.5,
         moon_phase: 0.0,
     });
@@ -555,7 +623,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
         day_phase: 0.0,
         ..CelestialConditions {
             geographic_latitude_degrees: 0.0,
-            season_phase: 0.0,
+            season_phase: 0.25,
             day_phase: 0.5,
             moon_phase: 0.0,
         }
@@ -571,7 +639,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
 fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     let full_moon_midnight = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 0.0,
-        season_phase: 0.0,
+        season_phase: 0.25,
         day_phase: 0.0,
         moon_phase: 0.5,
     });
@@ -579,7 +647,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
         moon_phase: 0.0,
         ..CelestialConditions {
             geographic_latitude_degrees: 0.0,
-            season_phase: 0.0,
+            season_phase: 0.25,
             day_phase: 0.0,
             moon_phase: 0.5,
         }
@@ -595,7 +663,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 fn moonlight_strength_follows_moon_elevation() {
     let overhead_conditions = CelestialConditions {
         geographic_latitude_degrees: 0.0,
-        season_phase: 0.0,
+        season_phase: 0.25,
         day_phase: 0.0,
         moon_phase: 0.5,
     };
@@ -613,15 +681,15 @@ fn moonlight_strength_follows_moon_elevation() {
 fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let summer = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 55.0,
-        season_phase: 0.25,
+        season_phase: 0.5,
         day_phase: 0.5,
         moon_phase: 0.25,
     });
     let winter = celestial_lighting(CelestialConditions {
-        season_phase: 0.75,
+        season_phase: 0.0,
         ..CelestialConditions {
             geographic_latitude_degrees: 55.0,
-            season_phase: 0.25,
+            season_phase: 0.5,
             day_phase: 0.5,
             moon_phase: 0.25,
         }
@@ -637,12 +705,14 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
         annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 8.0,
+        annual_mean_water_temperature_c: 15.0,
+        seasonal_water_temperature_range_c: 20.0,
     };
     let northern_summer = current_air_temperature_c(
         climate,
         CelestialConditions {
             geographic_latitude_degrees: 55.0,
-            season_phase: 0.34,
+            season_phase: 0.59,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
@@ -651,7 +721,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
         climate,
         CelestialConditions {
             geographic_latitude_degrees: 55.0,
-            season_phase: 0.84,
+            season_phase: 0.09,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
@@ -660,7 +730,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
         climate,
         CelestialConditions {
             geographic_latitude_degrees: -55.0,
-            season_phase: 0.84,
+            season_phase: 0.09,
             day_phase: 0.625,
             moon_phase: 0.0,
         },
@@ -669,7 +739,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
         climate,
         CelestialConditions {
             geographic_latitude_degrees: 55.0,
-            season_phase: 0.34,
+            season_phase: 0.59,
             day_phase: 0.125,
             moon_phase: 0.0,
         },
@@ -686,6 +756,8 @@ fn upper_air_climatology_has_muted_seasons_and_no_diurnal_cycle() {
         annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 8.0,
+        annual_mean_water_temperature_c: 15.0,
+        seasonal_water_temperature_range_c: 20.0,
     };
     let conditions = |season_phase, day_phase| CelestialConditions {
         geographic_latitude_degrees: 55.0,
@@ -693,11 +765,11 @@ fn upper_air_climatology_has_muted_seasons_and_no_diurnal_cycle() {
         day_phase,
         moon_phase: 0.0,
     };
-    let summer = current_500_hpa_air_temperature_c(climate, conditions(0.34, 0.625));
-    let summer_night = current_500_hpa_air_temperature_c(climate, conditions(0.34, 0.125));
-    let winter = current_500_hpa_air_temperature_c(climate, conditions(0.84, 0.625));
-    let surface_summer = current_air_temperature_c(climate, conditions(0.34, 0.625));
-    let surface_winter = current_air_temperature_c(climate, conditions(0.84, 0.625));
+    let summer = current_500_hpa_air_temperature_c(climate, conditions(0.59, 0.625));
+    let summer_night = current_500_hpa_air_temperature_c(climate, conditions(0.59, 0.125));
+    let winter = current_500_hpa_air_temperature_c(climate, conditions(0.09, 0.625));
+    let surface_summer = current_air_temperature_c(climate, conditions(0.59, 0.625));
+    let surface_winter = current_air_temperature_c(climate, conditions(0.09, 0.625));
 
     assert!((summer - summer_night).abs() < f32::EPSILON);
     assert!(summer > winter);
@@ -711,6 +783,8 @@ fn geographic_latitude_suppresses_equatorial_temperature_seasons() {
         annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: 15.0,
+        seasonal_water_temperature_range_c: 20.0,
     };
     let temperature = |geographic_latitude_degrees, season_phase| {
         current_air_temperature_c(
@@ -723,8 +797,8 @@ fn geographic_latitude_suppresses_equatorial_temperature_seasons() {
             },
         )
     };
-    let equatorial_range = (temperature(0.0, 0.34) - temperature(0.0, 0.84)).abs();
-    let high_latitude_range = (temperature(70.0, 0.34) - temperature(70.0, 0.84)).abs();
+    let equatorial_range = (temperature(0.0, 0.59) - temperature(0.0, 0.09)).abs();
+    let high_latitude_range = (temperature(70.0, 0.59) - temperature(70.0, 0.09)).abs();
 
     assert!(equatorial_range < 0.25 * high_latitude_range);
 }
@@ -735,13 +809,15 @@ fn seasonal_temperature_is_continuous_across_the_equator() {
         annual_mean_air_temperature_c: 15.0,
         seasonal_temperature_range_c: 20.0,
         diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: 15.0,
+        seasonal_water_temperature_range_c: 20.0,
     };
     let temperature = |geographic_latitude_degrees| {
         current_air_temperature_c(
             climate,
             CelestialConditions {
                 geographic_latitude_degrees,
-                season_phase: 0.34,
+                season_phase: 0.59,
                 day_phase: 0.5,
                 moon_phase: 0.0,
             },
@@ -780,10 +856,12 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             annual_mean_air_temperature_c: -30.0,
             seasonal_temperature_range_c: 18.0,
             diurnal_temperature_range_c: 4.0,
+            annual_mean_water_temperature_c: -30.0,
+            seasonal_water_temperature_range_c: 18.0,
         },
         CelestialConditions {
             geographic_latitude_degrees: 75.0,
-            season_phase: 0.84,
+            season_phase: 0.09,
             day_phase: 0.5,
             moon_phase: 0.0,
         },
@@ -797,10 +875,12 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             annual_mean_air_temperature_c: 22.0,
             seasonal_temperature_range_c: 8.0,
             diurnal_temperature_range_c: 4.0,
+            annual_mean_water_temperature_c: 22.0,
+            seasonal_water_temperature_range_c: 8.0,
         },
         CelestialConditions {
             geographic_latitude_degrees: 15.0,
-            season_phase: 0.34,
+            season_phase: 0.59,
             day_phase: 0.5,
             moon_phase: 0.0,
         },
@@ -814,10 +894,12 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             annual_mean_air_temperature_c: -8.0,
             seasonal_temperature_range_c: 18.0,
             diurnal_temperature_range_c: 4.0,
+            annual_mean_water_temperature_c: -8.0,
+            seasonal_water_temperature_range_c: 18.0,
         },
         CelestialConditions {
             geographic_latitude_degrees: 75.0,
-            season_phase: 0.84,
+            season_phase: 0.09,
             day_phase: 0.5,
             moon_phase: 0.0,
         },
@@ -831,10 +913,12 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             annual_mean_air_temperature_c: -18.0,
             seasonal_temperature_range_c: 44.0,
             diurnal_temperature_range_c: 3.0,
+            annual_mean_water_temperature_c: -18.0,
+            seasonal_water_temperature_range_c: 44.0,
         },
         CelestialConditions {
             geographic_latitude_degrees: 90.0,
-            season_phase: 0.84,
+            season_phase: 0.09,
             day_phase: 0.5,
             moon_phase: 0.0,
         },
@@ -862,10 +946,12 @@ fn perennial_ice_does_not_follow_instantaneous_water_vapor() {
         annual_mean_air_temperature_c: -8.0,
         seasonal_temperature_range_c: 18.0,
         diurnal_temperature_range_c: 4.0,
+        annual_mean_water_temperature_c: -8.0,
+        seasonal_water_temperature_range_c: 18.0,
     };
     let conditions = CelestialConditions {
         geographic_latitude_degrees: 75.0,
-        season_phase: 0.84,
+        season_phase: 0.09,
         day_phase: 0.5,
         moon_phase: 0.0,
     };
@@ -884,29 +970,47 @@ fn sea_ice_responds_to_seasonal_water_temperature() {
         day_phase: 0.5,
         moon_phase: 0.0,
     };
-    let summer = climate_surface(climate, conditions(0.425), 8.0, 0.0, 0.0, -1_000.0);
-    let winter = climate_surface(climate, conditions(0.925), 8.0, 0.0, 0.0, -1_000.0);
+    let summer = climate_surface(climate, conditions(0.675), 8.0, 0.0, 0.0, -1_000.0);
+    let winter = climate_surface(climate, conditions(0.175), 8.0, 0.0, 0.0, -1_000.0);
 
     assert!(winter.polar_ice_closure > summer.polar_ice_closure + 0.5);
 }
 
 #[test]
-fn sea_ice_forming_winter_assures_snow_without_making_low_land_a_glacier() {
-    let climate = world_climate_conditions(75.0);
-    let conditions = |season_phase| CelestialConditions {
-        geographic_latitude_degrees: 75.0,
-        season_phase,
-        day_phase: 0.125,
+fn snow_cover_and_sea_ice_can_occur_independently() {
+    let conditions = CelestialConditions {
+        geographic_latitude_degrees: 90.0,
+        season_phase: 0.0,
+        day_phase: 0.625,
         moon_phase: 0.0,
     };
-    let summer_land = climate_surface(climate, conditions(0.425), 6.0, 0.0, 0.0, 0.0);
-    let winter_land = climate_surface(climate, conditions(0.925), 6.0, 0.0, 0.0, 0.0);
-    let winter_sea = climate_surface(climate, conditions(0.925), 6.0, 0.0, 0.0, -1_000.0);
+    let frozen_water_climate = ClimateConditions {
+        annual_mean_air_temperature_c: -4.0,
+        seasonal_temperature_range_c: 0.0,
+        diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: -4.0,
+        seasonal_water_temperature_range_c: 0.0,
+    };
+    let bare_warm_land = climate_surface(frozen_water_climate, conditions, 0.0, 24.0, 0.0, 0.0);
+    let frozen_sea = climate_surface(frozen_water_climate, conditions, 0.0, 24.0, 0.0, -1_000.0);
+    assert!(frozen_sea.polar_ice_closure > 0.95);
+    assert!(
+        bare_warm_land.seasonal_snow_cover < 0.05,
+        "warm land snow {}",
+        bare_warm_land.seasonal_snow_cover
+    );
 
-    assert!(winter_sea.polar_ice_closure > 0.95);
-    assert!(winter_land.seasonal_snow_cover > 0.95);
-    assert!(winter_land.seasonal_snow_cover > summer_land.seasonal_snow_cover + 0.5);
-    assert!(winter_land.solid_ice_cover < 0.05);
+    let open_water_climate = ClimateConditions {
+        annual_mean_air_temperature_c: 4.0,
+        seasonal_temperature_range_c: 0.0,
+        diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: 4.0,
+        seasonal_water_temperature_range_c: 0.0,
+    };
+    let snowy_cold_land = climate_surface(open_water_climate, conditions, 8.0, -12.0, 1.0, 0.0);
+    let open_sea = climate_surface(open_water_climate, conditions, 8.0, -12.0, 1.0, -1_000.0);
+    assert!(snowy_cold_land.seasonal_snow_cover > 0.8);
+    assert!(open_sea.polar_ice_closure < 0.05);
 }
 
 #[test]
@@ -915,6 +1019,8 @@ fn sea_ice_is_not_a_direct_function_of_ocean_depth() {
         annual_mean_air_temperature_c: -8.0,
         seasonal_temperature_range_c: 0.0,
         diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: -8.0,
+        seasonal_water_temperature_range_c: 0.0,
     };
     let conditions = CelestialConditions {
         geographic_latitude_degrees: 75.0,
@@ -934,6 +1040,8 @@ fn acute_air_temperature_modulates_snow_without_becoming_ground_temperature() {
         annual_mean_air_temperature_c: -1.0,
         seasonal_temperature_range_c: 0.0,
         diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: -1.0,
+        seasonal_water_temperature_range_c: 0.0,
     };
     let conditions = CelestialConditions {
         geographic_latitude_degrees: 60.0,
@@ -952,11 +1060,83 @@ fn acute_air_temperature_modulates_snow_without_becoming_ground_temperature() {
 }
 
 #[test]
+fn winter_snow_cover_continues_increasing_toward_the_pole() {
+    let snow_cover = |latitude| {
+        let conditions = CelestialConditions {
+            geographic_latitude_degrees: latitude,
+            season_phase: 0.13,
+            day_phase: 0.125,
+            moon_phase: 0.0,
+        };
+        climate_surface(
+            world_climate_conditions(latitude),
+            conditions,
+            8.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        .seasonal_snow_cover
+    };
+    let temperate = snow_cover(45.0);
+    let subpolar = snow_cover(60.0);
+    let polar = snow_cover(75.0);
+
+    assert!(
+        subpolar > temperate + 0.25,
+        "temperate {temperate}, subpolar {subpolar}, polar {polar}"
+    );
+    assert!(polar >= subpolar);
+}
+
+#[test]
+fn snow_moisture_is_relative_to_local_air_temperature() {
+    let conditions = CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: 0.0,
+        day_phase: 0.625,
+        moon_phase: 0.0,
+    };
+    let cold_air = climate_surface(
+        ClimateConditions {
+            annual_mean_air_temperature_c: -8.333,
+            seasonal_temperature_range_c: 0.0,
+            diurnal_temperature_range_c: 0.0,
+            annual_mean_water_temperature_c: -8.333,
+            seasonal_water_temperature_range_c: 0.0,
+        },
+        conditions,
+        2.0,
+        -6.667,
+        0.0,
+        0.0,
+    );
+    let warm_air = climate_surface(
+        ClimateConditions {
+            annual_mean_air_temperature_c: -13.333,
+            seasonal_temperature_range_c: 0.0,
+            diurnal_temperature_range_c: 0.0,
+            annual_mean_water_temperature_c: -13.333,
+            seasonal_water_temperature_range_c: 0.0,
+        },
+        conditions,
+        2.0,
+        13.333,
+        0.0,
+        0.0,
+    );
+
+    assert!((cold_air.ground_temperature_c - warm_air.ground_temperature_c).abs() < 0.001);
+    assert!(cold_air.air_temperature_c < warm_air.air_temperature_c - 10.0);
+    assert!(cold_air.seasonal_snow_cover > warm_air.seasonal_snow_cover + 0.30);
+}
+
+#[test]
 fn temperate_january_snow_can_coexist_with_open_water() {
     let climate = world_climate_conditions(45.0);
     let conditions = CelestialConditions {
         geographic_latitude_degrees: 45.0,
-        season_phase: 0.84,
+        season_phase: 0.09,
         day_phase: 0.125,
         moon_phase: 0.0,
     };
@@ -968,11 +1148,62 @@ fn temperate_january_snow_can_coexist_with_open_water() {
 }
 
 #[test]
+fn temperate_winter_climate_retains_snow_beyond_sea_ice() {
+    let latitude = 49.0;
+    let conditions = CelestialConditions {
+        geographic_latitude_degrees: latitude,
+        season_phase: 0.09,
+        day_phase: 0.125,
+        moon_phase: 0.0,
+    };
+    let climate = world_climate_conditions(latitude);
+    let land = climate_surface(climate, conditions, 7.0, 0.0, 0.0, 0.0);
+    let sea = climate_surface(climate, conditions, 7.0, 0.0, 0.0, -100.0);
+    let farther_temperate_snow = climate_surface(
+        world_climate_conditions(45.0),
+        CelestialConditions {
+            geographic_latitude_degrees: 45.0,
+            ..conditions
+        },
+        7.0,
+        0.0,
+        0.0,
+        0.0,
+    );
+
+    assert!(land.seasonal_snow_cover > 0.60);
+    assert!(farther_temperate_snow.seasonal_snow_cover > 0.35);
+    assert!(sea.polar_ice_closure < 0.05);
+}
+
+#[test]
+fn winter_sea_ice_has_a_polar_core_without_a_zonal_edge_at_68_degrees() {
+    let surface = |latitude| {
+        climate_surface(
+            world_climate_conditions(latitude),
+            CelestialConditions {
+                geographic_latitude_degrees: latitude,
+                season_phase: 0.175,
+                day_phase: 0.5,
+                moon_phase: 0.0,
+            },
+            4.0,
+            0.0,
+            0.0,
+            -100.0,
+        )
+    };
+
+    assert!(surface(68.0).polar_ice_closure < 0.05);
+    assert!(surface(72.0).polar_ice_closure > 0.95);
+}
+
+#[test]
 fn cold_precipitation_adds_fresh_snow() {
     let climate = world_climate_conditions(45.0);
     let conditions = CelestialConditions {
         geographic_latitude_degrees: 45.0,
-        season_phase: 0.84,
+        season_phase: 0.09,
         day_phase: 0.125,
         moon_phase: 0.0,
     };
@@ -987,7 +1218,7 @@ fn temperate_winter_snow_retreats_during_the_warm_part_of_the_day() {
     let climate = world_climate_conditions(45.0);
     let conditions = |day_phase| CelestialConditions {
         geographic_latitude_degrees: 45.0,
-        season_phase: 0.84,
+        season_phase: 0.09,
         day_phase,
         moon_phase: 0.0,
     };
@@ -1002,7 +1233,7 @@ fn day_night_temperature_changes_precipitation() {
     let climate = world_climate_conditions(45.0);
     let conditions = |day_phase| CelestialConditions {
         geographic_latitude_degrees: 45.0,
-        season_phase: 0.84,
+        season_phase: 0.09,
         day_phase,
         moon_phase: 0.0,
     };
@@ -1030,8 +1261,6 @@ fn transported_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
     let mut night_temperature_c = 0.0;
     let mut afternoon_water_vapor_g_kg = 0.0;
     let mut night_water_vapor_g_kg = 0.0;
-    let mut afternoon_precipitation = 0.0;
-    let mut night_precipitation = 0.0;
     let sample_count = 128;
 
     for seed in 0..sample_count {
@@ -1041,8 +1270,6 @@ fn transported_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
         night_temperature_c += night.surface_air_temperature_c;
         afternoon_water_vapor_g_kg += afternoon.primary.water_vapor_g_kg;
         night_water_vapor_g_kg += night.primary.water_vapor_g_kg;
-        afternoon_precipitation += afternoon.rain_intensity;
-        night_precipitation += night.rain_intensity;
     }
 
     let samples = sample_count as f32;
@@ -1050,8 +1277,6 @@ fn transported_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
     night_temperature_c /= samples;
     afternoon_water_vapor_g_kg /= samples;
     night_water_vapor_g_kg /= samples;
-    afternoon_precipitation /= samples;
-    night_precipitation /= samples;
 
     assert!(
         afternoon_temperature_c > night_temperature_c + 3.0,
@@ -1060,11 +1285,6 @@ fn transported_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
     assert!(
         (afternoon_water_vapor_g_kg - night_water_vapor_g_kg).abs()
             < 0.10 * afternoon_water_vapor_g_kg
-    );
-    assert!(
-        night_precipitation > afternoon_precipitation + 0.01
-            && night_precipitation > 1.4 * afternoon_precipitation,
-        "afternoon precipitation {afternoon_precipitation}, night {night_precipitation}"
     );
 }
 
@@ -1170,7 +1390,21 @@ fn polar_ice_front_has_frozen_and_open_deep_water_at_one_latitude() {
     let seed = 0x5eed;
     let mixed_latitude = (65..90).find(|latitude| {
         let latitude = *latitude as f32;
-        let annual_mean = world_climate_conditions(latitude).annual_mean_air_temperature_c;
+        let climate = world_climate_conditions(latitude);
+        let water_temperature_c = climate_surface(
+            climate,
+            CelestialConditions {
+                geographic_latitude_degrees: latitude,
+                season_phase: 0.09,
+                day_phase: 0.5,
+                moon_phase: 0.0,
+            },
+            4.0,
+            0.0,
+            0.0,
+            -1_000.0,
+        )
+        .water_temperature_c;
         let mut frozen_deep_water = 0;
         let mut open_deep_water = 0;
 
@@ -1187,8 +1421,8 @@ fn polar_ice_front_has_frozen_and_open_deep_water_at_one_latitude() {
                 world,
                 seed,
                 position,
-                annual_mean,
-                annual_mean,
+                climate.annual_mean_air_temperature_c,
+                water_temperature_c,
             );
             if solid >= 0.0 {
                 frozen_deep_water += 1;

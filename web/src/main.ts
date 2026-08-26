@@ -100,11 +100,13 @@ try {
 
   function frame(timeMs: number): void {
     const gamepad = firstGamepad();
+    const worldX = gamepad?.axes[0] ?? 0;
+    const worldY = -(gamepad?.axes[1] ?? 0);
     game.set_player_input(
       keyboardAxis("KeyW", "KeyS"),
       keyboardAxis("KeyD", "KeyA"),
-      gamepad?.axes[0] ?? 0,
-      gamepad?.axes[1] ?? 0,
+      worldX,
+      worldY,
     );
     game.frame((timeMs - previousTimeMs) / 1000);
     statusElement.textContent = game.status();

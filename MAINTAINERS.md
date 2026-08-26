@@ -15,6 +15,8 @@ Repository-wide checks:
 
 Some integration tests open loopback UDP sockets for real WebTransport sessions.
 Restricted environments must allow loopback networking for those tests.
+Headless capture and its rendering integration tests require a hardware Vulkan
+GPU; software adapters are rejected.
 
 A successful build does not validate appearance. The
 [procedural playground](README.md#start-here) and browser provide interactive

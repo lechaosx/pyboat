@@ -188,6 +188,32 @@ fn surface_local_solar_phase() -> f32 {
     return surface_local_solar_phase_at(surface_position_m);
 }
 
+// Mirrors the 1991–2020 latitude-band climate and probability calibration in
+// `game/src/lib.rs`; both paths must derive the same climate at a world point.
+const CLIMATE_ANNUAL_MEAN_C: array<f32, 10> = array<f32, 10>(
+    27.4, 27.9, 25.0, 21.9, 16.9, 8.0, -0.2, -7.9, -11.7, -15.0,
+);
+const CLIMATE_SEASONAL_RANGE_C: array<f32, 10> = array<f32, 10>(
+    2.0, 3.1, 5.8, 15.3, 18.5, 21.3, 31.0, 31.6, 25.9, 20.0,
+);
+const CLIMATE_DIURNAL_RANGE_C: array<f32, 10> = array<f32, 10>(
+    4.4, 5.6, 5.2, 9.5, 9.6, 6.1, 6.3, 4.5, 3.2, 2.5,
+);
+const TEMPERATURE_ANOMALY_P99_C: array<f32, 10> = array<f32, 10>(
+    9.5, 5.4, 5.5, 13.7, 14.0, 16.2, 12.4, 13.3, 6.6, 6.0,
+);
+const TEMPERATURE_ANOMALY_SCALE_C: array<f32, 10> = array<f32, 10>(
+    19.5, 11.1, 11.3, 28.1, 28.7, 33.2, 25.4, 27.3, 13.5, 12.3,
+);
+
+fn latitude_curve_value(knots: array<f32, 10>, latitude_degrees: f32) -> f32 {
+    let knot_position = clamp(abs(latitude_degrees) / 10.0, 0.0, 9.0);
+    let lower = min(u32(floor(knot_position)), 8u);
+    let fraction = fract(knot_position);
+    let amount = fraction * fraction * (3.0 - 2.0 * fraction);
+    return mix(knots[lower], knots[lower + 1u], amount);
+}
+
 fn surface_seasonal_latitude_factor_at(position_m: vec2<f32>) -> f32 {
     let latitude = surface_latitude_degrees_at(position_m);
     let magnitude = smoothstep(0.0, 45.0, abs(latitude));
@@ -203,7 +229,7 @@ fn surface_polar_fraction_at(position_m: vec2<f32>) -> f32 {
 }
 
 fn surface_annual_mean_air_temperature_c_at(position_m: vec2<f32>) -> f32 {
-    return 27.0 - 45.0 * surface_polar_fraction_at(position_m);
+    return latitude_curve_value(CLIMATE_ANNUAL_MEAN_C, surface_latitude_degrees_at(position_m));
 }
 
 fn surface_annual_mean_air_temperature_c() -> f32 {
@@ -211,7 +237,7 @@ fn surface_annual_mean_air_temperature_c() -> f32 {
 }
 
 fn surface_seasonal_temperature_range_c_at(position_m: vec2<f32>) -> f32 {
-    return 3.0 + 41.0 * pow(surface_polar_fraction_at(position_m), 0.9);
+    return latitude_curve_value(CLIMATE_SEASONAL_RANGE_C, surface_latitude_degrees_at(position_m));
 }
 
 fn surface_seasonal_temperature_range_c() -> f32 {
@@ -219,7 +245,7 @@ fn surface_seasonal_temperature_range_c() -> f32 {
 }
 
 fn surface_diurnal_temperature_range_c_at(position_m: vec2<f32>) -> f32 {
-    return 6.0 - 3.0 * surface_polar_fraction_at(position_m);
+    return latitude_curve_value(CLIMATE_DIURNAL_RANGE_C, surface_latitude_degrees_at(position_m));
 }
 
 fn surface_diurnal_temperature_range_c() -> f32 {
@@ -227,7 +253,11 @@ fn surface_diurnal_temperature_range_c() -> f32 {
 }
 
 fn surface_air_temperature_anomaly_c_at(position_m: vec2<f32>) -> f32 {
-    return 13.0 * 0.75 * spatial_weather_fractal(
+    let scale_c = latitude_curve_value(
+        TEMPERATURE_ANOMALY_SCALE_C,
+        surface_latitude_degrees_at(position_m),
+    );
+    return scale_c * 0.75 * spatial_weather_fractal(
         vec2<u32>(0x38d01377u, 0x452821e6u),
         position_m - scene.surface_weather_transport_m.xy,
         65536.0,
@@ -236,12 +266,16 @@ fn surface_air_temperature_anomaly_c_at(position_m: vec2<f32>) -> f32 {
     );
 }
 
+fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
+    return 3.5 * exp(0.055 * (air_temperature_c + 5.0));
+}
+
 fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
-    let seasonal_phase = TAU * (scene.world_phases.y - 0.09);
+    let seasonal_phase = TAU * (scene.world_phases.y - 0.34);
     let climate_temperature_c = surface_annual_mean_air_temperature_c_at(position_m)
         + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
             * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
-    let capacity_g_kg = 3.5 * exp(0.055 * (climate_temperature_c + 5.0));
+    let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
     let noise = 0.75 * spatial_weather_fractal(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
         position_m - scene.surface_weather_transport_m.zw,
@@ -257,7 +291,7 @@ fn surface_water_vapor_g_kg() -> f32 {
 }
 
 fn surface_current_air_temperature_c_at(position_m: vec2<f32>) -> f32 {
-    let seasonal_phase = TAU * (scene.world_phases.y - 0.09);
+    let seasonal_phase = TAU * (scene.world_phases.y - 0.34);
     let diurnal_phase = TAU * (surface_local_solar_phase_at(position_m) - 0.625);
     return surface_annual_mean_air_temperature_c_at(position_m)
         + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
@@ -271,49 +305,63 @@ fn surface_current_air_temperature_c() -> f32 {
 }
 
 fn ground_temperature_c(elevation_m: f32) -> f32 {
-    let seasonal_phase = TAU * (scene.world_phases.y - 0.13);
+    let seasonal_phase = TAU * (scene.world_phases.y - 0.38);
     let diurnal_phase = TAU * (surface_local_solar_phase() - 0.625);
     let sea_level_temperature = surface_annual_mean_air_temperature_c()
         + 0.42 * surface_seasonal_temperature_range_c() * surface_seasonal_latitude_factor()
             * sin(seasonal_phase)
         + 0.15 * surface_diurnal_temperature_range_c() * cos(diurnal_phase);
     return sea_level_temperature
-        + 0.25 * surface_air_temperature_anomaly_c_at(surface_position_m)
+        + 0.35 * surface_air_temperature_anomaly_c_at(surface_position_m)
         - 0.0065 * max(elevation_m, 0.0);
 }
 
 fn water_temperature_c() -> f32 {
-    let seasonal_phase = TAU * (scene.world_phases.y - 0.175);
-    return surface_annual_mean_air_temperature_c()
-        + 0.28 * surface_seasonal_temperature_range_c() * surface_seasonal_latitude_factor()
+    let seasonal_phase = TAU * (scene.world_phases.y - 0.425);
+    let normalized_latitude = clamp(abs(surface_latitude_degrees()) / 90.0, 0.0, 1.0);
+    let polar_fraction = pow(normalized_latitude, 1.5);
+    let annual_temperature_c = 27.0 - 45.0 * polar_fraction;
+    let seasonal_temperature_range_c = 3.0 + 41.0 * pow(polar_fraction, 0.9);
+    let maritime_moderation_c = 65.0 * (
+        pow(normalized_latitude, 1.5) - pow(normalized_latitude, 2.6)
+    );
+    return annual_temperature_c
+        + maritime_moderation_c
+        + 0.28 * seasonal_temperature_range_c * surface_seasonal_latitude_factor()
             * sin(seasonal_phase);
 }
 
-fn climate_moisture_support() -> f32 {
-    return smoothstep(2.0, 10.0, surface_water_vapor_g_kg());
+fn climate_moisture_support(air_temperature_c: f32) -> f32 {
+    let relative_humidity = clamp(
+        surface_water_vapor_g_kg() / water_vapor_saturation_capacity_g_kg(air_temperature_c),
+        0.0,
+        1.5,
+    );
+    return smoothstep(0.45, 0.95, relative_humidity);
 }
 
 fn seasonal_snow_cover(elevation_m: f32) -> f32 {
     let ground_temperature = ground_temperature_c(elevation_m);
     let air_temperature = surface_current_air_temperature_c()
         - 0.0065 * max(elevation_m, 0.0);
-    let persistent_cold = 1.0 - smoothstep(-4.0, 4.0, ground_temperature);
-    let persistent_snow = persistent_cold * (0.35 + 0.65 * climate_moisture_support());
+    let weather_standard_deviation_c = latitude_curve_value(
+        TEMPERATURE_ANOMALY_P99_C,
+        surface_latitude_degrees(),
+    ) / 2.326;
+    let freezing_probability = 1.0 / (
+        1.0 + exp(1.702 * ground_temperature / weather_standard_deviation_c)
+    );
+    let snow_retention = 1.0 - pow(1.0 - freezing_probability, 3.0);
+    let persistent_snow = snow_retention * (0.35 + 0.65 * climate_moisture_support(air_temperature));
     let snowfall_cold = 1.0 - smoothstep(-1.0, 2.0, air_temperature);
     let fresh_snow = surface_cloud_weather.rain * snowfall_cold;
     let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
     let melt = smoothstep(0.0, 6.0, air_temperature);
-    let freezing_climate = 1.0 - smoothstep(-2.0, 0.0, water_temperature_c());
-    return max(snow_before_melt * (1.0 - 0.7 * melt), freezing_climate);
+    return snow_before_melt * (1.0 - 0.75 * melt);
 }
 
-fn local_snow_cover(elevation_m: f32, maritime_temperature_anomaly_c: f32) -> f32 {
-    let local_freezing_climate = 1.0 - smoothstep(
-        -2.0,
-        0.0,
-        water_temperature_c() + maritime_temperature_anomaly_c,
-    );
-    return max(seasonal_snow_cover(elevation_m), local_freezing_climate);
+fn local_snow_cover(elevation_m: f32) -> f32 {
+    return seasonal_snow_cover(elevation_m);
 }
 
 fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
@@ -325,7 +373,7 @@ fn autumn_vegetation_amount(elevation_m: f32) -> f32 {
         0.10,
         0.80,
         -surface_seasonal_latitude_factor()
-            * cos(TAU * (scene.world_phases.y - 0.13)),
+            * cos(TAU * (scene.world_phases.y - 0.38)),
     );
     let temperature = ground_temperature_c(elevation_m);
     let mild = smoothstep(-2.0, 8.0, temperature)
@@ -372,7 +420,7 @@ fn initialize_surface_tide() {
 fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
     let pressure = pressure_at(position_m);
     let air_temperature_c = surface_current_air_temperature_c_at(position_m);
-    let saturation_capacity_g_kg = 3.5 * exp(0.055 * (air_temperature_c + 5.0));
+    let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(air_temperature_c);
     let relative_humidity = clamp(
         surface_water_vapor_g_kg_at(position_m) / saturation_capacity_g_kg,
         0.0,
@@ -523,10 +571,8 @@ fn vertex(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     output.position = vec4<f32>(input.position, 0.0, 1.0);
     output.color = input.color;
-    output.world_position_m = scene.camera_and_view_m.xy + vec2<f32>(
-        input.position.x * scene.camera_and_view_m.z * 0.5,
-        -input.position.y * scene.camera_and_view_m.w * 0.5,
-    );
+    output.world_position_m = scene.camera_and_view_m.xy
+        + 0.5 * input.position * scene.camera_and_view_m.zw;
     output.is_terrain = input.is_terrain;
     return output;
 }
@@ -1230,7 +1276,7 @@ fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
 
 fn initialize_celestial_lighting() {
     let obliquity = 23.44 * PI / 180.0;
-    let solar_longitude = TAU * scene.world_phases.y;
+    let solar_longitude = TAU * (scene.world_phases.y - 0.25);
     let declination = asin(sin(obliquity) * sin(solar_longitude));
     let hour_angle = TAU * (surface_local_solar_phase() - 0.5);
     sun_light_direction = celestial_direction(declination, hour_angle);
@@ -1404,7 +1450,7 @@ fn solid_ice_sample(
     maritime_temperature: TerrainNoiseSample,
 ) -> TerrainSample {
     var surface = terrain;
-    let maritime_scale = 12.0 * (
+    let maritime_scale = 16.0 * (
         1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees()))
     );
     surface.maritime_temperature_anomaly_c = maritime_scale * maritime_temperature.value;
@@ -2111,7 +2157,6 @@ fn terrain_surface(
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
     coastal_sediment_amount: f32,
-    maritime_temperature_anomaly_c: f32,
     water_height_m: f32,
     surface: f32,
 ) -> TerrainSurface {
@@ -2181,12 +2226,9 @@ fn terrain_surface(
         * mix(3.0, 0.8, altitude_exposure)
         * mix(0.72, 1.28, smoothstep(-0.45, 0.45, surface));
     let snow_amount = smoothstep(
-        0.30,
-        0.75,
-        climate_visibility.x * local_snow_cover(
-            material_elevation_m,
-            maritime_temperature_anomaly_c,
-        ) + 0.18 * surface,
+        0.10,
+        0.55,
+        climate_visibility.x * local_snow_cover(material_elevation_m),
     );
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
     let slope_rock = smoothstep(
@@ -2517,7 +2559,6 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 terrain.coastal_rock_amount,
                 terrain.coastal_outcrop_amount,
                 terrain.coastal_sediment_amount,
-                terrain.maritime_temperature_anomaly_c,
                 water_height_m,
                 land_surface,
             );
@@ -2783,10 +2824,7 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         return vec4<f32>(rockiness, sediment, ruggedness, 1.0);
     }
     if mode == 40u {
-        return vec4<f32>(scalar_debug_color(local_snow_cover(
-            terrain.elevation_m,
-            terrain.maritime_temperature_anomaly_c,
-        )), 1.0);
+        return vec4<f32>(scalar_debug_color(local_snow_cover(terrain.elevation_m)), 1.0);
     }
     if mode == 41u {
         return vec4<f32>(scalar_debug_color(terrain.ice_amount), 1.0);
@@ -2805,20 +2843,17 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     }
     if mode == 51u {
         return vec4<f32>(scalar_debug_color(
-            (surface_annual_mean_air_temperature_c() + 18.0) / 45.0,
+            (surface_annual_mean_air_temperature_c() + 15.0) / 42.9,
         ), 1.0);
     }
     if mode == 52u {
         return vec4<f32>(signed_debug_color(surface_current_air_temperature_c() / 40.0), 1.0);
     }
     if mode == 53u {
-        return vec4<f32>(scalar_debug_color(local_snow_cover(
-            terrain.elevation_m,
-            terrain.maritime_temperature_anomaly_c,
-        )), 1.0);
+        return vec4<f32>(scalar_debug_color(local_snow_cover(terrain.elevation_m)), 1.0);
     }
     if mode == 54u {
-        let maritime_temperature = 12.0
+        let maritime_temperature = 16.0
             * (1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees())))
             * terrain_simplex_fractal_sample(
             vec2<u32>(0x78bd642fu, 0xa0761d64u),
@@ -2843,11 +2878,8 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     }
     if mode == 57u {
         return vec4<f32>(
-            clamp((surface_annual_mean_air_temperature_c() + 18.0) / 45.0, 0.0, 1.0),
-            local_snow_cover(
-                terrain.elevation_m,
-                terrain.maritime_temperature_anomaly_c,
-            ),
+            clamp((surface_annual_mean_air_temperature_c() + 15.0) / 42.9, 0.0, 1.0),
+            local_snow_cover(terrain.elevation_m),
             terrain.ice_amount,
             1.0,
         );

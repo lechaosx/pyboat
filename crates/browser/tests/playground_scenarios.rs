@@ -68,6 +68,8 @@ impl Scenario {
                 annual_mean_air_temperature_c: self.annual_mean_air_temperature,
                 seasonal_temperature_range_c: self.seasonal_temperature_range,
                 diurnal_temperature_range_c: self.diurnal_temperature_range,
+                annual_mean_water_temperature_c: self.annual_mean_air_temperature,
+                seasonal_water_temperature_range_c: self.seasonal_temperature_range,
             },
             self.celestial_conditions(),
         )

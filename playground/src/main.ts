@@ -163,7 +163,7 @@ const defaults: State = {
   currentWaterVapor: 13,
   aerosolOpticalDepth: 0.08,
   geographicLatitude: 45,
-  seasonPhase: 0.2521,
+  seasonPhase: 0.5021,
   dayPhase: 0.5833,
   moonPhase: 0.25,
   tidalRange: 1.25,
@@ -1049,21 +1049,37 @@ renderControls();
 let dragPointer: number | undefined;
 let dragX = 0;
 let dragY = 0;
+
+function canvasViewPoint(clientX: number, clientY: number, rect: DOMRect): [number, number] {
+  return [
+    (clientX - rect.left) / rect.width - 0.5,
+    0.5 - (clientY - rect.top) / rect.height,
+  ];
+}
+
 previewCanvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
   dragPointer = event.pointerId;
-  dragX = event.clientX;
-  dragY = event.clientY;
+  [dragX, dragY] = canvasViewPoint(
+    event.clientX,
+    event.clientY,
+    previewCanvas.getBoundingClientRect(),
+  );
   previewCanvas.setPointerCapture(event.pointerId);
   previewCanvas.classList.add("dragging");
 });
 previewCanvas.addEventListener("pointermove", (event) => {
   if (event.pointerId !== dragPointer) return;
+  const [viewX, viewY] = canvasViewPoint(
+    event.clientX,
+    event.clientY,
+    previewCanvas.getBoundingClientRect(),
+  );
   const aspect = previewCanvas.clientWidth / previewCanvas.clientHeight;
-  state.cameraX -= (event.clientX - dragX) / previewCanvas.clientWidth * state.viewHeight * aspect;
-  state.cameraY -= (event.clientY - dragY) / previewCanvas.clientHeight * state.viewHeight;
-  dragX = event.clientX;
-  dragY = event.clientY;
+  state.cameraX -= (viewX - dragX) * state.viewHeight * aspect;
+  state.cameraY -= (viewY - dragY) * state.viewHeight;
+  dragX = viewX;
+  dragY = viewY;
 });
 function finishDrag(event: PointerEvent): void {
   if (event.pointerId !== dragPointer) return;
@@ -1075,8 +1091,7 @@ previewCanvas.addEventListener("pointercancel", finishDrag);
 previewCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   const rect = previewCanvas.getBoundingClientRect();
-  const pointerX = (event.clientX - rect.left) / rect.width - 0.5;
-  const pointerY = (event.clientY - rect.top) / rect.height - 0.5;
+  const [pointerX, pointerY] = canvasViewPoint(event.clientX, event.clientY, rect);
   const oldHeight = state.viewHeight;
   const oldWidth = oldHeight * rect.width / rect.height;
   const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
@@ -1220,7 +1235,7 @@ function directedVector(magnitude: number, degrees: number): [number, number] {
 }
 
 function currentAirTemperature(): number {
-  const seasonalPhase = 2 * Math.PI * (state.seasonPhase - 0.09);
+  const seasonalPhase = 2 * Math.PI * (state.seasonPhase - 0.34);
   const diurnalPhase = 2 * Math.PI * (state.dayPhase - 0.625);
   return state.annualMeanAirTemperature
     + 0.5 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
@@ -1237,14 +1252,18 @@ function seasonalLatitudeFactor(): number {
 function groundTemperature(elevation: number): number {
   return state.annualMeanAirTemperature
     + 0.42 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
-      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.13))
+      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.38))
     - 0.0065 * Math.max(elevation, 0);
 }
 
 function waterTemperature(): number {
+  const normalizedLatitude = Math.min(1, Math.abs(state.geographicLatitude) / 90);
+  const maritimeModeration = 45
+    * (normalizedLatitude ** 1.5 - normalizedLatitude ** 2.6);
   return state.annualMeanAirTemperature
+    + maritimeModeration
     + 0.28 * state.seasonalTemperatureRange * seasonalLatitudeFactor()
-      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.175));
+      * Math.sin(2 * Math.PI * (state.seasonPhase - 0.425));
 }
 
 function tideHeight(): number {
@@ -1272,7 +1291,7 @@ function celestialDirection(declination: number, hourAngle: number): [number, nu
 
 function celestialLighting(): CelestialLighting {
   const obliquity = 23.44 * Math.PI / 180;
-  const solarLongitude = 2 * Math.PI * state.seasonPhase;
+  const solarLongitude = 2 * Math.PI * (state.seasonPhase - 0.25);
   const solarDeclination = Math.asin(Math.sin(obliquity) * Math.sin(solarLongitude));
   const solarHourAngle = 2 * Math.PI * (state.dayPhase - 0.5);
   const sunDirection = celestialDirection(solarDeclination, solarHourAngle);
@@ -1505,6 +1524,13 @@ function updateGeometryMeasurements(): void {
   }));
 }
 
+function worldToOverlayPoint(positionX: number, positionY: number, pixelsPerMetre: number): [number, number] {
+  return [
+    geometryOverlayCanvas.clientWidth / 2 + (positionX - state.cameraX) * pixelsPerMetre,
+    geometryOverlayCanvas.clientHeight / 2 - (positionY - state.cameraY) * pixelsPerMetre,
+  ];
+}
+
 function drawPeriodicGuideLines(
   periodM: number,
   offsetM: number,
@@ -1521,11 +1547,11 @@ function drawPeriodicGuideLines(
   while (index <= lastIndex) {
     const positionM = offsetM + index * periodM;
     if (vertical) {
-      const x = geometryOverlayCanvas.clientWidth / 2 + (positionM - state.cameraX) * pixelsPerMetre;
+      const [x] = worldToOverlayPoint(positionM, state.cameraY, pixelsPerMetre);
       geometryOverlayContext.moveTo(x, 0);
       geometryOverlayContext.lineTo(x, geometryOverlayCanvas.clientHeight);
     } else {
-      const y = geometryOverlayCanvas.clientHeight / 2 + (positionM - state.cameraY) * pixelsPerMetre;
+      const [, y] = worldToOverlayPoint(state.cameraX, positionM, pixelsPerMetre);
       geometryOverlayContext.moveTo(0, y);
       geometryOverlayContext.lineTo(geometryOverlayCanvas.clientWidth, y);
     }
