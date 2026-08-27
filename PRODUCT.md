@@ -60,7 +60,8 @@ current playable behavior; this file does not track delivery status.
   procedural and deterministic from match state across space and time.
 - **[Explicit]** Ocean circulation includes large local gyres, coastal flows,
   and reversing tidal currents without an explicit uniform prevailing-current
-  direction. Integrated world-scale transport remains zero.
+  direction. Coriolis reverses rotational circulation between hemispheres and
+  fades near the equator. Integrated world-scale transport remains zero.
 - **[Explicit]** Shared waves affect boat-relative water motion. Severe seas can
   produce exceptional crests through constructive interference rather than
   spawning arbitrary rogue-wave events.
@@ -71,6 +72,8 @@ current playable behavior; this file does not track delivery status.
   storm.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
   gust to broad weather system, and weakens in the lee of land over nearby water.
+  Weather-system scale remains proportional to world circumference, and Coriolis
+  reverses pressure-driven turning between hemispheres.
 - **[Explicit]** Sun and moon state drives tides whose height changes depth,
   grounding, navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
@@ -185,7 +188,7 @@ current playable behavior; this file does not track delivery status.
   the initial view shows final composition.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,
   immediate slider dragging, eased track clicks, and independent or locked
-  real-time multipliers for cloud evolution and world time.
+  real-time multipliers for cloud, pressure, and current evolution and world time.
 - **[Explicit]** The lab exposes independent longitude-circumference and
   pole-to-pole-span sliders, initialized to equal production defaults. A red
   cross marks the view-center sample, whose raw and cylindrical coordinates,

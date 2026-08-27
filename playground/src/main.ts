@@ -1,8 +1,7 @@
 import {
   sample_playground_environment,
   sample_playground_noise_octave,
-  sample_playground_ocean_grid,
-  sample_playground_pressure_grid,
+  sample_playground_vector_field_transport,
   sample_playground_surface_weather_transport,
   sample_playground_world_geometry,
 } from "browser";
@@ -22,10 +21,14 @@ type State = {
   viewHeight: number;
   time: number;
   cloudTimeScale: number;
+  pressureTimeScale: number;
+  currentTimeScale: number;
   worldTimeScale: number;
   timeScalesLocked: boolean;
   paused: boolean;
   worldTimeSeconds: number;
+  pressureTimeSeconds: number;
+  currentTimeSeconds: number;
   pressureHpa: number;
   pressureGradient: number;
   pressureGradientDirection: number;
@@ -145,10 +148,14 @@ const defaults: State = {
   viewHeight: 480,
   time: 37,
   cloudTimeScale: 1,
+  pressureTimeScale: 1,
+  currentTimeScale: 1,
   worldTimeScale: 0,
   timeScalesLocked: false,
   paused: false,
   worldTimeSeconds: 0,
+  pressureTimeSeconds: 0,
+  currentTimeSeconds: 0,
   pressureHpa: 1008,
   pressureGradient: 1.0,
   pressureGradientDirection: -81,
@@ -412,8 +419,9 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [6, "Upper optical depth"],
     [9, "Projected low shadow"], [10, "Projected upper shadow"], [11, "Combined transmittance"],
     [12, "Low height field"],
-    [16, "Surface wind"], [17, "Upper wind"], [18, "Vertical wind shear"],
-    [19, "Pressure gradient"], [20, "Temperature gradient"], [21, "Terrain shelter"],
+    [16, "Surface wind vector · RGB"], [17, "Upper wind vector · RGB"],
+    [18, "Vertical wind shear · RGB"], [19, "Pressure gradient vector · RGB"],
+    [20, "Temperature gradient vector · RGB"], [21, "Terrain shelter"],
     [49, "Signed latitude"], [50, "Local solar time"],
     [52, "Surface air temperature"], [56, "Solar elevation"],
     [58, "Cloud formation"], [59, "Cloud thickness"], [60, "Surface pressure"],
@@ -431,7 +439,7 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [62, "Visual water normals"],
     [63, "Precipitation contact normals"],
     [64, "Gameplay-driven wave normals"],
-    [65, "Authoritative ocean current"],
+    [65, "Ocean current vector · RGB"],
     [66, "Authoritative significant wave height"],
   ],
 };
@@ -891,6 +899,8 @@ worldToolbarElement.innerHTML = `
     <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude circumference · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure evolution · × real time</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
+    <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Current evolution · × real time</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
     <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
     <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
     <div class="actions"><button id="pause">Pause</button></div>
@@ -907,6 +917,10 @@ const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement
 const geometryMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#geometry-measurements")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
+const pressureTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
+const pressureTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-value")!;
+const currentTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#current-time-scale")!;
+const currentTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#current-time-value")!;
 const worldTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
 const worldTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
 const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
@@ -950,18 +964,48 @@ worldHeightValueInput.addEventListener("change", () => {
 function syncTimeScaleInputs(): void {
   cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
   cloudTimeValueInput.value = String(state.cloudTimeScale);
+  pressureTimeScaleInput.value = String(timeScaleToSlider(state.pressureTimeScale));
+  pressureTimeValueInput.value = String(state.pressureTimeScale);
+  currentTimeScaleInput.value = String(timeScaleToSlider(state.currentTimeScale));
+  currentTimeValueInput.value = String(state.currentTimeScale);
   worldTimeScaleInput.value = String(timeScaleToSlider(state.worldTimeScale));
   worldTimeValueInput.value = String(state.worldTimeScale);
   lockTimeScalesInput.checked = state.timeScalesLocked;
 }
 function setCloudTimeScale(value: number): void {
   state.cloudTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) state.worldTimeScale = state.cloudTimeScale;
+  if (state.timeScalesLocked) {
+    state.pressureTimeScale = state.cloudTimeScale;
+    state.currentTimeScale = state.cloudTimeScale;
+    state.worldTimeScale = state.cloudTimeScale;
+  }
+  syncTimeScaleInputs();
+}
+function setPressureTimeScale(value: number): void {
+  state.pressureTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+  if (state.timeScalesLocked) {
+    state.cloudTimeScale = state.pressureTimeScale;
+    state.currentTimeScale = state.pressureTimeScale;
+    state.worldTimeScale = state.pressureTimeScale;
+  }
+  syncTimeScaleInputs();
+}
+function setCurrentTimeScale(value: number): void {
+  state.currentTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+  if (state.timeScalesLocked) {
+    state.cloudTimeScale = state.currentTimeScale;
+    state.pressureTimeScale = state.currentTimeScale;
+    state.worldTimeScale = state.currentTimeScale;
+  }
   syncTimeScaleInputs();
 }
 function setWorldTimeScale(value: number): void {
   state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) state.cloudTimeScale = state.worldTimeScale;
+  if (state.timeScalesLocked) {
+    state.cloudTimeScale = state.worldTimeScale;
+    state.pressureTimeScale = state.worldTimeScale;
+    state.currentTimeScale = state.worldTimeScale;
+  }
   syncTimeScaleInputs();
 }
 cloudTimeScaleInput.addEventListener("input", () => {
@@ -973,6 +1017,24 @@ cloudTimeValueInput.addEventListener("input", () => {
   }
 });
 cloudTimeValueInput.addEventListener("change", syncTimeScaleInputs);
+pressureTimeScaleInput.addEventListener("input", () => {
+  setPressureTimeScale(timeScaleFromSlider(pressureTimeScaleInput.valueAsNumber));
+});
+pressureTimeValueInput.addEventListener("input", () => {
+  if (Number.isFinite(pressureTimeValueInput.valueAsNumber)) {
+    setPressureTimeScale(pressureTimeValueInput.valueAsNumber);
+  }
+});
+pressureTimeValueInput.addEventListener("change", syncTimeScaleInputs);
+currentTimeScaleInput.addEventListener("input", () => {
+  setCurrentTimeScale(timeScaleFromSlider(currentTimeScaleInput.valueAsNumber));
+});
+currentTimeValueInput.addEventListener("input", () => {
+  if (Number.isFinite(currentTimeValueInput.valueAsNumber)) {
+    setCurrentTimeScale(currentTimeValueInput.valueAsNumber);
+  }
+});
+currentTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 worldTimeScaleInput.addEventListener("input", () => {
   setWorldTimeScale(timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
 });
@@ -984,7 +1046,11 @@ worldTimeValueInput.addEventListener("input", () => {
 worldTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 lockTimeScalesInput.addEventListener("change", () => {
   state.timeScalesLocked = lockTimeScalesInput.checked;
-  if (state.timeScalesLocked) state.worldTimeScale = state.cloudTimeScale;
+  if (state.timeScalesLocked) {
+    state.pressureTimeScale = state.cloudTimeScale;
+    state.currentTimeScale = state.cloudTimeScale;
+    state.worldTimeScale = state.cloudTimeScale;
+  }
   syncTimeScaleInputs();
 });
 pauseButton.addEventListener("click", () => {
@@ -1144,10 +1210,8 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(48 + 2 * 16 * 16 * 4);
+const sceneFloats = new Float32Array(64);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-let oceanGridKey = "";
-let oceanGrid: Float32Array<ArrayBufferLike> = new Float32Array(16 * 16 * 4);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1712,30 +1776,21 @@ function writeUniforms(): void {
   transport.free();
   sceneFloats.set([state.dayPhase, state.seasonPhase, state.moonPhase, 0], 40);
   const worldTick = BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60)));
+  const pressureTick = BigInt(Math.max(0, Math.floor(state.pressureTimeSeconds * 60)));
+  const currentTick = BigInt(Math.max(0, Math.floor(state.currentTimeSeconds * 60)));
   sceneUints.set([
     Number(worldTick & 0xffff_ffffn),
     Number((worldTick >> 32n) & 0xffff_ffffn),
     0,
     0,
   ], 44);
-  sceneFloats.set(sample_playground_pressure_grid(
+  sceneFloats.set(sample_playground_vector_field_transport(
     state.worldWidthM,
     state.worldHeightM,
     parsedSeed(),
-    worldTick,
+    pressureTick,
+    currentTick,
   ), 48);
-  const oceanGridTick = worldTick / 60n * 60n;
-  const nextOceanGridKey = `${state.worldWidthM}:${state.worldHeightM}:${state.seed}:${oceanGridTick}`;
-  if (oceanGridKey !== nextOceanGridKey) {
-    oceanGrid = sample_playground_ocean_grid(
-      state.worldWidthM,
-      state.worldHeightM,
-      parsedSeed(),
-      oceanGridTick,
-    );
-    oceanGridKey = nextOceanGridKey;
-  }
-  sceneFloats.set(oceanGrid, 48 + 16 * 16 * 4);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
@@ -1829,6 +1884,8 @@ function frame(now: number): void {
   if (!state.paused) {
     const simulationElapsed = elapsed * state.cloudTimeScale;
     state.time += simulationElapsed;
+    state.pressureTimeSeconds += elapsed * state.pressureTimeScale;
+    state.currentTimeSeconds += elapsed * state.currentTimeScale;
     const worldElapsed = elapsed * state.worldTimeScale;
     state.worldTimeSeconds += worldElapsed;
     state.dayPhase = (state.dayPhase + worldElapsed / worldDaySeconds) % 1;
@@ -1861,7 +1918,7 @@ function frame(now: number): void {
   drawGeometryOverlay();
   statusElement.textContent = state.paused
     ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · live world with scenario overrides · ${state.cloudTimeScale}× clouds · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
+    : `${previewCanvas.width} × ${previewCanvas.height} · live world with scenario overrides · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock · day ${state.dayPhase.toFixed(3)} · season ${state.seasonPhase.toFixed(3)}`;
   requestAnimationFrame(frame);
 }
 

@@ -3,8 +3,8 @@ use std::{env, fs, path::PathBuf};
 use bytemuck::{Pod, Zeroable};
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_air_temperature_c, derive_weather, render_ocean_grid,
-    render_pressure_grid, surface_weather_transport, tide_height_m,
+    climate_surface, current_air_temperature_c, derive_weather, surface_weather_transport,
+    tide_height_m, vector_field_transport,
 };
 use rapier2d::prelude::Vector;
 use serde::{Deserialize, Serialize};
@@ -86,8 +86,10 @@ struct SceneUniforms {
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
-    pressure_grid: [[f32; 4]; 256],
-    ocean_grid: [[f32; 4]; 256],
+    pressure_transport_m_01: [f32; 4],
+    pressure_transport_m_23: [f32; 4],
+    ocean_current_transport_m: [f32; 4],
+    pressure_time_coordinate: [f32; 4],
 }
 
 #[repr(C)]
@@ -521,6 +523,7 @@ fn render_scenario(
     let upper_cloud_epoch = (options.time_seconds / 3600.0).floor() as u64;
     let tick = (options.time_seconds / simulation::DT_SECONDS) as u64;
     let surface_weather_transport = surface_weather_transport(world_geometry, options.seed, tick);
+    let vector_field_transport = vector_field_transport(world_geometry, options.seed, tick);
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -580,8 +583,25 @@ fn render_scenario(
             0.0,
         ],
         world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
-        pressure_grid: render_pressure_grid(world_geometry, options.seed, tick),
-        ocean_grid: render_ocean_grid(world_geometry, options.seed, tick),
+        pressure_transport_m_01: [
+            vector_field_transport.pressure_offset_m[0].x,
+            vector_field_transport.pressure_offset_m[0].y,
+            vector_field_transport.pressure_offset_m[1].x,
+            vector_field_transport.pressure_offset_m[1].y,
+        ],
+        pressure_transport_m_23: [
+            vector_field_transport.pressure_offset_m[2].x,
+            vector_field_transport.pressure_offset_m[2].y,
+            vector_field_transport.pressure_offset_m[3].x,
+            vector_field_transport.pressure_offset_m[3].y,
+        ],
+        ocean_current_transport_m: [
+            vector_field_transport.ocean_current_offset_m.x,
+            vector_field_transport.ocean_current_offset_m.y,
+            vector_field_transport.ocean_current_time_coordinate,
+            0.0,
+        ],
+        pressure_time_coordinate: vector_field_transport.pressure_time_coordinate,
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

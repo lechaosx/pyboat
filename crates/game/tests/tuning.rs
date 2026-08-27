@@ -105,7 +105,7 @@ fn derive_weather_at_surface_temperature(
             seasonal_water_temperature_range_c: 0.0,
         },
         CelestialConditions {
-            geographic_latitude_degrees: 0.0,
+            geographic_latitude_degrees: 45.0,
             season_phase: 0.0,
             day_phase: 0.0,
             moon_phase: 0.0,
@@ -206,7 +206,7 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
         let local = procedural_unsheltered_wind_velocity_m_s(
             seed,
             12_345,
-            position_m + Vector::new(2_048.0, 0.0),
+            position_m + Vector::new(128.0, 0.0),
         );
         let regional = procedural_unsheltered_wind_velocity_m_s(
             seed,
@@ -227,6 +227,71 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
     assert!(regional_samples > 800);
     assert!(local_alignment_sum / local_samples as f32 > 0.85);
     assert!((regional_alignment_sum / regional_samples as f32).abs() < 0.25);
+}
+
+#[test]
+fn one_world_contains_distinct_coherent_wind_systems() {
+    let world = WorldGeometry::default();
+    let mut direction_bins = [false; 8];
+    let mut velocity_sum = Vector::ZERO;
+    let mut speed_sum = 0.0;
+    let mut minimum_speed = f32::MAX;
+    let mut maximum_speed = 0.0_f32;
+    let mut neighboring_alignment_sum = 0.0;
+    let mut neighboring_alignment_count = 0;
+
+    for y in 0..16 {
+        for x in 0..16 {
+            let position_m = Vector::new(
+                (x as f32 / 16.0 - 0.5) * world.width_m(),
+                (y as f32 / 16.0 - 0.5) * world.height_m(),
+            );
+            let wind = procedural_unsheltered_wind_velocity_m_s_in_world(
+                world, 0x5eed, 12_345, position_m,
+            );
+            let speed = wind.length();
+            velocity_sum += wind;
+            speed_sum += speed;
+            minimum_speed = minimum_speed.min(speed);
+            maximum_speed = maximum_speed.max(speed);
+            if speed >= 2.0 {
+                let angle = wind.y.atan2(wind.x).rem_euclid(std::f32::consts::TAU);
+                let bin = (8.0 * angle / std::f32::consts::TAU).floor() as usize % 8;
+                direction_bins[bin] = true;
+
+                let neighboring = procedural_unsheltered_wind_velocity_m_s_in_world(
+                    world,
+                    0x5eed,
+                    12_345,
+                    position_m + Vector::new(128.0, 0.0),
+                );
+                if neighboring.length() >= 2.0 {
+                    neighboring_alignment_sum += wind.normalize().dot(neighboring.normalize());
+                    neighboring_alignment_count += 1;
+                }
+            }
+        }
+    }
+
+    assert!(
+        direction_bins
+            .into_iter()
+            .filter(|occupied| *occupied)
+            .count()
+            >= 6
+    );
+    assert!(
+        maximum_speed - minimum_speed > 12.0,
+        "speed range was {}",
+        maximum_speed - minimum_speed,
+    );
+    assert!(velocity_sum.length() < 0.35 * speed_sum);
+    assert!(neighboring_alignment_count > 192);
+    assert!(
+        neighboring_alignment_sum / neighboring_alignment_count as f32 > 0.5,
+        "128 m alignment was {}",
+        neighboring_alignment_sum / neighboring_alignment_count as f32,
+    );
 }
 
 #[test]
@@ -337,6 +402,49 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         wind.x.abs() < wind.y * 0.2,
         "surface wind was not nearly isobaric: {wind:?}"
     );
+}
+
+#[test]
+fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
+    let primary = AtmospherePrimary {
+        pressure_hpa: 1000.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        surface_air_temperature_anomaly_c: 0.0,
+        air_temperature_500_hpa_c: -15.0,
+        temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 8.0,
+    };
+    let climate = ClimateConditions {
+        annual_mean_air_temperature_c: 20.0,
+        seasonal_temperature_range_c: 0.0,
+        diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: 20.0,
+        seasonal_water_temperature_range_c: 0.0,
+    };
+    let wind_at = |latitude| {
+        derive_weather(
+            primary,
+            climate,
+            CelestialConditions {
+                geographic_latitude_degrees: latitude,
+                season_phase: 0.0,
+                day_phase: 0.0,
+                moon_phase: 0.0,
+            },
+        )
+        .wind_velocity_m_s
+    };
+
+    let north = wind_at(45.0);
+    let equator = wind_at(0.0);
+    let south = wind_at(-45.0);
+
+    assert!(north.y > 5.0, "northern wind was {north:?}");
+    assert!(south.y < -5.0, "southern wind was {south:?}");
+    assert!(equator.x < -5.0, "equatorial wind was {equator:?}");
+    assert!((north.length() - south.length()).abs() < 1.0e-5);
+    assert!((north.length() - equator.length()).abs() < 1.0e-5);
 }
 
 #[test]
@@ -1500,7 +1608,11 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     assert!(instability_range.1 > 0.75, "{instability_range:?}");
     assert!(high_cloud_samples > 0);
     assert!(high_cloud_samples < 512);
-    assert!(upper_cloud_wind_change < full_wind_change * 0.5);
+    assert!(
+        upper_cloud_wind_change < full_wind_change * 0.5,
+        "upper/full wind change ratio was {}",
+        upper_cloud_wind_change / full_wind_change,
+    );
 }
 
 #[test]
@@ -1530,7 +1642,11 @@ fn procedural_weather_upper_wind_is_seeded_coherent_and_faster_aloft() {
     }
 
     assert!(samples > 900);
-    assert!(upper_speed_sum > sea_speed_sum);
+    assert!(
+        upper_speed_sum > sea_speed_sum,
+        "upper/sea speed ratio was {}",
+        upper_speed_sum / sea_speed_sum,
+    );
     let average_alignment = alignment_sum / samples as f32;
     assert!(average_alignment > 0.9, "{average_alignment}");
     assert!(sheared_samples > samples * 9 / 10);

@@ -9,8 +9,8 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic, render_ocean_grid,
-    render_pressure_grid, surface_weather_transport, world_celestial_conditions,
+    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
+    surface_weather_transport, vector_field_transport, world_celestial_conditions,
     world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
@@ -307,33 +307,29 @@ pub fn sample_playground_surface_weather_transport(
 }
 
 #[wasm_bindgen]
-pub fn sample_playground_pressure_grid(
+pub fn sample_playground_vector_field_transport(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
-    tick: u64,
+    pressure_tick: u64,
+    current_tick: u64,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    Ok(render_pressure_grid(geometry, match_seed, tick)
-        .into_iter()
-        .flatten()
-        .collect())
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_ocean_grid(
-    world_width_m: f32,
-    world_height_m: f32,
-    match_seed: u64,
-    tick: u64,
-) -> Result<Vec<f32>, JsValue> {
-    let geometry = WorldGeometry::new(world_width_m, world_height_m)
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    Ok(render_ocean_grid(geometry, match_seed, tick)
-        .into_iter()
-        .flatten()
-        .collect())
+    let pressure_transport = vector_field_transport(geometry, match_seed, pressure_tick);
+    let current_transport = vector_field_transport(geometry, match_seed, current_tick);
+    let mut values = Vec::with_capacity(16);
+    for offset_m in pressure_transport.pressure_offset_m {
+        values.extend([offset_m.x, offset_m.y]);
+    }
+    values.extend([
+        current_transport.ocean_current_offset_m.x,
+        current_transport.ocean_current_offset_m.y,
+        current_transport.ocean_current_time_coordinate,
+        0.0,
+    ]);
+    values.extend(pressure_transport.pressure_time_coordinate);
+    Ok(values)
 }
 
 #[wasm_bindgen]
@@ -495,8 +491,10 @@ struct SceneUniforms {
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
-    pressure_grid: [[f32; 4]; 256],
-    ocean_grid: [[f32; 4]; 256],
+    pressure_transport_m_01: [f32; 4],
+    pressure_transport_m_23: [f32; 4],
+    ocean_current_transport_m: [f32; 4],
+    pressure_time_coordinate: [f32; 4],
 }
 
 struct Renderer {
@@ -509,8 +507,6 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    ocean_grid_key: Option<(WorldGeometry, Option<u64>, u64)>,
-    ocean_grid: [[f32; 4]; 256],
 }
 
 impl Renderer {
@@ -622,8 +618,6 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
-            ocean_grid_key: None,
-            ocean_grid: [[0.0; 4]; 256],
         })
     }
 
@@ -666,15 +660,7 @@ impl Renderer {
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
         let surface_weather_transport = surface_weather_transport(world_geometry, match_seed, tick);
-        let pressure_grid = render_pressure_grid(world_geometry, match_seed, tick);
-        let ocean_grid_tick = tick / 60 * 60;
-        let ocean_grid_key = (world_geometry, production_match_seed, ocean_grid_tick);
-        if self.ocean_grid_key != Some(ocean_grid_key) {
-            self.ocean_grid = production_match_seed.map_or([[0.0; 4]; 256], |match_seed| {
-                render_ocean_grid(world_geometry, match_seed, ocean_grid_tick)
-            });
-            self.ocean_grid_key = Some(ocean_grid_key);
-        }
+        let vector_field_transport = vector_field_transport(world_geometry, match_seed, tick);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -749,8 +735,25 @@ impl Renderer {
                     0.0,
                 ],
                 world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
-                pressure_grid,
-                ocean_grid: self.ocean_grid,
+                pressure_transport_m_01: [
+                    vector_field_transport.pressure_offset_m[0].x,
+                    vector_field_transport.pressure_offset_m[0].y,
+                    vector_field_transport.pressure_offset_m[1].x,
+                    vector_field_transport.pressure_offset_m[1].y,
+                ],
+                pressure_transport_m_23: [
+                    vector_field_transport.pressure_offset_m[2].x,
+                    vector_field_transport.pressure_offset_m[2].y,
+                    vector_field_transport.pressure_offset_m[3].x,
+                    vector_field_transport.pressure_offset_m[3].y,
+                ],
+                ocean_current_transport_m: [
+                    vector_field_transport.ocean_current_offset_m.x,
+                    vector_field_transport.ocean_current_offset_m.y,
+                    vector_field_transport.ocean_current_time_coordinate,
+                    0.0,
+                ],
+                pressure_time_coordinate: vector_field_transport.pressure_time_coordinate,
             }),
         );
 

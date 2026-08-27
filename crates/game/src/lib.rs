@@ -9,11 +9,16 @@ use simulation::{
 };
 
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
-const WIND_MODES_PER_BAND: usize = 16;
-pub const RENDER_PRESSURE_GRID_SIDE: usize = 16;
+// These gains fit the accepted k=2, lambda=9 m/s wind distribution; they are
+// gameplay calibration, not pressure amplitudes transferred from Earth data.
+const PRESSURE_SIMPLEX_SCALE: f32 = 0.49;
+const PRESSURE_EVOLUTION_SPEED_M_S: f32 = 1.0;
+const PRESSURE_GUST_SHAPING: f32 = 1.5;
+const PLANETARY_TRANSIENT_VARIANCE_FRACTION: f64 = 0.5;
+const PLANETARY_ZONAL_WIND_PEAK_M_S: f32 = 3.1;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
-const UPPER_WIND_SCALE: f32 = 1.12;
+const UPPER_WIND_SCALE: f32 = 1.15;
 const THERMAL_WIND_SCALE_M2_S_C: f32 = 2_000.0;
 const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
 const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
@@ -63,11 +68,17 @@ const TIDE_OCTAVE_COUNT: usize = 3;
 const TIDE_CIRCLE_OCTAVE_COUNT: usize = 3;
 const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: usize = 0;
 const OCEAN_CURRENT_NOISE_SALT: u64 = 0xcbbb_9d5d_c105_9ed8;
-const OCEAN_CURRENT_WAVELENGTH_M: f64 = 32_768.0;
+// A quarter-circumference wavelength represents an ocean-basin gyre. The
+// circumference scaling is Earth-like; the single-band spectrum and strength
+// are gameplay tuning rather than a scaled basin circulation model.
+const OCEAN_CURRENT_WORLD_FRACTION: f64 = 0.25;
 const OCEAN_CURRENT_OCTAVE_COUNT: usize = 3;
 const OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S: f64 = 5_500.0;
 const OCEAN_CURRENT_PRESSURE_COUPLING: f64 = 0.006;
+// Current strength, pressure coupling, drift, and evolution rates are gameplay
+// calibration; only the gyre wavelength fraction carries the Earth-scale analogy.
 const OCEAN_CURRENT_TRANSPORT_SPEED_SCALE: f64 = 0.002;
+const OCEAN_CURRENT_EVOLUTION_SPEED_M_S: f32 = 0.012;
 const OCEAN_TIDAL_POTENTIAL_SCALE_M2_S: f64 = 1_200.0;
 const OCEAN_WAVE_MODE_COUNT: usize = 16;
 const OCEAN_WIND_SEA_MODE_COUNT: usize = 12;
@@ -258,6 +269,14 @@ pub struct SurfaceWeatherTransport {
     // an absolute `u64` tick to floating point without losing adjacent ticks.
     pub air_temperature_offset_m: Vector,
     pub water_vapor_offset_m: Vector,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VectorFieldTransport {
+    pub pressure_offset_m: [Vector; 4],
+    pub pressure_time_coordinate: [f32; 4],
+    pub ocean_current_offset_m: Vector,
+    pub ocean_current_time_coordinate: f32,
 }
 
 struct ScalarNoiseSample {
@@ -657,36 +676,48 @@ struct PressureSample {
 
 #[derive(Clone, Copy)]
 struct WindBand {
-    minimum_wavelength_m: f64,
-    maximum_wavelength_m: f64,
+    world_fraction: f32,
     variance_fraction: f64,
     transport_salt: u64,
     transport_speed_scale: f64,
+    synoptic_coupling: f32,
 }
 
-// Pressure bands remain nearly co-moving because even sub-percent drift evolves
-// the 64 m gust modes quickly; scalar layers tolerate wider speed separation.
-const WIND_BANDS: [WindBand; 3] = [
+// On a 40,000 km Earth circumference these fractions represent wavelengths of
+// roughly 6000, 2000, 600, and 160 km; the 2000 km band lies within the NWS
+// 1000–2500 km synoptic range (forecast.weather.gov/glossary.php?word=synoptic+scale).
+// The default 64 km world scales them to 9.6, 3.2,
+// 0.96, and 0.256 km. Variance, coupling, and transport speeds are gameplay
+// tuning, not a scaled atmospheric energy spectrum. Keep the mirrored WGSL
+// fractions, amplitudes, and couplings synchronized with this table.
+const WIND_BANDS: [WindBand; 4] = [
     WindBand {
-        minimum_wavelength_m: 32_768.0,
-        maximum_wavelength_m: 131_072.0,
-        variance_fraction: 0.90,
+        world_fraction: 0.15,
+        variance_fraction: 0.12,
         transport_salt: 0x510e_527f_ade6_82d1,
         transport_speed_scale: 0.995,
+        synoptic_coupling: 1.0,
     },
     WindBand {
-        minimum_wavelength_m: 4096.0,
-        maximum_wavelength_m: 32_768.0,
-        variance_fraction: 0.08,
+        world_fraction: 0.05,
+        variance_fraction: 0.78,
         transport_salt: 0x9b05_688c_2b3e_6c1f,
         transport_speed_scale: 1.0,
+        synoptic_coupling: 1.0,
     },
     WindBand {
-        minimum_wavelength_m: 64.0,
-        maximum_wavelength_m: 512.0,
-        variance_fraction: 0.02,
+        world_fraction: 0.015,
+        variance_fraction: 0.08,
         transport_salt: 0x1f83_d9ab_fb41_bd6b,
         transport_speed_scale: 1.005,
+        synoptic_coupling: 0.20,
+    },
+    WindBand {
+        world_fraction: 0.004,
+        variance_fraction: 0.02,
+        transport_salt: 0x5be0_cd19_137e_2179,
+        transport_speed_scale: 1.01,
+        synoptic_coupling: 0.05,
     },
 ];
 
@@ -856,22 +887,15 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         query.position_m,
         query.celestial,
     );
-    let (transported_x_m, transported_y_m) = transported_weather_position_m(
-        query.world_geometry,
-        query.match_seed,
-        query.tick,
-        query.position_m,
-        OCEAN_CURRENT_NOISE_SALT,
-        OCEAN_CURRENT_TRANSPORT_SPEED_SCALE,
-    );
-    let gyre = terrain_fractal_noise_sample(
+    let transport = vector_field_transport(query.world_geometry, query.match_seed, query.tick);
+    let gyre = spatiotemporal_fractal_noise_sample(
         query.world_geometry,
         query.match_seed ^ OCEAN_CURRENT_NOISE_SALT,
-        transported_x_m,
-        transported_y_m,
-        OCEAN_CURRENT_WAVELENGTH_M,
+        query.position_m - transport.ocean_current_offset_m,
+        query.world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
+        transport.ocean_current_time_coordinate,
         OCEAN_CURRENT_OCTAVE_COUNT,
-        OCEAN_CURRENT_OCTAVE_COUNT,
+        0.5,
     );
     let basin_squared = (basin.value * basin.value) as f32;
     let basin_squared_gradient = Vector::new(
@@ -879,9 +903,6 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         (2.0 * basin.value * basin.gradient_y_per_m) as f32,
     );
     let gyre_gradient = Vector::new(gyre.gradient_x_per_m as f32, gyre.gradient_y_per_m as f32);
-    let base_gradient = OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S as f32
-        * (basin_squared * gyre_gradient + gyre.value as f32 * basin_squared_gradient);
-
     let latitude_rad = f64::from(query.celestial.geographic_latitude_degrees).to_radians();
     let hemisphere = libm::sin(latitude_rad) as f32;
     let hemisphere_gradient_y_per_m = if query.celestial.geographic_latitude_degrees.abs() < 90.0 {
@@ -890,6 +911,13 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
     } else {
         0.0
     };
+    let base_gradient = OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S as f32
+        * (hemisphere
+            * (basin_squared * gyre_gradient + gyre.value as f32 * basin_squared_gradient)
+            + Vector::new(
+                0.0,
+                basin_squared * gyre.value as f32 * hemisphere_gradient_y_per_m,
+            ));
     let pressure_potential_m2_s = f64::from(query.weather.primary.pressure_hpa - 1013.25)
         * f64::from(PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M);
     let pressure_gradient_m_s =
@@ -909,6 +937,42 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
                 * Vector::new(basin.gradient_x_per_m as f32, basin.gradient_y_per_m as f32));
     let streamfunction_gradient = base_gradient + weather_gradient;
     Vector::new(-streamfunction_gradient.y, streamfunction_gradient.x) - tidal_potential_gradient
+}
+
+fn spatiotemporal_fractal_noise_sample(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
+    position_m: Vector,
+    mut wavelength_m: f32,
+    mut time_coordinate: f32,
+    octave_count: usize,
+    persistence: f32,
+) -> ScalarNoiseSample {
+    let mut value = 0.0;
+    let mut gradient = Vector::ZERO;
+    let mut amplitude = 1.0;
+    let mut amplitude_sum = 0.0;
+    for octave in 0..octave_count {
+        let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
+        let octave_sample = spatiotemporal_simplex_noise_4d(
+            world_geometry,
+            octave_seed,
+            position_m,
+            wavelength_m,
+            time_coordinate,
+        );
+        value += amplitude * octave_sample.0;
+        gradient += amplitude * octave_sample.1;
+        amplitude_sum += amplitude;
+        amplitude *= persistence;
+        wavelength_m *= 0.5;
+        time_coordinate *= 2.0;
+    }
+    ScalarNoiseSample {
+        value: f64::from(value / amplitude_sum),
+        gradient_x_per_m: f64::from(gradient.x / amplitude_sum),
+        gradient_y_per_m: f64::from(gradient.y / amplitude_sum),
+    }
 }
 
 fn ocean_basin_capacity_sample(
@@ -1245,9 +1309,15 @@ pub fn derive_weather(
 ) -> ProceduralWeather {
     let surface_air_temperature_c =
         current_air_temperature_c(climate, conditions) + primary.surface_air_temperature_anomaly_c;
-    let wind_velocity_m_s = wind_from_pressure_gradient(primary.pressure_gradient_hpa_per_m);
+    let wind_velocity_m_s = wind_from_pressure_gradient(
+        primary.pressure_gradient_hpa_per_m,
+        conditions.geographic_latitude_degrees,
+    );
     let upper_pressure_wind_m_s = UPPER_WIND_SCALE
-        * wind_from_pressure_gradient(primary.synoptic_pressure_gradient_hpa_per_m);
+        * wind_from_pressure_gradient(
+            primary.synoptic_pressure_gradient_hpa_per_m,
+            conditions.geographic_latitude_degrees,
+        );
     let thermal_wind_m_s = THERMAL_WIND_SCALE_M2_S_C
         * Vector::new(
             -primary.temperature_gradient_c_per_m.y,
@@ -1272,10 +1342,10 @@ pub fn derive_weather(
         0.0005,
         f64::from(primary.temperature_gradient_c_per_m.length()),
     ) as f32;
-    let lift = (0.45 * pressure_lift + 0.35 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
+    let lift = (0.25 * pressure_lift + 0.55 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
     let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
     let cloud_signal = 0.68 * condensation + 0.22 * lift + 0.10 * instability * condensation;
-    let cloudiness = smoothstep_range(0.50, 0.98, f64::from(cloud_signal)) as f32;
+    let cloudiness = smoothstep_range(0.50, 1.01, f64::from(cloud_signal)) as f32;
     let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
     let upper_cloudiness = smoothstep_range(0.68, 0.90, f64::from(upper_cloud_signal)) as f32;
     let rain_signal = smoothstep_range(0.65, 0.75, f64::from(cloudiness)) as f32
@@ -1325,15 +1395,29 @@ fn sample_surface_air_temperature_anomaly_c(
     }
 }
 
-fn wind_from_pressure_gradient(pressure_gradient_hpa_per_m: Vector) -> Vector {
-    let along_isobar = Vector::new(
-        -pressure_gradient_hpa_per_m.y,
-        pressure_gradient_hpa_per_m.x,
-    );
-    let normalization = (1.0 + SURFACE_CROSS_ISOBAR_FRACTION.powi(2)).sqrt();
-    PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M
-        * (along_isobar - SURFACE_CROSS_ISOBAR_FRACTION * pressure_gradient_hpa_per_m)
-        / normalization
+fn wind_from_pressure_gradient(
+    pressure_gradient_hpa_per_m: Vector,
+    latitude_degrees: f32,
+) -> Vector {
+    let gradient_length = pressure_gradient_hpa_per_m.length();
+    if gradient_length == 0.0 {
+        return Vector::ZERO;
+    }
+    let latitude_sine = latitude_degrees.to_radians().sin();
+    // This bounded fade avoids the equatorial singularity of a geostrophic
+    // solve. Its latitude width is gameplay tuning, not a physical Coriolis rate.
+    let normalized_coriolis = ((latitude_sine.abs() - 0.02) / 0.23).clamp(0.0, 1.0);
+    let geostrophic_amount = normalized_coriolis.powi(2) * (3.0 - 2.0 * normalized_coriolis);
+    let hemisphere = if latitude_sine < 0.0 { -1.0 } else { 1.0 };
+    let along_isobar = hemisphere
+        * Vector::new(
+            -pressure_gradient_hpa_per_m.y,
+            pressure_gradient_hpa_per_m.x,
+        );
+    let toward_low = -pressure_gradient_hpa_per_m;
+    let flow = geostrophic_amount * along_isobar
+        + (1.0 - geostrophic_amount * (1.0 - SURFACE_CROSS_ISOBAR_FRACTION)) * toward_low;
+    PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M * gradient_length * flow.normalize()
 }
 
 pub fn procedural_terrain_elevation_m(
@@ -1651,6 +1735,43 @@ pub fn surface_weather_transport(
     }
 }
 
+pub fn vector_field_transport(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+) -> VectorFieldTransport {
+    VectorFieldTransport {
+        pressure_offset_m: WIND_BANDS.map(|band| {
+            weather_transport_offset_m(
+                world_geometry,
+                match_seed,
+                tick,
+                band.transport_salt,
+                band.transport_speed_scale,
+            )
+        }),
+        pressure_time_coordinate: WIND_BANDS.map(|band| {
+            noise_time_coordinate(
+                tick,
+                PRESSURE_EVOLUTION_SPEED_M_S,
+                (world_geometry.width_m() * band.world_fraction).max(64.0),
+            )
+        }),
+        ocean_current_offset_m: weather_transport_offset_m(
+            world_geometry,
+            match_seed,
+            tick,
+            OCEAN_CURRENT_NOISE_SALT,
+            OCEAN_CURRENT_TRANSPORT_SPEED_SCALE,
+        ),
+        ocean_current_time_coordinate: noise_time_coordinate(
+            tick,
+            OCEAN_CURRENT_EVOLUTION_SPEED_M_S,
+            world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
+        ),
+    }
+}
+
 fn procedural_weather_noise(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -1830,11 +1951,6 @@ fn terrain_simplex_noise_4d(
     position_m: Vector,
     wavelength_m: f32,
 ) -> (f32, Vector) {
-    const SKEW: f32 = 0.309_017;
-    const UNSKEW: f32 = 0.138_196_6;
-    // Matches the portable 2D kernel's RMS value over representative seeds.
-    const NORMALIZATION: f32 = 33.4;
-
     let wrapped_m = world_geometry.wrap_position_m([position_m.x, position_m.y]);
     let angle_x = std::f32::consts::TAU * wrapped_m[0] / world_geometry.width_m();
     let angle_y = std::f32::consts::TAU * wrapped_m[1] / world_geometry.height_m();
@@ -1848,6 +1964,52 @@ fn terrain_simplex_noise_4d(
         circle_y * cos_y,
         circle_y * sin_y,
     ];
+    let (value, input_gradient) = simplex_noise_sample_4d(field_seed, point);
+    let gradient_per_m = Vector::new(
+        (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
+        (-sin_y * input_gradient[2] + cos_y * input_gradient[3]) / wavelength_m,
+    );
+    (value, gradient_per_m)
+}
+
+fn spatiotemporal_simplex_noise_4d(
+    world_geometry: WorldGeometry,
+    field_seed: u64,
+    position_m: Vector,
+    wavelength_m: f32,
+    time_coordinate: f32,
+) -> (f32, Vector) {
+    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
+    let orientation = wind_hash(field_seed ^ 0x6a09_e667_f3bc_c909) as u32;
+    let longitude_offset = std::f32::consts::TAU * (orientation & 0xff) as f32 / 256.0;
+    let latitude_sign = if orientation & 0x100 == 0 { 1.0 } else { -1.0 };
+    let latitude_offset = ((orientation >> 9) & 0xff) as f32 / 16.0;
+    let longitude =
+        std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m() + longitude_offset;
+    let (sin_longitude, cos_longitude) = (libm::sinf(longitude), libm::cosf(longitude));
+    let circle_radius = world_geometry.width_m() / (std::f32::consts::TAU * wavelength_m);
+    let point = [
+        circle_radius * cos_longitude,
+        circle_radius * sin_longitude,
+        latitude_sign * position_m.y / wavelength_m + latitude_offset,
+        time_coordinate,
+    ];
+    let (value, input_gradient) = simplex_noise_sample_4d(field_seed, point);
+    (
+        value,
+        Vector::new(
+            (-sin_longitude * input_gradient[0] + cos_longitude * input_gradient[1]) / wavelength_m,
+            latitude_sign * input_gradient[2] / wavelength_m,
+        ),
+    )
+}
+
+fn simplex_noise_sample_4d(field_seed: u64, point: [f32; 4]) -> (f32, [f32; 4]) {
+    const SKEW: f32 = 0.309_017;
+    const UNSKEW: f32 = 0.138_196_6;
+    // Matches the portable 2D kernel's RMS value over representative seeds.
+    const NORMALIZATION: f32 = 33.4;
+
     let skew = point.iter().sum::<f32>() * SKEW;
     let lattice = point.map(|coordinate| libm::floorf(coordinate + skew) as i32);
     let unskew = lattice.iter().sum::<i32>() as f32 * UNSKEW;
@@ -1897,11 +2059,10 @@ fn terrain_simplex_noise_4d(
         }
     }
 
-    let gradient_per_m = Vector::new(
-        NORMALIZATION * (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
-        NORMALIZATION * (-sin_y * input_gradient[2] + cos_y * input_gradient[3]) / wavelength_m,
-    );
-    (NORMALIZATION * value, gradient_per_m)
+    (
+        NORMALIZATION * value,
+        input_gradient.map(|component| NORMALIZATION * component),
+    )
 }
 
 fn terrain_simplex_lattice_gradient_4d(field_seed: u64, lattice: [i32; 4]) -> [f32; 4] {
@@ -2280,57 +2441,10 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     position_m: Vector,
 ) -> Vector {
     let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
-    wind_from_pressure_gradient(pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M)
-}
-
-pub fn render_pressure_grid(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    tick: u64,
-) -> [[f32; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE] {
-    let mut grid = [[0.0; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE];
-    for y in 0..RENDER_PRESSURE_GRID_SIDE {
-        for x in 0..RENDER_PRESSURE_GRID_SIDE {
-            let position_m = Vector::new(
-                x as f32 * world_geometry.width_m() / RENDER_PRESSURE_GRID_SIDE as f32,
-                y as f32 * world_geometry.height_m() / RENDER_PRESSURE_GRID_SIDE as f32,
-            );
-            let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
-            grid[y * RENDER_PRESSURE_GRID_SIDE + x] = [
-                1013.25 + pressure.potential_m2_s as f32 / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-                pressure.gradient_m_s.x / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-                pressure.gradient_m_s.y / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-                0.0,
-            ];
-        }
-    }
-    grid
-}
-
-pub fn render_ocean_grid(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    tick: u64,
-) -> [[f32; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE] {
-    let mut grid = [[0.0; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE];
-    for y in 0..RENDER_PRESSURE_GRID_SIDE {
-        for x in 0..RENDER_PRESSURE_GRID_SIDE {
-            let position_m = Vector::new(
-                x as f32 * world_geometry.width_m() / RENDER_PRESSURE_GRID_SIDE as f32,
-                -0.5 * world_geometry.height_m()
-                    + y as f32 * world_geometry.height_m() / (RENDER_PRESSURE_GRID_SIDE - 1) as f32,
-            );
-            let ocean =
-                procedural_world_environment(world_geometry, match_seed, tick, position_m).ocean;
-            grid[y * RENDER_PRESSURE_GRID_SIDE + x] = [
-                ocean.current_velocity_m_s.x,
-                ocean.current_velocity_m_s.y,
-                ocean.significant_wave_height_m,
-                0.0,
-            ];
-        }
-    }
-    grid
+    wind_from_pressure_gradient(
+        pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+        world_geometry.latitude_degrees(position_m.y),
+    )
 }
 
 fn procedural_pressure_sample(
@@ -2339,78 +2453,74 @@ fn procedural_pressure_sample(
     tick: u64,
     position_m: Vector,
 ) -> PressureSample {
-    // Rotating the analytic gradient of one scalar potential gives coherent flow
-    // without sources or sinks; `wind_from_pressure_gradient` then adds the small
-    // cross-isobar component used by the surface model.
-    let mut potential_m2_s = 0.0;
-    let mut gradient_x_m_s = 0.0;
-    let mut gradient_y_m_s = 0.0;
-    let mut synoptic_gradient_x_m_s = 0.0;
-    let mut synoptic_gradient_y_m_s = 0.0;
-    for (band_index, band) in WIND_BANDS.iter().enumerate() {
-        let (transported_x_m, transported_y_m) = transported_weather_position_m(
+    let transport = vector_field_transport(world_geometry, match_seed, tick);
+    let mut potential_m2_s = 0.0_f32;
+    let mut gradient_m_s = Vector::ZERO;
+    let mut synoptic_gradient_m_s = Vector::ZERO;
+    for (band_index, band) in WIND_BANDS.into_iter().enumerate() {
+        let wavelength_m = (world_geometry.width_m() * band.world_fraction).max(64.0);
+        let transported_m = position_m - transport.pressure_offset_m[band_index];
+        let mut noise = spatiotemporal_simplex_noise_4d(
             world_geometry,
-            match_seed,
-            tick,
-            position_m,
-            band.transport_salt,
-            band.transport_speed_scale,
+            match_seed ^ band.transport_salt,
+            transported_m,
+            wavelength_m,
+            transport.pressure_time_coordinate[band_index],
         );
-        let band_key = match_seed ^ (band_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        let rotation = hash_unit(band_key ^ 0xa076_1d64_78bd_642f);
-        let amplitude_m_s = WIND_WEIBULL_SCALE_M_S
-            * libm::sqrt(band.variance_fraction / WIND_MODES_PER_BAND as f64);
-        let wavelength_log_range = libm::log(band.maximum_wavelength_m / band.minimum_wavelength_m);
-        let width_m = f64::from(world_geometry.width_m());
-        let height_m = f64::from(world_geometry.height_m());
-        let wrapped_x_m = transported_x_m.rem_euclid(width_m);
-        let wrapped_y_m = transported_y_m.rem_euclid(height_m);
-        for mode in 0..WIND_MODES_PER_BAND {
-            let mode_key = band_key ^ (mode as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
-            let direction_rad =
-                std::f64::consts::TAU * (mode as f64 / WIND_MODES_PER_BAND as f64 + rotation);
-            let (direction_y, direction_x) = libm::sincos(direction_rad);
-            let wavelength_fraction = hash_unit(mode_key ^ 0x8ebc_6af0_9c88_c6e3);
-            let wavelength_m =
-                band.minimum_wavelength_m * libm::exp(wavelength_log_range * wavelength_fraction);
-            let mut mode_x = libm::round(direction_x * width_m / wavelength_m) as i64;
-            let mut mode_y = libm::round(direction_y * height_m / wavelength_m) as i64;
-            if mode_x == 0 && mode_y == 0 {
-                if direction_x.abs() >= direction_y.abs() {
-                    mode_x = if direction_x < 0.0 { -1 } else { 1 };
-                } else {
-                    mode_y = if direction_y < 0.0 { -1 } else { 1 };
-                }
-            }
-            let frequency_x_per_m = mode_x as f64 / width_m;
-            let frequency_y_per_m = mode_y as f64 / height_m;
-            let spatial_frequency_per_m = libm::hypot(frequency_x_per_m, frequency_y_per_m);
-            let direction_x = frequency_x_per_m / spatial_frequency_per_m;
-            let direction_y = frequency_y_per_m / spatial_frequency_per_m;
-            let phase_rad = std::f64::consts::TAU
-                * (wrapped_x_m * frequency_x_per_m + wrapped_y_m * frequency_y_per_m);
-            let (cosine_coefficient, sine_coefficient) = normal_pair(mode_key);
-            let (phase_sine, phase_cosine) = libm::sincos(phase_rad);
-            let wave = cosine_coefficient * phase_cosine + sine_coefficient * phase_sine;
-            let gradient_x = amplitude_m_s * direction_x * wave;
-            let gradient_y = amplitude_m_s * direction_y * wave;
-            potential_m2_s += amplitude_m_s / (std::f64::consts::TAU * spatial_frequency_per_m)
-                * (cosine_coefficient * phase_sine - sine_coefficient * phase_cosine);
-            gradient_x_m_s += gradient_x;
-            gradient_y_m_s += gradient_y;
-            let upper_band_coupling = if band_index == 0 { 1.0 } else { 0.20 };
-            synoptic_gradient_x_m_s += upper_band_coupling * gradient_x;
-            synoptic_gradient_y_m_s += upper_band_coupling * gradient_y;
+        if band_index == WIND_BANDS.len() - 1 {
+            let unshaped_value = noise.0;
+            noise.0 = libm::sinhf(PRESSURE_GUST_SHAPING * unshaped_value) / PRESSURE_GUST_SHAPING;
+            noise.1 *= libm::coshf(PRESSURE_GUST_SHAPING * unshaped_value);
         }
+        let potential_scale_m2_s = PRESSURE_SIMPLEX_SCALE
+            * WIND_WEIBULL_SCALE_M_S as f32
+            * libm::sqrt(
+                band.variance_fraction
+                    * if band_index == 0 {
+                        PLANETARY_TRANSIENT_VARIANCE_FRACTION
+                    } else {
+                        1.0
+                    },
+            ) as f32
+            * wavelength_m;
+        let band_gradient_m_s = potential_scale_m2_s * noise.1;
+        potential_m2_s += potential_scale_m2_s * noise.0;
+        gradient_m_s += band_gradient_m_s;
+        synoptic_gradient_m_s += band.synoptic_coupling * band_gradient_m_s;
     }
+    // NOAA's idealized global circulation has an equatorial low, subtropical
+    // highs near 30°, subpolar lows near 60°, and polar highs. This weak zonal
+    // climatology uses half the planetary-band energy; evolving seeded noise
+    // supplies the migrating systems that break up those belts.
+    let latitude_rad = world_geometry.latitude_degrees(position_m.y).to_radians();
+    let zonal_phase = 6.0 * latitude_rad;
+    let zonal_potential_scale_m2_s =
+        PLANETARY_ZONAL_WIND_PEAK_M_S * world_geometry.height_m() / (6.0 * std::f32::consts::PI);
+    let zonal_potential_m2_s = -zonal_potential_scale_m2_s * libm::cosf(zonal_phase);
+    let zonal_gradient_m_s =
+        Vector::new(0.0, PLANETARY_ZONAL_WIND_PEAK_M_S * libm::sinf(zonal_phase));
+    potential_m2_s += zonal_potential_m2_s;
+    gradient_m_s += zonal_gradient_m_s;
+    synoptic_gradient_m_s += zonal_gradient_m_s;
     PressureSample {
-        potential_m2_s,
-        gradient_m_s: Vector::new(gradient_x_m_s as f32, gradient_y_m_s as f32),
-        synoptic_gradient_m_s: Vector::new(
-            synoptic_gradient_x_m_s as f32,
-            synoptic_gradient_y_m_s as f32,
-        ),
+        potential_m2_s: f64::from(potential_m2_s),
+        gradient_m_s,
+        synoptic_gradient_m_s,
     }
+}
+
+fn noise_time_coordinate(tick: u64, evolution_speed_m_s: f32, wavelength_m: f32) -> f32 {
+    const TIME_COORDINATE_PERIOD: f64 = 8192.0;
+    let coordinate_per_tick =
+        f64::from(DT_SECONDS) * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
+    let mut coordinate = 0.0;
+    // Horner reduction retains every tick bit while keeping the shader input in
+    // a range where `f32` still resolves animation-scale changes.
+    for shift in [48, 32, 16, 0] {
+        let chunk = ((tick >> shift) & 0xffff) as f64;
+        coordinate = (coordinate * 65_536.0 + chunk * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
+    }
+    coordinate as f32
 }
 
 fn transported_weather_position_m(
@@ -2506,13 +2616,6 @@ fn land_sheltered_wind(
         shelter = shelter.max(obstruction * recovery);
     }
     open_wind * (1.0 - LAND_WIND_MAX_SPEED_REDUCTION * shelter)
-}
-
-fn normal_pair(key: u64) -> (f64, f64) {
-    let radius = libm::sqrt(-2.0 * libm::log(hash_unit(key ^ 0x5899_65cc_7537_4cc3)));
-    let angle = std::f64::consts::TAU * hash_unit(key ^ 0x1d8e_4e27_c47d_124f);
-    let (sine, cosine) = libm::sincos(angle);
-    (radius * cosine, radius * sine)
 }
 
 fn hash_unit(value: u64) -> f64 {
@@ -2781,10 +2884,22 @@ mod tests {
             assert!(count > SAMPLE_COUNT / 8);
         }
         let mean_speed = speed_sum / SAMPLE_COUNT as f32;
-        assert!((7.6..=8.4).contains(&mean_speed));
-        assert!((38.0..=43.0).contains(&(x_square_sum / SAMPLE_COUNT as f32)));
-        assert!((38.0..=43.0).contains(&(y_square_sum / SAMPLE_COUNT as f32)));
-        assert!((cross_sum / SAMPLE_COUNT as f32).abs() < 1.0);
+        assert!((7.6..=8.4).contains(&mean_speed), "mean speed {mean_speed}");
+        assert!(
+            (38.0..=43.0).contains(&(x_square_sum / SAMPLE_COUNT as f32)),
+            "x variance {}",
+            x_square_sum / SAMPLE_COUNT as f32,
+        );
+        assert!(
+            (38.0..=43.0).contains(&(y_square_sum / SAMPLE_COUNT as f32)),
+            "y variance {}",
+            y_square_sum / SAMPLE_COUNT as f32,
+        );
+        assert!(
+            (cross_sum / SAMPLE_COUNT as f32).abs() < 1.0,
+            "cross covariance {}",
+            cross_sum / SAMPLE_COUNT as f32,
+        );
         let mode_bin = speed_bins
             .iter()
             .enumerate()

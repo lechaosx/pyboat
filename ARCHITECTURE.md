@@ -183,34 +183,39 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** At a fixed place and time, unsheltered wind speed follows a
   Weibull distribution with `k = 2` and `lambda = 9 m/s`.
 - **[Explicit]** Wind direction and speed vary continuously from gust to broad
-  weather scales.
+  weather scales. Pressure-system wavelengths are fixed fractions of world
+  circumference, preserving the relative spatial scale of Earth-like planetary,
+  synoptic, mesoscale, and local systems when world geometry changes. Their
+  amplitudes, relative variance, transport, evolution rate, and gust shaping are
+  gameplay calibration rather than scaled Earth values.
 - **[Explicit]** Deterministic terrain shelter weakens wind in the lee of land
   over nearby water.
-- **[Explicit]** Atmosphere uses a scalar spectral pressure potential whose
-  analytic gradient drives mostly isobaric surface wind. Broad pressure drives
-  upper flow, horizontal temperature gradient contributes thermal wind, and
-  vertical shear is derived. Pressure wavelength bands and scalar atmosphere
-  layers translate at distinct but correlated seeded velocities, so their
-  superposition evolves without stored history; there is no weather grid or
-  storm entity.
-- **[Implicit]** Pressure directions are quantized to integer wavevectors of the
-  procedural calibration rectangle, so the potential and its analytic gradient
-  join continuously at the longitude seam.
+- **[Explicit]** Atmosphere uses a compact match-seeded scalar spectral pressure
+  potential whose analytic gradient drives surface wind. Coriolis turns that
+  flow in opposite directions between hemispheres and fades smoothly to
+  down-gradient flow at the equator. Broad pressure drives upper flow,
+  horizontal temperature gradient contributes thermal wind, and vertical shear
+  is derived. Each pressure band directly evaluates a simplex field over
+  longitude, latitude, and a tick-derived time coordinate and also advects at a
+  distinct but correlated seeded velocity, so systems both deform and travel
+  without stored history; there is no weather grid or storm entity. Longitude is
+  circle-embedded for a continuous seam while latitude remains linear between
+  the finite poles and does not tile vertically.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, transported surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
   Its procedural inputs are match seed, geometry, global day/season/lunar phase,
   and tick; the view-center Rust sample is diagnostic and never drives the
   surface scene.
-- **[Implicit]** The host reduces the tick to bounded procedural transport offsets
-  before upload so WGSL never converts total time to `f32`.
-- **[Implicit]** Cloud formation bilinearly samples a fixed 16 by 16 periodic
-  lattice of the authoritative analytic pressure field. The host regenerates
-  the transient lattice from match state; it is not simulation state or a storm grid.
-  This keeps fragment cost and world-size tuning predictable without evaluating
-  all 48 spectral pressure modes per pixel. As a temporary cloud-only exception,
-  layer winds remain view-sampled inputs to cloud transport. Spatial temperature
-  and moisture are evaluated in WGSL rather than accepting center-derived weather.
+- **[Explicit]** The host reduces every tick bit to bounded procedural transport
+  offsets and continuous pressure/current noise-time coordinates before upload,
+  so WGSL never converts total time to `f32` or interpolates temporal snapshots.
+- **[Explicit]** Rust and WGSL evaluate the same four-band simplex pressure potential
+  directly from match seed, position, world geometry, and bounded transport
+  offsets. Cloud formation, pressure diagnostics, and rendered wind therefore
+  query the field at their world position without a sampled pressure lattice.
+  Spatial temperature and moisture are likewise evaluated in WGSL rather than
+  accepting center-derived weather.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
   latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with
@@ -268,15 +273,20 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 ### Ocean dynamics
 
 - **[Explicit]** Authoritative currents include large local gyres, coastal flow,
-  and reversing tidal flow without a uniform prevailing vector. World-scale net
-  transport remains zero, and local current enters the same water-relative load
-  path on the server and predicting client.
-- **[Implicit]** A longitude-periodic scalar streamfunction combines a slowly
-  transported seeded basin field with a weak evolving pressure coupling. Broad
+  and reversing tidal flow without a uniform prevailing vector. Gyre wavelengths
+  scale with world circumference, and Coriolis reverses rotational circulation
+  between hemispheres with a smooth equatorial fade. World-scale net transport
+  remains zero, and local current enters the same water-relative load path on the
+  server and predicting client.
+- **[Explicit]** A longitude-periodic scalar streamfunction directly evaluates
+  seeded simplex noise over longitude, latitude, and a tick-derived time
+  coordinate, then combines it with weak evolving pressure coupling. Broad
   landform capacity steers it around island groups, latitude closes it at the
   polar boundary, and a separate scalar potential uses spatial tide response and
   phase gradients. Both vanish where there is no navigable water. This is an
-  analytic local approximation, not a stored basin solve.
+  analytic local approximation, not a stored basin solve. Basin-scale wavelength
+  follows world circumference; spectrum, strength, pressure coupling, transport,
+  and evolution rate are gameplay calibration.
 - **[Explicit]** Shared gameplay waves are deterministic from match state and
   local conditions, affect boat-relative water motion, and have no persistent
   drift. Exceptional crests emerge from interference rather than an event flag.
@@ -290,13 +300,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   sharpens severe crests without adding mean horizontal motion. Vertical heave,
   roll, capsize, refraction, and diffraction remain outside the planar physics
   model.
-- **[Implicit]** The renderer samples authoritative current and significant
-  height on a fixed 16 by 16 cylinder grid once per simulated second. Each
-  fragment evaluates a fixed sixteen-mode seeded wave spectrum from that height
-  and local wind direction; world-space footprint attenuation removes
-  unresolved wavelengths. The final water material uses its slope, while the
-  playground exposes separate wave-normal, current, and significant-height
-  diagnostics. Fine capillary breakup remains appearance-only.
+- **[Explicit]** The renderer evaluates seeded current and significant wave
+  height directly at each queried world position from the same local causes as
+  the authoritative model. Each fragment evaluates a fixed sixteen-mode seeded
+  wave spectrum from that height and local wind direction; world-space footprint
+  attenuation removes unresolved wavelengths. The final water material uses its
+  slope, while the playground exposes separate wave-normal, current, and
+  significant-height diagnostics. Fine capillary breakup remains appearance-only.
 
 ### Browser rendering and playground
 

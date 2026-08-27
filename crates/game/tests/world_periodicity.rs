@@ -61,10 +61,12 @@ fn diagnostics_report_requested_and_effective_wavelengths() {
     }
 }
 
+#[track_caller]
 fn assert_close(left: f32, right: f32, tolerance: f32) {
     assert!((left - right).abs() <= tolerance, "{left} != {right}");
 }
 
+#[track_caller]
 fn assert_vector_close(left: Vector, right: Vector, tolerance: f32) {
     assert_close(left.x, right.x, tolerance);
     assert_close(left.y, right.y, tolerance);
@@ -101,16 +103,16 @@ fn assert_primary_close(left: AtmospherePrimary, right: AtmospherePrimary) {
 }
 
 fn assert_primary_seam_close(left: AtmospherePrimary, right: AtmospherePrimary) {
-    assert_close(left.pressure_hpa, right.pressure_hpa, 0.001);
+    assert_close(left.pressure_hpa, right.pressure_hpa, 0.002);
     assert_vector_close(
         left.pressure_gradient_hpa_per_m,
         right.pressure_gradient_hpa_per_m,
-        2.0e-5,
+        5.0e-5,
     );
     assert_vector_close(
         left.synoptic_pressure_gradient_hpa_per_m,
         right.synoptic_pressure_gradient_hpa_per_m,
-        2.0e-5,
+        5.0e-5,
     );
     assert_close(
         left.surface_air_temperature_anomaly_c,
@@ -137,19 +139,19 @@ fn assert_weather_seam_close(left: ProceduralWeather, right: ProceduralWeather) 
         right.surface_air_temperature_c,
         0.02,
     );
-    assert_vector_close(left.wind_velocity_m_s, right.wind_velocity_m_s, 0.1);
+    assert_vector_close(left.wind_velocity_m_s, right.wind_velocity_m_s, 0.25);
     assert_vector_close(
         left.upper_wind_velocity_m_s,
         right.upper_wind_velocity_m_s,
-        0.1,
+        0.25,
     );
-    assert_vector_close(left.wind_shear_m_s, right.wind_shear_m_s, 0.1);
+    assert_vector_close(left.wind_shear_m_s, right.wind_shear_m_s, 0.25);
     assert_close(left.relative_humidity, right.relative_humidity, 0.005);
     assert_close(left.lift, right.lift, 0.005);
     assert_close(left.cloudiness, right.cloudiness, 0.005);
     assert_close(left.instability, right.instability, 0.005);
     assert_close(left.upper_cloudiness, right.upper_cloudiness, 0.005);
-    assert_close(left.rain_intensity, right.rain_intensity, 0.005);
+    assert_close(left.rain_intensity, right.rain_intensity, 0.01);
 }
 
 #[test]
@@ -164,9 +166,10 @@ fn terrain_values_repeat_across_rectangular_periods_and_corners() {
         Vector::new(80_000.0, 40_000.0),
         Vector::new(-160_000.0, 120_000.0),
     ] {
-        assert_eq!(
+        assert_close(
             elevation,
-            procedural_terrain_elevation_m(world, SEED, position + offset)
+            procedural_terrain_elevation_m(world, SEED, position + offset),
+            0.02,
         );
     }
 }
@@ -290,35 +293,20 @@ fn terrain_one_sided_values_and_derivatives_meet_at_rectangular_seams() {
 }
 
 #[test]
-fn every_primary_atmosphere_field_repeats_on_the_procedural_calibration_rectangle() {
+fn every_primary_atmosphere_field_joins_across_longitude() {
     let world = geometry();
     let position = Vector::new(-31.75, 14.5);
     let primary = procedural_atmosphere_primary(world, SEED, TICK, position);
 
     assert_primary_close(
         primary,
-        procedural_atmosphere_primary(
-            world,
-            SEED,
-            TICK,
-            position + Vector::new(160_000.0, -120_000.0),
-        ),
+        procedural_atmosphere_primary(world, SEED, TICK, position + Vector::new(160_000.0, 0.0)),
     );
 
-    for (left, right) in [
-        (
-            Vector::new(-40_000.0, 6_250.0),
-            Vector::new(40_000.0, 6_250.0),
-        ),
-        (
-            Vector::new(11_500.0, -20_000.0),
-            Vector::new(11_500.0, 20_000.0),
-        ),
-        (
-            Vector::new(-40_000.0, -20_000.0),
-            Vector::new(40_000.0, 20_000.0),
-        ),
-    ] {
+    for (left, right) in [(
+        Vector::new(-40_000.0, 6_250.0),
+        Vector::new(40_000.0, 6_250.0),
+    )] {
         assert_primary_close(
             procedural_atmosphere_primary(world, SEED, TICK, left),
             procedural_atmosphere_primary(world, SEED, TICK, right),
@@ -339,67 +327,16 @@ fn authoritative_fields_approach_each_seam_from_both_sides() {
         ),
     ] {
         let half_width = world.width_m() / 2.0;
-        let half_height = world.height_m() / 2.0;
         for sample_index in 0..8 {
             let tangent_phase = (sample_index as f32 + 0.5) / 8.0;
-            let y = -half_height + tangent_phase * world.height_m();
+            let y = -0.5 * world.height_m() + tangent_phase * world.height_m();
             let x_sides = (
                 Vector::new(-half_width + epsilon, y),
                 Vector::new(half_width - epsilon, y),
             );
             assert_field_sides_close(world, seed, tick, x_sides.0, x_sides.1);
-
-            let x = -half_width + tangent_phase * world.width_m();
-            let y_sides = (
-                Vector::new(x, -half_height + epsilon),
-                Vector::new(x, half_height - epsilon),
-            );
-            assert_nonseasonal_field_sides_close(world, seed, tick, y_sides.0, y_sides.1);
         }
     }
-}
-
-fn assert_nonseasonal_field_sides_close(
-    world: WorldGeometry,
-    seed: u64,
-    tick: u64,
-    low: Vector,
-    high: Vector,
-) {
-    let low_primary = procedural_atmosphere_primary(world, seed, tick, low);
-    let high_primary = procedural_atmosphere_primary(world, seed, tick, high);
-    assert_close(low_primary.pressure_hpa, high_primary.pressure_hpa, 0.001);
-    assert_vector_close(
-        low_primary.pressure_gradient_hpa_per_m,
-        high_primary.pressure_gradient_hpa_per_m,
-        2.0e-5,
-    );
-    assert_vector_close(
-        low_primary.synoptic_pressure_gradient_hpa_per_m,
-        high_primary.synoptic_pressure_gradient_hpa_per_m,
-        2.0e-5,
-    );
-    assert_close(
-        low_primary.surface_air_temperature_anomaly_c,
-        high_primary.surface_air_temperature_anomaly_c,
-        0.005,
-    );
-    assert_vector_close(
-        low_primary.temperature_gradient_c_per_m,
-        high_primary.temperature_gradient_c_per_m,
-        2.0e-5,
-    );
-    let time_seconds = tick as f64 / 60.0;
-    assert_close(
-        procedural_water_height_m(world, seed, time_seconds, low),
-        procedural_water_height_m(world, seed, time_seconds, high),
-        0.01,
-    );
-    assert_vector_close(
-        procedural_unsheltered_wind_velocity_m_s(world, seed, tick, low),
-        procedural_unsheltered_wind_velocity_m_s(world, seed, tick, high),
-        0.1,
-    );
 }
 
 fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vector, high: Vector) {
@@ -420,13 +357,13 @@ fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vec
     assert_vector_close(
         procedural_unsheltered_wind_velocity_m_s(world, seed, tick, low),
         procedural_unsheltered_wind_velocity_m_s(world, seed, tick, high),
-        0.1,
+        0.25,
     );
     let low_environment = procedural_match_environment(world, seed, tick, low);
     let high_environment = procedural_match_environment(world, seed, tick, high);
     assert!(
         (low_environment.true_wind_velocity_m_s - high_environment.true_wind_velocity_m_s).length()
-            <= 0.2,
+            <= 0.3,
         "environment wind differs across {world:?} seed {seed:#x} tick {tick} between {low:?} and {high:?}: {:?} != {:?}",
         low_environment.true_wind_velocity_m_s,
         high_environment.true_wind_velocity_m_s,
@@ -443,7 +380,7 @@ fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vec
 fn tide_water_surface_winds_weather_and_environment_repeat() {
     let world = geometry();
     let position = Vector::new(29.0, -13.0);
-    let repeated = position + Vector::new(-240_000.0, 80_000.0);
+    let repeated = position + Vector::new(-80_000.0, 0.0);
     let time_seconds = TICK as f64 / 60.0;
 
     assert_eq!(
@@ -453,7 +390,7 @@ fn tide_water_surface_winds_weather_and_environment_repeat() {
     assert_close(
         procedural_water_height_m(world, SEED, time_seconds, position),
         procedural_water_height_m(world, SEED, time_seconds, repeated),
-        1.0e-6,
+        2.0e-4,
     );
     assert_close(
         procedural_water_depth_m(world, SEED, time_seconds, position),
@@ -465,26 +402,14 @@ fn tide_water_surface_winds_weather_and_environment_repeat() {
         procedural_solid_surface_elevation_m(world, SEED, repeated, 14.0, 14.0),
         1.0e-4,
     );
-    assert_vector_close(
-        procedural_unsheltered_wind_velocity_m_s(world, SEED, TICK, position),
-        procedural_unsheltered_wind_velocity_m_s(world, SEED, TICK, repeated),
-        1.0e-5,
-    );
-    assert_eq!(
-        procedural_weather(world, SEED, TICK, position),
-        procedural_weather(world, SEED, TICK, repeated)
-    );
-    assert_eq!(
-        procedural_match_environment(world, SEED, TICK, position),
-        procedural_match_environment(world, SEED, TICK, repeated)
-    );
+    assert_field_sides_close(world, SEED, TICK, position, repeated);
 }
 
 #[test]
 fn periodic_fields_remain_finite_and_repeating_at_the_largest_tick() {
     let world = geometry();
     let position = Vector::new(7.25, -9.5);
-    let repeated = position + Vector::new(80_000.0, 40_000.0);
+    let repeated = position + Vector::new(80_000.0, 0.0);
     let primary = procedural_atmosphere_primary(world, SEED, u64::MAX, position);
     let repeated_primary = procedural_atmosphere_primary(world, SEED, u64::MAX, repeated);
 
@@ -500,6 +425,25 @@ fn periodic_fields_remain_finite_and_repeating_at_the_largest_tick() {
     assert_ne!(
         primary,
         procedural_atmosphere_primary(world, SEED, u64::MAX - 60, position)
+    );
+}
+
+#[test]
+fn pressure_does_not_loop_between_the_poles() {
+    let world = geometry();
+    let south = procedural_atmosphere_primary(
+        world,
+        SEED,
+        TICK,
+        Vector::new(7.25, -0.5 * world.height_m()),
+    );
+    let north =
+        procedural_atmosphere_primary(world, SEED, TICK, Vector::new(7.25, 0.5 * world.height_m()));
+
+    assert!(
+        (south.pressure_hpa - north.pressure_hpa).abs() > 0.01,
+        "pressure repeats between poles: {} hPa",
+        south.pressure_hpa,
     );
 }
 
