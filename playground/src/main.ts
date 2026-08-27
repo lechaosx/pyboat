@@ -189,8 +189,8 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Visibility", layer: "Low cloud", kind: "DEBUG", level: "visibility", controls: [
-      toggle("lowCloudEnabled", "Low-cloud layer"),
+    domain: "weather", category: "Visibility", layer: "Low wind-cue clouds", kind: "DEBUG", level: "visibility", controls: [
+      toggle("lowCloudEnabled", "Low wind-cue layer"),
       toggle("lowCloudVisible", "Visible body"),
       toggle("lowCloudShadow", "Terrain shadow"),
     ],
@@ -217,8 +217,8 @@ const groups: ControlGroup[] = [
     ],
   },
   {
-    domain: "weather", category: "Visibility", layer: "Upper cloud", kind: "DEBUG", level: "visibility", controls: [
-      toggle("upperCloudEnabled", "Upper-cloud layer"),
+    domain: "weather", category: "Visibility", layer: "Weather canopy", kind: "DEBUG", level: "visibility", controls: [
+      toggle("upperCloudEnabled", "Weather canopy"),
       toggle("upperCloudShadow", "Terrain shadow"),
       toggle("upperShadowOnLowCloud", "Shadow on low cloud"),
     ],
@@ -306,16 +306,17 @@ const subrangeKeys = new Set<NumericStateKey>([
 
 const debugOptions: Record<Domain, Array<[number, string]>> = {
   weather: [
-    [0, "Final composition"], [1, "Low detail texture"], [2, "Low detail gate"],
-    [3, "Low density"], [4, "Low optical depth"], [5, "Low normals"],
-    [6, "Upper optical depth"],
+    [0, "Final composition"], [1, "Low latent texture"], [2, "Low coverage threshold"],
+    [3, "Low cloud amount"], [4, "Low optical depth"], [5, "Low normals"],
+    [6, "Weather-canopy optical depth"],
     [9, "Projected low shadow"], [10, "Projected upper shadow"], [11, "Combined transmittance"],
     [12, "Low height field"],
     [16, "Surface wind vector · RGB"], [17, "Upper wind vector · RGB"],
     [18, "Vertical wind shear · RGB"], [19, "Pressure gradient vector · RGB"],
     [20, "Temperature gradient vector · RGB"], [21, "Terrain shelter"],
     [52, "Surface air temperature"], [56, "Solar elevation"],
-    [58, "Cloud formation"], [59, "Cloud thickness"], [60, "Surface pressure"],
+    [58, "Low-cloud formation"], [60, "Surface pressure"],
+    [67, "Aerosol optical depth"],
   ],
   landscape: [
     [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
@@ -1154,8 +1155,8 @@ function atmosphericOutputs(): Array<[string, string]> {
     ["Relative humidity", `${(output.relativeHumidity * 100).toFixed(0)} %`],
     ["Instability", output.instability.toFixed(2)],
     ["Lift", output.lift.toFixed(2)],
-    ["Low cloud", output.cloudiness.toFixed(2)],
-    ["Upper cloud", output.upperCloudiness.toFixed(2)],
+    ["Cloud formation", output.cloudiness.toFixed(2)],
+    ["Weather canopy", output.upperCloudiness.toFixed(2)],
     ["Rain", output.rainIntensity.toFixed(2)],
   ];
 }

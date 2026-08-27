@@ -94,8 +94,9 @@ var<private> surface_cloud_weather: CloudWeatherSample;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
-const AEROSOL_OPTICAL_DEPTH: f32 = 0.08;
 const CELESTIAL_DISC_ANGULAR_RADIUS_RAD: f32 = 0.00465;
+const LOW_CLOUD_BASE_HEIGHT_M: f32 = 900.0;
+const WEATHER_CANOPY_HEIGHT_M: f32 = 3600.0;
 const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: u32 = 3u;
@@ -666,6 +667,13 @@ fn rain_intensity() -> f32 {
 
 fn wind_shear_amount() -> f32 {
     return smoothstep(4.0, 15.0, length(upper_wind_m_s() - surface_wind_m_s()));
+}
+
+fn visible_low_cloud_coverage(weather: CloudWeatherSample) -> f32 {
+    let fair_weather_lift = smoothstep(0.12, 0.68, weather.instability)
+        * (1.0 - smoothstep(0.08, 0.42, weather.rain))
+        * (1.0 - 0.90 * weather.stratiform);
+    return weather.low_coverage * mix(0.06, 1.0, fair_weather_lift);
 }
 
 fn production_tuning() -> SceneTuning {
@@ -1373,19 +1381,17 @@ fn visual_cloud_noise_sample(
 }
 
 struct LowCloudSample {
-    thickness: f32,
-    density: f32,
+    amount: f32,
     optical_depth: f32,
     height_m: f32,
     darkness: f32,
     relief: f32,
     gradient: vec2<f32>,
-    detail_amount: f32,
     detail_gate: f32,
 };
 
 struct UpperCloudSample {
-    thickness: f32,
+    amount: f32,
     optical_depth: f32,
 };
 
@@ -1394,38 +1400,34 @@ fn procedural_low_cloud_sample_with_weather(
     weather: CloudWeatherSample,
     pixel_footprint_m: f32,
 ) -> LowCloudSample {
-    let cover = weather.low_coverage;
-    let rain = weather.rain;
+    let cover = visible_low_cloud_coverage(weather);
     if cover <= 0.0 {
         var empty: LowCloudSample;
-        empty.thickness = 0.0;
-        empty.density = 0.0;
+        empty.amount = 0.0;
         empty.optical_depth = 0.0;
         empty.height_m = 0.0;
         empty.darkness = 0.0;
         empty.relief = 0.0;
         empty.gradient = vec2<f32>(0.0);
-        empty.detail_amount = 0.0;
         empty.detail_gate = 0.0;
         return empty;
     }
-    let stratiform = weather.stratiform;
-    let convective = weather.convective;
+    let convective = smoothstep(0.12, 0.68, weather.instability);
     let raw_detail = visual_cloud_noise_sample(
         position_m,
         false,
         vec2<u32>(0x38d01377u, 0x452821e6u),
-        640.0,
-        14u,
+        320.0,
+        12u,
         scene.low_cloud_epoch,
         scene.cloud_anchor_phase_and_padding.x,
         1800.0,
         pixel_footprint_m,
     );
     let detail_character = mix(
-        mix(clamp(tuning.cloud_detail.x, 0.0, 1.0), 0.05, 0.85 * stratiform),
+        clamp(tuning.cloud_detail.x, 0.0, 1.0),
         1.0,
-        0.75 * convective,
+        0.70 * convective,
     );
     let billow_rounding = 0.05;
     let rounded_magnitude = (
@@ -1459,72 +1461,60 @@ fn procedural_low_cloud_sample_with_weather(
     );
 
     let target_coverage = clamp(
-        tuning.cloud_wisps.x * sqrt(cover),
+        tuning.cloud_wisps.x * cover,
         0.0,
         0.95,
     );
     let body_threshold = mix(0.78, 0.32, sqrt(target_coverage));
     let edge_softness = max(tuning.cloud_detail.w, 0.005);
     let detail_blobiness = mix(
-        mix(clamp(tuning.cloud_detail.y, 0.0, 1.0), 0.0, stratiform),
+        clamp(tuning.cloud_detail.y, 0.0, 1.0),
         1.0,
-        0.80 * convective,
+        0.72 * convective,
     );
     let weather_presence = smoothstep(0.0, 0.08, cover);
-    let thickness_span = max(1.0 - body_threshold, edge_softness);
-    let raw_thickness = clamp(
-        (detail_amount - body_threshold) / thickness_span,
+    let amount_span = max(1.0 - body_threshold, edge_softness);
+    let raw_amount = clamp(
+        (detail_amount - body_threshold) / amount_span,
         0.0,
         1.0,
     );
-    let rounded_thickness = raw_thickness * raw_thickness
-        * (3.0 - 2.0 * raw_thickness);
-    let thickness = weather_presence * mix(
-        raw_thickness,
-        rounded_thickness,
+    let rounded_amount = raw_amount * raw_amount
+        * (3.0 - 2.0 * raw_amount);
+    let cloud_amount = weather_presence * mix(
+        raw_amount,
+        rounded_amount,
         0.45 * detail_blobiness,
     );
-    let thickness_inside = select(
+    let amount_inside = select(
         0.0,
         1.0,
         detail_amount > body_threshold && detail_amount < 1.0,
     );
-    let raw_thickness_gradient = thickness_inside * detail_gradient / thickness_span;
-    let rounded_thickness_gradient = 6.0
-        * raw_thickness * (1.0 - raw_thickness) * raw_thickness_gradient;
-    let thickness_gradient = weather_presence * mix(
-        raw_thickness_gradient,
-        rounded_thickness_gradient,
+    let raw_amount_gradient = amount_inside * detail_gradient / amount_span;
+    let rounded_amount_gradient = 6.0
+        * raw_amount * (1.0 - raw_amount) * raw_amount_gradient;
+    let amount_gradient = weather_presence * mix(
+        raw_amount_gradient,
+        rounded_amount_gradient,
         0.45 * detail_blobiness,
     );
-    let density = thickness;
     let height_detail = 0.35 + 0.65 * detail_amount;
-    let height_scale_m = mix(
-        mix(320.0, 120.0, stratiform),
-        560.0,
-        convective,
-    );
-    let height_m = height_scale_m * thickness * height_detail;
+    let height_scale_m = 180.0;
+    let height_m = height_scale_m * cloud_amount * height_detail;
     let height_gradient = height_scale_m * (
-        thickness_gradient * height_detail
-        + 0.65 * thickness * detail_gradient
+        amount_gradient * height_detail
+        + 0.65 * cloud_amount * detail_gradient
     );
 
     var sample: LowCloudSample;
-    sample.thickness = thickness;
-    sample.density = density;
-    sample.optical_depth = thickness
-        * (0.30 + 1.20 * detail_amount)
-        * mix(1.0, 1.35, stratiform)
-        * mix(1.0, 1.65, convective)
-        * (1.0 + 0.80 * rain);
+    sample.amount = cloud_amount;
+    sample.optical_depth = cloud_amount * (0.35 + 0.90 * detail_amount);
     sample.height_m = height_m;
-    sample.darkness = thickness
-        * (0.05 + 0.18 * stratiform + 0.18 * rain);
+    sample.darkness = 0.06 * cloud_amount;
     sample.relief = height_m / height_scale_m;
     sample.gradient = height_gradient;
-    sample.detail_amount = detail_amount;
-    sample.detail_gate = smoothstep(0.0, edge_softness, thickness);
+    sample.detail_gate = raw_amount;
     return sample;
 }
 
@@ -1551,7 +1541,7 @@ fn procedural_upper_cloud_sample_filtered(
     );
     if upper_coverage <= 0.0 {
         var empty: UpperCloudSample;
-        empty.thickness = 0.0;
+        empty.amount = 0.0;
         empty.optical_depth = 0.0;
         return empty;
     }
@@ -1559,23 +1549,34 @@ fn procedural_upper_cloud_sample_filtered(
         position_m,
         true,
         vec2<u32>(0x75374cc3u, 0x589965ccu),
-        512.0,
-        6u,
+        max(2048.0, 0.04 * scene.world_size_m.x),
+        8u,
         scene.upper_cloud_epoch,
         scene.cloud_anchor_phase_and_padding.y,
         3600.0,
         pixel_footprint_m,
     );
     let rain = weather.rain;
+    let billow = 2.0 * abs(upper_noise.value) - 1.0;
+    let canopy_texture = mix(
+        upper_noise.value,
+        billow + 0.08,
+        0.65 * weather.convective,
+    );
     let upper_threshold = mix(0.62, -0.18, upper_coverage) - 0.18 * rain;
-    let thickness = smoothstep(0.0, 0.08, upper_coverage) * clamp(
-        (upper_noise.value - upper_threshold) / max(1.0 - upper_threshold, 0.10),
+    let cloud_amount = smoothstep(0.0, 0.08, upper_coverage) * clamp(
+        (canopy_texture - upper_threshold) / max(1.0 - upper_threshold, 0.10),
         0.0,
         1.0,
     );
     var sample: UpperCloudSample;
-    sample.thickness = thickness;
-    sample.optical_depth = thickness * (0.45 + 1.15 * rain);
+    sample.amount = cloud_amount;
+    sample.optical_depth = cloud_amount * (
+        0.35
+            + 0.75 * weather.stratiform
+            + 0.95 * weather.convective
+            + 1.35 * rain
+    );
     return sample;
 }
 
@@ -1584,10 +1585,6 @@ fn procedural_upper_cloud_sample(position_m: vec2<f32>) -> UpperCloudSample {
         position_m,
         visual_pixel_footprint_m,
     );
-}
-
-fn low_cloud_base_height_m(weather: CloudWeatherSample) -> f32 {
-    return 650.0 + 650.0 * weather.instability + 550.0 * weather.rain;
 }
 
 fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
@@ -1658,35 +1655,64 @@ fn calculate_atmospheric_ambient_color() -> vec3<f32> {
     let daylight = smoothstep(-0.08, 0.35, sun.z);
     let horizon_glow = smoothstep(-0.12, 0.02, sun.z)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
-    var color = mix(vec3<f32>(0.42, 0.52, 0.75), vec3<f32>(0.84, 0.90, 1.0), twilight);
-    color = mix(color, vec3<f32>(1.0), daylight);
-    let sky_openness = 1.0 - 0.75 * upper_cloud_coverage();
-    color = mix(
-        color,
-        vec3<f32>(1.30, 0.52, 0.30),
-        0.62 * horizon_glow * sunset_scattering * sky_openness,
-    );
+    let upper_cover = upper_cloud_coverage();
     let overcast = clamp(
-        0.08 * low_cloud_coverage() + 0.82 * upper_cloud_coverage() + 0.30 * rain_intensity(),
+        0.08 * low_cloud_coverage() + 0.82 * upper_cover + 0.30 * rain_intensity(),
         0.0,
         1.0,
     );
-    let storm = rain_intensity() * smoothstep(0.45, 0.90, upper_cloud_coverage());
-    let weather_attenuation = 1.0 - 0.18 * overcast - 0.48 * storm;
-    let weather_tint = mix(
-        vec3<f32>(1.0),
-        vec3<f32>(0.72, 0.80, 0.88),
-        0.62 * overcast,
+    let storm = rain_intensity() * smoothstep(0.45, 0.90, upper_cover);
+    let sunset_warmth = horizon_glow * sunset_scattering;
+    var sky_color = mix(
+        vec3<f32>(0.42, 0.52, 0.75),
+        vec3<f32>(0.84, 0.90, 1.0),
+        twilight,
     );
-    return clear_intensity * weather_attenuation * color * weather_tint;
+    sky_color = mix(sky_color, vec3<f32>(1.0), daylight);
+    sky_color = mix(
+        sky_color,
+        vec3<f32>(1.30, 0.52, 0.30),
+        0.58 * sunset_warmth,
+    );
+    let cloud_sunset_warmth = sunset_warmth * (1.0 - 0.85 * storm);
+    let canopy_color = mix(
+        vec3<f32>(0.72, 0.80, 0.88),
+        vec3<f32>(1.22, 0.46, 0.20),
+        0.72 * cloud_sunset_warmth,
+    );
+    let diffuse_color = mix(sky_color, canopy_color, 0.78 * upper_cover);
+    let weather_attenuation = 1.0 - 0.18 * overcast - 0.48 * storm;
+    return clear_intensity * weather_attenuation * diffuse_color;
 }
 
 fn atmospheric_ambient_color() -> vec3<f32> {
     return ambient_light_color;
 }
 
+fn aerosol_optical_depth_at(
+    position_m: vec2<f32>,
+    weather: CloudWeatherSample,
+) -> f32 {
+    let regional = 0.5 + 0.5 * spatiotemporal_fractal_sample(
+        vec2<u32>(0x1f83d9abu, 0xfb41bd6bu),
+        position_m - scene.pressure_transport_m_01.xy,
+        max(8192.0, 0.125 * scene.world_size_m.x),
+        0.15 * scene.pressure_time_coordinate.x,
+        4u,
+        0.5,
+    ).value;
+    let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
+    let unwashed = 1.0 - 0.72 * weather.rain;
+    return mix(0.025, 0.32, clamp(0.68 * regional + 0.32 * dry_air, 0.0, 1.0))
+        * unwashed;
+}
+
 fn calculate_sunset_scattering() -> f32 {
-    let aerosol = smoothstep(0.06, 0.40, AEROSOL_OPTICAL_DEPTH);
+    let aerosol = smoothstep(
+        0.04,
+        0.30,
+        aerosol_optical_depth_at(surface_position_m, surface_cloud_weather),
+    );
     let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
@@ -3228,7 +3254,7 @@ fn cloud_color(
     cloud_sample: LowCloudSample,
     upper_transmittance: f32,
 ) -> vec3<f32> {
-    let density = cloud_sample.density;
+    let cloud_amount = cloud_sample.amount;
     let relief_gradient = tuning.cloud_rendering.w * cloud_sample.gradient;
     let limited_gradient = relief_gradient
         / (1.0 + length(relief_gradient) / 0.25);
@@ -3241,10 +3267,10 @@ fn cloud_color(
     let direct_light = direct_sun_amount() * sun_facing
         + direct_moon_amount() * moon_facing;
     let sunlight = direct_light_amount() * upper_transmittance;
-    let relief = cloud_sample.relief / max(density, 0.001);
+    let relief = cloud_sample.relief / max(cloud_amount, 0.001);
     let edge_light = sunlight
-        * (1.0 - smoothstep(0.30, 0.78, density))
-        * smoothstep(0.10, 0.55, density)
+        * (1.0 - smoothstep(0.30, 0.78, cloud_amount))
+        * smoothstep(0.10, 0.55, cloud_amount)
         * 0.18;
     let depth_shadow = smoothstep(0.45, 1.35, cloud_sample.optical_depth) * 0.14;
     let cloud_material = mix(
@@ -3264,7 +3290,7 @@ fn cloud_color(
             sun_direct_contribution_color() * mix(0.25, 1.0, sun_facing)
                 + moon_direct_contribution_color() * mix(0.25, 1.0, moon_facing)
         );
-    let body = smoothstep(0.08, 0.18, density);
+    let body = smoothstep(0.08, 0.18, cloud_amount);
     let optical_depth = tuning.cloud_rendering.x * cloud_sample.optical_depth;
     let opacity = tuning.cloud_rendering.y * body * (1.0 - exp(-1.35 * optical_depth));
     return mix(surface_color, cloud, opacity);
@@ -3310,8 +3336,8 @@ fn cloud_shadow_color(
     terrain_shadow_transmittance: f32,
     landform_grade: vec2<f32>,
 ) -> vec3<f32> {
-    let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
-    let upper_height_m = 6200.0;
+    let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
+    let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
     let surface_height_m = max(elevation_m, 0.0);
     let projected_low_position_m = projected_cloud_position(
         position_m,
@@ -3483,15 +3509,15 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         );
         surface_color = precipitation_haze_color(surface_color);
         if layer_visibility.x > 0.0 {
-            let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
-            let upper_height_m = 6200.0;
+            let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
+            let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
             let low_cloud = procedural_low_cloud_sample_with_weather(
                 input.world_position_m,
                 surface_cloud_weather,
                 visual_pixel_footprint_m,
             );
             var upper_transmittance = 1.0;
-            if low_cloud.density > 0.01 && layer_visibility.w > 0.0 {
+            if low_cloud.amount > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(
                     input.world_position_m,
                     low_height_m + tuning.cloud_rendering.w * low_cloud.height_m,
@@ -3559,10 +3585,23 @@ fn wind_debug_color(wind_m_s: vec2<f32>) -> vec3<f32> {
 fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     let position_m = input.world_position_m;
     if mode >= 1u && mode <= 6u {
+        if mode == 1u {
+            let latent = visual_cloud_noise_sample(
+                position_m,
+                false,
+                vec2<u32>(0x38d01377u, 0x452821e6u),
+                320.0,
+                12u,
+                scene.low_cloud_epoch,
+                scene.cloud_anchor_phase_and_padding.x,
+                1800.0,
+                visual_pixel_footprint_m,
+            );
+            return vec4<f32>(scalar_debug_color(0.5 + 0.5 * latent.value), 1.0);
+        }
         let low = procedural_low_cloud_sample(position_m);
-        if mode == 1u { return vec4<f32>(scalar_debug_color(low.detail_amount), 1.0); }
         if mode == 2u { return vec4<f32>(scalar_debug_color(low.detail_gate), 1.0); }
-        if mode == 3u { return vec4<f32>(scalar_debug_color(low.density), 1.0); }
+        if mode == 3u { return vec4<f32>(scalar_debug_color(low.amount), 1.0); }
         if mode == 4u { return vec4<f32>(scalar_debug_color(low.optical_depth), 1.0); }
         if mode == 5u {
             let normal = normalize(vec3<f32>(-low.gradient, 1.0));
@@ -3578,12 +3617,12 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     if mode >= 9u && mode <= 11u {
         let terrain = procedural_terrain_sample(position_m);
         let surface_height_m = max(terrain.elevation_m, tide_height_m());
-        let low_height_m = low_cloud_base_height_m(surface_cloud_weather);
+        let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
         let projected_low_position_m = projected_cloud_position(
             position_m, surface_height_m, low_height_m,
         );
         let projected_upper_position_m = projected_cloud_position(
-            position_m, surface_height_m, 6200.0,
+            position_m, surface_height_m, WEATHER_CANOPY_HEIGHT_M,
         );
         let projected_low_footprint_m = max(
             length(dpdx(projected_low_position_m)),
@@ -3766,16 +3805,8 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         );
     }
     if mode == 58u {
-        let formation = surface_cloud_weather.low_coverage;
+        let formation = visible_low_cloud_coverage(surface_cloud_weather);
         return vec4<f32>(vec3<f32>(formation), 1.0);
-    }
-    if mode == 59u {
-        let thickness = procedural_low_cloud_sample_with_weather(
-            position_m,
-            surface_cloud_weather,
-            visual_pixel_footprint_m,
-        ).thickness;
-        return vec4<f32>(vec3<f32>(thickness), 1.0);
     }
     if mode == 60u {
         let pressure = clamp((pressure_at(surface_position_m).x - 990.0) / 45.0, 0.0, 1.0);
@@ -3801,6 +3832,10 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
     }
     if mode == 66u {
         return vec4<f32>(scalar_debug_color(ocean_forcing_at(position_m).z / 6.0), 1.0);
+    }
+    if mode == 67u {
+        let aerosol = aerosol_optical_depth_at(position_m, cloud_weather_at(position_m));
+        return vec4<f32>(scalar_debug_color(aerosol / 0.32), 1.0);
     }
     return final_scene_color(input);
 }

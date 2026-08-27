@@ -126,13 +126,22 @@ current playable behavior; this file does not track delivery status.
   bounded shadows add depth without moving shorelines or collision. Material
   detail remains stable across boat-scale zoom rather than aliasing or revealing
   its procedural sampling lattice.
-- **[Explicit]** Clouds are weather-shaped volumetric layers that never conceal
-  players or affect gameplay.
-- **[Explicit]** Low wisps add detail, local shadows, and wind cues across at most
-  about one quarter of the view. Unseen upper coverage creates broad shadows and
-  overcast lighting.
-- **[Explicit]** Clouds respond to celestial light, while aerosol, moisture,
-  rain, coverage, and varying thickness shape scene color and mood.
+- **[Explicit]** Clouds are weather-shaped visual layers that never conceal
+  players or affect gameplay. One cloud-amount scalar drives each layer's body,
+  optical depth, and shadows; regional canopy coverage determines its diffuse
+  share of ambient light.
+- **[Explicit]** Small visible clouds form sparsely under suitable humid,
+  unstable, non-storm conditions at a fixed low altitude. They add local
+  shadows and make system-scale wind direction readable across at most about one
+  quarter of the view.
+- **[Explicit]** An unseen weather canopy represents broad convective and layered
+  clouds through varying amount and optical depth. It casts the primary weather
+  shadows and contributes diffuse light alongside the clear sky. Unresolved
+  high ice-cloud effects remain part of canopy and sky diffusion rather than a
+  third sampled layer.
+- **[Explicit]** Aerosol optical depth varies spatially with seeded regional
+  structure, dry air, and rain washout. When the sun is low, aerosol and moisture
+  can redden direct sunlight, visible clouds, and the canopy's diffuse light.
 - **[Explicit]** Directional sun and moon light and diffuse sky-and-cloud light
   independently affect terrain, water, and visible lower clouds. Gray overcast
   can remain softly luminous while severe storm cover darkens a noon scene.

@@ -234,11 +234,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   history, or fluid state. Unresolved octaves fade against the fragment's
   world-space pixel footprint. Spatial transported temperature and moisture
   derive cloud formation at the queried position. A continuous positive excess
-  of the latent field over the local formation threshold is cloud thickness,
-  while non-positive excess is clear air. Low-layer height and relief and both
-  layers' optical depth therefore vary with thickness, including in projected
-  shadows. A query derives humidity, instability, coverage, rain, and cloud type
-  from one local weather evaluation before sampling cloud detail.
+  of the latent field over the local formation threshold is cloud amount, while
+  non-positive excess is clear air. The visible layer uses small 320-metre
+  structures at a fixed 900-metre base and is limited to humid, unstable,
+  non-storm formation. Its relief and optical depth vary with amount. The unseen
+  weather canopy uses structures at least 2048 metres wide at a representative
+  3600-metre altitude; stratiform, convective, and rain signals alter its shape
+  and optical depth. Projected shadows use the same amount fields. A query
+  derives humidity, instability, coverage, rain, and cloud type from one local
+  weather evaluation before sampling cloud detail.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -362,9 +366,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Direct sun and moon intensity and color follow each source's
   elevation and orientation, while diffuse atmospheric light remains a separate
   RGB contribution. Both terms light the surface and visible lower clouds.
-  Atmospheric moisture and cover tint diffuse light; overcast attenuates it
-  moderately while rain under deep upper cover supplies stronger storm
-  attenuation.
+  Diffuse light blends clear-sky and weather-canopy contributions. Seeded
+  regional aerosol, moisture, and cloud amount tint it; overcast attenuates it
+  moderately while rain under deep canopy supplies stronger storm attenuation.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
   width as circumference and the clamped physical latitude derived from the
