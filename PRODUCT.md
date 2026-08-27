@@ -195,7 +195,9 @@ current playable behavior; this file does not track delivery status.
   repeats the reference meridian and longitude seams and marks the equator and
   finite poles. Changing either scale regenerates the live spatial world.
 - **[Explicit]** The global world clock is the sole source of day, season, and
-  lunar phase. Playback changes its rate rather than overriding those phases.
+  lunar phase. Production and the lab default to real time. The lab starts with
+  cloud, pressure, current, and world-clock rates locked together; playback
+  changes rates rather than overriding phases.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,

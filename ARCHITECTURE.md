@@ -221,22 +221,24 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   transported for only one bounded interval by the layer wind and combined with
   a smootherstep-timed orthogonal blend, so any absolute tick is directly
   queryable without accumulated simulation error or midpoint variance loss.
-  Low cloud uses complete unsheltered surface wind and upper cloud uses broad
-  synoptic wind sampled at the rendered world position; camera and player
-  identity do not affect either field.
-- **[Implicit]** Cloud octaves use circle-embedded four-dimensional simplex noise,
+  Both layers use system-scale wind sampled along each query trajectory; local
+  gust structure affects weather and wind diagnostics without folding cloud
+  shapes. Camera and player identity do not affect either field.
+- **[Explicit]** Cloud octaves use circle-embedded four-dimensional simplex noise,
   avoiding the finite-precision phase joins that thresholding can expose in the
   cheaper periodic two-dimensional kernel. The current renderer
-  uses one frozen local velocity for each finite flow map, a 30-minute low-layer
-  anchor interval, and a 60-minute upper-layer interval. Unresolved octaves fade
-  against the fragment's world-space pixel footprint. Spatial transported
-  temperature and moisture derive cloud formation at the queried position. A
-  continuous positive excess of the latent field over the local formation
-  threshold is cloud thickness, while non-positive excess is clear air.
-  Low-layer height and relief and both layers' optical depth therefore vary with
-  thickness, including in projected shadows. A query derives humidity,
-  instability, coverage, rain, and cloud type from one local weather evaluation
-  before sampling cloud detail.
+  traces each query through system-scale wind for a bounded number of steps
+  within a 30-minute low-layer or 60-minute upper-layer anchor interval. This
+  preserves coherent latent shapes under uniform flow, permits bounded
+  shear-driven deformation, and requires no individual clouds, particles,
+  history, or fluid state. Unresolved octaves fade against the fragment's
+  world-space pixel footprint. Spatial transported temperature and moisture
+  derive cloud formation at the queried position. A continuous positive excess
+  of the latent field over the local formation threshold is cloud thickness,
+  while non-positive excess is clear air. Low-layer height and relief and both
+  layers' optical depth therefore vary with thickness, including in projected
+  shadows. A query derives humidity, instability, coverage, rain, and cloud type
+  from one local weather evaluation before sampling cloud detail.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,

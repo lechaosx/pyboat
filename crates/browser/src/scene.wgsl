@@ -1210,15 +1210,14 @@ fn material_fractal_sample(
     return sample;
 }
 
-fn visual_advected_noise_sample(
-    position_m: vec2<f32>,
-    velocity_m_s: vec2<f32>,
+fn visual_transported_noise_sample(
+    current_position_m: vec2<f32>,
+    next_position_m: vec2<f32>,
     field_salt: vec2<u32>,
     initial_wavelength_m: f32,
     octave_count: u32,
     anchor_epoch: vec2<u32>,
     anchor_phase: f32,
-    refresh_period_seconds: f32,
     pixel_footprint_m: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
@@ -1232,10 +1231,6 @@ fn visual_advected_noise_sample(
     let smoother_phase = phase * phase * phase
         * (phase * (phase * 6.0 - 15.0) + 10.0);
     let angle = 0.5 * PI * smoother_phase;
-    let current_position_m = position_m
-        - velocity_m_s * (phase * refresh_period_seconds);
-    let next_position_m = position_m
-        + velocity_m_s * ((1.0 - phase) * refresh_period_seconds);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_visibility = smoothstep(
             pixel_footprint_m,
@@ -1282,6 +1277,101 @@ fn visual_advected_noise_sample(
     return sample;
 }
 
+fn visual_advected_noise_sample(
+    position_m: vec2<f32>,
+    velocity_m_s: vec2<f32>,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    anchor_epoch: vec2<u32>,
+    anchor_phase: f32,
+    refresh_period_seconds: f32,
+    pixel_footprint_m: f32,
+) -> TerrainNoiseSample {
+    let phase = clamp(anchor_phase, 0.0, 1.0);
+    return visual_transported_noise_sample(
+        position_m - velocity_m_s * (phase * refresh_period_seconds),
+        position_m + velocity_m_s * ((1.0 - phase) * refresh_period_seconds),
+        field_salt,
+        initial_wavelength_m,
+        octave_count,
+        anchor_epoch,
+        anchor_phase,
+        pixel_footprint_m,
+    );
+}
+
+fn cloud_advection_wind_m_s_at(position_m: vec2<f32>, upper_layer: bool) -> vec2<f32> {
+    // Cloud latent structure follows pressure-system flow. Gust-scale direction
+    // changes affect local weather but fold a finite anchor map before they can
+    // advect a coherent shape.
+    let filter_footprint_m = 0.008 * scene.world_size_m.x;
+    let pressure = procedural_pressure_sample_filtered(position_m, filter_footprint_m);
+    if upper_layer {
+        let pressure_wind = atmosphere_model.x * wind_from_pressure_gradient(
+            pressure.synoptic_gradient_m_s / 6000.0,
+            surface_latitude_degrees_at(position_m),
+        );
+        let temperature_gradient =
+            surface_air_temperature_anomaly_sample_at(position_m).gradient;
+        return 1.15 * pressure_wind
+            + 2000.0 * atmosphere_model.z * rotate_left(temperature_gradient);
+    }
+    return atmosphere_model.x * wind_from_pressure_gradient(
+        pressure.gradient_m_s / 6000.0,
+        surface_latitude_degrees_at(position_m),
+    );
+}
+
+fn trace_cloud_position_m(
+    position_m: vec2<f32>,
+    duration_seconds: f32,
+    upper_layer: bool,
+) -> vec2<f32> {
+    let step_count = select(2u, 4u, upper_layer);
+    let step_seconds = duration_seconds / f32(step_count);
+    var traced_position_m = position_m;
+    for (var step = 0u; step < step_count; step++) {
+        traced_position_m += step_seconds
+            * cloud_advection_wind_m_s_at(traced_position_m, upper_layer);
+    }
+    return traced_position_m;
+}
+
+fn visual_cloud_noise_sample(
+    position_m: vec2<f32>,
+    upper_layer: bool,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    anchor_epoch: vec2<u32>,
+    anchor_phase: f32,
+    refresh_period_seconds: f32,
+    pixel_footprint_m: f32,
+) -> TerrainNoiseSample {
+    let phase = clamp(anchor_phase, 0.0, 1.0);
+    let current_position_m = trace_cloud_position_m(
+        position_m,
+        -phase * refresh_period_seconds,
+        upper_layer,
+    );
+    let next_position_m = trace_cloud_position_m(
+        position_m,
+        (1.0 - phase) * refresh_period_seconds,
+        upper_layer,
+    );
+    return visual_transported_noise_sample(
+        current_position_m,
+        next_position_m,
+        field_salt,
+        initial_wavelength_m,
+        octave_count,
+        anchor_epoch,
+        anchor_phase,
+        pixel_footprint_m,
+    );
+}
+
 struct LowCloudSample {
     thickness: f32,
     density: f32,
@@ -1321,9 +1411,9 @@ fn procedural_low_cloud_sample_with_weather(
     }
     let stratiform = weather.stratiform;
     let convective = weather.convective;
-    let raw_detail = visual_advected_noise_sample(
+    let raw_detail = visual_cloud_noise_sample(
         position_m,
-        surface_wind_m_s(),
+        false,
         vec2<u32>(0x38d01377u, 0x452821e6u),
         640.0,
         14u,
@@ -1465,9 +1555,9 @@ fn procedural_upper_cloud_sample_filtered(
         empty.optical_depth = 0.0;
         return empty;
     }
-    let upper_noise = visual_advected_noise_sample(
+    let upper_noise = visual_cloud_noise_sample(
         position_m,
-        upper_wind_m_s(),
+        true,
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         512.0,
         6u,
