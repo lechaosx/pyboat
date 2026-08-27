@@ -1,8 +1,8 @@
 use std::{fs, io::BufReader, process::Command};
 
 use game::{
-    CelestialConditions, climate_surface, procedural_solid_surface_elevation_m,
-    procedural_terrain_elevation_m, procedural_world_environment, world_climate_conditions,
+    procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
+    procedural_world_environment,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -26,8 +26,6 @@ fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
         ));
         let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
             .args([
-                "--scenario",
-                "clear-high",
                 "--width",
                 "1",
                 "--height",
@@ -99,6 +97,8 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let season_phase = 0.09;
+    let world_time_seconds = world_time_for_season_phase(season_phase);
+    let tick = (world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
     let position_m = (0..512)
         .map(|index| {
             Vector::new(
@@ -107,46 +107,20 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
             )
         })
         .find(|position_m| {
-            let latitude = world.latitude_degrees(position_m.y);
-            let climate = world_climate_conditions(latitude);
-            let conditions = CelestialConditions {
-                geographic_latitude_degrees: latitude,
-                season_phase,
-                day_phase: 0.45,
-                moon_phase: 0.5,
-            };
             let bedrock = procedural_terrain_elevation_m(world, SEED, *position_m);
-            let water_temperature_c =
-                climate_surface(climate, conditions, 9.0, -2.0, 0.0, bedrock).water_temperature_c;
-            bedrock < 0.0
-                && procedural_solid_surface_elevation_m(
-                    world,
-                    SEED,
-                    *position_m,
-                    climate.annual_mean_air_temperature_c,
-                    water_temperature_c,
-                ) > 0.0
+            let sample = procedural_world_environment(world, SEED, tick, *position_m);
+            bedrock < 0.0 && sample.surface_climate.solid_ice_cover > 0.5
         })
         .expect("winter polar region should contain sea ice");
-    let latitude = world.latitude_degrees(position_m.y);
-    let climate = world_climate_conditions(latitude);
-    let conditions = CelestialConditions {
-        geographic_latitude_degrees: latitude,
-        season_phase,
-        day_phase: 0.45,
-        moon_phase: 0.5,
-    };
-    let bedrock = procedural_terrain_elevation_m(world, SEED, position_m);
-    let water_temperature_c =
-        climate_surface(climate, conditions, 9.0, -2.0, 0.0, bedrock).water_temperature_c;
+    let sample = procedural_world_environment(world, SEED, tick, position_m);
     let solid_surface = procedural_solid_surface_elevation_m(
         world,
         SEED,
         position_m,
-        climate.annual_mean_air_temperature_c,
-        water_temperature_c,
+        sample.climate.annual_mean_air_temperature_c,
+        sample.surface_climate.water_temperature_c,
     );
-    let actual = render_debug_image_at(world, position_m, "polar-freeze", 32, 1, 1);
+    let actual = render_debug_image_at(world, position_m, world_time_seconds, 32, 1, 1);
     let expected = signed_debug_pixel(solid_surface / 12.0);
 
     for channel in 0..3 {
@@ -182,23 +156,24 @@ fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
 }
 
 #[test]
-fn whole_world_capture_places_north_at_the_top() {
-    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let latitude = render_debug_image(world, 49, 8, 8);
-
-    let top_red = mean_channel(&latitude, 8, 0..1, 0);
-    let top_blue = mean_channel(&latitude, 8, 0..1, 2);
-    let bottom_red = mean_channel(&latitude, 8, 7..8, 0);
-    let bottom_blue = mean_channel(&latitude, 8, 7..8, 2);
-    assert!(top_red > top_blue);
-    assert!(bottom_blue > bottom_red);
-}
-
-#[test]
 fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let northern_summer = render_debug_image_for_scenario(world, "summer-midnight", 57, 32, 16);
-    let northern_winter = render_debug_image_for_scenario(world, "polar-freeze", 57, 32, 16);
+    let northern_summer = render_debug_image_at(
+        world,
+        Vector::ZERO,
+        world_time_for_season_phase(0.6336),
+        57,
+        32,
+        16,
+    );
+    let northern_winter = render_debug_image_at(
+        world,
+        Vector::ZERO,
+        world_time_for_season_phase(0.09),
+        57,
+        32,
+        16,
+    );
 
     let summer_north_snow = mean_channel(&northern_summer, 32, 0..8, 1);
     let winter_north_snow = mean_channel(&northern_winter, 32, 0..8, 1);
@@ -233,6 +208,15 @@ fn rendered_pressure_is_spatial_across_world() {
     assert!(channel_range(&pressure, 0) > 0.15);
 }
 
+#[test]
+fn rendered_temperature_gradient_is_spatial_across_world() {
+    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+    let gradient = render_debug_image(world, 20, 32, 16);
+
+    assert!(channel_range(&gradient, 0) > 0.08);
+    assert!(channel_range(&gradient, 1) > 0.08);
+}
+
 fn representative_shore(world: WorldGeometry) -> Vector {
     for x_index in -32..=32 {
         for y_index in -32..=32 {
@@ -258,43 +242,36 @@ fn read_pixel(path: &std::path::Path) -> [u8; 4] {
 }
 
 fn render_debug_pixel(world: WorldGeometry, position_m: Vector, mode: u32) -> [u8; 4] {
-    render_debug_image_at(world, position_m, "fair-cumulus", mode, 1, 1)
+    render_debug_image_at(world, position_m, 0.0, mode, 1, 1)
         .try_into()
         .unwrap()
 }
 
 fn render_debug_image(world: WorldGeometry, mode: u32, width: u32, height: u32) -> Vec<u8> {
-    render_debug_image_for_scenario(world, "fair-cumulus", mode, width, height)
+    render_debug_image_at(world, Vector::ZERO, 0.0, mode, width, height)
 }
 
-fn render_debug_image_for_scenario(
-    world: WorldGeometry,
-    scenario: &str,
-    mode: u32,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
-    render_debug_image_at(world, Vector::ZERO, scenario, mode, width, height)
+fn world_time_for_season_phase(season_phase: f64) -> f64 {
+    (season_phase - 0.5021).rem_euclid(1.0) * 86_400.0 * 360.0
 }
 
 fn render_debug_image_at(
     world: WorldGeometry,
     position_m: Vector,
-    scenario: &str,
+    world_time_seconds: f64,
     mode: u32,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{scenario}-{:08x}-{:08x}-{mode}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{mode}-{width}x{height}.png",
         std::process::id(),
+        world_time_seconds.to_bits(),
         position_m.x.to_bits(),
         position_m.y.to_bits(),
     ));
     let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
         .args([
-            "--scenario",
-            scenario,
             "--width",
             &width.to_string(),
             "--height",
@@ -311,8 +288,10 @@ fn render_debug_image_at(
             &world.height_m().to_string(),
             "--seed",
             &SEED.to_string(),
-            "--time",
+            "--cloud-time",
             "0",
+            "--world-time",
+            &world_time_seconds.to_string(),
             "--debug",
             &mode.to_string(),
             "--output",

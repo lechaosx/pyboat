@@ -133,8 +133,10 @@ fn renderer_weather_transport_stays_bounded_and_advances_at_huge_ticks() {
 
     for offset in [
         before.air_temperature_offset_m,
+        before.upper_air_temperature_offset_m,
         before.water_vapor_offset_m,
         after.air_temperature_offset_m,
+        after.upper_air_temperature_offset_m,
         after.water_vapor_offset_m,
     ] {
         assert!((0.0..world.width_m()).contains(&offset.x));
@@ -143,6 +145,10 @@ fn renderer_weather_transport_stays_bounded_and_advances_at_huge_ticks() {
     assert_ne!(
         before.air_temperature_offset_m,
         after.air_temperature_offset_m
+    );
+    assert_ne!(
+        before.upper_air_temperature_offset_m,
+        after.upper_air_temperature_offset_m
     );
     assert_ne!(before.water_vapor_offset_m, after.water_vapor_offset_m);
 }

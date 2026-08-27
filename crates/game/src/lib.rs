@@ -268,6 +268,7 @@ pub struct SurfaceWeatherTransport {
     // Bounded offsets preserve late-match motion when the shader cannot convert
     // an absolute `u64` tick to floating point without losing adjacent ticks.
     pub air_temperature_offset_m: Vector,
+    pub upper_air_temperature_offset_m: Vector,
     pub water_vapor_offset_m: Vector,
 }
 
@@ -1724,6 +1725,13 @@ pub fn surface_weather_transport(
             tick,
             SURFACE_AIR_TEMPERATURE_NOISE.salt,
             SURFACE_AIR_TEMPERATURE_NOISE.transport_speed_scale,
+        ),
+        upper_air_temperature_offset_m: weather_transport_offset_m(
+            world_geometry,
+            match_seed,
+            tick,
+            AIR_TEMPERATURE_500_HPA_NOISE.salt,
+            AIR_TEMPERATURE_500_HPA_NOISE.transport_speed_scale,
         ),
         water_vapor_offset_m: weather_transport_offset_m(
             world_geometry,

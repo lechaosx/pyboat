@@ -11,7 +11,6 @@ use bytes::Bytes;
 use game::{
     PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
     surface_weather_transport, vector_field_transport, world_celestial_conditions,
-    world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -42,8 +41,6 @@ pub struct PlaygroundWorldGeometrySample {
     canonical_y_m: f32,
     normalized_x: f32,
     normalized_y: f32,
-    latitude_degrees: f32,
-    local_solar_phase: f32,
 }
 
 #[wasm_bindgen]
@@ -262,6 +259,8 @@ pub fn sample_playground_environment(
 pub struct PlaygroundSurfaceWeatherTransport {
     air_temperature_x_m: f32,
     air_temperature_y_m: f32,
+    upper_air_temperature_x_m: f32,
+    upper_air_temperature_y_m: f32,
     water_vapor_x_m: f32,
     water_vapor_y_m: f32,
 }
@@ -276,6 +275,16 @@ impl PlaygroundSurfaceWeatherTransport {
     #[wasm_bindgen(getter)]
     pub fn air_temperature_y_m(&self) -> f32 {
         self.air_temperature_y_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn upper_air_temperature_x_m(&self) -> f32 {
+        self.upper_air_temperature_x_m
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn upper_air_temperature_y_m(&self) -> f32 {
+        self.upper_air_temperature_y_m
     }
 
     #[wasm_bindgen(getter)]
@@ -301,6 +310,8 @@ pub fn sample_playground_surface_weather_transport(
     Ok(PlaygroundSurfaceWeatherTransport {
         air_temperature_x_m: transport.air_temperature_offset_m.x,
         air_temperature_y_m: transport.air_temperature_offset_m.y,
+        upper_air_temperature_x_m: transport.upper_air_temperature_offset_m.x,
+        upper_air_temperature_y_m: transport.upper_air_temperature_offset_m.y,
         water_vapor_x_m: transport.water_vapor_offset_m.x,
         water_vapor_y_m: transport.water_vapor_offset_m.y,
     })
@@ -418,16 +429,6 @@ impl PlaygroundWorldGeometrySample {
     pub fn normalized_y(&self) -> f32 {
         self.normalized_y
     }
-
-    #[wasm_bindgen(getter)]
-    pub fn latitude_degrees(&self) -> f32 {
-        self.latitude_degrees
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn local_solar_phase(&self) -> f32 {
-        self.local_solar_phase
-    }
 }
 
 #[wasm_bindgen]
@@ -436,10 +437,9 @@ pub fn sample_playground_world_geometry(
     height_m: f32,
     raw_x_m: f32,
     raw_y_m: f32,
-    global_day_phase: f32,
 ) -> Result<PlaygroundWorldGeometrySample, JsValue> {
     let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
-    let sample = sample_world_geometry(geometry, [raw_x_m, raw_y_m], global_day_phase);
+    let sample = sample_world_geometry(geometry, [raw_x_m, raw_y_m], 0.0);
     Ok(PlaygroundWorldGeometrySample {
         raw_x_m: sample.raw_center_m[0],
         raw_y_m: sample.raw_center_m[1],
@@ -447,8 +447,6 @@ pub fn sample_playground_world_geometry(
         canonical_y_m: sample.canonical_center_m[1],
         normalized_x: sample.normalized_world[0],
         normalized_y: sample.normalized_world[1],
-        latitude_degrees: sample.latitude_degrees,
-        local_solar_phase: sample.local_solar_phase,
     })
 }
 
@@ -477,17 +475,12 @@ impl Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
-    pressure: [f32; 4],
-    synoptic_pressure_and_temperature: [f32; 4],
-    moisture_and_temperature_gradient: [f32; 4],
-    celestial_conditions: [f32; 4],
-    world_surface_conditions: [f32; 4],
+    upper_air_temperature_transport_m: [f32; 4],
     match_seed: [u32; 2],
     low_cloud_epoch: [u32; 2],
-    aerosol_and_padding: [f32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
-    cloud_anchor_phase: [f32; 2],
+    cloud_anchor_phase_and_padding: [f32; 4],
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
@@ -643,19 +636,8 @@ impl Renderer {
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
-        let production_match_seed = match_seed;
-        let production = production_match_seed.map(|match_seed| {
-            sample_production_world_environment(world_geometry, match_seed, tick, camera_m)
-        });
-        let celestial = production.map_or_else(
-            || world_celestial_conditions(world_geometry, tick as f64 / 60.0, camera_m),
-            |sample| sample.celestial,
-        );
-        let climate = production.map_or_else(
-            || world_climate_conditions(celestial.geographic_latitude_degrees),
-            |sample| sample.climate,
-        );
-        let primary = production.map(|sample| sample.weather.primary);
+        let celestial =
+            world_celestial_conditions(world_geometry, tick as f64 / 60.0, Vector::ZERO);
         let match_seed = match_seed.unwrap_or(0);
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
@@ -671,40 +653,10 @@ impl Renderer {
                     view_width_m,
                     view_height_m,
                 ],
-                pressure: primary.map_or([0.0; 4], |primary| {
-                    [
-                        primary.pressure_hpa,
-                        primary.pressure_gradient_hpa_per_m.x,
-                        primary.pressure_gradient_hpa_per_m.y,
-                        climate.seasonal_temperature_range_c,
-                    ]
-                }),
-                synoptic_pressure_and_temperature: primary.map_or([0.0; 4], |primary| {
-                    [
-                        primary.synoptic_pressure_gradient_hpa_per_m.x,
-                        primary.synoptic_pressure_gradient_hpa_per_m.y,
-                        climate.annual_mean_air_temperature_c,
-                        primary.air_temperature_500_hpa_c,
-                    ]
-                }),
-                moisture_and_temperature_gradient: primary.map_or([0.0; 4], |primary| {
-                    [
-                        primary.water_vapor_g_kg,
-                        primary.temperature_gradient_c_per_m.x,
-                        primary.temperature_gradient_c_per_m.y,
-                        climate.diurnal_temperature_range_c,
-                    ]
-                }),
-                celestial_conditions: [
-                    celestial.geographic_latitude_degrees,
-                    celestial.season_phase,
-                    celestial.day_phase,
-                    celestial.moon_phase,
-                ],
-                world_surface_conditions: [
-                    1.25,
+                upper_air_temperature_transport_m: [
+                    surface_weather_transport.upper_air_temperature_offset_m.x,
+                    surface_weather_transport.upper_air_temperature_offset_m.y,
                     0.0,
-                    primary.map_or(0.0, |primary| primary.surface_air_temperature_anomaly_c),
                     0.0,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
@@ -712,13 +664,17 @@ impl Renderer {
                     low_cloud_time.epoch as u32,
                     (low_cloud_time.epoch >> 32) as u32,
                 ],
-                aerosol_and_padding: [0.08, 0.0],
                 world_size_m: [world_geometry.width_m(), world_geometry.height_m()],
                 upper_cloud_epoch: [
                     upper_cloud_time.epoch as u32,
                     (upper_cloud_time.epoch >> 32) as u32,
                 ],
-                cloud_anchor_phase: [low_cloud_time.phase, upper_cloud_time.phase],
+                cloud_anchor_phase_and_padding: [
+                    low_cloud_time.phase,
+                    upper_cloud_time.phase,
+                    0.0,
+                    0.0,
+                ],
                 surface_weather_transport_m: [
                     surface_weather_transport.air_temperature_offset_m.x,
                     surface_weather_transport.air_temperature_offset_m.y,
@@ -726,10 +682,7 @@ impl Renderer {
                     surface_weather_transport.water_vapor_offset_m.y,
                 ],
                 world_phases: [
-                    (celestial.day_phase
-                        - camera_m.x.rem_euclid(world_geometry.width_m())
-                            / world_geometry.width_m())
-                    .rem_euclid(1.0),
+                    celestial.day_phase,
                     celestial.season_phase,
                     celestial.moon_phase,
                     0.0,

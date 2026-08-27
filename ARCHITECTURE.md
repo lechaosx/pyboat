@@ -222,8 +222,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   a smootherstep-timed orthogonal blend, so any absolute tick is directly
   queryable without accumulated simulation error or midpoint variance loss.
   Low cloud uses complete unsheltered surface wind and upper cloud uses broad
-  synoptic wind sampled for the view; player identity does not affect either
-  field.
+  synoptic wind sampled at the rendered world position; camera and player
+  identity do not affect either field.
 - **[Implicit]** Cloud octaves use circle-embedded four-dimensional simplex noise,
   avoiding the finite-precision phase joins that thresholding can expose in the
   cheaper periodic two-dimensional kernel. The current renderer
@@ -355,9 +355,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   functions. Gameplay binds scene state and fixed production tuning; the lab adds
   live tuning and diagnostic state without adding that interface to production.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
-  day, season, and moon phases. Rendering-grade astronomy derives light and tide;
-  season phase zero is the northern winter solstice while its approximate month
-  presentation labels the first interval January.
+  day, season, and moon phases. Rendering-grade astronomy derives light and tide,
+  and season phase zero is the northern winter solstice.
 - **[Explicit]** Direct sun and moon intensity and color follow each source's
   elevation and orientation, while diffuse atmospheric light remains a separate
   RGB contribution. Both terms light the surface and visible lower clouds.
@@ -384,9 +383,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Playground diagnostics may approximate authoritative shelter but
   never feed derived results back into primary inputs or gameplay physics.
 - **[Explicit]** The playground always samples live production state through the
-  browser's Rust/WASM boundary and retains manual scenarios as primary-cause
-  overrides. The view-center sample is diagnostic; the production shader derives
-  each rendered position independently. The overlay marks the raw center,
+  browser's Rust/WASM boundary. World controls set seed, geometry, and clock
+  rates; model and shader controls only tune or enable mechanisms already present
+  in that world. The view-center sample is diagnostic, and the shader derives
+  every rendered position independently. The overlay marks the raw center,
   repeated reference meridians and longitude seams, the equator, and both finite
   poles. Raw camera coordinates remain unbounded north-south.
 - **[Explicit]** The geometry diagnostic reports each representative octave's
@@ -437,8 +437,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Visual procedural-world work uses the interactive playground and
   deterministic headless capture rather than a separate native showcase or a
   checked-in image collection.
-- **[Explicit]** Headless capture renders the named scenarios with readable
-  condition summaries.
+- **[Explicit]** Headless capture renders one deterministic procedural world from
+  explicit seed, geometry, camera, cloud-time, and world-time inputs and writes a
+  derived-condition summary beside it.
 - **[Explicit]** Capture requires a hardware Vulkan GPU and has no
   software-rendering path.
 

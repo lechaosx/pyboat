@@ -2,52 +2,17 @@ use std::{env, fs, path::PathBuf};
 
 use bytemuck::{Pod, Zeroable};
 use game::{
-    AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_air_temperature_c, derive_weather, surface_weather_transport,
-    tide_height_m, vector_field_transport,
+    celestial_lighting, procedural_world_environment, surface_weather_transport,
+    vector_field_transport, world_celestial_conditions,
 };
-use rapier2d::prelude::Vector;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use simulation::WorldGeometry;
 use wgpu::util::DeviceExt;
 
 const SHADER: &str = include_str!("../../../crates/browser/src/scene.wgsl");
-const SCENARIOS: &str = include_str!("../../../playground/scenarios.json");
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Scenario {
-    slug: String,
-    label: String,
-    description: String,
-    pressure_hpa: f32,
-    pressure_gradient: f32,
-    pressure_gradient_direction: f32,
-    synoptic_pressure_gradient: f32,
-    synoptic_pressure_gradient_direction: f32,
-    annual_mean_air_temperature: f32,
-    current_air_temperature_anomaly: f32,
-    seasonal_temperature_range: f32,
-    diurnal_temperature_range: f32,
-    current_upper_air_temperature: f32,
-    temperature_gradient: f32,
-    temperature_gradient_direction: f32,
-    current_water_vapor: f32,
-    aerosol_optical_depth: f32,
-    geographic_latitude: f32,
-    season_phase: f32,
-    day_phase: f32,
-    moon_phase: f32,
-    tidal_range: f32,
-    tidal_phase_offset: f32,
-}
-
 #[derive(Clone)]
 struct Options {
-    scenario: String,
-    all: bool,
-    output: Option<PathBuf>,
-    output_dir: PathBuf,
+    output: PathBuf,
     width: u32,
     height: u32,
     camera_x_m: f32,
@@ -56,7 +21,8 @@ struct Options {
     world_height_m: f32,
     view_height_m: f32,
     seed: u64,
-    time_seconds: f32,
+    cloud_time_seconds: f32,
+    world_time_seconds: f64,
     debug_view: u32,
 }
 
@@ -72,17 +38,12 @@ struct Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
-    pressure: [f32; 4],
-    synoptic_pressure_and_temperature: [f32; 4],
-    moisture_and_temperature_gradient: [f32; 4],
-    celestial_conditions: [f32; 4],
-    world_surface_conditions: [f32; 4],
+    upper_air_temperature_transport_m: [f32; 4],
     match_seed: [u32; 2],
     low_cloud_epoch: [u32; 2],
-    aerosol_and_padding: [f32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
-    cloud_anchor_phase: [f32; 2],
+    cloud_anchor_phase_and_padding: [f32; 4],
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
@@ -119,9 +80,9 @@ struct DerivedOutput {
     clear_sky_ambient_intensity: f32,
     ground_temperature_c: f32,
     water_temperature_c: f32,
-    seasonal_snow_cover_at_600_m: f32,
+    seasonal_snow_cover: f32,
     polar_ice_closure: f32,
-    solid_ice_cover_at_600_m: f32,
+    solid_ice_cover: f32,
     tide_height_m: f32,
     surface_wind_m_s: [f32; 2],
     surface_wind_speed_m_s: f32,
@@ -157,8 +118,7 @@ struct ImageMetrics {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CaptureReport<'a> {
-    scenario: &'a Scenario,
+struct CaptureReport {
     image: String,
     width: u32,
     height: u32,
@@ -166,7 +126,8 @@ struct CaptureReport<'a> {
     world_size_m: [f32; 2],
     view_height_m: f32,
     seed: u64,
-    time_seconds: f32,
+    cloud_time_seconds: f32,
+    world_time_seconds: f64,
     debug_view: u32,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
@@ -180,37 +141,13 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let scenarios: Vec<Scenario> =
-        serde_json::from_str(SCENARIOS).map_err(|error| format!("invalid scenarios: {error}"))?;
-    if env::args().any(|argument| argument == "--list") {
-        for scenario in scenarios {
-            println!(
-                "{}\t{}\t{}",
-                scenario.slug, scenario.label, scenario.description
-            );
-        }
-        return Ok(());
-    }
     let options = parse_options()?;
-    let selected: Vec<&Scenario> = if options.all {
-        scenarios.iter().collect()
-    } else {
-        vec![
-            scenarios
-                .iter()
-                .find(|scenario| scenario.slug == options.scenario)
-                .ok_or_else(|| format!("unknown scenario: {}", options.scenario))?,
-        ]
-    };
-    pollster::block_on(render(selected, &options))
+    pollster::block_on(render(&options))
 }
 
 fn parse_options() -> Result<Options, String> {
     let mut options = Options {
-        scenario: "fair-cumulus".to_owned(),
-        all: false,
-        output: None,
-        output_dir: PathBuf::from("playground-captures"),
+        output: PathBuf::from("playground-capture.png"),
         width: 960,
         height: 600,
         camera_x_m: 0.0,
@@ -219,7 +156,8 @@ fn parse_options() -> Result<Options, String> {
         world_height_m: 64_000.0,
         view_height_m: 480.0,
         seed: 0x5eed,
-        time_seconds: 37.0,
+        cloud_time_seconds: 37.0,
+        world_time_seconds: 0.0,
         debug_view: 0,
     };
     let mut arguments = env::args().skip(1);
@@ -230,10 +168,7 @@ fn parse_options() -> Result<Options, String> {
                 .ok_or_else(|| format!("{argument} requires a value"))
         };
         match argument.as_str() {
-            "--all" => options.all = true,
-            "--scenario" => options.scenario = value(&mut arguments)?,
-            "--output" => options.output = Some(value(&mut arguments)?.into()),
-            "--output-dir" => options.output_dir = value(&mut arguments)?.into(),
+            "--output" => options.output = value(&mut arguments)?.into(),
             "--width" => options.width = parse(&value(&mut arguments)?, &argument)?,
             "--height" => options.height = parse(&value(&mut arguments)?, &argument)?,
             "--camera-x" => options.camera_x_m = parse(&value(&mut arguments)?, &argument)?,
@@ -242,7 +177,12 @@ fn parse_options() -> Result<Options, String> {
             "--world-height" => options.world_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--view-height" => options.view_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--seed" => options.seed = parse_seed(&value(&mut arguments)?)?,
-            "--time" => options.time_seconds = parse(&value(&mut arguments)?, &argument)?,
+            "--cloud-time" => {
+                options.cloud_time_seconds = parse(&value(&mut arguments)?, &argument)?
+            }
+            "--world-time" => {
+                options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
+            }
             "--debug" => options.debug_view = parse_debug_view(&value(&mut arguments)?)?,
             "--help" | "-h" => {
                 print_help();
@@ -250,9 +190,6 @@ fn parse_options() -> Result<Options, String> {
             }
             _ => return Err(format!("unknown option: {argument}")),
         }
-    }
-    if options.output.is_some() && options.all {
-        return Err("--output cannot be combined with --all; use --output-dir".to_owned());
     }
     if options.width == 0 || options.height == 0 {
         return Err("capture dimensions must be positive".to_owned());
@@ -288,36 +225,35 @@ fn parse_debug_view(value: &str) -> Result<u32, String> {
         "surface-wind" => Ok(16),
         "upper-wind" => Ok(17),
         "shear" => Ok(18),
-        "snow" => Ok(40),
+        "snow" => Ok(53),
         "ice" => Ok(41),
         "autumn" => Ok(42),
-        "tide" => Ok(48),
+        "tide" => Ok(55),
         _ => parse(value, "--debug"),
     }
 }
 
 fn print_help() {
     println!(
-        "playground-capture [--scenario SLUG | --all] [options]\n\n\
+        "playground-capture [options]\n\n\
          Options:\n\
-           --list                 list scenario slugs and descriptions\n\
-           --output PATH          write one scenario to PATH\n\
-           --output-dir PATH      directory for --all (default playground-captures)\n\
+           --output PATH          output path (default playground-capture.png)\n\
            --width N --height N   output dimensions (default 960x600)\n\
            --camera-x M --camera-y M  world-space camera centre\n\
            --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
            --view-height METRES   vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
-           --time SECONDS         deterministic animation time\n\
+           --cloud-time SECONDS   deterministic cloud animation time (default 37)\n\
+           --world-time SECONDS   deterministic world time (default 0)\n\
            --debug NAME|N         final, low-density, upper-depth, low-shadow,\n\
                                   upper-shadow, surface-wind, upper-wind, shear,\n\
                                   snow, ice, autumn, or tide\n\n\
-         Each PNG gets a JSON sidecar containing primary inputs, derived weather,\n\
-         surface climate, tide, and image metrics."
+         The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
+         and image metrics."
     );
 }
 
-async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), String> {
+async fn render(options: &Options) -> Result<(), String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -414,34 +350,28 @@ async fn render(scenarios: Vec<&Scenario>, options: &Options) -> Result<(), Stri
         "playground uniforms bind group",
     );
 
-    for scenario in scenarios {
-        let path = options
-            .output
-            .clone()
-            .unwrap_or_else(|| options.output_dir.join(format!("{}.png", scenario.slug)));
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-        }
-        let rgba = render_scenario(
-            &device,
-            &queue,
-            &pipeline,
-            &scene_layout,
-            &playground_bind_group,
-            &vertex_buffer,
-            scenario,
-            options,
-        )?;
-        write_png(&path, options.width, options.height, &rgba)?;
-        let report = capture_report(scenario, options, &path, &rgba);
-        let report_json = serde_json::to_string_pretty(&report)
-            .map_err(|error| format!("failed to serialize report: {error}"))?;
-        let sidecar_path = path.with_extension("json");
-        fs::write(&sidecar_path, &report_json)
-            .map_err(|error| format!("failed to write {}: {error}", sidecar_path.display()))?;
-        println!("{}", serde_json::to_string(&report).unwrap());
+    let path = &options.output;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
+    let rgba = render_world(
+        &device,
+        &queue,
+        &pipeline,
+        &scene_layout,
+        &playground_bind_group,
+        &vertex_buffer,
+        options,
+    )?;
+    write_png(path, options.width, options.height, &rgba)?;
+    let report = capture_report(options, path, &rgba)?;
+    let report_json = serde_json::to_string_pretty(&report)
+        .map_err(|error| format!("failed to serialize report: {error}"))?;
+    let sidecar_path = path.with_extension("json");
+    fs::write(&sidecar_path, &report_json)
+        .map_err(|error| format!("failed to write {}: {error}", sidecar_path.display()))?;
+    println!("{}", serde_json::to_string(&report).unwrap());
     Ok(())
 }
 
@@ -487,41 +417,24 @@ fn bind_group(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_scenario(
+fn render_world(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     pipeline: &wgpu::RenderPipeline,
     scene_layout: &wgpu::BindGroupLayout,
     playground_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
-    scenario: &Scenario,
     options: &Options,
 ) -> Result<Vec<u8>, String> {
-    let pressure_gradient = directed_vector(
-        scenario.pressure_gradient / 1000.0,
-        scenario.pressure_gradient_direction,
-    );
-    let synoptic_gradient = directed_vector(
-        scenario.synoptic_pressure_gradient / 1000.0,
-        scenario.synoptic_pressure_gradient_direction,
-    );
-    let temperature_gradient = directed_vector(
-        scenario.temperature_gradient / 1000.0,
-        scenario.temperature_gradient_direction,
-    );
-    let conditions = CelestialConditions {
-        geographic_latitude_degrees: scenario.geographic_latitude,
-        season_phase: scenario.season_phase,
-        day_phase: scenario.day_phase,
-        moon_phase: scenario.moon_phase,
-    };
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
     let canonical_camera_m =
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
-    let low_cloud_epoch = (options.time_seconds / 1800.0).floor() as u64;
-    let upper_cloud_epoch = (options.time_seconds / 3600.0).floor() as u64;
-    let tick = (options.time_seconds / simulation::DT_SECONDS) as u64;
+    let low_cloud_epoch = (options.cloud_time_seconds / 1800.0).floor() as u64;
+    let upper_cloud_epoch = (options.cloud_time_seconds / 3600.0).floor() as u64;
+    let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+    let conditions =
+        world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
     let surface_weather_transport = surface_weather_transport(world_geometry, options.seed, tick);
     let vector_field_transport = vector_field_transport(world_geometry, options.seed, tick);
     let uniforms = SceneUniforms {
@@ -531,44 +444,21 @@ fn render_scenario(
             options.view_height_m * options.width as f32 / options.height as f32,
             options.view_height_m,
         ],
-        pressure: [
-            scenario.pressure_hpa,
-            pressure_gradient.x,
-            pressure_gradient.y,
-            scenario.seasonal_temperature_range,
-        ],
-        synoptic_pressure_and_temperature: [
-            synoptic_gradient.x,
-            synoptic_gradient.y,
-            scenario.annual_mean_air_temperature,
-            scenario.current_upper_air_temperature,
-        ],
-        moisture_and_temperature_gradient: [
-            scenario.current_water_vapor,
-            temperature_gradient.x,
-            temperature_gradient.y,
-            scenario.diurnal_temperature_range,
-        ],
-        celestial_conditions: [
-            conditions.geographic_latitude_degrees,
-            conditions.season_phase,
-            conditions.day_phase,
-            conditions.moon_phase,
-        ],
-        world_surface_conditions: [
-            scenario.tidal_range,
-            scenario.tidal_phase_offset,
-            scenario.current_air_temperature_anomaly,
+        upper_air_temperature_transport_m: [
+            surface_weather_transport.upper_air_temperature_offset_m.x,
+            surface_weather_transport.upper_air_temperature_offset_m.y,
+            0.0,
             0.0,
         ],
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         low_cloud_epoch: [low_cloud_epoch as u32, (low_cloud_epoch >> 32) as u32],
-        aerosol_and_padding: [scenario.aerosol_optical_depth, 0.0],
         world_size_m: [options.world_width_m, options.world_height_m],
         upper_cloud_epoch: [upper_cloud_epoch as u32, (upper_cloud_epoch >> 32) as u32],
-        cloud_anchor_phase: [
-            options.time_seconds.rem_euclid(1800.0) / 1800.0,
-            options.time_seconds.rem_euclid(3600.0) / 3600.0,
+        cloud_anchor_phase_and_padding: [
+            options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0,
+            options.cloud_time_seconds.rem_euclid(3600.0) / 3600.0,
+            0.0,
+            0.0,
         ],
         surface_weather_transport_m: [
             surface_weather_transport.air_temperature_offset_m.x,
@@ -615,7 +505,7 @@ fn render_scenario(
         "scene uniforms bind group",
     );
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(&scenario.slug),
+        label: Some("procedural world capture"),
         size: wgpu::Extent3d {
             width: options.width,
             height: options.height,
@@ -715,75 +605,22 @@ fn fullscreen_vertices() -> [Vertex; 6] {
     })
 }
 
-fn directed_vector(magnitude: f32, direction_degrees: f32) -> Vector {
-    let direction = direction_degrees.to_radians();
-    magnitude * Vector::new(direction.cos(), direction.sin())
-}
-
-fn capture_report<'a>(
-    scenario: &'a Scenario,
+fn capture_report(
     options: &Options,
     path: &std::path::Path,
     rgba: &[u8],
-) -> CaptureReport<'a> {
-    let pressure_gradient = directed_vector(
-        scenario.pressure_gradient / 1000.0,
-        scenario.pressure_gradient_direction,
+) -> Result<CaptureReport, String> {
+    let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .map_err(|error| error.to_string())?;
+    let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+    let sample = procedural_world_environment(
+        world,
+        options.seed,
+        tick,
+        [options.camera_x_m, options.camera_y_m].into(),
     );
-    let synoptic_gradient = directed_vector(
-        scenario.synoptic_pressure_gradient / 1000.0,
-        scenario.synoptic_pressure_gradient_direction,
-    );
-    let temperature_gradient = directed_vector(
-        scenario.temperature_gradient / 1000.0,
-        scenario.temperature_gradient_direction,
-    );
-    let conditions = CelestialConditions {
-        geographic_latitude_degrees: scenario.geographic_latitude,
-        season_phase: scenario.season_phase,
-        day_phase: scenario.day_phase,
-        moon_phase: scenario.moon_phase,
-    };
-    let climate = ClimateConditions {
-        annual_mean_air_temperature_c: scenario.annual_mean_air_temperature,
-        seasonal_temperature_range_c: scenario.seasonal_temperature_range,
-        diurnal_temperature_range_c: scenario.diurnal_temperature_range,
-        annual_mean_water_temperature_c: scenario.annual_mean_air_temperature,
-        seasonal_water_temperature_range_c: scenario.seasonal_temperature_range,
-    };
-    let current_air_temperature =
-        current_air_temperature_c(climate, conditions) + scenario.current_air_temperature_anomaly;
-    let celestial = celestial_lighting(conditions);
-    let tide_height = tide_height_m(
-        TidalConditions {
-            reference_range_m: scenario.tidal_range,
-            phase_offset: scenario.tidal_phase_offset,
-        },
-        conditions,
-    );
-    let weather = derive_weather(
-        AtmospherePrimary {
-            pressure_hpa: scenario.pressure_hpa,
-            pressure_gradient_hpa_per_m: pressure_gradient,
-            synoptic_pressure_gradient_hpa_per_m: synoptic_gradient,
-            surface_air_temperature_anomaly_c: scenario.current_air_temperature_anomaly,
-            air_temperature_500_hpa_c: scenario.current_upper_air_temperature,
-            temperature_gradient_c_per_m: temperature_gradient,
-            water_vapor_g_kg: scenario.current_water_vapor,
-        },
-        climate,
-        conditions,
-    );
-    let surface = climate_surface(
-        climate,
-        conditions,
-        scenario.current_water_vapor,
-        scenario.current_air_temperature_anomaly,
-        weather.rain_intensity,
-        600.0,
-    );
-    CaptureReport {
-        scenario,
+    let celestial = celestial_lighting(sample.celestial);
+    Ok(CaptureReport {
         image: path.display().to_string(),
         width: options.width,
         height: options.height,
@@ -791,36 +628,37 @@ fn capture_report<'a>(
         world_size_m: [options.world_width_m, options.world_height_m],
         view_height_m: options.view_height_m,
         seed: options.seed,
-        time_seconds: options.time_seconds,
+        cloud_time_seconds: options.cloud_time_seconds,
+        world_time_seconds: options.world_time_seconds,
         debug_view: options.debug_view,
         derived: DerivedOutput {
-            current_air_temperature_c: current_air_temperature,
+            current_air_temperature_c: sample.weather.surface_air_temperature_c,
             sun_direction: celestial.sun_direction,
             sun_intensity: celestial.sun_intensity,
             moon_direction: celestial.moon_direction,
             moon_intensity: celestial.moon_intensity,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
-            ground_temperature_c: surface.ground_temperature_c,
-            water_temperature_c: surface.water_temperature_c,
-            seasonal_snow_cover_at_600_m: surface.seasonal_snow_cover,
-            polar_ice_closure: surface.polar_ice_closure,
-            solid_ice_cover_at_600_m: surface.solid_ice_cover,
-            tide_height_m: tide_height,
-            surface_wind_m_s: weather.wind_velocity_m_s.into(),
-            surface_wind_speed_m_s: weather.wind_velocity_m_s.length(),
-            upper_wind_m_s: weather.upper_wind_velocity_m_s.into(),
-            upper_wind_speed_m_s: weather.upper_wind_velocity_m_s.length(),
-            wind_shear_m_s: weather.wind_shear_m_s.into(),
-            wind_shear_speed_m_s: weather.wind_shear_m_s.length(),
-            relative_humidity: weather.relative_humidity,
-            instability: weather.instability,
-            lift: weather.lift,
-            low_cloudiness: weather.cloudiness,
-            upper_cloudiness: weather.upper_cloudiness,
-            rain_intensity: weather.rain_intensity,
+            ground_temperature_c: sample.surface_climate.ground_temperature_c,
+            water_temperature_c: sample.surface_climate.water_temperature_c,
+            seasonal_snow_cover: sample.surface_climate.seasonal_snow_cover,
+            polar_ice_closure: sample.surface_climate.polar_ice_closure,
+            solid_ice_cover: sample.surface_climate.solid_ice_cover,
+            tide_height_m: sample.water_height_m,
+            surface_wind_m_s: sample.weather.wind_velocity_m_s.into(),
+            surface_wind_speed_m_s: sample.weather.wind_velocity_m_s.length(),
+            upper_wind_m_s: sample.weather.upper_wind_velocity_m_s.into(),
+            upper_wind_speed_m_s: sample.weather.upper_wind_velocity_m_s.length(),
+            wind_shear_m_s: sample.weather.wind_shear_m_s.into(),
+            wind_shear_speed_m_s: sample.weather.wind_shear_m_s.length(),
+            relative_humidity: sample.weather.relative_humidity,
+            instability: sample.weather.instability,
+            lift: sample.weather.lift,
+            low_cloudiness: sample.weather.cloudiness,
+            upper_cloudiness: sample.weather.upper_cloudiness,
+            rain_intensity: sample.weather.rain_intensity,
         },
         image_metrics: image_metrics(rgba, options.width, options.height),
-    }
+    })
 }
 
 fn image_metrics(rgba: &[u8], width: u32, height: u32) -> ImageMetrics {

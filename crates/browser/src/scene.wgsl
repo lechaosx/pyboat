@@ -1,16 +1,11 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
-    pressure: vec4<f32>,
-    synoptic_pressure_and_temperature: vec4<f32>,
-    moisture_and_temperature_gradient: vec4<f32>,
-    celestial_conditions: vec4<f32>,
-    world_surface_conditions: vec4<f32>,
+    upper_air_temperature_transport_m: vec4<f32>,
     match_seed: vec2<u32>,
     low_cloud_epoch: vec2<u32>,
-    aerosol_and_padding: vec2<f32>,
     world_size_m: vec2<f32>,
     upper_cloud_epoch: vec2<u32>,
-    cloud_anchor_phase: vec2<f32>,
+    cloud_anchor_phase_and_padding: vec4<f32>,
     surface_weather_transport_m: vec4<f32>,
     world_phases: vec4<f32>,
     world_tick_and_padding: vec4<u32>,
@@ -99,6 +94,7 @@ var<private> surface_cloud_weather: CloudWeatherSample;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
+const AEROSOL_OPTICAL_DEPTH: f32 = 0.08;
 const CELESTIAL_DISC_ANGULAR_RADIUS_RAD: f32 = 0.00465;
 const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: u32 = 3u;
@@ -277,7 +273,7 @@ fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
 }
 
 fn surface_wind_m_s() -> vec2<f32> {
-    return surface_wind_m_s_at(scene.camera_and_view_m.xy);
+    return surface_wind_m_s_at(surface_position_m);
 }
 
 fn upper_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
@@ -286,9 +282,9 @@ fn upper_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
         pressure.synoptic_gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
+    let temperature_gradient = surface_air_temperature_anomaly_sample_at(position_m).gradient;
     return 1.15 * pressure_wind
-        + 2000.0 * atmosphere_model.z
-            * rotate_left(scene.moisture_and_temperature_gradient.yz);
+        + 2000.0 * atmosphere_model.z * rotate_left(temperature_gradient);
 }
 
 fn upper_wind_m_s() -> vec2<f32> {
@@ -337,6 +333,18 @@ fn latitude_curve_value(knots: array<f32, 10>, latitude_degrees: f32) -> f32 {
     return mix(knots[lower], knots[lower + 1u], amount);
 }
 
+fn latitude_curve_slope_per_degree(
+    knots: array<f32, 10>,
+    latitude_degrees: f32,
+) -> f32 {
+    let knot_position = clamp(abs(latitude_degrees) / 10.0, 0.0, 9.0);
+    let lower = min(u32(floor(knot_position)), 8u);
+    let fraction = fract(knot_position);
+    let sign = select(1.0, -1.0, latitude_degrees < 0.0);
+    return sign * (knots[lower + 1u] - knots[lower])
+        * 0.6 * fraction * (1.0 - fraction);
+}
+
 fn surface_seasonal_latitude_factor_at(position_m: vec2<f32>) -> f32 {
     let latitude = surface_latitude_degrees_at(position_m);
     let magnitude = smoothstep(0.0, 45.0, abs(latitude));
@@ -376,17 +384,51 @@ fn surface_diurnal_temperature_range_c() -> f32 {
 }
 
 fn surface_air_temperature_anomaly_c_at(position_m: vec2<f32>) -> f32 {
+    return surface_air_temperature_anomaly_sample_at(position_m).value;
+}
+
+fn surface_air_temperature_anomaly_sample_at(position_m: vec2<f32>) -> TerrainNoiseSample {
     let scale_c = latitude_curve_value(
         TEMPERATURE_ANOMALY_SCALE_C,
         surface_latitude_degrees_at(position_m),
     );
-    return scale_c * 0.75 * spatial_weather_fractal(
+    let scale_gradient_c_per_m = latitude_curve_slope_per_degree(
+        TEMPERATURE_ANOMALY_SCALE_C,
+        surface_latitude_degrees_at(position_m),
+    ) * 180.0 / scene.world_size_m.y;
+    let noise = spatial_weather_fractal_sample(
         vec2<u32>(0x38d01377u, 0x452821e6u),
         position_m - scene.surface_weather_transport_m.xy,
         65536.0,
         4u,
         4u,
     );
+    return TerrainNoiseSample(
+        scale_c * 0.75 * noise.value,
+        vec2<f32>(
+            scale_c * 0.75 * noise.gradient.x,
+            scale_c * 0.75 * noise.gradient.y
+                + 0.75 * noise.value * scale_gradient_c_per_m,
+        ),
+    );
+}
+
+fn upper_air_temperature_500_hpa_c_at(position_m: vec2<f32>) -> f32 {
+    let seasonal_phase = TAU * (scene.world_phases.y - 0.34);
+    let climate_temperature_c = surface_annual_mean_air_temperature_c_at(position_m)
+        - 35.5
+        + 0.25 * surface_seasonal_temperature_range_c_at(position_m)
+            * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
+    let independent_noise = 0.75 * spatial_weather_fractal(
+        vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
+        position_m - scene.upper_air_temperature_transport_m.xy,
+        65536.0,
+        4u,
+        4u,
+    );
+    return climate_temperature_c
+        + 0.45 * surface_air_temperature_anomaly_c_at(position_m)
+        + 19.0 * independent_noise;
 }
 
 fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
@@ -514,7 +556,8 @@ fn tide_height_m() -> f32 {
     let phase_offset = TAU * surface_tidal_phase_offset;
     let lunar_tide = cos(2.0 * (lunar_hour_angle + phase_offset));
     let solar_tide = 0.46 * cos(2.0 * (solar_hour_angle + phase_offset));
-    return 0.5 * surface_tidal_range_m * (lunar_tide + solar_tide) / 1.46;
+    return climate_visibility.y
+        * 0.5 * surface_tidal_range_m * (lunar_tide + solar_tide) / 1.46;
 }
 
 fn tide_reference_range_m() -> f32 {
@@ -529,9 +572,8 @@ fn initialize_surface_tide() {
         3u,
         3u,
     );
-    surface_tidal_range_m = scene.world_surface_conditions.x * live_range_m / 1.25;
-    surface_tidal_phase_offset = scene.world_surface_conditions.y
-        + 0.08 * spatial_weather_fractal(
+    surface_tidal_range_m = live_range_m;
+    surface_tidal_phase_offset = 0.08 * spatial_weather_fractal(
             vec2<u32>(0x84caa73bu, 0xbb67ae85u),
             surface_position_m,
             131072.0,
@@ -549,17 +591,19 @@ fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
         0.0,
         1.5,
     );
+    let upper_air_temperature_c = upper_air_temperature_500_hpa_c_at(position_m);
+    let temperature_gradient = surface_air_temperature_anomaly_sample_at(position_m).gradient;
     let instability = smoothstep(
         28.0,
         48.0,
-        air_temperature_c - scene.synoptic_pressure_and_temperature.w,
+        air_temperature_c - upper_air_temperature_c,
     );
     let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, pressure.x);
     let gradient_lift = smoothstep(0.0002, 0.0015, length(pressure.yz));
     let frontal_lift = smoothstep(
         0.00005,
         0.0005,
-        length(scene.moisture_and_temperature_gradient.yz),
+        length(temperature_gradient),
     );
     let lift = clamp(
         0.25 * pressure_lift + 0.55 * gradient_lift + 0.20 * frontal_lift,
@@ -1072,7 +1116,23 @@ fn spatial_weather_fractal(
     octave_count: u32,
     circle_octave_count: u32,
 ) -> f32 {
-    var value = 0.0;
+    return spatial_weather_fractal_sample(
+        field_salt,
+        position_m,
+        initial_wavelength_m,
+        octave_count,
+        circle_octave_count,
+    ).value;
+}
+
+fn spatial_weather_fractal_sample(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    circle_octave_count: u32,
+) -> TerrainNoiseSample {
+    var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
@@ -1083,26 +1143,29 @@ fn spatial_weather_fractal(
                 vec2<u32>(octave, 0u),
                 vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             );
-        var octave_value = 0.0;
+        var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
-            octave_value = terrain_simplex_noise_4d(
+            octave_sample = terrain_simplex_noise_4d(
                 octave_seed,
                 position_m,
                 wavelength_m,
-            ).value;
+            );
         } else {
-            octave_value = terrain_simplex_noise(
+            octave_sample = terrain_simplex_noise(
                 octave_seed,
                 position_m,
                 wavelength_m,
-            ).value;
+            );
         }
-        value += amplitude * octave_value;
+        sample.value += amplitude * octave_sample.value;
+        sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
         amplitude *= 0.5;
         wavelength_m *= 0.5;
     }
-    return value / amplitude_sum;
+    sample.value /= amplitude_sum;
+    sample.gradient /= amplitude_sum;
+    return sample;
 }
 
 fn material_fractal_sample(
@@ -1265,7 +1328,7 @@ fn procedural_low_cloud_sample_with_weather(
         640.0,
         14u,
         scene.low_cloud_epoch,
-        scene.cloud_anchor_phase.x,
+        scene.cloud_anchor_phase_and_padding.x,
         1800.0,
         pixel_footprint_m,
     );
@@ -1409,7 +1472,7 @@ fn procedural_upper_cloud_sample_filtered(
         512.0,
         6u,
         scene.upper_cloud_epoch,
-        scene.cloud_anchor_phase.y,
+        scene.cloud_anchor_phase_and_padding.y,
         3600.0,
         pixel_footprint_m,
     );
@@ -1533,7 +1596,7 @@ fn atmospheric_ambient_color() -> vec3<f32> {
 }
 
 fn calculate_sunset_scattering() -> f32 {
-    let aerosol = smoothstep(0.06, 0.40, clamp(scene.aerosol_and_padding.x, 0.0, 1.0));
+    let aerosol = smoothstep(0.06, 0.40, AEROSOL_OPTICAL_DEPTH);
     let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
@@ -2498,7 +2561,7 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
                         vec2<u32>(0x13198a2eu, 0x03707344u),
                     ),
             );
-            let local_cycle_time = scene.cloud_anchor_phase.x
+            let local_cycle_time = scene.cloud_anchor_phase_and_padding.x
                 * f32(cycles_per_anchor)
                 + visual_hash_unit(cell_hash.x);
             let local_cycle = u32(floor(local_cycle_time));
@@ -2790,7 +2853,7 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         18.0,
         4u,
         scene.low_cloud_epoch,
-        scene.cloud_anchor_phase.x,
+        scene.cloud_anchor_phase_and_padding.x,
         1800.0,
         visual_pixel_footprint_m,
     );
@@ -3473,14 +3536,16 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
             filtered_pressure.gradient_m_s / 6000.0,
             latitude_degrees,
         );
+        let local_temperature_gradient =
+            surface_air_temperature_anomaly_sample_at(position_m).gradient;
         let upper = 1.15 * atmosphere_model.x * wind_from_pressure_gradient(
             filtered_pressure.synoptic_gradient_m_s / 6000.0,
             latitude_degrees,
         ) + 2000.0 * atmosphere_model.z
-            * rotate_left(scene.moisture_and_temperature_gradient.yz);
+            * rotate_left(local_temperature_gradient);
         let shear = upper - surface;
         let pressure_gradient = filtered_pressure.gradient_m_s;
-        let temperature_gradient = 2000.0 * scene.moisture_and_temperature_gradient.yz;
+        let temperature_gradient = 2000.0 * local_temperature_gradient;
         if mode == 16u { return vec4<f32>(wind_debug_color(surface), 1.0); }
         if mode == 17u { return vec4<f32>(wind_debug_color(upper), 1.0); }
         if mode == 18u { return vec4<f32>(wind_debug_color(shear), 1.0); }
@@ -3561,23 +3626,11 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         // while blue without red identifies low-sediment vegetated coast.
         return vec4<f32>(rockiness, sediment, ruggedness, 1.0);
     }
-    if mode == 40u {
-        return vec4<f32>(scalar_debug_color(local_snow_cover(terrain.elevation_m)), 1.0);
-    }
     if mode == 41u {
         return vec4<f32>(scalar_debug_color(terrain.ice_amount), 1.0);
     }
     if mode == 42u {
         return vec4<f32>(scalar_debug_color(autumn_vegetation_amount(terrain.elevation_m)), 1.0);
-    }
-    if mode == 48u {
-        return vec4<f32>(signed_debug_color(tide_height_m() / 2.0), 1.0);
-    }
-    if mode == 49u {
-        return vec4<f32>(signed_debug_color(surface_latitude_degrees() / 90.0), 1.0);
-    }
-    if mode == 50u {
-        return vec4<f32>(scalar_debug_color(surface_local_solar_phase()), 1.0);
     }
     if mode == 51u {
         return vec4<f32>(scalar_debug_color(

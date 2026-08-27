@@ -180,27 +180,22 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** One browser laboratory covers weather, landscape, and water with
   the production rendering algorithms. It separates world inputs, procedural
   model tuning, shader tuning, and diagnostics into semantic domains.
-- **[Explicit]** Derived conditions are read-only. Scenarios change their primary
-  causes, while independent rendered contributions have hierarchical enable
-  controls that preserve subordinate values.
-- **[Explicit]** Production tuning is available as a preset, but live world state
-  has no arbitrary default reset. Initial world conditions are illustrative and
-  the initial view shows final composition.
+- **[Explicit]** Seed, geometry, position, and clocks always generate the world's
+  environmental causes. Derived conditions are read-only; playground controls
+  tune or enable existing mechanisms without replacing world-generated values.
+- **[Explicit]** Production tuning is available as a preset, while world state
+  has no arbitrary default reset and the initial view shows final composition.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,
   immediate slider dragging, eased track clicks, and independent or locked
   real-time multipliers for cloud, pressure, and current evolution and world time.
 - **[Explicit]** The lab exposes independent longitude-circumference and
   pole-to-pole-span sliders, initialized to equal production defaults. A red
   cross marks the view-center sample, whose raw and cylindrical coordinates,
-  normalized geographic coordinates, signed latitude, and local solar phase
-  remain visible while panning. A guide repeats the reference meridian and
-  longitude seams and marks the equator and finite poles. Changing either scale
-  regenerates the live spatial world; scenarios remain primary-cause overrides.
-- **[Explicit]** The lab presents local solar time in hours, season as an
-  approximate real-numbered month, and lunar phase with named landmarks while
-  retaining normalized runtime phases internally. Season phase zero is the
-  northern winter solstice and remains in the January-labelled portion of the
-  control.
+  and normalized geographic coordinates remain visible while panning. A guide
+  repeats the reference meridian and longitude seams and marks the equator and
+  finite poles. Changing either scale regenerates the live spatial world.
+- **[Explicit]** The global world clock is the sole source of day, season, and
+  lunar phase. Playback changes its rate rather than overriding those phases.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,
@@ -208,11 +203,8 @@ current playable behavior; this file does not track delivery status.
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
 - **[Explicit]** World geometry, playback, and the global clock remain immediately
-  accessible. Production-derived spatial measurements are read-only; scenario
-  overrides, visibility, tuning, and detailed diagnostics use collapsed semantic
-  groups.
-- **[Explicit]** Named weather and seasonal scenarios represent characteristic
-  regimes, not generic intensity steps.
+  accessible. Production-derived spatial measurements are read-only; visibility,
+  tuning, and mechanism diagnostics use collapsed semantic groups.
 
 ## Open questions
 
