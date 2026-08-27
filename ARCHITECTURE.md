@@ -265,6 +265,39 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   gap supplies angular fractures whose visibility follows existing broad ice
   variation. Fragment-footprint filtering removes the network before it aliases.
 
+### Ocean dynamics
+
+- **[Explicit]** Authoritative currents include large local gyres, coastal flow,
+  and reversing tidal flow without a uniform prevailing vector. World-scale net
+  transport remains zero, and local current enters the same water-relative load
+  path on the server and predicting client.
+- **[Implicit]** A longitude-periodic scalar streamfunction combines a slowly
+  transported seeded basin field with a weak evolving pressure coupling. Broad
+  landform capacity steers it around island groups, latitude closes it at the
+  polar boundary, and a separate scalar potential uses spatial tide response and
+  phase gradients. Both vanish where there is no navigable water. This is an
+  analytic local approximation, not a stored basin solve.
+- **[Explicit]** Shared gameplay waves are deterministic from match state and
+  local conditions, affect boat-relative water motion, and have no persistent
+  drift. Exceptional crests emerge from interference rather than an event flag.
+- **[Implicit]** Sixteen fixed-cost modes split into locally wind-weighted wind
+  sea and upper-wind-weighted swell. Integer longitudinal wave numbers preserve
+  the cylinder seam while continuous north-south wave numbers preserve requested
+  local scale. Deep-water dispersion advances phase from every bit of the
+  absolute tick; significant height grows with wind and is limited by the
+  shallow-water breaking ratio. First-order horizontal orbital velocity enters
+  `Environment.true_water_velocity_m_s`; a quadratic bound-wave response
+  sharpens severe crests without adding mean horizontal motion. Vertical heave,
+  roll, capsize, refraction, and diffraction remain outside the planar physics
+  model.
+- **[Implicit]** The renderer samples authoritative current and significant
+  height on a fixed 16 by 16 cylinder grid once per simulated second. Each
+  fragment evaluates a fixed sixteen-mode seeded wave spectrum from that height
+  and local wind direction; world-space footprint attenuation removes
+  unresolved wavelengths. The final water material uses its slope, while the
+  playground exposes separate wave-normal, current, and significant-height
+  diagnostics. Fine capillary breakup remains appearance-only.
+
 ### Browser rendering and playground
 
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates

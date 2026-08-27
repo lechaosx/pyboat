@@ -1,6 +1,7 @@
 import {
   sample_playground_environment,
   sample_playground_noise_octave,
+  sample_playground_ocean_grid,
   sample_playground_pressure_grid,
   sample_playground_surface_weather_transport,
   sample_playground_world_geometry,
@@ -429,6 +430,9 @@ const debugOptions: Record<Domain, Array<[number, string]>> = {
     [0, "Final composition"], [48, "Tide height"], [55, "Spatial tide height"],
     [62, "Visual water normals"],
     [63, "Precipitation contact normals"],
+    [64, "Gameplay-driven wave normals"],
+    [65, "Authoritative ocean current"],
+    [66, "Authoritative significant wave height"],
   ],
 };
 
@@ -1140,8 +1144,10 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(44 + 16 * 16 * 4);
+const sceneFloats = new Float32Array(48 + 2 * 16 * 16 * 4);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
+let oceanGridKey = "";
+let oceanGrid: Float32Array<ArrayBufferLike> = new Float32Array(16 * 16 * 4);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1186,6 +1192,11 @@ type WorldCenterDiagnostics = {
   solidIceCover: number;
   waterHeightM: number;
   waterDepthM: number;
+  currentVelocity: [number, number];
+  waveOrbitalVelocity: [number, number];
+  significantWaveHeightM: number;
+  waveSurfaceDisplacementM: number;
+  rogueCrestExcessM: number;
 };
 
 let worldCenterDiagnostics: WorldCenterDiagnostics | undefined;
@@ -1229,6 +1240,11 @@ function sampleWorldCenterDiagnostics(): void {
     solidIceCover: sample.solid_ice_cover,
     waterHeightM: sample.water_height_m,
     waterDepthM: sample.water_depth_m,
+    currentVelocity: [sample.current_x_m_s, sample.current_y_m_s],
+    waveOrbitalVelocity: [sample.wave_orbital_x_m_s, sample.wave_orbital_y_m_s],
+    significantWaveHeightM: sample.significant_wave_height_m,
+    waveSurfaceDisplacementM: sample.wave_surface_displacement_m,
+    rogueCrestExcessM: sample.rogue_crest_excess_m,
   };
   sample.free();
 }
@@ -1440,7 +1456,7 @@ function atmosphericOutputs(): Array<[string, string]> {
 
 function surfaceOutputs(): Array<[string, string]> {
   if (worldCenterDiagnostics) {
-    return [
+    const outputs: Array<[string, string]> = [
       ["Ground temperature", `${worldCenterDiagnostics.groundTemperatureC.toFixed(1)} °C`],
       ["Water temperature", `${worldCenterDiagnostics.waterTemperatureC.toFixed(1)} °C`],
       ["Seasonal snow", worldCenterDiagnostics.seasonalSnowCover.toFixed(2)],
@@ -1449,6 +1465,21 @@ function surfaceOutputs(): Array<[string, string]> {
       ["Tide height", `${worldCenterDiagnostics.waterHeightM.toFixed(2)} m`],
       ["Water depth", `${worldCenterDiagnostics.waterDepthM.toFixed(2)} m`],
     ];
+    if (activeDomain === "water") {
+      const vector = (value: [number, number]): string => {
+        const speed = Math.hypot(...value);
+        const direction = Math.atan2(value[1], value[0]) * 180 / Math.PI;
+        return `${speed.toFixed(2)} m/s · ${direction.toFixed(0)}°`;
+      };
+      outputs.push(
+        ["Current", vector(worldCenterDiagnostics.currentVelocity)],
+        ["Wave orbital motion", vector(worldCenterDiagnostics.waveOrbitalVelocity)],
+        ["Significant wave height", `${worldCenterDiagnostics.significantWaveHeightM.toFixed(2)} m`],
+        ["Instantaneous wave surface", `${worldCenterDiagnostics.waveSurfaceDisplacementM.toFixed(2)} m`],
+        ["Rogue crest excess", `${worldCenterDiagnostics.rogueCrestExcessM.toFixed(2)} m`],
+      );
+    }
+    return outputs;
   }
   const moisture = smoothstepValue(2, 10, state.currentWaterVapor);
   const ground = groundTemperature(0);
@@ -1680,12 +1711,31 @@ function writeUniforms(): void {
   ], 36);
   transport.free();
   sceneFloats.set([state.dayPhase, state.seasonPhase, state.moonPhase, 0], 40);
+  const worldTick = BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60)));
+  sceneUints.set([
+    Number(worldTick & 0xffff_ffffn),
+    Number((worldTick >> 32n) & 0xffff_ffffn),
+    0,
+    0,
+  ], 44);
   sceneFloats.set(sample_playground_pressure_grid(
     state.worldWidthM,
     state.worldHeightM,
     parsedSeed(),
-    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
-  ), 44);
+    worldTick,
+  ), 48);
+  const oceanGridTick = worldTick / 60n * 60n;
+  const nextOceanGridKey = `${state.worldWidthM}:${state.worldHeightM}:${state.seed}:${oceanGridTick}`;
+  if (oceanGridKey !== nextOceanGridKey) {
+    oceanGrid = sample_playground_ocean_grid(
+      state.worldWidthM,
+      state.worldHeightM,
+      parsedSeed(),
+      oceanGridTick,
+    );
+    oceanGridKey = nextOceanGridKey;
+  }
+  sceneFloats.set(oceanGrid, 48 + 16 * 16 * 4);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([

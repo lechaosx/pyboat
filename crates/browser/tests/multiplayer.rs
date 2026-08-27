@@ -199,9 +199,12 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     assert_eq!(client.health(), Some(100.0));
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
-    assert_eq!(client.view().unwrap().speed_m_s, 5.0);
     let environment =
         procedural_match_environment(world_geometry, 42, 9, client.camera_m().unwrap());
+    assert_eq!(
+        client.view().unwrap().speed_m_s,
+        (Vector::new(3.0, 4.0) - environment.true_water_velocity_m_s).length(),
+    );
     assert_ne!(
         environment,
         procedural_match_environment(WorldGeometry::default(), 42, 9, client.camera_m().unwrap(),)

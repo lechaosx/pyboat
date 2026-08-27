@@ -13,7 +13,9 @@ struct SceneUniforms {
     cloud_anchor_phase: vec2<f32>,
     surface_weather_transport_m: vec4<f32>,
     world_phases: vec4<f32>,
+    world_tick_and_padding: vec4<u32>,
     pressure_grid: array<vec4<f32>, 256>,
+    ocean_grid: array<vec4<f32>, 256>,
 };
 
 struct SceneTuning {
@@ -154,12 +156,39 @@ fn pressure_at(position_m: vec2<f32>) -> vec3<f32> {
         - pressure_grid_sample(scene.camera_and_view_m.xy);
 }
 
-fn surface_wind_m_s() -> vec2<f32> {
+fn ocean_grid_sample(position_m: vec2<f32>) -> vec3<f32> {
+    let coordinate_x = fract(position_m.x / scene.world_size_m.x) * 16.0;
+    let coordinate_y = clamp(
+        position_m.y / scene.world_size_m.y + 0.5,
+        0.0,
+        1.0,
+    ) * 15.0;
+    let lower_x = u32(floor(coordinate_x)) % 16u;
+    let upper_x = (lower_x + 1u) % 16u;
+    let lower_y = min(u32(floor(coordinate_y)), 15u);
+    let upper_y = min(lower_y + 1u, 15u);
+    let amount = vec2<f32>(fract(coordinate_x), fract(coordinate_y));
+    let lower_left = scene.ocean_grid[lower_y * 16u + lower_x].xyz;
+    let lower_right = scene.ocean_grid[lower_y * 16u + upper_x].xyz;
+    let upper_left = scene.ocean_grid[upper_y * 16u + lower_x].xyz;
+    let upper_right = scene.ocean_grid[upper_y * 16u + upper_x].xyz;
+    return mix(
+        mix(lower_left, lower_right, amount.x),
+        mix(upper_left, upper_right, amount.x),
+        amount.y,
+    );
+}
+
+fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
     let cross_isobar_fraction = 0.12 * atmosphere_model.y;
-    let gradient = scene.pressure.yz;
+    let gradient = pressure_at(position_m).yz;
     return 6000.0 * atmosphere_model.x
         * (rotate_left(gradient) - cross_isobar_fraction * gradient)
         / sqrt(1.0 + cross_isobar_fraction * cross_isobar_fraction);
+}
+
+fn surface_wind_m_s() -> vec2<f32> {
+    return surface_wind_m_s_at(scene.camera_and_view_m.xy);
 }
 
 fn upper_wind_m_s() -> vec2<f32> {
@@ -2396,7 +2425,110 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
     return sample;
 }
 
-fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+fn ocean_tick_phase_radians(phase_per_tick_radians: f32) -> f32 {
+    let tick = scene.world_tick_and_padding.xy;
+    let chunks = array<u32, 4>(
+        tick.y >> 16u,
+        tick.y & 0xffffu,
+        tick.x >> 16u,
+        tick.x & 0xffffu,
+    );
+    var phase = 0.0;
+    for (var chunk_index = 0u; chunk_index < 4u; chunk_index++) {
+        phase = (phase * 65536.0 + f32(chunks[chunk_index]) * phase_per_tick_radians) % TAU;
+    }
+    return phase;
+}
+
+fn ocean_hash_unit(key: vec2<u32>) -> f32 {
+    return (f32(terrain_hash(key).y >> 8u) + 0.5) / 16777216.0;
+}
+
+fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    let forcing = ocean_grid_sample(position_m);
+    let significant_height_m = forcing.z;
+    var sample: TerrainNoiseSample;
+    sample.value = significant_height_m;
+    sample.gradient = vec2<f32>(0.0);
+    if significant_height_m <= 0.0 {
+        return sample;
+    }
+
+    let surface_wind = surface_wind_m_s_at(position_m);
+    let upper_wind = upper_wind_m_s();
+    let surface_speed = length(surface_wind);
+    let upper_speed = length(upper_wind);
+    let surface_direction = surface_wind / max(surface_speed, 0.0001);
+    let upper_direction = upper_wind / max(upper_speed, 0.0001);
+    let wind_sea_height_m = 0.05 + 0.016 * surface_speed * surface_speed;
+    let swell_height_m = 0.006 * upper_speed * upper_speed;
+    let energy_direction = wind_sea_height_m * wind_sea_height_m * surface_direction
+        + swell_height_m * swell_height_m * upper_direction;
+    let energy_direction_length = length(energy_direction);
+    let dominant_direction = select(
+        vec2<f32>(1.0, 0.0),
+        energy_direction / max(energy_direction_length, 0.0001),
+        energy_direction_length > 0.0,
+    );
+    let rotation = TAU * ocean_hash_unit(
+        scene.match_seed ^ vec2<u32>(0xfe94f82bu, 0x3c6ef372u),
+    );
+    let amplitude_scale = significant_height_m / 5.676266;
+    var displacement_m = 0.0;
+
+    for (var mode_index = 0u; mode_index < 16u; mode_index++) {
+        let mode_key = scene.match_seed
+            ^ vec2<u32>(0x299f31d0u, 0xa4093822u)
+            ^ multiply_u64(
+                vec2<u32>(mode_index, 0u),
+                vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+            );
+        let angle = rotation + TAU * f32(mode_index) / 16.0;
+        let original_direction = vec2<f32>(cos(angle), sin(angle));
+        let is_wind_sea = mode_index < 12u;
+        let wavelength_fraction = ocean_hash_unit(
+            mode_key ^ vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        );
+        let minimum_wavelength_m = select(120.0, 8.0, is_wind_sea);
+        let maximum_wavelength_m = select(600.0, 180.0, is_wind_sea);
+        let wavelength_m = minimum_wavelength_m * pow(
+            maximum_wavelength_m / minimum_wavelength_m,
+            wavelength_fraction,
+        );
+        var mode_x = round(
+            original_direction.x * scene.world_size_m.x / wavelength_m,
+        );
+        if mode_x == 0.0 && abs(original_direction.y) < 0.000001 {
+            mode_x = select(1.0, -1.0, original_direction.x < 0.0);
+        }
+        let wave_number_x = TAU * mode_x / scene.world_size_m.x;
+        let wave_number_y = TAU * original_direction.y / wavelength_m;
+        let wave_number = length(vec2<f32>(wave_number_x, wave_number_y));
+        let direction = vec2<f32>(wave_number_x, wave_number_y) / wave_number;
+        let alignment = max(dot(direction, dominant_direction), 0.0);
+        let weight = 0.20 + pow(alignment, 4.0);
+        let amplitude_m = weight * amplitude_scale;
+        let angular_frequency = sqrt(9.81 * wave_number);
+        let phase = wave_number_x * fract(position_m.x / scene.world_size_m.x) * scene.world_size_m.x
+            + wave_number_y * position_m.y
+            - ocean_tick_phase_radians(angular_frequency / 60.0)
+            + TAU * ocean_hash_unit(
+                mode_key ^ vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+            );
+        let footprint_attenuation = exp(
+            -0.5 * pow(wave_number * visual_pixel_footprint_m, 2.0),
+        );
+        displacement_m += footprint_attenuation * amplitude_m * cos(phase);
+        let first_slope = -footprint_attenuation * amplitude_m * sin(phase) * wave_number;
+        sample.gradient += first_slope * direction;
+    }
+    let nonlinear_strength = 0.5 * smoothstep(1.5, 3.0, significant_height_m);
+    sample.gradient *= 1.0
+        + 2.0 * nonlinear_strength * displacement_m / significant_height_m;
+    return sample;
+}
+
+fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let random = terrain_hash(
         scene.match_seed ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u),
     );
@@ -2417,6 +2549,15 @@ fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     return sample;
 }
 
+fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    let physical = physical_water_wave_sample(position_m);
+    let decorative = decorative_water_normal_sample(position_m);
+    return TerrainNoiseSample(
+        physical.value,
+        2.5 * physical.gradient + 0.20 * decorative.gradient,
+    );
+}
+
 fn visual_water_surface(
     position_m: vec2<f32>,
     base_color: vec3<f32>,
@@ -2431,7 +2572,11 @@ fn visual_water_surface(
     return TerrainSurface(
         base_color,
         undisturbed_gradient + precipitation_contact.gradient,
-        mix(0.12, 0.24, surface_cloud_weather.rain),
+        mix(
+            mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
+            0.26,
+            surface_cloud_weather.rain,
+        ),
     );
 }
 
@@ -3241,6 +3386,17 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         let contact = precipitation_water_contact_sample(position_m);
         let normal = normalize(vec3<f32>(-20.0 * contact.gradient, 1.0));
         return vec4<f32>(0.5 + 0.5 * normal, 1.0);
+    }
+    if mode == 64u {
+        let waves = physical_water_wave_sample(position_m);
+        let normal = normalize(vec3<f32>(-waves.gradient, 1.0));
+        return vec4<f32>(0.5 + 0.5 * normal, 1.0);
+    }
+    if mode == 65u {
+        return vec4<f32>(wind_debug_color(ocean_grid_sample(position_m).xy), 1.0);
+    }
+    if mode == 66u {
+        return vec4<f32>(scalar_debug_color(ocean_grid_sample(position_m).z / 6.0), 1.0);
     }
     return final_scene_color(input);
 }

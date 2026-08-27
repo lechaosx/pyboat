@@ -58,6 +58,12 @@ current playable behavior; this file does not track delivery status.
   lower sliding resistance rather than perpetual creep.
 - **[Explicit]** Weather, wind, currents, waves, storms, seasons, and tides are
   procedural and deterministic from match state across space and time.
+- **[Explicit]** Ocean circulation includes large local gyres, coastal flows,
+  and reversing tidal currents without an explicit uniform prevailing-current
+  direction. Integrated world-scale transport remains zero.
+- **[Explicit]** Shared waves affect boat-relative water motion. Severe seas can
+  produce exceptional crests through constructive interference rather than
+  spawning arbitrary rogue-wave events.
 - **[Explicit]** Storm-like conditions emerge continuously rather than appearing
   as placed events.
 - **[Implicit]** The default world is humid and varied enough that severe rain is
@@ -94,10 +100,10 @@ current playable behavior; this file does not track delivery status.
   moving shoreline. Clear shallow water reveals bottom, outcrop, and reef
   structure through depth-attenuated, water-tinted reflectance and relief while
   retaining a cohesive color. Open water has moving, metre-scale surface
-  structure whose normals respond to diffuse sky light and directional
-  celestial light, remain stable at boat zoom, and filter away at wider scales.
-  This visual material does not stand in for authoritative waves or their
-  gameplay effects.
+  structure driven by shared local significant wave height, wind direction, and
+  seeded phase evolution. Its normals respond to diffuse sky light and
+  directional celestial light, remain stable at boat zoom, and filter away at
+  wider scales. Fine capillary breakup remains appearance-only.
 - **[Explicit]** Land has recognizable beach, vegetation, rock, snow, and ice
   materials.
 - **[Explicit]** The same authoritative, immovable solid-ice surface covers land

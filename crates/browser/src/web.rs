@@ -9,8 +9,9 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic, render_pressure_grid,
-    surface_weather_transport, world_celestial_conditions, world_climate_conditions,
+    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic, render_ocean_grid,
+    render_pressure_grid, surface_weather_transport, world_celestial_conditions,
+    world_climate_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -103,6 +104,13 @@ pub struct PlaygroundEnvironmentSample {
     solid_ice_cover: f32,
     water_height_m: f32,
     water_depth_m: f32,
+    current_x_m_s: f32,
+    current_y_m_s: f32,
+    wave_orbital_x_m_s: f32,
+    wave_orbital_y_m_s: f32,
+    significant_wave_height_m: f32,
+    wave_surface_displacement_m: f32,
+    rogue_crest_excess_m: f32,
 }
 
 macro_rules! environment_sample_getters {
@@ -166,6 +174,13 @@ environment_sample_getters!(
     solid_ice_cover,
     water_height_m,
     water_depth_m,
+    current_x_m_s,
+    current_y_m_s,
+    wave_orbital_x_m_s,
+    wave_orbital_y_m_s,
+    significant_wave_height_m,
+    wave_surface_displacement_m,
+    rogue_crest_excess_m,
 );
 
 #[wasm_bindgen]
@@ -233,6 +248,13 @@ pub fn sample_playground_environment(
         solid_ice_cover: sample.surface_climate.solid_ice_cover,
         water_height_m: sample.water_height_m,
         water_depth_m: sample.environment.water_depth_m,
+        current_x_m_s: sample.ocean.current_velocity_m_s.x,
+        current_y_m_s: sample.ocean.current_velocity_m_s.y,
+        wave_orbital_x_m_s: sample.ocean.wave_orbital_velocity_m_s.x,
+        wave_orbital_y_m_s: sample.ocean.wave_orbital_velocity_m_s.y,
+        significant_wave_height_m: sample.ocean.significant_wave_height_m,
+        wave_surface_displacement_m: sample.ocean.surface_displacement_m,
+        rogue_crest_excess_m: sample.ocean.rogue_crest_excess_m,
     })
 }
 
@@ -294,6 +316,21 @@ pub fn sample_playground_pressure_grid(
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     Ok(render_pressure_grid(geometry, match_seed, tick)
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_ocean_grid(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    tick: u64,
+) -> Result<Vec<f32>, JsValue> {
+    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    Ok(render_ocean_grid(geometry, match_seed, tick)
         .into_iter()
         .flatten()
         .collect())
@@ -457,7 +494,9 @@ struct SceneUniforms {
     cloud_anchor_phase: [f32; 2],
     surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
+    world_tick_and_padding: [u32; 4],
     pressure_grid: [[f32; 4]; 256],
+    ocean_grid: [[f32; 4]; 256],
 }
 
 struct Renderer {
@@ -470,6 +509,8 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    ocean_grid_key: Option<(WorldGeometry, Option<u64>, u64)>,
+    ocean_grid: [[f32; 4]; 256],
 }
 
 impl Renderer {
@@ -581,6 +622,8 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
+            ocean_grid_key: None,
+            ocean_grid: [[0.0; 4]; 256],
         })
     }
 
@@ -606,7 +649,8 @@ impl Renderer {
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
-        let production = match_seed.map(|match_seed| {
+        let production_match_seed = match_seed;
+        let production = production_match_seed.map(|match_seed| {
             sample_production_world_environment(world_geometry, match_seed, tick, camera_m)
         });
         let celestial = production.map_or_else(
@@ -623,6 +667,14 @@ impl Renderer {
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
         let surface_weather_transport = surface_weather_transport(world_geometry, match_seed, tick);
         let pressure_grid = render_pressure_grid(world_geometry, match_seed, tick);
+        let ocean_grid_tick = tick / 60 * 60;
+        let ocean_grid_key = (world_geometry, production_match_seed, ocean_grid_tick);
+        if self.ocean_grid_key != Some(ocean_grid_key) {
+            self.ocean_grid = production_match_seed.map_or([[0.0; 4]; 256], |match_seed| {
+                render_ocean_grid(world_geometry, match_seed, ocean_grid_tick)
+            });
+            self.ocean_grid_key = Some(ocean_grid_key);
+        }
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -696,7 +748,9 @@ impl Renderer {
                     celestial.moon_phase,
                     0.0,
                 ],
+                world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
                 pressure_grid,
+                ocean_grid: self.ocean_grid,
             }),
         );
 

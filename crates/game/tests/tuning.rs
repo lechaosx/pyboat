@@ -147,10 +147,12 @@ fn procedural_wind_is_seeded_and_continuous_across_space_and_time() {
 
     assert_eq!(wind, procedural_match_environment(seed, 600, position_m));
     assert!(wind.true_wind_velocity_m_s.length().is_finite());
-    assert_eq!(wind.true_water_velocity_m_s, Vector::ZERO);
+    assert!(wind.true_water_velocity_m_s.is_finite());
+    assert!(wind.true_water_velocity_m_s.length() > 0.01);
 
     let nearby = procedural_match_environment(seed, 601, position_m + Vector::new(0.1, 0.1));
     assert!((nearby.true_wind_velocity_m_s - wind.true_wind_velocity_m_s).length() < 1.0);
+    assert!((nearby.true_water_velocity_m_s - wind.true_water_velocity_m_s).length() < 1.0);
 
     let distant = procedural_match_environment(seed, 600, position_m + Vector::new(64.0, 0.0));
     let later = procedural_match_environment(seed, 4200, position_m);

@@ -62,6 +62,16 @@ const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: usize = 3;
 const TIDE_OCTAVE_COUNT: usize = 3;
 const TIDE_CIRCLE_OCTAVE_COUNT: usize = 3;
 const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: usize = 0;
+const OCEAN_CURRENT_NOISE_SALT: u64 = 0xcbbb_9d5d_c105_9ed8;
+const OCEAN_CURRENT_WAVELENGTH_M: f64 = 32_768.0;
+const OCEAN_CURRENT_OCTAVE_COUNT: usize = 3;
+const OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S: f64 = 5_500.0;
+const OCEAN_CURRENT_PRESSURE_COUPLING: f64 = 0.006;
+const OCEAN_CURRENT_TRANSPORT_SPEED_SCALE: f64 = 0.002;
+const OCEAN_TIDAL_POTENTIAL_SCALE_M2_S: f64 = 1_200.0;
+const OCEAN_WAVE_MODE_COUNT: usize = 16;
+const OCEAN_WIND_SEA_MODE_COUNT: usize = 12;
+const GRAVITY_M_S2: f64 = 9.81;
 // OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
 // features when a field is thresholded. Keep values and order synchronized with
 // `scene.wgsl` so its hash selects the same gradient.
@@ -220,6 +230,17 @@ pub struct ProceduralWeather {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OceanState {
+    pub current_velocity_m_s: Vector,
+    pub wave_orbital_velocity_m_s: Vector,
+    pub significant_wave_height_m: f32,
+    pub surface_displacement_m: f32,
+    pub surface_slope: Vector,
+    pub dominant_wave_direction: Vector,
+    pub rogue_crest_excess_m: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldEnvironment {
     pub celestial: CelestialConditions,
     pub climate: ClimateConditions,
@@ -227,6 +248,7 @@ pub struct WorldEnvironment {
     pub tide: TidalConditions,
     pub surface_climate: SurfaceClimate,
     pub water_height_m: f32,
+    pub ocean: OceanState,
     pub environment: Environment,
 }
 
@@ -242,6 +264,27 @@ struct ScalarNoiseSample {
     value: f64,
     gradient_x_per_m: f64,
     gradient_y_per_m: f64,
+}
+
+#[derive(Clone, Copy)]
+struct TidalSample {
+    conditions: TidalConditions,
+    range_gradient_per_m: Vector,
+    phase_gradient_per_m: Vector,
+}
+
+#[derive(Clone, Copy)]
+struct OceanQuery {
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    celestial: CelestialConditions,
+    weather: ProceduralWeather,
+    tidal_sample: TidalSample,
+    water_height_m: f32,
+    water_depth_m: f32,
+    true_wind_velocity_m_s: Vector,
 }
 
 struct TemperatureSample {
@@ -428,27 +471,47 @@ pub fn procedural_tidal_conditions(
     match_seed: u64,
     position_m: Vector,
 ) -> TidalConditions {
+    procedural_tidal_sample(world_geometry, match_seed, position_m).conditions
+}
+
+fn procedural_tidal_sample(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+) -> TidalSample {
     // Tide response and lag occupy independent seed domains; sharing terrain or
     // hash-mixer constants would couple unrelated fields at aligned coordinates.
-    let response = terrain_fractal_noise(
+    let response = terrain_fractal_noise_sample(
         world_geometry,
         match_seed ^ 0x6a09_e667_f3bc_c909,
-        position_m,
+        f64::from(position_m.x),
+        f64::from(position_m.y),
         131_072.0,
         TIDE_OCTAVE_COUNT,
         TIDE_CIRCLE_OCTAVE_COUNT,
-    ) as f32;
-    let lag = terrain_fractal_noise(
+    );
+    let lag = terrain_fractal_noise_sample(
         world_geometry,
         match_seed ^ 0xbb67_ae85_84ca_a73b,
-        position_m,
+        f64::from(position_m.x),
+        f64::from(position_m.y),
         131_072.0,
         TIDE_OCTAVE_COUNT,
         TIDE_CIRCLE_OCTAVE_COUNT,
-    ) as f32;
-    TidalConditions {
-        reference_range_m: 1.25 + 0.75 * response,
-        phase_offset: 0.08 * lag,
+    );
+    TidalSample {
+        conditions: TidalConditions {
+            reference_range_m: 1.25 + 0.75 * response.value as f32,
+            phase_offset: 0.08 * lag.value as f32,
+        },
+        range_gradient_per_m: Vector::new(
+            (0.75 * response.gradient_x_per_m) as f32,
+            (0.75 * response.gradient_y_per_m) as f32,
+        ),
+        phase_gradient_per_m: Vector::new(
+            (0.08 * lag.gradient_x_per_m) as f32,
+            (0.08 * lag.gradient_y_per_m) as f32,
+        ),
     }
 }
 
@@ -708,7 +771,8 @@ pub fn procedural_world_environment(
         celestial,
     );
     let weather = derive_weather(primary, climate, celestial);
-    let tide = procedural_tidal_conditions(world_geometry, match_seed, position_m);
+    let tidal_sample = procedural_tidal_sample(world_geometry, match_seed, position_m);
+    let tide = tidal_sample.conditions;
     let water_height_m = tide_height_m(tide, celestial);
     let terrain = procedural_terrain_surface_causes(world_geometry, match_seed, position_m);
     let terrain_elevation_m = terrain.elevation_m;
@@ -729,15 +793,29 @@ pub fn procedural_world_environment(
         terrain_elevation_m,
         surface_climate.water_temperature_c + terrain.maritime_temperature_anomaly_c,
     );
+    let true_wind_velocity_m_s = land_sheltered_wind(
+        world_geometry,
+        match_seed,
+        position_m,
+        weather.wind_velocity_m_s,
+    );
+    let water_depth_m = (water_height_m - solid_surface_elevation_m).max(0.0);
+    let ocean = procedural_ocean_state(OceanQuery {
+        world_geometry,
+        match_seed,
+        tick,
+        position_m,
+        celestial,
+        weather,
+        tidal_sample,
+        water_height_m,
+        water_depth_m,
+        true_wind_velocity_m_s,
+    });
     let environment = Environment {
-        true_wind_velocity_m_s: land_sheltered_wind(
-            world_geometry,
-            match_seed,
-            position_m,
-            weather.wind_velocity_m_s,
-        ),
-        true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: (water_height_m - solid_surface_elevation_m).max(0.0),
+        true_wind_velocity_m_s,
+        true_water_velocity_m_s: ocean.current_velocity_m_s + ocean.wave_orbital_velocity_m_s,
+        water_depth_m,
     };
 
     WorldEnvironment {
@@ -747,8 +825,314 @@ pub fn procedural_world_environment(
         tide,
         surface_climate,
         water_height_m,
+        ocean,
         environment,
     }
+}
+
+fn procedural_ocean_state(query: OceanQuery) -> OceanState {
+    if query.water_depth_m == 0.0 {
+        return OceanState {
+            current_velocity_m_s: Vector::ZERO,
+            wave_orbital_velocity_m_s: Vector::ZERO,
+            significant_wave_height_m: 0.0,
+            surface_displacement_m: 0.0,
+            surface_slope: Vector::ZERO,
+            dominant_wave_direction: Vector::ZERO,
+            rogue_crest_excess_m: 0.0,
+        };
+    }
+
+    let current_velocity_m_s = procedural_current_velocity_m_s(query);
+    let mut waves = procedural_wave_state(query);
+    waves.current_velocity_m_s = current_velocity_m_s;
+    waves
+}
+
+fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
+    let basin = ocean_basin_capacity_sample(
+        query.world_geometry,
+        query.match_seed,
+        query.position_m,
+        query.celestial,
+    );
+    let (transported_x_m, transported_y_m) = transported_weather_position_m(
+        query.world_geometry,
+        query.match_seed,
+        query.tick,
+        query.position_m,
+        OCEAN_CURRENT_NOISE_SALT,
+        OCEAN_CURRENT_TRANSPORT_SPEED_SCALE,
+    );
+    let gyre = terrain_fractal_noise_sample(
+        query.world_geometry,
+        query.match_seed ^ OCEAN_CURRENT_NOISE_SALT,
+        transported_x_m,
+        transported_y_m,
+        OCEAN_CURRENT_WAVELENGTH_M,
+        OCEAN_CURRENT_OCTAVE_COUNT,
+        OCEAN_CURRENT_OCTAVE_COUNT,
+    );
+    let basin_squared = (basin.value * basin.value) as f32;
+    let basin_squared_gradient = Vector::new(
+        (2.0 * basin.value * basin.gradient_x_per_m) as f32,
+        (2.0 * basin.value * basin.gradient_y_per_m) as f32,
+    );
+    let gyre_gradient = Vector::new(gyre.gradient_x_per_m as f32, gyre.gradient_y_per_m as f32);
+    let base_gradient = OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S as f32
+        * (basin_squared * gyre_gradient + gyre.value as f32 * basin_squared_gradient);
+
+    let latitude_rad = f64::from(query.celestial.geographic_latitude_degrees).to_radians();
+    let hemisphere = libm::sin(latitude_rad) as f32;
+    let hemisphere_gradient_y_per_m = if query.celestial.geographic_latitude_degrees.abs() < 90.0 {
+        (libm::cos(latitude_rad) * std::f64::consts::PI
+            / f64::from(query.world_geometry.height_m())) as f32
+    } else {
+        0.0
+    };
+    let pressure_potential_m2_s = f64::from(query.weather.primary.pressure_hpa - 1013.25)
+        * f64::from(PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M);
+    let pressure_gradient_m_s =
+        query.weather.primary.pressure_gradient_hpa_per_m * PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M;
+    let pressure_envelope = basin_squared * hemisphere;
+    let pressure_envelope_gradient = hemisphere * basin_squared_gradient
+        + Vector::new(0.0, basin_squared * hemisphere_gradient_y_per_m);
+    let weather_gradient = OCEAN_CURRENT_PRESSURE_COUPLING as f32
+        * (pressure_envelope * pressure_gradient_m_s
+            + pressure_potential_m2_s as f32 * pressure_envelope_gradient);
+
+    let tide_gradient =
+        tide_height_gradient_per_m(query.world_geometry, query.celestial, query.tidal_sample);
+    let tidal_potential_gradient = OCEAN_TIDAL_POTENTIAL_SCALE_M2_S as f32
+        * (basin.value as f32 * tide_gradient
+            + query.water_height_m
+                * Vector::new(basin.gradient_x_per_m as f32, basin.gradient_y_per_m as f32));
+    let streamfunction_gradient = base_gradient + weather_gradient;
+    Vector::new(-streamfunction_gradient.y, streamfunction_gradient.x) - tidal_potential_gradient
+}
+
+fn ocean_basin_capacity_sample(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    position_m: Vector,
+    celestial: CelestialConditions,
+) -> ScalarNoiseSample {
+    let cluster = terrain_fractal_noise_sample(
+        world_geometry,
+        match_seed ^ 0xa076_1d64_78bd_642f,
+        f64::from(position_m.x),
+        f64::from(position_m.y),
+        8192.0,
+        TERRAIN_CLUSTER_OCTAVE_COUNT,
+        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
+    );
+    let threshold_low = 0.02;
+    let threshold_high = 0.48;
+    let transition =
+        ((cluster.value - threshold_low) / (threshold_high - threshold_low)).clamp(0.0, 1.0);
+    let open_water = 1.0 - smoothstep(transition);
+    let open_water_derivative = if transition == 0.0 || transition == 1.0 {
+        0.0
+    } else {
+        -6.0 * transition * (1.0 - transition) / (threshold_high - threshold_low)
+    };
+    let latitude_rad = f64::from(celestial.geographic_latitude_degrees).to_radians();
+    let polar_capacity = libm::cos(latitude_rad).powi(2);
+    let polar_gradient_y_per_m = if celestial.geographic_latitude_degrees.abs() < 90.0 {
+        -libm::sin(2.0 * latitude_rad) * std::f64::consts::PI / f64::from(world_geometry.height_m())
+    } else {
+        0.0
+    };
+    ScalarNoiseSample {
+        value: open_water * polar_capacity,
+        gradient_x_per_m: open_water_derivative * cluster.gradient_x_per_m * polar_capacity,
+        gradient_y_per_m: open_water_derivative * cluster.gradient_y_per_m * polar_capacity
+            + open_water * polar_gradient_y_per_m,
+    }
+}
+
+fn tide_height_gradient_per_m(
+    world_geometry: WorldGeometry,
+    celestial: CelestialConditions,
+    tidal_sample: TidalSample,
+) -> Vector {
+    let solar_hour_angle = std::f64::consts::TAU * (f64::from(celestial.day_phase) - 0.5);
+    let lunar_hour_angle =
+        solar_hour_angle + std::f64::consts::TAU * f64::from(celestial.moon_phase);
+    let phase_offset = std::f64::consts::TAU * f64::from(tidal_sample.conditions.phase_offset);
+    let lunar_angle = 2.0 * (lunar_hour_angle + phase_offset);
+    let solar_angle = 2.0 * (solar_hour_angle + phase_offset);
+    let tide_sum = libm::cos(lunar_angle) + 0.46 * libm::cos(solar_angle);
+    let local_hour_gradient = Vector::new(
+        (std::f64::consts::TAU / f64::from(world_geometry.width_m())) as f32,
+        0.0,
+    );
+    let angle_gradient =
+        local_hour_gradient + std::f32::consts::TAU * tidal_sample.phase_gradient_per_m;
+    let tide_sum_gradient =
+        (-2.0 * libm::sin(lunar_angle) - 0.92 * libm::sin(solar_angle)) as f32 * angle_gradient;
+    (0.5 / 1.46)
+        * (tide_sum as f32 * tidal_sample.range_gradient_per_m
+            + tidal_sample.conditions.reference_range_m * tide_sum_gradient)
+}
+
+fn procedural_wave_state(query: OceanQuery) -> OceanState {
+    let wind_speed_m_s = query.true_wind_velocity_m_s.length();
+    let upper_wind_speed_m_s = query.weather.upper_wind_velocity_m_s.length();
+    let wind_direction = if wind_speed_m_s > 0.0 {
+        query.true_wind_velocity_m_s / wind_speed_m_s
+    } else {
+        Vector::ZERO
+    };
+    let upper_wind_direction = if upper_wind_speed_m_s > 0.0 {
+        query.weather.upper_wind_velocity_m_s / upper_wind_speed_m_s
+    } else {
+        Vector::ZERO
+    };
+    let wind_sea_height_m = 0.05 + 0.016 * wind_speed_m_s.powi(2);
+    let swell_height_m = 0.006 * upper_wind_speed_m_s.powi(2);
+    let unrestricted_height_m = libm::hypotf(wind_sea_height_m, swell_height_m);
+    let significant_wave_height_m = unrestricted_height_m.min(0.78 * query.water_depth_m);
+    let depth_scale = if unrestricted_height_m > 0.0 {
+        significant_wave_height_m / unrestricted_height_m
+    } else {
+        0.0
+    };
+
+    let rotation = std::f64::consts::TAU * hash_unit(query.match_seed ^ 0x3c6e_f372_fe94_f82b);
+    let mut modes = [(0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64); OCEAN_WAVE_MODE_COUNT];
+    let mut wind_weight_square_sum = 0.0;
+    let mut swell_weight_square_sum = 0.0;
+    for (mode_index, mode) in modes.iter_mut().enumerate() {
+        let mode_key = query.match_seed
+            ^ 0xa409_3822_299f_31d0
+            ^ (mode_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let direction_angle =
+            rotation + std::f64::consts::TAU * mode_index as f64 / OCEAN_WAVE_MODE_COUNT as f64;
+        let (direction_y, direction_x) = libm::sincos(direction_angle);
+        let is_wind_sea = mode_index < OCEAN_WIND_SEA_MODE_COUNT;
+        let wavelength_fraction = hash_unit(mode_key ^ 0xe703_7ed1_a0b4_28db);
+        let (minimum_wavelength_m, maximum_wavelength_m) = if is_wind_sea {
+            (8.0_f64, 180.0_f64)
+        } else {
+            (120.0_f64, 600.0_f64)
+        };
+        let wavelength_m = minimum_wavelength_m
+            * libm::pow(
+                maximum_wavelength_m / minimum_wavelength_m,
+                wavelength_fraction,
+            );
+        let width_m = f64::from(query.world_geometry.width_m());
+        let mut mode_x = libm::round(direction_x * width_m / wavelength_m) as i64;
+        if mode_x == 0 && direction_y.abs() < 1.0e-6 {
+            mode_x = if direction_x < 0.0 { -1 } else { 1 };
+        }
+        let wave_number_x = std::f64::consts::TAU * mode_x as f64 / width_m;
+        let wave_number_y = std::f64::consts::TAU * direction_y / wavelength_m;
+        let wave_number = libm::hypot(wave_number_x, wave_number_y);
+        let actual_direction_x = wave_number_x / wave_number;
+        let actual_direction_y = wave_number_y / wave_number;
+        let source_direction = if is_wind_sea {
+            wind_direction
+        } else {
+            upper_wind_direction
+        };
+        let alignment = (actual_direction_x as f32 * source_direction.x
+            + actual_direction_y as f32 * source_direction.y)
+            .max(0.0);
+        let weight = 0.20 + f64::from(alignment.powi(4));
+        if is_wind_sea {
+            wind_weight_square_sum += weight * weight;
+        } else {
+            swell_weight_square_sum += weight * weight;
+        }
+        let angular_frequency = libm::sqrt(GRAVITY_M_S2 * wave_number);
+        let phase = wave_number_x * f64::from(query.position_m.x).rem_euclid(width_m)
+            + wave_number_y * f64::from(query.position_m.y)
+            - tick_phase_radians(query.tick, angular_frequency * f64::from(DT_SECONDS))
+            + std::f64::consts::TAU * hash_unit(mode_key ^ 0xbf58_476d_1ce4_e5b9);
+        *mode = (
+            actual_direction_x,
+            actual_direction_y,
+            wave_number,
+            angular_frequency,
+            phase,
+            weight,
+        );
+    }
+
+    let wind_amplitude_scale = f64::from(depth_scale * wind_sea_height_m)
+        / (4.0 * libm::sqrt(0.5 * wind_weight_square_sum));
+    let swell_amplitude_scale =
+        f64::from(depth_scale * swell_height_m) / (4.0 * libm::sqrt(0.5 * swell_weight_square_sum));
+    let mut displacement_m = 0.0;
+    let mut slope = Vector::ZERO;
+    let mut orbital_velocity_m_s = Vector::ZERO;
+    let mut energy_direction = Vector::ZERO;
+    for (mode_index, mode) in modes.into_iter().enumerate() {
+        let (direction_x, direction_y, wave_number, angular_frequency, phase, weight) = mode;
+        let amplitude_m = weight
+            * if mode_index < OCEAN_WIND_SEA_MODE_COUNT {
+                wind_amplitude_scale
+            } else {
+                swell_amplitude_scale
+            };
+        let (phase_sine, phase_cosine) = libm::sincos(phase);
+        displacement_m += amplitude_m * phase_cosine;
+        slope += Vector::new(
+            (-amplitude_m * phase_sine * wave_number * direction_x) as f32,
+            (-amplitude_m * phase_sine * wave_number * direction_y) as f32,
+        );
+        orbital_velocity_m_s += Vector::new(
+            (amplitude_m * angular_frequency * phase_cosine * direction_x) as f32,
+            (amplitude_m * angular_frequency * phase_cosine * direction_y) as f32,
+        );
+        energy_direction += Vector::new(
+            (amplitude_m * amplitude_m * direction_x) as f32,
+            (amplitude_m * amplitude_m * direction_y) as f32,
+        );
+    }
+    let nonlinear_strength = 0.5 * smoothstep_range(1.5, 3.0, f64::from(significant_wave_height_m));
+    let significant_height_m = f64::from(significant_wave_height_m);
+    let bound_displacement_m = if significant_height_m > 0.0 {
+        nonlinear_strength
+            * (displacement_m * displacement_m - significant_height_m * significant_height_m / 16.0)
+            / significant_height_m
+    } else {
+        0.0
+    };
+    let bound_response = if significant_height_m > 0.0 {
+        (1.0 + 2.0 * nonlinear_strength * displacement_m / significant_height_m) as f32
+    } else {
+        1.0
+    };
+    displacement_m += bound_displacement_m;
+    slope *= bound_response;
+    let dominant_wave_direction = if energy_direction == Vector::ZERO {
+        Vector::ZERO
+    } else {
+        energy_direction.normalize()
+    };
+    let surface_displacement_m = displacement_m as f32;
+    OceanState {
+        current_velocity_m_s: Vector::ZERO,
+        wave_orbital_velocity_m_s: orbital_velocity_m_s,
+        significant_wave_height_m,
+        surface_displacement_m,
+        surface_slope: slope,
+        dominant_wave_direction,
+        rogue_crest_excess_m: (surface_displacement_m - significant_wave_height_m).max(0.0),
+    }
+}
+
+fn tick_phase_radians(tick: u64, phase_per_tick_radians: f64) -> f64 {
+    let mut phase = 0.0;
+    for shift in [48, 32, 16, 0] {
+        let chunk = ((tick >> shift) & 0xffff) as f64;
+        phase =
+            (phase * 65_536.0 + chunk * phase_per_tick_radians).rem_euclid(std::f64::consts::TAU);
+    }
+    phase
 }
 
 pub fn procedural_weather(
@@ -1322,25 +1706,6 @@ fn procedural_weather_noise_sample(
     sample.gradient_x_per_m *= WEATHER_NOISE_SCALE;
     sample.gradient_y_per_m *= WEATHER_NOISE_SCALE;
     sample
-}
-
-fn terrain_fractal_noise(
-    world_geometry: WorldGeometry,
-    field_seed: u64,
-    position_m: Vector,
-    wavelength_m: f64,
-    octave_count: usize,
-    circle_octave_count: usize,
-) -> f64 {
-    terrain_fractal_noise_at(
-        world_geometry,
-        field_seed,
-        f64::from(position_m.x),
-        f64::from(position_m.y),
-        wavelength_m,
-        octave_count,
-        circle_octave_count,
-    )
 }
 
 fn terrain_simplex_fractal_noise(
@@ -1935,6 +2300,32 @@ pub fn render_pressure_grid(
                 1013.25 + pressure.potential_m2_s as f32 / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
                 pressure.gradient_m_s.x / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
                 pressure.gradient_m_s.y / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+                0.0,
+            ];
+        }
+    }
+    grid
+}
+
+pub fn render_ocean_grid(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+) -> [[f32; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE] {
+    let mut grid = [[0.0; 4]; RENDER_PRESSURE_GRID_SIDE * RENDER_PRESSURE_GRID_SIDE];
+    for y in 0..RENDER_PRESSURE_GRID_SIDE {
+        for x in 0..RENDER_PRESSURE_GRID_SIDE {
+            let position_m = Vector::new(
+                x as f32 * world_geometry.width_m() / RENDER_PRESSURE_GRID_SIDE as f32,
+                -0.5 * world_geometry.height_m()
+                    + y as f32 * world_geometry.height_m() / (RENDER_PRESSURE_GRID_SIDE - 1) as f32,
+            );
+            let ocean =
+                procedural_world_environment(world_geometry, match_seed, tick, position_m).ocean;
+            grid[y * RENDER_PRESSURE_GRID_SIDE + x] = [
+                ocean.current_velocity_m_s.x,
+                ocean.current_velocity_m_s.y,
+                ocean.significant_wave_height_m,
                 0.0,
             ];
         }
