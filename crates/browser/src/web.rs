@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
     PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
-    surface_weather_transport, vector_field_transport, world_celestial_conditions,
+    scalar_field_time_coordinates, vector_field_time_coordinates, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -256,90 +256,27 @@ pub fn sample_playground_environment(
 }
 
 #[wasm_bindgen]
-pub struct PlaygroundSurfaceWeatherTransport {
-    air_temperature_x_m: f32,
-    air_temperature_y_m: f32,
-    upper_air_temperature_x_m: f32,
-    upper_air_temperature_y_m: f32,
-    water_vapor_x_m: f32,
-    water_vapor_y_m: f32,
-}
-
-#[wasm_bindgen]
-impl PlaygroundSurfaceWeatherTransport {
-    #[wasm_bindgen(getter)]
-    pub fn air_temperature_x_m(&self) -> f32 {
-        self.air_temperature_x_m
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn air_temperature_y_m(&self) -> f32 {
-        self.air_temperature_y_m
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn upper_air_temperature_x_m(&self) -> f32 {
-        self.upper_air_temperature_x_m
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn upper_air_temperature_y_m(&self) -> f32 {
-        self.upper_air_temperature_y_m
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn water_vapor_x_m(&self) -> f32 {
-        self.water_vapor_x_m
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn water_vapor_y_m(&self) -> f32 {
-        self.water_vapor_y_m
-    }
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_surface_weather_transport(
-    width_m: f32,
-    height_m: f32,
-    match_seed: u64,
-    tick: u64,
-) -> Result<PlaygroundSurfaceWeatherTransport, JsValue> {
-    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
-    let transport = surface_weather_transport(geometry, match_seed, tick);
-    Ok(PlaygroundSurfaceWeatherTransport {
-        air_temperature_x_m: transport.air_temperature_offset_m.x,
-        air_temperature_y_m: transport.air_temperature_offset_m.y,
-        upper_air_temperature_x_m: transport.upper_air_temperature_offset_m.x,
-        upper_air_temperature_y_m: transport.upper_air_temperature_offset_m.y,
-        water_vapor_x_m: transport.water_vapor_offset_m.x,
-        water_vapor_y_m: transport.water_vapor_offset_m.y,
-    })
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_vector_field_transport(
+pub fn sample_playground_field_time_coordinates(
     world_width_m: f32,
     world_height_m: f32,
-    match_seed: u64,
+    world_tick: u64,
     pressure_tick: u64,
     current_tick: u64,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let pressure_transport = vector_field_transport(geometry, match_seed, pressure_tick);
-    let current_transport = vector_field_transport(geometry, match_seed, current_tick);
-    let mut values = Vec::with_capacity(16);
-    for offset_m in pressure_transport.pressure_offset_m {
-        values.extend([offset_m.x, offset_m.y]);
-    }
+    let scalar = scalar_field_time_coordinates(world_tick);
+    let pressure = vector_field_time_coordinates(geometry, pressure_tick);
+    let current = vector_field_time_coordinates(geometry, current_tick);
+    let mut values = Vec::with_capacity(12);
     values.extend([
-        current_transport.ocean_current_offset_m.x,
-        current_transport.ocean_current_offset_m.y,
-        current_transport.ocean_current_time_coordinate,
-        0.0,
+        scalar.air_temperature,
+        scalar.upper_air_temperature,
+        scalar.water_vapor,
+        scalar.decorative_water,
     ]);
-    values.extend(pressure_transport.pressure_time_coordinate);
+    values.extend(pressure.pressure);
+    values.extend([current.ocean_current, 0.0, 0.0, 0.0]);
     Ok(values)
 }
 
@@ -475,19 +412,16 @@ impl Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
-    upper_air_temperature_transport_m: [f32; 4],
+    scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
     low_cloud_epoch: [u32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
     cloud_anchor_phase_and_padding: [f32; 4],
-    surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
-    pressure_transport_m_01: [f32; 4],
-    pressure_transport_m_23: [f32; 4],
-    ocean_current_transport_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
+    ocean_current_time_coordinate_and_padding: [f32; 4],
 }
 
 struct Renderer {
@@ -641,8 +575,8 @@ impl Renderer {
         let match_seed = match_seed.unwrap_or(0);
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
-        let surface_weather_transport = surface_weather_transport(world_geometry, match_seed, tick);
-        let vector_field_transport = vector_field_transport(world_geometry, match_seed, tick);
+        let scalar_time = scalar_field_time_coordinates(tick);
+        let vector_time = vector_field_time_coordinates(world_geometry, tick);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -653,11 +587,11 @@ impl Renderer {
                     view_width_m,
                     view_height_m,
                 ],
-                upper_air_temperature_transport_m: [
-                    surface_weather_transport.upper_air_temperature_offset_m.x,
-                    surface_weather_transport.upper_air_temperature_offset_m.y,
-                    0.0,
-                    0.0,
+                scalar_field_time_coordinates: [
+                    scalar_time.air_temperature,
+                    scalar_time.upper_air_temperature,
+                    scalar_time.water_vapor,
+                    scalar_time.decorative_water,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 low_cloud_epoch: [
@@ -675,12 +609,6 @@ impl Renderer {
                     0.0,
                     0.0,
                 ],
-                surface_weather_transport_m: [
-                    surface_weather_transport.air_temperature_offset_m.x,
-                    surface_weather_transport.air_temperature_offset_m.y,
-                    surface_weather_transport.water_vapor_offset_m.x,
-                    surface_weather_transport.water_vapor_offset_m.y,
-                ],
                 world_phases: [
                     celestial.day_phase,
                     celestial.season_phase,
@@ -688,25 +616,13 @@ impl Renderer {
                     0.0,
                 ],
                 world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
-                pressure_transport_m_01: [
-                    vector_field_transport.pressure_offset_m[0].x,
-                    vector_field_transport.pressure_offset_m[0].y,
-                    vector_field_transport.pressure_offset_m[1].x,
-                    vector_field_transport.pressure_offset_m[1].y,
-                ],
-                pressure_transport_m_23: [
-                    vector_field_transport.pressure_offset_m[2].x,
-                    vector_field_transport.pressure_offset_m[2].y,
-                    vector_field_transport.pressure_offset_m[3].x,
-                    vector_field_transport.pressure_offset_m[3].y,
-                ],
-                ocean_current_transport_m: [
-                    vector_field_transport.ocean_current_offset_m.x,
-                    vector_field_transport.ocean_current_offset_m.y,
-                    vector_field_transport.ocean_current_time_coordinate,
+                pressure_time_coordinate: vector_time.pressure,
+                ocean_current_time_coordinate_and_padding: [
+                    vector_time.ocean_current,
+                    0.0,
+                    0.0,
                     0.0,
                 ],
-                pressure_time_coordinate: vector_field_transport.pressure_time_coordinate,
             }),
         );
 

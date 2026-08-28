@@ -11,27 +11,27 @@ use simulation::{
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 // These gains fit the accepted k=2, lambda=9 m/s wind distribution; they are
 // gameplay calibration, not pressure amplitudes transferred from Earth data.
-const PRESSURE_SIMPLEX_SCALE: f32 = 0.49;
-const PRESSURE_EVOLUTION_SPEED_M_S: f32 = 1.0;
+const PRESSURE_SIMPLEX_SCALE: f32 = 0.495;
+const PRESSURE_EVOLUTION_SPEED_M_S: f32 = 6.0;
 const PRESSURE_GUST_SHAPING: f32 = 1.5;
 const PLANETARY_TRANSIENT_VARIANCE_FRACTION: f64 = 0.5;
 const PLANETARY_ZONAL_WIND_PEAK_M_S: f32 = 3.1;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
 const UPPER_WIND_SCALE: f32 = 1.15;
-const THERMAL_WIND_SCALE_M2_S_C: f32 = 2_000.0;
+const THERMAL_WIND_SCALE_M2_S_C: f32 = 1_600.0;
 const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
 const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
 const SURFACE_AIR_MASS_COUPLING_500_HPA: f32 = 0.45;
 const INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C: f32 = 19.0;
-const BASE_WEATHER_TRANSPORT_SPEED_M_S: f64 = 6.0;
-const WEATHER_TRANSPORT_DIRECTION_SPREAD_RAD: f64 = std::f64::consts::PI / 720.0;
 const SURFACE_AIR_TEMPERATURE_NOISE_SALT: u64 = 0x4528_21e6_38d0_1377;
 const AIR_TEMPERATURE_500_HPA_NOISE_SALT: u64 = 0xbe54_66cf_34e9_0c6c;
 const WATER_VAPOR_NOISE_SALT: u64 = 0x082e_fa98_ec4e_6c89;
-// Four-dimensional slices need a lower field gain to preserve the calibrated
-// clear/cloudy/storm occupancy of the derived weather transfer functions.
-const WEATHER_NOISE_SCALE: f64 = 0.75;
+// Four-dimensional slices use field-specific gains to preserve the independently
+// calibrated temperature tails and clear/cloudy/storm occupancy.
+const SURFACE_AIR_TEMPERATURE_NOISE_SCALE: f64 = 0.85;
+const AIR_TEMPERATURE_500_HPA_NOISE_SCALE: f64 = 0.75;
+const WATER_VAPOR_NOISE_SCALE: f64 = 0.75;
 // Calibrated from 1991–2020 NASA POWER/MERRA-2 daily T2M, T2M_MIN, and T2M_MAX:
 // eight longitude-balanced, low-elevation land sites per 10° absolute-latitude
 // band, with Southern Hemisphere seasons shifted and grid elevation removed by
@@ -47,9 +47,13 @@ const TEMPERATURE_ANOMALY_P99_C: [f32; 10] =
     [9.5, 5.4, 5.5, 13.7, 14.0, 16.2, 12.4, 13.3, 6.6, 6.0];
 const TEMPERATURE_ANOMALY_SCALE_C: [f32; 10] =
     [19.5, 11.1, 11.3, 28.1, 28.7, 33.2, 25.4, 27.3, 13.5, 12.3];
-const SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE: f64 = 0.9;
-const AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE: f64 = 1.15;
-const WATER_VAPOR_TRANSPORT_SPEED_SCALE: f64 = 1.0;
+// These speeds set noise-axis crossing times; they are gameplay evolution rates,
+// not air-parcel advection velocities or values scaled from Earth.
+const SURFACE_AIR_TEMPERATURE_EVOLUTION_SPEED_M_S: f32 = 5.4;
+const AIR_TEMPERATURE_500_HPA_EVOLUTION_SPEED_M_S: f32 = 6.9;
+const WATER_VAPOR_EVOLUTION_SPEED_M_S: f32 = 6.0;
+const DECORATIVE_WATER_EVOLUTION_SPEED_M_S: f32 = 0.65;
+const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
@@ -75,9 +79,8 @@ const OCEAN_CURRENT_WORLD_FRACTION: f64 = 0.25;
 const OCEAN_CURRENT_OCTAVE_COUNT: usize = 3;
 const OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S: f64 = 5_500.0;
 const OCEAN_CURRENT_PRESSURE_COUPLING: f64 = 0.006;
-// Current strength, pressure coupling, drift, and evolution rates are gameplay
+// Current strength, pressure coupling, and evolution rate are gameplay
 // calibration; only the gyre wavelength fraction carries the Earth-scale analogy.
-const OCEAN_CURRENT_TRANSPORT_SPEED_SCALE: f64 = 0.002;
 const OCEAN_CURRENT_EVOLUTION_SPEED_M_S: f32 = 0.012;
 const OCEAN_TIDAL_POTENTIAL_SCALE_M2_S: f64 = 1_200.0;
 const OCEAN_WAVE_MODE_COUNT: usize = 16;
@@ -264,20 +267,17 @@ pub struct WorldEnvironment {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SurfaceWeatherTransport {
-    // Bounded offsets preserve late-match motion when the shader cannot convert
-    // an absolute `u64` tick to floating point without losing adjacent ticks.
-    pub air_temperature_offset_m: Vector,
-    pub upper_air_temperature_offset_m: Vector,
-    pub water_vapor_offset_m: Vector,
+pub struct ScalarFieldTimeCoordinates {
+    pub air_temperature: f32,
+    pub upper_air_temperature: f32,
+    pub water_vapor: f32,
+    pub decorative_water: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VectorFieldTransport {
-    pub pressure_offset_m: [Vector; 4],
-    pub pressure_time_coordinate: [f32; 4],
-    pub ocean_current_offset_m: Vector,
-    pub ocean_current_time_coordinate: f32,
+pub struct VectorFieldTimeCoordinates {
+    pub pressure: [f32; 4],
+    pub ocean_current: f32,
 }
 
 struct ScalarNoiseSample {
@@ -315,32 +315,32 @@ struct TemperatureSample {
 #[derive(Clone, Copy)]
 struct WeatherNoiseParameters {
     salt: u64,
-    transport_speed_scale: f64,
-    wavelength_m: f64,
+    scale: f64,
+    evolution_speed_m_s: f32,
+    wavelength_m: f32,
     octave_count: usize,
-    circle_octave_count: usize,
 }
 
 const SURFACE_AIR_TEMPERATURE_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     salt: SURFACE_AIR_TEMPERATURE_NOISE_SALT,
-    transport_speed_scale: SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
+    scale: SURFACE_AIR_TEMPERATURE_NOISE_SCALE,
+    evolution_speed_m_s: SURFACE_AIR_TEMPERATURE_EVOLUTION_SPEED_M_S,
     wavelength_m: 65_536.0,
     octave_count: 4,
-    circle_octave_count: 4,
 };
 const AIR_TEMPERATURE_500_HPA_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     salt: AIR_TEMPERATURE_500_HPA_NOISE_SALT,
-    transport_speed_scale: AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
+    scale: AIR_TEMPERATURE_500_HPA_NOISE_SCALE,
+    evolution_speed_m_s: AIR_TEMPERATURE_500_HPA_EVOLUTION_SPEED_M_S,
     wavelength_m: 65_536.0,
     octave_count: 4,
-    circle_octave_count: 4,
 };
 const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     salt: WATER_VAPOR_NOISE_SALT,
-    transport_speed_scale: WATER_VAPOR_TRANSPORT_SPEED_SCALE,
+    scale: WATER_VAPOR_NOISE_SCALE,
+    evolution_speed_m_s: WATER_VAPOR_EVOLUTION_SPEED_M_S,
     wavelength_m: 3584.0,
     octave_count: 5,
-    circle_octave_count: 4,
 };
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
@@ -679,8 +679,7 @@ struct PressureSample {
 struct WindBand {
     world_fraction: f32,
     variance_fraction: f64,
-    transport_salt: u64,
-    transport_speed_scale: f64,
+    noise_salt: u64,
     synoptic_coupling: f32,
 }
 
@@ -688,36 +687,32 @@ struct WindBand {
 // roughly 6000, 2000, 600, and 160 km; the 2000 km band lies within the NWS
 // 1000–2500 km synoptic range (forecast.weather.gov/glossary.php?word=synoptic+scale).
 // The default 64 km world scales them to 9.6, 3.2,
-// 0.96, and 0.256 km. Variance, coupling, and transport speeds are gameplay
+// 0.96, and 0.256 km. Variance, coupling, and evolution rates are gameplay
 // tuning, not a scaled atmospheric energy spectrum. Keep the mirrored WGSL
 // fractions, amplitudes, and couplings synchronized with this table.
 const WIND_BANDS: [WindBand; 4] = [
     WindBand {
         world_fraction: 0.15,
         variance_fraction: 0.12,
-        transport_salt: 0x510e_527f_ade6_82d1,
-        transport_speed_scale: 0.995,
+        noise_salt: 0x510e_527f_ade6_82d1,
         synoptic_coupling: 1.0,
     },
     WindBand {
         world_fraction: 0.05,
         variance_fraction: 0.78,
-        transport_salt: 0x9b05_688c_2b3e_6c1f,
-        transport_speed_scale: 1.0,
+        noise_salt: 0x9b05_688c_2b3e_6c1f,
         synoptic_coupling: 1.0,
     },
     WindBand {
         world_fraction: 0.015,
         variance_fraction: 0.08,
-        transport_salt: 0x1f83_d9ab_fb41_bd6b,
-        transport_speed_scale: 1.005,
+        noise_salt: 0x1f83_d9ab_fb41_bd6b,
         synoptic_coupling: 0.20,
     },
     WindBand {
         world_fraction: 0.004,
         variance_fraction: 0.02,
-        transport_salt: 0x5be0_cd19_137e_2179,
-        transport_speed_scale: 1.01,
+        noise_salt: 0x5be0_cd19_137e_2179,
         synoptic_coupling: 0.05,
     },
 ];
@@ -888,13 +883,13 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         query.position_m,
         query.celestial,
     );
-    let transport = vector_field_transport(query.world_geometry, query.match_seed, query.tick);
+    let time = vector_field_time_coordinates(query.world_geometry, query.tick);
     let gyre = spatiotemporal_fractal_noise_sample(
         query.world_geometry,
         query.match_seed ^ OCEAN_CURRENT_NOISE_SALT,
-        query.position_m - transport.ocean_current_offset_m,
+        query.position_m,
         query.world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
-        transport.ocean_current_time_coordinate,
+        time.ocean_current,
         OCEAN_CURRENT_OCTAVE_COUNT,
         0.5,
     );
@@ -1713,66 +1708,44 @@ pub fn procedural_cloud_cover(
     procedural_weather(world_geometry, match_seed, tick, position_m).cloudiness
 }
 
-pub fn surface_weather_transport(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    tick: u64,
-) -> SurfaceWeatherTransport {
-    SurfaceWeatherTransport {
-        air_temperature_offset_m: weather_transport_offset_m(
-            world_geometry,
-            match_seed,
+pub fn scalar_field_time_coordinates(tick: u64) -> ScalarFieldTimeCoordinates {
+    ScalarFieldTimeCoordinates {
+        air_temperature: noise_time_coordinate(
             tick,
-            SURFACE_AIR_TEMPERATURE_NOISE.salt,
-            SURFACE_AIR_TEMPERATURE_NOISE.transport_speed_scale,
+            SURFACE_AIR_TEMPERATURE_NOISE.evolution_speed_m_s,
+            SURFACE_AIR_TEMPERATURE_NOISE.wavelength_m as f32,
         ),
-        upper_air_temperature_offset_m: weather_transport_offset_m(
-            world_geometry,
-            match_seed,
+        upper_air_temperature: noise_time_coordinate(
             tick,
-            AIR_TEMPERATURE_500_HPA_NOISE.salt,
-            AIR_TEMPERATURE_500_HPA_NOISE.transport_speed_scale,
+            AIR_TEMPERATURE_500_HPA_NOISE.evolution_speed_m_s,
+            AIR_TEMPERATURE_500_HPA_NOISE.wavelength_m as f32,
         ),
-        water_vapor_offset_m: weather_transport_offset_m(
-            world_geometry,
-            match_seed,
+        water_vapor: noise_time_coordinate(
             tick,
-            WATER_VAPOR_NOISE.salt,
-            WATER_VAPOR_NOISE.transport_speed_scale,
+            WATER_VAPOR_NOISE.evolution_speed_m_s,
+            WATER_VAPOR_NOISE.wavelength_m as f32,
+        ),
+        decorative_water: noise_time_coordinate(
+            tick,
+            DECORATIVE_WATER_EVOLUTION_SPEED_M_S,
+            DECORATIVE_WATER_WAVELENGTH_M,
         ),
     }
 }
 
-pub fn vector_field_transport(
+pub fn vector_field_time_coordinates(
     world_geometry: WorldGeometry,
-    match_seed: u64,
     tick: u64,
-) -> VectorFieldTransport {
-    VectorFieldTransport {
-        pressure_offset_m: WIND_BANDS.map(|band| {
-            weather_transport_offset_m(
-                world_geometry,
-                match_seed,
-                tick,
-                band.transport_salt,
-                band.transport_speed_scale,
-            )
-        }),
-        pressure_time_coordinate: WIND_BANDS.map(|band| {
+) -> VectorFieldTimeCoordinates {
+    VectorFieldTimeCoordinates {
+        pressure: WIND_BANDS.map(|band| {
             noise_time_coordinate(
                 tick,
                 PRESSURE_EVOLUTION_SPEED_M_S,
                 (world_geometry.width_m() * band.world_fraction).max(64.0),
             )
         }),
-        ocean_current_offset_m: weather_transport_offset_m(
-            world_geometry,
-            match_seed,
-            tick,
-            OCEAN_CURRENT_NOISE_SALT,
-            OCEAN_CURRENT_TRANSPORT_SPEED_SCALE,
-        ),
-        ocean_current_time_coordinate: noise_time_coordinate(
+        ocean_current: noise_time_coordinate(
             tick,
             OCEAN_CURRENT_EVOLUTION_SPEED_M_S,
             world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
@@ -1787,24 +1760,22 @@ fn procedural_weather_noise(
     position_m: Vector,
     parameters: WeatherNoiseParameters,
 ) -> f64 {
-    let (transported_x_m, transported_y_m) = transported_weather_position_m(
-        world_geometry,
-        match_seed,
+    let time = noise_time_coordinate(
         tick,
-        position_m,
-        parameters.salt,
-        parameters.transport_speed_scale,
+        parameters.evolution_speed_m_s,
+        parameters.wavelength_m,
     );
-    WEATHER_NOISE_SCALE
-        * terrain_fractal_noise_at(
+    parameters.scale
+        * spatiotemporal_fractal_noise_sample(
             world_geometry,
             match_seed ^ parameters.salt,
-            transported_x_m,
-            transported_y_m,
+            position_m,
             parameters.wavelength_m,
+            time,
             parameters.octave_count,
-            parameters.circle_octave_count,
+            0.5,
         )
+        .value
 }
 
 fn procedural_weather_noise_sample(
@@ -1814,26 +1785,23 @@ fn procedural_weather_noise_sample(
     position_m: Vector,
     parameters: WeatherNoiseParameters,
 ) -> ScalarNoiseSample {
-    let (transported_x_m, transported_y_m) = transported_weather_position_m(
-        world_geometry,
-        match_seed,
+    let time = noise_time_coordinate(
         tick,
-        position_m,
-        parameters.salt,
-        parameters.transport_speed_scale,
+        parameters.evolution_speed_m_s,
+        parameters.wavelength_m,
     );
-    let mut sample = terrain_fractal_noise_sample(
+    let mut sample = spatiotemporal_fractal_noise_sample(
         world_geometry,
         match_seed ^ parameters.salt,
-        transported_x_m,
-        transported_y_m,
+        position_m,
         parameters.wavelength_m,
+        time,
         parameters.octave_count,
-        parameters.circle_octave_count,
+        0.5,
     );
-    sample.value *= WEATHER_NOISE_SCALE;
-    sample.gradient_x_per_m *= WEATHER_NOISE_SCALE;
-    sample.gradient_y_per_m *= WEATHER_NOISE_SCALE;
+    sample.value *= parameters.scale;
+    sample.gradient_x_per_m *= parameters.scale;
+    sample.gradient_y_per_m *= parameters.scale;
     sample
 }
 
@@ -1992,6 +1960,8 @@ fn spatiotemporal_simplex_noise_4d(
     let longitude_offset = std::f32::consts::TAU * (orientation & 0xff) as f32 / 256.0;
     let latitude_sign = if orientation & 0x100 == 0 { 1.0 } else { -1.0 };
     let latitude_offset = ((orientation >> 9) & 0xff) as f32 / 16.0;
+    // Independent phase keeps the ensemble stationary as the shared clock advances.
+    let time_offset = ((orientation >> 17) & 0x7fff) as f32 / 64.0;
     let longitude =
         std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m() + longitude_offset;
     let (sin_longitude, cos_longitude) = (libm::sinf(longitude), libm::cosf(longitude));
@@ -2000,7 +1970,7 @@ fn spatiotemporal_simplex_noise_4d(
         circle_radius * cos_longitude,
         circle_radius * sin_longitude,
         latitude_sign * position_m.y / wavelength_m + latitude_offset,
-        time_coordinate,
+        time_coordinate + time_offset,
     ];
     let (value, input_gradient) = simplex_noise_sample_4d(field_seed, point);
     (
@@ -2115,40 +2085,6 @@ fn terrain_simplex_lattice_gradient(
     let index = (wind_hash(key) as u32 % SIMPLEX_GRADIENT_DIRECTIONS.len() as u32) as usize;
     let (gradient_x, gradient_y) = SIMPLEX_GRADIENT_DIRECTIONS[index];
     Vector::new(gradient_x, gradient_y)
-}
-
-fn terrain_fractal_noise_at(
-    world_geometry: WorldGeometry,
-    field_seed: u64,
-    position_x_m: f64,
-    position_y_m: f64,
-    mut wavelength_m: f64,
-    octave_count: usize,
-    circle_octave_count: usize,
-) -> f64 {
-    let mut noise = 0.0;
-    let mut amplitude = 1.0;
-    let mut amplitude_sum = 0.0;
-    for octave in 0..octave_count {
-        noise += amplitude
-            * hybrid_simplex_noise_sample_f64(
-                world_geometry,
-                field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03),
-                position_x_m,
-                position_y_m,
-                wavelength_m,
-                if octave < circle_octave_count {
-                    PeriodicNoiseBasis::CircleEmbeddedSimplex4d
-                } else {
-                    PeriodicNoiseBasis::PeriodicTriangularSimplex2d
-                },
-            )
-            .value;
-        amplitude_sum += amplitude;
-        amplitude *= 0.5;
-        wavelength_m *= 0.5;
-    }
-    noise / amplitude_sum
 }
 
 fn terrain_fractal_noise_sample(
@@ -2461,19 +2397,18 @@ fn procedural_pressure_sample(
     tick: u64,
     position_m: Vector,
 ) -> PressureSample {
-    let transport = vector_field_transport(world_geometry, match_seed, tick);
+    let time = vector_field_time_coordinates(world_geometry, tick);
     let mut potential_m2_s = 0.0_f32;
     let mut gradient_m_s = Vector::ZERO;
     let mut synoptic_gradient_m_s = Vector::ZERO;
     for (band_index, band) in WIND_BANDS.into_iter().enumerate() {
         let wavelength_m = (world_geometry.width_m() * band.world_fraction).max(64.0);
-        let transported_m = position_m - transport.pressure_offset_m[band_index];
         let mut noise = spatiotemporal_simplex_noise_4d(
             world_geometry,
-            match_seed ^ band.transport_salt,
-            transported_m,
+            match_seed ^ band.noise_salt,
+            position_m,
             wavelength_m,
-            transport.pressure_time_coordinate[band_index],
+            time.pressure[band_index],
         );
         if band_index == WIND_BANDS.len() - 1 {
             let unshaped_value = noise.0;
@@ -2522,83 +2457,13 @@ fn noise_time_coordinate(tick: u64, evolution_speed_m_s: f32, wavelength_m: f32)
     let coordinate_per_tick =
         f64::from(DT_SECONDS) * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
     let mut coordinate = 0.0;
-    // Horner reduction retains every tick bit while keeping the shader input in
-    // a range where `f32` still resolves animation-scale changes.
+    // Horner reduction incorporates the full tick without first rounding the
+    // absolute clock to floating point.
     for shift in [48, 32, 16, 0] {
         let chunk = ((tick >> shift) & 0xffff) as f64;
         coordinate = (coordinate * 65_536.0 + chunk * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
     }
     coordinate as f32
-}
-
-fn transported_weather_position_m(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    tick: u64,
-    position_m: Vector,
-    transport_salt: u64,
-    speed_scale: f64,
-) -> (f64, f64) {
-    let (transport_velocity_x_m_s, transport_velocity_y_m_s) =
-        weather_transport_velocity_m_s(match_seed, transport_salt, speed_scale);
-    let width_m = f64::from(world_geometry.width_m());
-    let height_m = f64::from(world_geometry.height_m());
-    (
-        (f64::from(position_m.x).rem_euclid(width_m)
-            - periodic_transport_displacement_m(tick, transport_velocity_x_m_s, width_m))
-        .rem_euclid(width_m),
-        (f64::from(position_m.y).rem_euclid(height_m)
-            - periodic_transport_displacement_m(tick, transport_velocity_y_m_s, height_m))
-        .rem_euclid(height_m),
-    )
-}
-
-fn weather_transport_offset_m(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    tick: u64,
-    transport_salt: u64,
-    speed_scale: f64,
-) -> Vector {
-    let (velocity_x_m_s, velocity_y_m_s) =
-        weather_transport_velocity_m_s(match_seed, transport_salt, speed_scale);
-    Vector::new(
-        periodic_transport_displacement_m(tick, velocity_x_m_s, f64::from(world_geometry.width_m()))
-            as f32,
-        periodic_transport_displacement_m(
-            tick,
-            velocity_y_m_s,
-            f64::from(world_geometry.height_m()),
-        ) as f32,
-    )
-}
-
-fn periodic_transport_displacement_m(tick: u64, velocity_m_s: f64, period_m: f64) -> f64 {
-    let displacement_per_tick_m = velocity_m_s * f64::from(DT_SECONDS);
-    let mut displacement_m = 0.0;
-    // Base-2^16 Horner reduction retains every tick bit without ever converting
-    // the full u64 to f64, so adjacent late-match ticks keep distinct phases.
-    for shift in [48, 32, 16, 0] {
-        let chunk = ((tick >> shift) & 0xffff) as f64;
-        displacement_m =
-            (displacement_m * 65_536.0 + chunk * displacement_per_tick_m).rem_euclid(period_m);
-    }
-    displacement_m
-}
-
-fn weather_transport_velocity_m_s(
-    match_seed: u64,
-    transport_salt: u64,
-    speed_scale: f64,
-) -> (f64, f64) {
-    let base_direction_rad = std::f64::consts::TAU * hash_unit(match_seed ^ 0x243f_6a88_85a3_08d3);
-    let direction_offset_rad = WEATHER_TRANSPORT_DIRECTION_SPREAD_RAD
-        * (2.0 * hash_unit(match_seed ^ transport_salt ^ 0x1319_8a2e_0370_7344) - 1.0);
-    let speed_variation =
-        0.9975 + 0.005 * hash_unit(match_seed ^ transport_salt ^ 0xa409_3822_299f_31d0);
-    let speed_m_s = BASE_WEATHER_TRANSPORT_SPEED_M_S * speed_scale * speed_variation;
-    let (direction_y, direction_x) = libm::sincos(base_direction_rad + direction_offset_rad);
-    (speed_m_s * direction_x, speed_m_s * direction_y)
 }
 
 fn land_sheltered_wind(
@@ -2680,43 +2545,19 @@ mod tests {
     }
 
     #[test]
-    fn stateless_weather_layers_use_correlated_distinct_transport() {
-        let match_seed = 0x5eed;
-        let surface = weather_transport_velocity_m_s(
-            match_seed,
-            SURFACE_AIR_TEMPERATURE_NOISE_SALT,
-            SURFACE_AIR_MASS_TRANSPORT_SPEED_SCALE,
-        );
-        let upper = weather_transport_velocity_m_s(
-            match_seed,
-            AIR_TEMPERATURE_500_HPA_NOISE_SALT,
-            AIR_TEMPERATURE_500_HPA_TRANSPORT_SPEED_SCALE,
-        );
-        let moisture = weather_transport_velocity_m_s(
-            match_seed,
-            WATER_VAPOR_NOISE_SALT,
-            WATER_VAPOR_TRANSPORT_SPEED_SCALE,
-        );
-        let speed = |velocity: (f64, f64)| libm::hypot(velocity.0, velocity.1);
-        let alignment = |first: (f64, f64), second: (f64, f64)| {
-            (first.0 * second.0 + first.1 * second.1) / (speed(first) * speed(second))
-        };
+    fn scalar_field_time_coordinates_preserve_late_tick_evolution() {
+        let world = WorldGeometry::default();
+        let before = scalar_field_time_coordinates(u64::MAX - 216_000);
+        let after = scalar_field_time_coordinates(u64::MAX);
+        assert_ne!(before.air_temperature, after.air_temperature);
+        assert_ne!(before.upper_air_temperature, after.upper_air_temperature);
+        assert_ne!(before.water_vapor, after.water_vapor);
+        assert_ne!(before.decorative_water, after.decorative_water);
 
-        assert!(alignment(surface, upper) > 0.9);
-        assert!(alignment(surface, moisture) > 0.9);
-        assert!(libm::hypot(surface.0 - upper.0, surface.1 - upper.1) > 0.1);
-        assert!(libm::hypot(surface.0 - moisture.0, surface.1 - moisture.1) > 0.1);
-        assert!(speed(upper) > speed(surface));
-
-        let band_speeds = WIND_BANDS.map(|band| {
-            speed(weather_transport_velocity_m_s(
-                match_seed,
-                band.transport_salt,
-                band.transport_speed_scale,
-            ))
-        });
-        assert!(band_speeds[0] < band_speeds[1]);
-        assert!(band_speeds[1] < band_speeds[2]);
+        let before = vector_field_time_coordinates(world, u64::MAX - 216_000);
+        let after = vector_field_time_coordinates(world, u64::MAX);
+        assert_ne!(before.pressure, after.pressure);
+        assert_ne!(before.ocean_current, after.ocean_current);
     }
 
     #[test]
@@ -2730,15 +2571,6 @@ mod tests {
         assert_eq!(FINE_TERRAIN_CIRCLE_OCTAVE_COUNT, 0);
         assert_eq!(TIDE_CIRCLE_OCTAVE_COUNT, 3);
         assert_eq!(TIDE_CIRCLE_OCTAVE_COUNT, TIDE_OCTAVE_COUNT);
-        assert_eq!(
-            SURFACE_AIR_TEMPERATURE_NOISE.circle_octave_count,
-            SURFACE_AIR_TEMPERATURE_NOISE.octave_count,
-        );
-        assert_eq!(
-            AIR_TEMPERATURE_500_HPA_NOISE.circle_octave_count,
-            AIR_TEMPERATURE_500_HPA_NOISE.octave_count,
-        );
-        assert_eq!(WATER_VAPOR_NOISE.circle_octave_count, 4);
     }
 
     #[test]
@@ -2860,7 +2692,7 @@ mod tests {
 
     #[test]
     fn open_wind_has_uniform_direction_and_weibull_speed() {
-        const SAMPLE_COUNT: usize = 16_384;
+        const SAMPLE_COUNT: usize = 65_536;
         let mut quadrant_counts = [0; 4];
         let mut speed_bins = [0; 31];
         let mut speed_sum = 0.0;
@@ -2914,7 +2746,7 @@ mod tests {
             .max_by_key(|(_, count)| *count)
             .unwrap()
             .0;
-        assert!((5..=7).contains(&mode_bin));
+        assert!((5..=7).contains(&mode_bin), "mode bin {mode_bin}");
         assert!(speed_bins[0] > 0);
         assert!(speed_bins[6] > speed_bins[12]);
         assert!(speed_bins[12] > speed_bins[18]);

@@ -144,11 +144,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   latitude, climate, and rendering position never wrap north-south, and opaque
   authoritative ice hides the repeated substrate beyond the poles.
 - **[Explicit]** Noise basis is a fixed semantic property of each field and
-  octave, independent of world geometry. Broad terrain, macro transported scalar
-  weather, and tide response use a four-dimensional circle embedding with radii
-  `width / 2π` and `height / 2π`, preserving the requested local metre scale
-  without stretching either axis. Fine physical terrain and material spectra
-  use periodic two-dimensional triangular simplex. Changing the
+  octave, independent of world geometry. Broad terrain and tide response use a
+  four-dimensional circle embedding with radii `width / 2π` and `height / 2π`,
+  preserving the requested local metre scale without stretching either axis.
+  Evolving scalar weather uses longitude-circle, linear-latitude, noise-time
+  simplex. Fine physical terrain and material spectra use periodic
+  two-dimensional triangular simplex. Changing the
   supported geometry range never silently reclassifies an octave; any partition
   change is an explicit, profiled retuning decision.
 - **[Explicit]** Procedural generator implementations remain portable between
@@ -159,12 +160,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   within a narrow numeric tolerance and preserve categorical boundaries outside
   that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
   portability requirement.
-- **[Explicit]** Long-duration transported scalar weather macro octaves and
-  broad unthresholded tide response use double-precision circle-embedded
-  four-dimensional simplex noise with analytic chain-rule world-space gradients;
-  the finest water-vapor octave remains periodic two-dimensional simplex.
-  Transported phases reduce on their procedural periods before evaluation,
-  preserving long-time precision without repeating time.
+- **[Explicit]** Broad unthresholded tide response uses double-precision
+  circle-embedded four-dimensional simplex noise with analytic chain-rule
+  world-space gradients. Evolving scalar weather uses portable single-precision
+  four-dimensional simplex with analytic horizontal gradients; the host reduces
+  the full tick into bounded time coordinates before shader evaluation.
 
 ### Atmosphere and climate
 
@@ -186,7 +186,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   weather scales. Pressure-system wavelengths are fixed fractions of world
   circumference, preserving the relative spatial scale of Earth-like planetary,
   synoptic, mesoscale, and local systems when world geometry changes. Their
-  amplitudes, relative variance, transport, evolution rate, and gust shaping are
+  amplitudes, relative variance, evolution rate, and gust shaping are
   gameplay calibration rather than scaled Earth values.
 - **[Explicit]** Deterministic terrain shelter weakens wind in the lee of land
   over nearby water.
@@ -196,26 +196,27 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   down-gradient flow at the equator. Broad pressure drives upper flow,
   horizontal temperature gradient contributes thermal wind, and vertical shear
   is derived. Each pressure band directly evaluates a simplex field over
-  longitude, latitude, and a tick-derived time coordinate and also advects at a
-  distinct but correlated seeded velocity, so systems both deform and travel
-  without stored history; there is no weather grid or storm entity. Longitude is
-  circle-embedded for a continuous seam while latitude remains linear between
-  the finite poles and does not tile vertically.
+  longitude, latitude, and a tick-derived time coordinate. Systems evolve and
+  move locally without a field-wide velocity, stored history, weather grid, or
+  storm entity. Longitude is circle-embedded for a continuous seam while
+  latitude remains linear between the finite poles and does not tile vertically.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
-  climate, transported surface temperature and moisture, snow and solid ice,
+  climate, evolving surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
   Its procedural inputs are match seed, geometry, global day/season/lunar phase,
   and tick; the view-center Rust sample is diagnostic and never drives the
   surface scene.
-- **[Explicit]** The host reduces every tick bit to bounded procedural transport
-  offsets and continuous pressure/current noise-time coordinates before upload,
-  so WGSL never converts total time to `f32` or interpolates temporal snapshots.
+- **[Explicit]** The host reduces the full tick into bounded scalar-weather,
+  pressure, and current noise-time coordinates before upload, so WGSL never
+  converts total time to `f32` or interpolates temporal snapshots. A seeded phase
+  on each field and octave prevents unrelated spectra from changing in lockstep.
 - **[Explicit]** Rust and WGSL evaluate the same four-band simplex pressure potential
-  directly from match seed, position, world geometry, and bounded transport
-  offsets. Cloud formation, pressure diagnostics, and rendered wind therefore
+  directly from match seed, position, world geometry, and bounded time
+  coordinates. Cloud formation, pressure diagnostics, and rendered wind therefore
   query the field at their world position without a sampled pressure lattice.
-  Spatial temperature and moisture are likewise evaluated in WGSL rather than
-  accepting center-derived weather.
+  Spatial temperature and moisture use the same spatiotemporal query model in
+  Rust and WGSL rather than accepting center-derived weather. No evolving scalar
+  or vector field receives a global spatial transport offset.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
   latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with
@@ -232,7 +233,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   preserves coherent latent shapes under uniform flow, permits bounded
   shear-driven deformation, and requires no individual clouds, particles,
   history, or fluid state. Unresolved octaves fade against the fragment's
-  world-space pixel footprint. Spatial transported temperature and moisture
+  world-space pixel footprint. Spatially evolving temperature and moisture
   derive cloud formation at the queried position. A continuous positive excess
   of the latent field over the local formation threshold is cloud amount, while
   non-positive excess is clear air. The visible layer uses small 320-metre
@@ -291,8 +292,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   polar boundary, and a separate scalar potential uses spatial tide response and
   phase gradients. Both vanish where there is no navigable water. This is an
   analytic local approximation, not a stored basin solve. Basin-scale wavelength
-  follows world circumference; spectrum, strength, pressure coupling, transport,
-  and evolution rate are gameplay calibration.
+  follows world circumference; spectrum, strength, pressure coupling, and
+  evolution rate are gameplay calibration.
 - **[Explicit]** Shared gameplay waves are deterministic from match state and
   local conditions, affect boat-relative water motion, and have no persistent
   drift. Exceptional crests emerge from interference rather than an event flag.
@@ -333,13 +334,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Reflective substrates remain visible farther, but every substrate approaches a
   visible bottom signal as water depth approaches zero. Underwater rendering
   adds neither a separate visual-detail height field nor bottom-normal lighting.
-- **[Implicit]** Unfrozen water adds an appearance-only normal field from four
-  fixed, metre-scale octaves of the same periodic circle-simplex and finite-anchor
-  transport used by other moving visual fields. Its seeded direction, octave
-  count, refresh horizon, and evaluation cost do not depend on world size. The
-  fragment footprint filters unresolved octaves, and the resulting normal and
-  low roughness enter the shared diffuse and directional surface-light model.
-  This field changes neither authoritative water height nor boat physics.
+- **[Explicit]** Unfrozen water adds an appearance-only normal field from four
+  fixed, metre-scale octaves of longitude-periodic, linear-latitude,
+  spatiotemporal simplex. It evolves locally without a field-wide velocity. Its
+  octave count and evaluation cost do not depend on world size. The fragment
+  footprint filters unresolved octaves, and the resulting normal and low
+  roughness enter the shared diffuse and directional surface-light model. This
+  field changes neither authoritative water height nor boat physics.
 - **[Explicit]** Visible precipitation contacts the world-space open-water
   surface. Individual contacts retain physical scale and filter out when the
   fragment footprint cannot resolve them; spatial precipitation then reduces

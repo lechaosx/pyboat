@@ -1,6 +1,6 @@
 use game::{
-    current_air_temperature_c, procedural_world_environment, surface_weather_transport,
-    world_celestial_conditions, world_climate_conditions,
+    current_air_temperature_c, procedural_world_environment, scalar_field_time_coordinates,
+    vector_field_time_coordinates, world_celestial_conditions, world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::{DT_SECONDS, WorldGeometry};
@@ -126,29 +126,23 @@ fn world_environment_is_deterministic_and_locally_continuous() {
 }
 
 #[test]
-fn renderer_weather_transport_stays_bounded_and_advances_at_huge_ticks() {
+fn evolving_weather_fields_advance_over_an_hour_at_huge_ticks_without_offsets() {
     let world = geometry();
-    let before = surface_weather_transport(world, SEED, u64::MAX - 1);
-    let after = surface_weather_transport(world, SEED, u64::MAX);
+    let scalar_before = scalar_field_time_coordinates(u64::MAX - 216_000);
+    let scalar_after = scalar_field_time_coordinates(u64::MAX);
+    let vector_before = vector_field_time_coordinates(world, u64::MAX - 216_000);
+    let vector_after = vector_field_time_coordinates(world, u64::MAX);
 
-    for offset in [
-        before.air_temperature_offset_m,
-        before.upper_air_temperature_offset_m,
-        before.water_vapor_offset_m,
-        after.air_temperature_offset_m,
-        after.upper_air_temperature_offset_m,
-        after.water_vapor_offset_m,
-    ] {
-        assert!((0.0..world.width_m()).contains(&offset.x));
-        assert!((0.0..world.height_m()).contains(&offset.y));
-    }
+    assert_ne!(scalar_before.air_temperature, scalar_after.air_temperature);
     assert_ne!(
-        before.air_temperature_offset_m,
-        after.air_temperature_offset_m
+        scalar_before.upper_air_temperature,
+        scalar_after.upper_air_temperature
     );
+    assert_ne!(scalar_before.water_vapor, scalar_after.water_vapor);
     assert_ne!(
-        before.upper_air_temperature_offset_m,
-        after.upper_air_temperature_offset_m
+        scalar_before.decorative_water,
+        scalar_after.decorative_water
     );
-    assert_ne!(before.water_vapor_offset_m, after.water_vapor_offset_m);
+    assert_ne!(vector_before.pressure, vector_after.pressure);
+    assert_ne!(vector_before.ocean_current, vector_after.ocean_current);
 }

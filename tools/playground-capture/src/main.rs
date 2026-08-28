@@ -2,8 +2,8 @@ use std::{env, fs, path::PathBuf};
 
 use bytemuck::{Pod, Zeroable};
 use game::{
-    celestial_lighting, procedural_world_environment, surface_weather_transport,
-    vector_field_transport, world_celestial_conditions,
+    celestial_lighting, procedural_world_environment, scalar_field_time_coordinates,
+    vector_field_time_coordinates, world_celestial_conditions,
 };
 use serde::Serialize;
 use simulation::WorldGeometry;
@@ -38,19 +38,16 @@ struct Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
-    upper_air_temperature_transport_m: [f32; 4],
+    scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
     low_cloud_epoch: [u32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
     cloud_anchor_phase_and_padding: [f32; 4],
-    surface_weather_transport_m: [f32; 4],
     world_phases: [f32; 4],
     world_tick_and_padding: [u32; 4],
-    pressure_transport_m_01: [f32; 4],
-    pressure_transport_m_23: [f32; 4],
-    ocean_current_transport_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
+    ocean_current_time_coordinate_and_padding: [f32; 4],
 }
 
 #[repr(C)]
@@ -435,8 +432,8 @@ fn render_world(
     let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
-    let surface_weather_transport = surface_weather_transport(world_geometry, options.seed, tick);
-    let vector_field_transport = vector_field_transport(world_geometry, options.seed, tick);
+    let scalar_time = scalar_field_time_coordinates(tick);
+    let vector_time = vector_field_time_coordinates(world_geometry, tick);
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -444,11 +441,11 @@ fn render_world(
             options.view_height_m * options.width as f32 / options.height as f32,
             options.view_height_m,
         ],
-        upper_air_temperature_transport_m: [
-            surface_weather_transport.upper_air_temperature_offset_m.x,
-            surface_weather_transport.upper_air_temperature_offset_m.y,
-            0.0,
-            0.0,
+        scalar_field_time_coordinates: [
+            scalar_time.air_temperature,
+            scalar_time.upper_air_temperature,
+            scalar_time.water_vapor,
+            scalar_time.decorative_water,
         ],
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         low_cloud_epoch: [low_cloud_epoch as u32, (low_cloud_epoch >> 32) as u32],
@@ -460,12 +457,6 @@ fn render_world(
             0.0,
             0.0,
         ],
-        surface_weather_transport_m: [
-            surface_weather_transport.air_temperature_offset_m.x,
-            surface_weather_transport.air_temperature_offset_m.y,
-            surface_weather_transport.water_vapor_offset_m.x,
-            surface_weather_transport.water_vapor_offset_m.y,
-        ],
         world_phases: [
             conditions.day_phase,
             conditions.season_phase,
@@ -473,25 +464,8 @@ fn render_world(
             0.0,
         ],
         world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
-        pressure_transport_m_01: [
-            vector_field_transport.pressure_offset_m[0].x,
-            vector_field_transport.pressure_offset_m[0].y,
-            vector_field_transport.pressure_offset_m[1].x,
-            vector_field_transport.pressure_offset_m[1].y,
-        ],
-        pressure_transport_m_23: [
-            vector_field_transport.pressure_offset_m[2].x,
-            vector_field_transport.pressure_offset_m[2].y,
-            vector_field_transport.pressure_offset_m[3].x,
-            vector_field_transport.pressure_offset_m[3].y,
-        ],
-        ocean_current_transport_m: [
-            vector_field_transport.ocean_current_offset_m.x,
-            vector_field_transport.ocean_current_offset_m.y,
-            vector_field_transport.ocean_current_time_coordinate,
-            0.0,
-        ],
-        pressure_time_coordinate: vector_field_transport.pressure_time_coordinate,
+        pressure_time_coordinate: vector_time.pressure,
+        ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

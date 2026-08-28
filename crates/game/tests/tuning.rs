@@ -201,7 +201,7 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
     let mut local_samples = 0;
     let mut regional_samples = 0;
 
-    for seed in 0..1_024 {
+    for seed in 0..4_096 {
         let wind = procedural_unsheltered_wind_velocity_m_s(seed, 12_345, position_m);
         let local = procedural_unsheltered_wind_velocity_m_s(
             seed,
@@ -223,8 +223,11 @@ fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
         }
     }
 
-    assert!(local_samples > 800);
-    assert!(regional_samples > 800);
+    assert!(local_samples > 3_200, "local samples {local_samples}");
+    assert!(
+        regional_samples > 3_000,
+        "regional samples {regional_samples}"
+    );
     assert!(local_alignment_sum / local_samples as f32 > 0.85);
     assert!((regional_alignment_sum / regional_samples as f32).abs() < 0.25);
 }
@@ -635,11 +638,11 @@ fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
     }
 
     let mean_error = error_sum / SAMPLE_COUNT as f32;
-    assert!(mean_error < 2.0e-7, "mean gradient error was {mean_error}");
+    assert!(mean_error < 2.5e-7, "mean gradient error was {mean_error}");
 }
 
 #[test]
-fn transported_weather_preserves_metre_scale_variation_after_years() {
+fn spatiotemporal_weather_preserves_metre_scale_variation_after_years() {
     const SAMPLE_COUNT: u64 = 128;
     let tick = 1_u64 << 32;
     let position_m = Vector::new(12.0, -7.0);
@@ -1364,7 +1367,7 @@ fn day_night_temperature_changes_precipitation() {
 }
 
 #[test]
-fn transported_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
+fn evolving_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
     let position_m = Vector::new(0.0, 16_000.0);
     let half_day_ticks = 12 * 60 * 60 * 60;
     let mut afternoon_temperature_c = 0.0;

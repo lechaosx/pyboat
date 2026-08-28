@@ -73,7 +73,9 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
   gust to broad weather system, and weakens in the lee of land over nearby water.
   Weather-system scale remains proportional to world circumference, and Coriolis
-  reverses pressure-driven turning between hemispheres.
+  reverses pressure-driven turning between hemispheres. Evolving weather has no
+  uniform translation direction; system motion is local and its world-scale mean
+  is zero.
 - **[Explicit]** Sun and moon state drives tides whose height changes depth,
   grounding, navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and

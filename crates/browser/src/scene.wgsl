@@ -1,18 +1,15 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
-    upper_air_temperature_transport_m: vec4<f32>,
+    scalar_field_time_coordinates: vec4<f32>,
     match_seed: vec2<u32>,
     low_cloud_epoch: vec2<u32>,
     world_size_m: vec2<f32>,
     upper_cloud_epoch: vec2<u32>,
     cloud_anchor_phase_and_padding: vec4<f32>,
-    surface_weather_transport_m: vec4<f32>,
     world_phases: vec4<f32>,
     world_tick_and_padding: vec4<u32>,
-    pressure_transport_m_01: vec4<f32>,
-    pressure_transport_m_23: vec4<f32>,
-    ocean_current_transport_m: vec4<f32>,
     pressure_time_coordinate: vec4<f32>,
+    ocean_current_time_coordinate_and_padding: vec4<f32>,
 };
 
 struct SceneTuning {
@@ -151,6 +148,7 @@ fn spatiotemporal_noise_sample(
     let longitude_offset = TAU * f32(orientation & 0xffu) / 256.0;
     let latitude_sign = select(1.0, -1.0, (orientation & 0x100u) != 0u);
     let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
+    let time_offset = f32((orientation >> 17u) & 0x7fffu) / 64.0;
     let longitude = TAU * canonical_world_position(position_m).x / scene.world_size_m.x
         + longitude_offset;
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
@@ -160,7 +158,7 @@ fn spatiotemporal_noise_sample(
             circle_radius * cos(longitude),
             circle_radius * sin(longitude),
             latitude_sign * position_m.y / wavelength_m + latitude_offset,
-            time_coordinate,
+            time_coordinate + time_offset,
         ),
     );
     return TerrainNoiseSample(
@@ -186,26 +184,15 @@ fn procedural_pressure_sample_filtered(
         vec2<u32>(0x137e2179u, 0x5be0cd19u),
     );
     let synoptic_coupling = array<f32, 4>(1.0, 1.0, 0.20, 0.05);
-    let transports = array<vec2<f32>, 4>(
-        scene.pressure_transport_m_01.xy,
-        scene.pressure_transport_m_01.zw,
-        scene.pressure_transport_m_23.xy,
-        scene.pressure_transport_m_23.zw,
-    );
     var sample: PressureFieldSample;
     sample.potential_m2_s = 0.0;
     sample.gradient_m_s = vec2<f32>(0.0);
     sample.synoptic_gradient_m_s = vec2<f32>(0.0);
     for (var band = 0u; band < 4u; band++) {
         let wavelength_m = max(scene.world_size_m.x * fractions[band], 64.0);
-        let transported_m = vec2<f32>(
-            fract((position_m.x - transports[band].x) / scene.world_size_m.x)
-                * scene.world_size_m.x,
-            position_m.y - transports[band].y,
-        );
         var noise = spatiotemporal_noise_sample(
             scene.match_seed ^ salts[band],
-            transported_m,
+            position_m,
             wavelength_m,
             scene.pressure_time_coordinate[band],
         );
@@ -216,7 +203,7 @@ fn procedural_pressure_sample_filtered(
         }
         let attenuation = exp(-0.5 * pow(16.0 * pixel_footprint_m / wavelength_m, 2.0));
         let transient_variance = variances[band] * select(1.0, 0.5, band == 0u);
-        let potential_scale_m2_s = attenuation * 0.49 * 9.0
+        let potential_scale_m2_s = attenuation * 0.495 * 9.0
             * sqrt(transient_variance) * wavelength_m;
         let gradient_m_s = potential_scale_m2_s * noise.gradient;
         sample.potential_m2_s += potential_scale_m2_s * noise.value;
@@ -285,7 +272,7 @@ fn upper_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
     );
     let temperature_gradient = surface_air_temperature_anomaly_sample_at(position_m).gradient;
     return 1.15 * pressure_wind
-        + 2000.0 * atmosphere_model.z * rotate_left(temperature_gradient);
+        + 1600.0 * atmosphere_model.z * rotate_left(temperature_gradient);
 }
 
 fn upper_wind_m_s() -> vec2<f32> {
@@ -397,19 +384,20 @@ fn surface_air_temperature_anomaly_sample_at(position_m: vec2<f32>) -> TerrainNo
         TEMPERATURE_ANOMALY_SCALE_C,
         surface_latitude_degrees_at(position_m),
     ) * 180.0 / scene.world_size_m.y;
-    let noise = spatial_weather_fractal_sample(
+    let noise = spatiotemporal_fractal_sample(
         vec2<u32>(0x38d01377u, 0x452821e6u),
-        position_m - scene.surface_weather_transport_m.xy,
+        position_m,
         65536.0,
+        scene.scalar_field_time_coordinates.x,
         4u,
-        4u,
+        0.5,
     );
     return TerrainNoiseSample(
-        scale_c * 0.75 * noise.value,
+        scale_c * 0.85 * noise.value,
         vec2<f32>(
-            scale_c * 0.75 * noise.gradient.x,
-            scale_c * 0.75 * noise.gradient.y
-                + 0.75 * noise.value * scale_gradient_c_per_m,
+            scale_c * 0.85 * noise.gradient.x,
+            scale_c * 0.85 * noise.gradient.y
+                + 0.85 * noise.value * scale_gradient_c_per_m,
         ),
     );
 }
@@ -420,13 +408,14 @@ fn upper_air_temperature_500_hpa_c_at(position_m: vec2<f32>) -> f32 {
         - 35.5
         + 0.25 * surface_seasonal_temperature_range_c_at(position_m)
             * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
-    let independent_noise = 0.75 * spatial_weather_fractal(
+    let independent_noise = 0.75 * spatiotemporal_fractal_sample(
         vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
-        position_m - scene.upper_air_temperature_transport_m.xy,
+        position_m,
         65536.0,
+        scene.scalar_field_time_coordinates.y,
         4u,
-        4u,
-    );
+        0.5,
+    ).value;
     return climate_temperature_c
         + 0.45 * surface_air_temperature_anomaly_c_at(position_m)
         + 19.0 * independent_noise;
@@ -442,13 +431,14 @@ fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
         + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
             * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
     let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.75 * spatial_weather_fractal(
+    let noise = 0.75 * spatiotemporal_fractal_sample(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
-        position_m - scene.surface_weather_transport_m.zw,
+        position_m,
         3584.0,
+        scene.scalar_field_time_coordinates.z,
         5u,
-        4u,
-    );
+        0.5,
+    ).value;
     return clamp(capacity_g_kg * (0.72 + 0.65 * noise), 0.5, 25.0);
 }
 
@@ -1285,30 +1275,6 @@ fn visual_transported_noise_sample(
     return sample;
 }
 
-fn visual_advected_noise_sample(
-    position_m: vec2<f32>,
-    velocity_m_s: vec2<f32>,
-    field_salt: vec2<u32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
-    refresh_period_seconds: f32,
-    pixel_footprint_m: f32,
-) -> TerrainNoiseSample {
-    let phase = clamp(anchor_phase, 0.0, 1.0);
-    return visual_transported_noise_sample(
-        position_m - velocity_m_s * (phase * refresh_period_seconds),
-        position_m + velocity_m_s * ((1.0 - phase) * refresh_period_seconds),
-        field_salt,
-        initial_wavelength_m,
-        octave_count,
-        anchor_epoch,
-        anchor_phase,
-        pixel_footprint_m,
-    );
-}
-
 fn cloud_advection_wind_m_s_at(position_m: vec2<f32>, upper_layer: bool) -> vec2<f32> {
     // Cloud latent structure follows pressure-system flow. Gust-scale direction
     // changes affect local weather but fold a finite anchor map before they can
@@ -1323,7 +1289,7 @@ fn cloud_advection_wind_m_s_at(position_m: vec2<f32>, upper_layer: bool) -> vec2
         let temperature_gradient =
             surface_air_temperature_anomaly_sample_at(position_m).gradient;
         return 1.15 * pressure_wind
-            + 2000.0 * atmosphere_model.z * rotate_left(temperature_gradient);
+            + 1600.0 * atmosphere_model.z * rotate_left(temperature_gradient);
     }
     return atmosphere_model.x * wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
@@ -1695,7 +1661,7 @@ fn aerosol_optical_depth_at(
 ) -> f32 {
     let regional = 0.5 + 0.5 * spatiotemporal_fractal_sample(
         vec2<u32>(0x1f83d9abu, 0xfb41bd6bu),
-        position_m - scene.pressure_transport_m_01.xy,
+        position_m,
         max(8192.0, 0.125 * scene.world_size_m.x),
         0.15 * scene.pressure_time_coordinate.x,
         4u,
@@ -2796,9 +2762,9 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
 
     let gyre = spatiotemporal_fractal_sample(
         vec2<u32>(0xc1059ed8u, 0xcbbb9d5du),
-        position_m - scene.ocean_current_transport_m.xy,
+        position_m,
         0.25 * scene.world_size_m.x,
-        scene.ocean_current_transport_m.z,
+        scene.ocean_current_time_coordinate_and_padding.x,
         3u,
         0.5,
     );
@@ -2957,22 +2923,40 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
 }
 
 fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
-    let random = terrain_hash(
-        scene.match_seed ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u),
-    );
-    let direction_angle = TAU * visual_hash_unit(random.x);
-    let velocity_m_s = 0.65 * vec2<f32>(cos(direction_angle), sin(direction_angle));
-    var sample = visual_advected_noise_sample(
-        position_m,
-        velocity_m_s,
-        vec2<u32>(0x6a09e667u, 0xbb67ae85u),
-        18.0,
-        4u,
-        scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_padding.x,
-        1800.0,
-        visual_pixel_footprint_m,
-    );
+    var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = 18.0;
+    var time_coordinate = scene.scalar_field_time_coordinates.w;
+    for (var octave = 0u; octave < 4u; octave++) {
+        let octave_visibility = smoothstep(
+            visual_pixel_footprint_m,
+            2.0 * visual_pixel_footprint_m,
+            wavelength_m,
+        );
+        if octave_visibility > 0.0 {
+            let octave_seed = scene.match_seed
+                ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u)
+                ^ multiply_u64(
+                    vec2<u32>(octave, 0u),
+                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+                );
+            let octave_sample = spatiotemporal_noise_sample(
+                octave_seed,
+                position_m,
+                wavelength_m,
+                time_coordinate,
+            );
+            sample.value += amplitude * octave_visibility * octave_sample.value;
+            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
+        }
+        amplitude_sum += amplitude;
+        amplitude *= 0.58;
+        wavelength_m *= 0.5;
+        time_coordinate *= 2.0;
+    }
+    sample.value /= amplitude_sum;
+    sample.gradient /= amplitude_sum;
     sample.gradient *= 1.6;
     return sample;
 }
@@ -3670,11 +3654,11 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         let upper = 1.15 * atmosphere_model.x * wind_from_pressure_gradient(
             filtered_pressure.synoptic_gradient_m_s / 6000.0,
             latitude_degrees,
-        ) + 2000.0 * atmosphere_model.z
+        ) + 1600.0 * atmosphere_model.z
             * rotate_left(local_temperature_gradient);
         let shear = upper - surface;
         let pressure_gradient = filtered_pressure.gradient_m_s;
-        let temperature_gradient = 2000.0 * local_temperature_gradient;
+        let temperature_gradient = 1600.0 * local_temperature_gradient;
         if mode == 16u { return vec4<f32>(wind_debug_color(surface), 1.0); }
         if mode == 17u { return vec4<f32>(wind_debug_color(upper), 1.0); }
         if mode == 18u { return vec4<f32>(wind_debug_color(shear), 1.0); }

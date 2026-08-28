@@ -1,8 +1,7 @@
 import {
   sample_playground_environment,
+  sample_playground_field_time_coordinates,
   sample_playground_noise_octave,
-  sample_playground_vector_field_transport,
-  sample_playground_surface_weather_transport,
   sample_playground_world_geometry,
 } from "browser";
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
@@ -1027,7 +1026,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(48);
+const sceneFloats = new Float32Array(36);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1339,18 +1338,17 @@ function writeUniforms(): void {
     state.viewHeight * aspect,
     state.viewHeight,
   ], 0);
-  const transport = sample_playground_surface_weather_transport(
+  const worldTick = BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60)));
+  const pressureTick = BigInt(Math.max(0, Math.floor(state.pressureTimeSeconds * 60)));
+  const currentTick = BigInt(Math.max(0, Math.floor(state.currentTimeSeconds * 60)));
+  const fieldTimes = sample_playground_field_time_coordinates(
     state.worldWidthM,
     state.worldHeightM,
-    parsedSeed(),
-    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
+    worldTick,
+    pressureTick,
+    currentTick,
   );
-  sceneFloats.set([
-    transport.upper_air_temperature_x_m,
-    transport.upper_air_temperature_y_m,
-    0,
-    0,
-  ], 4);
+  sceneFloats.set(fieldTimes.subarray(0, 4), 4);
   const [seedLow, seedHigh] = splitSeed(state.seed);
   const lowCloudEpoch = BigInt(Math.floor(state.time / 1800));
   const upperCloudEpoch = BigInt(Math.floor(state.time / 3600));
@@ -1371,31 +1369,16 @@ function writeUniforms(): void {
     0,
     0,
   ], 16);
-  sceneFloats.set([
-    transport.air_temperature_x_m,
-    transport.air_temperature_y_m,
-    transport.water_vapor_x_m,
-    transport.water_vapor_y_m,
-  ], 20);
-  transport.free();
   const [dayPhase, seasonPhase, moonPhase] = worldPhases();
-  sceneFloats.set([dayPhase, seasonPhase, moonPhase, 0], 24);
-  const worldTick = BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60)));
-  const pressureTick = BigInt(Math.max(0, Math.floor(state.pressureTimeSeconds * 60)));
-  const currentTick = BigInt(Math.max(0, Math.floor(state.currentTimeSeconds * 60)));
+  sceneFloats.set([dayPhase, seasonPhase, moonPhase, 0], 20);
   sceneUints.set([
     Number(worldTick & 0xffff_ffffn),
     Number((worldTick >> 32n) & 0xffff_ffffn),
     0,
     0,
-  ], 28);
-  sceneFloats.set(sample_playground_vector_field_transport(
-    state.worldWidthM,
-    state.worldHeightM,
-    parsedSeed(),
-    pressureTick,
-    currentTick,
-  ), 32);
+  ], 24);
+  sceneFloats.set(fieldTimes.subarray(4, 8), 28);
+  sceneFloats.set(fieldTimes.subarray(8, 12), 32);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([

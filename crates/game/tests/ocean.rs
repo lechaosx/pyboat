@@ -221,16 +221,24 @@ fn wave_motion_has_no_persistent_drift_and_constructively_interferes() {
         maximum_rogue_crest_excess_m = maximum_rogue_crest_excess_m.max(ocean.rogue_crest_excess_m);
         count += 1;
     }
-    for seed in SEED..SEED + 8 {
-        for y_index in 0..16 {
-            for x_index in 0..32 {
-                let candidate_m = Vector::new(
-                    -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 32.0,
-                    -0.5 * world.height_m() + (y_index as f32 + 0.5) * world.height_m() / 16.0,
-                );
-                let ocean = procedural_world_environment(world, seed, TICK, candidate_m).ocean;
-                maximum_rogue_crest_excess_m =
-                    maximum_rogue_crest_excess_m.max(ocean.rogue_crest_excess_m);
+    for time_index in 0..8 {
+        let tick = TICK + time_index * 900;
+        for seed in SEED..SEED + 8 {
+            for y_index in 0..16 {
+                for x_index in 0..32 {
+                    let candidate_m = Vector::new(
+                        -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 32.0,
+                        -0.5 * world.height_m() + (y_index as f32 + 0.5) * world.height_m() / 16.0,
+                    );
+                    let ocean = procedural_world_environment(world, seed, tick, candidate_m).ocean;
+                    if ocean.significant_wave_height_m > 0.5 {
+                        maximum_normalized_crest = maximum_normalized_crest.max(
+                            ocean.surface_displacement_m.max(0.0) / ocean.significant_wave_height_m,
+                        );
+                    }
+                    maximum_rogue_crest_excess_m =
+                        maximum_rogue_crest_excess_m.max(ocean.rogue_crest_excess_m);
+                }
             }
         }
     }
