@@ -156,7 +156,9 @@ current playable behavior; this file does not track delivery status.
   can remain softly luminous while severe storm cover darkens a noon scene.
   A tilted lunar orbit produces two paired solar/lunar eclipse seasons per year
   from celestial geometry. The penumbra dims moonlight subtly, while atmospheric
-  light refracted into the umbra makes eclipsed moonlight dim orange-red.
+  light refracted into the umbra makes a total lunar eclipse dim orange-red.
+  Independently, a low Moon can redden through the observer's local aerosol and
+  moist atmospheric path without an eclipse.
   Celestial discs retain a physical penumbra, so cloud and landform shadows do
   not become point-source sharp at high zoom.
 - **[Explicit]** Rain and snow meet open water in world space. Close views may
@@ -221,7 +223,9 @@ current playable behavior; this file does not track delivery status.
   from Sun and Moon positions and repeats with the 28-day month. Production and
   the lab default to real time. The lab starts with cloud, pressure, current,
   and world-clock rates locked together; playback changes rates rather than
-  overriding phases.
+  overriding phases. Celestial-event presets move only the lab's world clock to
+  naturally derived solar, partial-lunar, and total-lunar eclipse stages without
+  overriding orbital state, view, playback, tuning, or diagnostics.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,

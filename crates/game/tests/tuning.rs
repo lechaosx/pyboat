@@ -939,7 +939,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 
 #[test]
 fn lunar_orbit_tilt_limits_eclipses_to_node_crossings() {
-    let solar_node = 0.5021;
+    let solar_node = 0.5104333;
     let off_node = (solar_node + 0.25) % 1.0;
     let new_moon_at_node = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 0.0,
@@ -1022,6 +1022,23 @@ fn world_year_has_two_paired_eclipse_seasons() {
 
     assert_eq!(solar_eclipse_months, 2);
     assert_eq!(lunar_eclipse_months, 2);
+}
+
+#[test]
+fn first_lunar_eclipse_reaches_totality() {
+    let conditions = world_celestial_conditions_in_world(
+        WorldGeometry::default(),
+        90.997_222_222_222_22 * 86_400.0,
+        Vector::ZERO,
+    );
+    let lighting = celestial_lighting(conditions);
+
+    assert!(
+        lighting.lunar_umbra_fraction > 0.999,
+        "{}",
+        lighting.lunar_umbra_fraction,
+    );
+    assert!(lighting.moon_color[0] > lighting.moon_color[2]);
 }
 
 #[test]

@@ -87,7 +87,7 @@ var<private> solar_eclipse_fraction: f32;
 var<private> lunar_penumbra_fraction: f32;
 var<private> lunar_umbra_fraction: f32;
 var<private> ambient_light_color: vec3<f32>;
-var<private> sunset_scattering: f32;
+var<private> horizon_scattering: f32;
 var<private> visual_pixel_footprint_m: f32;
 var<private> surface_position_m: vec2<f32>;
 var<private> surface_tidal_range_m: f32;
@@ -99,7 +99,7 @@ const TAU: f32 = 6.283185307179586;
 const CELESTIAL_DISC_ANGULAR_RADIUS_RAD: f32 = 0.00465;
 const MOON_ANGULAR_RADIUS_RAD: f32 = 0.00452;
 const LUNAR_ORBIT_INCLINATION_RAD: f32 = 0.08979719;
-const LUNAR_ASCENDING_NODE_PHASE: f32 = 0.5021;
+const LUNAR_ASCENDING_NODE_PHASE: f32 = 0.5104333;
 const LUNAR_DISTANCE_PLANET_RADII: f32 = 60.3;
 const LOW_CLOUD_BASE_HEIGHT_M: f32 = 900.0;
 const WEATHER_CANOPY_HEIGHT_M: f32 = 3600.0;
@@ -1865,11 +1865,6 @@ fn initialize_celestial_lighting() {
         * illuminated_fraction
         * smoothstep(0.0, 0.08, moon_light_direction.z)
         * (0.35 + 0.65 * moon_elevation);
-    moon_light_color = mix(
-        vec3<f32>(0.48, 0.62, 1.0),
-        vec3<f32>(1.20, 0.28, 0.06),
-        smoothstep(0.05, 0.90, lunar_umbra_fraction),
-    );
 }
 
 fn sun_direction() -> vec3<f32> {
@@ -1913,7 +1908,7 @@ fn calculate_atmospheric_ambient_color() -> vec3<f32> {
         1.0,
     );
     let storm = rain_intensity() * smoothstep(0.45, 0.90, upper_cover);
-    let sunset_warmth = horizon_glow * sunset_scattering;
+    let sunset_warmth = horizon_glow * horizon_scattering;
     var sky_color = mix(
         vec3<f32>(0.42, 0.52, 0.75),
         vec3<f32>(0.84, 0.90, 1.0),
@@ -1963,7 +1958,7 @@ fn aerosol_optical_depth_at(
         * unwashed;
 }
 
-fn calculate_sunset_scattering() -> f32 {
+fn calculate_horizon_scattering() -> f32 {
     let aerosol = smoothstep(
         0.04,
         0.30,
@@ -1973,9 +1968,22 @@ fn calculate_sunset_scattering() -> f32 {
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
 
+fn calculate_moon_light_color() -> vec3<f32> {
+    let low_moon = 1.0 - smoothstep(0.08, 0.55, moon_direction().z);
+    let atmospheric_warmth = low_moon * mix(0.04, 0.82, horizon_scattering);
+    let eclipse_warmth = smoothstep(0.05, 0.90, lunar_umbra_fraction);
+    let warmth = 1.0
+        - (1.0 - atmospheric_warmth) * (1.0 - eclipse_warmth);
+    return mix(
+        vec3<f32>(0.48, 0.62, 1.0),
+        vec3<f32>(1.20, 0.28, 0.06),
+        warmth,
+    );
+}
+
 fn sun_direct_light_color() -> vec3<f32> {
     let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_direction().z);
-    let warmth = low_sun * mix(0.06, 1.0, sunset_scattering);
+    let warmth = low_sun * mix(0.06, 1.0, horizon_scattering);
     return mix(vec3<f32>(1.0), vec3<f32>(1.55, 0.34, 0.06), warmth);
 }
 
@@ -4292,7 +4300,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     surface_cloud_weather = cloud_weather_at(surface_position_m);
     initialize_surface_tide();
     initialize_celestial_lighting();
-    sunset_scattering = calculate_sunset_scattering();
+    horizon_scattering = calculate_horizon_scattering();
+    moon_light_color = calculate_moon_light_color();
     ambient_light_color = calculate_atmospheric_ambient_color();
     return final_scene_color(periodic_input);
 }
@@ -4318,7 +4327,8 @@ fn fragment_playground(input: VertexOutput) -> @location(0) vec4<f32> {
     surface_cloud_weather = cloud_weather_at(surface_position_m);
     initialize_surface_tide();
     initialize_celestial_lighting();
-    sunset_scattering = calculate_sunset_scattering();
+    horizon_scattering = calculate_horizon_scattering();
+    moon_light_color = calculate_moon_light_color();
     ambient_light_color = calculate_atmospheric_ambient_color();
     if playground.diagnostics.x == 0u {
         return final_scene_color(periodic_input);

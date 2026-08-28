@@ -390,7 +390,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3 planetary
   radii. Observer parallax and finite Sun/Moon discs derive local solar overlap;
   finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
-  two paired eclipse seasons while preserving exact annual repetition.
+  two paired eclipse seasons, including total lunar eclipses, while preserving
+  exact annual repetition.
 - **[Explicit]** Direct sun and moon intensity and color follow each source's
   elevation and orientation, while diffuse atmospheric light remains a separate
   RGB contribution. Both terms light the surface and visible lower clouds.
@@ -401,6 +402,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   moonlight slightly; increasing umbral coverage replaces blocked direct
   sunlight with dim orange-red light filtered through the atmosphere, and the
   resulting moon color enters direct and diffuse surface and cloud lighting.
+  Uneclipsed moonlight independently reddens near the horizon according to the
+  observer's local aerosol and moisture scattering.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
   width as circumference and the clamped physical latitude derived from the

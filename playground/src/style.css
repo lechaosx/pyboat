@@ -239,6 +239,31 @@ details > .actions {
 
 details > :last-child { margin-bottom: 0.72rem; }
 
+.world-toolbar-section {
+  margin: 0 0.72rem;
+  padding: 0.72rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.world-toolbar-section h3 {
+  margin: 0 0 0.5rem;
+  color: var(--world);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.world-toolbar-section .control,
+.world-toolbar-section .text-control {
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.celestial-event-presets {
+  flex-wrap: wrap;
+  margin: 0;
+}
+
 .control-category { margin-top: 1rem; }
 
 .control-category h2 {

@@ -97,12 +97,13 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
     let world = WorldGeometry::default();
     let world_time_seconds = 77.0 * 86_400.0;
-    let position_m = Vector::new(-9_333.334, -13_511.111);
+    let position_m = Vector::new(-11_022.222, -17_955.555);
     let lighting = celestial_lighting(world_celestial_conditions(
         world,
         world_time_seconds,
         position_m,
     ));
+    assert!(lighting.solar_eclipse_fraction > 0.5);
     let actual =
         render_debug_image_with_view_at(world, position_m, world_time_seconds, 1.0, 72, 1, 1);
     let expected = scalar_debug_pixel(lighting.solar_eclipse_fraction);

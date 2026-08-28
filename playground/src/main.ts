@@ -176,6 +176,12 @@ const worldDaySeconds = 86_400;
 const worldYearDays = 336;
 // Keep these calendar-derived phases synchronized with world_celestial_conditions.
 const lunarOrbitDays = 1 / (1 / 28 + 1 / worldYearDays);
+const firstBloodMoonSeconds = 91 * worldDaySeconds - 4 * 60;
+const celestialEventPresets = {
+  "solar-eclipse": 77 * worldDaySeconds,
+  "lunar-eclipse": firstBloodMoonSeconds - 60 * 60,
+  "blood-moon": firstBloodMoonSeconds,
+} as const;
 
 function worldPhases(): [number, number, number] {
   return [
@@ -761,15 +767,22 @@ function timeScaleToSlider(value: number): number {
 worldToolbarElement.innerHTML = `
   <details open>
     <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
-    <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude circumference · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure evolution · × real time</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Current evolution · × real time</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
-    <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
-    <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
-    <div class="actions"><button id="pause">Pause</button></div>
+    <section class="world-toolbar-section"><h3>World definition</h3>
+      <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude circumference · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
+    </section>
+    <section class="world-toolbar-section"><h3>Celestial events</h3>
+      <nav class="category-presets celestial-event-presets" aria-label="Celestial event presets"><button id="solar-eclipse-preset" type="button">Solar eclipse</button><button id="lunar-eclipse-preset" type="button">Lunar eclipse</button><button id="blood-moon-preset" type="button">Blood moon</button></nav>
+    </section>
+    <section class="world-toolbar-section"><h3>Playback</h3>
+      <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure evolution · × real time</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Current evolution · × real time</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
+      <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
+      <div class="actions"><button id="pause">Pause</button></div>
+    </section>
   </details>
   <details>
     <summary><span>View-center diagnostics</span><span class="kind kind-debug">DEBUG</span></summary>
@@ -796,6 +809,15 @@ const worldTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>(
 const worldTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
 const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
 const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
+function applyCelestialEventPreset(event: keyof typeof celestialEventPresets): void {
+  state.worldTimeSeconds = celestialEventPresets[event];
+}
+worldToolbarElement.querySelector<HTMLButtonElement>("#solar-eclipse-preset")!
+  .addEventListener("click", () => applyCelestialEventPreset("solar-eclipse"));
+worldToolbarElement.querySelector<HTMLButtonElement>("#lunar-eclipse-preset")!
+  .addEventListener("click", () => applyCelestialEventPreset("lunar-eclipse"));
+worldToolbarElement.querySelector<HTMLButtonElement>("#blood-moon-preset")!
+  .addEventListener("click", () => applyCelestialEventPreset("blood-moon"));
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
 });

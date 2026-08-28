@@ -134,9 +134,9 @@ const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_MONTH_DAYS;
 const WORLD_LUNAR_ORBIT_DAYS: f64 =
     1.0 / (1.0 / WORLD_LUNAR_PHASE_CYCLE_DAYS + 1.0 / WORLD_YEAR_DAYS);
 const LUNAR_ORBIT_INCLINATION_RAD: f64 = 5.145_f64.to_radians();
-// Centering the fixed node between the nearest new- and full-moon longitudes
-// pairs both eclipses within each season and preserves annual repetition.
-const LUNAR_ASCENDING_NODE_PHASE: f64 = 0.5021;
+// This fixed node retains paired eclipse seasons while allowing the central
+// lunar event to reach totality in the annually repeating calendar.
+const LUNAR_ASCENDING_NODE_PHASE: f64 = 0.5104333333333333;
 const LUNAR_DISTANCE_PLANET_RADII: f64 = 60.3;
 const SUN_ANGULAR_RADIUS_RAD: f64 = 0.00465;
 const MOON_ANGULAR_RADIUS_RAD: f64 = 0.00452;
