@@ -1,7 +1,6 @@
 import {
   sample_playground_environment,
   sample_playground_field_time_coordinates,
-  sample_playground_noise_octave,
   sample_playground_world_geometry,
 } from "browser";
 import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
@@ -776,7 +775,6 @@ worldToolbarElement.innerHTML = `
     <div class="view-center-diagnostics">
       <section><h3>Sample position</h3><div id="position-measurements" class="derived-grid"></div></section>
       <section><h3 id="derived-output-heading">Derived atmosphere</h3><div id="derived-output" class="derived-grid"></div></section>
-      <section><h3>Procedural basis</h3><div id="basis-measurements" class="derived-grid"></div></section>
     </div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
@@ -787,7 +785,6 @@ const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement
 const positionMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
 const derivedOutputHeadingElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
 const derivedOutputElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output")!;
-const basisMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#basis-measurements")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
 const pressureTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
@@ -1258,31 +1255,10 @@ function updateGeometryMeasurements(): void {
     ["Cylinder center", `${sample.canonical_x_m.toFixed(1)}, ${sample.canonical_y_m.toFixed(1)} m`],
     ["Normalized geography", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
   ];
-  const basisValues: Array<[string, string]> = [];
-  const octaveDefinitions: Array<[string, boolean, number]> = activeDomain === "weather"
-    ? [["Weather macro octave", true, 65536], ["Cloud detail octave", false, 640]]
-    : activeDomain === "landscape"
-      ? [["Terrain macro octave", true, 8192], ["Terrain relief octave", false, 256]]
-      : [["Tide response octave", true, 131072], ["Reef detail octave", false, 32]];
-  for (const [label, circleEmbedded, wavelengthM] of octaveDefinitions) {
-    const octave = sample_playground_noise_octave(
-      state.worldWidthM,
-      state.worldHeightM,
-      circleEmbedded,
-      wavelengthM,
-    );
-    const error = 100 * Math.max(octave.relative_error_x, octave.relative_error_y);
-    basisValues.push([
-      label,
-      `${octave.basis} · requested ${octave.requested_wavelength_m.toFixed(0)} m · effective ${octave.effective_wavelength_x_m.toFixed(1)} × ${octave.effective_wavelength_y_m.toFixed(1)} m · ${error.toFixed(2)}% max error`,
-    ]);
-    octave.free();
-  }
   renderedCameraX = sample.canonical_x_m;
   renderedCameraY = sample.canonical_y_m;
   sample.free();
   replaceDiagnosticRows(positionMeasurementsElement, positionValues);
-  replaceDiagnosticRows(basisMeasurementsElement, basisValues);
 }
 
 function updateViewCenterDiagnostics(): void {

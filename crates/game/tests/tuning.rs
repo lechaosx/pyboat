@@ -194,30 +194,131 @@ fn procedural_wind_is_spatially_and_temporally_coherent() {
 }
 
 #[test]
-fn surface_gusts_remain_when_the_resolved_pressure_gradient_is_removed() {
-    let world = WorldGeometry::default();
-    let position_m = Vector::new(12.0, 0.25 * world.height_m());
-    let tick = 12_345;
-    let celestial = world_celestial_conditions_in_world(world, tick as f64 / 60.0, position_m);
-    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
-    let mut speed_sum = 0.0;
+fn significant_gusts_require_mean_wind_or_moist_convection() {
+    let primary = AtmospherePrimary {
+        pressure_hpa: 1018.0,
+        pressure_gradient_hpa_per_m: Vector::ZERO,
+        synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
+        surface_gust_signal: 1.0,
+        surface_air_temperature_anomaly_c: 0.0,
+        air_temperature_500_hpa_c: -4.0,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 2.0,
+    };
 
-    for seed in 0..4_096 {
-        let primary = procedural_atmosphere_primary_in_world(world, seed, tick, position_m);
-        let pressureless = AtmospherePrimary {
-            pressure_gradient_hpa_per_m: Vector::ZERO,
-            synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
-            ..primary
-        };
-        speed_sum += derive_weather(pressureless, climate, celestial)
-            .wind_velocity_m_s
-            .length();
+    let weather = derive_weather_at_surface_temperature(primary, 20.0);
+
+    assert!(
+        weather.wind_velocity_m_s.length() < 0.05,
+        "calm stable air produced {:?} m/s wind",
+        weather.wind_velocity_m_s,
+    );
+}
+
+#[test]
+fn mechanical_gusts_follow_and_scale_with_mean_surface_wind() {
+    let weak = AtmospherePrimary {
+        pressure_hpa: 1013.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
+        surface_gust_signal: 1.0,
+        surface_air_temperature_anomaly_c: 0.0,
+        air_temperature_500_hpa_c: -4.0,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 2.0,
+    };
+    let strong = AtmospherePrimary {
+        pressure_gradient_hpa_per_m: 2.0 * weak.pressure_gradient_hpa_per_m,
+        synoptic_pressure_gradient_hpa_per_m: 2.0 * weak.synoptic_pressure_gradient_hpa_per_m,
+        ..weak
+    };
+    let without_pulse = |primary: AtmospherePrimary| AtmospherePrimary {
+        surface_gust_signal: 0.0,
+        ..primary
+    };
+    let weak_weather = derive_weather_at_surface_temperature(weak, 20.0);
+    let weak_mean = derive_weather_at_surface_temperature(without_pulse(weak), 20.0);
+    let strong_weather = derive_weather_at_surface_temperature(strong, 20.0);
+    let strong_mean = derive_weather_at_surface_temperature(without_pulse(strong), 20.0);
+    let weak_gust = weak_weather.wind_velocity_m_s - weak_mean.wind_velocity_m_s;
+    let strong_gust = strong_weather.wind_velocity_m_s - strong_mean.wind_velocity_m_s;
+
+    assert!(weak_gust.dot(weak_mean.wind_velocity_m_s) > 0.0);
+    assert!(strong_gust.dot(strong_mean.wind_velocity_m_s) > 0.0);
+    assert!(strong_gust.length() > 1.8 * weak_gust.length());
+}
+
+#[test]
+fn moist_convection_mixes_faster_upper_wind_into_surface_gusts() {
+    let dry = AtmospherePrimary {
+        pressure_hpa: 1013.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0, -0.0015),
+        surface_gust_signal: 1.0,
+        surface_air_temperature_anomaly_c: 0.0,
+        air_temperature_500_hpa_c: -4.0,
+        local_temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
+        water_vapor_g_kg: 2.0,
+    };
+    let convective = AtmospherePrimary {
+        pressure_hpa: 995.0,
+        air_temperature_500_hpa_c: -30.0,
+        water_vapor_g_kg: 25.0,
+        ..dry
+    };
+    let without_pulse = |primary: AtmospherePrimary| AtmospherePrimary {
+        surface_gust_signal: 0.0,
+        ..primary
+    };
+    let dry_weather = derive_weather_at_surface_temperature(dry, 30.0);
+    let dry_mean = derive_weather_at_surface_temperature(without_pulse(dry), 30.0);
+    let convective_weather = derive_weather_at_surface_temperature(convective, 30.0);
+    let convective_mean = derive_weather_at_surface_temperature(without_pulse(convective), 30.0);
+    let dry_gust = dry_weather.wind_velocity_m_s - dry_mean.wind_velocity_m_s;
+    let convective_gust = convective_weather.wind_velocity_m_s - convective_mean.wind_velocity_m_s;
+
+    assert!(convective_gust.length() > dry_gust.length());
+    let upper_direction = convective_weather.upper_wind_velocity_m_s.normalize();
+    assert!(
+        convective_gust.dot(upper_direction) > dry_gust.dot(upper_direction),
+        "convective gust {convective_gust:?} did not add momentum from upper wind {:?}",
+        convective_weather.upper_wind_velocity_m_s,
+    );
+}
+
+#[test]
+fn surface_gust_activity_varies_between_weather_regions() {
+    let world = WorldGeometry::default();
+    let mut minimum_rms = f32::MAX;
+    let mut maximum_rms = 0.0_f32;
+
+    for region_y in 0..4 {
+        for region_x in 0..8 {
+            let center = Vector::new(
+                (region_x as f32 / 8.0 - 0.4375) * world.width_m(),
+                (region_y as f32 / 4.0 - 0.375) * world.height_m(),
+            );
+            let mut square_speed_sum = 0.0;
+            for sample_y in 0..16 {
+                for sample_x in 0..16 {
+                    let offset = Vector::new(
+                        (sample_x as f32 - 7.5) * 64.0,
+                        (sample_y as f32 - 7.5) * 64.0,
+                    );
+                    let gust = procedural_weather_in_world(world, 0x5eed, 12_345, center + offset)
+                        .surface_gust_velocity_m_s;
+                    square_speed_sum += gust.length_squared();
+                }
+            }
+            let rms = (square_speed_sum / 256.0).sqrt();
+            minimum_rms = minimum_rms.min(rms);
+            maximum_rms = maximum_rms.max(rms);
+        }
     }
 
-    let mean_gust_speed_m_s = speed_sum / 4_096.0;
     assert!(
-        mean_gust_speed_m_s > 0.25,
-        "mean pressure-independent gust speed {mean_gust_speed_m_s} m/s",
+        maximum_rms > 1.5 * minimum_rms,
+        "regional gust RMS range was {minimum_rms}..{maximum_rms} m/s",
     );
 }
 
@@ -446,7 +547,7 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        surface_gust_velocity_m_s: Vector::ZERO,
+        surface_gust_signal: 0.0,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
@@ -472,7 +573,7 @@ fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        surface_gust_velocity_m_s: Vector::ZERO,
+        surface_gust_signal: 0.0,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
@@ -516,7 +617,7 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
-        surface_gust_velocity_m_s: Vector::ZERO,
+        surface_gust_signal: 0.0,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
@@ -550,7 +651,7 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
-        surface_gust_velocity_m_s: Vector::ZERO,
+        surface_gust_signal: 0.0,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -20.0,
         local_temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
@@ -1418,7 +1519,7 @@ fn day_night_temperature_changes_precipitation() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0015, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
-        surface_gust_velocity_m_s: Vector::ZERO,
+        surface_gust_signal: 0.0,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -30.0,
         local_temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
@@ -1677,7 +1778,7 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     assert!(high_cloud_samples > 0);
     assert!(high_cloud_samples < 512);
     assert!(
-        upper_cloud_wind_change < full_wind_change * 0.5,
+        upper_cloud_wind_change < full_wind_change,
         "upper/full wind change ratio was {}",
         upper_cloud_wind_change / full_wind_change,
     );

@@ -13,8 +13,15 @@ const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 // gameplay calibration, not pressure amplitudes transferred from Earth data.
 const PRESSURE_SIMPLEX_SCALE: f32 = 0.495;
 const PRESSURE_EVOLUTION_SPEED_M_S: f32 = 6.0;
-const SURFACE_GUST_SHAPING: f32 = 1.5;
-const CLIMATE_PRESSURE_WORLD_FRACTION: f32 = 0.30;
+// 7.71 * sqrt(0.0012) approximates ECMWF's friction-velocity gust term over
+// open water when only sustained 10 m wind is available. The instability
+// multiplier and procedural pulse are gameplay proxies for missing boundary-
+// layer stability and the three-second peak within an observation interval.
+const SURFACE_GUST_DRAG_INCREMENT: f32 = 0.27;
+// ECMWF adds 0.6 of positive low-level speed shear during deep convection.
+const CONVECTIVE_GUST_SHEAR_FRACTION: f32 = 0.60;
+const CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M: f32 = 19_200.0;
+const CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION: f32 = 0.30;
 const PLANETARY_ZONAL_WIND_PEAK_M_S: f32 = 3.1;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
@@ -182,7 +189,7 @@ pub struct AtmospherePrimary {
     pub pressure_hpa: f32,
     pub pressure_gradient_hpa_per_m: Vector,
     pub synoptic_pressure_gradient_hpa_per_m: Vector,
-    pub surface_gust_velocity_m_s: Vector,
+    pub surface_gust_signal: f32,
     pub surface_air_temperature_anomaly_c: f32,
     pub air_temperature_500_hpa_c: f32,
     pub local_temperature_gradient_c_per_m: Vector,
@@ -236,6 +243,7 @@ pub struct ProceduralWeather {
     pub primary: AtmospherePrimary,
     pub surface_air_temperature_c: f32,
     pub wind_velocity_m_s: Vector,
+    pub surface_gust_velocity_m_s: Vector,
     pub upper_wind_velocity_m_s: Vector,
     pub wind_shear_m_s: Vector,
     pub relative_humidity: f32,
@@ -664,7 +672,7 @@ struct PressureSample {
     potential_m2_s: f64,
     gradient_m_s: Vector,
     synoptic_gradient_m_s: Vector,
-    surface_gust_velocity_m_s: Vector,
+    surface_gust_signal: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -677,15 +685,17 @@ struct WindBand {
     synoptic_coupling: f32,
 }
 
-// The climate band spans 30% of world circumference. The remaining wavelengths
-// retain the default world's 1:625 reduction of roughly 2000, 600, and 160 km
-// Earth structures; the 2000 km reference lies within the NWS 1000–2500 km
-// synoptic range (forecast.weather.gov/glossary.php?word=synoptic+scale).
+// The climate band retains a 19.2 km zonal wavelength while its meridional
+// wavelength spans 30% of world height, so resizing latitude bands does not
+// resize their east-west structure. The remaining wavelengths retain the
+// default world's 1:625 reduction of roughly 2000, 600, and 160 km Earth
+// structures; the 2000 km reference lies within the NWS 1000–2500 km synoptic
+// range (forecast.weather.gov/glossary.php?word=synoptic+scale).
 // Variance, its latitude transfer, anisotropy, coupling, and evolution rates are
 // gameplay tuning rather than a scaled atmospheric energy spectrum. Transfers
 // sum to zero, and anisotropy is gradient-normalized, preserving calibrated
-// total wind energy. The 256 m band is a direct surface-gust vector and does not
-// contribute to resolved pressure. Keep the mirrored WGSL values synchronized.
+// total wind energy. The 256 m band supplies gust timing and does not contribute
+// to resolved pressure. Keep the mirrored WGSL values synchronized.
 const WIND_BANDS: [WindBand; 4] = [
     WindBand {
         wavelength_m: 0.0,
@@ -1309,7 +1319,7 @@ fn procedural_atmosphere_primary_with_conditions(
         pressure_gradient_hpa_per_m: pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
         synoptic_pressure_gradient_hpa_per_m: pressure.synoptic_gradient_m_s
             / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-        surface_gust_velocity_m_s: pressure.surface_gust_velocity_m_s,
+        surface_gust_signal: pressure.surface_gust_signal,
         surface_air_temperature_anomaly_c,
         air_temperature_500_hpa_c,
         local_temperature_gradient_c_per_m: surface_temperature.gradient_per_m,
@@ -1324,10 +1334,10 @@ pub fn derive_weather(
 ) -> ProceduralWeather {
     let surface_air_temperature_c =
         current_air_temperature_c(climate, conditions) + primary.surface_air_temperature_anomaly_c;
-    let wind_velocity_m_s = wind_from_pressure_gradient(
+    let resolved_surface_wind_m_s = wind_from_pressure_gradient(
         primary.pressure_gradient_hpa_per_m,
         conditions.geographic_latitude_degrees,
-    ) + primary.surface_gust_velocity_m_s;
+    );
     let upper_pressure_wind_m_s = UPPER_WIND_SCALE
         * wind_from_pressure_gradient(
             primary.synoptic_pressure_gradient_hpa_per_m,
@@ -1359,6 +1369,34 @@ pub fn derive_weather(
     ) as f32;
     let lift = (0.25 * pressure_lift + 0.55 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
     let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
+    // ECMWF diagnoses peak 10 m gust speed from a surface-stress/stability term
+    // plus 0.6 of positive low-level speed shear when deep convection is active.
+    // This model lacks friction velocity, boundary-layer stability, 850/950 hPa
+    // winds, and a convection scheme, so sustained wind, column instability,
+    // condensation, and lift are their deterministic local proxies.
+    let mechanical_stability_factor = 1.0 + 0.35 * instability;
+    let mechanical_gust_speed_m_s = SURFACE_GUST_DRAG_INCREMENT
+        * mechanical_stability_factor
+        * resolved_surface_wind_m_s.length();
+    let convective_activity = instability
+        * smoothstep_range(0.65, 0.95, f64::from(relative_humidity)) as f32
+        * smoothstep_range(0.35, 0.80, f64::from(lift)) as f32;
+    let convective_gust_speed_m_s = CONVECTIVE_GUST_SHEAR_FRACTION
+        * convective_activity
+        * (upper_wind_velocity_m_s.length() - resolved_surface_wind_m_s.length()).max(0.0);
+    let mechanical_gust_velocity_m_s = if resolved_surface_wind_m_s == Vector::ZERO {
+        Vector::ZERO
+    } else {
+        mechanical_gust_speed_m_s * resolved_surface_wind_m_s.normalize()
+    };
+    let convective_gust_velocity_m_s = if upper_wind_velocity_m_s == Vector::ZERO {
+        Vector::ZERO
+    } else {
+        convective_gust_speed_m_s * upper_wind_velocity_m_s.normalize()
+    };
+    let surface_gust_velocity_m_s =
+        primary.surface_gust_signal * (mechanical_gust_velocity_m_s + convective_gust_velocity_m_s);
+    let wind_velocity_m_s = resolved_surface_wind_m_s + surface_gust_velocity_m_s;
     let cloud_signal = 0.68 * condensation + 0.22 * lift + 0.10 * instability * condensation;
     let cloudiness = smoothstep_range(0.50, 1.01, f64::from(cloud_signal)) as f32;
     let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
@@ -1371,6 +1409,7 @@ pub fn derive_weather(
         primary,
         surface_air_temperature_c,
         wind_velocity_m_s,
+        surface_gust_velocity_m_s,
         upper_wind_velocity_m_s,
         wind_shear_m_s: upper_wind_velocity_m_s - wind_velocity_m_s,
         relative_humidity,
@@ -1755,8 +1794,11 @@ pub fn vector_field_time_coordinates(
     VectorFieldTimeCoordinates {
         pressure: WIND_BANDS.map(|band| {
             let wavelength_m = if band.wavelength_m == 0.0 {
-                CLIMATE_PRESSURE_WORLD_FRACTION
-                    * libm::sqrtf(world_geometry.width_m() * world_geometry.height_m())
+                libm::sqrtf(
+                    CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M
+                        * CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION
+                        * world_geometry.height_m(),
+                )
             } else {
                 band.wavelength_m
             };
@@ -2442,11 +2484,7 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     tick: u64,
     position_m: Vector,
 ) -> Vector {
-    let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
-    wind_from_pressure_gradient(
-        pressure.gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-        world_geometry.latitude_degrees(position_m.y),
-    ) + pressure.surface_gust_velocity_m_s
+    procedural_weather(world_geometry, match_seed, tick, position_m).wind_velocity_m_s
 }
 
 fn procedural_pressure_sample(
@@ -2469,12 +2507,12 @@ fn procedural_pressure_sample(
     let mut potential_m2_s = 0.0_f32;
     let mut gradient_m_s = Vector::ZERO;
     let mut synoptic_gradient_m_s = Vector::ZERO;
-    let mut surface_gust_velocity_m_s = Vector::ZERO;
+    let mut surface_gust_signal = 0.0;
     for (band_index, band) in WIND_BANDS.into_iter().enumerate() {
         let (zonal_wavelength_m, meridional_wavelength_m) = if band.wavelength_m == 0.0 {
             (
-                CLIMATE_PRESSURE_WORLD_FRACTION * world_geometry.width_m(),
-                CLIMATE_PRESSURE_WORLD_FRACTION * world_geometry.height_m(),
+                CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M,
+                CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION * world_geometry.height_m(),
             )
         } else {
             (band.wavelength_m, band.wavelength_m)
@@ -2487,7 +2525,7 @@ fn procedural_pressure_sample(
         let zonal_aspect = 1.0 + (band.midlatitude_zonal_aspect - 1.0) * midlatitude;
         let zonal_aspect_gradient_per_m =
             (band.midlatitude_zonal_aspect - 1.0) * midlatitude_gradient_per_m;
-        let mut noise = spatiotemporal_pressure_noise_4d(
+        let noise = spatiotemporal_pressure_noise_4d(
             world_geometry,
             match_seed ^ band.noise_salt,
             position_m,
@@ -2498,7 +2536,8 @@ fn procedural_pressure_sample(
             zonal_aspect_gradient_per_m,
         );
         if band_index == WIND_BANDS.len() - 1 {
-            noise.1 *= libm::coshf(SURFACE_GUST_SHAPING * noise.0);
+            surface_gust_signal = smoothstep_range(0.05, 0.65, f64::from(noise.0)) as f32;
+            continue;
         }
         let total_zonal_aspect = zonal_wavelength_m * zonal_aspect / meridional_wavelength_m;
         let total_zonal_aspect_gradient_per_m =
@@ -2517,13 +2556,9 @@ fn procedural_pressure_sample(
                 + variance_scale * anisotropy_normalization_gradient_per_m);
         let band_gradient_m_s = potential_scale_m2_s * noise.1
             + Vector::new(0.0, potential_scale_gradient_m_s * noise.0);
-        if band_index == WIND_BANDS.len() - 1 {
-            surface_gust_velocity_m_s = band_gradient_m_s;
-        } else {
-            potential_m2_s += potential_scale_m2_s * noise.0;
-            gradient_m_s += band_gradient_m_s;
-            synoptic_gradient_m_s += band.synoptic_coupling * band_gradient_m_s;
-        }
+        potential_m2_s += potential_scale_m2_s * noise.0;
+        gradient_m_s += band_gradient_m_s;
+        synoptic_gradient_m_s += band.synoptic_coupling * band_gradient_m_s;
     }
     // NOAA's idealized global circulation has an equatorial low, subtropical
     // highs near 30°, subpolar lows near 60°, and polar highs. Scaling potential
@@ -2542,7 +2577,7 @@ fn procedural_pressure_sample(
         potential_m2_s: f64::from(potential_m2_s),
         gradient_m_s,
         synoptic_gradient_m_s,
-        surface_gust_velocity_m_s,
+        surface_gust_signal,
     }
 }
 
@@ -2655,7 +2690,7 @@ mod tests {
     }
 
     #[test]
-    fn only_climate_pressure_evolution_scales_with_world_size() {
+    fn only_climate_pressure_evolution_scales_with_world_height() {
         let tick = 12_345_678;
         let reference = WorldGeometry::new(32_000.0, 24_000.0).unwrap();
         let wider = WorldGeometry::new(256_000.0, 24_000.0).unwrap();
@@ -2665,9 +2700,8 @@ mod tests {
         let wider = vector_field_time_coordinates(wider, tick).pressure;
         let taller = vector_field_time_coordinates(taller, tick).pressure;
 
-        assert_ne!(reference[0], wider[0]);
+        assert_eq!(reference, wider);
         assert_ne!(reference[0], taller[0]);
-        assert_eq!(reference[1..], wider[1..]);
         assert_eq!(reference[1..], taller[1..]);
     }
 

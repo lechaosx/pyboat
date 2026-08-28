@@ -72,14 +72,17 @@ current playable behavior; this file does not track delivery status.
   storm.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
   gust to broad weather system, and weakens in the lee of land over nearby water.
-  Latitude climatology and broad climate-pressure structure scale with the world,
-  while synoptic and local pressure systems retain fixed physical sizes. Broad
-  and synoptic pressure dominate pressure anomaly; restrained local pressure is
-  secondary, and gust-scale wind does not appear as a pressure texture. Broad
-  and synoptic systems become zonally coherent at midlatitudes without changing
-  total transient wind energy. Coriolis reverses pressure-driven turning between
-  hemispheres. Evolving weather has no uniform translation direction; system
-  motion is local and its world-scale mean is zero.
+  Latitude climatology and the meridional scale of broad climate-pressure bands
+  follow world height, while their zonal scale and all synoptic and local
+  pressure-system sizes remain fixed. Broad and synoptic pressure dominate
+  pressure anomaly; restrained local pressure is secondary. Procedural gust
+  pulses modulate a surface-wind/stability contribution and, during moist
+  convection, downward transport of faster upper wind. Broad and synoptic
+  systems become zonally coherent at midlatitudes without changing total
+  transient wind energy.
+  Coriolis reverses pressure-driven turning between hemispheres. Evolving weather
+  has no uniform translation direction; system motion is local and its
+  world-scale mean is zero.
 - **[Explicit]** Sun and moon state drives tides whose height changes depth,
   grounding, navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
@@ -220,8 +223,8 @@ current playable behavior; this file does not track delivery status.
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
 - **[Explicit]** World geometry, playback, and the global clock remain immediately
-  accessible. View-center position, derived conditions, and procedural-basis
-  measurements share one read-only diagnostic panel. Visibility, tuning, and
+  accessible. View-center position and derived conditions share one read-only
+  diagnostic panel. Visibility, tuning, and
   mechanism diagnostics use collapsed semantic groups, and render modes are
   categorized by related causes. Pressure diagnostics expose the full anomaly
   and individually scaled broad, synoptic, and local contributions. Separate

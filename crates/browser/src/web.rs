@@ -9,8 +9,8 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    PeriodicNoiseBasis, celestial_lighting, periodic_noise_octave_diagnostic,
-    scalar_field_time_coordinates, vector_field_time_coordinates, world_celestial_conditions,
+    celestial_lighting, scalar_field_time_coordinates, vector_field_time_coordinates,
+    world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -41,16 +41,6 @@ pub struct PlaygroundWorldGeometrySample {
     canonical_y_m: f32,
     normalized_x: f32,
     normalized_y: f32,
-}
-
-#[wasm_bindgen]
-pub struct PlaygroundNoiseOctaveDiagnostic {
-    basis: String,
-    requested_wavelength_m: f32,
-    effective_wavelength_x_m: f32,
-    effective_wavelength_y_m: f32,
-    relative_error_x: f32,
-    relative_error_y: f32,
 }
 
 #[wasm_bindgen]
@@ -278,61 +268,6 @@ pub fn sample_playground_field_time_coordinates(
     values.extend(pressure.pressure);
     values.extend([current.ocean_current, 0.0, 0.0, 0.0]);
     Ok(values)
-}
-
-#[wasm_bindgen]
-impl PlaygroundNoiseOctaveDiagnostic {
-    #[wasm_bindgen(getter)]
-    pub fn basis(&self) -> String {
-        self.basis.clone()
-    }
-    #[wasm_bindgen(getter)]
-    pub fn requested_wavelength_m(&self) -> f32 {
-        self.requested_wavelength_m
-    }
-    #[wasm_bindgen(getter)]
-    pub fn effective_wavelength_x_m(&self) -> f32 {
-        self.effective_wavelength_x_m
-    }
-    #[wasm_bindgen(getter)]
-    pub fn effective_wavelength_y_m(&self) -> f32 {
-        self.effective_wavelength_y_m
-    }
-    #[wasm_bindgen(getter)]
-    pub fn relative_error_x(&self) -> f32 {
-        self.relative_error_x
-    }
-    #[wasm_bindgen(getter)]
-    pub fn relative_error_y(&self) -> f32 {
-        self.relative_error_y
-    }
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_noise_octave(
-    width_m: f32,
-    height_m: f32,
-    circle_embedded: bool,
-    requested_wavelength_m: f32,
-) -> Result<PlaygroundNoiseOctaveDiagnostic, JsValue> {
-    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
-    let basis = if circle_embedded {
-        PeriodicNoiseBasis::CircleEmbeddedSimplex4d
-    } else {
-        PeriodicNoiseBasis::PeriodicTriangularSimplex2d
-    };
-    let diagnostic = periodic_noise_octave_diagnostic(geometry, basis, requested_wavelength_m);
-    Ok(PlaygroundNoiseOctaveDiagnostic {
-        basis: match basis {
-            PeriodicNoiseBasis::PeriodicTriangularSimplex2d => "2D periodic".to_owned(),
-            PeriodicNoiseBasis::CircleEmbeddedSimplex4d => "4D circle".to_owned(),
-        },
-        requested_wavelength_m: diagnostic.requested_wavelength_m,
-        effective_wavelength_x_m: diagnostic.effective_wavelength_x_m,
-        effective_wavelength_y_m: diagnostic.effective_wavelength_y_m,
-        relative_error_x: diagnostic.relative_error_x,
-        relative_error_y: diagnostic.relative_error_y,
-    })
 }
 
 #[wasm_bindgen]
