@@ -23,7 +23,7 @@ fn longitude_sets_local_solar_time_without_changing_global_cycles() {
     assert_eq!(east.day_phase, (reference.day_phase + 0.25).rem_euclid(1.0));
     assert_eq!(east.day_phase, repeated.day_phase);
     assert_eq!(reference.season_phase, east.season_phase);
-    assert_eq!(reference.moon_phase, east.moon_phase);
+    assert_eq!(reference.lunar_longitude_phase, east.lunar_longitude_phase,);
 }
 
 #[test]
@@ -58,7 +58,10 @@ fn hemispheres_have_opposite_seasons_while_global_phases_match() {
     let south = procedural_world_environment(world, SEED, TICK, Vector::new(0.0, -15_000.0));
 
     assert_eq!(north.celestial.season_phase, south.celestial.season_phase);
-    assert_eq!(north.celestial.moon_phase, south.celestial.moon_phase);
+    assert_eq!(
+        north.celestial.lunar_longitude_phase,
+        south.celestial.lunar_longitude_phase,
+    );
     let north_temperature = current_air_temperature_c(north.climate, north.celestial);
     let south_temperature = current_air_temperature_c(south.climate, south.celestial);
     let southern_opposite_season = current_air_temperature_c(

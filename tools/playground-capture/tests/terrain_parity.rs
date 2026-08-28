@@ -1,8 +1,8 @@
 use std::{fs, io::BufReader, process::Command};
 
 use game::{
-    procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
-    procedural_world_environment,
+    celestial_lighting, procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
+    procedural_world_environment, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -90,6 +90,29 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
                 "mode {mode} at {position_m:?}: {actual:?} != {expected:?}",
             );
         }
+    }
+}
+
+#[test]
+fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 77.0 * 86_400.0;
+    let position_m = Vector::new(-9_333.334, -13_511.111);
+    let lighting = celestial_lighting(world_celestial_conditions(
+        world,
+        world_time_seconds,
+        position_m,
+    ));
+    let actual =
+        render_debug_image_with_view_at(world, position_m, world_time_seconds, 1.0, 72, 1, 1);
+    let expected = scalar_debug_pixel(lighting.solar_eclipse_fraction);
+
+    for channel in 0..3 {
+        assert!(
+            actual[channel].abs_diff(expected[channel]) <= 4,
+            "{actual:?} != {expected:?} for {:?}",
+            lighting.solar_eclipse_fraction,
+        );
     }
 }
 
@@ -200,6 +223,47 @@ fn cloud_formation_is_spatial_across_world() {
 }
 
 #[test]
+fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(0.0, 6_000.0);
+    let sunset_seconds = 16_216.388_892_196_119;
+    let before_sunset = render_debug_image_with_view_at(
+        world,
+        position_m,
+        sunset_seconds - 3.0,
+        1_000.0,
+        10,
+        64,
+        64,
+    );
+    let after_sunset = render_debug_image_with_view_at(
+        world,
+        position_m,
+        sunset_seconds + 3.0,
+        1_000.0,
+        10,
+        64,
+        64,
+    );
+
+    let mean_difference = before_sunset
+        .chunks_exact(4)
+        .zip(after_sunset.chunks_exact(4))
+        .map(|(before, after)| {
+            (0..3)
+                .map(|channel| before[channel].abs_diff(after[channel]) as f32 / 255.0)
+                .sum::<f32>()
+                / 3.0
+        })
+        .sum::<f32>()
+        / (64.0 * 64.0);
+    assert!(
+        mean_difference < 0.005,
+        "{mean_difference} at {position_m:?}, sunset {sunset_seconds}",
+    );
+}
+
+#[test]
 fn rendered_pressure_is_spatial_across_world() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let pressure = render_debug_image(world, 60, 32, 16);
@@ -268,13 +332,33 @@ fn render_debug_image(world: WorldGeometry, mode: u32, width: u32, height: u32) 
 }
 
 fn world_time_for_season_phase(season_phase: f64) -> f64 {
-    (season_phase - 0.5021).rem_euclid(1.0) * 86_400.0 * 360.0
+    (season_phase - 0.5021).rem_euclid(1.0) * 86_400.0 * 336.0
 }
 
 fn render_debug_image_at(
     world: WorldGeometry,
     position_m: Vector,
     world_time_seconds: f64,
+    mode: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    render_debug_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        world.height_m(),
+        mode,
+        width,
+        height,
+    )
+}
+
+fn render_debug_image_with_view_at(
+    world: WorldGeometry,
+    position_m: Vector,
+    world_time_seconds: f64,
+    view_height_m: f32,
     mode: u32,
     width: u32,
     height: u32,
@@ -301,7 +385,7 @@ fn render_debug_image_at(
             "--camera-y",
             &position_m.y.to_string(),
             "--view-height",
-            &world.height_m().to_string(),
+            &view_height_m.to_string(),
             "--seed",
             &SEED.to_string(),
             "--cloud-time",
@@ -398,6 +482,23 @@ fn signed_debug_pixel(value: f32) -> [u8; 4] {
     let mut pixel = [0, 0, 0, 255];
     for channel in 0..3 {
         let linear = dark[channel] + magnitude * (target[channel] - dark[channel]);
+        let srgb = if linear <= 0.003_130_8 {
+            12.92 * linear
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        };
+        pixel[channel] = (255.0 * srgb).round() as u8;
+    }
+    pixel
+}
+
+fn scalar_debug_pixel(value: f32) -> [u8; 4] {
+    let amount = value.clamp(0.0, 1.0);
+    let dark = [0.015, 0.025, 0.035];
+    let target = [0.92, 0.96, 0.94];
+    let mut pixel = [0, 0, 0, 255];
+    for channel in 0..3 {
+        let linear = dark[channel] + amount * (target[channel] - dark[channel]);
         let srgb = if linear <= 0.003_130_8 {
             12.92 * linear
         } else {

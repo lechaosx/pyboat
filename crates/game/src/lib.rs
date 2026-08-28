@@ -125,8 +125,21 @@ const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
     (0.9914449, -0.1305262),
 ];
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
-const WORLD_YEAR_DAYS: f64 = 360.0;
-const WORLD_LUNAR_CYCLE_DAYS: f64 = 28.0;
+const WORLD_MONTH_DAYS: f64 = 28.0;
+const WORLD_YEAR_MONTHS: f64 = 12.0;
+const WORLD_YEAR_DAYS: f64 = WORLD_MONTH_DAYS * WORLD_YEAR_MONTHS;
+const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_MONTH_DAYS;
+// The Moon must orbit faster than its 28-day Sun-relative phase cycle because
+// the Sun advances through the sky during the same interval.
+const WORLD_LUNAR_ORBIT_DAYS: f64 =
+    1.0 / (1.0 / WORLD_LUNAR_PHASE_CYCLE_DAYS + 1.0 / WORLD_YEAR_DAYS);
+const LUNAR_ORBIT_INCLINATION_RAD: f64 = 5.145_f64.to_radians();
+// Centering the fixed node between the nearest new- and full-moon longitudes
+// pairs both eclipses within each season and preserves annual repetition.
+const LUNAR_ASCENDING_NODE_PHASE: f64 = 0.5021;
+const LUNAR_DISTANCE_PLANET_RADII: f64 = 60.3;
+const SUN_ANGULAR_RADIUS_RAD: f64 = 0.00465;
+const MOON_ANGULAR_RADIUS_RAD: f64 = 0.00452;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeriodicNoiseBasis {
@@ -201,7 +214,7 @@ pub struct CelestialConditions {
     pub geographic_latitude_degrees: f32,
     pub season_phase: f32,
     pub day_phase: f32,
-    pub moon_phase: f32,
+    pub lunar_longitude_phase: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -210,6 +223,10 @@ pub struct CelestialLighting {
     pub sun_intensity: f32,
     pub moon_direction: [f32; 3],
     pub moon_intensity: f32,
+    pub moon_color: [f32; 3],
+    pub solar_eclipse_fraction: f32,
+    pub lunar_penumbra_fraction: f32,
+    pub lunar_umbra_fraction: f32,
     pub ambient_intensity: f32,
 }
 
@@ -350,7 +367,9 @@ const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     salt: WATER_VAPOR_NOISE_SALT,
     scale: WATER_VAPOR_NOISE_SCALE,
     evolution_speed_m_s: WATER_VAPOR_EVOLUTION_SPEED_M_S,
-    wavelength_m: 3584.0,
+    // Humidity organizes weather systems; the visual fields supply smaller cloud
+    // bodies. Keep this spectrum synchronized with `scene.wgsl`.
+    wavelength_m: 8192.0,
     octave_count: 5,
 };
 
@@ -358,35 +377,91 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
     let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
     let solar_longitude = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.25);
     let obliquity = 23.44_f64.to_radians();
-    let solar_declination = libm::asin(libm::sin(obliquity) * libm::sin(solar_longitude));
+    let sun_equatorial = ecliptic_direction(solar_longitude, 0.0, obliquity);
+    let solar_declination = libm::asin(sun_equatorial[2]);
+    let solar_right_ascension = libm::atan2(sun_equatorial[1], sun_equatorial[0]);
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let sun_direction = celestial_direction(latitude, solar_declination, solar_hour_angle);
     let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
     let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
-    let sun_intensity = sun_horizon * (0.35 + 0.65 * sun_elevation);
 
-    let phase_angle = std::f64::consts::TAU * f64::from(conditions.moon_phase.rem_euclid(1.0));
-    let lunar_longitude = solar_longitude + phase_angle;
-    let lunar_declination = libm::asin(libm::sin(obliquity) * libm::sin(lunar_longitude));
-    let moon_direction =
-        celestial_direction(latitude, lunar_declination, solar_hour_angle + phase_angle);
-    let illuminated_fraction = 0.5 - 0.5 * libm::cos(phase_angle);
+    let lunar_longitude =
+        std::f64::consts::TAU * f64::from(conditions.lunar_longitude_phase.rem_euclid(1.0));
+    let lunar_latitude = libm::asin(
+        libm::sin(LUNAR_ORBIT_INCLINATION_RAD)
+            * libm::sin(lunar_longitude - std::f64::consts::TAU * LUNAR_ASCENDING_NODE_PHASE),
+    );
+    let moon_equatorial = ecliptic_direction(lunar_longitude, lunar_latitude, obliquity);
+    let lunar_declination = libm::asin(moon_equatorial[2]);
+    let lunar_right_ascension = libm::atan2(moon_equatorial[1], moon_equatorial[0]);
+    let lunar_hour_angle = solar_hour_angle + solar_right_ascension - lunar_right_ascension;
+    let geocentric_moon_direction =
+        celestial_direction(latitude, lunar_declination, lunar_hour_angle);
+    let moon_direction = topocentric_moon_direction(geocentric_moon_direction);
+    let illuminated_fraction = 0.5 - 0.5 * dot3(sun_equatorial, moon_equatorial);
+
+    let solar_separation =
+        angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
+    let solar_eclipse_fraction = circle_overlap_fraction(
+        solar_separation,
+        SUN_ANGULAR_RADIUS_RAD,
+        MOON_ANGULAR_RADIUS_RAD,
+    ) as f32;
+    let anti_solar = [-sun_equatorial[0], -sun_equatorial[1], -sun_equatorial[2]];
+    let lunar_shadow_separation = angular_separation(moon_equatorial, anti_solar);
+    let planet_angular_radius = libm::asin(1.0 / LUNAR_DISTANCE_PLANET_RADII);
+    let umbra_radius = planet_angular_radius - SUN_ANGULAR_RADIUS_RAD;
+    let penumbra_radius = planet_angular_radius + SUN_ANGULAR_RADIUS_RAD;
+    let lunar_umbra_fraction = circle_overlap_fraction(
+        lunar_shadow_separation,
+        MOON_ANGULAR_RADIUS_RAD,
+        umbra_radius,
+    ) as f32;
+    let lunar_penumbra_fraction = circle_overlap_fraction(
+        lunar_shadow_separation,
+        MOON_ANGULAR_RADIUS_RAD,
+        penumbra_radius,
+    ) as f32;
+
+    let sun_intensity =
+        (1.0 - solar_eclipse_fraction) * sun_horizon * (0.35 + 0.65 * sun_elevation);
     let moon_elevation = libm::sqrt(f64::from(moon_direction[2].max(0.0))) as f32;
-    let moon_intensity = 0.12
+    let lunar_shadow_transmittance =
+        (1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction).max(0.04);
+    let moon_intensity = lunar_shadow_transmittance
+        * 0.12
         * illuminated_fraction as f32
         * smoothstep_range(0.0, 0.08, f64::from(moon_direction[2])) as f32
         * (0.35 + 0.65 * moon_elevation);
+    let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(lunar_umbra_fraction)) as f32;
+    let moon_color = [
+        0.48 + eclipse_warmth * (1.20 - 0.48),
+        0.62 + eclipse_warmth * (0.28 - 0.62),
+        1.00 + eclipse_warmth * (0.06 - 1.00),
+    ];
     let twilight = smoothstep_range(-0.18, 0.12, f64::from(sun_direction[2])) as f32;
-    let ambient_intensity =
-        (0.035 + twilight * (0.45 + 0.515 * sun_elevation) + 0.85 * moon_intensity).min(1.0);
+    let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
+    let ambient_intensity = (0.035
+        + solar_ambient_transmittance * twilight * (0.45 + 0.515 * sun_elevation)
+        + 0.85 * moon_intensity)
+        .min(1.0);
 
     CelestialLighting {
         sun_direction,
         sun_intensity,
         moon_direction,
         moon_intensity,
+        moon_color,
+        solar_eclipse_fraction,
+        lunar_penumbra_fraction,
+        lunar_umbra_fraction,
         ambient_intensity,
     }
+}
+
+pub fn moon_phase(conditions: CelestialConditions) -> f32 {
+    let solar_longitude_phase = (conditions.season_phase - 0.25).rem_euclid(1.0);
+    (conditions.lunar_longitude_phase - solar_longitude_phase).rem_euclid(1.0)
 }
 
 pub fn current_air_temperature_c(
@@ -432,7 +507,7 @@ fn seasonal_latitude_factor(geographic_latitude_degrees: f32) -> f32 {
 pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> f32 {
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let lunar_hour_angle =
-        solar_hour_angle + std::f64::consts::TAU * f64::from(conditions.moon_phase);
+        solar_hour_angle + std::f64::consts::TAU * f64::from(moon_phase(conditions));
     let phase_offset = std::f64::consts::TAU * f64::from(tide.phase_offset);
     let lunar_tide = libm::cos(2.0 * (lunar_hour_angle + phase_offset));
     let solar_tide = 0.46 * libm::cos(2.0 * (solar_hour_angle + phase_offset));
@@ -450,7 +525,8 @@ pub fn world_celestial_conditions(
         season_phase: (0.5021 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
         day_phase: world_geometry.local_solar_phase(global_day_phase, position_m.x),
-        moon_phase: (0.25 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_CYCLE_DAYS))
+        lunar_longitude_phase: (0.5021
+            + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_ORBIT_DAYS))
             .rem_euclid(1.0) as f32,
     }
 }
@@ -656,6 +732,86 @@ fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
 
 fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
     3.5 * libm::exp(0.055 * f64::from(air_temperature_c + 5.0)) as f32
+}
+
+fn ecliptic_direction(longitude: f64, latitude: f64, obliquity: f64) -> [f64; 3] {
+    let ecliptic_x = libm::cos(latitude) * libm::cos(longitude);
+    let ecliptic_y = libm::cos(latitude) * libm::sin(longitude);
+    let ecliptic_z = libm::sin(latitude);
+    [
+        ecliptic_x,
+        ecliptic_y * libm::cos(obliquity) - ecliptic_z * libm::sin(obliquity),
+        ecliptic_y * libm::sin(obliquity) + ecliptic_z * libm::cos(obliquity),
+    ]
+}
+
+fn topocentric_moon_direction(geocentric_direction: [f32; 3]) -> [f32; 3] {
+    let x = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[0]);
+    let y = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[1]);
+    let z = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[2]) - 1.0;
+    let length = libm::sqrt(x * x + y * y + z * z);
+    [
+        (x / length) as f32,
+        (y / length) as f32,
+        (z / length) as f32,
+    ]
+}
+
+fn array3_f64(value: [f32; 3]) -> [f64; 3] {
+    [
+        f64::from(value[0]),
+        f64::from(value[1]),
+        f64::from(value[2]),
+    ]
+}
+
+fn dot3(left: [f64; 3], right: [f64; 3]) -> f64 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn angular_separation(left: [f64; 3], right: [f64; 3]) -> f64 {
+    let cross = [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ];
+    libm::atan2(libm::sqrt(dot3(cross, cross)), dot3(left, right))
+}
+
+fn circle_overlap_fraction(separation: f64, target_radius: f64, occluder_radius: f64) -> f64 {
+    if separation >= target_radius + occluder_radius {
+        return 0.0;
+    }
+    if separation <= (target_radius - occluder_radius).abs() {
+        return if occluder_radius >= target_radius {
+            1.0
+        } else {
+            occluder_radius * occluder_radius / (target_radius * target_radius)
+        };
+    }
+    let target_angle = libm::acos(
+        ((separation * separation + target_radius * target_radius
+            - occluder_radius * occluder_radius)
+            / (2.0 * separation * target_radius))
+            .clamp(-1.0, 1.0),
+    );
+    let occluder_angle = libm::acos(
+        ((separation * separation + occluder_radius * occluder_radius
+            - target_radius * target_radius)
+            / (2.0 * separation * occluder_radius))
+            .clamp(-1.0, 1.0),
+    );
+    let lens = 0.5
+        * libm::sqrt(
+            (-separation + target_radius + occluder_radius)
+                * (separation + target_radius - occluder_radius)
+                * (separation - target_radius + occluder_radius)
+                * (separation + target_radius + occluder_radius),
+        );
+    (target_radius * target_radius * target_angle
+        + occluder_radius * occluder_radius * occluder_angle
+        - lens)
+        / (std::f64::consts::PI * target_radius * target_radius)
 }
 
 fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32; 3] {
@@ -1044,7 +1200,7 @@ fn tide_height_gradient_per_m(
 ) -> Vector {
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(celestial.day_phase) - 0.5);
     let lunar_hour_angle =
-        solar_hour_angle + std::f64::consts::TAU * f64::from(celestial.moon_phase);
+        solar_hour_angle + std::f64::consts::TAU * f64::from(moon_phase(celestial));
     let phase_offset = std::f64::consts::TAU * f64::from(tidal_sample.conditions.phase_offset);
     let lunar_angle = 2.0 * (lunar_hour_angle + phase_offset);
     let solar_angle = 2.0 * (solar_hour_angle + phase_offset);

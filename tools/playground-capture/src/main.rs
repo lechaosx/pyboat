@@ -74,6 +74,10 @@ struct DerivedOutput {
     sun_intensity: f32,
     moon_direction: [f32; 3],
     moon_intensity: f32,
+    moon_light_color: [f32; 3],
+    solar_eclipse_fraction: f32,
+    lunar_penumbra_fraction: f32,
+    lunar_umbra_fraction: f32,
     clear_sky_ambient_intensity: f32,
     ground_temperature_c: f32,
     water_temperature_c: f32,
@@ -234,6 +238,7 @@ fn parse_debug_view(value: &str) -> Result<u32, String> {
         "surface-gust" => Ok(69),
         "resolved-wind" => Ok(70),
         "synoptic-wind" => Ok(71),
+        "solar-eclipse" => Ok(72),
         _ => parse(value, "--debug"),
     }
 }
@@ -254,7 +259,7 @@ fn print_help() {
                                   upper-shadow, surface-wind, upper-wind, shear,\n\
                                   broad-pressure, full-pressure, synoptic-pressure,\n\
                                   local-pressure, surface-gust, resolved-wind,\n\
-                                  synoptic-wind,\n\
+                                  synoptic-wind, solar-eclipse,\n\
                                   temperature-gradient, snow, ice, autumn,\n\
                                   or tide\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
@@ -276,6 +281,7 @@ mod tests {
         assert_eq!(parse_debug_view("temperature-gradient"), Ok(20));
         assert_eq!(parse_debug_view("resolved-wind"), Ok(70));
         assert_eq!(parse_debug_view("synoptic-wind"), Ok(71));
+        assert_eq!(parse_debug_view("solar-eclipse"), Ok(72));
     }
 }
 
@@ -489,7 +495,7 @@ fn render_world(
         world_phases: [
             conditions.day_phase,
             conditions.season_phase,
-            conditions.moon_phase,
+            conditions.lunar_longitude_phase,
             0.0,
         ],
         world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
@@ -640,6 +646,10 @@ fn capture_report(
             sun_intensity: celestial.sun_intensity,
             moon_direction: celestial.moon_direction,
             moon_intensity: celestial.moon_intensity,
+            moon_light_color: celestial.moon_color,
+            solar_eclipse_fraction: celestial.solar_eclipse_fraction,
+            lunar_penumbra_fraction: celestial.lunar_penumbra_fraction,
+            lunar_umbra_fraction: celestial.lunar_umbra_fraction,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
             ground_temperature_c: sample.surface_climate.ground_temperature_c,
             water_temperature_c: sample.surface_climate.water_temperature_c,

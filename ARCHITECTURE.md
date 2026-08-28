@@ -215,9 +215,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, evolving surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
-  Its procedural inputs are match seed, geometry, global day/season/lunar phase,
-  and tick; the view-center Rust sample is diagnostic and never drives the
-  surface scene.
+  Its procedural inputs are match seed, geometry, global day and season phases,
+  lunar longitude, and tick; the view-center Rust sample is diagnostic and never
+  drives the surface scene.
 - **[Explicit]** The host reduces the full tick into bounded scalar-weather,
   pressure, and current noise-time coordinates before upload, so WGSL never
   converts total time to `f32` or interpolates temporal snapshots. A seeded phase
@@ -248,16 +248,18 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   shear-driven deformation, and requires no individual clouds, particles,
   history, or fluid state. Unresolved octaves fade against the fragment's
   world-space pixel footprint. Spatially evolving temperature and moisture
-  derive cloud formation at the queried position. A continuous positive excess
-  of the latent field over the local formation threshold is cloud amount, while
-  non-positive excess is clear air. The visible layer uses small 320-metre
-  structures at a fixed 900-metre base and is limited to humid, unstable,
-  non-storm formation. Its relief and optical depth vary with amount. The unseen
-  weather canopy uses structures at least 2048 metres wide at a representative
-  3600-metre altitude; stratiform, convective, and rain signals alter its shape
-  and optical depth. Projected shadows use the same amount fields. A query
-  derives humidity, instability, coverage, rain, and cloud type from one local
-  weather evaluation before sampling cloud detail.
+  derive cloud formation at the queried position. Moisture remains coherent
+  above individual visible-cloud scale. The visible layer uses a continuous
+  positive excess of its latent field over the local formation threshold; it
+  has small 320-metre structures at a fixed 900-metre base and is limited to
+  humid, unstable, non-storm formation. Its relief and optical depth vary with
+  amount. The unseen weather canopy aggregates all cloud types by composing a
+  system-scale latent envelope with subordinate local texture at a
+  representative 3600-metre altitude. Stratiform and rainy conditions favor
+  connected cover, while convective conditions expose clustered cells.
+  Projected shadows use the same amount fields. A query derives humidity,
+  instability, coverage, rain, and cloud type from one local weather evaluation
+  before sampling cloud detail.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -377,21 +379,37 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   functions. Gameplay binds scene state and fixed production tuning; the lab adds
   live tuning and diagnostic state without adding that interface to production.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
-  day, season, and moon phases. Rendering-grade astronomy derives light and tide,
-  and season phase zero is the northern winter solstice.
+  day and season phases plus independently advancing lunar longitude.
+  Rendering-grade astronomy derives Sun and Moon directions first, then infers
+  lunar illumination phase and tidal separation from their geometry. A world
+  day lasts 24 hours, a calendar month lasts 28 days, and twelve months form a
+  336-day year. The lunar orbital rate produces one Sun-relative phase cycle per
+  month. Corresponding dates retain the same phase while seasonal Sun and Moon
+  positions vary between months and repeat after one year. Season phase zero is
+  the northern winter solstice. The Moon follows a circular orbit inclined
+  5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3 planetary
+  radii. Observer parallax and finite Sun/Moon discs derive local solar overlap;
+  finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
+  two paired eclipse seasons while preserving exact annual repetition.
 - **[Explicit]** Direct sun and moon intensity and color follow each source's
   elevation and orientation, while diffuse atmospheric light remains a separate
   RGB contribution. Both terms light the surface and visible lower clouds.
   Diffuse light blends clear-sky and weather-canopy contributions. Seeded
   regional aerosol, moisture, and cloud amount tint it; overcast attenuates it
   moderately while rain under deep canopy supplies stronger storm attenuation.
+  Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
+  moonlight slightly; increasing umbral coverage replaces blocked direct
+  sunlight with dim orange-red light filtered through the atmosphere, and the
+  resulting moon color enters direct and diffuse surface and cloud lighting.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
   width as circumference and the clamped physical latitude derived from the
   pole-to-pole span; the non-geographic polar apron retains its local planar
-  offset. Grazing shadows remain finite and fade toward the horizon. The apparent
-  angular radius of the sun and moon supplies a physical minimum filter footprint
-  for cloud shadows and a distance-proportional penumbra for landform shadows.
+  offset. Sun and Moon projections are evaluated independently and fade with
+  their respective direct-light contribution at the horizon. Grazing shadows
+  remain finite. The apparent angular radius of the sun and moon supplies a
+  physical minimum filter footprint for cloud shadows and a
+  distance-proportional penumbra for landform shadows.
 - **[Explicit]** North-south position maps linearly from -90 degrees at the
   finite southern pole through the equator to +90 degrees at the finite northern
   pole. Latitude remains clamped beyond those coordinates, so neither climate
@@ -401,7 +419,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   coordinates at their boundaries.
 - **[Explicit]** Canonical normalized east-west position is longitude. Local
   solar phase is the wrapped sum of global day phase and normalized longitude;
-  season and lunar phase remain global.
+  season phase and lunar longitude remain global.
 - **[Explicit]** Playground diagnostics may approximate authoritative shelter but
   never feed derived results back into primary inputs or gameplay physics.
 - **[Explicit]** The playground always samples live production state through the

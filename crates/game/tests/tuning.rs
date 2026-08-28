@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
     climate_surface, current_500_hpa_air_temperature_c, current_air_temperature_c, derive_weather,
-    dinghy_parameters, match_environment,
+    dinghy_parameters, match_environment, moon_phase,
     procedural_atmosphere_primary as procedural_atmosphere_primary_in_world,
     procedural_cloud_cover as procedural_cloud_cover_in_world,
     procedural_match_environment as procedural_match_environment_in_world,
@@ -108,7 +108,7 @@ fn derive_weather_at_surface_temperature(
             geographic_latitude_degrees: 45.0,
             season_phase: 0.0,
             day_phase: 0.0,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
     )
 }
@@ -594,7 +594,7 @@ fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
                 geographic_latitude_degrees: latitude,
                 season_phase: 0.0,
                 day_phase: 0.0,
-                moon_phase: 0.0,
+                lunar_longitude_phase: 0.0,
             },
         )
         .wind_velocity_m_s
@@ -736,7 +736,7 @@ fn temperate_temperature_extremes_have_observed_probabilities() {
                         geographic_latitude_degrees: latitude,
                         season_phase,
                         day_phase,
-                        moon_phase: 0.0,
+                        lunar_longitude_phase: 0.0,
                     },
                 ) + anomaly
             })
@@ -895,7 +895,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
         geographic_latitude_degrees: 0.0,
         season_phase: 0.25,
         day_phase: 0.5,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.25,
     });
     let midnight = celestial_lighting(CelestialConditions {
         day_phase: 0.0,
@@ -903,7 +903,7 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
             geographic_latitude_degrees: 0.0,
             season_phase: 0.25,
             day_phase: 0.5,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.25,
         }
     });
 
@@ -917,33 +917,186 @@ fn celestial_cycle_places_equinox_sun_overhead_at_equatorial_noon() {
 fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     let full_moon_midnight = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 0.0,
-        season_phase: 0.25,
+        season_phase: 0.5,
         day_phase: 0.0,
-        moon_phase: 0.5,
+        lunar_longitude_phase: 0.75,
     });
     let new_moon_midnight = celestial_lighting(CelestialConditions {
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.25,
         ..CelestialConditions {
             geographic_latitude_degrees: 0.0,
-            season_phase: 0.25,
+            season_phase: 0.5,
             day_phase: 0.0,
-            moon_phase: 0.5,
+            lunar_longitude_phase: 0.75,
         }
     });
 
-    assert!(full_moon_midnight.moon_direction[2] > 0.99);
+    assert!(full_moon_midnight.moon_direction[2] > 0.85);
     assert!(full_moon_midnight.moon_intensity > 0.09);
     assert_eq!(new_moon_midnight.moon_intensity, 0.0);
     assert!(full_moon_midnight.ambient_intensity > new_moon_midnight.ambient_intensity);
 }
 
 #[test]
+fn lunar_orbit_tilt_limits_eclipses_to_node_crossings() {
+    let solar_node = 0.5021;
+    let off_node = (solar_node + 0.25) % 1.0;
+    let new_moon_at_node = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: (solar_node + 0.25) % 1.0,
+        day_phase: 0.5,
+        lunar_longitude_phase: solar_node,
+    });
+    let new_moon_off_node = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: (off_node + 0.25) % 1.0,
+        day_phase: 0.5,
+        lunar_longitude_phase: off_node,
+    });
+    let full_moon_at_node = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: (solar_node + 0.25) % 1.0,
+        day_phase: 0.0,
+        lunar_longitude_phase: (solar_node + 0.5) % 1.0,
+    });
+    let full_moon_off_node = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: (off_node + 0.25) % 1.0,
+        day_phase: 0.0,
+        lunar_longitude_phase: (off_node + 0.5) % 1.0,
+    });
+    let direction_dot = |left: [f32; 3], right: [f32; 3]| {
+        left.into_iter().zip(right).map(|(a, b)| a * b).sum::<f32>()
+    };
+
+    assert!(
+        direction_dot(
+            new_moon_off_node.sun_direction,
+            new_moon_off_node.moon_direction
+        ) < 0.999
+    );
+    assert!(new_moon_at_node.solar_eclipse_fraction > 0.9);
+    assert_eq!(new_moon_off_node.solar_eclipse_fraction, 0.0);
+    assert!(new_moon_at_node.sun_intensity < 0.25 * new_moon_off_node.sun_intensity);
+    assert!(full_moon_at_node.lunar_umbra_fraction > 0.9);
+    assert_eq!(full_moon_off_node.lunar_penumbra_fraction, 0.0);
+    assert!(full_moon_at_node.moon_intensity < 0.25 * full_moon_off_node.moon_intensity);
+    assert!(full_moon_at_node.moon_color[0] > full_moon_at_node.moon_color[2]);
+    assert!(full_moon_off_node.moon_color[2] > full_moon_off_node.moon_color[0]);
+}
+
+#[test]
+fn world_year_has_two_paired_eclipse_seasons() {
+    let world = WorldGeometry::default();
+    let mut solar_eclipse_months = 0;
+    let mut lunar_eclipse_months = 0;
+
+    for month in 0..12 {
+        let new_moon_seconds = (21.0 + 28.0 * f64::from(month)) * 86_400.0;
+        let mut solar_eclipse_visible = false;
+        for latitude_index in -45..=45 {
+            for longitude_index in 0..48 {
+                let position_m = Vector::new(
+                    world.width_m() * (longitude_index as f32 / 48.0 - 0.5),
+                    world.height_m() * latitude_index as f32 / 90.0,
+                );
+                let lighting = celestial_lighting(world_celestial_conditions_in_world(
+                    world,
+                    new_moon_seconds,
+                    position_m,
+                ));
+                solar_eclipse_visible |=
+                    lighting.sun_direction[2] > 0.0 && lighting.solar_eclipse_fraction > 0.01;
+            }
+        }
+        solar_eclipse_months += usize::from(solar_eclipse_visible);
+
+        let full_moon_seconds = (7.0 + 28.0 * f64::from(month)) * 86_400.0;
+        let lighting = celestial_lighting(world_celestial_conditions_in_world(
+            world,
+            full_moon_seconds,
+            Vector::ZERO,
+        ));
+        lunar_eclipse_months += usize::from(lighting.lunar_penumbra_fraction > 0.01);
+    }
+
+    assert_eq!(solar_eclipse_months, 2);
+    assert_eq!(lunar_eclipse_months, 2);
+}
+
+#[test]
+fn lunar_position_advances_independently_while_phase_is_derived() {
+    let start = world_celestial_conditions_in_world(WorldGeometry::default(), 0.0, Vector::ZERO);
+    let one_synodic_cycle_later = world_celestial_conditions_in_world(
+        WorldGeometry::default(),
+        28.0 * 86_400.0,
+        Vector::ZERO,
+    );
+
+    assert!((moon_phase(start) - 0.25).abs() < 0.0001);
+    assert!((moon_phase(one_synodic_cycle_later) - moon_phase(start)).abs() < 0.0001);
+    let longitude_change = (one_synodic_cycle_later.lunar_longitude_phase
+        - start.lunar_longitude_phase)
+        .rem_euclid(1.0);
+    assert!(longitude_change > 0.05);
+}
+
+#[test]
+fn world_calendar_has_twelve_twenty_eight_day_months() {
+    let start = world_celestial_conditions_in_world(WorldGeometry::default(), 0.0, Vector::ZERO);
+    let one_month_later = world_celestial_conditions_in_world(
+        WorldGeometry::default(),
+        28.0 * 86_400.0,
+        Vector::ZERO,
+    );
+    let one_year_later = world_celestial_conditions_in_world(
+        WorldGeometry::default(),
+        12.0 * 28.0 * 86_400.0,
+        Vector::ZERO,
+    );
+
+    assert!((one_month_later.season_phase - start.season_phase - 1.0 / 12.0).abs() < 0.0001);
+    assert!((one_year_later.season_phase - start.season_phase).abs() < 0.0001);
+}
+
+#[test]
+fn same_calendar_moment_varies_by_month_and_repeats_by_year() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(0.0, 10_000.0);
+    let time_seconds = 11.75 * 86_400.0;
+    let conditions_at = |offset_days| {
+        world_celestial_conditions_in_world(
+            world,
+            time_seconds + offset_days * 86_400.0,
+            position_m,
+        )
+    };
+    let direction_difference = |left: [f32; 3], right: [f32; 3]| {
+        left.into_iter()
+            .zip(right)
+            .map(|(left, right)| (left - right).abs())
+            .sum::<f32>()
+    };
+    let start_conditions = conditions_at(0.0);
+    let next_month_conditions = conditions_at(28.0);
+    let start = celestial_lighting(start_conditions);
+    let next_month = celestial_lighting(next_month_conditions);
+    let next_year = celestial_lighting(conditions_at(336.0));
+
+    assert!((moon_phase(start_conditions) - moon_phase(next_month_conditions)).abs() < 0.0001);
+    assert!(direction_difference(start.sun_direction, next_month.sun_direction) > 0.1);
+    assert!(direction_difference(start.moon_direction, next_month.moon_direction) > 0.1);
+    assert!(direction_difference(start.sun_direction, next_year.sun_direction) < 0.0001);
+    assert!(direction_difference(start.moon_direction, next_year.moon_direction) < 0.0001);
+}
+
+#[test]
 fn moonlight_strength_follows_moon_elevation() {
     let overhead_conditions = CelestialConditions {
         geographic_latitude_degrees: 0.0,
-        season_phase: 0.25,
+        season_phase: 0.5,
         day_phase: 0.0,
-        moon_phase: 0.5,
+        lunar_longitude_phase: 0.75,
     };
     let overhead = celestial_lighting(overhead_conditions);
     let low = celestial_lighting(CelestialConditions {
@@ -961,7 +1114,7 @@ fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
         geographic_latitude_degrees: 55.0,
         season_phase: 0.5,
         day_phase: 0.5,
-        moon_phase: 0.25,
+        lunar_longitude_phase: 0.25,
     });
     let winter = celestial_lighting(CelestialConditions {
         season_phase: 0.0,
@@ -969,7 +1122,7 @@ fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
             geographic_latitude_degrees: 55.0,
             season_phase: 0.5,
             day_phase: 0.5,
-            moon_phase: 0.25,
+            lunar_longitude_phase: 0.25,
         }
     });
 
@@ -992,7 +1145,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
             geographic_latitude_degrees: 55.0,
             season_phase: 0.59,
             day_phase: 0.625,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
     );
     let northern_winter = current_air_temperature_c(
@@ -1001,7 +1154,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
             geographic_latitude_degrees: 55.0,
             season_phase: 0.09,
             day_phase: 0.625,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
     );
     let southern_summer = current_air_temperature_c(
@@ -1010,7 +1163,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
             geographic_latitude_degrees: -55.0,
             season_phase: 0.09,
             day_phase: 0.625,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
     );
     let summer_before_dawn = current_air_temperature_c(
@@ -1019,7 +1172,7 @@ fn climate_cycle_has_opposite_seasons_and_a_lagged_daily_temperature_peak() {
             geographic_latitude_degrees: 55.0,
             season_phase: 0.59,
             day_phase: 0.125,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
     );
 
@@ -1041,7 +1194,7 @@ fn upper_air_climatology_has_muted_seasons_and_no_diurnal_cycle() {
         geographic_latitude_degrees: 55.0,
         season_phase,
         day_phase,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let summer = current_500_hpa_air_temperature_c(climate, conditions(0.59, 0.625));
     let summer_night = current_500_hpa_air_temperature_c(climate, conditions(0.59, 0.125));
@@ -1071,7 +1224,7 @@ fn geographic_latitude_suppresses_equatorial_temperature_seasons() {
                 geographic_latitude_degrees,
                 season_phase,
                 day_phase: 0.5,
-                moon_phase: 0.0,
+                lunar_longitude_phase: 0.0,
             },
         )
     };
@@ -1097,7 +1250,7 @@ fn seasonal_temperature_is_continuous_across_the_equator() {
                 geographic_latitude_degrees,
                 season_phase: 0.59,
                 day_phase: 0.5,
-                moon_phase: 0.0,
+                lunar_longitude_phase: 0.0,
             },
         )
     };
@@ -1111,7 +1264,7 @@ fn aligned_sun_and_moon_produce_a_larger_tidal_range_than_quarter_phase() {
         geographic_latitude_degrees: 45.0,
         season_phase: 0.25,
         day_phase,
-        moon_phase,
+        lunar_longitude_phase: moon_phase,
     };
     let tide = TidalConditions {
         reference_range_m: 2.0,
@@ -1141,7 +1294,7 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             geographic_latitude_degrees: 75.0,
             season_phase: 0.09,
             day_phase: 0.5,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
         8.0,
         0.0,
@@ -1160,7 +1313,7 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             geographic_latitude_degrees: 15.0,
             season_phase: 0.59,
             day_phase: 0.5,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
         8.0,
         0.0,
@@ -1179,7 +1332,7 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             geographic_latitude_degrees: 75.0,
             season_phase: 0.09,
             day_phase: 0.5,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
         8.0,
         0.0,
@@ -1198,7 +1351,7 @@ fn stateless_surface_climate_distinguishes_snow_polar_and_high_elevation_ice() {
             geographic_latitude_degrees: 90.0,
             season_phase: 0.09,
             day_phase: 0.5,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         },
         4.0,
         0.0,
@@ -1231,7 +1384,7 @@ fn perennial_ice_does_not_follow_instantaneous_water_vapor() {
         geographic_latitude_degrees: 75.0,
         season_phase: 0.09,
         day_phase: 0.5,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let dry = climate_surface(climate, conditions, 0.0, 0.0, 0.0, 600.0);
     let humid = climate_surface(climate, conditions, 25.0, 0.0, 0.0, 600.0);
@@ -1246,7 +1399,7 @@ fn sea_ice_responds_to_seasonal_water_temperature() {
         geographic_latitude_degrees: 75.0,
         season_phase,
         day_phase: 0.5,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let summer = climate_surface(climate, conditions(0.675), 8.0, 0.0, 0.0, -1_000.0);
     let winter = climate_surface(climate, conditions(0.175), 8.0, 0.0, 0.0, -1_000.0);
@@ -1260,7 +1413,7 @@ fn snow_cover_and_sea_ice_can_occur_independently() {
         geographic_latitude_degrees: 90.0,
         season_phase: 0.0,
         day_phase: 0.625,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let frozen_water_climate = ClimateConditions {
         annual_mean_air_temperature_c: -4.0,
@@ -1304,7 +1457,7 @@ fn sea_ice_is_not_a_direct_function_of_ocean_depth() {
         geographic_latitude_degrees: 75.0,
         season_phase: 0.0,
         day_phase: 0.5,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let shallow = climate_surface(climate, conditions, 8.0, 0.0, 0.0, -10.0);
     let deep = climate_surface(climate, conditions, 8.0, 0.0, 0.0, -3_000.0);
@@ -1325,7 +1478,7 @@ fn acute_air_temperature_modulates_snow_without_becoming_ground_temperature() {
         geographic_latitude_degrees: 60.0,
         season_phase: 0.0,
         day_phase: 0.5,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let cold = climate_surface(climate, conditions, 8.0, -12.0, 0.0, 0.0);
     let mild = climate_surface(climate, conditions, 8.0, 0.0, 0.0, 0.0);
@@ -1344,7 +1497,7 @@ fn winter_snow_cover_continues_increasing_toward_the_pole() {
             geographic_latitude_degrees: latitude,
             season_phase: 0.13,
             day_phase: 0.125,
-            moon_phase: 0.0,
+            lunar_longitude_phase: 0.0,
         };
         climate_surface(
             world_climate_conditions(latitude),
@@ -1373,7 +1526,7 @@ fn snow_moisture_is_relative_to_local_air_temperature() {
         geographic_latitude_degrees: 0.0,
         season_phase: 0.0,
         day_phase: 0.625,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let cold_air = climate_surface(
         ClimateConditions {
@@ -1416,7 +1569,7 @@ fn temperate_january_snow_can_coexist_with_open_water() {
         geographic_latitude_degrees: 45.0,
         season_phase: 0.09,
         day_phase: 0.125,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let land = climate_surface(climate, conditions, 7.0, -6.0, 1.0, 0.0);
     let sea = climate_surface(climate, conditions, 7.0, -6.0, 1.0, -100.0);
@@ -1432,7 +1585,7 @@ fn temperate_winter_climate_retains_snow_beyond_sea_ice() {
         geographic_latitude_degrees: latitude,
         season_phase: 0.09,
         day_phase: 0.125,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let climate = world_climate_conditions(latitude);
     let land = climate_surface(climate, conditions, 7.0, 0.0, 0.0, 0.0);
@@ -1463,7 +1616,7 @@ fn winter_sea_ice_has_a_polar_core_without_a_zonal_edge_at_68_degrees() {
                 geographic_latitude_degrees: latitude,
                 season_phase: 0.175,
                 day_phase: 0.5,
-                moon_phase: 0.0,
+                lunar_longitude_phase: 0.0,
             },
             4.0,
             0.0,
@@ -1483,7 +1636,7 @@ fn cold_precipitation_adds_fresh_snow() {
         geographic_latitude_degrees: 45.0,
         season_phase: 0.09,
         day_phase: 0.125,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let dry = climate_surface(climate, conditions, 7.0, -4.0, 0.0, 0.0);
     let snowing = climate_surface(climate, conditions, 7.0, -4.0, 1.0, 0.0);
@@ -1498,7 +1651,7 @@ fn temperate_winter_snow_retreats_during_the_warm_part_of_the_day() {
         geographic_latitude_degrees: 45.0,
         season_phase: 0.09,
         day_phase,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let cold_night = climate_surface(climate, conditions(0.125), 7.0, -2.0, 0.6, 0.0);
     let warm_afternoon = climate_surface(climate, conditions(0.625), 7.0, -2.0, 0.6, 0.0);
@@ -1513,7 +1666,7 @@ fn day_night_temperature_changes_precipitation() {
         geographic_latitude_degrees: 45.0,
         season_phase: 0.09,
         day_phase,
-        moon_phase: 0.0,
+        lunar_longitude_phase: 0.0,
     };
     let primary = AtmospherePrimary {
         pressure_hpa: 990.0,
@@ -1676,7 +1829,7 @@ fn polar_ice_front_has_frozen_and_open_deep_water_at_one_latitude() {
                 geographic_latitude_degrees: latitude,
                 season_phase: 0.09,
                 day_phase: 0.5,
-                moon_phase: 0.0,
+                lunar_longitude_phase: 0.0,
             },
             4.0,
             0.0,
@@ -1781,6 +1934,34 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
         upper_cloud_wind_change < full_wind_change,
         "upper/full wind change ratio was {}",
         upper_cloud_wind_change / full_wind_change,
+    );
+}
+
+#[test]
+fn aggregate_cloud_cover_is_locally_coherent_and_regionally_varied() {
+    let origin_m = Vector::new(12.0, -7.0);
+    let nearby_m = origin_m + Vector::new(256.0, 0.0);
+    let regional_m = origin_m + Vector::new(8_192.0, 0.0);
+    let mut nearby_difference = 0.0;
+    let mut regional_difference = 0.0;
+
+    for seed in 0..512 {
+        let origin = procedural_weather(seed, 12_345, origin_m).upper_cloudiness;
+        nearby_difference +=
+            (procedural_weather(seed, 12_345, nearby_m).upper_cloudiness - origin).abs();
+        regional_difference +=
+            (procedural_weather(seed, 12_345, regional_m).upper_cloudiness - origin).abs();
+    }
+
+    let nearby_mean_difference = nearby_difference / 512.0;
+    let regional_mean_difference = regional_difference / 512.0;
+    assert!(
+        regional_mean_difference > 0.05,
+        "{regional_mean_difference}",
+    );
+    assert!(
+        nearby_mean_difference < 0.25 * regional_mean_difference,
+        "nearby {nearby_mean_difference}, regional {regional_mean_difference}",
     );
 }
 

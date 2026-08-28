@@ -173,14 +173,15 @@ const toggle = (key: NumericStateKey, label: string): ToggleControl => (
 
 const wrappedPhase = (phase: number): number => ((phase % 1) + 1) % 1;
 const worldDaySeconds = 86_400;
-const worldYearDays = 360;
-const lunarCycleDays = 28;
+const worldYearDays = 336;
+// Keep these calendar-derived phases synchronized with world_celestial_conditions.
+const lunarOrbitDays = 1 / (1 / 28 + 1 / worldYearDays);
 
 function worldPhases(): [number, number, number] {
   return [
     wrappedPhase(0.5833 + state.worldTimeSeconds / worldDaySeconds),
     wrappedPhase(0.5021 + state.worldTimeSeconds / (worldDaySeconds * worldYearDays)),
-    wrappedPhase(0.25 + state.worldTimeSeconds / (worldDaySeconds * lunarCycleDays)),
+    wrappedPhase(0.5021 + state.worldTimeSeconds / (worldDaySeconds * lunarOrbitDays)),
   ];
 }
 
@@ -318,7 +319,7 @@ const debugGroups: Record<Domain, DebugGroup[]> = {
     { label: "Lighting and shadows", options: [
       [9, "Projected low shadow"], [10, "Projected upper shadow"],
       [11, "Combined transmittance"], [56, "Solar elevation"],
-      [67, "Aerosol optical depth"],
+      [67, "Aerosol optical depth"], [72, "Solar eclipse coverage"],
     ] },
     { label: "Thermodynamics", options: [
       [20, "Local temperature-gradient vector · RGB"],
@@ -1098,6 +1099,9 @@ type WorldCenterDiagnostics = {
   sunIntensity: number;
   moonDirection: [number, number, number];
   moonIntensity: number;
+  solarEclipseFraction: number;
+  lunarPenumbraFraction: number;
+  lunarUmbraFraction: number;
   ambientIntensity: number;
   groundTemperatureC: number;
   waterTemperatureC: number;
@@ -1144,6 +1148,9 @@ function sampleWorldCenterDiagnostics(): WorldCenterDiagnostics {
     sunIntensity: sample.sun_intensity,
     moonDirection: [sample.moon_x, sample.moon_y, sample.moon_z],
     moonIntensity: sample.moon_intensity,
+    solarEclipseFraction: sample.solar_eclipse_fraction,
+    lunarPenumbraFraction: sample.lunar_penumbra_fraction,
+    lunarUmbraFraction: sample.lunar_umbra_fraction,
     ambientIntensity: sample.ambient_intensity,
     groundTemperatureC: sample.ground_temperature_c,
     waterTemperatureC: sample.water_temperature_c,
@@ -1178,6 +1185,9 @@ function atmosphericOutputs(output: WorldCenterDiagnostics): Array<[string, stri
     ["Current air temperature", `${output.surfaceAirTemperatureC.toFixed(1)} °C`],
     ["Sun", `${angle(output.sunDirection)} · ${output.sunIntensity.toFixed(2)}`],
     ["Moon", `${angle(output.moonDirection)} · ${output.moonIntensity.toFixed(2)}`],
+    ["Solar eclipse", `${(output.solarEclipseFraction * 100).toFixed(0)} %`],
+    ["Lunar penumbra", `${(output.lunarPenumbraFraction * 100).toFixed(0)} %`],
+    ["Lunar umbra", `${(output.lunarUmbraFraction * 100).toFixed(0)} %`],
     ["Astronomical ambient", output.ambientIntensity.toFixed(2)],
     ["Surface wind", `${speed(output.surfaceWind).toFixed(1)} m/s · ${direction(output.surfaceWind).toFixed(0)}°`],
     ["Upper wind", `${speed(output.upperWind).toFixed(1)} m/s · ${direction(output.upperWind).toFixed(0)}°`],
@@ -1391,8 +1401,8 @@ function writeUniforms(): void {
     0,
     0,
   ], 16);
-  const [dayPhase, seasonPhase, moonPhase] = worldPhases();
-  sceneFloats.set([dayPhase, seasonPhase, moonPhase, 0], 20);
+  const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases();
+  sceneFloats.set([dayPhase, seasonPhase, lunarLongitudePhase, 0], 20);
   sceneUints.set([
     Number(worldTick & 0xffff_ffffn),
     Number((worldTick >> 32n) & 0xffff_ffffn),

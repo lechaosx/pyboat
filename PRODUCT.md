@@ -143,17 +143,20 @@ current playable behavior; this file does not track delivery status.
   unstable, non-storm conditions at a fixed low altitude. They add local
   shadows and make system-scale wind direction readable across at most about one
   quarter of the view.
-- **[Explicit]** An unseen weather canopy represents broad convective and layered
-  clouds through varying amount and optical depth. It casts the primary weather
-  shadows and contributes diffuse light alongside the clear sky. Unresolved
-  high ice-cloud effects remain part of canopy and sky diffusion rather than a
-  third sampled layer.
+- **[Explicit]** An unseen weather canopy aggregates all cloud types into one
+  amount and optical-depth field, from local convective structure to broad
+  layered weather. It casts the primary weather shadows and contributes diffuse
+  light alongside the clear sky. Unresolved high ice-cloud effects remain part
+  of canopy and sky diffusion rather than a third sampled layer.
 - **[Explicit]** Aerosol optical depth varies spatially with seeded regional
   structure, dry air, and rain washout. When the sun is low, aerosol and moisture
   can redden direct sunlight, visible clouds, and the canopy's diffuse light.
 - **[Explicit]** Directional sun and moon light and diffuse sky-and-cloud light
   independently affect terrain, water, and visible lower clouds. Gray overcast
   can remain softly luminous while severe storm cover darkens a noon scene.
+  A tilted lunar orbit produces two paired solar/lunar eclipse seasons per year
+  from celestial geometry. The penumbra dims moonlight subtly, while atmospheric
+  light refracted into the umbra makes eclipsed moonlight dim orange-red.
   Celestial discs retain a physical penumbra, so cloud and landform shadows do
   not become point-source sharp at high zoom.
 - **[Explicit]** Rain and snow meet open water in world space. Close views may
@@ -213,9 +216,12 @@ current playable behavior; this file does not track delivery status.
   repeats the reference meridian and longitude seams and marks the equator and
   finite poles. Changing either scale regenerates the live spatial world.
 - **[Explicit]** The global world clock is the sole source of day, season, and
-  lunar phase. Production and the lab default to real time. The lab starts with
-  cloud, pressure, current, and world-clock rates locked together; playback
-  changes rates rather than overriding phases.
+  lunar position. A world day lasts 24 hours, a calendar month lasts 28 days,
+  and twelve months form a 336-day year. Lunar illumination phase is inferred
+  from Sun and Moon positions and repeats with the 28-day month. Production and
+  the lab default to real time. The lab starts with cloud, pressure, current,
+  and world-clock rates locked together; playback changes rates rather than
+  overriding phases.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,

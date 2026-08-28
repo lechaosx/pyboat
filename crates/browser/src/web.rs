@@ -9,7 +9,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    celestial_lighting, scalar_field_time_coordinates, vector_field_time_coordinates,
+    celestial_lighting, moon_phase, scalar_field_time_coordinates, vector_field_time_coordinates,
     world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
@@ -83,6 +83,9 @@ pub struct PlaygroundEnvironmentSample {
     moon_y: f32,
     moon_z: f32,
     moon_intensity: f32,
+    solar_eclipse_fraction: f32,
+    lunar_penumbra_fraction: f32,
+    lunar_umbra_fraction: f32,
     ambient_intensity: f32,
     ground_temperature_c: f32,
     water_temperature_c: f32,
@@ -153,6 +156,9 @@ environment_sample_getters!(
     moon_y,
     moon_z,
     moon_intensity,
+    solar_eclipse_fraction,
+    lunar_penumbra_fraction,
+    lunar_umbra_fraction,
     ambient_intensity,
     ground_temperature_c,
     water_temperature_c,
@@ -192,7 +198,7 @@ pub fn sample_playground_environment(
         geographic_latitude_degrees: sample.celestial.geographic_latitude_degrees,
         season_phase: sample.celestial.season_phase,
         day_phase: sample.celestial.day_phase,
-        moon_phase: sample.celestial.moon_phase,
+        moon_phase: moon_phase(sample.celestial),
         annual_mean_air_temperature_c: sample.climate.annual_mean_air_temperature_c,
         seasonal_temperature_range_c: sample.climate.seasonal_temperature_range_c,
         diurnal_temperature_range_c: sample.climate.diurnal_temperature_range_c,
@@ -227,6 +233,9 @@ pub fn sample_playground_environment(
         moon_y: lighting.moon_direction[1],
         moon_z: lighting.moon_direction[2],
         moon_intensity: lighting.moon_intensity,
+        solar_eclipse_fraction: lighting.solar_eclipse_fraction,
+        lunar_penumbra_fraction: lighting.lunar_penumbra_fraction,
+        lunar_umbra_fraction: lighting.lunar_umbra_fraction,
         ambient_intensity: lighting.ambient_intensity,
         ground_temperature_c: sample.surface_climate.ground_temperature_c,
         water_temperature_c: sample.surface_climate.water_temperature_c,
@@ -547,7 +556,7 @@ impl Renderer {
                 world_phases: [
                     celestial.day_phase,
                     celestial.season_phase,
-                    celestial.moon_phase,
+                    celestial.lunar_longitude_phase,
                     0.0,
                 ],
                 world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
