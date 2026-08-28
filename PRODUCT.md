@@ -220,12 +220,13 @@ current playable behavior; this file does not track delivery status.
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
 - **[Explicit]** World geometry, playback, and the global clock remain immediately
-  accessible. Production-derived spatial measurements are read-only; visibility,
-  tuning, and mechanism diagnostics use collapsed semantic groups. Pressure
-  diagnostics expose the full anomaly and individually scaled broad, synoptic,
-  and local contributions. Separate vector diagnostics expose surface gusts,
-  resolved surface wind, broad/synoptic circulation, and the local
-  weather-anomaly temperature gradient.
+  accessible. View-center position, derived conditions, and procedural-basis
+  measurements share one read-only diagnostic panel. Visibility, tuning, and
+  mechanism diagnostics use collapsed semantic groups, and render modes are
+  categorized by related causes. Pressure diagnostics expose the full anomaly
+  and individually scaled broad, synoptic, and local contributions. Separate
+  vector diagnostics expose surface gusts, resolved surface wind,
+  broad/synoptic circulation, and the local weather-anomaly temperature gradient.
 
 ## Open questions
 

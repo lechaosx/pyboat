@@ -252,9 +252,10 @@ details > :last-child { margin-bottom: 0.72rem; }
 
 .derived-grid {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: max-content minmax(max-content, 1fr);
   gap: 0.35rem 0.8rem;
   padding: 0.7rem;
+  overflow-x: auto;
   color: var(--muted);
   background: rgb(8 29 36 / 72%);
   border: 1px solid var(--line);
@@ -262,13 +263,26 @@ details > :last-child { margin-bottom: 0.72rem; }
   font-size: 0.72rem;
 }
 
-.derived-grid output { color: #e8f1ef; }
+.derived-grid > span,
+.derived-grid output {
+  min-width: max-content;
+  white-space: nowrap;
+}
 
-.geometry-measurements {
+.derived-grid output {
+  overflow: visible;
+  color: #e8f1ef;
+}
+
+.view-center-diagnostics {
+  display: grid;
+  gap: 0.8rem;
   margin: 0.8rem 0.72rem 0.72rem;
 }
 
-.geometry-measurements h3 {
+.view-center-diagnostics section { min-width: 0; }
+
+.view-center-diagnostics h3 {
   margin: 0 0 0.4rem;
   color: var(--world);
   font-size: 0.58rem;

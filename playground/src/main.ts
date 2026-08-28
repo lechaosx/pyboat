@@ -96,6 +96,10 @@ type ControlGroup = {
   level?: "advanced" | "visibility";
   controls: Control[];
 };
+type DebugGroup = {
+  label: string;
+  options: Array<[number, string]>;
+};
 
 const defaults: State = {
   seed: "0x5eed",
@@ -303,42 +307,64 @@ const subrangeKeys = new Set<NumericStateKey>([
   "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
 
-const debugOptions: Record<Domain, Array<[number, string]>> = {
+const debugGroups: Record<Domain, DebugGroup[]> = {
   weather: [
-    [0, "Final composition"], [1, "Low latent texture"], [2, "Low coverage threshold"],
-    [3, "Low cloud amount"], [4, "Low optical depth"], [5, "Low normals"],
-    [6, "Weather-canopy optical depth"],
-    [9, "Projected low shadow"], [10, "Projected upper shadow"], [11, "Combined transmittance"],
-    [12, "Low height field"],
-    [16, "Surface wind vector · RGB"], [17, "Upper wind vector · RGB"],
-    [18, "Vertical wind shear · RGB"], [19, "Pressure gradient vector · RGB"],
-    [20, "Local temperature-gradient vector · RGB"], [21, "Terrain shelter"],
-    [52, "Surface air temperature"], [56, "Solar elevation"],
-    [58, "Low-cloud formation"],
-    [59, "Broad pressure anomaly · ±8 hPa"],
-    [60, "Full pressure anomaly · ±8 hPa"],
-    [61, "Synoptic pressure anomaly · ±3 hPa"],
-    [67, "Aerosol optical depth"],
-    [68, "Local pressure anomaly · ±0.5 hPa"],
-    [69, "Surface gust vector · RGB"],
-    [70, "Resolved surface wind vector · RGB"],
-    [71, "Broad / synoptic circulation · RGB"],
+    { label: "Overview", options: [[0, "Final composition"]] },
+    { label: "Cloud structure", options: [
+      [1, "Low latent texture"], [2, "Low coverage threshold"],
+      [3, "Low cloud amount"], [4, "Low optical depth"], [5, "Low normals"],
+      [6, "Weather-canopy optical depth"], [12, "Low height field"],
+      [58, "Low-cloud formation"],
+    ] },
+    { label: "Lighting and shadows", options: [
+      [9, "Projected low shadow"], [10, "Projected upper shadow"],
+      [11, "Combined transmittance"], [56, "Solar elevation"],
+      [67, "Aerosol optical depth"],
+    ] },
+    { label: "Thermodynamics", options: [
+      [20, "Local temperature-gradient vector · RGB"],
+      [52, "Surface air temperature"],
+    ] },
+    { label: "Pressure", options: [
+      [19, "Pressure gradient vector · RGB"],
+      [59, "Broad pressure anomaly · ±8 hPa"],
+      [60, "Full pressure anomaly · ±8 hPa"],
+      [61, "Synoptic pressure anomaly · ±3 hPa"],
+      [68, "Local pressure anomaly · ±0.5 hPa"],
+    ] },
+    { label: "Wind", options: [
+      [16, "Surface wind vector · RGB"], [17, "Upper wind vector · RGB"],
+      [18, "Vertical wind shear · RGB"], [21, "Terrain shelter"],
+      [69, "Surface gust vector · RGB"],
+      [70, "Resolved surface wind vector · RGB"],
+      [71, "Broad / synoptic circulation · RGB"],
+    ] },
   ],
   landscape: [
-    [0, "Final composition"], [32, "Elevation"], [33, "Slope"], [34, "Normals"],
-    [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
-    [38, "Vegetation field"], [39, "Coastal character · RGB"],
-    [41, "Solid ice"], [42, "Autumn vegetation"],
-    [51, "Annual climate"], [53, "Spatial snow"], [54, "Spatial ice climate"],
-    [57, "Climate / snow / ice · RGB"],
+    { label: "Overview", options: [[0, "Final composition"]] },
+    { label: "Landform geometry", options: [
+      [32, "Elevation"], [33, "Slope"], [34, "Normals"],
+      [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
+    ] },
+    { label: "Surface materials", options: [
+      [38, "Vegetation field"], [39, "Coastal character · RGB"],
+    ] },
+    { label: "Climate", options: [
+      [41, "Solid ice"], [42, "Autumn vegetation"],
+      [51, "Annual climate"], [53, "Spatial snow"], [54, "Spatial ice climate"],
+      [57, "Climate / snow / ice · RGB"],
+    ] },
   ],
   water: [
-    [0, "Final composition"], [55, "Tide height"],
-    [62, "Visual water normals"],
-    [63, "Precipitation contact normals"],
-    [64, "Gameplay-driven wave normals"],
-    [65, "Ocean current vector · RGB"],
-    [66, "Authoritative significant wave height"],
+    { label: "Overview", options: [[0, "Final composition"]] },
+    { label: "Water level and flow", options: [
+      [55, "Tide height"], [65, "Ocean current vector · RGB"],
+    ] },
+    { label: "Wave surface", options: [
+      [62, "Visual water normals"], [64, "Gameplay-driven wave normals"],
+      [66, "Authoritative significant wave height"],
+    ] },
+    { label: "Precipitation", options: [[63, "Precipitation contact normals"]] },
   ],
 };
 
@@ -439,7 +465,6 @@ const outputByKey = new Map<NumericStateKey, HTMLInputElement>();
 const rangeByKey = new Map<NumericStateKey, RangeControl>();
 const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
 const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
-let derivedOutputElement: HTMLElement | undefined;
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 
@@ -669,13 +694,6 @@ function renderControls(): void {
     }
     controlsElement.append(section);
   }
-  derivedOutputElement = undefined;
-  const derivedSection = document.createElement("section");
-  derivedSection.className = "control-category derived-output";
-  const derivedName = activeDomain === "weather" ? "atmosphere" : "surface";
-  derivedSection.innerHTML = `<h2>Derived ${derivedName} · read only</h2><div class="derived-grid"></div>`;
-  derivedOutputElement = derivedSection.querySelector<HTMLElement>(".derived-grid")!;
-  controlsElement.append(derivedSection);
   const diagnosticSection = document.createElement("section");
   diagnosticSection.className = "control-category diagnostics";
   diagnosticSection.innerHTML = "<h2>Diagnostics</h2>";
@@ -687,12 +705,17 @@ function renderControls(): void {
   const diagnosticSelect = document.createElement("select");
   diagnosticSelect.id = "diagnostic-output";
   diagnosticHeading.htmlFor = diagnosticSelect.id;
-  for (const [value, name] of debugOptions[activeDomain]) {
-    const option = document.createElement("option");
-    option.value = String(value);
-    option.textContent = name;
-    option.selected = state.debugView === value;
-    diagnosticSelect.append(option);
+  for (const group of debugGroups[activeDomain]) {
+    const optionGroup = document.createElement("optgroup");
+    optionGroup.label = group.label;
+    for (const [value, name] of group.options) {
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = name;
+      option.selected = state.debugView === value;
+      optionGroup.append(option);
+    }
+    diagnosticSelect.append(optionGroup);
   }
   diagnosticSelect.addEventListener("change", () => {
     state.debugView = Number(diagnosticSelect.value);
@@ -750,14 +773,21 @@ worldToolbarElement.innerHTML = `
   </details>
   <details>
     <summary><span>View-center diagnostics</span><span class="kind kind-debug">DEBUG</span></summary>
-    <div class="geometry-measurements"><h3>View-center geometry</h3><div id="geometry-measurements" class="derived-grid"></div></div>
+    <div class="view-center-diagnostics">
+      <section><h3>Sample position</h3><div id="position-measurements" class="derived-grid"></div></section>
+      <section><h3 id="derived-output-heading">Derived atmosphere</h3><div id="derived-output" class="derived-grid"></div></section>
+      <section><h3>Procedural basis</h3><div id="basis-measurements" class="derived-grid"></div></section>
+    </div>
   </details>`;
 const seedInput = worldToolbarElement.querySelector<HTMLInputElement>("#seed")!;
 const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width")!;
 const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
 const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
-const geometryMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#geometry-measurements")!;
+const positionMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
+const derivedOutputHeadingElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
+const derivedOutputElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output")!;
+const basisMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#basis-measurements")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
 const pressureTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
@@ -1086,8 +1116,6 @@ type WorldCenterDiagnostics = {
   rogueCrestExcessM: number;
 };
 
-let worldCenterDiagnostics: WorldCenterDiagnostics | undefined;
-
 function parsedSeed(): bigint {
   try {
     return BigInt.asUintN(64, BigInt(state.seed));
@@ -1096,7 +1124,7 @@ function parsedSeed(): bigint {
   }
 }
 
-function sampleWorldCenterDiagnostics(): void {
+function sampleWorldCenterDiagnostics(): WorldCenterDiagnostics {
   const sample = sample_playground_environment(
     state.worldWidthM,
     state.worldHeightM,
@@ -1105,7 +1133,7 @@ function sampleWorldCenterDiagnostics(): void {
     state.cameraX,
     state.cameraY,
   );
-  worldCenterDiagnostics = {
+  const diagnostics: WorldCenterDiagnostics = {
     surfaceAirTemperatureC: sample.surface_air_temperature_c,
     surfaceWind: [sample.wind_x_m_s, sample.wind_y_m_s],
     upperWind: [sample.upper_wind_x_m_s, sample.upper_wind_y_m_s],
@@ -1134,11 +1162,10 @@ function sampleWorldCenterDiagnostics(): void {
     rogueCrestExcessM: sample.rogue_crest_excess_m,
   };
   sample.free();
+  return diagnostics;
 }
 
-function atmosphericOutputs(): Array<[string, string]> {
-  if (!worldCenterDiagnostics) return [];
-  const output = worldCenterDiagnostics;
+function atmosphericOutputs(output: WorldCenterDiagnostics): Array<[string, string]> {
   const speed = (value: [number, number]) => Math.hypot(...value);
   const direction = (value: [number, number]) => Math.atan2(value[1], value[0]) * 180 / Math.PI;
   const angle = (value: [number, number, number]): string => {
@@ -1167,9 +1194,7 @@ function atmosphericOutputs(): Array<[string, string]> {
   ];
 }
 
-function surfaceOutputs(): Array<[string, string]> {
-  if (!worldCenterDiagnostics) return [];
-  const output = worldCenterDiagnostics;
+function surfaceOutputs(output: WorldCenterDiagnostics): Array<[string, string]> {
   const outputs: Array<[string, string]> = [
     ["Ground temperature", `${output.groundTemperatureC.toFixed(1)} °C`],
     ["Water temperature", `${output.waterTemperatureC.toFixed(1)} °C`],
@@ -1196,16 +1221,29 @@ function surfaceOutputs(): Array<[string, string]> {
   return outputs;
 }
 
-function updateDerivedOutput(): void {
-  if (!derivedOutputElement) return;
-  const outputs = activeDomain === "weather" ? atmosphericOutputs() : surfaceOutputs();
-  derivedOutputElement.replaceChildren(...outputs.flatMap(([label, value]) => {
+function replaceDiagnosticRows(
+  element: HTMLElement,
+  rows: Array<[string, string]>,
+): void {
+  element.replaceChildren(...rows.flatMap(([label, value]) => {
     const name = document.createElement("span");
     name.textContent = label;
     const output = document.createElement("output");
     output.value = value;
     return [name, output];
   }));
+}
+
+function updateDerivedOutput(output: WorldCenterDiagnostics): void {
+  derivedOutputHeadingElement.textContent = activeDomain === "weather"
+    ? "Derived atmosphere"
+    : activeDomain === "landscape"
+      ? "Derived surface"
+      : "Derived water";
+  const outputs = activeDomain === "weather"
+    ? atmosphericOutputs(output)
+    : surfaceOutputs(output);
+  replaceDiagnosticRows(derivedOutputElement, outputs);
 }
 
 function updateGeometryMeasurements(): void {
@@ -1215,11 +1253,12 @@ function updateGeometryMeasurements(): void {
     state.cameraX,
     state.cameraY,
   );
-  const values: Array<[string, string]> = [
+  const positionValues: Array<[string, string]> = [
     ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
     ["Cylinder center", `${sample.canonical_x_m.toFixed(1)}, ${sample.canonical_y_m.toFixed(1)} m`],
     ["Normalized geography", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
   ];
+  const basisValues: Array<[string, string]> = [];
   const octaveDefinitions: Array<[string, boolean, number]> = activeDomain === "weather"
     ? [["Weather macro octave", true, 65536], ["Cloud detail octave", false, 640]]
     : activeDomain === "landscape"
@@ -1233,7 +1272,7 @@ function updateGeometryMeasurements(): void {
       wavelengthM,
     );
     const error = 100 * Math.max(octave.relative_error_x, octave.relative_error_y);
-    values.push([
+    basisValues.push([
       label,
       `${octave.basis} · requested ${octave.requested_wavelength_m.toFixed(0)} m · effective ${octave.effective_wavelength_x_m.toFixed(1)} × ${octave.effective_wavelength_y_m.toFixed(1)} m · ${error.toFixed(2)}% max error`,
     ]);
@@ -1242,13 +1281,13 @@ function updateGeometryMeasurements(): void {
   renderedCameraX = sample.canonical_x_m;
   renderedCameraY = sample.canonical_y_m;
   sample.free();
-  geometryMeasurementsElement.replaceChildren(...values.flatMap(([label, value]) => {
-    const name = document.createElement("span");
-    name.textContent = label;
-    const output = document.createElement("output");
-    output.value = value;
-    return [name, output];
-  }));
+  replaceDiagnosticRows(positionMeasurementsElement, positionValues);
+  replaceDiagnosticRows(basisMeasurementsElement, basisValues);
+}
+
+function updateViewCenterDiagnostics(): void {
+  updateGeometryMeasurements();
+  updateDerivedOutput(sampleWorldCenterDiagnostics());
 }
 
 function worldToOverlayPoint(positionX: number, positionY: number, pixelsPerMetre: number): [number, number] {
@@ -1480,9 +1519,7 @@ function frame(now: number): void {
     state.currentTimeSeconds += elapsed * state.currentTimeScale;
     state.worldTimeSeconds += elapsed * state.worldTimeScale;
   }
-  sampleWorldCenterDiagnostics();
-  updateDerivedOutput();
-  updateGeometryMeasurements();
+  updateViewCenterDiagnostics();
   writeUniforms();
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
