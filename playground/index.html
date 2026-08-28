@@ -33,6 +33,16 @@
         <div id="controls"></div>
       </aside>
     </main>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module">
+      const status = document.querySelector("#status");
+      const reportStartupError = (reason) => {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        status.textContent = `Startup failed: ${message}`;
+        console.error(reason);
+      };
+      window.addEventListener("error", (event) => reportStartupError(event.error ?? event.message));
+      window.addEventListener("unhandledrejection", (event) => reportStartupError(event.reason));
+      import("/src/main.ts").catch(reportStartupError);
+    </script>
   </body>
 </html>

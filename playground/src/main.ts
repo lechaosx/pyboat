@@ -1,9 +1,22 @@
 import {
+  playground_diagnostic_shader_source,
+  playground_scene_shader_source,
+  playground_startup_shader_source,
   sample_playground_environment,
   sample_playground_field_time_coordinates,
   sample_playground_world_geometry,
 } from "browser";
-import shaderSource from "../../crates/browser/src/scene.wgsl?raw";
+import {
+  advanceFixedClock,
+  fixedClockFraction,
+  fixedTickSeconds,
+  type FixedClock,
+} from "./fixed-clock";
+import {
+  diagnosticGroups,
+  diagnosticShaders,
+  type DiagnosticSelection,
+} from "./diagnostics";
 import "./style.css";
 
 type Domain = "weather" | "landscape" | "water";
@@ -66,12 +79,12 @@ type State = {
   shelterStrength: number;
   shelterEnabled: number;
   landscapeCompositionEnabled: number;
-  debugView: number;
+  diagnostic: DiagnosticSelection;
 };
 
 type NumericStateKey = Exclude<
   keyof State,
-  "seed" | "paused" | "timeScalesLocked"
+  "seed" | "paused" | "timeScalesLocked" | "diagnostic"
 >;
 type RangeControl = {
   type: "range";
@@ -95,11 +108,6 @@ type ControlGroup = {
   level?: "advanced" | "visibility";
   controls: Control[];
 };
-type DebugGroup = {
-  label: string;
-  options: Array<[number, string]>;
-};
-
 const defaults: State = {
   seed: "0x5eed",
   cameraX: 0,
@@ -157,7 +165,7 @@ const defaults: State = {
   shelterStrength: 1,
   shelterEnabled: 1,
   landscapeCompositionEnabled: 1,
-  debugView: 0,
+  diagnostic: "scene",
 };
 
 const range = (
@@ -183,11 +191,11 @@ const celestialEventPresets = {
   "blood-moon": firstBloodMoonSeconds,
 } as const;
 
-function worldPhases(): [number, number, number] {
+function worldPhases(worldTimeSeconds: number): [number, number, number] {
   return [
-    wrappedPhase(0.5833 + state.worldTimeSeconds / worldDaySeconds),
-    wrappedPhase(0.5021 + state.worldTimeSeconds / (worldDaySeconds * worldYearDays)),
-    wrappedPhase(0.5021 + state.worldTimeSeconds / (worldDaySeconds * lunarOrbitDays)),
+    wrappedPhase(0.5833 + worldTimeSeconds / worldDaySeconds),
+    wrappedPhase(0.5021 + worldTimeSeconds / (worldDaySeconds * worldYearDays)),
+    wrappedPhase(0.5021 + worldTimeSeconds / (worldDaySeconds * lunarOrbitDays)),
   ];
 }
 
@@ -312,67 +320,6 @@ const subtoggleKeys = new Set<NumericStateKey>([
 const subrangeKeys = new Set<NumericStateKey>([
   "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
 ]);
-
-const debugGroups: Record<Domain, DebugGroup[]> = {
-  weather: [
-    { label: "Overview", options: [[0, "Final composition"]] },
-    { label: "Cloud structure", options: [
-      [1, "Low latent texture"], [2, "Low coverage threshold"],
-      [3, "Low cloud amount"], [4, "Low optical depth"], [5, "Low normals"],
-      [6, "Weather-canopy optical depth"], [12, "Low height field"],
-      [58, "Low-cloud formation"],
-    ] },
-    { label: "Lighting and shadows", options: [
-      [9, "Projected low shadow"], [10, "Projected upper shadow"],
-      [11, "Combined transmittance"], [56, "Solar elevation"],
-      [67, "Aerosol optical depth"], [72, "Solar eclipse coverage"],
-    ] },
-    { label: "Thermodynamics", options: [
-      [20, "Local temperature-gradient vector · RGB"],
-      [52, "Surface air temperature"],
-    ] },
-    { label: "Pressure", options: [
-      [19, "Pressure gradient vector · RGB"],
-      [59, "Broad pressure anomaly · ±8 hPa"],
-      [60, "Full pressure anomaly · ±8 hPa"],
-      [61, "Synoptic pressure anomaly · ±3 hPa"],
-      [68, "Local pressure anomaly · ±0.5 hPa"],
-    ] },
-    { label: "Wind", options: [
-      [16, "Surface wind vector · RGB"], [17, "Upper wind vector · RGB"],
-      [18, "Vertical wind shear · RGB"], [21, "Terrain shelter"],
-      [69, "Surface gust vector · RGB"],
-      [70, "Resolved surface wind vector · RGB"],
-      [71, "Broad / synoptic circulation · RGB"],
-    ] },
-  ],
-  landscape: [
-    { label: "Overview", options: [[0, "Final composition"]] },
-    { label: "Landform geometry", options: [
-      [32, "Elevation"], [33, "Slope"], [34, "Normals"],
-      [35, "Island clusters"], [36, "Island detail"], [37, "Coastal reef field"],
-    ] },
-    { label: "Surface materials", options: [
-      [38, "Vegetation field"], [39, "Coastal character · RGB"],
-    ] },
-    { label: "Climate", options: [
-      [41, "Solid ice"], [42, "Autumn vegetation"],
-      [51, "Annual climate"], [53, "Spatial snow"], [54, "Spatial ice climate"],
-      [57, "Climate / snow / ice · RGB"],
-    ] },
-  ],
-  water: [
-    { label: "Overview", options: [[0, "Final composition"]] },
-    { label: "Water level and flow", options: [
-      [55, "Tide height"], [65, "Ocean current vector · RGB"],
-    ] },
-    { label: "Wave surface", options: [
-      [62, "Visual water normals"], [64, "Gameplay-driven wave normals"],
-      [66, "Authoritative significant wave height"],
-    ] },
-    { label: "Precipitation", options: [[63, "Precipitation contact normals"]] },
-  ],
-};
 
 const categoryPresets: Record<string, Record<string, Partial<State>>> = {
   "weather:Visibility": {
@@ -711,28 +658,41 @@ function renderControls(): void {
   const diagnosticSelect = document.createElement("select");
   diagnosticSelect.id = "diagnostic-output";
   diagnosticHeading.htmlFor = diagnosticSelect.id;
-  for (const group of debugGroups[activeDomain]) {
+  for (const group of diagnosticGroups[activeDomain]) {
     const optionGroup = document.createElement("optgroup");
     optionGroup.label = group.label;
     for (const [value, name] of group.options) {
       const option = document.createElement("option");
-      option.value = String(value);
+      option.value = value;
       option.textContent = name;
-      option.selected = state.debugView === value;
+      option.selected = state.diagnostic === value;
       optionGroup.append(option);
     }
     diagnosticSelect.append(optionGroup);
   }
+  const diagnosticReset = document.createElement("button");
+  diagnosticReset.type = "button";
+  diagnosticReset.className = "reset-value";
+  diagnosticReset.textContent = "↺";
+  diagnosticReset.title = "Reset diagnostic output to default";
+  diagnosticReset.setAttribute("aria-label", diagnosticReset.title);
+  const updateDiagnosticReset = () => {
+    diagnosticReset.hidden = state.diagnostic === "scene";
+  };
   diagnosticSelect.addEventListener("change", () => {
-    state.debugView = Number(diagnosticSelect.value);
-    updateResetButton("debugView");
+    state.diagnostic = diagnosticSelect.value as DiagnosticSelection;
+    updateDiagnosticReset();
   });
+  diagnosticReset.addEventListener("click", () => {
+    state.diagnostic = "scene";
+    diagnosticSelect.value = state.diagnostic;
+    updateDiagnosticReset();
+  });
+  updateDiagnosticReset();
   diagnosticLabel.append(
     diagnosticHeading,
     diagnosticSelect,
-    resetButton("debugView", "diagnostic output", () => {
-      diagnosticSelect.value = String(state.debugView);
-    }),
+    diagnosticReset,
   );
   diagnosticSection.append(diagnosticLabel);
   controlsElement.append(diagnosticSection);
@@ -747,7 +707,7 @@ function renderDomains(): void {
     button.className = domain === activeDomain ? "active" : "";
     button.addEventListener("click", () => {
       activeDomain = domain;
-      state.debugView = 0;
+      state.diagnostic = "scene";
       renderDomains();
       renderControls();
     });
@@ -799,6 +759,7 @@ const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement
 const positionMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
 const derivedOutputHeadingElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
 const derivedOutputElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output")!;
+const diagnosticsDetailsElement = positionMeasurementsElement.closest<HTMLDetailsElement>("details")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
 const pressureTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
@@ -1049,33 +1010,59 @@ previewCanvas.addEventListener("wheel", (event) => {
   state.viewHeight = newHeight;
 }, { passive: false });
 
+async function showStartupPhase(message: string): Promise<void> {
+  statusElement.textContent = message;
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+await showStartupPhase("Requesting WebGPU adapter…");
 const gpu = (navigator as Navigator & { gpu?: any }).gpu;
 if (!gpu) throw new Error("WebGPU is unavailable");
-const adapter = await gpu.requestAdapter();
+const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
 if (!adapter) throw new Error("No WebGPU adapter available");
+const adapterName = adapter.info?.description
+  || adapter.info?.device
+  || adapter.info?.architecture
+  || adapter.info?.vendor
+  || "WebGPU adapter";
+await showStartupPhase("Creating WebGPU device…");
 const device = await adapter.requestDevice();
+if (import.meta.hot) import.meta.hot.dispose(() => device.destroy());
+window.addEventListener("pagehide", () => device.destroy(), { once: true });
 const context = previewCanvas.getContext("webgpu") as any;
 const formatName = gpu.getPreferredCanvasFormat();
 context.configure({ device, format: formatName, alphaMode: "opaque" });
 
-const shader = device.createShaderModule({ code: shaderSource });
-const pipeline = device.createRenderPipeline({
-  layout: "auto",
-  vertex: {
-    module: shader,
-    entryPoint: "vertex",
-    buffers: [{
-      arrayStride: 24,
-      attributes: [
-        { shaderLocation: 0, offset: 0, format: "float32x2" },
-        { shaderLocation: 1, offset: 8, format: "float32x3" },
-        { shaderLocation: 2, offset: 20, format: "float32" },
-      ],
-    }],
-  },
-  fragment: { module: shader, entryPoint: "fragment_playground", targets: [{ format: formatName }] },
-  primitive: { topology: "triangle-list" },
-});
+await showStartupPhase("Creating startup shader…");
+const startupShader = device.createShaderModule({ code: playground_startup_shader_source() });
+function createPlaygroundPipeline(
+  shader: any,
+  entryPoint: string,
+  constants?: Record<string, number>,
+): Promise<any> {
+  return device.createRenderPipelineAsync({
+    layout: "auto",
+    vertex: {
+      module: shader,
+      entryPoint: "vertex",
+      buffers: [{
+        arrayStride: 24,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32x2" },
+          { shaderLocation: 1, offset: 8, format: "float32x3" },
+          { shaderLocation: 2, offset: 20, format: "float32" },
+        ],
+      }],
+    },
+    fragment: { module: shader, entryPoint, constants, targets: [{ format: formatName }] },
+    primitive: { topology: "triangle-list" },
+  });
+}
+await showStartupPhase("Compiling startup pipeline…");
+const startupPipeline = await createPlaygroundPipeline(
+  startupShader,
+  "fragment_playground_startup",
+);
 
 const vertices = new Float32Array([
   -1, -1, 0, 0, 0, 1, 1, -1, 0, 0, 0, 1, -1, 1, 0, 0, 0, 1,
@@ -1089,14 +1076,65 @@ const tuningFloats = new Float32Array(44);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
-const sceneBindGroup = device.createBindGroup({
-  layout: pipeline.getBindGroupLayout(0),
+const startupSceneBindGroup = device.createBindGroup({
+  layout: startupPipeline.getBindGroupLayout(0),
   entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
 });
-const playgroundBindGroup = device.createBindGroup({
-  layout: pipeline.getBindGroupLayout(1),
-  entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
-});
+type RenderResources = {
+  pipeline: any;
+  sceneBindGroup: any;
+  playgroundBindGroup?: any;
+};
+let sceneRenderResources: RenderResources = {
+  pipeline: startupPipeline,
+  sceneBindGroup: startupSceneBindGroup,
+};
+let sceneCompilationStatus = "compiling full scene";
+const diagnosticShaderModules = new Map<string, any>();
+const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
+const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
+
+function renderResourcesForFrame(): RenderResources {
+  const selection = state.diagnostic;
+  if (selection === "scene") return sceneRenderResources;
+  const ready = diagnosticRenderResources.get(selection);
+  if (ready) return ready;
+  if (!diagnosticPipelinesRequested.has(selection)) {
+    diagnosticPipelinesRequested.add(selection);
+    sceneCompilationStatus = `compiling ${selection.replaceAll("_", " ")}`;
+    const configuration = diagnosticShaders[selection];
+    let diagnosticShader = diagnosticShaderModules.get(configuration.name);
+    if (!diagnosticShader) {
+      diagnosticShader = device.createShaderModule({
+        code: playground_diagnostic_shader_source(configuration.name),
+      });
+      diagnosticShaderModules.set(configuration.name, diagnosticShader);
+    }
+    void createPlaygroundPipeline(
+      diagnosticShader,
+      `fragment_${configuration.name}`,
+      configuration.constants,
+    ).then((diagnosticPipeline) => {
+      diagnosticRenderResources.set(selection, {
+        pipeline: diagnosticPipeline,
+        sceneBindGroup: device.createBindGroup({
+          layout: diagnosticPipeline.getBindGroupLayout(0),
+          entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+        }),
+        playgroundBindGroup: device.createBindGroup({
+          layout: diagnosticPipeline.getBindGroupLayout(1),
+          entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+        }),
+      });
+      sceneCompilationStatus = "";
+    }, (error) => {
+      sceneCompilationStatus = `diagnostic failed: ${String(error)}`;
+      console.error(error);
+    });
+  }
+  return sceneRenderResources;
+}
+await showStartupPhase("Starting renderer…");
 
 function splitSeed(value: string): [number, number] {
   try {
@@ -1147,12 +1185,12 @@ function parsedSeed(): bigint {
   }
 }
 
-function sampleWorldCenterDiagnostics(): WorldCenterDiagnostics {
+function sampleWorldCenterDiagnostics(worldTimeSeconds: number): WorldCenterDiagnostics {
   const sample = sample_playground_environment(
     state.worldWidthM,
     state.worldHeightM,
     parsedSeed(),
-    BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60))),
+    BigInt(Math.max(0, Math.floor(worldTimeSeconds * 60))),
     state.cameraX,
     state.cameraY,
   );
@@ -1275,27 +1313,35 @@ function updateDerivedOutput(output: WorldCenterDiagnostics): void {
   replaceDiagnosticRows(derivedOutputElement, outputs);
 }
 
-function updateGeometryMeasurements(): void {
-  const sample = sample_playground_world_geometry(
+let sampledGeometryInputs: [number, number, number, number] | undefined;
+let positionMeasurements: Array<[string, string]> = [];
+
+function updateRenderedGeometry(): void {
+  const inputs: [number, number, number, number] = [
     state.worldWidthM,
     state.worldHeightM,
     state.cameraX,
     state.cameraY,
+  ];
+  if (sampledGeometryInputs?.every((value, index) => value === inputs[index])) return;
+  const sample = sample_playground_world_geometry(
+    ...inputs,
   );
-  const positionValues: Array<[string, string]> = [
+  positionMeasurements = [
     ["Raw world center", `${sample.raw_x_m.toFixed(1)}, ${sample.raw_y_m.toFixed(1)} m`],
     ["Cylinder center", `${sample.canonical_x_m.toFixed(1)}, ${sample.canonical_y_m.toFixed(1)} m`],
     ["Normalized geography", `${sample.normalized_x.toFixed(4)}, ${sample.normalized_y.toFixed(4)}`],
   ];
   renderedCameraX = sample.canonical_x_m;
   renderedCameraY = sample.canonical_y_m;
+  sampledGeometryInputs = inputs;
   sample.free();
-  replaceDiagnosticRows(positionMeasurementsElement, positionValues);
 }
 
-function updateViewCenterDiagnostics(): void {
-  updateGeometryMeasurements();
-  updateDerivedOutput(sampleWorldCenterDiagnostics());
+function updateViewCenterDiagnostics(worldTimeSeconds: number): void {
+  updateRenderedGeometry();
+  replaceDiagnosticRows(positionMeasurementsElement, positionMeasurements);
+  updateDerivedOutput(sampleWorldCenterDiagnostics(worldTimeSeconds));
 }
 
 function worldToOverlayPoint(positionX: number, positionY: number, pixelsPerMetre: number): [number, number] {
@@ -1349,7 +1395,21 @@ function drawGuideLine(positionM: number, vertical: boolean): void {
   geometryOverlayContext.stroke();
 }
 
+let drawnOverlayInputs: number[] | undefined;
 function drawGeometryOverlay(): void {
+  const inputs = [
+    geometryOverlayCanvas.width,
+    geometryOverlayCanvas.height,
+    geometryOverlayCanvas.clientWidth,
+    geometryOverlayCanvas.clientHeight,
+    state.cameraX,
+    state.cameraY,
+    state.viewHeight,
+    state.worldWidthM,
+    state.worldHeightM,
+  ];
+  if (drawnOverlayInputs?.every((value, index) => value === inputs[index])) return;
+  drawnOverlayInputs = inputs;
   const widthM = state.viewHeight * geometryOverlayCanvas.clientWidth / geometryOverlayCanvas.clientHeight;
   const minimumX = state.cameraX - widthM / 2;
   const maximumX = state.cameraX + widthM / 2;
@@ -1384,7 +1444,18 @@ function drawGeometryOverlay(): void {
   geometryOverlayContext.stroke();
 }
 
-function writeUniforms(): void {
+function splitTick(timeSeconds: number): [bigint, number] {
+  const tickPosition = Math.max(0, timeSeconds * 60);
+  const wholeTick = Math.floor(tickPosition);
+  return [BigInt(wholeTick), tickPosition - wholeTick];
+}
+
+function writeUniforms(
+  cloudTimeSeconds: number,
+  worldTimeSeconds: number,
+  pressureTimeSeconds: number,
+  currentTimeSeconds: number,
+): void {
   const aspect = previewCanvas.width / previewCanvas.height;
   sceneFloats.set([
     renderedCameraX,
@@ -1392,20 +1463,23 @@ function writeUniforms(): void {
     state.viewHeight * aspect,
     state.viewHeight,
   ], 0);
-  const worldTick = BigInt(Math.max(0, Math.floor(state.worldTimeSeconds * 60)));
-  const pressureTick = BigInt(Math.max(0, Math.floor(state.pressureTimeSeconds * 60)));
-  const currentTick = BigInt(Math.max(0, Math.floor(state.currentTimeSeconds * 60)));
+  const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
+  const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
+  const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const fieldTimes = sample_playground_field_time_coordinates(
     state.worldWidthM,
     state.worldHeightM,
     worldTick,
+    worldTickFraction,
     pressureTick,
+    pressureTickFraction,
     currentTick,
+    currentTickFraction,
   );
   sceneFloats.set(fieldTimes.subarray(0, 4), 4);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  const lowCloudEpoch = BigInt(Math.floor(state.time / 1800));
-  const upperCloudEpoch = BigInt(Math.floor(state.time / 3600));
+  const lowCloudEpoch = BigInt(Math.floor(cloudTimeSeconds / 1800));
+  const upperCloudEpoch = BigInt(Math.floor(cloudTimeSeconds / 3600));
   sceneUints.set([
     seedLow,
     seedHigh,
@@ -1418,12 +1492,12 @@ function writeUniforms(): void {
     Number((upperCloudEpoch >> 32n) & 0xffff_ffffn),
   ], 14);
   sceneFloats.set([
-    (state.time % 1800) / 1800,
-    (state.time % 3600) / 3600,
+    (cloudTimeSeconds % 1800) / 1800,
+    (cloudTimeSeconds % 3600) / 3600,
     0,
     0,
   ], 16);
-  const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases();
+  const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases(worldTimeSeconds);
   sceneFloats.set([dayPhase, seasonPhase, lunarLongitudePhase, 0], 20);
   sceneUints.set([
     Number(worldTick & 0xffff_ffffn),
@@ -1476,7 +1550,7 @@ function writeUniforms(): void {
     0,
     state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
   ], 36);
-  tuningUints.set([state.debugView, state.celestialLightingEnabled, 0, 0], 40);
+  tuningUints.set([state.celestialLightingEnabled, 0, 0, 0], 40);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 
@@ -1500,8 +1574,10 @@ function updateScaleBar(): void {
   const normalized = targetDistance / magnitude;
   const multiplier = normalized < 1.5 ? 1 : normalized < 3.5 ? 2 : normalized < 7.5 ? 5 : 10;
   const distance = multiplier * magnitude;
-  scaleLineElement.style.width = `${distance / state.viewHeight * previewCanvas.clientHeight}px`;
-  scaleLabelElement.textContent = formatDistance(distance);
+  const width = `${distance / state.viewHeight * previewCanvas.clientHeight}px`;
+  const label = formatDistance(distance);
+  if (scaleLineElement.style.width !== width) scaleLineElement.style.width = width;
+  if (scaleLabelElement.textContent !== label) scaleLabelElement.textContent = label;
 }
 
 function formatDistance(distanceMetres: number): string {
@@ -1513,23 +1589,65 @@ function formatDistance(distanceMetres: number): string {
   return `${(distanceMetres * 1000000000).toFixed(0)} nm`;
 }
 
+const clock: FixedClock = { accumulatorSeconds: 0 };
 let previous = performance.now();
+let statisticsStartedAt = previous;
+let framesInWindow = 0;
+let ticksInWindow = 0;
+let measuredFramesPerSecond: number | undefined;
+let measuredTicksPerSecond: number | undefined;
+let nextDiagnosticsAt = 0;
+
+function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
+  framesInWindow += 1;
+  ticksInWindow += ticks;
+  const windowSeconds = (now - statisticsStartedAt) / 1000;
+  if (windowSeconds < 1) return;
+  measuredFramesPerSecond = framesInWindow / windowSeconds;
+  measuredTicksPerSecond = ticksInWindow / windowSeconds;
+  statisticsStartedAt = now;
+  framesInWindow = 0;
+  ticksInWindow = 0;
+  const rates = `${measuredFramesPerSecond.toFixed(1)} FPS · ${measuredTicksPerSecond.toFixed(1)} TPS · ${adapterName}`;
+  const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
+  statusElement.textContent = state.paused
+    ? `${rates} · Paused at ${format(cloudTimeSeconds, 1)} s${compilation}`
+    : `${rates} · ${previewCanvas.width} × ${previewCanvas.height} · procedural world · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock${compilation}`;
+}
+
 function frame(now: number): void {
   resize();
   updateScaleBar();
-  const elapsed = Math.min((now - previous) / 1000, 0.1);
+  const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
-  advanceTransitions(elapsed);
-  if (!state.paused) {
-    const simulationElapsed = elapsed * state.cloudTimeScale;
-    state.time += simulationElapsed;
-    state.pressureTimeSeconds += elapsed * state.pressureTimeScale;
-    state.currentTimeSeconds += elapsed * state.currentTimeScale;
-    state.worldTimeSeconds += elapsed * state.worldTimeScale;
+  advanceTransitions(Math.min(elapsed, 0.1));
+  const ticks = state.paused ? 0 : advanceFixedClock(clock, elapsed, () => {
+    state.time += fixedTickSeconds * state.cloudTimeScale;
+    state.pressureTimeSeconds += fixedTickSeconds * state.pressureTimeScale;
+    state.currentTimeSeconds += fixedTickSeconds * state.currentTimeScale;
+    state.worldTimeSeconds += fixedTickSeconds * state.worldTimeScale;
+  });
+  const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
+  const cloudTimeSeconds = state.time + renderFractionSeconds * state.cloudTimeScale;
+  const pressureTimeSeconds = state.pressureTimeSeconds
+    + renderFractionSeconds * state.pressureTimeScale;
+  const currentTimeSeconds = state.currentTimeSeconds
+    + renderFractionSeconds * state.currentTimeScale;
+  const worldTimeSeconds = state.worldTimeSeconds
+    + renderFractionSeconds * state.worldTimeScale;
+  updateRenderedGeometry();
+  if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {
+    updateViewCenterDiagnostics(worldTimeSeconds);
+    nextDiagnosticsAt = now + 250;
   }
-  updateViewCenterDiagnostics();
-  writeUniforms();
+  writeUniforms(
+    cloudTimeSeconds,
+    worldTimeSeconds,
+    pressureTimeSeconds,
+    currentTimeSeconds,
+  );
   const encoder = device.createCommandEncoder();
+  const renderResources = renderResourcesForFrame();
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
@@ -1538,18 +1656,44 @@ function frame(now: number): void {
       storeOp: "store",
     }],
   });
-  pass.setPipeline(pipeline);
-  pass.setBindGroup(0, sceneBindGroup);
-  pass.setBindGroup(1, playgroundBindGroup);
+  pass.setPipeline(renderResources.pipeline);
+  pass.setBindGroup(0, renderResources.sceneBindGroup);
+  if (renderResources.playgroundBindGroup) {
+    pass.setBindGroup(1, renderResources.playgroundBindGroup);
+  }
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
   device.queue.submit([encoder.finish()]);
   drawGeometryOverlay();
-  statusElement.textContent = state.paused
-    ? `Paused at ${format(state.time, 1)} s`
-    : `${previewCanvas.width} × ${previewCanvas.height} · procedural world · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock`;
+  updateStatus(now, ticks, cloudTimeSeconds);
   requestAnimationFrame(frame);
 }
 
 requestAnimationFrame(frame);
+
+void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  .then(async () => {
+    const compilationStartedAt = performance.now();
+    const sceneShader = device.createShaderModule({ code: playground_scene_shader_source() });
+    const scenePipeline = await createPlaygroundPipeline(
+      sceneShader,
+      "fragment_playground_scene",
+    );
+    sceneRenderResources = {
+      pipeline: scenePipeline,
+      sceneBindGroup: device.createBindGroup({
+        layout: scenePipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      playgroundBindGroup: device.createBindGroup({
+        layout: scenePipeline.getBindGroupLayout(1),
+        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      }),
+    };
+    sceneCompilationStatus = `full scene ready in ${((performance.now() - compilationStartedAt) / 1000).toFixed(1)} s`;
+  })
+  .catch((error) => {
+    sceneCompilationStatus = `scene shader failed: ${String(error)}`;
+    console.error(error);
+  });

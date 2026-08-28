@@ -1,6 +1,8 @@
 use game::{
     current_air_temperature_c, procedural_world_environment, scalar_field_time_coordinates,
-    vector_field_time_coordinates, world_celestial_conditions, world_climate_conditions,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::{DT_SECONDS, WorldGeometry};
@@ -10,6 +12,30 @@ const TICK: u64 = 12_345;
 
 fn geometry() -> WorldGeometry {
     WorldGeometry::new(80_000.0, 40_000.0).unwrap()
+}
+
+#[test]
+fn field_time_coordinates_interpolate_between_simulation_ticks() {
+    let world = geometry();
+    let scalar_before = scalar_field_time_coordinates(TICK);
+    let scalar_halfway = scalar_field_time_coordinates_interpolated(TICK, 0.5);
+    let scalar_after = scalar_field_time_coordinates(TICK + 1);
+    assert!(
+        (scalar_halfway.air_temperature
+            - (scalar_before.air_temperature + scalar_after.air_temperature) * 0.5)
+            .abs()
+            < 1.0e-6
+    );
+
+    let vector_before = vector_field_time_coordinates(world, TICK);
+    let vector_halfway = vector_field_time_coordinates_interpolated(world, TICK, 0.5);
+    let vector_after = vector_field_time_coordinates(world, TICK + 1);
+    assert!(
+        (vector_halfway.ocean_current
+            - (vector_before.ocean_current + vector_after.ocean_current) * 0.5)
+            .abs()
+            < 1.0e-6
+    );
 }
 
 #[test]

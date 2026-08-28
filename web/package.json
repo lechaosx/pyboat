@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "bun run --cwd .. build:wasm",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.build.json && vite build",
     "preview": "vite preview"

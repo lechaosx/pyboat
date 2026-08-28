@@ -8,7 +8,7 @@ use game::dinghy_parameters;
 use rapier2d::prelude::Vector;
 use simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 
-const SCENE_SHADER: &str = include_str!("../src/scene.wgsl");
+const SCENE_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
 
 fn assert_vector_close(actual: Vector, expected: Vector) {
     assert!(

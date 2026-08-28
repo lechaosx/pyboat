@@ -12,12 +12,36 @@ use simulation::{
     MotionIntent, SharedSimulation, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
+#[cfg(test)]
+mod diagnostics;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
-#[cfg(target_arch = "wasm32")]
-pub(crate) const SCENE_SHADER: &str = include_str!("scene.wgsl");
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) const SCENE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
+
+#[cfg(any(feature = "playground", test))]
+pub(crate) const PLAYGROUND_SCENE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/scene-playground.wgsl"));
+
+#[cfg(any(all(target_arch = "wasm32", feature = "playground"), test))]
+pub(crate) const PLAYGROUND_STARTUP_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/scene-playground-startup.wgsl"));
+
+#[cfg(any(feature = "playground", test))]
+include!(concat!(env!("OUT_DIR"), "/diagnostic-shaders.rs"));
+
+#[cfg(feature = "playground")]
+pub fn playground_scene_shader_source() -> &'static str {
+    PLAYGROUND_SCENE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn playground_diagnostic_shader_source(name: &str) -> Option<&'static str> {
+    generated_playground_diagnostic_shader(name)
+}
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
@@ -932,6 +956,78 @@ fn cubic_vector_correction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_shader_exposes_only_the_game_interface() {
+        let module = naga::front::wgsl::parse_str(SCENE_SHADER).unwrap();
+        let entry_points: Vec<_> = module
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            entry_points,
+            [
+                (naga::ShaderStage::Vertex, "vertex"),
+                (naga::ShaderStage::Fragment, "fragment"),
+            ],
+        );
+        assert!(module.global_variables.iter().all(|(_, variable)| {
+            variable
+                .binding
+                .as_ref()
+                .is_none_or(|binding| binding.group == 0)
+        }));
+    }
+
+    #[test]
+    fn playground_shaders_expose_only_their_selected_interfaces() {
+        let startup = naga::front::wgsl::parse_str(PLAYGROUND_STARTUP_SHADER).unwrap();
+        let startup_entry_points: Vec<_> = startup
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            startup_entry_points,
+            [
+                (naga::ShaderStage::Vertex, "vertex"),
+                (naga::ShaderStage::Fragment, "fragment_playground_startup"),
+            ],
+        );
+
+        let scene = naga::front::wgsl::parse_str(PLAYGROUND_SCENE_SHADER).unwrap();
+        let scene_entry_points: Vec<_> = scene
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            scene_entry_points,
+            [
+                (naga::ShaderStage::Vertex, "vertex"),
+                (naga::ShaderStage::Fragment, "fragment_playground_scene"),
+            ],
+        );
+
+        for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
+            let source = generated_playground_diagnostic_shader(name).unwrap();
+            let diagnostic = naga::front::wgsl::parse_str(source).unwrap();
+            let diagnostic_entry_points: Vec<_> = diagnostic
+                .entry_points
+                .iter()
+                .map(|entry| (entry.stage, entry.name.as_str()))
+                .collect();
+            let fragment_name = format!("fragment_{name}");
+            assert_eq!(
+                diagnostic_entry_points,
+                [
+                    (naga::ShaderStage::Vertex, "vertex"),
+                    (naga::ShaderStage::Fragment, fragment_name.as_str()),
+                ],
+            );
+        }
+    }
 
     #[test]
     fn multiplayer_input_history_keeps_only_replayable_commands() {

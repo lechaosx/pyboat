@@ -9,7 +9,21 @@ use serde::Serialize;
 use simulation::WorldGeometry;
 use wgpu::util::DeviceExt;
 
-const SHADER: &str = include_str!("../../../crates/browser/src/scene.wgsl");
+#[derive(Clone, Debug, PartialEq)]
+struct ShaderSelection {
+    id: String,
+    module: Option<&'static str>,
+    constants: &'static [(&'static str, f64)],
+}
+
+fn scene_selection() -> ShaderSelection {
+    ShaderSelection {
+        id: "scene".to_owned(),
+        module: None,
+        constants: &[],
+    }
+}
+
 #[derive(Clone)]
 struct Options {
     output: PathBuf,
@@ -23,7 +37,7 @@ struct Options {
     seed: u64,
     cloud_time_seconds: f32,
     world_time_seconds: f64,
-    debug_view: u32,
+    diagnostic: ShaderSelection,
 }
 
 #[repr(C)]
@@ -63,7 +77,7 @@ struct PlaygroundUniforms {
     landscape_visibility: [f32; 4],
     atmosphere_model: [f32; 4],
     climate_visibility: [f32; 4],
-    diagnostics: [u32; 4],
+    celestial_visibility_and_padding: [f32; 4],
 }
 
 #[derive(Serialize)]
@@ -129,7 +143,7 @@ struct CaptureReport {
     seed: u64,
     cloud_time_seconds: f32,
     world_time_seconds: f64,
-    debug_view: u32,
+    diagnostic: String,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
 }
@@ -159,7 +173,7 @@ fn parse_options() -> Result<Options, String> {
         seed: 0x5eed,
         cloud_time_seconds: 37.0,
         world_time_seconds: 0.0,
-        debug_view: 0,
+        diagnostic: scene_selection(),
     };
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -184,7 +198,7 @@ fn parse_options() -> Result<Options, String> {
             "--world-time" => {
                 options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
             }
-            "--debug" => options.debug_view = parse_debug_view(&value(&mut arguments)?)?,
+            "--diagnostic" => options.diagnostic = parse_diagnostic(&value(&mut arguments)?)?,
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -216,31 +230,103 @@ fn parse_seed(value: &str) -> Result<u64, String> {
         .map_err(|_| format!("invalid seed: {value}"))
 }
 
-fn parse_debug_view(value: &str) -> Result<u32, String> {
-    match value {
-        "final" => Ok(0),
-        "low-density" => Ok(3),
-        "upper-depth" => Ok(6),
-        "low-shadow" => Ok(9),
-        "upper-shadow" => Ok(10),
-        "surface-wind" => Ok(16),
-        "upper-wind" => Ok(17),
-        "shear" => Ok(18),
-        "temperature-gradient" => Ok(20),
-        "broad-pressure" => Ok(59),
-        "full-pressure" => Ok(60),
-        "synoptic-pressure" => Ok(61),
-        "snow" => Ok(53),
-        "ice" => Ok(41),
-        "autumn" => Ok(42),
-        "tide" => Ok(55),
-        "local-pressure" => Ok(68),
-        "surface-gust" => Ok(69),
-        "resolved-wind" => Ok(70),
-        "synoptic-wind" => Ok(71),
-        "solar-eclipse" => Ok(72),
-        _ => parse(value, "--debug"),
+fn diagnostic(
+    id: &str,
+    module: &'static str,
+    constants: &'static [(&'static str, f64)],
+) -> ShaderSelection {
+    ShaderSelection {
+        id: id.to_owned(),
+        module: Some(module),
+        constants,
     }
+}
+
+fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
+    let selection = match value {
+        "scene" => scene_selection(),
+        "cloud_low_amount" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 1.0)]),
+        "cloud_weather_canopy_optical_depth" => {
+            diagnostic(value, "cloud_weather_canopy_optical_depth", &[])
+        }
+        "cloud_low_formation" => diagnostic(value, "cloud_low_formation", &[]),
+        "lighting_projected_low_shadow" => diagnostic(
+            value,
+            "lighting_cloud_shadow",
+            &[("CLOUD_SHADOW_OUTPUT", 0.0)],
+        ),
+        "lighting_projected_upper_shadow" => diagnostic(
+            value,
+            "lighting_cloud_shadow",
+            &[("CLOUD_SHADOW_OUTPUT", 1.0)],
+        ),
+        "lighting_solar_elevation" => {
+            diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 0.0)])
+        }
+        "lighting_solar_eclipse_coverage" => {
+            diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 1.0)])
+        }
+        "temperature_gradient" => diagnostic(value, "temperature_gradient", &[]),
+        "surface_air_temperature" => diagnostic(value, "surface_air_temperature", &[]),
+        "pressure_broad_anomaly" => diagnostic(
+            value,
+            "pressure_anomaly",
+            &[("PRESSURE_ANOMALY_OUTPUT", 0.0)],
+        ),
+        "pressure_full_anomaly" => diagnostic(
+            value,
+            "pressure_anomaly",
+            &[("PRESSURE_ANOMALY_OUTPUT", 1.0)],
+        ),
+        "pressure_synoptic_anomaly" => diagnostic(
+            value,
+            "pressure_anomaly",
+            &[("PRESSURE_ANOMALY_OUTPUT", 2.0)],
+        ),
+        "pressure_local_anomaly" => diagnostic(
+            value,
+            "pressure_anomaly",
+            &[("PRESSURE_ANOMALY_OUTPUT", 3.0)],
+        ),
+        "wind_surface" => diagnostic(
+            value,
+            "wind_surface_motion",
+            &[("WIND_SURFACE_OUTPUT", 0.0)],
+        ),
+        "wind_shear" => diagnostic(
+            value,
+            "wind_surface_motion",
+            &[("WIND_SURFACE_OUTPUT", 1.0)],
+        ),
+        "wind_surface_gust" => diagnostic(
+            value,
+            "wind_surface_motion",
+            &[("WIND_SURFACE_OUTPUT", 2.0)],
+        ),
+        "wind_upper" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 0.0)]),
+        "wind_resolved_surface" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 1.0)]),
+        "wind_broad_synoptic" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 2.0)]),
+        "terrain_elevation" => diagnostic(
+            value,
+            "terrain_geometry",
+            &[("TERRAIN_GEOMETRY_OUTPUT", 0.0)],
+        ),
+        "climate_solid_ice" => {
+            diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 0.0)])
+        }
+        "climate_autumn_vegetation" => {
+            diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 1.0)])
+        }
+        "climate_spatial_snow" => {
+            diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 2.0)])
+        }
+        "climate_composition" => {
+            diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 3.0)])
+        }
+        "water_tide_height" => diagnostic(value, "water_tide_height", &[]),
+        _ => return Err(format!("unknown diagnostic: {value}")),
+    };
+    Ok(selection)
 }
 
 fn print_help() {
@@ -255,13 +341,7 @@ fn print_help() {
            --seed N|0xHEX         deterministic visual seed\n\
            --cloud-time SECONDS   deterministic cloud animation time (default 37)\n\
            --world-time SECONDS   deterministic world time (default 0)\n\
-           --debug NAME|N         final, low-density, upper-depth, low-shadow,\n\
-                                  upper-shadow, surface-wind, upper-wind, shear,\n\
-                                  broad-pressure, full-pressure, synoptic-pressure,\n\
-                                  local-pressure, surface-gust, resolved-wind,\n\
-                                  synoptic-wind, solar-eclipse,\n\
-                                  temperature-gradient, snow, ice, autumn,\n\
-                                  or tide\n\n\
+           --diagnostic NAME      semantic diagnostic output (default scene)\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics."
     );
@@ -269,19 +349,14 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_debug_view;
+    use super::parse_diagnostic;
 
     #[test]
-    fn weather_debug_views_have_named_capture_options() {
-        assert_eq!(parse_debug_view("broad-pressure"), Ok(59));
-        assert_eq!(parse_debug_view("full-pressure"), Ok(60));
-        assert_eq!(parse_debug_view("synoptic-pressure"), Ok(61));
-        assert_eq!(parse_debug_view("local-pressure"), Ok(68));
-        assert_eq!(parse_debug_view("surface-gust"), Ok(69));
-        assert_eq!(parse_debug_view("temperature-gradient"), Ok(20));
-        assert_eq!(parse_debug_view("resolved-wind"), Ok(70));
-        assert_eq!(parse_debug_view("synoptic-wind"), Ok(71));
-        assert_eq!(parse_debug_view("solar-eclipse"), Ok(72));
+    fn diagnostics_select_semantic_shader_modules_and_overrides() {
+        let pressure = parse_diagnostic("pressure_full_anomaly").unwrap();
+        assert_eq!(pressure.module, Some("pressure_anomaly"));
+        assert_eq!(pressure.constants, &[("PRESSURE_ANOMALY_OUTPUT", 1.0)]);
+        assert!(parse_diagnostic("59").is_err());
     }
 }
 
@@ -316,9 +391,15 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
+    let shader_source = options
+        .diagnostic
+        .module
+        .map_or_else(browser::playground_scene_shader_source, |name| {
+            browser::playground_diagnostic_shader_source(name).unwrap()
+        });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Scene shader"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
     let scene_layout = uniform_layout(&device, "scene uniforms layout");
     let playground_layout = uniform_layout(&device, "playground uniforms layout");
@@ -327,6 +408,10 @@ async fn render(options: &Options) -> Result<(), String> {
         bind_group_layouts: &[Some(&scene_layout), Some(&playground_layout)],
         immediate_size: 0,
     });
+    let fragment_entry = options.diagnostic.module.map_or_else(
+        || "fragment_playground_scene".to_owned(),
+        |name| format!("fragment_{name}"),
+    );
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("playground capture pipeline"),
         layout: Some(&pipeline_layout),
@@ -342,9 +427,12 @@ async fn render(options: &Options) -> Result<(), String> {
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fragment_playground"),
+            entry_point: Some(&fragment_entry),
             targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: options.diagnostic.constants,
+                ..Default::default()
+            },
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -368,7 +456,7 @@ async fn render(options: &Options) -> Result<(), String> {
         landscape_visibility: [1.0; 4],
         atmosphere_model: [1.0; 4],
         climate_visibility: [1.0; 4],
-        diagnostics: [options.debug_view, 1, 0, 0],
+        celestial_visibility_and_padding: [1.0, 0.0, 0.0, 0.0],
     };
     let playground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("playground uniforms"),
@@ -639,7 +727,7 @@ fn capture_report(
         seed: options.seed,
         cloud_time_seconds: options.cloud_time_seconds,
         world_time_seconds: options.world_time_seconds,
-        debug_view: options.debug_view,
+        diagnostic: options.diagnostic.id.clone(),
         derived: DerivedOutput {
             current_air_temperature_c: sample.weather.surface_air_temperature_c,
             sun_direction: celestial.sun_direction,

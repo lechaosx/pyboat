@@ -6,6 +6,8 @@
     "browser": "workspace:*"
   },
   "scripts": {
+    "prebuild": "bun run --cwd .. build:wasm:playground",
+    "predev": "bun run --cwd .. build:wasm:playground:dev",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview"

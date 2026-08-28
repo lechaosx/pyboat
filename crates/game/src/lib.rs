@@ -44,7 +44,8 @@ const WATER_VAPOR_NOISE_SCALE: f64 = 0.75;
 // band, with Southern Hemisphere seasons shifted and grid elevation removed by
 // the standard lapse rate. The climate knots summarize band means and medians;
 // the anomaly tables match pooled daily-maximum p99 tails through the seeded
-// noise distribution. Keep these tables synchronized with `scene.wgsl`.
+// noise distribution. Keep these tables synchronized with
+// `crates/browser/src/shader/components/environment.wgsl`.
 const CLIMATE_ANNUAL_MEAN_C: [f32; 10] =
     [27.4, 27.9, 25.0, 21.9, 16.9, 8.0, -0.2, -7.9, -11.7, -15.0];
 const CLIMATE_SEASONAL_RANGE_C: [f32; 10] =
@@ -97,7 +98,7 @@ const OCEAN_WIND_SEA_MODE_COUNT: usize = 12;
 const GRAVITY_M_S2: f64 = 9.81;
 // OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
 // features when a field is thresholded. Keep values and order synchronized with
-// `scene.wgsl` so its hash selects the same gradient.
+// `crates/browser/src/shader/components/noise.wgsl` so its hash selects the same gradient.
 const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
     (0.9914449, 0.1305262),
     (0.9238795, 0.3826834),
@@ -368,7 +369,8 @@ const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     scale: WATER_VAPOR_NOISE_SCALE,
     evolution_speed_m_s: WATER_VAPOR_EVOLUTION_SPEED_M_S,
     // Humidity organizes weather systems; the visual fields supply smaller cloud
-    // bodies. Keep this spectrum synchronized with `scene.wgsl`.
+    // bodies. Keep this spectrum synchronized with
+    // `crates/browser/src/shader/components/environment.wgsl`.
     wavelength_m: 8192.0,
     octave_count: 5,
 };
@@ -1646,8 +1648,8 @@ fn procedural_terrain_surface_causes(
     position_m: Vector,
 ) -> TerrainSurfaceCauses {
     // Keep this composition synchronized with `procedural_terrain_sample` in
-    // `crates/browser/src/scene.wgsl`: Rust supplies physical depth while WGSL
-    // renders the same shoreline.
+    // `crates/browser/src/shader/components/terrain.wgsl`: Rust supplies physical
+    // depth while WGSL renders the same shoreline.
     let cluster = terrain_simplex_fractal_noise(
         world_geometry,
         match_seed ^ 0xa076_1d64_78bd_642f,
@@ -1846,7 +1848,8 @@ fn broad_landform_elevation_m(
     match_seed: u64,
     position_m: Vector,
 ) -> f32 {
-    // Keep this synchronized with `broad_landform_elevation_m` in `scene.wgsl`.
+    // Keep this synchronized with `broad_landform_elevation_m` in
+    // `crates/browser/src/shader/components/terrain.wgsl`.
     // Wind shelter and long shadows need island-scale blockers, not the complete
     // metre-scale terrain spectrum used for depth and grounding.
     let cluster = terrain_simplex_fractal_noise(
@@ -1919,24 +1922,35 @@ pub fn procedural_cloud_cover(
 }
 
 pub fn scalar_field_time_coordinates(tick: u64) -> ScalarFieldTimeCoordinates {
+    scalar_field_time_coordinates_interpolated(tick, 0.0)
+}
+
+pub fn scalar_field_time_coordinates_interpolated(
+    tick: u64,
+    tick_fraction: f32,
+) -> ScalarFieldTimeCoordinates {
     ScalarFieldTimeCoordinates {
-        air_temperature: noise_time_coordinate(
+        air_temperature: noise_time_coordinate_interpolated(
             tick,
+            tick_fraction,
             SURFACE_AIR_TEMPERATURE_NOISE.evolution_speed_m_s,
             SURFACE_AIR_TEMPERATURE_NOISE.wavelength_m as f32,
         ),
-        upper_air_temperature: noise_time_coordinate(
+        upper_air_temperature: noise_time_coordinate_interpolated(
             tick,
+            tick_fraction,
             AIR_TEMPERATURE_500_HPA_NOISE.evolution_speed_m_s,
             AIR_TEMPERATURE_500_HPA_NOISE.wavelength_m as f32,
         ),
-        water_vapor: noise_time_coordinate(
+        water_vapor: noise_time_coordinate_interpolated(
             tick,
+            tick_fraction,
             WATER_VAPOR_NOISE.evolution_speed_m_s,
             WATER_VAPOR_NOISE.wavelength_m as f32,
         ),
-        decorative_water: noise_time_coordinate(
+        decorative_water: noise_time_coordinate_interpolated(
             tick,
+            tick_fraction,
             DECORATIVE_WATER_EVOLUTION_SPEED_M_S,
             DECORATIVE_WATER_WAVELENGTH_M,
         ),
@@ -1946,6 +1960,14 @@ pub fn scalar_field_time_coordinates(tick: u64) -> ScalarFieldTimeCoordinates {
 pub fn vector_field_time_coordinates(
     world_geometry: WorldGeometry,
     tick: u64,
+) -> VectorFieldTimeCoordinates {
+    vector_field_time_coordinates_interpolated(world_geometry, tick, 0.0)
+}
+
+pub fn vector_field_time_coordinates_interpolated(
+    world_geometry: WorldGeometry,
+    tick: u64,
+    tick_fraction: f32,
 ) -> VectorFieldTimeCoordinates {
     VectorFieldTimeCoordinates {
         pressure: WIND_BANDS.map(|band| {
@@ -1958,10 +1980,16 @@ pub fn vector_field_time_coordinates(
             } else {
                 band.wavelength_m
             };
-            noise_time_coordinate(tick, PRESSURE_EVOLUTION_SPEED_M_S, wavelength_m)
+            noise_time_coordinate_interpolated(
+                tick,
+                tick_fraction,
+                PRESSURE_EVOLUTION_SPEED_M_S,
+                wavelength_m,
+            )
         }),
-        ocean_current: noise_time_coordinate(
+        ocean_current: noise_time_coordinate_interpolated(
             tick,
+            tick_fraction,
             OCEAN_CURRENT_EVOLUTION_SPEED_M_S,
             world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
         ),
@@ -2738,6 +2766,15 @@ fn procedural_pressure_sample(
 }
 
 fn noise_time_coordinate(tick: u64, evolution_speed_m_s: f32, wavelength_m: f32) -> f32 {
+    noise_time_coordinate_interpolated(tick, 0.0, evolution_speed_m_s, wavelength_m)
+}
+
+fn noise_time_coordinate_interpolated(
+    tick: u64,
+    tick_fraction: f32,
+    evolution_speed_m_s: f32,
+    wavelength_m: f32,
+) -> f32 {
     const TIME_COORDINATE_PERIOD: f64 = 8192.0;
     let coordinate_per_tick =
         f64::from(DT_SECONDS) * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
@@ -2748,6 +2785,8 @@ fn noise_time_coordinate(tick: u64, evolution_speed_m_s: f32, wavelength_m: f32)
         let chunk = ((tick >> shift) & 0xffff) as f64;
         coordinate = (coordinate * 65_536.0 + chunk * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
     }
+    coordinate =
+        (coordinate + f64::from(tick_fraction) * coordinate_per_tick) % TIME_COORDINATE_PERIOD;
     coordinate as f32
 }
 

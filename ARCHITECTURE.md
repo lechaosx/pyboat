@@ -218,10 +218,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Its procedural inputs are match seed, geometry, global day and season phases,
   lunar longitude, and tick; the view-center Rust sample is diagnostic and never
   drives the surface scene.
-- **[Explicit]** The host reduces the full tick into bounded scalar-weather,
-  pressure, and current noise-time coordinates before upload, so WGSL never
-  converts total time to `f32` or interpolates temporal snapshots. A seeded phase
-  on each field and octave prevents unrelated spectra from changing in lockstep.
+- **[Explicit]** The host reduces the full integer tick plus fractional render
+  progress into bounded scalar-weather, pressure, and current noise-time
+  coordinates before upload. Simulation state advances only on integer ticks;
+  faster rendering presents the interval toward the next tick without WGSL
+  converting total time to `f32` or interpolating temporal snapshots. A seeded
+  phase on each field and octave prevents unrelated spectra from changing in
+  lockstep.
 - **[Explicit]** Rust and WGSL evaluate the same climate, synoptic, and local
   simplex pressure potential plus a separate scalar gust pulse directly from
   match seed, position, world geometry, and bounded time coordinates. Resolved
@@ -334,6 +337,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 ### Browser rendering and playground
 
+- **[Explicit]** The playground advances its simulation clocks at 60 fixed ticks
+  per real second. A render executes every tick due at that moment and presents
+  only the newest state, skipping intermediate presentations when rendering is
+  slower than the tick rate. Faster rendering uses fractional progress toward
+  the next tick.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only where
   boats require it.
@@ -375,9 +383,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   used for long terrain shadows. Metre-scale terrain remains authoritative for
   depth and grounding but does not multiply the cost of every shelter ray or act
   as an aerodynamically significant blocker by itself.
-- **[Explicit]** Gameplay and the procedural playground share production shader
-  functions. Gameplay binds scene state and fixed production tuning; the lab adds
-  live tuning and diagnostic state without adding that interface to production.
+- **[Explicit]** Gameplay and the procedural playground compose shared WGSL data
+  types and pure rendering mechanisms from dependency-explicit source components.
+  Gameplay binds scene state and fixed production tuning; the lab supplies its
+  live tuning through a separate interface.
+- **[Explicit]** The shader source shipped to players contains only the production
+  entry points, bindings, and their reachable components. Playground diagnostic
+  sources and interfaces are feature-gated from production artifacts and compile
+  as separate lazy modules containing only the selected diagnostic layer's
+  dependency closure.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

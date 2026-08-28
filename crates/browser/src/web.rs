@@ -9,8 +9,9 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    celestial_lighting, moon_phase, scalar_field_time_coordinates, vector_field_time_coordinates,
-    world_celestial_conditions,
+    celestial_lighting, moon_phase, scalar_field_time_coordinates,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -28,10 +29,33 @@ use crate::{
     viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 
+#[cfg(feature = "playground")]
+use crate::PLAYGROUND_STARTUP_SHADER;
+
 const MAX_VERTICES: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
 const LOW_CLOUD_REFRESH_TICKS: u64 = 108_000;
 const UPPER_CLOUD_REFRESH_TICKS: u64 = 216_000;
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_scene_shader_source() -> String {
+    crate::playground_scene_shader_source().to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_startup_shader_source() -> String {
+    PLAYGROUND_STARTUP_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_diagnostic_shader_source(name: &str) -> Result<String, JsValue> {
+    crate::playground_diagnostic_shader_source(name)
+        .map(str::to_owned)
+        .ok_or_else(|| JsValue::from_str("unknown playground diagnostic shader"))
+}
 
 #[wasm_bindgen]
 pub struct PlaygroundWorldGeometrySample {
@@ -259,14 +283,19 @@ pub fn sample_playground_field_time_coordinates(
     world_width_m: f32,
     world_height_m: f32,
     world_tick: u64,
+    world_tick_fraction: f32,
     pressure_tick: u64,
+    pressure_tick_fraction: f32,
     current_tick: u64,
+    current_tick_fraction: f32,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let scalar = scalar_field_time_coordinates(world_tick);
-    let pressure = vector_field_time_coordinates(geometry, pressure_tick);
-    let current = vector_field_time_coordinates(geometry, current_tick);
+    let scalar = scalar_field_time_coordinates_interpolated(world_tick, world_tick_fraction);
+    let pressure =
+        vector_field_time_coordinates_interpolated(geometry, pressure_tick, pressure_tick_fraction);
+    let current =
+        vector_field_time_coordinates_interpolated(geometry, current_tick, current_tick_fraction);
     let mut values = Vec::with_capacity(12);
     values.extend([
         scalar.air_temperature,

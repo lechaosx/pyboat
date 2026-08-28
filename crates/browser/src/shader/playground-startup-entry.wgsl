@@ -1,0 +1,5 @@
+@fragment
+fn fragment_playground_startup(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = select(input.color, vec3<f32>(0.025, 0.09, 0.14), input.is_terrain > 0.5);
+    return vec4<f32>(color, 1.0);
+}

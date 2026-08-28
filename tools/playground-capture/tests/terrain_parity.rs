@@ -42,8 +42,8 @@ fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
                 "1",
                 "--seed",
                 &SEED.to_string(),
-                "--debug",
-                "32",
+                "--diagnostic",
+                "terrain_elevation",
                 "--output",
                 output.to_str().unwrap(),
             ])
@@ -76,18 +76,21 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
     let tick = 0;
     let position_m = Vector::new(1_234.5, -6_789.25);
     let sample = procedural_world_environment(world, SEED, tick, position_m);
-    for (mode, expected) in [
+    for (diagnostic, expected) in [
         (
-            52,
+            "surface_air_temperature",
             signed_debug_pixel(sample.weather.surface_air_temperature_c / 40.0),
         ),
-        (55, signed_debug_pixel(sample.water_height_m / 2.0)),
+        (
+            "water_tide_height",
+            signed_debug_pixel(sample.water_height_m / 2.0),
+        ),
     ] {
-        let actual = render_debug_pixel(world, position_m, mode);
+        let actual = render_diagnostic_pixel(world, position_m, diagnostic);
         for channel in 0..3 {
             assert!(
                 actual[channel].abs_diff(expected[channel]) <= 8,
-                "mode {mode} at {position_m:?}: {actual:?} != {expected:?}",
+                "{diagnostic} at {position_m:?}: {actual:?} != {expected:?}",
             );
         }
     }
@@ -104,8 +107,15 @@ fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
         position_m,
     ));
     assert!(lighting.solar_eclipse_fraction > 0.5);
-    let actual =
-        render_debug_image_with_view_at(world, position_m, world_time_seconds, 1.0, 72, 1, 1);
+    let actual = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_solar_eclipse_coverage",
+        1,
+        1,
+    );
     let expected = scalar_debug_pixel(lighting.solar_eclipse_fraction);
 
     for channel in 0..3 {
@@ -144,7 +154,14 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
         sample.climate.annual_mean_air_temperature_c,
         sample.surface_climate.water_temperature_c,
     );
-    let actual = render_debug_image_at(world, position_m, world_time_seconds, 32, 1, 1);
+    let actual = render_diagnostic_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        "terrain_elevation",
+        1,
+        1,
+    );
     let expected = signed_debug_pixel(solid_surface / 12.0);
 
     for channel in 0..3 {
@@ -158,8 +175,8 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
 #[test]
 fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let climate = render_debug_image(world, 57, 32, 16);
-    let solar = render_debug_image(world, 56, 32, 16);
+    let climate = render_diagnostic_image(world, "climate_composition", 32, 16);
+    let solar = render_diagnostic_image(world, "lighting_solar_elevation", 32, 16);
 
     let climate_equator = mean_channel(&climate, 32, 7..9, 0);
     let climate_poles =
@@ -182,19 +199,19 @@ fn whole_world_capture_contains_spatial_seasons_ice_and_solar_time() {
 #[test]
 fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let northern_summer = render_debug_image_at(
+    let northern_summer = render_diagnostic_image_at(
         world,
         Vector::ZERO,
         world_time_for_season_phase(0.6336),
-        57,
+        "climate_composition",
         32,
         16,
     );
-    let northern_winter = render_debug_image_at(
+    let northern_winter = render_diagnostic_image_at(
         world,
         Vector::ZERO,
         world_time_for_season_phase(0.09),
-        57,
+        "climate_composition",
         32,
         16,
     );
@@ -217,7 +234,7 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 #[test]
 fn cloud_formation_is_spatial_across_world() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let formation = render_debug_image(world, 58, 16, 8);
+    let formation = render_diagnostic_image(world, "cloud_low_formation", 16, 8);
 
     assert_grayscale(&formation);
     assert!(channel_range(&formation, 0) > 0.20);
@@ -228,21 +245,21 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 6_000.0);
     let sunset_seconds = 16_216.388_892_196_119;
-    let before_sunset = render_debug_image_with_view_at(
+    let before_sunset = render_diagnostic_image_with_view_at(
         world,
         position_m,
         sunset_seconds - 3.0,
         1_000.0,
-        10,
+        "lighting_projected_upper_shadow",
         64,
         64,
     );
-    let after_sunset = render_debug_image_with_view_at(
+    let after_sunset = render_diagnostic_image_with_view_at(
         world,
         position_m,
         sunset_seconds + 3.0,
         1_000.0,
-        10,
+        "lighting_projected_upper_shadow",
         64,
         64,
     );
@@ -267,7 +284,7 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
 #[test]
 fn rendered_pressure_is_spatial_across_world() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let pressure = render_debug_image(world, 60, 32, 16);
+    let pressure = render_diagnostic_image(world, "pressure_full_anomaly", 32, 16);
     let red_range = channel_range(&pressure, 0);
     let blue_range = channel_range(&pressure, 2);
 
@@ -292,7 +309,7 @@ fn rendered_pressure_is_spatial_across_world() {
 #[test]
 fn rendered_temperature_gradient_is_spatial_across_world() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let gradient = render_debug_image(world, 20, 32, 16);
+    let gradient = render_diagnostic_image(world, "temperature_gradient", 32, 16);
 
     assert!(channel_range(&gradient, 0) > 0.08);
     assert!(channel_range(&gradient, 1) > 0.08);
@@ -322,50 +339,55 @@ fn read_pixel(path: &std::path::Path) -> [u8; 4] {
     bytes[..info.buffer_size()].try_into().unwrap()
 }
 
-fn render_debug_pixel(world: WorldGeometry, position_m: Vector, mode: u32) -> [u8; 4] {
-    render_debug_image_at(world, position_m, 0.0, mode, 1, 1)
+fn render_diagnostic_pixel(world: WorldGeometry, position_m: Vector, diagnostic: &str) -> [u8; 4] {
+    render_diagnostic_image_at(world, position_m, 0.0, diagnostic, 1, 1)
         .try_into()
         .unwrap()
 }
 
-fn render_debug_image(world: WorldGeometry, mode: u32, width: u32, height: u32) -> Vec<u8> {
-    render_debug_image_at(world, Vector::ZERO, 0.0, mode, width, height)
+fn render_diagnostic_image(
+    world: WorldGeometry,
+    diagnostic: &str,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    render_diagnostic_image_at(world, Vector::ZERO, 0.0, diagnostic, width, height)
 }
 
 fn world_time_for_season_phase(season_phase: f64) -> f64 {
     (season_phase - 0.5021).rem_euclid(1.0) * 86_400.0 * 336.0
 }
 
-fn render_debug_image_at(
+fn render_diagnostic_image_at(
     world: WorldGeometry,
     position_m: Vector,
     world_time_seconds: f64,
-    mode: u32,
+    diagnostic: &str,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    render_debug_image_with_view_at(
+    render_diagnostic_image_with_view_at(
         world,
         position_m,
         world_time_seconds,
         world.height_m(),
-        mode,
+        diagnostic,
         width,
         height,
     )
 }
 
-fn render_debug_image_with_view_at(
+fn render_diagnostic_image_with_view_at(
     world: WorldGeometry,
     position_m: Vector,
     world_time_seconds: f64,
     view_height_m: f32,
-    mode: u32,
+    diagnostic: &str,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{mode}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
         std::process::id(),
         world_time_seconds.to_bits(),
         position_m.x.to_bits(),
@@ -393,8 +415,8 @@ fn render_debug_image_with_view_at(
             "0",
             "--world-time",
             &world_time_seconds.to_string(),
-            "--debug",
-            &mode.to_string(),
+            "--diagnostic",
+            diagnostic,
             "--output",
             output.to_str().unwrap(),
         ])
