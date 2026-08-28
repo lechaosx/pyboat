@@ -134,6 +134,11 @@ struct PressureFieldSample {
     potential_m2_s: f32,
     gradient_m_s: vec2<f32>,
     synoptic_gradient_m_s: vec2<f32>,
+    broad_synoptic_gradient_m_s: vec2<f32>,
+    climate_potential_m2_s: f32,
+    synoptic_potential_m2_s: f32,
+    local_potential_m2_s: f32,
+    surface_gust_velocity_m_s: vec2<f32>,
 }
 
 fn spatiotemporal_noise_sample(
@@ -171,52 +176,163 @@ fn spatiotemporal_noise_sample(
     );
 }
 
+fn spatiotemporal_pressure_noise_sample(
+    field_seed: vec2<u32>,
+    position_m: vec2<f32>,
+    zonal_wavelength_m: f32,
+    meridional_wavelength_m: f32,
+    time_coordinate: f32,
+    zonal_aspect: f32,
+    zonal_aspect_gradient_per_m: f32,
+) -> TerrainNoiseSample {
+    let orientation = terrain_hash(
+        field_seed ^ vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+    ).x;
+    let longitude_offset = TAU * f32(orientation & 0xffu) / 256.0;
+    let latitude_sign = select(1.0, -1.0, (orientation & 0x100u) != 0u);
+    let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
+    let time_offset = f32((orientation >> 17u) & 0x7fffu) / 64.0;
+    let longitude = TAU * canonical_world_position(position_m).x / scene.world_size_m.x
+        + longitude_offset;
+    let circle_radius = scene.world_size_m.x
+        / (TAU * zonal_wavelength_m * zonal_aspect);
+    let circle_radius_gradient_per_m =
+        -circle_radius * zonal_aspect_gradient_per_m / zonal_aspect;
+    let simplex = simplex_noise_sample_4d(
+        field_seed,
+        vec4<f32>(
+            circle_radius * cos(longitude),
+            circle_radius * sin(longitude),
+            latitude_sign * position_m.y / meridional_wavelength_m + latitude_offset,
+            time_coordinate + time_offset,
+        ),
+    );
+    return TerrainNoiseSample(
+        simplex.value,
+        vec2<f32>(
+            (-sin(longitude) * simplex.gradient.x
+                + cos(longitude) * simplex.gradient.y) / (zonal_wavelength_m * zonal_aspect),
+            circle_radius_gradient_per_m
+                * (cos(longitude) * simplex.gradient.x
+                    + sin(longitude) * simplex.gradient.y)
+                + latitude_sign * simplex.gradient.z / meridional_wavelength_m,
+        ),
+    );
+}
+
 fn procedural_pressure_sample_filtered(
     position_m: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> PressureFieldSample {
-    let fractions = array<f32, 4>(0.15, 0.05, 0.015, 0.004);
-    let variances = array<f32, 4>(0.12, 0.78, 0.08, 0.02);
+    let fixed_wavelengths_m = array<f32, 4>(0.0, 3200.0, 960.0, 256.0);
+    let world_wavelength_fractions = array<f32, 4>(0.30, 0.0, 0.0, 0.0);
+    let variances = array<f32, 4>(0.30, 0.54, 0.08, 0.02);
+    let midlatitude_variance_transfers = array<f32, 4>(-0.15, 0.15, 0.0, 0.0);
+    let midlatitude_zonal_aspects = array<f32, 4>(1.25, 1.4, 1.0, 1.0);
     let salts = array<vec2<u32>, 4>(
         vec2<u32>(0xade682d1u, 0x510e527fu),
         vec2<u32>(0x2b3e6c1fu, 0x9b05688cu),
         vec2<u32>(0xfb41bd6bu, 0x1f83d9abu),
         vec2<u32>(0x137e2179u, 0x5be0cd19u),
     );
-    let synoptic_coupling = array<f32, 4>(1.0, 1.0, 0.20, 0.05);
+    let synoptic_coupling = array<f32, 4>(1.0, 1.0, 0.20, 0.0);
+    let latitude_rad = radians(surface_latitude_degrees_at(position_m));
+    let midlatitude_sine = sin(2.0 * latitude_rad);
+    let midlatitude = midlatitude_sine * midlatitude_sine;
+    let latitude_gradient_rad_per_m = select(
+        0.0,
+        PI / scene.world_size_m.y,
+        abs(position_m.y) < 0.5 * scene.world_size_m.y,
+    );
+    let midlatitude_gradient_per_m =
+        2.0 * sin(4.0 * latitude_rad) * latitude_gradient_rad_per_m;
     var sample: PressureFieldSample;
     sample.potential_m2_s = 0.0;
     sample.gradient_m_s = vec2<f32>(0.0);
     sample.synoptic_gradient_m_s = vec2<f32>(0.0);
+    sample.broad_synoptic_gradient_m_s = vec2<f32>(0.0);
+    sample.climate_potential_m2_s = 0.0;
+    sample.synoptic_potential_m2_s = 0.0;
+    sample.local_potential_m2_s = 0.0;
+    sample.surface_gust_velocity_m_s = vec2<f32>(0.0);
     for (var band = 0u; band < 4u; band++) {
-        let wavelength_m = max(scene.world_size_m.x * fractions[band], 64.0);
-        var noise = spatiotemporal_noise_sample(
+        let zonal_wavelength_m = select(
+            fixed_wavelengths_m[band],
+            world_wavelength_fractions[band] * scene.world_size_m.x,
+            world_wavelength_fractions[band] > 0.0,
+        );
+        let meridional_wavelength_m = select(
+            fixed_wavelengths_m[band],
+            world_wavelength_fractions[band] * scene.world_size_m.y,
+            world_wavelength_fractions[band] > 0.0,
+        );
+        let variance_fraction = variances[band]
+            + midlatitude_variance_transfers[band] * midlatitude;
+        let variance_scale = sqrt(variance_fraction);
+        let variance_scale_gradient_per_m = 0.5
+            * midlatitude_variance_transfers[band]
+            * midlatitude_gradient_per_m / variance_scale;
+        let zonal_aspect = 1.0
+            + (midlatitude_zonal_aspects[band] - 1.0) * midlatitude;
+        let zonal_aspect_gradient_per_m =
+            (midlatitude_zonal_aspects[band] - 1.0) * midlatitude_gradient_per_m;
+        var noise = spatiotemporal_pressure_noise_sample(
             scene.match_seed ^ salts[band],
             position_m,
-            wavelength_m,
+            zonal_wavelength_m,
+            meridional_wavelength_m,
             scene.pressure_time_coordinate[band],
+            zonal_aspect,
+            zonal_aspect_gradient_per_m,
         );
         if band == 3u {
-            let unshaped_value = noise.value;
-            noise.value = sinh(1.5 * unshaped_value) / 1.5;
-            noise.gradient *= cosh(1.5 * unshaped_value);
+            noise.gradient *= cosh(1.5 * noise.value);
         }
-        let attenuation = exp(-0.5 * pow(16.0 * pixel_footprint_m / wavelength_m, 2.0));
-        let transient_variance = variances[band] * select(1.0, 0.5, band == 0u);
-        let potential_scale_m2_s = attenuation * 0.495 * 9.0
-            * sqrt(transient_variance) * wavelength_m;
-        let gradient_m_s = potential_scale_m2_s * noise.gradient;
-        sample.potential_m2_s += potential_scale_m2_s * noise.value;
-        sample.gradient_m_s += gradient_m_s;
-        sample.synoptic_gradient_m_s += synoptic_coupling[band] * gradient_m_s;
+        let attenuation_wavelength_m = min(zonal_wavelength_m, meridional_wavelength_m);
+        let attenuation = exp(
+            -0.5 * pow(16.0 * pixel_footprint_m / attenuation_wavelength_m, 2.0),
+        );
+        let total_zonal_aspect = zonal_wavelength_m * zonal_aspect
+            / meridional_wavelength_m;
+        let total_zonal_aspect_gradient_per_m = zonal_wavelength_m
+            * zonal_aspect_gradient_per_m / meridional_wavelength_m;
+        let zonal_aspect_squared = total_zonal_aspect * total_zonal_aspect;
+        let anisotropy_normalization = sqrt(
+            2.0 / (1.0 + 1.0 / zonal_aspect_squared),
+        );
+        let anisotropy_normalization_gradient_per_m = anisotropy_normalization
+            * total_zonal_aspect_gradient_per_m
+            / (total_zonal_aspect * (zonal_aspect_squared + 1.0));
+        let base_potential_scale_m2_s =
+            attenuation * 0.495 * 9.0 * meridional_wavelength_m;
+        let potential_scale_m2_s =
+            base_potential_scale_m2_s * variance_scale * anisotropy_normalization;
+        let potential_scale_gradient_m_s = base_potential_scale_m2_s
+            * (variance_scale_gradient_per_m * anisotropy_normalization
+                + variance_scale * anisotropy_normalization_gradient_per_m);
+        let gradient_m_s = potential_scale_m2_s * noise.gradient
+            + vec2<f32>(0.0, potential_scale_gradient_m_s * noise.value);
+        let potential_m2_s = potential_scale_m2_s * noise.value;
+        if band == 3u {
+            sample.surface_gust_velocity_m_s = gradient_m_s;
+        } else {
+            sample.potential_m2_s += potential_m2_s;
+            sample.gradient_m_s += gradient_m_s;
+            sample.synoptic_gradient_m_s += synoptic_coupling[band] * gradient_m_s;
+            if band <= 1u { sample.broad_synoptic_gradient_m_s += gradient_m_s; }
+            if band == 0u { sample.climate_potential_m2_s = potential_m2_s; }
+            if band == 1u { sample.synoptic_potential_m2_s = potential_m2_s; }
+            if band == 2u { sample.local_potential_m2_s = potential_m2_s; }
+        }
     }
-    let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let zonal_phase = 6.0 * latitude_rad;
     let zonal_potential_scale_m2_s = 3.1 * scene.world_size_m.y / (6.0 * PI);
     let zonal_gradient_m_s = vec2<f32>(0.0, 3.1 * sin(zonal_phase));
     sample.potential_m2_s -= zonal_potential_scale_m2_s * cos(zonal_phase);
+    sample.climate_potential_m2_s -= zonal_potential_scale_m2_s * cos(zonal_phase);
     sample.gradient_m_s += zonal_gradient_m_s;
     sample.synoptic_gradient_m_s += zonal_gradient_m_s;
+    sample.broad_synoptic_gradient_m_s += zonal_gradient_m_s;
     return sample;
 }
 
@@ -253,11 +369,17 @@ fn wind_from_pressure_gradient(
     return 6000.0 * gradient_length * normalize(flow);
 }
 
-fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
+fn resolved_surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
+    let pressure = procedural_pressure_sample(position_m);
     return atmosphere_model.x * wind_from_pressure_gradient(
-        pressure_at(position_m).yz,
+        pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
+}
+
+fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
+    return resolved_surface_wind_m_s_at(position_m)
+        + procedural_pressure_sample(position_m).surface_gust_velocity_m_s;
 }
 
 fn surface_wind_m_s() -> vec2<f32> {
@@ -321,18 +443,6 @@ fn latitude_curve_value(knots: array<f32, 10>, latitude_degrees: f32) -> f32 {
     return mix(knots[lower], knots[lower + 1u], amount);
 }
 
-fn latitude_curve_slope_per_degree(
-    knots: array<f32, 10>,
-    latitude_degrees: f32,
-) -> f32 {
-    let knot_position = clamp(abs(latitude_degrees) / 10.0, 0.0, 9.0);
-    let lower = min(u32(floor(knot_position)), 8u);
-    let fraction = fract(knot_position);
-    let sign = select(1.0, -1.0, latitude_degrees < 0.0);
-    return sign * (knots[lower + 1u] - knots[lower])
-        * 0.6 * fraction * (1.0 - fraction);
-}
-
 fn surface_seasonal_latitude_factor_at(position_m: vec2<f32>) -> f32 {
     let latitude = surface_latitude_degrees_at(position_m);
     let magnitude = smoothstep(0.0, 45.0, abs(latitude));
@@ -380,10 +490,6 @@ fn surface_air_temperature_anomaly_sample_at(position_m: vec2<f32>) -> TerrainNo
         TEMPERATURE_ANOMALY_SCALE_C,
         surface_latitude_degrees_at(position_m),
     );
-    let scale_gradient_c_per_m = latitude_curve_slope_per_degree(
-        TEMPERATURE_ANOMALY_SCALE_C,
-        surface_latitude_degrees_at(position_m),
-    ) * 180.0 / scene.world_size_m.y;
     let noise = spatiotemporal_fractal_sample(
         vec2<u32>(0x38d01377u, 0x452821e6u),
         position_m,
@@ -394,11 +500,7 @@ fn surface_air_temperature_anomaly_sample_at(position_m: vec2<f32>) -> TerrainNo
     );
     return TerrainNoiseSample(
         scale_c * 0.85 * noise.value,
-        vec2<f32>(
-            scale_c * 0.85 * noise.gradient.x,
-            scale_c * 0.85 * noise.gradient.y
-                + 0.85 * noise.value * scale_gradient_c_per_m,
-        ),
+        scale_c * 0.85 * noise.gradient,
     );
 }
 
@@ -2830,12 +2932,17 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     if water_depth_m == 0.0 {
         return vec3<f32>(0.0);
     }
-    let surface_speed_m_s = length(surface_wind_m_s_at(position_m));
+    // Wave energy responds to sustained resolved flow, not an instantaneous
+    // 256 m surface gust.
+    let surface_speed_m_s = length(resolved_surface_wind_m_s_at(position_m));
     let upper_speed_m_s = length(upper_wind_m_s_at(position_m));
     let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
     let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
     let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
-    return vec3<f32>(current_m_s, min(unrestricted_height_m, 0.78 * water_depth_m));
+    return vec3<f32>(
+        current_m_s,
+        min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
+    );
 }
 
 fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
@@ -2848,7 +2955,7 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         return sample;
     }
 
-    let surface_wind = surface_wind_m_s_at(position_m);
+    let surface_wind = resolved_surface_wind_m_s_at(position_m);
     let upper_wind = upper_wind_m_s_at(position_m);
     let surface_speed = length(surface_wind);
     let upper_speed = length(upper_wind);
@@ -3532,6 +3639,16 @@ fn signed_debug_color(value: f32) -> vec3<f32> {
     );
 }
 
+fn pressure_anomaly_debug_color(anomaly_hpa: f32, range_hpa: f32) -> vec3<f32> {
+    let anomaly = clamp(anomaly_hpa / range_hpa, -1.0, 1.0);
+    let neutral = vec3<f32>(0.58, 0.59, 0.60);
+    return select(
+        mix(neutral, vec3<f32>(0.08, 0.30, 0.88), -anomaly),
+        mix(neutral, vec3<f32>(0.90, 0.12, 0.08), anomaly),
+        anomaly >= 0.0,
+    );
+}
+
 fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
     // This diagnostic favors shader cost over parity. Gameplay shelter is sampled
     // by `game` and remains authoritative.
@@ -3639,16 +3756,21 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         );
         return vec4<f32>(scalar_debug_color(transmittance), 1.0);
     }
-    if mode >= 16u && mode <= 21u {
+    if (mode >= 16u && mode <= 21u) || mode == 70u || mode == 71u {
         let filtered_pressure = procedural_pressure_sample_filtered(
             position_m,
             visual_pixel_footprint_m,
         );
         let latitude_degrees = surface_latitude_degrees_at(position_m);
-        let surface = atmosphere_model.x * wind_from_pressure_gradient(
+        let resolved_surface = atmosphere_model.x * wind_from_pressure_gradient(
             filtered_pressure.gradient_m_s / 6000.0,
             latitude_degrees,
         );
+        let broad_synoptic = atmosphere_model.x * wind_from_pressure_gradient(
+            filtered_pressure.broad_synoptic_gradient_m_s / 6000.0,
+            latitude_degrees,
+        );
+        let surface = resolved_surface + filtered_pressure.surface_gust_velocity_m_s;
         let local_temperature_gradient =
             surface_air_temperature_anomaly_sample_at(position_m).gradient;
         let upper = 1.15 * atmosphere_model.x * wind_from_pressure_gradient(
@@ -3664,6 +3786,8 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         if mode == 18u { return vec4<f32>(wind_debug_color(shear), 1.0); }
         if mode == 19u { return vec4<f32>(wind_debug_color(pressure_gradient), 1.0); }
         if mode == 20u { return vec4<f32>(wind_debug_color(temperature_gradient), 1.0); }
+        if mode == 70u { return vec4<f32>(wind_debug_color(resolved_surface), 1.0); }
+        if mode == 71u { return vec4<f32>(wind_debug_color(broad_synoptic), 1.0); }
         let shelter = approximate_shelter(position_m, surface);
         return vec4<f32>(mix(
             vec3<f32>(0.84, 0.17, 0.10),
@@ -3792,9 +3916,36 @@ fn playground_debug_color(input: VertexOutput, mode: u32) -> vec4<f32> {
         let formation = visible_low_cloud_coverage(surface_cloud_weather);
         return vec4<f32>(vec3<f32>(formation), 1.0);
     }
-    if mode == 60u {
-        let pressure = clamp((pressure_at(surface_position_m).x - 990.0) / 45.0, 0.0, 1.0);
-        return vec4<f32>(vec3<f32>(pressure), 1.0);
+    if mode == 59u || mode == 60u || mode == 61u || mode == 68u || mode == 69u {
+        let pressure = procedural_pressure_sample_filtered(
+            surface_position_m,
+            select(0.0, visual_pixel_footprint_m, mode == 60u),
+        );
+        if mode == 59u {
+            return vec4<f32>(pressure_anomaly_debug_color(
+                pressure.climate_potential_m2_s / 6000.0,
+                8.0,
+            ), 1.0);
+        }
+        if mode == 60u {
+            return vec4<f32>(pressure_anomaly_debug_color(
+                pressure.potential_m2_s / 6000.0,
+                8.0,
+            ), 1.0);
+        }
+        if mode == 61u {
+            return vec4<f32>(pressure_anomaly_debug_color(
+                pressure.synoptic_potential_m2_s / 6000.0,
+                3.0,
+            ), 1.0);
+        }
+        if mode == 68u {
+            return vec4<f32>(pressure_anomaly_debug_color(
+                pressure.local_potential_m2_s / 6000.0,
+                0.5,
+            ), 1.0);
+        }
+        return vec4<f32>(wind_debug_color(pressure.surface_gust_velocity_m_s), 1.0);
     }
     if mode == 62u {
         let normal_detail = visual_water_normal_sample(position_m);

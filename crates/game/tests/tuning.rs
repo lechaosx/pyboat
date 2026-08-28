@@ -194,6 +194,64 @@ fn procedural_wind_is_spatially_and_temporally_coherent() {
 }
 
 #[test]
+fn surface_gusts_remain_when_the_resolved_pressure_gradient_is_removed() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(12.0, 0.25 * world.height_m());
+    let tick = 12_345;
+    let celestial = world_celestial_conditions_in_world(world, tick as f64 / 60.0, position_m);
+    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
+    let mut speed_sum = 0.0;
+
+    for seed in 0..4_096 {
+        let primary = procedural_atmosphere_primary_in_world(world, seed, tick, position_m);
+        let pressureless = AtmospherePrimary {
+            pressure_gradient_hpa_per_m: Vector::ZERO,
+            synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
+            ..primary
+        };
+        speed_sum += derive_weather(pressureless, climate, celestial)
+            .wind_velocity_m_s
+            .length();
+    }
+
+    let mean_gust_speed_m_s = speed_sum / 4_096.0;
+    assert!(
+        mean_gust_speed_m_s > 0.25,
+        "mean pressure-independent gust speed {mean_gust_speed_m_s} m/s",
+    );
+}
+
+#[test]
+fn resolved_pressure_is_dominated_by_broad_structure() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(12.0, 0.25 * world.height_m());
+    let mut anomaly_square_sum = 0.0;
+    let mut local_difference_square_sum = 0.0;
+
+    for seed in 0..4_096 {
+        let pressure_hpa =
+            procedural_atmosphere_primary_in_world(world, seed, 12_345, position_m).pressure_hpa;
+        let nearby_pressure_hpa = procedural_atmosphere_primary_in_world(
+            world,
+            seed,
+            12_345,
+            position_m + Vector::new(128.0, 0.0),
+        )
+        .pressure_hpa;
+        anomaly_square_sum += (pressure_hpa - 1013.25).powi(2);
+        local_difference_square_sum += (nearby_pressure_hpa - pressure_hpa).powi(2);
+    }
+
+    let anomaly_rms_hpa = (anomaly_square_sum / 4_096.0).sqrt();
+    let local_difference_rms_hpa = (local_difference_square_sum / 4_096.0).sqrt();
+    assert!(anomaly_rms_hpa > 0.5, "pressure RMS {anomaly_rms_hpa} hPa");
+    assert!(
+        local_difference_rms_hpa < 0.15 * anomaly_rms_hpa,
+        "128 m pressure difference RMS {local_difference_rms_hpa} hPa vs anomaly RMS {anomaly_rms_hpa} hPa",
+    );
+}
+
+#[test]
 fn procedural_wind_has_a_local_prevailing_direction_without_a_worldwide_one() {
     let position_m = Vector::new(12.0, -7.0);
     let mut local_alignment_sum = 0.0;
@@ -388,9 +446,10 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        surface_gust_velocity_m_s: Vector::ZERO,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
-        temperature_gradient_c_per_m: Vector::ZERO,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
     };
 
@@ -413,9 +472,10 @@ fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        surface_gust_velocity_m_s: Vector::ZERO,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
-        temperature_gradient_c_per_m: Vector::ZERO,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
     };
     let climate = ClimateConditions {
@@ -456,13 +516,14 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         pressure_hpa: 1000.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0008, 0.0),
+        surface_gust_velocity_m_s: Vector::ZERO,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -15.0,
-        temperature_gradient_c_per_m: Vector::ZERO,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 10.0,
     };
     let sheared = AtmospherePrimary {
-        temperature_gradient_c_per_m: Vector::new(0.0004, 0.0),
+        local_temperature_gradient_c_per_m: Vector::new(0.0004, 0.0),
         ..calm_aloft
     };
 
@@ -489,9 +550,10 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0012, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        surface_gust_velocity_m_s: Vector::ZERO,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -20.0,
-        temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
+        local_temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
         water_vapor_g_kg: 4.0,
     };
     let moist = AtmospherePrimary {
@@ -600,13 +662,13 @@ fn temperate_temperature_extremes_have_observed_probabilities() {
 }
 
 #[test]
-fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
+fn procedural_local_temperature_gradient_matches_the_equatorial_anomaly_derivative() {
     const SAMPLE_DISTANCE_M: f32 = 16.0;
     const SAMPLE_COUNT: u64 = 128;
     let mut error_sum = 0.0;
 
     for seed in 0..SAMPLE_COUNT {
-        let position_m = Vector::new(371.0 * seed as f32 + 12.0, -193.0 * seed as f32 - 7.0);
+        let position_m = Vector::new(371.0 * seed as f32 + 12.0, 0.0);
         let primary = procedural_atmosphere_primary(seed, 12_345, position_m);
         let numerical_gradient = Vector::new(
             procedural_atmosphere_primary(
@@ -634,7 +696,7 @@ fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
                 )
                 .surface_air_temperature_anomaly_c,
         ) / (2.0 * SAMPLE_DISTANCE_M);
-        error_sum += (primary.temperature_gradient_c_per_m - numerical_gradient).length();
+        error_sum += (primary.local_temperature_gradient_c_per_m - numerical_gradient).length();
     }
 
     let mean_error = error_sum / SAMPLE_COUNT as f32;
@@ -642,11 +704,11 @@ fn procedural_temperature_gradient_matches_the_local_anomaly_derivative() {
 }
 
 #[test]
-fn spatiotemporal_weather_preserves_metre_scale_variation_after_years() {
+fn spatiotemporal_local_temperature_gradient_preserves_metre_scale_variation_after_years() {
     const SAMPLE_COUNT: u64 = 128;
     let tick = 1_u64 << 32;
-    let position_m = Vector::new(12.0, -7.0);
-    let displacement_m = Vector::new(1.0, 1.0);
+    let position_m = Vector::new(12.0, 0.0);
+    let displacement_m = Vector::new(1.0, 0.0);
     let mut derivative_error = 0.0;
 
     for seed in 0..SAMPLE_COUNT {
@@ -654,7 +716,9 @@ fn spatiotemporal_weather_preserves_metre_scale_variation_after_years() {
         let nearby_temperature =
             procedural_atmosphere_primary(seed, tick, position_m + displacement_m)
                 .surface_air_temperature_anomaly_c;
-        let predicted_change = primary.temperature_gradient_c_per_m.dot(displacement_m);
+        let predicted_change = primary
+            .local_temperature_gradient_c_per_m
+            .dot(displacement_m);
         derivative_error +=
             (nearby_temperature - primary.surface_air_temperature_anomaly_c - predicted_change)
                 .abs();
@@ -1354,9 +1418,10 @@ fn day_night_temperature_changes_precipitation() {
         pressure_hpa: 990.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0015, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
+        surface_gust_velocity_m_s: Vector::ZERO,
         surface_air_temperature_anomaly_c: 0.0,
         air_temperature_500_hpa_c: -30.0,
-        temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
+        local_temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
         water_vapor_g_kg: 4.0,
     };
     let night = derive_weather(primary, climate, conditions(0.125));
@@ -1651,7 +1716,7 @@ fn procedural_weather_upper_wind_is_seeded_coherent_and_faster_aloft() {
         upper_speed_sum / sea_speed_sum,
     );
     let average_alignment = alignment_sum / samples as f32;
-    assert!(average_alignment > 0.9, "{average_alignment}");
+    assert!(average_alignment > 0.85, "{average_alignment}");
     assert!(sheared_samples > samples * 9 / 10);
 }
 

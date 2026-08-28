@@ -109,7 +109,7 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
         .find(|position_m| {
             let bedrock = procedural_terrain_elevation_m(world, SEED, *position_m);
             let sample = procedural_world_environment(world, SEED, tick, *position_m);
-            bedrock < 0.0 && sample.surface_climate.solid_ice_cover > 0.5
+            bedrock < 0.0 && sample.surface_climate.polar_ice_closure > 0.5
         })
         .expect("winter polar region should contain sea ice");
     let sample = procedural_world_environment(world, SEED, tick, position_m);
@@ -203,9 +203,25 @@ fn cloud_formation_is_spatial_across_world() {
 fn rendered_pressure_is_spatial_across_world() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let pressure = render_debug_image(world, 60, 32, 16);
+    let red_range = channel_range(&pressure, 0);
+    let blue_range = channel_range(&pressure, 2);
 
-    assert_grayscale(&pressure);
-    assert!(channel_range(&pressure, 0) > 0.15);
+    assert!(
+        red_range > 0.02 && blue_range > 0.02,
+        "red range {red_range}, blue range {blue_range}",
+    );
+    assert!(
+        pressure
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] > pixel[2].saturating_add(8)),
+        "pressure diagnostic contains no high-pressure red"
+    );
+    assert!(
+        pressure
+            .chunks_exact(4)
+            .any(|pixel| pixel[2] > pixel[0].saturating_add(8)),
+        "pressure diagnostic contains no low-pressure blue"
+    );
 }
 
 #[test]

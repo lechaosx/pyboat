@@ -183,23 +183,30 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** At a fixed place and time, unsheltered wind speed follows a
   Weibull distribution with `k = 2` and `lambda = 9 m/s`.
 - **[Explicit]** Wind direction and speed vary continuously from gust to broad
-  weather scales. Pressure-system wavelengths are fixed fractions of world
-  circumference, preserving the relative spatial scale of Earth-like planetary,
-  synoptic, mesoscale, and local systems when world geometry changes. Their
-  amplitudes, relative variance, evolution rate, and gust shaping are
-  gameplay calibration rather than scaled Earth values.
+  weather scales. Latitude pressure climatology and the evolving climate-pressure
+  band scale with world geometry. Synoptic and local pressure retain fixed 3.2 km
+  and 960 m wavelengths, while a fixed 256 m field contributes a direct surface
+  gust vector rather than resolved pressure. A smooth midlatitude envelope
+  transfers variance between broad and synoptic bands without changing total
+  transient gradient energy, and stretches those bands zonally while preserving
+  an analytic pressure gradient. Band amplitudes, relative variance, anisotropy,
+  evolution rate, and gust shaping are gameplay calibration rather than scaled
+  Earth values.
 - **[Explicit]** Deterministic terrain shelter weakens wind in the lee of land
   over nearby water.
 - **[Explicit]** Atmosphere uses a compact match-seeded scalar spectral pressure
   potential whose analytic gradient drives surface wind. Coriolis turns that
   flow in opposite directions between hemispheres and fades smoothly to
   down-gradient flow at the equator. Broad pressure drives upper flow,
-  horizontal temperature gradient contributes thermal wind, and vertical shear
-  is derived. Each pressure band directly evaluates a simplex field over
-  longitude, latitude, and a tick-derived time coordinate. Systems evolve and
-  move locally without a field-wide velocity, stored history, weather grid, or
-  storm entity. Longitude is circle-embedded for a continuous seam while
-  latitude remains linear between the finite poles and does not tile vertically.
+  horizontal local weather-anomaly temperature gradient contributes thermal
+  wind and frontal lift without turning its latitude-dependent statistical
+  amplitude envelope into a physical front, and vertical shear is derived. Each
+  pressure band and the gust field directly evaluate simplex noise over
+  longitude, latitude, and a tick-derived time coordinate. Systems
+  evolve and move locally without a field-wide velocity, stored history, weather
+  grid, or storm entity. Longitude is circle-embedded for a continuous seam
+  while latitude remains linear between the finite poles and does not tile
+  vertically.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, evolving surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
@@ -210,13 +217,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   pressure, and current noise-time coordinates before upload, so WGSL never
   converts total time to `f32` or interpolates temporal snapshots. A seeded phase
   on each field and octave prevents unrelated spectra from changing in lockstep.
-- **[Explicit]** Rust and WGSL evaluate the same four-band simplex pressure potential
-  directly from match seed, position, world geometry, and bounded time
-  coordinates. Cloud formation, pressure diagnostics, and rendered wind therefore
-  query the field at their world position without a sampled pressure lattice.
-  Spatial temperature and moisture use the same spatiotemporal query model in
-  Rust and WGSL rather than accepting center-derived weather. No evolving scalar
-  or vector field receives a global spatial transport offset.
+- **[Explicit]** Rust and WGSL evaluate the same climate, synoptic, and local
+  simplex pressure potential plus a separate simplex surface-gust vector directly
+  from match seed, position, world geometry, and bounded time coordinates. Cloud
+  formation, pressure diagnostics, and rendered wind therefore query their causes
+  at world position without a sampled lattice. Spatial temperature and moisture
+  use the same spatiotemporal query model in Rust and WGSL rather than accepting
+  center-derived weather. No evolving scalar or vector field receives a global
+  spatial transport offset.
 - **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
   latent field. Adjacent deterministic temporal anchors are
   transported for only one bounded interval by the layer wind and combined with
@@ -293,7 +301,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   phase gradients. Both vanish where there is no navigable water. This is an
   analytic local approximation, not a stored basin solve. Basin-scale wavelength
   follows world circumference; spectrum, strength, pressure coupling, and
-  evolution rate are gameplay calibration.
+  evolution rate are provisional gameplay values without hydrodynamic
+  calibration.
 - **[Explicit]** Shared gameplay waves are deterministic from match state and
   local conditions, affect boat-relative water motion, and have no persistent
   drift. Exceptional crests emerge from interference rather than an event flag.

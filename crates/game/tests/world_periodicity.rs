@@ -95,8 +95,8 @@ fn assert_primary_close(left: AtmospherePrimary, right: AtmospherePrimary) {
         1.0e-5,
     );
     assert_vector_close(
-        left.temperature_gradient_c_per_m,
-        right.temperature_gradient_c_per_m,
+        left.local_temperature_gradient_c_per_m,
+        right.local_temperature_gradient_c_per_m,
         1.0e-6,
     );
     assert_close(left.water_vapor_g_kg, right.water_vapor_g_kg, 1.0e-5);
@@ -125,8 +125,8 @@ fn assert_primary_seam_close(left: AtmospherePrimary, right: AtmospherePrimary) 
         0.01,
     );
     assert_vector_close(
-        left.temperature_gradient_c_per_m,
-        right.temperature_gradient_c_per_m,
+        left.local_temperature_gradient_c_per_m,
+        right.local_temperature_gradient_c_per_m,
         2.0e-5,
     );
     assert_close(left.water_vapor_g_kg, right.water_vapor_g_kg, 0.01);
@@ -419,8 +419,8 @@ fn periodic_fields_remain_finite_and_repeating_at_the_largest_tick() {
     assert!(primary.pressure_gradient_hpa_per_m.y.is_finite());
     assert!(primary.surface_air_temperature_anomaly_c.is_finite());
     assert!(primary.air_temperature_500_hpa_c.is_finite());
-    assert!(primary.temperature_gradient_c_per_m.x.is_finite());
-    assert!(primary.temperature_gradient_c_per_m.y.is_finite());
+    assert!(primary.local_temperature_gradient_c_per_m.x.is_finite());
+    assert!(primary.local_temperature_gradient_c_per_m.y.is_finite());
     assert!(primary.water_vapor_g_kg.is_finite());
     assert_ne!(
         primary,

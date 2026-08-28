@@ -72,10 +72,14 @@ current playable behavior; this file does not track delivery status.
   storm.
 - **[Explicit]** Unsheltered wind can blow in any direction, varies smoothly from
   gust to broad weather system, and weakens in the lee of land over nearby water.
-  Weather-system scale remains proportional to world circumference, and Coriolis
-  reverses pressure-driven turning between hemispheres. Evolving weather has no
-  uniform translation direction; system motion is local and its world-scale mean
-  is zero.
+  Latitude climatology and broad climate-pressure structure scale with the world,
+  while synoptic and local pressure systems retain fixed physical sizes. Broad
+  and synoptic pressure dominate pressure anomaly; restrained local pressure is
+  secondary, and gust-scale wind does not appear as a pressure texture. Broad
+  and synoptic systems become zonally coherent at midlatitudes without changing
+  total transient wind energy. Coriolis reverses pressure-driven turning between
+  hemispheres. Evolving weather has no uniform translation direction; system
+  motion is local and its world-scale mean is zero.
 - **[Explicit]** Sun and moon state drives tides whose height changes depth,
   grounding, navigability, and shoreline position.
 - **[Explicit]** Seasonal ground and water temperature, snow, vegetation, and
@@ -217,7 +221,11 @@ current playable behavior; this file does not track delivery status.
   moderate heightfield-lighting preset.
 - **[Explicit]** World geometry, playback, and the global clock remain immediately
   accessible. Production-derived spatial measurements are read-only; visibility,
-  tuning, and mechanism diagnostics use collapsed semantic groups.
+  tuning, and mechanism diagnostics use collapsed semantic groups. Pressure
+  diagnostics expose the full anomaly and individually scaled broad, synoptic,
+  and local contributions. Separate vector diagnostics expose surface gusts,
+  resolved surface wind, broad/synoptic circulation, and the local
+  weather-anomaly temperature gradient.
 
 ## Open questions
 

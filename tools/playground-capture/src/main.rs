@@ -222,10 +222,18 @@ fn parse_debug_view(value: &str) -> Result<u32, String> {
         "surface-wind" => Ok(16),
         "upper-wind" => Ok(17),
         "shear" => Ok(18),
+        "temperature-gradient" => Ok(20),
+        "broad-pressure" => Ok(59),
+        "full-pressure" => Ok(60),
+        "synoptic-pressure" => Ok(61),
         "snow" => Ok(53),
         "ice" => Ok(41),
         "autumn" => Ok(42),
         "tide" => Ok(55),
+        "local-pressure" => Ok(68),
+        "surface-gust" => Ok(69),
+        "resolved-wind" => Ok(70),
+        "synoptic-wind" => Ok(71),
         _ => parse(value, "--debug"),
     }
 }
@@ -244,10 +252,31 @@ fn print_help() {
            --world-time SECONDS   deterministic world time (default 0)\n\
            --debug NAME|N         final, low-density, upper-depth, low-shadow,\n\
                                   upper-shadow, surface-wind, upper-wind, shear,\n\
-                                  snow, ice, autumn, or tide\n\n\
+                                  broad-pressure, full-pressure, synoptic-pressure,\n\
+                                  local-pressure, surface-gust, resolved-wind,\n\
+                                  synoptic-wind,\n\
+                                  temperature-gradient, snow, ice, autumn,\n\
+                                  or tide\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_debug_view;
+
+    #[test]
+    fn weather_debug_views_have_named_capture_options() {
+        assert_eq!(parse_debug_view("broad-pressure"), Ok(59));
+        assert_eq!(parse_debug_view("full-pressure"), Ok(60));
+        assert_eq!(parse_debug_view("synoptic-pressure"), Ok(61));
+        assert_eq!(parse_debug_view("local-pressure"), Ok(68));
+        assert_eq!(parse_debug_view("surface-gust"), Ok(69));
+        assert_eq!(parse_debug_view("temperature-gradient"), Ok(20));
+        assert_eq!(parse_debug_view("resolved-wind"), Ok(70));
+        assert_eq!(parse_debug_view("synoptic-wind"), Ok(71));
+    }
 }
 
 async fn render(options: &Options) -> Result<(), String> {
