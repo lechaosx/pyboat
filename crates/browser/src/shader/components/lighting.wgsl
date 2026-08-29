@@ -123,10 +123,10 @@ fn direct_moon_amount() -> f32 {
     return visibility.y * celestial_moon_amount();
 }
 
-fn calculate_atmospheric_ambient_color(
+fn calculate_atmospheric_ambient_color_with_visibility(
     canopy: RegionalCanopyConditions,
+    visibility: vec2<f32>,
 ) -> vec3<f32> {
-    let visibility = indirect_light_visibility();
     if visibility.x <= 0.0 && visibility.y <= 0.0 {
         return vec3<f32>(0.0);
     }
@@ -192,6 +192,15 @@ fn calculate_atmospheric_ambient_color(
     }
     return visibility.x * (1.0 - canopy.sky_fraction) * clear_sky_light
         + visibility.y * canopy.sky_fraction * canopy_light;
+}
+
+fn calculate_atmospheric_ambient_color(
+    canopy: RegionalCanopyConditions,
+) -> vec3<f32> {
+    return calculate_atmospheric_ambient_color_with_visibility(
+        canopy,
+        indirect_light_visibility(),
+    );
 }
 
 fn atmospheric_ambient_color() -> vec3<f32> {
@@ -264,6 +273,12 @@ fn initialize_light_contributions() {
     moon_direct_contribution_light_color = moon_share * moon_light_color;
     ambient_contribution_light_color = atmospheric_ambient_color()
         * max(1.0 - sun_share - moon_share, 0.0);
+}
+
+fn ambient_contribution_share() -> f32 {
+    let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
+    let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
+    return max(1.0 - sun_share - moon_share, 0.0);
 }
 
 fn projected_cloud_position(

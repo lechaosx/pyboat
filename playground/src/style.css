@@ -33,7 +33,8 @@ select { font: inherit; }
 button,
 select,
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+input[type="time"] {
   color: inherit;
   background: var(--field);
   border: 1px solid var(--line-strong);
@@ -261,6 +262,25 @@ details > .world-toolbar-section:first-of-type { border-top: 0; }
   text-transform: uppercase;
 }
 
+.world-datetime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.world-datetime-grid label {
+  display: grid;
+  gap: 0.28rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.world-datetime-grid input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.38rem 0.45rem;
+}
+
 .control,
 .text-control {
   display: grid;
@@ -338,8 +358,7 @@ output {
   font-size: 0.72rem;
 }
 
-.category-presets,
-.actions {
+.category-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
@@ -348,7 +367,6 @@ output {
 
 .category-presets { margin-top: 0; margin-bottom: 0.55rem; }
 .category-presets button { padding: 0.25rem 0.45rem; font-size: 0.65rem; }
-.actions button { font-size: 0.68rem; }
 
 .view-center-diagnostics {
   display: grid;

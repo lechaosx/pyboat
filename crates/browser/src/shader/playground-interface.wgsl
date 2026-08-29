@@ -39,7 +39,7 @@ struct InitializedPlaygroundScene {
 fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = playground_scene_tuning();
-    layer_visibility = playground.layer_visibility;
+    layer_visibility = vec4<f32>(1.0);
     landscape_visibility = playground.landscape_visibility;
     atmosphere_model = playground.wind_model;
     climate_visibility = playground.climate_visibility;
@@ -62,14 +62,30 @@ fn effect_feature_visibility() -> vec4<f32> {
 }
 
 fn lighting_feature_visibility() -> vec4<f32> {
-    return playground.lighting_features;
+    return vec4<f32>(1.0);
 }
 
 fn direct_light_visibility() -> vec2<f32> {
-    return vec2<f32>(playground.light_contribution_visibility.xy);
+    return vec2<f32>(1.0);
 }
 
 fn indirect_light_visibility() -> vec2<f32> {
+    return vec2<f32>(1.0);
+}
+
+fn fragment_layer_visibility() -> vec4<f32> {
+    return playground.layer_visibility;
+}
+
+fn fragment_lighting_visibility() -> vec4<f32> {
+    return playground.lighting_features;
+}
+
+fn fragment_direct_light_visibility() -> vec2<f32> {
+    return vec2<f32>(playground.light_contribution_visibility.xy);
+}
+
+fn fragment_indirect_light_visibility() -> vec2<f32> {
     return vec2<f32>(playground.light_contribution_visibility.zw);
 }
 

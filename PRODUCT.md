@@ -210,8 +210,8 @@ current playable behavior; this file does not track delivery status.
 
 - **[Explicit]** One browser laboratory covers weather, landscape, and water with
   the production rendering algorithms. A spacious live preview remains visible
-  beside one continuous, vertically scrolling control panel. Scene tuning, world
-  and playback controls, and diagnostics share one world and tuning state.
+  beside one continuous, vertically scrolling control panel. Time, world, scene,
+  and diagnostic controls share one world and tuning state.
 - **[Explicit]** Seed, geometry, position, and clocks always generate the world's
   environmental causes. Derived conditions are read-only; playground controls
   tune or enable existing mechanisms without replacing world-generated values.
@@ -231,22 +231,32 @@ current playable behavior; this file does not track delivery status.
   from Sun and Moon positions and repeats with the 28-day month. Production and
   the lab default to real time. The lab starts with cloud, pressure, current,
   and world-clock rates locked together; playback changes rates rather than
-  overriding phases. Celestial-event presets move only the lab's world clock to
-  naturally derived solar, partial-lunar, and total-lunar eclipse stages without
-  overriding orbital state, view, playback, tuning, or diagnostics.
+  overriding phases. The lab exposes manual year, month, day, and time controls
+  for its 12-by-28-day calendar. Celestial-event presets move only the lab's world
+  clock to naturally derived solar, partial-lunar, and total-lunar eclipse stages
+  without overriding orbital state, view, playback, tuning, or diagnostics.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** Scene controls expose only values with an observable artistic or
-  model-level effect and group them as clouds, terrain, water, lighting, and
-  weather. Groups collapse independently, changes are immediate, and one action
-  restores production tuning.
-- **[Explicit]** The continuous panel orders scene tuning before seed, geometry,
-  celestial events, playback, and the global clock, followed by output selection
-  and view-center values, including exhaustive diagnostics.
+- **[Explicit]** Scene controls separate output layers, light contributions,
+  color attenuation, and appearance or motion tuning. Groups collapse
+  independently, changes are immediate, and one action restores production
+  tuning.
+- **[Explicit]** Scene toggles control only contributions that directly add to or
+  attenuate fragment color: land, water, low clouds, Sun and Moon direct light,
+  clear-sky and canopy ambient light, cloud shadows, landform relief, and
+  landform shadows. A hidden contribution remains fully computed for every
+  downstream stage but is omitted from final fragment accumulation; hiding every
+  contribution produces a blank black output.
+- **[Explicit]** Intermediate weather and water mechanisms have no user-facing
+  switches. The playground enables them when an active color stage or
+  selected diagnostic consumes them and disables them when nothing does.
+- **[Explicit]** The continuous panel orders time and playback first, world seed
+  and geometry second, scene controls third, and output selection and view-center
+  diagnostics last.
 - **[Explicit]** Pressure diagnostics expose the full anomaly and individually
   scaled broad, synoptic, and local contributions. Separate vector diagnostics
   expose surface gusts, resolved surface wind, broad/synoptic circulation, and

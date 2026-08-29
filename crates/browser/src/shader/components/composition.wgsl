@@ -128,12 +128,66 @@ fn cloud_shadow_color(
     );
 }
 
+fn fragment_surface_color(
+    surface_color: vec3<f32>,
+    position_m: vec2<f32>,
+    elevation_m: f32,
+    terrain_shadow_transmittance: vec2<f32>,
+    landform_grade: vec2<f32>,
+    is_land: bool,
+) -> vec3<f32> {
+    let layer = fragment_layer_visibility();
+    let lighting = fragment_lighting_visibility();
+    let direct = fragment_direct_light_visibility();
+    let indirect = fragment_indirect_light_visibility();
+    let grade = mix(vec2<f32>(1.0), landform_grade, lighting.x);
+    let terrain_shadow = mix(
+        vec2<f32>(1.0),
+        terrain_shadow_transmittance,
+        lighting.y,
+    );
+    let depths = celestial_cloud_shadow_depths_at(position_m, max(elevation_m, 0.0));
+    let sun_transmittance = cloud_shadow_transmittance(
+        layer.y * depths.low.x + layer.z * depths.upper.x,
+        sun_direction(),
+    );
+    let moon_transmittance = cloud_shadow_transmittance(
+        layer.y * depths.low.y + layer.z * depths.upper.y,
+        moon_direction(),
+    );
+    let canopy = regional_canopy_conditions(surface_cloud_weather);
+    let ambient = ambient_contribution_share() * (
+        indirect.x * calculate_atmospheric_ambient_color_with_visibility(
+            canopy,
+            vec2<f32>(1.0, 0.0),
+        )
+        + indirect.y * calculate_atmospheric_ambient_color_with_visibility(
+            canopy,
+            vec2<f32>(0.0, 1.0),
+        )
+    );
+    let light = grade.x * ambient
+        + direct.x
+            * terrain_shadow.x
+            * sun_transmittance
+            * grade.y
+            * sun_direct_contribution_color()
+        + direct.y
+            * terrain_shadow.y
+            * moon_transmittance
+            * grade.y
+            * moon_direct_contribution_color();
+    let surface_visibility = select(lighting.w, lighting.z, is_land);
+    return surface_visibility * surface_color * light;
+}
+
 fn final_scene_color(
     input: VertexOutput,
     atmosphere: SurfaceAtmosphereSample,
     surface_circle_position: vec4<f32>,
 ) -> vec4<f32> {
     var surface_color = input.color;
+    var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
         let terrain = procedural_terrain_sample_with_climate_from_circle(
             input.world_position_m,
@@ -217,6 +271,14 @@ fn final_scene_color(
                 terrain.elevation_m,
             );
         }
+        fragment_color = fragment_surface_color(
+            surface_color,
+            input.world_position_m,
+            max(terrain.elevation_m, water_height_m),
+            terrain_shadow_transmittance,
+            surface_light_grade,
+            is_land,
+        );
         surface_color = cloud_shadow_color(
             surface_color,
             input.world_position_m,
@@ -240,12 +302,15 @@ fn final_scene_color(
                     upper_height_m,
                 );
             }
-            surface_color = mix(
+            let clouded_surface_color = mix(
                 surface_color,
                 cloud_color(surface_color, low_cloud, upper_transmittance),
                 layer_visibility.x,
             );
+            fragment_color += fragment_layer_visibility().x
+                * (clouded_surface_color - surface_color);
+            surface_color = clouded_surface_color;
         }
     }
-    return vec4<f32>(surface_color, 1.0);
+    return vec4<f32>(fragment_color, 1.0);
 }

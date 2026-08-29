@@ -15,6 +15,7 @@ import {
   fixedTickSeconds,
   type FixedClock,
 } from "./fixed-clock";
+import { deriveIntermediateVisibility } from "./feature-visibility";
 import {
   diagnosticGroups,
   diagnosticShaders,
@@ -37,7 +38,6 @@ type State = {
   currentTimeScale: number;
   worldTimeScale: number;
   timeScalesLocked: boolean;
-  paused: boolean;
   worldTimeSeconds: number;
   pressureTimeSeconds: number;
   currentTimeSeconds: number;
@@ -45,10 +45,8 @@ type State = {
   moonDirectLightEnabled: number;
   skyIndirectLightEnabled: number;
   canopyIndirectLightEnabled: number;
-  pressureFieldEnabled: number;
-  temperatureFieldEnabled: number;
-  moistureFieldEnabled: number;
-  weatherFormationEnabled: number;
+  landSurfaceVisible: number;
+  waterSurfaceVisible: number;
   detailCharacter: number;
   detailBlobiness: number;
   detailContrast: number;
@@ -66,39 +64,21 @@ type State = {
   landformReliefStrength: number;
   landformShadowStrength: number;
   landformShadowReach: number;
-  lowCloudEnabled: number;
   lowCloudVisible: number;
   lowCloudShadow: number;
-  upperCloudEnabled: number;
   upperCloudShadow: number;
-  upperShadowOnLowCloud: number;
-  coastalReliefVisible: number;
-  vegetationVisible: number;
-  surfaceTextureVisible: number;
   landformReliefEnabled: number;
   landformShadowEnabled: number;
-  seasonalSnowVisible: number;
-  seasonalVegetationVisible: number;
   pressureWindScale: number;
-  pressureCirculationEnabled: number;
   crossIsobarScale: number;
-  crossIsobarEnabled: number;
   thermalWindScale: number;
-  thermalWindEnabled: number;
   shelterStrength: number;
-  shelterEnabled: number;
-  terrainMaterialsEnabled: number;
-  oceanForcingEnabled: number;
-  waveSpectrumEnabled: number;
-  decorativeWaterEnabled: number;
-  precipitationContactsEnabled: number;
-  shallowBottomEnabled: number;
   diagnostic: DiagnosticSelection;
 };
 
 type NumericStateKey = Exclude<
   keyof State,
-  "seed" | "paused" | "timeScalesLocked" | "diagnostic"
+  "seed" | "timeScalesLocked" | "diagnostic"
 >;
 const defaults: State = {
   seed: "0x5eed",
@@ -113,7 +93,6 @@ const defaults: State = {
   currentTimeScale: 1,
   worldTimeScale: 1,
   timeScalesLocked: true,
-  paused: false,
   worldTimeSeconds: 0,
   pressureTimeSeconds: 0,
   currentTimeSeconds: 0,
@@ -121,10 +100,8 @@ const defaults: State = {
   moonDirectLightEnabled: 1,
   skyIndirectLightEnabled: 1,
   canopyIndirectLightEnabled: 1,
-  pressureFieldEnabled: 1,
-  temperatureFieldEnabled: 1,
-  moistureFieldEnabled: 1,
-  weatherFormationEnabled: 1,
+  landSurfaceVisible: 1,
+  waterSurfaceVisible: 1,
   detailCharacter: 0.35,
   detailBlobiness: 0.25,
   detailContrast: 1.15,
@@ -142,33 +119,15 @@ const defaults: State = {
   landformReliefStrength: 1,
   landformShadowStrength: 0.7,
   landformShadowReach: 320,
-  lowCloudEnabled: 1,
   lowCloudVisible: 1,
   lowCloudShadow: 1,
-  upperCloudEnabled: 1,
   upperCloudShadow: 1,
-  upperShadowOnLowCloud: 1,
-  coastalReliefVisible: 1,
-  vegetationVisible: 1,
-  surfaceTextureVisible: 1,
   landformReliefEnabled: 1,
   landformShadowEnabled: 1,
-  seasonalSnowVisible: 1,
-  seasonalVegetationVisible: 1,
   pressureWindScale: 1,
-  pressureCirculationEnabled: 1,
   crossIsobarScale: 1,
-  crossIsobarEnabled: 1,
   thermalWindScale: 1,
-  thermalWindEnabled: 1,
   shelterStrength: 1,
-  shelterEnabled: 1,
-  terrainMaterialsEnabled: 1,
-  oceanForcingEnabled: 1,
-  waveSpectrumEnabled: 1,
-  decorativeWaterEnabled: 1,
-  precipitationContactsEnabled: 1,
-  shallowBottomEnabled: 1,
   diagnostic: "scene",
 };
 
@@ -197,24 +156,26 @@ const state: State = { ...defaults };
 const canvas = document.querySelector<HTMLCanvasElement>("#preview");
 const controls = document.querySelector<HTMLElement>("#controls");
 const tuningControls = document.querySelector<HTMLElement>("#tuning-controls");
+const timeToolbar = document.querySelector<HTMLElement>("#time-toolbar");
 const worldToolbar = document.querySelector<HTMLElement>("#world-toolbar");
 const diagnosticToolbar = document.querySelector<HTMLElement>("#diagnostic-toolbar");
 const status = document.querySelector<HTMLElement>("#status");
-const scaleLine = document.querySelector<HTMLElement>("#scale-line");
+const scaleBar = document.querySelector<HTMLElement>(".scale-bar");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
 const resetTuningButton = document.querySelector<HTMLButtonElement>("#reset-tuning");
 const playgroundMain = document.querySelector<HTMLElement>("main");
 const sidebarResizer = document.querySelector<HTMLElement>("#sidebar-resizer");
-if (!canvas || !controls || !tuningControls || !worldToolbar || !diagnosticToolbar || !status || !scaleLine || !scaleLabel || !resetTuningButton || !playgroundMain || !sidebarResizer) {
+if (!canvas || !controls || !tuningControls || !timeToolbar || !worldToolbar || !diagnosticToolbar || !status || !scaleBar || !scaleLabel || !resetTuningButton || !playgroundMain || !sidebarResizer) {
   throw new Error("Procedural lab page is incomplete");
 }
 const previewCanvas = canvas;
 const controlsElement = controls;
 const tuningControlsElement = tuningControls;
+const timeToolbarElement = timeToolbar;
 const worldToolbarElement = worldToolbar;
 const diagnosticToolbarElement = diagnosticToolbar;
 const statusElement = status;
-const scaleLineElement = scaleLine;
+const scaleBarElement = scaleBar;
 const scaleLabelElement = scaleLabel;
 const resetTuningButtonElement = resetTuningButton;
 const playgroundMainElement = playgroundMain;
@@ -266,27 +227,13 @@ function format(value: number, step: number): string {
 }
 
 const featureKeys = {
+  land_surface: "landSurfaceVisible",
+  water_surface: "waterSurfaceVisible",
   low_cloud_body: "lowCloudVisible",
   low_cloud_shadow: "lowCloudShadow",
   canopy_shadow: "upperCloudShadow",
-  canopy_on_low: "upperShadowOnLowCloud",
-  coastal_relief: "coastalReliefVisible",
-  vegetation: "vegetationVisible",
-  surface_texture: "surfaceTextureVisible",
-  seasonal_snow: "seasonalSnowVisible",
-  vegetation_seasons: "seasonalVegetationVisible",
   sun_direct: "sunDirectLightEnabled",
   moon_direct: "moonDirectLightEnabled",
-  pressure: "pressureFieldEnabled",
-  temperature: "temperatureFieldEnabled",
-  moisture: "moistureFieldEnabled",
-  weather: "weatherFormationEnabled",
-  materials: "terrainMaterialsEnabled",
-  ocean_forcing: "oceanForcingEnabled",
-  wave_spectrum: "waveSpectrumEnabled",
-  decorative_water: "decorativeWaterEnabled",
-  precipitation_contacts: "precipitationContactsEnabled",
-  shallow_bottom: "shallowBottomEnabled",
   sky_indirect: "skyIndirectLightEnabled",
   canopy_indirect: "canopyIndirectLightEnabled",
   landform_relief: "landformReliefEnabled",
@@ -374,11 +321,36 @@ type TuningGroup = {
 
 const tuningGroups: readonly TuningGroup[] = [
   {
-    label: "Clouds",
+    label: "Output layers",
     open: true,
     controls: [
-      { type: "toggle", key: "lowCloudEnabled", label: "Low clouds" },
-      { type: "toggle", key: "upperCloudEnabled", label: "Weather canopy" },
+      { type: "toggle", key: "landSurfaceVisible", label: "Land surface" },
+      { type: "toggle", key: "waterSurfaceVisible", label: "Water surface" },
+      { type: "toggle", key: "lowCloudVisible", label: "Low-cloud layer" },
+    ],
+  },
+  {
+    label: "Light contributions",
+    open: true,
+    controls: [
+      { type: "toggle", key: "sunDirectLightEnabled", label: "Direct Sun" },
+      { type: "toggle", key: "moonDirectLightEnabled", label: "Direct Moon" },
+      { type: "toggle", key: "skyIndirectLightEnabled", label: "Clear-sky ambient" },
+      { type: "toggle", key: "canopyIndirectLightEnabled", label: "Canopy ambient" },
+    ],
+  },
+  {
+    label: "Color attenuation",
+    controls: [
+      { type: "toggle", key: "lowCloudShadow", label: "Low-cloud shadows" },
+      { type: "toggle", key: "upperCloudShadow", label: "Canopy shadows" },
+      { type: "toggle", key: "landformReliefEnabled", label: "Terrain relief" },
+      { type: "toggle", key: "landformShadowEnabled", label: "Terrain shadows" },
+    ],
+  },
+  {
+    label: "Cloud appearance",
+    controls: [
       { type: "range", key: "detailContrast", label: "Shape contrast", min: 0.25, max: 2.5, step: 0.05 },
       { type: "range", key: "detailEdgeSoftness", label: "Edge softness", min: 0.005, max: 0.25, step: 0.005 },
       { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
@@ -388,54 +360,26 @@ const tuningGroups: readonly TuningGroup[] = [
     ],
   },
   {
-    label: "Terrain",
+    label: "Terrain appearance",
     controls: [
       { type: "range", key: "terrainScale", label: "Feature scale", min: 0.25, max: 4, step: 0.05 },
       { type: "range", key: "elevationScale", label: "Elevation", min: 0.1, max: 3, step: 0.05 },
       { type: "range", key: "cliffSlope", label: "Cliff response", min: 0.01, max: 0.3, step: 0.005 },
-      { type: "toggle", key: "coastalReliefVisible", label: "Coastal relief" },
-      { type: "toggle", key: "terrainMaterialsEnabled", label: "Surface materials" },
-      { type: "toggle", key: "vegetationVisible", label: "Vegetation" },
-      { type: "toggle", key: "seasonalVegetationVisible", label: "Vegetation seasons" },
-      { type: "toggle", key: "seasonalSnowVisible", label: "Seasonal snow" },
-      { type: "toggle", key: "surfaceTextureVisible", label: "Surface detail" },
-    ],
-  },
-  {
-    label: "Water",
-    controls: [
-      { type: "toggle", key: "oceanForcingEnabled", label: "Currents" },
-      { type: "toggle", key: "waveSpectrumEnabled", label: "Gameplay waves" },
-      { type: "toggle", key: "decorativeWaterEnabled", label: "Surface detail" },
-      { type: "toggle", key: "precipitationContactsEnabled", label: "Precipitation contacts" },
-      { type: "toggle", key: "shallowBottomEnabled", label: "Visible shallow bottom" },
-      { type: "range", key: "waterAttenuationLength", label: "Bottom attenuation · m", min: 0.1, max: 4, step: 0.05 },
-      { type: "range", key: "bottomVisibility", label: "Bottom visibility", min: 0, max: 2, step: 0.05 },
-    ],
-  },
-  {
-    label: "Lighting",
-    controls: [
-      { type: "toggle", key: "sunDirectLightEnabled", label: "Direct Sun" },
-      { type: "toggle", key: "moonDirectLightEnabled", label: "Direct Moon" },
-      { type: "toggle", key: "skyIndirectLightEnabled", label: "Clear-sky ambient" },
-      { type: "toggle", key: "canopyIndirectLightEnabled", label: "Canopy ambient" },
-      { type: "toggle", key: "lowCloudShadow", label: "Low-cloud shadows" },
-      { type: "toggle", key: "upperCloudShadow", label: "Canopy shadows" },
-      { type: "toggle", key: "landformReliefEnabled", label: "Terrain relief" },
       { type: "range", key: "landformReliefStrength", label: "Relief strength", min: 0, max: 2, step: 0.05 },
-      { type: "toggle", key: "landformShadowEnabled", label: "Terrain shadows" },
       { type: "range", key: "landformShadowStrength", label: "Shadow strength", min: 0, max: 1, step: 0.05 },
       { type: "range", key: "landformShadowReach", label: "Shadow reach · m", min: 40, max: 1200, step: 10 },
     ],
   },
   {
-    label: "Weather model",
+    label: "Water appearance",
     controls: [
-      { type: "toggle", key: "pressureFieldEnabled", label: "Pressure variation" },
-      { type: "toggle", key: "temperatureFieldEnabled", label: "Temperature variation" },
-      { type: "toggle", key: "moistureFieldEnabled", label: "Moisture variation" },
-      { type: "toggle", key: "weatherFormationEnabled", label: "Weather formation" },
+      { type: "range", key: "waterAttenuationLength", label: "Bottom attenuation · m", min: 0.1, max: 4, step: 0.05 },
+      { type: "range", key: "bottomVisibility", label: "Bottom visibility", min: 0, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    label: "Environment motion",
+    controls: [
       { type: "range", key: "pressureWindScale", label: "Pressure circulation", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "thermalWindScale", label: "Thermal shear", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "shelterStrength", label: "Terrain shelter", min: 0, max: 1, step: 0.05 },
@@ -560,12 +504,24 @@ function timeScaleToSlider(value: number): number {
 }
 
 worldToolbarElement.innerHTML = `
-  <details>
+  <details open>
     <summary>World definition</summary>
     <section class="world-toolbar-section"><h3>World definition</h3>
       <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
       <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude width</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
       <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
+    </section>
+  </details>`;
+timeToolbarElement.innerHTML = `
+  <details open>
+    <summary>Date &amp; time</summary>
+    <section class="world-toolbar-section"><h3>World calendar</h3>
+      <div class="world-datetime-grid">
+        <label><span>Year</span><input id="world-year" type="number" min="1" step="1"></label>
+        <label><span>Month</span><input id="world-month" type="number" min="1" max="12" step="1"></label>
+        <label><span>Day</span><input id="world-day" type="number" min="1" max="28" step="1"></label>
+        <label><span>Time</span><input id="world-time" type="time" step="1"></label>
+      </div>
     </section>
     <section class="world-toolbar-section"><h3>Celestial events</h3>
       <nav class="category-presets celestial-event-presets" aria-label="Celestial event presets"><button id="solar-eclipse-preset" type="button">Solar eclipse</button><button id="lunar-eclipse-preset" type="button">Lunar eclipse</button><button id="blood-moon-preset" type="button">Blood moon</button></nav>
@@ -579,7 +535,6 @@ worldToolbarElement.innerHTML = `
       <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Currents · ×</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
       <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · ×</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
       <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
-      <div class="actions"><button id="pause">Pause</button></div>
     </section>
   </details>`;
 diagnosticToolbarElement.innerHTML = `
@@ -595,28 +550,71 @@ const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#wo
 const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
 const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
+const worldYearInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-year")!;
+const worldMonthInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-month")!;
+const worldDayInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-day")!;
+const worldTimeInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time")!;
 const positionMeasurementsElement = diagnosticToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
 const derivedOutputHeadingElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
 const derivedOutputElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output")!;
 const diagnosticsDetailsElement = positionMeasurementsElement.closest<HTMLDetailsElement>("details")!;
-const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
-const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
-const pressureTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
-const pressureTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#pressure-time-value")!;
-const currentTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#current-time-scale")!;
-const currentTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#current-time-value")!;
-const worldTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
-const worldTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
-const lockTimeScalesInput = worldToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
-const pauseButton = worldToolbarElement.querySelector<HTMLButtonElement>("#pause")!;
+const cloudTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
+const cloudTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
+const pressureTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
+const pressureTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#pressure-time-value")!;
+const currentTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#current-time-scale")!;
+const currentTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#current-time-value")!;
+const worldTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
+const worldTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
+const lockTimeScalesInput = timeToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
+
+function syncWorldDateInputs(): void {
+  const totalSeconds = Math.max(0, Math.floor(state.worldTimeSeconds));
+  const totalDays = Math.floor(totalSeconds / worldDaySeconds);
+  const dayOfYear = totalDays % worldYearDays;
+  const secondsOfDay = totalSeconds % worldDaySeconds;
+  const hours = Math.floor(secondsOfDay / 3600);
+  const minutes = Math.floor(secondsOfDay % 3600 / 60);
+  const seconds = secondsOfDay % 60;
+  const values: Array<[HTMLInputElement, string]> = [
+    [worldYearInput, String(Math.floor(totalDays / worldYearDays) + 1)],
+    [worldMonthInput, String(Math.floor(dayOfYear / 28) + 1)],
+    [worldDayInput, String(dayOfYear % 28 + 1)],
+    [worldTimeInput, [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":")],
+  ];
+  for (const [input, value] of values) {
+    if (document.activeElement !== input && input.value !== value) input.value = value;
+  }
+}
+
+function setWorldDateFromInputs(): void {
+  const year = Math.max(1, Math.floor(worldYearInput.valueAsNumber || 1));
+  const month = Math.min(12, Math.max(1, Math.floor(worldMonthInput.valueAsNumber || 1)));
+  const day = Math.min(28, Math.max(1, Math.floor(worldDayInput.valueAsNumber || 1)));
+  const [hours = 0, minutes = 0, seconds = 0] = worldTimeInput.value
+    .split(":")
+    .map((value) => Number.parseInt(value, 10) || 0);
+  const dayIndex = (year - 1) * worldYearDays + (month - 1) * 28 + day - 1;
+  state.worldTimeSeconds = dayIndex * worldDaySeconds
+    + Math.min(23, hours) * 3600
+    + Math.min(59, minutes) * 60
+    + Math.min(59, seconds);
+  syncWorldDateInputs();
+}
+
+for (const input of [worldYearInput, worldMonthInput, worldDayInput, worldTimeInput]) {
+  input.addEventListener("change", setWorldDateFromInputs);
+}
+
 function applyCelestialEventPreset(event: keyof typeof celestialEventPresets): void {
   state.worldTimeSeconds = celestialEventPresets[event];
+  syncWorldDateInputs();
 }
-worldToolbarElement.querySelector<HTMLButtonElement>("#solar-eclipse-preset")!
+timeToolbarElement.querySelector<HTMLButtonElement>("#solar-eclipse-preset")!
   .addEventListener("click", () => applyCelestialEventPreset("solar-eclipse"));
-worldToolbarElement.querySelector<HTMLButtonElement>("#lunar-eclipse-preset")!
+timeToolbarElement.querySelector<HTMLButtonElement>("#lunar-eclipse-preset")!
   .addEventListener("click", () => applyCelestialEventPreset("lunar-eclipse"));
-worldToolbarElement.querySelector<HTMLButtonElement>("#blood-moon-preset")!
+timeToolbarElement.querySelector<HTMLButtonElement>("#blood-moon-preset")!
   .addEventListener("click", () => applyCelestialEventPreset("blood-moon"));
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
@@ -746,11 +744,8 @@ lockTimeScalesInput.addEventListener("change", () => {
   }
   syncTimeScaleInputs();
 });
-pauseButton.addEventListener("click", () => {
-  state.paused = !state.paused;
-  pauseButton.textContent = state.paused ? "Resume" : "Pause";
-});
 syncTimeScaleInputs();
+syncWorldDateInputs();
 
 renderControls();
 
@@ -1169,6 +1164,18 @@ function writeUniforms(
   currentTimeSeconds: number,
 ): void {
   const enabled = computationEnabled;
+  const intermediate = deriveIntermediateVisibility({
+    land: enabled("land_surface") > 0,
+    water: enabled("water_surface") > 0,
+    lowCloud: enabled("low_cloud_body") > 0,
+    sun: enabled("sun_direct") > 0,
+    moon: enabled("moon_direct") > 0,
+    clearSkyAmbient: enabled("sky_indirect") > 0,
+    canopyAmbient: enabled("canopy_indirect") > 0,
+    lowCloudShadow: enabled("low_cloud_shadow") > 0,
+    canopyShadow: enabled("canopy_shadow") > 0,
+  }, state.diagnostic !== "scene");
+  const visible = (value: boolean): number => Number(value);
   const aspect = previewCanvas.width / previewCanvas.height;
   sceneFloats.set([
     renderedCameraX,
@@ -1254,58 +1261,58 @@ function writeUniforms(
     0,
   ], 20);
   tuningFloats.set([
-    state.lowCloudEnabled * enabled("low_cloud_body"),
-    state.lowCloudEnabled * enabled("low_cloud_shadow"),
-    state.upperCloudEnabled * enabled("canopy_shadow"),
-    state.lowCloudEnabled * state.upperCloudEnabled * enabled("canopy_on_low"),
+    enabled("low_cloud_body"),
+    enabled("low_cloud_shadow"),
+    enabled("canopy_shadow"),
+    enabled("low_cloud_body") * enabled("canopy_shadow"),
   ], 24);
   tuningFloats.set([
-    enabled("coastal_relief"),
-    enabled("vegetation"),
-    enabled("surface_texture"),
+    1,
+    1,
+    1,
     1,
   ], 28);
   tuningFloats.set([
-    state.pressureCirculationEnabled * state.pressureWindScale,
-    state.crossIsobarEnabled * state.crossIsobarScale,
-    state.thermalWindEnabled * state.thermalWindScale,
-    state.shelterEnabled * state.shelterStrength,
+    state.pressureWindScale,
+    state.crossIsobarScale,
+    state.thermalWindScale,
+    state.shelterStrength,
   ], 32);
   tuningFloats.set([
-    enabled("seasonal_snow"),
+    1,
     1,
     0,
-    enabled("vegetation_seasons"),
+    1,
   ], 36);
   tuningUints.set([
     enabled("sun_direct"),
     enabled("moon_direct"),
     enabled("sky_indirect"),
-    state.upperCloudEnabled * enabled("canopy_indirect"),
+    enabled("canopy_indirect"),
   ], 40);
   tuningFloats.set([
-    enabled("pressure"),
-    enabled("temperature"),
-    enabled("moisture"),
-    enabled("weather"),
+    visible(intermediate.pressure),
+    visible(intermediate.temperature),
+    visible(intermediate.moisture),
+    visible(intermediate.weather),
   ], 44);
   tuningFloats.set([
-    enabled("materials"),
-    enabled("ocean_forcing"),
-    enabled("wave_spectrum"),
-    enabled("decorative_water"),
+    visible(intermediate.materials),
+    visible(intermediate.oceanForcing),
+    visible(intermediate.waveSpectrum),
+    visible(intermediate.materials),
   ], 48);
   tuningFloats.set([
-    enabled("precipitation_contacts"),
-    enabled("shallow_bottom"),
+    visible(intermediate.materials),
+    visible(intermediate.materials),
     0,
     0,
   ], 52);
   tuningFloats.set([
     enabled("landform_relief"),
     enabled("landform_shadow"),
-    0,
-    0,
+    enabled("land_surface"),
+    enabled("water_surface"),
   ], 56);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
@@ -1330,7 +1337,7 @@ function updateScaleBar(): void {
   const distance = multiplier * magnitude;
   const width = `${distance / state.viewHeight * previewCanvas.clientHeight}px`;
   const label = formatDistance(distance);
-  if (scaleLineElement.style.width !== width) scaleLineElement.style.width = width;
+  if (scaleBarElement.style.width !== width) scaleBarElement.style.width = width;
   if (scaleLabelElement.textContent !== label) scaleLabelElement.textContent = label;
 }
 
@@ -1376,10 +1383,9 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
     ? timestampQueriesSupported ? " · measuring GPU" : ""
     : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
-  statusElement.textContent = state.paused
-    ? `Paused · ${rates}${gpuTiming}${compilation}`
-    : `${rates}${gpuTiming}${compilation}`;
+  statusElement.textContent = `${rates}${gpuTiming}${compilation}`;
   statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · ${format(cloudTimeSeconds, 1)} s`;
+  syncWorldDateInputs();
 }
 
 function frame(now: number): void {
@@ -1387,7 +1393,7 @@ function frame(now: number): void {
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
-  const ticks = state.paused ? 0 : advanceFixedClock(clock, elapsed, () => {
+  const ticks = advanceFixedClock(clock, elapsed, () => {
     state.time += fixedTickSeconds * state.cloudTimeScale;
     state.pressureTimeSeconds += fixedTickSeconds * state.pressureTimeScale;
     state.currentTimeSeconds += fixedTickSeconds * state.currentTimeScale;
