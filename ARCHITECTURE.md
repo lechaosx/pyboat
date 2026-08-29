@@ -391,10 +391,6 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Disabled additive contributions evaluate to zero while their downstream light
   composition remains active; there are no aggregate direct- or indirect-light
   gates.
-- **[Explicit]** The playground graph models mutable shader branches as typed
-  replacement contracts rather than control-flow propagation. Each mute gate
-  supplies zero, an identity value, or a named fallback at its output boundary;
-  graph consumers remain independently active.
 - **[Explicit]** The shader source shipped to players contains only the production
   entry points, bindings, and their reachable components. Playground diagnostic
   sources and interfaces are feature-gated from production artifacts and compile

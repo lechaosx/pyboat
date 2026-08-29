@@ -208,11 +208,10 @@ current playable behavior; this file does not track delivery status.
 
 ## Procedural playground
 
-- **[Explicit]** One continuous browser laboratory covers weather, landscape,
-  and water with the production rendering algorithms. Its graph, tuning, and
-  diagnostics retain semantic domain labels without separate domain tabs, while
-  world inputs, procedural model tuning, shader tuning, and diagnostics remain
-  distinct.
+- **[Explicit]** One browser laboratory covers weather, landscape, and water with
+  the production rendering algorithms. A spacious live preview remains visible
+  beside one continuous, vertically scrolling control panel. Scene tuning, world
+  and playback controls, and diagnostics share one world and tuning state.
 - **[Explicit]** Seed, geometry, position, and clocks always generate the world's
   environmental causes. Derived conditions are read-only; playground controls
   tune or enable existing mechanisms without replacing world-generated values.
@@ -222,11 +221,10 @@ current playable behavior; this file does not track delivery status.
   immediate slider dragging, eased track clicks, and independent or locked
   real-time multipliers for cloud, pressure, and current evolution and world time.
 - **[Explicit]** The lab exposes independent longitude-circumference and
-  pole-to-pole-span sliders, initialized to equal production defaults. A red
-  cross marks the view-center sample, whose raw and cylindrical coordinates,
-  and normalized geographic coordinates remain visible while panning. A guide
-  repeats the reference meridian and longitude seams and marks the equator and
-  finite poles. Changing either scale regenerates the live spatial world.
+  pole-to-pole-span sliders, initialized to equal production defaults. The
+  view-center sample's raw and cylindrical coordinates and normalized geographic
+  coordinates remain visible while panning. Changing either scale regenerates
+  the live spatial world.
 - **[Explicit]** The global world clock is the sole source of day, season, and
   lunar position. A world day lasts 24 hours, a calendar month lasts 28 days,
   and twelve months form a 336-day year. Lunar illumination phase is inferred
@@ -242,23 +240,13 @@ current playable behavior; this file does not track delivery status.
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** The authored fragment-material DAG is the lab's primary
-  workspace. Its acyclic topology cannot be rewired, while automatic layout,
-  free node positioning, panning, and zooming make the authored graph navigable.
-  Typed ports and edges show actual shader dataflow among explicit seed, geometry,
-  clock, view, and fragment inputs; physical mechanisms; read-only intermediate
-  values; tunable visual mechanisms; composition; and final output.
-- **[Explicit]** Node tuning is inline. Selecting a node exposes its rationale and
-  related diagnostic outputs. Every mutable node declares the value supplied
-  while muted, such as zero contribution, unit transmittance, or a named fallback;
-  consumers remain live with that replacement. The graph therefore has four
-  sibling lighting contributions—Sun direct, Moon direct, clear-sky indirect,
-  and canopy indirect—without synthetic direct or indirect master nodes.
-- **[Explicit]** World geometry, playback, the global clock, view-center values,
-  and an exhaustive diagnostic selector remain available in a collapsed secondary
-  drawer so they do not displace the material graph.
-- **[Explicit]** The desktop lab control panel is horizontally resizable by
-  dragging its boundary.
+- **[Explicit]** Scene controls expose only values with an observable artistic or
+  model-level effect and group them as clouds, terrain, water, lighting, and
+  weather. Groups collapse independently, changes are immediate, and one action
+  restores production tuning.
+- **[Explicit]** The continuous panel orders scene tuning before seed, geometry,
+  celestial events, playback, and the global clock, followed by output selection
+  and view-center values, including exhaustive diagnostics.
 - **[Explicit]** Pressure diagnostics expose the full anomaly and individually
   scaled broad, synoptic, and local contributions. Separate vector diagnostics
   expose surface gusts, resolved surface wind, broad/synoptic circulation, and

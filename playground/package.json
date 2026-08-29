@@ -3,11 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@xyflow/react": "^12.11.5",
-    "browser": "workspace:*",
-    "elkjs": "0.12.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "browser": "workspace:*"
   },
   "scripts": {
     "prebuild": "bun run --cwd .. build:wasm:playground",
@@ -17,8 +13,6 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
     "typescript": "^6.0.3",
     "vite": "^8.0.13",
     "vite-plugin-wasm": "^3.6.0"

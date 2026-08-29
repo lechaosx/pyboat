@@ -20,7 +20,6 @@ import {
   diagnosticShaders,
   type DiagnosticSelection,
 } from "./diagnostics";
-import { mountShaderGraph, type ShaderGraphController } from "./shader-graph-view";
 import "./style.css";
 
 type Domain = "weather" | "landscape" | "water";
@@ -196,31 +195,28 @@ function worldPhases(worldTimeSeconds: number): [number, number, number] {
 const state: State = { ...defaults };
 
 const canvas = document.querySelector<HTMLCanvasElement>("#preview");
-const geometryOverlay = document.querySelector<HTMLCanvasElement>("#geometry-overlay");
 const controls = document.querySelector<HTMLElement>("#controls");
+const tuningControls = document.querySelector<HTMLElement>("#tuning-controls");
 const worldToolbar = document.querySelector<HTMLElement>("#world-toolbar");
-const shaderGraph = document.querySelector<HTMLElement>("#shader-graph");
+const diagnosticToolbar = document.querySelector<HTMLElement>("#diagnostic-toolbar");
 const status = document.querySelector<HTMLElement>("#status");
 const scaleLine = document.querySelector<HTMLElement>("#scale-line");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
-const geometryGuideLabel = document.querySelector<HTMLElement>(".geometry-guide-label");
+const resetTuningButton = document.querySelector<HTMLButtonElement>("#reset-tuning");
 const playgroundMain = document.querySelector<HTMLElement>("main");
 const sidebarResizer = document.querySelector<HTMLElement>("#sidebar-resizer");
-if (!canvas || !geometryOverlay || !controls || !worldToolbar || !shaderGraph || !status || !scaleLine || !scaleLabel || !geometryGuideLabel || !playgroundMain || !sidebarResizer) {
+if (!canvas || !controls || !tuningControls || !worldToolbar || !diagnosticToolbar || !status || !scaleLine || !scaleLabel || !resetTuningButton || !playgroundMain || !sidebarResizer) {
   throw new Error("Procedural lab page is incomplete");
 }
 const previewCanvas = canvas;
-const geometryOverlayCanvas = geometryOverlay;
-const geometryOverlayRenderingContext = geometryOverlayCanvas.getContext("2d");
-if (!geometryOverlayRenderingContext) throw new Error("World geometry diagnostic is unavailable");
-const geometryOverlayContext: CanvasRenderingContext2D = geometryOverlayRenderingContext;
 const controlsElement = controls;
+const tuningControlsElement = tuningControls;
 const worldToolbarElement = worldToolbar;
-const shaderGraphElement = shaderGraph;
+const diagnosticToolbarElement = diagnosticToolbar;
 const statusElement = status;
 const scaleLineElement = scaleLine;
 const scaleLabelElement = scaleLabel;
-const geometryGuideLabelElement = geometryGuideLabel;
+const resetTuningButtonElement = resetTuningButton;
 const playgroundMainElement = playgroundMain;
 const sidebarResizerElement = sidebarResizer;
 
@@ -262,7 +258,6 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
   setSidebarWidth(mainLeft + currentWidth + (event.key === "ArrowLeft" ? -16 : 16));
 });
 
-let shaderGraphController: ShaderGraphController | undefined;
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 
@@ -302,15 +297,6 @@ function computationEnabled(id: keyof typeof featureKeys): number {
   return Number(state[featureKeys[id]] > 0.5);
 }
 
-function diagnosticTag(): HTMLSpanElement {
-  const element = document.createElement("span");
-  element.className = "kind kind-debug";
-  element.textContent = "DEBUG";
-  return element;
-}
-
-let syncDiagnosticControl = () => {};
-
 function renderControls(): void {
   controlsElement.replaceChildren();
   const diagnosticSection = document.createElement("section");
@@ -320,7 +306,7 @@ function renderControls(): void {
   diagnosticLabel.className = "select-control";
   const diagnosticHeading = document.createElement("label");
   diagnosticHeading.className = "control-name";
-  diagnosticHeading.append(document.createTextNode("Output"), diagnosticTag());
+  diagnosticHeading.textContent = "Output";
   const diagnosticSelect = document.createElement("select");
   diagnosticSelect.id = "diagnostic-output";
   diagnosticHeading.htmlFor = diagnosticSelect.id;
@@ -347,25 +333,19 @@ function renderControls(): void {
   diagnosticReset.textContent = "↺";
   diagnosticReset.title = "Reset diagnostic output to default";
   diagnosticReset.setAttribute("aria-label", diagnosticReset.title);
-  const updateDiagnosticReset = () => {
+  const updateDiagnosticUI = () => {
     diagnosticReset.hidden = state.diagnostic === "scene";
-  };
-  syncDiagnosticControl = () => {
-    diagnosticSelect.value = state.diagnostic;
-    updateDiagnosticReset();
   };
   diagnosticSelect.addEventListener("change", () => {
     state.diagnostic = diagnosticSelect.value as DiagnosticSelection;
-    updateDiagnosticReset();
-    shaderGraphController?.sync();
+    updateDiagnosticUI();
   });
   diagnosticReset.addEventListener("click", () => {
     state.diagnostic = "scene";
     diagnosticSelect.value = state.diagnostic;
-    updateDiagnosticReset();
-    shaderGraphController?.sync();
+    updateDiagnosticUI();
   });
-  updateDiagnosticReset();
+  updateDiagnosticUI();
   diagnosticLabel.append(
     diagnosticHeading,
     diagnosticSelect,
@@ -374,6 +354,201 @@ function renderControls(): void {
   diagnosticSection.append(diagnosticLabel);
   controlsElement.append(diagnosticSection);
 }
+
+type TuningControl =
+  | { type: "toggle"; key: NumericStateKey; label: string }
+  | {
+      type: "range";
+      key: NumericStateKey;
+      label: string;
+      min: number;
+      max: number;
+      step: number;
+    };
+
+type TuningGroup = {
+  label: string;
+  open?: boolean;
+  controls: readonly TuningControl[];
+};
+
+const tuningGroups: readonly TuningGroup[] = [
+  {
+    label: "Clouds",
+    open: true,
+    controls: [
+      { type: "toggle", key: "lowCloudEnabled", label: "Low clouds" },
+      { type: "toggle", key: "upperCloudEnabled", label: "Weather canopy" },
+      { type: "range", key: "detailContrast", label: "Shape contrast", min: 0.25, max: 2.5, step: 0.05 },
+      { type: "range", key: "detailEdgeSoftness", label: "Edge softness", min: 0.005, max: 0.25, step: 0.005 },
+      { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
+      { type: "range", key: "opacity", label: "Opacity", min: 0, max: 1.5, step: 0.05 },
+      { type: "range", key: "darkness", label: "Darkening", min: 0, max: 2, step: 0.05 },
+      { type: "range", key: "relief", label: "Relief", min: 0, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    label: "Terrain",
+    controls: [
+      { type: "range", key: "terrainScale", label: "Feature scale", min: 0.25, max: 4, step: 0.05 },
+      { type: "range", key: "elevationScale", label: "Elevation", min: 0.1, max: 3, step: 0.05 },
+      { type: "range", key: "cliffSlope", label: "Cliff response", min: 0.01, max: 0.3, step: 0.005 },
+      { type: "toggle", key: "coastalReliefVisible", label: "Coastal relief" },
+      { type: "toggle", key: "terrainMaterialsEnabled", label: "Surface materials" },
+      { type: "toggle", key: "vegetationVisible", label: "Vegetation" },
+      { type: "toggle", key: "seasonalVegetationVisible", label: "Vegetation seasons" },
+      { type: "toggle", key: "seasonalSnowVisible", label: "Seasonal snow" },
+      { type: "toggle", key: "surfaceTextureVisible", label: "Surface detail" },
+    ],
+  },
+  {
+    label: "Water",
+    controls: [
+      { type: "toggle", key: "oceanForcingEnabled", label: "Currents" },
+      { type: "toggle", key: "waveSpectrumEnabled", label: "Gameplay waves" },
+      { type: "toggle", key: "decorativeWaterEnabled", label: "Surface detail" },
+      { type: "toggle", key: "precipitationContactsEnabled", label: "Precipitation contacts" },
+      { type: "toggle", key: "shallowBottomEnabled", label: "Visible shallow bottom" },
+      { type: "range", key: "waterAttenuationLength", label: "Bottom attenuation · m", min: 0.1, max: 4, step: 0.05 },
+      { type: "range", key: "bottomVisibility", label: "Bottom visibility", min: 0, max: 2, step: 0.05 },
+    ],
+  },
+  {
+    label: "Lighting",
+    controls: [
+      { type: "toggle", key: "sunDirectLightEnabled", label: "Direct Sun" },
+      { type: "toggle", key: "moonDirectLightEnabled", label: "Direct Moon" },
+      { type: "toggle", key: "skyIndirectLightEnabled", label: "Clear-sky ambient" },
+      { type: "toggle", key: "canopyIndirectLightEnabled", label: "Canopy ambient" },
+      { type: "toggle", key: "lowCloudShadow", label: "Low-cloud shadows" },
+      { type: "toggle", key: "upperCloudShadow", label: "Canopy shadows" },
+      { type: "toggle", key: "landformReliefEnabled", label: "Terrain relief" },
+      { type: "range", key: "landformReliefStrength", label: "Relief strength", min: 0, max: 2, step: 0.05 },
+      { type: "toggle", key: "landformShadowEnabled", label: "Terrain shadows" },
+      { type: "range", key: "landformShadowStrength", label: "Shadow strength", min: 0, max: 1, step: 0.05 },
+      { type: "range", key: "landformShadowReach", label: "Shadow reach · m", min: 40, max: 1200, step: 10 },
+    ],
+  },
+  {
+    label: "Weather model",
+    controls: [
+      { type: "toggle", key: "pressureFieldEnabled", label: "Pressure variation" },
+      { type: "toggle", key: "temperatureFieldEnabled", label: "Temperature variation" },
+      { type: "toggle", key: "moistureFieldEnabled", label: "Moisture variation" },
+      { type: "toggle", key: "weatherFormationEnabled", label: "Weather formation" },
+      { type: "range", key: "pressureWindScale", label: "Pressure circulation", min: 0, max: 2, step: 0.05 },
+      { type: "range", key: "thermalWindScale", label: "Thermal shear", min: 0, max: 2, step: 0.05 },
+      { type: "range", key: "shelterStrength", label: "Terrain shelter", min: 0, max: 1, step: 0.05 },
+    ],
+  },
+];
+
+const tuningControlSyncs: Array<() => void> = [];
+
+function renderTuningControls(): void {
+  for (const group of tuningGroups) {
+    const details = document.createElement("details");
+    details.open = group.open ?? false;
+    const summary = document.createElement("summary");
+    summary.textContent = group.label;
+    const body = document.createElement("div");
+    body.className = "tuning-group";
+
+    for (const control of group.controls) {
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "reset-value";
+      reset.textContent = "↺";
+      reset.title = `Reset ${control.label}`;
+      reset.setAttribute("aria-label", reset.title);
+      const syncReset = (row: HTMLElement) => {
+        reset.hidden = state[control.key] === defaults[control.key];
+        row.classList.toggle("no-reset", reset.hidden);
+      };
+
+      if (control.type === "toggle") {
+        const row = document.createElement("div");
+        row.className = "control toggle-control";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.id = `tuning-${control.key}`;
+        const label = document.createElement("label");
+        label.className = "control-name";
+        label.htmlFor = input.id;
+        label.textContent = control.label;
+        const sync = () => {
+          input.checked = state[control.key] > 0.5;
+          syncReset(row);
+        };
+        input.addEventListener("change", () => {
+          state[control.key] = Number(input.checked);
+          syncReset(row);
+        });
+        reset.addEventListener("click", () => {
+          state[control.key] = defaults[control.key];
+          sync();
+        });
+        sync();
+        tuningControlSyncs.push(sync);
+        row.append(input, label, reset);
+        body.append(row);
+        continue;
+      }
+
+      const row = document.createElement("div");
+      row.className = "control range-control";
+      const label = document.createElement("label");
+      label.className = "control-name";
+      const rangeInput = document.createElement("input");
+      rangeInput.type = "range";
+      rangeInput.id = `tuning-${control.key}`;
+      rangeInput.min = String(control.min);
+      rangeInput.max = String(control.max);
+      rangeInput.step = String(control.step);
+      label.htmlFor = rangeInput.id;
+      label.textContent = control.label;
+      const valueInput = document.createElement("input");
+      valueInput.type = "number";
+      valueInput.className = "range-value";
+      valueInput.min = rangeInput.min;
+      valueInput.max = rangeInput.max;
+      valueInput.step = rangeInput.step;
+      const sync = () => {
+        rangeInput.value = String(state[control.key]);
+        valueInput.value = format(state[control.key], control.step);
+        syncReset(row);
+      };
+      const setValue = (value: number) => {
+        state[control.key] = Math.min(control.max, Math.max(control.min, value));
+        sync();
+      };
+      rangeInput.addEventListener("input", () => setValue(rangeInput.valueAsNumber));
+      valueInput.addEventListener("input", () => {
+        if (Number.isFinite(valueInput.valueAsNumber)) setValue(valueInput.valueAsNumber);
+      });
+      valueInput.addEventListener("change", sync);
+      reset.addEventListener("click", () => {
+        state[control.key] = defaults[control.key];
+        sync();
+      });
+      sync();
+      tuningControlSyncs.push(sync);
+      row.append(label, rangeInput, valueInput, reset);
+      body.append(row);
+    }
+
+    details.append(summary, body);
+    tuningControlsElement.append(details);
+  }
+}
+
+renderTuningControls();
+resetTuningButtonElement.addEventListener("click", () => {
+  for (const group of tuningGroups) {
+    for (const control of group.controls) state[control.key] = defaults[control.key];
+  }
+  for (const sync of tuningControlSyncs) sync();
+});
 
 const minimumTimeScaleSlider = -2;
 const maximumTimeScale = 100000;
@@ -385,27 +560,31 @@ function timeScaleToSlider(value: number): number {
 }
 
 worldToolbarElement.innerHTML = `
-  <details open>
-    <summary><span>World and playback</span><span class="kind kind-world">WORLD</span></summary>
+  <details>
+    <summary>World definition</summary>
     <section class="world-toolbar-section"><h3>World definition</h3>
       <div class="text-control no-reset"><label class="control-name" for="seed">Seed</label><input id="seed" type="text" value="${state.seed}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude circumference · km</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span · km</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-width">Longitude width</label><input id="world-width" type="range" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"><input id="world-width-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldWidthM / 1000}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-height">Pole-to-pole span</label><input id="world-height" type="range" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"><input id="world-height-value" class="range-value" type="number" min="8" max="256" step="1" value="${state.worldHeightM / 1000}"></div>
     </section>
     <section class="world-toolbar-section"><h3>Celestial events</h3>
       <nav class="category-presets celestial-event-presets" aria-label="Celestial event presets"><button id="solar-eclipse-preset" type="button">Solar eclipse</button><button id="lunar-eclipse-preset" type="button">Lunar eclipse</button><button id="blood-moon-preset" type="button">Blood moon</button></nav>
     </section>
+  </details>
+  <details open>
+    <summary>Playback</summary>
     <section class="world-toolbar-section"><h3>Playback</h3>
-      <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Cloud evolution · × real time</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure evolution · × real time</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Current evolution · × real time</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · × real time</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Clouds · ×</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure · ×</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Currents · ×</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
+      <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · ×</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
       <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
       <div class="actions"><button id="pause">Pause</button></div>
     </section>
-  </details>
+  </details>`;
+diagnosticToolbarElement.innerHTML = `
   <details>
-    <summary><span>View-center diagnostics</span><span class="kind kind-debug">DEBUG</span></summary>
+    <summary>View-center diagnostics</summary>
     <div class="view-center-diagnostics">
       <section><h3>Sample position</h3><div id="position-measurements" class="derived-grid"></div></section>
       <section><h3 id="derived-output-heading">Derived atmosphere</h3><div id="derived-output" class="derived-grid"></div></section>
@@ -416,9 +595,9 @@ const worldWidthInput = worldToolbarElement.querySelector<HTMLInputElement>("#wo
 const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-width-value")!;
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
 const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
-const positionMeasurementsElement = worldToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
-const derivedOutputHeadingElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
-const derivedOutputElement = worldToolbarElement.querySelector<HTMLElement>("#derived-output")!;
+const positionMeasurementsElement = diagnosticToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
+const derivedOutputHeadingElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
+const derivedOutputElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output")!;
 const diagnosticsDetailsElement = positionMeasurementsElement.closest<HTMLDetailsElement>("details")!;
 const cloudTimeScaleInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
 const cloudTimeValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
@@ -441,7 +620,6 @@ worldToolbarElement.querySelector<HTMLButtonElement>("#blood-moon-preset")!
   .addEventListener("click", () => applyCelestialEventPreset("blood-moon"));
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
-  shaderGraphController?.sync();
 });
 function setWorldDimension(
   key: "worldWidthM" | "worldHeightM",
@@ -453,7 +631,6 @@ function setWorldDimension(
   state[key] = clampedKm * 1000;
   rangeInput.value = String(clampedKm);
   valueInput.value = String(clampedKm);
-  shaderGraphController?.sync();
 }
 worldWidthInput.addEventListener("input", () => {
   setWorldDimension("worldWidthM", worldWidthInput.valueAsNumber, worldWidthInput, worldWidthValueInput);
@@ -496,7 +673,6 @@ function setCloudTimeScale(value: number): void {
     state.worldTimeScale = state.cloudTimeScale;
   }
   syncTimeScaleInputs();
-  shaderGraphController?.sync();
 }
 function setPressureTimeScale(value: number): void {
   state.pressureTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -506,7 +682,6 @@ function setPressureTimeScale(value: number): void {
     state.worldTimeScale = state.pressureTimeScale;
   }
   syncTimeScaleInputs();
-  shaderGraphController?.sync();
 }
 function setCurrentTimeScale(value: number): void {
   state.currentTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -516,7 +691,6 @@ function setCurrentTimeScale(value: number): void {
     state.worldTimeScale = state.currentTimeScale;
   }
   syncTimeScaleInputs();
-  shaderGraphController?.sync();
 }
 function setWorldTimeScale(value: number): void {
   state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -526,7 +700,6 @@ function setWorldTimeScale(value: number): void {
     state.currentTimeScale = state.worldTimeScale;
   }
   syncTimeScaleInputs();
-  shaderGraphController?.sync();
 }
 cloudTimeScaleInput.addEventListener("input", () => {
   setCloudTimeScale(timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
@@ -577,39 +750,9 @@ pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
   pauseButton.textContent = state.paused ? "Resume" : "Pause";
 });
+syncTimeScaleInputs();
 
 renderControls();
-shaderGraphController = mountShaderGraph(shaderGraphElement, {
-  getValue: (key) => key === "seed" ? state.seed : state[key as NumericStateKey],
-  getDefaultValue: (key) => key === "seed" ? defaults.seed : defaults[key as NumericStateKey],
-  setValue: (key, value) => {
-    if (key === "seed") {
-      state.seed = String(value);
-      seedInput.value = state.seed;
-      return;
-    }
-    const numericValue = Number(value);
-    if (key === "worldWidthM") {
-      setWorldDimension("worldWidthM", numericValue / 1000, worldWidthInput, worldWidthValueInput);
-      return;
-    }
-    if (key === "worldHeightM") {
-      setWorldDimension("worldHeightM", numericValue / 1000, worldHeightInput, worldHeightValueInput);
-      return;
-    }
-    if (key === "cloudTimeScale") return setCloudTimeScale(numericValue);
-    if (key === "pressureTimeScale") return setPressureTimeScale(numericValue);
-    if (key === "currentTimeScale") return setCurrentTimeScale(numericValue);
-    if (key === "worldTimeScale") return setWorldTimeScale(numericValue);
-    const stateKey = key as NumericStateKey;
-    state[stateKey] = numericValue;
-  },
-  getDiagnostic: () => state.diagnostic,
-  setDiagnostic: (diagnostic) => {
-    state.diagnostic = diagnostic as DiagnosticSelection;
-    syncDiagnosticControl();
-  },
-});
 
 let dragPointer: number | undefined;
 let dragX = 0;
@@ -812,6 +955,7 @@ function renderResourcesForFrame(): RenderResources {
   return sceneRenderResources;
 }
 await showStartupPhase("Starting renderer…");
+statusElement.classList.add("ready");
 
 function splitSeed(value: string): [number, number] {
   try {
@@ -1012,106 +1156,6 @@ function updateViewCenterDiagnostics(worldTimeSeconds: number): void {
   updateDerivedOutput(sampleWorldCenterDiagnostics(worldTimeSeconds));
 }
 
-function worldToOverlayPoint(positionX: number, positionY: number, pixelsPerMetre: number): [number, number] {
-  return [
-    geometryOverlayCanvas.clientWidth / 2 + (positionX - state.cameraX) * pixelsPerMetre,
-    geometryOverlayCanvas.clientHeight / 2 - (positionY - state.cameraY) * pixelsPerMetre,
-  ];
-}
-
-function drawPeriodicGuideLines(
-  periodM: number,
-  offsetM: number,
-  minimumM: number,
-  maximumM: number,
-  vertical: boolean,
-): void {
-  const firstIndex = Math.ceil((minimumM - offsetM) / periodM);
-  const lastIndex = Math.floor((maximumM - offsetM) / periodM);
-  const pixelsPerMetre = geometryOverlayCanvas.clientHeight / state.viewHeight;
-  if (periodM * pixelsPerMetre < 4) return;
-  let index = firstIndex;
-  geometryOverlayContext.beginPath();
-  while (index <= lastIndex) {
-    const positionM = offsetM + index * periodM;
-    if (vertical) {
-      const [x] = worldToOverlayPoint(positionM, state.cameraY, pixelsPerMetre);
-      geometryOverlayContext.moveTo(x, 0);
-      geometryOverlayContext.lineTo(x, geometryOverlayCanvas.clientHeight);
-    } else {
-      const [, y] = worldToOverlayPoint(state.cameraX, positionM, pixelsPerMetre);
-      geometryOverlayContext.moveTo(0, y);
-      geometryOverlayContext.lineTo(geometryOverlayCanvas.clientWidth, y);
-    }
-    index += 1;
-  }
-  geometryOverlayContext.stroke();
-}
-
-function drawGuideLine(positionM: number, vertical: boolean): void {
-  const pixelsPerMetre = geometryOverlayCanvas.clientHeight / state.viewHeight;
-  geometryOverlayContext.beginPath();
-  if (vertical) {
-    const [x] = worldToOverlayPoint(positionM, state.cameraY, pixelsPerMetre);
-    geometryOverlayContext.moveTo(x, 0);
-    geometryOverlayContext.lineTo(x, geometryOverlayCanvas.clientHeight);
-  } else {
-    const [, y] = worldToOverlayPoint(state.cameraX, positionM, pixelsPerMetre);
-    geometryOverlayContext.moveTo(0, y);
-    geometryOverlayContext.lineTo(geometryOverlayCanvas.clientWidth, y);
-  }
-  geometryOverlayContext.stroke();
-}
-
-let drawnOverlayInputs: number[] | undefined;
-function drawGeometryOverlay(): void {
-  const inputs = [
-    geometryOverlayCanvas.width,
-    geometryOverlayCanvas.height,
-    geometryOverlayCanvas.clientWidth,
-    geometryOverlayCanvas.clientHeight,
-    state.cameraX,
-    state.cameraY,
-    state.viewHeight,
-    state.worldWidthM,
-    state.worldHeightM,
-  ];
-  if (drawnOverlayInputs?.every((value, index) => value === inputs[index])) return;
-  drawnOverlayInputs = inputs;
-  const widthM = state.viewHeight * geometryOverlayCanvas.clientWidth / geometryOverlayCanvas.clientHeight;
-  const minimumX = state.cameraX - widthM / 2;
-  const maximumX = state.cameraX + widthM / 2;
-  const minimumY = state.cameraY - state.viewHeight / 2;
-  const maximumY = state.cameraY + state.viewHeight / 2;
-  const pixelScaleX = geometryOverlayCanvas.width / geometryOverlayCanvas.clientWidth;
-  const pixelScaleY = geometryOverlayCanvas.height / geometryOverlayCanvas.clientHeight;
-  geometryOverlayContext.setTransform(pixelScaleX, 0, 0, pixelScaleY, 0, 0);
-  geometryOverlayContext.clearRect(0, 0, geometryOverlayCanvas.clientWidth, geometryOverlayCanvas.clientHeight);
-  geometryGuideLabelElement.hidden = false;
-  geometryOverlayContext.lineWidth = 1;
-  geometryOverlayContext.strokeStyle = "rgb(105 189 232 / 68%)";
-  geometryOverlayContext.setLineDash([]);
-  drawPeriodicGuideLines(state.worldWidthM, 0, minimumX, maximumX, true);
-  if (minimumY <= 0 && maximumY >= 0) drawGuideLine(0, false);
-  geometryOverlayContext.strokeStyle = "rgb(229 120 136 / 82%)";
-  geometryOverlayContext.setLineDash([7, 5]);
-  drawPeriodicGuideLines(state.worldWidthM, state.worldWidthM / 2, minimumX, maximumX, true);
-  for (const poleY of [-state.worldHeightM / 2, state.worldHeightM / 2]) {
-    if (minimumY <= poleY && maximumY >= poleY) drawGuideLine(poleY, false);
-  }
-  geometryOverlayContext.setLineDash([]);
-  geometryOverlayContext.strokeStyle = "#ff334f";
-  geometryOverlayContext.lineWidth = 2;
-  const centerX = geometryOverlayCanvas.clientWidth / 2;
-  const centerY = geometryOverlayCanvas.clientHeight / 2;
-  geometryOverlayContext.beginPath();
-  geometryOverlayContext.moveTo(centerX - 9, centerY);
-  geometryOverlayContext.lineTo(centerX + 9, centerY);
-  geometryOverlayContext.moveTo(centerX, centerY - 9);
-  geometryOverlayContext.lineTo(centerX, centerY + 9);
-  geometryOverlayContext.stroke();
-}
-
 function splitTick(timeSeconds: number): [bigint, number] {
   const tickPosition = Math.max(0, timeSeconds * 60);
   const wholeTick = Math.floor(tickPosition);
@@ -1273,8 +1317,6 @@ function resize(): void {
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;
-    geometryOverlayCanvas.width = width;
-    geometryOverlayCanvas.height = height;
   }
 }
 
@@ -1329,14 +1371,15 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   ticksInWindow = 0;
   gpuMillisecondsInWindow = 0;
   gpuSamplesInWindow = 0;
-  const rates = `${measuredFramesPerSecond.toFixed(1)} presented FPS · ${measuredTicksPerSecond.toFixed(1)} TPS · ${adapterName}`;
+  const rates = `${measuredFramesPerSecond.toFixed(0)} FPS · ${measuredTicksPerSecond.toFixed(0)} TPS`;
   const gpuTiming = measuredGpuMilliseconds === undefined
-    ? timestampQueriesSupported ? " · measuring GPU" : " · GPU timing unavailable"
-    : ` · ${measuredGpuMilliseconds.toFixed(1)} GPU ms · ${(1000 / measuredGpuMilliseconds).toFixed(1)} estimated GPU FPS`;
+    ? timestampQueriesSupported ? " · measuring GPU" : ""
+    : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = state.paused
-    ? `${rates}${gpuTiming} · Paused at ${format(cloudTimeSeconds, 1)} s${compilation}`
-    : `${rates}${gpuTiming} · ${previewCanvas.width} × ${previewCanvas.height} · procedural world · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock${compilation}`;
+    ? `Paused · ${rates}${gpuTiming}${compilation}`
+    : `${rates}${gpuTiming}${compilation}`;
+  statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · ${format(cloudTimeSeconds, 1)} s`;
 }
 
 function frame(now: number): void {
@@ -1427,7 +1470,6 @@ function frame(now: number): void {
       timestampReadback.pending = false;
     });
   }
-  drawGeometryOverlay();
   updateStatus(now, ticks, cloudTimeSeconds);
   requestAnimationFrame(frame);
 }
