@@ -386,11 +386,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   types and pure rendering mechanisms from dependency-explicit source components.
   Gameplay binds scene state and fixed production tuning; the lab supplies its
   live tuning through a separate interface.
-- **[Explicit]** Playground lighting visibility is four independent contribution
-  gates: direct Sun, direct Moon, diffuse clear sky, and diffuse regional canopy.
-  Disabled additive contributions evaluate to zero while their downstream light
-  composition remains active; there are no aggregate direct- or indirect-light
-  gates.
+- **[Explicit]** Playground color visibility preserves two compositional axes:
+  color-producing material layers, and a receiver-by-light matrix for land,
+  water, ice, and visible low clouds against direct Sun, direct Moon, diffuse
+  clear sky, and diffuse regional canopy. Each gate omits only its weighted color
+  or lit color product without disabling its operands or downstream computation;
+  scalar inputs and attenuation mechanisms have no independent visibility gates.
 - **[Explicit]** The shader source shipped to players contains only the production
   entry points, bindings, and their reachable components. Playground diagnostic
   sources and interfaces are feature-gated from production artifacts and compile

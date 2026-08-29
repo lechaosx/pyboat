@@ -647,8 +647,13 @@ fn terrain_rock_surface(
     material_gradient: vec2<f32>,
     elevation_m: f32,
 ) -> TerrainSurface {
+    let color_visibility = solid_material_color_visibility().x;
     if landscape_visibility.z <= 0.0 {
-        return TerrainSurface(vec3<f32>(0.36, 0.34, 0.30), vec2<f32>(0.0), 0.8);
+        return TerrainSurface(
+            color_visibility * vec3<f32>(0.36, 0.34, 0.30),
+            vec2<f32>(0.0),
+            0.8,
+        );
     }
     let rock_geology = material_fractal_value(
         vec2<u32>(0x1f83d9abu, 0x5be0cd19u),
@@ -703,7 +708,7 @@ fn terrain_rock_surface(
         0.18 * smoothstep(20.0, 240.0, elevation_m) + 0.82 * geology_grade,
     );
     return TerrainSurface(
-        rock_color,
+        color_visibility * rock_color,
         surface_height_m * mix(
             surface_height.gradient,
             plate_direction * surface_height.gradient,
@@ -715,8 +720,13 @@ fn terrain_rock_surface(
 }
 
 fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
+    let color_visibility = solid_material_color_visibility().z;
     if landscape_visibility.z <= 0.0 {
-        return TerrainSurface(vec3<f32>(0.78, 0.86, 0.88), vec2<f32>(0.0), 0.32);
+        return TerrainSurface(
+            color_visibility * vec3<f32>(0.78, 0.86, 0.88),
+            vec2<f32>(0.0),
+            0.32,
+        );
     }
     let micro_height = material_fractal_sample(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
@@ -732,7 +742,7 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
     );
     let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
     return TerrainSurface(
-        mix(
+        color_visibility * mix(
             vec3<f32>(0.56, 0.75, 0.80),
             vec3<f32>(0.94, 0.97, 0.96),
             clamp(0.45 + 0.35 * surface_grade + 0.22 * fine, 0.0, 1.0),
@@ -747,8 +757,13 @@ fn sea_ice_surface(
     cover: f32,
     bedrock_elevation_m: f32,
 ) -> TerrainSurface {
+    let color_visibility = solid_material_color_visibility().w;
     if landscape_visibility.z <= 0.0 {
-        return TerrainSurface(vec3<f32>(0.78, 0.86, 0.88), vec2<f32>(0.0), 0.42);
+        return TerrainSurface(
+            color_visibility * vec3<f32>(0.78, 0.86, 0.88),
+            vec2<f32>(0.0),
+            0.42,
+        );
     }
     let broad = material_fractal_sample(
         vec2<u32>(0xa4093822u, 0x299f31d0u),
@@ -871,7 +886,7 @@ fn sea_ice_surface(
         0.28 + 0.18 * shore,
     );
     return TerrainSurface(
-        mix(deep_color, shallow_color, shallow),
+        color_visibility * mix(deep_color, shallow_color, shallow),
         mix(slab_visibility * slab_tilt, 0.45 * broad.gradient, fracture)
             + 0.20 * fine.gradient
             + 0.16 * micro.gradient,

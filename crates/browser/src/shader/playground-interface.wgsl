@@ -9,11 +9,17 @@ struct PlaygroundUniforms {
     landscape_visibility: vec4<f32>,
     wind_model: vec4<f32>,
     climate_visibility: vec4<f32>,
-    light_contribution_visibility: vec4<u32>,
+    land_light_contribution_visibility: vec4<u32>,
+    water_light_contribution_visibility: vec4<u32>,
+    ice_light_contribution_visibility: vec4<u32>,
+    low_cloud_light_contribution_visibility: vec4<u32>,
+    land_material_color_visibility: vec4<u32>,
+    solid_material_color_visibility: vec4<u32>,
+    water_material_color_visibility: vec4<u32>,
+    layer_material_color_visibility: vec4<u32>,
     environment_features: vec4<f32>,
     material_features: vec4<f32>,
     effect_features: vec4<f32>,
-    lighting_features: vec4<f32>,
 };
 
 @group(1) @binding(0)
@@ -77,16 +83,34 @@ fn fragment_layer_visibility() -> vec4<f32> {
     return playground.layer_visibility;
 }
 
-fn fragment_lighting_visibility() -> vec4<f32> {
-    return playground.lighting_features;
+fn fragment_surface_light_visibility(surface_kind: u32) -> vec4<f32> {
+    var visibility = playground.water_light_contribution_visibility;
+    if surface_kind == 0u {
+        visibility = playground.land_light_contribution_visibility;
+    } else if surface_kind == 2u {
+        visibility = playground.ice_light_contribution_visibility;
+    }
+    return vec4<f32>(visibility);
 }
 
-fn fragment_direct_light_visibility() -> vec2<f32> {
-    return vec2<f32>(playground.light_contribution_visibility.xy);
+fn fragment_low_cloud_light_visibility() -> vec4<f32> {
+    return vec4<f32>(playground.low_cloud_light_contribution_visibility);
 }
 
-fn fragment_indirect_light_visibility() -> vec2<f32> {
-    return vec2<f32>(playground.light_contribution_visibility.zw);
+fn land_material_color_visibility() -> vec4<f32> {
+    return vec4<f32>(playground.land_material_color_visibility);
+}
+
+fn solid_material_color_visibility() -> vec4<f32> {
+    return vec4<f32>(playground.solid_material_color_visibility);
+}
+
+fn water_material_color_visibility() -> vec2<f32> {
+    return vec2<f32>(playground.water_material_color_visibility.xy);
+}
+
+fn low_cloud_material_color_visibility() -> f32 {
+    return f32(playground.layer_material_color_visibility.x);
 }
 
 fn initialize_playground_weather() {

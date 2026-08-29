@@ -545,6 +545,9 @@ fn terrain_surface(
     surface: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
+    let land_color_gate = land_material_color_visibility();
+    let solid_color_gate = solid_material_color_visibility();
+    let water_color_gate = water_material_color_visibility();
     if material_feature_visibility().x <= 0.0 {
         return TerrainSurface(
             select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
@@ -586,9 +589,12 @@ fn terrain_surface(
                 0.0,
                 1.0,
             );
+            let visible_water_color = water_color_gate.x * water_color
+                + water_color_gate.y * bottom_visibility
+                    * (water_veiled_bottom - water_color);
             return visual_water_surface(
                 position_m,
-                mix(water_color, water_veiled_bottom, bottom_visibility),
+                visible_water_color,
                 terrain_cluster,
                 elevation_m,
                 atmosphere,
@@ -596,7 +602,7 @@ fn terrain_surface(
         }
         return visual_water_surface(
             position_m,
-            water_color,
+            water_color_gate.x * water_color,
             terrain_cluster,
             elevation_m,
             atmosphere,
@@ -630,7 +636,7 @@ fn terrain_surface(
         );
     }
     let snow_surface = TerrainSurface(
-        mix(
+        solid_color_gate.y * mix(
             vec3<f32>(0.72, 0.76, 0.77),
             vec3<f32>(0.96, 0.97, 0.96),
             0.55 + 0.20 * surface_grade,
@@ -720,12 +726,16 @@ fn terrain_surface(
         intertidal_grade,
     );
     let intertidal_surface = TerrainSurface(
-        mix(0.70 * intertidal_color, intertidal_color, exposed_dryness),
+        land_color_gate.z * mix(
+            0.70 * intertidal_color,
+            intertidal_color,
+            exposed_dryness,
+        ),
         mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
         mix(0.96, 0.88, exposed_dryness),
     );
     let beach_surface = TerrainSurface(
-        mix(0.72 * beach_color, beach_color, exposed_dryness),
+        land_color_gate.w * mix(0.72 * beach_color, beach_color, exposed_dryness),
         beach_micro_height_m * micro_height.gradient,
         mix(0.90, 0.82, exposed_dryness),
     );
@@ -786,7 +796,8 @@ fn terrain_surface(
     forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10), 0.32 * dormancy);
     let forest_visibility = forest_amount * canopy_cluster * landscape_visibility.y;
     let vegetation_surface = TerrainSurface(
-        mix(grass_color, forest_color, forest_visibility),
+        land_color_gate.x * (1.0 - forest_visibility) * grass_color
+            + land_color_gate.y * forest_visibility * forest_color,
         mix(
             0.45 * micro_height.gradient,
             3.5 * canopy_detail.gradient + 0.24 * micro_height.gradient,

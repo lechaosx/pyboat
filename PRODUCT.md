@@ -241,16 +241,21 @@ current playable behavior; this file does not track delivery status.
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** Scene controls separate output layers, light contributions,
-  color attenuation, and appearance or motion tuning. Groups collapse
+- **[Explicit]** Scene controls group terminal color contributions by rendered
+  receiver, followed by appearance or motion tuning. Groups collapse
   independently, changes are immediate, and one action restores production
   tuning.
-- **[Explicit]** Scene toggles control only contributions that directly add to or
-  attenuate fragment color: land, water, low clouds, Sun and Moon direct light,
-  clear-sky and canopy ambient light, cloud shadows, landform relief, and
-  landform shadows. A hidden contribution remains fully computed for every
-  downstream stage but is omitted from final fragment accumulation; hiding every
-  contribution produces a blank black output.
+- **[Explicit]** Scene toggles expose every color-producing material or
+  compositing layer, including the individual land, water, ice, and visible-cloud
+  color layers. Geometry, coverage, normals, shadows, relief, opacity, lights,
+  and other values that only modulate downstream rendering have no independent
+  output toggle. Hiding a layer omits its weighted color without changing those
+  downstream inputs.
+- **[Explicit]** Lit output toggles form a Cartesian matrix between land, water,
+  ice, or visible low clouds and direct Sun, direct Moon, clear-sky ambient, or
+  canopy ambient light. Each toggle controls the resulting color product while
+  leaving both operands available to every other product. Hiding every color
+  layer or every lit product produces a blank black output.
 - **[Explicit]** Intermediate weather and water mechanisms have no user-facing
   switches. The playground enables them when an active color stage or
   selected diagnostic consumes them and disables them when nothing does.

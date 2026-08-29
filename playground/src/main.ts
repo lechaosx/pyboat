@@ -41,12 +41,33 @@ type State = {
   worldTimeSeconds: number;
   pressureTimeSeconds: number;
   currentTimeSeconds: number;
-  sunDirectLightEnabled: number;
-  moonDirectLightEnabled: number;
-  skyIndirectLightEnabled: number;
-  canopyIndirectLightEnabled: number;
-  landSurfaceVisible: number;
-  waterSurfaceVisible: number;
+  landSunContribution: number;
+  landMoonContribution: number;
+  landSkyContribution: number;
+  landCanopyContribution: number;
+  waterSunContribution: number;
+  waterMoonContribution: number;
+  waterSkyContribution: number;
+  waterCanopyContribution: number;
+  iceSunContribution: number;
+  iceMoonContribution: number;
+  iceSkyContribution: number;
+  iceCanopyContribution: number;
+  lowCloudSunContribution: number;
+  lowCloudMoonContribution: number;
+  lowCloudSkyContribution: number;
+  lowCloudCanopyContribution: number;
+  grassColorVisible: number;
+  forestColorVisible: number;
+  intertidalColorVisible: number;
+  beachColorVisible: number;
+  rockColorVisible: number;
+  snowColorVisible: number;
+  landIceColorVisible: number;
+  waterColorVisible: number;
+  bottomColorVisible: number;
+  seaIceColorVisible: number;
+  lowCloudColorVisible: number;
   detailCharacter: number;
   detailBlobiness: number;
   detailContrast: number;
@@ -64,11 +85,6 @@ type State = {
   landformReliefStrength: number;
   landformShadowStrength: number;
   landformShadowReach: number;
-  lowCloudVisible: number;
-  lowCloudShadow: number;
-  upperCloudShadow: number;
-  landformReliefEnabled: number;
-  landformShadowEnabled: number;
   pressureWindScale: number;
   crossIsobarScale: number;
   thermalWindScale: number;
@@ -96,12 +112,33 @@ const defaults: State = {
   worldTimeSeconds: 0,
   pressureTimeSeconds: 0,
   currentTimeSeconds: 0,
-  sunDirectLightEnabled: 1,
-  moonDirectLightEnabled: 1,
-  skyIndirectLightEnabled: 1,
-  canopyIndirectLightEnabled: 1,
-  landSurfaceVisible: 1,
-  waterSurfaceVisible: 1,
+  landSunContribution: 1,
+  landMoonContribution: 1,
+  landSkyContribution: 1,
+  landCanopyContribution: 1,
+  waterSunContribution: 1,
+  waterMoonContribution: 1,
+  waterSkyContribution: 1,
+  waterCanopyContribution: 1,
+  iceSunContribution: 1,
+  iceMoonContribution: 1,
+  iceSkyContribution: 1,
+  iceCanopyContribution: 1,
+  lowCloudSunContribution: 1,
+  lowCloudMoonContribution: 1,
+  lowCloudSkyContribution: 1,
+  lowCloudCanopyContribution: 1,
+  grassColorVisible: 1,
+  forestColorVisible: 1,
+  intertidalColorVisible: 1,
+  beachColorVisible: 1,
+  rockColorVisible: 1,
+  snowColorVisible: 1,
+  landIceColorVisible: 1,
+  waterColorVisible: 1,
+  bottomColorVisible: 1,
+  seaIceColorVisible: 1,
+  lowCloudColorVisible: 1,
   detailCharacter: 0.35,
   detailBlobiness: 0.25,
   detailContrast: 1.15,
@@ -119,11 +156,6 @@ const defaults: State = {
   landformReliefStrength: 1,
   landformShadowStrength: 0.7,
   landformShadowReach: 320,
-  lowCloudVisible: 1,
-  lowCloudShadow: 1,
-  upperCloudShadow: 1,
-  landformReliefEnabled: 1,
-  landformShadowEnabled: 1,
   pressureWindScale: 1,
   crossIsobarScale: 1,
   thermalWindScale: 1,
@@ -226,24 +258,6 @@ function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
 }
 
-const featureKeys = {
-  land_surface: "landSurfaceVisible",
-  water_surface: "waterSurfaceVisible",
-  low_cloud_body: "lowCloudVisible",
-  low_cloud_shadow: "lowCloudShadow",
-  canopy_shadow: "upperCloudShadow",
-  sun_direct: "sunDirectLightEnabled",
-  moon_direct: "moonDirectLightEnabled",
-  sky_indirect: "skyIndirectLightEnabled",
-  canopy_indirect: "canopyIndirectLightEnabled",
-  landform_relief: "landformReliefEnabled",
-  landform_shadow: "landformShadowEnabled",
-} as const satisfies Record<string, NumericStateKey>;
-
-function computationEnabled(id: keyof typeof featureKeys): number {
-  return Number(state[featureKeys[id]] > 0.5);
-}
-
 function renderControls(): void {
   controlsElement.replaceChildren();
   const diagnosticSection = document.createElement("section");
@@ -321,31 +335,78 @@ type TuningGroup = {
 
 const tuningGroups: readonly TuningGroup[] = [
   {
-    label: "Output layers",
+    label: "Land color layers",
     open: true,
     controls: [
-      { type: "toggle", key: "landSurfaceVisible", label: "Land surface" },
-      { type: "toggle", key: "waterSurfaceVisible", label: "Water surface" },
-      { type: "toggle", key: "lowCloudVisible", label: "Low-cloud layer" },
+      { type: "toggle", key: "grassColorVisible", label: "Grass" },
+      { type: "toggle", key: "forestColorVisible", label: "Forest" },
+      { type: "toggle", key: "intertidalColorVisible", label: "Intertidal ground" },
+      { type: "toggle", key: "beachColorVisible", label: "Beach sediment" },
+      { type: "toggle", key: "rockColorVisible", label: "Rock" },
+      { type: "toggle", key: "snowColorVisible", label: "Snow" },
     ],
   },
   {
-    label: "Light contributions",
+    label: "Land lighting",
     open: true,
     controls: [
-      { type: "toggle", key: "sunDirectLightEnabled", label: "Direct Sun" },
-      { type: "toggle", key: "moonDirectLightEnabled", label: "Direct Moon" },
-      { type: "toggle", key: "skyIndirectLightEnabled", label: "Clear-sky ambient" },
-      { type: "toggle", key: "canopyIndirectLightEnabled", label: "Canopy ambient" },
+      { type: "toggle", key: "landSunContribution", label: "Direct Sun" },
+      { type: "toggle", key: "landMoonContribution", label: "Direct Moon" },
+      { type: "toggle", key: "landSkyContribution", label: "Clear-sky ambient" },
+      { type: "toggle", key: "landCanopyContribution", label: "Canopy ambient" },
     ],
   },
   {
-    label: "Color attenuation",
+    label: "Water color layers",
+    open: true,
     controls: [
-      { type: "toggle", key: "lowCloudShadow", label: "Low-cloud shadows" },
-      { type: "toggle", key: "upperCloudShadow", label: "Canopy shadows" },
-      { type: "toggle", key: "landformReliefEnabled", label: "Terrain relief" },
-      { type: "toggle", key: "landformShadowEnabled", label: "Terrain shadows" },
+      { type: "toggle", key: "waterColorVisible", label: "Water body" },
+      { type: "toggle", key: "bottomColorVisible", label: "Visible bottom" },
+    ],
+  },
+  {
+    label: "Water lighting",
+    open: true,
+    controls: [
+      { type: "toggle", key: "waterSunContribution", label: "Direct Sun" },
+      { type: "toggle", key: "waterMoonContribution", label: "Direct Moon" },
+      { type: "toggle", key: "waterSkyContribution", label: "Clear-sky ambient" },
+      { type: "toggle", key: "waterCanopyContribution", label: "Canopy ambient" },
+    ],
+  },
+  {
+    label: "Ice color layers",
+    open: true,
+    controls: [
+      { type: "toggle", key: "landIceColorVisible", label: "Land ice" },
+      { type: "toggle", key: "seaIceColorVisible", label: "Sea ice" },
+    ],
+  },
+  {
+    label: "Ice lighting",
+    open: true,
+    controls: [
+      { type: "toggle", key: "iceSunContribution", label: "Direct Sun" },
+      { type: "toggle", key: "iceMoonContribution", label: "Direct Moon" },
+      { type: "toggle", key: "iceSkyContribution", label: "Clear-sky ambient" },
+      { type: "toggle", key: "iceCanopyContribution", label: "Canopy ambient" },
+    ],
+  },
+  {
+    label: "Low-cloud color layers",
+    open: true,
+    controls: [
+      { type: "toggle", key: "lowCloudColorVisible", label: "Cloud body" },
+    ],
+  },
+  {
+    label: "Low-cloud lighting",
+    open: true,
+    controls: [
+      { type: "toggle", key: "lowCloudSunContribution", label: "Direct Sun" },
+      { type: "toggle", key: "lowCloudMoonContribution", label: "Direct Moon" },
+      { type: "toggle", key: "lowCloudSkyContribution", label: "Clear-sky ambient" },
+      { type: "toggle", key: "lowCloudCanopyContribution", label: "Canopy ambient" },
     ],
   },
   {
@@ -870,7 +931,7 @@ const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x2
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
 const sceneFloats = new Float32Array(52);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-const tuningFloats = new Float32Array(60);
+const tuningFloats = new Float32Array(84);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1163,17 +1224,77 @@ function writeUniforms(
   pressureTimeSeconds: number,
   currentTimeSeconds: number,
 ): void {
-  const enabled = computationEnabled;
+  const enabled = (key: NumericStateKey): number => Number(state[key] > 0.5);
+  const landLight = [
+    enabled("landSunContribution"),
+    enabled("landMoonContribution"),
+    enabled("landSkyContribution"),
+    enabled("landCanopyContribution"),
+  ] as const;
+  const waterLight = [
+    enabled("waterSunContribution"),
+    enabled("waterMoonContribution"),
+    enabled("waterSkyContribution"),
+    enabled("waterCanopyContribution"),
+  ] as const;
+  const iceLight = [
+    enabled("iceSunContribution"),
+    enabled("iceMoonContribution"),
+    enabled("iceSkyContribution"),
+    enabled("iceCanopyContribution"),
+  ] as const;
+  const lowCloudLight = [
+    enabled("lowCloudSunContribution"),
+    enabled("lowCloudMoonContribution"),
+    enabled("lowCloudSkyContribution"),
+    enabled("lowCloudCanopyContribution"),
+  ] as const;
+  const landMaterial = [
+    enabled("grassColorVisible"),
+    enabled("forestColorVisible"),
+    enabled("intertidalColorVisible"),
+    enabled("beachColorVisible"),
+  ] as const;
+  const solidMaterial = [
+    enabled("rockColorVisible"),
+    enabled("snowColorVisible"),
+    enabled("landIceColorVisible"),
+    enabled("seaIceColorVisible"),
+  ] as const;
+  const waterMaterial = [
+    enabled("waterColorVisible"),
+    enabled("bottomColorVisible"),
+    0,
+    0,
+  ] as const;
+  const layerMaterial = [enabled("lowCloudColorVisible"), 0, 0, 0] as const;
+  const anyContribution = landLight.some(Boolean)
+    || waterLight.some(Boolean)
+    || iceLight.some(Boolean)
+    || lowCloudLight.some(Boolean);
+  const surfaceDirectContribution = landLight[0] > 0
+    || landLight[1] > 0
+    || waterLight[0] > 0
+    || waterLight[1] > 0
+    || iceLight[0] > 0
+    || iceLight[1] > 0;
   const intermediate = deriveIntermediateVisibility({
-    land: enabled("land_surface") > 0,
-    water: enabled("water_surface") > 0,
-    lowCloud: enabled("low_cloud_body") > 0,
-    sun: enabled("sun_direct") > 0,
-    moon: enabled("moon_direct") > 0,
-    clearSkyAmbient: enabled("sky_indirect") > 0,
-    canopyAmbient: enabled("canopy_indirect") > 0,
-    lowCloudShadow: enabled("low_cloud_shadow") > 0,
-    canopyShadow: enabled("canopy_shadow") > 0,
+    landSun: landLight[0] > 0,
+    landMoon: landLight[1] > 0,
+    landClearSkyAmbient: landLight[2] > 0,
+    landCanopyAmbient: landLight[3] > 0,
+    waterSun: waterLight[0] > 0,
+    waterMoon: waterLight[1] > 0,
+    waterClearSkyAmbient: waterLight[2] > 0,
+    waterCanopyAmbient: waterLight[3] > 0,
+    iceSun: iceLight[0] > 0,
+    iceMoon: iceLight[1] > 0,
+    iceClearSkyAmbient: iceLight[2] > 0,
+    iceCanopyAmbient: iceLight[3] > 0,
+    lowCloudSun: lowCloudLight[0] > 0,
+    lowCloudMoon: lowCloudLight[1] > 0,
+    lowCloudClearSkyAmbient: lowCloudLight[2] > 0,
+    lowCloudCanopyAmbient: lowCloudLight[3] > 0,
   }, state.diagnostic !== "scene");
   const visible = (value: boolean): number => Number(value);
   const aspect = previewCanvas.width / previewCanvas.height;
@@ -1261,10 +1382,10 @@ function writeUniforms(
     0,
   ], 20);
   tuningFloats.set([
-    enabled("low_cloud_body"),
-    enabled("low_cloud_shadow"),
-    enabled("canopy_shadow"),
-    enabled("low_cloud_body") * enabled("canopy_shadow"),
+    Number(anyContribution),
+    Number(surfaceDirectContribution),
+    Number(surfaceDirectContribution),
+    Number(lowCloudLight.some(Boolean)),
   ], 24);
   tuningFloats.set([
     1,
@@ -1284,36 +1405,32 @@ function writeUniforms(
     0,
     1,
   ], 36);
-  tuningUints.set([
-    enabled("sun_direct"),
-    enabled("moon_direct"),
-    enabled("sky_indirect"),
-    enabled("canopy_indirect"),
-  ], 40);
+  tuningUints.set(landLight, 40);
+  tuningUints.set(waterLight, 44);
+  tuningUints.set(iceLight, 48);
+  tuningUints.set(lowCloudLight, 52);
+  tuningUints.set(landMaterial, 56);
+  tuningUints.set(solidMaterial, 60);
+  tuningUints.set(waterMaterial, 64);
+  tuningUints.set(layerMaterial, 68);
   tuningFloats.set([
     visible(intermediate.pressure),
     visible(intermediate.temperature),
     visible(intermediate.moisture),
     visible(intermediate.weather),
-  ], 44);
+  ], 72);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.oceanForcing),
     visible(intermediate.waveSpectrum),
     visible(intermediate.materials),
-  ], 48);
+  ], 76);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.materials),
     0,
     0,
-  ], 52);
-  tuningFloats.set([
-    enabled("landform_relief"),
-    enabled("landform_shadow"),
-    enabled("land_surface"),
-    enabled("water_surface"),
-  ], 56);
+  ], 80);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 

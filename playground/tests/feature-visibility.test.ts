@@ -5,15 +5,22 @@ import {
 } from "../src/feature-visibility";
 
 const disabledContributions: FragmentContributionState = {
-  land: false,
-  water: false,
-  lowCloud: false,
-  sun: false,
-  moon: false,
-  clearSkyAmbient: false,
-  canopyAmbient: false,
-  lowCloudShadow: false,
-  canopyShadow: false,
+  landSun: false,
+  landMoon: false,
+  landClearSkyAmbient: false,
+  landCanopyAmbient: false,
+  waterSun: false,
+  waterMoon: false,
+  waterClearSkyAmbient: false,
+  waterCanopyAmbient: false,
+  iceSun: false,
+  iceMoon: false,
+  iceClearSkyAmbient: false,
+  iceCanopyAmbient: false,
+  lowCloudSun: false,
+  lowCloudMoon: false,
+  lowCloudClearSkyAmbient: false,
+  lowCloudCanopyAmbient: false,
 };
 
 describe("playground intermediate feature visibility", () => {
@@ -29,11 +36,10 @@ describe("playground intermediate feature visibility", () => {
     });
   });
 
-  test("keeps full material inputs available to a visible surface contribution", () => {
+  test("keeps full inputs available to one visible land-light product", () => {
     expect(deriveIntermediateVisibility({
       ...disabledContributions,
-      water: true,
-      clearSkyAmbient: true,
+      landSun: true,
     }, false)).toEqual({
       pressure: true,
       temperature: true,
@@ -45,10 +51,10 @@ describe("playground intermediate feature visibility", () => {
     });
   });
 
-  test("keeps full upstream input available to a visible cloud contribution", () => {
+  test("keeps full upstream input available to one visible cloud-light product", () => {
     expect(deriveIntermediateVisibility({
       ...disabledContributions,
-      lowCloud: true,
+      lowCloudCanopyAmbient: true,
     }, false)).toEqual({
       pressure: true,
       temperature: true,
@@ -57,22 +63,6 @@ describe("playground intermediate feature visibility", () => {
       materials: true,
       oceanForcing: true,
       waveSpectrum: true,
-    });
-  });
-
-  test("does not activate a shadow without a visible direct-light contribution", () => {
-    expect(deriveIntermediateVisibility({
-      ...disabledContributions,
-      land: true,
-      lowCloudShadow: true,
-    }, false)).toEqual({
-      pressure: false,
-      temperature: false,
-      moisture: false,
-      weather: false,
-      materials: false,
-      oceanForcing: false,
-      waveSpectrum: false,
     });
   });
 

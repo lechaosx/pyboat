@@ -60,14 +60,26 @@ fn fragment_layer_visibility() -> vec4<f32> {
     return vec4<f32>(1.0);
 }
 
-fn fragment_lighting_visibility() -> vec4<f32> {
+fn fragment_surface_light_visibility(_surface_kind: u32) -> vec4<f32> {
     return vec4<f32>(1.0);
 }
 
-fn fragment_direct_light_visibility() -> vec2<f32> {
+fn fragment_low_cloud_light_visibility() -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+
+fn land_material_color_visibility() -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+
+fn solid_material_color_visibility() -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+
+fn water_material_color_visibility() -> vec2<f32> {
     return vec2<f32>(1.0);
 }
 
-fn fragment_indirect_light_visibility() -> vec2<f32> {
-    return vec2<f32>(1.0);
+fn low_cloud_material_color_visibility() -> f32 {
+    return 1.0;
 }
