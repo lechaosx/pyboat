@@ -23,6 +23,7 @@ fn visual_cloud_noise_sample(
     octave_count: u32,
     anchor_epoch: vec2<u32>,
     anchor_phase: f32,
+    anchor_weights: vec2<f32>,
     refresh_period_seconds: f32,
     pixel_footprint_m: f32,
 ) -> TerrainNoiseSample {
@@ -40,7 +41,7 @@ fn visual_cloud_noise_sample(
         initial_wavelength_m,
         octave_count,
         anchor_epoch,
-        anchor_phase,
+        anchor_weights,
         pixel_footprint_m,
     );
 }
@@ -53,6 +54,7 @@ fn visual_cloud_noise_value(
     octave_count: u32,
     anchor_epoch: vec2<u32>,
     anchor_phase: f32,
+    anchor_weights: vec2<f32>,
     refresh_period_seconds: f32,
     pixel_footprint_m: f32,
 ) -> f32 {
@@ -70,7 +72,7 @@ fn visual_cloud_noise_value(
         initial_wavelength_m,
         octave_count,
         anchor_epoch,
-        anchor_phase,
+        anchor_weights,
         pixel_footprint_m,
     );
 }
@@ -180,7 +182,8 @@ fn procedural_low_cloud_sample_with_weather(
         320.0,
         12u,
         scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_padding.x,
+        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
+        scene.cloud_anchor_weights.xy,
         1800.0,
         pixel_footprint_m,
     );
@@ -250,7 +253,8 @@ fn procedural_low_cloud_optical_depth_with_weather(
         320.0,
         12u,
         scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_padding.x,
+        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
+        scene.cloud_anchor_weights.xy,
         1800.0,
         pixel_footprint_m,
     );
@@ -266,14 +270,30 @@ fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
     );
 }
 
+struct RegionalCanopyConditions {
+    sky_fraction: f32,
+    mean_optical_thickness: f32,
+}
+
+fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyConditions {
+    return RegionalCanopyConditions(
+        clamp(weather.upper_coverage, 0.0, 1.0),
+        0.35
+            + 0.75 * weather.stratiform
+            + 0.95 * weather.convective
+            + 1.35 * weather.rain,
+    );
+}
+
 fn procedural_upper_cloud_optical_depth_filtered(
     position_m: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> f32 {
     let weather = upper_cloud_weather_at(position_m);
+    let regional = regional_canopy_conditions(weather);
     let upper_coverage = clamp(
         max(
-            weather.upper_coverage,
+            regional.sky_fraction,
             0.30 * weather.low_coverage + 0.70 * weather.rain,
         ),
         0.0,
@@ -282,7 +302,7 @@ fn procedural_upper_cloud_optical_depth_filtered(
     if upper_coverage <= 0.0 {
         return 0.0;
     }
-    let phase = clamp(scene.cloud_anchor_phase_and_padding.y, 0.0, 1.0);
+    let phase = clamp(scene.cloud_anchor_phase_and_inverse_world_size_m.y, 0.0, 1.0);
     let traced = trace_cloud_positions_m(
         position_m,
         -phase * 3600.0,
@@ -298,7 +318,7 @@ fn procedural_upper_cloud_optical_depth_filtered(
         16384.0,
         4u,
         scene.upper_cloud_epoch,
-        phase,
+        scene.cloud_anchor_weights.zw,
         pixel_footprint_m,
     );
     let local_noise = visual_transported_noise_value_from_circles(
@@ -308,7 +328,7 @@ fn procedural_upper_cloud_optical_depth_filtered(
         2048.0,
         4u,
         scene.upper_cloud_epoch,
-        phase,
+        scene.cloud_anchor_weights.zw,
         pixel_footprint_m,
     );
     let rain = weather.rain;
@@ -331,12 +351,7 @@ fn procedural_upper_cloud_optical_depth_filtered(
         max(0.20 * layered_amount, cellular_amount),
         cellular_character,
     );
-    return cloud_amount * (
-        0.35
-            + 0.75 * weather.stratiform
-            + 0.95 * weather.convective
-            + 1.35 * rain
-    );
+    return cloud_amount * regional.mean_optical_thickness;
 }
 
 fn procedural_upper_cloud_optical_depth(position_m: vec2<f32>) -> f32 {

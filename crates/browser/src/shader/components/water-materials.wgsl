@@ -2,10 +2,16 @@ fn visual_hash_unit(value: u32) -> f32 {
     return f32(value >> 8u) / 16777216.0;
 }
 
-fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+fn precipitation_water_contact_sample_from_atmosphere(
+    position_m: vec2<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
+    if effect_feature_visibility().x <= 0.0 {
+        return sample;
+    }
     let precipitation = surface_cloud_weather.rain;
     if precipitation <= 0.001 || visual_pixel_footprint_m >= 0.30 {
         return sample;
@@ -22,7 +28,7 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
         canonical_position < vec2<f32>(0.0),
     );
     let cell_position = positive_position
-        / scene.world_size_m
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw
         * vec2<f32>(cell_cycles);
     let base_cell = vec2<i32>(floor(cell_position));
     let cell_local = fract(cell_position);
@@ -34,7 +40,10 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
     let snow_fraction = 1.0 - smoothstep(
         -1.0,
         2.0,
-        surface_current_air_temperature_c(),
+        surface_current_air_temperature_c_from_atmosphere(
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        ),
     );
     for (var offset_y = -1; offset_y <= 1; offset_y++) {
         for (var offset_x = -1; offset_x <= 1; offset_x++) {
@@ -54,7 +63,7 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
                         vec2<u32>(0x13198a2eu, 0x03707344u),
                     ),
             );
-            let local_cycle_time = scene.cloud_anchor_phase_and_padding.x
+            let local_cycle_time = scene.cloud_anchor_phase_and_inverse_world_size_m.x
                 * f32(cycles_per_anchor)
                 + visual_hash_unit(cell_hash.x);
             let local_cycle = u32(floor(local_cycle_time));
@@ -125,6 +134,13 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
     return sample;
 }
 
+fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    return precipitation_water_contact_sample_from_atmosphere(
+        position_m,
+        surface_atmosphere_sample_at(position_m),
+    );
+}
+
 fn ocean_tick_phase_radians(phase_per_tick_radians: f32) -> f32 {
     let tick = scene.world_tick_and_padding.xy;
     let chunks = array<u32, 4>(
@@ -144,16 +160,22 @@ fn ocean_hash_unit(key: vec2<u32>) -> f32 {
     return (f32(terrain_hash(key).y >> 8u) + 0.5) / 16777216.0;
 }
 
-fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
-    let latitude_rad = radians(surface_latitude_degrees_at(position_m));
-    let cluster = terrain_simplex_fractal_sample(
-        vec2<u32>(0x78bd642fu, 0xa0761d64u),
-        position_m,
-        8192.0,
-        3u,
-        0.5,
-        3u,
-    );
+struct OceanForcingSample {
+    current_m_s: vec2<f32>,
+    significant_height_m: f32,
+    surface_wind_m_s: vec2<f32>,
+    upper_wind_m_s: vec2<f32>,
+}
+
+fn ocean_forcing_from_surface(
+    position_m: vec2<f32>,
+    terrain_cluster: TerrainNoiseSample,
+    terrain_elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_tide: SurfaceTideSample,
+) -> OceanForcingSample {
+    let latitude_rad = radians(atmosphere.climate.latitude_degrees);
+    let cluster = terrain_cluster;
     let transition = clamp((cluster.value - 0.02) / 0.46, 0.0, 1.0);
     let open_water = 1.0 - transition * transition * (3.0 - 2.0 * transition);
     let open_water_derivative = select(
@@ -166,7 +188,8 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     let basin_gradient = open_water_derivative * cluster.gradient * polar_capacity
         + vec2<f32>(
             0.0,
-            -open_water * sin(2.0 * latitude_rad) * PI / scene.world_size_m.y,
+            -open_water * sin(2.0 * latitude_rad) * PI
+                * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
         );
     let basin_squared = basin * basin;
     let basin_squared_gradient = 2.0 * basin * basin_gradient;
@@ -181,9 +204,9 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     );
     let hemisphere = sin(latitude_rad);
     let hemisphere_gradient_y_per_m = select(
-        cos(latitude_rad) * PI / scene.world_size_m.y,
+        cos(latitude_rad) * PI * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
         0.0,
-        abs(surface_latitude_degrees_at(position_m)) >= 90.0,
+        abs(atmosphere.climate.latitude_degrees) >= 90.0,
     );
     let base_gradient = 5500.0
         * (hemisphere * (basin_squared * gyre.gradient + gyre.value * basin_squared_gradient)
@@ -192,7 +215,7 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
                 basin_squared * gyre.value * hemisphere_gradient_y_per_m,
             ));
 
-    let pressure = procedural_pressure_sample_without_surface_gust(position_m);
+    let pressure = atmosphere.pressure;
     let pressure_envelope = basin_squared * hemisphere;
     let pressure_envelope_gradient = hemisphere * basin_squared_gradient
         + vec2<f32>(0.0, basin_squared * hemisphere_gradient_y_per_m);
@@ -200,34 +223,42 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
         * (pressure_envelope * pressure.gradient_m_s
             + pressure.potential_m2_s * pressure_envelope_gradient);
 
-    let tide_response = terrain_simplex_fractal_sample(
-        vec2<u32>(0xf3bcc909u, 0x6a09e667u),
-        position_m,
-        131072.0,
-        3u,
-        0.5,
-        3u,
-    );
-    let tide_lag = terrain_simplex_fractal_sample(
-        vec2<u32>(0x84caa73bu, 0xbb67ae85u),
-        position_m,
-        131072.0,
-        3u,
-        0.5,
-        3u,
-    );
-    let tidal_range_m = 1.25 + 0.75 * tide_response.value;
-    let tidal_range_gradient = 0.75 * tide_response.gradient;
-    let tidal_phase = 0.08 * tide_lag.value;
-    let tidal_phase_gradient = 0.08 * tide_lag.gradient;
-    let solar_hour_angle = TAU * (surface_local_solar_phase_at(position_m) - 0.5);
-    let solar_longitude_phase = scene.world_phases.y - 0.25;
-    let lunar_phase = scene.world_phases.z - solar_longitude_phase;
+    var tide = surface_tide;
+    if tuning.terrain_tuning.x != 1.0 {
+        tide = SurfaceTideSample(
+            terrain_simplex_fractal_sample(
+                vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+                position_m,
+                131072.0,
+                3u,
+                0.5,
+                3u,
+            ),
+            terrain_simplex_fractal_sample(
+                vec2<u32>(0x84caa73bu, 0xbb67ae85u),
+                position_m,
+                131072.0,
+                3u,
+                0.5,
+                3u,
+            ),
+        );
+    }
+    let tidal_range_m = 1.25 + 0.75 * tide.response.value;
+    let tidal_range_gradient = 0.75 * tide.response.gradient;
+    let tidal_phase = 0.08 * tide.lag.value;
+    let tidal_phase_gradient = 0.08 * tide.lag.gradient;
+    let solar_hour_angle = TAU * (atmosphere.climate.local_solar_phase - 0.5);
+    let solar_longitude_phase = scene.world_phases_and_pixel_footprint_m.y - 0.25;
+    let lunar_phase = scene.world_phases_and_pixel_footprint_m.z - solar_longitude_phase;
     let lunar_hour_angle = solar_hour_angle + TAU * lunar_phase;
     let lunar_angle = 2.0 * (lunar_hour_angle + TAU * tidal_phase);
     let solar_angle = 2.0 * (solar_hour_angle + TAU * tidal_phase);
     let tide_sum = cos(lunar_angle) + 0.46 * cos(solar_angle);
-    let angle_gradient = vec2<f32>(TAU / scene.world_size_m.x, 0.0)
+    let angle_gradient = vec2<f32>(
+        TAU * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        0.0,
+    )
         + TAU * tidal_phase_gradient;
     let tide_sum_gradient = (-2.0 * sin(lunar_angle) - 0.92 * sin(solar_angle))
         * angle_gradient;
@@ -238,36 +269,77 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
         * (basin * tide_gradient + tide_height_m * basin_gradient);
     let current_m_s = rotate_left(base_gradient + weather_gradient) - tidal_potential_gradient;
 
-    let terrain = procedural_terrain_sample(position_m);
-    let water_depth_m = max(tide_height_m - terrain.elevation_m, 0.0);
+    let water_depth_m = max(tide_height_m - terrain_elevation_m, 0.0);
+    let surface_wind_m_s = resolved_surface_wind_m_s_from_pressure(
+        position_m,
+        atmosphere.pressure,
+    );
+    let upper_wind_m_s = upper_wind_m_s_from_atmosphere(position_m, atmosphere);
     if water_depth_m == 0.0 {
-        return vec3<f32>(0.0);
+        return OceanForcingSample(
+            vec2<f32>(0.0),
+            0.0,
+            surface_wind_m_s,
+            upper_wind_m_s,
+        );
     }
     // Wave energy responds to sustained resolved flow, not an instantaneous
     // 256 m surface gust.
-    let surface_speed_m_s = length(resolved_surface_wind_m_s_at(position_m));
-    let upper_speed_m_s = length(upper_wind_m_s_at(position_m));
+    let surface_speed_m_s = length(surface_wind_m_s);
+    let upper_speed_m_s = length(upper_wind_m_s);
     let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
     let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
     let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
-    return vec3<f32>(
+    return OceanForcingSample(
         current_m_s,
         min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
+        surface_wind_m_s,
+        upper_wind_m_s,
     );
 }
 
-fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
-    let forcing = ocean_forcing_at(position_m);
-    let significant_height_m = forcing.z;
+fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
+    let terrain = procedural_terrain_sample(position_m);
+    let forcing = ocean_forcing_from_surface(
+        position_m,
+        terrain.cluster,
+        terrain.elevation_m,
+        surface_atmosphere_sample_at(position_m),
+        surface_tide_sample_at(position_m),
+    );
+    return vec3<f32>(forcing.current_m_s, forcing.significant_height_m);
+}
+
+fn physical_water_wave_sample_from_surface(
+    position_m: vec2<f32>,
+    terrain_cluster: TerrainNoiseSample,
+    terrain_elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+    tide: SurfaceTideSample,
+) -> TerrainNoiseSample {
+    if material_feature_visibility().y <= 0.0 {
+        return TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    }
+    let forcing = ocean_forcing_from_surface(
+        position_m,
+        terrain_cluster,
+        terrain_elevation_m,
+        atmosphere,
+        tide,
+    );
+    let significant_height_m = forcing.significant_height_m;
     var sample: TerrainNoiseSample;
     sample.value = significant_height_m;
     sample.gradient = vec2<f32>(0.0);
     if significant_height_m <= 0.0 {
         return sample;
     }
+    if material_feature_visibility().z <= 0.0 {
+        return sample;
+    }
 
-    let surface_wind = resolved_surface_wind_m_s_at(position_m);
-    let upper_wind = upper_wind_m_s_at(position_m);
+    let surface_wind = forcing.surface_wind_m_s;
+    let upper_wind = forcing.upper_wind_m_s;
     let surface_speed = length(surface_wind);
     let upper_speed = length(upper_wind);
     let surface_direction = surface_wind / max(surface_speed, 0.0001);
@@ -313,7 +385,8 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         if mode_x == 0.0 && abs(original_direction.y) < 0.000001 {
             mode_x = select(1.0, -1.0, original_direction.x < 0.0);
         }
-        let wave_number_x = TAU * mode_x / scene.world_size_m.x;
+        let wave_number_x = TAU * mode_x
+            * scene.cloud_anchor_phase_and_inverse_world_size_m.z;
         let wave_number_y = TAU * original_direction.y / wavelength_m;
         let wave_number = length(vec2<f32>(wave_number_x, wave_number_y));
         let direction = vec2<f32>(wave_number_x, wave_number_y) / wave_number;
@@ -321,7 +394,9 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         let weight = 0.20 + pow(alignment, 4.0);
         let amplitude_m = weight * amplitude_scale;
         let angular_frequency = sqrt(9.81 * wave_number);
-        let phase = wave_number_x * fract(position_m.x / scene.world_size_m.x) * scene.world_size_m.x
+        let phase = wave_number_x
+            * fract(position_m.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z)
+            * scene.world_size_m.x
             + wave_number_y * position_m.y
             - ocean_tick_phase_radians(angular_frequency / 60.0)
             + TAU * ocean_hash_unit(
@@ -340,8 +415,22 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     return sample;
 }
 
+fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    let terrain = procedural_terrain_sample(position_m);
+    return physical_water_wave_sample_from_surface(
+        position_m,
+        terrain.cluster,
+        terrain.elevation_m,
+        surface_atmosphere_sample_at(position_m),
+        surface_tide_sample_at(position_m),
+    );
+}
+
 fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    if material_feature_visibility().w <= 0.0 {
+        return sample;
+    }
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = 18.0;
@@ -355,10 +444,7 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         if octave_visibility > 0.0 {
             let octave_seed = scene.match_seed
                 ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u)
-                ^ multiply_u64(
-                    vec2<u32>(octave, 0u),
-                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-                );
+                ^ OCTAVE_SALTS[octave];
             let octave_sample = spatiotemporal_noise_sample(
                 octave_seed,
                 position_m,
@@ -379,8 +465,20 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     return sample;
 }
 
-fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
-    let physical = physical_water_wave_sample(position_m);
+fn visual_water_normal_sample_from_surface(
+    position_m: vec2<f32>,
+    terrain_cluster: TerrainNoiseSample,
+    terrain_elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+    tide: SurfaceTideSample,
+) -> TerrainNoiseSample {
+    let physical = physical_water_wave_sample_from_surface(
+        position_m,
+        terrain_cluster,
+        terrain_elevation_m,
+        atmosphere,
+        tide,
+    );
     let decorative = decorative_water_normal_sample(position_m);
     return TerrainNoiseSample(
         physical.value,
@@ -388,12 +486,35 @@ fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     );
 }
 
+fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    let terrain = procedural_terrain_sample(position_m);
+    return visual_water_normal_sample_from_surface(
+        position_m,
+        terrain.cluster,
+        terrain.elevation_m,
+        surface_atmosphere_sample_at(position_m),
+        surface_tide_sample_at(position_m),
+    );
+}
+
 fn visual_water_surface(
     position_m: vec2<f32>,
     base_color: vec3<f32>,
+    terrain_cluster: TerrainNoiseSample,
+    terrain_elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
-    let normal_detail = visual_water_normal_sample(position_m);
-    let precipitation_contact = precipitation_water_contact_sample(position_m);
+    let normal_detail = visual_water_normal_sample_from_surface(
+        position_m,
+        terrain_cluster,
+        terrain_elevation_m,
+        atmosphere,
+        surface_tide_sample,
+    );
+    let precipitation_contact = precipitation_water_contact_sample_from_atmosphere(
+        position_m,
+        atmosphere,
+    );
     let undisturbed_gradient = mix(
         normal_detail.gradient,
         0.35 * normal_detail.gradient,
@@ -412,6 +533,7 @@ fn visual_water_surface(
 
 fn terrain_surface(
     position_m: vec2<f32>,
+    terrain_cluster: TerrainNoiseSample,
     elevation_m: f32,
     terrain_gradient: vec2<f32>,
     material_elevation_m: f32,
@@ -421,7 +543,15 @@ fn terrain_surface(
     coastal_sediment_amount: f32,
     water_height_m: f32,
     surface: f32,
+    atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
+    if material_feature_visibility().x <= 0.0 {
+        return TerrainSurface(
+            select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
+            vec2<f32>(0.0),
+            1.0,
+        );
+    }
     let slope = length(material_gradient);
     if elevation_m < water_height_m {
         let depth_m = water_height_m - elevation_m;
@@ -429,7 +559,7 @@ fn terrain_surface(
         let bottom_transmittance = exp(
             -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
         );
-        if bottom_transmittance > 0.02 {
+        if effect_feature_visibility().y > 0.0 && bottom_transmittance > 0.02 {
             let rock_amount = smoothstep(
                 0.25,
                 0.75,
@@ -459,38 +589,71 @@ fn terrain_surface(
             return visual_water_surface(
                 position_m,
                 mix(water_color, water_veiled_bottom, bottom_visibility),
+                terrain_cluster,
+                elevation_m,
+                atmosphere,
             );
         }
-        return visual_water_surface(position_m, water_color);
+        return visual_water_surface(
+            position_m,
+            water_color,
+            terrain_cluster,
+            elevation_m,
+            atmosphere,
+        );
     }
 
-    let micro_height = material_fractal_sample(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
-        position_m,
-        2.5,
-        6u,
-    );
+    var micro_height = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    if landscape_visibility.z > 0.0 {
+        micro_height = material_fractal_sample(
+            vec2<u32>(0xcbbb9d5du, 0x629a292au),
+            position_m,
+            2.5,
+            6u,
+        );
+    }
     let surface_grade = clamp(
         0.5 + landscape_visibility.z
             * (0.40 * surface + 0.22 * micro_height.value),
         0.0,
         1.0,
     );
-    let vegetation = material_fractal_value(
-        vec2<u32>(0x510e527fu, 0x9b05688cu),
-        position_m,
-        1536.0,
-        4u,
+    var snow_amount = 0.0;
+    if climate_visibility.x > 0.0 {
+        snow_amount = smoothstep(
+            0.10,
+            0.55,
+            local_snow_cover_from_atmosphere(
+            material_elevation_m,
+            atmosphere,
+            ),
+        );
+    }
+    let snow_surface = TerrainSurface(
+        mix(
+            vec3<f32>(0.72, 0.76, 0.77),
+            vec3<f32>(0.96, 0.97, 0.96),
+            0.55 + 0.20 * surface_grade,
+        ),
+        0.22 * micro_height.gradient,
+        0.70,
     );
+    if snow_amount >= 1.0 {
+        return snow_surface;
+    }
+    var vegetation = 0.0;
+    if landscape_visibility.y > 0.0 {
+        vegetation = material_fractal_value(
+            vec2<u32>(0x510e527fu, 0x9b05688cu),
+            position_m,
+            1536.0,
+            4u,
+        );
+    }
     let altitude_exposure = smoothstep(50.0, 200.0, material_elevation_m);
     let rock_slope_threshold = tuning.terrain_tuning.z
         * mix(3.0, 0.8, altitude_exposure)
         * mix(0.72, 1.28, smoothstep(-0.45, 0.45, surface));
-    let snow_amount = smoothstep(
-        0.10,
-        0.55,
-        climate_visibility.x * local_snow_cover(material_elevation_m),
-    );
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
     let slope_rock = smoothstep(
         0.65 * rock_slope_threshold,
@@ -571,13 +734,21 @@ fn terrain_surface(
     let forest_amount = smoothstep(-0.18, 0.35, vegetation)
         * tree_line
         * (1.0 - smoothstep(0.04, 0.08, slope));
-    let canopy_detail = material_fractal_sample(
-        vec2<u32>(0x428a2f98u, 0x71374491u),
-        position_m,
-        56.0,
-        3u,
-    );
-    let canopy_cluster = smoothstep(-0.22, 0.38, canopy_detail.value + 0.32 * vegetation);
+    var canopy_detail = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var canopy_cluster = 0.0;
+    if forest_amount > 0.0 && landscape_visibility.y > 0.0 {
+        canopy_detail = material_fractal_sample(
+            vec2<u32>(0x428a2f98u, 0x71374491u),
+            position_m,
+            56.0,
+            3u,
+        );
+        canopy_cluster = smoothstep(
+            -0.22,
+            0.38,
+            canopy_detail.value + 0.32 * vegetation,
+        );
+    }
     var grass_color = mix(
         vec3<f32>(0.09, 0.24, 0.10),
         vec3<f32>(0.32, 0.38, 0.17),
@@ -591,8 +762,20 @@ fn terrain_surface(
         vec3<f32>(0.09, 0.27, 0.11),
         0.18 + 0.34 * canopy_cluster + 0.18 * (0.5 + 0.5 * micro_height.value),
     );
-    let autumn = climate_visibility.w * autumn_vegetation_amount(material_elevation_m);
-    let dormancy = climate_visibility.w * vegetation_dormancy(material_elevation_m);
+    var autumn = 0.0;
+    var dormancy = 0.0;
+    if climate_visibility.w > 0.0 {
+        autumn = autumn_vegetation_amount_from_anomaly(
+            material_elevation_m,
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        );
+        dormancy = vegetation_dormancy_from_anomaly(
+            material_elevation_m,
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        );
+    }
     grass_color = mix(grass_color, vec3<f32>(0.52, 0.28, 0.04), 0.62 * autumn);
     forest_color = mix(
         forest_color,
@@ -638,15 +821,6 @@ fn terrain_surface(
             + intertidal_cover * intertidal_surface.roughness
             + sediment_cover * beach_surface.roughness
             + rock_cover * rock_surface.roughness,
-    );
-    let snow_surface = TerrainSurface(
-        mix(
-            vec3<f32>(0.72, 0.76, 0.77),
-            vec3<f32>(0.96, 0.97, 0.96),
-            0.55 + 0.20 * surface_grade,
-        ),
-        0.22 * micro_height.gradient,
-        0.70,
     );
     return blend_terrain_surface(composed_surface, snow_surface, snow_amount);
 }

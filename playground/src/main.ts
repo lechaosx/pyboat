@@ -2,10 +2,13 @@ import {
   playground_diagnostic_shader_source,
   playground_scene_shader_source,
   playground_startup_shader_source,
+  sample_playground_cloud_anchor_blend_weights,
+  sample_playground_celestial_orbit,
   sample_playground_environment,
   sample_playground_field_time_coordinates,
+  sample_playground_seasonal_phase_factors,
   sample_playground_world_geometry,
-} from "browser";
+} from "browser/playground";
 import {
   advanceFixedClock,
   fixedClockFraction,
@@ -17,10 +20,10 @@ import {
   diagnosticShaders,
   type DiagnosticSelection,
 } from "./diagnostics";
+import { mountShaderGraph, type ShaderGraphController } from "./shader-graph-view";
 import "./style.css";
 
 type Domain = "weather" | "landscape" | "water";
-type ControlKind = "MODEL" | "SHADER" | "DEBUG";
 
 type State = {
   seed: string;
@@ -39,7 +42,14 @@ type State = {
   worldTimeSeconds: number;
   pressureTimeSeconds: number;
   currentTimeSeconds: number;
-  celestialLightingEnabled: number;
+  sunDirectLightEnabled: number;
+  moonDirectLightEnabled: number;
+  skyIndirectLightEnabled: number;
+  canopyIndirectLightEnabled: number;
+  pressureFieldEnabled: number;
+  temperatureFieldEnabled: number;
+  moistureFieldEnabled: number;
+  weatherFormationEnabled: number;
   detailCharacter: number;
   detailBlobiness: number;
   detailContrast: number;
@@ -66,10 +76,10 @@ type State = {
   coastalReliefVisible: number;
   vegetationVisible: number;
   surfaceTextureVisible: number;
-  landscapeLightingVisible: number;
+  landformReliefEnabled: number;
+  landformShadowEnabled: number;
   seasonalSnowVisible: number;
   seasonalVegetationVisible: number;
-  tidesEnabled: number;
   pressureWindScale: number;
   pressureCirculationEnabled: number;
   crossIsobarScale: number;
@@ -78,7 +88,12 @@ type State = {
   thermalWindEnabled: number;
   shelterStrength: number;
   shelterEnabled: number;
-  landscapeCompositionEnabled: number;
+  terrainMaterialsEnabled: number;
+  oceanForcingEnabled: number;
+  waveSpectrumEnabled: number;
+  decorativeWaterEnabled: number;
+  precipitationContactsEnabled: number;
+  shallowBottomEnabled: number;
   diagnostic: DiagnosticSelection;
 };
 
@@ -86,28 +101,6 @@ type NumericStateKey = Exclude<
   keyof State,
   "seed" | "paused" | "timeScalesLocked" | "diagnostic"
 >;
-type RangeControl = {
-  type: "range";
-  key: NumericStateKey;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-};
-type ToggleControl = {
-  type: "toggle";
-  key: NumericStateKey;
-  label: string;
-};
-type Control = RangeControl | ToggleControl;
-type ControlGroup = {
-  domain: Domain;
-  category: string;
-  layer: string;
-  kind: ControlKind;
-  level?: "advanced" | "visibility";
-  controls: Control[];
-};
 const defaults: State = {
   seed: "0x5eed",
   cameraX: 0,
@@ -125,7 +118,14 @@ const defaults: State = {
   worldTimeSeconds: 0,
   pressureTimeSeconds: 0,
   currentTimeSeconds: 0,
-  celestialLightingEnabled: 1,
+  sunDirectLightEnabled: 1,
+  moonDirectLightEnabled: 1,
+  skyIndirectLightEnabled: 1,
+  canopyIndirectLightEnabled: 1,
+  pressureFieldEnabled: 1,
+  temperatureFieldEnabled: 1,
+  moistureFieldEnabled: 1,
+  weatherFormationEnabled: 1,
   detailCharacter: 0.35,
   detailBlobiness: 0.25,
   detailContrast: 1.15,
@@ -152,10 +152,10 @@ const defaults: State = {
   coastalReliefVisible: 1,
   vegetationVisible: 1,
   surfaceTextureVisible: 1,
-  landscapeLightingVisible: 1,
+  landformReliefEnabled: 1,
+  landformShadowEnabled: 1,
   seasonalSnowVisible: 1,
   seasonalVegetationVisible: 1,
-  tidesEnabled: 1,
   pressureWindScale: 1,
   pressureCirculationEnabled: 1,
   crossIsobarScale: 1,
@@ -164,20 +164,14 @@ const defaults: State = {
   thermalWindEnabled: 1,
   shelterStrength: 1,
   shelterEnabled: 1,
-  landscapeCompositionEnabled: 1,
+  terrainMaterialsEnabled: 1,
+  oceanForcingEnabled: 1,
+  waveSpectrumEnabled: 1,
+  decorativeWaterEnabled: 1,
+  precipitationContactsEnabled: 1,
+  shallowBottomEnabled: 1,
   diagnostic: "scene",
 };
-
-const range = (
-  key: NumericStateKey,
-  label: string,
-  min: number,
-  max: number,
-  step: number,
-): RangeControl => ({ type: "range", key, label, min, max, step });
-const toggle = (key: NumericStateKey, label: string): ToggleControl => (
-  { type: "toggle", key, label }
-);
 
 const wrappedPhase = (phase: number): number => ((phase % 1) + 1) % 1;
 const worldDaySeconds = 86_400;
@@ -199,203 +193,20 @@ function worldPhases(worldTimeSeconds: number): [number, number, number] {
   ];
 }
 
-const groups: ControlGroup[] = [
-  {
-    domain: "weather", category: "Visibility", layer: "Lighting", kind: "DEBUG", level: "visibility", controls: [
-      toggle("celestialLightingEnabled", "Celestial lighting"),
-    ],
-  },
-  {
-    domain: "weather", category: "Visibility", layer: "Low wind-cue clouds", kind: "DEBUG", level: "visibility", controls: [
-      toggle("lowCloudEnabled", "Low wind-cue layer"),
-      toggle("lowCloudVisible", "Visible body"),
-      toggle("lowCloudShadow", "Terrain shadow"),
-    ],
-  },
-  {
-    domain: "weather", category: "Advanced tuning", layer: "Low-cloud shape", kind: "SHADER", level: "advanced", controls: [
-      range("detailCharacter", "Billow shape", 0, 1, 0.05),
-      range("detailBlobiness", "Cell separation", 0, 1, 0.05),
-      range("detailContrast", "Detail contrast", 0.25, 2.5, 0.05),
-      range("detailEdgeSoftness", "Body edge", 0.005, 0.25, 0.005),
-    ],
-  },
-  {
-    domain: "weather", category: "Advanced tuning", layer: "Low-cloud coverage", kind: "SHADER", level: "advanced", controls: [
-      range("maxWispCoverage", "Maximum wisp coverage", 0, 1, 0.01),
-    ],
-  },
-  {
-    domain: "weather", category: "Advanced tuning", layer: "Low-cloud appearance", kind: "SHADER", level: "advanced", controls: [
-      range("opticalDepth", "Optical depth", 0, 3, 0.05),
-      range("opacity", "Opacity", 0, 1.5, 0.05),
-      range("darkness", "Low-cloud darkening", 0, 2, 0.05),
-      range("relief", "Relief shading", 0, 2, 0.05),
-    ],
-  },
-  {
-    domain: "weather", category: "Visibility", layer: "Weather canopy", kind: "DEBUG", level: "visibility", controls: [
-      toggle("upperCloudEnabled", "Weather canopy"),
-      toggle("upperCloudShadow", "Terrain shadow"),
-      toggle("upperShadowOnLowCloud", "Shadow on low cloud"),
-    ],
-  },
-  {
-    domain: "weather", category: "Advanced tuning", layer: "Wind components", kind: "MODEL", level: "advanced", controls: [
-      toggle("pressureCirculationEnabled", "Pressure circulation"),
-      toggle("crossIsobarEnabled", "Cross-isobar flow"),
-      toggle("thermalWindEnabled", "Thermal-wind shear"),
-      toggle("shelterEnabled", "Terrain shelter"),
-    ],
-  },
-  {
-    domain: "weather", category: "Advanced tuning", layer: "Wind response", kind: "MODEL", level: "advanced", controls: [
-      range("pressureWindScale", "Pressure response", 0, 2, 0.05),
-      range("crossIsobarScale", "Cross-isobar response", 0, 2, 0.05),
-      range("thermalWindScale", "Thermal response", 0, 2, 0.05),
-      range("shelterStrength", "Shelter strength", 0, 1, 0.05),
-    ],
-  },
-  {
-    domain: "landscape", category: "Advanced tuning", layer: "Terrain shape", kind: "SHADER", level: "advanced", controls: [
-      range("terrainScale", "Horizontal scale", 0.25, 4, 0.05),
-      range("elevationScale", "Elevation scale", 0.1, 3, 0.05),
-      range("cliffSlope", "Cliff slope", 0.01, 0.3, 0.005),
-    ],
-  },
-  {
-    domain: "landscape", category: "Advanced tuning", layer: "Landform lighting", kind: "SHADER", level: "advanced", controls: [
-      range("landformReliefStrength", "Relief strength", 0, 2, 0.05),
-      range("landformShadowStrength", "Cast-shadow strength", 0, 1, 0.05),
-      range("landformShadowReach", "Shadow reach · m", 32, 1024, 16),
-    ],
-  },
-  {
-    domain: "landscape", category: "Visibility", layer: "Surface composition", kind: "DEBUG", level: "visibility", controls: [
-      toggle("landscapeCompositionEnabled", "Landscape composition"),
-      toggle("coastalReliefVisible", "Coastal reef relief"),
-      toggle("vegetationVisible", "Vegetation"),
-      toggle("surfaceTextureVisible", "Surface texture"),
-      toggle("landscapeLightingVisible", "Terrain lighting"),
-    ],
-  },
-  {
-    domain: "landscape", category: "Visibility", layer: "Climate layers", kind: "DEBUG", level: "visibility", controls: [
-      toggle("seasonalSnowVisible", "Seasonal snow"),
-      toggle("seasonalVegetationVisible", "Vegetation seasons"),
-    ],
-  },
-  {
-    domain: "water", category: "Visibility", layer: "Astronomical tide", kind: "DEBUG", level: "visibility", controls: [
-      toggle("tidesEnabled", "Tidal water height"),
-    ],
-  },
-  {
-    domain: "water", category: "Advanced tuning", layer: "Underwater visibility", kind: "SHADER", level: "advanced", controls: [
-      range("waterAttenuationLength", "Bottom attenuation length · m", 0, 1, 0.01),
-      range("bottomVisibility", "Bottom visibility", 0, 2, 0.02),
-    ],
-  },
-];
-
-const categoryOrder = [
-  "Visibility", "Advanced tuning",
-];
-
-const lowCloudDependentKeys = new Set<NumericStateKey>([
-  "detailCharacter", "detailBlobiness", "detailContrast", "detailEdgeSoftness",
-  "maxWispCoverage",
-  "opticalDepth", "opacity", "darkness", "relief",
-  "lowCloudVisible", "lowCloudShadow",
-]);
-const landscapeCompositionKeys = new Set<NumericStateKey>([
-  "coastalReliefVisible", "vegetationVisible", "surfaceTextureVisible",
-  "landscapeLightingVisible", "seasonalSnowVisible",
-  "seasonalVegetationVisible",
-]);
-const subtoggleKeys = new Set<NumericStateKey>([
-  "lowCloudVisible", "lowCloudShadow", "upperCloudShadow", "upperShadowOnLowCloud",
-  ...landscapeCompositionKeys,
-]);
-const subrangeKeys = new Set<NumericStateKey>([
-  "pressureWindScale", "crossIsobarScale", "thermalWindScale", "shelterStrength",
-]);
-
-const categoryPresets: Record<string, Record<string, Partial<State>>> = {
-  "weather:Visibility": {
-    Production: {
-      celestialLightingEnabled: defaults.celestialLightingEnabled,
-      lowCloudEnabled: defaults.lowCloudEnabled,
-      lowCloudVisible: defaults.lowCloudVisible,
-      lowCloudShadow: defaults.lowCloudShadow,
-      upperCloudEnabled: defaults.upperCloudEnabled,
-      upperCloudShadow: defaults.upperCloudShadow,
-      upperShadowOnLowCloud: defaults.upperShadowOnLowCloud,
-    },
-  },
-  "weather:Advanced tuning": {
-    Production: {
-      detailCharacter: defaults.detailCharacter,
-      detailBlobiness: defaults.detailBlobiness,
-      detailContrast: defaults.detailContrast,
-      detailEdgeSoftness: defaults.detailEdgeSoftness,
-      maxWispCoverage: defaults.maxWispCoverage,
-      opticalDepth: defaults.opticalDepth,
-      opacity: defaults.opacity,
-      darkness: defaults.darkness,
-      relief: defaults.relief,
-      pressureCirculationEnabled: defaults.pressureCirculationEnabled,
-      pressureWindScale: defaults.pressureWindScale,
-      crossIsobarEnabled: defaults.crossIsobarEnabled,
-      crossIsobarScale: defaults.crossIsobarScale,
-      thermalWindEnabled: defaults.thermalWindEnabled,
-      thermalWindScale: defaults.thermalWindScale,
-      shelterEnabled: defaults.shelterEnabled,
-      shelterStrength: defaults.shelterStrength,
-    },
-  },
-  "landscape:Advanced tuning": {
-    Production: {
-      terrainScale: defaults.terrainScale,
-      elevationScale: defaults.elevationScale,
-      cliffSlope: defaults.cliffSlope,
-      landformReliefStrength: defaults.landformReliefStrength,
-      landformShadowStrength: defaults.landformShadowStrength,
-      landformShadowReach: defaults.landformShadowReach,
-    },
-  },
-  "landscape:Visibility": {
-    Production: {
-      landscapeCompositionEnabled: defaults.landscapeCompositionEnabled,
-      coastalReliefVisible: defaults.coastalReliefVisible,
-      vegetationVisible: defaults.vegetationVisible,
-      surfaceTextureVisible: defaults.surfaceTextureVisible,
-      landscapeLightingVisible: defaults.landscapeLightingVisible,
-      seasonalSnowVisible: defaults.seasonalSnowVisible,
-      seasonalVegetationVisible: defaults.seasonalVegetationVisible,
-    },
-  },
-  "water:Advanced tuning": {
-    Production: {
-      waterAttenuationLength: defaults.waterAttenuationLength,
-      bottomVisibility: defaults.bottomVisibility,
-    },
-  },
-};
-
 const state: State = { ...defaults };
-let activeDomain: Domain = "weather";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#preview");
 const geometryOverlay = document.querySelector<HTMLCanvasElement>("#geometry-overlay");
 const controls = document.querySelector<HTMLElement>("#controls");
-const domains = document.querySelector<HTMLElement>("#domains");
 const worldToolbar = document.querySelector<HTMLElement>("#world-toolbar");
+const shaderGraph = document.querySelector<HTMLElement>("#shader-graph");
 const status = document.querySelector<HTMLElement>("#status");
 const scaleLine = document.querySelector<HTMLElement>("#scale-line");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
 const geometryGuideLabel = document.querySelector<HTMLElement>(".geometry-guide-label");
-if (!canvas || !geometryOverlay || !controls || !domains || !worldToolbar || !status || !scaleLine || !scaleLabel || !geometryGuideLabel) {
+const playgroundMain = document.querySelector<HTMLElement>("main");
+const sidebarResizer = document.querySelector<HTMLElement>("#sidebar-resizer");
+if (!canvas || !geometryOverlay || !controls || !worldToolbar || !shaderGraph || !status || !scaleLine || !scaleLabel || !geometryGuideLabel || !playgroundMain || !sidebarResizer) {
   throw new Error("Procedural lab page is incomplete");
 }
 const previewCanvas = canvas;
@@ -404,20 +215,54 @@ const geometryOverlayRenderingContext = geometryOverlayCanvas.getContext("2d");
 if (!geometryOverlayRenderingContext) throw new Error("World geometry diagnostic is unavailable");
 const geometryOverlayContext: CanvasRenderingContext2D = geometryOverlayRenderingContext;
 const controlsElement = controls;
-const domainsElement = domains;
 const worldToolbarElement = worldToolbar;
+const shaderGraphElement = shaderGraph;
 const statusElement = status;
 const scaleLineElement = scaleLine;
 const scaleLabelElement = scaleLabel;
 const geometryGuideLabelElement = geometryGuideLabel;
+const playgroundMainElement = playgroundMain;
+const sidebarResizerElement = sidebarResizer;
 
-type ValueTransition = { elapsed: number; from: number; to: number };
-const valueTransitions = new Map<NumericStateKey, ValueTransition>();
-const inputByKey = new Map<NumericStateKey, HTMLInputElement>();
-const outputByKey = new Map<NumericStateKey, HTMLInputElement>();
-const rangeByKey = new Map<NumericStateKey, RangeControl>();
-const resetByKey = new Map<NumericStateKey, HTMLButtonElement>();
-const controlElementByKey = new Map<NumericStateKey, HTMLElement>();
+function setSidebarWidth(clientX: number): void {
+  const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+  const minimumWidth = 18 * rootFontSize;
+  const maximumWidth = Math.max(minimumWidth, playgroundMainElement.clientWidth - 20 * rootFontSize);
+  const mainLeft = playgroundMainElement.getBoundingClientRect().left;
+  const width = Math.min(maximumWidth, Math.max(minimumWidth, clientX - mainLeft));
+  document.documentElement.style.setProperty("--panel-width", `${width}px`);
+  sidebarResizerElement.setAttribute("aria-valuemin", String(Math.round(minimumWidth)));
+  sidebarResizerElement.setAttribute("aria-valuemax", String(Math.round(maximumWidth)));
+  sidebarResizerElement.setAttribute("aria-valuenow", String(Math.round(width)));
+}
+
+sidebarResizerElement.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  sidebarResizerElement.setPointerCapture(event.pointerId);
+  document.body.classList.add("sidebar-resizing");
+});
+sidebarResizerElement.addEventListener("pointermove", (event) => {
+  if (sidebarResizerElement.hasPointerCapture(event.pointerId)) setSidebarWidth(event.clientX);
+});
+const finishSidebarResize = (event: PointerEvent): void => {
+  if (sidebarResizerElement.hasPointerCapture(event.pointerId)) {
+    sidebarResizerElement.releasePointerCapture(event.pointerId);
+  }
+  document.body.classList.remove("sidebar-resizing");
+};
+sidebarResizerElement.addEventListener("pointerup", finishSidebarResize);
+sidebarResizerElement.addEventListener("pointercancel", finishSidebarResize);
+sidebarResizerElement.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const mainLeft = playgroundMainElement.getBoundingClientRect().left;
+  const resizerBounds = sidebarResizerElement.getBoundingClientRect();
+  const currentWidth = resizerBounds.left + resizerBounds.width / 2 - mainLeft;
+  setSidebarWidth(mainLeft + currentWidth + (event.key === "ArrowLeft" ? -16 : 16));
+});
+
+let shaderGraphController: ShaderGraphController | undefined;
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 
@@ -425,228 +270,49 @@ function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
 }
 
-function tag(kind: ControlKind): HTMLSpanElement {
+const featureKeys = {
+  low_cloud_body: "lowCloudVisible",
+  low_cloud_shadow: "lowCloudShadow",
+  canopy_shadow: "upperCloudShadow",
+  canopy_on_low: "upperShadowOnLowCloud",
+  coastal_relief: "coastalReliefVisible",
+  vegetation: "vegetationVisible",
+  surface_texture: "surfaceTextureVisible",
+  seasonal_snow: "seasonalSnowVisible",
+  vegetation_seasons: "seasonalVegetationVisible",
+  sun_direct: "sunDirectLightEnabled",
+  moon_direct: "moonDirectLightEnabled",
+  pressure: "pressureFieldEnabled",
+  temperature: "temperatureFieldEnabled",
+  moisture: "moistureFieldEnabled",
+  weather: "weatherFormationEnabled",
+  materials: "terrainMaterialsEnabled",
+  ocean_forcing: "oceanForcingEnabled",
+  wave_spectrum: "waveSpectrumEnabled",
+  decorative_water: "decorativeWaterEnabled",
+  precipitation_contacts: "precipitationContactsEnabled",
+  shallow_bottom: "shallowBottomEnabled",
+  sky_indirect: "skyIndirectLightEnabled",
+  canopy_indirect: "canopyIndirectLightEnabled",
+  landform_relief: "landformReliefEnabled",
+  landform_shadow: "landformShadowEnabled",
+} as const satisfies Record<string, NumericStateKey>;
+
+function computationEnabled(id: keyof typeof featureKeys): number {
+  return Number(state[featureKeys[id]] > 0.5);
+}
+
+function diagnosticTag(): HTMLSpanElement {
   const element = document.createElement("span");
-  element.className = `kind kind-${kind.toLowerCase()}`;
-  element.textContent = kind;
+  element.className = "kind kind-debug";
+  element.textContent = "DEBUG";
   return element;
 }
 
-function updateResetButton(key: NumericStateKey): void {
-  const button = resetByKey.get(key);
-  if (button) button.hidden = state[key] === defaults[key];
-}
-
-function setControlsEnabled(keys: Iterable<NumericStateKey>, enabled: boolean): void {
-  for (const key of keys) {
-    inputByKey.get(key)?.toggleAttribute("disabled", !enabled);
-    resetByKey.get(key)?.toggleAttribute("disabled", !enabled);
-    controlElementByKey.get(key)?.classList.toggle("control-disabled", !enabled);
-  }
-}
-
-function updateDependentControls(): void {
-  const lowCloudEnabled = state.lowCloudEnabled > 0.5;
-  const upperCloudEnabled = state.upperCloudEnabled > 0.5;
-  setControlsEnabled(lowCloudDependentKeys, lowCloudEnabled);
-  setControlsEnabled(["upperCloudShadow"], upperCloudEnabled);
-  setControlsEnabled(["upperShadowOnLowCloud"], lowCloudEnabled && upperCloudEnabled);
-  setControlsEnabled(["pressureWindScale"], state.pressureCirculationEnabled > 0.5);
-  setControlsEnabled(["crossIsobarScale"], state.crossIsobarEnabled > 0.5);
-  setControlsEnabled(["thermalWindScale"], state.thermalWindEnabled > 0.5);
-  setControlsEnabled(["shelterStrength"], state.shelterEnabled > 0.5);
-  setControlsEnabled(landscapeCompositionKeys, state.landscapeCompositionEnabled > 0.5);
-}
-
-function resetButton(
-  key: NumericStateKey,
-  label: string,
-  afterReset?: () => void,
-): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "reset-value";
-  button.textContent = "↺";
-  button.title = `Reset ${label} to default`;
-  button.setAttribute("aria-label", button.title);
-  button.addEventListener("click", () => {
-    valueTransitions.delete(key);
-    Object.assign(state, { [key]: defaults[key] });
-    syncControl(key);
-    afterReset?.();
-  });
-  resetByKey.set(key, button);
-  updateResetButton(key);
-  return button;
-}
-
-function createRangeControl(control: RangeControl): HTMLDivElement {
-  const container = document.createElement("div");
-  container.className = "control range-control";
-  container.classList.toggle("subcontrol", subrangeKeys.has(control.key));
-  const heading = document.createElement("label");
-  heading.className = "control-name";
-  heading.textContent = control.label;
-  const input = document.createElement("input");
-  input.type = "range";
-  input.id = `control-${control.key}`;
-  heading.htmlFor = input.id;
-  input.min = String(control.min);
-  input.max = String(control.max);
-  input.step = String(control.step);
-  const controlValue = state[control.key];
-  input.value = String(controlValue);
-  const output = document.createElement("input");
-  output.type = "number";
-  output.className = "range-value";
-  output.min = String(control.min);
-  output.max = String(control.max);
-  output.step = String(control.step);
-  output.value = format(controlValue, control.step);
-  input.addEventListener("input", () => {
-    valueTransitions.delete(control.key);
-    const value = Number(input.value);
-    state[control.key] = value;
-    syncControl(control.key);
-  });
-  output.addEventListener("input", () => {
-    if (!Number.isFinite(output.valueAsNumber)) return;
-    valueTransitions.delete(control.key);
-    const value = Math.min(control.max, Math.max(control.min, output.valueAsNumber));
-    state[control.key] = value;
-    syncControl(control.key);
-  });
-  output.addEventListener("change", () => syncControl(control.key));
-  let pointerId: number | undefined;
-  let pointerX = 0;
-  let dragging = false;
-  input.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    pointerId = event.pointerId;
-    pointerX = event.clientX;
-    dragging = false;
-    input.setPointerCapture(event.pointerId);
-  });
-  input.addEventListener("pointermove", (event) => {
-    if (event.pointerId !== pointerId) return;
-    if (!dragging && Math.abs(event.clientX - pointerX) < 4) return;
-    dragging = true;
-    valueTransitions.delete(control.key);
-    state[control.key] = rangeValueAtPointer(control, input, event.clientX);
-    syncControl(control.key);
-  });
-  input.addEventListener("pointerup", (event) => {
-    if (event.pointerId !== pointerId) return;
-    if (!dragging) {
-      valueTransitions.set(control.key, {
-        elapsed: 0,
-        from: state[control.key],
-        to: rangeValueAtPointer(control, input, event.clientX),
-      });
-    }
-    pointerId = undefined;
-  });
-  input.addEventListener("pointercancel", () => { pointerId = undefined; });
-  container.append(heading, input, output);
-  container.append(resetButton(control.key, control.label));
-  inputByKey.set(control.key, input);
-  outputByKey.set(control.key, output);
-  rangeByKey.set(control.key, control);
-  controlElementByKey.set(control.key, container);
-  return container;
-}
-
-function rangeValueAtPointer(control: RangeControl, input: HTMLInputElement, clientX: number): number {
-  const rect = input.getBoundingClientRect();
-  const amount = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  const value = control.min + amount * (control.max - control.min);
-  const controlValue = Math.min(
-    control.max,
-    Math.max(control.min, Math.round(value / control.step) * control.step),
-  );
-  return controlValue;
-}
-
-function createToggleControl(control: ToggleControl): HTMLDivElement {
-  const container = document.createElement("div");
-  container.className = "control toggle-control";
-  container.classList.toggle("subtoggle", subtoggleKeys.has(control.key));
-  const input = document.createElement("input");
-  input.type = "checkbox";
-  input.id = `control-${control.key}`;
-  input.checked = state[control.key] > 0.5;
-  input.addEventListener("change", () => {
-    state[control.key] = Number(input.checked);
-    syncControl(control.key);
-  });
-  const heading = document.createElement("label");
-  heading.className = "control-name";
-  heading.htmlFor = input.id;
-  heading.textContent = control.label;
-  container.append(input, heading, resetButton(control.key, control.label));
-  inputByKey.set(control.key, input);
-  controlElementByKey.set(control.key, container);
-  return container;
-}
+let syncDiagnosticControl = () => {};
 
 function renderControls(): void {
   controlsElement.replaceChildren();
-  inputByKey.clear();
-  outputByKey.clear();
-  rangeByKey.clear();
-  resetByKey.clear();
-  controlElementByKey.clear();
-  const domainGroups = groups.filter((group) => group.domain === activeDomain);
-  const categories = [...new Set(domainGroups.map((group) => group.category))]
-    .sort((left, right) => categoryOrder.indexOf(left) - categoryOrder.indexOf(right));
-  for (const category of categories) {
-    const section = document.createElement("section");
-    section.className = "control-category";
-    const title = document.createElement("h2");
-    title.textContent = category;
-    section.append(title);
-    const presets = categoryPresets[`${activeDomain}:${category}`];
-    if (presets) {
-      const presetBar = document.createElement("nav");
-      presetBar.className = "category-presets";
-      presetBar.setAttribute("aria-label", `${category} presets`);
-      const presetLabel = document.createElement("span");
-      presetLabel.textContent = "PRESETS";
-      presetBar.append(presetLabel);
-      for (const [name, values] of Object.entries(presets)) {
-        const button = document.createElement("button");
-        button.textContent = name;
-        button.addEventListener("click", () => {
-          valueTransitions.clear();
-          Object.assign(state, values);
-          for (const key of Object.keys(values) as NumericStateKey[]) syncControl(key);
-          updateDependentControls();
-        });
-        presetBar.append(button);
-      }
-      section.append(presetBar);
-    }
-    for (const group of domainGroups.filter((candidate) => candidate.category === category)) {
-      const details = document.createElement("details");
-      details.className = group.level ? `control-group ${group.level}` : "control-group primary";
-      details.open = group.level === undefined;
-      const summary = document.createElement("summary");
-      const summaryName = document.createElement("span");
-      summaryName.textContent = group.layer;
-      summary.append(summaryName, tag(group.kind));
-      details.append(summary);
-      for (const control of group.controls) {
-        details.append(
-          control.type === "range"
-            ? createRangeControl(control)
-            : createToggleControl(control),
-        );
-      }
-      section.append(details);
-    }
-    controlsElement.append(section);
-  }
   const diagnosticSection = document.createElement("section");
   diagnosticSection.className = "control-category diagnostics";
   diagnosticSection.innerHTML = "<h2>Diagnostics</h2>";
@@ -654,21 +320,26 @@ function renderControls(): void {
   diagnosticLabel.className = "select-control";
   const diagnosticHeading = document.createElement("label");
   diagnosticHeading.className = "control-name";
-  diagnosticHeading.append(document.createTextNode("Output"), tag("DEBUG"));
+  diagnosticHeading.append(document.createTextNode("Output"), diagnosticTag());
   const diagnosticSelect = document.createElement("select");
   diagnosticSelect.id = "diagnostic-output";
   diagnosticHeading.htmlFor = diagnosticSelect.id;
-  for (const group of diagnosticGroups[activeDomain]) {
-    const optionGroup = document.createElement("optgroup");
-    optionGroup.label = group.label;
-    for (const [value, name] of group.options) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = name;
-      option.selected = state.diagnostic === value;
-      optionGroup.append(option);
+  for (const domain of ["weather", "landscape", "water"] as Domain[]) {
+    for (const group of diagnosticGroups[domain]) {
+      if (group.label === "Overview" && domain !== "weather") continue;
+      const optionGroup = document.createElement("optgroup");
+      optionGroup.label = group.label === "Overview"
+        ? group.label
+        : `${domain[0].toUpperCase()}${domain.slice(1)} · ${group.label}`;
+      for (const [value, name] of group.options) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = name;
+        option.selected = state.diagnostic === value;
+        optionGroup.append(option);
+      }
+      diagnosticSelect.append(optionGroup);
     }
-    diagnosticSelect.append(optionGroup);
   }
   const diagnosticReset = document.createElement("button");
   diagnosticReset.type = "button";
@@ -679,14 +350,20 @@ function renderControls(): void {
   const updateDiagnosticReset = () => {
     diagnosticReset.hidden = state.diagnostic === "scene";
   };
+  syncDiagnosticControl = () => {
+    diagnosticSelect.value = state.diagnostic;
+    updateDiagnosticReset();
+  };
   diagnosticSelect.addEventListener("change", () => {
     state.diagnostic = diagnosticSelect.value as DiagnosticSelection;
     updateDiagnosticReset();
+    shaderGraphController?.sync();
   });
   diagnosticReset.addEventListener("click", () => {
     state.diagnostic = "scene";
     diagnosticSelect.value = state.diagnostic;
     updateDiagnosticReset();
+    shaderGraphController?.sync();
   });
   updateDiagnosticReset();
   diagnosticLabel.append(
@@ -696,23 +373,6 @@ function renderControls(): void {
   );
   diagnosticSection.append(diagnosticLabel);
   controlsElement.append(diagnosticSection);
-  updateDependentControls();
-}
-
-function renderDomains(): void {
-  domainsElement.replaceChildren();
-  for (const domain of ["weather", "landscape", "water"] as Domain[]) {
-    const button = document.createElement("button");
-    button.textContent = domain[0].toUpperCase() + domain.slice(1);
-    button.className = domain === activeDomain ? "active" : "";
-    button.addEventListener("click", () => {
-      activeDomain = domain;
-      state.diagnostic = "scene";
-      renderDomains();
-      renderControls();
-    });
-    domainsElement.append(button);
-  }
 }
 
 const minimumTimeScaleSlider = -2;
@@ -781,6 +441,7 @@ worldToolbarElement.querySelector<HTMLButtonElement>("#blood-moon-preset")!
   .addEventListener("click", () => applyCelestialEventPreset("blood-moon"));
 seedInput.addEventListener("input", () => {
   state.seed = seedInput.value;
+  shaderGraphController?.sync();
 });
 function setWorldDimension(
   key: "worldWidthM" | "worldHeightM",
@@ -792,6 +453,7 @@ function setWorldDimension(
   state[key] = clampedKm * 1000;
   rangeInput.value = String(clampedKm);
   valueInput.value = String(clampedKm);
+  shaderGraphController?.sync();
 }
 worldWidthInput.addEventListener("input", () => {
   setWorldDimension("worldWidthM", worldWidthInput.valueAsNumber, worldWidthInput, worldWidthValueInput);
@@ -834,6 +496,7 @@ function setCloudTimeScale(value: number): void {
     state.worldTimeScale = state.cloudTimeScale;
   }
   syncTimeScaleInputs();
+  shaderGraphController?.sync();
 }
 function setPressureTimeScale(value: number): void {
   state.pressureTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -843,6 +506,7 @@ function setPressureTimeScale(value: number): void {
     state.worldTimeScale = state.pressureTimeScale;
   }
   syncTimeScaleInputs();
+  shaderGraphController?.sync();
 }
 function setCurrentTimeScale(value: number): void {
   state.currentTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -852,6 +516,7 @@ function setCurrentTimeScale(value: number): void {
     state.worldTimeScale = state.currentTimeScale;
   }
   syncTimeScaleInputs();
+  shaderGraphController?.sync();
 }
 function setWorldTimeScale(value: number): void {
   state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
@@ -861,6 +526,7 @@ function setWorldTimeScale(value: number): void {
     state.currentTimeScale = state.worldTimeScale;
   }
   syncTimeScaleInputs();
+  shaderGraphController?.sync();
 }
 cloudTimeScaleInput.addEventListener("input", () => {
   setCloudTimeScale(timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
@@ -912,47 +578,38 @@ pauseButton.addEventListener("click", () => {
   pauseButton.textContent = state.paused ? "Resume" : "Pause";
 });
 
-function syncControl(key: NumericStateKey): void {
-  updateResetButton(key);
-  if (
-    key === "lowCloudEnabled"
-    || key === "upperCloudEnabled"
-    || key === "celestialLightingEnabled"
-    || key === "pressureCirculationEnabled"
-    || key === "crossIsobarEnabled"
-    || key === "thermalWindEnabled"
-    || key === "shelterEnabled"
-    || key === "landscapeCompositionEnabled"
-    || key === "tidesEnabled"
-  ) updateDependentControls();
-  const input = inputByKey.get(key);
-  if (!input) return;
-  if (input.type === "checkbox") {
-    input.checked = state[key] > 0.5;
-    return;
-  }
-  const definition = rangeByKey.get(key);
-  const output = outputByKey.get(key);
-  if (definition && output) {
-    const value = state[key];
-    input.value = String(value);
-    output.value = format(value, definition.step);
-  }
-}
-
-function advanceTransitions(elapsed: number): void {
-  for (const [key, transition] of valueTransitions) {
-    transition.elapsed += elapsed;
-    const progress = Math.min(transition.elapsed / 0.3, 1);
-    const amount = progress * progress * (3 - 2 * progress);
-    state[key] = transition.from + (transition.to - transition.from) * amount;
-    syncControl(key);
-    if (progress === 1) valueTransitions.delete(key);
-  }
-}
-
-renderDomains();
 renderControls();
+shaderGraphController = mountShaderGraph(shaderGraphElement, {
+  getValue: (key) => key === "seed" ? state.seed : state[key as NumericStateKey],
+  getDefaultValue: (key) => key === "seed" ? defaults.seed : defaults[key as NumericStateKey],
+  setValue: (key, value) => {
+    if (key === "seed") {
+      state.seed = String(value);
+      seedInput.value = state.seed;
+      return;
+    }
+    const numericValue = Number(value);
+    if (key === "worldWidthM") {
+      setWorldDimension("worldWidthM", numericValue / 1000, worldWidthInput, worldWidthValueInput);
+      return;
+    }
+    if (key === "worldHeightM") {
+      setWorldDimension("worldHeightM", numericValue / 1000, worldHeightInput, worldHeightValueInput);
+      return;
+    }
+    if (key === "cloudTimeScale") return setCloudTimeScale(numericValue);
+    if (key === "pressureTimeScale") return setPressureTimeScale(numericValue);
+    if (key === "currentTimeScale") return setCurrentTimeScale(numericValue);
+    if (key === "worldTimeScale") return setWorldTimeScale(numericValue);
+    const stateKey = key as NumericStateKey;
+    state[stateKey] = numericValue;
+  },
+  getDiagnostic: () => state.diagnostic,
+  setDiagnostic: (diagnostic) => {
+    state.diagnostic = diagnostic as DiagnosticSelection;
+    syncDiagnosticControl();
+  },
+});
 
 let dragPointer: number | undefined;
 let dragX = 0;
@@ -1026,7 +683,10 @@ const adapterName = adapter.info?.description
   || adapter.info?.vendor
   || "WebGPU adapter";
 await showStartupPhase("Creating WebGPU device…");
-const device = await adapter.requestDevice();
+const timestampQueriesSupported = adapter.features.has("timestamp-query");
+const device = await adapter.requestDevice({
+  requiredFeatures: timestampQueriesSupported ? ["timestamp-query"] : [],
+});
 if (import.meta.hot) import.meta.hot.dispose(() => device.destroy());
 window.addEventListener("pagehide", () => device.destroy(), { once: true });
 const context = previewCanvas.getContext("webgpu") as any;
@@ -1070,12 +730,29 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(36);
+const sceneFloats = new Float32Array(52);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
-const tuningFloats = new Float32Array(44);
+const tuningFloats = new Float32Array(60);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
+const timestampQuerySet = timestampQueriesSupported
+  ? device.createQuerySet({ type: "timestamp", count: 2 })
+  : undefined;
+const timestampResolveBuffer = timestampQueriesSupported
+  ? device.createBuffer({ size: 16, usage: 0x0200 | 0x0004 })
+  : undefined;
+type TimestampReadback = {
+  buffer: any;
+  pending: boolean;
+  pipeline?: any;
+};
+const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
+  ? Array.from({ length: 3 }, () => ({
+      buffer: device.createBuffer({ size: 16, usage: 0x0001 | 0x0008 }),
+      pending: false,
+    }))
+  : [];
 const startupSceneBindGroup = device.createBindGroup({
   layout: startupPipeline.getBindGroupLayout(0),
   entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
@@ -1262,7 +939,12 @@ function atmosphericOutputs(output: WorldCenterDiagnostics): Array<[string, stri
 }
 
 function surfaceOutputs(output: WorldCenterDiagnostics): Array<[string, string]> {
-  const outputs: Array<[string, string]> = [
+  const vector = (value: [number, number]): string => {
+    const speed = Math.hypot(...value);
+    const direction = Math.atan2(value[1], value[0]) * 180 / Math.PI;
+    return `${speed.toFixed(2)} m/s · ${direction.toFixed(0)}°`;
+  };
+  return [
     ["Ground temperature", `${output.groundTemperatureC.toFixed(1)} °C`],
     ["Water temperature", `${output.waterTemperatureC.toFixed(1)} °C`],
     ["Seasonal snow", output.seasonalSnowCover.toFixed(2)],
@@ -1270,22 +952,12 @@ function surfaceOutputs(output: WorldCenterDiagnostics): Array<[string, string]>
     ["Solid ice", output.solidIceCover.toFixed(2)],
     ["Tide height", `${output.waterHeightM.toFixed(2)} m`],
     ["Water depth", `${output.waterDepthM.toFixed(2)} m`],
+    ["Current", vector(output.currentVelocity)],
+    ["Wave orbital motion", vector(output.waveOrbitalVelocity)],
+    ["Significant wave height", `${output.significantWaveHeightM.toFixed(2)} m`],
+    ["Instantaneous wave surface", `${output.waveSurfaceDisplacementM.toFixed(2)} m`],
+    ["Rogue crest excess", `${output.rogueCrestExcessM.toFixed(2)} m`],
   ];
-  if (activeDomain === "water") {
-    const vector = (value: [number, number]): string => {
-      const speed = Math.hypot(...value);
-      const direction = Math.atan2(value[1], value[0]) * 180 / Math.PI;
-      return `${speed.toFixed(2)} m/s · ${direction.toFixed(0)}°`;
-    };
-    outputs.push(
-      ["Current", vector(output.currentVelocity)],
-      ["Wave orbital motion", vector(output.waveOrbitalVelocity)],
-      ["Significant wave height", `${output.significantWaveHeightM.toFixed(2)} m`],
-      ["Instantaneous wave surface", `${output.waveSurfaceDisplacementM.toFixed(2)} m`],
-      ["Rogue crest excess", `${output.rogueCrestExcessM.toFixed(2)} m`],
-    );
-  }
-  return outputs;
 }
 
 function replaceDiagnosticRows(
@@ -1302,15 +974,11 @@ function replaceDiagnosticRows(
 }
 
 function updateDerivedOutput(output: WorldCenterDiagnostics): void {
-  derivedOutputHeadingElement.textContent = activeDomain === "weather"
-    ? "Derived atmosphere"
-    : activeDomain === "landscape"
-      ? "Derived surface"
-      : "Derived water";
-  const outputs = activeDomain === "weather"
-    ? atmosphericOutputs(output)
-    : surfaceOutputs(output);
-  replaceDiagnosticRows(derivedOutputElement, outputs);
+  derivedOutputHeadingElement.textContent = "Derived environment";
+  replaceDiagnosticRows(derivedOutputElement, [
+    ...atmosphericOutputs(output),
+    ...surfaceOutputs(output),
+  ]);
 }
 
 let sampledGeometryInputs: [number, number, number, number] | undefined;
@@ -1456,6 +1124,7 @@ function writeUniforms(
   pressureTimeSeconds: number,
   currentTimeSeconds: number,
 ): void {
+  const enabled = computationEnabled;
   const aspect = previewCanvas.width / previewCanvas.height;
   sceneFloats.set([
     renderedCameraX,
@@ -1494,11 +1163,16 @@ function writeUniforms(
   sceneFloats.set([
     (cloudTimeSeconds % 1800) / 1800,
     (cloudTimeSeconds % 3600) / 3600,
-    0,
-    0,
+    1 / state.worldWidthM,
+    1 / state.worldHeightM,
   ], 16);
   const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases(worldTimeSeconds);
-  sceneFloats.set([dayPhase, seasonPhase, lunarLongitudePhase, 0], 20);
+  sceneFloats.set([
+    dayPhase,
+    seasonPhase,
+    lunarLongitudePhase,
+    state.viewHeight / previewCanvas.height,
+  ], 20);
   sceneUints.set([
     Number(worldTick & 0xffff_ffffn),
     Number((worldTick >> 32n) & 0xffff_ffffn),
@@ -1507,6 +1181,15 @@ function writeUniforms(
   ], 24);
   sceneFloats.set(fieldTimes.subarray(4, 8), 28);
   sceneFloats.set(fieldTimes.subarray(8, 12), 32);
+  sceneFloats.set(sample_playground_cloud_anchor_blend_weights(
+    (cloudTimeSeconds % 1800) / 1800,
+    (cloudTimeSeconds % 3600) / 3600,
+  ), 36);
+  sceneFloats.set(sample_playground_seasonal_phase_factors(seasonPhase), 40);
+  sceneFloats.set(sample_playground_celestial_orbit(
+    seasonPhase,
+    lunarLongitudePhase,
+  ), 44);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
@@ -1527,16 +1210,16 @@ function writeUniforms(
     0,
   ], 20);
   tuningFloats.set([
-    state.lowCloudEnabled * state.lowCloudVisible,
-    state.lowCloudEnabled * state.lowCloudShadow,
-    state.upperCloudEnabled * state.upperCloudShadow,
-    state.lowCloudEnabled * state.upperCloudEnabled * state.upperShadowOnLowCloud,
+    state.lowCloudEnabled * enabled("low_cloud_body"),
+    state.lowCloudEnabled * enabled("low_cloud_shadow"),
+    state.upperCloudEnabled * enabled("canopy_shadow"),
+    state.lowCloudEnabled * state.upperCloudEnabled * enabled("canopy_on_low"),
   ], 24);
   tuningFloats.set([
-    state.landscapeCompositionEnabled * state.coastalReliefVisible,
-    state.landscapeCompositionEnabled * state.vegetationVisible,
-    state.landscapeCompositionEnabled * state.surfaceTextureVisible,
-    state.landscapeCompositionEnabled * state.landscapeLightingVisible,
+    enabled("coastal_relief"),
+    enabled("vegetation"),
+    enabled("surface_texture"),
+    1,
   ], 28);
   tuningFloats.set([
     state.pressureCirculationEnabled * state.pressureWindScale,
@@ -1545,12 +1228,41 @@ function writeUniforms(
     state.shelterEnabled * state.shelterStrength,
   ], 32);
   tuningFloats.set([
-    state.landscapeCompositionEnabled * state.seasonalSnowVisible,
-    state.tidesEnabled,
+    enabled("seasonal_snow"),
+    1,
     0,
-    state.landscapeCompositionEnabled * state.seasonalVegetationVisible,
+    enabled("vegetation_seasons"),
   ], 36);
-  tuningUints.set([state.celestialLightingEnabled, 0, 0, 0], 40);
+  tuningUints.set([
+    enabled("sun_direct"),
+    enabled("moon_direct"),
+    enabled("sky_indirect"),
+    state.upperCloudEnabled * enabled("canopy_indirect"),
+  ], 40);
+  tuningFloats.set([
+    enabled("pressure"),
+    enabled("temperature"),
+    enabled("moisture"),
+    enabled("weather"),
+  ], 44);
+  tuningFloats.set([
+    enabled("materials"),
+    enabled("ocean_forcing"),
+    enabled("wave_spectrum"),
+    enabled("decorative_water"),
+  ], 48);
+  tuningFloats.set([
+    enabled("precipitation_contacts"),
+    enabled("shallow_bottom"),
+    0,
+    0,
+  ], 52);
+  tuningFloats.set([
+    enabled("landform_relief"),
+    enabled("landform_shadow"),
+    0,
+    0,
+  ], 56);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 
@@ -1596,6 +1308,10 @@ let framesInWindow = 0;
 let ticksInWindow = 0;
 let measuredFramesPerSecond: number | undefined;
 let measuredTicksPerSecond: number | undefined;
+let measuredGpuMilliseconds: number | undefined;
+let gpuMillisecondsInWindow = 0;
+let gpuSamplesInWindow = 0;
+let timedPipeline: any;
 let nextDiagnosticsAt = 0;
 
 function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
@@ -1605,14 +1321,22 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   if (windowSeconds < 1) return;
   measuredFramesPerSecond = framesInWindow / windowSeconds;
   measuredTicksPerSecond = ticksInWindow / windowSeconds;
+  if (gpuSamplesInWindow > 0) {
+    measuredGpuMilliseconds = gpuMillisecondsInWindow / gpuSamplesInWindow;
+  }
   statisticsStartedAt = now;
   framesInWindow = 0;
   ticksInWindow = 0;
-  const rates = `${measuredFramesPerSecond.toFixed(1)} FPS · ${measuredTicksPerSecond.toFixed(1)} TPS · ${adapterName}`;
+  gpuMillisecondsInWindow = 0;
+  gpuSamplesInWindow = 0;
+  const rates = `${measuredFramesPerSecond.toFixed(1)} presented FPS · ${measuredTicksPerSecond.toFixed(1)} TPS · ${adapterName}`;
+  const gpuTiming = measuredGpuMilliseconds === undefined
+    ? timestampQueriesSupported ? " · measuring GPU" : " · GPU timing unavailable"
+    : ` · ${measuredGpuMilliseconds.toFixed(1)} GPU ms · ${(1000 / measuredGpuMilliseconds).toFixed(1)} estimated GPU FPS`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = state.paused
-    ? `${rates} · Paused at ${format(cloudTimeSeconds, 1)} s${compilation}`
-    : `${rates} · ${previewCanvas.width} × ${previewCanvas.height} · procedural world · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock${compilation}`;
+    ? `${rates}${gpuTiming} · Paused at ${format(cloudTimeSeconds, 1)} s${compilation}`
+    : `${rates}${gpuTiming} · ${previewCanvas.width} × ${previewCanvas.height} · procedural world · ${state.cloudTimeScale}× clouds · ${state.pressureTimeScale}× pressure · ${state.currentTimeScale}× currents · ${state.worldTimeScale}× world clock${compilation}`;
 }
 
 function frame(now: number): void {
@@ -1620,7 +1344,6 @@ function frame(now: number): void {
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
-  advanceTransitions(Math.min(elapsed, 0.1));
   const ticks = state.paused ? 0 : advanceFixedClock(clock, elapsed, () => {
     state.time += fixedTickSeconds * state.cloudTimeScale;
     state.pressureTimeSeconds += fixedTickSeconds * state.pressureTimeScale;
@@ -1648,14 +1371,29 @@ function frame(now: number): void {
   );
   const encoder = device.createCommandEncoder();
   const renderResources = renderResourcesForFrame();
-  const pass = encoder.beginRenderPass({
+  if (renderResources.pipeline !== timedPipeline) {
+    timedPipeline = renderResources.pipeline;
+    measuredGpuMilliseconds = undefined;
+    gpuMillisecondsInWindow = 0;
+    gpuSamplesInWindow = 0;
+  }
+  const timestampReadback = timestampReadbacks.find((readback) => !readback.pending);
+  const renderPassDescriptor: any = {
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
       loadOp: "clear",
       storeOp: "store",
     }],
-  });
+  };
+  if (timestampReadback) {
+    renderPassDescriptor.timestampWrites = {
+      querySet: timestampQuerySet,
+      beginningOfPassWriteIndex: 0,
+      endOfPassWriteIndex: 1,
+    };
+  }
+  const pass = encoder.beginRenderPass(renderPassDescriptor);
   pass.setPipeline(renderResources.pipeline);
   pass.setBindGroup(0, renderResources.sceneBindGroup);
   if (renderResources.playgroundBindGroup) {
@@ -1664,7 +1402,31 @@ function frame(now: number): void {
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
+  if (timestampReadback) {
+    encoder.resolveQuerySet(timestampQuerySet, 0, 2, timestampResolveBuffer, 0);
+    encoder.copyBufferToBuffer(timestampResolveBuffer, 0, timestampReadback.buffer, 0, 16);
+    timestampReadback.pending = true;
+    timestampReadback.pipeline = renderResources.pipeline;
+  }
   device.queue.submit([encoder.finish()]);
+  if (timestampReadback) {
+    void timestampReadback.buffer.mapAsync(0x0001).then(() => {
+      const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
+      const startedAt = timestamps[0];
+      const finishedAt = timestamps[1];
+      if (
+        timestampReadback.pipeline === timedPipeline
+        && startedAt > 0n
+        && finishedAt >= startedAt
+      ) {
+        gpuMillisecondsInWindow += Number(finishedAt - startedAt) / 1_000_000;
+        gpuSamplesInWindow += 1;
+      }
+      timestampReadback.buffer.unmap();
+    }).catch(() => {}).finally(() => {
+      timestampReadback.pending = false;
+    });
+  }
   drawGeometryOverlay();
   updateStatus(now, ticks, cloudTimeSeconds);
   requestAnimationFrame(frame);

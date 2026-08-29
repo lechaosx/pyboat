@@ -1,9 +1,10 @@
 use std::{env, fs, path::PathBuf};
 
+use browser::{cloud_anchor_blend_weights, seasonal_phase_factors, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
-    celestial_lighting, procedural_world_environment, scalar_field_time_coordinates,
-    vector_field_time_coordinates, world_celestial_conditions,
+    celestial_lighting, celestial_orbit, procedural_world_environment,
+    scalar_field_time_coordinates, vector_field_time_coordinates, world_celestial_conditions,
 };
 use serde::Serialize;
 use simulation::WorldGeometry;
@@ -57,11 +58,15 @@ struct SceneUniforms {
     low_cloud_epoch: [u32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
-    cloud_anchor_phase_and_padding: [f32; 4],
-    world_phases: [f32; 4],
+    cloud_anchor_phase_and_inverse_world_size_m: [f32; 4],
+    world_phases_and_pixel_footprint_m: [f32; 4],
     world_tick_and_padding: [u32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
+    cloud_anchor_weights: [f32; 4],
+    seasonal_phase_factors: [f32; 4],
+    celestial_orbit_angles: [f32; 4],
+    celestial_orbit_light: [f32; 4],
 }
 
 #[repr(C)]
@@ -77,7 +82,11 @@ struct PlaygroundUniforms {
     landscape_visibility: [f32; 4],
     atmosphere_model: [f32; 4],
     climate_visibility: [f32; 4],
-    celestial_visibility_and_padding: [f32; 4],
+    light_contribution_visibility: [u32; 4],
+    environment_features: [f32; 4],
+    material_features: [f32; 4],
+    effect_features: [f32; 4],
+    lighting_features: [f32; 4],
 }
 
 #[derive(Serialize)]
@@ -456,7 +465,11 @@ async fn render(options: &Options) -> Result<(), String> {
         landscape_visibility: [1.0; 4],
         atmosphere_model: [1.0; 4],
         climate_visibility: [1.0; 4],
-        celestial_visibility_and_padding: [1.0, 0.0, 0.0, 0.0],
+        light_contribution_visibility: [1; 4],
+        environment_features: [1.0; 4],
+        material_features: [1.0; 4],
+        effect_features: [1.0; 4],
+        lighting_features: [1.0; 4],
     };
     let playground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("playground uniforms"),
@@ -552,9 +565,14 @@ fn render_world(
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
     let low_cloud_epoch = (options.cloud_time_seconds / 1800.0).floor() as u64;
     let upper_cloud_epoch = (options.cloud_time_seconds / 3600.0).floor() as u64;
+    let low_cloud_phase = options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0;
+    let upper_cloud_phase = options.cloud_time_seconds.rem_euclid(3600.0) / 3600.0;
+    let low_cloud_weights = cloud_anchor_blend_weights(low_cloud_phase);
+    let upper_cloud_weights = cloud_anchor_blend_weights(upper_cloud_phase);
     let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
+    let orbit = celestial_orbit(conditions);
     let scalar_time = scalar_field_time_coordinates(tick);
     let vector_time = vector_field_time_coordinates(world_geometry, tick);
     let uniforms = SceneUniforms {
@@ -574,21 +592,40 @@ fn render_world(
         low_cloud_epoch: [low_cloud_epoch as u32, (low_cloud_epoch >> 32) as u32],
         world_size_m: [options.world_width_m, options.world_height_m],
         upper_cloud_epoch: [upper_cloud_epoch as u32, (upper_cloud_epoch >> 32) as u32],
-        cloud_anchor_phase_and_padding: [
-            options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0,
-            options.cloud_time_seconds.rem_euclid(3600.0) / 3600.0,
-            0.0,
-            0.0,
+        cloud_anchor_phase_and_inverse_world_size_m: [
+            low_cloud_phase,
+            upper_cloud_phase,
+            options.world_width_m.recip(),
+            options.world_height_m.recip(),
         ],
-        world_phases: [
+        world_phases_and_pixel_footprint_m: [
             conditions.day_phase,
             conditions.season_phase,
             conditions.lunar_longitude_phase,
-            0.0,
+            visual_pixel_footprint_m(options.view_height_m, options.height),
         ],
         world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
         pressure_time_coordinate: vector_time.pressure,
         ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
+        cloud_anchor_weights: [
+            low_cloud_weights[0],
+            low_cloud_weights[1],
+            upper_cloud_weights[0],
+            upper_cloud_weights[1],
+        ],
+        seasonal_phase_factors: seasonal_phase_factors(conditions.season_phase),
+        celestial_orbit_angles: [
+            orbit.solar_declination_rad as f32,
+            orbit.solar_right_ascension_rad as f32,
+            orbit.lunar_declination_rad as f32,
+            orbit.lunar_right_ascension_rad as f32,
+        ],
+        celestial_orbit_light: [
+            orbit.illuminated_fraction as f32,
+            orbit.lunar_penumbra_fraction,
+            orbit.lunar_umbra_fraction,
+            0.0,
+        ],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

@@ -1,11 +1,19 @@
-fn canonical_world_component(value_m: f32, period_m: f32) -> f32 {
-    let wrapped_m = value_m - floor(value_m / period_m) * period_m;
+fn canonical_world_component(
+    value_m: f32,
+    period_m: f32,
+    inverse_period_m: f32,
+) -> f32 {
+    let wrapped_m = value_m - floor(value_m * inverse_period_m) * period_m;
     return select(wrapped_m, wrapped_m - period_m, wrapped_m >= 0.5 * period_m);
 }
 
 fn canonical_world_position(position_m: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(
-        canonical_world_component(position_m.x, scene.world_size_m.x),
+        canonical_world_component(
+            position_m.x,
+            scene.world_size_m.x,
+            scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        ),
         position_m.y,
     );
 }
@@ -82,6 +90,7 @@ struct Simplex2dDomain {
 };
 
 struct TerrainSample {
+    cluster: TerrainNoiseSample,
     elevation_m: f32,
     gradient: vec2<f32>,
     material_elevation_m: f32,
@@ -144,7 +153,8 @@ fn terrain_simplex_domain(
         canonical_position + scene.world_size_m,
         canonical_position < vec2<f32>(0.0),
     );
-    let normalized_position = positive_position / scene.world_size_m;
+    let normalized_position = positive_position
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw;
     let scaled = vec2<f32>(
         f32(x_cycles) * normalized_position.x
             + f32(y_cycles) * normalized_position.y / sqrt(3.0),
@@ -207,9 +217,10 @@ fn terrain_simplex_noise(
     sample.value *= 70.0;
     let scaled_gradient = 70.0 * sample.gradient;
     sample.gradient = vec2<f32>(
-        f32(domain.x_cycles) / scene.world_size_m.x
+        f32(domain.x_cycles) * scene.cloud_anchor_phase_and_inverse_world_size_m.z
             * (scaled_gradient.x - scaled_gradient.y),
-        f32(domain.y_cycles) / (sqrt(3.0) * scene.world_size_m.y)
+        f32(domain.y_cycles) * scene.cloud_anchor_phase_and_inverse_world_size_m.w
+            / sqrt(3.0)
             * (scaled_gradient.x + scaled_gradient.y),
     );
     return sample;
@@ -265,14 +276,20 @@ fn terrain_simplex_lattice_gradient_4d(
     return gradient;
 }
 
-fn periodic_noise_circle_position(position_m: vec2<f32>) -> vec4<f32> {
-    let canonical_position = canonical_world_position(position_m);
-    let angle = TAU * canonical_position / scene.world_size_m;
+fn periodic_noise_circle_position_from_canonical(position_m: vec2<f32>) -> vec4<f32> {
+    let angle = TAU * position_m
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw;
     return vec4<f32>(
         cos(angle.x),
         sin(angle.x),
         cos(angle.y),
         sin(angle.y),
+    );
+}
+
+fn periodic_noise_circle_position(position_m: vec2<f32>) -> vec4<f32> {
+    return periodic_noise_circle_position_from_canonical(
+        canonical_world_position(position_m),
     );
 }
 
@@ -419,20 +436,36 @@ fn terrain_simplex_fractal_sample(
     persistence: f32,
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
+    return terrain_simplex_fractal_sample_from_circle(
+        field_salt,
+        position_m,
+        periodic_noise_circle_position(position_m),
+        initial_wavelength_m,
+        octave_count,
+        persistence,
+        circle_octave_count,
+    );
+}
+
+fn terrain_simplex_fractal_sample_from_circle(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    persistence: f32,
+    circle_octave_count: u32,
+) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
-    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
             octave_sample = terrain_simplex_noise_4d_from_circle(
@@ -462,18 +495,34 @@ fn terrain_simplex_fractal_value(
     persistence: f32,
     circle_octave_count: u32,
 ) -> f32 {
+    return terrain_simplex_fractal_value_from_circle(
+        field_salt,
+        position_m,
+        periodic_noise_circle_position(position_m),
+        initial_wavelength_m,
+        octave_count,
+        persistence,
+        circle_octave_count,
+    );
+}
+
+fn terrain_simplex_fractal_value_from_circle(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    persistence: f32,
+    circle_octave_count: u32,
+) -> f32 {
     var value = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
-    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         var octave_value: f32;
         if octave < circle_octave_count {
             octave_value = terrain_simplex_noise_value_4d_from_circle(
@@ -512,10 +561,7 @@ fn spatiotemporal_fractal_sample(
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         let octave_sample = spatiotemporal_noise_sample(
             octave_seed,
             position_m,
@@ -550,10 +596,7 @@ fn spatiotemporal_fractal_value(
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         value += amplitude * spatiotemporal_noise_value(
             octave_seed,
             position_m,
@@ -575,18 +618,32 @@ fn spatial_weather_fractal_sample(
     octave_count: u32,
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
+    return spatial_weather_fractal_sample_from_circle(
+        field_salt,
+        position_m,
+        periodic_noise_circle_position(position_m),
+        initial_wavelength_m,
+        octave_count,
+        circle_octave_count,
+    );
+}
+
+fn spatial_weather_fractal_sample_from_circle(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    circle_octave_count: u32,
+) -> TerrainNoiseSample {
     var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
             octave_sample = terrain_simplex_noise_4d_from_circle(
@@ -615,18 +672,32 @@ fn spatial_weather_fractal(
     octave_count: u32,
     circle_octave_count: u32,
 ) -> f32 {
+    return spatial_weather_fractal_from_circle(
+        field_salt,
+        position_m,
+        periodic_noise_circle_position(position_m),
+        initial_wavelength_m,
+        octave_count,
+        circle_octave_count,
+    );
+}
+
+fn spatial_weather_fractal_from_circle(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    circle_octave_count: u32,
+) -> f32 {
     var value = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
-    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
-            ^ multiply_u64(
-                vec2<u32>(octave, 0u),
-                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+            ^ OCTAVE_SALTS[octave];
         var octave_value: f32;
         if octave < circle_octave_count {
             octave_value = terrain_simplex_noise_value_4d_from_circle(
@@ -670,10 +741,7 @@ fn material_fractal_sample(
         if octave_visibility > 0.0 {
             let octave_seed = scene.match_seed
                 ^ field_salt
-                ^ multiply_u64(
-                    vec2<u32>(octave, 0u),
-                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-                );
+                ^ OCTAVE_SALTS[octave];
             let octave_sample = terrain_simplex_noise(
                 octave_seed,
                 position_m,
@@ -710,10 +778,7 @@ fn material_fractal_value(
         if octave_visibility > 0.0 {
             let octave_seed = scene.match_seed
                 ^ field_salt
-                ^ multiply_u64(
-                    vec2<u32>(octave, 0u),
-                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-                );
+                ^ OCTAVE_SALTS[octave];
             value += amplitude * octave_visibility * terrain_simplex_noise_value(
                 octave_seed,
                 position_m,
@@ -734,7 +799,7 @@ fn visual_transported_noise_sample(
     initial_wavelength_m: f32,
     octave_count: u32,
     anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
+    anchor_weights: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
@@ -744,12 +809,6 @@ fn visual_transported_noise_sample(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
     let next_epoch = anchor_epoch + vec2<u32>(1u, select(0u, 1u, anchor_epoch.x == 0xffffffffu));
-    let phase = clamp(anchor_phase, 0.0, 1.0);
-    let smoother_phase = phase * phase * phase
-        * (phase * (phase * 6.0 - 15.0) + 10.0);
-    let angle = 0.5 * PI * smoother_phase;
-    let current_weight = cos(angle);
-    let next_weight = sin(angle);
     let epoch_salt = vec2<u32>(0x94d049bbu, 0x133111ebu);
     let current_epoch_seed = multiply_u64(anchor_epoch, epoch_salt);
     let next_epoch_seed = multiply_u64(next_epoch, epoch_salt);
@@ -764,10 +823,7 @@ fn visual_transported_noise_sample(
         if octave_visibility > 0.0 {
             let octave_seed = scene.match_seed
                 ^ field_salt
-                ^ multiply_u64(
-                    vec2<u32>(octave, 0u),
-                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-            );
+                ^ OCTAVE_SALTS[octave];
             let current_sample = terrain_simplex_noise_4d_from_circle(
                 octave_seed ^ current_epoch_seed,
                 current_circle_position,
@@ -779,10 +835,10 @@ fn visual_transported_noise_sample(
                 wavelength_m,
             );
             var octave_sample: TerrainNoiseSample;
-            octave_sample.value = current_weight * current_sample.value
-                + next_weight * next_sample.value;
-            octave_sample.gradient = current_weight * current_sample.gradient
-                + next_weight * next_sample.gradient;
+            octave_sample.value = anchor_weights.x * current_sample.value
+                + anchor_weights.y * next_sample.value;
+            octave_sample.gradient = anchor_weights.x * current_sample.gradient
+                + anchor_weights.y * next_sample.gradient;
             sample.value += amplitude * octave_visibility * octave_sample.value;
             sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
         }
@@ -802,7 +858,7 @@ fn visual_transported_noise_value_from_circles(
     initial_wavelength_m: f32,
     octave_count: u32,
     anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
+    anchor_weights: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> f32 {
     var value = 0.0;
@@ -810,12 +866,6 @@ fn visual_transported_noise_value_from_circles(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
     let next_epoch = anchor_epoch + vec2<u32>(1u, select(0u, 1u, anchor_epoch.x == 0xffffffffu));
-    let phase = clamp(anchor_phase, 0.0, 1.0);
-    let smoother_phase = phase * phase * phase
-        * (phase * (phase * 6.0 - 15.0) + 10.0);
-    let angle = 0.5 * PI * smoother_phase;
-    let current_weight = cos(angle);
-    let next_weight = sin(angle);
     let epoch_salt = vec2<u32>(0x94d049bbu, 0x133111ebu);
     let current_epoch_seed = multiply_u64(anchor_epoch, epoch_salt);
     let next_epoch_seed = multiply_u64(next_epoch, epoch_salt);
@@ -828,10 +878,7 @@ fn visual_transported_noise_value_from_circles(
         if octave_visibility > 0.0 {
             let octave_seed = scene.match_seed
                 ^ field_salt
-                ^ multiply_u64(
-                    vec2<u32>(octave, 0u),
-                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-                );
+                ^ OCTAVE_SALTS[octave];
             let current_value = terrain_simplex_noise_value_4d_from_circle(
                 octave_seed ^ current_epoch_seed,
                 current_circle_position,
@@ -843,7 +890,7 @@ fn visual_transported_noise_value_from_circles(
                 wavelength_m,
             );
             value += amplitude * octave_visibility * (
-                current_weight * current_value + next_weight * next_value
+                anchor_weights.x * current_value + anchor_weights.y * next_value
             );
         }
         amplitude_sum += amplitude;
@@ -860,7 +907,7 @@ fn visual_transported_noise_value(
     initial_wavelength_m: f32,
     octave_count: u32,
     anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
+    anchor_weights: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> f32 {
     return visual_transported_noise_value_from_circles(
@@ -870,7 +917,7 @@ fn visual_transported_noise_value(
         initial_wavelength_m,
         octave_count,
         anchor_epoch,
-        anchor_phase,
+        anchor_weights,
         pixel_footprint_m,
     );
 }

@@ -9,7 +9,11 @@ struct PlaygroundUniforms {
     landscape_visibility: vec4<f32>,
     wind_model: vec4<f32>,
     climate_visibility: vec4<f32>,
-    celestial_visibility_and_padding: vec4<u32>,
+    light_contribution_visibility: vec4<u32>,
+    environment_features: vec4<f32>,
+    material_features: vec4<f32>,
+    effect_features: vec4<f32>,
+    lighting_features: vec4<f32>,
 };
 
 @group(1) @binding(0)
@@ -26,24 +30,47 @@ fn playground_scene_tuning() -> SceneTuning {
     );
 }
 
+struct InitializedPlaygroundScene {
+    input: VertexOutput,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_circle_position: vec4<f32>,
+}
+
 fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
-    visual_pixel_footprint_m = max(
-        0.0001,
-        max(
-            length(dpdx(input.world_position_m)),
-            length(dpdy(input.world_position_m)),
-        ),
-    );
+    visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = playground_scene_tuning();
     layer_visibility = playground.layer_visibility;
     landscape_visibility = playground.landscape_visibility;
     atmosphere_model = playground.wind_model;
     climate_visibility = playground.climate_visibility;
-    celestial_visibility = f32(playground.celestial_visibility_and_padding.x);
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
     return periodic_input;
+}
+
+fn environment_feature_visibility() -> vec4<f32> {
+    return playground.environment_features;
+}
+
+fn material_feature_visibility() -> vec4<f32> {
+    return playground.material_features;
+}
+
+fn effect_feature_visibility() -> vec4<f32> {
+    return playground.effect_features;
+}
+
+fn lighting_feature_visibility() -> vec4<f32> {
+    return playground.lighting_features;
+}
+
+fn direct_light_visibility() -> vec2<f32> {
+    return vec2<f32>(playground.light_contribution_visibility.xy);
+}
+
+fn indirect_light_visibility() -> vec2<f32> {
+    return vec2<f32>(playground.light_contribution_visibility.zw);
 }
 
 fn initialize_playground_weather() {
@@ -54,21 +81,45 @@ fn initialize_playground_tide() {
     initialize_surface_tide();
 }
 
+fn initialize_playground_tide_value() {
+    initialize_surface_tide_value();
+}
+
 fn initialize_playground_celestial() {
     initialize_celestial_lighting();
 }
 
-fn initialize_playground_atmospheric_lighting() {
+fn initialize_playground_atmospheric_lighting(
+    canopy: RegionalCanopyConditions,
+) {
     initialize_playground_celestial();
-    horizon_scattering = calculate_horizon_scattering();
-    moon_light_color = calculate_moon_light_color();
-    ambient_light_color = calculate_atmospheric_ambient_color();
+    let visibility = indirect_light_visibility();
+    if visibility.x > 0.0 || visibility.y > 0.0 {
+        horizon_scattering = calculate_horizon_scattering();
+        moon_light_color = calculate_moon_light_color();
+        ambient_light_color = calculate_atmospheric_ambient_color(canopy);
+    } else {
+        horizon_scattering = 0.0;
+        moon_light_color = vec3<f32>(1.0);
+        ambient_light_color = vec3<f32>(0.0);
+    }
+    initialize_light_contributions();
 }
 
-fn initialize_playground_scene(input: VertexOutput) -> VertexOutput {
+fn initialize_playground_scene(input: VertexOutput) -> InitializedPlaygroundScene {
     let periodic_input = initialize_playground_base(input);
-    initialize_playground_weather();
-    initialize_playground_tide();
-    initialize_playground_atmospheric_lighting();
-    return periodic_input;
+    let surface_circle_position = periodic_noise_circle_position_from_canonical(
+        surface_position_m,
+    );
+    let surface_weather = low_cloud_weather_field_at(surface_position_m);
+    surface_cloud_weather = surface_weather.weather;
+    initialize_surface_tide_from_circle(surface_circle_position);
+    initialize_playground_atmospheric_lighting(
+        regional_canopy_conditions(surface_cloud_weather),
+    );
+    return InitializedPlaygroundScene(
+        periodic_input,
+        surface_weather.atmosphere,
+        surface_circle_position,
+    );
 }

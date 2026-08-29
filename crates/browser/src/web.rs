@@ -9,9 +9,10 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    celestial_lighting, moon_phase, scalar_field_time_coordinates,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    CelestialConditions, celestial_lighting, celestial_orbit, moon_phase,
+    scalar_field_time_coordinates, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -24,9 +25,10 @@ use web_transport_wasm::{ClientBuilder, Session};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock, cloud_anchor_time,
-    sample_production_world_environment, sample_world_geometry, scale_bar,
-    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock,
+    cloud_anchor_blend_weights, cloud_anchor_time, sample_production_world_environment,
+    sample_world_geometry, scale_bar, seasonal_phase_factors, viewport_interest_radius_m,
+    visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
 };
 
 #[cfg(feature = "playground")]
@@ -309,6 +311,41 @@ pub fn sample_playground_field_time_coordinates(
 }
 
 #[wasm_bindgen]
+pub fn sample_playground_cloud_anchor_blend_weights(low_phase: f32, upper_phase: f32) -> Vec<f32> {
+    let low = cloud_anchor_blend_weights(low_phase);
+    let upper = cloud_anchor_blend_weights(upper_phase);
+    vec![low[0], low[1], upper[0], upper[1]]
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_seasonal_phase_factors(season_phase: f32) -> Vec<f32> {
+    seasonal_phase_factors(season_phase).to_vec()
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_celestial_orbit(
+    season_phase: f32,
+    lunar_longitude_phase: f32,
+) -> Vec<f32> {
+    let orbit = celestial_orbit(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase,
+        day_phase: 0.0,
+        lunar_longitude_phase,
+    });
+    vec![
+        orbit.solar_declination_rad as f32,
+        orbit.solar_right_ascension_rad as f32,
+        orbit.lunar_declination_rad as f32,
+        orbit.lunar_right_ascension_rad as f32,
+        orbit.illuminated_fraction as f32,
+        orbit.lunar_penumbra_fraction,
+        orbit.lunar_umbra_fraction,
+        0.0,
+    ]
+}
+
+#[wasm_bindgen]
 impl PlaygroundWorldGeometrySample {
     #[wasm_bindgen(getter)]
     pub fn raw_x_m(&self) -> f32 {
@@ -390,11 +427,15 @@ struct SceneUniforms {
     low_cloud_epoch: [u32; 2],
     world_size_m: [f32; 2],
     upper_cloud_epoch: [u32; 2],
-    cloud_anchor_phase_and_padding: [f32; 4],
-    world_phases: [f32; 4],
+    cloud_anchor_phase_and_inverse_world_size_m: [f32; 4],
+    world_phases_and_pixel_footprint_m: [f32; 4],
     world_tick_and_padding: [u32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
+    cloud_anchor_weights: [f32; 4],
+    seasonal_phase_factors: [f32; 4],
+    celestial_orbit_angles: [f32; 4],
+    celestial_orbit_light: [f32; 4],
 }
 
 struct Renderer {
@@ -545,9 +586,12 @@ impl Renderer {
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
         let celestial =
             world_celestial_conditions(world_geometry, tick as f64 / 60.0, Vector::ZERO);
+        let orbit = celestial_orbit(celestial);
         let match_seed = match_seed.unwrap_or(0);
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
+        let low_cloud_weights = cloud_anchor_blend_weights(low_cloud_time.phase);
+        let upper_cloud_weights = cloud_anchor_blend_weights(upper_cloud_time.phase);
         let scalar_time = scalar_field_time_coordinates(tick);
         let vector_time = vector_field_time_coordinates(world_geometry, tick);
         self.queue.write_buffer(
@@ -576,17 +620,17 @@ impl Renderer {
                     upper_cloud_time.epoch as u32,
                     (upper_cloud_time.epoch >> 32) as u32,
                 ],
-                cloud_anchor_phase_and_padding: [
+                cloud_anchor_phase_and_inverse_world_size_m: [
                     low_cloud_time.phase,
                     upper_cloud_time.phase,
-                    0.0,
-                    0.0,
+                    world_geometry.width_m().recip(),
+                    world_geometry.height_m().recip(),
                 ],
-                world_phases: [
+                world_phases_and_pixel_footprint_m: [
                     celestial.day_phase,
                     celestial.season_phase,
                     celestial.lunar_longitude_phase,
-                    0.0,
+                    visual_pixel_footprint_m(view_height_m, self.config.height),
                 ],
                 world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
                 pressure_time_coordinate: vector_time.pressure,
@@ -594,6 +638,25 @@ impl Renderer {
                     vector_time.ocean_current,
                     0.0,
                     0.0,
+                    0.0,
+                ],
+                cloud_anchor_weights: [
+                    low_cloud_weights[0],
+                    low_cloud_weights[1],
+                    upper_cloud_weights[0],
+                    upper_cloud_weights[1],
+                ],
+                seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
+                celestial_orbit_angles: [
+                    orbit.solar_declination_rad as f32,
+                    orbit.solar_right_ascension_rad as f32,
+                    orbit.lunar_declination_rad as f32,
+                    orbit.lunar_right_ascension_rad as f32,
+                ],
+                celestial_orbit_light: [
+                    orbit.illuminated_fraction as f32,
+                    orbit.lunar_penumbra_fraction,
+                    orbit.lunar_umbra_fraction,
                     0.0,
                 ],
             }),

@@ -7,7 +7,8 @@ fn diagnostic_cloud_low_latent_texture(input: VertexOutput) -> vec4<f32> {
         320.0,
         12u,
         scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_padding.x,
+        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
+        scene.cloud_anchor_weights.xy,
         1800.0,
         visual_pixel_footprint_m,
     );

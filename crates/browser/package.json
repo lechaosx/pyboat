@@ -2,6 +2,16 @@
   "name": "browser",
   "version": "0.1.0",
   "type": "module",
-  "main": "./pkg/browser.js",
-  "types": "./pkg/browser.d.ts"
+  "main": "./pkg-production/browser.js",
+  "types": "./pkg-production/browser.d.ts",
+  "exports": {
+    ".": {
+      "types": "./pkg-production/browser.d.ts",
+      "import": "./pkg-production/browser.js"
+    },
+    "./playground": {
+      "types": "./pkg-playground/browser.d.ts",
+      "import": "./pkg-playground/browser.js"
+    }
+  }
 }

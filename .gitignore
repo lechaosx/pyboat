@@ -3,6 +3,8 @@
 /node_modules/
 /web/node_modules/
 /crates/browser/pkg/
+/crates/browser/pkg-production/
+/crates/browser/pkg-playground/
 /web/dist/
 /playground/dist/
 /playground/node_modules/

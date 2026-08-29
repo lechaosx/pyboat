@@ -74,6 +74,25 @@ pub fn cloud_anchor_time(tick: u64, period_ticks: u64) -> CloudAnchorTime {
     }
 }
 
+pub fn cloud_anchor_blend_weights(phase: f32) -> [f32; 2] {
+    let phase = phase.clamp(0.0, 1.0);
+    let smoother_phase = phase * phase * phase * (phase * (phase * 6.0 - 15.0) + 10.0);
+    let angle = 0.5 * std::f32::consts::PI * smoother_phase;
+    [angle.cos(), angle.sin()]
+}
+
+pub fn seasonal_phase_factors(season_phase: f32) -> [f32; 4] {
+    let weather_angle = std::f32::consts::TAU * (season_phase - 0.34);
+    let ground_angle = std::f32::consts::TAU * (season_phase - 0.38);
+    let water_angle = std::f32::consts::TAU * (season_phase - 0.425);
+    [
+        weather_angle.sin(),
+        ground_angle.sin(),
+        ground_angle.cos(),
+        water_angle.sin(),
+    ]
+}
+
 pub fn sample_world_geometry(
     geometry: WorldGeometry,
     raw_center_m: [f32; 2],
@@ -675,6 +694,10 @@ pub fn viewport_interest_radius_m(aspect_ratio: f32, view_height_m: f32) -> f32 
     view_width_m.hypot(view_height_m) / 2.0 + VIEWPORT_INTEREST_MARGIN_M
 }
 
+pub fn visual_pixel_footprint_m(view_height_m: f32, render_height_px: u32) -> f32 {
+    view_height_m / render_height_px as f32
+}
+
 pub fn zoom_view_height_m(view_height_m: f32, wheel_delta_y: f32) -> f32 {
     let zoomed_view_height_m = view_height_m * (wheel_delta_y * 0.001).exp();
     if zoomed_view_height_m.is_finite() && zoomed_view_height_m > 0.0 {
@@ -1045,5 +1068,11 @@ mod tests {
         assert_eq!(client.input_history.len(), MAXIMUM_REPLAY_COMMANDS);
         assert_eq!(client.input_history[0].sequence, 136);
         assert_eq!(client.input_history[14].sequence, 150);
+    }
+
+    #[test]
+    fn visual_pixel_footprint_follows_view_height_and_render_height() {
+        assert_eq!(visual_pixel_footprint_m(480.0, 960), 0.5);
+        assert_eq!(visual_pixel_footprint_m(480.0, 1), 480.0);
     }
 }

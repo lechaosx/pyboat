@@ -219,6 +219,17 @@ pub struct CelestialConditions {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CelestialOrbit {
+    pub solar_declination_rad: f64,
+    pub solar_right_ascension_rad: f64,
+    pub lunar_declination_rad: f64,
+    pub lunar_right_ascension_rad: f64,
+    pub illuminated_fraction: f64,
+    pub lunar_penumbra_fraction: f32,
+    pub lunar_umbra_fraction: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CelestialLighting {
     pub sun_direction: [f32; 3],
     pub sun_intensity: f32,
@@ -375,18 +386,12 @@ const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     octave_count: 5,
 };
 
-pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
-    let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
+pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
     let solar_longitude = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.25);
     let obliquity = 23.44_f64.to_radians();
     let sun_equatorial = ecliptic_direction(solar_longitude, 0.0, obliquity);
     let solar_declination = libm::asin(sun_equatorial[2]);
     let solar_right_ascension = libm::atan2(sun_equatorial[1], sun_equatorial[0]);
-    let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
-    let sun_direction = celestial_direction(latitude, solar_declination, solar_hour_angle);
-    let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
-    let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
-
     let lunar_longitude =
         std::f64::consts::TAU * f64::from(conditions.lunar_longitude_phase.rem_euclid(1.0));
     let lunar_latitude = libm::asin(
@@ -396,19 +401,7 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
     let moon_equatorial = ecliptic_direction(lunar_longitude, lunar_latitude, obliquity);
     let lunar_declination = libm::asin(moon_equatorial[2]);
     let lunar_right_ascension = libm::atan2(moon_equatorial[1], moon_equatorial[0]);
-    let lunar_hour_angle = solar_hour_angle + solar_right_ascension - lunar_right_ascension;
-    let geocentric_moon_direction =
-        celestial_direction(latitude, lunar_declination, lunar_hour_angle);
-    let moon_direction = topocentric_moon_direction(geocentric_moon_direction);
     let illuminated_fraction = 0.5 - 0.5 * dot3(sun_equatorial, moon_equatorial);
-
-    let solar_separation =
-        angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
-    let solar_eclipse_fraction = circle_overlap_fraction(
-        solar_separation,
-        SUN_ANGULAR_RADIUS_RAD,
-        MOON_ANGULAR_RADIUS_RAD,
-    ) as f32;
     let anti_solar = [-sun_equatorial[0], -sun_equatorial[1], -sun_equatorial[2]];
     let lunar_shadow_separation = angular_separation(moon_equatorial, anti_solar);
     let planet_angular_radius = libm::asin(1.0 / LUNAR_DISTANCE_PLANET_RADII);
@@ -425,17 +418,49 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
         penumbra_radius,
     ) as f32;
 
+    CelestialOrbit {
+        solar_declination_rad: solar_declination,
+        solar_right_ascension_rad: solar_right_ascension,
+        lunar_declination_rad: lunar_declination,
+        lunar_right_ascension_rad: lunar_right_ascension,
+        illuminated_fraction,
+        lunar_penumbra_fraction,
+        lunar_umbra_fraction,
+    }
+}
+
+pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
+    let orbit = celestial_orbit(conditions);
+    let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
+    let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
+    let sun_direction =
+        celestial_direction(latitude, orbit.solar_declination_rad, solar_hour_angle);
+    let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
+    let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
+    let lunar_hour_angle =
+        solar_hour_angle + orbit.solar_right_ascension_rad - orbit.lunar_right_ascension_rad;
+    let geocentric_moon_direction =
+        celestial_direction(latitude, orbit.lunar_declination_rad, lunar_hour_angle);
+    let moon_direction = topocentric_moon_direction(geocentric_moon_direction);
+    let solar_separation =
+        angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
+    let solar_eclipse_fraction = circle_overlap_fraction(
+        solar_separation,
+        SUN_ANGULAR_RADIUS_RAD,
+        MOON_ANGULAR_RADIUS_RAD,
+    ) as f32;
+
     let sun_intensity =
         (1.0 - solar_eclipse_fraction) * sun_horizon * (0.35 + 0.65 * sun_elevation);
     let moon_elevation = libm::sqrt(f64::from(moon_direction[2].max(0.0))) as f32;
     let lunar_shadow_transmittance =
-        (1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction).max(0.04);
+        (1.0 - 0.18 * orbit.lunar_penumbra_fraction - 0.78 * orbit.lunar_umbra_fraction).max(0.04);
     let moon_intensity = lunar_shadow_transmittance
         * 0.12
-        * illuminated_fraction as f32
+        * orbit.illuminated_fraction as f32
         * smoothstep_range(0.0, 0.08, f64::from(moon_direction[2])) as f32
         * (0.35 + 0.65 * moon_elevation);
-    let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(lunar_umbra_fraction)) as f32;
+    let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     let moon_color = [
         0.48 + eclipse_warmth * (1.20 - 0.48),
         0.62 + eclipse_warmth * (0.28 - 0.62),
@@ -455,8 +480,8 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
         moon_intensity,
         moon_color,
         solar_eclipse_fraction,
-        lunar_penumbra_fraction,
-        lunar_umbra_fraction,
+        lunar_penumbra_fraction: orbit.lunar_penumbra_fraction,
+        lunar_umbra_fraction: orbit.lunar_umbra_fraction,
         ambient_intensity,
     }
 }

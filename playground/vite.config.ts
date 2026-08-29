@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [wasm()],
   base: "./",
   build: { target: "esnext" },
-  optimizeDeps: { exclude: ["browser"] },
+  optimizeDeps: { exclude: ["browser/playground"] },
   server: {
     fs: { allow: [searchForWorkspaceRoot(process.cwd())] },
   },

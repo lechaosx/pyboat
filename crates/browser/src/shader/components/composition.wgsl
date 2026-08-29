@@ -128,34 +128,18 @@ fn cloud_shadow_color(
     );
 }
 
-fn precipitation_haze_color(surface_color: vec3<f32>) -> vec3<f32> {
-    let precipitation = surface_cloud_weather.rain;
-    if precipitation <= 0.001 {
-        return surface_color;
-    }
-    let snow_fraction = 1.0 - smoothstep(
-        -1.0,
-        2.0,
-        surface_current_air_temperature_c(),
-    );
-    let distance_amount = smoothstep(
-        180.0,
-        3500.0,
-        scene.camera_and_view_m.w,
-    );
-    let haze_amount = precipitation * mix(0.025, 0.22, distance_amount);
-    let haze_color = mix(
-        0.62 * atmospheric_ambient_color(),
-        vec3<f32>(0.72, 0.76, 0.78) * atmospheric_ambient_color(),
-        snow_fraction,
-    );
-    return mix(surface_color, haze_color, haze_amount);
-}
-
-fn final_scene_color(input: VertexOutput) -> vec4<f32> {
+fn final_scene_color(
+    input: VertexOutput,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_circle_position: vec4<f32>,
+) -> vec4<f32> {
     var surface_color = input.color;
     if input.is_terrain > 0.5 {
-        let terrain = procedural_terrain_sample(input.world_position_m);
+        let terrain = procedural_terrain_sample_with_climate_from_circle(
+            input.world_position_m,
+            surface_circle_position,
+            atmosphere.climate,
+        );
         let water_height_m = tide_height_m();
         let is_land = terrain.elevation_m >= water_height_m;
         var land_surface = 0.0;
@@ -174,9 +158,12 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 terrain.water_ice_amount,
                 terrain.bedrock_elevation_m,
             );
+        } else if is_land && terrain.ice_amount >= 1.0 {
+            surface = ice_surface(input.world_position_m, land_surface);
         } else {
             surface = terrain_surface(
                 input.world_position_m,
+                terrain.cluster,
                 terrain.elevation_m,
                 terrain.gradient,
                 terrain.material_elevation_m,
@@ -186,11 +173,15 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
                 terrain.coastal_sediment_amount,
                 water_height_m,
                 land_surface,
+                atmosphere,
             );
         }
         var surface_light_grade = vec2<f32>(1.0);
         if is_land {
-            if terrain.water_ice_amount == 0.0 && terrain.ice_amount > 0.0 {
+            if terrain.water_ice_amount == 0.0
+                && terrain.ice_amount > 0.0
+                && terrain.ice_amount < 1.0
+            {
                 let ice = ice_surface(input.world_position_m, land_surface);
                 surface.color = mix(
                     surface.color,
@@ -233,7 +224,6 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
             terrain_shadow_transmittance,
             surface_light_grade,
         );
-        surface_color = precipitation_haze_color(surface_color);
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;

@@ -17,10 +17,11 @@ fn terrain_smoothstep_sample(
 fn solid_ice_sample(
     terrain: TerrainSample,
     maritime_temperature: TerrainNoiseSample,
+    climate: SurfaceClimateSample,
 ) -> TerrainSample {
     var surface = terrain;
     let maritime_scale = 16.0 * (
-        1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees()))
+        1.0 - smoothstep(75.0, 90.0, abs(climate.latitude_degrees))
     );
     surface.maritime_temperature_anomaly_c = maritime_scale * maritime_temperature.value;
     var bedrock: TerrainNoiseSample;
@@ -28,7 +29,7 @@ fn solid_ice_sample(
     bedrock.gradient = terrain.gradient;
     if bedrock.value < 0.0 {
         var effective_water_temperature: TerrainNoiseSample;
-        effective_water_temperature.value = water_temperature_c()
+        effective_water_temperature.value = water_temperature_c_from_climate(climate)
             + maritime_scale * maritime_temperature.value;
         effective_water_temperature.gradient = maritime_scale * maritime_temperature.gradient;
         let open_water = terrain_smoothstep_sample(-2.0, 0.0, effective_water_temperature);
@@ -47,14 +48,15 @@ fn solid_ice_sample(
     positive_bedrock.value = max(bedrock.value, 0.0);
     positive_bedrock.gradient = select(vec2<f32>(0.0), bedrock.gradient, bedrock.value > 0.0);
     var annual_temperature: TerrainNoiseSample;
-    annual_temperature.value = surface_annual_mean_air_temperature_c()
+    annual_temperature.value = climate.annual_mean_air_temperature_c
         - 0.0065 * positive_bedrock.value;
-    let latitude = surface_latitude_degrees();
+    let latitude = climate.latitude_degrees;
     let normalized_latitude = clamp(abs(latitude) / 90.0, 0.0, 1.0);
     let latitude_sign = select(-1.0, 1.0, latitude >= 0.0);
     let climate_gradient_y = select(
         0.0,
-        -135.0 * sqrt(normalized_latitude) * latitude_sign / scene.world_size_m.y,
+        -135.0 * sqrt(normalized_latitude) * latitude_sign
+            * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
         normalized_latitude > 0.0,
     );
     annual_temperature.gradient = vec2<f32>(0.0, climate_gradient_y)
@@ -92,22 +94,28 @@ fn solid_ice_sample(
     return surface;
 }
 
-fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
+fn procedural_terrain_sample_with_climate_from_circle(
+    position_m: vec2<f32>,
+    terrain_circle_position: vec4<f32>,
+    climate: SurfaceClimateSample,
+) -> TerrainSample {
     // Keep the density composition synchronized with
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
     // for physical depth.
     let terrain_position_m = position_m;
-    let cluster = terrain_simplex_fractal_sample(
+    let cluster = terrain_simplex_fractal_sample_from_circle(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
+        terrain_circle_position,
         8192.0,
         3u,
         0.5,
         TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     );
-    let island = terrain_simplex_fractal_sample(
+    let island = terrain_simplex_fractal_sample_from_circle(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         terrain_position_m,
+        terrain_circle_position,
         1536.0,
         5u,
         0.35,
@@ -139,10 +147,11 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var coastal_rock: TerrainNoiseSample;
     coastal_rock.value = 0.0;
     coastal_rock.gradient = vec2<f32>(0.0);
-    if base.value > -32.0 && base.value < 4.0 {
-        let reef_ruggedness_noise = terrain_simplex_fractal_sample(
+    if landscape_visibility.x > 0.0 && base.value > -32.0 && base.value < 4.0 {
+        let reef_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
+            terrain_circle_position,
             2048.0,
             3u,
             0.5,
@@ -153,9 +162,10 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             0.25,
             reef_ruggedness_noise,
         );
-        let coastal_substrate = terrain_simplex_fractal_sample(
+        let coastal_substrate = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
             terrain_position_m,
+            terrain_circle_position,
             1536.0,
             3u,
             0.5,
@@ -194,6 +204,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     );
 
     var terrain: TerrainSample;
+    terrain.cluster = cluster;
     terrain.elevation_m = -deepened_depth_m;
     terrain.gradient = -deepened_depth_gradient;
     terrain.material_elevation_m = terrain.elevation_m;
@@ -207,9 +218,10 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     terrain.coastal_sediment_amount = 0.0;
     let land_detail_mask = terrain_smoothstep_sample(4.0, 12.0, base);
     if land_detail_mask.value > 0.0 {
-        let land_ruggedness_noise = terrain_simplex_fractal_sample(
+        let land_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
+            terrain_circle_position,
             2048.0,
             3u,
             0.5,
@@ -220,9 +232,10 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             0.25,
             land_ruggedness_noise,
         );
-        let land_detail = terrain_simplex_fractal_sample(
+        let land_detail = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x4f6cdd1du, 0x2545f491u),
             terrain_position_m,
+            terrain_circle_position,
             256.0,
             6u,
             0.65,
@@ -263,9 +276,10 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
             land_ruggedness,
         );
         if land_micro_relief_amount.value > 0.0 {
-            let land_micro_relief = terrain_simplex_fractal_sample(
+            let land_micro_relief = terrain_simplex_fractal_sample_from_circle(
                 vec2<u32>(0xfe94f82bu, 0x3c6ef372u),
                 terrain_position_m,
+                terrain_circle_position,
                 4.0,
                 3u,
                 0.6,
@@ -322,7 +336,7 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         && rock_mask_value == 0.0
         && outer_reef_mask_value == 0.0
     {
-        return solid_ice_sample(terrain, cluster);
+        return solid_ice_sample(terrain, cluster, climate);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
@@ -334,10 +348,11 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var shoal: TerrainNoiseSample;
     shoal.value = 0.0;
     shoal.gradient = vec2<f32>(0.0);
-    if seabed_mask_value > 0.0 {
-        shoal = terrain_simplex_fractal_sample(
+    if landscape_visibility.x > 0.0 && seabed_mask_value > 0.0 {
+        shoal = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             terrain_position_m,
+            terrain_circle_position,
             256.0,
             3u,
             0.5,
@@ -357,10 +372,14 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var reef: TerrainNoiseSample;
     reef.value = 0.0;
     reef.gradient = vec2<f32>(0.0);
-    if coastal_detail_mask_value > 0.0 && coastal_rock_relief.value > 0.0 {
-        reef = terrain_simplex_fractal_sample(
+    if landscape_visibility.x > 0.0
+        && coastal_detail_mask_value > 0.0
+        && coastal_rock_relief.value > 0.0
+    {
+        reef = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x75374cc3u, 0x589965ccu),
             terrain_position_m,
+            terrain_circle_position,
             32.0,
             6u,
             0.55,
@@ -371,10 +390,14 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
     var outer_reef: TerrainNoiseSample;
     outer_reef.value = 0.0;
     outer_reef.gradient = vec2<f32>(0.0);
-    if outer_reef_mask_value > 0.0 && coastal_rock_relief.value > 0.0 {
-        outer_reef = terrain_simplex_fractal_sample(
+    if landscape_visibility.x > 0.0
+        && outer_reef_mask_value > 0.0
+        && coastal_rock_relief.value > 0.0
+    {
+        outer_reef = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x9c88c6e3u, 0x8ebc6af0u),
             terrain_position_m,
+            terrain_circle_position,
             128.0,
             8u,
             0.6,
@@ -457,24 +480,45 @@ fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value);
-    return solid_ice_sample(terrain, cluster);
+    return solid_ice_sample(terrain, cluster, climate);
+}
+
+fn procedural_terrain_sample_with_climate(
+    position_m: vec2<f32>,
+    climate: SurfaceClimateSample,
+) -> TerrainSample {
+    return procedural_terrain_sample_with_climate_from_circle(
+        position_m,
+        periodic_noise_circle_position(position_m),
+        climate,
+    );
+}
+
+fn procedural_terrain_sample(position_m: vec2<f32>) -> TerrainSample {
+    return procedural_terrain_sample_with_climate(
+        position_m,
+        surface_climate_sample_at(position_m),
+    );
 }
 
 fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     // Long terrain shadows follow island-scale relief; coastal detail remains
     // locally lit instead of multiplying the full terrain cost at every sample.
     let terrain_position_m = position_m;
-    let cluster = terrain_simplex_fractal_value(
+    let terrain_circle_position = periodic_noise_circle_position(terrain_position_m);
+    let cluster = terrain_simplex_fractal_value_from_circle(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
+        terrain_circle_position,
         8192.0,
         3u,
         0.5,
         TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     );
-    let island = terrain_simplex_fractal_value(
+    let island = terrain_simplex_fractal_value_from_circle(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         terrain_position_m,
+        terrain_circle_position,
         1536.0,
         5u,
         0.35,
@@ -493,10 +537,14 @@ fn landform_light_grade(
     roughness: f32,
 ) -> vec2<f32> {
     let strength = clamp(
-        tuning.landform_lighting.x * landscape_visibility.w,
+        tuning.landform_lighting.x
+            * landscape_visibility.w * lighting_feature_visibility().x,
         0.0,
         2.0,
     );
+    if strength <= 0.0 {
+        return vec2<f32>(1.0);
+    }
     let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
     let source_amount = direct_sun_amount() + direct_moon_amount();
     let combined_light = direct_sun_amount() * sun_direction()
@@ -543,7 +591,8 @@ fn landform_shadow_transmittance_for_light(
     light_amount: f32,
 ) -> f32 {
     let strength = clamp(
-        tuning.landform_lighting.y * landscape_visibility.w,
+        tuning.landform_lighting.y
+            * landscape_visibility.w * lighting_feature_visibility().y,
         0.0,
         1.0,
     );
@@ -598,6 +647,9 @@ fn terrain_rock_surface(
     material_gradient: vec2<f32>,
     elevation_m: f32,
 ) -> TerrainSurface {
+    if landscape_visibility.z <= 0.0 {
+        return TerrainSurface(vec3<f32>(0.36, 0.34, 0.30), vec2<f32>(0.0), 0.8);
+    }
     let rock_geology = material_fractal_value(
         vec2<u32>(0x1f83d9abu, 0x5be0cd19u),
         position_m,
@@ -663,6 +715,9 @@ fn terrain_rock_surface(
 }
 
 fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
+    if landscape_visibility.z <= 0.0 {
+        return TerrainSurface(vec3<f32>(0.78, 0.86, 0.88), vec2<f32>(0.0), 0.32);
+    }
     let micro_height = material_fractal_sample(
         vec2<u32>(0xcbbb9d5du, 0x629a292au),
         position_m,
@@ -692,6 +747,9 @@ fn sea_ice_surface(
     cover: f32,
     bedrock_elevation_m: f32,
 ) -> TerrainSurface {
+    if landscape_visibility.z <= 0.0 {
+        return TerrainSurface(vec3<f32>(0.78, 0.86, 0.88), vec2<f32>(0.0), 0.42);
+    }
     let broad = material_fractal_sample(
         vec2<u32>(0xa4093822u, 0x299f31d0u),
         position_m,
@@ -722,7 +780,7 @@ fn sea_ice_surface(
         canonical_position < vec2<f32>(0.0),
     );
     let slab_position = positive_position
-        / scene.world_size_m
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw
         * vec2<f32>(slab_cycles);
     let slab_base = vec2<i32>(floor(slab_position));
     let slab_local = fract(slab_position);

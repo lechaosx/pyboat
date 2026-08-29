@@ -9,23 +9,6 @@ fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
     );
 }
 
-fn ecliptic_direction(
-    longitude: f32,
-    latitude: f32,
-    obliquity: f32,
-) -> vec3<f32> {
-    let ecliptic = vec3<f32>(
-        cos(latitude) * cos(longitude),
-        cos(latitude) * sin(longitude),
-        sin(latitude),
-    );
-    return vec3<f32>(
-        ecliptic.x,
-        ecliptic.y * cos(obliquity) - ecliptic.z * sin(obliquity),
-        ecliptic.y * sin(obliquity) + ecliptic.z * cos(obliquity),
-    );
-}
-
 fn topocentric_moon_direction(geocentric_direction: vec3<f32>) -> vec3<f32> {
     return normalize(
         LUNAR_DISTANCE_PLANET_RADII * geocentric_direction
@@ -79,28 +62,16 @@ fn circle_overlap_fraction(
 }
 
 fn initialize_celestial_lighting() {
-    let obliquity = 23.44 * PI / 180.0;
-    let solar_longitude = TAU * (scene.world_phases.y - 0.25);
-    let sun_equatorial = ecliptic_direction(solar_longitude, 0.0, obliquity);
-    let declination = asin(sun_equatorial.z);
-    let solar_right_ascension = atan2(sun_equatorial.y, sun_equatorial.x);
     let hour_angle = TAU * (surface_local_solar_phase() - 0.5);
-    sun_light_direction = celestial_direction(declination, hour_angle);
-    let lunar_longitude = TAU * fract(scene.world_phases.z);
-    let lunar_latitude = asin(
-        sin(LUNAR_ORBIT_INCLINATION_RAD)
-            * sin(lunar_longitude - TAU * LUNAR_ASCENDING_NODE_PHASE),
+    sun_light_direction = celestial_direction(
+        scene.celestial_orbit_angles.x,
+        hour_angle,
     );
-    let moon_equatorial = ecliptic_direction(
-        lunar_longitude,
-        lunar_latitude,
-        obliquity,
-    );
-    let lunar_declination = asin(moon_equatorial.z);
-    let lunar_right_ascension = atan2(moon_equatorial.y, moon_equatorial.x);
     let geocentric_moon_direction = celestial_direction(
-        lunar_declination,
-        hour_angle + solar_right_ascension - lunar_right_ascension,
+        scene.celestial_orbit_angles.z,
+        hour_angle
+            + scene.celestial_orbit_angles.y
+            - scene.celestial_orbit_angles.w,
     );
     moon_light_direction = topocentric_moon_direction(geocentric_moon_direction);
     solar_eclipse_fraction = circle_overlap_fraction(
@@ -108,33 +79,20 @@ fn initialize_celestial_lighting() {
         CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         MOON_ANGULAR_RADIUS_RAD,
     );
-    let planet_angular_radius = asin(1.0 / LUNAR_DISTANCE_PLANET_RADII);
-    let lunar_shadow_separation = angular_separation(moon_equatorial, -sun_equatorial);
-    lunar_umbra_fraction = circle_overlap_fraction(
-        lunar_shadow_separation,
-        MOON_ANGULAR_RADIUS_RAD,
-        planet_angular_radius - CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-    );
-    lunar_penumbra_fraction = circle_overlap_fraction(
-        lunar_shadow_separation,
-        MOON_ANGULAR_RADIUS_RAD,
-        planet_angular_radius + CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-    );
+    lunar_penumbra_fraction = scene.celestial_orbit_light.y;
+    lunar_umbra_fraction = scene.celestial_orbit_light.z;
     let sun_horizon = smoothstep(0.0, 0.08, sun_light_direction.z);
-    sun_light_amount = celestial_visibility
-        * (1.0 - solar_eclipse_fraction)
+    sun_light_amount = (1.0 - solar_eclipse_fraction)
         * sun_horizon
         * (0.35 + 0.65 * sqrt(max(sun_light_direction.z, 0.0)));
-    let illuminated_fraction = 0.5 - 0.5 * dot(sun_equatorial, moon_equatorial);
     let moon_elevation = sqrt(max(moon_light_direction.z, 0.0));
     let lunar_shadow_transmittance = max(
         1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction,
         0.04,
     );
-    moon_light_amount = celestial_visibility
-        * lunar_shadow_transmittance
+    moon_light_amount = lunar_shadow_transmittance
         * 0.12
-        * illuminated_fraction
+        * scene.celestial_orbit_light.x
         * smoothstep(0.0, 0.08, moon_light_direction.z)
         * (0.35 + 0.65 * moon_elevation);
 }
@@ -147,65 +105,93 @@ fn moon_direction() -> vec3<f32> {
     return moon_light_direction;
 }
 
-fn direct_sun_amount() -> f32 {
+fn celestial_sun_amount() -> f32 {
     return sun_light_amount;
 }
 
-fn direct_moon_amount() -> f32 {
+fn celestial_moon_amount() -> f32 {
     return moon_light_amount;
 }
 
-fn calculate_atmospheric_ambient_color() -> vec3<f32> {
-    if celestial_visibility <= 0.0 {
-        return vec3<f32>(1.0);
+fn direct_sun_amount() -> f32 {
+    let visibility = direct_light_visibility();
+    return visibility.x * celestial_sun_amount();
+}
+
+fn direct_moon_amount() -> f32 {
+    let visibility = direct_light_visibility();
+    return visibility.y * celestial_moon_amount();
+}
+
+fn calculate_atmospheric_ambient_color(
+    canopy: RegionalCanopyConditions,
+) -> vec3<f32> {
+    let visibility = indirect_light_visibility();
+    if visibility.x <= 0.0 && visibility.y <= 0.0 {
+        return vec3<f32>(0.0);
     }
     let sun = sun_direction();
     let sun_elevation = sqrt(max(sun.z, 0.0));
     let twilight = smoothstep(-0.18, 0.12, sun.z);
-    let clear_intensity = celestial_visibility * min(
+    let clear_intensity = min(
         1.0,
         0.035
             + (1.0 - 0.85 * solar_eclipse_fraction)
                 * twilight
                 * (0.45 + 0.515 * sun_elevation)
-            + 0.85 * direct_moon_amount(),
+            + 0.85 * celestial_moon_amount(),
     );
     let daylight = smoothstep(-0.08, 0.35, sun.z);
     let horizon_glow = smoothstep(-0.12, 0.02, sun.z)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
-    let upper_cover = upper_cloud_coverage();
-    let overcast = clamp(
-        0.08 * low_cloud_coverage() + 0.82 * upper_cover + 0.30 * rain_intensity(),
-        0.0,
-        1.0,
-    );
-    let storm = rain_intensity() * smoothstep(0.45, 0.90, upper_cover);
     let sunset_warmth = horizon_glow * horizon_scattering;
-    var sky_color = mix(
-        vec3<f32>(0.42, 0.52, 0.75),
-        vec3<f32>(0.84, 0.90, 1.0),
-        twilight,
-    );
-    sky_color = mix(sky_color, vec3<f32>(1.0), daylight);
-    sky_color = mix(
-        sky_color,
-        vec3<f32>(1.30, 0.52, 0.30),
-        0.58 * sunset_warmth,
-    );
-    sky_color = mix(
-        sky_color,
-        moon_light_color,
-        0.25 * (1.0 - daylight) * lunar_umbra_fraction,
-    );
-    let cloud_sunset_warmth = sunset_warmth * (1.0 - 0.85 * storm);
-    let canopy_color = mix(
-        vec3<f32>(0.72, 0.80, 0.88),
-        vec3<f32>(1.22, 0.46, 0.20),
-        0.72 * cloud_sunset_warmth,
-    );
-    let diffuse_color = mix(sky_color, canopy_color, 0.78 * upper_cover);
-    let weather_attenuation = 1.0 - 0.18 * overcast - 0.48 * storm;
-    return clear_intensity * weather_attenuation * diffuse_color;
+    var clear_sky_light = vec3<f32>(0.0);
+    if visibility.x > 0.0 {
+        var sky_color = mix(
+            vec3<f32>(0.42, 0.52, 0.75),
+            vec3<f32>(0.84, 0.90, 1.0),
+            twilight,
+        );
+        sky_color = mix(sky_color, vec3<f32>(1.0), daylight);
+        sky_color = mix(
+            sky_color,
+            vec3<f32>(1.30, 0.52, 0.30),
+            0.58 * sunset_warmth,
+        );
+        let moon_presence = (1.0 - daylight) * clamp(
+            celestial_moon_amount() / 0.12,
+            0.0,
+            1.0,
+        );
+        sky_color = mix(sky_color, moon_light_color, 0.25 * moon_presence);
+        clear_sky_light = clear_intensity * sky_color;
+    }
+
+    var canopy_light = vec3<f32>(0.0);
+    if visibility.y > 0.0 {
+        let sun_source = celestial_sun_amount() * sun_direct_light_color();
+        let moon_source = celestial_moon_amount() * moon_light_color;
+        let source_amount = celestial_sun_amount() + celestial_moon_amount();
+        let source_color = select(
+            vec3<f32>(0.72, 0.80, 0.88),
+            (sun_source + moon_source) / max(source_amount, 0.0001),
+            source_amount > 0.0,
+        );
+        let source_presence = smoothstep(0.0, 0.2, source_amount);
+        let canopy_color = mix(
+            vec3<f32>(0.72, 0.80, 0.88),
+            source_color,
+            0.45 * source_presence,
+        );
+        let canopy_attenuation = mix(
+            0.82,
+            0.34,
+            smoothstep(0.35, 3.40, canopy.mean_optical_thickness),
+        );
+        canopy_light = clear_intensity * canopy_attenuation * canopy_color;
+    }
+    return visibility.x * (1.0 - canopy.sky_fraction) * clear_sky_light
+        + visibility.y * canopy.sky_fraction * canopy_light;
 }
 
 fn atmospheric_ambient_color() -> vec3<f32> {
@@ -260,19 +246,24 @@ fn sun_direct_light_color() -> vec3<f32> {
 }
 
 fn sun_direct_contribution_color() -> vec3<f32> {
-    let share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
-    return share * sun_direct_light_color();
+    return sun_direct_contribution_light_color;
 }
 
 fn moon_direct_contribution_color() -> vec3<f32> {
-    let share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
-    return share * moon_light_color;
+    return moon_direct_contribution_light_color;
 }
 
 fn ambient_contribution_color() -> vec3<f32> {
+    return ambient_contribution_light_color;
+}
+
+fn initialize_light_contributions() {
     let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
     let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
-    return atmospheric_ambient_color() * max(1.0 - sun_share - moon_share, 0.0);
+    sun_direct_contribution_light_color = sun_share * sun_direct_light_color();
+    moon_direct_contribution_light_color = moon_share * moon_light_color;
+    ambient_contribution_light_color = atmospheric_ambient_color()
+        * max(1.0 - sun_share - moon_share, 0.0);
 }
 
 fn projected_cloud_position(
@@ -286,14 +277,16 @@ fn projected_cloud_position(
     if height_m <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
         return position_m;
     }
-    let longitude = TAU * position_m.x / scene.world_size_m.x;
+    let longitude = TAU * position_m.x
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.z;
     let polar_y_m = clamp(
         position_m.y,
         -0.5 * scene.world_size_m.y,
         0.5 * scene.world_size_m.y,
     );
     let polar_excess_y_m = position_m.y - polar_y_m;
-    let latitude = PI * polar_y_m / scene.world_size_m.y;
+    let latitude = PI * polar_y_m
+        * scene.cloud_anchor_phase_and_inverse_world_size_m.w;
     let longitude_sin = sin(longitude);
     let longitude_cos = cos(longitude);
     let latitude_sin = sin(latitude);
@@ -333,9 +326,13 @@ fn projected_cloud_footprint_m(position_m: vec2<f32>) -> f32 {
     var x_derivative = dpdx(position_m);
     var y_derivative = dpdy(position_m);
     x_derivative.x -= scene.world_size_m.x
-        * round(x_derivative.x / scene.world_size_m.x);
+        * round(
+            x_derivative.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        );
     y_derivative.x -= scene.world_size_m.x
-        * round(y_derivative.x / scene.world_size_m.x);
+        * round(
+            y_derivative.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        );
     return max(length(x_derivative), length(y_derivative));
 }
 
@@ -410,6 +407,9 @@ fn celestial_cloud_shadow_depths_at(
     surface_height_m: f32,
 ) -> CelestialCloudShadowDepths {
     var celestial_depths = CelestialCloudShadowDepths(vec2<f32>(0.0), vec2<f32>(0.0));
+    if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
+        return celestial_depths;
+    }
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let is_sun = source_index == 0u;
         let light = select(moon_direction(), sun_direction(), is_sun);

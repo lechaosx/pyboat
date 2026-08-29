@@ -21,17 +21,23 @@
           <div class="scale-labels"><span>0</span><span id="scale-label">200 m</span></div>
         </div>
       </div>
-      <aside>
+      <aside class="lab-panel">
         <header>
           <p>PROCEDURAL WORLD / LAB</p>
-          <h1>World laboratory</h1>
+          <h1>Fragment material</h1>
           <span id="status">Starting WebGPU…</span>
           <div class="navigation-hint">Drag to pan · mouse wheel to zoom</div>
         </header>
-        <nav id="domains" class="domains" aria-label="Procedural domains"></nav>
-        <section id="world-toolbar" aria-label="World controls"></section>
-        <div id="controls"></div>
+        <section id="shader-graph" class="shader-graph-root" aria-label="Fragment shader material graph"></section>
+        <details class="lab-tools-drawer">
+          <summary>World, playback, and all diagnostics</summary>
+          <div class="lab-tools-content">
+            <section id="world-toolbar" aria-label="World controls"></section>
+            <div id="controls"></div>
+          </div>
+        </details>
       </aside>
+      <div id="sidebar-resizer" role="separator" aria-label="Resize control panel" aria-orientation="vertical" aria-valuemin="288" tabindex="0"></div>
     </main>
     <script type="module">
       const status = document.querySelector("#status");

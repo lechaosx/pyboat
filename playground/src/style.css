@@ -11,7 +11,7 @@
   --model: #d9ae66;
   --shader: #ad8ee8;
   --debug: #e57888;
-  --panel-width: min(29rem, calc(100vw - 2rem));
+  --panel-width: clamp(36rem, 60vw, 80rem);
 }
 
 * { box-sizing: border-box; }
@@ -21,6 +21,9 @@ main {
   grid-template-columns: var(--panel-width) minmax(0, 1fr);
   height: 100vh;
 }
+
+.sidebar-resizing,
+.sidebar-resizing * { cursor: col-resize !important; }
 
 .render-view {
   position: relative;
@@ -116,13 +119,70 @@ aside {
   grid-row: 1;
   width: 100%;
   height: 100vh;
-  padding: 1.25rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
   backdrop-filter: blur(18px);
+  overflow: hidden;
+  scrollbar-color: #315761 transparent;
+}
+
+.lab-panel > header {
+  padding: 0.8rem 1rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.lab-tools-drawer {
+  z-index: 5;
+  max-height: 48vh;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+}
+
+.lab-tools-drawer > summary {
+  padding: 0.62rem 1rem;
+  background: #0b252d;
+  border-top: 1px solid var(--line);
+}
+
+.lab-tools-content {
+  max-height: calc(48vh - 2.5rem);
+  padding: 0 1rem 1rem;
   overflow: auto;
   scrollbar-color: #315761 transparent;
 }
+
+#sidebar-resizer {
+  position: relative;
+  z-index: 20;
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+  width: 0.7rem;
+  height: 100vh;
+  transform: translateX(50%);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+#sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(50% - 1px);
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition: background 120ms ease;
+}
+
+#sidebar-resizer:hover::after,
+#sidebar-resizer:focus-visible::after,
+.sidebar-resizing #sidebar-resizer::after { background: var(--accent); }
 
 @media (max-width: 760px) {
   main {
@@ -143,6 +203,8 @@ aside {
     border-top: 1px solid var(--line);
     border-right: 0;
   }
+
+  #sidebar-resizer { display: none; }
 }
 
 header { padding-bottom: 0.9rem; }
@@ -156,8 +218,8 @@ header p {
 }
 
 h1 {
-  margin: 0.15rem 0;
-  font: 400 2rem Georgia, serif;
+  margin: 0.05rem 0;
+  font: 400 1.35rem Georgia, serif;
 }
 
 #status,
@@ -185,29 +247,6 @@ button {
 
 button:hover { background: #1b414b; }
 
-.domains {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.35rem;
-  margin-bottom: 0.8rem;
-}
-
-.domains button {
-  padding: 0.58rem;
-  color: var(--muted);
-  background: rgb(9 31 39 / 82%);
-  border-color: var(--line);
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.domains button.active {
-  color: #f3fbf8;
-  background: #16454c;
-  border-color: #4a8f8b;
-  box-shadow: inset 0 -2px var(--accent);
-}
-
 details {
   margin-bottom: 0.55rem;
   background: rgb(8 29 36 / 72%);
@@ -228,7 +267,12 @@ summary {
 }
 
 .control-group.advanced { border-color: rgb(173 142 232 / 24%); }
-.control-group.visibility { border-color: rgb(229 120 136 / 24%); }
+
+.control-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 
 details > .control,
 details > .text-control,
@@ -392,7 +436,6 @@ input[type="checkbox"] {
 
 .toggle-control.no-reset { grid-template-columns: 1rem 1fr; }
 
-details > .subtoggle { margin-left: 1.7rem; }
 details > .subcontrol { margin-left: 1.7rem; }
 
 input[type="text"],

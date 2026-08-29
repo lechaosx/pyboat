@@ -137,8 +137,10 @@ current playable behavior; this file does not track delivery status.
   its procedural sampling lattice.
 - **[Explicit]** Clouds are weather-shaped visual layers that never conceal
   players or affect gameplay. One cloud-amount scalar drives each layer's body,
-  optical depth, and shadows; regional canopy coverage determines its diffuse
-  share of ambient light.
+  optical depth, and shadows. Clear-sky and weather-canopy ambient light are
+  blended per surface pixel by a smooth regional estimate of how much surrounding
+  sky is canopy rather than clear; this is not a directly overhead cloud sample.
+  Visible lower clouds do not contribute to ambient light.
 - **[Explicit]** Small visible clouds form sparsely under suitable humid,
   unstable, non-storm conditions at a fixed low altitude. They add local
   shadows and make system-scale wind direction readable across at most about one
@@ -146,8 +148,14 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** An unseen weather canopy aggregates all cloud types into one
   amount and optical-depth field, from local convective structure to broad
   layered weather. It casts the primary weather shadows and contributes diffuse
-  light alongside the clear sky. Unresolved high ice-cloud effects remain part
-  of canopy and sky diffusion rather than a third sampled layer.
+  light alongside the clear sky. The canopy-light endpoint uses the smooth
+  regional mean optical thickness of the cloudy portion of the visible sky,
+  rather than the local overhead texture sample, to filter eclipse-aware Sun and
+  Moon intensity and color. These regional canopy conditions independently feed
+  ambient lighting and detailed canopy pixels and shadows; ambient never consumes
+  a sampled cloud pixel. Clear-sky light follows celestial and atmospheric
+  scattering conditions. Unresolved high ice-cloud effects remain part of canopy
+  and sky diffusion rather than a third sampled layer.
 - **[Explicit]** Aerosol optical depth varies spatially with seeded regional
   structure, dry air, and rain washout. When the sun is low, aerosol and moisture
   can redden direct sunlight, visible clouds, and the canopy's diffuse light.
@@ -162,9 +170,9 @@ current playable behavior; this file does not track delivery status.
   Celestial discs retain a physical penumbra, so cloud and landform shadows do
   not become point-source sharp at high zoom.
 - **[Explicit]** Rain and snow meet open water in world space. Close views may
-  resolve physically small surface contacts, while wider views replace
-  unresolved precipitation with atmospheric haze rather than enlarged drops or
-  screen-aligned streaks.
+  resolve physically small surface contacts. Wider views filter unresolved
+  contacts away rather than replacing them with atmospheric haze, enlarged
+  drops, or screen-aligned streaks.
 - **[Explicit]** The local boat has one apparent-wind windsock whose visible
   length communicates speed. The product does not overlay a world grid or field
   of wind arrows.
@@ -200,9 +208,11 @@ current playable behavior; this file does not track delivery status.
 
 ## Procedural playground
 
-- **[Explicit]** One browser laboratory covers weather, landscape, and water with
-  the production rendering algorithms. It separates world inputs, procedural
-  model tuning, shader tuning, and diagnostics into semantic domains.
+- **[Explicit]** One continuous browser laboratory covers weather, landscape,
+  and water with the production rendering algorithms. Its graph, tuning, and
+  diagnostics retain semantic domain labels without separate domain tabs, while
+  world inputs, procedural model tuning, shader tuning, and diagnostics remain
+  distinct.
 - **[Explicit]** Seed, geometry, position, and clocks always generate the world's
   environmental causes. Derived conditions are read-only; playground controls
   tune or enable existing mechanisms without replacing world-generated values.
@@ -232,14 +242,27 @@ current playable behavior; this file does not track delivery status.
   including flat relief under directly overhead light. The lab exposes relief
   strength, cast-shadow strength, and shadow reach while production retains a
   moderate heightfield-lighting preset.
-- **[Explicit]** World geometry, playback, and the global clock remain immediately
-  accessible. View-center position and derived conditions share one read-only
-  diagnostic panel. Visibility, tuning, and
-  mechanism diagnostics use collapsed semantic groups, and render modes are
-  categorized by related causes. Pressure diagnostics expose the full anomaly
-  and individually scaled broad, synoptic, and local contributions. Separate
-  vector diagnostics expose surface gusts, resolved surface wind,
-  broad/synoptic circulation, and the local weather-anomaly temperature gradient.
+- **[Explicit]** The authored fragment-material DAG is the lab's primary
+  workspace. Its acyclic topology cannot be rewired, while automatic layout,
+  free node positioning, panning, and zooming make the authored graph navigable.
+  Typed ports and edges show actual shader dataflow among explicit seed, geometry,
+  clock, view, and fragment inputs; physical mechanisms; read-only intermediate
+  values; tunable visual mechanisms; composition; and final output.
+- **[Explicit]** Node tuning is inline. Selecting a node exposes its rationale and
+  related diagnostic outputs. Every mutable node declares the value supplied
+  while muted, such as zero contribution, unit transmittance, or a named fallback;
+  consumers remain live with that replacement. The graph therefore has four
+  sibling lighting contributions—Sun direct, Moon direct, clear-sky indirect,
+  and canopy indirect—without synthetic direct or indirect master nodes.
+- **[Explicit]** World geometry, playback, the global clock, view-center values,
+  and an exhaustive diagnostic selector remain available in a collapsed secondary
+  drawer so they do not displace the material graph.
+- **[Explicit]** The desktop lab control panel is horizontally resizable by
+  dragging its boundary.
+- **[Explicit]** Pressure diagnostics expose the full anomaly and individually
+  scaled broad, synoptic, and local contributions. Separate vector diagnostics
+  expose surface gusts, resolved surface wind, broad/synoptic circulation, and
+  the local weather-anomaly temperature gradient.
 
 ## Open questions
 
