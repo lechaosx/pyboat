@@ -66,11 +66,15 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
         visual_pixel_footprint_m,
         finite_source_shadow_footprint_m(upper_height_m - low_height_m),
     );
-    let upper = procedural_upper_cloud_sample_filtered(
+    let upper_optical_depth = procedural_upper_cloud_optical_depth_filtered(
         projected_position_m,
         footprint_m,
     );
-    return mix(1.0, cloud_shadow_transmittance(upper.optical_depth, light), layer_visibility.w);
+    return mix(
+        1.0,
+        cloud_shadow_transmittance(upper_optical_depth, light),
+        layer_visibility.w,
+    );
 }
 
 fn upper_cloud_transmittance_at_low_cloud(
@@ -156,12 +160,12 @@ fn final_scene_color(input: VertexOutput) -> vec4<f32> {
         let is_land = terrain.elevation_m >= water_height_m;
         var land_surface = 0.0;
         if is_land && terrain.water_ice_amount == 0.0 {
-            land_surface = material_fractal_sample(
+            land_surface = material_fractal_value(
                 vec2<u32>(0x6a09e667u, 0xbb67ae85u),
                 input.world_position_m,
                 96.0,
                 4u,
-            ).value;
+            );
         }
         var surface: TerrainSurface;
         if terrain.water_ice_amount > 0.0 {

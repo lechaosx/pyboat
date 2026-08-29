@@ -1,7 +1,8 @@
 fn diagnostic_cloud_low_latent_texture(input: VertexOutput) -> vec4<f32> {
+    let weather = low_cloud_weather_at(input.world_position_m);
     let latent = visual_cloud_noise_sample(
         input.world_position_m,
-        false,
+        weather.low_advection_wind_m_s,
         vec2<u32>(0x38d01377u, 0x452821e6u),
         320.0,
         12u,
@@ -35,8 +36,8 @@ fn diagnostic_cloud_low_normals(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_cloud_weather_canopy_optical_depth(input: VertexOutput) -> vec4<f32> {
-    let upper = procedural_upper_cloud_sample(input.world_position_m);
-    return vec4<f32>(scalar_debug_color(upper.optical_depth), 1.0);
+    let optical_depth = procedural_upper_cloud_optical_depth(input.world_position_m);
+    return vec4<f32>(scalar_debug_color(optical_depth), 1.0);
 }
 
 fn diagnostic_cloud_low_height(input: VertexOutput) -> vec4<f32> {
@@ -86,7 +87,7 @@ fn diagnostic_lighting_solar_elevation(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
-    let aerosol = aerosol_optical_depth_at(position_m, cloud_weather_at(position_m));
+    let aerosol = aerosol_optical_depth_at(position_m, cloud_weather_conditions_at(position_m));
     return vec4<f32>(scalar_debug_color(aerosol / 0.32), 1.0);
 }
 

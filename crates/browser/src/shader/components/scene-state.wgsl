@@ -31,6 +31,8 @@ struct CloudWeatherSample {
     rain: f32,
     stratiform: f32,
     convective: f32,
+    low_advection_wind_m_s: vec2<f32>,
+    upper_advection_wind_m_s: vec2<f32>,
 };
 
 @group(0) @binding(0)

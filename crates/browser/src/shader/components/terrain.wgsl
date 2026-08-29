@@ -464,22 +464,22 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     // Long terrain shadows follow island-scale relief; coastal detail remains
     // locally lit instead of multiplying the full terrain cost at every sample.
     let terrain_position_m = position_m;
-    let cluster = terrain_simplex_fractal_sample(
+    let cluster = terrain_simplex_fractal_value(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),
         terrain_position_m,
         8192.0,
         3u,
         0.5,
         TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
-    ).value;
-    let island = terrain_simplex_fractal_sample(
+    );
+    let island = terrain_simplex_fractal_value(
         vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         terrain_position_m,
         1536.0,
         5u,
         0.35,
         TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
-    ).value;
+    );
     let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep(0.32, 0.58, cluster);
     let trench_depth = smoothstep(0.50, 0.74, -cluster);
@@ -598,12 +598,12 @@ fn terrain_rock_surface(
     material_gradient: vec2<f32>,
     elevation_m: f32,
 ) -> TerrainSurface {
-    let rock_geology = material_fractal_sample(
+    let rock_geology = material_fractal_value(
         vec2<u32>(0x1f83d9abu, 0x5be0cd19u),
         position_m,
         384.0,
         3u,
-    ).value;
+    );
     let surface_height = material_fractal_sample(
         vec2<u32>(0x243f6a88u, 0x85a308d3u),
         position_m,
@@ -669,12 +669,12 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
         4.0,
         6u,
     );
-    let fine = material_fractal_sample(
+    let fine = material_fractal_value(
         vec2<u32>(0x13198a2eu, 0x03707344u),
         position_m,
         72.0,
         3u,
-    ).value;
+    );
     let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
     return TerrainSurface(
         mix(

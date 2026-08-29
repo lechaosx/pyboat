@@ -216,14 +216,14 @@ fn aerosol_optical_depth_at(
     position_m: vec2<f32>,
     weather: CloudWeatherSample,
 ) -> f32 {
-    let regional = 0.5 + 0.5 * spatiotemporal_fractal_sample(
+    let regional = 0.5 + 0.5 * spatiotemporal_fractal_value(
         vec2<u32>(0x1f83d9abu, 0xfb41bd6bu),
         position_m,
         max(8192.0, 0.125 * scene.world_size_m.x),
         0.15 * scene.pressure_time_coordinate.x,
         4u,
         0.5,
-    ).value;
+    );
     let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
     let unwashed = 1.0 - 0.72 * weather.rain;
     return mix(0.025, 0.32, clamp(0.68 * regional + 0.32 * dry_air, 0.0, 1.0))
@@ -390,17 +390,17 @@ fn cloud_shadow_projection_at(
 fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepths {
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
-        depths.low = layer_visibility.y * procedural_low_cloud_sample_with_weather(
+        depths.low = layer_visibility.y * procedural_low_cloud_optical_depth_with_weather(
             projection.low_position_m,
-            cloud_weather_at(projection.low_position_m),
+            low_cloud_weather_at(projection.low_position_m),
             projection.low_footprint_m,
-        ).optical_depth;
+        );
     }
     if layer_visibility.z > 0.0 {
-        depths.upper = layer_visibility.z * procedural_upper_cloud_sample_filtered(
+        depths.upper = layer_visibility.z * procedural_upper_cloud_optical_depth_filtered(
             projection.upper_position_m,
             projection.upper_footprint_m,
-        ).optical_depth;
+        );
     }
     return depths;
 }

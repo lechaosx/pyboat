@@ -47,7 +47,7 @@ fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
 }
 
 fn initialize_playground_weather() {
-    surface_cloud_weather = cloud_weather_at(surface_position_m);
+    surface_cloud_weather = low_cloud_weather_at(surface_position_m);
 }
 
 fn initialize_playground_tide() {

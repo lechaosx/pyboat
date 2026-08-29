@@ -55,7 +55,7 @@ fn diagnostic_pressure_gradient(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_pressure_broad_anomaly(input: VertexOutput) -> vec4<f32> {
-    let pressure = procedural_pressure_sample(input.world_position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(input.world_position_m);
     return vec4<f32>(pressure_anomaly_debug_color(
         pressure.climate_potential_m2_s / 6000.0,
         8.0,
@@ -71,7 +71,7 @@ fn diagnostic_pressure_full_anomaly(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_pressure_synoptic_anomaly(input: VertexOutput) -> vec4<f32> {
-    let pressure = procedural_pressure_sample(input.world_position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(input.world_position_m);
     return vec4<f32>(pressure_anomaly_debug_color(
         pressure.synoptic_potential_m2_s / 6000.0,
         3.0,
@@ -79,7 +79,7 @@ fn diagnostic_pressure_synoptic_anomaly(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_pressure_local_anomaly(input: VertexOutput) -> vec4<f32> {
-    let pressure = procedural_pressure_sample(input.world_position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(input.world_position_m);
     return vec4<f32>(pressure_anomaly_debug_color(
         pressure.local_potential_m2_s / 6000.0,
         0.5,
@@ -130,7 +130,7 @@ fn diagnostic_wind_terrain_shelter(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_wind_surface_gust(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_with_surface_gust(position_m);
     let resolved_surface = resolved_surface_wind_m_s_at(position_m);
     let upper = upper_wind_m_s_at(position_m);
     let gust = surface_gust_velocity_m_s_at(position_m, pressure, resolved_surface, upper);

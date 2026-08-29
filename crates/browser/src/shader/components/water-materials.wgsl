@@ -192,7 +192,7 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
                 basin_squared * gyre.value * hemisphere_gradient_y_per_m,
             ));
 
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(position_m);
     let pressure_envelope = basin_squared * hemisphere;
     let pressure_envelope_gradient = hemisphere * basin_squared_gradient
         + vec2<f32>(0.0, basin_squared * hemisphere_gradient_y_per_m);
@@ -476,12 +476,12 @@ fn terrain_surface(
         0.0,
         1.0,
     );
-    let vegetation = material_fractal_sample(
+    let vegetation = material_fractal_value(
         vec2<u32>(0x510e527fu, 0x9b05688cu),
         position_m,
         1536.0,
         4u,
-    ).value;
+    );
     let altitude_exposure = smoothstep(50.0, 200.0, material_elevation_m);
     let rock_slope_threshold = tuning.terrain_tuning.z
         * mix(3.0, 0.8, altitude_exposure)

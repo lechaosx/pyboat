@@ -16,7 +16,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
-    surface_cloud_weather = cloud_weather_at(surface_position_m);
+    surface_cloud_weather = low_cloud_weather_at(surface_position_m);
     initialize_surface_tide();
     initialize_celestial_lighting();
     horizon_scattering = calculate_horizon_scattering();

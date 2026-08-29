@@ -67,6 +67,20 @@ struct Simplex4dSample {
     gradient: vec4<f32>,
 };
 
+struct Simplex4dDomain {
+    lattice: vec4<i32>,
+    first: vec4<f32>,
+    rank: vec4<i32>,
+};
+
+struct Simplex2dDomain {
+    cell: vec2<i32>,
+    lattice_offsets: array<vec2<i32>, 3>,
+    offsets: array<vec2<f32>, 3>,
+    x_cycles: i32,
+    y_cycles: i32,
+};
+
 struct TerrainSample {
     elevation_m: f32,
     gradient: vec2<f32>,
@@ -114,11 +128,10 @@ fn terrain_simplex_lattice_gradient(
     return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(key).x % 24u];
 }
 
-fn terrain_simplex_noise(
-    seed: vec2<u32>,
+fn terrain_simplex_domain(
     position_m: vec2<f32>,
     wavelength_m: f32,
-) -> TerrainNoiseSample {
+) -> Simplex2dDomain {
     let skew_factor = 0.36602542;
     let unskew_factor = 0.21132487;
     let x_cycles = max(1, i32(round(scene.world_size_m.x / (sqrt(2.0) * wavelength_m))));
@@ -151,29 +164,37 @@ fn terrain_simplex_noise(
         - vec2<f32>(middle_lattice_offset)
         + vec2<f32>(unskew_factor);
     let last_offset = first_offset - vec2<f32>(1.0 - 2.0 * unskew_factor);
+    return Simplex2dDomain(
+        cell,
+        array<vec2<i32>, 3>(vec2<i32>(0), middle_lattice_offset, vec2<i32>(1)),
+        array<vec2<f32>, 3>(first_offset, middle_offset, last_offset),
+        x_cycles,
+        y_cycles,
+    );
+}
 
+fn terrain_simplex_noise(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
+    let domain = terrain_simplex_domain(position_m, wavelength_m);
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
-    let lattice_offsets = array<vec2<i32>, 3>(
-        vec2<i32>(0),
-        middle_lattice_offset,
-        vec2<i32>(1),
-    );
-    let offsets = array<vec2<f32>, 3>(first_offset, middle_offset, last_offset);
     for (var vertex = 0u; vertex < 3u; vertex++) {
-        let offset = offsets[vertex];
+        let offset = domain.offsets[vertex];
         let attenuation = 0.5 - dot(offset, offset);
         if attenuation <= 0.0 {
             continue;
         }
-        let lattice = cell + lattice_offsets[vertex];
+        let lattice = domain.cell + domain.lattice_offsets[vertex];
         let gradient = terrain_simplex_lattice_gradient(
             seed,
             lattice.x,
             lattice.y,
-            x_cycles,
-            y_cycles,
+            domain.x_cycles,
+            domain.y_cycles,
         );
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
@@ -186,11 +207,40 @@ fn terrain_simplex_noise(
     sample.value *= 70.0;
     let scaled_gradient = 70.0 * sample.gradient;
     sample.gradient = vec2<f32>(
-        f32(x_cycles) / scene.world_size_m.x * (scaled_gradient.x - scaled_gradient.y),
-        f32(y_cycles) / (sqrt(3.0) * scene.world_size_m.y)
+        f32(domain.x_cycles) / scene.world_size_m.x
+            * (scaled_gradient.x - scaled_gradient.y),
+        f32(domain.y_cycles) / (sqrt(3.0) * scene.world_size_m.y)
             * (scaled_gradient.x + scaled_gradient.y),
     );
     return sample;
+}
+
+fn terrain_simplex_noise_value(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> f32 {
+    let domain = terrain_simplex_domain(position_m, wavelength_m);
+    var value = 0.0;
+    for (var vertex = 0u; vertex < 3u; vertex++) {
+        let offset = domain.offsets[vertex];
+        let attenuation = 0.5 - dot(offset, offset);
+        if attenuation <= 0.0 {
+            continue;
+        }
+        let lattice = domain.cell + domain.lattice_offsets[vertex];
+        let gradient = terrain_simplex_lattice_gradient(
+            seed,
+            lattice.x,
+            lattice.y,
+            domain.x_cycles,
+            domain.y_cycles,
+        );
+        let ramp = dot(gradient, offset);
+        let attenuation_squared = attenuation * attenuation;
+        value += attenuation_squared * attenuation_squared * ramp;
+    }
+    return 70.0 * value;
 }
 
 fn terrain_simplex_lattice_gradient_4d(
@@ -215,31 +265,18 @@ fn terrain_simplex_lattice_gradient_4d(
     return gradient;
 }
 
-fn terrain_simplex_noise_4d(
-    seed: vec2<u32>,
-    position_m: vec2<f32>,
-    wavelength_m: f32,
-) -> TerrainNoiseSample {
+fn periodic_noise_circle_position(position_m: vec2<f32>) -> vec4<f32> {
     let canonical_position = canonical_world_position(position_m);
     let angle = TAU * canonical_position / scene.world_size_m;
-    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
-    let point = vec4<f32>(
-        circle_radius.x * cos(angle.x),
-        circle_radius.x * sin(angle.x),
-        circle_radius.y * cos(angle.y),
-        circle_radius.y * sin(angle.y),
-    );
-    let simplex = simplex_noise_sample_4d(seed, point);
-    return TerrainNoiseSample(
-        simplex.value,
-        vec2<f32>(
-            -sin(angle.x) * simplex.gradient.x + cos(angle.x) * simplex.gradient.y,
-            -sin(angle.y) * simplex.gradient.z + cos(angle.y) * simplex.gradient.w,
-        ) / wavelength_m,
+    return vec4<f32>(
+        cos(angle.x),
+        sin(angle.x),
+        cos(angle.y),
+        sin(angle.y),
     );
 }
 
-fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
+fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     let skew_factor = 0.309017;
     let unskew_factor = 0.1381966;
     let skew = dot(point, vec4<f32>(skew_factor));
@@ -253,7 +290,12 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
     if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
     if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
     if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
+    return Simplex4dDomain(lattice, first, rank);
+}
 
+fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
+    let unskew_factor = 0.1381966;
+    let domain = simplex_noise_domain_4d(point);
     var sample: Simplex4dSample;
     sample.value = 0.0;
     sample.gradient = vec4<f32>(0.0);
@@ -264,14 +306,17 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
             lattice_offset = select(
                 vec4<i32>(0),
                 vec4<i32>(1),
-                rank >= vec4<i32>(threshold),
+                domain.rank >= vec4<i32>(threshold),
             );
         }
-        let offset = first - vec4<f32>(lattice_offset)
+        let offset = domain.first - vec4<f32>(lattice_offset)
             + vec4<f32>(f32(vertex) * unskew_factor);
         let attenuation = 0.6 - dot(offset, offset);
         if attenuation > 0.0 {
-            let gradient = terrain_simplex_lattice_gradient_4d(seed, lattice + lattice_offset);
+            let gradient = terrain_simplex_lattice_gradient_4d(
+                seed,
+                domain.lattice + lattice_offset,
+            );
             let ramp = dot(gradient, offset);
             let attenuation_squared = attenuation * attenuation;
             let attenuation_cubed = attenuation_squared * attenuation;
@@ -285,6 +330,85 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
     sample.value *= 33.4;
     sample.gradient *= 33.4;
     return sample;
+}
+
+fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
+    let unskew_factor = 0.1381966;
+    let domain = simplex_noise_domain_4d(point);
+    var value = 0.0;
+    for (var vertex = 0i; vertex < 5i; vertex++) {
+        let threshold = 4i - vertex;
+        var lattice_offset = vec4<i32>(0);
+        if vertex > 0i {
+            lattice_offset = select(
+                vec4<i32>(0),
+                vec4<i32>(1),
+                domain.rank >= vec4<i32>(threshold),
+            );
+        }
+        let offset = domain.first - vec4<f32>(lattice_offset)
+            + vec4<f32>(f32(vertex) * unskew_factor);
+        let attenuation = 0.6 - dot(offset, offset);
+        if attenuation > 0.0 {
+            let gradient = terrain_simplex_lattice_gradient_4d(
+                seed,
+                domain.lattice + lattice_offset,
+            );
+            let ramp = dot(gradient, offset);
+            let attenuation_squared = attenuation * attenuation;
+            value += attenuation_squared * attenuation_squared * ramp;
+        }
+    }
+    return 33.4 * value;
+}
+
+fn terrain_simplex_noise_4d_from_circle(
+    seed: vec2<u32>,
+    circle_position: vec4<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
+    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
+    let simplex = simplex_noise_sample_4d(seed, vec4<f32>(
+        circle_radius.x * circle_position.x,
+        circle_radius.x * circle_position.y,
+        circle_radius.y * circle_position.z,
+        circle_radius.y * circle_position.w,
+    ));
+    return TerrainNoiseSample(
+        simplex.value,
+        vec2<f32>(
+            -circle_position.y * simplex.gradient.x
+                + circle_position.x * simplex.gradient.y,
+            -circle_position.w * simplex.gradient.z
+                + circle_position.z * simplex.gradient.w,
+        ) / wavelength_m,
+    );
+}
+
+fn terrain_simplex_noise_value_4d_from_circle(
+    seed: vec2<u32>,
+    circle_position: vec4<f32>,
+    wavelength_m: f32,
+) -> f32 {
+    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
+    return simplex_noise_value_4d(seed, vec4<f32>(
+        circle_radius.x * circle_position.x,
+        circle_radius.x * circle_position.y,
+        circle_radius.y * circle_position.z,
+        circle_radius.y * circle_position.w,
+    ));
+}
+
+fn terrain_simplex_noise_4d(
+    seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+) -> TerrainNoiseSample {
+    return terrain_simplex_noise_4d_from_circle(
+        seed,
+        periodic_noise_circle_position(position_m),
+        wavelength_m,
+    );
 }
 
 fn terrain_simplex_fractal_sample(
@@ -301,6 +425,7 @@ fn terrain_simplex_fractal_sample(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
+    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
@@ -310,7 +435,11 @@ fn terrain_simplex_fractal_sample(
             );
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
-            octave_sample = terrain_simplex_noise_4d(octave_seed, position_m, wavelength_m);
+            octave_sample = terrain_simplex_noise_4d_from_circle(
+                octave_seed,
+                circle_position,
+                wavelength_m,
+            );
         } else {
             octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
         }
@@ -323,6 +452,48 @@ fn terrain_simplex_fractal_sample(
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
     return sample;
+}
+
+fn terrain_simplex_fractal_value(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    persistence: f32,
+    circle_octave_count: u32,
+) -> f32 {
+    var value = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
+    let circle_position = periodic_noise_circle_position(position_m);
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_seed = scene.match_seed
+            ^ field_salt
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        var octave_value: f32;
+        if octave < circle_octave_count {
+            octave_value = terrain_simplex_noise_value_4d_from_circle(
+                octave_seed,
+                circle_position,
+                wavelength_m,
+            );
+        } else {
+            octave_value = terrain_simplex_noise_value(
+                octave_seed,
+                position_m,
+                wavelength_m,
+            );
+        }
+        value += amplitude * octave_value;
+        amplitude_sum += amplitude;
+        amplitude *= persistence;
+        wavelength_m *= 0.5;
+    }
+    return value / amplitude_sum;
 }
 
 fn spatiotemporal_fractal_sample(
@@ -363,20 +534,38 @@ fn spatiotemporal_fractal_sample(
     return sample;
 }
 
-fn spatial_weather_fractal(
+fn spatiotemporal_fractal_value(
     field_salt: vec2<u32>,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
+    initial_time_coordinate: f32,
     octave_count: u32,
-    circle_octave_count: u32,
+    persistence: f32,
 ) -> f32 {
-    return spatial_weather_fractal_sample(
-        field_salt,
-        position_m,
-        initial_wavelength_m,
-        octave_count,
-        circle_octave_count,
-    ).value;
+    var value = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    var time_coordinate = initial_time_coordinate;
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_seed = scene.match_seed
+            ^ field_salt
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        value += amplitude * spatiotemporal_noise_value(
+            octave_seed,
+            position_m,
+            wavelength_m,
+            time_coordinate,
+        );
+        amplitude_sum += amplitude;
+        amplitude *= persistence;
+        wavelength_m *= 0.5;
+        time_coordinate *= 2.0;
+    }
+    return value / amplitude_sum;
 }
 
 fn spatial_weather_fractal_sample(
@@ -390,6 +579,7 @@ fn spatial_weather_fractal_sample(
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
+    let circle_position = periodic_noise_circle_position(position_m);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
@@ -399,17 +589,13 @@ fn spatial_weather_fractal_sample(
             );
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
-            octave_sample = terrain_simplex_noise_4d(
+            octave_sample = terrain_simplex_noise_4d_from_circle(
                 octave_seed,
-                position_m,
+                circle_position,
                 wavelength_m,
             );
         } else {
-            octave_sample = terrain_simplex_noise(
-                octave_seed,
-                position_m,
-                wavelength_m,
-            );
+            octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
         }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
@@ -420,6 +606,47 @@ fn spatial_weather_fractal_sample(
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
     return sample;
+}
+
+fn spatial_weather_fractal(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    circle_octave_count: u32,
+) -> f32 {
+    var value = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    let circle_position = periodic_noise_circle_position(position_m);
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_seed = scene.match_seed
+            ^ field_salt
+            ^ multiply_u64(
+                vec2<u32>(octave, 0u),
+                vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+        var octave_value: f32;
+        if octave < circle_octave_count {
+            octave_value = terrain_simplex_noise_value_4d_from_circle(
+                octave_seed,
+                circle_position,
+                wavelength_m,
+            );
+        } else {
+            octave_value = terrain_simplex_noise_value(
+                octave_seed,
+                position_m,
+                wavelength_m,
+            );
+        }
+        value += amplitude * octave_value;
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.5;
+    }
+    return value / amplitude_sum;
 }
 
 fn material_fractal_sample(
@@ -464,6 +691,42 @@ fn material_fractal_sample(
     return sample;
 }
 
+fn material_fractal_value(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+) -> f32 {
+    var value = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_visibility = smoothstep(
+            visual_pixel_footprint_m,
+            2.0 * visual_pixel_footprint_m,
+            wavelength_m,
+        );
+        if octave_visibility > 0.0 {
+            let octave_seed = scene.match_seed
+                ^ field_salt
+                ^ multiply_u64(
+                    vec2<u32>(octave, 0u),
+                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+                );
+            value += amplitude * octave_visibility * terrain_simplex_noise_value(
+                octave_seed,
+                position_m,
+                wavelength_m,
+            );
+        }
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.53;
+    }
+    return value / amplitude_sum;
+}
+
 fn visual_transported_noise_sample(
     current_position_m: vec2<f32>,
     next_position_m: vec2<f32>,
@@ -485,6 +748,77 @@ fn visual_transported_noise_sample(
     let smoother_phase = phase * phase * phase
         * (phase * (phase * 6.0 - 15.0) + 10.0);
     let angle = 0.5 * PI * smoother_phase;
+    let current_weight = cos(angle);
+    let next_weight = sin(angle);
+    let epoch_salt = vec2<u32>(0x94d049bbu, 0x133111ebu);
+    let current_epoch_seed = multiply_u64(anchor_epoch, epoch_salt);
+    let next_epoch_seed = multiply_u64(next_epoch, epoch_salt);
+    let current_circle_position = periodic_noise_circle_position(current_position_m);
+    let next_circle_position = periodic_noise_circle_position(next_position_m);
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_visibility = smoothstep(
+            pixel_footprint_m,
+            2.0 * pixel_footprint_m,
+            wavelength_m,
+        );
+        if octave_visibility > 0.0 {
+            let octave_seed = scene.match_seed
+                ^ field_salt
+                ^ multiply_u64(
+                    vec2<u32>(octave, 0u),
+                    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
+            );
+            let current_sample = terrain_simplex_noise_4d_from_circle(
+                octave_seed ^ current_epoch_seed,
+                current_circle_position,
+                wavelength_m,
+            );
+            let next_sample = terrain_simplex_noise_4d_from_circle(
+                octave_seed ^ next_epoch_seed,
+                next_circle_position,
+                wavelength_m,
+            );
+            var octave_sample: TerrainNoiseSample;
+            octave_sample.value = current_weight * current_sample.value
+                + next_weight * next_sample.value;
+            octave_sample.gradient = current_weight * current_sample.gradient
+                + next_weight * next_sample.gradient;
+            sample.value += amplitude * octave_visibility * octave_sample.value;
+            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
+        }
+        amplitude_sum += amplitude;
+        amplitude *= 0.58;
+        wavelength_m *= 0.5;
+    }
+    sample.value /= amplitude_sum;
+    sample.gradient /= amplitude_sum;
+    return sample;
+}
+
+fn visual_transported_noise_value_from_circles(
+    current_circle_position: vec4<f32>,
+    next_circle_position: vec4<f32>,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    anchor_epoch: vec2<u32>,
+    anchor_phase: f32,
+    pixel_footprint_m: f32,
+) -> f32 {
+    var value = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    let next_epoch = anchor_epoch + vec2<u32>(1u, select(0u, 1u, anchor_epoch.x == 0xffffffffu));
+    let phase = clamp(anchor_phase, 0.0, 1.0);
+    let smoother_phase = phase * phase * phase
+        * (phase * (phase * 6.0 - 15.0) + 10.0);
+    let angle = 0.5 * PI * smoother_phase;
+    let current_weight = cos(angle);
+    let next_weight = sin(angle);
+    let epoch_salt = vec2<u32>(0x94d049bbu, 0x133111ebu);
+    let current_epoch_seed = multiply_u64(anchor_epoch, epoch_salt);
+    let next_epoch_seed = multiply_u64(next_epoch, epoch_salt);
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_visibility = smoothstep(
             pixel_footprint_m,
@@ -498,35 +832,45 @@ fn visual_transported_noise_sample(
                     vec2<u32>(octave, 0u),
                     vec2<u32>(0xd192ed03u, 0xd1b54a32u),
                 );
-            let current_sample = terrain_simplex_noise_4d(
-                octave_seed ^ multiply_u64(
-                    anchor_epoch,
-                    vec2<u32>(0x94d049bbu, 0x133111ebu),
-                ),
-                current_position_m,
+            let current_value = terrain_simplex_noise_value_4d_from_circle(
+                octave_seed ^ current_epoch_seed,
+                current_circle_position,
                 wavelength_m,
             );
-            let next_sample = terrain_simplex_noise_4d(
-                octave_seed ^ multiply_u64(
-                    next_epoch,
-                    vec2<u32>(0x94d049bbu, 0x133111ebu),
-                ),
-                next_position_m,
+            let next_value = terrain_simplex_noise_value_4d_from_circle(
+                octave_seed ^ next_epoch_seed,
+                next_circle_position,
                 wavelength_m,
             );
-            var octave_sample: TerrainNoiseSample;
-            octave_sample.value = cos(angle) * current_sample.value
-                + sin(angle) * next_sample.value;
-            octave_sample.gradient = cos(angle) * current_sample.gradient
-                + sin(angle) * next_sample.gradient;
-            sample.value += amplitude * octave_visibility * octave_sample.value;
-            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
+            value += amplitude * octave_visibility * (
+                current_weight * current_value + next_weight * next_value
+            );
         }
         amplitude_sum += amplitude;
         amplitude *= 0.58;
         wavelength_m *= 0.5;
     }
-    sample.value /= amplitude_sum;
-    sample.gradient /= amplitude_sum;
-    return sample;
+    return value / amplitude_sum;
+}
+
+fn visual_transported_noise_value(
+    current_position_m: vec2<f32>,
+    next_position_m: vec2<f32>,
+    field_salt: vec2<u32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    anchor_epoch: vec2<u32>,
+    anchor_phase: f32,
+    pixel_footprint_m: f32,
+) -> f32 {
+    return visual_transported_noise_value_from_circles(
+        periodic_noise_circle_position(current_position_m),
+        periodic_noise_circle_position(next_position_m),
+        field_salt,
+        initial_wavelength_m,
+        octave_count,
+        anchor_epoch,
+        anchor_phase,
+        pixel_footprint_m,
+    );
 }

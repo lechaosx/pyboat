@@ -13,12 +13,18 @@ struct PressureFieldSample {
     surface_gust_signal: f32,
 }
 
-fn spatiotemporal_noise_sample(
+struct SpatiotemporalNoiseDomain {
+    point: vec4<f32>,
+    longitude: f32,
+    latitude_sign: f32,
+};
+
+fn spatiotemporal_noise_domain(
     field_seed: vec2<u32>,
     position_m: vec2<f32>,
     wavelength_m: f32,
     time_coordinate: f32,
-) -> TerrainNoiseSample {
+) -> SpatiotemporalNoiseDomain {
     let orientation = terrain_hash(
         field_seed ^ vec2<u32>(0xf3bcc909u, 0x6a09e667u),
     ).x;
@@ -29,23 +35,54 @@ fn spatiotemporal_noise_sample(
     let longitude = TAU * canonical_world_position(position_m).x / scene.world_size_m.x
         + longitude_offset;
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
-    let simplex = simplex_noise_sample_4d(
-        field_seed,
+    return SpatiotemporalNoiseDomain(
         vec4<f32>(
             circle_radius * cos(longitude),
             circle_radius * sin(longitude),
             latitude_sign * position_m.y / wavelength_m + latitude_offset,
             time_coordinate + time_offset,
         ),
+        longitude,
+        latitude_sign,
     );
+}
+
+fn spatiotemporal_noise_sample(
+    field_seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+    time_coordinate: f32,
+) -> TerrainNoiseSample {
+    let domain = spatiotemporal_noise_domain(
+        field_seed,
+        position_m,
+        wavelength_m,
+        time_coordinate,
+    );
+    let simplex = simplex_noise_sample_4d(field_seed, domain.point);
     return TerrainNoiseSample(
         simplex.value,
         vec2<f32>(
-            (-sin(longitude) * simplex.gradient.x
-                + cos(longitude) * simplex.gradient.y) / wavelength_m,
-            latitude_sign * simplex.gradient.z / wavelength_m,
+            (-sin(domain.longitude) * simplex.gradient.x
+                + cos(domain.longitude) * simplex.gradient.y) / wavelength_m,
+            domain.latitude_sign * simplex.gradient.z / wavelength_m,
         ),
     );
+}
+
+fn spatiotemporal_noise_value(
+    field_seed: vec2<u32>,
+    position_m: vec2<f32>,
+    wavelength_m: f32,
+    time_coordinate: f32,
+) -> f32 {
+    let domain = spatiotemporal_noise_domain(
+        field_seed,
+        position_m,
+        wavelength_m,
+        time_coordinate,
+    );
+    return simplex_noise_value_4d(field_seed, domain.point);
 }
 
 fn spatiotemporal_pressure_noise_sample(
@@ -92,9 +129,10 @@ fn spatiotemporal_pressure_noise_sample(
     );
 }
 
-fn procedural_pressure_sample_filtered(
+fn procedural_pressure_sample_filtered_bands(
     position_m: vec2<f32>,
     pixel_footprint_m: f32,
+    band_count: u32,
 ) -> PressureFieldSample {
     let zonal_wavelengths_m = array<f32, 4>(19200.0, 3200.0, 960.0, 256.0);
     let fixed_meridional_wavelengths_m = array<f32, 4>(0.0, 3200.0, 960.0, 256.0);
@@ -128,7 +166,7 @@ fn procedural_pressure_sample_filtered(
     sample.synoptic_potential_m2_s = 0.0;
     sample.local_potential_m2_s = 0.0;
     sample.surface_gust_signal = 0.0;
-    for (var band = 0u; band < 4u; band++) {
+    for (var band = 0u; band < band_count; band++) {
         let zonal_wavelength_m = zonal_wavelengths_m[band];
         let meridional_wavelength_m = select(
             fixed_meridional_wavelengths_m[band],
@@ -202,12 +240,25 @@ fn procedural_pressure_sample_filtered(
     return sample;
 }
 
-fn procedural_pressure_sample(position_m: vec2<f32>) -> PressureFieldSample {
+fn procedural_pressure_sample_filtered(
+    position_m: vec2<f32>,
+    pixel_footprint_m: f32,
+) -> PressureFieldSample {
+    return procedural_pressure_sample_filtered_bands(position_m, pixel_footprint_m, 4u);
+}
+
+fn procedural_pressure_sample_without_surface_gust(
+    position_m: vec2<f32>,
+) -> PressureFieldSample {
+    return procedural_pressure_sample_filtered_bands(position_m, 0.0, 3u);
+}
+
+fn procedural_pressure_sample_with_surface_gust(position_m: vec2<f32>) -> PressureFieldSample {
     return procedural_pressure_sample_filtered(position_m, 0.0);
 }
 
 fn pressure_at(position_m: vec2<f32>) -> vec3<f32> {
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(position_m);
     return vec3<f32>(
         1013.25 + pressure.potential_m2_s / 6000.0,
         pressure.gradient_m_s / 6000.0,
@@ -236,7 +287,7 @@ fn wind_from_pressure_gradient(
 }
 
 fn resolved_surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(position_m);
     return atmosphere_model.x * wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
@@ -244,7 +295,7 @@ fn resolved_surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
 }
 
 fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_with_surface_gust(position_m);
     let resolved_surface_wind_m_s = atmosphere_model.x * wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
@@ -264,7 +315,7 @@ fn surface_wind_m_s() -> vec2<f32> {
 }
 
 fn upper_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
-    let pressure = procedural_pressure_sample(position_m);
+    let pressure = procedural_pressure_sample_without_surface_gust(position_m);
     let pressure_wind = atmosphere_model.x * wind_from_pressure_gradient(
         pressure.synoptic_gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
@@ -359,7 +410,18 @@ fn surface_diurnal_temperature_range_c() -> f32 {
 }
 
 fn surface_air_temperature_anomaly_c_at(position_m: vec2<f32>) -> f32 {
-    return surface_air_temperature_anomaly_sample_at(position_m).value;
+    let scale_c = latitude_curve_value(
+        TEMPERATURE_ANOMALY_SCALE_C,
+        surface_latitude_degrees_at(position_m),
+    );
+    return scale_c * 0.85 * spatiotemporal_fractal_value(
+        vec2<u32>(0x38d01377u, 0x452821e6u),
+        position_m,
+        65536.0,
+        scene.scalar_field_time_coordinates.x,
+        4u,
+        0.5,
+    );
 }
 
 fn surface_air_temperature_anomaly_sample_at(position_m: vec2<f32>) -> TerrainNoiseSample {
@@ -397,14 +459,14 @@ fn upper_air_temperature_500_hpa_c_from_anomaly(
         - 35.5
         + 0.25 * surface_seasonal_temperature_range_c_at(position_m)
             * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
-    let independent_noise = 0.75 * spatiotemporal_fractal_sample(
+    let independent_noise = 0.75 * spatiotemporal_fractal_value(
         vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.y,
         4u,
         0.5,
-    ).value;
+    );
     return climate_temperature_c
         + 0.45 * surface_anomaly_c
         + 19.0 * independent_noise;
@@ -420,14 +482,14 @@ fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
         + 0.5 * surface_seasonal_temperature_range_c_at(position_m)
             * surface_seasonal_latitude_factor_at(position_m) * sin(seasonal_phase);
     let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.75 * spatiotemporal_fractal_sample(
+    let noise = 0.75 * spatiotemporal_fractal_value(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
         position_m,
         8192.0,
         scene.scalar_field_time_coordinates.z,
         5u,
         0.5,
-    ).value;
+    );
     return clamp(capacity_g_kg * (0.72 + 0.65 * noise), 0.5, 25.0);
 }
 
@@ -574,8 +636,16 @@ fn initialize_surface_tide() {
         );
 }
 
-fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
-    let pressure = pressure_at(position_m);
+fn cloud_weather_at_with_winds(
+    position_m: vec2<f32>,
+    include_low_wind: bool,
+    include_upper_wind: bool,
+) -> CloudWeatherSample {
+    let pressure_sample = procedural_pressure_sample_without_surface_gust(position_m);
+    let pressure = vec3<f32>(
+        1013.25 + pressure_sample.potential_m2_s / 6000.0,
+        pressure_sample.gradient_m_s / 6000.0,
+    );
     let surface_anomaly = surface_air_temperature_anomaly_sample_at(position_m);
     let air_temperature_c = surface_current_air_temperature_c_from_anomaly(
         position_m,
@@ -645,7 +715,38 @@ fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
         0.0,
         1.0,
     );
+    let latitude_degrees = surface_latitude_degrees_at(position_m);
+    weather.low_advection_wind_m_s = vec2<f32>(0.0);
+    if include_low_wind {
+        // Broad flow keeps finite cloud-anchor maps coherent instead of folding them
+        // around gust-scale pressure features.
+        weather.low_advection_wind_m_s = atmosphere_model.x * wind_from_pressure_gradient(
+            pressure_sample.broad_synoptic_gradient_m_s / 6000.0,
+            latitude_degrees,
+        );
+    }
+    weather.upper_advection_wind_m_s = vec2<f32>(0.0);
+    if include_upper_wind {
+        weather.upper_advection_wind_m_s = 1.15 * atmosphere_model.x
+            * wind_from_pressure_gradient(
+            pressure_sample.synoptic_gradient_m_s / 6000.0,
+            latitude_degrees,
+        )
+            + 1600.0 * atmosphere_model.z * rotate_left(surface_anomaly.gradient);
+    }
     return weather;
+}
+
+fn cloud_weather_conditions_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    return cloud_weather_at_with_winds(position_m, false, false);
+}
+
+fn low_cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    return cloud_weather_at_with_winds(position_m, true, false);
+}
+
+fn upper_cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    return cloud_weather_at_with_winds(position_m, false, true);
 }
 
 fn surface_gust_velocity_m_s_at(
@@ -654,7 +755,7 @@ fn surface_gust_velocity_m_s_at(
     resolved_surface_wind_m_s: vec2<f32>,
     upper_wind_m_s: vec2<f32>,
 ) -> vec2<f32> {
-    let weather = cloud_weather_at(position_m);
+    let weather = cloud_weather_conditions_at(position_m);
     let mechanical_gust_speed_m_s = 0.27
         * (1.0 + 0.35 * weather.instability)
         * length(resolved_surface_wind_m_s);
