@@ -232,18 +232,9 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 }
 
 #[test]
-fn cloud_formation_is_spatial_across_world() {
-    let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
-    let formation = render_diagnostic_image(world, "cloud_low_formation", 16, 8);
-
-    assert_grayscale(&formation);
-    assert!(channel_range(&formation, 0) > 0.20);
-}
-
-#[test]
 fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(1_250.0, -750.0);
+    let position_m = Vector::new(0.0, -10_000.0);
     let near = render_diagnostic_image_with_view_at(
         world,
         position_m,
@@ -497,13 +488,6 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
         .collect();
     columns.iter().copied().fold(f32::NEG_INFINITY, f32::max)
         - columns.iter().copied().fold(f32::INFINITY, f32::min)
-}
-
-fn assert_grayscale(bytes: &[u8]) {
-    for pixel in bytes.chunks_exact(4) {
-        assert!(pixel[0].abs_diff(pixel[1]) <= 1, "{pixel:?}");
-        assert!(pixel[1].abs_diff(pixel[2]) <= 1, "{pixel:?}");
-    }
 }
 
 fn channel_range(bytes: &[u8], channel: usize) -> f32 {

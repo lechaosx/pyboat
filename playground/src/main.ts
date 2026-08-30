@@ -2,13 +2,11 @@ import {
   playground_diagnostic_shader_source,
   playground_scene_shader_source,
   playground_startup_shader_source,
-  sample_playground_cloud_anchor_blend_weights,
   sample_playground_celestial_orbit,
   sample_playground_environment,
   sample_playground_field_time_coordinates,
-  sample_playground_low_cloud_kernel_uniforms,
-  sample_playground_upper_cloud_kernel_uniforms,
   sample_playground_seasonal_phase_factors,
+  sample_playground_view_cloud_uniforms,
   sample_playground_world_geometry,
 } from "browser/playground";
 import {
@@ -73,7 +71,6 @@ type State = {
   opticalDepth: number;
   opacity: number;
   darkness: number;
-  relief: number;
   cloudSelfShadowVisible: number;
   cloudEdgeLightStrength: number;
   cloudSelfShadowStrength: number;
@@ -171,7 +168,6 @@ const defaults: State = {
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
-  relief: 1,
   cloudSelfShadowVisible: 1,
   cloudEdgeLightStrength: 0.18,
   cloudSelfShadowStrength: 0.14,
@@ -309,6 +305,12 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 
 let renderedCameraX = 0;
 let renderedCameraY = 0;
+let previousCloudTimeSeconds: number | undefined;
+let cloudElapsedSeconds = 0;
+const lowCloudMotionM = [0, 0];
+const upperCloudMotionM = [0, 0];
+let previousLowCloudWindMS = [0, 0];
+let previousUpperCloudWindMS = [0, 0];
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -475,7 +477,6 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
       { type: "range", key: "opacity", label: "Opacity", min: 0, max: 1.5, step: 0.05 },
       { type: "range", key: "darkness", label: "Darkening", min: 0, max: 2, step: 0.05 },
-      { type: "range", key: "relief", label: "Relief", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudEdgeLightStrength", label: "Edge light", min: 0, max: 0.6, step: 0.01 },
       { type: "toggle", key: "cloudSelfShadowVisible", label: "Self-shadow" },
       { type: "range", key: "cloudSelfShadowStrength", label: "Self-shadow", min: 0, max: 0.6, step: 0.01 },
@@ -984,7 +985,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(2876);
+const sceneFloats = new Float32Array(68);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1187,7 +1188,7 @@ function atmosphericOutputs(output: WorldCenterDiagnostics): Array<[string, stri
     ["Relative humidity", `${(output.relativeHumidity * 100).toFixed(0)} %`],
     ["Instability", output.instability.toFixed(2)],
     ["Lift", output.lift.toFixed(2)],
-    ["Cloud formation", output.cloudiness.toFixed(2)],
+    ["Low cloudiness", output.cloudiness.toFixed(2)],
     ["Weather canopy", output.upperCloudiness.toFixed(2)],
     ["Rain", output.rainIntensity.toFixed(2)],
   ];
@@ -1343,24 +1344,24 @@ function writeUniforms(
   );
   sceneFloats.set(fieldTimes.subarray(0, 4), 4);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  const lowCloudEpoch = BigInt(Math.floor(cloudTimeSeconds / 1800));
-  const upperCloudEpoch = BigInt(Math.floor(cloudTimeSeconds / 3600));
+  const precipitationEpoch = BigInt(Math.floor(cloudTimeSeconds / 1800));
   sceneUints.set([
     seedLow,
     seedHigh,
-    Number(lowCloudEpoch & 0xffff_ffffn),
-    Number((lowCloudEpoch >> 32n) & 0xffff_ffffn),
+    Number(precipitationEpoch & 0xffff_ffffn),
+    Number((precipitationEpoch >> 32n) & 0xffff_ffffn),
   ], 8);
-  sceneFloats.set([state.worldWidthM, state.worldHeightM], 12);
-  sceneUints.set([
-    Number(upperCloudEpoch & 0xffff_ffffn),
-    Number((upperCloudEpoch >> 32n) & 0xffff_ffffn),
-  ], 14);
   sceneFloats.set([
-    (cloudTimeSeconds % 1800) / 1800,
-    (cloudTimeSeconds % 3600) / 3600,
+    state.worldWidthM,
+    state.worldHeightM,
     1 / state.worldWidthM,
     1 / state.worldHeightM,
+  ], 12);
+  sceneFloats.set([
+    (cloudTimeSeconds % 1800) / 1800,
+    0,
+    0,
+    0,
   ], 16);
   const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases(worldTimeSeconds);
   sceneFloats.set([
@@ -1377,48 +1378,55 @@ function writeUniforms(
   ], 24);
   sceneFloats.set(fieldTimes.subarray(4, 8), 28);
   sceneFloats.set(fieldTimes.subarray(8, 12), 32);
-  sceneFloats.set(sample_playground_cloud_anchor_blend_weights(
-    (cloudTimeSeconds % 1800) / 1800,
-    (cloudTimeSeconds % 3600) / 3600,
-  ), 36);
-  sceneFloats.set(sample_playground_seasonal_phase_factors(seasonPhase), 40);
+  sceneFloats.set(sample_playground_seasonal_phase_factors(seasonPhase), 36);
   sceneFloats.set(sample_playground_celestial_orbit(
     seasonPhase,
     lunarLongitudePhase,
-  ), 44);
-  sceneFloats.set(sample_playground_low_cloud_kernel_uniforms(
+  ), 40);
+  const viewCloud = sample_playground_view_cloud_uniforms(
     state.worldWidthM,
     state.worldHeightM,
     (BigInt(seedHigh) << 32n) | BigInt(seedLow),
     cloudTick,
-    cloudTick,
     renderedCameraX,
     renderedCameraY,
-    state.viewHeight * aspect,
-    state.viewHeight,
-    state.lowCloudBodySize,
-    state.lowCloudOccurrence,
-  ), 52);
-  sceneFloats.set(sample_playground_upper_cloud_kernel_uniforms(
-    state.worldWidthM,
-    state.worldHeightM,
-    (BigInt(seedHigh) << 32n) | BigInt(seedLow),
-    cloudTick,
-    cloudTick,
-    renderedCameraX,
-    renderedCameraY,
-    state.viewHeight * aspect,
-    state.viewHeight,
-  ), 2104);
+  );
+  const lowWind = [viewCloud[8], viewCloud[9]];
+  const upperWind = [viewCloud[10], viewCloud[11]];
+  if (previousCloudTimeSeconds === undefined || cloudTimeSeconds < previousCloudTimeSeconds) {
+    lowCloudMotionM.fill(0);
+    upperCloudMotionM.fill(0);
+    cloudElapsedSeconds = 0;
+  } else {
+    const elapsedSeconds = cloudTimeSeconds - previousCloudTimeSeconds;
+    for (let axis = 0; axis < 2; axis += 1) {
+      lowCloudMotionM[axis] += 0.5 * elapsedSeconds
+        * (previousLowCloudWindMS[axis] + lowWind[axis]);
+      upperCloudMotionM[axis] += 0.5 * elapsedSeconds
+        * (previousUpperCloudWindMS[axis] + upperWind[axis]);
+    }
+    cloudElapsedSeconds += elapsedSeconds;
+  }
+  previousCloudTimeSeconds = cloudTimeSeconds;
+  previousLowCloudWindMS = lowWind;
+  previousUpperCloudWindMS = upperWind;
+  sceneFloats.set(viewCloud.subarray(0, 4), 48);
+  sceneFloats.set(viewCloud.subarray(4, 8), 52);
+  sceneFloats.set(viewCloud.subarray(8, 12), 56);
+  sceneFloats.set([...lowCloudMotionM, ...upperCloudMotionM], 60);
+  sceneFloats.set([cloudElapsedSeconds / 420, cloudElapsedSeconds / 1500, 0, 0], 64);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
   ], 0);
   tuningFloats.set([
-    state.maxWispCoverage, state.cloudNormalStrength, 0, 0,
+    state.maxWispCoverage,
+    state.cloudNormalStrength,
+    state.lowCloudBodySize,
+    state.lowCloudOccurrence,
   ], 4);
-  tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 8);
+  tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, 0], 8);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);
   tuningFloats.set([
     state.waterAttenuationLength,

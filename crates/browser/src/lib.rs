@@ -12,18 +12,10 @@ use simulation::{
     MotionIntent, SharedSimulation, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
-mod cloud_kernels;
 #[cfg(test)]
 mod diagnostics;
 #[cfg(target_arch = "wasm32")]
 mod web;
-
-pub use cloud_kernels::{
-    LOW_CLOUD_KERNEL_VECTORS, LowCloudKernel, LowCloudKernelTuning, LowCloudKernelUniforms,
-    UPPER_CLOUD_KERNEL_VECTORS, UpperCloudKernelUniforms, low_cloud_kernel_uniforms,
-    low_cloud_kernels, low_cloud_kernels_with_tuning, upper_cloud_kernel_uniforms,
-    upper_cloud_kernels,
-};
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -66,27 +58,20 @@ pub struct WorldGeometrySample {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CloudAnchorTime {
+pub struct PeriodicEffectTime {
     pub epoch: u64,
     pub age_ticks: u64,
     pub phase: f32,
 }
 
-pub fn cloud_anchor_time(tick: u64, period_ticks: u64) -> CloudAnchorTime {
+pub fn periodic_effect_time(tick: u64, period_ticks: u64) -> PeriodicEffectTime {
     let epoch = tick / period_ticks;
     let age_ticks = tick % period_ticks;
-    CloudAnchorTime {
+    PeriodicEffectTime {
         epoch,
         age_ticks,
         phase: age_ticks as f32 / period_ticks as f32,
     }
-}
-
-pub fn cloud_anchor_blend_weights(phase: f32) -> [f32; 2] {
-    let phase = phase.clamp(0.0, 1.0);
-    let smoother_phase = phase * phase * phase * (phase * (phase * 6.0 - 15.0) + 10.0);
-    let angle = 0.5 * std::f32::consts::PI * smoother_phase;
-    [angle.cos(), angle.sin()]
 }
 
 pub fn seasonal_phase_factors(season_phase: f32) -> [f32; 4] {

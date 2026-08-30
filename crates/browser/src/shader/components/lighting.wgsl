@@ -293,7 +293,7 @@ fn projected_cloud_position(
         return position_m;
     }
     let longitude = TAU * position_m.x
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.z;
+        * scene.inverse_world_size_m.x;
     let polar_y_m = clamp(
         position_m.y,
         -0.5 * scene.world_size_m.y,
@@ -301,7 +301,7 @@ fn projected_cloud_position(
     );
     let polar_excess_y_m = position_m.y - polar_y_m;
     let latitude = PI * polar_y_m
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.w;
+        * scene.inverse_world_size_m.y;
     let longitude_sin = sin(longitude);
     let longitude_cos = cos(longitude);
     let latitude_sin = sin(latitude);
@@ -337,25 +337,9 @@ fn projected_cloud_position(
     );
 }
 
-fn projected_cloud_footprint_m(position_m: vec2<f32>) -> f32 {
-    var x_derivative = dpdx(position_m);
-    var y_derivative = dpdy(position_m);
-    x_derivative.x -= scene.world_size_m.x
-        * round(
-            x_derivative.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
-        );
-    y_derivative.x -= scene.world_size_m.x
-        * round(
-            y_derivative.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
-        );
-    return max(length(x_derivative), length(y_derivative));
-}
-
 struct CloudShadowProjection {
     low_position_m: vec2<f32>,
     upper_position_m: vec2<f32>,
-    low_footprint_m: f32,
-    upper_footprint_m: f32,
 };
 
 struct CloudShadowDepths {
@@ -388,14 +372,6 @@ fn cloud_shadow_projection_at(
     return CloudShadowProjection(
         low_position_m,
         upper_position_m,
-        max(
-            projected_cloud_footprint_m(low_position_m),
-            finite_source_shadow_footprint_m(LOW_CLOUD_BASE_HEIGHT_M - surface_height_m),
-        ),
-        max(
-            projected_cloud_footprint_m(upper_position_m),
-            finite_source_shadow_footprint_m(WEATHER_CANOPY_HEIGHT_M - surface_height_m),
-        ),
     );
 }
 
@@ -407,10 +383,7 @@ fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepth
     }
     if layer_visibility.z > 0.0 {
         depths.upper = layer_visibility.z * tuning.cloud_shadows.y
-            * procedural_upper_cloud_optical_depth_filtered(
-            projection.upper_position_m,
-            projection.upper_footprint_m,
-        );
+            * procedural_upper_cloud_optical_depth(projection.upper_position_m);
     }
     return depths;
 }
@@ -460,8 +433,4 @@ fn effective_cloud_shadow_amount(sun_depth: f32, moon_depth: f32) -> f32 {
         0.0,
         1.0,
     );
-}
-
-fn finite_source_shadow_footprint_m(height_m: f32) -> f32 {
-    return 2.0 * max(height_m, 0.0) * CELESTIAL_DISC_ANGULAR_RADIUS_RAD;
 }

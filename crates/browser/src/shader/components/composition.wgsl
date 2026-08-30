@@ -5,9 +5,8 @@ fn cloud_color(
     contribution_visibility: vec4<f32>,
 ) -> vec3<f32> {
     let cloud_amount = cloud_sample.amount;
-    let relief_gradient = tuning.cloud_rendering.w * cloud_sample.gradient;
-    let limited_gradient = relief_gradient
-        / (1.0 + length(relief_gradient) / 0.25);
+    let limited_gradient = cloud_sample.gradient
+        / (1.0 + length(cloud_sample.gradient) / 0.25);
     let cloud_normal = normalize(vec3<f32>(
         -limited_gradient,
         1.0,
@@ -18,7 +17,7 @@ fn cloud_color(
         + direct_moon_amount() * moon_facing;
     let sunlight = direct_sun_amount() * upper_transmittance.x
         + direct_moon_amount() * upper_transmittance.y;
-    let relief = cloud_sample.relief / max(cloud_amount, 0.001);
+    let depth = cloud_sample.optical_depth / max(cloud_amount, 0.001);
     let edge_light = sunlight
         * (1.0 - smoothstep(0.30, 0.78, cloud_amount))
         * smoothstep(0.10, 0.55, cloud_amount)
@@ -28,12 +27,12 @@ fn cloud_color(
     let cloud_material = mix(
         vec3<f32>(0.68, 0.72, 0.74),
         vec3<f32>(0.96, 0.97, 0.96),
-        0.30 + 0.45 * relief + 0.25 * direct_light,
+        0.30 + 0.36 * min(depth / 1.25, 1.0) + 0.25 * direct_light,
     );
     var cloud = max(vec3<f32>(0.16, 0.18, 0.20), mix(
         cloud_material,
         vec3<f32>(0.12, 0.15, 0.17),
-        clamp(cloud_sample.darkness * tuning.cloud_rendering.z, 0.0, 1.0),
+        clamp(0.06 * cloud_amount * tuning.cloud_rendering.z, 0.0, 1.0),
     ) * (0.70 + sunlight * mix(0.12, 0.36, direct_light))
         + edge_light
         - depth_shadow);
@@ -76,14 +75,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
         upper_height_m,
         light,
     );
-    let footprint_m = max(
-        visual_pixel_footprint_m,
-        finite_source_shadow_footprint_m(upper_height_m - low_height_m),
-    );
-    let upper_optical_depth = procedural_upper_cloud_optical_depth_filtered(
-        projected_position_m,
-        footprint_m,
-    );
+    let upper_optical_depth = procedural_upper_cloud_optical_depth(projected_position_m);
     return mix(
         1.0,
         cloud_shadow_transmittance(upper_optical_depth, light),
@@ -256,7 +248,7 @@ fn final_scene_color(
             if low_cloud.amount > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(
                     input.world_position_m,
-                    low_height_m + tuning.cloud_rendering.w * low_cloud.height_m,
+                    low_height_m,
                     upper_height_m,
                 );
             }

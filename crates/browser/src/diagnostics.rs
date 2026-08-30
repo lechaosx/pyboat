@@ -2,7 +2,6 @@ pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
     "cloud_low_latent_texture",
     "cloud_low_sample",
     "cloud_weather_canopy_optical_depth",
-    "cloud_low_formation",
     "lighting_cloud_shadow",
     "lighting_solar",
     "lighting_aerosol_optical_depth",

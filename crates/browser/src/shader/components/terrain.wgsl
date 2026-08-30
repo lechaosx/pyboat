@@ -56,7 +56,7 @@ fn solid_ice_sample(
     let climate_gradient_y = select(
         0.0,
         -135.0 * sqrt(normalized_latitude) * latitude_sign
-            * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
+            * scene.inverse_world_size_m.y,
         normalized_latitude > 0.0,
     );
     annual_temperature.gradient = vec2<f32>(0.0, climate_gradient_y)
@@ -797,7 +797,7 @@ fn sea_ice_surface(
         canonical_position < vec2<f32>(0.0),
     );
     let slab_position = positive_position
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw
+        * scene.inverse_world_size_m
         * vec2<f32>(slab_cycles);
     let slab_base = vec2<i32>(floor(slab_position));
     let slab_local = fract(slab_position);

@@ -28,13 +28,13 @@ fn precipitation_water_contact_sample_from_atmosphere(
         canonical_position < vec2<f32>(0.0),
     );
     let cell_position = positive_position
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw
+        * scene.inverse_world_size_m
         * vec2<f32>(cell_cycles);
     let base_cell = vec2<i32>(floor(cell_position));
     let cell_local = fract(cell_position);
     let cycles_per_anchor = 2400u;
     let anchor_cycles = multiply_u64(
-        scene.low_cloud_epoch,
+        scene.precipitation_epoch,
         vec2<u32>(cycles_per_anchor, 0u),
     );
     let snow_fraction = 1.0 - smoothstep(
@@ -63,7 +63,7 @@ fn precipitation_water_contact_sample_from_atmosphere(
                         vec2<u32>(0x13198a2eu, 0x03707344u),
                     ),
             );
-            let local_cycle_time = scene.cloud_anchor_phase_and_inverse_world_size_m.x
+            let local_cycle_time = scene.precipitation_phase_and_padding.x
                 * f32(cycles_per_anchor)
                 + visual_hash_unit(cell_hash.x);
             let local_cycle = u32(floor(local_cycle_time));
@@ -189,7 +189,7 @@ fn ocean_forcing_from_surface(
         + vec2<f32>(
             0.0,
             -open_water * sin(2.0 * latitude_rad) * PI
-                * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
+                * scene.inverse_world_size_m.y,
         );
     let basin_squared = basin * basin;
     let basin_squared_gradient = 2.0 * basin * basin_gradient;
@@ -204,7 +204,7 @@ fn ocean_forcing_from_surface(
     );
     let hemisphere = sin(latitude_rad);
     let hemisphere_gradient_y_per_m = select(
-        cos(latitude_rad) * PI * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
+        cos(latitude_rad) * PI * scene.inverse_world_size_m.y,
         0.0,
         abs(atmosphere.climate.latitude_degrees) >= 90.0,
     );
@@ -256,7 +256,7 @@ fn ocean_forcing_from_surface(
     let solar_angle = 2.0 * (solar_hour_angle + TAU * tidal_phase);
     let tide_sum = cos(lunar_angle) + 0.46 * cos(solar_angle);
     let angle_gradient = vec2<f32>(
-        TAU * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        TAU * scene.inverse_world_size_m.x,
         0.0,
     )
         + TAU * tidal_phase_gradient;
@@ -386,7 +386,7 @@ fn physical_water_wave_sample_from_surface(
             mode_x = select(1.0, -1.0, original_direction.x < 0.0);
         }
         let wave_number_x = TAU * mode_x
-            * scene.cloud_anchor_phase_and_inverse_world_size_m.z;
+            * scene.inverse_world_size_m.x;
         let wave_number_y = TAU * original_direction.y / wavelength_m;
         let wave_number = length(vec2<f32>(wave_number_x, wave_number_y));
         let direction = vec2<f32>(wave_number_x, wave_number_y) / wave_number;
@@ -395,7 +395,7 @@ fn physical_water_wave_sample_from_surface(
         let amplitude_m = weight * amplitude_scale;
         let angular_frequency = sqrt(9.81 * wave_number);
         let phase = wave_number_x
-            * fract(position_m.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z)
+            * fract(position_m.x * scene.inverse_world_size_m.x)
             * scene.world_size_m.x
             + wave_number_y * position_m.y
             - ocean_tick_phase_radians(angular_frequency / 60.0)

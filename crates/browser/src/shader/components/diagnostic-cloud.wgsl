@@ -1,11 +1,6 @@
 fn diagnostic_cloud_low_latent_texture(input: VertexOutput) -> vec4<f32> {
-    let latent = low_cloud_kernel_field_sample(input.world_position_m);
-    return vec4<f32>(scalar_debug_color(latent.value), 1.0);
-}
-
-fn diagnostic_cloud_low_coverage_threshold(input: VertexOutput) -> vec4<f32> {
-    let low = procedural_low_cloud_sample(input.world_position_m);
-    return vec4<f32>(scalar_debug_color(low.detail_gate), 1.0);
+    let latent = low_cloud_latent_sample(input.world_position_m);
+    return vec4<f32>(signed_debug_color(latent.value), 1.0);
 }
 
 fn diagnostic_cloud_low_amount(input: VertexOutput) -> vec4<f32> {
@@ -27,16 +22,6 @@ fn diagnostic_cloud_low_normals(input: VertexOutput) -> vec4<f32> {
 fn diagnostic_cloud_weather_canopy_optical_depth(input: VertexOutput) -> vec4<f32> {
     let optical_depth = procedural_upper_cloud_optical_depth(input.world_position_m);
     return vec4<f32>(scalar_debug_color(optical_depth), 1.0);
-}
-
-fn diagnostic_cloud_low_height(input: VertexOutput) -> vec4<f32> {
-    let low = procedural_low_cloud_sample(input.world_position_m);
-    return vec4<f32>(scalar_debug_color(low.height_m / 320.0), 1.0);
-}
-
-fn diagnostic_cloud_low_formation(input: VertexOutput) -> vec4<f32> {
-    let formation = visible_low_cloud_coverage(surface_cloud_weather);
-    return vec4<f32>(vec3<f32>(formation), 1.0);
 }
 
 fn diagnostic_cloud_shadow_depths(position_m: vec2<f32>) -> CelestialCloudShadowDepths {

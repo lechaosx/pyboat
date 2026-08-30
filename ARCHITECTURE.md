@@ -232,38 +232,38 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   simplex pressure potential plus a separate scalar gust pulse directly from
   match seed, position, world geometry, and bounded time coordinates. Resolved
   surface wind directs mechanical gusts; moist convection can mix faster upper
-  wind downward. Cloud formation, pressure diagnostics, and rendered wind
+  wind downward. Global cloudiness, pressure diagnostics, and rendered wind
   therefore query their causes at world position without a sampled lattice.
   Spatial temperature and moisture use the same spatiotemporal query model in
   Rust and WGSL rather than accepting center-derived weather. No evolving scalar
   or vector field receives a global spatial transport offset.
-- **[Explicit]** The visible lower-cloud layer is a stateless, match-seeded,
-  longitude-periodic latent kernel field. Deterministic 5-minute birth cohorts
-  overlap for 15-minute lifetimes with complementary squared-sine weights.
-  Compact elliptical polynomial kernels form according to weather at birth;
-  their centers follow the time-varying system wind through fixed one-minute
-  midpoint steps while their shapes do not shear. Their motion uses system-wind
-  speed and direction one-to-one. Any absolute tick reconstructs the same field
-  without accumulated state. The renderer supplies only kernels whose support
-  can affect the view or nearby projected shadows; camera and player identity do
-  not affect the canonical field.
-- **[Explicit]** The lower kernel sum continuously drives visible amount, relief,
-  optical depth, and projected shadows. Overlapping lobes form small structures
-  at a fixed 900-metre base under humid, unstable, non-storm birth conditions.
-  Cloud amount, relief, normals, optical depth, and shadows at a world position
-  are independent of camera zoom; zoom changes only which positions are sampled.
-  Kernels are latent basis functions rather than individually composited clouds.
-- **[Explicit]** The unseen weather canopy is a stateless, match-seeded,
-  longitude-periodic latent kernel field at a representative 3600-metre
-  altitude. Deterministic 15-minute birth cohorts overlap for 45-minute
-  lifetimes. Large overlapping lobes form according to weather at birth and
-  follow time-varying upper wind one-to-one through fixed five-minute midpoint
-  steps without shearing. Their continuous sum supplies connected projected
-  shadow optical depth without per-fragment weather or octave evaluation.
+- **[Explicit]** Each client renders lower clouds from a continuous,
+  longitude-periodic spatiotemporal latent noise field parameterized by weather
+  measured at the view center. The field contains no tracked cloud bodies,
+  compact kernels, birth cohorts, or temporal anchors: its time dimension
+  continuously forms and dissolves structure. The client integrates the sampled
+  system wind into a translation offset, so changing wind curves the field's
+  path without stretching it and instantaneous translation speed matches wind
+  speed one-to-one. Cloud visuals may differ between users because their view
+  centers supply different measurements.
+- **[Explicit]** The lower field continuously drives visible amount, optical
+  depth, analytic body normals, and projected shadows at a fixed 900-metre
+  height. Body size, occurrence, detail character, blob shape, contrast, edge,
+  normal strength, optical depth, opacity, and shadow darkness remain playground
+  tunings. Cloud amount, normals, optical depth, and shadows at a sampled world
+  position are independent of camera zoom and pixel footprint; zoom changes only
+  which positions are sampled. Scalar shadow queries omit body-gradient work.
+- **[Explicit]** Each client renders the unseen 3600-metre weather canopy from a
+  broader continuous spatiotemporal latent noise field parameterized by
+  view-center upper cloudiness and precipitation. Its translation follows the
+  integrated view-center upper wind one-to-one, and its continuous optical depth
+  supplies connected projected Sun and Moon shadows without tracked bodies or
+  temporal anchors.
 - **[Explicit]** Regional-canopy ambient attenuation uses a lower-contrast
-  response than directional canopy shadows. Ambient light follows broad local
-  weather, while the advected canopy kernel field attenuates Sun and Moon, so a
-  directional shadow boundary does not also impose the same ambient boundary.
+  response than directional canopy shadows. It follows global procedural weather
+  evaluated at each world position rather than either per-client visual field,
+  while the view-local canopy field attenuates Sun and Moon. A directional shadow
+  boundary therefore does not impose the same ambient boundary.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -373,8 +373,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   contacts with atmospheric haze or screen-space falling streaks.
 - **[Implicit]** A fixed 3-by-3 search over periodic 1.5-metre cells renders a
   deterministic representative subset of precipitation contacts. Each cell has
-  a jittered impact and 0.75-second lifecycle derived from the bounded low-cloud
-  anchor clock. Rain rings expand from 1.8 to 22 centimetres; cold precipitation
+  a jittered impact and 0.75-second lifecycle derived from a bounded periodic
+  effect clock. Rain rings expand from 1.8 to 22 centimetres; cold precipitation
   produces smaller melting dimples. The contact path exits before its search in
   dry weather or above a 30-centimetre fragment footprint.
 - **[Implicit]** WGSL mirrors the authoritative terrain and short environment
@@ -432,7 +432,6 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   offset. Sun and Moon projections are evaluated independently and fade with
   their respective direct-light contribution at the horizon. Grazing shadows
   remain finite. The apparent angular radius of the sun and moon supplies a
-  physical minimum filter footprint for cloud shadows and a
   distance-proportional penumbra for landform shadows.
 - **[Explicit]** North-south position maps linearly from -90 degrees at the
   finite southern pole through the equator to +90 degrees at the finite northern
@@ -449,10 +448,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The playground always samples live production state through the
   browser's Rust/WASM boundary. World controls set seed, geometry, and clock
   rates; model and shader controls only tune or enable mechanisms already present
-  in that world. The view-center sample is diagnostic, and the shader derives
-  every rendered position independently. The overlay marks the raw center,
-  repeated reference meridians and longitude seams, the equator, and both finite
-  poles. Raw camera coordinates remain unbounded north-south.
+  in that world. The view-center sample supplies the per-client visual cloud
+  fields and their winds; other procedural surface state remains independently
+  derived at each rendered position. The overlay marks the raw center, repeated
+  reference meridians and longitude seams, the equator, and both finite poles.
+  Raw camera coordinates remain unbounded north-south.
 - **[Implicit]** Playground longitude-circumference and pole-to-pole-span controls
   cover 8 km to 256 km independently in 1 km steps, with equal 64 km defaults.
 

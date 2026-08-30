@@ -12,7 +12,7 @@ fn canonical_world_position(position_m: vec2<f32>) -> vec2<f32> {
         canonical_world_component(
             position_m.x,
             scene.world_size_m.x,
-            scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+            scene.inverse_world_size_m.x,
         ),
         position_m.y,
     );
@@ -154,7 +154,7 @@ fn terrain_simplex_domain(
         canonical_position < vec2<f32>(0.0),
     );
     let normalized_position = positive_position
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw;
+        * scene.inverse_world_size_m;
     let scaled = vec2<f32>(
         f32(x_cycles) * normalized_position.x
             + f32(y_cycles) * normalized_position.y / sqrt(3.0),
@@ -217,9 +217,9 @@ fn terrain_simplex_noise(
     sample.value *= 70.0;
     let scaled_gradient = 70.0 * sample.gradient;
     sample.gradient = vec2<f32>(
-        f32(domain.x_cycles) * scene.cloud_anchor_phase_and_inverse_world_size_m.z
+        f32(domain.x_cycles) * scene.inverse_world_size_m.x
             * (scaled_gradient.x - scaled_gradient.y),
-        f32(domain.y_cycles) * scene.cloud_anchor_phase_and_inverse_world_size_m.w
+        f32(domain.y_cycles) * scene.inverse_world_size_m.y
             / sqrt(3.0)
             * (scaled_gradient.x + scaled_gradient.y),
     );
@@ -278,7 +278,7 @@ fn terrain_simplex_lattice_gradient_4d(
 
 fn periodic_noise_circle_position_from_canonical(position_m: vec2<f32>) -> vec4<f32> {
     let angle = TAU * position_m
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.zw;
+        * scene.inverse_world_size_m;
     return vec4<f32>(
         cos(angle.x),
         sin(angle.x),

@@ -1,4 +1,4 @@
-use browser::{cloud_anchor_time, sample_production_world_environment, sample_world_geometry};
+use browser::{periodic_effect_time, sample_production_world_environment, sample_world_geometry};
 use game::{procedural_match_environment, procedural_world_environment};
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -17,17 +17,17 @@ fn playground_geometry_sample_uses_canonical_world_math() {
 }
 
 #[test]
-fn cloud_anchor_time_keeps_integer_epochs_and_bounded_ages() {
-    let before = cloud_anchor_time(107_999, 108_000);
+fn periodic_effect_time_keeps_integer_epochs_and_bounded_ages() {
+    let before = periodic_effect_time(107_999, 108_000);
     assert_eq!(before.epoch, 0);
     assert!(before.phase < 1.0);
 
-    let boundary = cloud_anchor_time(108_000, 108_000);
+    let boundary = periodic_effect_time(108_000, 108_000);
     assert_eq!(boundary.epoch, 1);
     assert_eq!(boundary.age_ticks, 0);
     assert_eq!(boundary.phase, 0.0);
 
-    let huge = cloud_anchor_time(u64::MAX, 108_000);
+    let huge = periodic_effect_time(u64::MAX, 108_000);
     assert_eq!(huge.epoch, u64::MAX / 108_000);
     assert!(huge.age_ticks < 108_000);
     assert!((0.0..1.0).contains(&huge.phase));

@@ -54,7 +54,7 @@ fn spatiotemporal_noise_domain(
     let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
     let time_offset = f32((orientation >> 17u) & 0x7fffu) / 64.0;
     let longitude = TAU * canonical_world_position(position_m).x
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.z
+        * scene.inverse_world_size_m.x
         + longitude_offset;
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     return SpatiotemporalNoiseDomain(
@@ -124,7 +124,7 @@ fn spatiotemporal_pressure_noise_sample(
     let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
     let time_offset = f32((orientation >> 17u) & 0x7fffu) / 64.0;
     let longitude = TAU * canonical_world_position(position_m).x
-        * scene.cloud_anchor_phase_and_inverse_world_size_m.z
+        * scene.inverse_world_size_m.x
         + longitude_offset;
     let circle_radius = scene.world_size_m.x
         / (TAU * zonal_wavelength_m * zonal_aspect);
@@ -175,7 +175,7 @@ fn procedural_pressure_sample_filtered_bands(
     let midlatitude = midlatitude_sine * midlatitude_sine;
     let latitude_gradient_rad_per_m = select(
         0.0,
-        PI * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
+        PI * scene.inverse_world_size_m.y,
         abs(position_m.y) < 0.5 * scene.world_size_m.y,
     );
     let midlatitude_gradient_per_m =
@@ -372,7 +372,7 @@ fn upper_wind_m_s() -> vec2<f32> {
 
 fn surface_latitude_degrees_at(position_m: vec2<f32>) -> f32 {
     return clamp(
-        180.0 * position_m.y * scene.cloud_anchor_phase_and_inverse_world_size_m.w,
+        180.0 * position_m.y * scene.inverse_world_size_m.y,
         -90.0,
         90.0,
     );
@@ -385,7 +385,7 @@ fn surface_latitude_degrees() -> f32 {
 fn surface_local_solar_phase_at(position_m: vec2<f32>) -> f32 {
     return fract(
         scene.world_phases_and_pixel_footprint_m.x
-            + position_m.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+            + position_m.x * scene.inverse_world_size_m.x,
     );
 }
 
@@ -1045,8 +1045,8 @@ fn cloud_weather_from_atmosphere(
     let latitude_degrees = atmosphere.climate.latitude_degrees;
     weather.low_advection_wind_m_s = vec2<f32>(0.0);
     if include_low_wind {
-        // Broad flow keeps finite cloud-anchor maps coherent instead of folding them
-        // around gust-scale pressure features.
+        // Broad flow transports cloud structure without folding it around
+        // gust-scale pressure features.
         weather.low_advection_wind_m_s = atmosphere_model.x * wind_from_pressure_gradient(
             pressure_sample.broad_synoptic_gradient_m_s / 6000.0,
             latitude_degrees,
@@ -1162,6 +1162,7 @@ fn visible_low_cloud_coverage(weather: CloudWeatherSample) -> f32 {
         * (1.0 - 0.90 * weather.stratiform);
     return weather.low_coverage * mix(0.06, 1.0, fair_weather_lift);
 }
+
 
 fn production_tuning() -> SceneTuning {
     return SceneTuning(

@@ -25,12 +25,10 @@ use web_transport_wasm::{ClientBuilder, Session};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, LOW_CLOUD_KERNEL_VECTORS, LowCloudKernelTuning,
-    MultiplayerClient, SCENE_SHADER, UPPER_CLOUD_KERNEL_VECTORS, Windsock,
-    cloud_anchor_blend_weights, cloud_anchor_time, low_cloud_kernel_uniforms, low_cloud_kernels,
-    low_cloud_kernels_with_tuning, sample_production_world_environment, sample_world_geometry,
-    scale_bar, seasonal_phase_factors, upper_cloud_kernel_uniforms, upper_cloud_kernels,
-    viewport_interest_radius_m, visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock,
+    periodic_effect_time, sample_production_world_environment, sample_world_geometry, scale_bar,
+    seasonal_phase_factors, viewport_interest_radius_m, visual_pixel_footprint_m,
+    windsock_extension, zoom_view_height_m,
 };
 
 #[cfg(feature = "playground")]
@@ -38,8 +36,7 @@ use crate::PLAYGROUND_STARTUP_SHADER;
 
 const MAX_VERTICES: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
-const LOW_CLOUD_REFRESH_TICKS: u64 = 108_000;
-const UPPER_CLOUD_REFRESH_TICKS: u64 = 216_000;
+const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
@@ -313,72 +310,38 @@ pub fn sample_playground_field_time_coordinates(
 }
 
 #[wasm_bindgen]
-pub fn sample_playground_cloud_anchor_blend_weights(low_phase: f32, upper_phase: f32) -> Vec<f32> {
-    let low = cloud_anchor_blend_weights(low_phase);
-    let upper = cloud_anchor_blend_weights(upper_phase);
-    vec![low[0], low[1], upper[0], upper[1]]
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_low_cloud_kernel_uniforms(
+pub fn sample_playground_view_cloud_uniforms(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
     cloud_tick: u64,
-    wind_tick: u64,
     camera_x_m: f32,
     camera_y_m: f32,
-    view_width_m: f32,
-    view_height_m: f32,
-    body_size_scale: f32,
-    occurrence_scale: f32,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let uniforms = low_cloud_kernel_uniforms(&low_cloud_kernels_with_tuning(
+    let weather = sample_production_world_environment(
         geometry,
         match_seed,
         cloud_tick,
-        wind_tick,
         Vector::new(camera_x_m, camera_y_m),
-        Vector::new(view_width_m, view_height_m),
-        LowCloudKernelTuning {
-            body_size_scale,
-            occurrence_scale,
-        },
-    ));
-    let mut values = Vec::with_capacity(4 + 4 * LOW_CLOUD_KERNEL_VECTORS);
-    values.extend(uniforms.count_and_padding);
-    values.extend(uniforms.vectors.into_iter().flatten());
-    Ok(values)
-}
-
-#[wasm_bindgen]
-pub fn sample_playground_upper_cloud_kernel_uniforms(
-    world_width_m: f32,
-    world_height_m: f32,
-    match_seed: u64,
-    cloud_tick: u64,
-    wind_tick: u64,
-    camera_x_m: f32,
-    camera_y_m: f32,
-    view_width_m: f32,
-    view_height_m: f32,
-) -> Result<Vec<f32>, JsValue> {
-    let geometry = WorldGeometry::new(world_width_m, world_height_m)
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let uniforms = upper_cloud_kernel_uniforms(&upper_cloud_kernels(
-        geometry,
-        match_seed,
-        cloud_tick,
-        wind_tick,
-        Vector::new(camera_x_m, camera_y_m),
-        Vector::new(view_width_m, view_height_m),
-    ));
-    let mut values = Vec::with_capacity(4 + 4 * UPPER_CLOUD_KERNEL_VECTORS);
-    values.extend(uniforms.count_and_padding);
-    values.extend(uniforms.vectors.into_iter().flatten());
-    Ok(values)
+    )
+    .weather;
+    let low_wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
+    Ok(vec![
+        weather.relative_humidity,
+        weather.instability,
+        weather.lift,
+        weather.cloudiness,
+        weather.upper_cloudiness,
+        weather.rain_intensity,
+        0.0,
+        0.0,
+        low_wind.x,
+        low_wind.y,
+        weather.upper_wind_velocity_m_s.x,
+        weather.upper_wind_velocity_m_s.y,
+    ])
 }
 
 #[wasm_bindgen]
@@ -488,22 +451,56 @@ struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
-    low_cloud_epoch: [u32; 2],
+    precipitation_epoch: [u32; 2],
     world_size_m: [f32; 2],
-    upper_cloud_epoch: [u32; 2],
-    cloud_anchor_phase_and_inverse_world_size_m: [f32; 4],
+    inverse_world_size_m: [f32; 2],
+    precipitation_phase_and_padding: [f32; 4],
     world_phases_and_pixel_footprint_m: [f32; 4],
     world_tick_and_padding: [u32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
-    cloud_anchor_weights: [f32; 4],
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
-    low_cloud_kernel_count_and_padding: [f32; 4],
-    low_cloud_kernel_vectors: [[f32; 4]; LOW_CLOUD_KERNEL_VECTORS],
-    upper_cloud_kernel_count_and_padding: [f32; 4],
-    upper_cloud_kernel_vectors: [[f32; 4]; UPPER_CLOUD_KERNEL_VECTORS],
+    view_cloud_primary: [f32; 4],
+    view_cloud_secondary: [f32; 4],
+    view_cloud_winds_m_s: [f32; 4],
+    view_cloud_motion_m: [f32; 4],
+    view_cloud_time_coordinates: [f32; 4],
+}
+
+#[derive(Default)]
+struct ViewCloudMotion {
+    last_tick: Option<u64>,
+    low_offset_m: [f64; 2],
+    upper_offset_m: [f64; 2],
+    previous_low_wind_m_s: [f64; 2],
+    previous_upper_wind_m_s: [f64; 2],
+    elapsed_seconds: f64,
+}
+
+impl ViewCloudMotion {
+    fn advance(&mut self, tick: u64, low_wind: Vector, upper_wind: Vector) {
+        let low_wind = [f64::from(low_wind.x), f64::from(low_wind.y)];
+        let upper_wind = [f64::from(upper_wind.x), f64::from(upper_wind.y)];
+        if let Some(last_tick) = self.last_tick {
+            if tick < last_tick {
+                *self = Self::default();
+            } else {
+                let seconds = (tick - last_tick) as f64 * f64::from(simulation::DT_SECONDS);
+                for axis in 0..2 {
+                    self.low_offset_m[axis] +=
+                        0.5 * seconds * (self.previous_low_wind_m_s[axis] + low_wind[axis]);
+                    self.upper_offset_m[axis] +=
+                        0.5 * seconds * (self.previous_upper_wind_m_s[axis] + upper_wind[axis]);
+                }
+                self.elapsed_seconds += seconds;
+            }
+        }
+        self.last_tick = Some(tick);
+        self.previous_low_wind_m_s = low_wind;
+        self.previous_upper_wind_m_s = upper_wind;
+    }
 }
 
 struct Renderer {
@@ -516,6 +513,7 @@ struct Renderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    cloud_motion: ViewCloudMotion,
 }
 
 impl Renderer {
@@ -627,6 +625,7 @@ impl Renderer {
             vertex_buffer,
             uniform_buffer,
             bind_group,
+            cloud_motion: ViewCloudMotion::default(),
         })
     }
 
@@ -656,26 +655,18 @@ impl Renderer {
             world_celestial_conditions(world_geometry, tick as f64 / 60.0, Vector::ZERO);
         let orbit = celestial_orbit(celestial);
         let match_seed = match_seed.unwrap_or(0);
-        let low_cloud_kernel_uniforms = low_cloud_kernel_uniforms(&low_cloud_kernels(
+        let view_weather = sample_production_world_environment(
             world_geometry,
             match_seed,
             tick,
-            tick,
             canonical_camera_m.into(),
-            Vector::new(view_width_m, view_height_m),
-        ));
-        let upper_cloud_kernel_uniforms = upper_cloud_kernel_uniforms(&upper_cloud_kernels(
-            world_geometry,
-            match_seed,
-            tick,
-            tick,
-            canonical_camera_m.into(),
-            Vector::new(view_width_m, view_height_m),
-        ));
-        let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
-        let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
-        let low_cloud_weights = cloud_anchor_blend_weights(low_cloud_time.phase);
-        let upper_cloud_weights = cloud_anchor_blend_weights(upper_cloud_time.phase);
+        )
+        .weather;
+        let low_cloud_wind =
+            view_weather.wind_velocity_m_s - view_weather.surface_gust_velocity_m_s;
+        self.cloud_motion
+            .advance(tick, low_cloud_wind, view_weather.upper_wind_velocity_m_s);
+        let precipitation_time = periodic_effect_time(tick, PRECIPITATION_CONTACT_PERIOD_TICKS);
         let scalar_time = scalar_field_time_coordinates(tick);
         let vector_time = vector_field_time_coordinates(world_geometry, tick);
         self.queue.write_buffer(
@@ -695,21 +686,16 @@ impl Renderer {
                     scalar_time.decorative_water,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
-                low_cloud_epoch: [
-                    low_cloud_time.epoch as u32,
-                    (low_cloud_time.epoch >> 32) as u32,
+                precipitation_epoch: [
+                    precipitation_time.epoch as u32,
+                    (precipitation_time.epoch >> 32) as u32,
                 ],
                 world_size_m: [world_geometry.width_m(), world_geometry.height_m()],
-                upper_cloud_epoch: [
-                    upper_cloud_time.epoch as u32,
-                    (upper_cloud_time.epoch >> 32) as u32,
-                ],
-                cloud_anchor_phase_and_inverse_world_size_m: [
-                    low_cloud_time.phase,
-                    upper_cloud_time.phase,
+                inverse_world_size_m: [
                     world_geometry.width_m().recip(),
                     world_geometry.height_m().recip(),
                 ],
+                precipitation_phase_and_padding: [precipitation_time.phase, 0.0, 0.0, 0.0],
                 world_phases_and_pixel_footprint_m: [
                     celestial.day_phase,
                     celestial.season_phase,
@@ -724,12 +710,6 @@ impl Renderer {
                     0.0,
                     0.0,
                 ],
-                cloud_anchor_weights: [
-                    low_cloud_weights[0],
-                    low_cloud_weights[1],
-                    upper_cloud_weights[0],
-                    upper_cloud_weights[1],
-                ],
                 seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
                 celestial_orbit_angles: [
                     orbit.solar_declination_rad as f32,
@@ -743,10 +723,36 @@ impl Renderer {
                     orbit.lunar_umbra_fraction,
                     0.0,
                 ],
-                low_cloud_kernel_count_and_padding: low_cloud_kernel_uniforms.count_and_padding,
-                low_cloud_kernel_vectors: low_cloud_kernel_uniforms.vectors,
-                upper_cloud_kernel_count_and_padding: upper_cloud_kernel_uniforms.count_and_padding,
-                upper_cloud_kernel_vectors: upper_cloud_kernel_uniforms.vectors,
+                view_cloud_primary: [
+                    view_weather.relative_humidity,
+                    view_weather.instability,
+                    view_weather.lift,
+                    view_weather.cloudiness,
+                ],
+                view_cloud_secondary: [
+                    view_weather.upper_cloudiness,
+                    view_weather.rain_intensity,
+                    0.0,
+                    0.0,
+                ],
+                view_cloud_winds_m_s: [
+                    low_cloud_wind.x,
+                    low_cloud_wind.y,
+                    view_weather.upper_wind_velocity_m_s.x,
+                    view_weather.upper_wind_velocity_m_s.y,
+                ],
+                view_cloud_motion_m: [
+                    self.cloud_motion.low_offset_m[0] as f32,
+                    self.cloud_motion.low_offset_m[1] as f32,
+                    self.cloud_motion.upper_offset_m[0] as f32,
+                    self.cloud_motion.upper_offset_m[1] as f32,
+                ],
+                view_cloud_time_coordinates: [
+                    (self.cloud_motion.elapsed_seconds / 420.0) as f32,
+                    (self.cloud_motion.elapsed_seconds / 1500.0) as f32,
+                    0.0,
+                    0.0,
+                ],
             }),
         );
 
