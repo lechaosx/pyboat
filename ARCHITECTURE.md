@@ -257,9 +257,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   position are independent of camera zoom and pixel footprint; zoom changes only
   which positions are sampled. Scalar shadow queries omit body-gradient work.
 - **[Explicit]** The unseen 3600-metre weather canopy uses a broader continuous
-  spatiotemporal latent noise field. Its translation follows the integrated
-  view-center upper wind one-to-one, and its continuous optical depth supplies
-  connected projected Sun and Moon shadows.
+  spatiotemporal latent noise field. Its regional sky fraction and mean optical
+  thickness are algebraic outputs of the shared weather derivation from
+  independent moisture, temperature, and pressure fields; the canopy performs
+  no additional weather-noise query. Sky fraction sets target coverage while
+  the translated latent texture determines individual bodies and openings. Its
+  translation follows the integrated view-center upper wind one-to-one, and its
+  continuous optical depth supplies connected projected Sun and Moon shadows.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -408,7 +412,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   entry points, bindings, and their reachable components. Playground diagnostic
   sources and interfaces are feature-gated from production artifacts and compile
   as separate lazy modules containing only the selected diagnostic layer's
-  dependency closure.
+  dependency closure. Related scalar views share diagnostic modules selected by
+  pipeline overrides while reading the same primary and derived field functions
+  as production rendering.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

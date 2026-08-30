@@ -183,9 +183,9 @@ fn calculate_atmospheric_ambient_color_with_visibility(
             0.75 * source_presence,
         );
         let cloud_dome_radiance = mix(
-            0.86,
-            0.08,
-            smoothstep(0.25, 4.20, canopy.mean_optical_thickness),
+            0.88,
+            0.025,
+            smoothstep(0.35, 2.75, canopy.mean_optical_thickness),
         );
         canopy_light = clear_intensity * cloud_dome_radiance * canopy_color;
     }
@@ -358,6 +358,7 @@ fn cloud_shadow_projection_at(
 fn cloud_shadow_depths_at(
     projection: CloudShadowProjection,
     weather: CloudWeatherSample,
+    canopy: RegionalCanopyConditions,
 ) -> CloudShadowDepths {
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
@@ -366,7 +367,7 @@ fn cloud_shadow_depths_at(
     }
     if layer_visibility.z > 0.0 {
         depths.upper = layer_visibility.z * tuning.cloud_shadows.y
-            * procedural_upper_cloud_optical_depth(projection.upper_position_m, weather);
+            * procedural_upper_cloud_optical_depth(projection.upper_position_m, canopy);
     }
     return depths;
 }
@@ -375,6 +376,7 @@ fn celestial_cloud_shadow_depths_at(
     position_m: vec2<f32>,
     surface_height_m: f32,
     weather: CloudWeatherSample,
+    canopy: RegionalCanopyConditions,
 ) -> CelestialCloudShadowDepths {
     var celestial_depths = CelestialCloudShadowDepths(vec2<f32>(0.0), vec2<f32>(0.0));
     if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
@@ -386,7 +388,7 @@ fn celestial_cloud_shadow_depths_at(
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 {
             let projection = cloud_shadow_projection_at(position_m, surface_height_m, light);
-            let depths = cloud_shadow_depths_at(projection, weather);
+            let depths = cloud_shadow_depths_at(projection, weather, canopy);
             celestial_depths.low[source_index] = depths.low;
             celestial_depths.upper[source_index] = depths.upper;
         }

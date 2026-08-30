@@ -134,93 +134,94 @@ struct RegionalCanopyConditions {
     mean_optical_thickness: f32,
 }
 
-fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyConditions {
-    return RegionalCanopyConditions(
-        clamp(weather.upper_coverage, 0.0, 1.0),
-        0.35
-            + 0.75 * weather.stratiform
-            + 0.95 * weather.convective,
-    );
-}
-
-fn ambient_sky_conditions_from_atmosphere(
-    position_m: vec2<f32>,
+fn regional_canopy_drivers(
     atmosphere: SurfaceAtmosphereSample,
-) -> RegionalCanopyConditions {
-    if environment_feature_visibility().w <= 0.0 {
-        return RegionalCanopyConditions(0.0, 0.0);
-    }
+    weather: CloudWeatherSample,
+) -> vec3<f32> {
     let climate_air_temperature_c = atmosphere.climate.annual_mean_air_temperature_c
         + 0.5 * atmosphere.climate.seasonal_temperature_range_c
             * atmosphere.climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
-    let broad_temperature_scale_c = latitude_curve_value(
-        TEMPERATURE_ANOMALY_SCALE_C,
-        atmosphere.climate.latitude_degrees,
+    let climate_saturation_g_kg = water_vapor_saturation_capacity_g_kg(
+        climate_air_temperature_c,
     );
-    let broad_temperature_anomaly_c = 0.85 * broad_temperature_scale_c
-        * spatiotemporal_noise_value(
-        vec2<u32>(0x38d01377u, 0x452821e6u),
-        position_m,
-        65536.0,
-        scene.scalar_field_time_coordinates.x,
-    );
-    let broad_air_temperature_c = climate_air_temperature_c
-        + broad_temperature_anomaly_c;
     let climate_water_vapor_g_kg = select(
         0.0,
-        0.72 * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c),
+        0.72 * climate_saturation_g_kg,
         environment_feature_visibility().z > 0.0,
     );
-    let broad_relative_humidity = clamp(
-        climate_water_vapor_g_kg
-            / water_vapor_saturation_capacity_g_kg(broad_air_temperature_c),
+    // A sky-dome estimate should respond less to local moisture structure than
+    // the overhead weather column does.
+    let regional_water_vapor_g_kg = mix(
+        climate_water_vapor_g_kg,
+        atmosphere.water_vapor_g_kg,
+        0.18,
+    );
+    let regional_air_temperature_c = climate_air_temperature_c
+        + atmosphere.temperature_anomaly.value;
+    let regional_relative_humidity = clamp(
+        regional_water_vapor_g_kg
+            / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c),
         0.0,
         1.5,
     );
     let broad_pressure_hpa = 1013.25
         + atmosphere.pressure.climate_potential_m2_s / 6000.0;
-    let condensation = smoothstep(0.45, 0.95, broad_relative_humidity);
-    let pressure_lift = 1.0 - smoothstep(990.0, 1014.0, broad_pressure_hpa);
-    let cloud_signal = 0.72 * condensation + 0.28 * pressure_lift;
-    let sky_fraction = clamp(cloud_signal, 0.0, 1.0);
-    let storm_depth = smoothstep(0.55, 0.92, sky_fraction)
-        * mix(0.35, 1.0, pressure_lift);
+    let condensation = smoothstep(0.45, 0.95, regional_relative_humidity);
+    let pressure_lift = 1.0 - smoothstep(1009.0, 1017.0, broad_pressure_hpa);
+    return vec3<f32>(condensation, pressure_lift, weather.instability);
+}
+
+fn regional_canopy_conditions(
+    atmosphere: SurfaceAtmosphereSample,
+    weather: CloudWeatherSample,
+) -> RegionalCanopyConditions {
+    if environment_feature_visibility().w <= 0.0 {
+        return RegionalCanopyConditions(0.0, 0.0);
+    }
+    let drivers = regional_canopy_drivers(atmosphere, weather);
+    let condensation = drivers.x;
+    let pressure_lift = drivers.y;
+    let instability = drivers.z;
+    let cloud_potential = 0.55 * condensation
+        + 0.25 * pressure_lift
+        + 0.20 * condensation * instability;
+    let sky_fraction = smoothstep(0.30, 0.88, cloud_potential);
+    let storm_depth = smoothstep(
+        0.15,
+        0.45,
+        condensation * pressure_lift * instability,
+    );
     return RegionalCanopyConditions(
         sky_fraction,
-        0.25 + 0.80 * condensation + 1.10 * pressure_lift + 2.05 * storm_depth,
+        0.18
+            + 0.50 * condensation
+            + 0.70 * pressure_lift
+            + 0.45 * condensation * instability
+            + 3.6 * storm_depth,
     );
 }
 
 fn procedural_upper_cloud_optical_depth(
     position_m: vec2<f32>,
-    weather: CloudWeatherSample,
+    regional: RegionalCanopyConditions,
 ) -> f32 {
     let field_position_m = position_m - scene.view_cloud_motion_m.zw;
-    let regional = regional_canopy_conditions(weather);
-    let cover = clamp(
-        max(regional.sky_fraction, 0.30 * weather.low_coverage),
-        0.0,
-        1.0,
-    );
+    let cover = regional.sky_fraction;
     if cover <= 0.0 {
         return 0.0;
     }
     let latent = spatiotemporal_fractal_value(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         field_position_m,
-        8000.0,
+        4000.0,
         scene.cloud_time_coordinates.y,
-        4u,
-        0.58,
+        2u,
+        0.35,
     );
-    let layered_amount = clamp(cover + 0.30 * latent, 0.0, 1.0);
-    let cell = smoothstep(0.42, 0.72, 0.5 + 0.5 * latent);
-    let cellular_amount = layered_amount * mix(0.20, 1.0, cell);
-    let amount = smoothstep(0.0, 0.12, cover) * mix(
-        layered_amount,
-        max(0.20 * layered_amount, cellular_amount),
-        weather.convective,
-    );
-    return amount * regional.mean_optical_thickness;
+    let threshold = 0.70 * (0.5 - cover) + 0.04;
+    let amount = smoothstep(threshold - 0.08, threshold + 0.08, latent);
+    return amount
+        * mix(0.72, 1.0, 0.5 + 0.5 * latent)
+        * regional.mean_optical_thickness;
 }

@@ -1,4 +1,5 @@
 pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
+    "atmosphere_conditions",
     "cloud_low_latent_texture",
     "cloud_low_sample",
     "cloud_weather_canopy_optical_depth",

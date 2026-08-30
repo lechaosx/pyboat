@@ -1,4 +1,15 @@
 export type DiagnosticId =
+  | "atmosphere_water_vapor"
+  | "weather_relative_humidity"
+  | "weather_instability"
+  | "weather_lift"
+  | "weather_low_coverage"
+  | "weather_regional_condensation"
+  | "weather_broad_pressure_lift"
+  | "weather_storm_potential"
+  | "weather_sky_fraction"
+  | "weather_canopy_optical_thickness"
+  | "weather_rain"
   | "cloud_low_latent_texture"
   | "cloud_low_optical_depth"
   | "cloud_low_normals"
@@ -60,6 +71,50 @@ export type DiagnosticShader = {
 };
 
 export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
+  atmosphere_water_vapor: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 0 },
+  },
+  weather_relative_humidity: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 1 },
+  },
+  weather_instability: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 2 },
+  },
+  weather_lift: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 3 },
+  },
+  weather_low_coverage: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 4 },
+  },
+  weather_regional_condensation: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 7 },
+  },
+  weather_broad_pressure_lift: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 8 },
+  },
+  weather_storm_potential: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 9 },
+  },
+  weather_sky_fraction: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 10 },
+  },
+  weather_canopy_optical_thickness: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 5 },
+  },
+  weather_rain: {
+    name: "atmosphere_conditions",
+    constants: { ATMOSPHERE_CONDITION_OUTPUT: 6 },
+  },
   cloud_low_latent_texture: { name: "cloud_low_latent_texture" },
   cloud_low_optical_depth: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 0 } },
   cloud_low_normals: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 1 } },
@@ -145,34 +200,29 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
 
 export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
   weather: [
-    { label: "Overview", options: [["scene", "Final composition"]] },
-    { label: "Cloud structure", options: [
-      ["cloud_low_latent_texture", "Low latent texture"],
-      ["cloud_low_optical_depth", "Low optical depth"],
-      ["cloud_low_normals", "Low normals"],
-      ["cloud_weather_canopy_optical_depth", "Canopy optical depth"],
-    ] },
-    { label: "Lighting and shadows", options: [
-      ["lighting_projected_low_shadow", "Projected low shadow"],
-      ["lighting_projected_upper_shadow", "Projected upper shadow"],
-      ["lighting_combined_transmittance", "Combined transmittance"],
-      ["lighting_ambient_sky_occlusion", "Ambient sky occlusion"],
-      ["lighting_solar_elevation", "Solar elevation"],
-      ["lighting_aerosol_optical_depth", "Aerosol optical depth"],
-      ["lighting_solar_eclipse_coverage", "Solar eclipse coverage"],
-    ] },
-    { label: "Thermodynamics", options: [
-      ["temperature_gradient", "Local temperature-gradient vector · RGB"],
+    { label: "Primary world fields", options: [
       ["surface_air_temperature", "Surface air temperature"],
-    ] },
-    { label: "Pressure", options: [
-      ["pressure_gradient", "Pressure gradient vector · RGB"],
+      ["atmosphere_water_vapor", "Water vapor · 0–25 g/kg"],
+      ["temperature_gradient", "Temperature-gradient vector · RGB"],
       ["pressure_broad_anomaly", "Broad pressure anomaly · ±8 hPa"],
-      ["pressure_full_anomaly", "Full pressure anomaly · ±8 hPa"],
       ["pressure_synoptic_anomaly", "Synoptic pressure anomaly · ±3 hPa"],
       ["pressure_local_anomaly", "Local pressure anomaly · ±0.5 hPa"],
+      ["pressure_full_anomaly", "Combined pressure anomaly · ±8 hPa"],
+      ["pressure_gradient", "Pressure-gradient vector · RGB"],
     ] },
-    { label: "Wind", options: [
+    { label: "Derived conditions", options: [
+      ["weather_relative_humidity", "Relative humidity · 0–150%"],
+      ["weather_instability", "Atmospheric instability"],
+      ["weather_lift", "Combined lift"],
+      ["weather_low_coverage", "Low-cloud coverage"],
+      ["weather_regional_condensation", "Regional condensation"],
+      ["weather_broad_pressure_lift", "Broad pressure lift"],
+      ["weather_storm_potential", "Storm potential"],
+      ["weather_sky_fraction", "Sky fraction"],
+      ["weather_canopy_optical_thickness", "Regional canopy optical thickness"],
+      ["weather_rain", "Rain intensity"],
+    ] },
+    { label: "Transport", options: [
       ["wind_surface", "Surface wind vector · RGB"],
       ["wind_upper", "Upper wind vector · RGB"],
       ["wind_shear", "Vertical wind shear · RGB"],
@@ -181,6 +231,19 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["wind_resolved_surface", "Resolved surface wind vector · RGB"],
       ["wind_broad_synoptic", "Broad / synoptic circulation · RGB"],
     ] },
+    { label: "Rendered consequences", options: [
+      ["cloud_low_latent_texture", "Low latent texture"],
+      ["cloud_low_optical_depth", "Low optical depth"],
+      ["cloud_low_normals", "Low normals"],
+      ["cloud_weather_canopy_optical_depth", "Canopy optical depth"],
+      ["lighting_projected_low_shadow", "Projected low shadow"],
+      ["lighting_projected_upper_shadow", "Projected upper shadow"],
+      ["lighting_combined_transmittance", "Combined transmittance"],
+      ["lighting_solar_elevation", "Solar elevation"],
+      ["lighting_aerosol_optical_depth", "Aerosol optical depth"],
+      ["lighting_solar_eclipse_coverage", "Solar eclipse coverage"],
+    ] },
+    { label: "Overview", options: [["scene", "Final composition"]] },
   ],
   landscape: [
     { label: "Overview", options: [["scene", "Final composition"]] },

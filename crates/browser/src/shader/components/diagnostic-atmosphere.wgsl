@@ -49,6 +49,46 @@ fn diagnostic_surface_air_temperature(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(signed_debug_color(surface_current_air_temperature_c() / 40.0), 1.0);
 }
 
+fn diagnostic_atmosphere_condition(input: VertexOutput, output: u32) -> vec4<f32> {
+    let position_m = input.world_position_m;
+    let atmosphere = surface_atmosphere_sample_at(position_m);
+    if output == 0u {
+        return vec4<f32>(scalar_debug_color(atmosphere.water_vapor_g_kg / 25.0), 1.0);
+    }
+    let weather = cloud_weather_from_atmosphere(position_m, atmosphere, false, false);
+    if output == 1u {
+        return vec4<f32>(scalar_debug_color(weather.relative_humidity / 1.5), 1.0);
+    }
+    if output == 2u {
+        return vec4<f32>(scalar_debug_color(weather.instability), 1.0);
+    }
+    if output == 3u {
+        return vec4<f32>(scalar_debug_color(weather.lift), 1.0);
+    }
+    if output == 4u {
+        return vec4<f32>(scalar_debug_color(weather.low_coverage), 1.0);
+    }
+    if output == 5u {
+        let canopy = regional_canopy_conditions(atmosphere, weather);
+        return vec4<f32>(scalar_debug_color(canopy.mean_optical_thickness / 4.20), 1.0);
+    }
+    if output == 6u {
+        return vec4<f32>(scalar_debug_color(weather.rain), 1.0);
+    }
+    let drivers = regional_canopy_drivers(atmosphere, weather);
+    if output == 7u {
+        return vec4<f32>(scalar_debug_color(drivers.x), 1.0);
+    }
+    if output == 8u {
+        return vec4<f32>(scalar_debug_color(drivers.y), 1.0);
+    }
+    if output == 9u {
+        return vec4<f32>(scalar_debug_color(drivers.x * drivers.y * drivers.z), 1.0);
+    }
+    let canopy = regional_canopy_conditions(atmosphere, weather);
+    return vec4<f32>(scalar_debug_color(canopy.sky_fraction), 1.0);
+}
+
 fn diagnostic_pressure_gradient(input: VertexOutput) -> vec4<f32> {
     let pressure = diagnostic_filtered_pressure(input.world_position_m);
     return vec4<f32>(wind_debug_color(pressure.gradient_m_s), 1.0);

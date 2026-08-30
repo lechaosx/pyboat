@@ -151,11 +151,14 @@ current playable behavior; this file does not track delivery status.
   light alongside the clear sky. The canopy-light endpoint uses the smooth
   regional mean optical thickness of the cloudy portion of the visible sky,
   rather than the local overhead texture sample, to filter eclipse-aware Sun and
-  Moon intensity and color. These regional canopy conditions independently feed
-  ambient lighting and detailed canopy pixels and shadows; ambient never consumes
-  a sampled cloud pixel. Clear-sky light follows celestial and atmospheric
-  scattering conditions. Unresolved high ice-cloud effects remain part of canopy
-  and sky diffusion rather than a third sampled layer.
+  Moon intensity and color. The same regional sky fraction sets both the
+  clear-sky/cloud-dome ambient blend and the target areal coverage of detailed
+  canopy bodies and shadows. It derives from the same pressure, temperature,
+  moisture, and resulting weather conditions as gameplay; ambient never consumes
+  a sampled cloud pixel.
+  Clear-sky light follows celestial and atmospheric scattering conditions.
+  Unresolved high ice-cloud effects remain part of canopy and sky diffusion
+  rather than a third sampled layer.
 - **[Explicit]** Aerosol optical depth varies spatially with seeded regional
   structure, dry air, and rain washout. When the sun is low, aerosol and moisture
   can redden direct sunlight, visible clouds, and the canopy's diffuse light.
@@ -261,6 +264,11 @@ current playable behavior; this file does not track delivery status.
   and bottom response, ice structure, light balance, cloud shape and lighting,
   and low-cloud and canopy shadows. It does not expose low-level noise-kernel
   constants or replace world-generated physical inputs.
+- **[Explicit]** Diagnostic outputs present causal world state before rendered
+  consequences: primary atmospheric fields first, derived weather conditions
+  second, transport third, and cloud, shadow, lighting, and final-composition
+  results afterward. They visualize existing model inputs and derivations rather
+  than introducing diagnostic-only world fields.
 - **[Explicit]** Intermediate weather and water mechanisms have no user-facing
   switches. The playground enables them when an active color stage or
   selected diagnostic consumes them and disables them when nothing does.

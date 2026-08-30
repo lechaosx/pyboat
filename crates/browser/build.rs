@@ -76,6 +76,7 @@ fn diagnostic_mechanism(name: &str) -> &'static str {
     if name.starts_with("cloud_") || name.starts_with("lighting_") {
         "src/shader/components/diagnostic-cloud.wgsl"
     } else if name.starts_with("temperature_")
+        || name.starts_with("atmosphere_")
         || name.starts_with("surface_air_")
         || name.starts_with("pressure_")
         || name.starts_with("wind_")

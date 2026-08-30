@@ -375,10 +375,69 @@ fn visual_cloud_fields_are_independent_of_view_center_weather() {
 }
 
 #[test]
-fn canopy_weather_envelope_stays_in_world_coordinates() {
+fn broad_pressure_lift_spans_settled_and_lifting_regions() {
     let world = WorldGeometry::default();
-    let width = 32usize;
-    let height = 32usize;
+    let lift = render_diagnostic_image(world, "weather_broad_pressure_lift", 128, 128);
+
+    assert!(channel_range(&lift, 0) > 0.65);
+}
+
+#[test]
+fn broad_atmosphere_emerges_into_distinct_weather_regimes() {
+    let world = WorldGeometry::default();
+    let width = 128usize;
+    let height = 128usize;
+    let cover = render_diagnostic_image(world, "weather_sky_fraction", width as u32, height as u32);
+    let thickness = render_diagnostic_image(
+        world,
+        "weather_canopy_optical_thickness",
+        width as u32,
+        height as u32,
+    );
+    let debug_amount = |image: &[u8], offset: usize| {
+        let srgb = image[offset] as f32 / 255.0;
+        let linear = if srgb <= 0.040_45 {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).powf(2.4)
+        };
+        ((linear - 0.015) / 0.905).clamp(0.0, 1.0)
+    };
+    let mut clear = 0;
+    let mut mixed = 0;
+    let mut overcast = 0;
+    let mut storm = 0;
+    for block_row in 0..8 {
+        for block_column in 0..8 {
+            let mut cover_sum = 0.0;
+            let mut thickness_sum = 0.0;
+            for row in block_row * 16..(block_row + 1) * 16 {
+                for column in block_column * 16..(block_column + 1) * 16 {
+                    let offset = 4 * (row * width + column);
+                    cover_sum += debug_amount(&cover, offset);
+                    thickness_sum += debug_amount(&thickness, offset);
+                }
+            }
+            let block_cover = cover_sum / 256.0;
+            let block_thickness = thickness_sum / 256.0;
+            clear += usize::from(block_cover < 0.06);
+            mixed += usize::from(block_cover > 0.18 && block_cover < 0.42);
+            overcast += usize::from(block_cover > 0.68);
+            storm += usize::from(block_thickness > 0.68);
+        }
+    }
+
+    assert!(clear >= 4, "clear blocks {clear}");
+    assert!(mixed >= 4, "mixed blocks {mixed}");
+    assert!(overcast >= 2, "overcast blocks {overcast}");
+    assert!(storm >= 1, "storm blocks {storm}");
+}
+
+#[test]
+fn canopy_coverage_tracks_ambient_sky_fraction() {
+    let world = WorldGeometry::default();
+    let width = 128usize;
+    let height = 128usize;
     let cloud_time_seconds = 1_800.0;
     let canopy = render_diagnostic_image_with_cloud_time(
         world,
@@ -390,27 +449,55 @@ fn canopy_weather_envelope_stays_in_world_coordinates() {
         width as u32,
         height as u32,
     );
-    let tick = (cloud_time_seconds / simulation::DT_SECONDS) as u64;
-    let mut optical_depth = Vec::with_capacity(width * height);
-    let mut cloud_condition = Vec::with_capacity(width * height);
-    for row in 0..height {
-        for column in 0..width {
-            let offset = 4 * (row * width + column);
-            optical_depth.push(
-                (canopy[offset] as f32 + canopy[offset + 1] as f32 + canopy[offset + 2] as f32)
-                    / (3.0 * 255.0),
-            );
-            let position_m = Vector::new(
-                (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
-                (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
-            );
-            let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
-            cloud_condition.push(weather.upper_cloudiness.max(0.30 * weather.cloudiness));
+    let ambient = render_diagnostic_image_with_cloud_time(
+        world,
+        Vector::ZERO,
+        0.0,
+        cloud_time_seconds,
+        world.height_m(),
+        "lighting_ambient_sky_occlusion",
+        width as u32,
+        height as u32,
+    );
+    let mut canopy_cover = Vec::new();
+    let mut sky_fraction = Vec::new();
+    let debug_amount = |image: &[u8], offset: usize| {
+        let srgb = image[offset] as f32 / 255.0;
+        let linear = if srgb <= 0.040_45 {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).powf(2.4)
+        };
+        ((linear - 0.015) / 0.905).clamp(0.0, 1.0)
+    };
+    for block_row in 0..8 {
+        for block_column in 0..8 {
+            let mut occupied = 0.0;
+            let mut ambient_sum = 0.0;
+            for row in block_row * 16..(block_row + 1) * 16 {
+                for column in block_column * 16..(block_column + 1) * 16 {
+                    let offset = 4 * (row * width + column);
+                    occupied += f32::from(debug_amount(&canopy, offset) > 0.05);
+                    ambient_sum += debug_amount(&ambient, offset);
+                }
+            }
+            canopy_cover.push(occupied / 256.0);
+            sky_fraction.push(ambient_sum / 256.0);
         }
     }
 
-    let correlation = pearson_correlation(&optical_depth, &cloud_condition);
-    assert!(correlation > 0.45, "{correlation}");
+    let correlation = pearson_correlation(&canopy_cover, &sky_fraction);
+    let mean_error = canopy_cover
+        .iter()
+        .zip(&sky_fraction)
+        .map(|(cover, target)| (cover - target).abs())
+        .sum::<f32>()
+        / canopy_cover.len() as f32;
+    let target_mean = sky_fraction.iter().sum::<f32>() / sky_fraction.len() as f32;
+    let cover_mean = canopy_cover.iter().sum::<f32>() / canopy_cover.len() as f32;
+    assert!(correlation > 0.75, "correlation {correlation}");
+    assert!((cover_mean - target_mean).abs() < 0.05);
+    assert!(mean_error < 0.10, "mean error {mean_error}");
 }
 
 #[test]

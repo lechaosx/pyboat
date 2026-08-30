@@ -267,6 +267,61 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
+        "atmosphere_water_vapor" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 0.0)],
+        ),
+        "weather_relative_humidity" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 1.0)],
+        ),
+        "weather_instability" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 2.0)],
+        ),
+        "weather_lift" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 3.0)],
+        ),
+        "weather_low_coverage" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 4.0)],
+        ),
+        "weather_regional_condensation" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 7.0)],
+        ),
+        "weather_broad_pressure_lift" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 8.0)],
+        ),
+        "weather_storm_potential" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 9.0)],
+        ),
+        "weather_sky_fraction" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 10.0)],
+        ),
+        "weather_canopy_optical_thickness" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 5.0)],
+        ),
+        "weather_rain" => diagnostic(
+            value,
+            "atmosphere_conditions",
+            &[("ATMOSPHERE_CONDITION_OUTPUT", 6.0)],
+        ),
         "cloud_low_latent_texture" => diagnostic(value, "cloud_low_latent_texture", &[]),
         "cloud_low_optical_depth" => {
             diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 0.0)])

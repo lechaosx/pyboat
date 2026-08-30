@@ -65,7 +65,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
     upper_height_m: f32,
     light: vec3<f32>,
     light_amount: f32,
-    weather: CloudWeatherSample,
+    canopy: RegionalCanopyConditions,
 ) -> f32 {
     if light_amount <= 0.0 || light.z <= 0.0 {
         return 1.0;
@@ -78,7 +78,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
     );
     let upper_optical_depth = procedural_upper_cloud_optical_depth(
         projected_position_m,
-        weather,
+        canopy,
     );
     return mix(
         1.0,
@@ -91,7 +91,7 @@ fn upper_cloud_transmittance_at_low_cloud(
     position_m: vec2<f32>,
     low_height_m: f32,
     upper_height_m: f32,
-    weather: CloudWeatherSample,
+    canopy: RegionalCanopyConditions,
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
@@ -104,7 +104,7 @@ fn upper_cloud_transmittance_at_low_cloud(
             upper_height_m,
             light,
             light_amount,
-            weather,
+            canopy,
         );
     }
     return transmittance;
@@ -125,6 +125,7 @@ fn fragment_surface_color(
         position_m,
         max(elevation_m, 0.0),
         weather,
+        ambient_sky,
     );
     let sun_transmittance = cloud_shadow_transmittance(
         layer.y * depths.low.x + layer.z * depths.upper.x,
@@ -167,9 +168,9 @@ fn final_scene_color(
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
         let visual_weather = visual_cloud_weather(surface_cloud_weather);
-        let ambient_sky = ambient_sky_conditions_from_atmosphere(
-            input.world_position_m,
+        let ambient_sky = regional_canopy_conditions(
             atmosphere,
+            surface_cloud_weather,
         );
         let terrain = procedural_terrain_sample_with_climate_from_circle(
             input.world_position_m,
@@ -271,7 +272,7 @@ fn final_scene_color(
                     input.world_position_m,
                     low_height_m,
                     upper_height_m,
-                    visual_weather,
+                    ambient_sky,
                 );
             }
             let clouded_fragment_color = cloud_color(
