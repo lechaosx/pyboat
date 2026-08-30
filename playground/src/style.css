@@ -233,6 +233,21 @@ summary {
 .tuning-group { padding: 0 0.72rem 0.72rem; }
 .tuning-group .control:first-child { margin-top: 0; }
 
+.composition-note {
+  display: grid;
+  gap: 0.18rem;
+  margin: 0 0 0.55rem;
+  padding: 0.62rem 0.72rem;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 0.45rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.35;
+}
+
+.composition-note strong { color: var(--accent); }
+
 .control-category { margin-top: 0.8rem; }
 .control-category:first-child { margin-top: 0; }
 
@@ -338,13 +353,15 @@ output {
 }
 
 .reset-value {
+  align-self: stretch;
   width: 1.55rem;
-  height: 1.55rem;
   padding: 0;
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1;
 }
+
+.reset-value-hidden { visibility: hidden; }
 
 .select-control {
   display: grid;

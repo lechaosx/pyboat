@@ -5,14 +5,19 @@ struct PlaygroundUniforms {
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
+    cloud_lighting: vec4<f32>,
+    cloud_shadows: vec4<f32>,
+    water_surface: vec4<f32>,
+    ice_surface: vec4<f32>,
+    ice_structure: vec4<f32>,
+    land_material_normals: vec4<f32>,
+    material_coverage: vec4<f32>,
+    light_balance: vec4<f32>,
     layer_visibility: vec4<f32>,
     landscape_visibility: vec4<f32>,
     wind_model: vec4<f32>,
     climate_visibility: vec4<f32>,
-    land_light_contribution_visibility: vec4<u32>,
-    water_light_contribution_visibility: vec4<u32>,
-    ice_light_contribution_visibility: vec4<u32>,
-    low_cloud_light_contribution_visibility: vec4<u32>,
+    light_contribution_visibility: vec4<u32>,
     land_material_color_visibility: vec4<u32>,
     solid_material_color_visibility: vec4<u32>,
     water_material_color_visibility: vec4<u32>,
@@ -33,6 +38,14 @@ fn playground_scene_tuning() -> SceneTuning {
         playground.terrain_tuning,
         playground.water_tuning,
         playground.landform_lighting,
+        playground.cloud_lighting,
+        playground.cloud_shadows,
+        playground.water_surface,
+        playground.ice_surface,
+        playground.ice_structure,
+        playground.land_material_normals,
+        playground.material_coverage,
+        playground.light_balance,
     );
 }
 
@@ -83,18 +96,9 @@ fn fragment_layer_visibility() -> vec4<f32> {
     return playground.layer_visibility;
 }
 
-fn fragment_surface_light_visibility(surface_kind: u32) -> vec4<f32> {
-    var visibility = playground.water_light_contribution_visibility;
-    if surface_kind == 0u {
-        visibility = playground.land_light_contribution_visibility;
-    } else if surface_kind == 2u {
-        visibility = playground.ice_light_contribution_visibility;
-    }
-    return vec4<f32>(visibility);
-}
-
-fn fragment_low_cloud_light_visibility() -> vec4<f32> {
-    return vec4<f32>(playground.low_cloud_light_contribution_visibility);
+fn fragment_light_visibility() -> vec4<f32> {
+    return playground.light_balance
+        * vec4<f32>(playground.light_contribution_visibility);
 }
 
 fn land_material_color_visibility() -> vec4<f32> {

@@ -5,22 +5,11 @@ import {
 } from "../src/feature-visibility";
 
 const disabledContributions: FragmentContributionState = {
-  landSun: false,
-  landMoon: false,
-  landClearSkyAmbient: false,
-  landCanopyAmbient: false,
-  waterSun: false,
-  waterMoon: false,
-  waterClearSkyAmbient: false,
-  waterCanopyAmbient: false,
-  iceSun: false,
-  iceMoon: false,
-  iceClearSkyAmbient: false,
-  iceCanopyAmbient: false,
-  lowCloudSun: false,
-  lowCloudMoon: false,
-  lowCloudClearSkyAmbient: false,
-  lowCloudCanopyAmbient: false,
+  colorLayer: false,
+  sun: false,
+  moon: false,
+  clearSkyAmbient: false,
+  canopyAmbient: false,
 };
 
 describe("playground intermediate feature visibility", () => {
@@ -36,10 +25,11 @@ describe("playground intermediate feature visibility", () => {
     });
   });
 
-  test("keeps full inputs available to one visible land-light product", () => {
+  test("keeps full inputs available to one visible row-column product", () => {
     expect(deriveIntermediateVisibility({
       ...disabledContributions,
-      landSun: true,
+      colorLayer: true,
+      sun: true,
     }, false)).toEqual({
       pressure: true,
       temperature: true,
@@ -51,10 +41,11 @@ describe("playground intermediate feature visibility", () => {
     });
   });
 
-  test("keeps full upstream input available to one visible cloud-light product", () => {
+  test("keeps full upstream input available to an ambient row-column product", () => {
     expect(deriveIntermediateVisibility({
       ...disabledContributions,
-      lowCloudCanopyAmbient: true,
+      colorLayer: true,
+      canopyAmbient: true,
     }, false)).toEqual({
       pressure: true,
       temperature: true,

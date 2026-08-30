@@ -22,8 +22,9 @@ fn cloud_color(
     let edge_light = sunlight
         * (1.0 - smoothstep(0.30, 0.78, cloud_amount))
         * smoothstep(0.10, 0.55, cloud_amount)
-        * 0.18;
-    let depth_shadow = smoothstep(0.45, 1.35, cloud_sample.optical_depth) * 0.14;
+        * tuning.cloud_lighting.x;
+    let depth_shadow = smoothstep(0.45, 1.35, cloud_sample.optical_depth)
+        * tuning.cloud_lighting.y;
     let cloud_material = mix(
         vec3<f32>(0.68, 0.72, 0.74),
         vec3<f32>(0.96, 0.97, 0.96),
@@ -117,10 +118,9 @@ fn fragment_surface_color(
     elevation_m: f32,
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec2<f32>,
-    surface_kind: u32,
 ) -> vec3<f32> {
     let layer = fragment_layer_visibility();
-    let contribution = fragment_surface_light_visibility(surface_kind);
+    let contribution = fragment_light_visibility();
     let depths = celestial_cloud_shadow_depths_at(position_m, max(elevation_m, 0.0));
     let sun_transmittance = cloud_shadow_transmittance(
         layer.y * depths.low.x + layer.z * depths.upper.x,
@@ -205,17 +205,13 @@ fn final_scene_color(
             );
         }
         var surface_light_grade = vec2<f32>(1.0);
-        var partial_land_ice_color = vec3<f32>(0.0);
-        var has_partial_land_ice = false;
         if is_land {
             if terrain.water_ice_amount == 0.0
                 && terrain.ice_amount > 0.0
                 && terrain.ice_amount < 1.0
             {
                 let ice = ice_surface(input.world_position_m, land_surface);
-                surface.color *= 1.0 - terrain.ice_amount;
-                partial_land_ice_color = terrain.ice_amount * ice.color;
-                has_partial_land_ice = true;
+                surface.color = mix(surface.color, ice.color, terrain.ice_amount);
                 surface.detail_gradient = mix(
                     surface.detail_gradient,
                     ice.detail_gradient,
@@ -245,28 +241,13 @@ fn final_scene_color(
                 terrain.elevation_m,
             );
         }
-        var surface_kind = select(1u, 0u, is_land);
-        if terrain.water_ice_amount > 0.0 || (is_land && terrain.ice_amount >= 1.0) {
-            surface_kind = 2u;
-        }
         fragment_color = fragment_surface_color(
             surface_color,
             input.world_position_m,
             max(terrain.elevation_m, water_height_m),
             terrain_shadow_transmittance,
             surface_light_grade,
-            surface_kind,
         );
-        if has_partial_land_ice {
-            fragment_color += fragment_surface_color(
-                partial_land_ice_color,
-                input.world_position_m,
-                max(terrain.elevation_m, water_height_m),
-                terrain_shadow_transmittance,
-                surface_light_grade,
-                2u,
-            );
-        }
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
@@ -287,7 +268,7 @@ fn final_scene_color(
                 fragment_color,
                 low_cloud,
                 upper_transmittance,
-                fragment_low_cloud_light_visibility(),
+                fragment_light_visibility(),
             );
             fragment_color += fragment_layer_visibility().x
                 * (clouded_fragment_color - fragment_color);

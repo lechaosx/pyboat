@@ -709,12 +709,14 @@ fn terrain_rock_surface(
     );
     return TerrainSurface(
         color_visibility * rock_color,
-        surface_height_m * mix(
-            surface_height.gradient,
-            plate_direction * surface_height.gradient,
-            fracture_amount,
-        )
-            + micro_height_m * micro_height.gradient,
+        tuning.land_material_normals.x * (
+            surface_height_m * mix(
+                surface_height.gradient,
+                plate_direction * surface_height.gradient,
+                fracture_amount,
+            )
+                + micro_height_m * micro_height.gradient
+        ),
         mix(0.92, 0.68, rock_ruggedness),
     );
 }
@@ -725,7 +727,7 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            0.32,
+            tuning.ice_surface.y,
         );
     }
     let micro_height = material_fractal_sample(
@@ -747,8 +749,8 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
             vec3<f32>(0.94, 0.97, 0.96),
             clamp(0.45 + 0.35 * surface_grade + 0.22 * fine, 0.0, 1.0),
         ),
-        0.18 * micro_height.gradient,
-        0.32,
+        tuning.ice_surface.x * micro_height.gradient,
+        tuning.ice_surface.y,
     );
 }
 
@@ -762,7 +764,7 @@ fn sea_ice_surface(
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            0.42,
+            clamp(0.42 * tuning.ice_surface.w, 0.0, 1.0),
         );
     }
     let broad = material_fractal_sample(
@@ -785,7 +787,7 @@ fn sea_ice_surface(
     );
     let slab_cycles = max(
         vec2<i32>(1),
-        vec2<i32>(round(scene.world_size_m / 192.0)),
+        vec2<i32>(round(scene.world_size_m / max(tuning.ice_structure.x, 1.0))),
     );
     let slab_size_m = scene.world_size_m / vec2<f32>(slab_cycles);
     let canonical_position = canonical_world_position(position_m);
@@ -842,9 +844,10 @@ fn sea_ice_surface(
         0.45 * min(slab_size_m.x, slab_size_m.y),
         visual_pixel_footprint_m,
     );
+    let fracture_width = max(tuning.ice_structure.y, 0.01);
     let fracture_geometry = 1.0 - smoothstep(
-        1.5,
-        5.0 + visual_pixel_footprint_m,
+        1.5 * fracture_width,
+        (5.0 + visual_pixel_footprint_m) * fracture_width,
         second_distance_m - nearest_distance_m,
     );
     let fracture_stress = smoothstep(
@@ -852,9 +855,14 @@ fn sea_ice_surface(
         0.45,
         0.72 * broad.value + 0.28 * fine.value,
     );
-    let fracture = slab_visibility
-        * fracture_geometry
-        * mix(0.22, 1.0, fracture_stress);
+    let fracture = clamp(
+        tuning.ice_structure.z
+            * slab_visibility
+            * fracture_geometry
+            * mix(0.22, 1.0, fracture_stress),
+        0.0,
+        1.0,
+    );
     let slab_tone = visual_hash_unit(slab_hash.x);
     let slab_tilt = 0.025 * vec2<f32>(
         2.0 * visual_hash_unit(slab_hash.x ^ 0x9e3779b9u) - 1.0,
@@ -883,15 +891,19 @@ fn sea_ice_surface(
     let shallow_color = mix(
         deep_color,
         vec3<f32>(0.56, 0.82, 0.85),
-        0.28 + 0.18 * shore,
+        clamp(tuning.ice_structure.w * (0.28 + 0.18 * shore), 0.0, 1.0),
     );
     return TerrainSurface(
         color_visibility * mix(deep_color, shallow_color, shallow),
-        mix(slab_visibility * slab_tilt, 0.45 * broad.gradient, fracture)
-            + 0.20 * fine.gradient
-            + 0.16 * micro.gradient,
+        tuning.ice_surface.z * (
+            mix(slab_visibility * slab_tilt, 0.45 * broad.gradient, fracture)
+                + 0.20 * fine.gradient
+                + 0.16 * micro.gradient
+        ),
         clamp(
-            0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow,
+            tuning.ice_surface.w * (
+                0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow
+            ),
             0.0,
             1.0,
         ),

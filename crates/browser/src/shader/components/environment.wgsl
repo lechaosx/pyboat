@@ -1201,5 +1201,13 @@ fn production_tuning() -> SceneTuning {
             LANDFORM_SHADOW_REACH_M,
             0.0,
         ),
+        vec4<f32>(0.18, 0.14, 0.0, 0.0),
+        vec4<f32>(1.0, 1.0, 0.85, CLOUD_OPACITY),
+        vec4<f32>(2.5, 0.20, 1.0, 1.0),
+        vec4<f32>(0.18, 0.32, 1.0, 1.0),
+        vec4<f32>(192.0, 1.0, 1.0, 1.0),
+        vec4<f32>(1.0),
+        vec4<f32>(1.0),
+        vec4<f32>(1.0),
     );
 }

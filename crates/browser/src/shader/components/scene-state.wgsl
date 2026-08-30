@@ -23,6 +23,14 @@ struct SceneTuning {
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
+    cloud_lighting: vec4<f32>,
+    cloud_shadows: vec4<f32>,
+    water_surface: vec4<f32>,
+    ice_surface: vec4<f32>,
+    ice_structure: vec4<f32>,
+    land_material_normals: vec4<f32>,
+    material_coverage: vec4<f32>,
+    light_balance: vec4<f32>,
 };
 
 

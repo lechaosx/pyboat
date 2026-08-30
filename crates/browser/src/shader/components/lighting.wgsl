@@ -402,14 +402,16 @@ fn cloud_shadow_projection_at(
 fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepths {
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
-        depths.low = layer_visibility.y * procedural_low_cloud_optical_depth_with_weather(
+        depths.low = layer_visibility.y * tuning.cloud_shadows.x
+            * procedural_low_cloud_optical_depth_with_weather(
             projection.low_position_m,
             low_cloud_weather_at(projection.low_position_m),
             projection.low_footprint_m,
         );
     }
     if layer_visibility.z > 0.0 {
-        depths.upper = layer_visibility.z * procedural_upper_cloud_optical_depth_filtered(
+        depths.upper = layer_visibility.z * tuning.cloud_shadows.y
+            * procedural_upper_cloud_optical_depth_filtered(
             projection.upper_position_m,
             projection.upper_footprint_m,
         );
@@ -445,12 +447,12 @@ fn cloud_shadow_contrast(light: vec3<f32>) -> f32 {
 
 fn cloud_shadow_transmittance(depth: f32, light: vec3<f32>) -> f32 {
     let shadow = exp(
-        -0.85
+        -tuning.cloud_shadows.z
             * tuning.cloud_rendering.x
             * cloud_shadow_contrast(light)
             * depth,
     );
-    return mix(1.0, shadow, clamp(tuning.cloud_rendering.y, 0.0, 1.0));
+    return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
 }
 
 fn effective_cloud_shadow_amount(sun_depth: f32, moon_depth: f32) -> f32 {

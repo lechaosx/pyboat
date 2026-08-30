@@ -247,15 +247,20 @@ current playable behavior; this file does not track delivery status.
   tuning.
 - **[Explicit]** Scene toggles expose every color-producing material or
   compositing layer, including the individual land, water, ice, and visible-cloud
-  color layers. Geometry, coverage, normals, shadows, relief, opacity, lights,
-  and other values that only modulate downstream rendering have no independent
-  output toggle. Hiding a layer omits its weighted color without changing those
-  downstream inputs.
-- **[Explicit]** Lit output toggles form a Cartesian matrix between land, water,
-  ice, or visible low clouds and direct Sun, direct Moon, clear-sky ambient, or
-  canopy ambient light. Each toggle controls the resulting color product while
-  leaving both operands available to every other product. Hiding every color
-  layer or every lit product produces a blank black output.
+  color layers, plus each shadow stage that directly attenuates the composed
+  color. Geometry, coverage, normals, relief, opacity, and other values that only
+  modulate downstream rendering have no independent output toggle. Hiding a
+  layer or shadow stage omits its color effect without changing its inputs.
+- **[Explicit]** Lit output is the Cartesian product of two orthogonal toggle
+  axes: color-producing material rows and direct Sun, direct Moon, clear-sky
+  ambient, or canopy ambient light columns. The UI switches whole rows and
+  columns rather than individual products. Hiding every color row or every light
+  column produces a blank black output.
+- **[Explicit]** Scene tuning exposes the meaningful visual stages behind those
+  outputs, including material coverage, generated normals and roughness, water
+  and bottom response, ice structure, light balance, cloud shape and lighting,
+  and low-cloud and canopy shadows. It does not expose low-level noise-kernel
+  constants or replace world-generated physical inputs.
 - **[Explicit]** Intermediate weather and water mechanisms have no user-facing
   switches. The playground enables them when an active color stage or
   selected diagnostic consumes them and disables them when nothing does.

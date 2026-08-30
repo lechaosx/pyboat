@@ -60,12 +60,8 @@ fn fragment_layer_visibility() -> vec4<f32> {
     return vec4<f32>(1.0);
 }
 
-fn fragment_surface_light_visibility(_surface_kind: u32) -> vec4<f32> {
-    return vec4<f32>(1.0);
-}
-
-fn fragment_low_cloud_light_visibility() -> vec4<f32> {
-    return vec4<f32>(1.0);
+fn fragment_light_visibility() -> vec4<f32> {
+    return tuning.light_balance;
 }
 
 fn land_material_color_visibility() -> vec4<f32> {

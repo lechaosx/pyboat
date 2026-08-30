@@ -1,20 +1,9 @@
 export type FragmentContributionState = {
-  landSun: boolean;
-  landMoon: boolean;
-  landClearSkyAmbient: boolean;
-  landCanopyAmbient: boolean;
-  waterSun: boolean;
-  waterMoon: boolean;
-  waterClearSkyAmbient: boolean;
-  waterCanopyAmbient: boolean;
-  iceSun: boolean;
-  iceMoon: boolean;
-  iceClearSkyAmbient: boolean;
-  iceCanopyAmbient: boolean;
-  lowCloudSun: boolean;
-  lowCloudMoon: boolean;
-  lowCloudClearSkyAmbient: boolean;
-  lowCloudCanopyAmbient: boolean;
+  colorLayer: boolean;
+  sun: boolean;
+  moon: boolean;
+  clearSkyAmbient: boolean;
+  canopyAmbient: boolean;
 };
 
 export type IntermediateVisibility = {
@@ -43,7 +32,11 @@ export function deriveIntermediateVisibility(
     };
   }
 
-  const colorPipeline = Object.values(contributions).some(Boolean);
+  const colorPipeline = contributions.colorLayer
+    && (contributions.sun
+      || contributions.moon
+      || contributions.clearSkyAmbient
+      || contributions.canopyAmbient);
 
   return {
     pressure: colorPipeline,

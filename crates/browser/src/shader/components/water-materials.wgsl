@@ -482,7 +482,8 @@ fn visual_water_normal_sample_from_surface(
     let decorative = decorative_water_normal_sample(position_m);
     return TerrainNoiseSample(
         physical.value,
-        2.5 * physical.gradient + 0.20 * decorative.gradient,
+        tuning.water_surface.x * physical.gradient
+            + tuning.water_surface.y * decorative.gradient,
     );
 }
 
@@ -522,11 +523,16 @@ fn visual_water_surface(
     );
     return TerrainSurface(
         base_color,
-        undisturbed_gradient + precipitation_contact.gradient,
-        mix(
-            mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
-            0.26,
-            surface_cloud_weather.rain,
+        undisturbed_gradient
+            + tuning.water_surface.z * precipitation_contact.gradient,
+        clamp(
+            tuning.water_surface.w * mix(
+                mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
+                0.26,
+                surface_cloud_weather.rain,
+            ),
+            0.0,
+            1.0,
         ),
     );
 }
@@ -578,11 +584,12 @@ fn terrain_surface(
             );
             var bottom_reflectance = mix(0.32, sediment_reflectance, sediment_amount);
             bottom_reflectance = mix(bottom_reflectance, rock_reflectance, rock_amount);
-            let bottom_water_color = water_color * (1.0 + 3.0 * bottom_reflectance);
+            let bottom_water_color = water_color
+                * (1.0 + tuning.water_tuning.z * bottom_reflectance);
             let water_veiled_bottom = mix(
                 bottom_water_color,
                 water_color,
-                0.35 * (1.0 - bottom_transmittance),
+                tuning.water_tuning.w * (1.0 - bottom_transmittance),
             );
             let bottom_visibility = clamp(
                 tuning.water_tuning.y * bottom_transmittance,
@@ -634,6 +641,7 @@ fn terrain_surface(
             atmosphere,
             ),
         );
+        snow_amount = clamp(tuning.material_coverage.w * snow_amount, 0.0, 1.0);
     }
     let snow_surface = TerrainSurface(
         solid_color_gate.y * mix(
@@ -641,7 +649,7 @@ fn terrain_surface(
             vec3<f32>(0.96, 0.97, 0.96),
             0.55 + 0.20 * surface_grade,
         ),
-        0.22 * micro_height.gradient,
+        0.22 * tuning.land_material_normals.w * micro_height.gradient,
         0.70,
     );
     if snow_amount >= 1.0 {
@@ -673,11 +681,17 @@ fn terrain_surface(
         material_elevation_m,
     );
     let coastal_rock = smoothstep(0.10, 0.82, coastal_rock_amount);
-    let rock_cover = 1.0
-        - (1.0 - slope_rock)
-            * (1.0 - outcrop_rock)
-            * (1.0 - alpine_rock)
-            * (1.0 - coastal_rock);
+    let rock_cover = clamp(
+        tuning.material_coverage.y * (
+            1.0
+                - (1.0 - slope_rock)
+                    * (1.0 - outcrop_rock)
+                    * (1.0 - alpine_rock)
+                    * (1.0 - coastal_rock)
+        ),
+        0.0,
+        1.0,
+    );
 
     let beach_sediment = smoothstep(0.08, 0.42, coastal_sediment_amount);
     let beach_bottom_m = mix(-0.15, -4.0, beach_sediment);
@@ -701,9 +715,14 @@ fn terrain_surface(
         beach_top_m + 1.5,
         material_elevation_m,
     ));
-    let sediment_capacity = beach_sediment
-        * beach_elevation
-        * (1.0 - smoothstep(0.10, 0.30, slope));
+    let sediment_capacity = clamp(
+        tuning.material_coverage.z
+            * beach_sediment
+            * beach_elevation
+            * (1.0 - smoothstep(0.10, 0.30, slope)),
+        0.0,
+        1.0,
+    );
     let intertidal_ceiling_m = 0.5 * tide_reference_range_m();
     let intertidal_capacity = 1.0 - smoothstep(
         intertidal_ceiling_m - 0.2,
@@ -794,13 +813,21 @@ fn terrain_surface(
     );
     grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15), 0.42 * dormancy);
     forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10), 0.32 * dormancy);
-    let forest_visibility = forest_amount * canopy_cluster * landscape_visibility.y;
+    let forest_visibility = clamp(
+        tuning.material_coverage.x
+            * forest_amount
+            * canopy_cluster
+            * landscape_visibility.y,
+        0.0,
+        1.0,
+    );
     let vegetation_surface = TerrainSurface(
         land_color_gate.x * (1.0 - forest_visibility) * grass_color
             + land_color_gate.y * forest_visibility * forest_color,
         mix(
-            0.45 * micro_height.gradient,
-            3.5 * canopy_detail.gradient + 0.24 * micro_height.gradient,
+            0.45 * tuning.land_material_normals.y * micro_height.gradient,
+            3.5 * tuning.land_material_normals.z * canopy_detail.gradient
+                + 0.24 * tuning.land_material_normals.y * micro_height.gradient,
             forest_visibility,
         ),
         mix(0.88, 0.96, forest_visibility),
