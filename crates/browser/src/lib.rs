@@ -12,10 +12,18 @@ use simulation::{
     MotionIntent, SharedSimulation, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
+mod cloud_kernels;
 #[cfg(test)]
 mod diagnostics;
 #[cfg(target_arch = "wasm32")]
 mod web;
+
+pub use cloud_kernels::{
+    LOW_CLOUD_KERNEL_VECTORS, LowCloudKernel, LowCloudKernelTuning, LowCloudKernelUniforms,
+    UPPER_CLOUD_KERNEL_VECTORS, UpperCloudKernelUniforms, low_cloud_kernel_uniforms,
+    low_cloud_kernels, low_cloud_kernels_with_tuning, upper_cloud_kernel_uniforms,
+    upper_cloud_kernels,
+};
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 #[cfg(any(target_arch = "wasm32", test))]

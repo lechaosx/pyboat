@@ -241,6 +241,33 @@ fn cloud_formation_is_spatial_across_world() {
 }
 
 #[test]
+fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(1_250.0, -750.0);
+    let near = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        1.0,
+        "cloud_low_optical_depth",
+        1,
+        1,
+    );
+    let far = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        200.0,
+        "cloud_low_optical_depth",
+        1,
+        1,
+    );
+
+    assert_ne!(&near[..3], &[33, 44, 53]);
+    assert_eq!(&near[..3], &far[..3]);
+}
+
+#[test]
 fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 6_000.0);

@@ -6,6 +6,8 @@ import {
   sample_playground_celestial_orbit,
   sample_playground_environment,
   sample_playground_field_time_coordinates,
+  sample_playground_low_cloud_kernel_uniforms,
+  sample_playground_upper_cloud_kernel_uniforms,
   sample_playground_seasonal_phase_factors,
   sample_playground_world_geometry,
 } from "browser/playground";
@@ -65,6 +67,9 @@ type State = {
   detailContrast: number;
   detailEdgeSoftness: number;
   maxWispCoverage: number;
+  cloudNormalStrength: number;
+  lowCloudBodySize: number;
+  lowCloudOccurrence: number;
   opticalDepth: number;
   opacity: number;
   darkness: number;
@@ -160,6 +165,9 @@ const defaults: State = {
   detailContrast: 1.15,
   detailEdgeSoftness: 0.06,
   maxWispCoverage: 0.25,
+  cloudNormalStrength: 0,
+  lowCloudBodySize: 1,
+  lowCloudOccurrence: 1,
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
@@ -459,8 +467,11 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "detailCharacter", label: "Detail character", min: 0, max: 1, step: 0.05 },
       { type: "range", key: "detailBlobiness", label: "Blobiness", min: 0, max: 1, step: 0.05 },
       { type: "range", key: "maxWispCoverage", label: "Wisp coverage", min: 0, max: 0.95, step: 0.05 },
+      { type: "range", key: "lowCloudBodySize", label: "Body size", min: 0.25, max: 4, step: 0.05 },
+      { type: "range", key: "lowCloudOccurrence", label: "Occurrence", min: 0, max: 4, step: 0.05 },
       { type: "range", key: "detailContrast", label: "Shape contrast", min: 0.25, max: 2.5, step: 0.05 },
       { type: "range", key: "detailEdgeSoftness", label: "Edge softness", min: 0.005, max: 0.25, step: 0.005 },
+      { type: "range", key: "cloudNormalStrength", label: "Normal strength", min: 0, max: 1, step: 0.05 },
       { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
       { type: "range", key: "opacity", label: "Opacity", min: 0, max: 1.5, step: 0.05 },
       { type: "range", key: "darkness", label: "Darkening", min: 0, max: 2, step: 0.05 },
@@ -973,7 +984,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(52);
+const sceneFloats = new Float32Array(2876);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1317,6 +1328,7 @@ function writeUniforms(
     state.viewHeight,
   ], 0);
   const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
+  const [cloudTick] = splitTick(cloudTimeSeconds);
   const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
   const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const fieldTimes = sample_playground_field_time_coordinates(
@@ -1374,13 +1386,37 @@ function writeUniforms(
     seasonPhase,
     lunarLongitudePhase,
   ), 44);
+  sceneFloats.set(sample_playground_low_cloud_kernel_uniforms(
+    state.worldWidthM,
+    state.worldHeightM,
+    (BigInt(seedHigh) << 32n) | BigInt(seedLow),
+    cloudTick,
+    cloudTick,
+    renderedCameraX,
+    renderedCameraY,
+    state.viewHeight * aspect,
+    state.viewHeight,
+    state.lowCloudBodySize,
+    state.lowCloudOccurrence,
+  ), 52);
+  sceneFloats.set(sample_playground_upper_cloud_kernel_uniforms(
+    state.worldWidthM,
+    state.worldHeightM,
+    (BigInt(seedHigh) << 32n) | BigInt(seedLow),
+    cloudTick,
+    cloudTick,
+    renderedCameraX,
+    renderedCameraY,
+    state.viewHeight * aspect,
+    state.viewHeight,
+  ), 2104);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
   ], 0);
   tuningFloats.set([
-    state.maxWispCoverage, 0, 0, 0,
+    state.maxWispCoverage, state.cloudNormalStrength, 0, 0,
   ], 4);
   tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.relief], 8);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);

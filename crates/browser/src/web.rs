@@ -25,10 +25,12 @@ use web_transport_wasm::{ClientBuilder, Session};
 use wgpu::CurrentSurfaceTexture;
 
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER, Windsock,
-    cloud_anchor_blend_weights, cloud_anchor_time, sample_production_world_environment,
-    sample_world_geometry, scale_bar, seasonal_phase_factors, viewport_interest_radius_m,
-    visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, LOW_CLOUD_KERNEL_VECTORS, LowCloudKernelTuning,
+    MultiplayerClient, SCENE_SHADER, UPPER_CLOUD_KERNEL_VECTORS, Windsock,
+    cloud_anchor_blend_weights, cloud_anchor_time, low_cloud_kernel_uniforms, low_cloud_kernels,
+    low_cloud_kernels_with_tuning, sample_production_world_environment, sample_world_geometry,
+    scale_bar, seasonal_phase_factors, upper_cloud_kernel_uniforms, upper_cloud_kernels,
+    viewport_interest_radius_m, visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
 };
 
 #[cfg(feature = "playground")]
@@ -318,6 +320,68 @@ pub fn sample_playground_cloud_anchor_blend_weights(low_phase: f32, upper_phase:
 }
 
 #[wasm_bindgen]
+pub fn sample_playground_low_cloud_kernel_uniforms(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    cloud_tick: u64,
+    wind_tick: u64,
+    camera_x_m: f32,
+    camera_y_m: f32,
+    view_width_m: f32,
+    view_height_m: f32,
+    body_size_scale: f32,
+    occurrence_scale: f32,
+) -> Result<Vec<f32>, JsValue> {
+    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let uniforms = low_cloud_kernel_uniforms(&low_cloud_kernels_with_tuning(
+        geometry,
+        match_seed,
+        cloud_tick,
+        wind_tick,
+        Vector::new(camera_x_m, camera_y_m),
+        Vector::new(view_width_m, view_height_m),
+        LowCloudKernelTuning {
+            body_size_scale,
+            occurrence_scale,
+        },
+    ));
+    let mut values = Vec::with_capacity(4 + 4 * LOW_CLOUD_KERNEL_VECTORS);
+    values.extend(uniforms.count_and_padding);
+    values.extend(uniforms.vectors.into_iter().flatten());
+    Ok(values)
+}
+
+#[wasm_bindgen]
+pub fn sample_playground_upper_cloud_kernel_uniforms(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    cloud_tick: u64,
+    wind_tick: u64,
+    camera_x_m: f32,
+    camera_y_m: f32,
+    view_width_m: f32,
+    view_height_m: f32,
+) -> Result<Vec<f32>, JsValue> {
+    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let uniforms = upper_cloud_kernel_uniforms(&upper_cloud_kernels(
+        geometry,
+        match_seed,
+        cloud_tick,
+        wind_tick,
+        Vector::new(camera_x_m, camera_y_m),
+        Vector::new(view_width_m, view_height_m),
+    ));
+    let mut values = Vec::with_capacity(4 + 4 * UPPER_CLOUD_KERNEL_VECTORS);
+    values.extend(uniforms.count_and_padding);
+    values.extend(uniforms.vectors.into_iter().flatten());
+    Ok(values)
+}
+
+#[wasm_bindgen]
 pub fn sample_playground_seasonal_phase_factors(season_phase: f32) -> Vec<f32> {
     seasonal_phase_factors(season_phase).to_vec()
 }
@@ -436,6 +500,10 @@ struct SceneUniforms {
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
+    low_cloud_kernel_count_and_padding: [f32; 4],
+    low_cloud_kernel_vectors: [[f32; 4]; LOW_CLOUD_KERNEL_VECTORS],
+    upper_cloud_kernel_count_and_padding: [f32; 4],
+    upper_cloud_kernel_vectors: [[f32; 4]; UPPER_CLOUD_KERNEL_VECTORS],
 }
 
 struct Renderer {
@@ -588,6 +656,22 @@ impl Renderer {
             world_celestial_conditions(world_geometry, tick as f64 / 60.0, Vector::ZERO);
         let orbit = celestial_orbit(celestial);
         let match_seed = match_seed.unwrap_or(0);
+        let low_cloud_kernel_uniforms = low_cloud_kernel_uniforms(&low_cloud_kernels(
+            world_geometry,
+            match_seed,
+            tick,
+            tick,
+            canonical_camera_m.into(),
+            Vector::new(view_width_m, view_height_m),
+        ));
+        let upper_cloud_kernel_uniforms = upper_cloud_kernel_uniforms(&upper_cloud_kernels(
+            world_geometry,
+            match_seed,
+            tick,
+            tick,
+            canonical_camera_m.into(),
+            Vector::new(view_width_m, view_height_m),
+        ));
         let low_cloud_time = cloud_anchor_time(tick, LOW_CLOUD_REFRESH_TICKS);
         let upper_cloud_time = cloud_anchor_time(tick, UPPER_CLOUD_REFRESH_TICKS);
         let low_cloud_weights = cloud_anchor_blend_weights(low_cloud_time.phase);
@@ -659,6 +743,10 @@ impl Renderer {
                     orbit.lunar_umbra_fraction,
                     0.0,
                 ],
+                low_cloud_kernel_count_and_padding: low_cloud_kernel_uniforms.count_and_padding,
+                low_cloud_kernel_vectors: low_cloud_kernel_uniforms.vectors,
+                upper_cloud_kernel_count_and_padding: upper_cloud_kernel_uniforms.count_and_padding,
+                upper_cloud_kernel_vectors: upper_cloud_kernel_uniforms.vectors,
             }),
         );
 

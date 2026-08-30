@@ -197,8 +197,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   sustained surface wind substitutes for unavailable friction velocity, column
   instability substitutes for boundary-layer stability, and moist lift gates
   60% of positive upper-to-surface speed shear.
-- **[Explicit]** Deterministic terrain shelter weakens wind in the lee of land
-  over nearby water.
+- **[Explicit]** Deterministic terrain shelter weakens authoritative wind in the
+  lee of land over nearby water. Rust evaluates shelter only for requested
+  environment positions, including boat positions. Production rendering uses
+  unsheltered wind and does not probe terrain across the view; the playground
+  retains a debug-only approximate shelter field.
 - **[Explicit]** Atmosphere uses a compact match-seeded scalar spectral pressure
   potential whose analytic gradient drives surface wind. Coriolis turns that
   flow in opposite directions between hemispheres and fades smoothly to
@@ -234,35 +237,33 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Spatial temperature and moisture use the same spatiotemporal query model in
   Rust and WGSL rather than accepting center-derived weather. No evolving scalar
   or vector field receives a global spatial transport offset.
-- **[Explicit]** Each procedural cloud layer is a stateless, match-seeded periodic
-  latent field. Adjacent deterministic temporal anchors are
-  transported for only one bounded interval by the layer wind and combined with
-  a smootherstep-timed orthogonal blend, so any absolute tick is directly
-  queryable without accumulated simulation error or midpoint variance loss.
-  Both layers use system-scale wind sampled along each query trajectory; local
-  gust structure affects weather and wind diagnostics without folding cloud
-  shapes. Camera and player identity do not affect either field.
-- **[Explicit]** Cloud octaves use circle-embedded four-dimensional simplex noise,
-  avoiding the finite-precision phase joins that thresholding can expose in the
-  cheaper periodic two-dimensional kernel. The current renderer
-  traces each query through system-scale wind for a bounded number of steps
-  within a 30-minute low-layer or 60-minute upper-layer anchor interval. This
-  preserves coherent latent shapes under uniform flow, permits bounded
-  shear-driven deformation, and requires no individual clouds, particles,
-  history, or fluid state. Unresolved octaves fade against the fragment's
-  world-space pixel footprint. Spatially evolving temperature and moisture
-  derive cloud formation at the queried position. Moisture remains coherent
-  above individual visible-cloud scale. The visible layer uses a continuous
-  positive excess of its latent field over the local formation threshold; it
-  has small 320-metre structures at a fixed 900-metre base and is limited to
-  humid, unstable, non-storm formation. Its relief and optical depth vary with
-  amount. The unseen weather canopy aggregates all cloud types by composing a
-  system-scale latent envelope with subordinate local texture at a
-  representative 3600-metre altitude. Stratiform and rainy conditions favor
-  connected cover, while convective conditions expose clustered cells.
-  Projected shadows use the same amount fields. A query derives humidity,
-  instability, coverage, rain, and cloud type from one local weather evaluation
-  before sampling cloud detail.
+- **[Explicit]** The visible lower-cloud layer is a stateless, match-seeded,
+  longitude-periodic latent kernel field. Deterministic 5-minute birth cohorts
+  overlap for 15-minute lifetimes with complementary squared-sine weights.
+  Compact elliptical polynomial kernels form according to weather at birth;
+  their centers follow the time-varying system wind through fixed one-minute
+  midpoint steps while their shapes do not shear. Their motion uses system-wind
+  speed and direction one-to-one. Any absolute tick reconstructs the same field
+  without accumulated state. The renderer supplies only kernels whose support
+  can affect the view or nearby projected shadows; camera and player identity do
+  not affect the canonical field.
+- **[Explicit]** The lower kernel sum continuously drives visible amount, relief,
+  optical depth, and projected shadows. Overlapping lobes form small structures
+  at a fixed 900-metre base under humid, unstable, non-storm birth conditions.
+  Cloud amount, relief, normals, optical depth, and shadows at a world position
+  are independent of camera zoom; zoom changes only which positions are sampled.
+  Kernels are latent basis functions rather than individually composited clouds.
+- **[Explicit]** The unseen weather canopy is a stateless, match-seeded,
+  longitude-periodic latent kernel field at a representative 3600-metre
+  altitude. Deterministic 15-minute birth cohorts overlap for 45-minute
+  lifetimes. Large overlapping lobes form according to weather at birth and
+  follow time-varying upper wind one-to-one through fixed five-minute midpoint
+  steps without shearing. Their continuous sum supplies connected projected
+  shadow optical depth without per-fragment weather or octave evaluation.
+- **[Explicit]** Regional-canopy ambient attenuation uses a lower-contrast
+  response than directional canopy shadows. Ambient light follows broad local
+  weather, while the advected canopy kernel field attenuates Sun and Moon, so a
+  directional shadow boundary does not also impose the same ambient boundary.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,

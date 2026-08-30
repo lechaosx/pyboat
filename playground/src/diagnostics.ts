@@ -158,7 +158,7 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["cloud_low_amount", "Low cloud amount"],
       ["cloud_low_optical_depth", "Low optical depth"],
       ["cloud_low_normals", "Low normals"],
-      ["cloud_weather_canopy_optical_depth", "Weather-canopy optical depth"],
+      ["cloud_weather_canopy_optical_depth", "Canopy kernel optical depth"],
       ["cloud_low_height", "Low height field"],
       ["cloud_low_formation", "Low-cloud formation"],
     ] },

@@ -1,11 +1,16 @@
 use std::{env, fs, path::PathBuf};
 
-use browser::{cloud_anchor_blend_weights, seasonal_phase_factors, visual_pixel_footprint_m};
+use browser::{
+    LOW_CLOUD_KERNEL_VECTORS, UPPER_CLOUD_KERNEL_VECTORS, cloud_anchor_blend_weights,
+    low_cloud_kernel_uniforms, low_cloud_kernels, seasonal_phase_factors,
+    upper_cloud_kernel_uniforms, upper_cloud_kernels, visual_pixel_footprint_m,
+};
 use bytemuck::{Pod, Zeroable};
 use game::{
     celestial_lighting, celestial_orbit, procedural_world_environment,
     scalar_field_time_coordinates, vector_field_time_coordinates, world_celestial_conditions,
 };
+use rapier2d::prelude::Vector;
 use serde::Serialize;
 use simulation::WorldGeometry;
 use wgpu::util::DeviceExt;
@@ -67,6 +72,10 @@ struct SceneUniforms {
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
+    low_cloud_kernel_count_and_padding: [f32; 4],
+    low_cloud_kernel_vectors: [[f32; 4]; LOW_CLOUD_KERNEL_VECTORS],
+    upper_cloud_kernel_count_and_padding: [f32; 4],
+    upper_cloud_kernel_vectors: [[f32; 4]; UPPER_CLOUD_KERNEL_VECTORS],
 }
 
 #[repr(C)]
@@ -78,15 +87,26 @@ struct PlaygroundUniforms {
     terrain_tuning: [f32; 4],
     water_tuning: [f32; 4],
     landform_lighting: [f32; 4],
+    cloud_lighting: [f32; 4],
+    cloud_shadows: [f32; 4],
+    water_surface: [f32; 4],
+    ice_surface: [f32; 4],
+    ice_structure: [f32; 4],
+    land_material_normals: [f32; 4],
+    material_coverage: [f32; 4],
+    light_balance: [f32; 4],
     layer_visibility: [f32; 4],
     landscape_visibility: [f32; 4],
-    atmosphere_model: [f32; 4],
+    wind_model: [f32; 4],
     climate_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
+    land_material_color_visibility: [u32; 4],
+    solid_material_color_visibility: [u32; 4],
+    water_material_color_visibility: [u32; 4],
+    layer_material_color_visibility: [u32; 4],
     environment_features: [f32; 4],
     material_features: [f32; 4],
     effect_features: [f32; 4],
-    lighting_features: [f32; 4],
 }
 
 #[derive(Serialize)]
@@ -254,7 +274,12 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
+        "cloud_low_latent_texture" => diagnostic(value, "cloud_low_latent_texture", &[]),
         "cloud_low_amount" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 1.0)]),
+        "cloud_low_optical_depth" => {
+            diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 2.0)])
+        }
+        "cloud_low_normals" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 3.0)]),
         "cloud_weather_canopy_optical_depth" => {
             diagnostic(value, "cloud_weather_canopy_optical_depth", &[])
         }
@@ -461,15 +486,26 @@ async fn render(options: &Options) -> Result<(), String> {
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         water_tuning: [0.5, 1.0, 0.0, 0.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
+        cloud_lighting: [0.18, 0.14, 0.0, 0.0],
+        cloud_shadows: [1.0, 1.0, 0.85, 1.0],
+        water_surface: [2.5, 0.2, 1.0, 1.0],
+        ice_surface: [0.18, 0.32, 1.0, 1.0],
+        ice_structure: [192.0, 1.0, 1.0, 1.0],
+        land_material_normals: [1.0; 4],
+        material_coverage: [1.0; 4],
+        light_balance: [1.0; 4],
         layer_visibility: [1.0; 4],
         landscape_visibility: [1.0; 4],
-        atmosphere_model: [1.0; 4],
-        climate_visibility: [1.0; 4],
+        wind_model: [1.0; 4],
+        climate_visibility: [1.0, 1.0, 0.0, 1.0],
         light_contribution_visibility: [1; 4],
+        land_material_color_visibility: [1; 4],
+        solid_material_color_visibility: [1; 4],
+        water_material_color_visibility: [1; 4],
+        layer_material_color_visibility: [1; 4],
         environment_features: [1.0; 4],
         material_features: [1.0; 4],
         effect_features: [1.0; 4],
-        lighting_features: [1.0; 4],
     };
     let playground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("playground uniforms"),
@@ -575,6 +611,29 @@ fn render_world(
     let orbit = celestial_orbit(conditions);
     let scalar_time = scalar_field_time_coordinates(tick);
     let vector_time = vector_field_time_coordinates(world_geometry, tick);
+    let cloud_tick = (options.cloud_time_seconds / simulation::DT_SECONDS) as u64;
+    let low_cloud_kernel_uniforms = low_cloud_kernel_uniforms(&low_cloud_kernels(
+        world_geometry,
+        options.seed,
+        cloud_tick,
+        cloud_tick,
+        canonical_camera_m.into(),
+        Vector::new(
+            options.view_height_m * options.width as f32 / options.height as f32,
+            options.view_height_m,
+        ),
+    ));
+    let upper_cloud_kernel_uniforms = upper_cloud_kernel_uniforms(&upper_cloud_kernels(
+        world_geometry,
+        options.seed,
+        cloud_tick,
+        cloud_tick,
+        canonical_camera_m.into(),
+        Vector::new(
+            options.view_height_m * options.width as f32 / options.height as f32,
+            options.view_height_m,
+        ),
+    ));
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -626,6 +685,10 @@ fn render_world(
             orbit.lunar_umbra_fraction,
             0.0,
         ],
+        low_cloud_kernel_count_and_padding: low_cloud_kernel_uniforms.count_and_padding,
+        low_cloud_kernel_vectors: low_cloud_kernel_uniforms.vectors,
+        upper_cloud_kernel_count_and_padding: upper_cloud_kernel_uniforms.count_and_padding,
+        upper_cloud_kernel_vectors: upper_cloud_kernel_uniforms.vectors,
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

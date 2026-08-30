@@ -1,18 +1,6 @@
 fn diagnostic_cloud_low_latent_texture(input: VertexOutput) -> vec4<f32> {
-    let weather = low_cloud_weather_at(input.world_position_m);
-    let latent = visual_cloud_noise_sample(
-        input.world_position_m,
-        weather.low_advection_wind_m_s,
-        vec2<u32>(0x38d01377u, 0x452821e6u),
-        320.0,
-        12u,
-        scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
-        scene.cloud_anchor_weights.xy,
-        1800.0,
-        visual_pixel_footprint_m,
-    );
-    return vec4<f32>(scalar_debug_color(0.5 + 0.5 * latent.value), 1.0);
+    let latent = low_cloud_kernel_field_sample(input.world_position_m);
+    return vec4<f32>(scalar_debug_color(latent.value), 1.0);
 }
 
 fn diagnostic_cloud_low_coverage_threshold(input: VertexOutput) -> vec4<f32> {

@@ -403,11 +403,7 @@ fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepth
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
         depths.low = layer_visibility.y * tuning.cloud_shadows.x
-            * procedural_low_cloud_optical_depth_with_weather(
-            projection.low_position_m,
-            low_cloud_weather_at(projection.low_position_m),
-            projection.low_footprint_m,
-        );
+            * procedural_low_cloud_optical_depth(projection.low_position_m);
     }
     if layer_visibility.z > 0.0 {
         depths.upper = layer_visibility.z * tuning.cloud_shadows.y

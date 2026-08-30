@@ -14,6 +14,10 @@ struct SceneUniforms {
     seasonal_phase_factors: vec4<f32>,
     celestial_orbit_angles: vec4<f32>,
     celestial_orbit_light: vec4<f32>,
+    low_cloud_kernel_count_and_padding: vec4<f32>,
+    low_cloud_kernel_vectors: array<vec4<f32>, 512>,
+    upper_cloud_kernel_count_and_padding: vec4<f32>,
+    upper_cloud_kernel_vectors: array<vec4<f32>, 192>,
 };
 
 struct SceneTuning {

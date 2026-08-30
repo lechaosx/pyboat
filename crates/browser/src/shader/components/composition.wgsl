@@ -37,7 +37,7 @@ fn cloud_color(
     ) * (0.70 + sunlight * mix(0.12, 0.36, direct_light))
         + edge_light
         - depth_shadow);
-    let canopy = regional_canopy_conditions(surface_cloud_weather);
+    let canopy = ambient_canopy_conditions(surface_cloud_weather);
     cloud *= low_cloud_material_color_visibility() * (
         ambient_contribution_share() * (
             contribution_visibility.z * calculate_atmospheric_ambient_color_with_visibility(
@@ -130,7 +130,7 @@ fn fragment_surface_color(
         layer.y * depths.low.y + layer.z * depths.upper.y,
         moon_direction(),
     );
-    let canopy = regional_canopy_conditions(surface_cloud_weather);
+    let canopy = ambient_canopy_conditions(surface_cloud_weather);
     let ambient = ambient_contribution_share() * (
         contribution.z * calculate_atmospheric_ambient_color_with_visibility(
             canopy,
@@ -251,11 +251,7 @@ fn final_scene_color(
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
-            let low_cloud = procedural_low_cloud_sample_with_weather(
-                input.world_position_m,
-                surface_cloud_weather,
-                visual_pixel_footprint_m,
-            );
+            let low_cloud = procedural_low_cloud_sample(input.world_position_m);
             var upper_transmittance = vec2<f32>(1.0);
             if low_cloud.amount > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(

@@ -8,7 +8,8 @@ and local solar time,
 latitude-calibrated opposite seasons, weather-responsive snow, sea ice, tide,
 Sun/Moon lighting with geometric eclipses, gameplay-driven and
 precipitation-responsive open-water material, depth, spatial weather,
-zero-net local circulation, and phase-resolved gameplay waves.
+wind-advected renewing cloud fields and projected shadows, zero-net local
+circulation, and phase-resolved gameplay waves.
 Prediction, ramming, damage, and persistent wrecks remain deterministic. Boats
 sail longitude laps and interact across that seam, while latitude reaches finite
 north and south poles without a world edge.

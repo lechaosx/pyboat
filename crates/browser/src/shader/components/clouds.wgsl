@@ -1,82 +1,3 @@
-struct CloudTracePositions {
-    current: vec2<f32>,
-    next: vec2<f32>,
-};
-
-fn trace_cloud_positions_m(
-    position_m: vec2<f32>,
-    current_duration_seconds: f32,
-    next_duration_seconds: f32,
-    wind_m_s: vec2<f32>,
-) -> CloudTracePositions {
-    return CloudTracePositions(
-        position_m + current_duration_seconds * wind_m_s,
-        position_m + next_duration_seconds * wind_m_s,
-    );
-}
-
-fn visual_cloud_noise_sample(
-    position_m: vec2<f32>,
-    wind_m_s: vec2<f32>,
-    field_salt: vec2<u32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
-    anchor_weights: vec2<f32>,
-    refresh_period_seconds: f32,
-    pixel_footprint_m: f32,
-) -> TerrainNoiseSample {
-    let phase = clamp(anchor_phase, 0.0, 1.0);
-    let traced = trace_cloud_positions_m(
-        position_m,
-        -phase * refresh_period_seconds,
-        (1.0 - phase) * refresh_period_seconds,
-        wind_m_s,
-    );
-    return visual_transported_noise_sample(
-        traced.current,
-        traced.next,
-        field_salt,
-        initial_wavelength_m,
-        octave_count,
-        anchor_epoch,
-        anchor_weights,
-        pixel_footprint_m,
-    );
-}
-
-fn visual_cloud_noise_value(
-    position_m: vec2<f32>,
-    wind_m_s: vec2<f32>,
-    field_salt: vec2<u32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    anchor_epoch: vec2<u32>,
-    anchor_phase: f32,
-    anchor_weights: vec2<f32>,
-    refresh_period_seconds: f32,
-    pixel_footprint_m: f32,
-) -> f32 {
-    let phase = clamp(anchor_phase, 0.0, 1.0);
-    let traced = trace_cloud_positions_m(
-        position_m,
-        -phase * refresh_period_seconds,
-        (1.0 - phase) * refresh_period_seconds,
-        wind_m_s,
-    );
-    return visual_transported_noise_value(
-        traced.current,
-        traced.next,
-        field_salt,
-        initial_wavelength_m,
-        octave_count,
-        anchor_epoch,
-        anchor_weights,
-        pixel_footprint_m,
-    );
-}
-
 struct LowCloudSample {
     amount: f32,
     optical_depth: f32,
@@ -99,48 +20,76 @@ struct LowCloudShape {
     weather_presence: f32,
 };
 
-fn low_cloud_shape(
-    weather: CloudWeatherSample,
-    cover: f32,
-    raw_detail_value: f32,
-) -> LowCloudShape {
-    let convective = smoothstep(0.12, 0.68, weather.instability);
-    let detail_character = mix(
-        clamp(tuning.cloud_detail.x, 0.0, 1.0),
-        1.0,
-        0.70 * convective,
-    );
-    let billow_rounding = 0.05;
-    let rounded_magnitude = (
-        sqrt(raw_detail_value * raw_detail_value + billow_rounding * billow_rounding)
-            - billow_rounding
-    ) / (sqrt(1.0 + billow_rounding * billow_rounding) - billow_rounding);
-    let rounded_detail_value = 2.0 * rounded_magnitude - 1.0;
-    let detail_value = mix(
-        raw_detail_value,
-        rounded_detail_value + 0.10,
+fn low_cloud_kernel_field_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    let kernel_count = u32(clamp(
+        round(scene.low_cloud_kernel_count_and_padding.x),
+        0.0,
+        256.0,
+    ));
+    for (var kernel_index = 0u; kernel_index < kernel_count; kernel_index++) {
+        let extent = scene.low_cloud_kernel_vectors[2u * kernel_index];
+        let shape = scene.low_cloud_kernel_vectors[2u * kernel_index + 1u];
+        let radius_m = extent.z;
+        if radius_m <= 0.0 || extent.w <= 0.0 {
+            continue;
+        }
+        var offset_m = position_m - extent.xy;
+        offset_m.x -= scene.world_size_m.x * round(
+            offset_m.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        );
+        let axis = shape.xy;
+        let perpendicular = vec2<f32>(-axis.y, axis.x);
+        let aspect_ratio = max(shape.z, 0.01);
+        let along_m = dot(offset_m, axis);
+        let across_m = dot(offset_m, perpendicular);
+        let inverse_radius_squared = 1.0 / (radius_m * radius_m);
+        let normalized_radius_squared = inverse_radius_squared * (
+            along_m * along_m / (aspect_ratio * aspect_ratio)
+                + across_m * across_m
+        );
+        if normalized_radius_squared < 1.0 {
+            let interior = 1.0 - normalized_radius_squared;
+            let amplitude = extent.w;
+            sample.value += amplitude * interior * interior * interior;
+            let normalized_radius_gradient = 2.0 * inverse_radius_squared * (
+                along_m / (aspect_ratio * aspect_ratio) * axis
+                    + across_m * perpendicular
+            );
+            sample.gradient -= 3.0 * amplitude * interior * interior
+                * normalized_radius_gradient;
+        }
+    }
+    return sample;
+}
+
+fn low_cloud_kernel_shape(field_value: f32) -> LowCloudShape {
+    let detail_character = clamp(tuning.cloud_detail.x, 0.0, 1.0);
+    let characterized_field = mix(
+        field_value,
+        sqrt(max(field_value, 0.0)),
         detail_character,
     );
     let detail_contrast = max(tuning.cloud_detail.z, 0.01);
-    let unclamped_detail_amount = 0.5 + 0.5 * detail_contrast * detail_value;
+    let unclamped_detail_amount = detail_contrast * characterized_field;
     let detail_amount = clamp(unclamped_detail_amount, 0.0, 1.0);
-    let target_coverage = clamp(tuning.cloud_wisps.x * cover, 0.0, 0.95);
-    let body_threshold = mix(0.78, 0.32, sqrt(target_coverage));
+    let target_coverage = clamp(tuning.cloud_wisps.x, 0.0, 0.95);
+    let body_threshold = mix(0.58, 0.28, sqrt(target_coverage));
     let edge_softness = max(tuning.cloud_detail.w, 0.005);
-    let detail_blobiness = mix(
-        clamp(tuning.cloud_detail.y, 0.0, 1.0),
-        1.0,
-        0.72 * convective,
+    let amount_span = max(
+        0.005,
+        (1.0 - body_threshold) * clamp(edge_softness / 0.06, 0.1, 2.0),
     );
-    let weather_presence = smoothstep(0.0, 0.08, cover);
-    let amount_span = max(1.0 - body_threshold, edge_softness);
     let raw_amount = clamp(
         (detail_amount - body_threshold) / amount_span,
         0.0,
         1.0,
     );
     let rounded_amount = raw_amount * raw_amount * (3.0 - 2.0 * raw_amount);
-    let cloud_amount = weather_presence * mix(
+    let detail_blobiness = clamp(tuning.cloud_detail.y, 0.0, 1.0);
+    let cloud_amount = mix(
         raw_amount,
         rounded_amount,
         0.45 * detail_blobiness,
@@ -154,17 +103,12 @@ fn low_cloud_shape(
         raw_amount,
         cloud_amount,
         detail_blobiness,
-        weather_presence,
+        1.0,
     );
 }
 
-fn procedural_low_cloud_sample_with_weather(
-    position_m: vec2<f32>,
-    weather: CloudWeatherSample,
-    pixel_footprint_m: f32,
-) -> LowCloudSample {
-    let cover = visible_low_cloud_coverage(weather);
-    if cover <= 0.0 {
+fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
+    if scene.low_cloud_kernel_count_and_padding.x <= 0.0 {
         var empty: LowCloudSample;
         empty.amount = 0.0;
         empty.optical_depth = 0.0;
@@ -175,34 +119,18 @@ fn procedural_low_cloud_sample_with_weather(
         empty.detail_gate = 0.0;
         return empty;
     }
-    let raw_detail = visual_cloud_noise_sample(
-        position_m,
-        weather.low_advection_wind_m_s,
-        vec2<u32>(0x38d01377u, 0x452821e6u),
-        320.0,
-        12u,
-        scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
-        scene.cloud_anchor_weights.xy,
-        1800.0,
-        pixel_footprint_m,
-    );
-    let shape = low_cloud_shape(weather, cover, raw_detail.value);
-    let billow_rounding = 0.05;
-    let rounded_detail_gradient = 2.0 * raw_detail.value * raw_detail.gradient
-        / (
-            sqrt(raw_detail.value * raw_detail.value + billow_rounding * billow_rounding)
-                * (sqrt(1.0 + billow_rounding * billow_rounding) - billow_rounding)
-        );
-    let shaped_detail_gradient = mix(
-        raw_detail.gradient,
-        rounded_detail_gradient,
+    let kernel_field = low_cloud_kernel_field_sample(position_m);
+    let shape = low_cloud_kernel_shape(kernel_field.value);
+    let detail_contrast = max(tuning.cloud_detail.z, 0.01);
+    let characterized_gradient_scale = mix(
+        1.0,
+        0.5 / sqrt(max(kernel_field.value, 0.0001)),
         shape.detail_character,
     );
-    let detail_contrast = max(tuning.cloud_detail.z, 0.01);
+    let pillow_gradient = characterized_gradient_scale * kernel_field.gradient;
     let detail_gradient = select(
         vec2<f32>(0.0),
-        0.5 * detail_contrast * shaped_detail_gradient,
+        detail_contrast * pillow_gradient,
         shape.unclamped_detail_amount > 0.0 && shape.unclamped_detail_amount < 1.0,
     );
     let amount_inside = select(
@@ -223,7 +151,7 @@ fn procedural_low_cloud_sample_with_weather(
     let height_m = height_scale_m * shape.cloud_amount * height_detail;
     let height_gradient = height_scale_m * (
         amount_gradient * height_detail
-        + 0.65 * shape.cloud_amount * detail_gradient
+        + shape.cloud_amount * (0.35 * detail_gradient + 0.18 * pillow_gradient)
     );
 
     var sample: LowCloudSample;
@@ -232,42 +160,19 @@ fn procedural_low_cloud_sample_with_weather(
     sample.height_m = height_m;
     sample.darkness = 0.06 * shape.cloud_amount;
     sample.relief = height_m / height_scale_m;
-    sample.gradient = height_gradient;
+    let normal_strength = mix(0.20, 1.0, clamp(tuning.cloud_wisps.y, 0.0, 1.0));
+    sample.gradient = normal_strength * height_gradient;
     sample.detail_gate = shape.raw_amount;
     return sample;
 }
 
-fn procedural_low_cloud_optical_depth_with_weather(
-    position_m: vec2<f32>,
-    weather: CloudWeatherSample,
-    pixel_footprint_m: f32,
-) -> f32 {
-    let cover = visible_low_cloud_coverage(weather);
-    if cover <= 0.0 {
+fn procedural_low_cloud_optical_depth(position_m: vec2<f32>) -> f32 {
+    if scene.low_cloud_kernel_count_and_padding.x <= 0.0 {
         return 0.0;
     }
-    let raw_detail_value = visual_cloud_noise_value(
-        position_m,
-        weather.low_advection_wind_m_s,
-        vec2<u32>(0x38d01377u, 0x452821e6u),
-        320.0,
-        12u,
-        scene.low_cloud_epoch,
-        scene.cloud_anchor_phase_and_inverse_world_size_m.x,
-        scene.cloud_anchor_weights.xy,
-        1800.0,
-        pixel_footprint_m,
-    );
-    let shape = low_cloud_shape(weather, cover, raw_detail_value);
+    let kernel_field = low_cloud_kernel_field_sample(position_m);
+    let shape = low_cloud_kernel_shape(kernel_field.value);
     return shape.cloud_amount * (0.35 + 0.90 * shape.detail_amount);
-}
-
-fn procedural_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
-    return procedural_low_cloud_sample_with_weather(
-        position_m,
-        low_cloud_weather_at(position_m),
-        visual_pixel_footprint_m,
-    );
 }
 
 struct RegionalCanopyConditions {
@@ -285,73 +190,58 @@ fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyCond
     );
 }
 
+fn ambient_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyConditions {
+    let regional = regional_canopy_conditions(weather);
+    return RegionalCanopyConditions(
+        0.55 * regional.sky_fraction,
+        mix(0.35, regional.mean_optical_thickness, 0.55),
+    );
+}
+
+fn upper_cloud_kernel_field_value(position_m: vec2<f32>) -> f32 {
+    var value = 0.0;
+    let kernel_count = u32(clamp(
+        round(scene.upper_cloud_kernel_count_and_padding.x),
+        0.0,
+        96.0,
+    ));
+    for (var kernel_index = 0u; kernel_index < kernel_count; kernel_index++) {
+        let extent = scene.upper_cloud_kernel_vectors[2u * kernel_index];
+        let shape = scene.upper_cloud_kernel_vectors[2u * kernel_index + 1u];
+        let radius_m = extent.z;
+        if radius_m <= 0.0 || extent.w <= 0.0 {
+            continue;
+        }
+        var offset_m = position_m - extent.xy;
+        offset_m.x -= scene.world_size_m.x * round(
+            offset_m.x * scene.cloud_anchor_phase_and_inverse_world_size_m.z,
+        );
+        let axis = shape.xy;
+        let perpendicular = vec2<f32>(-axis.y, axis.x);
+        let aspect_ratio = max(shape.z, 0.01);
+        let along_m = dot(offset_m, axis);
+        let across_m = dot(offset_m, perpendicular);
+        let normalized_radius_squared = (
+            along_m * along_m / (aspect_ratio * aspect_ratio)
+                + across_m * across_m
+        ) / (radius_m * radius_m);
+        if normalized_radius_squared < 1.0 {
+            let interior = 1.0 - normalized_radius_squared;
+            value += extent.w * interior * interior * interior;
+        }
+    }
+    return value;
+}
+
 fn procedural_upper_cloud_optical_depth_filtered(
     position_m: vec2<f32>,
-    pixel_footprint_m: f32,
+    _pixel_footprint_m: f32,
 ) -> f32 {
-    let weather = upper_cloud_weather_at(position_m);
-    let regional = regional_canopy_conditions(weather);
-    let upper_coverage = clamp(
-        max(
-            regional.sky_fraction,
-            0.30 * weather.low_coverage + 0.70 * weather.rain,
-        ),
-        0.0,
-        1.0,
-    );
-    if upper_coverage <= 0.0 {
+    if scene.upper_cloud_kernel_count_and_padding.x <= 0.0 {
         return 0.0;
     }
-    let phase = clamp(scene.cloud_anchor_phase_and_inverse_world_size_m.y, 0.0, 1.0);
-    let traced = trace_cloud_positions_m(
-        position_m,
-        -phase * 3600.0,
-        (1.0 - phase) * 3600.0,
-        weather.upper_advection_wind_m_s,
-    );
-    let current_circle_position = periodic_noise_circle_position(traced.current);
-    let next_circle_position = periodic_noise_circle_position(traced.next);
-    let system_noise = visual_transported_noise_value_from_circles(
-        current_circle_position,
-        next_circle_position,
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
-        16384.0,
-        4u,
-        scene.upper_cloud_epoch,
-        scene.cloud_anchor_weights.zw,
-        pixel_footprint_m,
-    );
-    let local_noise = visual_transported_noise_value_from_circles(
-        current_circle_position,
-        next_circle_position,
-        vec2<u32>(0x4cf5ad43u, 0x2745937fu),
-        2048.0,
-        4u,
-        scene.upper_cloud_epoch,
-        scene.cloud_anchor_weights.zw,
-        pixel_footprint_m,
-    );
-    let rain = weather.rain;
-    let system_amount = clamp(
-        upper_coverage + 0.28 * system_noise,
-        0.0,
-        1.0,
-    );
-    let connected_cover = max(weather.stratiform, 0.70 * rain);
-    let layered_amount = clamp(
-        system_amount + mix(0.18, 0.05, connected_cover) * local_noise,
-        0.0,
-        1.0,
-    );
-    let local_cells = smoothstep(0.42, 0.72, 0.5 + 0.5 * local_noise);
-    let cellular_amount = system_amount * mix(0.20, 1.0, local_cells);
-    let cellular_character = weather.convective * (1.0 - 0.65 * rain);
-    let cloud_amount = smoothstep(0.0, 0.12, upper_coverage) * mix(
-        layered_amount,
-        max(0.20 * layered_amount, cellular_amount),
-        cellular_character,
-    );
-    return cloud_amount * regional.mean_optical_thickness;
+    let field = upper_cloud_kernel_field_value(position_m);
+    return smoothstep(0.02, 0.20, field) * min(field, 4.0);
 }
 
 fn procedural_upper_cloud_optical_depth(position_m: vec2<f32>) -> f32 {
