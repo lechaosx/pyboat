@@ -268,11 +268,10 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
         "cloud_low_latent_texture" => diagnostic(value, "cloud_low_latent_texture", &[]),
-        "cloud_low_amount" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 0.0)]),
         "cloud_low_optical_depth" => {
-            diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 1.0)])
+            diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 0.0)])
         }
-        "cloud_low_normals" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 2.0)]),
+        "cloud_low_normals" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 1.0)]),
         "cloud_weather_canopy_optical_depth" => {
             diagnostic(value, "cloud_weather_canopy_optical_depth", &[])
         }
@@ -387,6 +386,7 @@ mod tests {
         let pressure = parse_diagnostic("pressure_full_anomaly").unwrap();
         assert_eq!(pressure.module, Some("pressure_anomaly"));
         assert_eq!(pressure.constants, &[("PRESSURE_ANOMALY_OUTPUT", 1.0)]);
+        assert!(parse_diagnostic("cloud_low_amount").is_err());
         assert!(parse_diagnostic("59").is_err());
     }
 }

@@ -5,7 +5,7 @@ fn cloud_color(
     contribution_visibility: vec4<f32>,
     ambient_sky: RegionalCanopyConditions,
 ) -> vec3<f32> {
-    let cloud_amount = cloud_sample.amount;
+    let cloud_amount = cloud_sample.body_amount;
     let limited_gradient = cloud_sample.gradient
         / (1.0 + length(cloud_sample.gradient) / 0.25);
     let cloud_normal = normalize(vec3<f32>(
@@ -266,7 +266,7 @@ fn final_scene_color(
                 visual_weather,
             );
             var upper_transmittance = vec2<f32>(1.0);
-            if low_cloud.amount > 0.01 && layer_visibility.w > 0.0 {
+            if low_cloud.body_amount > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(
                     input.world_position_m,
                     low_height_m,

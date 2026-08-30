@@ -1,5 +1,5 @@
 struct LowCloudSample {
-    amount: f32,
+    body_amount: f32,
     optical_depth: f32,
     gradient: vec2<f32>,
 };
@@ -64,33 +64,40 @@ fn low_cloud_shape(raw_value: f32, weather: CloudWeatherSample) -> vec3<f32> {
     );
     let target_coverage = clamp(tuning.cloud_wisps.x * cover * occurrence, 0.0, 0.95);
     let threshold = mix(0.78, 0.32, sqrt(target_coverage));
-    let span = max(1.0 - threshold, max(tuning.cloud_detail.w, 0.005));
+    let edge_scale = clamp(max(tuning.cloud_detail.w, 0.005) / 0.06, 0.1, 2.0);
+    let span = max(0.005, (1.0 - threshold) * edge_scale);
     let unclamped_amount = (detail - threshold) / span;
-    let raw_amount = clamp(unclamped_amount, 0.0, 1.0);
-    let raw_amount_derivative = select(
+    let raw_body_amount = clamp(unclamped_amount, 0.0, 1.0);
+    let raw_body_amount_derivative = select(
         0.0,
         detail_derivative / span,
         unclamped_amount > 0.0 && unclamped_amount < 1.0,
     );
-    let rounded_amount = raw_amount * raw_amount * (3.0 - 2.0 * raw_amount);
-    let rounded_amount_derivative = 6.0 * raw_amount * (1.0 - raw_amount)
-        * raw_amount_derivative;
+    let rounded_body_amount = raw_body_amount * raw_body_amount
+        * (3.0 - 2.0 * raw_body_amount);
+    let rounded_body_amount_derivative = 6.0 * raw_body_amount
+        * (1.0 - raw_body_amount) * raw_body_amount_derivative;
     let blobiness = mix(
         clamp(tuning.cloud_detail.y, 0.0, 1.0),
         1.0,
         0.72 * convective,
     );
     let presence = smoothstep(0.0, 0.08, cover * occurrence);
-    let amount = presence * mix(raw_amount, rounded_amount, 0.45 * blobiness);
-    let amount_derivative = presence * mix(
-        raw_amount_derivative,
-        rounded_amount_derivative,
+    let body_amount = presence * mix(
+        raw_body_amount,
+        rounded_body_amount,
         0.45 * blobiness,
     );
-    let optical_depth = amount * (0.35 + 0.90 * detail);
-    let optical_derivative = amount_derivative * (0.35 + 0.90 * detail)
-        + 0.90 * amount * detail_derivative;
-    return vec3<f32>(amount, optical_depth, optical_derivative);
+    let body_amount_derivative = presence * mix(
+        raw_body_amount_derivative,
+        rounded_body_amount_derivative,
+        0.45 * blobiness,
+    );
+    let height_detail = 0.35 + 0.65 * detail;
+    let optical_depth = body_amount * body_amount * (0.25 + detail);
+    let height_derivative = 2.0 * body_amount * body_amount_derivative * height_detail
+        + 0.65 * body_amount * body_amount * detail_derivative;
+    return vec3<f32>(body_amount, optical_depth, height_derivative);
 }
 
 fn procedural_low_cloud_sample(
@@ -107,7 +114,7 @@ fn procedural_low_cloud_sample(
     return LowCloudSample(
         shape.x,
         shape.y,
-        150.0 * normal_strength * shape.z * latent.gradient,
+        180.0 * normal_strength * shape.z * latent.gradient,
     );
 }
 
@@ -202,11 +209,18 @@ fn procedural_upper_cloud_optical_depth(
     let latent = spatiotemporal_fractal_value(
         vec2<u32>(0x75374cc3u, 0x589965ccu),
         field_position_m,
-        12000.0,
+        8000.0,
         scene.cloud_time_coordinates.y,
         4u,
         0.58,
     );
-    let amount = smoothstep(0.0, 0.12, cover) * clamp(cover + 0.30 * latent, 0.0, 1.0);
+    let layered_amount = clamp(cover + 0.30 * latent, 0.0, 1.0);
+    let cell = smoothstep(0.42, 0.72, 0.5 + 0.5 * latent);
+    let cellular_amount = layered_amount * mix(0.20, 1.0, cell);
+    let amount = smoothstep(0.0, 0.12, cover) * mix(
+        layered_amount,
+        max(0.20 * layered_amount, cellular_amount),
+        weather.convective,
+    );
     return amount * regional.mean_optical_thickness;
 }

@@ -1174,8 +1174,8 @@ fn production_tuning() -> SceneTuning {
         vec4<f32>(
             CLOUD_MAX_WISP_COVERAGE,
             0.0,
-            0.0,
-            0.0,
+            1.0,
+            1.0,
         ),
         vec4<f32>(
             CLOUD_OPTICAL_DEPTH,

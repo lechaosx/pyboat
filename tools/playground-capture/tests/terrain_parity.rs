@@ -333,7 +333,10 @@ fn visual_cloud_fields_are_independent_of_view_center_weather() {
     let width = 64usize;
     let height = 16usize;
     let mut differences = Vec::new();
-    for diagnostic in ["cloud_low_amount", "cloud_weather_canopy_optical_depth"] {
+    for diagnostic in [
+        "cloud_low_optical_depth",
+        "cloud_weather_canopy_optical_depth",
+    ] {
         let storm_centered = render_diagnostic_image_with_view_at(
             world,
             Vector::new(-4_000.0, 0.0),

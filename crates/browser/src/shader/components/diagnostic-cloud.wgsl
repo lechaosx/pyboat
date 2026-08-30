@@ -5,14 +5,6 @@ fn diagnostic_cloud_low_latent_texture(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(signed_debug_color(latent.value), 1.0);
 }
 
-fn diagnostic_cloud_low_amount(input: VertexOutput) -> vec4<f32> {
-    let low = procedural_low_cloud_sample(
-        input.world_position_m,
-        visual_cloud_weather(surface_cloud_weather),
-    );
-    return vec4<f32>(scalar_debug_color(low.amount), 1.0);
-}
-
 fn diagnostic_cloud_low_optical_depth(input: VertexOutput) -> vec4<f32> {
     let low = procedural_low_cloud_sample(
         input.world_position_m,

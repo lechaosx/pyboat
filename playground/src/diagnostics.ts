@@ -1,6 +1,5 @@
 export type DiagnosticId =
   | "cloud_low_latent_texture"
-  | "cloud_low_amount"
   | "cloud_low_optical_depth"
   | "cloud_low_normals"
   | "cloud_weather_canopy_optical_depth"
@@ -62,9 +61,8 @@ export type DiagnosticShader = {
 
 export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
   cloud_low_latent_texture: { name: "cloud_low_latent_texture" },
-  cloud_low_amount: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 0 } },
-  cloud_low_optical_depth: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 1 } },
-  cloud_low_normals: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 2 } },
+  cloud_low_optical_depth: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 0 } },
+  cloud_low_normals: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 1 } },
   cloud_weather_canopy_optical_depth: { name: "cloud_weather_canopy_optical_depth" },
   lighting_projected_low_shadow: {
     name: "lighting_cloud_shadow",
@@ -150,7 +148,6 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
     { label: "Overview", options: [["scene", "Final composition"]] },
     { label: "Cloud structure", options: [
       ["cloud_low_latent_texture", "Low latent texture"],
-      ["cloud_low_amount", "Low cloud amount"],
       ["cloud_low_optical_depth", "Low optical depth"],
       ["cloud_low_normals", "Low normals"],
       ["cloud_weather_canopy_optical_depth", "Canopy optical depth"],
