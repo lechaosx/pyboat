@@ -259,6 +259,38 @@ fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
 }
 
 #[test]
+fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-12_000.0, -5_000.0);
+    let ambient = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        4_000.0,
+        "lighting_ambient_sky_occlusion",
+        256,
+        64,
+    );
+    let canopy = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        4_000.0,
+        "cloud_weather_canopy_optical_depth",
+        256,
+        64,
+    );
+    let ambient_detail = mean_neighbor_luminance_difference(&ambient, 256, 64);
+    let canopy_detail = mean_neighbor_luminance_difference(&canopy, 256, 64);
+
+    assert!(canopy_detail > 0.0005, "{canopy_detail}");
+    assert!(
+        ambient_detail < 0.5 * canopy_detail,
+        "ambient {ambient_detail}, canopy {canopy_detail}",
+    );
+}
+
+#[test]
 fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 6_000.0);
@@ -488,6 +520,22 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
         .collect();
     columns.iter().copied().fold(f32::NEG_INFINITY, f32::max)
         - columns.iter().copied().fold(f32::INFINITY, f32::min)
+}
+
+fn mean_neighbor_luminance_difference(bytes: &[u8], width: usize, height: usize) -> f32 {
+    let luminance = |offset: usize| {
+        (bytes[offset] as f32 + bytes[offset + 1] as f32 + bytes[offset + 2] as f32) / (3.0 * 255.0)
+    };
+    let mut difference = 0.0;
+    let mut count = 0;
+    for row in 0..height {
+        for column in 1..width {
+            let offset = 4 * (row * width + column);
+            difference += (luminance(offset) - luminance(offset - 4)).abs();
+            count += 1;
+        }
+    }
+    difference / count as f32
 }
 
 fn channel_range(bytes: &[u8], channel: usize) -> f32 {

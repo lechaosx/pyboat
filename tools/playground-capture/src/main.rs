@@ -288,6 +288,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_cloud_shadow",
             &[("CLOUD_SHADOW_OUTPUT", 1.0)],
         ),
+        "lighting_ambient_sky_occlusion" => diagnostic(
+            value,
+            "lighting_cloud_shadow",
+            &[("CLOUD_SHADOW_OUTPUT", 3.0)],
+        ),
         "lighting_solar_elevation" => {
             diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 0.0)])
         }

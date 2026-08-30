@@ -7,6 +7,7 @@ export type DiagnosticId =
   | "lighting_projected_low_shadow"
   | "lighting_projected_upper_shadow"
   | "lighting_combined_transmittance"
+  | "lighting_ambient_sky_occlusion"
   | "lighting_solar_elevation"
   | "lighting_aerosol_optical_depth"
   | "lighting_solar_eclipse_coverage"
@@ -76,6 +77,10 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
   lighting_combined_transmittance: {
     name: "lighting_cloud_shadow",
     constants: { CLOUD_SHADOW_OUTPUT: 2 },
+  },
+  lighting_ambient_sky_occlusion: {
+    name: "lighting_cloud_shadow",
+    constants: { CLOUD_SHADOW_OUTPUT: 3 },
   },
   lighting_solar_elevation: {
     name: "lighting_solar",
@@ -154,6 +159,7 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["lighting_projected_low_shadow", "Projected low shadow"],
       ["lighting_projected_upper_shadow", "Projected upper shadow"],
       ["lighting_combined_transmittance", "Combined transmittance"],
+      ["lighting_ambient_sky_occlusion", "Ambient sky occlusion"],
       ["lighting_solar_elevation", "Solar elevation"],
       ["lighting_aerosol_optical_depth", "Aerosol optical depth"],
       ["lighting_solar_eclipse_coverage", "Solar eclipse coverage"],

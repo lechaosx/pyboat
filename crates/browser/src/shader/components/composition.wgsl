@@ -3,6 +3,7 @@ fn cloud_color(
     cloud_sample: LowCloudSample,
     upper_transmittance: vec2<f32>,
     contribution_visibility: vec4<f32>,
+    ambient_sky: RegionalCanopyConditions,
 ) -> vec3<f32> {
     let cloud_amount = cloud_sample.amount;
     let limited_gradient = cloud_sample.gradient
@@ -36,15 +37,14 @@ fn cloud_color(
     ) * (0.70 + sunlight * mix(0.12, 0.36, direct_light))
         + edge_light
         - depth_shadow);
-    let canopy = ambient_canopy_conditions(surface_cloud_weather);
     cloud *= low_cloud_material_color_visibility() * (
         ambient_contribution_share() * (
             contribution_visibility.z * calculate_atmospheric_ambient_color_with_visibility(
-                canopy,
+                ambient_sky,
                 vec2<f32>(1.0, 0.0),
             )
             + contribution_visibility.w * calculate_atmospheric_ambient_color_with_visibility(
-                canopy,
+                ambient_sky,
                 vec2<f32>(0.0, 1.0),
             )
         )
@@ -110,6 +110,7 @@ fn fragment_surface_color(
     elevation_m: f32,
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec2<f32>,
+    ambient_sky: RegionalCanopyConditions,
 ) -> vec3<f32> {
     let layer = fragment_layer_visibility();
     let contribution = fragment_light_visibility();
@@ -122,14 +123,13 @@ fn fragment_surface_color(
         layer.y * depths.low.y + layer.z * depths.upper.y,
         moon_direction(),
     );
-    let canopy = ambient_canopy_conditions(surface_cloud_weather);
     let ambient = ambient_contribution_share() * (
         contribution.z * calculate_atmospheric_ambient_color_with_visibility(
-            canopy,
+            ambient_sky,
             vec2<f32>(1.0, 0.0),
         )
         + contribution.w * calculate_atmospheric_ambient_color_with_visibility(
-            canopy,
+            ambient_sky,
             vec2<f32>(0.0, 1.0),
         )
     );
@@ -155,6 +155,7 @@ fn final_scene_color(
     var surface_color = input.color;
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
+        let ambient_sky = ambient_sky_conditions_at(input.world_position_m);
         let terrain = procedural_terrain_sample_with_climate_from_circle(
             input.world_position_m,
             surface_circle_position,
@@ -239,6 +240,7 @@ fn final_scene_color(
             max(terrain.elevation_m, water_height_m),
             terrain_shadow_transmittance,
             surface_light_grade,
+            ambient_sky,
         );
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
@@ -257,6 +259,7 @@ fn final_scene_color(
                 low_cloud,
                 upper_transmittance,
                 fragment_light_visibility(),
+                ambient_sky,
             );
             fragment_color += fragment_layer_visibility().x
                 * (clouded_fragment_color - fragment_color);

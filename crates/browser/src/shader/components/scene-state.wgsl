@@ -88,8 +88,6 @@ var<private> moon_light_color: vec3<f32>;
 var<private> solar_eclipse_fraction: f32;
 var<private> lunar_penumbra_fraction: f32;
 var<private> lunar_umbra_fraction: f32;
-var<private> ambient_light_color: vec3<f32>;
-var<private> ambient_contribution_light_color: vec3<f32>;
 var<private> sun_direct_contribution_light_color: vec3<f32>;
 var<private> moon_direct_contribution_light_color: vec3<f32>;
 var<private> horizon_scattering: f32;

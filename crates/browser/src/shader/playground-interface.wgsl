@@ -88,10 +88,6 @@ fn direct_light_visibility() -> vec2<f32> {
     return vec2<f32>(1.0);
 }
 
-fn indirect_light_visibility() -> vec2<f32> {
-    return vec2<f32>(1.0);
-}
-
 fn fragment_layer_visibility() -> vec4<f32> {
     return playground.layer_visibility;
 }
@@ -133,20 +129,10 @@ fn initialize_playground_celestial() {
     initialize_celestial_lighting();
 }
 
-fn initialize_playground_atmospheric_lighting(
-    canopy: RegionalCanopyConditions,
-) {
+fn initialize_playground_atmospheric_lighting() {
     initialize_playground_celestial();
-    let visibility = indirect_light_visibility();
-    if visibility.x > 0.0 || visibility.y > 0.0 {
-        horizon_scattering = calculate_horizon_scattering();
-        moon_light_color = calculate_moon_light_color();
-        ambient_light_color = calculate_atmospheric_ambient_color(canopy);
-    } else {
-        horizon_scattering = 0.0;
-        moon_light_color = vec3<f32>(1.0);
-        ambient_light_color = vec3<f32>(0.0);
-    }
+    horizon_scattering = calculate_horizon_scattering();
+    moon_light_color = calculate_moon_light_color();
     initialize_light_contributions();
 }
 
@@ -158,9 +144,7 @@ fn initialize_playground_scene(input: VertexOutput) -> InitializedPlaygroundScen
     let surface_weather = low_cloud_weather_field_at(surface_position_m);
     surface_cloud_weather = surface_weather.weather;
     initialize_surface_tide_from_circle(surface_circle_position);
-    initialize_playground_atmospheric_lighting(
-        regional_canopy_conditions(surface_cloud_weather),
-    );
+    initialize_playground_atmospheric_lighting();
     return InitializedPlaygroundScene(
         periodic_input,
         surface_weather.atmosphere,

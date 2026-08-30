@@ -145,66 +145,52 @@ fn calculate_atmospheric_ambient_color_with_visibility(
     let horizon_glow = smoothstep(-0.12, 0.02, sun.z)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
     let sunset_warmth = horizon_glow * horizon_scattering;
+    let sun_source = celestial_sun_amount() * sun_direct_light_color();
+    let moon_source = celestial_moon_amount() * moon_light_color;
+    let source_amount = celestial_sun_amount() + celestial_moon_amount();
+    let source_color = select(
+        vec3<f32>(0.72, 0.80, 0.88),
+        (sun_source + moon_source) / max(source_amount, 0.0001),
+        source_amount > 0.0,
+    );
+    let source_presence = smoothstep(0.0, 0.2, source_amount);
     var clear_sky_light = vec3<f32>(0.0);
     if visibility.x > 0.0 {
         var sky_color = mix(
             vec3<f32>(0.42, 0.52, 0.75),
-            vec3<f32>(0.84, 0.90, 1.0),
+            vec3<f32>(0.68, 0.80, 1.0),
             twilight,
         );
-        sky_color = mix(sky_color, vec3<f32>(1.0), daylight);
+        sky_color = mix(sky_color, vec3<f32>(0.72, 0.84, 1.0), daylight);
         sky_color = mix(
             sky_color,
             vec3<f32>(1.30, 0.52, 0.30),
             0.58 * sunset_warmth,
         );
-        let moon_presence = (1.0 - daylight) * clamp(
-            celestial_moon_amount() / 0.12,
-            0.0,
-            1.0,
+        sky_color *= mix(
+            vec3<f32>(1.0),
+            source_color,
+            0.35 * source_presence,
         );
-        sky_color = mix(sky_color, moon_light_color, 0.25 * moon_presence);
         clear_sky_light = clear_intensity * sky_color;
     }
 
     var canopy_light = vec3<f32>(0.0);
     if visibility.y > 0.0 {
-        let sun_source = celestial_sun_amount() * sun_direct_light_color();
-        let moon_source = celestial_moon_amount() * moon_light_color;
-        let source_amount = celestial_sun_amount() + celestial_moon_amount();
-        let source_color = select(
-            vec3<f32>(0.72, 0.80, 0.88),
-            (sun_source + moon_source) / max(source_amount, 0.0001),
-            source_amount > 0.0,
-        );
-        let source_presence = smoothstep(0.0, 0.2, source_amount);
         let canopy_color = mix(
             vec3<f32>(0.72, 0.80, 0.88),
             source_color,
-            0.45 * source_presence,
+            0.75 * source_presence,
         );
-        let canopy_attenuation = mix(
-            0.82,
-            0.34,
-            smoothstep(0.35, 3.40, canopy.mean_optical_thickness),
+        let cloud_dome_radiance = mix(
+            0.86,
+            0.08,
+            smoothstep(0.25, 4.20, canopy.mean_optical_thickness),
         );
-        canopy_light = clear_intensity * canopy_attenuation * canopy_color;
+        canopy_light = clear_intensity * cloud_dome_radiance * canopy_color;
     }
     return visibility.x * (1.0 - canopy.sky_fraction) * clear_sky_light
         + visibility.y * canopy.sky_fraction * canopy_light;
-}
-
-fn calculate_atmospheric_ambient_color(
-    canopy: RegionalCanopyConditions,
-) -> vec3<f32> {
-    return calculate_atmospheric_ambient_color_with_visibility(
-        canopy,
-        indirect_light_visibility(),
-    );
-}
-
-fn atmospheric_ambient_color() -> vec3<f32> {
-    return ambient_light_color;
 }
 
 fn aerosol_optical_depth_at(
@@ -262,17 +248,11 @@ fn moon_direct_contribution_color() -> vec3<f32> {
     return moon_direct_contribution_light_color;
 }
 
-fn ambient_contribution_color() -> vec3<f32> {
-    return ambient_contribution_light_color;
-}
-
 fn initialize_light_contributions() {
     let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
     let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
     sun_direct_contribution_light_color = sun_share * sun_direct_light_color();
     moon_direct_contribution_light_color = moon_share * moon_light_color;
-    ambient_contribution_light_color = atmospheric_ambient_color()
-        * max(1.0 - sun_share - moon_share, 0.0);
 }
 
 fn ambient_contribution_share() -> f32 {

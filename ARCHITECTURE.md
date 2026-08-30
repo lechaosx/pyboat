@@ -259,11 +259,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   integrated view-center upper wind one-to-one, and its continuous optical depth
   supplies connected projected Sun and Moon shadows without tracked bodies or
   temporal anchors.
-- **[Explicit]** Regional-canopy ambient attenuation uses a lower-contrast
-  response than directional canopy shadows. It follows global procedural weather
-  evaluated at each world position rather than either per-client visual field,
-  while the view-local canopy field attenuates Sun and Moon. A directional shadow
-  boundary therefore does not impose the same ambient boundary.
+- **[Explicit]** Ambient sky occlusion is a globally coherent spatiotemporal
+  field representing the average cloud fraction and optical thickness of the
+  whole overhead sky dome. Its two octaves have wavelengths of at least 128 and
+  64 kilometres, lower frequency than the view-local canopy's 12-kilometre base
+  and finer octaves. Nearby points can therefore lie on opposite sides of a
+  directional cloud shadow while retaining nearly identical ambient light.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,
@@ -413,12 +414,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
   two paired eclipse seasons, including total lunar eclipses, while preserving
   exact annual repetition.
-- **[Explicit]** Direct sun and moon intensity and color follow each source's
-  elevation and orientation, while diffuse atmospheric light remains a separate
-  RGB contribution. Both terms light the surface and visible lower clouds.
-  Diffuse light blends clear-sky and weather-canopy contributions. Seeded
-  regional aerosol, moisture, and cloud amount tint it; overcast attenuates it
-  moderately while rain under deep canopy supplies stronger storm attenuation.
+- **[Explicit]** Sun and Moon remain independent directional light sources whose
+  direct contributions use their respective direction, intensity, color, and
+  cloud and terrain transmittance. Ambient light separately combines a clear-sky
+  dome, blue by day, with a cloud-dome source weighted by broad overhead cloud
+  fraction. Both dome sources scatter the same Sun and Moon source colors used
+  for direct light; increasing cloud optical thickness reduces cloud-dome
+  radiance toward darkness. Both direct and ambient terms light the surface and
+  visible lower clouds.
   Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
   moonlight slightly; increasing umbral coverage replaces blocked direct
   sunlight with dim orange-red light filtered through the atmosphere, and the

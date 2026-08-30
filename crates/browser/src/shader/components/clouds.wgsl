@@ -152,11 +152,26 @@ fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyCond
     );
 }
 
-fn ambient_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyConditions {
-    let regional = regional_canopy_conditions(weather);
+fn ambient_sky_conditions_at(position_m: vec2<f32>) -> RegionalCanopyConditions {
+    if environment_feature_visibility().w <= 0.0 {
+        return RegionalCanopyConditions(0.0, 0.0);
+    }
+    let wavelength_m = max(
+        128000.0,
+        0.75 * max(scene.world_size_m.x, scene.world_size_m.y),
+    );
+    let cloud_signal = 0.5 + 0.5 * spatiotemporal_fractal_value(
+        vec2<u32>(0xa54ff53au, 0x510e527fu),
+        position_m,
+        wavelength_m,
+        0.08 * scene.pressure_time_coordinate.x,
+        2u,
+        0.50,
+    );
+    let sky_fraction = smoothstep(0.20, 0.80, cloud_signal);
     return RegionalCanopyConditions(
-        0.55 * regional.sky_fraction,
-        mix(0.35, regional.mean_optical_thickness, 0.55),
+        sky_fraction,
+        mix(0.25, 4.20, sky_fraction * sky_fraction),
     );
 }
 

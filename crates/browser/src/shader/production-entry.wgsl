@@ -21,9 +21,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     horizon_scattering = calculate_horizon_scattering();
     moon_light_color = calculate_moon_light_color();
-    ambient_light_color = calculate_atmospheric_ambient_color(
-        regional_canopy_conditions(surface_cloud_weather),
-    );
     initialize_light_contributions();
     return final_scene_color(
         periodic_input,
@@ -49,10 +46,6 @@ fn lighting_feature_visibility() -> vec4<f32> {
 }
 
 fn direct_light_visibility() -> vec2<f32> {
-    return vec2<f32>(1.0);
-}
-
-fn indirect_light_visibility() -> vec2<f32> {
     return vec2<f32>(1.0);
 }
 

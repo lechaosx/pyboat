@@ -55,6 +55,11 @@ fn diagnostic_lighting_combined_transmittance(input: VertexOutput) -> vec4<f32> 
     return vec4<f32>(scalar_debug_color(1.0 - shadow_amount), 1.0);
 }
 
+fn diagnostic_lighting_ambient_sky_occlusion(input: VertexOutput) -> vec4<f32> {
+    let ambient_sky = ambient_sky_conditions_at(input.world_position_m);
+    return vec4<f32>(scalar_debug_color(ambient_sky.sky_fraction), 1.0);
+}
+
 fn diagnostic_lighting_solar_elevation(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(scalar_debug_color(0.5 + 0.5 * sun_direction().z), 1.0);
 }

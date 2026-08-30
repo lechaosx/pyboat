@@ -11,5 +11,8 @@ fn fragment_lighting_cloud_shadow(input: VertexOutput) -> @location(0) vec4<f32>
     if CLOUD_SHADOW_OUTPUT == 1u {
         return diagnostic_lighting_projected_upper_shadow(periodic_input);
     }
-    return diagnostic_lighting_combined_transmittance(periodic_input);
+    if CLOUD_SHADOW_OUTPUT == 2u {
+        return diagnostic_lighting_combined_transmittance(periodic_input);
+    }
+    return diagnostic_lighting_ambient_sky_occlusion(periodic_input);
 }
