@@ -1,4 +1,6 @@
 @fragment
 fn fragment_cloud_weather_canopy_optical_depth(input: VertexOutput) -> @location(0) vec4<f32> {
-    return diagnostic_cloud_weather_canopy_optical_depth(initialize_playground_base(input));
+    let periodic_input = initialize_playground_base(input);
+    initialize_playground_weather();
+    return diagnostic_cloud_weather_canopy_optical_depth(periodic_input);
 }

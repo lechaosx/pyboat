@@ -13,11 +13,8 @@ struct SceneUniforms {
     seasonal_phase_factors: vec4<f32>,
     celestial_orbit_angles: vec4<f32>,
     celestial_orbit_light: vec4<f32>,
-    view_cloud_primary: vec4<f32>,
-    view_cloud_secondary: vec4<f32>,
-    view_cloud_winds_m_s: vec4<f32>,
     view_cloud_motion_m: vec4<f32>,
-    view_cloud_time_coordinates: vec4<f32>,
+    cloud_time_coordinates: vec4<f32>,
 };
 
 struct SceneTuning {

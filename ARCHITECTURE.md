@@ -237,15 +237,18 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   Spatial temperature and moisture use the same spatiotemporal query model in
   Rust and WGSL rather than accepting center-derived weather. No evolving scalar
   or vector field receives a global spatial transport offset.
-- **[Explicit]** Each client renders lower clouds from a continuous,
-  longitude-periodic spatiotemporal latent noise field parameterized by weather
-  measured at the view center. The field contains no tracked cloud bodies,
-  compact kernels, birth cohorts, or temporal anchors: its time dimension
-  continuously forms and dissolves structure. The client integrates the sampled
-  system wind into a translation offset, so changing wind curves the field's
-  path without stretching it and instantaneous translation speed matches wind
-  speed one-to-one. Cloud visuals may differ between users because their view
-  centers supply different measurements.
+- **[Explicit]** Lower clouds and the weather canopy are continuous,
+  longitude-periodic global fields. Match seed, global cloud time, and the
+  existing spatial atmosphere determine their latent structure, occurrence,
+  coverage, and character without tracked bodies, compact kernels, birth
+  cohorts, or temporal anchors. Global weather conditions are evaluated once at
+  each rendered world position and passed through visible-cloud and projected-
+  shadow calculations. They remain stationary while the only per-client cloud
+  input, the integrated view-center system-wind translation, offsets each
+  layer's latent noise. Changing wind therefore curves cloud texture paths
+  without stretching them, instantaneous translation speed matches wind speed
+  one-to-one, and advecting texture adopts the stationary weather regime it
+  enters.
 - **[Explicit]** The lower field continuously drives visible amount, optical
   depth, analytic body normals, and projected shadows at a fixed 900-metre
   height. Body size, occurrence, detail character, blob shape, contrast, edge,
@@ -253,18 +256,24 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   tunings. Cloud amount, normals, optical depth, and shadows at a sampled world
   position are independent of camera zoom and pixel footprint; zoom changes only
   which positions are sampled. Scalar shadow queries omit body-gradient work.
-- **[Explicit]** Each client renders the unseen 3600-metre weather canopy from a
-  broader continuous spatiotemporal latent noise field parameterized by
-  view-center upper cloudiness and precipitation. Its translation follows the
-  integrated view-center upper wind one-to-one, and its continuous optical depth
-  supplies connected projected Sun and Moon shadows without tracked bodies or
-  temporal anchors.
-- **[Explicit]** Ambient sky occlusion is a globally coherent spatiotemporal
-  field representing the average cloud fraction and optical thickness of the
-  whole overhead sky dome. Its two octaves have wavelengths of at least 128 and
-  64 kilometres, lower frequency than the view-local canopy's 12-kilometre base
-  and finer octaves. Nearby points can therefore lie on opposite sides of a
-  directional cloud shadow while retaining nearly identical ambient light.
+- **[Explicit]** The unseen 3600-metre weather canopy uses a broader continuous
+  spatiotemporal latent noise field. Its translation follows the integrated
+  view-center upper wind one-to-one, and its continuous optical depth supplies
+  connected projected Sun and Moon shadows.
+- **[Explicit]** Rain remains a global weather field queried at actual world
+  positions. It does not condition either visual cloud field and does not move
+  with a client's cloud translation, so rendered precipitation is independent
+  of individual visible cloud bodies and canopy openings.
+- **[Explicit]** Ambient sky occlusion is a globally coherent estimate of the
+  average cloud fraction and optical thickness of the whole overhead sky dome.
+  It derives continuously from the lowest-frequency existing temperature,
+  moisture, and pressure conditions and their condensation and lift response,
+  rather than from an independent noise field or a sampled canopy pixel. Its
+  spatial variation remains materially lower-frequency than the directional
+  canopy, so nearby points can lie on opposite sides of a directional cloud
+  shadow while retaining nearly identical ambient light. Broad humid low-pressure
+  weather can therefore darken ambient light while a local canopy opening still
+  admits direct Sun or Moon light.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,

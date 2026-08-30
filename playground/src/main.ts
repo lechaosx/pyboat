@@ -6,7 +6,7 @@ import {
   sample_playground_environment,
   sample_playground_field_time_coordinates,
   sample_playground_seasonal_phase_factors,
-  sample_playground_view_cloud_uniforms,
+  sample_playground_view_cloud_state,
   sample_playground_world_geometry,
 } from "browser/playground";
 import {
@@ -306,7 +306,6 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 let previousCloudTimeSeconds: number | undefined;
-let cloudElapsedSeconds = 0;
 const lowCloudMotionM = [0, 0];
 const upperCloudMotionM = [0, 0];
 let previousLowCloudWindMS = [0, 0];
@@ -985,7 +984,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(68);
+const sceneFloats = new Float32Array(56);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1328,15 +1327,15 @@ function writeUniforms(
     state.viewHeight * aspect,
     state.viewHeight,
   ], 0);
-  const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
-  const [cloudTick] = splitTick(cloudTimeSeconds);
+  const [worldTick] = splitTick(worldTimeSeconds);
+  const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
   const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
   const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const fieldTimes = sample_playground_field_time_coordinates(
     state.worldWidthM,
     state.worldHeightM,
-    worldTick,
-    worldTickFraction,
+    cloudTick,
+    cloudTickFraction,
     pressureTick,
     pressureTickFraction,
     currentTick,
@@ -1383,20 +1382,20 @@ function writeUniforms(
     seasonPhase,
     lunarLongitudePhase,
   ), 40);
-  const viewCloud = sample_playground_view_cloud_uniforms(
+  const viewCloud = sample_playground_view_cloud_state(
     state.worldWidthM,
     state.worldHeightM,
     (BigInt(seedHigh) << 32n) | BigInt(seedLow),
     cloudTick,
+    cloudTickFraction,
     renderedCameraX,
     renderedCameraY,
   );
-  const lowWind = [viewCloud[8], viewCloud[9]];
-  const upperWind = [viewCloud[10], viewCloud[11]];
+  const lowWind = [viewCloud[0], viewCloud[1]];
+  const upperWind = [viewCloud[2], viewCloud[3]];
   if (previousCloudTimeSeconds === undefined || cloudTimeSeconds < previousCloudTimeSeconds) {
     lowCloudMotionM.fill(0);
     upperCloudMotionM.fill(0);
-    cloudElapsedSeconds = 0;
   } else {
     const elapsedSeconds = cloudTimeSeconds - previousCloudTimeSeconds;
     for (let axis = 0; axis < 2; axis += 1) {
@@ -1405,16 +1404,12 @@ function writeUniforms(
       upperCloudMotionM[axis] += 0.5 * elapsedSeconds
         * (previousUpperCloudWindMS[axis] + upperWind[axis]);
     }
-    cloudElapsedSeconds += elapsedSeconds;
   }
   previousCloudTimeSeconds = cloudTimeSeconds;
   previousLowCloudWindMS = lowWind;
   previousUpperCloudWindMS = upperWind;
-  sceneFloats.set(viewCloud.subarray(0, 4), 48);
+  sceneFloats.set([...lowCloudMotionM, ...upperCloudMotionM], 48);
   sceneFloats.set(viewCloud.subarray(4, 8), 52);
-  sceneFloats.set(viewCloud.subarray(8, 12), 56);
-  sceneFloats.set([...lowCloudMotionM, ...upperCloudMotionM], 60);
-  sceneFloats.set([cloudElapsedSeconds / 420, cloudElapsedSeconds / 1500, 0, 0], 64);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([

@@ -355,15 +355,18 @@ fn cloud_shadow_projection_at(
     );
 }
 
-fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepths {
+fn cloud_shadow_depths_at(
+    projection: CloudShadowProjection,
+    weather: CloudWeatherSample,
+) -> CloudShadowDepths {
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
         depths.low = layer_visibility.y * tuning.cloud_shadows.x
-            * procedural_low_cloud_optical_depth(projection.low_position_m);
+            * procedural_low_cloud_optical_depth(projection.low_position_m, weather);
     }
     if layer_visibility.z > 0.0 {
         depths.upper = layer_visibility.z * tuning.cloud_shadows.y
-            * procedural_upper_cloud_optical_depth(projection.upper_position_m);
+            * procedural_upper_cloud_optical_depth(projection.upper_position_m, weather);
     }
     return depths;
 }
@@ -371,6 +374,7 @@ fn cloud_shadow_depths_at(projection: CloudShadowProjection) -> CloudShadowDepth
 fn celestial_cloud_shadow_depths_at(
     position_m: vec2<f32>,
     surface_height_m: f32,
+    weather: CloudWeatherSample,
 ) -> CelestialCloudShadowDepths {
     var celestial_depths = CelestialCloudShadowDepths(vec2<f32>(0.0), vec2<f32>(0.0));
     if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
@@ -382,7 +386,7 @@ fn celestial_cloud_shadow_depths_at(
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 {
             let projection = cloud_shadow_projection_at(position_m, surface_height_m, light);
-            let depths = cloud_shadow_depths_at(projection);
+            let depths = cloud_shadow_depths_at(projection, weather);
             celestial_depths.low[source_index] = depths.low;
             celestial_depths.upper[source_index] = depths.upper;
         }

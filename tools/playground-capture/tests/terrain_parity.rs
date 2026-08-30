@@ -291,6 +291,126 @@ fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
 }
 
 #[test]
+fn ambient_sky_occlusion_follows_existing_weather_conditions() {
+    let world = WorldGeometry::default();
+    let width = 32usize;
+    let height = 32usize;
+    let ambient = render_diagnostic_image(
+        world,
+        "lighting_ambient_sky_occlusion",
+        width as u32,
+        height as u32,
+    );
+    let mut occlusion = Vec::with_capacity(width * height);
+    let mut cloud_condition = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for column in 0..width {
+            let offset = 4 * (row * width + column);
+            occlusion.push(
+                (ambient[offset] as f32 + ambient[offset + 1] as f32 + ambient[offset + 2] as f32)
+                    / (3.0 * 255.0),
+            );
+            let position_m = Vector::new(
+                (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
+                (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
+            );
+            let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
+            cloud_condition.push(
+                weather
+                    .upper_cloudiness
+                    .max(0.5 * weather.cloudiness + 0.5 * weather.rain_intensity),
+            );
+        }
+    }
+
+    let correlation = pearson_correlation(&occlusion, &cloud_condition);
+    assert!(correlation > 0.20, "{correlation}");
+}
+
+#[test]
+fn visual_cloud_fields_are_independent_of_view_center_weather() {
+    let world = WorldGeometry::default();
+    let width = 64usize;
+    let height = 16usize;
+    let mut differences = Vec::new();
+    for diagnostic in ["cloud_low_amount", "cloud_weather_canopy_optical_depth"] {
+        let storm_centered = render_diagnostic_image_with_view_at(
+            world,
+            Vector::new(-4_000.0, 0.0),
+            0.0,
+            8_000.0,
+            diagnostic,
+            width as u32,
+            height as u32,
+        );
+        let clear_centered = render_diagnostic_image_with_view_at(
+            world,
+            Vector::ZERO,
+            0.0,
+            8_000.0,
+            diagnostic,
+            width as u32,
+            height as u32,
+        );
+        let mut maximum_difference = 0u8;
+        for row in 0..height {
+            for storm_column in 8..width {
+                let clear_column = storm_column - 8;
+                for channel in 0..3 {
+                    let storm = storm_centered[4 * (row * width + storm_column) + channel];
+                    let clear = clear_centered[4 * (row * width + clear_column) + channel];
+                    maximum_difference = maximum_difference.max(storm.abs_diff(clear));
+                }
+            }
+        }
+        differences.push((diagnostic, maximum_difference));
+    }
+    assert!(
+        differences.iter().all(|(_, difference)| *difference <= 1),
+        "{differences:?}",
+    );
+}
+
+#[test]
+fn canopy_weather_envelope_stays_in_world_coordinates() {
+    let world = WorldGeometry::default();
+    let width = 32usize;
+    let height = 32usize;
+    let cloud_time_seconds = 1_800.0;
+    let canopy = render_diagnostic_image_with_cloud_time(
+        world,
+        Vector::ZERO,
+        0.0,
+        cloud_time_seconds,
+        world.height_m(),
+        "cloud_weather_canopy_optical_depth",
+        width as u32,
+        height as u32,
+    );
+    let tick = (cloud_time_seconds / simulation::DT_SECONDS) as u64;
+    let mut optical_depth = Vec::with_capacity(width * height);
+    let mut cloud_condition = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for column in 0..width {
+            let offset = 4 * (row * width + column);
+            optical_depth.push(
+                (canopy[offset] as f32 + canopy[offset + 1] as f32 + canopy[offset + 2] as f32)
+                    / (3.0 * 255.0),
+            );
+            let position_m = Vector::new(
+                (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
+                (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
+            );
+            let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
+            cloud_condition.push(weather.upper_cloudiness.max(0.30 * weather.cloudiness));
+        }
+    }
+
+    let correlation = pearson_correlation(&optical_depth, &cloud_condition);
+    assert!(correlation > 0.45, "{correlation}");
+}
+
+#[test]
 fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 6_000.0);
@@ -436,10 +556,34 @@ fn render_diagnostic_image_with_view_at(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
+    render_diagnostic_image_with_cloud_time(
+        world,
+        position_m,
+        world_time_seconds,
+        0.0,
+        view_height_m,
+        diagnostic,
+        width,
+        height,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_diagnostic_image_with_cloud_time(
+    world: WorldGeometry,
+    position_m: Vector,
+    world_time_seconds: f64,
+    cloud_time_seconds: f32,
+    view_height_m: f32,
+    diagnostic: &str,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
         std::process::id(),
         world_time_seconds.to_bits(),
+        cloud_time_seconds.to_bits(),
         position_m.x.to_bits(),
         position_m.y.to_bits(),
     ));
@@ -462,7 +606,7 @@ fn render_diagnostic_image_with_view_at(
             "--seed",
             &SEED.to_string(),
             "--cloud-time",
-            "0",
+            &cloud_time_seconds.to_string(),
             "--world-time",
             &world_time_seconds.to_string(),
             "--diagnostic",
@@ -536,6 +680,22 @@ fn mean_neighbor_luminance_difference(bytes: &[u8], width: usize, height: usize)
         }
     }
     difference / count as f32
+}
+
+fn pearson_correlation(left: &[f32], right: &[f32]) -> f32 {
+    let left_mean = left.iter().sum::<f32>() / left.len() as f32;
+    let right_mean = right.iter().sum::<f32>() / right.len() as f32;
+    let mut covariance = 0.0;
+    let mut left_variance = 0.0;
+    let mut right_variance = 0.0;
+    for (&left, &right) in left.iter().zip(right) {
+        let centered_left = left - left_mean;
+        let centered_right = right - right_mean;
+        covariance += centered_left * centered_right;
+        left_variance += centered_left * centered_left;
+        right_variance += centered_right * centered_right;
+    }
+    covariance / (left_variance * right_variance).sqrt()
 }
 
 fn channel_range(bytes: &[u8], channel: usize) -> f32 {

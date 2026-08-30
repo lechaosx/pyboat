@@ -9,10 +9,10 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    CelestialConditions, celestial_lighting, celestial_orbit, moon_phase,
-    scalar_field_time_coordinates, scalar_field_time_coordinates_interpolated,
-    vector_field_time_coordinates, vector_field_time_coordinates_interpolated,
-    world_celestial_conditions,
+    CelestialConditions, celestial_lighting, celestial_orbit, cloud_field_time_coordinates,
+    cloud_field_time_coordinates_interpolated, moon_phase, scalar_field_time_coordinates,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -283,8 +283,8 @@ pub fn sample_playground_environment(
 pub fn sample_playground_field_time_coordinates(
     world_width_m: f32,
     world_height_m: f32,
-    world_tick: u64,
-    world_tick_fraction: f32,
+    scalar_tick: u64,
+    scalar_tick_fraction: f32,
     pressure_tick: u64,
     pressure_tick_fraction: f32,
     current_tick: u64,
@@ -292,7 +292,7 @@ pub fn sample_playground_field_time_coordinates(
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let scalar = scalar_field_time_coordinates_interpolated(world_tick, world_tick_fraction);
+    let scalar = scalar_field_time_coordinates_interpolated(scalar_tick, scalar_tick_fraction);
     let pressure =
         vector_field_time_coordinates_interpolated(geometry, pressure_tick, pressure_tick_fraction);
     let current =
@@ -310,11 +310,12 @@ pub fn sample_playground_field_time_coordinates(
 }
 
 #[wasm_bindgen]
-pub fn sample_playground_view_cloud_uniforms(
+pub fn sample_playground_view_cloud_state(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
     cloud_tick: u64,
+    cloud_tick_fraction: f32,
     camera_x_m: f32,
     camera_y_m: f32,
 ) -> Result<Vec<f32>, JsValue> {
@@ -328,19 +329,16 @@ pub fn sample_playground_view_cloud_uniforms(
     )
     .weather;
     let low_wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
+    let time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
     Ok(vec![
-        weather.relative_humidity,
-        weather.instability,
-        weather.lift,
-        weather.cloudiness,
-        weather.upper_cloudiness,
-        weather.rain_intensity,
-        0.0,
-        0.0,
         low_wind.x,
         low_wind.y,
         weather.upper_wind_velocity_m_s.x,
         weather.upper_wind_velocity_m_s.y,
+        time.low,
+        time.upper,
+        0.0,
+        0.0,
     ])
 }
 
@@ -462,11 +460,8 @@ struct SceneUniforms {
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
-    view_cloud_primary: [f32; 4],
-    view_cloud_secondary: [f32; 4],
-    view_cloud_winds_m_s: [f32; 4],
     view_cloud_motion_m: [f32; 4],
-    view_cloud_time_coordinates: [f32; 4],
+    cloud_time_coordinates: [f32; 4],
 }
 
 #[derive(Default)]
@@ -476,7 +471,6 @@ struct ViewCloudMotion {
     upper_offset_m: [f64; 2],
     previous_low_wind_m_s: [f64; 2],
     previous_upper_wind_m_s: [f64; 2],
-    elapsed_seconds: f64,
 }
 
 impl ViewCloudMotion {
@@ -494,7 +488,6 @@ impl ViewCloudMotion {
                     self.upper_offset_m[axis] +=
                         0.5 * seconds * (self.previous_upper_wind_m_s[axis] + upper_wind[axis]);
                 }
-                self.elapsed_seconds += seconds;
             }
         }
         self.last_tick = Some(tick);
@@ -669,6 +662,7 @@ impl Renderer {
         let precipitation_time = periodic_effect_time(tick, PRECIPITATION_CONTACT_PERIOD_TICKS);
         let scalar_time = scalar_field_time_coordinates(tick);
         let vector_time = vector_field_time_coordinates(world_geometry, tick);
+        let cloud_time = cloud_field_time_coordinates(tick);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -723,36 +717,13 @@ impl Renderer {
                     orbit.lunar_umbra_fraction,
                     0.0,
                 ],
-                view_cloud_primary: [
-                    view_weather.relative_humidity,
-                    view_weather.instability,
-                    view_weather.lift,
-                    view_weather.cloudiness,
-                ],
-                view_cloud_secondary: [
-                    view_weather.upper_cloudiness,
-                    view_weather.rain_intensity,
-                    0.0,
-                    0.0,
-                ],
-                view_cloud_winds_m_s: [
-                    low_cloud_wind.x,
-                    low_cloud_wind.y,
-                    view_weather.upper_wind_velocity_m_s.x,
-                    view_weather.upper_wind_velocity_m_s.y,
-                ],
                 view_cloud_motion_m: [
                     self.cloud_motion.low_offset_m[0] as f32,
                     self.cloud_motion.low_offset_m[1] as f32,
                     self.cloud_motion.upper_offset_m[0] as f32,
                     self.cloud_motion.upper_offset_m[1] as f32,
                 ],
-                view_cloud_time_coordinates: [
-                    (self.cloud_motion.elapsed_seconds / 420.0) as f32,
-                    (self.cloud_motion.elapsed_seconds / 1500.0) as f32,
-                    0.0,
-                    0.0,
-                ],
+                cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
             }),
         );
 

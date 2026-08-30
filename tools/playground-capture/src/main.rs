@@ -3,8 +3,9 @@ use std::{env, fs, path::PathBuf};
 use browser::{seasonal_phase_factors, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
-    celestial_lighting, celestial_orbit, procedural_world_environment,
-    scalar_field_time_coordinates, vector_field_time_coordinates, world_celestial_conditions,
+    celestial_lighting, celestial_orbit, cloud_field_time_coordinates,
+    procedural_world_environment, scalar_field_time_coordinates, vector_field_time_coordinates,
+    world_celestial_conditions,
 };
 use serde::Serialize;
 use simulation::WorldGeometry;
@@ -66,11 +67,8 @@ struct SceneUniforms {
     seasonal_phase_factors: [f32; 4],
     celestial_orbit_angles: [f32; 4],
     celestial_orbit_light: [f32; 4],
-    view_cloud_primary: [f32; 4],
-    view_cloud_secondary: [f32; 4],
-    view_cloud_winds_m_s: [f32; 4],
     view_cloud_motion_m: [f32; 4],
-    view_cloud_time_coordinates: [f32; 4],
+    cloud_time_coordinates: [f32; 4],
 }
 
 #[repr(C)]
@@ -604,9 +602,11 @@ fn render_world(
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
     let orbit = celestial_orbit(conditions);
-    let scalar_time = scalar_field_time_coordinates(tick);
-    let vector_time = vector_field_time_coordinates(world_geometry, tick);
     let cloud_tick = (options.cloud_time_seconds / simulation::DT_SECONDS) as u64;
+    let scalar_time = scalar_field_time_coordinates(cloud_tick);
+    let pressure_time = vector_field_time_coordinates(world_geometry, cloud_tick);
+    let current_time = vector_field_time_coordinates(world_geometry, tick);
+    let cloud_time = cloud_field_time_coordinates(cloud_tick);
     let view_weather = procedural_world_environment(
         world_geometry,
         options.seed,
@@ -646,8 +646,8 @@ fn render_world(
             visual_pixel_footprint_m(options.view_height_m, options.height),
         ],
         world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
-        pressure_time_coordinate: vector_time.pressure,
-        ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
+        pressure_time_coordinate: pressure_time.pressure,
+        ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
         seasonal_phase_factors: seasonal_phase_factors(conditions.season_phase),
         celestial_orbit_angles: [
             orbit.solar_declination_rad as f32,
@@ -661,36 +661,13 @@ fn render_world(
             orbit.lunar_umbra_fraction,
             0.0,
         ],
-        view_cloud_primary: [
-            view_weather.relative_humidity,
-            view_weather.instability,
-            view_weather.lift,
-            view_weather.cloudiness,
-        ],
-        view_cloud_secondary: [
-            view_weather.upper_cloudiness,
-            view_weather.rain_intensity,
-            0.0,
-            0.0,
-        ],
-        view_cloud_winds_m_s: [
-            low_wind.x,
-            low_wind.y,
-            view_weather.upper_wind_velocity_m_s.x,
-            view_weather.upper_wind_velocity_m_s.y,
-        ],
         view_cloud_motion_m: [
             low_wind.x * options.cloud_time_seconds,
             low_wind.y * options.cloud_time_seconds,
             view_weather.upper_wind_velocity_m_s.x * options.cloud_time_seconds,
             view_weather.upper_wind_velocity_m_s.y * options.cloud_time_seconds,
         ],
-        view_cloud_time_coordinates: [
-            options.cloud_time_seconds / 420.0,
-            options.cloud_time_seconds / 1500.0,
-            0.0,
-            0.0,
-        ],
+        cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),

@@ -315,6 +315,12 @@ pub struct ScalarFieldTimeCoordinates {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CloudFieldTimeCoordinates {
+    pub low: f32,
+    pub upper: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VectorFieldTimeCoordinates {
     pub pressure: [f32; 4],
     pub ocean_current: f32,
@@ -1979,6 +1985,20 @@ pub fn scalar_field_time_coordinates_interpolated(
             DECORATIVE_WATER_EVOLUTION_SPEED_M_S,
             DECORATIVE_WATER_WAVELENGTH_M,
         ),
+    }
+}
+
+pub fn cloud_field_time_coordinates(tick: u64) -> CloudFieldTimeCoordinates {
+    cloud_field_time_coordinates_interpolated(tick, 0.0)
+}
+
+pub fn cloud_field_time_coordinates_interpolated(
+    tick: u64,
+    tick_fraction: f32,
+) -> CloudFieldTimeCoordinates {
+    CloudFieldTimeCoordinates {
+        low: noise_time_coordinate_interpolated(tick, tick_fraction, 1.0, 420.0),
+        upper: noise_time_coordinate_interpolated(tick, tick_fraction, 1.0, 1500.0),
     }
 }
 

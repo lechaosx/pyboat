@@ -65,6 +65,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
     upper_height_m: f32,
     light: vec3<f32>,
     light_amount: f32,
+    weather: CloudWeatherSample,
 ) -> f32 {
     if light_amount <= 0.0 || light.z <= 0.0 {
         return 1.0;
@@ -75,7 +76,10 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
         upper_height_m,
         light,
     );
-    let upper_optical_depth = procedural_upper_cloud_optical_depth(projected_position_m);
+    let upper_optical_depth = procedural_upper_cloud_optical_depth(
+        projected_position_m,
+        weather,
+    );
     return mix(
         1.0,
         cloud_shadow_transmittance(upper_optical_depth, light),
@@ -87,6 +91,7 @@ fn upper_cloud_transmittance_at_low_cloud(
     position_m: vec2<f32>,
     low_height_m: f32,
     upper_height_m: f32,
+    weather: CloudWeatherSample,
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
@@ -99,6 +104,7 @@ fn upper_cloud_transmittance_at_low_cloud(
             upper_height_m,
             light,
             light_amount,
+            weather,
         );
     }
     return transmittance;
@@ -111,10 +117,15 @@ fn fragment_surface_color(
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec2<f32>,
     ambient_sky: RegionalCanopyConditions,
+    weather: CloudWeatherSample,
 ) -> vec3<f32> {
     let layer = fragment_layer_visibility();
     let contribution = fragment_light_visibility();
-    let depths = celestial_cloud_shadow_depths_at(position_m, max(elevation_m, 0.0));
+    let depths = celestial_cloud_shadow_depths_at(
+        position_m,
+        max(elevation_m, 0.0),
+        weather,
+    );
     let sun_transmittance = cloud_shadow_transmittance(
         layer.y * depths.low.x + layer.z * depths.upper.x,
         sun_direction(),
@@ -155,7 +166,11 @@ fn final_scene_color(
     var surface_color = input.color;
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
-        let ambient_sky = ambient_sky_conditions_at(input.world_position_m);
+        let visual_weather = visual_cloud_weather(surface_cloud_weather);
+        let ambient_sky = ambient_sky_conditions_from_atmosphere(
+            input.world_position_m,
+            atmosphere,
+        );
         let terrain = procedural_terrain_sample_with_climate_from_circle(
             input.world_position_m,
             surface_circle_position,
@@ -241,17 +256,22 @@ fn final_scene_color(
             terrain_shadow_transmittance,
             surface_light_grade,
             ambient_sky,
+            visual_weather,
         );
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
-            let low_cloud = procedural_low_cloud_sample(input.world_position_m);
+            let low_cloud = procedural_low_cloud_sample(
+                input.world_position_m,
+                visual_weather,
+            );
             var upper_transmittance = vec2<f32>(1.0);
             if low_cloud.amount > 0.01 && layer_visibility.w > 0.0 {
                 upper_transmittance = upper_cloud_transmittance_at_low_cloud(
                     input.world_position_m,
                     low_height_m,
                     upper_height_m,
+                    visual_weather,
                 );
             }
             let clouded_fragment_color = cloud_color(

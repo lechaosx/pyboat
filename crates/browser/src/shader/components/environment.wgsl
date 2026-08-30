@@ -1158,7 +1158,6 @@ fn wind_shear_amount() -> f32 {
 
 fn visible_low_cloud_coverage(weather: CloudWeatherSample) -> f32 {
     let fair_weather_lift = smoothstep(0.12, 0.68, weather.instability)
-        * (1.0 - smoothstep(0.08, 0.42, weather.rain))
         * (1.0 - 0.90 * weather.stratiform);
     return weather.low_coverage * mix(0.06, 1.0, fair_weather_lift);
 }
