@@ -136,6 +136,105 @@ fn insert_cloud_shadow_cache_tile_key(key: vec2<f32>, layer: u32) {
     }
 }
 
+fn landform_shadow_cache_offset(
+    source_index: u32,
+    sample_index: u32,
+    reach_m: f32,
+) -> vec3<f32> {
+    let is_sun = source_index == 0u;
+    let light = select(moon_direction(), sun_direction(), is_sun);
+    let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
+    let horizontal_light = length(light.xy);
+    if light_amount <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
+        return vec3<f32>(0.0);
+    }
+    let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
+    return vec3<f32>(distance_m * light.xy / horizontal_light, 1.0);
+}
+
+fn cloud_shadow_cache_projection_is_reused(
+    receiver_position_m: vec2<f32>,
+    projected_position_m: vec2<f32>,
+    layer: u32,
+    source_index: u32,
+) -> bool {
+    // Moving a one-use query into the atlas adds a fill and a lookup without
+    // removing work; only overlapping footprints are profitable to cache.
+    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
+        * visual_pixel_footprint_m;
+    for (var other_source_index = 0u; other_source_index < 2u; other_source_index++) {
+        let other_is_sun = other_source_index == 0u;
+        let other_light = select(moon_direction(), sun_direction(), other_is_sun);
+        let other_light_amount = select(
+            direct_moon_amount(),
+            direct_sun_amount(),
+            other_is_sun,
+        );
+        if other_light_amount <= 0.0 || cloud_shadow_contrast(other_light) <= 0.0 {
+            continue;
+        }
+        let receiver_count = select(2u, 1u, layer == 0u);
+        for (var receiver_index = 0u; receiver_index < receiver_count; receiver_index++) {
+            if other_source_index == source_index && receiver_index == 0u {
+                continue;
+            }
+            let receiver_height_m = select(0.0, LOW_CLOUD_BASE_HEIGHT_M, receiver_index == 1u);
+            let cloud_height_m = select(
+                WEATHER_CANOPY_HEIGHT_M,
+                LOW_CLOUD_BASE_HEIGHT_M,
+                layer == 0u,
+            );
+            let other_projected_position_m = projected_cloud_position(
+                receiver_position_m,
+                receiver_height_m,
+                cloud_height_m,
+                other_light,
+            );
+            let candidate_receiver_m = canonical_world_position(
+                receiver_position_m
+                    + cloud_shadow_cache_relative_position(projected_position_m)
+                    - cloud_shadow_cache_relative_position(other_projected_position_m),
+            );
+            if all(abs(cloud_shadow_cache_relative_position(candidate_receiver_m)) <= half_view_m) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn landform_shadow_cache_sample_is_reused(
+    sample_position_m: vec2<f32>,
+    source_index: u32,
+    sample_index: u32,
+    reach_m: f32,
+) -> bool {
+    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
+        * visual_pixel_footprint_m;
+    for (var other_source_index = 0u; other_source_index < 2u; other_source_index++) {
+        for (var other_sample_index = 0u; other_sample_index < 4u; other_sample_index++) {
+            if other_source_index == source_index && other_sample_index == sample_index {
+                continue;
+            }
+            let other_offset = landform_shadow_cache_offset(
+                other_source_index,
+                other_sample_index,
+                reach_m,
+            );
+            if other_offset.z <= 0.0 {
+                continue;
+            }
+            let other_receiver_m = canonical_world_position(
+                sample_position_m - other_offset.xy,
+            );
+            if all(abs(cloud_shadow_cache_relative_position(other_receiver_m)) <= half_view_m) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 @compute @workgroup_size(8, 8)
 fn discover_cloud_shadow_cache_tiles(
     @builtin(global_invocation_id) invocation_id: vec3<u32>,
@@ -158,23 +257,71 @@ fn discover_cloud_shadow_cache_tiles(
         + 0.5 * clip_position * scene.camera_and_view_m.zw;
     let position_m = canonical_world_position(raw_position_m);
     initialize_cloud_shadow_cache_discovery(position_m);
+    let broad_receiver_elevation_m = broad_landform_elevation_m(position_m);
+    let water_height_m = tide_height_m();
+    let landform_shadows_visible = tuning.landform_lighting.y
+        * landscape_visibility.w * lighting_feature_visibility().y > 0.0
+        && broad_receiver_elevation_m >= water_height_m;
+    let reach_m = max(tuning.landform_lighting.z, 1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let is_sun = source_index == 0u;
         let light = select(moon_direction(), sun_direction(), is_sun);
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
-            let projection = cloud_shadow_projection_at(position_m, 0.0, light);
+            let receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
+            let projection = cloud_shadow_projection_at(
+                position_m,
+                receiver_height_m,
+                light,
+            );
             if layer_visibility.y > 0.0 && tuning.cloud_shadows.x > 0.0 {
-                insert_cloud_shadow_cache_tile_key(
-                    cloud_shadow_cache_tile_key(projection.low_position_m),
+                if cloud_shadow_cache_projection_is_reused(
+                    position_m,
+                    projection.low_position_m,
                     0u,
-                );
+                    source_index,
+                ) {
+                    insert_cloud_shadow_cache_tile_key(
+                        cloud_shadow_cache_tile_key(projection.low_position_m),
+                        0u,
+                    );
+                }
             }
             if layer_visibility.z > 0.0 && tuning.cloud_shadows.y > 0.0 {
-                insert_cloud_shadow_cache_tile_key(
-                    cloud_shadow_cache_tile_key(projection.upper_position_m),
+                if cloud_shadow_cache_projection_is_reused(
+                    position_m,
+                    projection.upper_position_m,
                     1u,
+                    source_index,
+                ) {
+                    insert_cloud_shadow_cache_tile_key(
+                        cloud_shadow_cache_tile_key(projection.upper_position_m),
+                        1u,
+                    );
+                }
+            }
+        }
+        if landform_shadows_visible {
+            for (var sample_index = 0u; sample_index < 4u; sample_index++) {
+                let offset = landform_shadow_cache_offset(
+                    source_index,
+                    sample_index,
+                    reach_m,
                 );
+                if offset.z > 0.0 {
+                    let sample_position_m = canonical_world_position(position_m + offset.xy);
+                    if landform_shadow_cache_sample_is_reused(
+                        sample_position_m,
+                        source_index,
+                        sample_index,
+                        reach_m,
+                    ) {
+                        insert_cloud_shadow_cache_tile_key(
+                            cloud_shadow_cache_tile_key(sample_position_m),
+                            2u,
+                        );
+                    }
+                }
             }
         }
     }
@@ -240,6 +387,9 @@ fn cloud_shadow_cache_fragment(
         let weather = cloud_weather_conditions_at(input.world_position_m);
         return procedural_low_cloud_optical_depth(input.world_position_m, weather);
     }
-    let canopy = regional_canopy_conditions_at(input.world_position_m);
-    return procedural_upper_cloud_optical_depth(input.world_position_m, canopy);
+    if input.layer == 1u {
+        let canopy = regional_canopy_conditions_at(input.world_position_m);
+        return procedural_upper_cloud_optical_depth(input.world_position_m, canopy);
+    }
+    return broad_landform_elevation_m(input.world_position_m);
 }

@@ -610,7 +610,7 @@ fn landform_shadow_transmittance_for_light(
     var occlusion = 0.0;
     for (var sample_index = 0u; sample_index < 4u; sample_index++) {
         let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
-        let blocker_elevation_m = broad_landform_elevation_m(
+        let blocker_elevation_m = sampled_broad_landform_elevation_m(
             position_m + distance_m * toward_light,
         );
         let ray_elevation_m = elevation_m + distance_m * ray_slope;

@@ -1,6 +1,7 @@
 import {
   playground_cloud_shadow_cache_shader_source,
   playground_diagnostic_shader_source,
+  playground_direct_scene_shader_source,
   playground_scene_shader_source,
   playground_startup_shader_source,
   sample_playground_celestial_orbit,
@@ -25,6 +26,8 @@ import {
 import "./style.css";
 
 type Domain = "weather" | "landscape" | "water";
+
+let useShadowCache = true;
 
 type State = {
   seed: string;
@@ -371,6 +374,21 @@ function renderControls(): void {
     diagnosticReset,
   );
   diagnosticSection.append(diagnosticLabel);
+  const cacheLabel = document.createElement("div");
+  cacheLabel.className = "control toggle-control no-reset";
+  const cacheInput = document.createElement("input");
+  cacheInput.id = "shadow-cache-enabled";
+  cacheInput.type = "checkbox";
+  cacheInput.checked = useShadowCache;
+  const cacheHeading = document.createElement("label");
+  cacheHeading.className = "control-name";
+  cacheHeading.htmlFor = cacheInput.id;
+  cacheHeading.textContent = "Cached shadow fields";
+  cacheInput.addEventListener("change", () => {
+    useShadowCache = cacheInput.checked;
+  });
+  cacheLabel.append(cacheInput, cacheHeading);
+  diagnosticSection.append(cacheLabel);
   controlsElement.append(diagnosticSection);
 }
 
@@ -1025,7 +1043,7 @@ function createCloudShadowCache(
   );
   const desiredTiles = Math.max(
     1,
-    4 * (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1),
+    6 * (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1),
   );
   const maximumTiles = Math.min(desiredTiles, maximumAxisTiles ** 2);
   const atlasColumns = Math.max(
@@ -1122,19 +1140,20 @@ function createCloudShadowCache(
   };
 }
 const timestampQuerySet = timestampQueriesSupported
-  ? device.createQuerySet({ type: "timestamp", count: 2 })
+  ? device.createQuerySet({ type: "timestamp", count: 4 })
   : undefined;
 const timestampResolveBuffer = timestampQueriesSupported
-  ? device.createBuffer({ size: 16, usage: 0x0200 | 0x0004 })
+  ? device.createBuffer({ size: 32, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
   buffer: any;
   pending: boolean;
   pipeline?: any;
+  cached?: boolean;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
   ? Array.from({ length: 3 }, () => ({
-      buffer: device.createBuffer({ size: 16, usage: 0x0001 | 0x0008 }),
+      buffer: device.createBuffer({ size: 32, usage: 0x0001 | 0x0008 }),
       pending: false,
     }))
   : [];
@@ -1152,6 +1171,7 @@ let sceneRenderResources: RenderResources = {
   pipeline: startupPipeline,
   sceneBindGroup: startupSceneBindGroup,
 };
+let directSceneRenderResources = sceneRenderResources;
 let sceneCompilationStatus = "compiling full scene";
 const diagnosticShaderModules = new Map<string, any>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
@@ -1159,7 +1179,9 @@ const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
 
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
-  if (selection === "scene") return sceneRenderResources;
+  if (selection === "scene") {
+    return useShadowCache ? sceneRenderResources : directSceneRenderResources;
+  }
   const ready = diagnosticRenderResources.get(selection);
   if (ready) return ready;
   if (!diagnosticPipelinesRequested.has(selection)) {
@@ -1715,8 +1737,15 @@ let measuredFramesPerSecond: number | undefined;
 let measuredTicksPerSecond: number | undefined;
 let measuredGpuMilliseconds: number | undefined;
 let gpuMillisecondsInWindow = 0;
+let discoveryGpuMillisecondsInWindow = 0;
+let fillGpuMillisecondsInWindow = 0;
+let sceneGpuMillisecondsInWindow = 0;
 let gpuSamplesInWindow = 0;
+let measuredDiscoveryGpuMilliseconds: number | undefined;
+let measuredFillGpuMilliseconds: number | undefined;
+let measuredSceneGpuMilliseconds: number | undefined;
 let timedPipeline: any;
+let timedUsesShadowCache = false;
 let nextDiagnosticsAt = 0;
 
 function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
@@ -1728,16 +1757,25 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   measuredTicksPerSecond = ticksInWindow / windowSeconds;
   if (gpuSamplesInWindow > 0) {
     measuredGpuMilliseconds = gpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredDiscoveryGpuMilliseconds = discoveryGpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredFillGpuMilliseconds = fillGpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredSceneGpuMilliseconds = sceneGpuMillisecondsInWindow / gpuSamplesInWindow;
   }
   statisticsStartedAt = now;
   framesInWindow = 0;
   ticksInWindow = 0;
   gpuMillisecondsInWindow = 0;
+  discoveryGpuMillisecondsInWindow = 0;
+  fillGpuMillisecondsInWindow = 0;
+  sceneGpuMillisecondsInWindow = 0;
   gpuSamplesInWindow = 0;
   const rates = `${measuredFramesPerSecond.toFixed(0)} FPS · ${measuredTicksPerSecond.toFixed(0)} TPS`;
   const gpuTiming = measuredGpuMilliseconds === undefined
     ? timestampQueriesSupported ? " · measuring GPU" : ""
-    : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU`;
+    : timedUsesShadowCache && measuredDiscoveryGpuMilliseconds !== undefined
+      && measuredFillGpuMilliseconds !== undefined && measuredSceneGpuMilliseconds !== undefined
+    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredDiscoveryGpuMilliseconds.toFixed(1)} discover + ${measuredFillGpuMilliseconds.toFixed(1)} fill + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
+    : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU scene`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = `${rates}${gpuTiming}${compilation}`;
   statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · ${format(cloudTimeSeconds, 1)} s`;
@@ -1778,8 +1816,15 @@ function frame(now: number): void {
   const renderResources = renderResourcesForFrame();
   if (renderResources.pipeline !== timedPipeline) {
     timedPipeline = renderResources.pipeline;
+    timedUsesShadowCache = Boolean(renderResources.cloudShadowCache);
     measuredGpuMilliseconds = undefined;
+    measuredDiscoveryGpuMilliseconds = undefined;
+    measuredFillGpuMilliseconds = undefined;
+    measuredSceneGpuMilliseconds = undefined;
     gpuMillisecondsInWindow = 0;
+    discoveryGpuMillisecondsInWindow = 0;
+    fillGpuMillisecondsInWindow = 0;
+    sceneGpuMillisecondsInWindow = 0;
     gpuSamplesInWindow = 0;
   }
   const timestampReadback = timestampReadbacks.find((readback) => !readback.pending);
@@ -1792,6 +1837,7 @@ function frame(now: number): void {
       discoveryPassDescriptor.timestampWrites = {
         querySet: timestampQuerySet,
         beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
       };
     }
     const discoveryPass = encoder.beginComputePass(discoveryPassDescriptor);
@@ -1804,13 +1850,20 @@ function frame(now: number): void {
       Math.ceil(previewCanvas.height / 128),
     );
     discoveryPass.end();
-    const fillPass = encoder.beginRenderPass({
+    const fillPassDescriptor: any = {
       colorAttachments: [{
         view: cache.atlasView,
         loadOp: "load",
         storeOp: "store",
       }],
-    });
+    };
+    if (timestampReadback) {
+      fillPassDescriptor.timestampWrites = {
+        querySet: timestampQuerySet,
+        endOfPassWriteIndex: 2,
+      };
+    }
+    const fillPass = encoder.beginRenderPass(fillPassDescriptor);
     fillPass.setPipeline(cache.fillPipeline);
     fillPass.setBindGroup(0, cache.fillSceneBindGroup);
     fillPass.setBindGroup(1, cache.fillPlaygroundBindGroup);
@@ -1830,7 +1883,7 @@ function frame(now: number): void {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet,
       ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
-      endOfPassWriteIndex: 1,
+      endOfPassWriteIndex: cache ? 3 : 1,
     };
   }
   const pass = encoder.beginRenderPass(renderPassDescriptor);
@@ -1844,23 +1897,40 @@ function frame(now: number): void {
   pass.draw(6);
   pass.end();
   if (timestampReadback) {
-    encoder.resolveQuerySet(timestampQuerySet, 0, 2, timestampResolveBuffer, 0);
-    encoder.copyBufferToBuffer(timestampResolveBuffer, 0, timestampReadback.buffer, 0, 16);
+    const timestampCount = cache ? 4 : 2;
+    const timestampBytes = timestampCount * 8;
+    encoder.resolveQuerySet(timestampQuerySet, 0, timestampCount, timestampResolveBuffer, 0);
+    encoder.copyBufferToBuffer(
+      timestampResolveBuffer,
+      0,
+      timestampReadback.buffer,
+      0,
+      timestampBytes,
+    );
     timestampReadback.pending = true;
     timestampReadback.pipeline = renderResources.pipeline;
+    timestampReadback.cached = Boolean(cache);
   }
   device.queue.submit([encoder.finish()]);
   if (timestampReadback) {
     void timestampReadback.buffer.mapAsync(0x0001).then(() => {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
       const startedAt = timestamps[0];
-      const finishedAt = timestamps[1];
+      const cached = timestampReadback.cached;
+      const finishedAt = timestamps[cached ? 3 : 1];
       if (
         timestampReadback.pipeline === timedPipeline
         && startedAt > 0n
         && finishedAt >= startedAt
       ) {
         gpuMillisecondsInWindow += Number(finishedAt - startedAt) / 1_000_000;
+        if (cached) {
+          discoveryGpuMillisecondsInWindow += Number(timestamps[1] - timestamps[0]) / 1_000_000;
+          fillGpuMillisecondsInWindow += Number(timestamps[2] - timestamps[1]) / 1_000_000;
+          sceneGpuMillisecondsInWindow += Number(timestamps[3] - timestamps[2]) / 1_000_000;
+        } else {
+          sceneGpuMillisecondsInWindow += Number(timestamps[1] - timestamps[0]) / 1_000_000;
+        }
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
@@ -1878,11 +1948,15 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   .then(async () => {
     const compilationStartedAt = performance.now();
     const sceneShader = device.createShaderModule({ code: playground_scene_shader_source() });
+    const directSceneShader = device.createShaderModule({
+      code: playground_direct_scene_shader_source(),
+    });
     const cacheShader = device.createShaderModule({
       code: playground_cloud_shadow_cache_shader_source(),
     });
-    const [scenePipeline, discoveryPipeline, fillPipeline] = await Promise.all([
+    const [scenePipeline, directScenePipeline, discoveryPipeline, fillPipeline] = await Promise.all([
       createPlaygroundPipeline(sceneShader, "fragment_playground_scene"),
+      createPlaygroundPipeline(directSceneShader, "fragment_playground_scene"),
       device.createComputePipelineAsync({
         layout: "auto",
         compute: {
@@ -1916,6 +1990,17 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         fillPipeline,
         scenePipeline,
       ),
+    };
+    directSceneRenderResources = {
+      pipeline: directScenePipeline,
+      sceneBindGroup: device.createBindGroup({
+        layout: directScenePipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      playgroundBindGroup: device.createBindGroup({
+        layout: directScenePipeline.getBindGroupLayout(1),
+        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      }),
     };
     sceneCompilationStatus = `full scene ready in ${((performance.now() - compilationStartedAt) / 1000).toFixed(1)} s`;
   })

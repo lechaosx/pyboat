@@ -267,19 +267,21 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   determines individual bodies and openings. Its translation follows the
   integrated view-center upper wind one-to-one, and its continuous optical depth
   supplies connected projected Sun and Moon shadows.
-- **[Explicit]** Directional cloud-shadow rendering stores lower-cloud and
-  canopy optical depth in distinct logical layers of one frame-local sparse
-  world-space tile atlas. A GPU discovery pass requests only projected tiles
-  reached by the current viewport and active celestial lights. Tiles have fixed
-  texel dimensions while their world-space texel size equals the view's
-  world-space pixel footprint, so shadow resolution follows zoom exactly as
-  direct fragment evaluation did. Evaluated gutters preserve filtered seams,
-  and a missing or capacity-limited tile falls back to the canonical procedural
-  query. Canopy samples already requested for ground shadows are reused when the
-  same world tiles shade visible lower clouds; no additional receiver footprint
-  is generated for clear fragments. The atlas has no temporal persistence, does
-  not become simulation state, and is not used for visible lower-cloud bodies or
-  ambient sky light.
+- **[Explicit]** Directional shadow rendering stores lower-cloud optical depth,
+  canopy optical depth, and broad landform elevation in distinct logical layers
+  of one frame-local sparse world-space tile atlas. A GPU discovery pass requests
+  a tile only where two or more active light or receiver footprints reuse its
+  field samples; unique queries remain direct. Canopy samples requested for
+  ground shadows can therefore shade visible lower clouds, and overlapping
+  landform-shadow rays share their blocker elevation without eagerly evaluating
+  disjoint close-zoom rays. Cloud discovery uses broad receiver elevation while
+  final cloud projection retains exact fragment elevation. Tiles have fixed texel
+  dimensions while their world-space texel size equals the view's world-space
+  pixel footprint, so resolution follows zoom exactly as direct fragment
+  evaluation did. Evaluated gutters preserve filtered seams, and a missing or
+  capacity-limited tile falls back to the canonical procedural query. The atlas
+  has no temporal persistence, does not become simulation state, and is not used
+  for visible lower-cloud bodies or ambient sky light.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent

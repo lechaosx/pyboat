@@ -119,6 +119,31 @@ fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
     return procedural_upper_cloud_optical_depth(position_m, canopy);
 }
 
+fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
+    let key = cloud_shadow_cache_tile_key(position_m);
+    let slot = cloud_shadow_cache_slot(key, 2u);
+    if slot >= cloud_shadow_cache.maximum_tiles {
+        return broad_landform_elevation_m(position_m);
+    }
+    let slot_origin_px = vec2<u32>(
+        slot % cloud_shadow_cache.atlas_columns,
+        slot / cloud_shadow_cache.atlas_columns,
+    ) * CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS;
+    let sample_position = cloud_shadow_cache_relative_position(position_m)
+        / visual_pixel_footprint_m;
+    let local_position_px = sample_position
+        - key * CLOUD_SHADOW_CACHE_TILE_TEXELS
+        + vec2<f32>(1.0);
+    let atlas_position_px = vec2<f32>(slot_origin_px) + local_position_px;
+    let atlas_uv = atlas_position_px / vec2<f32>(cloud_shadow_cache.atlas_size_px);
+    return textureSampleLevel(
+        cloud_shadow_cache_atlas,
+        cloud_shadow_cache_sampler,
+        atlas_uv,
+        0.0,
+    ).x;
+}
+
 fn sampled_cloud_shadow_depths_at(
     projection: CloudShadowProjection,
 ) -> CloudShadowDepths {

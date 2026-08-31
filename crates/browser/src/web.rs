@@ -53,6 +53,12 @@ pub fn playground_cloud_shadow_cache_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn playground_direct_scene_shader_source() -> String {
+    crate::playground_direct_scene_shader_source().to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn playground_startup_shader_source() -> String {
     PLAYGROUND_STARTUP_SHADER.to_owned()
 }
