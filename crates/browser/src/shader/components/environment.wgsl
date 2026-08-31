@@ -426,7 +426,7 @@ const TEMPERATURE_ANOMALY_SCALE_C: array<f32, 10> = array<f32, 10>(
 fn latitude_curve_value(knots: array<f32, 10>, latitude_degrees: f32) -> f32 {
     let knot_position = clamp(abs(latitude_degrees) / 10.0, 0.0, 9.0);
     let lower = min(u32(floor(knot_position)), 8u);
-    let fraction = fract(knot_position);
+    let fraction = knot_position - f32(lower);
     let amount = fraction * fraction * (3.0 - 2.0 * fraction);
     return mix(knots[lower], knots[lower + 1u], amount);
 }
