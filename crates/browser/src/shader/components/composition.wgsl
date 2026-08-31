@@ -75,10 +75,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
         upper_height_m,
         light,
     );
-    let upper_optical_depth = procedural_upper_cloud_optical_depth(
-        projected_position_m,
-        regional_canopy_conditions_at(projected_position_m),
-    );
+    let upper_optical_depth = sampled_upper_cloud_optical_depth_at(projected_position_m);
     return mix(
         1.0,
         cloud_shadow_transmittance(upper_optical_depth, light),

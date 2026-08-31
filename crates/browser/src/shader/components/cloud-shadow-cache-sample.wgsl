@@ -110,6 +110,15 @@ fn cached_cloud_shadow_optical_depth(
     ).x;
 }
 
+fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
+    let cached_depth = cached_cloud_shadow_optical_depth(position_m, 1u);
+    if cached_depth >= 0.0 {
+        return cached_depth;
+    }
+    let canopy = regional_canopy_conditions_at(position_m);
+    return procedural_upper_cloud_optical_depth(position_m, canopy);
+}
+
 fn sampled_cloud_shadow_depths_at(
     projection: CloudShadowProjection,
 ) -> CloudShadowDepths {
@@ -126,14 +135,7 @@ fn sampled_cloud_shadow_depths_at(
         depths.low = layer_visibility.y * tuning.cloud_shadows.x * low_depth;
     }
     if layer_visibility.z > 0.0 {
-        var upper_depth = cached_cloud_shadow_optical_depth(projection.upper_position_m, 1u);
-        if upper_depth < 0.0 {
-            let canopy = regional_canopy_conditions_at(projection.upper_position_m);
-            upper_depth = procedural_upper_cloud_optical_depth(
-                projection.upper_position_m,
-                canopy,
-            );
-        }
+        let upper_depth = sampled_upper_cloud_optical_depth_at(projection.upper_position_m);
         depths.upper = layer_visibility.z * tuning.cloud_shadows.y * upper_depth;
     }
     return depths;

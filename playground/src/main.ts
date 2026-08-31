@@ -1025,7 +1025,7 @@ function createCloudShadowCache(
   );
   const desiredTiles = Math.max(
     1,
-    4 * Math.ceil(width / tileTexels) * Math.ceil(height / tileTexels),
+    4 * (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1),
   );
   const maximumTiles = Math.min(desiredTiles, maximumAxisTiles ** 2);
   const atlasColumns = Math.max(

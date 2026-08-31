@@ -37,8 +37,8 @@ pub fn cloud_shadow_cache_layout(
     let screen_columns = viewport_width.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
     let screen_rows = viewport_height.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
     let desired_tiles = 4u32
-        .saturating_mul(screen_columns)
-        .saturating_mul(screen_rows)
+        .saturating_mul(screen_columns.saturating_add(1))
+        .saturating_mul(screen_rows.saturating_add(1))
         .max(1);
     let physical_tile_texels = CLOUD_SHADOW_CACHE_TILE_TEXELS + 2;
     let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
@@ -1081,7 +1081,7 @@ mod tests {
     fn cloud_shadow_cache_capacity_tracks_screen_resolution() {
         let layout = cloud_shadow_cache_layout(1920, 1080, 8192);
 
-        assert_eq!(layout.maximum_tiles, 4 * 15 * 9);
+        assert_eq!(layout.maximum_tiles, 4 * 16 * 10);
         assert!(layout.table_entries >= 2 * layout.maximum_tiles);
         assert!(layout.table_entries.is_power_of_two());
         assert!(layout.atlas_width <= 8192);

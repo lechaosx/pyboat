@@ -164,14 +164,18 @@ fn discover_cloud_shadow_cache_tiles(
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
             let projection = cloud_shadow_projection_at(position_m, 0.0, light);
-            insert_cloud_shadow_cache_tile_key(
-                cloud_shadow_cache_tile_key(projection.low_position_m),
-                0u,
-            );
-            insert_cloud_shadow_cache_tile_key(
-                cloud_shadow_cache_tile_key(projection.upper_position_m),
-                1u,
-            );
+            if layer_visibility.y > 0.0 && tuning.cloud_shadows.x > 0.0 {
+                insert_cloud_shadow_cache_tile_key(
+                    cloud_shadow_cache_tile_key(projection.low_position_m),
+                    0u,
+                );
+            }
+            if layer_visibility.z > 0.0 && tuning.cloud_shadows.y > 0.0 {
+                insert_cloud_shadow_cache_tile_key(
+                    cloud_shadow_cache_tile_key(projection.upper_position_m),
+                    1u,
+                );
+            }
         }
     }
 }

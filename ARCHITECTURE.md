@@ -275,8 +275,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   world-space pixel footprint, so shadow resolution follows zoom exactly as
   direct fragment evaluation did. Evaluated gutters preserve filtered seams,
   and a missing or capacity-limited tile falls back to the canonical procedural
-  query. The atlas has no temporal persistence, does not become simulation
-  state, and is not used for visible lower-cloud bodies or ambient sky light.
+  query. Canopy samples already requested for ground shadows are reused when the
+  same world tiles shade visible lower clouds; no additional receiver footprint
+  is generated for clear fragments. The atlas has no temporal persistence, does
+  not become simulation state, and is not used for visible lower-cloud bodies or
+  ambient sky light.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
