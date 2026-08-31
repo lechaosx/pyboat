@@ -56,6 +56,8 @@
 ## Test Observable Risk
 
 - Use red-green TDD for bug fixes and for behavior or contracts that can be exercised through a stable interface at reasonable cost. Confirm that the new test fails for the intended reason before implementing the change.
+- Treat a failing test as evidence to investigate, not proof that production code is wrong. Check the assertion, setup, measurement, and claimed contract before changing implementation. If the test is wrong, fix it; flag ambiguity or any material change to a user-approved contract before proceeding.
+- Treat agent-authored tests as provisional hypotheses, especially tests of tuning or visual quality. Do not tune production merely to satisfy an arbitrary threshold: verify that the metric measures the intended property, is insensitive to unrelated scale or representation changes, and is supported by broader calibration or visual evidence where practical.
 - Add tests for observable behavior, compatibility boundaries, deterministic calculations, and regressions that are likely to recur.
 - Do not add tests whose primary assertion searches source text, pins private names or structure, or encodes subjective visual tuning. Such tests obstruct implementation changes without protecting product behavior.
 - Do not test thin delivery adapters, command wrappers, or presentation formatting merely to prove that they forward to already-testable behavior. Test the underlying stable contract directly; verify the adapter with the smallest appropriate build, smoke check, or manual exercise.
