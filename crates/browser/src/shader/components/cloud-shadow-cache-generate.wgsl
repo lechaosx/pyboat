@@ -50,6 +50,9 @@ var<storage, read> cloud_shadow_cache_tiles_for_rendering: array<CloudShadowCach
 
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 const CLOUD_SHADOW_CACHE_DISCOVERY_STRIDE_PX: u32 = 16u;
+// A coarse multiple plus a small residual keeps kilometre-scale elevations
+// precise below the shortest land-shadow transition after f16 conversion.
+const LAND_ELEVATION_CACHE_COARSE_STEP_M: f32 = 16.0;
 
 fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
     let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
@@ -383,15 +386,25 @@ fn cloud_shadow_cache_vertex(
 @fragment
 fn cloud_shadow_cache_fragment(
     input: CloudShadowCacheVertexOutput,
-) -> @location(0) f32 {
+) -> @location(0) vec2<f32> {
     initialize_cloud_shadow_cache_generation(input.world_position_m);
     if input.layer == 0u {
         let weather = cloud_weather_conditions_at(input.world_position_m);
-        return procedural_low_cloud_optical_depth(input.world_position_m, weather);
+        return vec2<f32>(
+            procedural_low_cloud_optical_depth(input.world_position_m, weather),
+            0.0,
+        );
     }
     if input.layer == 1u {
         let canopy = regional_canopy_conditions_at(input.world_position_m);
-        return procedural_upper_cloud_optical_depth(input.world_position_m, canopy);
+        return vec2<f32>(
+            procedural_upper_cloud_optical_depth(input.world_position_m, canopy),
+            0.0,
+        );
     }
-    return broad_landform_elevation_m(input.world_position_m);
+    let elevation_m = broad_landform_elevation_m(input.world_position_m);
+    let coarse_elevation_m = floor(
+        elevation_m / LAND_ELEVATION_CACHE_COARSE_STEP_M,
+    ) * LAND_ELEVATION_CACHE_COARSE_STEP_M;
+    return vec2<f32>(elevation_m - coarse_elevation_m, coarse_elevation_m);
 }

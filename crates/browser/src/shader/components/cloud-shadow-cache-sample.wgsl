@@ -140,12 +140,13 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         + vec2<f32>(1.0);
     let atlas_position_px = vec2<f32>(slot_origin_px) + local_position_px;
     let atlas_uv = atlas_position_px / vec2<f32>(cloud_shadow_cache.atlas_size_px);
-    return textureSampleLevel(
+    let cached_elevation_m = textureSampleLevel(
         cloud_shadow_cache_atlas,
         cloud_shadow_cache_sampler,
         atlas_uv,
         0.0,
-    ).x;
+    ).xy;
+    return cached_elevation_m.x + cached_elevation_m.y;
 }
 
 fn sampled_cloud_shadow_depths_at(

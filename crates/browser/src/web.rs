@@ -700,7 +700,7 @@ impl CloudShadowCache {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("cloud_shadow_cache_fragment"),
-                targets: &[Some(wgpu::TextureFormat::R16Float.into())],
+                targets: &[Some(wgpu::TextureFormat::Rg16Float.into())],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -792,7 +792,7 @@ impl CloudShadowCache {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
+            format: wgpu::TextureFormat::Rg16Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });

@@ -1194,7 +1194,7 @@ function createCloudShadowCache(
   debugBuffer.unmap();
   const atlas = device.createTexture({
     size: [cacheUniforms[2], cacheUniforms[3]],
-    format: "r16float",
+    format: "rg16float",
     usage: 0x04 | 0x10,
   });
   const atlasView = atlas.createView();
@@ -2137,7 +2137,7 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         fragment: {
           module: cacheShader,
           entryPoint: "cloud_shadow_cache_fragment",
-          targets: [{ format: "r16float" }],
+          targets: [{ format: "rg16float" }],
         },
         primitive: { topology: "triangle-list" },
       }),

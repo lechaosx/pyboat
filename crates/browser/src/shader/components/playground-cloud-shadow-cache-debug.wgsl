@@ -114,7 +114,7 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
         vec2<u32>(display_position_px / display_scale),
         cloud_shadow_cache.atlas_size_px - vec2<u32>(1u),
     );
-    let value = textureLoad(cloud_shadow_cache_atlas, atlas_position_px, 0).x;
+    let value = textureLoad(cloud_shadow_cache_atlas, atlas_position_px, 0).xy;
     let physical_tile_texels = shadow_cache_tile_texels() + 2u;
     let atlas_tile = atlas_position_px / vec2<u32>(physical_tile_texels);
     let slot = atlas_tile.y * cloud_shadow_cache.atlas_columns + atlas_tile.x;
@@ -123,12 +123,12 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
     }
     let layer = cloud_shadow_cache_tiles[slot].layer;
     if layer == 0u {
-        return vec4<f32>(1.0 - exp(-max(value, 0.0)), 0.0, 0.0, 1.0);
+        return vec4<f32>(1.0 - exp(-max(value.x, 0.0)), 0.0, 0.0, 1.0);
     }
     if layer == 1u {
-        return vec4<f32>(0.0, 0.0, 1.0 - exp(-max(value, 0.0)), 1.0);
+        return vec4<f32>(0.0, 0.0, 1.0 - exp(-max(value.x, 0.0)), 1.0);
     }
-    let elevation = 0.5 + 0.5 * tanh(value / 100.0);
+    let elevation = 0.5 + 0.5 * tanh((value.x + value.y) / 100.0);
     return vec4<f32>(0.0, elevation, 0.0, 1.0);
 }
 
