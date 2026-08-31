@@ -35,17 +35,20 @@ struct SceneTuning {
 };
 
 
+struct RegionalCloudDrivers {
+    condensation: f32,
+    pressure_lift: f32,
+    instability: f32,
+};
+
 struct CloudWeatherSample {
     relative_humidity: f32,
     instability: f32,
     lift: f32,
     low_coverage: f32,
-    upper_coverage: f32,
     rain: f32,
     stratiform: f32,
-    convective: f32,
-    low_advection_wind_m_s: vec2<f32>,
-    upper_advection_wind_m_s: vec2<f32>,
+    regional: RegionalCloudDrivers,
 };
 
 @group(0) @binding(0)

@@ -139,7 +139,9 @@ current playable behavior; this file does not track delivery status.
   players or affect gameplay. One cloud-amount scalar drives each layer's body,
   optical depth, and shadows. Clear-sky and weather-canopy ambient light are
   blended per surface pixel by a smooth regional estimate of how much surrounding
-  sky is canopy rather than clear; this is not a directly overhead cloud sample.
+  sky is canopy rather than clear. This ground-level sky estimate is neither a
+  directly overhead cloud sample nor projected along the Sun or Moon direction;
+  celestial state instead determines the light available to the sky dome.
   Visible lower clouds do not contribute to ambient light.
 - **[Explicit]** Small visible clouds form sparsely under suitable humid,
   unstable, non-storm conditions at a fixed low altitude. They add local
@@ -148,14 +150,15 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** An unseen weather canopy aggregates all cloud types into one
   amount and optical-depth field, from local convective structure to broad
   layered weather. It casts the primary weather shadows and contributes diffuse
-  light alongside the clear sky. The canopy-light endpoint uses the smooth
-  regional mean optical thickness of the cloudy portion of the visible sky,
-  rather than the local overhead texture sample, to filter eclipse-aware Sun and
-  Moon intensity and color. The same regional sky fraction sets both the
-  clear-sky/cloud-dome ambient blend and the target areal coverage of detailed
-  canopy bodies and shadows. It derives from the same pressure, temperature,
-  moisture, and resulting weather conditions as gameplay; ambient never consumes
-  a sampled cloud pixel.
+  light alongside the clear sky. Directional shadows evaluate weather where the
+  Sun or Moon ray intersects the canopy layer. The canopy-light endpoint uses
+  the smooth regional mean optical thickness of the cloudy portion of the
+  visible sky, rather than the local overhead texture sample, to filter
+  eclipse-aware Sun and Moon intensity and color. The same regional sky fraction
+  sets both the clear-sky/cloud-dome ambient blend and the target areal coverage
+  of detailed canopy bodies and shadows. It derives from the same pressure,
+  temperature, moisture, and resulting weather conditions as gameplay; ambient
+  never consumes a sampled cloud pixel.
   Clear-sky light follows celestial and atmospheric scattering conditions.
   Unresolved high ice-cloud effects remain part of canopy and sky diffusion
   rather than a third sampled layer.

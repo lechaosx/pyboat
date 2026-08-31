@@ -15,7 +15,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface_circle_position = periodic_noise_circle_position_from_canonical(
         surface_position_m,
     );
-    let surface_weather = low_cloud_weather_field_at(surface_position_m);
+    let surface_weather = cloud_weather_field_at(surface_position_m);
     surface_cloud_weather = surface_weather.weather;
     initialize_surface_tide_from_circle(surface_circle_position);
     initialize_celestial_lighting();

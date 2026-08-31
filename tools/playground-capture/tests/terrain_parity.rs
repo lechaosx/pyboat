@@ -234,7 +234,28 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 #[test]
 fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(0.0, -10_000.0);
+    let overview_size = 32usize;
+    let overview_height_m = 16_000.0;
+    let overview = render_diagnostic_image_with_view_at(
+        world,
+        Vector::new(0.0, -10_000.0),
+        0.0,
+        overview_height_m,
+        "cloud_low_optical_depth",
+        overview_size as u32,
+        overview_size as u32,
+    );
+    let cloud_pixel = overview
+        .chunks_exact(4)
+        .position(|pixel| pixel[..3] != scalar_debug_pixel(0.0)[..3])
+        .expect("representative view should contain a low cloud");
+    let row = cloud_pixel / overview_size;
+    let column = cloud_pixel % overview_size;
+    let position_m = Vector::new(
+        (column as f32 + 0.5) / overview_size as f32 * overview_height_m - 0.5 * overview_height_m,
+        -10_000.0 + 0.5 * overview_height_m
+            - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
+    );
     let near = render_diagnostic_image_with_view_at(
         world,
         position_m,
@@ -254,7 +275,7 @@ fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
         1,
     );
 
-    assert_ne!(&near[..3], &[33, 44, 53]);
+    assert_ne!(&near[..3], &scalar_debug_pixel(0.0)[..3]);
     assert_eq!(&near[..3], &far[..3]);
 }
 
@@ -280,8 +301,8 @@ fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
         256,
         64,
     );
-    let ambient_detail = mean_neighbor_luminance_difference(&ambient, 256, 64);
-    let canopy_detail = mean_neighbor_luminance_difference(&canopy, 256, 64);
+    let ambient_detail = normalized_mean_neighbor_scalar_difference(&ambient, 256, 64);
+    let canopy_detail = normalized_mean_neighbor_scalar_difference(&canopy, 256, 64);
 
     assert!(canopy_detail > 0.0005, "{canopy_detail}");
     assert!(
@@ -438,66 +459,66 @@ fn canopy_coverage_tracks_ambient_sky_fraction() {
     let world = WorldGeometry::default();
     let width = 128usize;
     let height = 128usize;
-    let cloud_time_seconds = 1_800.0;
-    let canopy = render_diagnostic_image_with_cloud_time(
-        world,
-        Vector::ZERO,
-        0.0,
-        cloud_time_seconds,
-        world.height_m(),
-        "cloud_weather_canopy_optical_depth",
-        width as u32,
-        height as u32,
-    );
-    let ambient = render_diagnostic_image_with_cloud_time(
-        world,
-        Vector::ZERO,
-        0.0,
-        cloud_time_seconds,
-        world.height_m(),
-        "lighting_ambient_sky_occlusion",
-        width as u32,
-        height as u32,
-    );
-    let mut canopy_cover = Vec::new();
-    let mut sky_fraction = Vec::new();
-    let debug_amount = |image: &[u8], offset: usize| {
-        let srgb = image[offset] as f32 / 255.0;
-        let linear = if srgb <= 0.040_45 {
-            srgb / 12.92
-        } else {
-            ((srgb + 0.055) / 1.055).powf(2.4)
-        };
-        ((linear - 0.015) / 0.905).clamp(0.0, 1.0)
-    };
-    for block_row in 0..8 {
-        for block_column in 0..8 {
-            let mut occupied = 0.0;
-            let mut ambient_sum = 0.0;
-            for row in block_row * 16..(block_row + 1) * 16 {
-                for column in block_column * 16..(block_column + 1) * 16 {
-                    let offset = 4 * (row * width + column);
-                    occupied += f32::from(debug_amount(&canopy, offset) > 0.05);
-                    ambient_sum += debug_amount(&ambient, offset);
+    for (seed, cloud_time_seconds) in [(SEED, 1_800.0), (1, 900.0), (0xdead_beef, 3_600.0)] {
+        let canopy = render_diagnostic_image_with_seed_and_cloud_time(
+            world,
+            seed,
+            Vector::ZERO,
+            0.0,
+            cloud_time_seconds,
+            world.height_m(),
+            "cloud_weather_canopy_optical_depth",
+            width as u32,
+            height as u32,
+        );
+        let ambient = render_diagnostic_image_with_seed_and_cloud_time(
+            world,
+            seed,
+            Vector::ZERO,
+            0.0,
+            cloud_time_seconds,
+            world.height_m(),
+            "lighting_ambient_sky_occlusion",
+            width as u32,
+            height as u32,
+        );
+        let mut canopy_cover = Vec::new();
+        let mut sky_fraction = Vec::new();
+        for block_row in 0..8 {
+            for block_column in 0..8 {
+                let mut occupied = 0.0;
+                let mut ambient_sum = 0.0;
+                for row in block_row * 16..(block_row + 1) * 16 {
+                    for column in block_column * 16..(block_column + 1) * 16 {
+                        let offset = 4 * (row * width + column);
+                        occupied += f32::from(scalar_debug_amount(&canopy[offset..]) > 0.05);
+                        ambient_sum += scalar_debug_amount(&ambient[offset..]);
+                    }
                 }
+                canopy_cover.push(occupied / 256.0);
+                sky_fraction.push(ambient_sum / 256.0);
             }
-            canopy_cover.push(occupied / 256.0);
-            sky_fraction.push(ambient_sum / 256.0);
         }
-    }
 
-    let correlation = pearson_correlation(&canopy_cover, &sky_fraction);
-    let mean_error = canopy_cover
-        .iter()
-        .zip(&sky_fraction)
-        .map(|(cover, target)| (cover - target).abs())
-        .sum::<f32>()
-        / canopy_cover.len() as f32;
-    let target_mean = sky_fraction.iter().sum::<f32>() / sky_fraction.len() as f32;
-    let cover_mean = canopy_cover.iter().sum::<f32>() / canopy_cover.len() as f32;
-    assert!(correlation > 0.75, "correlation {correlation}");
-    assert!((cover_mean - target_mean).abs() < 0.05);
-    assert!(mean_error < 0.10, "mean error {mean_error}");
+        let correlation = pearson_correlation(&canopy_cover, &sky_fraction);
+        let mean_error = canopy_cover
+            .iter()
+            .zip(&sky_fraction)
+            .map(|(cover, target)| (cover - target).abs())
+            .sum::<f32>()
+            / canopy_cover.len() as f32;
+        let target_mean = sky_fraction.iter().sum::<f32>() / sky_fraction.len() as f32;
+        let cover_mean = canopy_cover.iter().sum::<f32>() / canopy_cover.len() as f32;
+        assert!(
+            correlation > 0.75,
+            "seed {seed:#x}: correlation {correlation}"
+        );
+        assert!(
+            (cover_mean - target_mean).abs() < 0.05,
+            "seed {seed:#x}: cover {cover_mean}, target {target_mean}",
+        );
+        assert!(mean_error < 0.10, "seed {seed:#x}: mean error {mean_error}");
+    }
 }
 
 #[test]
@@ -538,6 +559,37 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     assert!(
         mean_difference < 0.005,
         "{mean_difference} at {position_m:?}, sunset {sunset_seconds}",
+    );
+}
+
+#[test]
+fn projected_upper_clouds_can_shadow_locally_clear_ground() {
+    let world = WorldGeometry::default();
+    let width = 128usize;
+    let height = 64usize;
+    let sky = render_diagnostic_image(
+        world,
+        "lighting_ambient_sky_occlusion",
+        width as u32,
+        height as u32,
+    );
+    let shadow = render_diagnostic_image(
+        world,
+        "lighting_projected_upper_shadow",
+        width as u32,
+        height as u32,
+    );
+    let shadowed_clear_ground = sky
+        .chunks_exact(4)
+        .zip(shadow.chunks_exact(4))
+        .filter(|(sky, shadow)| {
+            sky[..3] == scalar_debug_pixel(0.0)[..3] && scalar_debug_amount(shadow) > 0.05
+        })
+        .count();
+
+    assert!(
+        shadowed_clear_ground > 0,
+        "no projected canopy crossed a clear-sky boundary"
     );
 }
 
@@ -669,8 +721,33 @@ fn render_diagnostic_image_with_cloud_time(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
+    render_diagnostic_image_with_seed_and_cloud_time(
+        world,
+        SEED,
+        position_m,
+        world_time_seconds,
+        cloud_time_seconds,
+        view_height_m,
+        diagnostic,
+        width,
+        height,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_diagnostic_image_with_seed_and_cloud_time(
+    world: WorldGeometry,
+    seed: u64,
+    position_m: Vector,
+    world_time_seconds: f64,
+    cloud_time_seconds: f32,
+    view_height_m: f32,
+    diagnostic: &str,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{:016x}-{:08x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{seed:016x}-{:016x}-{:08x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
         std::process::id(),
         world_time_seconds.to_bits(),
         cloud_time_seconds.to_bits(),
@@ -694,7 +771,7 @@ fn render_diagnostic_image_with_cloud_time(
             "--view-height",
             &view_height_m.to_string(),
             "--seed",
-            &SEED.to_string(),
+            &seed.to_string(),
             "--cloud-time",
             &cloud_time_seconds.to_string(),
             "--world-time",
@@ -756,16 +833,21 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
         - columns.iter().copied().fold(f32::INFINITY, f32::min)
 }
 
-fn mean_neighbor_luminance_difference(bytes: &[u8], width: usize, height: usize) -> f32 {
-    let luminance = |offset: usize| {
-        (bytes[offset] as f32 + bytes[offset + 1] as f32 + bytes[offset + 2] as f32) / (3.0 * 255.0)
-    };
+fn normalized_mean_neighbor_scalar_difference(bytes: &[u8], width: usize, height: usize) -> f32 {
+    let (minimum, maximum) = bytes.chunks_exact(4).map(scalar_debug_amount).fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(minimum, maximum), value| (minimum.min(value), maximum.max(value)),
+    );
+    let range = maximum - minimum;
     let mut difference = 0.0;
     let mut count = 0;
     for row in 0..height {
         for column in 1..width {
             let offset = 4 * (row * width + column);
-            difference += (luminance(offset) - luminance(offset - 4)).abs();
+            difference += (scalar_debug_amount(&bytes[offset..])
+                - scalar_debug_amount(&bytes[offset - 4..]))
+            .abs()
+                / range;
             count += 1;
         }
     }
@@ -800,6 +882,16 @@ fn channel_range(bytes: &[u8], channel: usize) -> f32 {
         .max()
         .unwrap();
     f32::from(maximum - minimum) / 255.0
+}
+
+fn scalar_debug_amount(pixel: &[u8]) -> f32 {
+    let srgb = pixel[0] as f32 / 255.0;
+    let linear = if srgb <= 0.040_45 {
+        srgb / 12.92
+    } else {
+        ((srgb + 0.055) / 1.055).powf(2.4)
+    };
+    ((linear - 0.015) / 0.905).clamp(0.0, 1.0)
 }
 
 fn signed_debug_pixel(value: f32) -> [u8; 4] {

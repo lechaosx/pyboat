@@ -4,20 +4,10 @@ struct LowCloudSample {
     gradient: vec2<f32>,
 };
 
-fn visual_cloud_weather(source: CloudWeatherSample) -> CloudWeatherSample {
-    var weather = source;
-    weather.convective = clamp(
-        weather.instability * smoothstep(0.35, 0.85, weather.lift),
-        0.0,
-        1.0,
-    );
-    return weather;
-}
-
 fn low_cloud_latent_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let body_size = clamp(tuning.cloud_wisps.z, 0.25, 4.0);
     return spatiotemporal_fractal_sample(
-        vec2<u32>(0x38d01377u, 0x452821e6u),
+        vec2<u32>(0x6c8e9cf5u, 0x7a1d3b2fu),
         position_m,
         640.0 * body_size,
         scene.cloud_time_coordinates.x,
@@ -29,7 +19,7 @@ fn low_cloud_latent_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
 fn low_cloud_latent_value(position_m: vec2<f32>) -> f32 {
     let body_size = clamp(tuning.cloud_wisps.z, 0.25, 4.0);
     return spatiotemporal_fractal_value(
-        vec2<u32>(0x38d01377u, 0x452821e6u),
+        vec2<u32>(0x6c8e9cf5u, 0x7a1d3b2fu),
         position_m,
         640.0 * body_size,
         scene.cloud_time_coordinates.x,
@@ -134,55 +124,15 @@ struct RegionalCanopyConditions {
     mean_optical_thickness: f32,
 }
 
-fn regional_canopy_drivers(
-    atmosphere: SurfaceAtmosphereSample,
-    weather: CloudWeatherSample,
-) -> vec3<f32> {
-    let climate_air_temperature_c = atmosphere.climate.annual_mean_air_temperature_c
-        + 0.5 * atmosphere.climate.seasonal_temperature_range_c
-            * atmosphere.climate.seasonal_latitude_factor
-            * scene.seasonal_phase_factors.x;
-    let climate_saturation_g_kg = water_vapor_saturation_capacity_g_kg(
-        climate_air_temperature_c,
-    );
-    let climate_water_vapor_g_kg = select(
-        0.0,
-        0.72 * climate_saturation_g_kg,
-        environment_feature_visibility().z > 0.0,
-    );
-    // A sky-dome estimate should respond less to local moisture structure than
-    // the overhead weather column does.
-    let regional_water_vapor_g_kg = mix(
-        climate_water_vapor_g_kg,
-        atmosphere.water_vapor_g_kg,
-        0.18,
-    );
-    let regional_air_temperature_c = climate_air_temperature_c
-        + atmosphere.temperature_anomaly.value;
-    let regional_relative_humidity = clamp(
-        regional_water_vapor_g_kg
-            / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c),
-        0.0,
-        1.5,
-    );
-    let broad_pressure_hpa = 1013.25
-        + atmosphere.pressure.climate_potential_m2_s / 6000.0;
-    let condensation = smoothstep(0.45, 0.95, regional_relative_humidity);
-    let pressure_lift = 1.0 - smoothstep(1009.0, 1017.0, broad_pressure_hpa);
-    return vec3<f32>(condensation, pressure_lift, weather.instability);
-}
-
-fn regional_canopy_conditions(
-    atmosphere: SurfaceAtmosphereSample,
-    weather: CloudWeatherSample,
+fn regional_canopy_conditions_from_drivers(
+    drivers: RegionalCloudDrivers,
 ) -> RegionalCanopyConditions {
     if environment_feature_visibility().w <= 0.0 {
         return RegionalCanopyConditions(0.0, 0.0);
     }
-    let drivers = regional_canopy_drivers(atmosphere, weather);
-    let condensation = drivers.x;
-    let pressure_lift = drivers.y;
-    let instability = drivers.z;
+    let condensation = drivers.condensation;
+    let pressure_lift = drivers.pressure_lift;
+    let instability = drivers.instability;
     let cloud_potential = 0.55 * condensation
         + 0.25 * pressure_lift
         + 0.20 * condensation * instability;
@@ -200,6 +150,14 @@ fn regional_canopy_conditions(
             + 0.45 * condensation * instability
             + 3.6 * storm_depth,
     );
+}
+
+fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyConditions {
+    return regional_canopy_conditions_from_drivers(weather.regional);
+}
+
+fn regional_canopy_conditions_at(position_m: vec2<f32>) -> RegionalCanopyConditions {
+    return regional_canopy_conditions_from_drivers(regional_cloud_drivers_at(position_m));
 }
 
 fn procedural_upper_cloud_optical_depth(

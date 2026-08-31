@@ -241,14 +241,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   longitude-periodic global fields. Match seed, global cloud time, and the
   existing spatial atmosphere determine their latent structure, occurrence,
   coverage, and character without tracked bodies, compact kernels, birth
-  cohorts, or temporal anchors. Global weather conditions are evaluated once at
-  each rendered world position and passed through visible-cloud and projected-
-  shadow calculations. They remain stationary while the only per-client cloud
-  input, the integrated view-center system-wind translation, offsets each
-  layer's latent noise. Changing wind therefore curves cloud texture paths
-  without stretching them, instantaneous translation speed matches wind speed
-  one-to-one, and advecting texture adopts the stationary weather regime it
-  enters.
+  cohorts, or temporal anchors. Weather is evaluated at the sampled cloud point:
+  surface positions supply visible bodies and ambient conditions, while
+  directional shadows use each light ray's intersection with the cloud layer.
+  Weather remains stationary while the only per-client cloud input, the
+  integrated view-center system-wind translation, offsets each layer's latent
+  noise. Each latent field normalizes its evolution coordinate by its own base
+  wavelength. Changing wind therefore curves cloud texture paths without
+  stretching them, instantaneous translation speed matches wind speed one-to-one,
+  and advecting texture adopts the stationary weather regime it enters.
 - **[Explicit]** The lower field continuously drives visible amount, optical
   depth, analytic body normals, and projected shadows at a fixed 900-metre
   height. Body size, occurrence, detail character, blob shape, contrast, edge,
@@ -259,11 +260,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The unseen 3600-metre weather canopy uses a broader continuous
   spatiotemporal latent noise field. Its regional sky fraction and mean optical
   thickness are algebraic outputs of the shared weather derivation from
-  independent moisture, temperature, and pressure fields; the canopy performs
-  no additional weather-noise query. Sky fraction sets target coverage while
-  the translated latent texture determines individual bodies and openings. Its
-  translation follows the integrated view-center upper wind one-to-one, and its
-  continuous optical depth supplies connected projected Sun and Moon shadows.
+  independent moisture, temperature, and pressure fields. A surface atmosphere
+  query retains the broad components needed by the canopy; a projected-shadow
+  query samples only those broad components at the cloud-layer intersection.
+  Sky fraction sets target coverage while the translated latent texture
+  determines individual bodies and openings. Its translation follows the
+  integrated view-center upper wind one-to-one, and its continuous optical depth
+  supplies connected projected Sun and Moon shadows.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -273,11 +276,14 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   It derives continuously from the lowest-frequency existing temperature,
   moisture, and pressure conditions and their condensation and lift response,
   rather than from an independent noise field or a sampled canopy pixel. Its
-  spatial variation remains materially lower-frequency than the directional
-  canopy, so nearby points can lie on opposite sides of a directional cloud
-  shadow while retaining nearly identical ambient light. Broad humid low-pressure
-  weather can therefore darken ambient light while a local canopy opening still
-  admits direct Sun or Moon light.
+  spatial lookup stays at the receiving surface point and is never projected
+  along a Sun or Moon direction; celestial state affects the resulting sky-dome
+  radiance, not the estimated canopy fraction. Its spatial variation remains
+  materially lower-frequency than the directional canopy, so nearby points can
+  lie on opposite sides of a directional cloud shadow while retaining nearly
+  identical ambient light. Broad humid low-pressure weather can therefore
+  darken ambient light while a local canopy opening still admits direct Sun or
+  Moon light.
 - **[Explicit]** Surface climate and astronomical tide are stateless analytic
   models. Broad tide response and phase fields represent unresolved basin
   dynamics independently of terrain; bathymetry affects resulting water depth,

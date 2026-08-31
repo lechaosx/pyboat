@@ -62,6 +62,8 @@ const AIR_TEMPERATURE_500_HPA_EVOLUTION_SPEED_M_S: f32 = 6.9;
 const WATER_VAPOR_EVOLUTION_SPEED_M_S: f32 = 6.0;
 const DECORATIVE_WATER_EVOLUTION_SPEED_M_S: f32 = 0.65;
 const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
+const LOW_CLOUD_VISUAL_WAVELENGTH_M: f32 = 640.0;
+const WEATHER_CANOPY_VISUAL_WAVELENGTH_M: f32 = 4_000.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
 const LAND_WIND_RECOVERY_DISTANCE_M: f32 = 256.0;
@@ -1997,8 +1999,18 @@ pub fn cloud_field_time_coordinates_interpolated(
     tick_fraction: f32,
 ) -> CloudFieldTimeCoordinates {
     CloudFieldTimeCoordinates {
-        low: noise_time_coordinate_interpolated(tick, tick_fraction, 1.0, 420.0),
-        upper: noise_time_coordinate_interpolated(tick, tick_fraction, 1.0, 1500.0),
+        low: noise_time_coordinate_interpolated(
+            tick,
+            tick_fraction,
+            1.0,
+            LOW_CLOUD_VISUAL_WAVELENGTH_M,
+        ),
+        upper: noise_time_coordinate_interpolated(
+            tick,
+            tick_fraction,
+            1.0,
+            WEATHER_CANOPY_VISUAL_WAVELENGTH_M,
+        ),
     }
 }
 

@@ -70,6 +70,11 @@ struct TerrainNoiseSample {
     gradient: vec2<f32>,
 };
 
+struct FractalNoiseSample {
+    total: TerrainNoiseSample,
+    broad: TerrainNoiseSample,
+};
+
 struct Simplex4dSample {
     value: f32,
     gradient: vec4<f32>,
@@ -553,7 +558,26 @@ fn spatiotemporal_fractal_sample(
     octave_count: u32,
     persistence: f32,
 ) -> TerrainNoiseSample {
+    return spatiotemporal_fractal_sample_with_broad(
+        field_salt,
+        position_m,
+        initial_wavelength_m,
+        initial_time_coordinate,
+        octave_count,
+        persistence,
+    ).total;
+}
+
+fn spatiotemporal_fractal_sample_with_broad(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    initial_time_coordinate: f32,
+    octave_count: u32,
+    persistence: f32,
+) -> FractalNoiseSample {
     var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var broad = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
@@ -568,6 +592,7 @@ fn spatiotemporal_fractal_sample(
             wavelength_m,
             time_coordinate,
         );
+        if octave == 0u { broad = octave_sample; }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
         amplitude_sum += amplitude;
@@ -577,7 +602,7 @@ fn spatiotemporal_fractal_sample(
     }
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
-    return sample;
+    return FractalNoiseSample(sample, broad);
 }
 
 fn spatiotemporal_fractal_value(
@@ -588,7 +613,26 @@ fn spatiotemporal_fractal_value(
     octave_count: u32,
     persistence: f32,
 ) -> f32 {
+    return spatiotemporal_fractal_value_with_broad(
+        field_salt,
+        position_m,
+        initial_wavelength_m,
+        initial_time_coordinate,
+        octave_count,
+        persistence,
+    ).x;
+}
+
+fn spatiotemporal_fractal_value_with_broad(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    initial_time_coordinate: f32,
+    octave_count: u32,
+    persistence: f32,
+) -> vec2<f32> {
     var value = 0.0;
+    var broad = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
@@ -597,18 +641,20 @@ fn spatiotemporal_fractal_value(
         let octave_seed = scene.match_seed
             ^ field_salt
             ^ OCTAVE_SALTS[octave];
-        value += amplitude * spatiotemporal_noise_value(
+        let octave_value = spatiotemporal_noise_value(
             octave_seed,
             position_m,
             wavelength_m,
             time_coordinate,
         );
+        if octave == 0u { broad = octave_value; }
+        value += amplitude * octave_value;
         amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
         time_coordinate *= 2.0;
     }
-    return value / amplitude_sum;
+    return vec2<f32>(value / amplitude_sum, broad);
 }
 
 fn spatial_weather_fractal_sample(

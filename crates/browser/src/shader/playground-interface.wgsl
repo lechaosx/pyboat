@@ -114,7 +114,7 @@ fn low_cloud_material_color_visibility() -> f32 {
 }
 
 fn initialize_playground_weather() {
-    surface_cloud_weather = low_cloud_weather_at(surface_position_m);
+    surface_cloud_weather = cloud_weather_at(surface_position_m);
 }
 
 fn initialize_playground_tide() {
@@ -141,7 +141,7 @@ fn initialize_playground_scene(input: VertexOutput) -> InitializedPlaygroundScen
     let surface_circle_position = periodic_noise_circle_position_from_canonical(
         surface_position_m,
     );
-    let surface_weather = low_cloud_weather_field_at(surface_position_m);
+    let surface_weather = cloud_weather_field_at(surface_position_m);
     surface_cloud_weather = surface_weather.weather;
     initialize_surface_tide_from_circle(surface_circle_position);
     initialize_playground_atmospheric_lighting();

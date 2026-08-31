@@ -25,13 +25,25 @@ struct SurfaceClimateSample {
 struct SurfaceAtmosphereSample {
     pressure: PressureFieldSample,
     temperature_anomaly: TerrainNoiseSample,
+    broad_temperature_anomaly_c: f32,
     water_vapor_g_kg: f32,
+    broad_water_vapor_g_kg: f32,
     climate: SurfaceClimateSample,
 }
 
 struct CloudWeatherFieldSample {
     atmosphere: SurfaceAtmosphereSample,
     weather: CloudWeatherSample,
+}
+
+struct AtmosphereTemperatureField {
+    sample: TerrainNoiseSample,
+    broad_value_c: f32,
+}
+
+struct AtmosphereScalarField {
+    value: f32,
+    broad_value: f32,
 }
 
 struct SpatiotemporalNoiseDomain {
@@ -506,11 +518,18 @@ fn surface_air_temperature_anomaly_sample_from_climate(
     position_m: vec2<f32>,
     climate: SurfaceClimateSample,
 ) -> TerrainNoiseSample {
+    return surface_air_temperature_anomaly_field_from_climate(position_m, climate).sample;
+}
+
+fn surface_air_temperature_anomaly_field_from_climate(
+    position_m: vec2<f32>,
+    climate: SurfaceClimateSample,
+) -> AtmosphereTemperatureField {
     let scale_c = latitude_curve_value(
         TEMPERATURE_ANOMALY_SCALE_C,
         climate.latitude_degrees,
     );
-    let noise = spatiotemporal_fractal_sample(
+    let noise = spatiotemporal_fractal_sample_with_broad(
         vec2<u32>(0x38d01377u, 0x452821e6u),
         position_m,
         65536.0,
@@ -518,9 +537,12 @@ fn surface_air_temperature_anomaly_sample_from_climate(
         4u,
         0.5,
     );
-    return TerrainNoiseSample(
-        scale_c * 0.85 * noise.value,
-        scale_c * 0.85 * noise.gradient,
+    return AtmosphereTemperatureField(
+        TerrainNoiseSample(
+            scale_c * 0.85 * noise.total.value,
+            scale_c * 0.85 * noise.total.gradient,
+        ),
+        scale_c * 0.85 * noise.broad.value,
     );
 }
 
@@ -539,21 +561,26 @@ fn surface_atmosphere_sample_at(position_m: vec2<f32>) -> SurfaceAtmosphereSampl
     if environment_feature_visibility().x > 0.0 {
         pressure = procedural_pressure_sample_without_surface_gust(position_m);
     }
-    var temperature_anomaly = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var temperature = AtmosphereTemperatureField(
+        TerrainNoiseSample(0.0, vec2<f32>(0.0)),
+        0.0,
+    );
     if environment_feature_visibility().y > 0.0 {
-        temperature_anomaly = surface_air_temperature_anomaly_sample_from_climate(
+        temperature = surface_air_temperature_anomaly_field_from_climate(
             position_m,
             climate,
         );
     }
-    var water_vapor_g_kg = 0.0;
+    var water_vapor = AtmosphereScalarField(0.0, 0.0);
     if environment_feature_visibility().z > 0.0 {
-        water_vapor_g_kg = surface_water_vapor_g_kg_from_climate(position_m, climate);
+        water_vapor = surface_water_vapor_field_from_climate(position_m, climate);
     }
     return SurfaceAtmosphereSample(
         pressure,
-        temperature_anomaly,
-        water_vapor_g_kg,
+        temperature.sample,
+        temperature.broad_value_c,
+        water_vapor.value,
+        water_vapor.broad_value,
         climate,
     );
 }
@@ -581,12 +608,26 @@ fn upper_air_temperature_500_hpa_c_from_atmosphere(
     surface_anomaly_c: f32,
     climate: SurfaceClimateSample,
 ) -> f32 {
+    return upper_air_temperature_500_hpa_field_from_atmosphere(
+        position_m,
+        surface_anomaly_c,
+        surface_anomaly_c,
+        climate,
+    ).value;
+}
+
+fn upper_air_temperature_500_hpa_field_from_atmosphere(
+    position_m: vec2<f32>,
+    surface_anomaly_c: f32,
+    broad_surface_anomaly_c: f32,
+    climate: SurfaceClimateSample,
+) -> AtmosphereScalarField {
     let climate_temperature_c = climate.annual_mean_air_temperature_c
         - 35.5
         + 0.25 * climate.seasonal_temperature_range_c
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
-    let independent_noise = 0.75 * spatiotemporal_fractal_value(
+    let independent_noise = 0.75 * spatiotemporal_fractal_value_with_broad(
         vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
         position_m,
         65536.0,
@@ -594,8 +635,34 @@ fn upper_air_temperature_500_hpa_c_from_atmosphere(
         4u,
         0.5,
     );
+    return AtmosphereScalarField(
+        climate_temperature_c
+            + 0.45 * surface_anomaly_c
+            + 19.0 * independent_noise.x,
+        climate_temperature_c
+            + 0.45 * broad_surface_anomaly_c
+            + 19.0 * independent_noise.y,
+    );
+}
+
+fn broad_upper_air_temperature_500_hpa_c_from_atmosphere(
+    position_m: vec2<f32>,
+    broad_surface_anomaly_c: f32,
+    climate: SurfaceClimateSample,
+) -> f32 {
+    let climate_temperature_c = climate.annual_mean_air_temperature_c
+        - 35.5
+        + 0.25 * climate.seasonal_temperature_range_c
+            * climate.seasonal_latitude_factor
+            * scene.seasonal_phase_factors.x;
+    let independent_noise = 0.75 * spatiotemporal_noise_value(
+        vec2<u32>(0x9e0c6c89u, 0xbe5466cfu) ^ scene.match_seed,
+        position_m,
+        65536.0,
+        scene.scalar_field_time_coordinates.y,
+    );
     return climate_temperature_c
-        + 0.45 * surface_anomaly_c
+        + 0.45 * broad_surface_anomaly_c
         + 19.0 * independent_noise;
 }
 
@@ -614,12 +681,19 @@ fn surface_water_vapor_g_kg_from_climate(
     position_m: vec2<f32>,
     climate: SurfaceClimateSample,
 ) -> f32 {
+    return surface_water_vapor_field_from_climate(position_m, climate).value;
+}
+
+fn surface_water_vapor_field_from_climate(
+    position_m: vec2<f32>,
+    climate: SurfaceClimateSample,
+) -> AtmosphereScalarField {
     let climate_temperature_c = climate.annual_mean_air_temperature_c
         + 0.5 * climate.seasonal_temperature_range_c
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
     let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.75 * spatiotemporal_fractal_value(
+    let noise = 0.75 * spatiotemporal_fractal_value_with_broad(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
         position_m,
         8192.0,
@@ -627,7 +701,10 @@ fn surface_water_vapor_g_kg_from_climate(
         5u,
         0.5,
     );
-    return clamp(capacity_g_kg * (0.72 + 0.65 * noise), 0.5, 25.0);
+    return AtmosphereScalarField(
+        clamp(capacity_g_kg * (0.72 + 0.65 * noise.x), 0.5, 25.0),
+        clamp(capacity_g_kg * (0.72 + 0.65 * noise.y), 0.5, 25.0),
+    );
 }
 
 fn surface_water_vapor_g_kg() -> f32 {
@@ -947,11 +1024,122 @@ fn initialize_surface_tide_value() {
     );
 }
 
+fn regional_cloud_drivers_from_fields(
+    climate: SurfaceClimateSample,
+    broad_pressure_potential_m2_s: f32,
+    broad_surface_temperature_anomaly_c: f32,
+    broad_water_vapor_g_kg: f32,
+    broad_upper_air_temperature_c: f32,
+) -> RegionalCloudDrivers {
+    let climate_air_temperature_c = climate.annual_mean_air_temperature_c
+        + 0.5 * climate.seasonal_temperature_range_c
+            * climate.seasonal_latitude_factor
+            * scene.seasonal_phase_factors.x;
+    let climate_water_vapor_g_kg = select(
+        0.0,
+        0.72 * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c),
+        environment_feature_visibility().z > 0.0,
+    );
+    let regional_water_vapor_g_kg = mix(
+        climate_water_vapor_g_kg,
+        broad_water_vapor_g_kg,
+        0.20,
+    );
+    let regional_air_temperature_c = climate_air_temperature_c
+        + broad_surface_temperature_anomaly_c;
+    let relative_humidity = clamp(
+        regional_water_vapor_g_kg
+            / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c),
+        0.0,
+        1.5,
+    );
+    let broad_pressure_hpa = 1013.25 + broad_pressure_potential_m2_s / 6000.0;
+    return RegionalCloudDrivers(
+        smoothstep(0.45, 0.95, relative_humidity),
+        1.0 - smoothstep(1009.0, 1017.0, broad_pressure_hpa),
+        smoothstep(
+            28.0,
+            48.0,
+            regional_air_temperature_c - broad_upper_air_temperature_c,
+        ),
+    );
+}
+
+fn regional_cloud_drivers_from_atmosphere(
+    atmosphere: SurfaceAtmosphereSample,
+    broad_upper_air_temperature_c: f32,
+) -> RegionalCloudDrivers {
+    return regional_cloud_drivers_from_fields(
+        atmosphere.climate,
+        atmosphere.pressure.climate_potential_m2_s,
+        atmosphere.broad_temperature_anomaly_c,
+        atmosphere.broad_water_vapor_g_kg,
+        broad_upper_air_temperature_c,
+    );
+}
+
+fn regional_cloud_drivers_at(position_m: vec2<f32>) -> RegionalCloudDrivers {
+    if environment_feature_visibility().w <= 0.0 {
+        return RegionalCloudDrivers(0.0, 0.0, 0.0);
+    }
+    let climate = surface_climate_sample_at(position_m);
+    var broad_pressure_potential_m2_s = 0.0;
+    if environment_feature_visibility().x > 0.0 {
+        broad_pressure_potential_m2_s = procedural_pressure_sample_filtered_bands(
+            position_m,
+            0.0,
+            1u,
+        ).climate_potential_m2_s;
+    }
+    var broad_temperature_anomaly_c = 0.0;
+    if environment_feature_visibility().y > 0.0 {
+        let scale_c = latitude_curve_value(
+            TEMPERATURE_ANOMALY_SCALE_C,
+            climate.latitude_degrees,
+        );
+        broad_temperature_anomaly_c = scale_c * 0.85 * spatiotemporal_noise_value(
+            scene.match_seed ^ vec2<u32>(0x38d01377u, 0x452821e6u),
+            position_m,
+            65536.0,
+            scene.scalar_field_time_coordinates.x,
+        );
+    }
+    var broad_water_vapor_g_kg = 0.0;
+    if environment_feature_visibility().z > 0.0 {
+        let climate_temperature_c = climate.annual_mean_air_temperature_c
+            + 0.5 * climate.seasonal_temperature_range_c
+                * climate.seasonal_latitude_factor
+                * scene.seasonal_phase_factors.x;
+        let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
+        let noise = 0.75 * spatiotemporal_noise_value(
+            scene.match_seed ^ vec2<u32>(0xec4e6c89u, 0x082efa98u),
+            position_m,
+            8192.0,
+            scene.scalar_field_time_coordinates.z,
+        );
+        broad_water_vapor_g_kg = clamp(
+            capacity_g_kg * (0.72 + 0.65 * noise),
+            0.5,
+            25.0,
+        );
+    }
+    let broad_upper_air_temperature_c = broad_upper_air_temperature_500_hpa_c_from_atmosphere(
+        position_m,
+        broad_temperature_anomaly_c,
+        climate,
+    );
+    return regional_cloud_drivers_from_fields(
+        climate,
+        broad_pressure_potential_m2_s,
+        broad_temperature_anomaly_c,
+        broad_water_vapor_g_kg,
+        broad_upper_air_temperature_c,
+    );
+}
+
 fn cloud_weather_from_atmosphere(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
-    include_low_wind: bool,
-    include_upper_wind: bool,
 ) -> CloudWeatherSample {
     if environment_feature_visibility().w <= 0.0 {
         return CloudWeatherSample(
@@ -961,10 +1149,7 @@ fn cloud_weather_from_atmosphere(
             0.0,
             0.0,
             0.0,
-            0.0,
-            0.0,
-            vec2<f32>(0.0),
-            vec2<f32>(0.0),
+            RegionalCloudDrivers(0.0, 0.0, 0.0),
         );
     }
     let pressure_sample = atmosphere.pressure;
@@ -983,16 +1168,17 @@ fn cloud_weather_from_atmosphere(
         0.0,
         1.5,
     );
-    let upper_air_temperature_c = upper_air_temperature_500_hpa_c_from_atmosphere(
+    let upper_air_temperature = upper_air_temperature_500_hpa_field_from_atmosphere(
         position_m,
         surface_anomaly.value,
+        atmosphere.broad_temperature_anomaly_c,
         atmosphere.climate,
     );
     let temperature_gradient = surface_anomaly.gradient;
     let instability = smoothstep(
         28.0,
         48.0,
-        air_temperature_c - upper_air_temperature_c,
+        air_temperature_c - upper_air_temperature.value,
     );
     let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, pressure.x);
     let gradient_lift = smoothstep(0.0002, 0.0015, length(pressure.yz));
@@ -1011,11 +1197,6 @@ fn cloud_weather_from_atmosphere(
         + 0.22 * lift
         + 0.10 * instability * condensation;
     let low_coverage = smoothstep(0.50, 1.01, signal);
-    let upper_coverage = smoothstep(
-        0.68,
-        0.90,
-        0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift,
-    );
     let rain_signal = smoothstep(0.65, 0.75, low_coverage)
         * low_coverage
         * (0.45 + 0.20 * instability + 0.45 * lift);
@@ -1026,7 +1207,6 @@ fn cloud_weather_from_atmosphere(
     weather.instability = instability;
     weather.lift = lift;
     weather.low_coverage = low_coverage;
-    weather.upper_coverage = upper_coverage;
     weather.rain = rain;
     weather.stratiform = clamp(
         smoothstep(0.78, 1.05, relative_humidity)
@@ -1035,78 +1215,27 @@ fn cloud_weather_from_atmosphere(
         0.0,
         1.0,
     );
-    weather.convective = clamp(
-        instability
-            * smoothstep(0.35, 0.85, lift)
-            * mix(0.45, 1.0, rain),
-        0.0,
-        1.0,
+    weather.regional = regional_cloud_drivers_from_atmosphere(
+        atmosphere,
+        upper_air_temperature.broad_value,
     );
-    let latitude_degrees = atmosphere.climate.latitude_degrees;
-    weather.low_advection_wind_m_s = vec2<f32>(0.0);
-    if include_low_wind {
-        // Broad flow transports cloud structure without folding it around
-        // gust-scale pressure features.
-        weather.low_advection_wind_m_s = atmosphere_model.x * wind_from_pressure_gradient(
-            pressure_sample.broad_synoptic_gradient_m_s / 6000.0,
-            latitude_degrees,
-        );
-    }
-    weather.upper_advection_wind_m_s = vec2<f32>(0.0);
-    if include_upper_wind {
-        weather.upper_advection_wind_m_s = 1.15 * atmosphere_model.x
-            * wind_from_pressure_gradient(
-            pressure_sample.synoptic_gradient_m_s / 6000.0,
-            latitude_degrees,
-        )
-            + 1600.0 * atmosphere_model.z * rotate_left(surface_anomaly.gradient);
-    }
     return weather;
 }
 
-fn cloud_weather_field_at_with_winds(
-    position_m: vec2<f32>,
-    include_low_wind: bool,
-    include_upper_wind: bool,
-) -> CloudWeatherFieldSample {
+fn cloud_weather_field_at(position_m: vec2<f32>) -> CloudWeatherFieldSample {
     let atmosphere = surface_atmosphere_sample_at(position_m);
     return CloudWeatherFieldSample(
         atmosphere,
-        cloud_weather_from_atmosphere(
-            position_m,
-            atmosphere,
-            include_low_wind,
-            include_upper_wind,
-        ),
+        cloud_weather_from_atmosphere(position_m, atmosphere),
     );
 }
 
-fn cloud_weather_at_with_winds(
-    position_m: vec2<f32>,
-    include_low_wind: bool,
-    include_upper_wind: bool,
-) -> CloudWeatherSample {
-    return cloud_weather_field_at_with_winds(
-        position_m,
-        include_low_wind,
-        include_upper_wind,
-    ).weather;
+fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    return cloud_weather_field_at(position_m).weather;
 }
 
 fn cloud_weather_conditions_at(position_m: vec2<f32>) -> CloudWeatherSample {
-    return cloud_weather_at_with_winds(position_m, false, false);
-}
-
-fn low_cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
-    return cloud_weather_at_with_winds(position_m, true, false);
-}
-
-fn low_cloud_weather_field_at(position_m: vec2<f32>) -> CloudWeatherFieldSample {
-    return cloud_weather_field_at_with_winds(position_m, true, false);
-}
-
-fn upper_cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
-    return cloud_weather_at_with_winds(position_m, false, true);
+    return cloud_weather_at(position_m);
 }
 
 fn surface_gust_velocity_m_s_at(
@@ -1142,10 +1271,6 @@ fn relative_humidity() -> f32 {
 
 fn low_cloud_coverage() -> f32 {
     return surface_cloud_weather.low_coverage;
-}
-
-fn upper_cloud_coverage() -> f32 {
-    return surface_cloud_weather.upper_coverage;
 }
 
 fn rain_intensity() -> f32 {

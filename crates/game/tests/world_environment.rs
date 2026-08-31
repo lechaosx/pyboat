@@ -1,8 +1,8 @@
 use game::{
-    current_air_temperature_c, procedural_world_environment, scalar_field_time_coordinates,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
-    world_climate_conditions,
+    cloud_field_time_coordinates, current_air_temperature_c, procedural_world_environment,
+    scalar_field_time_coordinates, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions, world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::{DT_SECONDS, WorldGeometry};
@@ -36,6 +36,14 @@ fn field_time_coordinates_interpolate_between_simulation_ticks() {
             .abs()
             < 1.0e-6
     );
+}
+
+#[test]
+fn cloud_field_time_coordinates_use_each_visual_fields_wavelength() {
+    let after_one_second = cloud_field_time_coordinates(60);
+
+    assert!((after_one_second.low - 1.0 / 640.0).abs() < 1.0e-7);
+    assert!((after_one_second.upper - 1.0 / 4_000.0).abs() < 1.0e-7);
 }
 
 #[test]
