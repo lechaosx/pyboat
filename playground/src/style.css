@@ -394,6 +394,7 @@ output {
 }
 
 .cache-legend[hidden] { display: none; }
+.cache-legend span[hidden] { display: none; }
 .cache-legend span { display: flex; align-items: center; gap: 0.25rem; }
 .cache-legend i { width: 0.55rem; height: 0.55rem; border-radius: 0.12rem; }
 .cache-low { background: #f33; }

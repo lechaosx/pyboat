@@ -59,10 +59,59 @@ fn record_shadow_cache_lookup(layer: u32, hit: bool) {
     }
 }
 
+fn shadow_cache_debug_tiles(position_m: vec2<f32>) -> vec4<f32> {
+    let key = cloud_shadow_cache_tile_key(position_m);
+    let low = select(
+        0.0,
+        1.0,
+        cloud_shadow_cache_slot(key, 0u) < cloud_shadow_cache.maximum_tiles,
+    );
+    let upper = select(
+        0.0,
+        1.0,
+        cloud_shadow_cache_slot(key, 1u) < cloud_shadow_cache.maximum_tiles,
+    );
+    let terrain = select(
+        0.0,
+        1.0,
+        cloud_shadow_cache_slot(key, 2u) < cloud_shadow_cache.maximum_tiles,
+    );
+    let color = vec3<f32>(low, terrain, upper);
+    if all(color == vec3<f32>(0.0)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let sample_position_px = cloud_shadow_cache_relative_position(position_m)
+        / visual_pixel_footprint_m;
+    let tile_position_px = sample_position_px
+        - key * f32(shadow_cache_tile_texels())
+        - vec2<f32>(0.5);
+    let edge_distance_px = min(
+        min(tile_position_px.x, tile_position_px.y),
+        min(
+            f32(shadow_cache_tile_texels()) - tile_position_px.x,
+            f32(shadow_cache_tile_texels()) - tile_position_px.y,
+        ),
+    );
+    return vec4<f32>(select(0.35 * color, color, edge_distance_px >= 1.0), 1.0);
+}
+
 fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
-    let output_uv = fragment_position_px / vec2<f32>(cloud_shadow_cache.viewport_size_px);
+    let viewport_size_px = vec2<f32>(cloud_shadow_cache.viewport_size_px);
+    let atlas_size_px = vec2<f32>(cloud_shadow_cache.atlas_size_px);
+    let display_scale = min(
+        viewport_size_px.x / atlas_size_px.x,
+        viewport_size_px.y / atlas_size_px.y,
+    );
+    let display_size_px = display_scale * atlas_size_px;
+    let display_origin_px = 0.5 * (viewport_size_px - display_size_px);
+    let display_position_px = fragment_position_px - display_origin_px;
+    if any(display_position_px < vec2<f32>(0.0))
+        || any(display_position_px >= display_size_px)
+    {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     let atlas_position_px = min(
-        vec2<u32>(output_uv * vec2<f32>(cloud_shadow_cache.atlas_size_px)),
+        vec2<u32>(display_position_px / display_scale),
         cloud_shadow_cache.atlas_size_px - vec2<u32>(1u),
     );
     let value = textureLoad(cloud_shadow_cache_atlas, atlas_position_px, 0).x;

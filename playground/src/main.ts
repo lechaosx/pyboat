@@ -411,7 +411,12 @@ function renderControls(): void {
   const cacheDebugSelect = document.createElement("select");
   cacheDebugSelect.id = "shadow-cache-debug";
   cacheDebugHeading.htmlFor = cacheDebugSelect.id;
-  for (const [value, label] of [["0", "Scene"], ["1", "Activity"], ["2", "Atlas"]]) {
+  for (const [value, label] of [
+    ["0", "Scene"],
+    ["1", "Lookups"],
+    ["2", "Tiles"],
+    ["3", "Atlas"],
+  ]) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = label;
@@ -421,6 +426,7 @@ function renderControls(): void {
   cacheDebugSelect.addEventListener("change", () => {
     shadowCacheDebugMode = Number(cacheDebugSelect.value);
     cacheLegend.hidden = shadowCacheDebugMode === 0;
+    cacheFallbackLegend.hidden = shadowCacheDebugMode !== 1;
     if (shadowCacheDebugMode !== 0) {
       useShadowCache = true;
       cacheInput.checked = true;
@@ -460,8 +466,12 @@ function renderControls(): void {
     '<span><i class="cache-low"></i>Low cloud</span>',
     '<span><i class="cache-upper"></i>Canopy</span>',
     '<span><i class="cache-terrain"></i>Terrain</span>',
-    '<span><i class="cache-fallback"></i>Fallback</span>',
+    '<span class="cache-fallback-label"><i class="cache-fallback"></i>Fallback</span>',
   ].join("");
+  const cacheFallbackLegend = cacheLegend.querySelector<HTMLElement>(
+    ".cache-fallback-label",
+  )!;
+  cacheFallbackLegend.hidden = shadowCacheDebugMode !== 1;
   diagnosticSection.append(
     cacheLabel,
     cacheDebugLabel,
@@ -1987,7 +1997,7 @@ function frame(now: number): void {
     const fillPassDescriptor: any = {
       colorAttachments: [{
         view: cache.atlasView,
-        ...(shadowCacheDebugMode === 2
+        ...(shadowCacheDebugMode === 3
           ? { clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear" }
           : { loadOp: "load" }),
         storeOp: "store",

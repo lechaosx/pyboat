@@ -438,10 +438,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   as production rendering.
 - **[Explicit]** Playground cache diagnostics report live and allocated tile
   counts, atlas dimensions, and world-space texel resolution. The lab can display
-  cache hits by logical field, direct-query fallbacks, or the current atlas, and
-  can recreate it with 32-, 64-, 128-, or 256-texel tiles without changing the
-  world-space resolution of one texel. Its counters, tile metadata, and debug
-  bindings are absent from the production scene shader.
+  per-fragment cache lookups, axis-aligned resident tiles in world sample space,
+  or the aspect-preserved current atlas, and can recreate it with 32-, 64-, 128-,
+  or 256-texel tiles without changing the world-space resolution of one texel.
+  Its counters, tile metadata, and debug bindings are absent from the production
+  scene shader.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

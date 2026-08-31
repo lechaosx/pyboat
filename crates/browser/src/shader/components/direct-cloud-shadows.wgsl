@@ -8,6 +8,10 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(0.0);
 }
 
+fn shadow_cache_debug_tiles(position_m: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(0.0);
+}
+
 fn apply_shadow_cache_debug(color: vec4<f32>) -> vec4<f32> {
     return color;
 }
