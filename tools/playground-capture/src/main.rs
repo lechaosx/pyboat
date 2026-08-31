@@ -480,7 +480,7 @@ async fn render(options: &Options) -> Result<(), String> {
     let shader_source = options
         .diagnostic
         .module
-        .map_or_else(browser::playground_scene_shader_source, |name| {
+        .map_or_else(browser::playground_direct_scene_shader_source, |name| {
             browser::playground_diagnostic_shader_source(name).unwrap()
         });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

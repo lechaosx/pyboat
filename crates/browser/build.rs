@@ -17,11 +17,31 @@ const SCENE_COMPONENTS: &[&str] = &[
 
 fn main() {
     let scene = read_components(SCENE_COMPONENTS);
-    let production = compose(&[&scene, &read_component("src/shader/production-entry.wgsl")]);
+    let cache_sample = read_component("src/shader/components/cloud-shadow-cache-sample.wgsl");
+    let direct_cloud_shadows = read_component("src/shader/components/direct-cloud-shadows.wgsl");
+    let production_entry = read_component("src/shader/production-entry.wgsl");
+    let production = compose(&[&scene, &cache_sample, &production_entry]);
     write_shader(
         &production,
         &["vertex", "fragment"],
         "scene-production.wgsl",
+    );
+    let cache_generate = read_component("src/shader/components/cloud-shadow-cache-generate.wgsl");
+    let production_cache = compose(&[
+        &scene,
+        &direct_cloud_shadows,
+        &production_entry,
+        &cache_generate,
+        &read_component("src/shader/production-cloud-shadow-cache-entry.wgsl"),
+    ]);
+    write_shader(
+        &production_cache,
+        &[
+            "discover_cloud_shadow_cache_tiles",
+            "cloud_shadow_cache_vertex",
+            "cloud_shadow_cache_fragment",
+        ],
+        "scene-production-cloud-shadow-cache.wgsl",
     );
     let playground_interface = read_component("src/shader/playground-interface.wgsl");
     let startup = read_components(&[
@@ -36,6 +56,7 @@ fn main() {
     );
     let playground = compose(&[
         &scene,
+        &cache_sample,
         &playground_interface,
         &read_component("src/shader/playground-entry.wgsl"),
     ]);
@@ -44,12 +65,40 @@ fn main() {
         &["vertex", "fragment_playground_scene"],
         "scene-playground.wgsl",
     );
+    let playground_direct = compose(&[
+        &scene,
+        &direct_cloud_shadows,
+        &playground_interface,
+        &read_component("src/shader/playground-entry.wgsl"),
+    ]);
+    write_shader(
+        &playground_direct,
+        &["vertex", "fragment_playground_scene"],
+        "scene-playground-direct.wgsl",
+    );
+    let playground_cache = compose(&[
+        &scene,
+        &direct_cloud_shadows,
+        &playground_interface,
+        &cache_generate,
+        &read_component("src/shader/playground-cloud-shadow-cache-entry.wgsl"),
+    ]);
+    write_shader(
+        &playground_cache,
+        &[
+            "discover_cloud_shadow_cache_tiles",
+            "cloud_shadow_cache_vertex",
+            "cloud_shadow_cache_fragment",
+        ],
+        "scene-playground-cloud-shadow-cache.wgsl",
+    );
     let diagnostic_common = read_component("src/shader/components/diagnostic-common.wgsl");
     for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
         let mechanism = read_component(diagnostic_mechanism(name));
         let entry = read_component(&format!("src/shader/diagnostics/{name}.wgsl"));
         let diagnostic = compose(&[
             &scene,
+            &direct_cloud_shadows,
             &playground_interface,
             &diagnostic_common,
             &mechanism,

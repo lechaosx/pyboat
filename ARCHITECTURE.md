@@ -233,7 +233,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   match seed, position, world geometry, and bounded time coordinates. Resolved
   surface wind directs mechanical gusts; moist convection can mix faster upper
   wind downward. Global cloudiness, pressure diagnostics, and rendered wind
-  therefore query their causes at world position without a sampled lattice.
+  therefore query their canonical causes analytically at world position.
   Spatial temperature and moisture use the same spatiotemporal query model in
   Rust and WGSL rather than accepting center-derived weather. No evolving scalar
   or vector field receives a global spatial transport offset.
@@ -267,6 +267,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   determines individual bodies and openings. Its translation follows the
   integrated view-center upper wind one-to-one, and its continuous optical depth
   supplies connected projected Sun and Moon shadows.
+- **[Explicit]** Directional cloud-shadow rendering stores lower-cloud and
+  canopy optical depth in distinct logical layers of one frame-local sparse
+  world-space tile atlas. A GPU discovery pass requests only projected tiles
+  reached by the current viewport and active celestial lights. Tiles have fixed
+  texel dimensions while their world-space texel size equals the view's
+  world-space pixel footprint, so shadow resolution follows zoom exactly as
+  direct fragment evaluation did. Evaluated gutters preserve filtered seams,
+  and a missing or capacity-limited tile falls back to the canonical procedural
+  query. The atlas has no temporal persistence, does not become simulation
+  state, and is not used for visible lower-cloud bodies or ambient sky light.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent

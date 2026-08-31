@@ -355,7 +355,7 @@ fn cloud_shadow_projection_at(
     );
 }
 
-fn cloud_shadow_depths_at(
+fn procedural_cloud_shadow_depths_at(
     projection: CloudShadowProjection,
 ) -> CloudShadowDepths {
     var depths = CloudShadowDepths(0.0, 0.0);
@@ -386,7 +386,7 @@ fn celestial_cloud_shadow_depths_at(
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 {
             let projection = cloud_shadow_projection_at(position_m, surface_height_m, light);
-            let depths = cloud_shadow_depths_at(projection);
+            let depths = sampled_cloud_shadow_depths_at(projection);
             celestial_depths.low[source_index] = depths.low;
             celestial_depths.upper[source_index] = depths.upper;
         }

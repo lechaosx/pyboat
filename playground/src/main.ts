@@ -1,4 +1,5 @@
 import {
+  playground_cloud_shadow_cache_shader_source,
   playground_diagnostic_shader_source,
   playground_scene_shader_source,
   playground_startup_shader_source,
@@ -990,6 +991,136 @@ const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
+
+type CloudShadowCache = {
+  width: number;
+  height: number;
+  discoveryPipeline: any;
+  fillPipeline: any;
+  discoverySceneBindGroup: any;
+  discoveryPlaygroundBindGroup: any;
+  discoveryBindGroup: any;
+  fillSceneBindGroup: any;
+  fillPlaygroundBindGroup: any;
+  fillBindGroup: any;
+  sampleBindGroup: any;
+  entries: any;
+  header: any;
+  atlasView: any;
+  resources: any[];
+};
+
+function createCloudShadowCache(
+  discoveryPipeline: any,
+  fillPipeline: any,
+  scenePipeline: any,
+): CloudShadowCache {
+  const width = previewCanvas.width;
+  const height = previewCanvas.height;
+  const tileTexels = 128;
+  const physicalTileTexels = tileTexels + 2;
+  const maximumAxisTiles = Math.max(
+    1,
+    Math.floor(device.limits.maxTextureDimension2D / physicalTileTexels),
+  );
+  const desiredTiles = Math.max(
+    1,
+    4 * Math.ceil(width / tileTexels) * Math.ceil(height / tileTexels),
+  );
+  const maximumTiles = Math.min(desiredTiles, maximumAxisTiles ** 2);
+  const atlasColumns = Math.max(
+    1,
+    Math.min(maximumAxisTiles, Math.ceil(Math.sqrt(maximumTiles))),
+  );
+  const atlasRows = Math.ceil(maximumTiles / atlasColumns);
+  let tableEntries = 1;
+  while (tableEntries < 2 * maximumTiles) tableEntries *= 2;
+  const cacheUniforms = new Uint32Array([
+    width,
+    height,
+    atlasColumns * physicalTileTexels,
+    atlasRows * physicalTileTexels,
+    tableEntries - 1,
+    maximumTiles,
+    atlasColumns,
+    0,
+  ]);
+  const uniformBuffer = device.createBuffer({
+    size: cacheUniforms.byteLength,
+    usage: 0x40 | 0x08,
+    mappedAtCreation: true,
+  });
+  new Uint32Array(uniformBuffer.getMappedRange()).set(cacheUniforms);
+  uniformBuffer.unmap();
+  const header = device.createBuffer({
+    size: 16,
+    usage: 0x80 | 0x100 | 0x08,
+    mappedAtCreation: true,
+  });
+  new Uint32Array(header.getMappedRange()).set([6, 0, 0, 0]);
+  header.unmap();
+  const entries = device.createBuffer({
+    size: tableEntries * 20,
+    usage: 0x80 | 0x08,
+  });
+  const tiles = device.createBuffer({ size: maximumTiles * 16, usage: 0x80 });
+  const atlas = device.createTexture({
+    size: [cacheUniforms[2], cacheUniforms[3]],
+    format: "r16float",
+    usage: 0x04 | 0x10,
+  });
+  const atlasView = atlas.createView();
+  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+  const uniformEntry = { binding: 0, resource: { buffer: uniformBuffer } };
+  return {
+    width,
+    height,
+    discoveryPipeline,
+    fillPipeline,
+    discoverySceneBindGroup: device.createBindGroup({
+      layout: discoveryPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+    }),
+    discoveryPlaygroundBindGroup: device.createBindGroup({
+      layout: discoveryPipeline.getBindGroupLayout(1),
+      entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+    }),
+    discoveryBindGroup: device.createBindGroup({
+      layout: discoveryPipeline.getBindGroupLayout(2),
+      entries: [
+        uniformEntry,
+        { binding: 1, resource: { buffer: header } },
+        { binding: 2, resource: { buffer: entries } },
+        { binding: 3, resource: { buffer: tiles } },
+      ],
+    }),
+    fillSceneBindGroup: device.createBindGroup({
+      layout: fillPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+    }),
+    fillPlaygroundBindGroup: device.createBindGroup({
+      layout: fillPipeline.getBindGroupLayout(1),
+      entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+    }),
+    fillBindGroup: device.createBindGroup({
+      layout: fillPipeline.getBindGroupLayout(2),
+      entries: [uniformEntry, { binding: 4, resource: { buffer: tiles } }],
+    }),
+    sampleBindGroup: device.createBindGroup({
+      layout: scenePipeline.getBindGroupLayout(2),
+      entries: [
+        uniformEntry,
+        { binding: 1, resource: { buffer: entries } },
+        { binding: 2, resource: atlasView },
+        { binding: 3, resource: sampler },
+      ],
+    }),
+    entries,
+    header,
+    atlasView,
+    resources: [uniformBuffer, tiles, atlas, sampler],
+  };
+}
 const timestampQuerySet = timestampQueriesSupported
   ? device.createQuerySet({ type: "timestamp", count: 2 })
   : undefined;
@@ -1015,6 +1146,7 @@ type RenderResources = {
   pipeline: any;
   sceneBindGroup: any;
   playgroundBindGroup?: any;
+  cloudShadowCache?: CloudShadowCache;
 };
 let sceneRenderResources: RenderResources = {
   pipeline: startupPipeline,
@@ -1540,6 +1672,14 @@ function resize(): void {
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;
+    const cache = sceneRenderResources.cloudShadowCache;
+    if (cache) {
+      sceneRenderResources.cloudShadowCache = createCloudShadowCache(
+        cache.discoveryPipeline,
+        cache.fillPipeline,
+        sceneRenderResources.pipeline,
+      );
+    }
   }
 }
 
@@ -1643,6 +1783,41 @@ function frame(now: number): void {
     gpuSamplesInWindow = 0;
   }
   const timestampReadback = timestampReadbacks.find((readback) => !readback.pending);
+  const cache = renderResources.cloudShadowCache;
+  if (cache) {
+    encoder.clearBuffer(cache.entries);
+    encoder.clearBuffer(cache.header, 4, 4);
+    const discoveryPassDescriptor: any = {};
+    if (timestampReadback) {
+      discoveryPassDescriptor.timestampWrites = {
+        querySet: timestampQuerySet,
+        beginningOfPassWriteIndex: 0,
+      };
+    }
+    const discoveryPass = encoder.beginComputePass(discoveryPassDescriptor);
+    discoveryPass.setPipeline(cache.discoveryPipeline);
+    discoveryPass.setBindGroup(0, cache.discoverySceneBindGroup);
+    discoveryPass.setBindGroup(1, cache.discoveryPlaygroundBindGroup);
+    discoveryPass.setBindGroup(2, cache.discoveryBindGroup);
+    discoveryPass.dispatchWorkgroups(
+      Math.ceil(previewCanvas.width / 128),
+      Math.ceil(previewCanvas.height / 128),
+    );
+    discoveryPass.end();
+    const fillPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: cache.atlasView,
+        loadOp: "load",
+        storeOp: "store",
+      }],
+    });
+    fillPass.setPipeline(cache.fillPipeline);
+    fillPass.setBindGroup(0, cache.fillSceneBindGroup);
+    fillPass.setBindGroup(1, cache.fillPlaygroundBindGroup);
+    fillPass.setBindGroup(2, cache.fillBindGroup);
+    fillPass.drawIndirect(cache.header, 0);
+    fillPass.end();
+  }
   const renderPassDescriptor: any = {
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
@@ -1654,7 +1829,7 @@ function frame(now: number): void {
   if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet,
-      beginningOfPassWriteIndex: 0,
+      ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
       endOfPassWriteIndex: 1,
     };
   }
@@ -1664,6 +1839,7 @@ function frame(now: number): void {
   if (renderResources.playgroundBindGroup) {
     pass.setBindGroup(1, renderResources.playgroundBindGroup);
   }
+  if (cache) pass.setBindGroup(2, cache.sampleBindGroup);
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
@@ -1702,10 +1878,29 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   .then(async () => {
     const compilationStartedAt = performance.now();
     const sceneShader = device.createShaderModule({ code: playground_scene_shader_source() });
-    const scenePipeline = await createPlaygroundPipeline(
-      sceneShader,
-      "fragment_playground_scene",
-    );
+    const cacheShader = device.createShaderModule({
+      code: playground_cloud_shadow_cache_shader_source(),
+    });
+    const [scenePipeline, discoveryPipeline, fillPipeline] = await Promise.all([
+      createPlaygroundPipeline(sceneShader, "fragment_playground_scene"),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: cacheShader,
+          entryPoint: "discover_cloud_shadow_cache_tiles",
+        },
+      }),
+      device.createRenderPipelineAsync({
+        layout: "auto",
+        vertex: { module: cacheShader, entryPoint: "cloud_shadow_cache_vertex" },
+        fragment: {
+          module: cacheShader,
+          entryPoint: "cloud_shadow_cache_fragment",
+          targets: [{ format: "r16float" }],
+        },
+        primitive: { topology: "triangle-list" },
+      }),
+    ]);
     sceneRenderResources = {
       pipeline: scenePipeline,
       sceneBindGroup: device.createBindGroup({
@@ -1716,6 +1911,11 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         layout: scenePipeline.getBindGroupLayout(1),
         entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
       }),
+      cloudShadowCache: createCloudShadowCache(
+        discoveryPipeline,
+        fillPipeline,
+        scenePipeline,
+      ),
     };
     sceneCompilationStatus = `full scene ready in ${((performance.now() - compilationStartedAt) / 1000).toFixed(1)} s`;
   })

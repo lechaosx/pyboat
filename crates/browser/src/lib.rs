@@ -18,13 +18,66 @@ mod diagnostics;
 mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
+pub const CLOUD_SHADOW_CACHE_TILE_TEXELS: u32 = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloudShadowCacheLayout {
+    pub atlas_width: u32,
+    pub atlas_height: u32,
+    pub atlas_columns: u32,
+    pub maximum_tiles: u32,
+    pub table_entries: u32,
+}
+
+pub fn cloud_shadow_cache_layout(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+) -> CloudShadowCacheLayout {
+    let screen_columns = viewport_width.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
+    let screen_rows = viewport_height.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
+    let desired_tiles = 4u32
+        .saturating_mul(screen_columns)
+        .saturating_mul(screen_rows)
+        .max(1);
+    let physical_tile_texels = CLOUD_SHADOW_CACHE_TILE_TEXELS + 2;
+    let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
+    let maximum_tiles = desired_tiles.min(maximum_axis_tiles.saturating_pow(2));
+    let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
+    let atlas_columns = square_columns.min(maximum_axis_tiles).max(1);
+    let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
+    let table_entries = maximum_tiles.saturating_mul(2).next_power_of_two();
+
+    CloudShadowCacheLayout {
+        atlas_width: atlas_columns * physical_tile_texels,
+        atlas_height: atlas_rows * physical_tile_texels,
+        atlas_columns,
+        maximum_tiles,
+        table_entries,
+    }
+}
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) const SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) const CLOUD_SHADOW_CACHE_SHADER: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/scene-production-cloud-shadow-cache.wgsl"
+));
 
 #[cfg(any(feature = "playground", test))]
 pub(crate) const PLAYGROUND_SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-playground.wgsl"));
+
+#[cfg(any(feature = "playground", test))]
+const PLAYGROUND_DIRECT_SCENE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/scene-playground-direct.wgsl"));
+
+#[cfg(any(feature = "playground", test))]
+pub(crate) const PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/scene-playground-cloud-shadow-cache.wgsl"
+));
 
 #[cfg(any(all(target_arch = "wasm32", feature = "playground"), test))]
 pub(crate) const PLAYGROUND_STARTUP_SHADER: &str =
@@ -36,6 +89,16 @@ include!(concat!(env!("OUT_DIR"), "/diagnostic-shaders.rs"));
 #[cfg(feature = "playground")]
 pub fn playground_scene_shader_source() -> &'static str {
     PLAYGROUND_SCENE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn playground_direct_scene_shader_source() -> &'static str {
+    PLAYGROUND_DIRECT_SCENE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn playground_cloud_shadow_cache_shader_source() -> &'static str {
+    PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -992,8 +1055,38 @@ mod tests {
             variable
                 .binding
                 .as_ref()
-                .is_none_or(|binding| binding.group == 0)
+                .is_none_or(|binding| binding.group == 0 || binding.group == 2)
         }));
+
+        let cache = naga::front::wgsl::parse_str(CLOUD_SHADOW_CACHE_SHADER).unwrap();
+        let cache_entry_points: Vec<_> = cache
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            cache_entry_points,
+            [
+                (
+                    naga::ShaderStage::Compute,
+                    "discover_cloud_shadow_cache_tiles",
+                ),
+                (naga::ShaderStage::Vertex, "cloud_shadow_cache_vertex"),
+                (naga::ShaderStage::Fragment, "cloud_shadow_cache_fragment",),
+            ],
+        );
+    }
+
+    #[test]
+    fn cloud_shadow_cache_capacity_tracks_screen_resolution() {
+        let layout = cloud_shadow_cache_layout(1920, 1080, 8192);
+
+        assert_eq!(layout.maximum_tiles, 4 * 15 * 9);
+        assert!(layout.table_entries >= 2 * layout.maximum_tiles);
+        assert!(layout.table_entries.is_power_of_two());
+        assert!(layout.atlas_width <= 8192);
+        assert!(layout.atlas_height <= 8192);
+        assert!(layout.atlas_columns > 0);
     }
 
     #[test]
@@ -1025,6 +1118,12 @@ mod tests {
                 (naga::ShaderStage::Fragment, "fragment_playground_scene"),
             ],
         );
+
+        let cache = naga::front::wgsl::parse_str(PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER).unwrap();
+        assert_eq!(cache.entry_points.len(), 3);
+
+        let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();
+        assert_eq!(direct.entry_points.len(), 2);
 
         for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
             let source = generated_playground_diagnostic_shader(name).unwrap();
