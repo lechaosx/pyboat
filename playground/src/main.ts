@@ -28,6 +28,9 @@ import "./style.css";
 type Domain = "weather" | "landscape" | "water";
 
 let useShadowCache = true;
+let shadowCacheTileTexels = 128;
+let shadowCacheDebugMode = 0;
+let shadowCacheInfoElement: HTMLElement | undefined;
 
 type State = {
   seed: string;
@@ -360,6 +363,12 @@ function renderControls(): void {
   };
   diagnosticSelect.addEventListener("change", () => {
     state.diagnostic = diagnosticSelect.value as DiagnosticSelection;
+    if (state.diagnostic !== "scene" && shadowCacheDebugMode !== 0) {
+      shadowCacheDebugMode = 0;
+      cacheDebugSelect.value = "0";
+      cacheLegend.hidden = true;
+      recreateShadowCache();
+    }
     updateDiagnosticUI();
   });
   diagnosticReset.addEventListener("click", () => {
@@ -386,9 +395,80 @@ function renderControls(): void {
   cacheHeading.textContent = "Cached shadow fields";
   cacheInput.addEventListener("change", () => {
     useShadowCache = cacheInput.checked;
+    if (!useShadowCache && shadowCacheDebugMode !== 0) {
+      shadowCacheDebugMode = 0;
+      cacheDebugSelect.value = "0";
+      cacheLegend.hidden = true;
+      recreateShadowCache();
+    }
   });
   cacheLabel.append(cacheInput, cacheHeading);
-  diagnosticSection.append(cacheLabel);
+  const cacheDebugLabel = document.createElement("div");
+  cacheDebugLabel.className = "select-control cache-control";
+  const cacheDebugHeading = document.createElement("label");
+  cacheDebugHeading.className = "control-name";
+  cacheDebugHeading.textContent = "Cache view";
+  const cacheDebugSelect = document.createElement("select");
+  cacheDebugSelect.id = "shadow-cache-debug";
+  cacheDebugHeading.htmlFor = cacheDebugSelect.id;
+  for (const [value, label] of [["0", "Scene"], ["1", "Activity"], ["2", "Atlas"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    cacheDebugSelect.append(option);
+  }
+  cacheDebugSelect.value = String(shadowCacheDebugMode);
+  cacheDebugSelect.addEventListener("change", () => {
+    shadowCacheDebugMode = Number(cacheDebugSelect.value);
+    cacheLegend.hidden = shadowCacheDebugMode === 0;
+    if (shadowCacheDebugMode !== 0) {
+      useShadowCache = true;
+      cacheInput.checked = true;
+      state.diagnostic = "scene";
+      diagnosticSelect.value = state.diagnostic;
+      updateDiagnosticUI();
+    }
+    recreateShadowCache();
+  });
+  cacheDebugLabel.append(cacheDebugHeading, cacheDebugSelect);
+  const tileSizeLabel = document.createElement("div");
+  tileSizeLabel.className = "select-control cache-control";
+  const tileSizeHeading = document.createElement("label");
+  tileSizeHeading.className = "control-name";
+  tileSizeHeading.textContent = "Tile size";
+  const tileSizeSelect = document.createElement("select");
+  tileSizeSelect.id = "shadow-cache-tile-size";
+  tileSizeHeading.htmlFor = tileSizeSelect.id;
+  for (const tileTexels of [32, 64, 128, 256]) {
+    const option = document.createElement("option");
+    option.value = String(tileTexels);
+    option.textContent = `${tileTexels} px`;
+    tileSizeSelect.append(option);
+  }
+  tileSizeSelect.value = String(shadowCacheTileTexels);
+  tileSizeSelect.addEventListener("change", () => {
+    shadowCacheTileTexels = Number(tileSizeSelect.value);
+    recreateShadowCache();
+  });
+  tileSizeLabel.append(tileSizeHeading, tileSizeSelect);
+  shadowCacheInfoElement = document.createElement("div");
+  shadowCacheInfoElement.className = "cache-info";
+  const cacheLegend = document.createElement("div");
+  cacheLegend.className = "cache-legend";
+  cacheLegend.hidden = shadowCacheDebugMode === 0;
+  cacheLegend.innerHTML = [
+    '<span><i class="cache-low"></i>Low cloud</span>',
+    '<span><i class="cache-upper"></i>Canopy</span>',
+    '<span><i class="cache-terrain"></i>Terrain</span>',
+    '<span><i class="cache-fallback"></i>Fallback</span>',
+  ].join("");
+  diagnosticSection.append(
+    cacheLabel,
+    cacheDebugLabel,
+    tileSizeLabel,
+    shadowCacheInfoElement,
+    cacheLegend,
+  );
   controlsElement.append(diagnosticSection);
 }
 
@@ -1013,6 +1093,13 @@ const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, us
 type CloudShadowCache = {
   width: number;
   height: number;
+  tileTexels: number;
+  maximumTiles: number;
+  atlasWidth: number;
+  atlasHeight: number;
+  liveTiles?: number;
+  tileCountPending: boolean;
+  tileCountReadback: any;
   discoveryPipeline: any;
   fillPipeline: any;
   discoverySceneBindGroup: any;
@@ -1035,7 +1122,7 @@ function createCloudShadowCache(
 ): CloudShadowCache {
   const width = previewCanvas.width;
   const height = previewCanvas.height;
-  const tileTexels = 128;
+  const tileTexels = shadowCacheTileTexels;
   const physicalTileTexels = tileTexels + 2;
   const maximumAxisTiles = Math.max(
     1,
@@ -1061,6 +1148,10 @@ function createCloudShadowCache(
     tableEntries - 1,
     maximumTiles,
     atlasColumns,
+    tileTexels,
+    0,
+    0,
+    0,
     0,
   ]);
   const uniformBuffer = device.createBuffer({
@@ -1072,7 +1163,7 @@ function createCloudShadowCache(
   uniformBuffer.unmap();
   const header = device.createBuffer({
     size: 16,
-    usage: 0x80 | 0x100 | 0x08,
+    usage: 0x80 | 0x100 | 0x08 | 0x04,
     mappedAtCreation: true,
   });
   new Uint32Array(header.getMappedRange()).set([6, 0, 0, 0]);
@@ -1082,6 +1173,15 @@ function createCloudShadowCache(
     usage: 0x80 | 0x08,
   });
   const tiles = device.createBuffer({ size: maximumTiles * 16, usage: 0x80 });
+  const tileCountReadback = device.createBuffer({ size: 16, usage: 0x01 | 0x08 });
+  const debugUniforms = new Uint32Array([shadowCacheDebugMode, 0, 0, 0]);
+  const debugBuffer = device.createBuffer({
+    size: debugUniforms.byteLength,
+    usage: 0x40,
+    mappedAtCreation: true,
+  });
+  new Uint32Array(debugBuffer.getMappedRange()).set(debugUniforms);
+  debugBuffer.unmap();
   const atlas = device.createTexture({
     size: [cacheUniforms[2], cacheUniforms[3]],
     format: "r16float",
@@ -1093,6 +1193,12 @@ function createCloudShadowCache(
   return {
     width,
     height,
+    tileTexels,
+    maximumTiles,
+    atlasWidth: cacheUniforms[2],
+    atlasHeight: cacheUniforms[3],
+    tileCountPending: false,
+    tileCountReadback,
     discoveryPipeline,
     fillPipeline,
     discoverySceneBindGroup: device.createBindGroup({
@@ -1131,12 +1237,15 @@ function createCloudShadowCache(
         { binding: 1, resource: { buffer: entries } },
         { binding: 2, resource: atlasView },
         { binding: 3, resource: sampler },
+        { binding: 4, resource: { buffer: tiles } },
+        { binding: 5, resource: { buffer: header } },
+        { binding: 6, resource: { buffer: debugBuffer } },
       ],
     }),
     entries,
     header,
     atlasView,
-    resources: [uniformBuffer, tiles, atlas, sampler],
+    resources: [uniformBuffer, tiles, atlas, sampler, tileCountReadback, debugBuffer],
   };
 }
 const timestampQuerySet = timestampQueriesSupported
@@ -1176,6 +1285,31 @@ let sceneCompilationStatus = "compiling full scene";
 const diagnosticShaderModules = new Map<string, any>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
+
+function updateShadowCacheInfo(cache?: CloudShadowCache): void {
+  if (!shadowCacheInfoElement) return;
+  if (!cache) {
+    if (shadowCacheInfoElement.textContent !== "Direct evaluation") {
+      shadowCacheInfoElement.textContent = "Direct evaluation";
+    }
+    return;
+  }
+  const liveTiles = cache.liveTiles === undefined ? "—" : String(cache.liveTiles);
+  const worldTexelM = state.viewHeight / previewCanvas.height;
+  const text = `${liveTiles} / ${cache.maximumTiles} live tiles · ${cache.atlasWidth} × ${cache.atlasHeight} atlas · ${formatDistance(worldTexelM)}/texel`;
+  if (shadowCacheInfoElement.textContent !== text) shadowCacheInfoElement.textContent = text;
+}
+
+function recreateShadowCache(): void {
+  const cache = sceneRenderResources.cloudShadowCache;
+  if (!cache) return;
+  sceneRenderResources.cloudShadowCache = createCloudShadowCache(
+    cache.discoveryPipeline,
+    cache.fillPipeline,
+    sceneRenderResources.pipeline,
+  );
+  updateShadowCacheInfo(sceneRenderResources.cloudShadowCache);
+}
 
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
@@ -1696,11 +1830,7 @@ function resize(): void {
     previewCanvas.height = height;
     const cache = sceneRenderResources.cloudShadowCache;
     if (cache) {
-      sceneRenderResources.cloudShadowCache = createCloudShadowCache(
-        cache.discoveryPipeline,
-        cache.fillPipeline,
-        sceneRenderResources.pipeline,
-      );
+      recreateShadowCache();
     }
   }
 }
@@ -1745,10 +1875,13 @@ let measuredDiscoveryGpuMilliseconds: number | undefined;
 let measuredFillGpuMilliseconds: number | undefined;
 let measuredSceneGpuMilliseconds: number | undefined;
 let timedPipeline: any;
+let timedCache: CloudShadowCache | undefined;
 let timedUsesShadowCache = false;
 let nextDiagnosticsAt = 0;
+let nextShadowCacheInfoAt = 0;
 
 function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
+  updateShadowCacheInfo(renderResourcesForFrame().cloudShadowCache);
   framesInWindow += 1;
   ticksInWindow += ticks;
   const windowSeconds = (now - statisticsStartedAt) / 1000;
@@ -1814,8 +1947,9 @@ function frame(now: number): void {
   );
   const encoder = device.createCommandEncoder();
   const renderResources = renderResourcesForFrame();
-  if (renderResources.pipeline !== timedPipeline) {
+  if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {
     timedPipeline = renderResources.pipeline;
+    timedCache = renderResources.cloudShadowCache;
     timedUsesShadowCache = Boolean(renderResources.cloudShadowCache);
     measuredGpuMilliseconds = undefined;
     measuredDiscoveryGpuMilliseconds = undefined;
@@ -1853,7 +1987,9 @@ function frame(now: number): void {
     const fillPassDescriptor: any = {
       colorAttachments: [{
         view: cache.atlasView,
-        loadOp: "load",
+        ...(shadowCacheDebugMode === 2
+          ? { clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear" }
+          : { loadOp: "load" }),
         storeOp: "store",
       }],
     };
@@ -1896,6 +2032,13 @@ function frame(now: number): void {
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
+  let cacheInfoReadback: CloudShadowCache | undefined;
+  if (cache && now >= nextShadowCacheInfoAt && !cache.tileCountPending) {
+    encoder.copyBufferToBuffer(cache.header, 0, cache.tileCountReadback, 0, 16);
+    cache.tileCountPending = true;
+    cacheInfoReadback = cache;
+    nextShadowCacheInfoAt = now + 500;
+  }
   if (timestampReadback) {
     const timestampCount = cache ? 4 : 2;
     const timestampBytes = timestampCount * 8;
@@ -1912,6 +2055,20 @@ function frame(now: number): void {
     timestampReadback.cached = Boolean(cache);
   }
   device.queue.submit([encoder.finish()]);
+  if (cacheInfoReadback) {
+    const readbackCache = cacheInfoReadback;
+    void readbackCache.tileCountReadback.mapAsync(0x0001).then(() => {
+      readbackCache.liveTiles = new Uint32Array(
+        readbackCache.tileCountReadback.getMappedRange(),
+      )[1];
+      readbackCache.tileCountReadback.unmap();
+      if (sceneRenderResources.cloudShadowCache === readbackCache) {
+        updateShadowCacheInfo(readbackCache);
+      }
+    }).catch(() => {}).finally(() => {
+      readbackCache.tileCountPending = false;
+    });
+  }
   if (timestampReadback) {
     void timestampReadback.buffer.mapAsync(0x0001).then(() => {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());

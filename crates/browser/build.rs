@@ -18,9 +18,23 @@ const SCENE_COMPONENTS: &[&str] = &[
 fn main() {
     let scene = read_components(SCENE_COMPONENTS);
     let cache_sample = read_component("src/shader/components/cloud-shadow-cache-sample.wgsl");
+    let cache_debug_disabled =
+        read_component("src/shader/components/cloud-shadow-cache-debug-disabled.wgsl");
+    let cache_fixed_tile =
+        read_component("src/shader/components/cloud-shadow-cache-fixed-tile.wgsl");
+    let cache_runtime_tile =
+        read_component("src/shader/components/cloud-shadow-cache-runtime-tile.wgsl");
+    let playground_cache_debug =
+        read_component("src/shader/components/playground-cloud-shadow-cache-debug.wgsl");
     let direct_cloud_shadows = read_component("src/shader/components/direct-cloud-shadows.wgsl");
     let production_entry = read_component("src/shader/production-entry.wgsl");
-    let production = compose(&[&scene, &cache_sample, &production_entry]);
+    let production = compose(&[
+        &scene,
+        &cache_sample,
+        &cache_fixed_tile,
+        &cache_debug_disabled,
+        &production_entry,
+    ]);
     write_shader(
         &production,
         &["vertex", "fragment"],
@@ -30,6 +44,7 @@ fn main() {
     let production_cache = compose(&[
         &scene,
         &direct_cloud_shadows,
+        &cache_fixed_tile,
         &production_entry,
         &cache_generate,
         &read_component("src/shader/production-cloud-shadow-cache-entry.wgsl"),
@@ -57,6 +72,7 @@ fn main() {
     let playground = compose(&[
         &scene,
         &cache_sample,
+        &playground_cache_debug,
         &playground_interface,
         &read_component("src/shader/playground-entry.wgsl"),
     ]);
@@ -79,6 +95,7 @@ fn main() {
     let playground_cache = compose(&[
         &scene,
         &direct_cloud_shadows,
+        &cache_runtime_tile,
         &playground_interface,
         &cache_generate,
         &read_component("src/shader/playground-cloud-shadow-cache-entry.wgsl"),

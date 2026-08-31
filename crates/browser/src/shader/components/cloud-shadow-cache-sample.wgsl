@@ -4,7 +4,11 @@ struct CloudShadowCacheUniforms {
     table_mask: u32,
     maximum_tiles: u32,
     atlas_columns: u32,
-    padding: u32,
+    tile_texels: u32,
+    padding_0: u32,
+    padding_1: u32,
+    padding_2: u32,
+    padding_3: u32,
 };
 
 struct CloudShadowCacheEntry {
@@ -27,8 +31,6 @@ var cloud_shadow_cache_atlas: texture_2d<f32>;
 @group(2) @binding(3)
 var cloud_shadow_cache_sampler: sampler;
 
-const CLOUD_SHADOW_CACHE_TILE_TEXELS: f32 = 128.0;
-const CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS: u32 = 130u;
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 
 fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
@@ -47,7 +49,7 @@ fn cloud_shadow_cache_tile_key(position_m: vec2<f32>) -> vec2<f32> {
         / visual_pixel_footprint_m;
     return floor(
         (sample_position - vec2<f32>(0.5))
-            / CLOUD_SHADOW_CACHE_TILE_TEXELS,
+            / f32(shadow_cache_tile_texels()),
     );
 }
 
@@ -88,17 +90,18 @@ fn cached_cloud_shadow_optical_depth(
 ) -> f32 {
     let key = cloud_shadow_cache_tile_key(position_m);
     let slot = cloud_shadow_cache_slot(key, layer);
+    record_shadow_cache_lookup(layer, slot < cloud_shadow_cache.maximum_tiles);
     if slot >= cloud_shadow_cache.maximum_tiles {
         return -1.0;
     }
     let slot_origin_px = vec2<u32>(
         slot % cloud_shadow_cache.atlas_columns,
         slot / cloud_shadow_cache.atlas_columns,
-    ) * CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS;
+    ) * (shadow_cache_tile_texels() + 2u);
     let sample_position = cloud_shadow_cache_relative_position(position_m)
         / visual_pixel_footprint_m;
     let local_position_px = sample_position
-        - key * CLOUD_SHADOW_CACHE_TILE_TEXELS
+        - key * f32(shadow_cache_tile_texels())
         + vec2<f32>(1.0);
     let atlas_position_px = vec2<f32>(slot_origin_px) + local_position_px;
     let atlas_uv = atlas_position_px / vec2<f32>(cloud_shadow_cache.atlas_size_px);
@@ -122,17 +125,18 @@ fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
 fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     let key = cloud_shadow_cache_tile_key(position_m);
     let slot = cloud_shadow_cache_slot(key, 2u);
+    record_shadow_cache_lookup(2u, slot < cloud_shadow_cache.maximum_tiles);
     if slot >= cloud_shadow_cache.maximum_tiles {
         return broad_landform_elevation_m(position_m);
     }
     let slot_origin_px = vec2<u32>(
         slot % cloud_shadow_cache.atlas_columns,
         slot / cloud_shadow_cache.atlas_columns,
-    ) * CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS;
+    ) * (shadow_cache_tile_texels() + 2u);
     let sample_position = cloud_shadow_cache_relative_position(position_m)
         / visual_pixel_footprint_m;
     let local_position_px = sample_position
-        - key * CLOUD_SHADOW_CACHE_TILE_TEXELS
+        - key * f32(shadow_cache_tile_texels())
         + vec2<f32>(1.0);
     let atlas_position_px = vec2<f32>(slot_origin_px) + local_position_px;
     let atlas_uv = atlas_position_px / vec2<f32>(cloud_shadow_cache.atlas_size_px);

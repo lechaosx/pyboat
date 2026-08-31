@@ -38,7 +38,7 @@ Choose what you want to run:
 | Browser workspace | `bun run dev` |
 
 The procedural playground keeps a full live preview beside one continuous panel
-for tuning, playback, and diagnostics.
+for tuning, playback, field diagnostics, and sparse shadow-cache inspection.
 
 ### Browser multiplayer
 

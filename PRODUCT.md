@@ -272,6 +272,11 @@ current playable behavior; this file does not track delivery status.
   second, transport third, and cloud, shadow, lighting, and final-composition
   results afterward. They visualize existing model inputs and derivations rather
   than introducing diagnostic-only world fields.
+- **[Explicit]** Shadow-cache diagnostics expose cache activity and the live tile
+  atlas with field-specific colors, report tile occupancy and atlas resolution,
+  and let the lab compare a small fixed set of tile sizes. Selecting a cache view
+  activates final composition and the cached renderer; production keeps its
+  fixed tile size and contains no playground instrumentation.
 - **[Explicit]** Intermediate weather and water mechanisms have no user-facing
   switches. The playground enables them when an active color stage or
   selected diagnostic consumes them and disables them when nothing does.

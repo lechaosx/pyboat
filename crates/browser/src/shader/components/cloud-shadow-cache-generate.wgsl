@@ -4,7 +4,11 @@ struct CloudShadowCacheUniforms {
     table_mask: u32,
     maximum_tiles: u32,
     atlas_columns: u32,
-    padding: u32,
+    tile_texels: u32,
+    padding_0: u32,
+    padding_1: u32,
+    padding_2: u32,
+    padding_3: u32,
 };
 
 struct CloudShadowCacheHeader {
@@ -44,8 +48,6 @@ var<storage, read_write> cloud_shadow_cache_tiles: array<CloudShadowCacheTile>;
 @group(2) @binding(4)
 var<storage, read> cloud_shadow_cache_tiles_for_rendering: array<CloudShadowCacheTile>;
 
-const CLOUD_SHADOW_CACHE_TILE_TEXELS: f32 = 128.0;
-const CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS: u32 = 130u;
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 const CLOUD_SHADOW_CACHE_DISCOVERY_STRIDE_PX: u32 = 16u;
 
@@ -65,7 +67,7 @@ fn cloud_shadow_cache_tile_key(position_m: vec2<f32>) -> vec2<f32> {
         / visual_pixel_footprint_m;
     return floor(
         (sample_position - vec2<f32>(0.5))
-            / CLOUD_SHADOW_CACHE_TILE_TEXELS,
+            / f32(shadow_cache_tile_texels()),
     );
 }
 
@@ -353,14 +355,14 @@ fn cloud_shadow_cache_vertex(
         instance_index / cloud_shadow_cache.atlas_columns,
     );
     let local_position_px = corners[vertex_index]
-        * f32(CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS);
+        * f32(shadow_cache_tile_texels() + 2u);
     let atlas_position_px = vec2<f32>(
-        atlas_tile * CLOUD_SHADOW_CACHE_PHYSICAL_TILE_TEXELS,
+        atlas_tile * (shadow_cache_tile_texels() + 2u),
     ) + local_position_px;
     let atlas_position = atlas_position_px / vec2<f32>(cloud_shadow_cache.atlas_size_px);
     let key = vec2<f32>(bitcast<f32>(tile.key_x), bitcast<f32>(tile.key_y));
     let relative_position_m = (
-        key * CLOUD_SHADOW_CACHE_TILE_TEXELS
+        key * f32(shadow_cache_tile_texels())
             + local_position_px
             - vec2<f32>(1.0)
     ) * visual_pixel_footprint_m;

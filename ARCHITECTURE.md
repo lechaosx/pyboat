@@ -275,13 +275,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   ground shadows can therefore shade visible lower clouds, and overlapping
   landform-shadow rays share their blocker elevation without eagerly evaluating
   disjoint close-zoom rays. Cloud discovery uses broad receiver elevation while
-  final cloud projection retains exact fragment elevation. Tiles have fixed texel
-  dimensions while their world-space texel size equals the view's world-space
-  pixel footprint, so resolution follows zoom exactly as direct fragment
-  evaluation did. Evaluated gutters preserve filtered seams, and a missing or
-  capacity-limited tile falls back to the canonical procedural query. The atlas
-  has no temporal persistence, does not become simulation state, and is not used
-  for visible lower-cloud bodies or ambient sky light.
+  final cloud projection retains exact fragment elevation. Production tiles have
+  fixed 128-texel dimensions while their world-space texel size equals the view's
+  world-space pixel footprint, so resolution follows zoom exactly as direct
+  fragment evaluation did. Evaluated gutters preserve filtered seams, and a
+  missing or capacity-limited tile falls back to the canonical procedural query.
+  The atlas has no temporal persistence, does not become simulation state, and
+  is not used for visible lower-cloud bodies or ambient sky light.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -436,6 +436,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   dependency closure. Related scalar views share diagnostic modules selected by
   pipeline overrides while reading the same primary and derived field functions
   as production rendering.
+- **[Explicit]** Playground cache diagnostics report live and allocated tile
+  counts, atlas dimensions, and world-space texel resolution. The lab can display
+  cache hits by logical field, direct-query fallbacks, or the current atlas, and
+  can recreate it with 32-, 64-, 128-, or 256-texel tiles without changing the
+  world-space resolution of one texel. Its counters, tile metadata, and debug
+  bindings are absent from the production scene shader.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

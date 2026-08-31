@@ -34,13 +34,27 @@ pub fn cloud_shadow_cache_layout(
     viewport_height: u32,
     maximum_texture_dimension: u32,
 ) -> CloudShadowCacheLayout {
-    let screen_columns = viewport_width.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
-    let screen_rows = viewport_height.div_ceil(CLOUD_SHADOW_CACHE_TILE_TEXELS);
+    cloud_shadow_cache_layout_for_tile_size(
+        viewport_width,
+        viewport_height,
+        maximum_texture_dimension,
+        CLOUD_SHADOW_CACHE_TILE_TEXELS,
+    )
+}
+
+pub fn cloud_shadow_cache_layout_for_tile_size(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+    tile_texels: u32,
+) -> CloudShadowCacheLayout {
+    let screen_columns = viewport_width.div_ceil(tile_texels);
+    let screen_rows = viewport_height.div_ceil(tile_texels);
     let desired_tiles = 6u32
         .saturating_mul(screen_columns.saturating_add(1))
         .saturating_mul(screen_rows.saturating_add(1))
         .max(1);
-    let physical_tile_texels = CLOUD_SHADOW_CACHE_TILE_TEXELS + 2;
+    let physical_tile_texels = tile_texels + 2;
     let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
     let maximum_tiles = desired_tiles.min(maximum_axis_tiles.saturating_pow(2));
     let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
@@ -1057,6 +1071,12 @@ mod tests {
                 .as_ref()
                 .is_none_or(|binding| binding.group == 0 || binding.group == 2)
         }));
+        assert!(module.global_variables.iter().all(|(_, variable)| {
+            variable
+                .binding
+                .as_ref()
+                .is_none_or(|binding| binding.group != 2 || binding.binding <= 3)
+        }));
 
         let cache = naga::front::wgsl::parse_str(CLOUD_SHADOW_CACHE_SHADER).unwrap();
         let cache_entry_points: Vec<_> = cache
@@ -1090,6 +1110,17 @@ mod tests {
     }
 
     #[test]
+    fn cloud_shadow_cache_capacity_tracks_selected_tile_size() {
+        let layout = cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 64);
+
+        assert_eq!(layout.maximum_tiles, 6 * 31 * 18);
+        assert_eq!(layout.atlas_width % 66, 0);
+        assert_eq!(layout.atlas_height % 66, 0);
+        assert!(layout.atlas_width <= 8192);
+        assert!(layout.atlas_height <= 8192);
+    }
+
+    #[test]
     fn playground_shaders_expose_only_their_selected_interfaces() {
         let startup = naga::front::wgsl::parse_str(PLAYGROUND_STARTUP_SHADER).unwrap();
         let startup_entry_points: Vec<_> = startup
@@ -1106,6 +1137,12 @@ mod tests {
         );
 
         let scene = naga::front::wgsl::parse_str(PLAYGROUND_SCENE_SHADER).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&scene)
+        .unwrap();
         let scene_entry_points: Vec<_> = scene
             .entry_points
             .iter()
@@ -1120,6 +1157,12 @@ mod tests {
         );
 
         let cache = naga::front::wgsl::parse_str(PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&cache)
+        .unwrap();
         assert_eq!(cache.entry_points.len(), 3);
 
         let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();

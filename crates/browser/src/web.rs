@@ -517,7 +517,8 @@ struct CloudShadowCacheUniforms {
     table_mask: u32,
     maximum_tiles: u32,
     atlas_columns: u32,
-    padding: u32,
+    tile_texels: u32,
+    padding: [u32; 4],
 }
 
 struct CloudShadowCacheResources {
@@ -754,7 +755,8 @@ impl CloudShadowCache {
             table_mask: layout.table_entries - 1,
             maximum_tiles: layout.maximum_tiles,
             atlas_columns: layout.atlas_columns,
-            padding: 0,
+            tile_texels: crate::CLOUD_SHADOW_CACHE_TILE_TEXELS,
+            padding: [0; 4],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cloud shadow cache uniforms"),
