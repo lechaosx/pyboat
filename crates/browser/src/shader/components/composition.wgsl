@@ -66,7 +66,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
     light: vec3<f32>,
     light_amount: f32,
 ) -> f32 {
-    if light_amount <= 0.0 || light.z <= 0.0 {
+    if light_amount <= 0.0 || cloud_shadow_contrast(light) <= 0.0 {
         return 1.0;
     }
     let projected_position_m = projected_cloud_position(

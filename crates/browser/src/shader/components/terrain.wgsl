@@ -520,7 +520,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         terrain_position_m,
         terrain_circle_position,
         1536.0,
-        5u,
+        3u,
         0.35,
         TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     );
@@ -608,8 +608,8 @@ fn landform_shadow_transmittance_for_light(
     let ray_slope = light_direction.z / horizontal_light;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     var occlusion = 0.0;
-    for (var sample_index = 0u; sample_index < 5u; sample_index++) {
-        let distance_m = reach_m * exp2(f32(sample_index) - 4.0);
+    for (var sample_index = 0u; sample_index < 4u; sample_index++) {
+        let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
         let blocker_elevation_m = broad_landform_elevation_m(
             position_m + distance_m * toward_light,
         );

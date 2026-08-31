@@ -194,20 +194,12 @@ fn calculate_atmospheric_ambient_color_with_visibility(
 }
 
 fn aerosol_optical_depth_at(
-    position_m: vec2<f32>,
     weather: CloudWeatherSample,
 ) -> f32 {
-    let regional = 0.5 + 0.5 * spatiotemporal_fractal_value(
-        vec2<u32>(0x1f83d9abu, 0xfb41bd6bu),
-        position_m,
-        max(8192.0, 0.125 * scene.world_size_m.x),
-        0.15 * scene.pressure_time_coordinate.x,
-        4u,
-        0.5,
-    );
+    let settled_air = 1.0 - weather.regional.pressure_lift;
     let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
     let unwashed = 1.0 - 0.72 * weather.rain;
-    return mix(0.025, 0.32, clamp(0.68 * regional + 0.32 * dry_air, 0.0, 1.0))
+    return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
         * unwashed;
 }
 
@@ -215,7 +207,7 @@ fn calculate_horizon_scattering() -> f32 {
     let aerosol = smoothstep(
         0.04,
         0.30,
-        aerosol_optical_depth_at(surface_position_m, surface_cloud_weather),
+        aerosol_optical_depth_at(surface_cloud_weather),
     );
     let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
@@ -384,7 +376,7 @@ fn celestial_cloud_shadow_depths_at(
         let is_sun = source_index == 0u;
         let light = select(moon_direction(), sun_direction(), is_sun);
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
-        if light_amount > 0.0 {
+        if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
             let projection = cloud_shadow_projection_at(position_m, surface_height_m, light);
             let depths = sampled_cloud_shadow_depths_at(projection);
             celestial_depths.low[source_index] = depths.low;

@@ -79,7 +79,7 @@ fn diagnostic_lighting_solar_elevation(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
-    let aerosol = aerosol_optical_depth_at(position_m, cloud_weather_conditions_at(position_m));
+    let aerosol = aerosol_optical_depth_at(cloud_weather_conditions_at(position_m));
     return vec4<f32>(scalar_debug_color(aerosol / 0.32), 1.0);
 }
 
