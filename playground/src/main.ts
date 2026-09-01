@@ -224,18 +224,20 @@ const defaults: State = {
 };
 
 const worldDaySeconds = 86_400;
-const worldYearDays = 336;
+const worldYearDays = 365;
+const lunarMonthDays = 28;
 const firstBloodMoonSeconds = 91 * worldDaySeconds - 4 * 60;
 const celestialEventPresets = {
-  "solar-eclipse": 77 * worldDaySeconds,
+  "solar-eclipse": 105 * worldDaySeconds,
   "lunar-eclipse": firstBloodMoonSeconds - 60 * 60,
   "blood-moon": firstBloodMoonSeconds,
 } as const;
 
-function worldPhases(worldTimeSeconds: number): [number, number, number] {
+function worldPhases(worldTimeSeconds: number): [number, number, number, number] {
   const phases = sample_playground_world_phases(worldTimeSeconds);
-  return [phases[0], phases[1], phases[2]];
+  return [phases[0], phases[1], phases[2], phases[3]];
 }
+const lunarEpochDays = worldPhases(0)[3] * lunarMonthDays;
 
 const state: State = { ...defaults };
 
@@ -737,9 +739,10 @@ timeToolbarElement.innerHTML = `
     <summary>Date &amp; time</summary>
     <section class="world-toolbar-section"><h3>World calendar</h3>
       <div class="world-datetime-grid">
-        <label><span>Year</span><input id="world-year" type="number" min="1" step="1"></label>
-        <label><span>Month</span><input id="world-month" type="number" min="1" max="12" step="1"></label>
-        <label><span>Day</span><input id="world-day" type="number" min="1" max="28" step="1"></label>
+        <label><span>Solar year</span><input id="world-year" type="number" min="1" step="1"></label>
+        <label><span>Year day</span><input id="world-year-day" type="number" min="1" max="365" step="1"></label>
+        <label><span>Lunar month</span><input id="world-lunar-month" type="number" readonly></label>
+        <label><span>Lunar day</span><input id="world-lunar-day" type="number" readonly></label>
         <label><span>Time</span><input id="world-time" type="time" step="1"></label>
       </div>
     </section>
@@ -771,8 +774,9 @@ const worldWidthValueInput = worldToolbarElement.querySelector<HTMLInputElement>
 const worldHeightInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height")!;
 const worldHeightValueInput = worldToolbarElement.querySelector<HTMLInputElement>("#world-height-value")!;
 const worldYearInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-year")!;
-const worldMonthInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-month")!;
-const worldDayInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-day")!;
+const worldYearDayInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-year-day")!;
+const worldLunarMonthInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-lunar-month")!;
+const worldLunarDayInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-lunar-day")!;
 const worldTimeInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time")!;
 const positionMeasurementsElement = diagnosticToolbarElement.querySelector<HTMLElement>("#position-measurements")!;
 const derivedOutputHeadingElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
@@ -792,14 +796,16 @@ function syncWorldDateInputs(): void {
   const totalSeconds = Math.max(0, Math.floor(state.worldTimeSeconds));
   const totalDays = Math.floor(totalSeconds / worldDaySeconds);
   const dayOfYear = totalDays % worldYearDays;
+  const lunarDays = Math.floor(totalSeconds / worldDaySeconds + lunarEpochDays);
   const secondsOfDay = totalSeconds % worldDaySeconds;
   const hours = Math.floor(secondsOfDay / 3600);
   const minutes = Math.floor(secondsOfDay % 3600 / 60);
   const seconds = secondsOfDay % 60;
   const values: Array<[HTMLInputElement, string]> = [
     [worldYearInput, String(Math.floor(totalDays / worldYearDays) + 1)],
-    [worldMonthInput, String(Math.floor(dayOfYear / 28) + 1)],
-    [worldDayInput, String(dayOfYear % 28 + 1)],
+    [worldYearDayInput, String(dayOfYear + 1)],
+    [worldLunarMonthInput, String(Math.floor(lunarDays / lunarMonthDays) + 1)],
+    [worldLunarDayInput, String(lunarDays % lunarMonthDays + 1)],
     [worldTimeInput, [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":")],
   ];
   for (const [input, value] of values) {
@@ -809,12 +815,11 @@ function syncWorldDateInputs(): void {
 
 function setWorldDateFromInputs(): void {
   const year = Math.max(1, Math.floor(worldYearInput.valueAsNumber || 1));
-  const month = Math.min(12, Math.max(1, Math.floor(worldMonthInput.valueAsNumber || 1)));
-  const day = Math.min(28, Math.max(1, Math.floor(worldDayInput.valueAsNumber || 1)));
+  const day = Math.min(worldYearDays, Math.max(1, Math.floor(worldYearDayInput.valueAsNumber || 1)));
   const [hours = 0, minutes = 0, seconds = 0] = worldTimeInput.value
     .split(":")
     .map((value) => Number.parseInt(value, 10) || 0);
-  const dayIndex = (year - 1) * worldYearDays + (month - 1) * 28 + day - 1;
+  const dayIndex = (year - 1) * worldYearDays + day - 1;
   state.worldTimeSeconds = dayIndex * worldDaySeconds
     + Math.min(23, hours) * 3600
     + Math.min(59, minutes) * 60
@@ -822,7 +827,7 @@ function setWorldDateFromInputs(): void {
   syncWorldDateInputs();
 }
 
-for (const input of [worldYearInput, worldMonthInput, worldDayInput, worldTimeInput]) {
+for (const input of [worldYearInput, worldYearDayInput, worldTimeInput]) {
   input.addEventListener("change", setWorldDateFromInputs);
 }
 

@@ -128,18 +128,17 @@ const SIMPLEX_GRADIENT_DIRECTIONS: [(f32, f32); 24] = [
     (0.9914449, -0.1305262),
 ];
 const WORLD_DAY_SECONDS: f64 = 86_400.0;
-const WORLD_MONTH_DAYS: f64 = 28.0;
-const WORLD_YEAR_MONTHS: f64 = 12.0;
-const WORLD_YEAR_DAYS: f64 = WORLD_MONTH_DAYS * WORLD_YEAR_MONTHS;
+const WORLD_LUNAR_MONTH_DAYS: f64 = 28.0;
+const WORLD_YEAR_DAYS: f64 = 365.0;
 const WORLD_ORBIT_EPOCH_PHASE: f64 = 0.0021;
-const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_MONTH_DAYS;
+const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_LUNAR_MONTH_DAYS;
 // The Moon must orbit faster than its 28-day Sun-relative phase cycle because
 // the Sun advances through the sky during the same interval.
 const WORLD_LUNAR_ORBIT_DAYS: f64 =
     1.0 / (1.0 / WORLD_LUNAR_PHASE_CYCLE_DAYS + 1.0 / WORLD_YEAR_DAYS);
 const LUNAR_ORBIT_INCLINATION_RAD: f64 = 5.145_f64.to_radians();
-// This fixed node retains paired eclipse seasons while allowing the central
-// lunar event to reach totality in the annually repeating calendar.
+// This node retains paired eclipse seasons while placing one full Moon close
+// enough to the orbital plane for totality.
 const LUNAR_ASCENDING_NODE_PHASE: f64 = 0.5104333333333333;
 const LUNAR_DISTANCE_PLANET_RADII: f64 = 60.3;
 const SUN_ANGULAR_RADIUS_RAD: f64 = 0.00465;

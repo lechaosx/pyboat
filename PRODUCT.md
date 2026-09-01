@@ -232,15 +232,16 @@ current playable behavior; this file does not track delivery status.
   coordinates remain visible while panning. Changing either scale regenerates
   the live spatial world.
 - **[Explicit]** The global world clock is the sole source of day, season, and
-  lunar position. A world day lasts 24 hours, a calendar month lasts 28 days,
-  and twelve months form a 336-day year. Lunar illumination phase is inferred
-  from Sun and Moon positions and repeats with the 28-day month. Production and
-  the lab default to real time. The lab starts with cloud, pressure, current,
-  and world-clock rates locked together; playback changes rates rather than
-  overriding phases. The lab exposes manual year, month, day, and time controls
-  for its 12-by-28-day calendar. Celestial-event presets move only the lab's world
-  clock to naturally derived solar, partial-lunar, and total-lunar eclipse stages
-  without overriding orbital state, view, playback, tuning, or diagnostics.
+  lunar position. A world day lasts 24 hours, the seasonal year lasts 365 days,
+  and the independent lunar month lasts 28 days. Lunar illumination phase is
+  inferred from Sun and Moon positions and repeats with the lunar month; the
+  combined geometry repeats after 28 years. Production and the lab default to
+  real time. The lab starts with cloud, pressure, current, and world-clock rates
+  locked together; playback changes rates rather than overriding phases. The lab
+  exposes manual solar-year, year-day, and time controls alongside the derived
+  lunar month and day. Celestial-event presets move only the lab's world clock to
+  naturally derived solar, partial-lunar, and total-lunar eclipse stages without
+  overriding orbital state, view, playback, tuning, or diagnostics.
 - **[Explicit]** The lab exposes bottom attenuation length and visibility without
   changing physical terrain, depth, or grounding.
 - **[Explicit]** Landform lighting follows the astronomical sun or moon angle,

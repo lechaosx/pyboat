@@ -445,17 +445,17 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers
-  lunar illumination phase and tidal separation from their geometry. A world
-  day lasts 24 hours, a calendar month lasts 28 days, and twelve months form a
-  336-day year. The lunar orbital rate produces one Sun-relative phase cycle per
-  month. Corresponding dates retain the same phase while seasonal Sun and Moon
-  positions vary between months and repeat after one year. Season phase zero is
-  the northern winter solstice. The Moon follows a circular orbit inclined
-  5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3 planetary
-  radii. Observer parallax and finite Sun/Moon discs derive local solar overlap;
+  lunar illumination phase and tidal separation from their geometry. A world day
+  lasts 24 hours, the seasonal year lasts 365 days, and the independent lunar
+  month lasts 28 days. The lunar orbital rate produces one Sun-relative phase
+  cycle per month, advancing lunar phase by one day between corresponding points
+  in successive years and repeating the combined geometry after 28 years. Season
+  phase zero is the northern winter solstice. The Moon follows a circular orbit
+  inclined 5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3
+  planetary radii. Observer parallax and finite Sun/Moon discs derive local
+  solar overlap;
   finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
-  two paired eclipse seasons, including total lunar eclipses, while preserving
-  exact annual repetition.
+  two eclipse seasons per year while individual events shift between years.
 - **[Explicit]** Sun and Moon remain independent directional light sources whose
   direct contributions use their respective direction, intensity, color, and
   cloud and terrain transmittance. Ambient light separately combines a clear-sky

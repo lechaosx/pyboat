@@ -63,19 +63,17 @@ fn longitude_sets_local_solar_time_without_changing_global_cycles() {
 }
 
 #[test]
-fn northern_june_is_summer_and_northern_december_is_winter() {
+fn northern_midyear_is_summer_and_year_boundary_is_winter() {
     let world = geometry();
     let northern_position_m = Vector::new(0.0, world.height_m() / 3.0);
-    let world_time_at_midmonth = |month: u32| f64::from((month - 1) * 28 + 13) * WORLD_DAY_SECONDS;
-    let june = world_celestial_conditions(world, world_time_at_midmonth(6), northern_position_m);
-    let december =
-        world_celestial_conditions(world, world_time_at_midmonth(12), northern_position_m);
+    let summer = world_celestial_conditions(world, 182.5 * WORLD_DAY_SECONDS, northern_position_m);
+    let winter = world_celestial_conditions(world, 0.0, northern_position_m);
 
-    assert!(celestial_orbit(june).solar_declination_rad > 0.0);
-    assert!(celestial_orbit(december).solar_declination_rad < 0.0);
-    let climate = world_climate_conditions(june.geographic_latitude_degrees);
+    assert!(celestial_orbit(summer).solar_declination_rad > 0.0);
+    assert!(celestial_orbit(winter).solar_declination_rad < 0.0);
+    let climate = world_climate_conditions(summer.geographic_latitude_degrees);
     assert!(
-        current_air_temperature_c(climate, june) > current_air_temperature_c(climate, december)
+        current_air_temperature_c(climate, summer) > current_air_temperature_c(climate, winter)
     );
 }
 

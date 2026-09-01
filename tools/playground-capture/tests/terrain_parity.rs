@@ -99,8 +99,8 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 #[test]
 fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
     let world = WorldGeometry::default();
-    let world_time_seconds = 77.0 * 86_400.0;
-    let position_m = Vector::new(-15_555.556, 22_222.223);
+    let world_time_seconds = 105.0 * 86_400.0;
+    let position_m = Vector::new(9_599.998, -23_822.223);
     let lighting = celestial_lighting(world_celestial_conditions(
         world,
         world_time_seconds,
@@ -674,7 +674,7 @@ fn render_diagnostic_image(
 fn world_time_for_season_phase(season_phase: f64) -> f64 {
     let epoch_phase =
         world_celestial_conditions(WorldGeometry::default(), 0.0, Vector::ZERO).season_phase;
-    (season_phase - f64::from(epoch_phase)).rem_euclid(1.0) * 86_400.0 * 336.0
+    (season_phase - f64::from(epoch_phase)).rem_euclid(1.0) * 86_400.0 * 365.0
 }
 
 fn render_diagnostic_image_at(

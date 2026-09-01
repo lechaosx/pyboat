@@ -368,6 +368,7 @@ pub fn sample_playground_world_phases(world_time_seconds: f64) -> Vec<f32> {
         conditions.day_phase,
         conditions.season_phase,
         conditions.lunar_longitude_phase,
+        moon_phase(conditions),
     ]
 }
 

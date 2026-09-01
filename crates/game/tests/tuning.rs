@@ -991,7 +991,7 @@ fn world_year_has_two_paired_eclipse_seasons() {
     let mut solar_eclipse_months = 0;
     let mut lunar_eclipse_months = 0;
 
-    for month in 0..12 {
+    for month in 0..13 {
         let new_moon_seconds = (21.0 + 28.0 * f64::from(month)) * 86_400.0;
         let mut solar_eclipse_visible = false;
         for latitude_index in -45..=45 {
@@ -1059,7 +1059,7 @@ fn lunar_position_advances_independently_while_phase_is_derived() {
 }
 
 #[test]
-fn world_calendar_has_twelve_twenty_eight_day_months() {
+fn solar_year_and_lunar_month_advance_independently() {
     let start = world_celestial_conditions_in_world(WorldGeometry::default(), 0.0, Vector::ZERO);
     let one_month_later = world_celestial_conditions_in_world(
         WorldGeometry::default(),
@@ -1068,16 +1068,19 @@ fn world_calendar_has_twelve_twenty_eight_day_months() {
     );
     let one_year_later = world_celestial_conditions_in_world(
         WorldGeometry::default(),
-        12.0 * 28.0 * 86_400.0,
+        365.0 * 86_400.0,
         Vector::ZERO,
     );
 
-    assert!((one_month_later.season_phase - start.season_phase - 1.0 / 12.0).abs() < 0.0001);
+    assert!((one_month_later.season_phase - start.season_phase - 28.0 / 365.0).abs() < 0.0001);
+    assert!((moon_phase(one_month_later) - moon_phase(start)).abs() < 0.0001);
     assert!((one_year_later.season_phase - start.season_phase).abs() < 0.0001);
+    let annual_lunar_advance = (moon_phase(one_year_later) - moon_phase(start)).rem_euclid(1.0);
+    assert!((annual_lunar_advance - 1.0 / 28.0).abs() < 0.0001);
 }
 
 #[test]
-fn same_calendar_moment_varies_by_month_and_repeats_by_year() {
+fn celestial_geometry_repeats_after_twenty_eight_years() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 10_000.0);
     let time_seconds = 11.75 * 86_400.0;
@@ -1098,13 +1101,16 @@ fn same_calendar_moment_varies_by_month_and_repeats_by_year() {
     let next_month_conditions = conditions_at(28.0);
     let start = celestial_lighting(start_conditions);
     let next_month = celestial_lighting(next_month_conditions);
-    let next_year = celestial_lighting(conditions_at(336.0));
+    let next_year = celestial_lighting(conditions_at(365.0));
+    let next_full_cycle = celestial_lighting(conditions_at(28.0 * 365.0));
 
     assert!((moon_phase(start_conditions) - moon_phase(next_month_conditions)).abs() < 0.0001);
     assert!(direction_difference(start.sun_direction, next_month.sun_direction) > 0.1);
     assert!(direction_difference(start.moon_direction, next_month.moon_direction) > 0.1);
     assert!(direction_difference(start.sun_direction, next_year.sun_direction) < 0.0001);
-    assert!(direction_difference(start.moon_direction, next_year.moon_direction) < 0.0001);
+    assert!(direction_difference(start.moon_direction, next_year.moon_direction) > 0.01);
+    assert!(direction_difference(start.sun_direction, next_full_cycle.sun_direction) < 0.0001);
+    assert!(direction_difference(start.moon_direction, next_full_cycle.moon_direction) < 0.0001);
 }
 
 #[test]
