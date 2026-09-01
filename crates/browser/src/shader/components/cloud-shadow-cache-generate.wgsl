@@ -333,7 +333,8 @@ fn discover_cloud_shadow_cache_tiles(
     let elevated_sun_amount = celestial_sun_amount_at_height(LOW_CLOUD_BASE_HEIGHT_M);
     if layer_visibility.x > 0.0
         && layer_visibility.w > 0.0
-        && direct_sun_amount() <= 0.0
+        && (direct_sun_amount() <= 0.0
+            || cloud_shadow_contrast(sun_direction()) <= 0.0)
         && elevated_sun_amount > 0.0
         && direct_moon_amount() > 0.0
     {

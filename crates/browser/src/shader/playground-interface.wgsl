@@ -131,8 +131,10 @@ fn initialize_playground_celestial() {
 
 fn initialize_playground_atmospheric_lighting() {
     initialize_playground_celestial();
-    horizon_scattering = calculate_horizon_scattering();
-    moon_light_color = calculate_moon_light_color();
+    local_horizon_scattering = calculate_local_horizon_scattering();
+    regional_horizon_scattering = calculate_regional_horizon_scattering();
+    moon_direct_light_color = calculate_moon_light_color(local_horizon_scattering);
+    moon_diffuse_light_color = calculate_moon_light_color(regional_horizon_scattering);
     initialize_light_contributions();
 }
 

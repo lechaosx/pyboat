@@ -222,7 +222,7 @@ fn moon_canopy_scattered_light(
         * celestial_moon_amount_at_height(WEATHER_CANOPY_HEIGHT_M)
         * intercepted_moon
         * underside_escape
-        * moon_light_color;
+        * moon_diffuse_light_color;
 }
 
 struct AtmosphericAmbientLight {
@@ -241,10 +241,10 @@ fn calculate_atmospheric_ambient_light(
     let upper_afterglow = smoothstep(-0.309017, -0.1391731, sun.z)
         * (1.0 - smoothstep(-0.1391731, -0.0348995, sun.z));
     let solar_ambient = daylight * (0.45 + 0.515 * sun_elevation)
-        + mix(0.24, 0.36, horizon_scattering)
+        + mix(0.24, 0.36, regional_horizon_scattering)
             * (1.0 - daylight)
             * lower_twilight
-        + mix(0.04, 0.09, horizon_scattering) * upper_afterglow;
+        + mix(0.04, 0.09, regional_horizon_scattering) * upper_afterglow;
     let clear_intensity = min(
         1.0,
         0.035
@@ -254,9 +254,9 @@ fn calculate_atmospheric_ambient_light(
     );
     let horizon_glow = max(lower_twilight, 0.35 * upper_afterglow)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
-    let sunset_warmth = horizon_glow * horizon_scattering;
-    let sun_source = celestial_sun_amount() * sun_direct_light_color();
-    let moon_source = celestial_moon_amount() * moon_light_color;
+    let sunset_warmth = horizon_glow * regional_horizon_scattering;
+    let sun_source = celestial_sun_amount() * sun_diffuse_light_color();
+    let moon_source = celestial_moon_amount() * moon_diffuse_light_color;
     let source_amount = celestial_sun_amount() + celestial_moon_amount();
     let source_color = select(
         vec3<f32>(0.72, 0.80, 0.88),
@@ -311,7 +311,7 @@ fn calculate_atmospheric_ambient_light(
         * celestial_sun_amount_at_height(WEATHER_CANOPY_HEIGHT_M)
         * intercepted_sun
         * underside_escape
-        * sun_direct_light_color();
+        * sun_diffuse_light_color();
     let scattered_moon_light = moon_canopy_scattered_light(
         optical_thickness,
         underside_escape,
@@ -333,7 +333,7 @@ fn atmospheric_ambient_color_with_visibility(
     return visibility.x * ambient.clear_sky + visibility.y * ambient.canopy;
 }
 
-fn aerosol_optical_depth_at(regional: RegionalCloudDrivers) -> f32 {
+fn regional_aerosol_optical_depth_at(regional: RegionalCloudDrivers) -> f32 {
     let settled_air = 1.0 - regional.pressure_lift;
     let dry_air = 1.0 - regional.condensation;
     let storm = regional.condensation
@@ -344,11 +344,19 @@ fn aerosol_optical_depth_at(regional: RegionalCloudDrivers) -> f32 {
         * unwashed;
 }
 
-fn calculate_horizon_scattering() -> f32 {
+fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
+    let settled_air = 1.0 - weather.regional.pressure_lift;
+    let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
+    let unwashed = 1.0 - 0.72 * weather.rain;
+    return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
+        * unwashed;
+}
+
+fn calculate_regional_horizon_scattering() -> f32 {
     let aerosol = smoothstep(
         0.04,
         0.30,
-        aerosol_optical_depth_at(surface_cloud_weather.regional),
+        regional_aerosol_optical_depth_at(surface_cloud_weather.regional),
     );
     let moist_haze = smoothstep(
         0.40,
@@ -358,9 +366,19 @@ fn calculate_horizon_scattering() -> f32 {
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
 
-fn calculate_moon_light_color() -> vec3<f32> {
+fn calculate_local_horizon_scattering() -> f32 {
+    let aerosol = smoothstep(
+        0.04,
+        0.30,
+        local_aerosol_optical_depth_at(surface_cloud_weather),
+    );
+    let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
+    return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
+}
+
+fn calculate_moon_light_color(scattering: f32) -> vec3<f32> {
     let low_moon = 1.0 - smoothstep(0.08, 0.55, moon_direction().z);
-    let atmospheric_warmth = low_moon * mix(0.04, 0.82, horizon_scattering);
+    let atmospheric_warmth = low_moon * mix(0.04, 0.82, scattering);
     let eclipse_warmth = smoothstep(0.05, 0.90, lunar_umbra_fraction);
     let warmth = 1.0
         - (1.0 - atmospheric_warmth) * (1.0 - eclipse_warmth);
@@ -371,10 +389,18 @@ fn calculate_moon_light_color() -> vec3<f32> {
     );
 }
 
-fn sun_direct_light_color() -> vec3<f32> {
+fn sun_light_color(scattering: f32) -> vec3<f32> {
     let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_direction().z);
-    let warmth = low_sun * mix(0.06, 1.0, horizon_scattering);
+    let warmth = low_sun * mix(0.06, 1.0, scattering);
     return mix(vec3<f32>(1.0), vec3<f32>(1.55, 0.34, 0.06), warmth);
+}
+
+fn sun_direct_light_color() -> vec3<f32> {
+    return sun_light_color(local_horizon_scattering);
+}
+
+fn sun_diffuse_light_color() -> vec3<f32> {
+    return sun_light_color(regional_horizon_scattering);
 }
 
 fn sun_direct_contribution_color() -> vec3<f32> {
@@ -389,7 +415,7 @@ fn initialize_light_contributions() {
     let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
     let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
     sun_direct_contribution_light_color = sun_share * sun_direct_light_color();
-    moon_direct_contribution_light_color = moon_share * moon_light_color;
+    moon_direct_contribution_light_color = moon_share * moon_direct_light_color;
 }
 
 fn ambient_contribution_share() -> f32 {

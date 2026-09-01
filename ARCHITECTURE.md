@@ -464,19 +464,19 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   dome, blue by day, with a canopy-underlight source weighted by broad overhead
   cloud fraction. The clear-sky dome sums solar-disc daylight, lower-atmosphere
   twilight, and weaker upper-atmosphere afterglow; broad regional scattering
-  modulates the two twilight components. At zero optical thickness the canopy
-  transfer equals clear-sky diffuse light. Increasing thickness attenuates and
-  backscatters that diffuse light, while intercepted altitude-visible Sun and
-  Moon light escapes from the underside most strongly at moderate thickness and
-  is absorbed by thick storm canopy.
+  modulates the two twilight components and all canopy-underlight sources.
+  Direct Sun and Moon colors instead use receiver-local aerosol, humidity, and
+  rain. At zero optical thickness the canopy transfer equals clear-sky diffuse
+  light. Increasing thickness attenuates and backscatters that diffuse light,
+  while intercepted altitude-visible Sun and Moon light escapes from the
+  underside most strongly at moderate thickness and is absorbed by thick storm
+  canopy.
   The resulting ambient pair is evaluated once per fragment and lights both the
   surface and visible lower clouds; visible lower clouds never feed it.
   Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
   moonlight slightly; increasing umbral coverage replaces blocked direct
   sunlight with dim orange-red light filtered through the atmosphere, and the
-  resulting moon color enters direct and diffuse surface and cloud lighting.
-  Uneclipsed moonlight independently reddens near the horizon according to the
-  observer's local aerosol and moisture scattering.
+  eclipse color enters both the local direct and regional diffuse Moon paths.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
   width as circumference and the mirror-repeating latitude derived from the

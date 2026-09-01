@@ -14,8 +14,8 @@ fn cloud_color(
     ));
     let sun_facing = max(dot(cloud_normal, sun_direction()), 0.0);
     let moon_facing = max(dot(cloud_normal, moon_direction()), 0.0);
-    let direct_light = direct_sun_amount() * sun_facing
-        + direct_moon_amount() * moon_facing;
+    let sun_direct_shape = direct_sun_amount() * sun_facing;
+    let moon_direct_shape = direct_moon_amount() * moon_facing;
     let elevated_sun_amount = celestial_sun_amount_at_height(
         LOW_CLOUD_BASE_HEIGHT_M,
     );
@@ -23,12 +23,11 @@ fn cloud_color(
         elevated_sun_amount - celestial_sun_amount(),
         0.0,
     );
-    let sunlight = direct_sun_amount() * upper_transmittance.x
-        + direct_moon_amount() * upper_transmittance.y
-        + elevated_sun_scatter * upper_transmittance.x;
+    let sunlight = (direct_sun_amount() + elevated_sun_scatter)
+        * upper_transmittance.x;
+    let moonlight = direct_moon_amount() * upper_transmittance.y;
     let depth = cloud_sample.optical_depth / max(cloud_amount, 0.001);
-    let edge_light = sunlight
-        * (1.0 - smoothstep(0.30, 0.78, cloud_amount))
+    let edge_response = (1.0 - smoothstep(0.30, 0.78, cloud_amount))
         * smoothstep(0.10, 0.55, cloud_amount)
         * tuning.cloud_lighting.x;
     let depth_shadow = smoothstep(0.45, 1.35, cloud_sample.optical_depth)
@@ -36,37 +35,62 @@ fn cloud_color(
     let cloud_material = mix(
         vec3<f32>(0.68, 0.72, 0.74),
         vec3<f32>(0.96, 0.97, 0.96),
-        0.30 + 0.36 * min(depth / 1.25, 1.0) + 0.25 * direct_light,
+        0.30 + 0.36 * min(depth / 1.25, 1.0),
     );
+    let storm_amount = clamp(
+        0.06 * cloud_amount * tuning.cloud_rendering.z,
+        0.0,
+        1.0,
+    );
+    let neutral_material = mix(
+        cloud_material,
+        vec3<f32>(0.12, 0.15, 0.17),
+        storm_amount,
+    );
+    let neutral_cloud = max(
+        vec3<f32>(0.16, 0.18, 0.20),
+        0.70 * neutral_material - depth_shadow,
+    );
+    let direct_whitening = 0.70 * 0.25
+        * (1.0 - storm_amount)
+        * (vec3<f32>(0.96, 0.97, 0.96) - vec3<f32>(0.68, 0.72, 0.74));
+    let sun_cloud = neutral_cloud
+        + direct_whitening * sun_direct_shape
+        + neutral_material
+            * sunlight
+            * mix(0.12, 0.36, sun_direct_shape)
+        + sunlight * edge_response;
+    let moon_cloud = neutral_cloud
+        + direct_whitening * moon_direct_shape
+        + neutral_material
+            * moonlight
+            * mix(0.12, 0.36, moon_direct_shape)
+        + moonlight * edge_response;
     let elevated_sun_light = contribution_visibility.x
         * upper_transmittance.x
         * 0.26
         * sqrt(elevated_sun_scatter)
         * sun_direct_light_color()
-        * (0.12 + 0.88 * edge_light / max(sunlight, 0.001));
-    var cloud = max(vec3<f32>(0.16, 0.18, 0.20), mix(
-        cloud_material,
-        vec3<f32>(0.12, 0.15, 0.17),
-        clamp(0.06 * cloud_amount * tuning.cloud_rendering.z, 0.0, 1.0),
-    ) * (0.70 + sunlight * mix(0.12, 0.36, direct_light))
-        + edge_light
-        - depth_shadow);
-    cloud *= low_cloud_material_color_visibility() * (
-        ambient_contribution_share() * (
-            contribution_visibility.z * atmospheric_ambient_color_with_visibility(
-                ambient_light,
-                vec2<f32>(1.0, 0.0),
-            )
-            + contribution_visibility.w * atmospheric_ambient_color_with_visibility(
-                ambient_light,
-                vec2<f32>(0.0, 1.0),
-            )
+        * (0.12 + 0.88 * edge_response);
+    let ambient_color = ambient_contribution_share() * (
+        contribution_visibility.z * atmospheric_ambient_color_with_visibility(
+            ambient_light,
+            vec2<f32>(1.0, 0.0),
         )
-        + contribution_visibility.x * upper_transmittance.x
-            * sun_direct_contribution_color() * mix(0.25, 1.0, sun_facing)
-        + contribution_visibility.y * upper_transmittance.y
-            * moon_direct_contribution_color() * mix(0.25, 1.0, moon_facing)
-        + elevated_sun_light
+        + contribution_visibility.w * atmospheric_ambient_color_with_visibility(
+            ambient_light,
+            vec2<f32>(0.0, 1.0),
+        )
+    );
+    let sun_color = contribution_visibility.x * upper_transmittance.x
+        * sun_direct_contribution_color() * mix(0.25, 1.0, sun_facing)
+        + elevated_sun_light;
+    let moon_color = contribution_visibility.y * upper_transmittance.y
+        * moon_direct_contribution_color() * mix(0.25, 1.0, moon_facing);
+    let cloud = low_cloud_material_color_visibility() * (
+        neutral_cloud * ambient_color
+        + sun_cloud * sun_color
+        + moon_cloud * moon_color
     );
     let body = smoothstep(0.08, 0.18, cloud_amount);
     let optical_depth = tuning.cloud_rendering.x * cloud_sample.optical_depth;

@@ -254,7 +254,7 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["lighting_solar_elevation", "Solar elevation"],
       ["lighting_low_cloud_sun_visibility", "Sun visible at low clouds"],
       ["lighting_canopy_sun_visibility", "Sun visible at canopy"],
-      ["lighting_aerosol_optical_depth", "Aerosol optical depth"],
+      ["lighting_aerosol_optical_depth", "Regional diffuse aerosol"],
       ["lighting_canopy_moon_scattering", "Moon → canopy scattering"],
       ["lighting_solar_eclipse_coverage", "Solar eclipse coverage"],
     ] },

@@ -171,19 +171,19 @@ current playable behavior; this file does not track delivery status.
   twilight components without importing local weather detail into ambient light.
   Unresolved high ice-cloud effects remain part of canopy and sky diffusion
   rather than a third sampled layer.
-- **[Explicit]** Aerosol optical depth varies only with the broad regional
-  condensation and pressure regime, including regional storm washout. Local
-  humidity, rain, and visible lower clouds do not imprint fragment-scale changes
-  on ambient color. When the sun is low, regional aerosol and moisture can
-  redden direct sunlight, visible clouds, and the canopy's diffuse light.
+- **[Explicit]** Diffuse aerosol optical depth varies only with the broad
+  regional condensation and pressure regime, including regional storm washout.
+  Local humidity, rain, and visible lower clouds do not imprint fragment-scale
+  changes on ambient color. Direct Sun and Moon colors instead retain the
+  receiver's local aerosol, humidity, and rain response. At low elevation these
+  separate paths can redden direct sunlight and moonlight while regional
+  scattering colors clear-sky and canopy diffuse light.
 - **[Explicit]** Directional sun and moon light and diffuse sky-and-cloud light
   independently affect terrain, water, and visible lower clouds. Gray overcast
   can remain softly luminous while severe storm cover darkens a noon scene.
   A tilted lunar orbit produces two paired solar/lunar eclipse seasons per year
   from celestial geometry. The penumbra dims moonlight subtly, while atmospheric
   light refracted into the umbra makes a total lunar eclipse dim orange-red.
-  Independently, a low Moon can redden through the observer's local aerosol and
-  moist atmospheric path without an eclipse.
   Celestial discs retain a physical penumbra, so cloud and landform shadows do
   not become point-source sharp at high zoom.
 - **[Explicit]** Rain and snow meet open water in world space. Close views may
