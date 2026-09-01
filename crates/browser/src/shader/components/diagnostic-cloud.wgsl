@@ -102,7 +102,8 @@ fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> 
         canopy.mean_optical_thickness,
         underside_escape,
     );
-    let luminance = dot(scattering, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let luminance = canopy.sky_fraction
+        * dot(scattering, vec3<f32>(0.2126, 0.7152, 0.0722));
     return vec4<f32>(scalar_debug_color(luminance / 0.05), 1.0);
 }
 

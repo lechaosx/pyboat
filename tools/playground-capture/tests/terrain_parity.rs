@@ -176,7 +176,7 @@ fn rendered_cloud_layer_sun_visibility_uses_the_world_horizon() {
 }
 
 #[test]
-fn full_moon_produces_direct_canopy_scattering() {
+fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let world_time_seconds = (0..28 * 24)
@@ -187,23 +187,37 @@ fn full_moon_produces_direct_canopy_scattering() {
             left.moon_intensity.total_cmp(&right.moon_intensity)
         })
         .unwrap();
-    let lighting = celestial_lighting(world_celestial_conditions(
-        world,
-        world_time_seconds,
-        position_m,
-    ));
-    assert!(lighting.moon_intensity > 0.08, "{lighting:?}");
-
-    let scattering = render_diagnostic_image_with_view_at(
+    let width = 64;
+    let height = 32;
+    let coverage = render_diagnostic_image_at(
         world,
         position_m,
         world_time_seconds,
-        1.0,
-        "lighting_canopy_moon_scattering",
-        1,
-        1,
+        "weather_sky_fraction",
+        width,
+        height,
     );
-    assert!(scalar_debug_amount(&scattering) > 0.01, "{scattering:?}");
+    let scattering = render_diagnostic_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        "lighting_canopy_moon_scattering",
+        width,
+        height,
+    );
+    let mut clear_pixels = 0;
+    let mut scattering_pixels = 0;
+    for (coverage, scattering) in coverage.chunks_exact(4).zip(scattering.chunks_exact(4)) {
+        let coverage = scalar_debug_amount(coverage);
+        let scattering = scalar_debug_amount(scattering);
+        if coverage <= 0.002 {
+            clear_pixels += 1;
+            assert!(scattering <= 0.002, "clear canopy scattered {scattering}");
+        }
+        scattering_pixels += usize::from(scattering > 0.01);
+    }
+    assert!(clear_pixels > 0);
+    assert!(scattering_pixels > 0);
 }
 
 #[test]

@@ -157,55 +157,71 @@ fn landform_shadow_cache_offset(
     return vec3<f32>(distance_m * light.xy / horizontal_light, 1.0);
 }
 
-fn cloud_shadow_cache_projection_is_reused(
-    receiver_position_m: vec2<f32>,
-    projected_position_m: vec2<f32>,
+struct CloudShadowCacheFootprint {
+    enabled: bool,
+    light: vec3<f32>,
+    receiver_height_m: f32,
+    cloud_height_m: f32,
+};
+
+fn cloud_shadow_cache_footprint(
+    footprint_index: u32,
     layer: u32,
-    source_index: u32,
-) -> bool {
-    // Moving a one-use query into the atlas adds a fill and a lookup without
-    // removing work; only overlapping footprints are profitable to cache.
-    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
-        * visual_pixel_footprint_m;
-    for (var other_source_index = 0u; other_source_index < 2u; other_source_index++) {
-        let other_is_sun = other_source_index == 0u;
-        let other_light = select(moon_direction(), sun_direction(), other_is_sun);
-        let other_light_amount = select(
-            direct_moon_amount(),
-            direct_sun_amount(),
-            other_is_sun,
-        );
-        if other_light_amount <= 0.0 || cloud_shadow_contrast(other_light) <= 0.0 {
-            continue;
-        }
-        let receiver_count = select(2u, 1u, layer == 0u);
-        for (var receiver_index = 0u; receiver_index < receiver_count; receiver_index++) {
-            if other_source_index == source_index && receiver_index == 0u {
-                continue;
-            }
-            let receiver_height_m = select(0.0, LOW_CLOUD_BASE_HEIGHT_M, receiver_index == 1u);
-            let cloud_height_m = select(
-                WEATHER_CANOPY_HEIGHT_M,
-                LOW_CLOUD_BASE_HEIGHT_M,
-                layer == 0u,
-            );
-            let other_projected_position_m = projected_cloud_position(
-                receiver_position_m,
+    surface_receiver_height_m: f32,
+) -> CloudShadowCacheFootprint {
+    // Indices 0/1 are Sun/Moon at the surface; 2/3 are Sun/Moon at low clouds.
+    let is_sun = footprint_index % 2u == 0u;
+    let receives_at_low_cloud = layer == 1u && footprint_index >= 2u;
+    var light = select(moon_direction(), sun_direction(), is_sun);
+    var light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
+    var enabled = false;
+    var receiver_height_m = surface_receiver_height_m;
+    let cloud_height_m = select(
+        WEATHER_CANOPY_HEIGHT_M,
+        LOW_CLOUD_BASE_HEIGHT_M,
+        layer == 0u,
+    );
+    if receives_at_low_cloud {
+        receiver_height_m = LOW_CLOUD_BASE_HEIGHT_M;
+        if is_sun {
+            light_amount = celestial_sun_amount_at_height(receiver_height_m);
+            light = celestial_visible_disc_sample_direction_at_height(
                 receiver_height_m,
-                cloud_height_m,
-                other_light,
+                light,
+                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             );
-            let candidate_receiver_m = canonical_world_position(
-                receiver_position_m
-                    + cloud_shadow_cache_relative_position(projected_position_m)
-                    - cloud_shadow_cache_relative_position(other_projected_position_m),
-            );
-            if all(abs(cloud_shadow_cache_relative_position(candidate_receiver_m)) <= half_view_m) {
-                return true;
-            }
         }
+        enabled = layer_visibility.x > 0.0
+            && layer_visibility.w > 0.0
+            && light_amount > 0.0;
+    } else {
+        let layer_active = select(
+            layer_visibility.z > 0.0 && tuning.cloud_shadows.y > 0.0,
+            layer_visibility.y > 0.0 && tuning.cloud_shadows.x > 0.0,
+            layer == 0u,
+        );
+        enabled = layer_active
+            && light_amount > 0.0
+            && cloud_shadow_contrast(light) > 0.0;
     }
-    return false;
+    return CloudShadowCacheFootprint(
+        enabled,
+        light,
+        receiver_height_m,
+        cloud_height_m,
+    );
+}
+
+fn cloud_shadow_cache_footprint_position(
+    receiver_position_m: vec2<f32>,
+    footprint: CloudShadowCacheFootprint,
+) -> vec2<f32> {
+    return projected_cloud_position(
+        receiver_position_m,
+        footprint.receiver_height_m,
+        footprint.cloud_height_m,
+        footprint.light,
+    );
 }
 
 fn landform_shadow_cache_sample_is_reused(
@@ -269,43 +285,58 @@ fn discover_cloud_shadow_cache_tiles(
         && broad_receiver_elevation_m >= water_height_m;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
-    for (var source_index = 0u; source_index < 2u; source_index++) {
-        let is_sun = source_index == 0u;
-        let light = select(moon_direction(), sun_direction(), is_sun);
-        let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
-        if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
-            let projection = cloud_shadow_projection_at(
-                position_m,
+    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
+        * visual_pixel_footprint_m;
+    for (var layer = 0u; layer < 2u; layer++) {
+        let footprint_count = select(4u, 2u, layer == 0u);
+        var footprints: array<CloudShadowCacheFootprint, 4>;
+        for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
+            footprints[footprint_index] = cloud_shadow_cache_footprint(
+                footprint_index,
+                layer,
                 surface_receiver_height_m,
-                light,
             );
-            if layer_visibility.y > 0.0 && tuning.cloud_shadows.x > 0.0 {
-                if cloud_shadow_cache_projection_is_reused(
+        }
+        for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
+            let footprint = footprints[footprint_index];
+            if !footprint.enabled {
+                continue;
+            }
+            let projected_position_m = cloud_shadow_cache_footprint_position(
+                position_m,
+                footprint,
+            );
+            var reused = false;
+            // Moving a one-use query into the atlas adds a fill and a lookup
+            // without removing work; only overlapping footprints are profitable.
+            for (var other_index = 0u; other_index < footprint_count; other_index++) {
+                let other = footprints[other_index];
+                if other_index == footprint_index || !other.enabled {
+                    continue;
+                }
+                let other_projected_position_m = cloud_shadow_cache_footprint_position(
                     position_m,
-                    projection.low_position_m,
-                    0u,
-                    source_index,
-                ) {
-                    insert_cloud_shadow_cache_tile_key(
-                        cloud_shadow_cache_tile_key(projection.low_position_m),
-                        0u,
-                    );
+                    other,
+                );
+                let candidate_receiver_m = canonical_world_position(
+                    position_m
+                        + cloud_shadow_cache_relative_position(projected_position_m)
+                        - cloud_shadow_cache_relative_position(other_projected_position_m),
+                );
+                if all(abs(cloud_shadow_cache_relative_position(candidate_receiver_m)) <= half_view_m) {
+                    reused = true;
+                    break;
                 }
             }
-            if layer_visibility.z > 0.0 && tuning.cloud_shadows.y > 0.0 {
-                if cloud_shadow_cache_projection_is_reused(
-                    position_m,
-                    projection.upper_position_m,
-                    1u,
-                    source_index,
-                ) {
-                    insert_cloud_shadow_cache_tile_key(
-                        cloud_shadow_cache_tile_key(projection.upper_position_m),
-                        1u,
-                    );
-                }
+            if reused {
+                insert_cloud_shadow_cache_tile_key(
+                    cloud_shadow_cache_tile_key(projected_position_m),
+                    layer,
+                );
             }
         }
+    }
+    for (var source_index = 0u; source_index < 2u; source_index++) {
         if landform_shadows_visible {
             for (var sample_index = 0u; sample_index < 4u; sample_index++) {
                 let offset = landform_shadow_cache_offset(
@@ -328,56 +359,6 @@ fn discover_cloud_shadow_cache_tiles(
                     }
                 }
             }
-        }
-    }
-    let elevated_sun_amount = celestial_sun_amount_at_height(LOW_CLOUD_BASE_HEIGHT_M);
-    if layer_visibility.x > 0.0
-        && layer_visibility.w > 0.0
-        && (direct_sun_amount() <= 0.0
-            || cloud_shadow_contrast(sun_direction()) <= 0.0)
-        && elevated_sun_amount > 0.0
-        && direct_moon_amount() > 0.0
-    {
-        let sampled_sun = celestial_visible_disc_sample_direction_at_height(
-            LOW_CLOUD_BASE_HEIGHT_M,
-            sun_direction(),
-            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-        );
-        let sun_position_m = projected_cloud_position(
-            position_m,
-            LOW_CLOUD_BASE_HEIGHT_M,
-            WEATHER_CANOPY_HEIGHT_M,
-            sampled_sun,
-        );
-        let moon_position_m = projected_cloud_position(
-            position_m,
-            LOW_CLOUD_BASE_HEIGHT_M,
-            WEATHER_CANOPY_HEIGHT_M,
-            moon_direction(),
-        );
-        let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
-            * visual_pixel_footprint_m;
-        let sun_on_moon_receiver_m = canonical_world_position(
-            position_m
-                + cloud_shadow_cache_relative_position(moon_position_m)
-                - cloud_shadow_cache_relative_position(sun_position_m),
-        );
-        if all(abs(cloud_shadow_cache_relative_position(sun_on_moon_receiver_m)) <= half_view_m) {
-            insert_cloud_shadow_cache_tile_key(
-                cloud_shadow_cache_tile_key(moon_position_m),
-                1u,
-            );
-        }
-        let moon_on_sun_receiver_m = canonical_world_position(
-            position_m
-                + cloud_shadow_cache_relative_position(sun_position_m)
-                - cloud_shadow_cache_relative_position(moon_position_m),
-        );
-        if all(abs(cloud_shadow_cache_relative_position(moon_on_sun_receiver_m)) <= half_view_m) {
-            insert_cloud_shadow_cache_tile_key(
-                cloud_shadow_cache_tile_key(sun_position_m),
-                1u,
-            );
         }
     }
 }
