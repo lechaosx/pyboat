@@ -18,8 +18,11 @@ fn geometry() -> WorldGeometry {
 #[test]
 fn octave_basis_is_fixed_across_supported_world_rectangles() {
     for (wavelength_m, expected) in [
-        (8192.0, PeriodicNoiseBasis::CircleEmbeddedSimplex4d),
-        (256.0, PeriodicNoiseBasis::PeriodicTriangularSimplex2d),
+        (8192.0, PeriodicNoiseBasis::LongitudeCircleSimplex4d),
+        (
+            256.0,
+            PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d,
+        ),
     ] {
         for world in [
             WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
@@ -43,7 +46,7 @@ fn diagnostics_report_requested_and_effective_wavelengths() {
     ] {
         let circle = periodic_noise_octave_diagnostic(
             world,
-            PeriodicNoiseBasis::CircleEmbeddedSimplex4d,
+            PeriodicNoiseBasis::LongitudeCircleSimplex4d,
             8192.0,
         );
         assert_eq!(circle.effective_wavelength_x_m, 8192.0);
@@ -53,7 +56,7 @@ fn diagnostics_report_requested_and_effective_wavelengths() {
 
         let periodic = periodic_noise_octave_diagnostic(
             world,
-            PeriodicNoiseBasis::PeriodicTriangularSimplex2d,
+            PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d,
             256.0,
         );
         assert!(periodic.effective_wavelength_x_m.is_finite());
@@ -155,47 +158,46 @@ fn assert_weather_seam_close(left: ProceduralWeather, right: ProceduralWeather) 
 }
 
 #[test]
-fn terrain_values_repeat_across_rectangular_periods_and_corners() {
+fn terrain_repeats_across_longitude_and_continues_north_south() {
     let world = geometry();
-    let position = Vector::new(13.25, -7.5);
-    let elevation = procedural_terrain_elevation_m(world, SEED, position);
+    let positions = [
+        Vector::new(13.25, -7.5),
+        Vector::new(-12_345.0, 8_765.0),
+        Vector::new(31_000.0, 19_000.0),
+    ];
 
-    for offset in [
-        Vector::new(80_000.0, 0.0),
-        Vector::new(0.0, 40_000.0),
-        Vector::new(80_000.0, 40_000.0),
-        Vector::new(-160_000.0, 120_000.0),
-    ] {
+    for position in positions {
+        let elevation = procedural_terrain_elevation_m(world, SEED, position);
         assert_close(
             elevation,
-            procedural_terrain_elevation_m(world, SEED, position + offset),
+            procedural_terrain_elevation_m(
+                world,
+                SEED,
+                position + Vector::new(world.width_m(), 0.0),
+            ),
             0.02,
         );
     }
+
+    assert!(positions.into_iter().any(|position| {
+        let elevation = procedural_terrain_elevation_m(world, SEED, position);
+        let north = procedural_terrain_elevation_m(
+            world,
+            SEED,
+            position + Vector::new(0.0, world.height_m()),
+        );
+        (elevation - north).abs() > 0.02
+    }));
 }
 
 #[test]
-fn terrain_value_and_gradient_are_continuous_at_every_seam() {
+fn terrain_value_and_gradient_are_continuous_across_longitude() {
     let world = geometry();
     let epsilon = 0.5;
 
-    for (left, right, tangent) in [
-        (
-            Vector::new(-40_000.0, 6_250.0),
-            Vector::new(40_000.0, 6_250.0),
-            Vector::new(0.0, epsilon),
-        ),
-        (
-            Vector::new(11_500.0, -20_000.0),
-            Vector::new(11_500.0, 20_000.0),
-            Vector::new(epsilon, 0.0),
-        ),
-        (
-            Vector::new(-40_000.0, -20_000.0),
-            Vector::new(40_000.0, 20_000.0),
-            Vector::new(epsilon, epsilon),
-        ),
-    ] {
+    for y in [-61_000.0, -20_000.0, 6_250.0, 20_000.0, 73_000.0] {
+        let left = Vector::new(-40_000.0, y);
+        let right = Vector::new(40_000.0, y);
         assert_close(
             procedural_terrain_elevation_m(world, SEED, left),
             procedural_terrain_elevation_m(world, SEED, right),
@@ -219,27 +221,26 @@ fn terrain_value_and_gradient_are_continuous_at_every_seam() {
         );
         assert_vector_close(left_gradient, right_gradient, 1.0e-3);
         assert_close(
-            procedural_terrain_elevation_m(world, SEED, left + tangent),
-            procedural_terrain_elevation_m(world, SEED, right + tangent),
+            procedural_terrain_elevation_m(world, SEED, left + Vector::new(0.0, epsilon)),
+            procedural_terrain_elevation_m(world, SEED, right + Vector::new(0.0, epsilon)),
             1.0e-4,
         );
     }
 }
 
 #[test]
-fn terrain_one_sided_values_and_derivatives_meet_at_rectangular_seams() {
+fn terrain_one_sided_values_and_derivatives_meet_at_longitude_seam() {
     let epsilon = 0.03125;
     let mut checked_x_seam = 0;
-    let mut checked_y_seam = 0;
     for (world, seed) in [
         (WorldGeometry::new(8_000.0, 256_000.0).unwrap(), SEED),
         (geometry(), 0x1234_5678_9abc_def0),
         (WorldGeometry::new(256_000.0, 8_000.0).unwrap(), u64::MAX),
     ] {
         let half_width = world.width_m() / 2.0;
-        let half_height = world.height_m() / 2.0;
         for sample_index in 0..32 {
-            let y = -half_height + (sample_index as f32 + 0.5) * world.height_m() / 32.0;
+            let y = -1.5 * world.height_m()
+                + (sample_index as f32 + 0.5) * 3.0 * world.height_m() / 32.0;
             let edge = procedural_terrain_elevation_m(world, seed, Vector::new(-half_width, y));
             if edge.abs() <= 100.0 {
                 checked_x_seam += 1;
@@ -262,34 +263,9 @@ fn terrain_one_sided_values_and_derivatives_meet_at_rectangular_seams() {
                     "x seam in {world:?} seed {seed:#x} at y={y}: edge={edge}, low={inside_low}, high={inside_high}, derivatives {low_derivative} and {high_derivative}",
                 );
             }
-
-            let x = -half_width + (sample_index as f32 + 0.5) * world.width_m() / 32.0;
-            let edge = procedural_terrain_elevation_m(world, seed, Vector::new(x, -half_height));
-            if edge.abs() <= 100.0 {
-                checked_y_seam += 1;
-                let inside_low = procedural_terrain_elevation_m(
-                    world,
-                    seed,
-                    Vector::new(x, -half_height + epsilon),
-                );
-                let inside_high = procedural_terrain_elevation_m(
-                    world,
-                    seed,
-                    Vector::new(x, half_height - epsilon),
-                );
-                let low_derivative = (inside_low - edge) / epsilon;
-                let high_derivative = (edge - inside_high) / epsilon;
-                assert!((inside_low - edge).abs() <= 0.5);
-                assert!((inside_high - edge).abs() <= 0.5);
-                assert!(
-                    (low_derivative - high_derivative).abs() <= 1.0,
-                    "y seam in {world:?} seed {seed:#x} at x={x}: edge={edge}, low={inside_low}, high={inside_high}, derivatives {low_derivative} and {high_derivative}",
-                );
-            }
         }
     }
     assert!(checked_x_seam > 0);
-    assert!(checked_y_seam > 0);
 }
 
 #[test]
@@ -377,7 +353,7 @@ fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vec
 }
 
 #[test]
-fn tide_water_surface_winds_weather_and_environment_repeat() {
+fn fields_repeat_across_longitude_and_tide_continues_north_south() {
     let world = geometry();
     let position = Vector::new(29.0, -13.0);
     let repeated = position + Vector::new(-80_000.0, 0.0);
@@ -386,6 +362,10 @@ fn tide_water_surface_winds_weather_and_environment_repeat() {
     assert_eq!(
         procedural_tidal_conditions(world, SEED, position),
         procedural_tidal_conditions(world, SEED, repeated)
+    );
+    assert_ne!(
+        procedural_tidal_conditions(world, SEED, position),
+        procedural_tidal_conditions(world, SEED, position + Vector::new(0.0, world.height_m()),),
     );
     assert_close(
         procedural_water_height_m(world, SEED, time_seconds, position),

@@ -91,7 +91,7 @@ struct Simplex2dDomain {
     lattice_offsets: array<vec2<i32>, 3>,
     offsets: array<vec2<f32>, 3>,
     x_cycles: i32,
-    y_cycles: i32,
+    y_scale_per_m: f32,
 };
 
 struct TerrainSample {
@@ -124,19 +124,18 @@ fn terrain_simplex_lattice_gradient(
     x: i32,
     y: i32,
     x_cycles: i32,
-    y_cycles: i32,
 ) -> vec2<f32> {
-    // These residues are the integer axes of the triangular lattice. Integer
-    // cycle counts make each procedural calibration period an exact lattice shift.
+    // x-y is the longitude axis of the triangular lattice. Wrapping only this
+    // residue preserves the cylindrical seam without repeating latitude.
     let periodic_x = positive_mod(x - y, 2 * x_cycles);
-    let periodic_y = positive_mod(x + y, 2 * y_cycles);
+    let unbounded_y = x + y;
     let key = seed
         ^ multiply_u64(
             signed_u64(periodic_x),
             vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
         )
         ^ multiply_u64(
-            signed_u64(periodic_y),
+            signed_u64(unbounded_y),
             vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
         );
     return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(key).x % 24u];
@@ -149,22 +148,18 @@ fn terrain_simplex_domain(
     let skew_factor = 0.36602542;
     let unskew_factor = 0.21132487;
     let x_cycles = max(1, i32(round(scene.world_size_m.x / (sqrt(2.0) * wavelength_m))));
-    let y_cycles = max(1, i32(round(
-        scene.world_size_m.y * sqrt(1.5) / wavelength_m,
-    )));
     let canonical_position = canonical_world_position(position_m);
-    let positive_position = select(
-        canonical_position,
-        canonical_position + scene.world_size_m,
-        canonical_position < vec2<f32>(0.0),
+    let positive_x = select(
+        canonical_position.x,
+        canonical_position.x + scene.world_size_m.x,
+        canonical_position.x < 0.0,
     );
-    let normalized_position = positive_position
-        * scene.inverse_world_size_m;
+    let horizontal_phase = f32(x_cycles) * positive_x * scene.inverse_world_size_m.x;
+    let y_scale_per_m = 1.0 / (sqrt(2.0) * wavelength_m);
+    let vertical_phase = position_m.y * y_scale_per_m;
     let scaled = vec2<f32>(
-        f32(x_cycles) * normalized_position.x
-            + f32(y_cycles) * normalized_position.y / sqrt(3.0),
-        -f32(x_cycles) * normalized_position.x
-            + f32(y_cycles) * normalized_position.y / sqrt(3.0),
+        horizontal_phase + vertical_phase,
+        -horizontal_phase + vertical_phase,
     );
     let skew = (scaled.x + scaled.y) * skew_factor;
     let cell = vec2<i32>(floor(scaled + vec2<f32>(skew)));
@@ -184,7 +179,7 @@ fn terrain_simplex_domain(
         array<vec2<i32>, 3>(vec2<i32>(0), middle_lattice_offset, vec2<i32>(1)),
         array<vec2<f32>, 3>(first_offset, middle_offset, last_offset),
         x_cycles,
-        y_cycles,
+        y_scale_per_m,
     );
 }
 
@@ -209,7 +204,6 @@ fn terrain_simplex_noise(
             lattice.x,
             lattice.y,
             domain.x_cycles,
-            domain.y_cycles,
         );
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
@@ -224,9 +218,7 @@ fn terrain_simplex_noise(
     sample.gradient = vec2<f32>(
         f32(domain.x_cycles) * scene.inverse_world_size_m.x
             * (scaled_gradient.x - scaled_gradient.y),
-        f32(domain.y_cycles) * scene.inverse_world_size_m.y
-            / sqrt(3.0)
-            * (scaled_gradient.x + scaled_gradient.y),
+        domain.y_scale_per_m * (scaled_gradient.x + scaled_gradient.y),
     );
     return sample;
 }
@@ -250,7 +242,6 @@ fn terrain_simplex_noise_value(
             lattice.x,
             lattice.y,
             domain.x_cycles,
-            domain.y_cycles,
         );
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
@@ -282,13 +273,12 @@ fn terrain_simplex_lattice_gradient_4d(
 }
 
 fn periodic_noise_circle_position_from_canonical(position_m: vec2<f32>) -> vec4<f32> {
-    let angle = TAU * position_m
-        * scene.inverse_world_size_m;
+    let angle = TAU * position_m.x * scene.inverse_world_size_m.x;
     return vec4<f32>(
-        cos(angle.x),
-        sin(angle.x),
-        cos(angle.y),
-        sin(angle.y),
+        cos(angle),
+        sin(angle),
+        position_m.y,
+        0.0,
     );
 }
 
@@ -389,20 +379,21 @@ fn terrain_simplex_noise_4d_from_circle(
     circle_position: vec4<f32>,
     wavelength_m: f32,
 ) -> TerrainNoiseSample {
-    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
+    let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
+    let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
     let simplex = simplex_noise_sample_4d(seed, vec4<f32>(
-        circle_radius.x * circle_position.x,
-        circle_radius.x * circle_position.y,
-        circle_radius.y * circle_position.z,
-        circle_radius.y * circle_position.w,
+        circle_radius * circle_position.x,
+        circle_radius * circle_position.y,
+        linear_y,
+        linear_y + 0.5,
     ));
+    let cylindrical_scale = 35.7 / 33.4;
     return TerrainNoiseSample(
-        simplex.value,
-        vec2<f32>(
+        cylindrical_scale * simplex.value,
+        cylindrical_scale * vec2<f32>(
             -circle_position.y * simplex.gradient.x
                 + circle_position.x * simplex.gradient.y,
-            -circle_position.w * simplex.gradient.z
-                + circle_position.z * simplex.gradient.w,
+            (simplex.gradient.z + simplex.gradient.w) / sqrt(2.0),
         ) / wavelength_m,
     );
 }
@@ -412,12 +403,13 @@ fn terrain_simplex_noise_value_4d_from_circle(
     circle_position: vec4<f32>,
     wavelength_m: f32,
 ) -> f32 {
-    let circle_radius = scene.world_size_m / (TAU * wavelength_m);
-    return simplex_noise_value_4d(seed, vec4<f32>(
-        circle_radius.x * circle_position.x,
-        circle_radius.x * circle_position.y,
-        circle_radius.y * circle_position.z,
-        circle_radius.y * circle_position.w,
+    let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
+    let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
+    return (35.7 / 33.4) * simplex_noise_value_4d(seed, vec4<f32>(
+        circle_radius * circle_position.x,
+        circle_radius * circle_position.y,
+        linear_y,
+        linear_y + 0.5,
     ));
 }
 

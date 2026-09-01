@@ -957,19 +957,21 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_interest_and_physics_bubble_include_corner_neighbors() {
+    fn longitude_wrapped_interest_excludes_the_opposite_pole() {
         let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
         let game_match = game_match_with_boats(
             world,
             &[
                 Vector::new(3_999.0, 3_999.0),
+                Vector::new(-3_999.0, 3_997.0),
+                Vector::new(-3_980.0, 3_978.0),
                 Vector::new(-3_999.0, -3_999.0),
-                Vector::new(-3_980.0, -3_980.0),
             ],
         );
 
         assert_eq!(game_match.visible_boats("player-1"), vec![0, 1]);
-        let ServerMessage::Snapshot { boats, .. } = game_match.snapshot_for("player-1", &[0, 1, 2])
+        let ServerMessage::Snapshot { boats, .. } =
+            game_match.snapshot_for("player-1", &[0, 1, 2, 3])
         else {
             unreachable!();
         };
@@ -977,6 +979,8 @@ mod tests {
         assert!(boats[1].turn.is_some());
         assert!(boats[2].forward.is_none());
         assert!(boats[2].turn.is_none());
+        assert!(boats[3].forward.is_none());
+        assert!(boats[3].turn.is_none());
     }
 
     #[test]

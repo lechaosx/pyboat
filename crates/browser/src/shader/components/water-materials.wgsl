@@ -16,20 +16,15 @@ fn precipitation_water_contact_sample_from_atmosphere(
     if precipitation <= 0.001 || visual_pixel_footprint_m >= 0.30 {
         return sample;
     }
-    let cell_cycles = max(
-        vec2<i32>(1),
-        vec2<i32>(round(scene.world_size_m / 1.50)),
-    );
-    let cell_size_m = scene.world_size_m / vec2<f32>(cell_cycles);
+    let cell_x_cycles = max(1, i32(round(scene.world_size_m.x / 1.50)));
+    let cell_size_m = vec2<f32>(scene.world_size_m.x / f32(cell_x_cycles), 1.50);
     let canonical_position = canonical_world_position(position_m);
-    let positive_position = select(
-        canonical_position,
-        canonical_position + scene.world_size_m,
-        canonical_position < vec2<f32>(0.0),
+    let positive_x = select(
+        canonical_position.x,
+        canonical_position.x + scene.world_size_m.x,
+        canonical_position.x < 0.0,
     );
-    let cell_position = positive_position
-        * scene.inverse_world_size_m
-        * vec2<f32>(cell_cycles);
+    let cell_position = vec2<f32>(positive_x, position_m.y) / cell_size_m;
     let base_cell = vec2<i32>(floor(cell_position));
     let cell_local = fract(cell_position);
     let cycles_per_anchor = 2400u;
@@ -49,8 +44,8 @@ fn precipitation_water_contact_sample_from_atmosphere(
         for (var offset_x = -1; offset_x <= 1; offset_x++) {
             let unwrapped_cell = base_cell + vec2<i32>(offset_x, offset_y);
             let wrapped_cell = vec2<i32>(
-                positive_mod(unwrapped_cell.x, cell_cycles.x),
-                positive_mod(unwrapped_cell.y, cell_cycles.y),
+                positive_mod(unwrapped_cell.x, cell_x_cycles),
+                unwrapped_cell.y,
             );
             let cell_hash = terrain_hash(
                 scene.match_seed

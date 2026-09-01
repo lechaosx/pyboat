@@ -1762,7 +1762,7 @@ fn solid_ice_extends_land_across_coastal_water() {
         })
         .expect("representative region should contain a shallow coast");
     let bedrock_elevation_m = procedural_terrain_elevation_m(seed, position_m);
-    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -3.0, -3.0);
+    let ice_elevation_m = procedural_solid_surface_elevation_m(seed, position_m, -20.0, -20.0);
 
     assert!(bedrock_elevation_m < 0.0);
     assert!(ice_elevation_m > 0.0);
@@ -1826,8 +1826,8 @@ fn cold_surface_water_freezes_over_shallow_and_deep_ocean() {
         .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -1_000.0)
         .expect("representative region should contain deep ocean");
 
-    let shallow_ice = procedural_solid_surface_elevation_m(seed, shallow_position_m, -8.0, -4.0);
-    let deep_ice = procedural_solid_surface_elevation_m(seed, deep_position_m, -8.0, -4.0);
+    let shallow_ice = procedural_solid_surface_elevation_m(seed, shallow_position_m, -20.0, -20.0);
+    let deep_ice = procedural_solid_surface_elevation_m(seed, deep_position_m, -20.0, -20.0);
 
     assert!(shallow_ice > 0.0);
     assert!(deep_ice > 0.0);

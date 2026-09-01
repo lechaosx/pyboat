@@ -146,8 +146,8 @@ const MOON_ANGULAR_RADIUS_RAD: f64 = 0.00452;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeriodicNoiseBasis {
-    PeriodicTriangularSimplex2d,
-    CircleEmbeddedSimplex4d,
+    LongitudePeriodicTriangularSimplex2d,
+    LongitudeCircleSimplex4d,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -166,10 +166,10 @@ pub fn periodic_noise_octave_diagnostic(
     requested_wavelength_m: f32,
 ) -> PeriodicNoiseOctaveDiagnostic {
     let (effective_wavelength_x_m, effective_wavelength_y_m) = match basis {
-        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => {
+        PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d => {
             periodic_simplex_effective_wavelengths(world_geometry, requested_wavelength_m)
         }
-        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => {
+        PeriodicNoiseBasis::LongitudeCircleSimplex4d => {
             (requested_wavelength_m, requested_wavelength_m)
         }
     };
@@ -191,12 +191,9 @@ fn periodic_simplex_effective_wavelengths(
         / (std::f32::consts::SQRT_2 * requested_wavelength_m))
         .round()
         .max(1.0);
-    let vertical_modes = (world_geometry.height_m() * libm::sqrtf(1.5) / requested_wavelength_m)
-        .round()
-        .max(1.0);
     (
         world_geometry.width_m() / (std::f32::consts::SQRT_2 * horizontal_modes),
-        world_geometry.height_m() * libm::sqrtf(1.5) / vertical_modes,
+        requested_wavelength_m,
     )
 }
 
@@ -2120,9 +2117,9 @@ fn terrain_simplex_fractal_noise(
     for octave in 0..octave_count {
         let octave_seed = field_seed ^ (octave as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
         let basis = if octave < circle_octave_count {
-            PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+            PeriodicNoiseBasis::LongitudeCircleSimplex4d
         } else {
-            PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+            PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d
         };
         value += amplitude
             * terrain_simplex_noise(world_geometry, octave_seed, position_m, wavelength_m, basis);
@@ -2141,10 +2138,10 @@ fn terrain_simplex_noise(
     basis: PeriodicNoiseBasis,
 ) -> f32 {
     match basis {
-        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => {
+        PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d => {
             terrain_simplex_noise_2d(world_geometry, field_seed, position_m, wavelength_m)
         }
-        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => {
+        PeriodicNoiseBasis::LongitudeCircleSimplex4d => {
             terrain_simplex_noise_4d(world_geometry, field_seed, position_m, wavelength_m).0
         }
     }
@@ -2160,20 +2157,15 @@ fn terrain_simplex_noise_2d(
     const UNSKEW: f32 = 0.211_324_87;
     const NORMALIZATION: f32 = 70.0;
 
-    let wrapped_m = world_geometry.wrap_position_m([position_m.x, position_m.y]);
+    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
     let horizontal_modes = ((f64::from(world_geometry.width_m())
         / (f64::from(wavelength_m) * std::f64::consts::SQRT_2))
         .round()
         .clamp(1.0, f64::from(i32::MAX / 4))) as i32;
-    let vertical_modes = ((f64::from(world_geometry.height_m()) * libm::sqrt(1.5)
-        / f64::from(wavelength_m))
-    .round()
-    .clamp(1.0, f64::from(i32::MAX / 4))) as i32;
-    let horizontal_phase = wrapped_m[0].rem_euclid(world_geometry.width_m())
+    let horizontal_phase = wrapped_x_m.rem_euclid(world_geometry.width_m())
         * horizontal_modes as f32
         / world_geometry.width_m();
-    let vertical_phase = wrapped_m[1].rem_euclid(world_geometry.height_m()) * vertical_modes as f32
-        / (world_geometry.height_m() * 1.732_050_8);
+    let vertical_phase = position_m.y / (std::f32::consts::SQRT_2 * wavelength_m);
     let scaled = Vector::new(
         horizontal_phase + vertical_phase,
         -horizontal_phase + vertical_phase,
@@ -2205,13 +2197,8 @@ fn terrain_simplex_noise_2d(
         if attenuation <= 0.0 {
             continue;
         }
-        let lattice_gradient = terrain_simplex_lattice_gradient(
-            field_seed,
-            lattice_x,
-            lattice_y,
-            horizontal_modes,
-            vertical_modes,
-        );
+        let lattice_gradient =
+            terrain_simplex_lattice_gradient(field_seed, lattice_x, lattice_y, horizontal_modes);
         let ramp = lattice_gradient.dot(offset);
         let attenuation_squared = attenuation * attenuation;
         let attenuation_fourth = attenuation_squared * attenuation_squared;
@@ -2227,25 +2214,22 @@ fn terrain_simplex_noise_4d(
     position_m: Vector,
     wavelength_m: f32,
 ) -> (f32, Vector) {
-    let wrapped_m = world_geometry.wrap_position_m([position_m.x, position_m.y]);
-    let angle_x = std::f32::consts::TAU * wrapped_m[0] / world_geometry.width_m();
-    let angle_y = std::f32::consts::TAU * wrapped_m[1] / world_geometry.height_m();
+    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
+    let angle_x = std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m();
     let (sin_x, cos_x) = (libm::sinf(angle_x), libm::cosf(angle_x));
-    let (sin_y, cos_y) = (libm::sinf(angle_y), libm::cosf(angle_y));
     let circle_x = world_geometry.width_m() / (std::f32::consts::TAU * wavelength_m);
-    let circle_y = world_geometry.height_m() / (std::f32::consts::TAU * wavelength_m);
-    let point = [
-        circle_x * cos_x,
-        circle_x * sin_x,
-        circle_y * cos_y,
-        circle_y * sin_y,
-    ];
+    let linear_y = position_m.y / (std::f32::consts::SQRT_2 * wavelength_m);
+    let point = [circle_x * cos_x, circle_x * sin_x, linear_y, linear_y + 0.5];
     let (value, input_gradient) = simplex_noise_sample_4d(field_seed, point);
-    let gradient_per_m = Vector::new(
-        (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
-        (-sin_y * input_gradient[2] + cos_y * input_gradient[3]) / wavelength_m,
-    );
-    (value, gradient_per_m)
+    // The linear north-south slice needs this scale to retain the calibrated
+    // broad-terrain occupancy and coastal-slope distribution.
+    let cylindrical_scale = 35.7 / 33.4;
+    let gradient_per_m = cylindrical_scale
+        * Vector::new(
+            (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
+            (input_gradient[2] + input_gradient[3]) / (std::f32::consts::SQRT_2 * wavelength_m),
+        );
+    (cylindrical_scale * value, gradient_per_m)
 }
 
 fn spatiotemporal_simplex_noise_4d(
@@ -2412,14 +2396,12 @@ fn terrain_simplex_lattice_gradient(
     x: i32,
     y: i32,
     horizontal_modes: i32,
-    vertical_modes: i32,
 ) -> Vector {
-    // x-y and x+y are the rectangular axes of the triangular lattice. Integer
-    // mode counts therefore turn each procedural calibration period into an
-    // exact lattice shift.
+    // x-y is the longitude axis of the triangular lattice. Wrapping only this
+    // residue preserves the cylindrical seam without repeating latitude.
     let horizontal_lattice =
         (i64::from(x) - i64::from(y)).rem_euclid(2 * i64::from(horizontal_modes));
-    let vertical_lattice = (i64::from(x) + i64::from(y)).rem_euclid(2 * i64::from(vertical_modes));
+    let vertical_lattice = i64::from(x) + i64::from(y);
     let key = field_seed
         ^ (horizontal_lattice as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (vertical_lattice as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
@@ -2450,9 +2432,9 @@ fn terrain_fractal_noise_sample(
             position_y_m,
             wavelength_m,
             if octave < circle_octave_count {
-                PeriodicNoiseBasis::CircleEmbeddedSimplex4d
+                PeriodicNoiseBasis::LongitudeCircleSimplex4d
             } else {
-                PeriodicNoiseBasis::PeriodicTriangularSimplex2d
+                PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d
             },
         );
         value += amplitude * sample.value;
@@ -2478,14 +2460,16 @@ fn hybrid_simplex_noise_sample_f64(
     basis: PeriodicNoiseBasis,
 ) -> ScalarNoiseSample {
     match basis {
-        PeriodicNoiseBasis::PeriodicTriangularSimplex2d => periodic_simplex_noise_sample_f64(
-            world_geometry,
-            field_seed,
-            position_x_m,
-            position_y_m,
-            wavelength_m,
-        ),
-        PeriodicNoiseBasis::CircleEmbeddedSimplex4d => circle_embedded_simplex_noise_sample_f64(
+        PeriodicNoiseBasis::LongitudePeriodicTriangularSimplex2d => {
+            periodic_simplex_noise_sample_f64(
+                world_geometry,
+                field_seed,
+                position_x_m,
+                position_y_m,
+                wavelength_m,
+            )
+        }
+        PeriodicNoiseBasis::LongitudeCircleSimplex4d => cylindrical_simplex_noise_sample_f64(
             world_geometry,
             field_seed,
             position_x_m,
@@ -2495,7 +2479,7 @@ fn hybrid_simplex_noise_sample_f64(
     }
 }
 
-fn circle_embedded_simplex_noise_sample_f64(
+fn cylindrical_simplex_noise_sample_f64(
     world_geometry: WorldGeometry,
     field_seed: u64,
     position_x_m: f64,
@@ -2504,22 +2488,14 @@ fn circle_embedded_simplex_noise_sample_f64(
 ) -> ScalarNoiseSample {
     const SKEW: f64 = 0.309_016_994_374_947_45;
     const UNSKEW: f64 = 0.138_196_601_125_010_5;
-    const NORMALIZATION: f64 = 33.4;
+    const NORMALIZATION: f64 = 35.7;
 
     let width_m = f64::from(world_geometry.width_m());
-    let height_m = f64::from(world_geometry.height_m());
     let angle_x = std::f64::consts::TAU * position_x_m.rem_euclid(width_m) / width_m;
-    let angle_y = std::f64::consts::TAU * position_y_m.rem_euclid(height_m) / height_m;
     let (sin_x, cos_x) = (libm::sin(angle_x), libm::cos(angle_x));
-    let (sin_y, cos_y) = (libm::sin(angle_y), libm::cos(angle_y));
     let circle_x = width_m / (std::f64::consts::TAU * wavelength_m);
-    let circle_y = height_m / (std::f64::consts::TAU * wavelength_m);
-    let point = [
-        circle_x * cos_x,
-        circle_x * sin_x,
-        circle_y * cos_y,
-        circle_y * sin_y,
-    ];
+    let linear_y = position_y_m / (std::f64::consts::SQRT_2 * wavelength_m);
+    let point = [circle_x * cos_x, circle_x * sin_x, linear_y, linear_y + 0.5];
     let skew = point.iter().sum::<f64>() * SKEW;
     let lattice = point.map(|coordinate| libm::floor(coordinate + skew) as i64);
     let unskew = lattice.iter().sum::<i64>() as f64 * UNSKEW;
@@ -2573,8 +2549,8 @@ fn circle_embedded_simplex_noise_sample_f64(
         value: NORMALIZATION * value,
         gradient_x_per_m: NORMALIZATION * (-sin_x * input_gradient[0] + cos_x * input_gradient[1])
             / wavelength_m,
-        gradient_y_per_m: NORMALIZATION * (-sin_y * input_gradient[2] + cos_y * input_gradient[3])
-            / wavelength_m,
+        gradient_y_per_m: NORMALIZATION * (input_gradient[2] + input_gradient[3])
+            / (std::f64::consts::SQRT_2 * wavelength_m),
     }
 }
 
@@ -2610,20 +2586,14 @@ fn periodic_simplex_noise_sample_f64(
 ) -> ScalarNoiseSample {
     const SKEW: f64 = 0.366_025_403_784_438_65;
     const UNSKEW: f64 = 0.211_324_865_405_187_13;
-    const SQRT_3: f64 = 1.732_050_807_568_877_2;
     const NORMALIZATION: f64 = 70.0;
 
     let width_m = f64::from(world_geometry.width_m());
-    let height_m = f64::from(world_geometry.height_m());
     let horizontal_modes = (width_m / (std::f64::consts::SQRT_2 * wavelength_m))
         .round()
         .clamp(1.0, i64::MAX as f64 / 4.0) as i64;
-    let vertical_modes = (height_m * libm::sqrt(1.5) / wavelength_m)
-        .round()
-        .clamp(1.0, i64::MAX as f64 / 4.0) as i64;
     let horizontal_phase = position_x_m.rem_euclid(width_m) * horizontal_modes as f64 / width_m;
-    let vertical_phase =
-        position_y_m.rem_euclid(height_m) * vertical_modes as f64 / (SQRT_3 * height_m);
+    let vertical_phase = position_y_m / (std::f64::consts::SQRT_2 * wavelength_m);
     let scaled_x = horizontal_phase + vertical_phase;
     let scaled_y = -horizontal_phase + vertical_phase;
     let skew = (scaled_x + scaled_y) * SKEW;
@@ -2664,7 +2634,6 @@ fn periodic_simplex_noise_sample_f64(
             lattice_x,
             lattice_y,
             horizontal_modes,
-            vertical_modes,
         );
         let ramp = gradient.0 * offset_x + gradient.1 * offset_y;
         let attenuation_squared = attenuation * attenuation;
@@ -2678,7 +2647,7 @@ fn periodic_simplex_noise_sample_f64(
     }
 
     let horizontal_scale_per_m = horizontal_modes as f64 / width_m;
-    let vertical_scale_per_m = vertical_modes as f64 / (SQRT_3 * height_m);
+    let vertical_scale_per_m = 1.0 / (std::f64::consts::SQRT_2 * wavelength_m);
     ScalarNoiseSample {
         value: NORMALIZATION * value,
         gradient_x_per_m: NORMALIZATION
@@ -2695,10 +2664,9 @@ fn periodic_simplex_lattice_gradient_f64(
     x: i64,
     y: i64,
     horizontal_modes: i64,
-    vertical_modes: i64,
 ) -> (f64, f64) {
     let horizontal_lattice = (x - y).rem_euclid(2 * horizontal_modes);
-    let vertical_lattice = (x + y).rem_euclid(2 * vertical_modes);
+    let vertical_lattice = x + y;
     let key = field_seed
         ^ (horizontal_lattice as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (vertical_lattice as u64).wrapping_mul(0xe703_7ed1_a0b4_28db);
@@ -3041,7 +3009,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_embedded_noise_gradient_matches_finite_difference_at_rectangular_seams() {
+    fn cylindrical_noise_gradient_matches_finite_difference() {
         let epsilon_m = 0.01;
         for world in [
             WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
@@ -3055,9 +3023,8 @@ mod tests {
                 (0.291 * half_width, -half_height),
                 (-half_width, -half_height),
             ] {
-                let sample =
-                    circle_embedded_simplex_noise_sample_f64(world, 0x5eed_cafe, x, y, 8192.0);
-                let x_low = circle_embedded_simplex_noise_sample_f64(
+                let sample = cylindrical_simplex_noise_sample_f64(world, 0x5eed_cafe, x, y, 8192.0);
+                let x_low = cylindrical_simplex_noise_sample_f64(
                     world,
                     0x5eed_cafe,
                     x - epsilon_m,
@@ -3065,7 +3032,7 @@ mod tests {
                     8192.0,
                 )
                 .value;
-                let x_high = circle_embedded_simplex_noise_sample_f64(
+                let x_high = cylindrical_simplex_noise_sample_f64(
                     world,
                     0x5eed_cafe,
                     x + epsilon_m,
@@ -3073,7 +3040,7 @@ mod tests {
                     8192.0,
                 )
                 .value;
-                let y_low = circle_embedded_simplex_noise_sample_f64(
+                let y_low = cylindrical_simplex_noise_sample_f64(
                     world,
                     0x5eed_cafe,
                     x,
@@ -3081,7 +3048,7 @@ mod tests {
                     8192.0,
                 )
                 .value;
-                let y_high = circle_embedded_simplex_noise_sample_f64(
+                let y_high = cylindrical_simplex_noise_sample_f64(
                     world,
                     0x5eed_cafe,
                     x,
@@ -3090,17 +3057,23 @@ mod tests {
                 )
                 .value;
                 assert!(
-                    ((x_high - x_low) / (2.0 * epsilon_m) - sample.gradient_x_per_m).abs() < 1.0e-8
+                    ((x_high - x_low) / (2.0 * epsilon_m) - sample.gradient_x_per_m).abs() < 1.0e-8,
+                    "x={x} y={y}: finite difference {}, analytic {}",
+                    (x_high - x_low) / (2.0 * epsilon_m),
+                    sample.gradient_x_per_m,
                 );
                 assert!(
-                    ((y_high - y_low) / (2.0 * epsilon_m) - sample.gradient_y_per_m).abs() < 1.0e-8
+                    ((y_high - y_low) / (2.0 * epsilon_m) - sample.gradient_y_per_m).abs() < 1.0e-8,
+                    "x={x} y={y}: finite difference {}, analytic {}",
+                    (y_high - y_low) / (2.0 * epsilon_m),
+                    sample.gradient_y_per_m,
                 );
             }
         }
     }
 
     #[test]
-    fn circle_embedded_noise_keeps_local_gradient_scale_across_world_sizes() {
+    fn cylindrical_noise_keeps_local_gradient_scale_across_world_sizes() {
         let wavelength_m = 8192.0;
         let mut scaled_rms = Vec::new();
         for world in [
@@ -3113,7 +3086,7 @@ mod tests {
                 for y_index in 0..16 {
                     let x = f64::from(world.width_m()) * (x_index as f64 + 0.37) / 16.0;
                     let y = f64::from(world.height_m()) * (y_index as f64 + 0.61) / 16.0;
-                    let sample = circle_embedded_simplex_noise_sample_f64(
+                    let sample = cylindrical_simplex_noise_sample_f64(
                         world,
                         0x5eed_cafe ^ (x_index * 16 + y_index) as u64,
                         x,
@@ -3132,7 +3105,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_circle_noise_tracks_double_precision_reference() {
+    fn portable_cylindrical_noise_tracks_double_precision_reference() {
         for world in [
             WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
             WorldGeometry::new(80_000.0, 40_000.0).unwrap(),
@@ -3143,7 +3116,7 @@ mod tests {
                 Vector::new(0.173 * world.width_m(), -0.291 * world.height_m()),
             ] {
                 let portable = terrain_simplex_noise_4d(world, 0x5eed_cafe, position_m, 8192.0);
-                let reference = circle_embedded_simplex_noise_sample_f64(
+                let reference = cylindrical_simplex_noise_sample_f64(
                     world,
                     0x5eed_cafe,
                     f64::from(position_m.x),

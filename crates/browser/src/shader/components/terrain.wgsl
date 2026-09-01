@@ -785,20 +785,19 @@ fn sea_ice_surface(
         4.0,
         6u,
     );
-    let slab_cycles = max(
-        vec2<i32>(1),
-        vec2<i32>(round(scene.world_size_m / max(tuning.ice_structure.x, 1.0))),
+    let target_slab_size_m = max(tuning.ice_structure.x, 1.0);
+    let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / target_slab_size_m)));
+    let slab_size_m = vec2<f32>(
+        scene.world_size_m.x / f32(slab_x_cycles),
+        target_slab_size_m,
     );
-    let slab_size_m = scene.world_size_m / vec2<f32>(slab_cycles);
     let canonical_position = canonical_world_position(position_m);
-    let positive_position = select(
-        canonical_position,
-        canonical_position + scene.world_size_m,
-        canonical_position < vec2<f32>(0.0),
+    let positive_x = select(
+        canonical_position.x,
+        canonical_position.x + scene.world_size_m.x,
+        canonical_position.x < 0.0,
     );
-    let slab_position = positive_position
-        * scene.inverse_world_size_m
-        * vec2<f32>(slab_cycles);
+    let slab_position = vec2<f32>(positive_x, position_m.y) / slab_size_m;
     let slab_base = vec2<i32>(floor(slab_position));
     let slab_local = fract(slab_position);
     var nearest_distance_m = 1e9;
@@ -808,8 +807,8 @@ fn sea_ice_surface(
         for (var offset_x = -1; offset_x <= 1; offset_x++) {
             let unwrapped_cell = slab_base + vec2<i32>(offset_x, offset_y);
             let wrapped_cell = vec2<i32>(
-                positive_mod(unwrapped_cell.x, slab_cycles.x),
-                positive_mod(unwrapped_cell.y, slab_cycles.y),
+                positive_mod(unwrapped_cell.x, slab_x_cycles),
+                unwrapped_cell.y,
             );
             let candidate_hash = terrain_hash(
                 scene.match_seed

@@ -87,11 +87,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   surfaces remain low-frequency; finer structure is appearance-only and cannot
   change depth, collision, or the shoreline.
 - **[Explicit]** Large-scale archipelago suitability uses three octaves of
-  four-dimensional simplex-gradient noise sampled through metre-scale circle
-  embeddings of both world axes. Independent island morphology uses the same
-  basis for its first three octaves and periodic two-dimensional triangular
-  simplex for its two finer octaves. A high sea-level threshold keeps the land
-  excursion set below the regime where it commonly divides the sea.
+  four-dimensional simplex-gradient noise sampled through a longitude circle
+  and a linear north-south path. Independent island morphology uses the same
+  basis for its first three octaves and longitude-periodic two-dimensional
+  triangular simplex for its two finer octaves. A high sea-level threshold keeps
+  the land excursion set below the regime where it commonly divides the sea.
 - **[Explicit]** Coastal appearance is the expression of shared latent physical
   fields rather than independent material masks. Broad substrate rockiness and
   coastal ruggedness cross the shoreline: rocky and reef-forming regions drive
@@ -123,8 +123,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   relief but excludes metre-scale micro-relief, preventing broad contour zoning
   without turning cover into aliased speckle.
 - **[Explicit]** Broad coastal substrate and ruggedness use circle-embedded
-  four-dimensional simplex. Shoal and finer physical relief use periodic
-  two-dimensional triangular simplex.
+  four-dimensional simplex with linear north-south coordinates. Shoal and finer
+  physical relief use longitude-periodic two-dimensional triangular simplex.
 
 ### Shared procedural fields
 
@@ -136,19 +136,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   sent to a client. Snapshots synchronize boats, not sampled environment fields
   or model parameters.
 - **[Explicit]** Every seeded spatial field joins without a value or gradient seam
-  across the longitude period. Canonicalizing sample coordinates alone does not
-  make an ordinary noise field periodic.
-- **[Implicit]** Existing terrain, weather, tide, material, and cloud noise retains
-  its calibrated north-south procedural period beneath the polar exterior. That
-  internal repetition is not coordinate equivalence: physics, visibility,
-  latitude, climate, and rendering position never wrap north-south, and opaque
-  authoritative ice hides the repeated substrate beyond the poles.
+  across the longitude period and continues without repetition north-south,
+  including beyond the geographic poles. Canonicalizing sample coordinates alone
+  does not make an ordinary noise field periodic.
 - **[Explicit]** Noise basis is a fixed semantic property of each field and
   octave, independent of world geometry. Broad terrain and tide response use a
-  four-dimensional circle embedding with radii `width / 2π` and `height / 2π`,
-  preserving the requested local metre scale without stretching either axis.
+  four-dimensional longitude-circle and linear-north-south embedding, preserving
+  the requested local metre scale without stretching either axis.
   Evolving scalar weather uses longitude-circle, linear-latitude, noise-time
-  simplex. Fine physical terrain and material spectra use periodic
+  simplex. Fine physical terrain and material spectra use longitude-periodic
   two-dimensional triangular simplex. Changing the
   supported geometry range never silently reclassifies an octave; any partition
   change is an explicit, profiled retuning decision.
@@ -161,7 +157,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
   portability requirement.
 - **[Explicit]** Broad unthresholded tide response uses double-precision
-  circle-embedded four-dimensional simplex noise with analytic chain-rule
+  cylindrical four-dimensional simplex noise with analytic chain-rule
   world-space gradients. Evolving scalar weather uses portable single-precision
   four-dimensional simplex with analytic horizontal gradients; the host reduces
   the full tick into bounded time coordinates before shader evaluation.
@@ -319,15 +315,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Solid ice derives from climate rather than an authored latitude
   front, island-distance field, or propagation solve. The calibrated polar
   climate remains frozen through summer.
-- **[Implicit]** Seasonal water temperature combines with a broad periodic
+- **[Implicit]** Seasonal water temperature combines with a broad cylindrical
   maritime heat anomaly derived from an existing landform field, producing a
   small, variable cap independently of water depth.
 - **[Explicit]** Frozen water renders the authoritative immovable solid body
   directly. Its opaque material distinguishes plate interiors, fractures,
   shores, and bedrock-controlled shallows without creating independent movable
   floes or a second collision surface.
-- **[Implicit]** Plate interiors come from a seeded periodic jittered Voronoi
-  field with approximately 192-metre cells and a fixed nine-candidate search.
+- **[Explicit]** Plate interiors come from a seeded longitude-periodic,
+  north-south-unbounded jittered Voronoi field with approximately 192-metre cells
+  and a fixed nine-candidate search.
   Nearest-cell identity supplies a constant plate tilt; the nearest/second-nearest
   gap supplies angular fractures whose visibility follows existing broad ice
   variation. Fragment-footprint filtering removes the network before it aliases.
@@ -384,11 +381,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** A single procedural surface normal combines the authoritative
   heightfield gradient with material-specific visual detail before celestial
   lighting. Appearance-only material spectra may extend below thirty centimetres.
-- **[Implicit]** Appearance-only material spectra use the portable 24-direction
-  periodic two-dimensional simplex kernel with non-binary octave spacing; each
-  octave chooses integer cycle counts for both world axes and fades out against
-  the fragment's world-space pixel footprint before it can alias. Material
-  relief remains single-sample, without parallax or per-material ray marching.
+- **[Explicit]** Appearance-only material spectra use the portable 24-direction
+  longitude-periodic two-dimensional simplex kernel with non-binary octave
+  spacing; each octave chooses an integer longitude cycle count and fades out
+  against the fragment's world-space pixel footprint before it can alias.
+  Material relief remains single-sample, without parallax or per-material ray
+  marching.
   Bounded broad-relief samples provide cast shadows without displaced geometry.
   In clear shallow water, filtered material reflectance produces scalar contrast
   through the water palette according to round-trip optical transmittance.
@@ -406,8 +404,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   surface. Individual contacts retain physical scale and filter out when the
   fragment footprint cannot resolve them. Rendering does not replace unresolved
   contacts with atmospheric haze or screen-space falling streaks.
-- **[Implicit]** A fixed 3-by-3 search over periodic 1.5-metre cells renders a
-  deterministic representative subset of precipitation contacts. Each cell has
+- **[Explicit]** A fixed 3-by-3 search over longitude-periodic,
+  north-south-unbounded 1.5-metre cells renders a deterministic representative
+  subset of precipitation contacts. Each cell has
   a jittered impact and 0.75-second lifecycle derived from a bounded periodic
   effect clock. Rain rings expand from 1.8 to 22 centimetres; cold precipitation
   produces smaller melting dimples. The contact path exits before its search in
