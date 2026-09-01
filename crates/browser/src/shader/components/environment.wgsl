@@ -185,11 +185,7 @@ fn procedural_pressure_sample_filtered_bands(
     let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let midlatitude_sine = sin(2.0 * latitude_rad);
     let midlatitude = midlatitude_sine * midlatitude_sine;
-    let latitude_gradient_rad_per_m = select(
-        0.0,
-        PI * scene.inverse_world_size_m.y,
-        abs(position_m.y) < 0.5 * scene.world_size_m.y,
-    );
+    let latitude_gradient_rad_per_m = surface_latitude_gradient_rad_per_m_at(position_m);
     let midlatitude_gradient_per_m =
         2.0 * sin(4.0 * latitude_rad) * latitude_gradient_rad_per_m;
     var sample: PressureFieldSample;
@@ -382,16 +378,34 @@ fn upper_wind_m_s() -> vec2<f32> {
     return upper_wind_m_s_at(surface_position_m);
 }
 
+fn surface_latitude_phase_degrees_at(position_m: vec2<f32>) -> f32 {
+    let unwrapped_degrees = 180.0 * position_m.y * scene.inverse_world_size_m.y;
+    return unwrapped_degrees
+        - 360.0 * floor((unwrapped_degrees + 180.0) / 360.0);
+}
+
 fn surface_latitude_degrees_at(position_m: vec2<f32>) -> f32 {
-    return clamp(
-        180.0 * position_m.y * scene.inverse_world_size_m.y,
-        -90.0,
-        90.0,
-    );
+    let latitude_degrees = surface_latitude_phase_degrees_at(position_m);
+    if latitude_degrees > 90.0 {
+        return 180.0 - latitude_degrees;
+    }
+    if latitude_degrees < -90.0 {
+        return -180.0 - latitude_degrees;
+    }
+    return latitude_degrees;
 }
 
 fn surface_latitude_degrees() -> f32 {
     return surface_latitude_degrees_at(surface_position_m);
+}
+
+fn surface_latitude_gradient_rad_per_m_at(position_m: vec2<f32>) -> f32 {
+    let direction = select(
+        1.0,
+        -1.0,
+        abs(surface_latitude_phase_degrees_at(position_m)) > 90.0,
+    );
+    return direction * PI * scene.inverse_world_size_m.y;
 }
 
 fn surface_local_solar_phase_at(position_m: vec2<f32>) -> f32 {
@@ -429,6 +443,21 @@ fn latitude_curve_value(knots: array<f32, 10>, latitude_degrees: f32) -> f32 {
     let fraction = knot_position - f32(lower);
     let amount = fraction * fraction * (3.0 - 2.0 * fraction);
     return mix(knots[lower], knots[lower + 1u], amount);
+}
+
+fn latitude_curve_gradient_y_per_m_at(
+    knots: array<f32, 10>,
+    position_m: vec2<f32>,
+) -> f32 {
+    let latitude = surface_latitude_degrees_at(position_m);
+    let knot_position = clamp(abs(latitude) / 10.0, 0.0, 9.0);
+    let lower = min(u32(floor(knot_position)), 8u);
+    let fraction = knot_position - f32(lower);
+    let gradient_c_per_degree = (knots[lower + 1u] - knots[lower])
+        * 0.6 * fraction * (1.0 - fraction);
+    let hemisphere_sign = select(-1.0, 1.0, latitude >= 0.0);
+    return gradient_c_per_degree * hemisphere_sign
+        * degrees(surface_latitude_gradient_rad_per_m_at(position_m));
 }
 
 fn surface_seasonal_latitude_factor_at(position_m: vec2<f32>) -> f32 {

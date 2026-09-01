@@ -266,14 +266,7 @@ fn projected_cloud_position(
     }
     let longitude = TAU * position_m.x
         * scene.inverse_world_size_m.x;
-    let polar_y_m = clamp(
-        position_m.y,
-        -0.5 * scene.world_size_m.y,
-        0.5 * scene.world_size_m.y,
-    );
-    let polar_excess_y_m = position_m.y - polar_y_m;
-    let latitude = PI * polar_y_m
-        * scene.inverse_world_size_m.y;
+    let latitude = radians(surface_latitude_degrees_at(position_m));
     let longitude_sin = sin(longitude);
     let longitude_cos = cos(longitude);
     let latitude_sin = sin(latitude);
@@ -302,10 +295,15 @@ fn projected_cloud_position(
     );
     let cloud_position = ray_origin + ray_distance_m * world_light;
     let cloud_direction = normalize(cloud_position);
-    return vec2<f32>(
-        scene.world_size_m.x * atan2(cloud_direction.y, cloud_direction.x) / TAU,
-        polar_excess_y_m
-            + scene.world_size_m.y * asin(clamp(cloud_direction.z, -1.0, 1.0)) / PI,
+    let cloud_latitude = asin(clamp(cloud_direction.z, -1.0, 1.0));
+    let cloud_longitude = atan2(cloud_direction.y, cloud_direction.x);
+    let longitude_delta = atan2(
+        sin(cloud_longitude - longitude),
+        cos(cloud_longitude - longitude),
+    );
+    return position_m + vec2<f32>(
+        scene.world_size_m.x * longitude_delta / TAU,
+        scene.world_size_m.y * (cloud_latitude - latitude) / PI,
     );
 }
 

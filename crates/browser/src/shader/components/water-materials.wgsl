@@ -169,7 +169,7 @@ fn ocean_forcing_from_surface(
     atmosphere: SurfaceAtmosphereSample,
     surface_tide: SurfaceTideSample,
 ) -> OceanForcingSample {
-    let latitude_rad = radians(atmosphere.climate.latitude_degrees);
+    let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let cluster = terrain_cluster;
     let transition = clamp((cluster.value - 0.02) / 0.46, 0.0, 1.0);
     let open_water = 1.0 - transition * transition * (3.0 - 2.0 * transition);
@@ -183,8 +183,8 @@ fn ocean_forcing_from_surface(
     let basin_gradient = open_water_derivative * cluster.gradient * polar_capacity
         + vec2<f32>(
             0.0,
-            -open_water * sin(2.0 * latitude_rad) * PI
-                * scene.inverse_world_size_m.y,
+            -open_water * sin(2.0 * latitude_rad)
+                * surface_latitude_gradient_rad_per_m_at(position_m),
         );
     let basin_squared = basin * basin;
     let basin_squared_gradient = 2.0 * basin * basin_gradient;
@@ -198,11 +198,8 @@ fn ocean_forcing_from_surface(
         0.5,
     );
     let hemisphere = sin(latitude_rad);
-    let hemisphere_gradient_y_per_m = select(
-        cos(latitude_rad) * PI * scene.inverse_world_size_m.y,
-        0.0,
-        abs(atmosphere.climate.latitude_degrees) >= 90.0,
-    );
+    let hemisphere_gradient_y_per_m =
+        cos(latitude_rad) * surface_latitude_gradient_rad_per_m_at(position_m);
     let base_gradient = 5500.0
         * (hemisphere * (basin_squared * gyre.gradient + gyre.value * basin_squared_gradient)
             + vec2<f32>(

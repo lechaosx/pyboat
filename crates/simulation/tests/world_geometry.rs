@@ -42,16 +42,27 @@ fn minimum_image_wraps_longitude_only() {
 }
 
 #[test]
-fn latitude_reaches_finite_poles_and_clamps_beyond_them() {
+fn latitude_mirror_repeats_between_the_poles() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
 
     assert_eq!(world.latitude_degrees(-20_000.0), -90.0);
     assert_eq!(world.latitude_degrees(0.0), 0.0);
     assert_eq!(world.latitude_degrees(10_000.0), 45.0);
     assert_eq!(world.latitude_degrees(20_000.0), 90.0);
-    assert_eq!(world.latitude_degrees(-30_000.0), -90.0);
-    assert_eq!(world.latitude_degrees(30_000.0), 90.0);
+    assert_eq!(world.latitude_degrees(30_000.0), 45.0);
+    assert_eq!(world.latitude_degrees(40_000.0), 0.0);
+    assert_eq!(world.latitude_degrees(50_000.0), -45.0);
+    assert_eq!(world.latitude_degrees(80_000.0), 0.0);
+    assert_eq!(world.latitude_degrees(-30_000.0), -45.0);
+    assert_eq!(world.latitude_degrees(-40_000.0), 0.0);
+    assert_eq!(world.latitude_degrees(-80_000.0), 0.0);
     assert!(world.latitude_degrees(20_000.0 - 0.125) > 89.99);
+
+    let gradient = 180.0 / world.height_m();
+    assert_eq!(world.latitude_gradient_degrees_per_m(10_000.0), gradient);
+    assert_eq!(world.latitude_gradient_degrees_per_m(30_000.0), -gradient);
+    assert_eq!(world.latitude_gradient_degrees_per_m(50_000.0), -gradient);
+    assert_eq!(world.latitude_gradient_degrees_per_m(70_000.0), gradient);
 }
 
 #[test]

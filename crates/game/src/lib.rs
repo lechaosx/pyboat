@@ -1115,12 +1115,13 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
     let gyre_gradient = Vector::new(gyre.gradient_x_per_m as f32, gyre.gradient_y_per_m as f32);
     let latitude_rad = f64::from(query.celestial.geographic_latitude_degrees).to_radians();
     let hemisphere = libm::sin(latitude_rad) as f32;
-    let hemisphere_gradient_y_per_m = if query.celestial.geographic_latitude_degrees.abs() < 90.0 {
-        (libm::cos(latitude_rad) * std::f64::consts::PI
-            / f64::from(query.world_geometry.height_m())) as f32
-    } else {
-        0.0
-    };
+    let hemisphere_gradient_y_per_m = (libm::cos(latitude_rad)
+        * f64::from(
+            query
+                .world_geometry
+                .latitude_gradient_degrees_per_m(query.position_m.y),
+        )
+        .to_radians()) as f32;
     let base_gradient = OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S as f32
         * (hemisphere
             * (basin_squared * gyre_gradient + gyre.value as f32 * basin_squared_gradient)
@@ -1212,11 +1213,8 @@ fn ocean_basin_capacity_sample(
     };
     let latitude_rad = f64::from(celestial.geographic_latitude_degrees).to_radians();
     let polar_capacity = libm::cos(latitude_rad).powi(2);
-    let polar_gradient_y_per_m = if celestial.geographic_latitude_degrees.abs() < 90.0 {
-        -libm::sin(2.0 * latitude_rad) * std::f64::consts::PI / f64::from(world_geometry.height_m())
-    } else {
-        0.0
-    };
+    let polar_gradient_y_per_m = -libm::sin(2.0 * latitude_rad)
+        * f64::from(world_geometry.latitude_gradient_degrees_per_m(position_m.y)).to_radians();
     ScalarNoiseSample {
         value: open_water * polar_capacity,
         gradient_x_per_m: open_water_derivative * cluster.gradient_x_per_m * polar_capacity,
@@ -2706,11 +2704,9 @@ fn procedural_pressure_sample(
     let latitude_rad = world_geometry.latitude_degrees(position_m.y).to_radians();
     let midlatitude_sine = libm::sinf(2.0 * latitude_rad);
     let midlatitude = midlatitude_sine * midlatitude_sine;
-    let latitude_gradient_rad_per_m = if position_m.y.abs() < 0.5 * world_geometry.height_m() {
-        std::f32::consts::PI / world_geometry.height_m()
-    } else {
-        0.0
-    };
+    let latitude_gradient_rad_per_m = world_geometry
+        .latitude_gradient_degrees_per_m(position_m.y)
+        .to_radians();
     let midlatitude_gradient_per_m =
         2.0 * libm::sinf(4.0 * latitude_rad) * latitude_gradient_rad_per_m;
     let mut potential_m2_s = 0.0_f32;

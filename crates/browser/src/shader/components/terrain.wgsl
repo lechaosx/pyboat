@@ -18,6 +18,7 @@ fn solid_ice_sample(
     terrain: TerrainSample,
     maritime_temperature: TerrainNoiseSample,
     climate: SurfaceClimateSample,
+    position_m: vec2<f32>,
 ) -> TerrainSample {
     var surface = terrain;
     let maritime_scale = 16.0 * (
@@ -50,16 +51,10 @@ fn solid_ice_sample(
     var annual_temperature: TerrainNoiseSample;
     annual_temperature.value = climate.annual_mean_air_temperature_c
         - 0.0065 * positive_bedrock.value;
-    let latitude = climate.latitude_degrees;
-    let normalized_latitude = clamp(abs(latitude) / 90.0, 0.0, 1.0);
-    let latitude_sign = select(-1.0, 1.0, latitude >= 0.0);
-    let climate_gradient_y = select(
+    annual_temperature.gradient = vec2<f32>(
         0.0,
-        -135.0 * sqrt(normalized_latitude) * latitude_sign
-            * scene.inverse_world_size_m.y,
-        normalized_latitude > 0.0,
-    );
-    annual_temperature.gradient = vec2<f32>(0.0, climate_gradient_y)
+        latitude_curve_gradient_y_per_m_at(CLIMATE_ANNUAL_MEAN_C, position_m),
+    )
         - 0.0065 * positive_bedrock.gradient;
     if annual_temperature.value >= -8.0 {
         return surface;
@@ -336,7 +331,7 @@ fn procedural_terrain_sample_with_climate_from_circle(
         && rock_mask_value == 0.0
         && outer_reef_mask_value == 0.0
     {
-        return solid_ice_sample(terrain, cluster, climate);
+        return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
@@ -480,7 +475,7 @@ fn procedural_terrain_sample_with_climate_from_circle(
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value);
-    return solid_ice_sample(terrain, cluster, climate);
+    return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
 }
 
 fn procedural_terrain_sample_with_climate(

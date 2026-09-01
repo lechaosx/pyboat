@@ -110,15 +110,17 @@ fn hemispheres_have_opposite_seasons_while_global_phases_match() {
 }
 
 #[test]
-fn latitude_reaches_each_pole_and_remains_clamped_beyond_it() {
+fn latitude_mirror_repeats_between_successive_poles() {
     let world = geometry();
     let half_height = world.height_m() / 2.0;
     for (y_m, expected_latitude) in [
-        (-2.0 * half_height, -90.0),
+        (-2.0 * half_height, 0.0),
         (-half_height, -90.0),
         (0.0, 0.0),
         (half_height, 90.0),
-        (2.0 * half_height, 90.0),
+        (2.0 * half_height, 0.0),
+        (3.0 * half_height, -90.0),
+        (4.0 * half_height, 0.0),
     ] {
         let conditions = world_celestial_conditions(world, 0.0, Vector::new(0.0, y_m));
         assert_eq!(conditions.geographic_latitude_degrees, expected_latitude);
@@ -126,18 +128,24 @@ fn latitude_reaches_each_pole_and_remains_clamped_beyond_it() {
 }
 
 #[test]
-fn polar_exterior_is_authoritative_solid_surface_at_every_longitude() {
+fn repeated_latitude_mirrors_climate_without_repeating_seeded_fields() {
     let world = geometry();
-    for y_m in [-world.height_m(), world.height_m()] {
-        for longitude_index in 0..16 {
-            let x_m =
-                -world.width_m() / 2.0 + (longitude_index as f32 + 0.5) * world.width_m() / 16.0;
-            let environment =
-                procedural_world_environment(world, SEED, TICK, Vector::new(x_m, y_m));
-            assert_eq!(environment.environment.water_depth_m, 0.0);
-            assert!(environment.surface_climate.solid_ice_cover > 0.99);
-        }
-    }
+    let sixty_degrees =
+        procedural_world_environment(world, SEED, TICK, Vector::new(0.0, world.height_m() / 3.0));
+    let mirrored_120_degrees = procedural_world_environment(
+        world,
+        SEED,
+        TICK,
+        Vector::new(0.0, 2.0 * world.height_m() / 3.0),
+    );
+
+    assert_eq!(sixty_degrees.climate, mirrored_120_degrees.climate);
+    assert_eq!(sixty_degrees.celestial.geographic_latitude_degrees, 60.0);
+    assert_eq!(
+        mirrored_120_degrees.celestial.geographic_latitude_degrees,
+        60.0
+    );
+    assert_ne!(sixty_degrees.weather, mirrored_120_degrees.weather);
 }
 
 #[test]

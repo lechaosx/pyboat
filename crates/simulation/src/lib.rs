@@ -68,7 +68,34 @@ impl WorldGeometry {
     }
 
     pub fn latitude_degrees(self, y_m: f32) -> f32 {
-        (y_m / self.height_m * 180.0).clamp(-90.0, 90.0)
+        let degrees = self.latitude_phase_degrees(y_m);
+        if degrees > 90.0 {
+            180.0 - degrees
+        } else if degrees < -90.0 {
+            -180.0 - degrees
+        } else {
+            degrees
+        }
+    }
+
+    pub fn latitude_gradient_degrees_per_m(self, y_m: f32) -> f32 {
+        let direction = if self.latitude_phase_degrees(y_m).abs() > 90.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        direction * 180.0 / self.height_m
+    }
+
+    fn latitude_phase_degrees(self, y_m: f32) -> f32 {
+        let period_m = 2.0 * self.height_m;
+        let cycle_y_m = y_m.rem_euclid(period_m);
+        let degrees = 180.0 * cycle_y_m / self.height_m;
+        if degrees >= 180.0 {
+            degrees - 360.0
+        } else {
+            degrees
+        }
     }
 
     pub fn local_solar_phase(self, global_day_phase: f32, x_m: f32) -> f32 {

@@ -34,10 +34,10 @@ current playable behavior; this file does not track delivery status.
   finite pole-to-pole geographic span; their numeric defaults are equal. Boats
   can sail longitude laps and interact across that seam.
 - **[Explicit]** North-south position is unbounded and does not wrap. Latitude
-  maps linearly from the equator to exact finite poles and remains clamped at
-  -90 or +90 degrees beyond them. The camera therefore cannot reveal a world
-  edge, while the indefinitely continuing authoritative polar ice prevents
-  boats from travelling through the non-geographic exterior.
+  mirror-repeats between -90 and +90 degrees at successive poles, following
+  `0, +90, 0, -90, 0` as north-south position advances. Climate and lighting use
+  that latitude, while terrain and every seeded spatial field continue unchanged
+  and do not repeat. The camera therefore cannot reveal a world edge.
 - **[Explicit]** A statistically connected, dominant sea contains natural-looking
   sparse groups of large procedural islands. Land may be more fractal and rare
   enclosed water may occur, but the world must not become a patchwork of equal

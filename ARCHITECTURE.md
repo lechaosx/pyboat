@@ -33,8 +33,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Each match has a cylindrical `WorldGeometry` with independently
   selectable longitude circumference and pole-to-pole span in metres. It defines
   canonical coordinates in `[-width/2, width/2) x R`; minimum-image displacement
-  wraps only longitude. Latitude is `180 * y / height` inside the geographic span
-  and clamps to the exact poles beyond it. Authoritative simulation, client
+  wraps only longitude. Latitude mirror-repeats between -90 and +90 degrees at
+  successive poles without wrapping north-south position. Authoritative simulation, client
   prediction, reconciliation, rendering placement, spatial interest, and
   replication use that shared geometry. The origin is the equator and reference
   meridian.
@@ -209,8 +209,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   over longitude, latitude, and a tick-derived time coordinate. Systems
   evolve and move locally without a field-wide velocity, stored history, weather
   grid, or storm entity. Longitude is circle-embedded for a continuous seam
-  while latitude remains linear between the finite poles and does not tile
-  vertically.
+  while the meridional noise coordinate remains linear and does not tile
+  vertically; only latitude-derived calibration envelopes repeat.
 - **[Explicit]** Surface rendering derives signed latitude, local solar time,
   climate, evolving surface temperature and moisture, snow and solid ice,
   astronomical tide, and celestial lighting at every rendered world position.
@@ -340,8 +340,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** A longitude-periodic scalar streamfunction directly evaluates
   seeded simplex noise over longitude, latitude, and a tick-derived time
   coordinate, then combines it with weak evolving pressure coupling. Broad
-  landform capacity steers it around island groups, latitude closes it at the
-  polar boundary, and a separate scalar potential uses spatial tide response and
+  landform capacity steers it around island groups, latitude closes it at every
+  pole, and a separate scalar potential uses spatial tide response and
   phase gradients. Both vanish where there is no navigable water. This is an
   analytic local approximation, not a stored basin solve. Basin-scale wavelength
   follows world circumference; spectrum, strength, pressure coupling, and
@@ -472,16 +472,19 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   observer's local aerosol and moisture scattering.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
-  width as circumference and the clamped physical latitude derived from the
-  pole-to-pole span; the non-geographic polar apron retains its local planar
-  offset. Sun and Moon projections are evaluated independently and fade with
+  width as circumference and the mirror-repeating latitude derived from the
+  pole-to-pole span. The resulting local angular displacement offsets the
+  receiver's unbounded cylindrical coordinates, without folding longitude or
+  north-south cloud fields at a pole. Sun and Moon projections are evaluated independently and fade with
   their respective direct-light contribution at the horizon. Grazing shadows
   remain finite. The apparent angular radius of the sun and moon supplies a
   distance-proportional penumbra for landform shadows.
-- **[Explicit]** North-south position maps linearly from -90 degrees at the
-  finite southern pole through the equator to +90 degrees at the finite northern
-  pole. Latitude remains clamped beyond those coordinates, so neither climate
-  nor seasonal forcing has a north-south seam.
+- **[Explicit]** North-south position maps linearly through -90 degrees at the
+  first southern pole, the equator, and +90 degrees at the first northern pole,
+  then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate,
+  lighting, and their analytic meridional gradients use that mirrored latitude.
+  Longitude, terrain, materials, and seeded atmosphere fields retain their
+  unbounded, non-repeating north-south coordinate.
 - **[Implicit]** World and view coordinates use positive X for east/right and
   positive Y for north/up. Input adapters convert down-positive device
   coordinates at their boundaries.
