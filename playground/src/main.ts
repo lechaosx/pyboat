@@ -10,6 +10,7 @@ import {
   sample_playground_seasonal_phase_factors,
   sample_playground_view_cloud_state,
   sample_playground_world_geometry,
+  sample_playground_world_phases,
 } from "browser/playground";
 import {
   advanceFixedClock,
@@ -222,11 +223,8 @@ const defaults: State = {
   diagnostic: "scene",
 };
 
-const wrappedPhase = (phase: number): number => ((phase % 1) + 1) % 1;
 const worldDaySeconds = 86_400;
 const worldYearDays = 336;
-// Keep these calendar-derived phases synchronized with world_celestial_conditions.
-const lunarOrbitDays = 1 / (1 / 28 + 1 / worldYearDays);
 const firstBloodMoonSeconds = 91 * worldDaySeconds - 4 * 60;
 const celestialEventPresets = {
   "solar-eclipse": 77 * worldDaySeconds,
@@ -235,11 +233,8 @@ const celestialEventPresets = {
 } as const;
 
 function worldPhases(worldTimeSeconds: number): [number, number, number] {
-  return [
-    wrappedPhase(0.5833 + worldTimeSeconds / worldDaySeconds),
-    wrappedPhase(0.5021 + worldTimeSeconds / (worldDaySeconds * worldYearDays)),
-    wrappedPhase(0.5021 + worldTimeSeconds / (worldDaySeconds * lunarOrbitDays)),
-  ];
+  const phases = sample_playground_world_phases(worldTimeSeconds);
+  return [phases[0], phases[1], phases[2]];
 }
 
 const state: State = { ...defaults };

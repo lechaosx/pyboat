@@ -361,6 +361,17 @@ pub fn sample_playground_seasonal_phase_factors(season_phase: f32) -> Vec<f32> {
 }
 
 #[wasm_bindgen]
+pub fn sample_playground_world_phases(world_time_seconds: f64) -> Vec<f32> {
+    let conditions =
+        world_celestial_conditions(WorldGeometry::default(), world_time_seconds, Vector::ZERO);
+    vec![
+        conditions.day_phase,
+        conditions.season_phase,
+        conditions.lunar_longitude_phase,
+    ]
+}
+
+#[wasm_bindgen]
 pub fn sample_playground_celestial_orbit(
     season_phase: f32,
     lunar_longitude_phase: f32,

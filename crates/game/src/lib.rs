@@ -131,6 +131,7 @@ const WORLD_DAY_SECONDS: f64 = 86_400.0;
 const WORLD_MONTH_DAYS: f64 = 28.0;
 const WORLD_YEAR_MONTHS: f64 = 12.0;
 const WORLD_YEAR_DAYS: f64 = WORLD_MONTH_DAYS * WORLD_YEAR_MONTHS;
+const WORLD_ORBIT_EPOCH_PHASE: f64 = 0.0021;
 const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_MONTH_DAYS;
 // The Moon must orbit faster than its 28-day Sun-relative phase cycle because
 // the Sun advances through the sky during the same interval.
@@ -554,10 +555,11 @@ pub fn world_celestial_conditions(
     let global_day_phase = (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32;
     CelestialConditions {
         geographic_latitude_degrees: world_geometry.latitude_degrees(position_m.y),
-        season_phase: (0.5021 + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
+        season_phase: (WORLD_ORBIT_EPOCH_PHASE
+            + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
         day_phase: world_geometry.local_solar_phase(global_day_phase, position_m.x),
-        lunar_longitude_phase: (0.5021
+        lunar_longitude_phase: (WORLD_ORBIT_EPOCH_PHASE
             + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_ORBIT_DAYS))
             .rem_euclid(1.0) as f32,
     }

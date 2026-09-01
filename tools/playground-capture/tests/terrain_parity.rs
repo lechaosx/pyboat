@@ -100,7 +100,7 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
 fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
     let world = WorldGeometry::default();
     let world_time_seconds = 77.0 * 86_400.0;
-    let position_m = Vector::new(-11_022.222, -17_955.555);
+    let position_m = Vector::new(-15_555.556, 22_222.223);
     let lighting = celestial_lighting(world_celestial_conditions(
         world,
         world_time_seconds,
@@ -567,14 +567,19 @@ fn projected_upper_clouds_can_shadow_locally_clear_ground() {
     let world = WorldGeometry::default();
     let width = 128usize;
     let height = 64usize;
-    let sky = render_diagnostic_image(
+    let world_time_seconds = world_time_for_season_phase(0.5021);
+    let sky = render_diagnostic_image_at(
         world,
+        Vector::ZERO,
+        world_time_seconds,
         "lighting_ambient_sky_occlusion",
         width as u32,
         height as u32,
     );
-    let shadow = render_diagnostic_image(
+    let shadow = render_diagnostic_image_at(
         world,
+        Vector::ZERO,
+        world_time_seconds,
         "lighting_projected_upper_shadow",
         width as u32,
         height as u32,
@@ -667,7 +672,9 @@ fn render_diagnostic_image(
 }
 
 fn world_time_for_season_phase(season_phase: f64) -> f64 {
-    (season_phase - 0.5021).rem_euclid(1.0) * 86_400.0 * 336.0
+    let epoch_phase =
+        world_celestial_conditions(WorldGeometry::default(), 0.0, Vector::ZERO).season_phase;
+    (season_phase - f64::from(epoch_phase)).rem_euclid(1.0) * 86_400.0 * 336.0
 }
 
 fn render_diagnostic_image_at(

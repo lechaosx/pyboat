@@ -1,14 +1,16 @@
 use game::{
-    cloud_field_time_coordinates, current_air_temperature_c, procedural_world_environment,
-    scalar_field_time_coordinates, scalar_field_time_coordinates_interpolated,
-    vector_field_time_coordinates, vector_field_time_coordinates_interpolated,
-    world_celestial_conditions, world_climate_conditions,
+    celestial_orbit, cloud_field_time_coordinates, current_air_temperature_c,
+    procedural_world_environment, scalar_field_time_coordinates,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::{DT_SECONDS, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
 const TICK: u64 = 12_345;
+const WORLD_DAY_SECONDS: f64 = 86_400.0;
 
 fn geometry() -> WorldGeometry {
     WorldGeometry::new(80_000.0, 40_000.0).unwrap()
@@ -58,6 +60,23 @@ fn longitude_sets_local_solar_time_without_changing_global_cycles() {
     assert_eq!(east.day_phase, repeated.day_phase);
     assert_eq!(reference.season_phase, east.season_phase);
     assert_eq!(reference.lunar_longitude_phase, east.lunar_longitude_phase,);
+}
+
+#[test]
+fn northern_june_is_summer_and_northern_december_is_winter() {
+    let world = geometry();
+    let northern_position_m = Vector::new(0.0, world.height_m() / 3.0);
+    let world_time_at_midmonth = |month: u32| f64::from((month - 1) * 28 + 13) * WORLD_DAY_SECONDS;
+    let june = world_celestial_conditions(world, world_time_at_midmonth(6), northern_position_m);
+    let december =
+        world_celestial_conditions(world, world_time_at_midmonth(12), northern_position_m);
+
+    assert!(celestial_orbit(june).solar_declination_rad > 0.0);
+    assert!(celestial_orbit(december).solar_declination_rad < 0.0);
+    let climate = world_climate_conditions(june.geographic_latitude_degrees);
+    assert!(
+        current_air_temperature_c(climate, june) > current_air_temperature_c(climate, december)
+    );
 }
 
 #[test]
