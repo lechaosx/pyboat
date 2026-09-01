@@ -938,6 +938,27 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
 }
 
 #[test]
+fn upper_atmosphere_afterglow_outlasts_lower_twilight() {
+    let ambient_at_solar_depression = |degrees: f32| {
+        celestial_lighting(CelestialConditions {
+            geographic_latitude_degrees: 0.0,
+            season_phase: 0.25,
+            day_phase: 0.75 + degrees / 360.0,
+            lunar_longitude_phase: 0.0,
+        })
+        .ambient_intensity
+    };
+
+    let civil_twilight = ambient_at_solar_depression(6.0);
+    let nautical_twilight = ambient_at_solar_depression(12.0);
+    let astronomical_night = ambient_at_solar_depression(18.0);
+
+    assert!(civil_twilight > nautical_twilight);
+    assert!(nautical_twilight > astronomical_night);
+    assert!((astronomical_night - 0.035).abs() < 1e-6);
+}
+
+#[test]
 fn lunar_orbit_tilt_limits_eclipses_to_node_crossings() {
     let solar_node = 0.5104333;
     let off_node = (solar_node + 0.25) % 1.0;

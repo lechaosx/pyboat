@@ -147,24 +147,35 @@ current playable behavior; this file does not track delivery status.
   unstable, non-storm conditions at a fixed low altitude. They add local
   shadows and make system-scale wind direction readable across at most about one
   quarter of the view.
+- **[Explicit]** Near sunset, the world's curvature can leave visible lower
+  clouds in sunlight after the surface is in shadow. The weather canopy filters
+  that grazing light before it produces edge and internal scattering in their
+  visible material.
 - **[Explicit]** An unseen weather canopy aggregates all cloud types into one
   amount and optical-depth field, from local convective structure to broad
   layered weather. It casts the primary weather shadows and contributes diffuse
   light alongside the clear sky. Directional shadows evaluate weather where the
   Sun or Moon ray intersects the canopy layer. The canopy-light endpoint uses
   the smooth regional mean optical thickness of the cloudy portion of the
-  visible sky, rather than the local overhead texture sample, to filter
-  eclipse-aware Sun and Moon intensity and color. The same regional sky fraction
+  visible sky, rather than the local overhead texture sample, to transform
+  clear-sky diffuse light and scatter eclipse-aware Sun and Moon light from the
+  canopy's underside. Thin canopy approaches clear-sky ambient, moderate canopy
+  can glow warmly at sunset or softly under moonlight, and thick canopy
+  attenuates its underside toward storm darkness. The same regional sky fraction
   sets both the clear-sky/cloud-dome ambient blend and the target areal coverage
   of detailed canopy bodies and shadows. It derives from the same pressure,
   temperature, moisture, and resulting weather conditions as gameplay; ambient
   never consumes a sampled cloud pixel.
-  Clear-sky light follows celestial and atmospheric scattering conditions.
+  Clear-sky light combines solar-disc daylight, lower-atmosphere twilight, and
+  weaker upper-atmosphere afterglow. Broad regional scattering modulates both
+  twilight components without importing local weather detail into ambient light.
   Unresolved high ice-cloud effects remain part of canopy and sky diffusion
   rather than a third sampled layer.
-- **[Explicit]** Aerosol optical depth varies spatially with seeded regional
-  structure, dry air, and rain washout. When the sun is low, aerosol and moisture
-  can redden direct sunlight, visible clouds, and the canopy's diffuse light.
+- **[Explicit]** Aerosol optical depth varies only with the broad regional
+  condensation and pressure regime, including regional storm washout. Local
+  humidity, rain, and visible lower clouds do not imprint fragment-scale changes
+  on ambient color. When the sun is low, regional aerosol and moisture can
+  redden direct sunlight, visible clouds, and the canopy's diffuse light.
 - **[Explicit]** Directional sun and moon light and diffuse sky-and-cloud light
   independently affect terrain, water, and visible lower clouds. Gray overcast
   can remain softly luminous while severe storm cover darkens a noon scene.

@@ -1,8 +1,8 @@
 use std::{fs, io::BufReader, process::Command};
 
 use game::{
-    celestial_lighting, procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
-    procedural_world_environment, world_celestial_conditions,
+    celestial_disc_visibility_at_height, celestial_lighting, procedural_solid_surface_elevation_m,
+    procedural_terrain_elevation_m, procedural_world_environment, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -125,6 +125,85 @@ fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
             lighting.solar_eclipse_fraction,
         );
     }
+}
+
+#[test]
+fn rendered_cloud_layer_sun_visibility_uses_the_world_horizon() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 0.0;
+    let position_m = (0..4_096)
+        .map(|index| Vector::new(world.width_m() * (index as f32 / 4_096.0 - 0.5), 0.0))
+        .find(|position_m| {
+            let sun_z = celestial_lighting(world_celestial_conditions(
+                world,
+                world_time_seconds,
+                *position_m,
+            ))
+            .sun_direction[2];
+            (-0.205..=-0.195).contains(&sun_z)
+        })
+        .expect("the equator should cross the selected twilight elevation");
+    let sun_z = celestial_lighting(world_celestial_conditions(
+        world,
+        world_time_seconds,
+        position_m,
+    ))
+    .sun_direction[2];
+
+    for (diagnostic, height_m) in [
+        ("lighting_low_cloud_sun_visibility", 900.0),
+        ("lighting_canopy_sun_visibility", 3_600.0),
+    ] {
+        let actual = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            1.0,
+            diagnostic,
+            1,
+            1,
+        );
+        let expected = scalar_debug_pixel(celestial_disc_visibility_at_height(
+            world, height_m, sun_z, 0.00465,
+        ));
+        for channel in 0..3 {
+            assert!(
+                actual[channel].abs_diff(expected[channel]) <= 4,
+                "{diagnostic}: {actual:?} != {expected:?} at sun z {sun_z}",
+            );
+        }
+    }
+}
+
+#[test]
+fn full_moon_produces_direct_canopy_scattering() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..28 * 24)
+        .map(|hour| hour as f64 * 3_600.0)
+        .max_by(|left, right| {
+            let left = celestial_lighting(world_celestial_conditions(world, *left, position_m));
+            let right = celestial_lighting(world_celestial_conditions(world, *right, position_m));
+            left.moon_intensity.total_cmp(&right.moon_intensity)
+        })
+        .unwrap();
+    let lighting = celestial_lighting(world_celestial_conditions(
+        world,
+        world_time_seconds,
+        position_m,
+    ));
+    assert!(lighting.moon_intensity > 0.08, "{lighting:?}");
+
+    let scattering = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_canopy_moon_scattering",
+        1,
+        1,
+    );
+    assert!(scalar_debug_amount(&scattering) > 0.01, "{scattering:?}");
 }
 
 #[test]
@@ -308,6 +387,38 @@ fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
     assert!(
         ambient_detail < 0.5 * canopy_detail,
         "ambient {ambient_detail}, canopy {canopy_detail}",
+    );
+}
+
+#[test]
+fn ambient_aerosol_is_lower_frequency_than_local_humidity() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-12_000.0, -5_000.0);
+    let aerosol = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        4_000.0,
+        "lighting_aerosol_optical_depth",
+        256,
+        64,
+    );
+    let humidity = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        4_000.0,
+        "weather_relative_humidity",
+        256,
+        64,
+    );
+    let aerosol_detail = normalized_mean_neighbor_scalar_difference(&aerosol, 256, 64);
+    let humidity_detail = normalized_mean_neighbor_scalar_difference(&humidity, 256, 64);
+
+    assert!(humidity_detail > 0.0005, "{humidity_detail}");
+    assert!(
+        aerosol_detail < 0.5 * humidity_detail,
+        "aerosol {aerosol_detail}, humidity {humidity_detail}",
     );
 }
 

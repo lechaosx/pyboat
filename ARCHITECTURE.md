@@ -269,9 +269,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   a tile only where two or more active light or receiver footprints reuse its
   field samples; unique queries remain direct. Canopy samples requested for
   ground shadows can therefore shade visible lower clouds, and overlapping
-  landform-shadow rays share their blocker elevation without eagerly evaluating
-  disjoint close-zoom rays. Cloud discovery uses broad receiver elevation while
-  final cloud projection retains exact fragment elevation. Production tiles have
+  post-sunset Sun and Moon footprints on lower clouds can share canopy tiles.
+  An isolated elevated-Sun footprint remains direct. Overlapping landform-shadow
+  rays share their blocker elevation without eagerly evaluating disjoint
+  close-zoom rays. Cloud discovery uses broad receiver elevation while final
+  cloud projection retains exact fragment elevation. Production tiles have
   fixed 128-texel dimensions while their world-space texel size equals the view's
   world-space pixel footprint, so resolution follows zoom exactly as direct
   fragment evaluation did. Evaluated gutters preserve filtered seams, and a
@@ -459,11 +461,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Sun and Moon remain independent directional light sources whose
   direct contributions use their respective direction, intensity, color, and
   cloud and terrain transmittance. Ambient light separately combines a clear-sky
-  dome, blue by day, with a cloud-dome source weighted by broad overhead cloud
-  fraction. Both dome sources scatter the same Sun and Moon source colors used
-  for direct light; increasing cloud optical thickness reduces cloud-dome
-  radiance toward darkness. Both direct and ambient terms light the surface and
-  visible lower clouds.
+  dome, blue by day, with a canopy-underlight source weighted by broad overhead
+  cloud fraction. The clear-sky dome sums solar-disc daylight, lower-atmosphere
+  twilight, and weaker upper-atmosphere afterglow; broad regional scattering
+  modulates the two twilight components. At zero optical thickness the canopy
+  transfer equals clear-sky diffuse light. Increasing thickness attenuates and
+  backscatters that diffuse light, while intercepted altitude-visible Sun and
+  Moon light escapes from the underside most strongly at moderate thickness and
+  is absorbed by thick storm canopy.
+  The resulting ambient pair is evaluated once per fragment and lights both the
+  surface and visible lower clouds; visible lower clouds never feed it.
   Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
   moonlight slightly; increasing umbral coverage replaces blocked direct
   sunlight with dim orange-red light filtered through the atmosphere, and the
@@ -475,9 +482,17 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   width as circumference and the mirror-repeating latitude derived from the
   pole-to-pole span. The resulting local angular displacement offsets the
   receiver's unbounded cylindrical coordinates, without folding longitude or
-  north-south cloud fields at a pole. Sun and Moon projections are evaluated independently and fade with
-  their respective direct-light contribution at the horizon. Grazing shadows
-  remain finite. The apparent angular radius of the sun and moon supplies a
+  north-south cloud fields at a pole. Sun visibility at each receiver layer
+  derives its Earth-shadow horizon from world circumference and physical
+  altitude, with the finite solar disc smoothing the transition. The 3600-metre
+  canopy can therefore scatter sunlight after ground sunset, and the 900-metre
+  visible-cloud layer can remain sunlit or be blocked by detailed canopy optical
+  depth. While the disc is only partly visible, projected attenuation uses the
+  midpoint of its visible vertical slice so the representative ray clears the
+  planet rather than selecting the canopy shell beyond it. Below-surface-horizon
+  sunlight contributes only edge and internal scattering; top-facing direct
+  response remains tied to surface-visible light. Grazing optical paths remain
+  finite. The apparent angular radius of the Sun and Moon supplies a
   distance-proportional penumbra for landform shadows.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,

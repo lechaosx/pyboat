@@ -6,7 +6,7 @@ deterministic cylindrical procedural world whose longitude repeats seamlessly
 and whose unbounded north-south terrain passes through mirror-repeating
 latitude and climate bands. Each position has longitude and local solar time,
 latitude-calibrated opposite seasons, weather-responsive snow, sea ice, tide,
-Sun/Moon lighting with geometric eclipses, gameplay-driven and
+altitude-aware sunlight, geometric Sun/Moon eclipses, gameplay-driven and
 precipitation-responsive open-water material, depth, spatial weather,
 globally shaped, locally wind-translated cloud fields and projected shadows,
 zero-net local circulation, and phase-resolved gameplay waves.

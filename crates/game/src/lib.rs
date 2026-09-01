@@ -471,12 +471,19 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
         0.62 + eclipse_warmth * (0.28 - 0.62),
         1.00 + eclipse_warmth * (0.06 - 1.00),
     ];
-    let twilight = smoothstep_range(-0.18, 0.12, f64::from(sun_direction[2])) as f32;
+    // These sine-of-elevation thresholds must stay synchronized with lighting.wgsl.
+    let daylight = smoothstep_range(-0.034_899_5, 0.139_173_1, f64::from(sun_direction[2])) as f32;
+    let lower_twilight =
+        smoothstep_range(-0.156_434_5, 0.017_452_4, f64::from(sun_direction[2])) as f32;
+    let upper_afterglow = smoothstep_range(-0.309_017, -0.139_173_1, f64::from(sun_direction[2]))
+        as f32
+        * (1.0 - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(sun_direction[2])) as f32);
+    let solar_ambient = daylight * (0.45 + 0.515 * sun_elevation)
+        + 0.30 * (1.0 - daylight) * lower_twilight
+        + 0.065 * upper_afterglow;
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
-    let ambient_intensity = (0.035
-        + solar_ambient_transmittance * twilight * (0.45 + 0.515 * sun_elevation)
-        + 0.85 * moon_intensity)
-        .min(1.0);
+    let ambient_intensity =
+        (0.035 + solar_ambient_transmittance * solar_ambient + 0.85 * moon_intensity).min(1.0);
 
     CelestialLighting {
         sun_direction,
@@ -489,6 +496,48 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
         lunar_umbra_fraction: orbit.lunar_umbra_fraction,
         ambient_intensity,
     }
+}
+
+pub fn celestial_disc_visibility_at_height(
+    world_geometry: WorldGeometry,
+    height_m: f32,
+    direction_z: f32,
+    angular_radius_rad: f32,
+) -> f32 {
+    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let observer_radius_m = world_radius_m + height_m.max(0.0);
+    let radius_ratio = world_radius_m / observer_radius_m;
+    let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
+    let horizon_cosine = (1.0 - horizon_z * horizon_z).max(0.0).sqrt();
+    let disc_sine = angular_radius_rad.sin();
+    let disc_cosine = angular_radius_rad.cos();
+    smoothstep_range(
+        f64::from(horizon_z * disc_cosine - horizon_cosine * disc_sine),
+        f64::from(horizon_z * disc_cosine + horizon_cosine * disc_sine),
+        f64::from(direction_z),
+    ) as f32
+}
+
+pub fn celestial_visible_disc_sample_direction_z_at_height(
+    world_geometry: WorldGeometry,
+    height_m: f32,
+    direction_z: f32,
+    angular_radius_rad: f32,
+) -> f32 {
+    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let observer_radius_m = world_radius_m + height_m.max(0.0);
+    let radius_ratio = world_radius_m / observer_radius_m;
+    let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
+    let direction_z = direction_z.clamp(-1.0, 1.0);
+    let direction_horizontal = (1.0 - direction_z * direction_z).max(0.0).sqrt();
+    let disc_sine = angular_radius_rad.sin();
+    let disc_cosine = angular_radius_rad.cos();
+    let lower_limb_z = direction_z * disc_cosine - direction_horizontal * disc_sine;
+    let upper_limb_z = direction_z * disc_cosine + direction_horizontal * disc_sine;
+    if lower_limb_z >= horizon_z || upper_limb_z <= horizon_z {
+        return direction_z;
+    }
+    0.5 * (horizon_z + upper_limb_z)
 }
 
 pub fn moon_phase(conditions: CelestialConditions) -> f32 {
@@ -2868,6 +2917,54 @@ pub fn computed_yaw_rate_torques_in_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elevated_cloud_layers_see_the_sun_below_the_surface_horizon() {
+        let world = WorldGeometry::default();
+
+        assert_eq!(
+            celestial_disc_visibility_at_height(world, 0.0, -0.20, SUN_ANGULAR_RADIUS_RAD as f32,),
+            0.0,
+        );
+        assert_eq!(
+            celestial_disc_visibility_at_height(world, 900.0, -0.20, SUN_ANGULAR_RADIUS_RAD as f32,),
+            1.0,
+        );
+        assert_eq!(
+            celestial_disc_visibility_at_height(world, 900.0, -0.50, SUN_ANGULAR_RADIUS_RAD as f32,),
+            0.0,
+        );
+        assert_eq!(
+            celestial_disc_visibility_at_height(
+                world,
+                3_600.0,
+                -0.50,
+                SUN_ANGULAR_RADIUS_RAD as f32,
+            ),
+            1.0,
+        );
+    }
+
+    #[test]
+    fn partial_solar_disc_uses_a_ray_that_clears_the_planet() {
+        let world = WorldGeometry::default();
+        let height_m = 900.0;
+        let world_radius_m = world.width_m() / std::f32::consts::TAU;
+        let observer_radius_m = world_radius_m + height_m;
+        let horizon_z = -(1.0 - (world_radius_m / observer_radius_m).powi(2)).sqrt();
+        let center_z = horizon_z - 0.5 * SUN_ANGULAR_RADIUS_RAD as f32;
+
+        let sampled_z = celestial_visible_disc_sample_direction_z_at_height(
+            world,
+            height_m,
+            center_z,
+            SUN_ANGULAR_RADIUS_RAD as f32,
+        );
+        let closest_ray_radius_m = observer_radius_m * (1.0 - sampled_z * sampled_z).sqrt();
+
+        assert!(sampled_z > horizon_z, "{sampled_z} <= {horizon_z}");
+        assert!(closest_ray_radius_m >= world_radius_m);
+    }
 
     fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
         super::procedural_match_environment(WorldGeometry::default(), match_seed, tick, position_m)

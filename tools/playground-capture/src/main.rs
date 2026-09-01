@@ -351,6 +351,18 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "lighting_solar_eclipse_coverage" => {
             diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 1.0)])
         }
+        "lighting_low_cloud_sun_visibility" => {
+            diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 2.0)])
+        }
+        "lighting_canopy_sun_visibility" => {
+            diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 3.0)])
+        }
+        "lighting_aerosol_optical_depth" => {
+            diagnostic(value, "lighting_aerosol_optical_depth", &[])
+        }
+        "lighting_canopy_moon_scattering" => {
+            diagnostic(value, "lighting_canopy_moon_scattering", &[])
+        }
         "temperature_gradient" => diagnostic(value, "temperature_gradient", &[]),
         "surface_air_temperature" => diagnostic(value, "surface_air_temperature", &[]),
         "pressure_broad_anomaly" => diagnostic(

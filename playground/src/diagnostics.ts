@@ -19,7 +19,10 @@ export type DiagnosticId =
   | "lighting_combined_transmittance"
   | "lighting_ambient_sky_occlusion"
   | "lighting_solar_elevation"
+  | "lighting_low_cloud_sun_visibility"
+  | "lighting_canopy_sun_visibility"
   | "lighting_aerosol_optical_depth"
+  | "lighting_canopy_moon_scattering"
   | "lighting_solar_eclipse_coverage"
   | "temperature_gradient"
   | "surface_air_temperature"
@@ -143,7 +146,16 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
     name: "lighting_solar",
     constants: { LIGHTING_SOLAR_OUTPUT: 1 },
   },
+  lighting_low_cloud_sun_visibility: {
+    name: "lighting_solar",
+    constants: { LIGHTING_SOLAR_OUTPUT: 2 },
+  },
+  lighting_canopy_sun_visibility: {
+    name: "lighting_solar",
+    constants: { LIGHTING_SOLAR_OUTPUT: 3 },
+  },
   lighting_aerosol_optical_depth: { name: "lighting_aerosol_optical_depth" },
+  lighting_canopy_moon_scattering: { name: "lighting_canopy_moon_scattering" },
   temperature_gradient: { name: "temperature_gradient" },
   surface_air_temperature: { name: "surface_air_temperature" },
   pressure_gradient: { name: "pressure_gradient" },
@@ -240,7 +252,10 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["lighting_projected_upper_shadow", "Projected upper shadow"],
       ["lighting_combined_transmittance", "Combined transmittance"],
       ["lighting_solar_elevation", "Solar elevation"],
+      ["lighting_low_cloud_sun_visibility", "Sun visible at low clouds"],
+      ["lighting_canopy_sun_visibility", "Sun visible at canopy"],
       ["lighting_aerosol_optical_depth", "Aerosol optical depth"],
+      ["lighting_canopy_moon_scattering", "Moon → canopy scattering"],
       ["lighting_solar_eclipse_coverage", "Solar eclipse coverage"],
     ] },
     { label: "Overview", options: [["scene", "Final composition"]] },

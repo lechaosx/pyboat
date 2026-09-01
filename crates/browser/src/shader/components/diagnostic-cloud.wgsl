@@ -77,9 +77,40 @@ fn diagnostic_lighting_solar_elevation(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(scalar_debug_color(0.5 + 0.5 * sun_direction().z), 1.0);
 }
 
+fn diagnostic_lighting_low_cloud_sun_visibility(input: VertexOutput) -> vec4<f32> {
+    let visibility = celestial_disc_visibility_at_height(
+        LOW_CLOUD_BASE_HEIGHT_M,
+        sun_direction(),
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+    );
+    return vec4<f32>(scalar_debug_color(visibility), 1.0);
+}
+
+fn diagnostic_lighting_canopy_sun_visibility(input: VertexOutput) -> vec4<f32> {
+    let visibility = celestial_disc_visibility_at_height(
+        WEATHER_CANOPY_HEIGHT_M,
+        sun_direction(),
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+    );
+    return vec4<f32>(scalar_debug_color(visibility), 1.0);
+}
+
+fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> {
+    let canopy = regional_canopy_conditions(surface_cloud_weather);
+    let underside_escape = exp(-0.42 * canopy.mean_optical_thickness);
+    let scattering = moon_canopy_scattered_light(
+        canopy.mean_optical_thickness,
+        underside_escape,
+    );
+    let luminance = dot(scattering, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return vec4<f32>(scalar_debug_color(luminance / 0.05), 1.0);
+}
+
 fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
-    let aerosol = aerosol_optical_depth_at(cloud_weather_conditions_at(position_m));
+    let atmosphere = surface_atmosphere_sample_at(position_m);
+    let weather = cloud_weather_from_atmosphere(position_m, atmosphere);
+    let aerosol = aerosol_optical_depth_at(weather.regional);
     return vec4<f32>(scalar_debug_color(aerosol / 0.32), 1.0);
 }
 

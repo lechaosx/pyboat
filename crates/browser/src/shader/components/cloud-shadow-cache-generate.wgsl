@@ -268,15 +268,15 @@ fn discover_cloud_shadow_cache_tiles(
         * landscape_visibility.w * lighting_feature_visibility().y > 0.0
         && broad_receiver_elevation_m >= water_height_m;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
+    let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let is_sun = source_index == 0u;
         let light = select(moon_direction(), sun_direction(), is_sun);
         let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
         if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
-            let receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
             let projection = cloud_shadow_projection_at(
                 position_m,
-                receiver_height_m,
+                surface_receiver_height_m,
                 light,
             );
             if layer_visibility.y > 0.0 && tuning.cloud_shadows.x > 0.0 {
@@ -328,6 +328,55 @@ fn discover_cloud_shadow_cache_tiles(
                     }
                 }
             }
+        }
+    }
+    let elevated_sun_amount = celestial_sun_amount_at_height(LOW_CLOUD_BASE_HEIGHT_M);
+    if layer_visibility.x > 0.0
+        && layer_visibility.w > 0.0
+        && direct_sun_amount() <= 0.0
+        && elevated_sun_amount > 0.0
+        && direct_moon_amount() > 0.0
+    {
+        let sampled_sun = celestial_visible_disc_sample_direction_at_height(
+            LOW_CLOUD_BASE_HEIGHT_M,
+            sun_direction(),
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+        );
+        let sun_position_m = projected_cloud_position(
+            position_m,
+            LOW_CLOUD_BASE_HEIGHT_M,
+            WEATHER_CANOPY_HEIGHT_M,
+            sampled_sun,
+        );
+        let moon_position_m = projected_cloud_position(
+            position_m,
+            LOW_CLOUD_BASE_HEIGHT_M,
+            WEATHER_CANOPY_HEIGHT_M,
+            moon_direction(),
+        );
+        let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
+            * visual_pixel_footprint_m;
+        let sun_on_moon_receiver_m = canonical_world_position(
+            position_m
+                + cloud_shadow_cache_relative_position(moon_position_m)
+                - cloud_shadow_cache_relative_position(sun_position_m),
+        );
+        if all(abs(cloud_shadow_cache_relative_position(sun_on_moon_receiver_m)) <= half_view_m) {
+            insert_cloud_shadow_cache_tile_key(
+                cloud_shadow_cache_tile_key(moon_position_m),
+                1u,
+            );
+        }
+        let moon_on_sun_receiver_m = canonical_world_position(
+            position_m
+                + cloud_shadow_cache_relative_position(sun_position_m)
+                - cloud_shadow_cache_relative_position(moon_position_m),
+        );
+        if all(abs(cloud_shadow_cache_relative_position(moon_on_sun_receiver_m)) <= half_view_m) {
+            insert_cloud_shadow_cache_tile_key(
+                cloud_shadow_cache_tile_key(sun_position_m),
+                1u,
+            );
         }
     }
 }

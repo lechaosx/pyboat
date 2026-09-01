@@ -6,6 +6,7 @@ pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
     "lighting_cloud_shadow",
     "lighting_solar",
     "lighting_aerosol_optical_depth",
+    "lighting_canopy_moon_scattering",
     "temperature_gradient",
     "surface_air_temperature",
     "pressure_gradient",
