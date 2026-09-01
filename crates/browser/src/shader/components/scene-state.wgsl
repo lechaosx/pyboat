@@ -81,6 +81,7 @@ var<private> landscape_visibility: vec4<f32>;
 var<private> atmosphere_model: vec4<f32>;
 var<private> climate_visibility: vec4<f32>;
 var<private> sun_light_direction: vec3<f32>;
+var<private> geocentric_moon_light_direction: vec3<f32>;
 var<private> moon_light_direction: vec3<f32>;
 var<private> sun_light_amount: f32;
 var<private> moon_light_amount: f32;

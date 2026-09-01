@@ -158,14 +158,14 @@ current playable behavior; this file does not track delivery status.
   Sun or Moon ray intersects the canopy layer. The canopy-light endpoint uses
   the smooth regional mean optical thickness of the cloudy portion of the
   visible sky, rather than the local overhead texture sample, to transform
-  clear-sky diffuse light and scatter eclipse-aware Sun and Moon light from the
-  canopy's underside. Thin canopy approaches clear-sky ambient, moderate canopy
-  can glow warmly at sunset or softly under moonlight, and thick canopy
-  attenuates its underside toward storm darkness. The same regional sky fraction
-  sets both the clear-sky/cloud-dome ambient blend and the target areal coverage
-  of detailed canopy bodies and shadows. It derives from the same pressure,
-  temperature, moisture, and resulting weather conditions as gameplay; ambient
-  never consumes a sampled cloud pixel.
+  clear-sky diffuse light and scatter receiver-local, eclipse-aware Sun and Moon
+  light from the canopy's underside. Thin canopy approaches clear-sky ambient,
+  moderate canopy can glow warmly at sunset or softly under moonlight, and thick
+  canopy attenuates its underside toward storm darkness. The same regional sky
+  fraction sets both the clear-sky/cloud-dome ambient blend and the target areal
+  coverage of detailed canopy bodies and shadows. It derives from the same
+  pressure, temperature, moisture, and resulting weather conditions as gameplay;
+  ambient never consumes a sampled cloud pixel.
   Clear-sky light combines solar-disc daylight, lower-atmosphere twilight, and
   weaker upper-atmosphere afterglow. Broad regional scattering modulates both
   twilight components without importing local weather detail into ambient light.

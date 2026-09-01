@@ -454,8 +454,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   in successive years and repeating the combined geometry after 28 years. Season
   phase zero is the northern winter solstice. The Moon follows a circular orbit
   inclined 5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3
-  planetary radii. Observer parallax and finite Sun/Moon discs derive local
-  solar overlap;
+  planetary radii. Observer parallax at each receiver height and finite Sun/Moon
+  discs derive receiver-local solar overlap;
   finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
   two eclipse seasons per year while individual events shift between years.
 - **[Explicit]** Sun and Moon remain independent directional light sources whose
@@ -482,9 +482,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   width as circumference and the mirror-repeating latitude derived from the
   pole-to-pole span. The resulting local angular displacement offsets the
   receiver's unbounded cylindrical coordinates, without folding longitude or
-  north-south cloud fields at a pole. Sun visibility at each receiver layer
-  derives its Earth-shadow horizon from world circumference and physical
-  altitude, with the finite solar disc smoothing the transition. The 3600-metre
+  north-south cloud fields at a pole. Sun and Moon visibility at each receiver
+  layer derive their Earth-shadow horizon from world circumference and physical
+  altitude, with each finite disc smoothing its transition. The 3600-metre
   canopy can therefore scatter sunlight after ground sunset, and the 900-metre
   visible-cloud layer can remain sunlit or be blocked by detailed canopy optical
   depth. While the disc is only partly visible, projected attenuation uses the

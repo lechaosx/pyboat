@@ -435,18 +435,31 @@ pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
 }
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
+    celestial_lighting_at_height(WorldGeometry::default(), conditions, 0.0)
+}
+
+pub fn celestial_lighting_at_height(
+    world_geometry: WorldGeometry,
+    conditions: CelestialConditions,
+    receiver_height_m: f32,
+) -> CelestialLighting {
     let orbit = celestial_orbit(conditions);
     let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let sun_direction =
         celestial_direction(latitude, orbit.solar_declination_rad, solar_hour_angle);
-    let sun_horizon = smoothstep_range(0.0, 0.08, f64::from(sun_direction[2])) as f32;
-    let sun_elevation = libm::sqrt(f64::from(sun_direction[2].max(0.0))) as f32;
+    let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
+    let sun_elevation = ((sun_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
+    let sun_elevation = libm::sqrt(f64::from(sun_elevation)) as f32;
     let lunar_hour_angle =
         solar_hour_angle + orbit.solar_right_ascension_rad - orbit.lunar_right_ascension_rad;
     let geocentric_moon_direction =
         celestial_direction(latitude, orbit.lunar_declination_rad, lunar_hour_angle);
-    let moon_direction = topocentric_moon_direction(geocentric_moon_direction);
+    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let observer_radius_planet_radii =
+        (world_radius_m + receiver_height_m.max(0.0)) / world_radius_m;
+    let moon_direction =
+        topocentric_moon_direction(geocentric_moon_direction, observer_radius_planet_radii);
     let solar_separation =
         angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
     let solar_eclipse_fraction = circle_overlap_fraction(
@@ -455,15 +468,27 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
         MOON_ANGULAR_RADIUS_RAD,
     ) as f32;
 
-    let sun_intensity =
-        (1.0 - solar_eclipse_fraction) * sun_horizon * (0.35 + 0.65 * sun_elevation);
-    let moon_elevation = libm::sqrt(f64::from(moon_direction[2].max(0.0))) as f32;
+    let sun_intensity = (1.0 - solar_eclipse_fraction)
+        * celestial_disc_visibility_at_height(
+            world_geometry,
+            receiver_height_m,
+            sun_direction[2],
+            SUN_ANGULAR_RADIUS_RAD as f32,
+        )
+        * (0.35 + 0.65 * sun_elevation);
+    let moon_elevation = ((moon_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
+    let moon_elevation = libm::sqrt(f64::from(moon_elevation)) as f32;
     let lunar_shadow_transmittance =
         (1.0 - 0.18 * orbit.lunar_penumbra_fraction - 0.78 * orbit.lunar_umbra_fraction).max(0.04);
     let moon_intensity = lunar_shadow_transmittance
         * 0.12
         * orbit.illuminated_fraction as f32
-        * smoothstep_range(0.0, 0.08, f64::from(moon_direction[2])) as f32
+        * celestial_disc_visibility_at_height(
+            world_geometry,
+            receiver_height_m,
+            moon_direction[2],
+            MOON_ANGULAR_RADIUS_RAD as f32,
+        )
         * (0.35 + 0.65 * moon_elevation);
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     let moon_color = [
@@ -504,10 +529,7 @@ pub fn celestial_disc_visibility_at_height(
     direction_z: f32,
     angular_radius_rad: f32,
 ) -> f32 {
-    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
-    let observer_radius_m = world_radius_m + height_m.max(0.0);
-    let radius_ratio = world_radius_m / observer_radius_m;
-    let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
+    let horizon_z = celestial_horizon_z_at_height(world_geometry, height_m);
     let horizon_cosine = (1.0 - horizon_z * horizon_z).max(0.0).sqrt();
     let disc_sine = angular_radius_rad.sin();
     let disc_cosine = angular_radius_rad.cos();
@@ -516,6 +538,13 @@ pub fn celestial_disc_visibility_at_height(
         f64::from(horizon_z * disc_cosine + horizon_cosine * disc_sine),
         f64::from(direction_z),
     ) as f32
+}
+
+fn celestial_horizon_z_at_height(world_geometry: WorldGeometry, height_m: f32) -> f32 {
+    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let observer_radius_m = world_radius_m + height_m.max(0.0);
+    let radius_ratio = world_radius_m / observer_radius_m;
+    -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt()
 }
 
 pub fn celestial_visible_disc_sample_direction_z_at_height(
@@ -827,10 +856,14 @@ fn ecliptic_direction(longitude: f64, latitude: f64, obliquity: f64) -> [f64; 3]
     ]
 }
 
-fn topocentric_moon_direction(geocentric_direction: [f32; 3]) -> [f32; 3] {
+fn topocentric_moon_direction(
+    geocentric_direction: [f32; 3],
+    observer_radius_planet_radii: f32,
+) -> [f32; 3] {
     let x = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[0]);
     let y = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[1]);
-    let z = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[2]) - 1.0;
+    let z = LUNAR_DISTANCE_PLANET_RADII * f64::from(geocentric_direction[2])
+        - f64::from(observer_radius_planet_radii);
     let length = libm::sqrt(x * x + y * y + z * z);
     [
         (x / length) as f32,

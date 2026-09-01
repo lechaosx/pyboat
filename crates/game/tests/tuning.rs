@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 
 use game::{
     AtmospherePrimary, CelestialConditions, ClimateConditions, TidalConditions, celestial_lighting,
-    climate_surface, current_500_hpa_air_temperature_c, current_air_temperature_c, derive_weather,
-    dinghy_parameters, match_environment, moon_phase,
+    celestial_lighting_at_height, climate_surface, current_500_hpa_air_temperature_c,
+    current_air_temperature_c, derive_weather, dinghy_parameters, match_environment, moon_phase,
     procedural_atmosphere_primary as procedural_atmosphere_primary_in_world,
     procedural_cloud_cover as procedural_cloud_cover_in_world,
     procedural_match_environment as procedural_match_environment_in_world,
@@ -956,6 +956,58 @@ fn upper_atmosphere_afterglow_outlasts_lower_twilight() {
     assert!(civil_twilight > nautical_twilight);
     assert!(nautical_twilight > astronomical_night);
     assert!((astronomical_night - 0.035).abs() < 1e-6);
+}
+
+#[test]
+fn direct_sun_uses_the_finite_disc_surface_horizon() {
+    let angular_radius_rad = 0.00465_f32;
+    let lighting = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: 0.25,
+        day_phase: 0.25 + 1.1 * angular_radius_rad / std::f32::consts::TAU,
+        lunar_longitude_phase: 0.5,
+    });
+
+    assert!(lighting.sun_direction[2] > angular_radius_rad);
+    assert!(lighting.sun_intensity > 0.35, "{}", lighting.sun_intensity);
+}
+
+#[test]
+fn receiver_height_changes_lunar_parallax_and_solar_overlap() {
+    let world = WorldGeometry::default();
+    let horizon_conditions = CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: 0.25,
+        day_phase: 0.25,
+        lunar_longitude_phase: 0.5,
+    };
+    let surface = celestial_lighting_at_height(world, horizon_conditions, 0.0);
+    let canopy = celestial_lighting_at_height(world, horizon_conditions, 3_600.0);
+    let direction_dot = surface
+        .moon_direction
+        .into_iter()
+        .zip(canopy.moon_direction)
+        .map(|(left, right)| left * right)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0);
+    let direction_change = direction_dot.acos();
+    assert!(direction_change > 0.00452, "{direction_change}");
+
+    let solar_node = 0.5104333;
+    let eclipse_conditions = CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        season_phase: (solar_node + 0.25) % 1.0,
+        day_phase: 0.5 + 24.0 / 360.0,
+        lunar_longitude_phase: solar_node,
+    };
+    let surface = celestial_lighting_at_height(world, eclipse_conditions, 0.0);
+    let canopy = celestial_lighting_at_height(world, eclipse_conditions, 3_600.0);
+    assert!(
+        surface.solar_eclipse_fraction > 0.10,
+        "{}",
+        surface.solar_eclipse_fraction,
+    );
+    assert_eq!(canopy.solar_eclipse_fraction, 0.0);
 }
 
 #[test]

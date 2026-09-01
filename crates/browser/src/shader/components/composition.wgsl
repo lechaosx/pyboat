@@ -12,10 +12,16 @@ fn cloud_color(
         -limited_gradient,
         1.0,
     ));
+    let low_cloud_moon = topocentric_moon_direction_at_height(
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
+    let elevated_moon_amount = celestial_moon_amount_at_height(
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
     let sun_facing = max(dot(cloud_normal, sun_direction()), 0.0);
-    let moon_facing = max(dot(cloud_normal, moon_direction()), 0.0);
+    let moon_facing = max(dot(cloud_normal, low_cloud_moon), 0.0);
     let sun_direct_shape = direct_sun_amount() * sun_facing;
-    let moon_direct_shape = direct_moon_amount() * moon_facing;
+    let moon_direct_shape = elevated_moon_amount * moon_facing;
     let elevated_sun_amount = celestial_sun_amount_at_height(
         LOW_CLOUD_BASE_HEIGHT_M,
     );
@@ -25,7 +31,7 @@ fn cloud_color(
     );
     let sunlight = (direct_sun_amount() + elevated_sun_scatter)
         * upper_transmittance.x;
-    let moonlight = direct_moon_amount() * upper_transmittance.y;
+    let moonlight = elevated_moon_amount * upper_transmittance.y;
     let depth = cloud_sample.optical_depth / max(cloud_amount, 0.001);
     let edge_response = (1.0 - smoothstep(0.30, 0.78, cloud_amount))
         * smoothstep(0.10, 0.55, cloud_amount)
@@ -85,8 +91,15 @@ fn cloud_color(
     let sun_color = contribution_visibility.x * upper_transmittance.x
         * sun_direct_contribution_color() * mix(0.25, 1.0, sun_facing)
         + elevated_sun_light;
-    let moon_color = contribution_visibility.y * upper_transmittance.y
-        * moon_direct_contribution_color() * mix(0.25, 1.0, moon_facing);
+    let moon_color = contribution_visibility.y
+        * upper_transmittance.y
+        * 0.16
+        * sqrt(clamp(elevated_moon_amount, 0.0, 1.0))
+        * calculate_moon_light_color_at_height(
+            local_horizon_scattering,
+            LOW_CLOUD_BASE_HEIGHT_M,
+        )
+        * mix(0.25, 1.0, moon_facing);
     let cloud = low_cloud_material_color_visibility() * (
         neutral_cloud * ambient_color
         + sun_cloud * sun_color
@@ -130,25 +143,31 @@ fn upper_cloud_transmittance_at_low_cloud(
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let is_sun = source_index == 0u;
-        let light = select(moon_direction(), sun_direction(), is_sun);
+        var light = select(
+            topocentric_moon_direction_at_height(low_height_m),
+            sun_direction(),
+            is_sun,
+        );
         let light_amount = select(
-            direct_moon_amount(),
+            celestial_moon_amount_at_height(low_height_m),
             celestial_sun_amount_at_height(low_height_m),
             is_sun,
         );
-        var sampled_light = light;
-        if is_sun {
-            sampled_light = celestial_visible_disc_sample_direction_at_height(
-                low_height_m,
-                light,
-                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-            );
-        }
+        let angular_radius_rad = select(
+            MOON_ANGULAR_RADIUS_RAD,
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+            is_sun,
+        );
+        light = celestial_visible_disc_sample_direction_at_height(
+            low_height_m,
+            light,
+            angular_radius_rad,
+        );
         transmittance[source_index] = upper_cloud_transmittance_at_low_cloud_for_light(
             position_m,
             low_height_m,
             upper_height_m,
-            sampled_light,
+            light,
             light_amount,
         );
     }

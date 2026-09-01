@@ -9,10 +9,14 @@ fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
     );
 }
 
-fn topocentric_moon_direction(geocentric_direction: vec3<f32>) -> vec3<f32> {
+fn topocentric_moon_direction_at_height(height_m: f32) -> vec3<f32> {
+    let world_radius_m = scene.world_size_m.x / TAU;
+    let observer_radius_planet_radii = (
+        world_radius_m + max(height_m, 0.0)
+    ) / world_radius_m;
     return normalize(
-        LUNAR_DISTANCE_PLANET_RADII * geocentric_direction
-            - vec3<f32>(0.0, 0.0, 1.0),
+        LUNAR_DISTANCE_PLANET_RADII * geocentric_moon_light_direction
+            - vec3<f32>(0.0, 0.0, observer_radius_planet_radii),
     );
 }
 
@@ -67,13 +71,13 @@ fn initialize_celestial_lighting() {
         scene.celestial_orbit_angles.x,
         hour_angle,
     );
-    let geocentric_moon_direction = celestial_direction(
+    geocentric_moon_light_direction = celestial_direction(
         scene.celestial_orbit_angles.z,
         hour_angle
             + scene.celestial_orbit_angles.y
             - scene.celestial_orbit_angles.w,
     );
-    moon_light_direction = topocentric_moon_direction(geocentric_moon_direction);
+    moon_light_direction = topocentric_moon_direction_at_height(0.0);
     solar_eclipse_fraction = circle_overlap_fraction(
         angular_separation(sun_light_direction, moon_light_direction),
         CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
@@ -81,20 +85,8 @@ fn initialize_celestial_lighting() {
     );
     lunar_penumbra_fraction = scene.celestial_orbit_light.y;
     lunar_umbra_fraction = scene.celestial_orbit_light.z;
-    let sun_horizon = smoothstep(0.0, 0.08, sun_light_direction.z);
-    sun_light_amount = (1.0 - solar_eclipse_fraction)
-        * sun_horizon
-        * (0.35 + 0.65 * sqrt(max(sun_light_direction.z, 0.0)));
-    let moon_elevation = sqrt(max(moon_light_direction.z, 0.0));
-    let lunar_shadow_transmittance = max(
-        1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction,
-        0.04,
-    );
-    moon_light_amount = lunar_shadow_transmittance
-        * 0.12
-        * scene.celestial_orbit_light.x
-        * smoothstep(0.0, 0.08, moon_light_direction.z)
-        * (0.35 + 0.65 * moon_elevation);
+    sun_light_amount = celestial_sun_amount_at_height(0.0);
+    moon_light_amount = celestial_moon_amount_at_height(0.0);
 }
 
 fn sun_direction() -> vec3<f32> {
@@ -170,6 +162,17 @@ fn celestial_visible_disc_sample_direction_at_height(
     return vec3<f32>(sampled_horizontal * light.xy / light_horizontal, sampled_z);
 }
 
+fn solar_eclipse_fraction_at_height(height_m: f32) -> f32 {
+    return circle_overlap_fraction(
+        angular_separation(
+            sun_direction(),
+            topocentric_moon_direction_at_height(height_m),
+        ),
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+        MOON_ANGULAR_RADIUS_RAD,
+    );
+}
+
 fn celestial_sun_amount_at_height(height_m: f32) -> f32 {
     let horizon_z = celestial_horizon_z_at_height(height_m);
     let elevation = clamp(
@@ -177,7 +180,7 @@ fn celestial_sun_amount_at_height(height_m: f32) -> f32 {
         0.0,
         1.0,
     );
-    return (1.0 - solar_eclipse_fraction)
+    return (1.0 - solar_eclipse_fraction_at_height(height_m))
         * celestial_disc_visibility_at_height(
             height_m,
             sun_direction(),
@@ -187,9 +190,10 @@ fn celestial_sun_amount_at_height(height_m: f32) -> f32 {
 }
 
 fn celestial_moon_amount_at_height(height_m: f32) -> f32 {
+    let moon = topocentric_moon_direction_at_height(height_m);
     let horizon_z = celestial_horizon_z_at_height(height_m);
     let elevation = clamp(
-        (moon_direction().z - horizon_z) / (1.0 - horizon_z),
+        (moon.z - horizon_z) / (1.0 - horizon_z),
         0.0,
         1.0,
     );
@@ -202,7 +206,7 @@ fn celestial_moon_amount_at_height(height_m: f32) -> f32 {
         * scene.celestial_orbit_light.x
         * celestial_disc_visibility_at_height(
             height_m,
-            moon_direction(),
+            moon,
             MOON_ANGULAR_RADIUS_RAD,
         )
         * (0.35 + 0.65 * sqrt(elevation));
@@ -212,9 +216,10 @@ fn moon_canopy_scattered_light(
     optical_thickness: f32,
     underside_escape: f32,
 ) -> vec3<f32> {
+    let moon = topocentric_moon_direction_at_height(WEATHER_CANOPY_HEIGHT_M);
     let canopy_horizon_z = celestial_horizon_z_at_height(WEATHER_CANOPY_HEIGHT_M);
     let slant_cosine = max(
-        (moon_direction().z - canopy_horizon_z) / (1.0 - canopy_horizon_z),
+        (moon.z - canopy_horizon_z) / (1.0 - canopy_horizon_z),
         0.04,
     );
     let intercepted_moon = 1.0 - exp(-optical_thickness / slant_cosine);
@@ -222,7 +227,10 @@ fn moon_canopy_scattered_light(
         * celestial_moon_amount_at_height(WEATHER_CANOPY_HEIGHT_M)
         * intercepted_moon
         * underside_escape
-        * moon_diffuse_light_color;
+        * calculate_moon_light_color_at_height(
+            regional_horizon_scattering,
+            WEATHER_CANOPY_HEIGHT_M,
+        );
 }
 
 struct AtmosphericAmbientLight {
@@ -376,8 +384,12 @@ fn calculate_local_horizon_scattering() -> f32 {
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
 
-fn calculate_moon_light_color(scattering: f32) -> vec3<f32> {
-    let low_moon = 1.0 - smoothstep(0.08, 0.55, moon_direction().z);
+fn calculate_moon_light_color_at_height(
+    scattering: f32,
+    height_m: f32,
+) -> vec3<f32> {
+    let moon = topocentric_moon_direction_at_height(height_m);
+    let low_moon = 1.0 - smoothstep(0.08, 0.55, moon.z);
     let atmospheric_warmth = low_moon * mix(0.04, 0.82, scattering);
     let eclipse_warmth = smoothstep(0.05, 0.90, lunar_umbra_fraction);
     let warmth = 1.0
@@ -387,6 +399,10 @@ fn calculate_moon_light_color(scattering: f32) -> vec3<f32> {
         vec3<f32>(1.20, 0.28, 0.06),
         warmth,
     );
+}
+
+fn calculate_moon_light_color(scattering: f32) -> vec3<f32> {
+    return calculate_moon_light_color_at_height(scattering, 0.0);
 }
 
 fn sun_light_color(scattering: f32) -> vec3<f32> {

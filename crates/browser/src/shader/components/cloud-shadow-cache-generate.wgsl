@@ -185,12 +185,20 @@ fn cloud_shadow_cache_footprint(
         receiver_height_m = LOW_CLOUD_BASE_HEIGHT_M;
         if is_sun {
             light_amount = celestial_sun_amount_at_height(receiver_height_m);
-            light = celestial_visible_disc_sample_direction_at_height(
-                receiver_height_m,
-                light,
-                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-            );
+        } else {
+            light = topocentric_moon_direction_at_height(receiver_height_m);
+            light_amount = celestial_moon_amount_at_height(receiver_height_m);
         }
+        let angular_radius_rad = select(
+            MOON_ANGULAR_RADIUS_RAD,
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+            is_sun,
+        );
+        light = celestial_visible_disc_sample_direction_at_height(
+            receiver_height_m,
+            light,
+            angular_radius_rad,
+        );
         enabled = layer_visibility.x > 0.0
             && layer_visibility.w > 0.0
             && light_amount > 0.0;
