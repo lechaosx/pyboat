@@ -533,7 +533,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
-        "cloud_shadow_cache_tiles" => ShaderSelection {
+        "cloud_shadow_cache_tiles" | "cloud_shadow_cache_marker_integrity" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),
             constants: &[],
@@ -948,6 +948,7 @@ fn render_world(
             playground_bind_group,
             options.width,
             options.height,
+            options.diagnostic.id == "cloud_shadow_cache_marker_integrity",
         );
     }
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1045,6 +1046,7 @@ fn discover_cloud_shadow_cache_tiles(
     playground_bind_group: &wgpu::BindGroup,
     viewport_width: u32,
     viewport_height: u32,
+    test_marker_integrity: bool,
 ) -> Result<Vec<u8>, String> {
     let layout = browser::cloud_shadow_cache_layout(
         viewport_width,
@@ -1075,7 +1077,9 @@ fn discover_cloud_shadow_cache_tiles(
     let entries = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("capture cloud shadow cache entries"),
         size: u64::from(layout.table_entries) * 8,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let tiles = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1125,11 +1129,23 @@ fn discover_cloud_shadow_cache_tiles(
             },
         ],
     });
+    let mut shader_source = browser::playground_cloud_shadow_cache_shader_source().to_owned();
+    if test_marker_integrity {
+        shader_source.push_str(
+            r#"
+@compute @workgroup_size(1)
+fn test_cloud_shadow_cache_marker_integrity() {
+    let key = vec2<f32>(0.0);
+    mark_cloud_shadow_cache_tile_key(key, 0u, 0u);
+    mark_cloud_shadow_cache_tile_key(key, 0u, 1u);
+    mark_cloud_shadow_cache_tile_key(key, 0u, 2u);
+}
+"#,
+        );
+    }
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("capture cloud shadow cache shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            browser::playground_cloud_shadow_cache_shader_source().into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("capture cloud shadow cache discovery pipeline layout"),
@@ -1144,13 +1160,19 @@ fn discover_cloud_shadow_cache_tiles(
         label: Some("capture cloud shadow cache discovery pipeline"),
         layout: Some(&pipeline_layout),
         module: &shader,
-        entry_point: Some("discover_cloud_shadow_cache_tiles"),
+        entry_point: Some(if test_marker_integrity {
+            "test_cloud_shadow_cache_marker_integrity"
+        } else {
+            "discover_cloud_shadow_cache_tiles"
+        }),
         compilation_options: Default::default(),
         cache: None,
     });
+    let entries_offset = 16;
+    let readback_size = entries_offset + u64::from(layout.table_entries) * 8;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("capture cloud shadow cache header readback"),
-        size: 16,
+        label: Some("capture cloud shadow cache readback"),
+        size: readback_size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -1168,13 +1190,24 @@ fn discover_cloud_shadow_cache_tiles(
         pass.set_bind_group(0, scene_bind_group, &[]);
         pass.set_bind_group(1, playground_bind_group, &[]);
         pass.set_bind_group(2, &cache_bind_group, &[]);
-        pass.dispatch_workgroups(
-            viewport_width.div_ceil(128),
-            viewport_height.div_ceil(128),
-            1,
-        );
+        if test_marker_integrity {
+            pass.dispatch_workgroups(1, 1, 1);
+        } else {
+            pass.dispatch_workgroups(
+                viewport_width.div_ceil(128),
+                viewport_height.div_ceil(128),
+                1,
+            );
+        }
     }
     encoder.copy_buffer_to_buffer(&header, 0, &readback, 0, 16);
+    encoder.copy_buffer_to_buffer(
+        &entries,
+        0,
+        &readback,
+        entries_offset,
+        u64::from(layout.table_entries) * 8,
+    );
     queue.submit([encoder.finish()]);
     let slice = readback.slice(..);
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -1190,12 +1223,22 @@ fn discover_cloud_shadow_cache_tiles(
         .map_err(|error| format!("cache discovery readback failed: {error}"))?;
     let data = slice
         .get_mapped_range()
-        .map_err(|error| format!("failed to read cache discovery header: {error}"))?;
+        .map_err(|error| format!("failed to read cache discovery buffers: {error}"))?;
     let tile_count = u32::from_ne_bytes(data[4..8].try_into().unwrap());
-    let pixel = if tile_count == 0 {
-        [0, 0, 0, 255]
-    } else {
+    let entries_start = usize::try_from(entries_offset).unwrap();
+    let mut allocated_slots = data[entries_start..]
+        .chunks_exact(8)
+        .filter_map(|entry| {
+            let slot = u32::from_ne_bytes(entry[4..].try_into().unwrap());
+            (slot & 0x8000_0000 != 0).then_some(slot & 0x7fff_ffff)
+        })
+        .collect::<Vec<_>>();
+    allocated_slots.sort_unstable();
+    let valid = allocated_slots == (0..tile_count).collect::<Vec<_>>();
+    let pixel = if tile_count > 0 && valid {
         [255, 255, 255, 255]
+    } else {
+        [0, 0, 0, 255]
     };
     Ok((0..viewport_width * viewport_height)
         .flat_map(|_| pixel)

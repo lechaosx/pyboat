@@ -183,21 +183,36 @@ fn mark_cloud_shadow_cache_tile_key(
             return;
         }
         if entry_identity == identity {
-            let footprints = atomicOr(
+            var footprints = atomicLoad(
                 &cloud_shadow_cache_entries[table_index].slot,
-                footprint_bit,
             );
-            if (footprints & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u
-                || (footprints & ~footprint_bit) == 0u
-            {
-                return;
-            }
-            let allocation = atomicOr(
-                &cloud_shadow_cache_entries[table_index].slot,
-                CLOUD_SHADOW_CACHE_SLOT_ALLOCATED,
-            );
-            if (allocation & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) == 0u {
-                allocate_cloud_shadow_cache_tile(table_index, key, layer);
+            for (
+                var attempt = 0u;
+                attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+                attempt++
+            ) {
+                if (footprints & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
+                    return;
+                }
+                let marked_footprints = footprints | footprint_bit;
+                let reused = (marked_footprints & (marked_footprints - 1u)) != 0u;
+                if marked_footprints == footprints && !reused {
+                    return;
+                }
+                let marked_slot = marked_footprints
+                    | select(0u, CLOUD_SHADOW_CACHE_SLOT_ALLOCATED, reused);
+                let mark = atomicCompareExchangeWeak(
+                    &cloud_shadow_cache_entries[table_index].slot,
+                    footprints,
+                    marked_slot,
+                );
+                if mark.exchanged {
+                    if reused {
+                        allocate_cloud_shadow_cache_tile(table_index, key, layer);
+                    }
+                    return;
+                }
+                footprints = mark.old_value;
             }
             return;
         }

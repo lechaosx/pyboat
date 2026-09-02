@@ -1138,18 +1138,18 @@ function createCloudShadowCache(
     1,
     Math.floor(device.limits.maxTextureDimension2D / physicalTileTexels),
   );
-  const desiredTiles = Math.max(
-    1,
-    6 * (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1),
-  );
+  const screenFootprintTiles =
+    (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1);
+  const desiredTiles = Math.max(1, 6 * screenFootprintTiles);
   const maximumTiles = Math.min(desiredTiles, maximumAxisTiles ** 2);
   const atlasColumns = Math.max(
     1,
     Math.min(maximumAxisTiles, Math.ceil(Math.sqrt(maximumTiles))),
   );
   const atlasRows = Math.ceil(maximumTiles / atlasColumns);
+  const markerTiles = Math.max(1, 14 * screenFootprintTiles);
   let tableEntries = 1;
-  while (tableEntries < 2 * maximumTiles) tableEntries *= 2;
+  while (tableEntries < 2 * markerTiles) tableEntries *= 2;
   const cacheUniforms = new Uint32Array([
     width,
     height,
@@ -1179,7 +1179,7 @@ function createCloudShadowCache(
   new Uint32Array(header.getMappedRange()).set([6, 0, 0, 0]);
   header.unmap();
   const entries = device.createBuffer({
-    size: tableEntries * 20,
+    size: tableEntries * 8,
     usage: 0x80 | 0x08,
   });
   const tiles = device.createBuffer({ size: maximumTiles * 16, usage: 0x80 });

@@ -856,6 +856,24 @@ fn shadow_atlas_requires_two_distinct_reused_footprints() {
 }
 
 #[test]
+fn allocated_shadow_atlas_slot_survives_later_footprint_marks() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "cloud_shadow_cache_marker_integrity",
+        1,
+        1,
+    );
+
+    assert!(
+        scalar_debug_amount(&image) > 0.99,
+        "allocated marker no longer identifies its atlas slot",
+    );
+}
+
+#[test]
 fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let season_phase = 0.09;
