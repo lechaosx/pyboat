@@ -40,6 +40,10 @@ struct Options {
     cloud_time_seconds: f32,
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
+    light_balance: [f32; 4],
+    cloud_shadows: [f32; 4],
+    landscape_visibility: [f32; 4],
+    light_contribution_visibility: [u32; 4],
 }
 
 #[repr(C)]
@@ -100,6 +104,18 @@ struct PlaygroundUniforms {
     environment_features: [f32; 4],
     material_features: [f32; 4],
     effect_features: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CloudShadowCacheUniforms {
+    viewport_size_px: [u32; 2],
+    atlas_size_px: [u32; 2],
+    table_mask: u32,
+    maximum_tiles: u32,
+    atlas_columns: u32,
+    tile_texels: u32,
+    padding: [u32; 4],
 }
 
 #[derive(Serialize)]
@@ -196,6 +212,10 @@ fn parse_options() -> Result<Options, String> {
         cloud_time_seconds: 37.0,
         world_time_seconds: 0.0,
         diagnostic: scene_selection(),
+        light_balance: [1.0; 4],
+        cloud_shadows: [1.0, 1.0, 0.85, 1.0],
+        landscape_visibility: [1.0; 4],
+        light_contribution_visibility: [1; 4],
     };
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -221,6 +241,19 @@ fn parse_options() -> Result<Options, String> {
                 options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
             }
             "--diagnostic" => options.diagnostic = parse_diagnostic(&value(&mut arguments)?)?,
+            "--light-balance" => {
+                options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--cloud-shadows" => {
+                options.cloud_shadows = parse_f32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--landscape-visibility" => {
+                options.landscape_visibility = parse_f32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--light-contributions" => {
+                options.light_contribution_visibility =
+                    parse_u32x4(&value(&mut arguments)?, &argument)?
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -250,6 +283,26 @@ fn parse_seed(value: &str) -> Result<u64, String> {
         .strip_prefix("0x")
         .map_or_else(|| value.parse(), |hex| u64::from_str_radix(hex, 16))
         .map_err(|_| format!("invalid seed: {value}"))
+}
+
+fn parse_f32x4(value: &str, option: &str) -> Result<[f32; 4], String> {
+    let values = value
+        .split(',')
+        .map(|value| parse(value, option))
+        .collect::<Result<Vec<_>, _>>()?;
+    values
+        .try_into()
+        .map_err(|_| format!("{option} requires four comma-separated values"))
+}
+
+fn parse_u32x4(value: &str, option: &str) -> Result<[u32; 4], String> {
+    let values = value
+        .split(',')
+        .map(|value| parse(value, option))
+        .collect::<Result<Vec<_>, _>>()?;
+    values
+        .try_into()
+        .map_err(|_| format!("{option} requires four comma-separated values"))
 }
 
 fn diagnostic(
@@ -360,6 +413,78 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "lighting_surface_sun_amount" => {
             diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 4.0)])
         }
+        "lighting_receiver_moon_datum" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 5.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 0.0),
+            ],
+        ),
+        "lighting_receiver_moon_low_cloud" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 5.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 900.0),
+            ],
+        ),
+        "lighting_receiver_moon_canopy" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 5.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 3_600.0),
+            ],
+        ),
+        "lighting_canopy_transfer_clear" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 0.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.0),
+            ],
+        ),
+        "lighting_canopy_transfer_zero" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.0),
+            ],
+        ),
+        "lighting_canopy_transfer_thin" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.25),
+            ],
+        ),
+        "lighting_canopy_transfer_moderate" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 1.5),
+            ],
+        ),
+        "lighting_canopy_transfer_thick" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 6.0),
+            ],
+        ),
+        "lighting_low_cloud_canopy_transmittance" => {
+            diagnostic(value, "lighting_low_cloud_canopy_transmittance", &[])
+        }
+        "cloud_shadow_cache_tiles" => ShaderSelection {
+            id: value.to_owned(),
+            module: Some("cloud_shadow_cache"),
+            constants: &[],
+        },
         "lighting_aerosol_optical_depth" => {
             diagnostic(value, "lighting_aerosol_optical_depth", &[])
         }
@@ -442,6 +567,10 @@ fn print_help() {
            --cloud-time SECONDS   deterministic cloud animation time (default 37)\n\
            --world-time SECONDS   deterministic world time (default 0)\n\
            --diagnostic NAME      semantic diagnostic output (default scene)\n\n\
+           --light-balance V,V,V,V  Sun, Moon, clear-sky, and canopy light scales\n\
+           --light-contributions V,V,V,V  enable the four light contributions\n\
+           --cloud-shadows V,V,V,V  low/canopy strength, extinction, contrast\n\
+           --landscape-visibility V,V,V,V  landscape mechanism visibility\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics."
     );
@@ -492,9 +621,11 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
-    let shader_source = options
+    let fragment_module = options
         .diagnostic
         .module
+        .filter(|name| *name != "cloud_shadow_cache");
+    let shader_source = fragment_module
         .map_or_else(browser::playground_direct_scene_shader_source, |name| {
             browser::playground_diagnostic_shader_source(name).unwrap()
         });
@@ -509,7 +640,7 @@ async fn render(options: &Options) -> Result<(), String> {
         bind_group_layouts: &[Some(&scene_layout), Some(&playground_layout)],
         immediate_size: 0,
     });
-    let fragment_entry = options.diagnostic.module.map_or_else(
+    let fragment_entry = fragment_module.map_or_else(
         || "fragment_playground_scene".to_owned(),
         |name| format!("fragment_{name}"),
     );
@@ -554,18 +685,18 @@ async fn render(options: &Options) -> Result<(), String> {
         water_tuning: [0.5, 1.0, 0.0, 0.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
         cloud_lighting: [0.18, 0.14, 0.0, 0.0],
-        cloud_shadows: [1.0, 1.0, 0.85, 1.0],
+        cloud_shadows: options.cloud_shadows,
         water_surface: [2.5, 0.2, 1.0, 1.0],
         ice_surface: [0.18, 0.32, 1.0, 1.0],
         ice_structure: [192.0, 1.0, 1.0, 1.0],
         land_material_normals: [1.0; 4],
         material_coverage: [1.0; 4],
-        light_balance: [1.0; 4],
+        light_balance: options.light_balance,
         layer_visibility: [1.0; 4],
-        landscape_visibility: [1.0; 4],
+        landscape_visibility: options.landscape_visibility,
         wind_model: [1.0; 4],
         climate_visibility: [1.0, 1.0, 0.0, 1.0],
-        light_contribution_visibility: [1; 4],
+        light_contribution_visibility: options.light_contribution_visibility,
         land_material_color_visibility: [1; 4],
         solid_material_color_visibility: [1; 4],
         water_material_color_visibility: [1; 4],
@@ -596,6 +727,7 @@ async fn render(options: &Options) -> Result<(), String> {
         &queue,
         &pipeline,
         &scene_layout,
+        &playground_layout,
         &playground_bind_group,
         &vertex_buffer,
         options,
@@ -625,7 +757,7 @@ fn uniform_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
         label: Some(label),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -658,6 +790,7 @@ fn render_world(
     queue: &wgpu::Queue,
     pipeline: &wgpu::RenderPipeline,
     scene_layout: &wgpu::BindGroupLayout,
+    playground_layout: &wgpu::BindGroupLayout,
     playground_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
     options: &Options,
@@ -750,6 +883,18 @@ fn render_world(
         &scene_buffer,
         "scene uniforms bind group",
     );
+    if options.diagnostic.module == Some("cloud_shadow_cache") {
+        return discover_cloud_shadow_cache_tiles(
+            device,
+            queue,
+            scene_layout,
+            playground_layout,
+            &scene_bind_group,
+            playground_bind_group,
+            options.width,
+            options.height,
+        );
+    }
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("procedural world capture"),
         size: wgpu::Extent3d {
@@ -832,6 +977,173 @@ fn render_world(
         .chunks_exact(padded_bytes_per_row as usize)
         .flat_map(|row| &row[..bytes_per_row as usize])
         .copied()
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn discover_cloud_shadow_cache_tiles(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene_layout: &wgpu::BindGroupLayout,
+    playground_layout: &wgpu::BindGroupLayout,
+    scene_bind_group: &wgpu::BindGroup,
+    playground_bind_group: &wgpu::BindGroup,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Result<Vec<u8>, String> {
+    let layout = browser::cloud_shadow_cache_layout(
+        viewport_width,
+        viewport_height,
+        device.limits().max_texture_dimension_2d,
+    );
+    let cache_uniforms = CloudShadowCacheUniforms {
+        viewport_size_px: [viewport_width, viewport_height],
+        atlas_size_px: [layout.atlas_width, layout.atlas_height],
+        table_mask: layout.table_entries - 1,
+        maximum_tiles: layout.maximum_tiles,
+        atlas_columns: layout.atlas_columns,
+        tile_texels: browser::CLOUD_SHADOW_CACHE_TILE_TEXELS,
+        padding: [0; 4],
+    };
+    let cache_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("capture cloud shadow cache uniforms"),
+        contents: bytemuck::bytes_of(&cache_uniforms),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("capture cloud shadow cache header"),
+        contents: bytemuck::cast_slice(&[6u32, 0, 0, 0]),
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+    });
+    let entries = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("capture cloud shadow cache entries"),
+        size: u64::from(layout.table_entries) * 20,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let tiles = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("capture cloud shadow cache tiles"),
+        size: u64::from(layout.maximum_tiles) * 16,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    let buffer_layout_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let cache_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("capture cloud shadow cache discovery layout"),
+        entries: &[
+            buffer_layout_entry(0, wgpu::BufferBindingType::Uniform),
+            buffer_layout_entry(1, wgpu::BufferBindingType::Storage { read_only: false }),
+            buffer_layout_entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+            buffer_layout_entry(3, wgpu::BufferBindingType::Storage { read_only: false }),
+        ],
+    });
+    let cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("capture cloud shadow cache discovery bind group"),
+        layout: &cache_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: cache_uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: header.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: entries.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: tiles.as_entire_binding(),
+            },
+        ],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("capture cloud shadow cache shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            browser::playground_cloud_shadow_cache_shader_source().into(),
+        ),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("capture cloud shadow cache discovery pipeline layout"),
+        bind_group_layouts: &[
+            Some(scene_layout),
+            Some(playground_layout),
+            Some(&cache_layout),
+        ],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("capture cloud shadow cache discovery pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("discover_cloud_shadow_cache_tiles"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("capture cloud shadow cache header readback"),
+        size: 16,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("capture cloud shadow cache discovery encoder"),
+    });
+    encoder.clear_buffer(&entries, 0, None);
+    encoder.clear_buffer(&header, 4, Some(4));
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("capture cloud shadow cache discovery pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, scene_bind_group, &[]);
+        pass.set_bind_group(1, playground_bind_group, &[]);
+        pass.set_bind_group(2, &cache_bind_group, &[]);
+        pass.dispatch_workgroups(
+            viewport_width.div_ceil(128),
+            viewport_height.div_ceil(128),
+            1,
+        );
+    }
+    encoder.copy_buffer_to_buffer(&header, 0, &readback, 0, 16);
+    queue.submit([encoder.finish()]);
+    let slice = readback.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        sender.send(result).unwrap();
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|error| format!("cache discovery GPU poll failed: {error}"))?;
+    receiver
+        .recv()
+        .map_err(|error| format!("cache discovery readback stopped: {error}"))?
+        .map_err(|error| format!("cache discovery readback failed: {error}"))?;
+    let data = slice
+        .get_mapped_range()
+        .map_err(|error| format!("failed to read cache discovery header: {error}"))?;
+    let tile_count = u32::from_ne_bytes(data[4..8].try_into().unwrap());
+    let pixel = if tile_count == 0 {
+        [0, 0, 0, 255]
+    } else {
+        [255, 255, 255, 255]
+    };
+    Ok((0..viewport_width * viewport_height)
+        .flat_map(|_| pixel)
         .collect())
 }
 

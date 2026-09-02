@@ -127,3 +127,28 @@ fn diagnostic_lighting_surface_sun_amount(input: VertexOutput) -> vec4<f32> {
     let direct_light = celestial_receiver_light_at_height(surface_height_m);
     return vec4<f32>(scalar_debug_color(direct_light.sun_amount), 1.0);
 }
+
+fn diagnostic_lighting_receiver_moon(height_m: f32) -> vec4<f32> {
+    let direct_light = celestial_receiver_light_at_height(height_m);
+    return vec4<f32>(
+        0.5 + 0.5 * direct_light.moon_direction,
+        direct_light.solar_eclipse_fraction,
+    );
+}
+
+fn diagnostic_lighting_low_cloud_canopy_transmittance(
+    input: VertexOutput,
+) -> vec4<f32> {
+    let low_cloud_light = celestial_receiver_light_at_height(
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
+    let transmittance = upper_cloud_transmittance_at_low_cloud(
+        input.world_position_m,
+        WEATHER_CANOPY_HEIGHT_M,
+        low_cloud_light,
+    );
+    return vec4<f32>(scalar_debug_color(min(
+        transmittance.x,
+        transmittance.y,
+    )), 1.0);
+}

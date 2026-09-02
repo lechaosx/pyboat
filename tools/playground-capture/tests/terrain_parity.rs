@@ -270,6 +270,301 @@ fn full_moon_canopy_scattering_tracks_canopy_coverage() {
 }
 
 #[test]
+fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_darkens_with_depth() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..24 * 60)
+        .map(|minute| minute as f64 * 60.0)
+        .max_by(|left, right| {
+            let left = celestial_lighting(world_celestial_conditions(world, *left, position_m));
+            let right = celestial_lighting(world_celestial_conditions(world, *right, position_m));
+            left.sun_intensity.total_cmp(&right.sun_intensity)
+        })
+        .unwrap();
+    let clear = render_diagnostic_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        "lighting_canopy_transfer_clear",
+        1,
+        1,
+    );
+    let zero = render_diagnostic_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        "lighting_canopy_transfer_zero",
+        1,
+        1,
+    );
+    assert_rgb_close(&clear, &zero, 1);
+
+    let transfer_luminance = |diagnostic| {
+        linear_luminance(&render_diagnostic_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            diagnostic,
+            1,
+            1,
+        ))
+    };
+    let thin = transfer_luminance("lighting_canopy_transfer_thin");
+    let moderate = transfer_luminance("lighting_canopy_transfer_moderate");
+    let thick = transfer_luminance("lighting_canopy_transfer_thick");
+    assert!(thin > moderate, "thin {thin}, moderate {moderate}");
+    assert!(moderate > thick, "moderate {moderate}, thick {thick}");
+}
+
+#[test]
+fn scene_light_contribution_gates_compose_independently() {
+    let world = WorldGeometry::default();
+    let canopy = render_diagnostic_image(world, "lighting_ambient_sky_occlusion", 64, 64);
+    let mixed_canopy_pixel = canopy
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(_, pixel)| (0.3..0.7).contains(&scalar_debug_amount(pixel)))
+        .min_by_key(|(pixel_index, _)| (pixel_index / 64).abs_diff(32))
+        .map(|(pixel_index, _)| pixel_index)
+        .expect("the world should contain mixed canopy conditions");
+    let row = mixed_canopy_pixel / 64;
+    let column = mixed_canopy_pixel % 64;
+    let position_m = Vector::new(
+        world.width_m() * ((column as f32 + 0.5) / 64.0 - 0.5),
+        world.height_m() * (0.5 - (row as f32 + 0.5) / 64.0),
+    );
+    let world_time_seconds = (0..28 * 24)
+        .map(|hour| hour as f64 * 3_600.0)
+        .filter_map(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
+            (light.sun_intensity > 0.1 && light.moon_intensity > 0.005)
+                .then_some((time, light.sun_intensity.min(8.0 * light.moon_intensity)))
+        })
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .expect("Sun and Moon should share the sky during the lunar month")
+        .0;
+    let off = render_controlled_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        2_000.0,
+        "scene",
+        48,
+        48,
+        &[
+            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-contributions", "0,0,0,0"),
+        ],
+    );
+    assert!(
+        off.chunks_exact(4)
+            .flat_map(|pixel| &pixel[..3])
+            .all(|channel| *channel <= 1),
+        "all disabled: maximum channel {}",
+        off.chunks_exact(4)
+            .flat_map(|pixel| &pixel[..3])
+            .copied()
+            .max()
+            .unwrap(),
+    );
+
+    let mut isolated = Vec::new();
+    for contribution in 0..4 {
+        let mut gates = [0; 4];
+        gates[contribution] = 1;
+        let gate_value = format!("{},{},{},{}", gates[0], gates[1], gates[2], gates[3]);
+        let controls = [
+            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-contributions", gate_value.as_str()),
+        ];
+        let image = render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            2_000.0,
+            "scene",
+            48,
+            48,
+            &controls,
+        );
+        let luminance = mean_linear_luminance(&image);
+        assert!(
+            luminance > 0.000_01,
+            "contribution {contribution}: {luminance}"
+        );
+        isolated.push(image);
+    }
+    let all = render_controlled_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        2_000.0,
+        "scene",
+        48,
+        48,
+        &[
+            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-contributions", "1,1,1,1"),
+        ],
+    );
+    let mean_error = all
+        .chunks_exact(4)
+        .enumerate()
+        .flat_map(|(pixel_index, pixel)| {
+            (0..3).map({
+                let isolated = &isolated;
+                move |channel| {
+                    let expected = isolated
+                        .iter()
+                        .map(|image| srgb_channel_to_linear(image[4 * pixel_index + channel]))
+                        .sum::<f32>();
+                    (srgb_channel_to_linear(pixel[channel]) - expected).abs()
+                }
+            })
+        })
+        .sum::<f32>()
+        / (48.0 * 48.0 * 3.0);
+    assert!(mean_error < 0.01, "composition error {mean_error}");
+}
+
+#[test]
+fn canopy_shadow_control_disables_attenuation_on_lower_clouds() {
+    let world = WorldGeometry::default();
+    let disabled = render_controlled_image_at(
+        world,
+        Vector::ZERO,
+        0.0,
+        world.height_m(),
+        "lighting_low_cloud_canopy_transmittance",
+        128,
+        64,
+        &[("--cloud-shadows", "1,0,0.85,1")],
+    );
+    assert!(
+        disabled
+            .chunks_exact(4)
+            .all(|pixel| scalar_debug_amount(pixel) > 0.99),
+    );
+    let enabled = render_controlled_image_at(
+        world,
+        Vector::ZERO,
+        0.0,
+        world.height_m(),
+        "lighting_low_cloud_canopy_transmittance",
+        128,
+        64,
+        &[("--cloud-shadows", "1,1,0.85,1")],
+    );
+    assert!(
+        enabled
+            .chunks_exact(4)
+            .zip(disabled.chunks_exact(4))
+            .any(|(enabled, disabled)| {
+                scalar_debug_amount(enabled) + 0.02 < scalar_debug_amount(disabled)
+            }),
+        "enabled canopy shadows produced no lower-cloud attenuation",
+    );
+}
+
+#[test]
+fn receiver_height_moon_geometry_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 105.0 * 86_400.0;
+    let position_m = Vector::new(9_599.998, -23_822.223);
+    let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+    let mut expected_directions = Vec::new();
+    let mut expected_eclipses = Vec::new();
+    for (diagnostic, height_m) in [
+        ("lighting_receiver_moon_datum", 0.0),
+        ("lighting_receiver_moon_low_cloud", 900.0),
+        ("lighting_receiver_moon_canopy", 3_600.0),
+    ] {
+        let expected = celestial_lighting_at_height(world, conditions, height_m);
+        let actual = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            1.0,
+            diagnostic,
+            1,
+            1,
+        );
+        for channel in 0..3 {
+            let expected_channel =
+                linear_channel_byte(0.5 + 0.5 * expected.moon_direction[channel]);
+            assert!(
+                actual[channel].abs_diff(expected_channel) <= 3,
+                "{diagnostic} direction: {actual:?} != {:?}",
+                expected.moon_direction,
+            );
+        }
+        let expected_eclipse = (255.0 * expected.solar_eclipse_fraction).round() as u8;
+        assert!(
+            actual[3].abs_diff(expected_eclipse) <= 2,
+            "{diagnostic} eclipse: {} != {}",
+            actual[3],
+            expected.solar_eclipse_fraction,
+        );
+        expected_directions.push(expected.moon_direction);
+        expected_eclipses.push(expected.solar_eclipse_fraction);
+    }
+    assert!(
+        expected_directions[0]
+            .iter()
+            .zip(expected_directions[2])
+            .any(|(datum, canopy)| (datum - canopy).abs() > 0.001),
+    );
+    assert!((expected_eclipses[0] - expected_eclipses[2]).abs() > 0.01);
+}
+
+#[test]
+fn shadow_atlas_requires_two_distinct_reused_footprints() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..28 * 24)
+        .map(|hour| hour as f64 * 3_600.0)
+        .find(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, *time, position_m));
+            light.sun_direction[2] > 0.65 && light.moon_direction[2] < -0.50
+        })
+        .expect("the Sun and Moon should occupy opposite hemispheres");
+    let single = render_controlled_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        8_000.0,
+        "cloud_shadow_cache_tiles",
+        128,
+        128,
+        &[
+            ("--landscape-visibility", "1,1,1,0"),
+            ("--cloud-shadows", "0,0,0.85,1"),
+        ],
+    );
+    assert!(
+        scalar_debug_amount(&single) < 0.01,
+        "single footprint was cached"
+    );
+    let reused = render_controlled_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        8_000.0,
+        "cloud_shadow_cache_tiles",
+        128,
+        128,
+        &[
+            ("--landscape-visibility", "1,1,1,0"),
+            ("--cloud-shadows", "0,1,0.85,1"),
+        ],
+    );
+    assert!(
+        scalar_debug_amount(&reused) > 0.99,
+        "two overlapping receiver footprints were not cached",
+    );
+}
+
+#[test]
 fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let season_phase = 0.09;
@@ -975,6 +1270,68 @@ fn render_diagnostic_image_with_seed_and_cloud_time(
     bytes
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_controlled_image_at(
+    world: WorldGeometry,
+    position_m: Vector,
+    world_time_seconds: f64,
+    view_height_m: f32,
+    diagnostic: &str,
+    width: u32,
+    height: u32,
+    controls: &[(&str, &str)],
+) -> Vec<u8> {
+    let output = std::env::temp_dir().join(format!(
+        "pyboat-controlled-{}-{:016x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
+        std::process::id(),
+        world_time_seconds.to_bits(),
+        position_m.x.to_bits(),
+        position_m.y.to_bits(),
+    ));
+    let mut capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"));
+    capture.args([
+        "--width",
+        &width.to_string(),
+        "--height",
+        &height.to_string(),
+        "--world-width",
+        &world.width_m().to_string(),
+        "--world-height",
+        &world.height_m().to_string(),
+        "--camera-x",
+        &position_m.x.to_string(),
+        "--camera-y",
+        &position_m.y.to_string(),
+        "--view-height",
+        &view_height_m.to_string(),
+        "--seed",
+        &SEED.to_string(),
+        "--cloud-time",
+        "0",
+        "--world-time",
+        &world_time_seconds.to_string(),
+        "--diagnostic",
+        diagnostic,
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    for (option, value) in controls {
+        capture.args([option, value]);
+    }
+    let capture = capture
+        .output()
+        .expect("headless controlled capture should start");
+    assert!(
+        capture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&capture.stderr),
+    );
+    let bytes = read_image(&output);
+    fs::remove_file(&output).unwrap();
+    fs::remove_file(output.with_extension("json")).unwrap();
+    bytes
+}
+
 fn read_image(path: &std::path::Path) -> Vec<u8> {
     let decoder = png::Decoder::new(BufReader::new(fs::File::open(path).unwrap()));
     let mut reader = decoder.read_info().unwrap();
@@ -1063,6 +1420,43 @@ fn channel_range(bytes: &[u8], channel: usize) -> f32 {
         .max()
         .unwrap();
     f32::from(maximum - minimum) / 255.0
+}
+
+fn srgb_channel_to_linear(channel: u8) -> f32 {
+    let srgb = f32::from(channel) / 255.0;
+    if srgb <= 0.040_45 {
+        srgb / 12.92
+    } else {
+        ((srgb + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_channel_byte(linear: f32) -> u8 {
+    let srgb = if linear <= 0.003_130_8 {
+        12.92 * linear
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (255.0 * srgb.clamp(0.0, 1.0)).round() as u8
+}
+
+fn linear_luminance(pixel: &[u8]) -> f32 {
+    0.2126 * srgb_channel_to_linear(pixel[0])
+        + 0.7152 * srgb_channel_to_linear(pixel[1])
+        + 0.0722 * srgb_channel_to_linear(pixel[2])
+}
+
+fn mean_linear_luminance(image: &[u8]) -> f32 {
+    image.chunks_exact(4).map(linear_luminance).sum::<f32>() / (image.len() / 4) as f32
+}
+
+fn assert_rgb_close(left: &[u8], right: &[u8], tolerance: u8) {
+    for channel in 0..3 {
+        assert!(
+            left[channel].abs_diff(right[channel]) <= tolerance,
+            "{left:?} != {right:?}",
+        );
+    }
 }
 
 fn scalar_debug_amount(pixel: &[u8]) -> f32 {
