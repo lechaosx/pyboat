@@ -50,17 +50,20 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
 ) -> CloudShadowCacheLayout {
     let screen_columns = viewport_width.div_ceil(tile_texels);
     let screen_rows = viewport_height.div_ceil(tile_texels);
-    let desired_tiles = 6u32
-        .saturating_mul(screen_columns.saturating_add(1))
-        .saturating_mul(screen_rows.saturating_add(1))
-        .max(1);
+    let screen_footprint_tiles = screen_columns
+        .saturating_add(1)
+        .saturating_mul(screen_rows.saturating_add(1));
+    let desired_tiles = 6u32.saturating_mul(screen_footprint_tiles).max(1);
     let physical_tile_texels = tile_texels + 2;
     let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
     let maximum_tiles = desired_tiles.min(maximum_axis_tiles.saturating_pow(2));
     let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
     let atlas_columns = square_columns.min(maximum_axis_tiles).max(1);
     let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
-    let table_entries = maximum_tiles.saturating_mul(2).next_power_of_two();
+    // Discovery retains six cloud and eight landform footprints, including
+    // singletons that never consume atlas space.
+    let marker_tiles = 14u32.saturating_mul(screen_footprint_tiles).max(1);
+    let table_entries = marker_tiles.saturating_mul(2).next_power_of_two();
 
     CloudShadowCacheLayout {
         atlas_width: atlas_columns * physical_tile_texels,
@@ -1102,11 +1105,14 @@ mod tests {
         let layout = cloud_shadow_cache_layout(1920, 1080, 8192);
 
         assert_eq!(layout.maximum_tiles, 6 * 16 * 10);
-        assert!(layout.table_entries >= 2 * layout.maximum_tiles);
+        assert!(layout.table_entries >= 2 * 14 * 16 * 10);
         assert!(layout.table_entries.is_power_of_two());
         assert!(layout.atlas_width <= 8192);
         assert!(layout.atlas_height <= 8192);
         assert!(layout.atlas_columns > 0);
+
+        let texture_limited_layout = cloud_shadow_cache_layout(1920, 1080, 1024);
+        assert_eq!(texture_limited_layout.table_entries, layout.table_entries);
     }
 
     #[test]
@@ -1114,6 +1120,7 @@ mod tests {
         let layout = cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 64);
 
         assert_eq!(layout.maximum_tiles, 6 * 31 * 18);
+        assert!(layout.table_entries >= 2 * 14 * 31 * 18);
         assert_eq!(layout.atlas_width % 66, 0);
         assert_eq!(layout.atlas_height % 66, 0);
         assert!(layout.atlas_width <= 8192);

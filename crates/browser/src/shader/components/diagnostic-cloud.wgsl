@@ -153,8 +153,9 @@ fn diagnostic_lighting_low_cloud_canopy_transmittance(
     )), 1.0);
 }
 
-fn diagnostic_low_cloud_sun_lighting() -> vec4<f32> {
+fn diagnostic_low_cloud_sun_lighting(surface_height_m: f32) -> vec4<f32> {
     let lighting = low_cloud_sun_lighting(
+        celestial_receiver_light_at_height(surface_height_m),
         celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M),
     );
     return vec4<f32>(

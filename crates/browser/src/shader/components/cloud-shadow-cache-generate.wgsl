@@ -131,23 +131,35 @@ fn mark_cloud_shadow_cache_tile_key(
     let footprint_bit = 1u << footprint_index;
     var table_index = tag & cloud_shadow_cache.table_mask;
     for (var probe = 0u; probe < 16u; probe++) {
-        let claim = atomicCompareExchangeWeak(
-            &cloud_shadow_cache_entries[table_index].state,
-            0u,
-            CLOUD_SHADOW_CACHE_ENTRY_BUSY,
-        );
-        if claim.exchanged {
-            cloud_shadow_cache_entries[table_index].key_x = bitcast<u32>(key.x);
-            cloud_shadow_cache_entries[table_index].key_y = bitcast<u32>(key.y);
-            cloud_shadow_cache_entries[table_index].layer = layer;
-            atomicStore(&cloud_shadow_cache_entries[table_index].slot, footprint_bit);
-            atomicStore(&cloud_shadow_cache_entries[table_index].state, tag);
-            return;
+        var state = atomicLoad(&cloud_shadow_cache_entries[table_index].state);
+        loop {
+            if state == CLOUD_SHADOW_CACHE_ENTRY_BUSY {
+                state = atomicLoad(&cloud_shadow_cache_entries[table_index].state);
+                continue;
+            }
+            if state == 0u {
+                let claim = atomicCompareExchangeWeak(
+                    &cloud_shadow_cache_entries[table_index].state,
+                    0u,
+                    CLOUD_SHADOW_CACHE_ENTRY_BUSY,
+                );
+                if claim.exchanged {
+                    cloud_shadow_cache_entries[table_index].key_x = bitcast<u32>(key.x);
+                    cloud_shadow_cache_entries[table_index].key_y = bitcast<u32>(key.y);
+                    cloud_shadow_cache_entries[table_index].layer = layer;
+                    atomicStore(
+                        &cloud_shadow_cache_entries[table_index].slot,
+                        footprint_bit,
+                    );
+                    atomicStore(&cloud_shadow_cache_entries[table_index].state, tag);
+                    return;
+                }
+                state = claim.old_value;
+                continue;
+            }
+            break;
         }
-        if claim.old_value == CLOUD_SHADOW_CACHE_ENTRY_BUSY {
-            continue;
-        }
-        if claim.old_value == tag
+        if state == tag
             && cloud_shadow_cache_entries[table_index].key_x == bitcast<u32>(key.x)
             && cloud_shadow_cache_entries[table_index].key_y == bitcast<u32>(key.y)
             && cloud_shadow_cache_entries[table_index].layer == layer

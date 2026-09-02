@@ -469,6 +469,14 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 0.0)],
         ),
+        "lighting_low_cloud_sun_lighting_elevated" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 0.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
         "lighting_landform_sun_grade_moon_coupling" => diagnostic(
             value,
             "lighting_model_regressions",

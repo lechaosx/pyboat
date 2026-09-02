@@ -516,6 +516,52 @@ fn low_cloud_sunlight_uses_receiver_eclipse_with_surface_horizon_visibility() {
 }
 
 #[test]
+fn low_cloud_sunlight_uses_rendered_surface_horizon() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let surface_height_m = 600.0;
+    let (world_time_seconds, datum, surface, low_cloud) = (0..365 * 24 * 12)
+        .map(|step| step as f64 * 300.0)
+        .filter_map(|time| {
+            let conditions = world_celestial_conditions(world, time, position_m);
+            let datum = celestial_lighting_at_height(world, conditions, 0.0);
+            let surface = celestial_lighting_at_height(world, conditions, surface_height_m);
+            let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
+            (surface.sun_intensity > datum.sun_intensity + 0.03
+                && low_cloud.sun_intensity > surface.sun_intensity
+                && low_cloud.solar_eclipse_fraction < 0.01)
+                .then_some((time, datum, surface, low_cloud))
+        })
+        .max_by(|left, right| {
+            (left.2.sun_intensity - left.1.sun_intensity)
+                .total_cmp(&(right.2.sun_intensity - right.1.sun_intensity))
+        })
+        .expect("elevated terrain should see the Sun before datum sunrise");
+    let surface_unoccluded = surface.sun_intensity / (1.0 - surface.solar_eclipse_fraction);
+    let expected_surface = surface_unoccluded * (1.0 - low_cloud.solar_eclipse_fraction);
+    let expected_elevated = (low_cloud.sun_intensity - expected_surface).max(0.0);
+    let actual = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_low_cloud_sun_lighting_elevated",
+        1,
+        1,
+    );
+    for (channel, expected) in [expected_surface, low_cloud.sun_intensity, expected_elevated]
+        .into_iter()
+        .enumerate()
+    {
+        let actual = srgb_channel_to_linear(actual[channel]);
+        assert!(
+            (actual - expected).abs() < 0.015,
+            "channel {channel}: {actual} != {expected}; datum {datum:?}, surface {surface:?}, low {low_cloud:?}",
+        );
+    }
+}
+
+#[test]
 fn landform_sun_grade_is_independent_of_moon_visibility() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;

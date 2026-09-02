@@ -5,15 +5,19 @@ struct LowCloudSunLighting {
 };
 
 fn low_cloud_sun_lighting(
+    surface_light: CelestialReceiverLight,
     low_cloud_light: CelestialReceiverLight,
 ) -> LowCloudSunLighting {
     let visibility = direct_light_visibility().x;
-    let surface_amount = visibility * sun_amount_at_horizon_with_eclipse(
-        0.0,
-        low_cloud_light.solar_eclipse_fraction,
-    );
     let total_amount = visibility * low_cloud_light.sun_amount;
-    let elevated_amount = max(total_amount - surface_amount, 0.0);
+    let surface_amount = min(
+        total_amount,
+        visibility * sun_amount_at_horizon_with_eclipse(
+            surface_light.horizon_z,
+            low_cloud_light.solar_eclipse_fraction,
+        ),
+    );
+    let elevated_amount = total_amount - surface_amount;
     return LowCloudSunLighting(
         surface_amount,
         elevated_amount,
@@ -27,6 +31,7 @@ fn cloud_color(
     upper_transmittance: vec2<f32>,
     contribution_visibility: vec4<f32>,
     ambient_light: AtmosphericAmbientLight,
+    surface_light: CelestialReceiverLight,
     low_cloud_light: CelestialReceiverLight,
 ) -> vec3<f32> {
     let cloud_amount = cloud_sample.body_amount;
@@ -38,7 +43,7 @@ fn cloud_color(
     ));
     let sun_facing = max(dot(cloud_normal, sun_direction()), 0.0);
     let moon_facing = max(dot(cloud_normal, low_cloud_light.moon_direction), 0.0);
-    let low_cloud_sun = low_cloud_sun_lighting(low_cloud_light);
+    let low_cloud_sun = low_cloud_sun_lighting(surface_light, low_cloud_light);
     let sun_direct_shape = low_cloud_sun.surface_amount * sun_facing;
     let moon_direct_shape = low_cloud_light.moon_amount * moon_facing;
     let elevated_sun_scatter = low_cloud_sun.elevated_amount;
@@ -369,6 +374,7 @@ fn final_scene_color(
                     upper_transmittance,
                     fragment_light_visibility(),
                     ambient_light,
+                    surface_direct_light,
                     low_cloud_light,
                 );
                 fragment_color += layer_visibility.x
