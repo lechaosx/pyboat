@@ -221,6 +221,7 @@ fn mark_cloud_shadow_cache_tile_key(
 }
 
 fn landform_shadow_cache_offset(
+    position_m: vec2<f32>,
     source_index: u32,
     sample_index: u32,
     reach_m: f32,
@@ -237,12 +238,13 @@ fn landform_shadow_cache_offset(
         direct_light.sun_amount,
         is_sun,
     );
-    let horizontal_light = length(light.xy);
-    if light_amount <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
+    let world_light = celestial_direction_in_world_coordinates(position_m, light);
+    let horizontal_light = length(world_light.xy);
+    if light_amount <= 0.0 || world_light.z <= 0.0 || horizontal_light <= 0.001 {
         return vec3<f32>(0.0);
     }
     let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
-    return vec3<f32>(distance_m * light.xy / horizontal_light, 1.0);
+    return vec3<f32>(distance_m * world_light.xy / horizontal_light, 1.0);
 }
 
 struct CloudShadowCacheFootprint {
@@ -387,6 +389,7 @@ fn discover_cloud_shadow_cache_tiles(
         if landform_shadows_visible {
             for (var sample_index = 0u; sample_index < 4u; sample_index++) {
                 let offset = landform_shadow_cache_offset(
+                    position_m,
                     source_index,
                     sample_index,
                     reach_m,
@@ -449,9 +452,7 @@ fn cloud_shadow_cache_vertex(
         0.0,
         1.0,
     );
-    output.world_position_m = canonical_world_position(
-        scene.camera_and_view_m.xy + relative_position_m,
-    );
+    output.world_position_m = scene.camera_and_view_m.xy + relative_position_m;
     output.layer = tile.layer;
     return output;
 }

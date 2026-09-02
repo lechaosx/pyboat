@@ -120,6 +120,378 @@ struct CloudShadowCacheUniforms {
     padding: [u32; 4],
 }
 
+struct CaptureCloudShadowCache {
+    sample_layout: wgpu::BindGroupLayout,
+    discovery_pipeline: wgpu::ComputePipeline,
+    fill_pipeline: wgpu::RenderPipeline,
+    entries: wgpu::Buffer,
+    header: wgpu::Buffer,
+    atlas_view: wgpu::TextureView,
+    discovery_bind_group: wgpu::BindGroup,
+    fill_bind_group: wgpu::BindGroup,
+    sample_bind_group: wgpu::BindGroup,
+    _tiles: wgpu::Buffer,
+    _atlas: wgpu::Texture,
+    _debug: wgpu::Buffer,
+}
+
+impl CaptureCloudShadowCache {
+    fn new(
+        device: &wgpu::Device,
+        scene_layout: &wgpu::BindGroupLayout,
+        playground_layout: &wgpu::BindGroupLayout,
+        viewport_width: u32,
+        viewport_height: u32,
+    ) -> Self {
+        let buffer_entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let sample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("capture cache sampling layout"),
+            entries: &[
+                buffer_entry(
+                    0,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+                buffer_entry(
+                    1,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                ),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                buffer_entry(
+                    4,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                ),
+                buffer_entry(
+                    5,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                ),
+                buffer_entry(
+                    6,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+            ],
+        });
+        let discovery_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("capture cache discovery layout"),
+            entries: &[
+                buffer_entry(
+                    0,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+                buffer_entry(
+                    1,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Storage { read_only: false },
+                ),
+                buffer_entry(
+                    2,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Storage { read_only: false },
+                ),
+                buffer_entry(
+                    3,
+                    wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Storage { read_only: false },
+                ),
+            ],
+        });
+        let fill_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("capture cache fill layout"),
+            entries: &[
+                buffer_entry(
+                    0,
+                    wgpu::ShaderStages::VERTEX,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+                buffer_entry(
+                    4,
+                    wgpu::ShaderStages::VERTEX,
+                    wgpu::BufferBindingType::Storage { read_only: true },
+                ),
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("capture cache shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                browser::playground_cloud_shadow_cache_shader_source().into(),
+            ),
+        });
+        let discovery_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("capture cache discovery pipeline layout"),
+                bind_group_layouts: &[
+                    Some(scene_layout),
+                    Some(playground_layout),
+                    Some(&discovery_layout),
+                ],
+                immediate_size: 0,
+            });
+        let discovery_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("capture cache discovery pipeline"),
+            layout: Some(&discovery_pipeline_layout),
+            module: &shader,
+            entry_point: Some("discover_cloud_shadow_cache_tiles"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let fill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("capture cache fill pipeline layout"),
+            bind_group_layouts: &[
+                Some(scene_layout),
+                Some(playground_layout),
+                Some(&fill_layout),
+            ],
+            immediate_size: 0,
+        });
+        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("capture cache fill pipeline"),
+            layout: Some(&fill_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("cloud_shadow_cache_vertex"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("cloud_shadow_cache_fragment"),
+                targets: &[Some(wgpu::TextureFormat::Rg16Float.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let layout = browser::cloud_shadow_cache_layout(
+            viewport_width,
+            viewport_height,
+            device.limits().max_texture_dimension_2d,
+        );
+        let uniforms = CloudShadowCacheUniforms {
+            viewport_size_px: [viewport_width, viewport_height],
+            atlas_size_px: [layout.atlas_width, layout.atlas_height],
+            table_mask: layout.table_entries - 1,
+            maximum_tiles: layout.maximum_tiles,
+            atlas_columns: layout.atlas_columns,
+            tile_texels: browser::CLOUD_SHADOW_CACHE_TILE_TEXELS,
+            padding: [0; 4],
+        };
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("capture cache uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("capture cache draw arguments"),
+            contents: bytemuck::cast_slice(&[6u32, 0, 0, 0]),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::COPY_DST,
+        });
+        let entries = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture cache page table"),
+            size: u64::from(layout.table_entries) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let tiles = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture cache tiles"),
+            size: u64::from(layout.maximum_tiles) * 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture cache atlas"),
+            size: wgpu::Extent3d {
+                width: layout.atlas_width,
+                height: layout.atlas_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("capture cache sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let debug = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("capture cache debug uniforms"),
+            contents: bytemuck::cast_slice(&[0u32; 4]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let discovery_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("capture cache discovery bind group"),
+            layout: &discovery_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: header.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: entries.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tiles.as_entire_binding(),
+                },
+            ],
+        });
+        let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("capture cache fill bind group"),
+            layout: &fill_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: tiles.as_entire_binding(),
+                },
+            ],
+        });
+        let sample_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("capture cache sample bind group"),
+            layout: &sample_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: entries.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: tiles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: header.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: debug.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            sample_layout,
+            discovery_pipeline,
+            fill_pipeline,
+            entries,
+            header,
+            atlas_view,
+            discovery_bind_group,
+            fill_bind_group,
+            sample_bind_group,
+            _tiles: tiles,
+            _atlas: atlas,
+            _debug: debug,
+        }
+    }
+
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene_bind_group: &wgpu::BindGroup,
+        playground_bind_group: &wgpu::BindGroup,
+        viewport_width: u32,
+        viewport_height: u32,
+    ) {
+        encoder.clear_buffer(&self.entries, 0, None);
+        encoder.clear_buffer(&self.header, 4, Some(4));
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("capture cache discovery pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.discovery_pipeline);
+            pass.set_bind_group(0, scene_bind_group, &[]);
+            pass.set_bind_group(1, playground_bind_group, &[]);
+            pass.set_bind_group(2, &self.discovery_bind_group, &[]);
+            pass.dispatch_workgroups(
+                viewport_width.div_ceil(128),
+                viewport_height.div_ceil(128),
+                1,
+            );
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("capture cache fill pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.atlas_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.fill_pipeline);
+        pass.set_bind_group(0, scene_bind_group, &[]);
+        pass.set_bind_group(1, playground_bind_group, &[]);
+        pass.set_bind_group(2, &self.fill_bind_group, &[]);
+        pass.draw_indirect(&self.header, 0);
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DerivedOutput {
@@ -331,6 +703,11 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
+        "scene_cached" => ShaderSelection {
+            id: value.to_owned(),
+            module: None,
+            constants: &[],
+        },
         "atmosphere_water_vapor" => diagnostic(
             value,
             "atmosphere_conditions",
@@ -510,6 +887,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_REGRESSION_OUTPUT", 7.0),
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
+        ),
+        "lighting_mirrored_world_direction" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 8.0)],
         ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
@@ -696,23 +1078,43 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
+    let cached_scene = options.diagnostic.id == "scene_cached";
     let fragment_module = options
         .diagnostic
         .module
         .filter(|name| *name != "cloud_shadow_cache");
-    let shader_source = fragment_module
-        .map_or_else(browser::playground_direct_scene_shader_source, |name| {
-            browser::playground_diagnostic_shader_source(name).unwrap()
-        });
+    let shader_source = fragment_module.map_or_else(
+        || {
+            if cached_scene {
+                browser::playground_scene_shader_source()
+            } else {
+                browser::playground_direct_scene_shader_source()
+            }
+        },
+        |name| browser::playground_diagnostic_shader_source(name).unwrap(),
+    );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Scene shader"),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
     let scene_layout = uniform_layout(&device, "scene uniforms layout");
     let playground_layout = uniform_layout(&device, "playground uniforms layout");
+    let cloud_shadow_cache = cached_scene.then(|| {
+        CaptureCloudShadowCache::new(
+            &device,
+            &scene_layout,
+            &playground_layout,
+            options.width,
+            options.height,
+        )
+    });
+    let mut bind_group_layouts = vec![Some(&scene_layout), Some(&playground_layout)];
+    if let Some(cache) = &cloud_shadow_cache {
+        bind_group_layouts.push(Some(&cache.sample_layout));
+    }
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("playground capture pipeline layout"),
-        bind_group_layouts: &[Some(&scene_layout), Some(&playground_layout)],
+        bind_group_layouts: &bind_group_layouts,
         immediate_size: 0,
     });
     let fragment_entry = fragment_module.map_or_else(
@@ -805,6 +1207,7 @@ async fn render(options: &Options) -> Result<(), String> {
         &playground_layout,
         &playground_bind_group,
         &vertex_buffer,
+        cloud_shadow_cache.as_ref(),
         options,
     )?;
     write_png(path, options.width, options.height, &rgba)?;
@@ -868,6 +1271,7 @@ fn render_world(
     playground_layout: &wgpu::BindGroupLayout,
     playground_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
+    cloud_shadow_cache: Option<&CaptureCloudShadowCache>,
     options: &Options,
 ) -> Result<Vec<u8>, String> {
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
@@ -1005,6 +1409,15 @@ fn render_world(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("playground capture encoder"),
     });
+    if let Some(cache) = cloud_shadow_cache {
+        cache.encode(
+            &mut encoder,
+            &scene_bind_group,
+            playground_bind_group,
+            options.width,
+            options.height,
+        );
+    }
     {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1026,6 +1439,9 @@ fn render_world(
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &scene_bind_group, &[]);
         pass.set_bind_group(1, playground_bind_group, &[]);
+        if let Some(cache) = cloud_shadow_cache {
+            pass.set_bind_group(2, &cache.sample_bind_group, &[]);
+        }
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
     }

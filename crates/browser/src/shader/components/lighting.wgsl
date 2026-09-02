@@ -516,6 +516,14 @@ fn ambient_contribution_share(receiver: CelestialReceiverLight) -> f32 {
     return max(1.0 - sun_share - moon_share, 0.0);
 }
 
+fn celestial_direction_in_world_coordinates(
+    position_m: vec2<f32>,
+    direction: vec3<f32>,
+) -> vec3<f32> {
+    let latitude_direction = sign(surface_latitude_gradient_rad_per_m_at(position_m));
+    return vec3<f32>(direction.x, latitude_direction * direction.y, direction.z);
+}
+
 fn projected_cloud_position(
     position_m: vec2<f32>,
     source_height_m: f32,
@@ -536,17 +544,54 @@ fn projected_cloud_position(
             + cloud_radius_m * cloud_radius_m
             - source_radius_m * source_radius_m,
     );
+    let latitude = radians(surface_latitude_degrees_at(position_m));
+    let latitude_sin = sin(latitude);
+    let latitude_cos = cos(latitude);
+    let endpoint = normalize(vec3<f32>(
+        (source_radius_m + ray_distance_m * light.z) * latitude_cos
+            - ray_distance_m * light.y * latitude_sin,
+        ray_distance_m * light.x,
+        (source_radius_m + ray_distance_m * light.z) * latitude_sin
+            + ray_distance_m * light.y * latitude_cos,
+    ));
+    let endpoint_latitude = asin(clamp(endpoint.z, -1.0, 1.0));
+    let physical_longitude_delta = atan2(endpoint.y, endpoint.x);
+    let latitude_phase = PI * position_m.y * scene.inverse_world_size_m.y;
+    let source_band = i32(floor((latitude_phase + 0.5 * PI) / PI));
     let angular_distance = atan2(
         ray_distance_m * horizontal_light,
         source_radius_m + ray_distance_m * light.z,
     );
-    let latitude_direction = sign(surface_latitude_gradient_rad_per_m_at(position_m));
-    let tangent_direction = vec2<f32>(light.x, latitude_direction * light.y)
-        / horizontal_light;
+    let world_light = celestial_direction_in_world_coordinates(position_m, light);
+    let predicted_latitude_phase = latitude_phase
+        + angular_distance * world_light.y / horizontal_light;
+    var endpoint_band = source_band;
+    var endpoint_latitude_phase = 0.0;
+    var closest_distance = 1e9;
+    for (var band_offset = -2; band_offset <= 2; band_offset++) {
+        let band = source_band + band_offset;
+        let ascending = (band & 1) == 0;
+        let candidate = f32(band) * PI
+            + select(-endpoint_latitude, endpoint_latitude, ascending);
+        let distance = abs(candidate - predicted_latitude_phase);
+        if distance < closest_distance {
+            closest_distance = distance;
+            endpoint_band = band;
+            endpoint_latitude_phase = candidate;
+        }
+    }
+    let source_parity = source_band & 1;
+    let endpoint_parity = endpoint_band & 1;
+    var longitude_delta = physical_longitude_delta
+        - f32(endpoint_parity - source_parity) * PI;
+    let predicted_longitude_delta = angular_distance * light.x / horizontal_light;
+    longitude_delta -= round(
+        (longitude_delta - predicted_longitude_delta) / TAU,
+    ) * TAU;
     return position_m + vec2<f32>(
-        scene.world_size_m.x / TAU,
-        scene.world_size_m.y / PI,
-    ) * angular_distance * tangent_direction;
+        scene.world_size_m.x * longitude_delta / TAU,
+        scene.world_size_m.y * (endpoint_latitude_phase - latitude_phase) / PI,
+    );
 }
 
 struct CloudShadowProjection {

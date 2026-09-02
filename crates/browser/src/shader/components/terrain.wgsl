@@ -528,6 +528,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
 }
 
 fn landform_light_grade(
+    position_m: vec2<f32>,
     surface_gradient: vec2<f32>,
     roughness: f32,
     direct_light: CelestialReceiverLight,
@@ -542,8 +543,16 @@ fn landform_light_grade(
         return vec3<f32>(1.0);
     }
     let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    let combined_light = direct_light.sun_amount * direct_light.sun_direction
-        + direct_light.moon_amount * direct_light.moon_direction;
+    let sun_direction = celestial_direction_in_world_coordinates(
+        position_m,
+        direct_light.sun_direction,
+    );
+    let moon_direction = celestial_direction_in_world_coordinates(
+        position_m,
+        direct_light.moon_direction,
+    );
+    let combined_light = direct_light.sun_amount * sun_direction
+        + direct_light.moon_amount * moon_direction;
     let light_direction = select(
         vec3<f32>(0.0, 0.0, 1.0),
         normalize(combined_light),
@@ -556,8 +565,8 @@ fn landform_light_grade(
     var direct_grades = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let light_direction = select(
-            direct_light.moon_direction,
-            direct_light.sun_direction,
+            moon_direction,
+            sun_direction,
             source_index == 0u,
         );
         let direct_facing = smoothstep(
@@ -596,16 +605,20 @@ fn landform_shadow_transmittance_for_light(
         0.0,
         1.0,
     );
-    let horizontal_light = length(light_direction.xy);
+    let world_light_direction = celestial_direction_in_world_coordinates(
+        position_m,
+        light_direction,
+    );
+    let horizontal_light = length(world_light_direction.xy);
     if strength <= 0.0
         || light_amount <= 0.0
-        || light_direction.z <= 0.0
+        || world_light_direction.z <= 0.0
         || horizontal_light <= 0.001
     {
         return 1.0;
     }
-    let toward_light = light_direction.xy / horizontal_light;
-    let ray_slope = light_direction.z / horizontal_light;
+    let toward_light = world_light_direction.xy / horizontal_light;
+    let ray_slope = world_light_direction.z / horizontal_light;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     var occlusion = 0.0;
     for (var sample_index = 0u; sample_index < 4u; sample_index++) {
