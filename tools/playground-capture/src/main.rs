@@ -357,6 +357,9 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "lighting_canopy_sun_visibility" => {
             diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 3.0)])
         }
+        "lighting_surface_sun_amount" => {
+            diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 4.0)])
+        }
         "lighting_aerosol_optical_depth" => {
             diagnostic(value, "lighting_aerosol_optical_depth", &[])
         }

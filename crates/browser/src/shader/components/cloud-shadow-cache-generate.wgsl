@@ -145,10 +145,19 @@ fn landform_shadow_cache_offset(
     source_index: u32,
     sample_index: u32,
     reach_m: f32,
+    direct_light: CelestialReceiverLight,
 ) -> vec3<f32> {
     let is_sun = source_index == 0u;
-    let light = select(moon_direction(), sun_direction(), is_sun);
-    let light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
+    let light = select(
+        direct_light.moon_direction,
+        direct_light.sun_direction,
+        is_sun,
+    );
+    let light_amount = select(
+        direct_light.moon_amount,
+        direct_light.sun_amount,
+        is_sun,
+    );
     let horizontal_light = length(light.xy);
     if light_amount <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
         return vec3<f32>(0.0);
@@ -167,35 +176,40 @@ struct CloudShadowCacheFootprint {
 fn cloud_shadow_cache_footprint(
     footprint_index: u32,
     layer: u32,
-    surface_receiver_height_m: f32,
+    surface_light: CelestialReceiverLight,
+    low_cloud_light: CelestialReceiverLight,
 ) -> CloudShadowCacheFootprint {
     // Indices 0/1 are Sun/Moon at the surface; 2/3 are Sun/Moon at low clouds.
     let is_sun = footprint_index % 2u == 0u;
     let receives_at_low_cloud = layer == 1u && footprint_index >= 2u;
-    var light = select(moon_direction(), sun_direction(), is_sun);
-    var light_amount = select(direct_moon_amount(), direct_sun_amount(), is_sun);
+    var receiver_light = surface_light;
+    if receives_at_low_cloud {
+        receiver_light = low_cloud_light;
+    }
+    var light = select(
+        receiver_light.moon_direction,
+        receiver_light.sun_direction,
+        is_sun,
+    );
+    var light_amount = select(
+        receiver_light.moon_amount,
+        receiver_light.sun_amount,
+        is_sun,
+    );
     var enabled = false;
-    var receiver_height_m = surface_receiver_height_m;
     let cloud_height_m = select(
         WEATHER_CANOPY_HEIGHT_M,
         LOW_CLOUD_BASE_HEIGHT_M,
         layer == 0u,
     );
     if receives_at_low_cloud {
-        receiver_height_m = LOW_CLOUD_BASE_HEIGHT_M;
-        if is_sun {
-            light_amount = celestial_sun_amount_at_height(receiver_height_m);
-        } else {
-            light = topocentric_moon_direction_at_height(receiver_height_m);
-            light_amount = celestial_moon_amount_at_height(receiver_height_m);
-        }
         let angular_radius_rad = select(
             MOON_ANGULAR_RADIUS_RAD,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             is_sun,
         );
-        light = celestial_visible_disc_sample_direction_at_height(
-            receiver_height_m,
+        light = celestial_visible_disc_sample_direction_at_horizon(
+            receiver_light.horizon_z,
             light,
             angular_radius_rad,
         );
@@ -215,7 +229,7 @@ fn cloud_shadow_cache_footprint(
     return CloudShadowCacheFootprint(
         enabled,
         light,
-        receiver_height_m,
+        receiver_light.height_m,
         cloud_height_m,
     );
 }
@@ -237,6 +251,7 @@ fn landform_shadow_cache_sample_is_reused(
     source_index: u32,
     sample_index: u32,
     reach_m: f32,
+    direct_light: CelestialReceiverLight,
 ) -> bool {
     let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
         * visual_pixel_footprint_m;
@@ -249,6 +264,7 @@ fn landform_shadow_cache_sample_is_reused(
                 other_source_index,
                 other_sample_index,
                 reach_m,
+                direct_light,
             );
             if other_offset.z <= 0.0 {
                 continue;
@@ -293,6 +309,8 @@ fn discover_cloud_shadow_cache_tiles(
         && broad_receiver_elevation_m >= water_height_m;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
+    let surface_light = celestial_receiver_light_at_height(surface_receiver_height_m);
+    let low_cloud_light = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
     let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
         * visual_pixel_footprint_m;
     for (var layer = 0u; layer < 2u; layer++) {
@@ -302,7 +320,8 @@ fn discover_cloud_shadow_cache_tiles(
             footprints[footprint_index] = cloud_shadow_cache_footprint(
                 footprint_index,
                 layer,
-                surface_receiver_height_m,
+                surface_light,
+                low_cloud_light,
             );
         }
         for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
@@ -351,6 +370,7 @@ fn discover_cloud_shadow_cache_tiles(
                     source_index,
                     sample_index,
                     reach_m,
+                    surface_light,
                 );
                 if offset.z > 0.0 {
                     let sample_position_m = canonical_world_position(position_m + offset.xy);
@@ -359,6 +379,7 @@ fn discover_cloud_shadow_cache_tiles(
                         source_index,
                         sample_index,
                         reach_m,
+                        surface_light,
                     ) {
                         insert_cloud_shadow_cache_tile_key(
                             cloud_shadow_cache_tile_key(sample_position_m),

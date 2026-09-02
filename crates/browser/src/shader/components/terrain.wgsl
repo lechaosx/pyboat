@@ -530,6 +530,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
 fn landform_light_grade(
     surface_gradient: vec2<f32>,
     roughness: f32,
+    direct_light: CelestialReceiverLight,
 ) -> vec2<f32> {
     let strength = clamp(
         tuning.landform_lighting.x
@@ -541,9 +542,9 @@ fn landform_light_grade(
         return vec2<f32>(1.0);
     }
     let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    let source_amount = direct_sun_amount() + direct_moon_amount();
-    let combined_light = direct_sun_amount() * sun_direction()
-        + direct_moon_amount() * moon_direction();
+    let source_amount = direct_light.sun_amount + direct_light.moon_amount;
+    let combined_light = direct_light.sun_amount * direct_light.sun_direction
+        + direct_light.moon_amount * direct_light.moon_direction;
     let light_direction = select(
         vec3<f32>(0.0, 0.0, 1.0),
         normalize(combined_light),
@@ -555,12 +556,16 @@ fn landform_light_grade(
     let sun_facing = smoothstep(
         -0.12,
         1.0,
-        dot(normal, sun_direction()),
+        dot(normal, direct_light.sun_direction),
     );
-    let moon_facing = smoothstep(-0.12, 1.0, dot(normal, moon_direction()));
+    let moon_facing = smoothstep(
+        -0.12,
+        1.0,
+        dot(normal, direct_light.moon_direction),
+    );
     let direct_facing = (
-        direct_sun_amount() * sun_facing
-            + direct_moon_amount() * moon_facing
+        direct_light.sun_amount * sun_facing
+            + direct_light.moon_amount * moon_facing
     ) / max(source_amount, 0.0001);
     let specular_exponent = mix(56.0, 7.0, clamp(roughness, 0.0, 1.0));
     let half_direction_sum = light_direction + vec3<f32>(0.0, 0.0, 1.0);
@@ -622,6 +627,7 @@ fn landform_shadow_transmittance_for_light(
 fn landform_shadow_transmittance(
     position_m: vec2<f32>,
     elevation_m: f32,
+    direct_light: CelestialReceiverLight,
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
@@ -629,8 +635,16 @@ fn landform_shadow_transmittance(
         transmittance[source_index] = landform_shadow_transmittance_for_light(
             position_m,
             elevation_m,
-            select(moon_direction(), sun_direction(), is_sun),
-            select(direct_moon_amount(), direct_sun_amount(), is_sun),
+            select(
+                direct_light.moon_direction,
+                direct_light.sun_direction,
+                is_sun,
+            ),
+            select(
+                direct_light.moon_amount,
+                direct_light.sun_amount,
+                is_sun,
+            ),
         );
     }
     return transmittance;

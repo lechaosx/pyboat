@@ -484,11 +484,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   receiver's unbounded cylindrical coordinates, without folding longitude or
   north-south cloud fields at a pole. Sun and Moon visibility at each receiver
   layer derive their Earth-shadow horizon from world circumference and physical
-  altitude, with each finite disc smoothing its transition. The 3600-metre
-  canopy can therefore scatter sunlight after ground sunset, and the 900-metre
-  visible-cloud layer can remain sunlit or be blocked by detailed canopy optical
-  depth. While the disc is only partly visible, projected attenuation uses the
-  midpoint of its visible vertical slice so the representative ray clears the
+  altitude, with each finite disc smoothing its transition. Rendered terrain and
+  water use their local surface elevation; the 900-metre visible-cloud and
+  3600-metre canopy layers use their fixed physical altitudes. The canopy can
+  therefore scatter sunlight after ground sunset, and visible clouds can remain
+  sunlit or be blocked by detailed canopy optical depth. While the disc is only
+  partly visible, projected attenuation uses the midpoint of its visible
+  vertical slice so the representative ray clears the
   planet rather than selecting the canopy shell beyond it. Below-surface-horizon
   sunlight contributes only edge and internal scattering; top-facing direct
   response remains tied to surface-visible light. Grazing optical paths remain

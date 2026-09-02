@@ -1,8 +1,9 @@
 use std::{fs, io::BufReader, process::Command};
 
 use game::{
-    celestial_disc_visibility_at_height, celestial_lighting, procedural_solid_surface_elevation_m,
-    procedural_terrain_elevation_m, procedural_world_environment, world_celestial_conditions,
+    celestial_disc_visibility_at_height, celestial_lighting, celestial_lighting_at_height,
+    procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
+    procedural_world_environment, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -123,6 +124,54 @@ fn rendered_solar_eclipse_matches_authoritative_celestial_geometry() {
             actual[channel].abs_diff(expected[channel]) <= 4,
             "{actual:?} != {expected:?} for {:?}",
             lighting.solar_eclipse_fraction,
+        );
+    }
+}
+
+#[test]
+fn rendered_surface_sun_amount_uses_receiver_elevation() {
+    let world = WorldGeometry::default();
+    let position_m = (0..64)
+        .flat_map(|y_index| {
+            (0..64).map(move |x_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 64.0 - 0.5),
+                    world.height_m() * (y_index as f32 / 128.0 - 0.25),
+                )
+            })
+        })
+        .max_by(|left, right| {
+            procedural_terrain_elevation_m(world, SEED, *left)
+                .total_cmp(&procedural_terrain_elevation_m(world, SEED, *right))
+        })
+        .unwrap();
+    let elevation_m = procedural_terrain_elevation_m(world, SEED, position_m);
+    assert!(elevation_m > 0.0);
+    let (world_time_seconds, expected) = (0..24 * 60)
+        .map(|minute| minute as f64 * 60.0)
+        .find_map(|world_time_seconds| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            let datum = celestial_lighting(conditions);
+            let elevated = celestial_lighting_at_height(world, conditions, elevation_m);
+            (datum.sun_intensity == 0.0 && elevated.sun_intensity > 0.10)
+                .then_some((world_time_seconds, elevated.sun_intensity))
+        })
+        .expect("elevated terrain should see the Sun beyond the datum horizon");
+
+    let actual = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_surface_sun_amount",
+        1,
+        1,
+    );
+    let expected = scalar_debug_pixel(expected);
+    for channel in 0..3 {
+        assert!(
+            actual[channel].abs_diff(expected[channel]) <= 4,
+            "{actual:?} != {expected:?} at elevation {elevation_m}",
         );
     }
 }

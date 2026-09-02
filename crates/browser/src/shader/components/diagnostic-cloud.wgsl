@@ -38,6 +38,7 @@ fn diagnostic_cloud_shadow_depths(position_m: vec2<f32>) -> CelestialCloudShadow
     return celestial_cloud_shadow_depths_at(
         position_m,
         surface_height_m,
+        celestial_receiver_light_at_height(surface_height_m),
     );
 }
 
@@ -101,6 +102,7 @@ fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> 
     let scattering = moon_canopy_scattered_light(
         canopy.mean_optical_thickness,
         underside_escape,
+        celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M),
     );
     let luminance = canopy.sky_fraction
         * dot(scattering, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -117,4 +119,11 @@ fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_lighting_solar_eclipse_coverage(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(scalar_debug_color(solar_eclipse_fraction), 1.0);
+}
+
+fn diagnostic_lighting_surface_sun_amount(input: VertexOutput) -> vec4<f32> {
+    let terrain = procedural_terrain_sample(input.world_position_m);
+    let surface_height_m = max(terrain.elevation_m, tide_height_m());
+    let direct_light = celestial_receiver_light_at_height(surface_height_m);
+    return vec4<f32>(scalar_debug_color(direct_light.sun_amount), 1.0);
 }
