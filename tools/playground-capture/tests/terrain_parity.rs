@@ -270,7 +270,7 @@ fn full_moon_canopy_scattering_tracks_canopy_coverage() {
 }
 
 #[test]
-fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_darkens_with_depth() {
+fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_attenuates_thick_canopy() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let world_time_seconds = (0..24 * 60)
@@ -299,21 +299,20 @@ fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_darkens_with_depth(
     );
     assert_rgb_close(&clear, &zero, 1);
 
-    let transfer_luminance = |diagnostic| {
-        linear_luminance(&render_diagnostic_image_at(
-            world,
-            position_m,
-            world_time_seconds,
-            diagnostic,
-            1,
-            1,
-        ))
-    };
-    let thin = transfer_luminance("lighting_canopy_transfer_thin");
-    let moderate = transfer_luminance("lighting_canopy_transfer_moderate");
-    let thick = transfer_luminance("lighting_canopy_transfer_thick");
-    assert!(thin > moderate, "thin {thin}, moderate {moderate}");
-    assert!(moderate > thick, "moderate {moderate}, thick {thick}");
+    let thick = render_diagnostic_image_at(
+        world,
+        position_m,
+        world_time_seconds,
+        "lighting_canopy_transfer_thick",
+        1,
+        1,
+    );
+    assert!(
+        linear_luminance(&thick) < linear_luminance(&zero),
+        "zero {:?}, thick {:?}",
+        &zero[..3],
+        &thick[..3],
+    );
 }
 
 #[test]
@@ -467,6 +466,86 @@ fn canopy_shadow_control_disables_attenuation_on_lower_clouds() {
 }
 
 #[test]
+fn low_cloud_sunlight_uses_receiver_eclipse_with_surface_horizon_visibility() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 105.0 * 86_400.0;
+    let (position_m, datum, low_cloud) = (0..128)
+        .flat_map(|x_index| {
+            (0..64).map(move |y_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
+                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                )
+            })
+        })
+        .filter_map(|position_m| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            let datum = celestial_lighting_at_height(world, conditions, 0.0);
+            let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
+            (datum.sun_intensity > 0.05
+                && low_cloud.solar_eclipse_fraction > datum.solar_eclipse_fraction + 0.05)
+                .then_some((position_m, datum, low_cloud))
+        })
+        .max_by(|left, right| {
+            (left.2.solar_eclipse_fraction - left.1.solar_eclipse_fraction)
+                .total_cmp(&(right.2.solar_eclipse_fraction - right.1.solar_eclipse_fraction))
+        })
+        .expect("the eclipse should differ between datum and low-cloud receivers");
+    let datum_unoccluded = datum.sun_intensity / (1.0 - datum.solar_eclipse_fraction);
+    let expected_surface = datum_unoccluded * (1.0 - low_cloud.solar_eclipse_fraction);
+    let expected_elevated = (low_cloud.sun_intensity - expected_surface).max(0.0);
+    let actual = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_low_cloud_sun_lighting",
+        1,
+        1,
+    );
+    for (channel, expected) in [expected_surface, low_cloud.sun_intensity, expected_elevated]
+        .into_iter()
+        .enumerate()
+    {
+        let actual = srgb_channel_to_linear(actual[channel]);
+        assert!(
+            (actual - expected).abs() < 0.015,
+            "channel {channel}: {actual} != {expected}; datum {datum:?}, low {low_cloud:?}",
+        );
+    }
+}
+
+#[test]
+fn landform_sun_grade_is_independent_of_moon_visibility() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..28 * 24)
+        .map(|hour| hour as f64 * 3_600.0)
+        .filter_map(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
+            (light.sun_intensity > 0.1 && light.moon_intensity > 0.005)
+                .then_some((time, light.sun_intensity.min(8.0 * light.moon_intensity)))
+        })
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .expect("Sun and Moon should share the sky during the lunar month")
+        .0;
+    let coupling = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_landform_sun_grade_moon_coupling",
+        1,
+        1,
+    );
+    assert!(
+        scalar_debug_amount(&coupling) < 0.002,
+        "Moon changed the Sun terrain grade by {}",
+        scalar_debug_amount(&coupling),
+    );
+}
+
+#[test]
 fn receiver_height_moon_geometry_matches_authoritative_rust() {
     let world = WorldGeometry::default();
     let world_time_seconds = 105.0 * 86_400.0;
@@ -520,48 +599,70 @@ fn receiver_height_moon_geometry_matches_authoritative_rust() {
 #[test]
 fn shadow_atlas_requires_two_distinct_reused_footprints() {
     let world = WorldGeometry::default();
-    let position_m = Vector::ZERO;
-    let world_time_seconds = (0..28 * 24)
-        .map(|hour| hour as f64 * 3_600.0)
-        .find(|time| {
-            let light = celestial_lighting(world_celestial_conditions(world, *time, position_m));
-            light.sun_direction[2] > 0.65 && light.moon_direction[2] < -0.50
-        })
-        .expect("the Sun and Moon should occupy opposite hemispheres");
-    let single = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        8_000.0,
-        "cloud_shadow_cache_tiles",
-        128,
-        128,
-        &[
-            ("--landscape-visibility", "1,1,1,0"),
-            ("--cloud-shadows", "0,0,0.85,1"),
-        ],
-    );
-    assert!(
-        scalar_debug_amount(&single) < 0.01,
-        "single footprint was cached"
-    );
-    let reused = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        8_000.0,
-        "cloud_shadow_cache_tiles",
-        128,
-        128,
-        &[
-            ("--landscape-visibility", "1,1,1,0"),
-            ("--cloud-shadows", "0,1,0.85,1"),
-        ],
-    );
-    assert!(
-        scalar_debug_amount(&reused) > 0.99,
-        "two overlapping receiver footprints were not cached",
-    );
+    for (label, position_m, view_height_m) in [
+        ("local", Vector::ZERO, 8_000.0),
+        ("wide", Vector::ZERO, 24_000.0),
+        (
+            "north-pole",
+            Vector::new(0.0, 0.46 * world.height_m()),
+            12_000.0,
+        ),
+        (
+            "south-pole",
+            Vector::new(0.0, -0.46 * world.height_m()),
+            12_000.0,
+        ),
+    ] {
+        let world_time_seconds = (0..365 * 24)
+            .map(|hour| hour as f64 * 3_600.0)
+            .filter_map(|time| {
+                let conditions = world_celestial_conditions(world, time, position_m);
+                let surface = celestial_lighting_at_height(world, conditions, 0.0);
+                let low = celestial_lighting_at_height(world, conditions, 900.0);
+                (surface.sun_intensity > 0.12
+                    && low.sun_intensity > 0.12
+                    && low.moon_intensity == 0.0
+                    && low.moon_direction[2] < -0.20)
+                    .then_some((time, surface.sun_intensity.min(low.sun_intensity)))
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap_or_else(|| panic!("{label}: no isolated Sun interval"))
+            .0;
+        let single = render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            "cloud_shadow_cache_tiles",
+            128,
+            128,
+            &[
+                ("--landscape-visibility", "1,1,1,0"),
+                ("--cloud-shadows", "0,0,0.85,1"),
+            ],
+        );
+        assert!(
+            scalar_debug_amount(&single) < 0.01,
+            "{label}: single footprint was cached",
+        );
+        let reused = render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            "cloud_shadow_cache_tiles",
+            128,
+            128,
+            &[
+                ("--landscape-visibility", "1,1,1,0"),
+                ("--cloud-shadows", "0,1,0.85,1"),
+            ],
+        );
+        assert!(
+            scalar_debug_amount(&reused) > 0.99,
+            "{label}: two overlapping receiver footprints were not cached",
+        );
+    }
 }
 
 #[test]

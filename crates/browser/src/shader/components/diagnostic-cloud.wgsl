@@ -152,3 +152,43 @@ fn diagnostic_lighting_low_cloud_canopy_transmittance(
         transmittance.y,
     )), 1.0);
 }
+
+fn diagnostic_low_cloud_sun_lighting() -> vec4<f32> {
+    let lighting = low_cloud_sun_lighting(
+        celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M),
+    );
+    return vec4<f32>(
+        lighting.surface_amount,
+        lighting.total_amount,
+        lighting.elevated_amount,
+        1.0,
+    );
+}
+
+fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
+    var receiver = celestial_receiver_light_at_height(0.0);
+    receiver.sun_direction = vec3<f32>(0.7035, 0.1005, 0.7035);
+    receiver.moon_direction = vec3<f32>(-0.5025, 0.5025, 0.7035);
+    receiver.sun_amount = 1.0;
+    receiver.moon_amount = 1.0;
+    var sun_only_receiver = receiver;
+    sun_only_receiver.moon_amount = 0.0;
+    var moon_only_receiver = receiver;
+    moon_only_receiver.sun_amount = 0.0;
+    let grade = landform_light_grade(vec2<f32>(0.28, -0.21), 0.45, receiver);
+    let sun_only_grade = landform_light_grade(
+        vec2<f32>(0.28, -0.21),
+        0.45,
+        sun_only_receiver,
+    );
+    let moon_only_grade = landform_light_grade(
+        vec2<f32>(0.28, -0.21),
+        0.45,
+        moon_only_receiver,
+    );
+    return vec4<f32>(scalar_debug_color(abs(
+        grade.y - sun_only_grade.y,
+    ) + abs(
+        grade.z - moon_only_grade.z,
+    )), 1.0);
+}

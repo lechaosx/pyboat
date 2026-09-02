@@ -23,7 +23,7 @@ struct CloudShadowCacheEntry {
     key_x: u32,
     key_y: u32,
     layer: u32,
-    slot: u32,
+    slot: atomic<u32>,
 };
 
 struct CloudShadowCacheTile {
@@ -49,6 +49,7 @@ var<storage, read_write> cloud_shadow_cache_tiles: array<CloudShadowCacheTile>;
 var<storage, read> cloud_shadow_cache_tiles_for_rendering: array<CloudShadowCacheTile>;
 
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
+const CLOUD_SHADOW_CACHE_SLOT_ALLOCATED: u32 = 0x80000000u;
 const CLOUD_SHADOW_CACHE_DISCOVERY_STRIDE_PX: u32 = 16u;
 // A coarse multiple plus a small residual keeps kilometre-scale elevations
 // precise below the shortest land-shadow transition after f16 conversion.
@@ -85,8 +86,49 @@ fn cloud_shadow_cache_hash(key: vec2<f32>, layer: u32) -> u32 {
     return select(tag, tag ^ 0x80000000u, tag == CLOUD_SHADOW_CACHE_ENTRY_BUSY);
 }
 
-fn insert_cloud_shadow_cache_tile_key(key: vec2<f32>, layer: u32) {
+fn allocate_cloud_shadow_cache_tile(
+    table_index: u32,
+    key: vec2<f32>,
+    layer: u32,
+) {
+    var slot = cloud_shadow_cache.maximum_tiles;
+    var tile_count = atomicLoad(&cloud_shadow_cache_header.instance_count);
+    loop {
+        if tile_count >= cloud_shadow_cache.maximum_tiles {
+            break;
+        }
+        let allocation = atomicCompareExchangeWeak(
+            &cloud_shadow_cache_header.instance_count,
+            tile_count,
+            tile_count + 1u,
+        );
+        if allocation.exchanged {
+            slot = tile_count;
+            break;
+        }
+        tile_count = allocation.old_value;
+    }
+    if slot < cloud_shadow_cache.maximum_tiles {
+        cloud_shadow_cache_tiles[slot] = CloudShadowCacheTile(
+            bitcast<u32>(key.x),
+            bitcast<u32>(key.y),
+            layer,
+            0u,
+        );
+    }
+    atomicStore(
+        &cloud_shadow_cache_entries[table_index].slot,
+        CLOUD_SHADOW_CACHE_SLOT_ALLOCATED | slot,
+    );
+}
+
+fn mark_cloud_shadow_cache_tile_key(
+    key: vec2<f32>,
+    layer: u32,
+    footprint_index: u32,
+) {
     let tag = cloud_shadow_cache_hash(key, layer);
+    let footprint_bit = 1u << footprint_index;
     var table_index = tag & cloud_shadow_cache.table_mask;
     for (var probe = 0u; probe < 16u; probe++) {
         let claim = atomicCompareExchangeWeak(
@@ -95,47 +137,58 @@ fn insert_cloud_shadow_cache_tile_key(key: vec2<f32>, layer: u32) {
             CLOUD_SHADOW_CACHE_ENTRY_BUSY,
         );
         if claim.exchanged {
-            var slot = cloud_shadow_cache.maximum_tiles;
-            var tile_count = atomicLoad(&cloud_shadow_cache_header.instance_count);
-            loop {
-                if tile_count >= cloud_shadow_cache.maximum_tiles {
-                    break;
-                }
-                let allocation = atomicCompareExchangeWeak(
-                    &cloud_shadow_cache_header.instance_count,
-                    tile_count,
-                    tile_count + 1u,
-                );
-                if allocation.exchanged {
-                    slot = tile_count;
-                    break;
-                }
-                tile_count = allocation.old_value;
-            }
             cloud_shadow_cache_entries[table_index].key_x = bitcast<u32>(key.x);
             cloud_shadow_cache_entries[table_index].key_y = bitcast<u32>(key.y);
             cloud_shadow_cache_entries[table_index].layer = layer;
-            cloud_shadow_cache_entries[table_index].slot = slot;
-            if slot < cloud_shadow_cache.maximum_tiles {
-                cloud_shadow_cache_tiles[slot] = CloudShadowCacheTile(
-                    bitcast<u32>(key.x),
-                    bitcast<u32>(key.y),
-                    layer,
-                    0u,
-                );
-            }
+            atomicStore(&cloud_shadow_cache_entries[table_index].slot, footprint_bit);
             atomicStore(&cloud_shadow_cache_entries[table_index].state, tag);
             return;
         }
         if claim.old_value == CLOUD_SHADOW_CACHE_ENTRY_BUSY {
-            return;
+            continue;
         }
         if claim.old_value == tag
             && cloud_shadow_cache_entries[table_index].key_x == bitcast<u32>(key.x)
             && cloud_shadow_cache_entries[table_index].key_y == bitcast<u32>(key.y)
             && cloud_shadow_cache_entries[table_index].layer == layer
         {
-            return;
+            var footprints = atomicLoad(
+                &cloud_shadow_cache_entries[table_index].slot,
+            );
+            loop {
+                if (footprints & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
+                    return;
+                }
+                let marked_footprints = footprints | footprint_bit;
+                let mark = atomicCompareExchangeWeak(
+                    &cloud_shadow_cache_entries[table_index].slot,
+                    footprints,
+                    marked_footprints,
+                );
+                if !mark.exchanged {
+                    footprints = mark.old_value;
+                    continue;
+                }
+                if (footprints & ~footprint_bit) == 0u {
+                    return;
+                }
+                var allocation_state = marked_footprints;
+                loop {
+                    if (allocation_state & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
+                        return;
+                    }
+                    let allocation = atomicCompareExchangeWeak(
+                        &cloud_shadow_cache_entries[table_index].slot,
+                        allocation_state,
+                        CLOUD_SHADOW_CACHE_SLOT_ALLOCATED,
+                    );
+                    if allocation.exchanged {
+                        allocate_cloud_shadow_cache_tile(table_index, key, layer);
+                        return;
+                    }
+                    allocation_state = allocation.old_value;
+                }
+            }
         }
         table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
     }
@@ -246,40 +299,6 @@ fn cloud_shadow_cache_footprint_position(
     );
 }
 
-fn landform_shadow_cache_sample_is_reused(
-    sample_position_m: vec2<f32>,
-    source_index: u32,
-    sample_index: u32,
-    reach_m: f32,
-    direct_light: CelestialReceiverLight,
-) -> bool {
-    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
-        * visual_pixel_footprint_m;
-    for (var other_source_index = 0u; other_source_index < 2u; other_source_index++) {
-        for (var other_sample_index = 0u; other_sample_index < 4u; other_sample_index++) {
-            if other_source_index == source_index && other_sample_index == sample_index {
-                continue;
-            }
-            let other_offset = landform_shadow_cache_offset(
-                other_source_index,
-                other_sample_index,
-                reach_m,
-                direct_light,
-            );
-            if other_offset.z <= 0.0 {
-                continue;
-            }
-            let other_receiver_m = canonical_world_position(
-                sample_position_m - other_offset.xy,
-            );
-            if all(abs(cloud_shadow_cache_relative_position(other_receiver_m)) <= half_view_m) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 @compute @workgroup_size(8, 8)
 fn discover_cloud_shadow_cache_tiles(
     @builtin(global_invocation_id) invocation_id: vec3<u32>,
@@ -311,8 +330,6 @@ fn discover_cloud_shadow_cache_tiles(
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
     let surface_light = celestial_receiver_light_at_height(surface_receiver_height_m);
     let low_cloud_light = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
-    let half_view_m = 0.5 * vec2<f32>(cloud_shadow_cache.viewport_size_px)
-        * visual_pixel_footprint_m;
     for (var layer = 0u; layer < 2u; layer++) {
         let footprint_count = select(4u, 2u, layer == 0u);
         var footprints: array<CloudShadowCacheFootprint, 4>;
@@ -333,34 +350,11 @@ fn discover_cloud_shadow_cache_tiles(
                 position_m,
                 footprint,
             );
-            var reused = false;
-            // Moving a one-use query into the atlas adds a fill and a lookup
-            // without removing work; only overlapping footprints are profitable.
-            for (var other_index = 0u; other_index < footprint_count; other_index++) {
-                let other = footprints[other_index];
-                if other_index == footprint_index || !other.enabled {
-                    continue;
-                }
-                let other_projected_position_m = cloud_shadow_cache_footprint_position(
-                    position_m,
-                    other,
-                );
-                let candidate_receiver_m = canonical_world_position(
-                    position_m
-                        + cloud_shadow_cache_relative_position(projected_position_m)
-                        - cloud_shadow_cache_relative_position(other_projected_position_m),
-                );
-                if all(abs(cloud_shadow_cache_relative_position(candidate_receiver_m)) <= half_view_m) {
-                    reused = true;
-                    break;
-                }
-            }
-            if reused {
-                insert_cloud_shadow_cache_tile_key(
-                    cloud_shadow_cache_tile_key(projected_position_m),
-                    layer,
-                );
-            }
+            mark_cloud_shadow_cache_tile_key(
+                cloud_shadow_cache_tile_key(projected_position_m),
+                layer,
+                footprint_index,
+            );
         }
     }
     for (var source_index = 0u; source_index < 2u; source_index++) {
@@ -374,18 +368,11 @@ fn discover_cloud_shadow_cache_tiles(
                 );
                 if offset.z > 0.0 {
                     let sample_position_m = canonical_world_position(position_m + offset.xy);
-                    if landform_shadow_cache_sample_is_reused(
-                        sample_position_m,
-                        source_index,
-                        sample_index,
-                        reach_m,
-                        surface_light,
-                    ) {
-                        insert_cloud_shadow_cache_tile_key(
-                            cloud_shadow_cache_tile_key(sample_position_m),
-                            2u,
-                        );
-                    }
+                    mark_cloud_shadow_cache_tile_key(
+                        cloud_shadow_cache_tile_key(sample_position_m),
+                        2u,
+                        4u * source_index + sample_index,
+                    );
                 }
             }
         }

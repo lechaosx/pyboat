@@ -192,23 +192,33 @@ fn solar_eclipse_fraction_for_moon(moon: vec3<f32>) -> f32 {
     );
 }
 
-fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
-    let clamped_height_m = max(height_m, 0.0);
-    let horizon_z = celestial_horizon_z_at_height(height_m);
-    let moon = topocentric_moon_direction_at_height(clamped_height_m);
-    let eclipse_fraction = solar_eclipse_fraction_for_moon(moon);
-    let sun_elevation = clamp(
+fn sun_amount_at_horizon_with_eclipse(
+    horizon_z: f32,
+    eclipse_fraction: f32,
+) -> f32 {
+    let elevation = clamp(
         (sun_direction().z - horizon_z) / (1.0 - horizon_z),
         0.0,
         1.0,
     );
-    let sun_amount = (1.0 - eclipse_fraction)
+    return (1.0 - eclipse_fraction)
         * celestial_disc_visibility_at_horizon(
             horizon_z,
             sun_direction(),
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         )
-        * (0.35 + 0.65 * sqrt(sun_elevation));
+        * (0.35 + 0.65 * sqrt(elevation));
+}
+
+fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
+    let clamped_height_m = max(height_m, 0.0);
+    let horizon_z = celestial_horizon_z_at_height(height_m);
+    let moon = topocentric_moon_direction_at_height(clamped_height_m);
+    let eclipse_fraction = solar_eclipse_fraction_for_moon(moon);
+    let sun_amount = sun_amount_at_horizon_with_eclipse(
+        horizon_z,
+        eclipse_fraction,
+    );
     let moon_elevation = clamp(
         (moon.z - horizon_z) / (1.0 - horizon_z),
         0.0,
@@ -322,6 +332,16 @@ fn calculate_atmospheric_ambient_light(
     let clear_sky_light = clear_intensity * sky_color;
 
     let optical_thickness = max(canopy.mean_optical_thickness, 0.0);
+    let clear_contribution = (1.0 - canopy.sky_fraction) * clear_sky_light;
+    if canopy.sky_fraction <= 0.0 {
+        return AtmosphericAmbientLight(clear_contribution, vec3<f32>(0.0));
+    }
+    if optical_thickness <= 0.0 {
+        return AtmosphericAmbientLight(
+            clear_contribution,
+            canopy.sky_fraction * clear_sky_light,
+        );
+    }
     let diffuse_transmittance = exp(-0.72 * optical_thickness);
     let downward_albedo = mix(
         0.58,
@@ -358,7 +378,7 @@ fn calculate_atmospheric_ambient_light(
         + scattered_moon_light;
 
     return AtmosphericAmbientLight(
-        (1.0 - canopy.sky_fraction) * clear_sky_light,
+        clear_contribution,
         canopy.sky_fraction * canopy_light,
     );
 }

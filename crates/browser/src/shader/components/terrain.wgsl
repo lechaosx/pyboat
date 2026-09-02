@@ -531,7 +531,7 @@ fn landform_light_grade(
     surface_gradient: vec2<f32>,
     roughness: f32,
     direct_light: CelestialReceiverLight,
-) -> vec2<f32> {
+) -> vec3<f32> {
     let strength = clamp(
         tuning.landform_lighting.x
             * landscape_visibility.w * lighting_feature_visibility().x,
@@ -539,10 +539,9 @@ fn landform_light_grade(
         2.0,
     );
     if strength <= 0.0 {
-        return vec2<f32>(1.0);
+        return vec3<f32>(1.0);
     }
     let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    let source_amount = direct_light.sun_amount + direct_light.moon_amount;
     let combined_light = direct_light.sun_amount * direct_light.sun_direction
         + direct_light.moon_amount * direct_light.moon_direction;
     let light_direction = select(
@@ -553,34 +552,34 @@ fn landform_light_grade(
     let sky_direction = normalize(vec3<f32>(0.28 * light_direction.xy, 1.0));
     let sky_facing = clamp(dot(normal, sky_direction), 0.0, 1.0);
     let sky_grade = mix(0.70, 1.08, smoothstep(0.20, 1.0, sky_facing));
-    let sun_facing = smoothstep(
-        -0.12,
-        1.0,
-        dot(normal, direct_light.sun_direction),
-    );
-    let moon_facing = smoothstep(
-        -0.12,
-        1.0,
-        dot(normal, direct_light.moon_direction),
-    );
-    let direct_facing = (
-        direct_light.sun_amount * sun_facing
-            + direct_light.moon_amount * moon_facing
-    ) / max(source_amount, 0.0001);
     let specular_exponent = mix(56.0, 7.0, clamp(roughness, 0.0, 1.0));
-    let half_direction_sum = light_direction + vec3<f32>(0.0, 0.0, 1.0);
-    var specular = 0.0;
-    if length(half_direction_sum) > 0.001 {
-        specular = pow(
-            clamp(dot(normal, normalize(half_direction_sum)), 0.0, 1.0),
-            specular_exponent,
-        ) * mix(0.16, 0.025, clamp(roughness, 0.0, 1.0));
+    var direct_grades = vec2<f32>(1.0);
+    for (var source_index = 0u; source_index < 2u; source_index++) {
+        let light_direction = select(
+            direct_light.moon_direction,
+            direct_light.sun_direction,
+            source_index == 0u,
+        );
+        let direct_facing = smoothstep(
+            -0.12,
+            1.0,
+            dot(normal, light_direction),
+        );
+        let half_direction_sum = light_direction + vec3<f32>(0.0, 0.0, 1.0);
+        var specular = 0.0;
+        if length(half_direction_sum) > 0.001 {
+            specular = pow(
+                clamp(dot(normal, normalize(half_direction_sum)), 0.0, 1.0),
+                specular_exponent,
+            ) * mix(0.16, 0.025, clamp(roughness, 0.0, 1.0));
+        }
+        direct_grades[source_index] = mix(0.44, 1.30, direct_facing) + specular;
     }
-    let direct_grade = mix(0.44, 1.30, direct_facing) + specular;
     return clamp(
-        vec2<f32>(1.0) + strength * (vec2<f32>(sky_grade, direct_grade) - 1.0),
-        vec2<f32>(0.50),
-        vec2<f32>(1.40),
+        vec3<f32>(1.0)
+            + strength * (vec3<f32>(sky_grade, direct_grades) - 1.0),
+        vec3<f32>(0.50),
+        vec3<f32>(1.40),
     );
 }
 

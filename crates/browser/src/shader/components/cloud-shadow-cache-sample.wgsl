@@ -32,6 +32,8 @@ var cloud_shadow_cache_atlas: texture_2d<f32>;
 var cloud_shadow_cache_sampler: sampler;
 
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
+const CLOUD_SHADOW_CACHE_SLOT_ALLOCATED: u32 = 0x80000000u;
+const CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK: u32 = 0x7fffffffu;
 
 fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
     let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
@@ -77,7 +79,10 @@ fn cloud_shadow_cache_slot(key: vec2<f32>, layer: u32) -> u32 {
             && entry.key_y == bitcast<u32>(key.y)
             && entry.layer == layer
         {
-            return entry.slot;
+            if (entry.slot & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
+                return entry.slot & CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK;
+            }
+            return cloud_shadow_cache.maximum_tiles;
         }
         table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
     }

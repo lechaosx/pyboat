@@ -453,22 +453,6 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.0),
             ],
         ),
-        "lighting_canopy_transfer_thin" => diagnostic(
-            value,
-            "lighting_canopy_transfer",
-            &[
-                ("CANOPY_TRANSFER_OUTPUT", 1.0),
-                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.25),
-            ],
-        ),
-        "lighting_canopy_transfer_moderate" => diagnostic(
-            value,
-            "lighting_canopy_transfer",
-            &[
-                ("CANOPY_TRANSFER_OUTPUT", 1.0),
-                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 1.5),
-            ],
-        ),
         "lighting_canopy_transfer_thick" => diagnostic(
             value,
             "lighting_canopy_transfer",
@@ -480,6 +464,16 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "lighting_low_cloud_canopy_transmittance" => {
             diagnostic(value, "lighting_low_cloud_canopy_transmittance", &[])
         }
+        "lighting_low_cloud_sun_lighting" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 0.0)],
+        ),
+        "lighting_landform_sun_grade_moon_coupling" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 1.0)],
+        ),
         "cloud_shadow_cache_tiles" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),

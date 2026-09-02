@@ -1,3 +1,26 @@
+struct LowCloudSunLighting {
+    surface_amount: f32,
+    elevated_amount: f32,
+    total_amount: f32,
+};
+
+fn low_cloud_sun_lighting(
+    low_cloud_light: CelestialReceiverLight,
+) -> LowCloudSunLighting {
+    let visibility = direct_light_visibility().x;
+    let surface_amount = visibility * sun_amount_at_horizon_with_eclipse(
+        0.0,
+        low_cloud_light.solar_eclipse_fraction,
+    );
+    let total_amount = visibility * low_cloud_light.sun_amount;
+    let elevated_amount = max(total_amount - surface_amount, 0.0);
+    return LowCloudSunLighting(
+        surface_amount,
+        elevated_amount,
+        total_amount,
+    );
+}
+
 fn cloud_color(
     surface_color: vec3<f32>,
     cloud_sample: LowCloudSample,
@@ -15,15 +38,11 @@ fn cloud_color(
     ));
     let sun_facing = max(dot(cloud_normal, sun_direction()), 0.0);
     let moon_facing = max(dot(cloud_normal, low_cloud_light.moon_direction), 0.0);
-    let sun_direct_shape = direct_sun_amount() * sun_facing;
+    let low_cloud_sun = low_cloud_sun_lighting(low_cloud_light);
+    let sun_direct_shape = low_cloud_sun.surface_amount * sun_facing;
     let moon_direct_shape = low_cloud_light.moon_amount * moon_facing;
-    let elevated_sun_amount = low_cloud_light.sun_amount;
-    let elevated_sun_scatter = max(
-        elevated_sun_amount - celestial_sun_amount(),
-        0.0,
-    );
-    let sunlight = (direct_sun_amount() + elevated_sun_scatter)
-        * upper_transmittance.x;
+    let elevated_sun_scatter = low_cloud_sun.elevated_amount;
+    let sunlight = low_cloud_sun.total_amount * upper_transmittance.x;
     let moonlight = low_cloud_light.moon_amount * upper_transmittance.y;
     let depth = cloud_sample.optical_depth / max(cloud_amount, 0.001);
     let edge_response = (1.0 - smoothstep(0.30, 0.78, cloud_amount))
@@ -82,7 +101,8 @@ fn cloud_color(
         )
     );
     let sun_color = contribution_visibility.x * upper_transmittance.x
-        * sun_direct_contribution_color() * mix(0.25, 1.0, sun_facing)
+        * sun_direct_contribution_color_for_amount(low_cloud_sun.surface_amount)
+        * mix(0.25, 1.0, sun_facing)
         + elevated_sun_light;
     let moon_color = contribution_visibility.y
         * upper_transmittance.y
@@ -178,7 +198,7 @@ fn fragment_surface_color(
     elevation_m: f32,
     direct_light: CelestialReceiverLight,
     terrain_shadow_transmittance: vec2<f32>,
-    landform_grade: vec2<f32>,
+    landform_grade: vec3<f32>,
     ambient_light: AtmosphericAmbientLight,
 ) -> vec3<f32> {
     let layer = fragment_layer_visibility();
@@ -215,7 +235,7 @@ fn fragment_surface_color(
         + contribution.y
             * terrain_shadow_transmittance.y
             * moon_transmittance
-            * landform_grade.y
+            * landform_grade.z
             * moon_direct_contribution_color_for_receiver(direct_light);
     return surface_color * light;
 }
@@ -273,7 +293,7 @@ fn final_scene_color(
         }
         let surface_height_m = max(terrain.elevation_m, water_height_m);
         let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
-        var surface_light_grade = vec2<f32>(1.0);
+        var surface_light_grade = vec3<f32>(1.0);
         if is_land {
             if terrain.water_ice_amount == 0.0
                 && terrain.ice_amount > 0.0
@@ -325,29 +345,35 @@ fn final_scene_color(
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
-            let low_cloud_light = celestial_receiver_light_at_height(low_height_m);
             let low_cloud = procedural_low_cloud_sample(
                 input.world_position_m,
                 surface_cloud_weather,
             );
-            var upper_transmittance = vec2<f32>(1.0);
-            if low_cloud.body_amount > 0.01 && layer_visibility.w > 0.0 {
-                upper_transmittance = upper_cloud_transmittance_at_low_cloud(
-                    input.world_position_m,
-                    upper_height_m,
+            if low_cloud.body_amount > 0.08
+                && low_cloud.optical_depth > 0.0
+                && tuning.cloud_rendering.x > 0.0
+                && tuning.cloud_rendering.y > 0.0
+            {
+                let low_cloud_light = celestial_receiver_light_at_height(low_height_m);
+                var upper_transmittance = vec2<f32>(1.0);
+                if layer_visibility.w > 0.0 {
+                    upper_transmittance = upper_cloud_transmittance_at_low_cloud(
+                        input.world_position_m,
+                        upper_height_m,
+                        low_cloud_light,
+                    );
+                }
+                let clouded_fragment_color = cloud_color(
+                    fragment_color,
+                    low_cloud,
+                    upper_transmittance,
+                    fragment_light_visibility(),
+                    ambient_light,
                     low_cloud_light,
                 );
+                fragment_color += layer_visibility.x
+                    * (clouded_fragment_color - fragment_color);
             }
-            let clouded_fragment_color = cloud_color(
-                fragment_color,
-                low_cloud,
-                upper_transmittance,
-                fragment_light_visibility(),
-                ambient_light,
-                low_cloud_light,
-            );
-            fragment_color += fragment_layer_visibility().x
-                * (clouded_fragment_color - fragment_color);
         }
     }
     return vec4<f32>(fragment_color, 1.0);

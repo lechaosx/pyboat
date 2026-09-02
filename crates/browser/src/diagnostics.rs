@@ -6,6 +6,7 @@ pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
     "lighting_cloud_shadow",
     "lighting_canopy_transfer",
     "lighting_low_cloud_canopy_transmittance",
+    "lighting_model_regressions",
     "lighting_solar",
     "lighting_aerosol_optical_depth",
     "lighting_canopy_moon_scattering",
