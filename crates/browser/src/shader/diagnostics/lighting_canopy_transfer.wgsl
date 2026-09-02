@@ -8,6 +8,9 @@ fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f
         select(0.0, 1.0, CANOPY_TRANSFER_OUTPUT == 1u),
         CANOPY_TRANSFER_OPTICAL_THICKNESS,
     );
-    let ambient = calculate_atmospheric_ambient_light(canopy);
+    let ambient = calculate_atmospheric_ambient_light(
+        canopy,
+        celestial_receiver_light_at_height(0.0),
+    );
     return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
 }

@@ -19,6 +19,13 @@ struct CloudShadowCacheEntry {
     slot: u32,
 };
 
+struct CloudShadowCacheTile {
+    key_x: u32,
+    key_y: u32,
+    layer: u32,
+    padding: u32,
+};
+
 @group(2) @binding(0)
 var<uniform> cloud_shadow_cache: CloudShadowCacheUniforms;
 
@@ -30,6 +37,9 @@ var cloud_shadow_cache_atlas: texture_2d<f32>;
 
 @group(2) @binding(3)
 var cloud_shadow_cache_sampler: sampler;
+
+@group(2) @binding(4)
+var<storage, read> cloud_shadow_cache_tiles_for_sampling: array<CloudShadowCacheTile>;
 
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 const CLOUD_SHADOW_CACHE_SLOT_ALLOCATED: u32 = 0x80000000u;
@@ -80,7 +90,16 @@ fn cloud_shadow_cache_slot(key: vec2<f32>, layer: u32) -> u32 {
             && entry.layer == layer
         {
             if (entry.slot & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
-                return entry.slot & CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK;
+                let slot = entry.slot & CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK;
+                if slot < cloud_shadow_cache.maximum_tiles {
+                    let tile = cloud_shadow_cache_tiles_for_sampling[slot];
+                    if tile.key_x == bitcast<u32>(key.x)
+                        && tile.key_y == bitcast<u32>(key.y)
+                        && tile.layer == layer
+                    {
+                        return slot;
+                    }
+                }
             }
             return cloud_shadow_cache.maximum_tiles;
         }

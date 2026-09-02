@@ -193,3 +193,19 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
         grade.z - moon_only_grade.z,
     )), 1.0);
 }
+
+fn diagnostic_receiver_ambient(surface_height_m: f32) -> vec4<f32> {
+    let receiver = celestial_receiver_light_at_height(surface_height_m);
+    let ambient = calculate_atmospheric_ambient_light(
+        RegionalCanopyConditions(0.0, 0.0),
+        receiver,
+    );
+    return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
+}
+
+fn diagnostic_receiver_ambient_share(surface_height_m: f32) -> vec4<f32> {
+    let receiver = celestial_receiver_light_at_height(surface_height_m);
+    return vec4<f32>(scalar_debug_color(
+        ambient_contribution_share(receiver),
+    ), 1.0);
+}

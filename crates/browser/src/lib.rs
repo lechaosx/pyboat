@@ -1078,7 +1078,7 @@ mod tests {
             variable
                 .binding
                 .as_ref()
-                .is_none_or(|binding| binding.group != 2 || binding.binding <= 3)
+                .is_none_or(|binding| binding.group != 2 || binding.binding <= 4)
         }));
 
         let cache = naga::front::wgsl::parse_str(CLOUD_SHADOW_CACHE_SHADER).unwrap();

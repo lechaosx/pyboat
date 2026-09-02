@@ -95,7 +95,7 @@ fn cloud_color(
         * sqrt(elevated_sun_scatter)
         * sun_direct_light_color()
         * (0.12 + 0.88 * edge_response);
-    let ambient_color = ambient_contribution_share() * (
+    let ambient_color = ambient_contribution_share(low_cloud_light) * (
         contribution_visibility.z * atmospheric_ambient_color_with_visibility(
             ambient_light,
             vec2<f32>(1.0, 0.0),
@@ -118,14 +118,15 @@ fn cloud_color(
             low_cloud_light.moon_direction,
         )
         * mix(0.25, 1.0, moon_facing);
-    let cloud = low_cloud_material_color_visibility() * (
+    let cloud = (
         neutral_cloud * ambient_color
         + sun_cloud * sun_color
         + moon_cloud * moon_color
     );
     let body = smoothstep(0.08, 0.18, cloud_amount);
     let optical_depth = tuning.cloud_rendering.x * cloud_sample.optical_depth;
-    let opacity = tuning.cloud_rendering.y * body * (1.0 - exp(-1.35 * optical_depth));
+    let opacity = low_cloud_material_color_visibility()
+        * tuning.cloud_rendering.y * body * (1.0 - exp(-1.35 * optical_depth));
     return mix(surface_color, cloud, opacity);
 }
 
@@ -221,7 +222,7 @@ fn fragment_surface_color(
         layer.y * depths.low.y + layer.z * depths.upper.y,
         direct_light.moon_direction,
     );
-    let ambient = ambient_contribution_share() * (
+    let ambient = ambient_contribution_share(direct_light) * (
         contribution.z * atmospheric_ambient_color_with_visibility(
             ambient_light,
             vec2<f32>(1.0, 0.0),
@@ -254,7 +255,6 @@ fn final_scene_color(
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
         let ambient_sky = regional_canopy_conditions(surface_cloud_weather);
-        let ambient_light = calculate_atmospheric_ambient_light(ambient_sky);
         let terrain = procedural_terrain_sample_with_climate_from_circle(
             input.world_position_m,
             surface_circle_position,
@@ -298,6 +298,10 @@ fn final_scene_color(
         }
         let surface_height_m = max(terrain.elevation_m, water_height_m);
         let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
+        let ambient_light = calculate_atmospheric_ambient_light(
+            ambient_sky,
+            surface_direct_light,
+        );
         var surface_light_grade = vec3<f32>(1.0);
         if is_land {
             if terrain.water_ice_amount == 0.0
@@ -358,6 +362,7 @@ fn final_scene_color(
                 && low_cloud.optical_depth > 0.0
                 && tuning.cloud_rendering.x > 0.0
                 && tuning.cloud_rendering.y > 0.0
+                && low_cloud_material_color_visibility() > 0.0
             {
                 let low_cloud_light = celestial_receiver_light_at_height(low_height_m);
                 var upper_transmittance = vec2<f32>(1.0);

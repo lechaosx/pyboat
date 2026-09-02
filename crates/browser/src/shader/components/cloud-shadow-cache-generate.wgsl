@@ -20,9 +20,9 @@ struct CloudShadowCacheHeader {
 
 struct CloudShadowCacheEntry {
     state: atomic<u32>,
-    key_x: u32,
-    key_y: u32,
-    layer: u32,
+    key_x: atomic<u32>,
+    key_y: atomic<u32>,
+    layer: atomic<u32>,
     slot: atomic<u32>,
 };
 
@@ -50,6 +50,7 @@ var<storage, read> cloud_shadow_cache_tiles_for_rendering: array<CloudShadowCach
 
 const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 const CLOUD_SHADOW_CACHE_SLOT_ALLOCATED: u32 = 0x80000000u;
+const CLOUD_SHADOW_CACHE_ATOMIC_RETRIES: u32 = 8u;
 const CLOUD_SHADOW_CACHE_DISCOVERY_STRIDE_PX: u32 = 16u;
 // A coarse multiple plus a small residual keeps kilometre-scale elevations
 // precise below the shortest land-shadow transition after f16 conversion.
@@ -93,7 +94,11 @@ fn allocate_cloud_shadow_cache_tile(
 ) {
     var slot = cloud_shadow_cache.maximum_tiles;
     var tile_count = atomicLoad(&cloud_shadow_cache_header.instance_count);
-    loop {
+    for (
+        var attempt = 0u;
+        attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+        attempt++
+    ) {
         if tile_count >= cloud_shadow_cache.maximum_tiles {
             break;
         }
@@ -132,21 +137,27 @@ fn mark_cloud_shadow_cache_tile_key(
     var table_index = tag & cloud_shadow_cache.table_mask;
     for (var probe = 0u; probe < 16u; probe++) {
         var state = atomicLoad(&cloud_shadow_cache_entries[table_index].state);
-        loop {
-            if state == CLOUD_SHADOW_CACHE_ENTRY_BUSY {
-                state = atomicLoad(&cloud_shadow_cache_entries[table_index].state);
-                continue;
-            }
-            if state == 0u {
+        if state == 0u {
+            for (
+                var attempt = 0u;
+                attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+                attempt++
+            ) {
                 let claim = atomicCompareExchangeWeak(
                     &cloud_shadow_cache_entries[table_index].state,
                     0u,
                     CLOUD_SHADOW_CACHE_ENTRY_BUSY,
                 );
                 if claim.exchanged {
-                    cloud_shadow_cache_entries[table_index].key_x = bitcast<u32>(key.x);
-                    cloud_shadow_cache_entries[table_index].key_y = bitcast<u32>(key.y);
-                    cloud_shadow_cache_entries[table_index].layer = layer;
+                    atomicStore(
+                        &cloud_shadow_cache_entries[table_index].key_x,
+                        bitcast<u32>(key.x),
+                    );
+                    atomicStore(
+                        &cloud_shadow_cache_entries[table_index].key_y,
+                        bitcast<u32>(key.y),
+                    );
+                    atomicStore(&cloud_shadow_cache_entries[table_index].layer, layer);
                     atomicStore(
                         &cloud_shadow_cache_entries[table_index].slot,
                         footprint_bit,
@@ -155,19 +166,31 @@ fn mark_cloud_shadow_cache_tile_key(
                     return;
                 }
                 state = claim.old_value;
-                continue;
+                if state != 0u {
+                    break;
+                }
             }
-            break;
         }
-        if state == tag
-            && cloud_shadow_cache_entries[table_index].key_x == bitcast<u32>(key.x)
-            && cloud_shadow_cache_entries[table_index].key_y == bitcast<u32>(key.y)
-            && cloud_shadow_cache_entries[table_index].layer == layer
-        {
+        if state == 0u || state == CLOUD_SHADOW_CACHE_ENTRY_BUSY {
+            return;
+        }
+        if state == tag {
+            if atomicLoad(&cloud_shadow_cache_entries[table_index].key_x)
+                    != bitcast<u32>(key.x)
+                || atomicLoad(&cloud_shadow_cache_entries[table_index].key_y)
+                    != bitcast<u32>(key.y)
+                || atomicLoad(&cloud_shadow_cache_entries[table_index].layer) != layer
+            {
+                return;
+            }
             var footprints = atomicLoad(
                 &cloud_shadow_cache_entries[table_index].slot,
             );
-            loop {
+            for (
+                var mark_attempt = 0u;
+                mark_attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+                mark_attempt++
+            ) {
                 if (footprints & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
                     return;
                 }
@@ -185,7 +208,11 @@ fn mark_cloud_shadow_cache_tile_key(
                     return;
                 }
                 var allocation_state = marked_footprints;
-                loop {
+                for (
+                    var allocation_attempt = 0u;
+                    allocation_attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+                    allocation_attempt++
+                ) {
                     if (allocation_state & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
                         return;
                     }
@@ -200,7 +227,9 @@ fn mark_cloud_shadow_cache_tile_key(
                     }
                     allocation_state = allocation.old_value;
                 }
+                return;
             }
+            return;
         }
         table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
     }

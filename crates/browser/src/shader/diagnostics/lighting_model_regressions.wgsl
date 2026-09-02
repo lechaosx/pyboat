@@ -7,5 +7,11 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 0u {
         return diagnostic_low_cloud_sun_lighting(LIGHTING_MODEL_SURFACE_HEIGHT_M);
     }
-    return diagnostic_landform_sun_grade_moon_coupling();
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 1u {
+        return diagnostic_landform_sun_grade_moon_coupling();
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 2u {
+        return diagnostic_receiver_ambient(LIGHTING_MODEL_SURFACE_HEIGHT_M);
+    }
+    return diagnostic_receiver_ambient_share(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

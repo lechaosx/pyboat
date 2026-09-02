@@ -41,9 +41,11 @@ struct Options {
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
     light_balance: [f32; 4],
+    cloud_rendering: [f32; 4],
     cloud_shadows: [f32; 4],
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
+    layer_material_color_visibility: [u32; 4],
 }
 
 #[repr(C)]
@@ -213,9 +215,11 @@ fn parse_options() -> Result<Options, String> {
         world_time_seconds: 0.0,
         diagnostic: scene_selection(),
         light_balance: [1.0; 4],
+        cloud_rendering: [1.0, 1.0, 1.0, 0.0],
         cloud_shadows: [1.0, 1.0, 0.85, 1.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
+        layer_material_color_visibility: [1; 4],
     };
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -244,6 +248,9 @@ fn parse_options() -> Result<Options, String> {
             "--light-balance" => {
                 options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
+            "--cloud-rendering" => {
+                options.cloud_rendering = parse_f32x4(&value(&mut arguments)?, &argument)?
+            }
             "--cloud-shadows" => {
                 options.cloud_shadows = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
@@ -252,6 +259,10 @@ fn parse_options() -> Result<Options, String> {
             }
             "--light-contributions" => {
                 options.light_contribution_visibility =
+                    parse_u32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--layer-material-colors" => {
+                options.layer_material_color_visibility =
                     parse_u32x4(&value(&mut arguments)?, &argument)?
             }
             "--help" | "-h" => {
@@ -482,6 +493,30 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 1.0)],
         ),
+        "lighting_receiver_ambient_datum" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 2.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 0.0),
+            ],
+        ),
+        "lighting_receiver_ambient_elevated" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 2.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
+        "lighting_receiver_ambient_share_elevated" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 3.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
         "cloud_shadow_cache_tiles" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),
@@ -571,7 +606,9 @@ fn print_help() {
            --diagnostic NAME      semantic diagnostic output (default scene)\n\n\
            --light-balance V,V,V,V  Sun, Moon, clear-sky, and canopy light scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
+           --cloud-rendering V,V,V,V  lower-cloud depth, opacity, storm, padding\n\
            --cloud-shadows V,V,V,V  low/canopy strength, extinction, contrast\n\
+           --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
            --landscape-visibility V,V,V,V  landscape mechanism visibility\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics."
@@ -682,7 +719,7 @@ async fn render(options: &Options) -> Result<(), String> {
     let playground_uniforms = PlaygroundUniforms {
         cloud_detail: [0.35, 0.25, 1.15, 0.06],
         cloud_wisps: [0.25, 0.0, 1.0, 1.0],
-        cloud_rendering: [1.0, 1.0, 1.0, 0.0],
+        cloud_rendering: options.cloud_rendering,
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         water_tuning: [0.5, 1.0, 0.0, 0.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
@@ -702,7 +739,7 @@ async fn render(options: &Options) -> Result<(), String> {
         land_material_color_visibility: [1; 4],
         solid_material_color_visibility: [1; 4],
         water_material_color_visibility: [1; 4],
-        layer_material_color_visibility: [1; 4],
+        layer_material_color_visibility: options.layer_material_color_visibility,
         environment_features: [1.0; 4],
         material_features: [1.0; 4],
         effect_features: [1.0; 4],

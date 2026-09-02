@@ -562,6 +562,78 @@ fn low_cloud_sunlight_uses_rendered_surface_horizon() {
 }
 
 #[test]
+fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 105.0 * 86_400.0;
+    let (position_m, datum, surface) = (0..128)
+        .flat_map(|x_index| {
+            (0..64).map(move |y_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
+                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                )
+            })
+        })
+        .filter_map(|position_m| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            let datum = celestial_lighting_at_height(world, conditions, 0.0);
+            let surface = celestial_lighting_at_height(world, conditions, 600.0);
+            (datum.sun_direction[2] > 0.2
+                && datum.sun_intensity > 0.05
+                && surface.solar_eclipse_fraction > datum.solar_eclipse_fraction + 0.05)
+                .then_some((position_m, datum, surface))
+        })
+        .max_by(|left, right| {
+            (left.2.solar_eclipse_fraction - left.1.solar_eclipse_fraction)
+                .total_cmp(&(right.2.solar_eclipse_fraction - right.1.solar_eclipse_fraction))
+        })
+        .expect("the eclipse should differ at an elevated surface receiver");
+    let datum_ambient = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_receiver_ambient_datum",
+        1,
+        1,
+    );
+    let surface_ambient = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_receiver_ambient_elevated",
+        1,
+        1,
+    );
+    assert!(
+        linear_luminance(&surface_ambient) + 0.01 < linear_luminance(&datum_ambient),
+        "datum {:?}, surface {:?}; datum light {datum:?}, surface light {surface:?}",
+        &datum_ambient[..3],
+        &surface_ambient[..3],
+    );
+
+    let expected_share = (1.0
+        - 0.38 * surface.sun_intensity.clamp(0.0, 1.0).sqrt()
+        - 0.16 * surface.moon_intensity.clamp(0.0, 1.0).sqrt())
+    .max(0.0);
+    let actual_share = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_receiver_ambient_share_elevated",
+        1,
+        1,
+    );
+    assert!(
+        (scalar_debug_amount(&actual_share) - expected_share).abs() < 0.01,
+        "ambient share {} != {expected_share}; datum {datum:?}, surface {surface:?}",
+        scalar_debug_amount(&actual_share),
+    );
+}
+
+#[test]
 fn landform_sun_grade_is_independent_of_moon_visibility() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
@@ -813,6 +885,54 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
     let winter_south_ice = mean_channel(&northern_winter, 32, 8..16, 2);
     assert!(winter_north_ice > summer_north_ice + 0.05);
     assert!(summer_south_ice > winter_south_ice + 0.05);
+}
+
+#[test]
+fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
+    let world = WorldGeometry::default();
+    let overview_size = 32usize;
+    let overview_height_m = 16_000.0;
+    let overview = render_diagnostic_image_with_view_at(
+        world,
+        Vector::new(0.0, -10_000.0),
+        123.456,
+        overview_height_m,
+        "cloud_low_optical_depth",
+        overview_size as u32,
+        overview_size as u32,
+    );
+    let cloud_pixel = overview
+        .chunks_exact(4)
+        .position(|pixel| scalar_debug_amount(pixel) > 0.2)
+        .expect("representative view should contain an opaque low cloud");
+    let row = cloud_pixel / overview_size;
+    let column = cloud_pixel % overview_size;
+    let position_m = Vector::new(
+        (column as f32 + 0.5) / overview_size as f32 * overview_height_m - 0.5 * overview_height_m,
+        -10_000.0 + 0.5 * overview_height_m
+            - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
+    );
+    let row_hidden = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        1.0,
+        "scene",
+        1,
+        1,
+        &[("--layer-material-colors", "0,1,1,1")],
+    );
+    let opacity_disabled = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        1.0,
+        "scene",
+        1,
+        1,
+        &[("--cloud-rendering", "1,0,1,0")],
+    );
+    assert_rgb_close(&row_hidden, &opacity_disabled, 1);
 }
 
 #[test]
