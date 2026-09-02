@@ -493,6 +493,24 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 1.0)],
         ),
+        "lighting_landform_shadow_disc_radii" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 5.0)],
+        ),
+        "lighting_cloud_projection" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 6.0)],
+        ),
+        "lighting_cloud_shadow_receiver" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 7.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -533,7 +551,9 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
-        "cloud_shadow_cache_tiles" | "cloud_shadow_cache_marker_integrity" => ShaderSelection {
+        "cloud_shadow_cache_tiles"
+        | "cloud_shadow_cache_marker_integrity"
+        | "cloud_shadow_cache_fallback_integrity" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),
             constants: &[],
@@ -948,7 +968,15 @@ fn render_world(
             playground_bind_group,
             options.width,
             options.height,
-            options.diagnostic.id == "cloud_shadow_cache_marker_integrity",
+            match options.diagnostic.id.as_str() {
+                "cloud_shadow_cache_marker_integrity" => {
+                    Some("test_cloud_shadow_cache_marker_integrity")
+                }
+                "cloud_shadow_cache_fallback_integrity" => {
+                    Some("test_cloud_shadow_cache_fallback_integrity")
+                }
+                _ => None,
+            },
         );
     }
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1046,7 +1074,7 @@ fn discover_cloud_shadow_cache_tiles(
     playground_bind_group: &wgpu::BindGroup,
     viewport_width: u32,
     viewport_height: u32,
-    test_marker_integrity: bool,
+    test_entry_point: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let layout = browser::cloud_shadow_cache_layout(
         viewport_width,
@@ -1130,9 +1158,10 @@ fn discover_cloud_shadow_cache_tiles(
         ],
     });
     let mut shader_source = browser::playground_cloud_shadow_cache_shader_source().to_owned();
-    if test_marker_integrity {
-        shader_source.push_str(
-            r#"
+    if let Some(test_entry_point) = test_entry_point {
+        shader_source.push_str(match test_entry_point {
+            "test_cloud_shadow_cache_marker_integrity" => {
+                r#"
 @compute @workgroup_size(1)
 fn test_cloud_shadow_cache_marker_integrity() {
     let key = vec2<f32>(0.0);
@@ -1140,8 +1169,22 @@ fn test_cloud_shadow_cache_marker_integrity() {
     mark_cloud_shadow_cache_tile_key(key, 0u, 1u);
     mark_cloud_shadow_cache_tile_key(key, 0u, 2u);
 }
-"#,
-        );
+"#
+            }
+            "test_cloud_shadow_cache_fallback_integrity" => {
+                r#"
+@compute @workgroup_size(1)
+fn test_cloud_shadow_cache_fallback_integrity() {
+    for (var key_x = 0u; key_x <= cloud_shadow_cache.maximum_tiles; key_x++) {
+        let key = vec2<f32>(f32(key_x), 0.0);
+        mark_cloud_shadow_cache_tile_key(key, 0u, 0u);
+        mark_cloud_shadow_cache_tile_key(key, 0u, 1u);
+    }
+}
+"#
+            }
+            _ => unreachable!(),
+        });
     }
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("capture cloud shadow cache shader"),
@@ -1160,11 +1203,7 @@ fn test_cloud_shadow_cache_marker_integrity() {
         label: Some("capture cloud shadow cache discovery pipeline"),
         layout: Some(&pipeline_layout),
         module: &shader,
-        entry_point: Some(if test_marker_integrity {
-            "test_cloud_shadow_cache_marker_integrity"
-        } else {
-            "discover_cloud_shadow_cache_tiles"
-        }),
+        entry_point: Some(test_entry_point.unwrap_or("discover_cloud_shadow_cache_tiles")),
         compilation_options: Default::default(),
         cache: None,
     });
@@ -1190,7 +1229,7 @@ fn test_cloud_shadow_cache_marker_integrity() {
         pass.set_bind_group(0, scene_bind_group, &[]);
         pass.set_bind_group(1, playground_bind_group, &[]);
         pass.set_bind_group(2, &cache_bind_group, &[]);
-        if test_marker_integrity {
+        if test_entry_point.is_some() {
             pass.dispatch_workgroups(1, 1, 1);
         } else {
             pass.dispatch_workgroups(
@@ -1230,7 +1269,9 @@ fn test_cloud_shadow_cache_marker_integrity() {
         .chunks_exact(8)
         .filter_map(|entry| {
             let slot = u32::from_ne_bytes(entry[4..].try_into().unwrap());
-            (slot & 0x8000_0000 != 0).then_some(slot & 0x7fff_ffff)
+            (slot & 0x8000_0000 != 0)
+                .then_some(slot & 0x7fff_ffff)
+                .filter(|slot| *slot < layout.maximum_tiles)
         })
         .collect::<Vec<_>>();
     allocated_slots.sort_unstable();

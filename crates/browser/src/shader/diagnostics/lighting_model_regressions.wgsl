@@ -16,5 +16,14 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 3u {
         return diagnostic_receiver_ambient_share(LIGHTING_MODEL_SURFACE_HEIGHT_M);
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 5u {
+        return diagnostic_landform_shadow_disc_radii(input);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 6u {
+        return diagnostic_cloud_projection(input);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 7u {
+        return diagnostic_cloud_shadow_receiver_light(LIGHTING_MODEL_SURFACE_HEIGHT_M);
+    }
     return diagnostic_ambient_with_surface_horizon(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

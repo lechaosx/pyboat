@@ -527,47 +527,26 @@ fn projected_cloud_position(
     if height_m <= 0.0 || horizontal_light <= 0.001 {
         return position_m;
     }
-    let longitude = TAU * position_m.x
-        * scene.inverse_world_size_m.x;
-    let latitude = radians(surface_latitude_degrees_at(position_m));
-    let longitude_sin = sin(longitude);
-    let longitude_cos = cos(longitude);
-    let latitude_sin = sin(latitude);
-    let latitude_cos = cos(latitude);
-    let up = vec3<f32>(
-        latitude_cos * longitude_cos,
-        latitude_cos * longitude_sin,
-        latitude_sin,
-    );
-    let east = vec3<f32>(-longitude_sin, longitude_cos, 0.0);
-    let north = vec3<f32>(
-        -latitude_sin * longitude_cos,
-        -latitude_sin * longitude_sin,
-        latitude_cos,
-    );
-    let world_light = light.x * east + light.y * north + light.z * up;
     let world_radius_m = scene.world_size_m.x / TAU;
     let source_radius_m = world_radius_m + max(source_height_m, 0.0);
     let cloud_radius_m = world_radius_m + cloud_height_m;
-    let ray_origin = source_radius_m * up;
-    let origin_along_ray_m = dot(ray_origin, world_light);
+    let origin_along_ray_m = source_radius_m * light.z;
     let ray_distance_m = -origin_along_ray_m + sqrt(
         origin_along_ray_m * origin_along_ray_m
             + cloud_radius_m * cloud_radius_m
             - source_radius_m * source_radius_m,
     );
-    let cloud_position = ray_origin + ray_distance_m * world_light;
-    let cloud_direction = normalize(cloud_position);
-    let cloud_latitude = asin(clamp(cloud_direction.z, -1.0, 1.0));
-    let cloud_longitude = atan2(cloud_direction.y, cloud_direction.x);
-    let longitude_delta = atan2(
-        sin(cloud_longitude - longitude),
-        cos(cloud_longitude - longitude),
+    let angular_distance = atan2(
+        ray_distance_m * horizontal_light,
+        source_radius_m + ray_distance_m * light.z,
     );
+    let latitude_direction = sign(surface_latitude_gradient_rad_per_m_at(position_m));
+    let tangent_direction = vec2<f32>(light.x, latitude_direction * light.y)
+        / horizontal_light;
     return position_m + vec2<f32>(
-        scene.world_size_m.x * longitude_delta / TAU,
-        scene.world_size_m.y * (cloud_latitude - latitude) / PI,
-    );
+        scene.world_size_m.x / TAU,
+        scene.world_size_m.y / PI,
+    ) * angular_distance * tangent_direction;
 }
 
 struct CloudShadowProjection {
@@ -688,12 +667,17 @@ fn cloud_layer_transmittance(
     return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
 }
 
-fn effective_cloud_shadow_amount(sun_depth: f32, moon_depth: f32) -> f32 {
+fn effective_cloud_shadow_amount(
+    sun_depth: f32,
+    moon_depth: f32,
+    receiver: CelestialReceiverLight,
+) -> f32 {
+    let visibility = direct_light_visibility();
     return clamp(
-        direct_sun_amount()
-                * (1.0 - cloud_shadow_transmittance(sun_depth, sun_direction()))
-            + direct_moon_amount()
-                * (1.0 - cloud_shadow_transmittance(moon_depth, moon_direction())),
+        visibility.x * receiver.sun_amount
+                * (1.0 - cloud_shadow_transmittance(sun_depth, receiver.sun_direction))
+            + visibility.y * receiver.moon_amount
+                * (1.0 - cloud_shadow_transmittance(moon_depth, receiver.moon_direction)),
         0.0,
         1.0,
     );

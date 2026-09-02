@@ -588,6 +588,7 @@ fn landform_shadow_transmittance_for_light(
     elevation_m: f32,
     light_direction: vec3<f32>,
     light_amount: f32,
+    angular_radius_rad: f32,
 ) -> f32 {
     let strength = clamp(
         tuning.landform_lighting.y
@@ -614,7 +615,7 @@ fn landform_shadow_transmittance_for_light(
         );
         let ray_elevation_m = elevation_m + distance_m * ray_slope;
         let softness_m = 0.6
-            + 2.0 * CELESTIAL_DISC_ANGULAR_RADIUS_RAD * distance_m;
+            + 2.0 * angular_radius_rad * distance_m;
         occlusion = max(
             occlusion,
             smoothstep(0.0, softness_m, blocker_elevation_m - ray_elevation_m),
@@ -642,6 +643,11 @@ fn landform_shadow_transmittance(
             select(
                 direct_light.moon_amount,
                 direct_light.sun_amount,
+                is_sun,
+            ),
+            select(
+                MOON_ANGULAR_RADIUS_RAD,
+                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
                 is_sun,
             ),
         );

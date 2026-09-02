@@ -736,6 +736,104 @@ fn landform_sun_grade_is_independent_of_moon_visibility() {
 }
 
 #[test]
+fn landform_shadows_use_source_specific_apparent_radii() {
+    let world = WorldGeometry::default();
+    let position_m = representative_shore(world);
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        2_000.0,
+        "lighting_landform_shadow_disc_radii",
+        256,
+        256,
+    );
+
+    let baseline = scalar_debug_pixel(0.0);
+    let maximum = image.chunks_exact(4).map(|pixel| pixel[0]).max().unwrap();
+    assert!(
+        maximum > baseline[0].saturating_add(1),
+        "Sun and Moon landform penumbrae were identical: {maximum} <= {}",
+        baseline[0],
+    );
+}
+
+#[test]
+fn cloud_projection_preserves_unfolded_tangent_displacement_at_poles() {
+    let world = WorldGeometry::default();
+    let projected_offset = |y_m| {
+        let pixel = render_diagnostic_image_with_view_at(
+            world,
+            Vector::new(0.0, y_m),
+            0.0,
+            1.0,
+            "lighting_cloud_projection",
+            1,
+            1,
+        );
+        [
+            srgb_channel_to_linear(pixel[0]) - 0.5,
+            srgb_channel_to_linear(pixel[1]) - 0.5,
+        ]
+    };
+    let ascending = projected_offset(0.25 * world.height_m());
+    let descending = projected_offset(0.75 * world.height_m());
+    let crossing = projected_offset(0.49 * world.height_m());
+
+    assert!(ascending[1] > 0.01, "ascending offset: {ascending:?}");
+    assert!(descending[1] < -0.01, "descending offset: {descending:?}");
+    assert!(
+        (ascending[0] - descending[0]).abs() < 0.01,
+        "mirrored east offsets: {ascending:?}, {descending:?}",
+    );
+    assert!(
+        crossing[0].abs() < 0.10,
+        "pole crossing introduced a longitude jump: {crossing:?}",
+    );
+}
+
+#[test]
+fn cloud_shadow_diagnostics_use_receiver_local_light() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = 105.0 * 86_400.0;
+    let position_m = (0..128)
+        .flat_map(|x_index| {
+            (0..64).map(move |y_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
+                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                )
+            })
+        })
+        .filter_map(|position_m| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            let datum = celestial_lighting_at_height(world, conditions, 0.0);
+            let elevated = celestial_lighting_at_height(world, conditions, 600.0);
+            let difference = (elevated.solar_eclipse_fraction - datum.solar_eclipse_fraction).abs();
+            (datum.sun_direction[2] > 0.2 && datum.sun_intensity > 0.05 && difference > 0.05)
+                .then_some((position_m, difference))
+        })
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .expect("the eclipse should differ at an elevated surface receiver")
+        .0;
+    let difference = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_cloud_shadow_receiver",
+        1,
+        1,
+    );
+
+    assert!(
+        scalar_debug_amount(&difference) < 0.01,
+        "shadow diagnostic used different projection and weighting receivers: {:?}",
+        &difference[..3],
+    );
+}
+
+#[test]
 fn receiver_height_moon_geometry_matches_authoritative_rust() {
     let world = WorldGeometry::default();
     let world_time_seconds = 105.0 * 86_400.0;
@@ -822,7 +920,7 @@ fn shadow_atlas_requires_two_distinct_reused_footprints() {
             world,
             position_m,
             world_time_seconds,
-            view_height_m,
+            1_000.0,
             "cloud_shadow_cache_tiles",
             128,
             128,
@@ -870,6 +968,24 @@ fn allocated_shadow_atlas_slot_survives_later_footprint_marks() {
     assert!(
         scalar_debug_amount(&image) > 0.99,
         "allocated marker no longer identifies its atlas slot",
+    );
+}
+
+#[test]
+fn shadow_atlas_capacity_fallback_is_not_cache_corruption() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "cloud_shadow_cache_fallback_integrity",
+        1,
+        1,
+    );
+
+    assert!(
+        scalar_debug_amount(&image) > 0.99,
+        "non-resident fallback was reported as an invalid atlas slot",
     );
 }
 
