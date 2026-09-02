@@ -12,18 +12,8 @@ struct CloudShadowCacheUniforms {
 };
 
 struct CloudShadowCacheEntry {
-    state: u32,
-    key_x: u32,
-    key_y: u32,
-    layer: u32,
+    identity: u32,
     slot: u32,
-};
-
-struct CloudShadowCacheTile {
-    key_x: u32,
-    key_y: u32,
-    layer: u32,
-    padding: u32,
 };
 
 @group(2) @binding(0)
@@ -38,12 +28,13 @@ var cloud_shadow_cache_atlas: texture_2d<f32>;
 @group(2) @binding(3)
 var cloud_shadow_cache_sampler: sampler;
 
-@group(2) @binding(4)
-var<storage, read> cloud_shadow_cache_tiles_for_sampling: array<CloudShadowCacheTile>;
-
-const CLOUD_SHADOW_CACHE_ENTRY_BUSY: u32 = 0xffffffffu;
 const CLOUD_SHADOW_CACHE_SLOT_ALLOCATED: u32 = 0x80000000u;
 const CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK: u32 = 0x7fffffffu;
+// Keep this packing synchronized with cloud-shadow-cache-generate.wgsl. One
+// atomic identity avoids compound publication; out-of-range projections use
+// the exact direct-sampling fallback.
+const CLOUD_SHADOW_CACHE_KEY_MIN: f32 = -16384.0;
+const CLOUD_SHADOW_CACHE_KEY_MAX: f32 = 16383.0;
 
 fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
     let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
@@ -65,42 +56,48 @@ fn cloud_shadow_cache_tile_key(position_m: vec2<f32>) -> vec2<f32> {
     );
 }
 
-fn cloud_shadow_cache_hash(key: vec2<f32>, layer: u32) -> u32 {
-    var value = bitcast<u32>(key.x) * 0x9e3779b9u;
-    value = value ^ (bitcast<u32>(key.y) * 0x85ebca6bu);
-    value = value ^ (layer * 0xc2b2ae35u);
+fn cloud_shadow_cache_key_identity(key: vec2<f32>, layer: u32) -> u32 {
+    if layer > 2u
+        || any(key < vec2<f32>(CLOUD_SHADOW_CACHE_KEY_MIN))
+        || any(key > vec2<f32>(CLOUD_SHADOW_CACHE_KEY_MAX))
+    {
+        return 0u;
+    }
+    let coordinates = vec2<u32>(
+        vec2<i32>(key) - vec2<i32>(i32(CLOUD_SHADOW_CACHE_KEY_MIN)),
+    );
+    return 1u + (
+        coordinates.x
+            | (coordinates.y << 15u)
+            | (layer << 30u)
+    );
+}
+
+fn cloud_shadow_cache_hash(identity: u32) -> u32 {
+    var value = identity;
     value = value ^ (value >> 16u);
     value = value * 0x7feb352du;
     value = value ^ (value >> 15u);
-    let tag = (value * 0x846ca68bu) | 1u;
-    return select(tag, tag ^ 0x80000000u, tag == CLOUD_SHADOW_CACHE_ENTRY_BUSY);
+    return value * 0x846ca68bu;
 }
 
 fn cloud_shadow_cache_slot(key: vec2<f32>, layer: u32) -> u32 {
-    let tag = cloud_shadow_cache_hash(key, layer);
-    var table_index = tag & cloud_shadow_cache.table_mask;
+    let identity = cloud_shadow_cache_key_identity(key, layer);
+    if identity == 0u {
+        return cloud_shadow_cache.maximum_tiles;
+    }
+    var table_index = cloud_shadow_cache_hash(identity)
+        & cloud_shadow_cache.table_mask;
     for (var probe = 0u; probe < 16u; probe++) {
         let entry = cloud_shadow_cache_entries[table_index];
-        if entry.state == 0u {
+        if entry.identity == 0u {
             break;
         }
-        if entry.state == tag
-            && entry.key_x == bitcast<u32>(key.x)
-            && entry.key_y == bitcast<u32>(key.y)
-            && entry.layer == layer
-        {
+        if entry.identity == identity {
             if (entry.slot & CLOUD_SHADOW_CACHE_SLOT_ALLOCATED) != 0u {
-                let slot = entry.slot & CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK;
-                if slot < cloud_shadow_cache.maximum_tiles {
-                    let tile = cloud_shadow_cache_tiles_for_sampling[slot];
-                    if tile.key_x == bitcast<u32>(key.x)
-                        && tile.key_y == bitcast<u32>(key.y)
-                        && tile.layer == layer
-                    {
-                        return slot;
-                    }
-                }
+                return entry.slot & CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK;
             }
+            return cloud_shadow_cache.maximum_tiles;
         }
         table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
     }

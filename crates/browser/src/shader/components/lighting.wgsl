@@ -279,7 +279,12 @@ fn calculate_atmospheric_ambient_light(
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
     let sun = sun_direction();
-    let sun_elevation = sqrt(max(sun.z, 0.0));
+    let receiver_sun_z = clamp(
+        (sun.z - receiver.horizon_z) / (1.0 - receiver.horizon_z),
+        0.0,
+        1.0,
+    );
+    let sun_elevation = sqrt(receiver_sun_z);
     // These sine-of-elevation thresholds must stay synchronized with game::celestial_lighting.
     let daylight = smoothstep(-0.0348995, 0.1391731, sun.z);
     let lower_twilight = smoothstep(-0.1564345, 0.0174524, sun.z);

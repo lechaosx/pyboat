@@ -1074,7 +1074,7 @@ fn discover_cloud_shadow_cache_tiles(
     });
     let entries = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("capture cloud shadow cache entries"),
-        size: u64::from(layout.table_entries) * 20,
+        size: u64::from(layout.table_entries) * 8,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });

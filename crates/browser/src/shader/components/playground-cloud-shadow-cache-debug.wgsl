@@ -1,3 +1,10 @@
+struct CloudShadowCacheTile {
+    key_x: u32,
+    key_y: u32,
+    layer: u32,
+    padding: u32,
+};
+
 struct CloudShadowCacheHeader {
     vertex_count: u32,
     instance_count: atomic<u32>,
@@ -11,6 +18,9 @@ struct CloudShadowCacheDebugUniforms {
     padding_1: u32,
     padding_2: u32,
 };
+
+@group(2) @binding(4)
+var<storage, read> cloud_shadow_cache_tiles: array<CloudShadowCacheTile>;
 
 @group(2) @binding(5)
 var<storage, read> cloud_shadow_cache_header: CloudShadowCacheHeader;
@@ -111,7 +121,7 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
     if slot >= atomicLoad(&cloud_shadow_cache_header.instance_count) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let layer = cloud_shadow_cache_tiles_for_sampling[slot].layer;
+    let layer = cloud_shadow_cache_tiles[slot].layer;
     if layer == 0u {
         return vec4<f32>(1.0 - exp(-max(value.x, 0.0)), 0.0, 0.0, 1.0);
     }

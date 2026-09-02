@@ -601,16 +601,6 @@ impl CloudShadowCache {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
             ],
         });
         let discovery_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -794,7 +784,7 @@ impl CloudShadowCache {
         });
         let entries = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cloud shadow cache page table"),
-            size: u64::from(layout.table_entries) * 20,
+            size: u64::from(layout.table_entries) * 8,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -874,10 +864,6 @@ impl CloudShadowCache {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: tiles.as_entire_binding(),
                 },
             ],
         });

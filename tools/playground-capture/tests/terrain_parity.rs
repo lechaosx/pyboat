@@ -666,6 +666,46 @@ fn atmospheric_twilight_bands_do_not_shift_with_surface_horizon() {
 }
 
 #[test]
+fn daylight_amplitude_uses_receiver_normalized_solar_elevation() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..24 * 60)
+        .map(|minute| minute as f64 * 60.0)
+        .filter_map(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
+            ((0.06..0.10).contains(&light.sun_direction[2]) && light.solar_eclipse_fraction == 0.0)
+                .then_some((time, light.moon_intensity))
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .expect("the Sun should cross the daylight transition each day")
+        .0;
+    let datum = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_ambient_horizon_datum",
+        1,
+        1,
+    );
+    let elevated = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_ambient_horizon_elevated",
+        1,
+        1,
+    );
+    assert!(
+        linear_luminance(&elevated) > linear_luminance(&datum) + 0.02,
+        "datum {:?}, elevated {:?}",
+        &datum[..3],
+        &elevated[..3],
+    );
+}
+
+#[test]
 fn landform_sun_grade_is_independent_of_moon_visibility() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
