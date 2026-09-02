@@ -188,20 +188,13 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
     sun_only_receiver.moon_amount = 0.0;
     var moon_only_receiver = receiver;
     moon_only_receiver.sun_amount = 0.0;
-    let grade = landform_light_grade(
-        surface_position_m,
-        vec2<f32>(0.28, -0.21),
-        0.45,
-        receiver,
-    );
+    let grade = landform_light_grade(vec2<f32>(0.28, -0.21), 0.45, receiver);
     let sun_only_grade = landform_light_grade(
-        surface_position_m,
         vec2<f32>(0.28, -0.21),
         0.45,
         sun_only_receiver,
     );
     let moon_only_grade = landform_light_grade(
-        surface_position_m,
         vec2<f32>(0.28, -0.21),
         0.45,
         moon_only_receiver,
@@ -265,11 +258,8 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
     return vec4<f32>(scalar_debug_color(10.0 * abs(actual - expected)), 1.0);
 }
 
-fn diagnostic_mirrored_world_light_direction(input: VertexOutput) -> vec4<f32> {
-    let direction = celestial_direction_in_world_coordinates(
-        input.world_position_m,
-        normalize(vec3<f32>(0.20, 0.90, 0.30)),
-    );
+fn diagnostic_world_light_direction() -> vec4<f32> {
+    let direction = normalize(vec3<f32>(0.20, 0.90, 0.30));
     return vec4<f32>(0.5 + 0.5 * direction, 1.0);
 }
 

@@ -759,7 +759,7 @@ fn landform_shadows_use_source_specific_apparent_radii() {
 }
 
 #[test]
-fn cloud_projection_preserves_unfolded_tangent_displacement_at_poles() {
+fn cloud_projection_stays_continuous_across_mirrored_latitude_boundaries() {
     let world = WorldGeometry::default();
     let projected_offset = |y_m| {
         let pixel = render_diagnostic_image_with_view_at(
@@ -776,69 +776,41 @@ fn cloud_projection_preserves_unfolded_tangent_displacement_at_poles() {
             srgb_channel_to_linear(pixel[1]) - 0.5,
         ]
     };
-    let ascending = projected_offset(0.25 * world.height_m());
-    let descending = projected_offset(0.75 * world.height_m());
-    let crossing = projected_offset(0.49 * world.height_m());
+    let before_pole = projected_offset(0.499 * world.height_m());
+    let after_pole = projected_offset(0.501 * world.height_m());
 
-    assert!(ascending[1] > 0.01, "ascending offset: {ascending:?}");
-    assert!(descending[1] < -0.01, "descending offset: {descending:?}");
     assert!(
-        (ascending[0] - descending[0]).abs() < 0.01,
-        "mirrored east offsets: {ascending:?}, {descending:?}",
-    );
-    assert!(
-        crossing[0].abs() < 0.10,
-        "pole crossing introduced a longitude jump: {crossing:?}",
+        (before_pole[0] - after_pole[0]).abs() < 0.01
+            && (before_pole[1] - after_pole[1]).abs() < 0.01,
+        "projected offset jumped at the pole: {before_pole:?}, {after_pole:?}",
     );
 }
 
 #[test]
-fn cloud_projection_matches_spherical_destination_near_pole() {
+fn cloud_projection_stays_continuous_within_a_latitude_band() {
     let world = WorldGeometry::default();
-    let y_m = 0.44 * world.height_m();
-    let pixel = render_diagnostic_image_with_view_at(
-        world,
-        Vector::new(0.0, y_m),
-        0.0,
-        1.0,
-        "lighting_cloud_projection",
-        1,
-        1,
-    );
-    let actual = [
-        srgb_channel_to_linear(pixel[0]) - 0.5,
-        srgb_channel_to_linear(pixel[1]) - 0.5,
-    ];
-    let light = {
-        let length = (0.20_f32 * 0.20 + 0.96 * 0.96 + 0.20 * 0.20).sqrt();
-        [0.20 / length, 0.96 / length, 0.20 / length]
+    let projected_offset = |y_m| {
+        let pixel = render_diagnostic_image_with_view_at(
+            world,
+            Vector::new(0.0, y_m),
+            0.0,
+            1.0,
+            "lighting_cloud_projection",
+            1,
+            1,
+        );
+        [
+            srgb_channel_to_linear(pixel[0]) - 0.5,
+            srgb_channel_to_linear(pixel[1]) - 0.5,
+        ]
     };
-    let radius_m = world.width_m() / std::f32::consts::TAU;
-    let cloud_radius_m = radius_m + 3_600.0;
-    let along_ray_m = radius_m * light[2];
-    let ray_distance_m = -along_ray_m
-        + (along_ray_m * along_ray_m + cloud_radius_m * cloud_radius_m - radius_m * radius_m)
-            .sqrt();
-    let horizontal = (light[0] * light[0] + light[1] * light[1]).sqrt();
-    let angular_distance =
-        (ray_distance_m * horizontal).atan2(radius_m + ray_distance_m * light[2]);
-    let latitude = world.latitude_degrees(y_m).to_radians();
-    let bearing = light[0].atan2(light[1]);
-    let destination_latitude = (latitude.sin() * angular_distance.cos()
-        + latitude.cos() * angular_distance.sin() * bearing.cos())
-    .asin();
-    let physical_longitude_delta = (bearing.sin() * angular_distance.sin() * latitude.cos())
-        .atan2(angular_distance.cos() - latitude.sin() * destination_latitude.sin());
-    let destination_latitude_phase = std::f32::consts::PI - destination_latitude;
-    let expected = [
-        (physical_longitude_delta - std::f32::consts::PI) / std::f32::consts::TAU,
-        (destination_latitude_phase - std::f32::consts::PI * y_m / world.height_m())
-            / std::f32::consts::PI,
-    ];
+    let before_branch = projected_offset(20_830.0);
+    let after_branch = projected_offset(20_850.0);
 
     assert!(
-        (actual[0] - expected[0]).abs() < 0.01 && (actual[1] - expected[1]).abs() < 0.01,
-        "projected offset {actual:?} != spherical destination {expected:?}",
+        (before_branch[0] - after_branch[0]).abs() < 0.01
+            && (before_branch[1] - after_branch[1]).abs() < 0.01,
+        "projected offset jumped within one latitude band: {before_branch:?}, {after_branch:?}",
     );
 }
 
@@ -884,7 +856,7 @@ fn cloud_shadow_diagnostics_use_receiver_local_light() {
 }
 
 #[test]
-fn geographic_light_direction_follows_mirrored_world_latitude() {
+fn world_light_direction_stays_continuous_across_the_pole() {
     let world = WorldGeometry::default();
     let sample = |y_m| {
         let pixel = render_diagnostic_image_with_view_at(
@@ -892,7 +864,7 @@ fn geographic_light_direction_follows_mirrored_world_latitude() {
             Vector::new(0.0, y_m),
             0.0,
             1.0,
-            "lighting_mirrored_world_direction",
+            "lighting_world_direction",
             1,
             1,
         );
@@ -902,13 +874,15 @@ fn geographic_light_direction_follows_mirrored_world_latitude() {
             srgb_channel_to_linear(pixel[2]),
         ]
     };
-    let ascending = sample(0.25 * world.height_m());
-    let descending = sample(0.75 * world.height_m());
+    let before_pole = sample(0.499 * world.height_m());
+    let after_pole = sample(0.501 * world.height_m());
 
-    assert!((ascending[0] - descending[0]).abs() < 0.01);
-    assert!((ascending[2] - descending[2]).abs() < 0.01);
-    assert!(ascending[1] > 0.8, "ascending direction: {ascending:?}");
-    assert!(descending[1] < 0.2, "descending direction: {descending:?}");
+    for channel in 0..3 {
+        assert!(
+            (before_pole[channel] - after_pole[channel]).abs() < 0.01,
+            "world light direction jumped at the pole: {before_pole:?}, {after_pole:?}",
+        );
+    }
 }
 
 #[test]

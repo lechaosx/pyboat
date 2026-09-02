@@ -26,7 +26,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         return diagnostic_cloud_shadow_receiver_light(LIGHTING_MODEL_SURFACE_HEIGHT_M);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 8u {
-        return diagnostic_mirrored_world_light_direction(input);
+        return diagnostic_world_light_direction();
     }
     return diagnostic_ambient_with_surface_horizon(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

@@ -27,7 +27,6 @@ fn low_cloud_sun_lighting(
 
 fn cloud_color(
     surface_color: vec3<f32>,
-    position_m: vec2<f32>,
     cloud_sample: LowCloudSample,
     upper_transmittance: vec2<f32>,
     contribution_visibility: vec4<f32>,
@@ -42,17 +41,8 @@ fn cloud_color(
         -limited_gradient,
         1.0,
     ));
-    let sun_facing = max(dot(
-        cloud_normal,
-        celestial_direction_in_world_coordinates(position_m, sun_direction()),
-    ), 0.0);
-    let moon_facing = max(dot(
-        cloud_normal,
-        celestial_direction_in_world_coordinates(
-            position_m,
-            low_cloud_light.moon_direction,
-        ),
-    ), 0.0);
+    let sun_facing = max(dot(cloud_normal, sun_direction()), 0.0);
+    let moon_facing = max(dot(cloud_normal, low_cloud_light.moon_direction), 0.0);
     let low_cloud_sun = low_cloud_sun_lighting(surface_light, low_cloud_light);
     let sun_direct_shape = low_cloud_sun.surface_amount * sun_facing;
     let moon_direct_shape = low_cloud_light.moon_amount * moon_facing;
@@ -332,14 +322,12 @@ fn final_scene_color(
                 );
             }
             surface_light_grade = landform_light_grade(
-                input.world_position_m,
                 3.0 * terrain.gradient + surface.detail_gradient,
                 surface.roughness,
                 surface_direct_light,
             );
         } else {
             surface_light_grade = landform_light_grade(
-                input.world_position_m,
                 surface.detail_gradient,
                 surface.roughness,
                 surface_direct_light,
@@ -386,7 +374,6 @@ fn final_scene_color(
                 }
                 let clouded_fragment_color = cloud_color(
                     fragment_color,
-                    input.world_position_m,
                     low_cloud,
                     upper_transmittance,
                     fragment_light_visibility(),

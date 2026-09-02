@@ -888,7 +888,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
-        "lighting_mirrored_world_direction" => diagnostic(
+        "lighting_world_direction" => diagnostic(
             value,
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 8.0)],
