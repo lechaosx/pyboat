@@ -175,13 +175,25 @@ fn mark_cloud_shadow_cache_tile_key(
             return;
         }
         if state == tag {
-            if atomicLoad(&cloud_shadow_cache_entries[table_index].key_x)
-                    != bitcast<u32>(key.x)
-                || atomicLoad(&cloud_shadow_cache_entries[table_index].key_y)
-                    != bitcast<u32>(key.y)
-                || atomicLoad(&cloud_shadow_cache_entries[table_index].layer) != layer
-            {
-                return;
+            var key_matches = false;
+            for (
+                var attempt = 0u;
+                attempt < CLOUD_SHADOW_CACHE_ATOMIC_RETRIES;
+                attempt++
+            ) {
+                key_matches = atomicLoad(
+                    &cloud_shadow_cache_entries[table_index].key_x,
+                ) == bitcast<u32>(key.x)
+                    && atomicLoad(&cloud_shadow_cache_entries[table_index].key_y)
+                        == bitcast<u32>(key.y)
+                    && atomicLoad(&cloud_shadow_cache_entries[table_index].layer) == layer;
+                if key_matches {
+                    break;
+                }
+            }
+            if !key_matches {
+                table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
+                continue;
             }
             var footprints = atomicLoad(
                 &cloud_shadow_cache_entries[table_index].slot,

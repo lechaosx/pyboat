@@ -634,6 +634,38 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
 }
 
 #[test]
+fn atmospheric_twilight_bands_do_not_shift_with_surface_horizon() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..24 * 12)
+        .map(|step| step as f64 * 300.0)
+        .find(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, *time, position_m));
+            (-0.12..-0.08).contains(&light.sun_direction[2])
+        })
+        .expect("the Sun should cross the lower twilight band each day");
+    let datum = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_ambient_horizon_datum",
+        1,
+        1,
+    );
+    let elevated = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_ambient_horizon_elevated",
+        1,
+        1,
+    );
+    assert_rgb_close(&datum, &elevated, 1);
+}
+
+#[test]
 fn landform_sun_grade_is_independent_of_moon_visibility() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;

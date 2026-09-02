@@ -517,6 +517,22 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
+        "lighting_ambient_horizon_datum" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 4.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 0.0),
+            ],
+        ),
+        "lighting_ambient_horizon_elevated" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 4.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
         "cloud_shadow_cache_tiles" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),

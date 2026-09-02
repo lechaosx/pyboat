@@ -279,14 +279,12 @@ fn calculate_atmospheric_ambient_light(
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
     let sun = sun_direction();
-    let receiver_sun_z = (sun.z - receiver.horizon_z)
-        / (1.0 - receiver.horizon_z);
-    let sun_elevation = sqrt(max(receiver_sun_z, 0.0));
+    let sun_elevation = sqrt(max(sun.z, 0.0));
     // These sine-of-elevation thresholds must stay synchronized with game::celestial_lighting.
-    let daylight = smoothstep(-0.0348995, 0.1391731, receiver_sun_z);
-    let lower_twilight = smoothstep(-0.1564345, 0.0174524, receiver_sun_z);
-    let upper_afterglow = smoothstep(-0.309017, -0.1391731, receiver_sun_z)
-        * (1.0 - smoothstep(-0.1391731, -0.0348995, receiver_sun_z));
+    let daylight = smoothstep(-0.0348995, 0.1391731, sun.z);
+    let lower_twilight = smoothstep(-0.1564345, 0.0174524, sun.z);
+    let upper_afterglow = smoothstep(-0.309017, -0.1391731, sun.z)
+        * (1.0 - smoothstep(-0.1391731, -0.0348995, sun.z));
     let solar_ambient = daylight * (0.45 + 0.515 * sun_elevation)
         + mix(0.24, 0.36, regional_horizon_scattering)
             * (1.0 - daylight)
@@ -300,7 +298,7 @@ fn calculate_atmospheric_ambient_light(
             + 0.85 * receiver.moon_amount,
     );
     let horizon_glow = max(lower_twilight, 0.35 * upper_afterglow)
-        * (1.0 - smoothstep(0.18, 0.55, receiver_sun_z));
+        * (1.0 - smoothstep(0.18, 0.55, sun.z));
     let sunset_warmth = horizon_glow * regional_horizon_scattering;
     let sun_source = receiver.sun_amount * sun_diffuse_light_color();
     let moon_source = receiver.moon_amount

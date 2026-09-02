@@ -362,7 +362,6 @@ fn final_scene_color(
                 && low_cloud.optical_depth > 0.0
                 && tuning.cloud_rendering.x > 0.0
                 && tuning.cloud_rendering.y > 0.0
-                && low_cloud_material_color_visibility() > 0.0
             {
                 let low_cloud_light = celestial_receiver_light_at_height(low_height_m);
                 var upper_transmittance = vec2<f32>(1.0);

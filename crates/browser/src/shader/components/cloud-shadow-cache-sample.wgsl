@@ -101,7 +101,6 @@ fn cloud_shadow_cache_slot(key: vec2<f32>, layer: u32) -> u32 {
                     }
                 }
             }
-            return cloud_shadow_cache.maximum_tiles;
         }
         table_index = (table_index + 1u) & cloud_shadow_cache.table_mask;
     }

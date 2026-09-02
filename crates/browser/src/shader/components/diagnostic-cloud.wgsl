@@ -209,3 +209,14 @@ fn diagnostic_receiver_ambient_share(surface_height_m: f32) -> vec4<f32> {
         ambient_contribution_share(receiver),
     ), 1.0);
 }
+
+fn diagnostic_ambient_with_surface_horizon(surface_height_m: f32) -> vec4<f32> {
+    var receiver = celestial_receiver_light_at_height(0.0);
+    receiver.height_m = surface_height_m;
+    receiver.horizon_z = celestial_horizon_z_at_height(surface_height_m);
+    let ambient = calculate_atmospheric_ambient_light(
+        RegionalCanopyConditions(0.0, 0.0),
+        receiver,
+    );
+    return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
+}
