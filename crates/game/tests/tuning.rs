@@ -1260,6 +1260,45 @@ fn moonlight_strength_follows_moon_elevation() {
 }
 
 #[test]
+fn diffuse_moonlight_crosses_the_horizon_more_gradually_than_direct_moonlight() {
+    let base = CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
+        season_phase: 0.5,
+        day_phase: 0.0,
+        lunar_longitude_phase: 0.75,
+    };
+    let lighting_at_elevation = |elevation_degrees: f32| {
+        let target_z = elevation_degrees.to_radians().sin();
+        (0..=20_000)
+            .map(|step| {
+                celestial_lighting(CelestialConditions {
+                    day_phase: step as f32 / 20_000.0,
+                    ..base
+                })
+            })
+            .min_by(|left, right| {
+                (left.moon_direction[2] - target_z)
+                    .abs()
+                    .total_cmp(&(right.moon_direction[2] - target_z).abs())
+            })
+            .unwrap()
+    };
+    let below = lighting_at_elevation(-1.0);
+    let above = lighting_at_elevation(1.0);
+    let high = lighting_at_elevation(8.0);
+
+    assert_eq!(below.moon_intensity, 0.0);
+    assert!(below.moon_ambient_intensity > 0.0);
+    assert!(below.moon_ambient_intensity < above.moon_ambient_intensity);
+    assert!(above.moon_ambient_intensity < high.moon_ambient_intensity);
+    assert!(
+        above.moon_ambient_intensity - below.moon_ambient_intensity
+            < 0.5 * (high.moon_ambient_intensity - below.moon_ambient_intensity),
+    );
+}
+
+#[test]
 fn seasonal_solar_declination_changes_high_latitude_noon_elevation() {
     let summer = celestial_lighting(CelestialConditions {
         geographic_latitude_degrees: 55.0,

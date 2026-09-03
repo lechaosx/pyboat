@@ -237,6 +237,7 @@ pub struct CelestialLighting {
     pub sun_intensity: f32,
     pub moon_direction: [f32; 3],
     pub moon_intensity: f32,
+    pub moon_ambient_intensity: f32,
     pub moon_color: [f32; 3],
     pub solar_eclipse_fraction: f32,
     pub lunar_penumbra_fraction: f32,
@@ -493,6 +494,21 @@ pub fn celestial_lighting_at_height(
             MOON_ANGULAR_RADIUS_RAD as f32,
         )
         * (0.35 + 0.65 * moon_elevation);
+    // These atmospheric horizon thresholds must stay synchronized with lighting.wgsl.
+    let lunar_daylight =
+        smoothstep_range(-0.034_899_5, 0.139_173_1, f64::from(moon_direction[2])) as f32;
+    let lunar_lower_twilight =
+        smoothstep_range(-0.156_434_5, 0.017_452_4, f64::from(moon_direction[2])) as f32;
+    let lunar_upper_afterglow =
+        smoothstep_range(-0.309_017, -0.139_173_1, f64::from(moon_direction[2])) as f32
+        * (1.0
+            - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(moon_direction[2]))
+                as f32);
+    let lunar_ambient = lunar_daylight * (0.45 + 0.515 * moon_elevation)
+        + 0.30 * (1.0 - lunar_daylight) * lunar_lower_twilight
+        + 0.065 * lunar_upper_afterglow;
+    let moon_ambient_intensity =
+        lunar_shadow_transmittance * 0.12 * orbit.illuminated_fraction as f32 * lunar_ambient;
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     let moon_color = [
         0.48 + eclipse_warmth * (1.20 - 0.48),
@@ -511,13 +527,15 @@ pub fn celestial_lighting_at_height(
         + 0.065 * upper_afterglow;
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
     let ambient_intensity =
-        (0.035 + solar_ambient_transmittance * solar_ambient + 0.85 * moon_intensity).min(1.0);
+        (0.035 + solar_ambient_transmittance * solar_ambient + 0.85 * moon_ambient_intensity)
+            .min(1.0);
 
     CelestialLighting {
         sun_direction,
         sun_intensity,
         moon_direction,
         moon_intensity,
+        moon_ambient_intensity,
         moon_color,
         solar_eclipse_fraction,
         lunar_penumbra_fraction: orbit.lunar_penumbra_fraction,

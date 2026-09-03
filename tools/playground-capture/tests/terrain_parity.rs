@@ -1126,6 +1126,41 @@ fn receiver_height_moon_geometry_matches_authoritative_rust() {
 }
 
 #[test]
+fn diffuse_moon_horizon_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(0.0, 0.42 * world.height_m());
+    let world_time_seconds = (0..28 * 24 * 4)
+        .map(|quarter_hour| quarter_hour as f64 * 900.0)
+        .filter_map(|time| {
+            let lighting = celestial_lighting(world_celestial_conditions(world, time, position_m));
+            (lighting.moon_ambient_intensity > 0.005)
+                .then_some((time, lighting.moon_direction[2].abs()))
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .expect("the lunar month should contain diffuse Moon twilight")
+        .0;
+    let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+    for (diagnostic, height_m) in [
+        ("lighting_receiver_moon_ambient_datum", 0.0),
+        ("lighting_receiver_moon_ambient_low_cloud", 900.0),
+        ("lighting_receiver_moon_ambient_canopy", 3_600.0),
+    ] {
+        let expected = celestial_lighting_at_height(world, conditions, height_m);
+        let actual = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            1.0,
+            diagnostic,
+            1,
+            1,
+        );
+        let expected = scalar_debug_pixel(expected.moon_ambient_intensity);
+        assert_rgb_close(&actual, &expected, 3);
+    }
+}
+
+#[test]
 fn shadow_atlas_requires_two_distinct_reused_footprints() {
     let world = WorldGeometry::default();
     for (label, position_m, view_height_m) in [

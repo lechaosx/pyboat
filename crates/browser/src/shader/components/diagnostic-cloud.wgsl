@@ -148,6 +148,14 @@ fn diagnostic_lighting_receiver_moon(height_m: f32) -> vec4<f32> {
     );
 }
 
+fn diagnostic_lighting_receiver_moon_ambient(height_m: f32) -> vec4<f32> {
+    regional_horizon_scattering = 0.5;
+    let receiver = celestial_receiver_light_at_height(height_m);
+    return vec4<f32>(scalar_debug_color(
+        moon_atmospheric_amount(receiver),
+    ), 1.0);
+}
+
 fn diagnostic_lighting_low_cloud_canopy_transmittance(
     input: VertexOutput,
 ) -> vec4<f32> {

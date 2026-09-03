@@ -12,6 +12,9 @@ fn fragment_lighting_solar(input: VertexOutput) -> @location(0) vec4<f32> {
     if LIGHTING_SOLAR_OUTPUT == 5u {
         return diagnostic_lighting_receiver_moon(LIGHTING_RECEIVER_HEIGHT_M);
     }
+    if LIGHTING_SOLAR_OUTPUT == 6u {
+        return diagnostic_lighting_receiver_moon_ambient(LIGHTING_RECEIVER_HEIGHT_M);
+    }
     if LIGHTING_SOLAR_OUTPUT == 0u {
         return diagnostic_lighting_solar_elevation(periodic_input);
     }

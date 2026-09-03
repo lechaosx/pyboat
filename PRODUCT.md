@@ -173,8 +173,10 @@ current playable behavior; this file does not track delivery status.
   pressure, temperature, moisture, and resulting weather conditions as gameplay;
   ambient never consumes a sampled cloud pixel.
   Clear-sky light combines solar-disc daylight, lower-atmosphere twilight, and
-  weaker upper-atmosphere afterglow. Broad regional scattering modulates both
-  twilight components without importing local weather detail into ambient light.
+  weaker upper-atmosphere afterglow. Diffuse moonlight uses the same three
+  atmospheric bands, scaled by lunar phase and eclipse, rather than inheriting
+  the direct lunar-disc edge. Broad regional scattering modulates these diffuse
+  components without importing local weather detail into ambient light.
   Unresolved high ice-cloud effects remain part of canopy and sky diffusion
   rather than a third sampled layer.
 - **[Explicit]** Diffuse aerosol optical depth varies only with the broad

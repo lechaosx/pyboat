@@ -248,6 +248,48 @@ fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
     );
 }
 
+fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
+    // These atmospheric horizon thresholds must stay synchronized with game::celestial_lighting.
+    let daylight = smoothstep(
+        -0.0348995,
+        0.1391731,
+        receiver.moon_direction.z,
+    );
+    let lower_twilight = smoothstep(
+        -0.1564345,
+        0.0174524,
+        receiver.moon_direction.z,
+    );
+    let upper_afterglow = smoothstep(
+        -0.309017,
+        -0.1391731,
+        receiver.moon_direction.z,
+    ) * (1.0 - smoothstep(
+        -0.1391731,
+        -0.0348995,
+        receiver.moon_direction.z,
+    ));
+    let moon_elevation = clamp(
+        (receiver.moon_direction.z - receiver.horizon_z)
+            / (1.0 - receiver.horizon_z),
+        0.0,
+        1.0,
+    );
+    let lunar_shadow_transmittance = max(
+        1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction,
+        0.04,
+    );
+    let lunar_ambient = daylight * (0.45 + 0.515 * sqrt(moon_elevation))
+        + mix(0.24, 0.36, regional_horizon_scattering)
+            * (1.0 - daylight)
+            * lower_twilight
+        + mix(0.04, 0.09, regional_horizon_scattering) * upper_afterglow;
+    return lunar_shadow_transmittance
+        * 0.12
+        * scene.celestial_orbit_light.x
+        * lunar_ambient;
+}
+
 fn moon_canopy_scattered_light(
     optical_thickness: f32,
     underside_escape: f32,
@@ -295,23 +337,24 @@ fn calculate_atmospheric_ambient_light(
             * (1.0 - daylight)
             * lower_twilight
         + mix(0.04, 0.09, regional_horizon_scattering) * upper_afterglow;
+    let moon_ambient_amount = moon_atmospheric_amount(receiver);
     let clear_intensity = min(
         1.0,
         0.035
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
                 * solar_ambient
-            + 0.85 * receiver.moon_amount,
+            + 0.85 * moon_ambient_amount,
     );
     let horizon_glow = max(lower_twilight, 0.35 * upper_afterglow)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
     let sunset_warmth = horizon_glow * regional_horizon_scattering;
     let sun_source = receiver.sun_amount * sun_diffuse_light_color();
-    let moon_source = receiver.moon_amount
+    let moon_source = moon_ambient_amount
         * calculate_moon_light_color_for_direction(
             regional_horizon_scattering,
             receiver.moon_direction,
         );
-    let source_amount = receiver.sun_amount + receiver.moon_amount;
+    let source_amount = receiver.sun_amount + moon_ambient_amount;
     let source_color = select(
         vec3<f32>(0.72, 0.80, 0.88),
         (sun_source + moon_source) / max(source_amount, 0.0001),

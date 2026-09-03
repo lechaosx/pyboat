@@ -830,6 +830,30 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_RECEIVER_HEIGHT_M", 3_600.0),
             ],
         ),
+        "lighting_receiver_moon_ambient_datum" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 6.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 0.0),
+            ],
+        ),
+        "lighting_receiver_moon_ambient_low_cloud" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 6.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 900.0),
+            ],
+        ),
+        "lighting_receiver_moon_ambient_canopy" => diagnostic(
+            value,
+            "lighting_solar",
+            &[
+                ("LIGHTING_SOLAR_OUTPUT", 6.0),
+                ("LIGHTING_RECEIVER_HEIGHT_M", 3_600.0),
+            ],
+        ),
         "lighting_canopy_transfer_clear" => diagnostic(
             value,
             "lighting_canopy_transfer",

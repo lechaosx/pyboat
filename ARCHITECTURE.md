@@ -472,6 +472,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   while intercepted altitude-visible Sun and Moon light escapes from the
   underside most strongly at moderate thickness and is absorbed by thick storm
   canopy.
+  Moon-fed diffuse sky light uses the same daylight, lower-twilight, and
+  upper-afterglow bands as solar diffuse light, scaled by lunar phase and eclipse.
+  Direct moonlight and direct Moon-to-canopy scattering retain finite-disc
+  visibility.
   The resulting ambient pair is evaluated once per fragment and lights both the
   surface and visible lower clouds; visible lower clouds never feed it.
   Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
