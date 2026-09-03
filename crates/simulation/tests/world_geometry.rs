@@ -58,6 +58,11 @@ fn latitude_mirror_repeats_between_the_poles() {
     assert_eq!(world.latitude_degrees(-80_000.0), 0.0);
     assert!(world.latitude_degrees(20_000.0 - 0.125) > 89.99);
 
+    assert_eq!(world.latitude_phase_degrees(10_000.0), 45.0);
+    assert_eq!(world.latitude_phase_degrees(30_000.0), 135.0);
+    assert_eq!(world.latitude_phase_degrees(50_000.0), -135.0);
+    assert_eq!(world.latitude_phase_degrees(70_000.0), -45.0);
+
     let gradient = 180.0 / world.height_m();
     assert_eq!(world.latitude_gradient_degrees_per_m(10_000.0), gradient);
     assert_eq!(world.latitude_gradient_degrees_per_m(30_000.0), -gradient);

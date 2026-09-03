@@ -130,17 +130,21 @@ fn hemispheres_have_opposite_seasons_while_global_phases_match() {
 fn latitude_mirror_repeats_between_successive_poles() {
     let world = geometry();
     let half_height = world.height_m() / 2.0;
-    for (y_m, expected_latitude) in [
-        (-2.0 * half_height, 0.0),
-        (-half_height, -90.0),
-        (0.0, 0.0),
-        (half_height, 90.0),
-        (2.0 * half_height, 0.0),
-        (3.0 * half_height, -90.0),
-        (4.0 * half_height, 0.0),
+    for (y_m, expected_latitude, expected_celestial_latitude) in [
+        (-2.0 * half_height, 0.0, -180.0),
+        (-half_height, -90.0, -90.0),
+        (0.0, 0.0, 0.0),
+        (half_height, 90.0, 90.0),
+        (2.0 * half_height, 0.0, -180.0),
+        (3.0 * half_height, -90.0, -90.0),
+        (4.0 * half_height, 0.0, 0.0),
     ] {
         let conditions = world_celestial_conditions(world, 0.0, Vector::new(0.0, y_m));
         assert_eq!(conditions.geographic_latitude_degrees, expected_latitude);
+        assert_eq!(
+            conditions.celestial_latitude_degrees,
+            expected_celestial_latitude,
+        );
     }
 }
 
@@ -158,9 +162,14 @@ fn repeated_latitude_mirrors_climate_without_repeating_seeded_fields() {
 
     assert_eq!(sixty_degrees.climate, mirrored_120_degrees.climate);
     assert_eq!(sixty_degrees.celestial.geographic_latitude_degrees, 60.0);
+    assert_eq!(sixty_degrees.celestial.celestial_latitude_degrees, 60.0);
     assert_eq!(
         mirrored_120_degrees.celestial.geographic_latitude_degrees,
         60.0
+    );
+    assert_eq!(
+        mirrored_120_degrees.celestial.celestial_latitude_degrees,
+        120.0,
     );
     assert_ne!(sixty_degrees.weather, mirrored_120_degrees.weather);
 }

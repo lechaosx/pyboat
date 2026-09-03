@@ -886,6 +886,43 @@ fn world_light_direction_stays_continuous_across_the_pole() {
 }
 
 #[test]
+fn rendered_lighting_uses_the_connected_hemisphere_after_a_pole() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = (0.25 - 0.0021) * 365.0 * 86_400.0;
+    let ascending_y_m = 0.25 * world.height_m();
+    let descending_y_m = 0.75 * world.height_m();
+    let longitude_m = (0..360)
+        .map(|index| world.width_m() * (index as f32 / 360.0 - 0.5))
+        .max_by(|left, right| {
+            let sun_z = |longitude_m| {
+                celestial_lighting(world_celestial_conditions(
+                    world,
+                    world_time_seconds,
+                    Vector::new(longitude_m, ascending_y_m),
+                ))
+                .sun_direction[2]
+            };
+            sun_z(*left).total_cmp(&sun_z(*right))
+        })
+        .unwrap();
+    let sample_z = |y_m| {
+        let pixel = render_diagnostic_image_with_view_at(
+            world,
+            Vector::new(longitude_m, y_m),
+            world_time_seconds,
+            1.0,
+            "lighting_world_direction",
+            1,
+            1,
+        );
+        2.0 * srgb_channel_to_linear(pixel[2]) - 1.0
+    };
+
+    assert!(sample_z(ascending_y_m) > 0.6);
+    assert!(sample_z(descending_y_m) < -0.6);
+}
+
+#[test]
 fn receiver_height_moon_geometry_matches_authoritative_rust() {
     let world = WorldGeometry::default();
     let world_time_seconds = 105.0 * 86_400.0;

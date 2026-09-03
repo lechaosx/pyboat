@@ -259,7 +259,7 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
 }
 
 fn diagnostic_world_light_direction() -> vec4<f32> {
-    let direction = normalize(vec3<f32>(0.20, 0.90, 0.30));
+    let direction = sun_direction();
     return vec4<f32>(0.5 + 0.5 * direction, 1.0);
 }
 

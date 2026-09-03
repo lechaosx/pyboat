@@ -379,6 +379,7 @@ pub fn sample_playground_celestial_orbit(
 ) -> Vec<f32> {
     let orbit = celestial_orbit(CelestialConditions {
         geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
         season_phase,
         day_phase: 0.0,
         lunar_longitude_phase,

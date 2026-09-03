@@ -499,9 +499,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,
   then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate,
-  lighting, and their analytic meridional gradients use that mirrored latitude.
-  Longitude, terrain, materials, and seeded atmosphere fields retain their
-  unbounded, non-repeating north-south coordinate.
+  and its analytic meridional gradients use that mirrored latitude. Celestial
+  geometry instead uses the continuous latitude phase, so each descending band
+  represents the connected far hemisphere while its direction remains
+  continuous in the cylindrical chart. Longitude, terrain, materials, and seeded
+  atmosphere fields retain their unbounded, non-repeating north-south coordinate.
 - **[Implicit]** World and view coordinates use positive X for east/right and
   positive Y for north/up. Input adapters convert down-positive device
   coordinates at their boundaries.

@@ -1,5 +1,5 @@
 fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
-    let latitude = surface_latitude_degrees() * PI / 180.0;
+    let latitude = radians(surface_latitude_phase_degrees_at(surface_position_m));
     return vec3<f32>(
         -cos(declination) * sin(hour_angle),
         sin(declination) * cos(latitude)

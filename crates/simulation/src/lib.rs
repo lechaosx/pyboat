@@ -87,7 +87,7 @@ impl WorldGeometry {
         direction * 180.0 / self.height_m
     }
 
-    fn latitude_phase_degrees(self, y_m: f32) -> f32 {
+    pub fn latitude_phase_degrees(self, y_m: f32) -> f32 {
         let period_m = 2.0 * self.height_m;
         let cycle_y_m = y_m.rem_euclid(period_m);
         let degrees = 180.0 * cycle_y_m / self.height_m;

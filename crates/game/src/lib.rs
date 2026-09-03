@@ -212,6 +212,7 @@ pub struct AtmospherePrimary {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CelestialConditions {
     pub geographic_latitude_degrees: f32,
+    pub celestial_latitude_degrees: f32,
     pub season_phase: f32,
     pub day_phase: f32,
     pub lunar_longitude_phase: f32,
@@ -444,7 +445,7 @@ pub fn celestial_lighting_at_height(
     receiver_height_m: f32,
 ) -> CelestialLighting {
     let orbit = celestial_orbit(conditions);
-    let latitude = f64::from(conditions.geographic_latitude_degrees).to_radians();
+    let latitude = f64::from(conditions.celestial_latitude_degrees).to_radians();
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let sun_direction =
         celestial_direction(latitude, orbit.solar_declination_rad, solar_hour_angle);
@@ -632,6 +633,7 @@ pub fn world_celestial_conditions(
     let global_day_phase = (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32;
     CelestialConditions {
         geographic_latitude_degrees: world_geometry.latitude_degrees(position_m.y),
+        celestial_latitude_degrees: world_geometry.latitude_phase_degrees(position_m.y),
         season_phase: (WORLD_ORBIT_EPOCH_PHASE
             + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
