@@ -243,6 +243,27 @@ fn diagnostic_cloud_projection(input: VertexOutput) -> vec4<f32> {
     );
 }
 
+fn diagnostic_cloud_projection_isotropy(input: VertexOutput) -> vec4<f32> {
+    let position_m = input.world_position_m;
+    let east_position_m = projected_cloud_position(
+        position_m,
+        0.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        normalize(vec3<f32>(1.0, 0.0, 0.2)),
+    );
+    let north_position_m = projected_cloud_position(
+        position_m,
+        0.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        normalize(vec3<f32>(0.0, 1.0, 0.2)),
+    );
+    let east_distance_m = length(east_position_m - position_m);
+    let north_distance_m = length(north_position_m - position_m);
+    let relative_difference = abs(east_distance_m - north_distance_m)
+        / max(east_distance_m, north_distance_m);
+    return vec4<f32>(scalar_debug_color(relative_difference), 1.0);
+}
+
 fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
     let receiver = celestial_receiver_light_at_height(surface_height_m);
     let visibility = direct_light_visibility();

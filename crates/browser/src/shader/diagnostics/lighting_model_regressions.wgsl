@@ -28,5 +28,8 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 8u {
         return diagnostic_world_light_direction();
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 9u {
+        return diagnostic_cloud_projection_isotropy(input);
+    }
     return diagnostic_ambient_with_surface_horizon(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

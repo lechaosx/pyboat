@@ -20,6 +20,7 @@ struct SurfaceClimateSample {
     seasonal_temperature_range_c: f32,
     diurnal_temperature_range_c: f32,
     local_solar_phase: f32,
+    diurnal_temperature_factor: f32,
 }
 
 struct SurfaceAtmosphereSample {
@@ -430,6 +431,8 @@ const CLIMATE_SEASONAL_RANGE_C: array<f32, 10> = array<f32, 10>(
 const CLIMATE_DIURNAL_RANGE_C: array<f32, 10> = array<f32, 10>(
     4.4, 5.6, 5.2, 9.5, 9.6, 6.1, 6.3, 4.5, 3.2, 2.5,
 );
+const DIURNAL_THERMAL_TIME_CONSTANT_DAYS: f32 = 4.0 / 24.0;
+const DIURNAL_DAYLIGHT_HARMONIC_SATURATION: f32 = 0.05;
 const TEMPERATURE_ANOMALY_P99_C: array<f32, 10> = array<f32, 10>(
     9.5, 5.4, 5.5, 13.7, 14.0, 16.2, 12.4, 13.3, 6.6, 6.0,
 );
@@ -498,6 +501,46 @@ fn surface_diurnal_temperature_range_c() -> f32 {
     return surface_diurnal_temperature_range_c_at(surface_position_m);
 }
 
+fn surface_diurnal_temperature_factor_at(position_m: vec2<f32>) -> f32 {
+    let latitude = radians(surface_latitude_phase_degrees_at(position_m));
+    let declination = scene.celestial_orbit_angles.x;
+    let mean_solar_elevation = sin(latitude) * sin(declination);
+    let varying_solar_elevation = cos(latitude) * cos(declination);
+    let varying_magnitude = abs(varying_solar_elevation);
+    // Closed-form first cosine coefficient of max(0, sun_direction.z).
+    var daylight_harmonic = 0.0;
+    if varying_magnitude >= 1e-9 {
+        if mean_solar_elevation >= varying_magnitude {
+            daylight_harmonic = varying_solar_elevation;
+        } else if mean_solar_elevation > -varying_magnitude {
+            let sunset_hour_angle = acos(clamp(
+                -mean_solar_elevation / varying_magnitude,
+                -1.0,
+                1.0,
+            ));
+            let sunset_sine = sin(sunset_hour_angle);
+            daylight_harmonic = sign(varying_solar_elevation)
+                * (2.0 * mean_solar_elevation * sunset_sine
+                    + varying_magnitude
+                        * (sunset_hour_angle
+                            + sunset_sine * cos(sunset_hour_angle)))
+                / PI;
+        }
+    }
+    let hour_angle = TAU * (surface_local_solar_phase_at(position_m) - 0.5);
+    let thermal_frequency_time = TAU * DIURNAL_THERMAL_TIME_CONSTANT_DAYS;
+    // Normalized steady response of a first-order thermal reservoir.
+    let thermal_response = (
+        cos(hour_angle) + thermal_frequency_time * sin(hour_angle)
+    ) / sqrt(1.0 + thermal_frequency_time * thermal_frequency_time);
+    let daylight_response = smoothstep(
+        0.0,
+        DIURNAL_DAYLIGHT_HARMONIC_SATURATION,
+        abs(daylight_harmonic),
+    );
+    return sign(daylight_harmonic) * daylight_response * thermal_response;
+}
+
 fn surface_climate_sample_at(position_m: vec2<f32>) -> SurfaceClimateSample {
     let latitude_degrees = surface_latitude_degrees_at(position_m);
     let seasonal_magnitude = smoothstep(0.0, 45.0, abs(latitude_degrees));
@@ -508,6 +551,7 @@ fn surface_climate_sample_at(position_m: vec2<f32>) -> SurfaceClimateSample {
         latitude_curve_value(CLIMATE_SEASONAL_RANGE_C, latitude_degrees),
         latitude_curve_value(CLIMATE_DIURNAL_RANGE_C, latitude_degrees),
         surface_local_solar_phase_at(position_m),
+        surface_diurnal_temperature_factor_at(position_m),
     );
 }
 
@@ -761,12 +805,12 @@ fn surface_current_air_temperature_c_from_atmosphere(
     surface_anomaly_c: f32,
     climate: SurfaceClimateSample,
 ) -> f32 {
-    let diurnal_phase = TAU * (climate.local_solar_phase - 0.625);
     return climate.annual_mean_air_temperature_c
         + 0.5 * climate.seasonal_temperature_range_c
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x
-        + 0.5 * climate.diurnal_temperature_range_c * cos(diurnal_phase)
+        + 0.5 * climate.diurnal_temperature_range_c
+            * climate.diurnal_temperature_factor
         + surface_anomaly_c;
 }
 
@@ -790,11 +834,11 @@ fn ground_temperature_c_from_fields(
     temperature_anomaly_c: f32,
     climate: SurfaceClimateSample,
 ) -> f32 {
-    let diurnal_phase = TAU * (climate.local_solar_phase - 0.625);
     let sea_level_temperature = climate.annual_mean_air_temperature_c
         + 0.42 * climate.seasonal_temperature_range_c * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.y
-        + 0.15 * climate.diurnal_temperature_range_c * cos(diurnal_phase);
+        + 0.15 * climate.diurnal_temperature_range_c
+            * climate.diurnal_temperature_factor;
     return sea_level_temperature
         + 0.35 * temperature_anomaly_c
         - 0.0065 * max(elevation_m, 0.0);

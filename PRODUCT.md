@@ -36,10 +36,13 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** North-south position is unbounded and does not wrap. Latitude
   mirror-repeats between -90 and +90 degrees at successive poles, following
   `0, +90, 0, -90, 0` as north-south position advances. Climate uses that
-  latitude. Celestial lighting treats each descending band as the connected far
-  hemisphere, remaining seamless at the pole without transforming terrain or
-  weather coordinates. Every seeded spatial field continues unchanged and does
-  not repeat. The camera therefore cannot reveal a world edge.
+  latitude for seasons. Its daily temperature response follows the thermally
+  lagged first harmonic of local daylight, which reverses on each descending band
+  and vanishes continuously at a pole. Celestial lighting treats each descending
+  band as the connected far hemisphere, remaining seamless at the pole without
+  transforming terrain or weather coordinates. Every seeded spatial field
+  continues unchanged and does not repeat. The camera therefore cannot reveal a
+  world edge.
 - **[Explicit]** A statistically connected, dominant sea contains natural-looking
   sparse groups of large procedural islands. Land may be more fractal and rare
   enclosed water may occur, but the world must not become a patchwork of equal

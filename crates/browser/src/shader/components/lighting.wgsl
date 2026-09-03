@@ -541,10 +541,8 @@ fn projected_cloud_position(
         source_radius_m + ray_distance_m * light.z,
     );
     let tangent_direction = light.xy / horizontal_light;
-    return position_m + vec2<f32>(
-        scene.world_size_m.x / TAU,
-        scene.world_size_m.y / PI,
-    ) * angular_distance * tangent_direction;
+    return position_m
+        + world_radius_m * angular_distance * tangent_direction;
 }
 
 struct CloudShadowProjection {

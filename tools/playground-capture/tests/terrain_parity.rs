@@ -75,25 +75,49 @@ fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
 fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let tick = 0;
-    let position_m = Vector::new(1_234.5, -6_789.25);
-    let sample = procedural_world_environment(world, SEED, tick, position_m);
-    for (diagnostic, expected) in [
-        (
-            "surface_air_temperature",
-            signed_debug_pixel(sample.weather.surface_air_temperature_c / 40.0),
-        ),
-        (
-            "water_tide_height",
-            signed_debug_pixel(sample.water_height_m / 2.0),
-        ),
+    for position_m in [
+        Vector::new(1_234.5, -6_789.25),
+        Vector::new(1_234.5, 0.75 * world.height_m()),
     ] {
-        let actual = render_diagnostic_pixel(world, position_m, diagnostic);
-        for channel in 0..3 {
-            assert!(
-                actual[channel].abs_diff(expected[channel]) <= 8,
-                "{diagnostic} at {position_m:?}: {actual:?} != {expected:?}",
-            );
+        let sample = procedural_world_environment(world, SEED, tick, position_m);
+        for (diagnostic, expected) in [
+            (
+                "surface_air_temperature",
+                signed_debug_pixel(sample.weather.surface_air_temperature_c / 40.0),
+            ),
+            (
+                "water_tide_height",
+                signed_debug_pixel(sample.water_height_m / 2.0),
+            ),
+        ] {
+            let actual = render_diagnostic_pixel(world, position_m, diagnostic);
+            for channel in 0..3 {
+                assert!(
+                    actual[channel].abs_diff(expected[channel]) <= 8,
+                    "{diagnostic} at {position_m:?}: {actual:?} != {expected:?}",
+                );
+            }
         }
+    }
+}
+
+#[test]
+fn rendered_surface_temperature_is_continuous_across_a_pole() {
+    let world = WorldGeometry::default();
+    let pole_y_m = 0.5 * world.height_m();
+    let before = render_diagnostic_pixel(
+        world,
+        Vector::new(0.0, pole_y_m - 0.000001 * world.height_m()),
+        "surface_air_temperature",
+    );
+    let after = render_diagnostic_pixel(
+        world,
+        Vector::new(0.0, pole_y_m + 0.000001 * world.height_m()),
+        "surface_air_temperature",
+    );
+
+    for channel in 0..3 {
+        assert!(before[channel].abs_diff(after[channel]) <= 1);
     }
 }
 
@@ -811,6 +835,26 @@ fn cloud_projection_stays_continuous_within_a_latitude_band() {
         (before_branch[0] - after_branch[0]).abs() < 0.01
             && (before_branch[1] - after_branch[1]).abs() < 0.01,
         "projected offset jumped within one latitude band: {before_branch:?}, {after_branch:?}",
+    );
+}
+
+#[test]
+fn cloud_projection_has_the_same_world_scale_in_each_direction() {
+    let world = WorldGeometry::default();
+    let difference = render_diagnostic_image_with_view_at(
+        world,
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "lighting_cloud_projection_isotropy",
+        1,
+        1,
+    );
+
+    assert!(
+        scalar_debug_amount(&difference) < 0.01,
+        "east/west and north/south projection scales differ: {:?}",
+        &difference[..3],
     );
 }
 

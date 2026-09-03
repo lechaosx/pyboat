@@ -479,10 +479,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   eclipse color enters both the local direct and regional diffuse Moon paths.
 - **[Explicit]** Cloud-shadow displacement follows physical layer height and
   light direction at every zoom. Rays intersect a spherical shell using world
-  width as circumference and the mirror-repeating latitude derived from the
-  pole-to-pole span. The resulting local angular displacement offsets the
-  receiver's unbounded cylindrical coordinates, without folding longitude or
-  north-south cloud fields at a pole. Sun and Moon visibility at each receiver
+  width as circumference and the receiver-local connected celestial direction.
+  The resulting local angular displacement uses the physical metres-per-radian
+  scale derived from world circumference and offsets the receiver's unbounded
+  cylindrical coordinates, without folding longitude or north-south cloud fields
+  at a pole. Sun and Moon visibility at each receiver
   layer derive their Earth-shadow horizon from world circumference and physical
   altitude, with each finite disc smoothing its transition. Rendered terrain and
   water use their local surface elevation; the 900-metre visible-cloud and
@@ -498,12 +499,16 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   distance-proportional penumbra for landform shadows.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,
-  then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate,
-  and its analytic meridional gradients use that mirrored latitude. Celestial
-  geometry instead uses the continuous latitude phase, so each descending band
-  represents the connected far hemisphere while its direction remains
-  continuous in the cylindrical chart. Longitude, terrain, materials, and seeded
-  atmosphere fields retain their unbounded, non-repeating north-south coordinate.
+  then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate
+  and its analytic meridional gradients use that mirrored latitude. Its diurnal
+  temperature phase and weak-forcing availability follow the thermally lagged
+  first harmonic of nonnegative solar elevation, while the calibrated diurnal
+  range sets its saturated amplitude. The response therefore vanishes in polar
+  night and continuously at each pole. Celestial geometry instead uses the
+  continuous latitude phase, so each descending band represents the connected
+  far hemisphere while its direction remains continuous in the cylindrical
+  chart. Longitude, terrain, materials, and seeded atmosphere fields retain
+  their unbounded, non-repeating north-south coordinate.
 - **[Implicit]** World and view coordinates use positive X for east/right and
   positive Y for north/up. Input adapters convert down-positive device
   coordinates at their boundaries.

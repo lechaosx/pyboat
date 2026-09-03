@@ -175,6 +175,77 @@ fn repeated_latitude_mirrors_climate_without_repeating_seeded_fields() {
 }
 
 #[test]
+fn mirrored_northern_bands_share_a_season_but_have_opposite_solar_days() {
+    let world = geometry();
+    let world_time_seconds = (0.25 - 0.0021) * 365.0 * WORLD_DAY_SECONDS;
+    let reference = world_celestial_conditions(world, world_time_seconds, Vector::new(0.0, 0.0));
+    let peak_x_m = (0.625 - reference.day_phase).rem_euclid(1.0) * world.width_m();
+    let ascending = world_celestial_conditions(
+        world,
+        world_time_seconds,
+        Vector::new(peak_x_m, world.height_m() / 3.0),
+    );
+    let descending = world_celestial_conditions(
+        world,
+        world_time_seconds,
+        Vector::new(peak_x_m, 2.0 * world.height_m() / 3.0),
+    );
+    let climate = world_climate_conditions(ascending.geographic_latitude_degrees);
+
+    assert_eq!(ascending.geographic_latitude_degrees, 60.0);
+    assert_eq!(descending.geographic_latitude_degrees, 60.0);
+    assert_eq!(ascending.season_phase, descending.season_phase);
+    assert!(
+        (current_air_temperature_c(climate, ascending)
+            - current_air_temperature_c(climate, descending))
+            > 0.0
+    );
+}
+
+#[test]
+fn pole_has_no_deterministic_diurnal_temperature_cycle() {
+    let world = geometry();
+    let pole_y_m = 0.5 * world.height_m();
+    let reference = world_celestial_conditions(world, 0.0, Vector::new(0.0, pole_y_m));
+    let opposite =
+        world_celestial_conditions(world, 0.0, Vector::new(0.5 * world.width_m(), pole_y_m));
+    let climate = world_climate_conditions(reference.geographic_latitude_degrees);
+
+    assert!(
+        (current_air_temperature_c(climate, reference)
+            - current_air_temperature_c(climate, opposite))
+        .abs()
+            < 0.01
+    );
+}
+
+#[test]
+fn diurnal_temperature_is_continuous_across_a_pole() {
+    let world = geometry();
+    let pole_y_m = 0.5 * world.height_m();
+    let before = world_celestial_conditions(
+        world,
+        0.0,
+        Vector::new(0.0, pole_y_m - 0.000001 * world.height_m()),
+    );
+    let after = world_celestial_conditions(
+        world,
+        0.0,
+        Vector::new(0.0, pole_y_m + 0.000001 * world.height_m()),
+    );
+    let before_temperature = current_air_temperature_c(
+        world_climate_conditions(before.geographic_latitude_degrees),
+        before,
+    );
+    let after_temperature = current_air_temperature_c(
+        world_climate_conditions(after.geographic_latitude_degrees),
+        after,
+    );
+
+    assert!((before_temperature - after_temperature).abs() < 0.01);
+}
+
+#[test]
 fn world_environment_is_deterministic_and_locally_continuous() {
     let world = geometry();
     let position = Vector::new(12_345.0, 4_321.0);

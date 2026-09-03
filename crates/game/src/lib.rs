@@ -132,6 +132,8 @@ const WORLD_LUNAR_MONTH_DAYS: f64 = 28.0;
 const WORLD_YEAR_DAYS: f64 = 365.0;
 const WORLD_ORBIT_EPOCH_PHASE: f64 = 0.0021;
 const WORLD_LUNAR_PHASE_CYCLE_DAYS: f64 = WORLD_LUNAR_MONTH_DAYS;
+const DIURNAL_THERMAL_TIME_CONSTANT_DAYS: f64 = 4.0 / 24.0;
+const DIURNAL_DAYLIGHT_HARMONIC_SATURATION: f64 = 0.05;
 // The Moon must orbit faster than its 28-day Sun-relative phase cycle because
 // the Sun advances through the sky during the same interval.
 const WORLD_LUNAR_ORBIT_DAYS: f64 =
@@ -580,14 +582,50 @@ pub fn current_air_temperature_c(
     conditions: CelestialConditions,
 ) -> f32 {
     let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.34);
-    let diurnal_phase = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.625);
     let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
     climate.annual_mean_air_temperature_c
         + 0.5
             * climate.seasonal_temperature_range_c
             * latitude_factor
             * libm::sin(seasonal_phase) as f32
-        + 0.5 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+        + 0.5 * climate.diurnal_temperature_range_c * diurnal_temperature_factor(conditions)
+}
+
+fn diurnal_temperature_factor(conditions: CelestialConditions) -> f32 {
+    let latitude = f64::from(conditions.celestial_latitude_degrees).to_radians();
+    let solar_longitude = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.25);
+    let declination = libm::asin(libm::sin(23.44_f64.to_radians()) * libm::sin(solar_longitude));
+    let mean_solar_elevation = libm::sin(latitude) * libm::sin(declination);
+    let varying_solar_elevation = libm::cos(latitude) * libm::cos(declination);
+    let varying_magnitude = varying_solar_elevation.abs();
+    // Closed-form first cosine coefficient of max(0, sun_direction.z).
+    let daylight_harmonic = if varying_magnitude < 1.0e-9 {
+        0.0
+    } else if mean_solar_elevation >= varying_magnitude {
+        varying_solar_elevation
+    } else if mean_solar_elevation <= -varying_magnitude {
+        0.0
+    } else {
+        let sunset_hour_angle =
+            libm::acos((-mean_solar_elevation / varying_magnitude).clamp(-1.0, 1.0));
+        let sunset_sine = libm::sin(sunset_hour_angle);
+        varying_solar_elevation.signum()
+            * (2.0 * mean_solar_elevation * sunset_sine
+                + varying_magnitude
+                    * (sunset_hour_angle + sunset_sine * libm::cos(sunset_hour_angle)))
+            / std::f64::consts::PI
+    };
+    let hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
+    let thermal_frequency_time = std::f64::consts::TAU * DIURNAL_THERMAL_TIME_CONSTANT_DAYS;
+    // Normalized steady response of a first-order thermal reservoir.
+    let thermal_response = (libm::cos(hour_angle) + thermal_frequency_time * libm::sin(hour_angle))
+        / libm::sqrt(1.0 + thermal_frequency_time * thermal_frequency_time);
+    let daylight_response = smoothstep_range(
+        0.0,
+        DIURNAL_DAYLIGHT_HARMONIC_SATURATION,
+        daylight_harmonic.abs(),
+    );
+    (daylight_harmonic.signum() * daylight_response * thermal_response) as f32
 }
 
 pub fn current_500_hpa_air_temperature_c(
@@ -766,13 +804,12 @@ pub fn climate_surface(
         current_air_temperature_c(climate, conditions) + surface_air_temperature_anomaly_c;
     let latitude_factor = seasonal_latitude_factor(conditions.geographic_latitude_degrees);
     let seasonal_phase = std::f64::consts::TAU * (f64::from(conditions.season_phase) - 0.38);
-    let diurnal_phase = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.625);
     let ground_temperature_c = climate.annual_mean_air_temperature_c
         + 0.42
             * climate.seasonal_temperature_range_c
             * latitude_factor
             * libm::sin(seasonal_phase) as f32
-        + 0.15 * climate.diurnal_temperature_range_c * libm::cos(diurnal_phase) as f32
+        + 0.15 * climate.diurnal_temperature_range_c * diurnal_temperature_factor(conditions)
         + 0.25 * surface_air_temperature_anomaly_c;
     let water_temperature_c = seasonal_water_temperature_c(climate, conditions);
     let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
