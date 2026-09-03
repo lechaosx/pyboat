@@ -43,6 +43,7 @@ struct Options {
     light_balance: [f32; 4],
     cloud_rendering: [f32; 4],
     cloud_shadows: [f32; 4],
+    landform_lighting: [f32; 4],
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
     layer_material_color_visibility: [u32; 4],
@@ -589,6 +590,7 @@ fn parse_options() -> Result<Options, String> {
         light_balance: [1.0; 4],
         cloud_rendering: [1.0, 1.0, 1.0, 0.0],
         cloud_shadows: [1.0, 1.0, 0.85, 1.0],
+        landform_lighting: [1.0, 0.7, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
         layer_material_color_visibility: [1; 4],
@@ -625,6 +627,9 @@ fn parse_options() -> Result<Options, String> {
             }
             "--cloud-shadows" => {
                 options.cloud_shadows = parse_f32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--landform-lighting" => {
+                options.landform_lighting = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
             "--landscape-visibility" => {
                 options.landscape_visibility = parse_f32x4(&value(&mut arguments)?, &argument)?
@@ -898,6 +903,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 9.0)],
         ),
+        "lighting_landform_shadow_tangent_continuity" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 10.0)],
+        ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1031,6 +1041,7 @@ fn print_help() {
            --light-contributions V,V,V,V  enable the four light contributions\n\
            --cloud-rendering V,V,V,V  lower-cloud depth, opacity, storm, padding\n\
            --cloud-shadows V,V,V,V  low/canopy strength, extinction, contrast\n\
+           --landform-lighting V,V,V,V  relief, shadow, reach, padding\n\
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
            --landscape-visibility V,V,V,V  landscape mechanism visibility\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
@@ -1165,7 +1176,7 @@ async fn render(options: &Options) -> Result<(), String> {
         cloud_rendering: options.cloud_rendering,
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         water_tuning: [0.5, 1.0, 0.0, 0.0],
-        landform_lighting: [1.0, 0.7, 320.0, 0.0],
+        landform_lighting: options.landform_lighting,
         cloud_lighting: [0.18, 0.14, 0.0, 0.0],
         cloud_shadows: options.cloud_shadows,
         water_surface: [2.5, 0.2, 1.0, 1.0],

@@ -783,6 +783,114 @@ fn landform_shadows_use_source_specific_apparent_radii() {
 }
 
 #[test]
+fn landform_shadows_are_continuous_across_the_local_tangent() {
+    let world = WorldGeometry::default();
+    let position_m = representative_shore(world);
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        2_000.0,
+        "lighting_landform_shadow_tangent_continuity",
+        256,
+        256,
+    );
+
+    let maximum = image
+        .chunks_exact(4)
+        .map(scalar_debug_amount)
+        .fold(0.0, f32::max);
+    assert!(maximum < 0.02, "shadow discontinuity was {maximum}");
+}
+
+#[test]
+fn landform_cast_shadows_reach_open_water() {
+    let world = WorldGeometry::default();
+    let position_m = representative_shore(world);
+    let width = 192;
+    let height = 192;
+    let elevation = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        0.0,
+        2_000.0,
+        "terrain_elevation",
+        width,
+        height,
+    );
+    let mut maximum_water_difference = 0.0_f32;
+    let mut low_sun_times = [None, None];
+    for quarter_hour in 0..192 {
+        let world_time_seconds = quarter_hour as f64 * 900.0;
+        let light = celestial_lighting(world_celestial_conditions(
+            world,
+            world_time_seconds,
+            position_m,
+        ));
+        if (0.0..0.7).contains(&light.sun_intensity) && light.sun_intensity > 0.0 {
+            let direction_index = usize::from(light.sun_direction[0] >= 0.0);
+            if low_sun_times[direction_index]
+                .is_none_or(|(_, intensity)| light.sun_intensity < intensity)
+            {
+                low_sun_times[direction_index] = Some((world_time_seconds, light.sun_intensity));
+            }
+        }
+    }
+    assert!(low_sun_times.iter().all(Option::is_some));
+    for (world_time_seconds, _) in low_sun_times.into_iter().flatten() {
+        let controls = [
+            ("--cloud-shadows", "0,0,0.85,0"),
+            ("--layer-material-colors", "0,0,0,0"),
+            ("--light-contributions", "1,0,0,0"),
+        ];
+        let unshadowed = render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            2_000.0,
+            "scene",
+            width,
+            height,
+            &[
+                controls[0],
+                controls[1],
+                controls[2],
+                ("--landform-lighting", "0,0,320,0"),
+            ],
+        );
+        let shadowed = render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            2_000.0,
+            "scene",
+            width,
+            height,
+            &[
+                controls[0],
+                controls[1],
+                controls[2],
+                ("--landform-lighting", "0,1,320,0"),
+            ],
+        );
+        for ((elevation, unshadowed), shadowed) in elevation
+            .chunks_exact(4)
+            .zip(unshadowed.chunks_exact(4))
+            .zip(shadowed.chunks_exact(4))
+        {
+            if elevation[2] > elevation[0].saturating_add(2) {
+                maximum_water_difference = maximum_water_difference
+                    .max((linear_luminance(unshadowed) - linear_luminance(shadowed)).abs());
+            }
+        }
+    }
+    assert!(
+        maximum_water_difference > 0.005,
+        "landform shadows changed water luminance by only {maximum_water_difference}",
+    );
+}
+
+#[test]
 fn cloud_projection_stays_continuous_across_mirrored_latitude_boundaries() {
     let world = WorldGeometry::default();
     let projected_offset = |y_m| {

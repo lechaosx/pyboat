@@ -238,7 +238,7 @@ fn landform_shadow_cache_offset(
         is_sun,
     );
     let horizontal_light = length(light.xy);
-    if light_amount <= 0.0 || light.z <= 0.0 || horizontal_light <= 0.001 {
+    if light_amount <= 0.0 || horizontal_light <= 0.001 {
         return vec3<f32>(0.0);
     }
     let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
@@ -350,8 +350,7 @@ fn discover_cloud_shadow_cache_tiles(
     let broad_receiver_elevation_m = broad_landform_elevation_m(position_m);
     let water_height_m = tide_height_m();
     let landform_shadows_visible = tuning.landform_lighting.y
-        * landscape_visibility.w * lighting_feature_visibility().y > 0.0
-        && broad_receiver_elevation_m >= water_height_m;
+        * landscape_visibility.w * lighting_feature_visibility().y > 0.0;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
     let surface_light = celestial_receiver_light_at_height(surface_receiver_height_m);

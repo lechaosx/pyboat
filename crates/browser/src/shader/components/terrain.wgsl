@@ -601,21 +601,28 @@ fn landform_shadow_transmittance_for_light(
     let horizontal_light = length(light_direction.xy);
     if strength <= 0.0
         || light_amount <= 0.0
-        || light_direction.z <= 0.0
         || horizontal_light <= 0.001
     {
         return 1.0;
     }
     let toward_light = light_direction.xy / horizontal_light;
-    let ray_slope = light_direction.z / horizontal_light;
     let reach_m = max(tuning.landform_lighting.z, 1.0);
+    let world_radius_m = scene.world_size_m.x / TAU;
+    let receiver_radius_m = world_radius_m + elevation_m;
     var occlusion = 0.0;
     for (var sample_index = 0u; sample_index < 4u; sample_index++) {
         let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
         let blocker_elevation_m = sampled_broad_landform_elevation_m(
             position_m + distance_m * toward_light,
         );
-        let ray_elevation_m = elevation_m + distance_m * ray_slope;
+        let angular_distance = distance_m / world_radius_m;
+        let ray_denominator = horizontal_light * cos(angular_distance)
+            - light_direction.z * sin(angular_distance);
+        if ray_denominator <= 0.0 {
+            continue;
+        }
+        let ray_elevation_m = receiver_radius_m * horizontal_light
+            / ray_denominator - world_radius_m;
         let softness_m = 0.6
             + 2.0 * angular_radius_rad * distance_m;
         occlusion = max(

@@ -208,7 +208,7 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
 
 fn diagnostic_landform_shadow_disc_radii(input: VertexOutput) -> vec4<f32> {
     var receiver = celestial_receiver_light_at_height(0.0);
-    let direction = normalize(vec3<f32>(0.95, 0.30, 0.03));
+    let direction = normalize(vec3<f32>(0.95, 0.30, 0.0));
     receiver.sun_direction = direction;
     receiver.moon_direction = direction;
     receiver.sun_amount = 1.0;
@@ -221,6 +221,31 @@ fn diagnostic_landform_shadow_disc_radii(input: VertexOutput) -> vec4<f32> {
     );
     return vec4<f32>(scalar_debug_color(clamp(
         500.0 * (transmittance.x - transmittance.y),
+        0.0,
+        1.0,
+    )), 1.0);
+}
+
+fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f32> {
+    let position_m = input.world_position_m;
+    let elevation_m = broad_landform_elevation_m(position_m);
+    let horizontal = normalize(vec2<f32>(0.95, 0.30));
+    let below = landform_shadow_transmittance_for_light(
+        position_m,
+        elevation_m,
+        normalize(vec3<f32>(horizontal, -0.000001)),
+        1.0,
+        MOON_ANGULAR_RADIUS_RAD,
+    );
+    let above = landform_shadow_transmittance_for_light(
+        position_m,
+        elevation_m,
+        normalize(vec3<f32>(horizontal, 0.000001)),
+        1.0,
+        MOON_ANGULAR_RADIUS_RAD,
+    );
+    return vec4<f32>(scalar_debug_color(clamp(
+        8.0 * abs(above - below),
         0.0,
         1.0,
     )), 1.0);

@@ -389,7 +389,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   against the fragment's world-space pixel footprint before it can alias.
   Material relief remains single-sample, without parallax or per-material ray
   marching.
-  Bounded broad-relief samples provide cast shadows without displaced geometry.
+  Bounded broad-relief samples follow spherical light rays and cast finite-disc
+  shadows across both terrain and water without displaced geometry.
   In clear shallow water, filtered material reflectance produces scalar contrast
   through the water palette according to round-trip optical transmittance.
   Reflective substrates remain visible farther, but every substrate approaches a

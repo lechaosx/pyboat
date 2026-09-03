@@ -137,7 +137,8 @@ current playable behavior; this file does not track delivery status.
   physical causes. Their ecotones therefore differ without classified zones,
   authored boundary distances, or one shared decorative edge treatment; true
   shoreline and solid-ice phase boundaries remain readable. Relief lighting and
-  bounded shadows add depth without moving shorelines or collision. Material
+  bounded landform shadows across terrain and water add depth without moving
+  shorelines or collision. Material
   detail remains stable across boat-scale zoom rather than aliasing or revealing
   its procedural sampling lattice.
 - **[Explicit]** Clouds are weather-shaped visual layers that never conceal

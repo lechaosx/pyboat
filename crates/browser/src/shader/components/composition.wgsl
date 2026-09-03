@@ -334,14 +334,11 @@ fn final_scene_color(
             );
         }
         surface_color = surface.color;
-        var terrain_shadow_transmittance = vec2<f32>(1.0);
-        if is_land {
-            terrain_shadow_transmittance = landform_shadow_transmittance(
-                input.world_position_m,
-                terrain.elevation_m,
-                surface_direct_light,
-            );
-        }
+        let terrain_shadow_transmittance = landform_shadow_transmittance(
+            input.world_position_m,
+            surface_height_m,
+            surface_direct_light,
+        );
         fragment_color = fragment_surface_color(
             surface_color,
             input.world_position_m,
