@@ -151,8 +151,8 @@ current playable behavior; this file does not track delivery status.
   Visible lower clouds do not contribute to ambient light.
 - **[Explicit]** Small visible clouds form sparsely under suitable humid,
   unstable, non-storm conditions at a fixed low altitude. They add local
-  shadows and make system-scale wind direction readable across at most about one
-  quarter of the view.
+  shadows, shift with camera-relative geometric parallax, and make system-scale
+  wind direction readable across at most about one quarter of the view.
 - **[Explicit]** Near sunset, the world's curvature can leave visible lower
   clouds in sunlight after the surface is in shadow. The weather canopy filters
   that grazing light before it produces edge and internal scattering in their

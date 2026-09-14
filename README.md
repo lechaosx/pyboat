@@ -8,8 +8,8 @@ latitude and climate bands. Each position has longitude and local solar time,
 latitude-calibrated opposite seasons, weather-responsive snow, sea ice, tide,
 altitude-aware sunlight, geometric Sun/Moon eclipses, gameplay-driven and
 precipitation-responsive open-water material, depth, spatial weather,
-globally shaped, locally wind-translated cloud fields and projected shadows,
-zero-net local circulation, and phase-resolved gameplay waves.
+globally shaped, locally wind-translated and parallax-projected cloud fields and
+shadows, zero-net local circulation, and phase-resolved gameplay waves.
 Prediction, ramming, damage, and persistent wrecks remain deterministic. Boats
 sail longitude laps and interact across that seam, while successive north and
 south poles pass without a world edge.

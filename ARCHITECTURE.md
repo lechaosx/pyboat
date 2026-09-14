@@ -238,8 +238,13 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   existing spatial atmosphere determine their latent structure, occurrence,
   coverage, and character without tracked bodies, compact kernels, birth
   cohorts, or temporal anchors. Weather is evaluated at the sampled cloud point:
-  surface positions supply visible bodies and ambient conditions, while
-  directional shadows use each light ray's intersection with the cloud layer.
+  an analytic virtual-perspective intersection with the fixed-altitude lower
+  layer supplies visible bodies, surface positions supply ambient conditions,
+  and directional shadows use each light ray's intersection with the cloud
+  layer. The lower-cloud projection scales around the camera's world position
+  and wraps longitude relative to it, keeping the center aligned and the field
+  continuous across the cylindrical seam. Ground shadows remain anchored to
+  their world positions.
   Weather remains stationary while the only per-client cloud input, the
   integrated view-center system-wind translation, offsets each layer's latent
   noise. Each latent field normalizes its evolution coordinate by its own base
@@ -249,10 +254,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The lower field continuously drives visible amount, optical
   depth, analytic body normals, and projected shadows at a fixed 900-metre
   height. Body size, occurrence, detail character, blob shape, contrast, edge,
-  normal strength, optical depth, opacity, and shadow darkness remain playground
-  tunings. Cloud amount, normals, optical depth, and shadows at a sampled world
-  position are independent of camera zoom and pixel footprint; zoom changes only
-  which positions are sampled. Scalar shadow queries omit body-gradient work.
+  normal strength, optical depth, opacity, projection strength, and shadow
+  darkness remain playground tunings. Cloud amount, normals, optical depth, and
+  shadows at a sampled world position are independent of camera zoom and pixel
+  footprint; zoom changes only which positions are sampled. Scalar shadow queries
+  omit body-gradient work.
 - **[Explicit]** The unseen 3600-metre weather canopy uses a broader continuous
   spatiotemporal latent noise field. Its regional sky fraction and mean optical
   thickness are algebraic outputs of the shared weather derivation from

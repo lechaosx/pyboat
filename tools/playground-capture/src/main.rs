@@ -589,7 +589,7 @@ fn parse_options() -> Result<Options, String> {
         world_time_seconds: 0.0,
         diagnostic: scene_selection(),
         light_balance: [1.0; 4],
-        cloud_rendering: [1.0, 1.0, 1.0, 0.0],
+        cloud_rendering: [1.0, 1.0, 1.0, 1.0],
         cloud_shadows: [1.0, 1.0, 0.85, 1.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
@@ -1085,7 +1085,7 @@ fn print_help() {
            --diagnostic NAME      semantic diagnostic output (default scene)\n\n\
            --light-balance V,V,V,V  Sun, Moon, clear-sky, and canopy light scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
-           --cloud-rendering V,V,V,V  lower-cloud depth, opacity, storm, padding\n\
+           --cloud-rendering V,V,V,V  lower-cloud depth, opacity, storm, parallax\n\
            --cloud-shadows V,V,V,V  low/canopy strength, extinction, contrast\n\
            --landform-lighting V,V,V,V  relief, shadow, reach, padding\n\
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\

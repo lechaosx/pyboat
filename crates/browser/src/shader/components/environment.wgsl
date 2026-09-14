@@ -1379,7 +1379,7 @@ fn production_tuning() -> SceneTuning {
             CLOUD_OPTICAL_DEPTH,
             CLOUD_OPACITY,
             CLOUD_DARKNESS,
-            CLOUD_RELIEF,
+            LOW_CLOUD_PARALLAX,
         ),
         vec4<f32>(
             TERRAIN_HORIZONTAL_SCALE,

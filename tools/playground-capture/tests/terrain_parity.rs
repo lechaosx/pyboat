@@ -1600,6 +1600,66 @@ fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
 }
 
 #[test]
+fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(0.0, -10_000.0);
+    let without_parallax = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        16_000.0,
+        "scene",
+        65,
+        65,
+        &[("--cloud-rendering", "1,1,1,0")],
+    );
+    let with_parallax = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        16_000.0,
+        "scene",
+        65,
+        65,
+        &[("--cloud-rendering", "1,1,1,1")],
+    );
+    assert_ne!(without_parallax, with_parallax);
+    let center_pixel = 4 * (32 * 65 + 32);
+    assert_eq!(
+        &without_parallax[center_pixel..center_pixel + 4],
+        &with_parallax[center_pixel..center_pixel + 4],
+    );
+
+    let shadows_without_parallax = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        16_000.0,
+        "scene",
+        64,
+        64,
+        &[
+            ("--cloud-rendering", "1,1,1,0"),
+            ("--layer-material-colors", "0,1,1,1"),
+        ],
+    );
+    let shadows_with_parallax = render_controlled_image_at(
+        world,
+        position_m,
+        123.456,
+        16_000.0,
+        "scene",
+        64,
+        64,
+        &[
+            ("--cloud-rendering", "1,1,1,1"),
+            ("--layer-material-colors", "0,1,1,1"),
+        ],
+    );
+    assert_eq!(shadows_without_parallax, shadows_with_parallax);
+}
+
+#[test]
 fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
     let world = WorldGeometry::default();
     let overview_size = 32usize;

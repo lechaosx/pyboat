@@ -4,6 +4,21 @@ struct LowCloudSample {
     gradient: vec2<f32>,
 };
 
+fn visible_low_cloud_position_m(position_m: vec2<f32>) -> vec2<f32> {
+    let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
+    let wrapped_longitude_delta_m = longitude_delta_m
+        - round(longitude_delta_m * scene.inverse_world_size_m.x) * scene.world_size_m.x;
+    let camera_delta_m = vec2<f32>(
+        wrapped_longitude_delta_m,
+        position_m.y - scene.camera_and_view_m.y,
+    );
+    let projection_scale = 1.0 - clamp(tuning.cloud_rendering.w, 0.0, 2.0)
+        * LOW_CLOUD_BASE_HEIGHT_M / LOW_CLOUD_PROJECTION_EYE_HEIGHT_M;
+    return canonical_world_position(
+        scene.camera_and_view_m.xy + projection_scale * camera_delta_m,
+    );
+}
+
 fn low_cloud_latent_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let body_size = clamp(tuning.cloud_wisps.z, 0.25, 4.0);
     return spatiotemporal_fractal_sample(

@@ -79,6 +79,7 @@ type State = {
   opticalDepth: number;
   opacity: number;
   darkness: number;
+  lowCloudParallax: number;
   cloudSelfShadowVisible: number;
   cloudEdgeLightStrength: number;
   cloudSelfShadowStrength: number;
@@ -176,6 +177,7 @@ const defaults: State = {
   opticalDepth: 1,
   opacity: 1,
   darkness: 1,
+  lowCloudParallax: 1,
   cloudSelfShadowVisible: 1,
   cloudEdgeLightStrength: 0.18,
   cloudSelfShadowStrength: 0.14,
@@ -582,6 +584,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
       { type: "range", key: "opacity", label: "Opacity", min: 0, max: 1.5, step: 0.05 },
       { type: "range", key: "darkness", label: "Darkening", min: 0, max: 2, step: 0.05 },
+      { type: "range", key: "lowCloudParallax", label: "Parallax", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudEdgeLightStrength", label: "Edge light", min: 0, max: 0.6, step: 0.01 },
       { type: "toggle", key: "cloudSelfShadowVisible", label: "Self-shadow" },
       { type: "range", key: "cloudSelfShadowStrength", label: "Self-shadow", min: 0, max: 0.6, step: 0.01 },
@@ -1719,7 +1722,7 @@ function writeUniforms(
     state.lowCloudBodySize,
     state.lowCloudOccurrence,
   ], 4);
-  tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, 0], 8);
+  tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.lowCloudParallax], 8);
   tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);
   tuningFloats.set([
     state.waterAttenuationLength,

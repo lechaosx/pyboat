@@ -389,9 +389,11 @@ fn final_scene_color(
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
+            let low_cloud_position_m = visible_low_cloud_position_m(input.world_position_m);
+            let low_cloud_weather = cloud_weather_at(low_cloud_position_m);
             let low_cloud = procedural_low_cloud_sample(
-                input.world_position_m,
-                surface_cloud_weather,
+                low_cloud_position_m,
+                low_cloud_weather,
             );
             if low_cloud.body_amount > 0.08
                 && low_cloud.optical_depth > 0.0
@@ -402,7 +404,7 @@ fn final_scene_color(
                 var upper_transmittance = vec2<f32>(1.0);
                 if layer_visibility.w > 0.0 {
                     upper_transmittance = upper_cloud_transmittance_at_low_cloud(
-                        input.world_position_m,
+                        low_cloud_position_m,
                         upper_height_m,
                         low_cloud_light,
                     );

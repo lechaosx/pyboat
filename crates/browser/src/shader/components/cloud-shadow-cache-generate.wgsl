@@ -398,8 +398,14 @@ fn discover_cloud_shadow_cache_tiles(
         let footprint_count = select(8u, 4u, layer == 0u);
         var footprints: array<CloudShadowCacheFootprint, 8>;
         for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
-            footprints[footprint_index] = cloud_shadow_cache_footprint(
+            let receives_at_low_cloud = layer == 1u && footprint_index >= 4u;
+            let receiver_position_m = select(
                 position_m,
+                visible_low_cloud_position_m(position_m),
+                receives_at_low_cloud,
+            );
+            footprints[footprint_index] = cloud_shadow_cache_footprint(
+                receiver_position_m,
                 footprint_index,
                 layer,
                 surface_light,
@@ -411,8 +417,14 @@ fn discover_cloud_shadow_cache_tiles(
             if !footprint.enabled {
                 continue;
             }
-            let projected_position_m = cloud_shadow_cache_footprint_position(
+            let receives_at_low_cloud = layer == 1u && footprint_index >= 4u;
+            let receiver_position_m = select(
                 position_m,
+                visible_low_cloud_position_m(position_m),
+                receives_at_low_cloud,
+            );
+            let projected_position_m = cloud_shadow_cache_footprint_position(
+                receiver_position_m,
                 footprint,
             );
             mark_cloud_shadow_cache_tile_key(
