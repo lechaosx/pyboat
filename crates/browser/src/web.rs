@@ -1281,7 +1281,7 @@ pub struct BrowserGame {
     close_notice: Rc<RefCell<Option<String>>>,
     transport: Rc<RefCell<Option<Session>>>,
     pending_datagrams: Rc<RefCell<VecDeque<Vec<u8>>>>,
-    pending_reliable: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    pending_viewport: Rc<RefCell<Option<Vec<u8>>>>,
     sending_datagrams: Rc<Cell<bool>>,
     sending_reliable: Rc<Cell<bool>>,
     renderer: Renderer,
@@ -1307,7 +1307,7 @@ impl BrowserGame {
         let close_notice = Rc::new(RefCell::new(None));
         let transport = Rc::new(RefCell::new(None));
         let pending_datagrams = Rc::new(RefCell::new(VecDeque::new()));
-        let pending_reliable = Rc::new(RefCell::new(VecDeque::new()));
+        let pending_viewport = Rc::new(RefCell::new(None));
         let sending_datagrams = Rc::new(Cell::new(false));
         let sending_reliable = Rc::new(Cell::new(false));
 
@@ -1318,7 +1318,7 @@ impl BrowserGame {
             Rc::clone(&close_notice),
             Rc::clone(&transport),
             Rc::clone(&pending_datagrams),
-            Rc::clone(&pending_reliable),
+            Rc::clone(&pending_viewport),
             Rc::clone(&sending_datagrams),
             Rc::clone(&sending_reliable),
         )?;
@@ -1330,7 +1330,7 @@ impl BrowserGame {
             close_notice,
             transport,
             pending_datagrams,
-            pending_reliable,
+            pending_viewport,
             sending_datagrams,
             sending_reliable,
             renderer,
@@ -1346,9 +1346,8 @@ impl BrowserGame {
         let inputs = client.take_inputs(elapsed_seconds);
         drop(client);
         if let Some(viewport) = viewport {
-            self.pending_reliable
-                .borrow_mut()
-                .push_back(encode_client_message(&viewport).map_err(js_error)?);
+            self.pending_viewport
+                .replace(Some(encode_client_message(&viewport).map_err(js_error)?));
         }
         for input in inputs {
             let mut pending = self.pending_datagrams.borrow_mut();
@@ -1364,7 +1363,7 @@ impl BrowserGame {
         );
         pump_reliable(
             &self.transport,
-            &self.pending_reliable,
+            &self.pending_viewport,
             &self.sending_reliable,
         );
         if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
@@ -1500,7 +1499,7 @@ fn connect_webtransport(
     close_notice: Rc<RefCell<Option<String>>>,
     transport: Rc<RefCell<Option<Session>>>,
     pending_datagrams: Rc<RefCell<VecDeque<Vec<u8>>>>,
-    pending_reliable: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    pending_viewport: Rc<RefCell<Option<Vec<u8>>>>,
     sending_datagrams: Rc<Cell<bool>>,
     sending_reliable: Rc<Cell<bool>>,
 ) -> Result<(), JsValue> {
@@ -1539,7 +1538,7 @@ fn connect_webtransport(
         );
         watch_connection_close(session, protocol_client, connection_status, close_notice);
         pump_datagrams(&transport, &pending_datagrams, &sending_datagrams);
-        pump_reliable(&transport, &pending_reliable, &sending_reliable);
+        pump_reliable(&transport, &pending_viewport, &sending_reliable);
     });
     Ok(())
 }
@@ -1646,7 +1645,7 @@ fn pump_datagrams(
 
 fn pump_reliable(
     transport: &Rc<RefCell<Option<Session>>>,
-    pending: &Rc<RefCell<VecDeque<Vec<u8>>>>,
+    pending: &Rc<RefCell<Option<Vec<u8>>>>,
     sending: &Rc<Cell<bool>>,
 ) {
     if sending.get() {
@@ -1660,7 +1659,7 @@ fn pump_reliable(
     let sending = Rc::clone(sending);
     spawn_local(async move {
         loop {
-            let Some(message) = pending.borrow_mut().pop_front() else {
+            let Some(message) = pending.borrow_mut().take() else {
                 break;
             };
             let result = async {
@@ -1670,7 +1669,7 @@ fn pump_reliable(
             }
             .await;
             if result.is_err() {
-                pending.borrow_mut().clear();
+                pending.borrow_mut().take();
                 break;
             }
         }

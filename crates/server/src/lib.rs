@@ -34,6 +34,8 @@ pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const MAX_VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
+const MAX_PENDING_CONNECTION_EVENTS: usize = 256;
+const MAX_PENDING_CONNECTION_MESSAGES: usize = 16;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBTRANSPORT_PATH: &str = "/game";
 const WEBTRANSPORT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -448,7 +450,7 @@ where
     F: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
 {
-    let (events, mut incoming_events) = mpsc::unbounded_channel();
+    let (events, mut incoming_events) = mpsc::channel(MAX_PENDING_CONNECTION_EVENTS);
     let mut connections: HashMap<String, watch::Sender<Option<OutboundMessage>>> = HashMap::new();
     let mut game_match = GameMatch::new_with_world_geometry(new_match_seed(), world_geometry);
     let mut next_player_number = 1_u64;
@@ -487,7 +489,7 @@ where
                         Ok(connection) => {
                             let _ = events.send(ConnectionEvent::Upgraded {
                                 connection,
-                            });
+                            }).await;
                         }
                         Err(error) => eprintln!("WebTransport connection failed: {error}"),
                     }
@@ -562,7 +564,7 @@ async fn handle_connection(
     player_number: u64,
     match_seed: u64,
     world_geometry: WorldGeometry,
-    events: mpsc::UnboundedSender<ConnectionEvent>,
+    events: mpsc::Sender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
     let (outbound, mut outbound_updates) = watch::channel(None);
     let (registered, registration) = oneshot::channel();
@@ -573,6 +575,7 @@ async fn handle_connection(
             outbound,
             registered,
         })
+        .await
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "server stopped"))?;
     registration
         .await
@@ -598,7 +601,7 @@ async fn handle_connection(
                             player_id: player_id.clone(),
                             sequence,
                             intent: MotionIntent { forward, turn },
-                        }).is_err() {
+                        }).await.is_err() {
                             break Ok(());
                         }
                     }
@@ -606,7 +609,7 @@ async fn handle_connection(
                         if events.send(ConnectionEvent::Viewport {
                             player_id: player_id.clone(),
                             radius_m: radius,
-                        }).is_err() {
+                        }).await.is_err() {
                             break Ok(());
                         }
                     }
@@ -643,7 +646,9 @@ async fn handle_connection(
     for task in receive_tasks {
         task.abort();
     }
-    let _ = events.send(ConnectionEvent::Disconnected { player_id });
+    let _ = events
+        .send(ConnectionEvent::Disconnected { player_id })
+        .await;
     result?;
     Ok(())
 }
@@ -651,10 +656,10 @@ async fn handle_connection(
 fn receive_messages(
     connection: &Connection,
 ) -> (
-    mpsc::UnboundedReceiver<ConnectionResult<IncomingMessage>>,
+    mpsc::Receiver<ConnectionResult<IncomingMessage>>,
     [tokio::task::JoinHandle<()>; 2],
 ) {
-    let (messages, receiver) = mpsc::unbounded_channel();
+    let (messages, receiver) = mpsc::channel(MAX_PENDING_CONNECTION_MESSAGES);
     let datagram_connection = connection.clone();
     let datagram_messages = messages.clone();
     let datagram_task = tokio::spawn(async move {
@@ -674,7 +679,7 @@ fn receive_messages(
                     Err(error) => Err(error.into()),
                 };
             let failed = message.is_err();
-            if datagram_messages.send(message).is_err() || failed {
+            if datagram_messages.send(message).await.is_err() || failed {
                 break;
             }
         }
@@ -693,11 +698,11 @@ fn receive_messages(
                                 decode_client_message(&message).map_err(|error| error.into())
                             })
                             .map(IncomingMessage::Reliable);
-                        let _ = messages.send(message);
+                        let _ = messages.send(message).await;
                     });
                 }
                 Err(error) => {
-                    let _ = messages.send(Err(error.into()));
+                    let _ = messages.send(Err(error.into())).await;
                     break;
                 }
             }
