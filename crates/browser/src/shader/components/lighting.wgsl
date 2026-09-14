@@ -552,10 +552,74 @@ struct CloudShadowDepths {
     upper: f32,
 };
 
-struct CelestialCloudShadowDepths {
+struct CloudDiscShadowDepths {
     low: vec2<f32>,
     upper: vec2<f32>,
 };
+
+struct CelestialCloudShadowDepths {
+    sun: CloudDiscShadowDepths,
+    moon: CloudDiscShadowDepths,
+};
+
+struct CelestialDiscSampleDirections {
+    lower: vec3<f32>,
+    upper: vec3<f32>,
+};
+
+fn celestial_disc_sample_directions(
+    horizon_z: f32,
+    light: vec3<f32>,
+    angular_radius_rad: f32,
+) -> CelestialDiscSampleDirections {
+    let horizontal_light = length(light.xy);
+    if angular_radius_rad <= 0.0 || horizontal_light <= 0.001 {
+        return CelestialDiscSampleDirections(light, light);
+    }
+    let horizontal_direction = light.xy / horizontal_light;
+    let elevation_rad = asin(clamp(light.z, -1.0, 1.0));
+    let visible_lower_rad = max(
+        elevation_rad - angular_radius_rad,
+        asin(clamp(horizon_z, -1.0, 1.0)),
+    );
+    let visible_upper_rad = elevation_rad + angular_radius_rad;
+    if visible_lower_rad >= visible_upper_rad {
+        return CelestialDiscSampleDirections(light, light);
+    }
+    let lower_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 0.25);
+    let upper_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 0.75);
+    return CelestialDiscSampleDirections(
+        vec3<f32>(
+            cos(lower_elevation_rad) * horizontal_direction,
+            sin(lower_elevation_rad),
+        ),
+        vec3<f32>(
+            cos(upper_elevation_rad) * horizontal_direction,
+            sin(upper_elevation_rad),
+        ),
+    );
+}
+
+fn celestial_disc_projection_separation_m(
+    position_m: vec2<f32>,
+    source_height_m: f32,
+    cloud_height_m: f32,
+    directions: CelestialDiscSampleDirections,
+) -> f32 {
+    return length(
+        projected_cloud_position(
+            position_m,
+            source_height_m,
+            cloud_height_m,
+            directions.lower,
+        ) - projected_cloud_position(
+            position_m,
+            source_height_m,
+            cloud_height_m,
+            directions.upper,
+        ),
+    );
+}
 
 fn cloud_shadow_projection_at(
     position_m: vec2<f32>,
@@ -597,12 +661,76 @@ fn procedural_cloud_shadow_depths_at(
     return depths;
 }
 
+fn cloud_shadow_depths_for_light_at(
+    position_m: vec2<f32>,
+    surface_height_m: f32,
+    horizon_z: f32,
+    light: vec3<f32>,
+    angular_radius_rad: f32,
+) -> CloudDiscShadowDepths {
+    let directions = celestial_disc_sample_directions(
+        horizon_z,
+        light,
+        angular_radius_rad,
+    );
+    let lower_projection = cloud_shadow_projection_at(
+        position_m,
+        surface_height_m,
+        directions.lower,
+    );
+    let upper_projection = cloud_shadow_projection_at(
+        position_m,
+        surface_height_m,
+        directions.upper,
+    );
+    let maximum_separation_m = max(
+        select(
+            0.0,
+            length(lower_projection.low_position_m - upper_projection.low_position_m),
+            layer_visibility.y > 0.0,
+        ),
+        select(
+            0.0,
+            length(lower_projection.upper_position_m - upper_projection.upper_position_m),
+            layer_visibility.z > 0.0,
+        ),
+    );
+    if maximum_separation_m <= visual_pixel_footprint_m {
+        let representative_light = celestial_visible_disc_sample_direction_at_horizon(
+            horizon_z,
+            light,
+            angular_radius_rad,
+        );
+        let depths = sampled_cloud_shadow_depths_at(
+            cloud_shadow_projection_at(
+                position_m,
+                surface_height_m,
+                representative_light,
+            ),
+        );
+        return CloudDiscShadowDepths(
+            vec2<f32>(depths.low, depths.low),
+            vec2<f32>(depths.upper, depths.upper),
+        );
+    }
+    let lower_depths = sampled_cloud_shadow_depths_at(lower_projection);
+    let upper_depths = sampled_cloud_shadow_depths_at(upper_projection);
+    return CloudDiscShadowDepths(
+        vec2<f32>(lower_depths.low, upper_depths.low),
+        vec2<f32>(lower_depths.upper, upper_depths.upper),
+    );
+}
+
 fn celestial_cloud_shadow_depths_at(
     position_m: vec2<f32>,
     surface_height_m: f32,
     direct_light: CelestialReceiverLight,
 ) -> CelestialCloudShadowDepths {
-    var celestial_depths = CelestialCloudShadowDepths(vec2<f32>(0.0), vec2<f32>(0.0));
+    let empty_depths = CloudDiscShadowDepths(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, 0.0),
+    );
+    var celestial_depths = CelestialCloudShadowDepths(empty_depths, empty_depths);
     if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
         return celestial_depths;
     }
@@ -619,10 +747,23 @@ fn celestial_cloud_shadow_depths_at(
             is_sun,
         );
         if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
-            let projection = cloud_shadow_projection_at(position_m, surface_height_m, light);
-            let depths = sampled_cloud_shadow_depths_at(projection);
-            celestial_depths.low[source_index] = depths.low;
-            celestial_depths.upper[source_index] = depths.upper;
+            let angular_radius_rad = select(
+                MOON_ANGULAR_RADIUS_RAD,
+                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+                is_sun,
+            );
+            let depths = cloud_shadow_depths_for_light_at(
+                position_m,
+                surface_height_m,
+                direct_light.horizon_z,
+                light,
+                angular_radius_rad,
+            );
+            if is_sun {
+                celestial_depths.sun = depths;
+            } else {
+                celestial_depths.moon = depths;
+            }
         }
     }
     return celestial_depths;
@@ -640,6 +781,13 @@ fn cloud_shadow_transmittance(depth: f32, light: vec3<f32>) -> f32 {
             * depth,
     );
     return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
+}
+
+fn cloud_disc_shadow_transmittance(depths: vec2<f32>, light: vec3<f32>) -> f32 {
+    return 0.5 * (
+        cloud_shadow_transmittance(depths.x, light)
+            + cloud_shadow_transmittance(depths.y, light)
+    );
 }
 
 fn cloud_layer_transmittance(
@@ -661,16 +809,22 @@ fn cloud_layer_transmittance(
 }
 
 fn effective_cloud_shadow_amount(
-    sun_depth: f32,
-    moon_depth: f32,
+    sun_depths: vec2<f32>,
+    moon_depths: vec2<f32>,
     receiver: CelestialReceiverLight,
 ) -> f32 {
     let visibility = direct_light_visibility();
     return clamp(
         visibility.x * receiver.sun_amount
-                * (1.0 - cloud_shadow_transmittance(sun_depth, receiver.sun_direction))
+                * (1.0 - cloud_disc_shadow_transmittance(
+                    sun_depths,
+                    receiver.sun_direction,
+                ))
             + visibility.y * receiver.moon_amount
-                * (1.0 - cloud_shadow_transmittance(moon_depth, receiver.moon_direction)),
+                * (1.0 - cloud_disc_shadow_transmittance(
+                    moon_depths,
+                    receiver.moon_direction,
+                )),
         0.0,
         1.0,
     );

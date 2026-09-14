@@ -943,6 +943,16 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 12.0)],
         ),
+        "lighting_cloud_shadow_disc_radius" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 13.0)],
+        ),
+        "lighting_low_cloud_canopy_shadow_disc_radius" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 14.0)],
+        ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
             "lighting_model_regressions",

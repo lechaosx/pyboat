@@ -502,6 +502,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   response remains tied to surface-visible light. Grazing optical paths remain
   finite. The apparent angular radius of the Sun and Moon supplies a
   distance-proportional penumbra for landform shadows.
+- **[Implicit]** Resolvable cloud-shadow penumbrae average two symmetric samples
+  across the visible vertical extent of each celestial disc. Subpixel separation
+  collapses to the representative ray. Both samples retain one
+  source-and-receiver footprint identity for sparse-atlas reuse eligibility.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,
   then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate

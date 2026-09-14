@@ -54,8 +54,8 @@ fn diagnostic_cloud_shadow_sample(position_m: vec2<f32>) -> DiagnosticCloudShado
 fn diagnostic_lighting_projected_low_shadow(input: VertexOutput) -> vec4<f32> {
     let sample = diagnostic_cloud_shadow_sample(input.world_position_m);
     return vec4<f32>(scalar_debug_color(effective_cloud_shadow_amount(
-        sample.depths.low.x,
-        sample.depths.low.y,
+        sample.depths.sun.low,
+        sample.depths.moon.low,
         sample.receiver,
     )), 1.0);
 }
@@ -63,8 +63,8 @@ fn diagnostic_lighting_projected_low_shadow(input: VertexOutput) -> vec4<f32> {
 fn diagnostic_lighting_projected_upper_shadow(input: VertexOutput) -> vec4<f32> {
     let sample = diagnostic_cloud_shadow_sample(input.world_position_m);
     return vec4<f32>(scalar_debug_color(effective_cloud_shadow_amount(
-        sample.depths.upper.x,
-        sample.depths.upper.y,
+        sample.depths.sun.upper,
+        sample.depths.moon.upper,
         sample.receiver,
     )), 1.0);
 }
@@ -72,8 +72,8 @@ fn diagnostic_lighting_projected_upper_shadow(input: VertexOutput) -> vec4<f32> 
 fn diagnostic_lighting_combined_transmittance(input: VertexOutput) -> vec4<f32> {
     let sample = diagnostic_cloud_shadow_sample(input.world_position_m);
     let shadow_amount = effective_cloud_shadow_amount(
-        sample.depths.low.x + sample.depths.upper.x,
-        sample.depths.low.y + sample.depths.upper.y,
+        sample.depths.sun.low + sample.depths.sun.upper,
+        sample.depths.moon.low + sample.depths.moon.upper,
         sample.receiver,
     );
     return vec4<f32>(scalar_debug_color(1.0 - shadow_amount), 1.0);
@@ -281,6 +281,59 @@ fn diagnostic_landform_shadow_partial_disc_ray() -> vec4<f32> {
     )), 1.0);
 }
 
+fn diagnostic_cloud_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
+    let position_m = input.world_position_m;
+    let direction = normalize(vec3<f32>(0.95, 0.30, 0.20));
+    let point_depths = cloud_shadow_depths_for_light_at(
+        position_m,
+        0.0,
+        0.0,
+        direction,
+        0.0,
+    );
+    let disc_depths = cloud_shadow_depths_for_light_at(
+        position_m,
+        0.0,
+        0.0,
+        direction,
+        0.05,
+    );
+    let difference = abs(
+        cloud_disc_shadow_transmittance(point_depths.low, direction)
+            - cloud_disc_shadow_transmittance(disc_depths.low, direction),
+    ) + abs(
+        cloud_disc_shadow_transmittance(point_depths.upper, direction)
+            - cloud_disc_shadow_transmittance(disc_depths.upper, direction),
+    );
+    return vec4<f32>(scalar_debug_color(clamp(20.0 * difference, 0.0, 1.0)), 1.0);
+}
+
+fn diagnostic_low_cloud_canopy_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
+    let direction = normalize(vec3<f32>(0.95, 0.30, 0.20));
+    let receiver = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
+    let point_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
+        input.world_position_m,
+        receiver,
+        WEATHER_CANOPY_HEIGHT_M,
+        direction,
+        1.0,
+        0.0,
+    );
+    let disc_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
+        input.world_position_m,
+        receiver,
+        WEATHER_CANOPY_HEIGHT_M,
+        direction,
+        1.0,
+        0.05,
+    );
+    return vec4<f32>(scalar_debug_color(clamp(
+        20.0 * abs(point_transmittance - disc_transmittance),
+        0.0,
+        1.0,
+    )), 1.0);
+}
+
 fn diagnostic_cloud_projection(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
     let projected_position_m = projected_cloud_position(
@@ -330,7 +383,11 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
         0.0,
         1.0,
     );
-    let actual = effective_cloud_shadow_amount(1.0, 1.0, receiver);
+    let actual = effective_cloud_shadow_amount(
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        receiver,
+    );
     return vec4<f32>(scalar_debug_color(10.0 * abs(actual - expected)), 1.0);
 }
 

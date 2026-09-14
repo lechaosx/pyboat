@@ -1147,7 +1147,7 @@ function createCloudShadowCache(
     Math.min(maximumAxisTiles, Math.ceil(Math.sqrt(maximumTiles))),
   );
   const atlasRows = Math.ceil(maximumTiles / atlasColumns);
-  const markerTiles = Math.max(1, 14 * screenFootprintTiles);
+  const markerTiles = Math.max(1, 20 * screenFootprintTiles);
   let tableEntries = 1;
   while (tableEntries < 2 * markerTiles) tableEntries *= 2;
   const cacheUniforms = new Uint32Array([

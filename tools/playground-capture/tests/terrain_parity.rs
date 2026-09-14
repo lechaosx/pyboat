@@ -839,6 +839,48 @@ fn partially_visible_disc_uses_a_ray_above_the_horizon() {
 }
 
 #[test]
+fn cloud_shadow_softness_responds_to_celestial_disc_radius() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        8_000.0,
+        "lighting_cloud_shadow_disc_radius",
+        256,
+        256,
+    );
+    let maximum = image
+        .chunks_exact(4)
+        .map(scalar_debug_amount)
+        .fold(0.0, f32::max);
+    assert!(
+        maximum > 0.02,
+        "disc radius did not change cloud shadows: {maximum}"
+    );
+}
+
+#[test]
+fn low_cloud_canopy_shadow_softness_responds_to_celestial_disc_radius() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        8_000.0,
+        "lighting_low_cloud_canopy_shadow_disc_radius",
+        256,
+        256,
+    );
+    let maximum = image
+        .chunks_exact(4)
+        .map(scalar_debug_amount)
+        .fold(0.0, f32::max);
+    assert!(
+        maximum > 0.02,
+        "disc radius did not change canopy shadows on low clouds: {maximum}"
+    );
+}
+
+#[test]
 fn landform_cast_shadows_reach_open_water() {
     let world = WorldGeometry::default();
     let position_m = representative_shore(world);
