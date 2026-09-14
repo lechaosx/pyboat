@@ -143,6 +143,7 @@ impl CaptureCloudShadowCache {
         playground_layout: &wgpu::BindGroupLayout,
         viewport_width: u32,
         viewport_height: u32,
+        debug_mode: u32,
     ) -> Self {
         let buffer_entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -355,7 +356,7 @@ impl CaptureCloudShadowCache {
         });
         let debug = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("capture cache debug uniforms"),
-            contents: bytemuck::cast_slice(&[0u32; 4]),
+            contents: bytemuck::cast_slice(&[debug_mode, 0, 0, 0]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let discovery_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -708,7 +709,7 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
-        "scene_cached" => ShaderSelection {
+        "scene_cached" | "scene_cached_activity" => ShaderSelection {
             id: value.to_owned(),
             module: None,
             constants: &[],
@@ -932,6 +933,16 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 10.0)],
         ),
+        "lighting_landform_shadow_penumbra_center" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 11.0)],
+        ),
+        "lighting_landform_shadow_partial_disc_ray" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 12.0)],
+        ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -974,7 +985,8 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         ),
         "cloud_shadow_cache_tiles"
         | "cloud_shadow_cache_marker_integrity"
-        | "cloud_shadow_cache_fallback_integrity" => ShaderSelection {
+        | "cloud_shadow_cache_fallback_integrity"
+        | "cloud_shadow_cache_tide_initialization" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),
             constants: &[],
@@ -1118,7 +1130,10 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
-    let cached_scene = options.diagnostic.id == "scene_cached";
+    let cached_scene = matches!(
+        options.diagnostic.id.as_str(),
+        "scene_cached" | "scene_cached_activity"
+    );
     let fragment_module = options
         .diagnostic
         .module
@@ -1146,6 +1161,7 @@ async fn render(options: &Options) -> Result<(), String> {
             &playground_layout,
             options.width,
             options.height,
+            u32::from(options.diagnostic.id == "scene_cached_activity"),
         )
     });
     let mut bind_group_layouts = vec![Some(&scene_layout), Some(&playground_layout)];
@@ -1419,6 +1435,9 @@ fn render_world(
                 "cloud_shadow_cache_fallback_integrity" => {
                     Some("test_cloud_shadow_cache_fallback_integrity")
                 }
+                "cloud_shadow_cache_tide_initialization" => {
+                    Some("test_cloud_shadow_cache_tide_initialization")
+                }
                 _ => None,
             },
         );
@@ -1633,6 +1652,19 @@ fn test_cloud_shadow_cache_marker_integrity() {
 fn test_cloud_shadow_cache_fallback_integrity() {
     for (var key_x = 0u; key_x <= cloud_shadow_cache.maximum_tiles; key_x++) {
         let key = vec2<f32>(f32(key_x), 0.0);
+        mark_cloud_shadow_cache_tile_key(key, 0u, 0u);
+        mark_cloud_shadow_cache_tile_key(key, 0u, 1u);
+    }
+}
+"#
+            }
+            "test_cloud_shadow_cache_tide_initialization" => {
+                r#"
+@compute @workgroup_size(1)
+fn test_cloud_shadow_cache_tide_initialization() {
+    initialize_cloud_shadow_cache_discovery(scene.camera_and_view_m.xy);
+    if abs(tide_height_m()) > 0.05 {
+        let key = vec2<f32>(0.0);
         mark_cloud_shadow_cache_tile_key(key, 0u, 0u);
         mark_cloud_shadow_cache_tile_key(key, 0u, 1u);
     }

@@ -259,6 +259,27 @@ fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f3
     )), 1.0);
 }
 
+fn diagnostic_landform_shadow_penumbra_center() -> vec4<f32> {
+    return vec4<f32>(scalar_debug_color(landform_disc_occlusion(0.0, 1.0)), 1.0);
+}
+
+fn diagnostic_landform_shadow_partial_disc_ray() -> vec4<f32> {
+    var receiver = celestial_receiver_light_at_height(0.0);
+    receiver.horizon_z = 0.0;
+    receiver.sun_direction = normalize(vec3<f32>(
+        1.0,
+        0.0,
+        -0.5 * CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+    ));
+    receiver.sun_amount = 0.5;
+    let direction = landform_shadow_sample_direction(receiver, 0u);
+    return vec4<f32>(scalar_debug_color(select(
+        0.0,
+        1.0,
+        direction.z > receiver.horizon_z,
+    )), 1.0);
+}
+
 fn diagnostic_cloud_projection(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
     let projected_position_m = projected_cloud_position(

@@ -227,11 +227,7 @@ fn landform_shadow_cache_offset(
     direct_light: CelestialReceiverLight,
 ) -> vec3<f32> {
     let is_sun = source_index == 0u;
-    let light = select(
-        direct_light.moon_direction,
-        direct_light.sun_direction,
-        is_sun,
-    );
+    let light = landform_shadow_sample_direction(direct_light, source_index);
     let light_amount = select(
         direct_light.moon_amount,
         direct_light.sun_amount,

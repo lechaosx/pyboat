@@ -627,10 +627,46 @@ fn landform_shadow_transmittance_for_light(
             + 2.0 * angular_radius_rad * distance_m;
         occlusion = max(
             occlusion,
-            smoothstep(0.0, softness_m, blocker_elevation_m - ray_elevation_m),
+            landform_disc_occlusion(
+                blocker_elevation_m - ray_elevation_m,
+                softness_m,
+            ),
         );
     }
     return 1.0 - strength * occlusion;
+}
+
+fn landform_disc_occlusion(
+    blocker_clearance_m: f32,
+    full_width_m: f32,
+) -> f32 {
+    return smoothstep(
+        -0.5 * full_width_m,
+        0.5 * full_width_m,
+        blocker_clearance_m,
+    );
+}
+
+fn landform_shadow_sample_direction(
+    direct_light: CelestialReceiverLight,
+    source_index: u32,
+) -> vec3<f32> {
+    let is_sun = source_index == 0u;
+    let direction = select(
+        direct_light.moon_direction,
+        direct_light.sun_direction,
+        is_sun,
+    );
+    let angular_radius_rad = select(
+        MOON_ANGULAR_RADIUS_RAD,
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+        is_sun,
+    );
+    return celestial_visible_disc_sample_direction_at_horizon(
+        direct_light.horizon_z,
+        direction,
+        angular_radius_rad,
+    );
 }
 
 fn landform_shadow_transmittance(
@@ -644,11 +680,7 @@ fn landform_shadow_transmittance(
         transmittance[source_index] = landform_shadow_transmittance_for_light(
             position_m,
             elevation_m,
-            select(
-                direct_light.moon_direction,
-                direct_light.sun_direction,
-                is_sun,
-            ),
+            landform_shadow_sample_direction(direct_light, source_index),
             select(
                 direct_light.moon_amount,
                 direct_light.sun_amount,

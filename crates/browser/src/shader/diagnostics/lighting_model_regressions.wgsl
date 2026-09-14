@@ -34,5 +34,11 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 10u {
         return diagnostic_landform_shadow_tangent_continuity(input);
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 11u {
+        return diagnostic_landform_shadow_penumbra_center();
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 12u {
+        return diagnostic_landform_shadow_partial_disc_ray();
+    }
     return diagnostic_ambient_with_surface_horizon(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

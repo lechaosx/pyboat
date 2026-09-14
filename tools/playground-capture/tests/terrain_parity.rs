@@ -804,6 +804,41 @@ fn landform_shadows_are_continuous_across_the_local_tangent() {
 }
 
 #[test]
+fn landform_penumbra_is_centered_on_half_occlusion() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "lighting_landform_shadow_penumbra_center",
+        1,
+        1,
+    );
+    let amount = scalar_debug_amount(&image);
+    assert!(
+        (amount - 0.5).abs() < 0.02,
+        "penumbra centre occlusion was {amount}",
+    );
+}
+
+#[test]
+fn partially_visible_disc_uses_a_ray_above_the_horizon() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "lighting_landform_shadow_partial_disc_ray",
+        1,
+        1,
+    );
+    assert!(
+        scalar_debug_amount(&image) > 0.98,
+        "partial-disc shadow ray entered the planet",
+    );
+}
+
+#[test]
 fn landform_cast_shadows_reach_open_water() {
     let world = WorldGeometry::default();
     let position_m = representative_shore(world);
@@ -1266,6 +1301,37 @@ fn shadow_atlas_capacity_fallback_is_not_cache_corruption() {
 }
 
 #[test]
+fn cache_discovery_initializes_procedural_tide_state() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let (world_time_seconds, tide_height_m) = (0..96)
+        .map(|quarter_hour| {
+            let world_time_seconds = quarter_hour as f64 * 900.0;
+            let tick = (world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+            let tide_height_m =
+                procedural_world_environment(world, SEED, tick, position_m).water_height_m;
+            (world_time_seconds, tide_height_m)
+        })
+        .find(|(_, tide_height_m)| tide_height_m.abs() > 0.05)
+        .expect("test position should have a nonzero tide during the day");
+    assert!(tide_height_m.abs() > 0.05);
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "cloud_shadow_cache_tide_initialization",
+        1,
+        1,
+    );
+
+    assert!(
+        scalar_debug_amount(&image) > 0.99,
+        "cache discovery used uninitialized tide state",
+    );
+}
+
+#[test]
 fn cached_scene_matches_direct_scene_across_longitude_seam() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.5 * world.width_m() - 200.0, 0.0);
@@ -1305,6 +1371,37 @@ fn cached_scene_matches_direct_scene_across_longitude_seam() {
     assert!(
         maximum < 3.0,
         "maximum cached/direct byte difference: {maximum}"
+    );
+
+    let activity = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        4_000.0,
+        "scene_cached_activity",
+        256,
+        128,
+    );
+    let fallback = [
+        linear_channel_byte(1.0),
+        linear_channel_byte(0.35),
+        linear_channel_byte(0.0),
+    ];
+    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
+        + 128.0) as usize;
+    let has_atlas_hit = |column| {
+        (0..128).any(|row| {
+            let pixel = &activity[4 * (row * 256 + column)..];
+            pixel[..3] != [0, 0, 0]
+                && pixel[..3]
+                    .iter()
+                    .zip(fallback)
+                    .any(|(actual, fallback)| actual.abs_diff(fallback) > 4)
+        })
+    };
+    assert!(
+        has_atlas_hit(seam_column - 1) && has_atlas_hit(seam_column),
+        "longitude-seam parity capture did not hit the atlas on both sides",
     );
 }
 
