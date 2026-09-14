@@ -79,37 +79,10 @@ fn initialize_celestial_lighting() {
     );
     lunar_penumbra_fraction = scene.celestial_orbit_light.y;
     lunar_umbra_fraction = scene.celestial_orbit_light.z;
-    let datum_light = celestial_receiver_light_at_height(0.0);
-    moon_light_direction = datum_light.moon_direction;
-    solar_eclipse_fraction = datum_light.solar_eclipse_fraction;
-    sun_light_amount = datum_light.sun_amount;
-    moon_light_amount = datum_light.moon_amount;
 }
 
 fn sun_direction() -> vec3<f32> {
     return sun_light_direction;
-}
-
-fn moon_direction() -> vec3<f32> {
-    return moon_light_direction;
-}
-
-fn celestial_sun_amount() -> f32 {
-    return sun_light_amount;
-}
-
-fn celestial_moon_amount() -> f32 {
-    return moon_light_amount;
-}
-
-fn direct_sun_amount() -> f32 {
-    let visibility = direct_light_visibility();
-    return visibility.x * celestial_sun_amount();
-}
-
-fn direct_moon_amount() -> f32 {
-    let visibility = direct_light_visibility();
-    return visibility.y * celestial_moon_amount();
 }
 
 struct CelestialReceiverLight {
@@ -502,10 +475,6 @@ fn calculate_moon_light_color_for_direction(
     );
 }
 
-fn calculate_moon_light_color(scattering: f32) -> vec3<f32> {
-    return calculate_moon_light_color_for_direction(scattering, moon_direction());
-}
-
 fn sun_light_color(scattering: f32) -> vec3<f32> {
     let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_direction().z);
     let warmth = low_sun * mix(0.06, 1.0, scattering);
@@ -518,14 +487,6 @@ fn sun_direct_light_color() -> vec3<f32> {
 
 fn sun_diffuse_light_color() -> vec3<f32> {
     return sun_light_color(regional_horizon_scattering);
-}
-
-fn sun_direct_contribution_color() -> vec3<f32> {
-    return sun_direct_contribution_light_color;
-}
-
-fn moon_direct_contribution_color() -> vec3<f32> {
-    return moon_direct_contribution_light_color;
 }
 
 fn sun_direct_contribution_color_for_amount(amount: f32) -> vec3<f32> {
@@ -541,13 +502,6 @@ fn moon_direct_contribution_color_for_receiver(
             local_horizon_scattering,
             receiver.moon_direction,
         );
-}
-
-fn initialize_light_contributions() {
-    let sun_share = 0.38 * sqrt(clamp(direct_sun_amount(), 0.0, 1.0));
-    let moon_share = 0.16 * sqrt(clamp(direct_moon_amount(), 0.0, 1.0));
-    sun_direct_contribution_light_color = sun_share * sun_direct_light_color();
-    moon_direct_contribution_light_color = moon_share * moon_direct_light_color;
 }
 
 fn ambient_contribution_share(receiver: CelestialReceiverLight) -> f32 {

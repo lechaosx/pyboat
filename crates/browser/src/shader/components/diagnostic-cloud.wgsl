@@ -130,7 +130,8 @@ fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_lighting_solar_eclipse_coverage(input: VertexOutput) -> vec4<f32> {
-    return vec4<f32>(scalar_debug_color(solar_eclipse_fraction), 1.0);
+    let receiver = celestial_receiver_light_at_height(0.0);
+    return vec4<f32>(scalar_debug_color(receiver.solar_eclipse_fraction), 1.0);
 }
 
 fn diagnostic_lighting_surface_sun_amount(input: VertexOutput) -> vec4<f32> {
@@ -216,7 +217,7 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
 
 fn diagnostic_landform_shadow_disc_radii(input: VertexOutput) -> vec4<f32> {
     var receiver = celestial_receiver_light_at_height(0.0);
-    let direction = normalize(vec3<f32>(0.95, 0.30, 0.0));
+    let direction = normalize(vec3<f32>(0.95, 0.30, 0.02));
     receiver.sun_direction = direction;
     receiver.moon_direction = direction;
     receiver.sun_amount = 1.0;

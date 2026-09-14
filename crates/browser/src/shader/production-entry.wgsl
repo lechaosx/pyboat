@@ -21,9 +21,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     local_horizon_scattering = calculate_local_horizon_scattering();
     regional_horizon_scattering = calculate_regional_horizon_scattering();
-    moon_direct_light_color = calculate_moon_light_color(local_horizon_scattering);
-    moon_diffuse_light_color = calculate_moon_light_color(regional_horizon_scattering);
-    initialize_light_contributions();
     return final_scene_color(
         periodic_input,
         surface_weather.atmosphere,

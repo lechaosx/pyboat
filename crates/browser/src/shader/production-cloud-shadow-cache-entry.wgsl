@@ -10,6 +10,6 @@ fn initialize_cloud_shadow_cache_generation(position_m: vec2<f32>) {
 
 fn initialize_cloud_shadow_cache_discovery(position_m: vec2<f32>) {
     initialize_cloud_shadow_cache_generation(position_m);
-    initialize_surface_tide();
+    initialize_surface_tide_value();
     initialize_celestial_lighting();
 }
