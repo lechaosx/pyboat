@@ -340,8 +340,12 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
         (100.0, &["player-1", "player-2", "player-3"], &["player-5"]),
         (1.0, &["player-1"], &["player-3", "player-4", "player-5"]),
     ];
-    for (radius, required_ids, forbidden_ids) in cases {
-        let viewport = encode_client_message(&ClientMessage::Viewport { radius: *radius }).unwrap();
+    for (index, (radius, required_ids, forbidden_ids)) in cases.iter().enumerate() {
+        let viewport = encode_client_message(&ClientMessage::Viewport {
+            sequence: index as i64 + 1,
+            radius: *radius,
+        })
+        .unwrap();
         send_reliable(&clients[0].connection, &viewport).await;
         timeout(Duration::from_secs(1), async {
             loop {
@@ -360,6 +364,71 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
         })
         .await
         .unwrap();
+    }
+
+    for client in &clients {
+        close(client);
+    }
+    server.task.abort();
+}
+
+#[tokio::test]
+async fn stale_viewport_stream_cannot_overwrite_a_newer_update() {
+    let server = start_server();
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        clients.push(connect(&server).await.0);
+    }
+    let (registered_tick, _, _) = next_snapshot(&clients[4]).await;
+    let mut stale_stream = clients[0]
+        .connection
+        .open_uni()
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let stale = encode_client_message(&ClientMessage::Viewport {
+        sequence: -1,
+        radius: 100.0,
+    })
+    .unwrap();
+    stale_stream.write_all(&stale).await.unwrap();
+    let current = encode_client_message(&ClientMessage::Viewport {
+        sequence: 0,
+        radius: 1.0,
+    })
+    .unwrap();
+    send_reliable(&clients[0].connection, &current).await;
+
+    let applied_tick = timeout(Duration::from_secs(1), async {
+        loop {
+            let (tick, boats, _) = next_snapshot(&clients[0]).await;
+            if tick >= registered_tick
+                && boats
+                    .iter()
+                    .all(|boat| !matches!(boat.id.as_str(), "player-3" | "player-4" | "player-5"))
+            {
+                break tick;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    stale_stream.finish().await.unwrap();
+
+    let mut checked = 0;
+    while checked < 5 {
+        let (tick, boats, _) = next_snapshot(&clients[0]).await;
+        if tick <= applied_tick {
+            continue;
+        }
+        assert!(
+            boats
+                .iter()
+                .all(|boat| !matches!(boat.id.as_str(), "player-3" | "player-4" | "player-5")),
+            "stale viewport update expanded interest",
+        );
+        checked += 1;
     }
 
     for client in &clients {

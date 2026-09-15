@@ -174,9 +174,8 @@ fn diagnostic_lighting_low_cloud_canopy_transmittance(
     )), 1.0);
 }
 
-fn diagnostic_low_cloud_sun_lighting(surface_height_m: f32) -> vec4<f32> {
+fn diagnostic_low_cloud_sun_lighting() -> vec4<f32> {
     let lighting = low_cloud_sun_lighting(
-        celestial_receiver_light_at_height(surface_height_m),
         celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M),
     );
     return vec4<f32>(
@@ -185,6 +184,25 @@ fn diagnostic_low_cloud_sun_lighting(surface_height_m: f32) -> vec4<f32> {
         lighting.elevated_amount,
         1.0,
     );
+}
+
+fn diagnostic_projected_low_cloud_direct_color(input: VertexOutput) -> vec4<f32> {
+    let position_m = visible_low_cloud_position_m(input.world_position_m);
+    let weather = cloud_weather_at(position_m);
+    let receiver = celestial_receiver_light_at_position_and_height(
+        position_m,
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
+    let color = cloud_color(
+        vec3<f32>(0.0),
+        LowCloudSample(1.0, 0.6, vec2<f32>(0.0)),
+        vec2<f32>(1.0),
+        vec4<f32>(1.0, 0.0, 0.0, 0.0),
+        AtmosphericAmbientLight(vec3<f32>(0.0), vec3<f32>(0.0)),
+        weather,
+        receiver,
+    );
+    return vec4<f32>(color, 1.0);
 }
 
 fn diagnostic_projected_low_cloud_receiver(input: VertexOutput) -> vec4<f32> {
@@ -223,25 +241,20 @@ fn diagnostic_below_datum_cloud_projection(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_cloud_disc_transverse_spread(input: VertexOutput) -> vec4<f32> {
-    let light = normalize(vec3<f32>(0.8, 0.0, 0.6));
-    let directions = celestial_disc_sample_directions(
+    let light = vec3<f32>(1.0, 0.0, 0.0);
+    let full = celestial_disc_sample_directions(
+        -1.0,
+        light,
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+    );
+    let clipped = celestial_disc_sample_directions(
         0.0,
         light,
         CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
     );
-    let lower = projected_cloud_position(
-        input.world_position_m,
-        0.0,
-        WEATHER_CANOPY_HEIGHT_M,
-        directions.lower,
-    );
-    let side = projected_cloud_position(
-        input.world_position_m,
-        0.0,
-        WEATHER_CANOPY_HEIGHT_M,
-        directions.side,
-    );
-    return vec4<f32>(scalar_debug_color(abs(lower.y - side.y) / 10.0), 1.0);
+    let full_spread = abs(full.side.y - full.lower.y);
+    let clipped_spread = abs(clipped.side.y - clipped.lower.y);
+    return vec4<f32>(scalar_debug_color(0.5 * clipped_spread / full_spread), 1.0);
 }
 
 fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {

@@ -85,14 +85,21 @@ fn input_rejects_values_outside_the_control_range() {
 
 #[test]
 fn viewport_message_is_compact_and_rejects_invalid_radius() {
-    let expected = ClientMessage::Viewport { radius: 17.5 };
+    let expected = ClientMessage::Viewport {
+        sequence: 7,
+        radius: 17.5,
+    };
     let encoded = encode_client_message(&expected).unwrap();
     let decoded = decode_client_message(&encoded).unwrap();
 
-    assert_eq!(encoded.len(), 6);
+    assert_eq!(encoded.len(), 7);
     assert_eq!(decoded, expected);
     assert_eq!(
-        encode_client_message(&ClientMessage::Viewport { radius: 0.0 }).unwrap_err(),
+        encode_client_message(&ClientMessage::Viewport {
+            sequence: 7,
+            radius: 0.0,
+        })
+        .unwrap_err(),
         ProtocolError::InvalidViewportRadius
     );
 }
@@ -107,7 +114,7 @@ fn empty_snapshot_is_compact_and_round_trips() {
     let encoded = encode_server_message(&expected).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(encoded, [3, 1, 7, 0, 0]);
+    assert_eq!(encoded, [4, 1, 7, 0, 0]);
     assert_eq!(decoded, expected);
 }
 

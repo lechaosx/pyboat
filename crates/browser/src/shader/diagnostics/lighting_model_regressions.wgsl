@@ -5,7 +5,7 @@ override LIGHTING_MODEL_SURFACE_HEIGHT_M: f32 = 0.0;
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_playground_scene(input);
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 0u {
-        return diagnostic_low_cloud_sun_lighting(LIGHTING_MODEL_SURFACE_HEIGHT_M);
+        return diagnostic_low_cloud_sun_lighting();
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 1u {
         return diagnostic_landform_sun_grade_moon_coupling();
@@ -42,6 +42,9 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 17u {
         return diagnostic_cloud_disc_transverse_spread(input);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 18u {
+        return diagnostic_projected_low_cloud_direct_color(input);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 11u {
         return diagnostic_landform_shadow_penumbra_center();

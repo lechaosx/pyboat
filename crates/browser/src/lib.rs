@@ -20,6 +20,31 @@ mod web;
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 pub const CLOUD_SHADOW_CACHE_TILE_TEXELS: u32 = 128;
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn queue_latest_snapshot(pending: &mut Option<ServerMessage>, snapshot: ServerMessage) {
+    let ServerMessage::Snapshot { tick, .. } = &snapshot else {
+        return;
+    };
+    let should_replace = pending.as_ref().is_none_or(|pending| match pending {
+        ServerMessage::Snapshot {
+            tick: pending_tick, ..
+        } => tick >= pending_tick,
+        ServerMessage::Welcome { .. } => true,
+    });
+    if should_replace {
+        *pending = Some(snapshot);
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn disconnect_and_clear_pending_snapshot(
+    client: &mut MultiplayerClient,
+    pending: &mut Option<ServerMessage>,
+) {
+    pending.take();
+    client.disconnect();
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloudShadowCacheLayout {
     pub atlas_width: u32,
@@ -280,6 +305,7 @@ pub struct MultiplayerClient {
     next_input_sequence: i64,
     input_history: Vec<InputCommand>,
     input_accumulator_seconds: f32,
+    next_viewport_sequence: i64,
     sent_viewport_radius_m: Option<f32>,
     time_seconds: f32,
     prediction: SharedSimulation,
@@ -309,6 +335,7 @@ impl MultiplayerClient {
             next_input_sequence: 1,
             input_history: Vec::new(),
             input_accumulator_seconds: 0.0,
+            next_viewport_sequence: 1,
             sent_viewport_radius_m: None,
             time_seconds: 0.0,
             prediction: SharedSimulation::new(),
@@ -416,7 +443,12 @@ impl MultiplayerClient {
             return None;
         }
         self.sent_viewport_radius_m = Some(radius_m);
-        Some(ClientMessage::Viewport { radius: radius_m })
+        let sequence = self.next_viewport_sequence;
+        self.next_viewport_sequence += 1;
+        Some(ClientMessage::Viewport {
+            sequence,
+            radius: radius_m,
+        })
     }
 
     pub fn set_player_input(
@@ -1052,6 +1084,42 @@ fn cubic_vector_correction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapshot(tick: u64) -> ServerMessage {
+        ServerMessage::Snapshot {
+            tick,
+            boats: Vec::new(),
+            removed_player_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pending_snapshot_keeps_the_highest_received_tick() {
+        let mut pending = None;
+
+        queue_latest_snapshot(&mut pending, snapshot(7));
+        queue_latest_snapshot(&mut pending, snapshot(5));
+        assert_eq!(pending, Some(snapshot(7)));
+
+        queue_latest_snapshot(&mut pending, snapshot(9));
+        assert_eq!(pending, Some(snapshot(9)));
+    }
+
+    #[test]
+    fn disconnect_discards_a_queued_snapshot() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        let mut pending = Some(snapshot(7));
+
+        disconnect_and_clear_pending_snapshot(&mut client, &mut pending);
+
+        assert_eq!(pending, None);
+        assert_eq!(client.update_viewport(10.0), None);
+    }
 
     #[test]
     fn production_shader_exposes_only_the_game_interface() {

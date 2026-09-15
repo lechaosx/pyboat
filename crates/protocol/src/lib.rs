@@ -5,7 +5,7 @@ pub use simulation::WorldGeometry;
 
 // Postcard encodes these enums and structs positionally. Reordering or changing
 // fields is a wire-contract change and requires a new version.
-pub const PROTOCOL_VERSION: u8 = 3;
+pub const PROTOCOL_VERSION: u8 = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -15,6 +15,7 @@ pub enum ClientMessage {
         turn: f32,
     },
     Viewport {
+        sequence: i64,
         radius: f32,
     },
 }
@@ -104,7 +105,7 @@ fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError>
         {
             Err(ProtocolError::InvalidMotionIntent)
         }
-        ClientMessage::Viewport { radius } if !radius.is_finite() || *radius <= 0.0 => {
+        ClientMessage::Viewport { radius, .. } if !radius.is_finite() || *radius <= 0.0 => {
             Err(ProtocolError::InvalidViewportRadius)
         }
         _ => Ok(()),

@@ -27,7 +27,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER,
-    Windsock, cloud_shadow_cache_layout, periodic_effect_time, sample_production_world_environment,
+    Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
+    periodic_effect_time, queue_latest_snapshot, sample_production_world_environment,
     sample_world_geometry, scale_bar, seasonal_phase_factors, viewport_interest_radius_m,
     visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
 };
@@ -1366,8 +1367,10 @@ impl BrowserGame {
             &self.pending_viewport,
             &self.sending_reliable,
         );
-        if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
-            self.client.borrow_mut().accept(snapshot);
+        if self.connection_status.get() == ConnectionStatus::Connected {
+            if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
+                self.client.borrow_mut().accept(snapshot);
+            }
         }
         let client = self.client.borrow();
         self.renderer.render(
@@ -1529,14 +1532,23 @@ fn connect_webtransport(
             Rc::clone(&protocol_client),
             Rc::clone(&pending_snapshot),
             Rc::clone(&connection_status),
+            Rc::clone(&transport),
         );
         receive_reliable_messages(
             session.clone(),
             Rc::clone(&protocol_client),
             Rc::clone(&pending_snapshot),
             Rc::clone(&connection_status),
+            Rc::clone(&transport),
         );
-        watch_connection_close(session, protocol_client, connection_status, close_notice);
+        watch_connection_close(
+            session,
+            protocol_client,
+            connection_status,
+            close_notice,
+            Rc::clone(&pending_snapshot),
+            Rc::clone(&transport),
+        );
         pump_datagrams(&transport, &pending_datagrams, &sending_datagrams);
         pump_reliable(&transport, &pending_viewport, &sending_reliable);
     });
@@ -1548,12 +1560,18 @@ fn receive_datagrams(
     protocol_client: Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
     connection_status: Rc<Cell<ConnectionStatus>>,
+    transport: Rc<RefCell<Option<Session>>>,
 ) {
     spawn_local(async move {
         while let Ok(message) = session.recv_datagram().await {
             if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
-                protocol_client.borrow_mut().disconnect();
-                connection_status.set(ConnectionStatus::Error);
+                fail_protocol(
+                    &session,
+                    &protocol_client,
+                    &pending_snapshot,
+                    &connection_status,
+                    &transport,
+                );
                 break;
             }
         }
@@ -1565,20 +1583,29 @@ fn receive_reliable_messages(
     protocol_client: Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
     connection_status: Rc<Cell<ConnectionStatus>>,
+    transport: Rc<RefCell<Option<Session>>>,
 ) {
     spawn_local(async move {
         while let Ok(mut stream) = session.accept_uni().await {
             let mut message = Vec::new();
-            loop {
+            let complete = loop {
                 match stream.read(64 * 1024).await {
                     Ok(Some(chunk)) => message.extend_from_slice(&chunk),
-                    Ok(None) => break,
-                    Err(_) => return,
+                    Ok(None) => break true,
+                    Err(_) => break false,
                 }
+            };
+            if !complete {
+                continue;
             }
             if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
-                protocol_client.borrow_mut().disconnect();
-                connection_status.set(ConnectionStatus::Error);
+                fail_protocol(
+                    &session,
+                    &protocol_client,
+                    &pending_snapshot,
+                    &connection_status,
+                    &transport,
+                );
                 break;
             }
         }
@@ -1593,10 +1620,26 @@ fn accept_server_message(
     match decode_server_message(bytes)? {
         message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
         message @ ServerMessage::Snapshot { .. } => {
-            pending_snapshot.replace(Some(message));
+            queue_latest_snapshot(&mut pending_snapshot.borrow_mut(), message);
         }
     }
     Ok(())
+}
+
+fn fail_protocol(
+    session: &Session,
+    protocol_client: &Rc<RefCell<MultiplayerClient>>,
+    pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: &Rc<Cell<ConnectionStatus>>,
+    transport: &Rc<RefCell<Option<Session>>>,
+) {
+    disconnect_and_clear_pending_snapshot(
+        &mut protocol_client.borrow_mut(),
+        &mut pending_snapshot.borrow_mut(),
+    );
+    connection_status.set(ConnectionStatus::Error);
+    transport.borrow_mut().take();
+    session.close(1, "Protocol error");
 }
 
 fn watch_connection_close(
@@ -1604,10 +1647,16 @@ fn watch_connection_close(
     protocol_client: Rc<RefCell<MultiplayerClient>>,
     connection_status: Rc<Cell<ConnectionStatus>>,
     close_notice: Rc<RefCell<Option<String>>>,
+    pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,
+    transport: Rc<RefCell<Option<Session>>>,
 ) {
     spawn_local(async move {
         let error = session.closed().await;
-        protocol_client.borrow_mut().disconnect();
+        transport.borrow_mut().take();
+        disconnect_and_clear_pending_snapshot(
+            &mut protocol_client.borrow_mut(),
+            &mut pending_snapshot.borrow_mut(),
+        );
         close_notice.replace(Some(error.to_string()));
         if connection_status.get() != ConnectionStatus::Error {
             connection_status.set(ConnectionStatus::Closed);

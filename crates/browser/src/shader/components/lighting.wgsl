@@ -500,14 +500,18 @@ fn calculate_regional_horizon_scattering() -> f32 {
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
 }
 
-fn calculate_local_horizon_scattering() -> f32 {
+fn calculate_local_horizon_scattering_at(weather: CloudWeatherSample) -> f32 {
     let aerosol = smoothstep(
         0.04,
         0.30,
-        local_aerosol_optical_depth_at(surface_cloud_weather),
+        local_aerosol_optical_depth_at(weather),
     );
-    let moist_haze = smoothstep(0.65, 1.10, relative_humidity());
+    let moist_haze = smoothstep(0.65, 1.10, weather.relative_humidity);
     return clamp(0.82 * aerosol + 0.18 * moist_haze, 0.0, 1.0);
+}
+
+fn calculate_local_horizon_scattering() -> f32 {
+    return calculate_local_horizon_scattering_at(surface_cloud_weather);
 }
 
 fn calculate_moon_light_color_for_direction(
@@ -645,11 +649,17 @@ fn celestial_disc_sample_directions(
     let visible_span_rad = visible_upper_rad - visible_lower_rad;
     let lower_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 1.0 / 3.0);
     let upper_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 5.0 / 6.0);
+    let lower_disc_offset_rad = lower_elevation_rad - elevation_rad;
+    let transverse_half_width_rad = sqrt(max(
+        angular_radius_rad * angular_radius_rad
+            - lower_disc_offset_rad * lower_disc_offset_rad,
+        0.0,
+    ));
     let lateral = vec3<f32>(
         -horizontal_direction.y,
         horizontal_direction.x,
         0.0,
-    ) * (visible_span_rad * 0.28867513);
+    ) * (transverse_half_width_rad * 0.61237244);
     let lower_base = vec3<f32>(
         cos(lower_elevation_rad) * horizontal_direction,
         sin(lower_elevation_rad),

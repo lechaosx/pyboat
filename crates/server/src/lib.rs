@@ -67,6 +67,7 @@ enum ConnectionEvent {
     },
     Viewport {
         player_id: String,
+        sequence: i64,
         radius_m: f32,
     },
     Disconnected {
@@ -91,6 +92,7 @@ struct Player {
     acknowledged_input: i64,
     last_received_input: i64,
     pending_inputs: VecDeque<(i64, MotionIntent)>,
+    last_received_viewport: Option<i64>,
     visibility_radius_m: f32,
     health: f32,
     last_hit_tick: Option<u64>,
@@ -201,6 +203,7 @@ impl GameMatch {
             acknowledged_input: 0,
             last_received_input: 0,
             pending_inputs: VecDeque::new(),
+            last_received_viewport: None,
             visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
             health: BOAT_MAX_HEALTH,
             last_hit_tick: None,
@@ -246,7 +249,7 @@ impl GameMatch {
         player.last_received_input = sequence;
     }
 
-    fn set_viewport(&mut self, player_id: &str, radius_m: f32) {
+    fn set_viewport(&mut self, player_id: &str, sequence: i64, radius_m: f32) {
         let Some(player) = self
             .players
             .iter_mut()
@@ -254,6 +257,13 @@ impl GameMatch {
         else {
             return;
         };
+        if player
+            .last_received_viewport
+            .is_some_and(|last_sequence| sequence <= last_sequence)
+        {
+            return;
+        }
+        player.last_received_viewport = Some(sequence);
         player.visibility_radius_m =
             radius_m.clamp(PHYSICS_BUBBLE_RADIUS_M, MAX_VISIBILITY_RADIUS_M);
     }
@@ -455,6 +465,7 @@ where
     let mut game_match = GameMatch::new_with_world_geometry(new_match_seed(), world_geometry);
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
+    let mut upgrades = tokio::task::JoinSet::new();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -482,9 +493,9 @@ where
                 .await;
                 return Ok(());
             }
-            incoming_session = endpoint.accept() => {
+            incoming_session = endpoint.accept(), if upgrades.len() < MAX_PENDING_CONNECTION_EVENTS => {
                 let events = events.clone();
-                tokio::spawn(async move {
+                upgrades.spawn(async move {
                     match upgrade_connection(incoming_session).await {
                         Ok(connection) => {
                             let _ = events.send(ConnectionEvent::Upgraded {
@@ -494,6 +505,11 @@ where
                         Err(error) => eprintln!("WebTransport connection failed: {error}"),
                     }
                 });
+            }
+            Some(result) = upgrades.join_next(), if !upgrades.is_empty() => {
+                if let Err(error) = result {
+                    eprintln!("WebTransport connection upgrade task failed: {error}");
+                }
             }
             Some(event) = incoming_events.recv() => match event {
                 ConnectionEvent::Upgraded { connection } => {
@@ -527,8 +543,8 @@ where
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     game_match.set_input(&player_id, sequence, intent);
                 }
-                ConnectionEvent::Viewport { player_id, radius_m } => {
-                    game_match.set_viewport(&player_id, radius_m);
+                ConnectionEvent::Viewport { player_id, sequence, radius_m } => {
+                    game_match.set_viewport(&player_id, sequence, radius_m);
                 }
                 ConnectionEvent::Disconnected { player_id } => {
                     connections.remove(&player_id);
@@ -566,6 +582,12 @@ async fn handle_connection(
     world_geometry: WorldGeometry,
     events: mpsc::Sender<ConnectionEvent>,
 ) -> ConnectionResult<()> {
+    let welcome = encode_server_message(&ServerMessage::Welcome {
+        player_id: player_id.clone(),
+        match_seed,
+        world_geometry,
+    })?;
+    send_reliable_message(&connection, &welcome).await?;
     let (outbound, mut outbound_updates) = watch::channel(None);
     let (registered, registration) = oneshot::channel();
     events
@@ -580,12 +602,6 @@ async fn handle_connection(
     registration
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "server stopped"))?;
-    let welcome = encode_server_message(&ServerMessage::Welcome {
-        player_id: player_id.clone(),
-        match_seed,
-        world_geometry,
-    })?;
-    send_reliable_message(&connection, &welcome).await?;
     let (mut incoming_messages, receive_tasks) = receive_messages(&connection);
 
     let result: ConnectionResult<()> = async {
@@ -605,9 +621,13 @@ async fn handle_connection(
                             break Ok(());
                         }
                     }
-                    Some(Ok(IncomingMessage::Reliable(ClientMessage::Viewport { radius }))) => {
+                    Some(Ok(IncomingMessage::Reliable(ClientMessage::Viewport {
+                        sequence,
+                        radius,
+                    }))) => {
                         if events.send(ConnectionEvent::Viewport {
                             player_id: player_id.clone(),
+                            sequence,
                             radius_m: radius,
                         }).await.is_err() {
                             break Ok(());
@@ -773,6 +793,7 @@ mod tests {
                 acknowledged_input: 0,
                 last_received_input: 0,
                 pending_inputs: VecDeque::new(),
+                last_received_viewport: None,
                 visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
                 health: BOAT_MAX_HEALTH,
                 last_hit_tick: None,
@@ -835,6 +856,7 @@ mod tests {
                     acknowledged_input: 0,
                     last_received_input: 0,
                     pending_inputs: VecDeque::new(),
+                    last_received_viewport: None,
                     visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
                     health: BOAT_MAX_HEALTH,
                     last_hit_tick: None,

@@ -499,20 +499,22 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   altitude, with each finite disc smoothing its transition. Rendered terrain and
   water use their local surface elevation, including below datum; the
   900-metre visible-cloud and 3600-metre canopy layers use their fixed physical
-  altitudes. The canopy can therefore scatter sunlight after ground sunset,
-  and visible clouds evaluate
-  celestial geometry at their displayed projected position. They can remain
+  altitudes. The canopy can therefore scatter sunlight after ground sunset.
+  Visible clouds evaluate celestial geometry at their displayed projected
+  position. They can remain
   sunlit or be blocked by detailed canopy optical depth. While the disc is only
   partly visible, projected attenuation uses the midpoint of its visible
   vertical slice so the representative ray clears the
   planet rather than selecting the canopy shell beyond it. Below-surface-horizon
   sunlight contributes only edge and internal scattering; top-facing direct
-  response remains tied to surface-visible light. Grazing optical paths remain
-  finite. The apparent angular radius of the Sun and Moon supplies a
-  distance-proportional penumbra for landform shadows.
+  response uses datum-horizon visibility at the cloud's projected world
+  position. Its direct color uses weather sampled at that position. Grazing
+  optical paths remain finite. The apparent angular radius of the Sun and Moon
+  supplies a distance-proportional penumbra for landform shadows.
 - **[Implicit]** Resolvable cloud-shadow penumbrae average three samples
-  across both axes of each visible celestial disc. Subpixel separation
-  collapses to the representative ray. All samples retain one
+  across both axes of each visible celestial disc. A horizon-clipped disc keeps
+  transverse spread from the width of its visible circular segment. Subpixel
+  separation collapses to the representative ray. All samples retain one
   source-and-receiver footprint identity for sparse-atlas reuse eligibility.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,
@@ -551,13 +553,21 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   WebTransport.
 - **[Implicit]** The versioned welcome message carries player identity, match
   seed, and validated world geometry. Server and browser retain the same
-  geometry for authoritative and predicted match inputs.
+  geometry for authoritative and predicted match inputs. A player enters the
+  authoritative match only after the welcome message is sent successfully.
 - **[Explicit]** WebTransport is always encrypted. Local development pins a
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.
 - **[Implicit]** Network queues are bounded and latest-biased so delayed clients
-  cannot accumulate stale commands or snapshots. Commands are sequenced, and an
-  acknowledgement covers only input already used by an authoritative tick.
+  cannot accumulate stale commands or snapshots. Input commands and viewport
+  updates are sequenced so independently completed streams cannot restore stale
+  interest. An acknowledgement covers only input already used by an
+  authoritative tick.
+- **[Implicit]** A protocol decoding or version failure closes the WebTransport
+  session and discards its queued snapshot so neither peer retains incompatible
+  replicated state.
+- **[Implicit]** An independently reset reliable stream is discarded without
+  disabling reception of later streams from the same session.
 - **[Explicit]** Snapshots are assembled for each recipient because nearby boats
   need prediction data that distant visible boats do not.
 

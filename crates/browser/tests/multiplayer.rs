@@ -103,12 +103,18 @@ fn multiplayer_client_sends_viewport_only_when_connected_and_changed() {
     });
     assert_eq!(
         client.update_viewport(15.0),
-        Some(ClientMessage::Viewport { radius: 15.0 })
+        Some(ClientMessage::Viewport {
+            sequence: 1,
+            radius: 15.0,
+        })
     );
     assert_eq!(client.update_viewport(15.0), None);
     assert_eq!(
         client.update_viewport(18.0),
-        Some(ClientMessage::Viewport { radius: 18.0 })
+        Some(ClientMessage::Viewport {
+            sequence: 2,
+            radius: 18.0,
+        })
     );
 
     client.disconnect();
