@@ -187,6 +187,63 @@ fn diagnostic_low_cloud_sun_lighting(surface_height_m: f32) -> vec4<f32> {
     );
 }
 
+fn diagnostic_projected_low_cloud_receiver(input: VertexOutput) -> vec4<f32> {
+    let projected_position_m = visible_low_cloud_position_m(input.world_position_m);
+    let receiver = celestial_receiver_light_at_position_and_height(
+        projected_position_m,
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
+    return vec4<f32>(
+        receiver.sun_amount,
+        receiver.moon_amount,
+        select(0.0, 1.0, projected_position_m.x != input.world_position_m.x),
+        1.0,
+    );
+}
+
+fn diagnostic_below_datum_cloud_projection(input: VertexOutput) -> vec4<f32> {
+    let light = normalize(vec3<f32>(0.95, 0.0, 0.2));
+    let low_tide_position = projected_cloud_position(
+        input.world_position_m,
+        -1.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        light,
+    );
+    let datum_position = projected_cloud_position(
+        input.world_position_m,
+        0.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        light,
+    );
+    return vec4<f32>(scalar_debug_color(select(
+        0.0,
+        1.0,
+        length(low_tide_position - datum_position) > 0.25,
+    )), 1.0);
+}
+
+fn diagnostic_cloud_disc_transverse_spread(input: VertexOutput) -> vec4<f32> {
+    let light = normalize(vec3<f32>(0.8, 0.0, 0.6));
+    let directions = celestial_disc_sample_directions(
+        0.0,
+        light,
+        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+    );
+    let lower = projected_cloud_position(
+        input.world_position_m,
+        0.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        directions.lower,
+    );
+    let side = projected_cloud_position(
+        input.world_position_m,
+        0.0,
+        WEATHER_CANOPY_HEIGHT_M,
+        directions.side,
+    );
+    return vec4<f32>(scalar_debug_color(abs(lower.y - side.y) / 10.0), 1.0);
+}
+
 fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
     var receiver = celestial_receiver_light_at_height(0.0);
     receiver.sun_direction = vec3<f32>(0.7035, 0.1005, 0.7035);
@@ -384,8 +441,8 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
         1.0,
     );
     let actual = effective_cloud_shadow_amount(
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(1.0, 1.0),
+        vec3<f32>(1.0),
+        vec3<f32>(1.0),
         receiver,
     );
     return vec4<f32>(scalar_debug_color(10.0 * abs(actual - expected)), 1.0);

@@ -709,7 +709,7 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
-        "scene_cached" | "scene_cached_activity" => ShaderSelection {
+        "scene_cached" | "scene_cached_activity" | "scene_cached_hits" => ShaderSelection {
             id: value.to_owned(),
             module: None,
             constants: &[],
@@ -953,6 +953,21 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 14.0)],
         ),
+        "lighting_projected_low_cloud_receiver" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 15.0)],
+        ),
+        "lighting_below_datum_cloud_projection" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 16.0)],
+        ),
+        "lighting_cloud_disc_transverse_spread" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 17.0)],
+        ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1142,7 +1157,7 @@ async fn render(options: &Options) -> Result<(), String> {
         .map_err(|error| format!("failed to create capture device: {error}"))?;
     let cached_scene = matches!(
         options.diagnostic.id.as_str(),
-        "scene_cached" | "scene_cached_activity"
+        "scene_cached" | "scene_cached_activity" | "scene_cached_hits"
     );
     let fragment_module = options
         .diagnostic
@@ -1171,7 +1186,11 @@ async fn render(options: &Options) -> Result<(), String> {
             &playground_layout,
             options.width,
             options.height,
-            u32::from(options.diagnostic.id == "scene_cached_activity"),
+            match options.diagnostic.id.as_str() {
+                "scene_cached_activity" => 1,
+                "scene_cached_hits" => 4,
+                _ => 0,
+            },
         )
     });
     let mut bind_group_layouts = vec![Some(&scene_layout), Some(&playground_layout)];

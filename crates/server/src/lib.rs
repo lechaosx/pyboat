@@ -687,11 +687,15 @@ fn receive_messages(
 
     let stream_connection = connection.clone();
     let stream_task = tokio::spawn(async move {
+        let mut reads = tokio::task::JoinSet::new();
         loop {
+            if reads.len() >= MAX_PENDING_CONNECTION_MESSAGES {
+                reads.join_next().await;
+            }
             match stream_connection.accept_uni().await {
                 Ok(stream) => {
                     let messages = messages.clone();
-                    tokio::spawn(async move {
+                    reads.spawn(async move {
                         let message = receive_reliable_message(stream)
                             .await
                             .and_then(|message| {

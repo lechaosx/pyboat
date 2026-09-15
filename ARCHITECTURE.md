@@ -497,9 +497,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   at a pole. Sun and Moon visibility at each receiver
   layer derive their Earth-shadow horizon from world circumference and physical
   altitude, with each finite disc smoothing its transition. Rendered terrain and
-  water use their local surface elevation; the 900-metre visible-cloud and
-  3600-metre canopy layers use their fixed physical altitudes. The canopy can
-  therefore scatter sunlight after ground sunset, and visible clouds can remain
+  water use their local surface elevation, including below datum; the
+  900-metre visible-cloud and 3600-metre canopy layers use their fixed physical
+  altitudes. The canopy can therefore scatter sunlight after ground sunset,
+  and visible clouds evaluate
+  celestial geometry at their displayed projected position. They can remain
   sunlit or be blocked by detailed canopy optical depth. While the disc is only
   partly visible, projected attenuation uses the midpoint of its visible
   vertical slice so the representative ray clears the
@@ -508,9 +510,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   response remains tied to surface-visible light. Grazing optical paths remain
   finite. The apparent angular radius of the Sun and Moon supplies a
   distance-proportional penumbra for landform shadows.
-- **[Implicit]** Resolvable cloud-shadow penumbrae average two symmetric samples
-  across the visible vertical extent of each celestial disc. Subpixel separation
-  collapses to the representative ray. Both samples retain one
+- **[Implicit]** Resolvable cloud-shadow penumbrae average three samples
+  across both axes of each visible celestial disc. Subpixel separation
+  collapses to the representative ray. All samples retain one
   source-and-receiver footprint identity for sparse-atlas reuse eligibility.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,

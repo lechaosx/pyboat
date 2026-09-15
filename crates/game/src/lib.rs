@@ -460,8 +460,7 @@ pub fn celestial_lighting_at_height(
     let geocentric_moon_direction =
         celestial_direction(latitude, orbit.lunar_declination_rad, lunar_hour_angle);
     let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
-    let observer_radius_planet_radii =
-        (world_radius_m + receiver_height_m.max(0.0)) / world_radius_m;
+    let observer_radius_planet_radii = (world_radius_m + receiver_height_m) / world_radius_m;
     let moon_direction =
         topocentric_moon_direction(geocentric_moon_direction, observer_radius_planet_radii);
     let solar_separation =

@@ -255,11 +255,11 @@ fn cloud_shadow_cache_footprint(
     surface_light: CelestialReceiverLight,
     low_cloud_light: CelestialReceiverLight,
 ) -> CloudShadowCacheFootprint {
-    // Each receiver/source pair has lower- and upper-disc footprints.
-    let tap_index = footprint_index % 2u;
-    let source_index = (footprint_index / 2u) % 2u;
+    // All disc taps share one receiver/source identity for reuse eligibility.
+    let tap_index = footprint_index % 3u;
+    let source_index = (footprint_index / 3u) % 2u;
     let is_sun = source_index == 0u;
-    let receives_at_low_cloud = layer == 1u && footprint_index >= 4u;
+    let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
     var receiver_light = surface_light;
     if receives_at_low_cloud {
         receiver_light = low_cloud_light;
@@ -327,6 +327,9 @@ fn cloud_shadow_cache_footprint(
     );
     if resolved {
         light = select(directions.lower, directions.upper, tap_index == 1u);
+        if tap_index == 2u {
+            light = directions.side;
+        }
     }
     if receives_at_low_cloud {
         enabled = layer_visibility.x > 0.0
@@ -393,12 +396,15 @@ fn discover_cloud_shadow_cache_tiles(
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
     let surface_light = celestial_receiver_light_at_height(surface_receiver_height_m);
-    let low_cloud_light = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
+    let low_cloud_light = celestial_receiver_light_at_position_and_height(
+        visible_low_cloud_position_m(position_m),
+        LOW_CLOUD_BASE_HEIGHT_M,
+    );
     for (var layer = 0u; layer < 2u; layer++) {
-        let footprint_count = select(8u, 4u, layer == 0u);
-        var footprints: array<CloudShadowCacheFootprint, 8>;
+        let footprint_count = select(12u, 6u, layer == 0u);
+        var footprints: array<CloudShadowCacheFootprint, 12>;
         for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
-            let receives_at_low_cloud = layer == 1u && footprint_index >= 4u;
+            let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
             let receiver_position_m = select(
                 position_m,
                 visible_low_cloud_position_m(position_m),
@@ -417,7 +423,7 @@ fn discover_cloud_shadow_cache_tiles(
             if !footprint.enabled {
                 continue;
             }
-            let receives_at_low_cloud = layer == 1u && footprint_index >= 4u;
+            let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
             let receiver_position_m = select(
                 position_m,
                 visible_low_cloud_position_m(position_m),
@@ -430,7 +436,7 @@ fn discover_cloud_shadow_cache_tiles(
             mark_cloud_shadow_cache_tile_key(
                 cloud_shadow_cache_tile_key(projected_position_m),
                 layer,
-                footprint_index / 2u,
+                footprint_index / 3u,
             );
         }
     }

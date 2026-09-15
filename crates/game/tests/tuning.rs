@@ -993,6 +993,14 @@ fn receiver_height_changes_lunar_parallax_and_solar_overlap() {
     };
     let surface = celestial_lighting_at_height(world, horizon_conditions, 0.0);
     let canopy = celestial_lighting_at_height(world, horizon_conditions, 3_600.0);
+    let below_datum = celestial_lighting_at_height(world, horizon_conditions, -900.0);
+    assert!(
+        surface
+            .moon_direction
+            .into_iter()
+            .zip(below_datum.moon_direction)
+            .any(|(surface, below)| (surface - below).abs() > 0.0001),
+    );
     let direction_dot = surface
         .moon_direction
         .into_iter()

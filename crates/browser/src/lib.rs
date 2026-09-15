@@ -60,9 +60,9 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
     let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
     let atlas_columns = square_columns.min(maximum_axis_tiles).max(1);
     let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
-    // Discovery retains twelve cloud-disc and eight landform footprints, including
+    // Discovery retains eighteen cloud-disc and eight landform footprints, including
     // singletons that never consume atlas space.
-    let marker_tiles = 20u32.saturating_mul(screen_footprint_tiles).max(1);
+    let marker_tiles = 26u32.saturating_mul(screen_footprint_tiles).max(1);
     let table_entries = marker_tiles.saturating_mul(2).next_power_of_two();
 
     CloudShadowCacheLayout {
@@ -1105,7 +1105,7 @@ mod tests {
         let layout = cloud_shadow_cache_layout(1920, 1080, 8192);
 
         assert_eq!(layout.maximum_tiles, 6 * 16 * 10);
-        assert!(layout.table_entries >= 2 * 20 * 16 * 10);
+        assert!(layout.table_entries >= 2 * 26 * 16 * 10);
         assert!(layout.table_entries.is_power_of_two());
         assert!(layout.atlas_width <= 8192);
         assert!(layout.atlas_height <= 8192);
@@ -1120,7 +1120,7 @@ mod tests {
         let layout = cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 64);
 
         assert_eq!(layout.maximum_tiles, 6 * 31 * 18);
-        assert!(layout.table_entries >= 2 * 20 * 31 * 18);
+        assert!(layout.table_entries >= 2 * 26 * 31 * 18);
         assert_eq!(layout.atlas_width % 66, 0);
         assert_eq!(layout.atlas_height % 66, 0);
         assert!(layout.atlas_width <= 8192);

@@ -839,6 +839,78 @@ fn partially_visible_disc_uses_a_ray_above_the_horizon() {
 }
 
 #[test]
+fn projected_low_cloud_receives_light_at_its_world_position() {
+    let world = WorldGeometry::default();
+    let camera_m = Vector::ZERO;
+    let ground_m = Vector::new(16_000.0, 0.0);
+    let projected_m = Vector::new(14_800.0, 0.0);
+    let (world_time_seconds, expected) = (0..96)
+        .map(|quarter_hour| quarter_hour as f64 * 900.0)
+        .map(|time| {
+            let ground = celestial_lighting_at_height(
+                world,
+                world_celestial_conditions(world, time, ground_m),
+                900.0,
+            );
+            let projected = celestial_lighting_at_height(
+                world,
+                world_celestial_conditions(world, time, projected_m),
+                900.0,
+            );
+            (time, ground, projected)
+        })
+        .max_by(|left, right| {
+            (left.1.sun_intensity - left.2.sun_intensity)
+                .abs()
+                .total_cmp(&(right.1.sun_intensity - right.2.sun_intensity).abs())
+        })
+        .map(|(time, ground, projected)| {
+            assert!((ground.sun_intensity - projected.sun_intensity).abs() > 0.03);
+            (time, projected.sun_intensity)
+        })
+        .unwrap();
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        camera_m,
+        world_time_seconds,
+        16_000.0,
+        "lighting_projected_low_cloud_receiver",
+        3,
+        1,
+    );
+    let actual = srgb_channel_to_linear(image[4 * 2]);
+    assert!((actual - expected).abs() < 0.015, "{actual} != {expected}");
+}
+
+#[test]
+fn below_datum_water_elevation_changes_cloud_projection() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "lighting_below_datum_cloud_projection",
+        1,
+        1,
+    );
+    assert!(scalar_debug_amount(&image) > 0.98);
+}
+
+#[test]
+fn resolvable_cloud_disc_samples_spread_across_both_axes() {
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        1.0,
+        "lighting_cloud_disc_transverse_spread",
+        1,
+        1,
+    );
+    assert!(scalar_debug_amount(&image) > 0.1);
+}
+
+#[test]
 fn cloud_shadow_softness_responds_to_celestial_disc_radius() {
     let image = render_diagnostic_image_with_view_at(
         WorldGeometry::default(),
@@ -1415,35 +1487,24 @@ fn cached_scene_matches_direct_scene_across_longitude_seam() {
         "maximum cached/direct byte difference: {maximum}"
     );
 
-    let activity = render_diagnostic_image_with_view_at(
+    let hits = render_diagnostic_image_with_view_at(
         world,
         position_m,
         world_time_seconds,
         4_000.0,
-        "scene_cached_activity",
+        "scene_cached_hits",
         256,
         128,
     );
-    let fallback = [
-        linear_channel_byte(1.0),
-        linear_channel_byte(0.35),
-        linear_channel_byte(0.0),
-    ];
     let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
         + 128.0) as usize;
-    let has_atlas_hit = |column| {
-        (0..128).any(|row| {
-            let pixel = &activity[4 * (row * 256 + column)..];
-            pixel[..3] != [0, 0, 0]
-                && pixel[..3]
-                    .iter()
-                    .zip(fallback)
-                    .any(|(actual, fallback)| actual.abs_diff(fallback) > 4)
-        })
-    };
     assert!(
-        has_atlas_hit(seam_column - 1) && has_atlas_hit(seam_column),
-        "longitude-seam parity capture did not hit the atlas on both sides",
+        (0..128).any(|row| {
+            let left = &hits[4 * (row * 256 + seam_column - 1)..];
+            let right = &hits[4 * (row * 256 + seam_column)..];
+            (left[0] > 240 && right[0] > 240) || (left[2] > 240 && right[2] > 240)
+        }),
+        "longitude-seam parity capture did not sample the same cached cloud layer on both sides",
     );
 }
 

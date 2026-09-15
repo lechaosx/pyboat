@@ -1,5 +1,9 @@
-fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
-    let latitude = radians(surface_latitude_phase_degrees_at(surface_position_m));
+fn celestial_direction_at_position(
+    position_m: vec2<f32>,
+    declination: f32,
+    hour_angle: f32,
+) -> vec3<f32> {
+    let latitude = radians(surface_latitude_phase_degrees_at(position_m));
     return vec3<f32>(
         -cos(declination) * sin(hour_angle),
         sin(declination) * cos(latitude)
@@ -9,13 +13,16 @@ fn celestial_direction(declination: f32, hour_angle: f32) -> vec3<f32> {
     );
 }
 
-fn topocentric_moon_direction_at_height(height_m: f32) -> vec3<f32> {
+fn topocentric_moon_direction_for_geocentric(
+    height_m: f32,
+    geocentric_direction: vec3<f32>,
+) -> vec3<f32> {
     let world_radius_m = scene.world_size_m.x / TAU;
     let observer_radius_planet_radii = (
-        world_radius_m + max(height_m, 0.0)
+        world_radius_m + height_m
     ) / world_radius_m;
     return normalize(
-        LUNAR_DISTANCE_PLANET_RADII * geocentric_moon_light_direction
+        LUNAR_DISTANCE_PLANET_RADII * geocentric_direction
             - vec3<f32>(0.0, 0.0, observer_radius_planet_radii),
     );
 }
@@ -67,11 +74,13 @@ fn circle_overlap_fraction(
 
 fn initialize_celestial_lighting() {
     let hour_angle = TAU * (surface_local_solar_phase() - 0.5);
-    sun_light_direction = celestial_direction(
+    sun_light_direction = celestial_direction_at_position(
+        surface_position_m,
         scene.celestial_orbit_angles.x,
         hour_angle,
     );
-    geocentric_moon_light_direction = celestial_direction(
+    geocentric_moon_light_direction = celestial_direction_at_position(
+        surface_position_m,
         scene.celestial_orbit_angles.z,
         hour_angle
             + scene.celestial_orbit_angles.y
@@ -153,44 +162,60 @@ fn celestial_visible_disc_sample_direction_at_horizon(
     return vec3<f32>(sampled_horizontal * light.xy / light_horizontal, sampled_z);
 }
 
-fn solar_eclipse_fraction_for_moon(moon: vec3<f32>) -> f32 {
+fn solar_eclipse_fraction_for_directions(sun: vec3<f32>, moon: vec3<f32>) -> f32 {
     let disc_sum = CELESTIAL_DISC_ANGULAR_RADIUS_RAD + MOON_ANGULAR_RADIUS_RAD;
-    if dot(sun_direction(), moon) <= cos(disc_sum) {
+    if dot(sun, moon) <= cos(disc_sum) {
         return 0.0;
     }
     return circle_overlap_fraction(
-        angular_separation(sun_direction(), moon),
+        angular_separation(sun, moon),
         CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         MOON_ANGULAR_RADIUS_RAD,
     );
 }
 
-fn sun_amount_at_horizon_with_eclipse(
+fn sun_amount_at_horizon_with_eclipse_for_direction(
     horizon_z: f32,
     eclipse_fraction: f32,
+    sun: vec3<f32>,
 ) -> f32 {
     let elevation = clamp(
-        (sun_direction().z - horizon_z) / (1.0 - horizon_z),
+        (sun.z - horizon_z) / (1.0 - horizon_z),
         0.0,
         1.0,
     );
     return (1.0 - eclipse_fraction)
         * celestial_disc_visibility_at_horizon(
             horizon_z,
-            sun_direction(),
+            sun,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         )
         * (0.35 + 0.65 * sqrt(elevation));
 }
 
-fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
-    let clamped_height_m = max(height_m, 0.0);
-    let horizon_z = celestial_horizon_z_at_height(height_m);
-    let moon = topocentric_moon_direction_at_height(clamped_height_m);
-    let eclipse_fraction = solar_eclipse_fraction_for_moon(moon);
-    let sun_amount = sun_amount_at_horizon_with_eclipse(
+fn sun_amount_at_horizon_with_eclipse(
+    horizon_z: f32,
+    eclipse_fraction: f32,
+) -> f32 {
+    return sun_amount_at_horizon_with_eclipse_for_direction(
         horizon_z,
         eclipse_fraction,
+        sun_direction(),
+    );
+}
+
+fn celestial_receiver_light_for_directions(
+    height_m: f32,
+    sun: vec3<f32>,
+    geocentric_moon: vec3<f32>,
+) -> CelestialReceiverLight {
+    let horizon_z = celestial_horizon_z_at_height(height_m);
+    let moon = topocentric_moon_direction_for_geocentric(height_m, geocentric_moon);
+    let eclipse_fraction = solar_eclipse_fraction_for_directions(sun, moon);
+    let sun_amount = sun_amount_at_horizon_with_eclipse_for_direction(
+        horizon_z,
+        eclipse_fraction,
+        sun,
     );
     let moon_elevation = clamp(
         (moon.z - horizon_z) / (1.0 - horizon_z),
@@ -211,14 +236,40 @@ fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
         )
         * (0.35 + 0.65 * sqrt(moon_elevation));
     return CelestialReceiverLight(
-        clamped_height_m,
+        height_m,
         horizon_z,
-        sun_direction(),
+        sun,
         moon,
         eclipse_fraction,
         sun_amount,
         moon_amount,
     );
+}
+
+fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
+    return celestial_receiver_light_for_directions(
+        height_m,
+        sun_light_direction,
+        geocentric_moon_light_direction,
+    );
+}
+
+fn celestial_receiver_light_at_position_and_height(
+    position_m: vec2<f32>,
+    height_m: f32,
+) -> CelestialReceiverLight {
+    let hour_angle = TAU * (surface_local_solar_phase_at(position_m) - 0.5);
+    let sun = celestial_direction_at_position(
+        position_m,
+        scene.celestial_orbit_angles.x,
+        hour_angle,
+    );
+    let geocentric_moon = celestial_direction_at_position(
+        position_m,
+        scene.celestial_orbit_angles.z,
+        hour_angle + scene.celestial_orbit_angles.y - scene.celestial_orbit_angles.w,
+    );
+    return celestial_receiver_light_for_directions(height_m, sun, geocentric_moon);
 }
 
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
@@ -475,18 +526,18 @@ fn calculate_moon_light_color_for_direction(
     );
 }
 
-fn sun_light_color(scattering: f32) -> vec3<f32> {
-    let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_direction().z);
+fn sun_light_color_for_direction(scattering: f32, sun: vec3<f32>) -> vec3<f32> {
+    let low_sun = 1.0 - smoothstep(0.08, 0.55, sun.z);
     let warmth = low_sun * mix(0.06, 1.0, scattering);
     return mix(vec3<f32>(1.0), vec3<f32>(1.55, 0.34, 0.06), warmth);
 }
 
 fn sun_direct_light_color() -> vec3<f32> {
-    return sun_light_color(local_horizon_scattering);
+    return sun_light_color_for_direction(local_horizon_scattering, sun_direction());
 }
 
 fn sun_diffuse_light_color() -> vec3<f32> {
-    return sun_light_color(regional_horizon_scattering);
+    return sun_light_color_for_direction(regional_horizon_scattering, sun_direction());
 }
 
 fn sun_direct_contribution_color_for_amount(amount: f32) -> vec3<f32> {
@@ -525,7 +576,7 @@ fn projected_cloud_position(
         return position_m;
     }
     let world_radius_m = scene.world_size_m.x / TAU;
-    let source_radius_m = world_radius_m + max(source_height_m, 0.0);
+    let source_radius_m = world_radius_m + source_height_m;
     let cloud_radius_m = world_radius_m + cloud_height_m;
     let origin_along_ray_m = source_radius_m * light.z;
     let ray_distance_m = -origin_along_ray_m + sqrt(
@@ -553,8 +604,8 @@ struct CloudShadowDepths {
 };
 
 struct CloudDiscShadowDepths {
-    low: vec2<f32>,
-    upper: vec2<f32>,
+    low: vec3<f32>,
+    upper: vec3<f32>,
 };
 
 struct CelestialCloudShadowDepths {
@@ -565,6 +616,7 @@ struct CelestialCloudShadowDepths {
 struct CelestialDiscSampleDirections {
     lower: vec3<f32>,
     upper: vec3<f32>,
+    side: vec3<f32>,
 };
 
 fn celestial_disc_sample_directions(
@@ -573,10 +625,14 @@ fn celestial_disc_sample_directions(
     angular_radius_rad: f32,
 ) -> CelestialDiscSampleDirections {
     let horizontal_light = length(light.xy);
-    if angular_radius_rad <= 0.0 || horizontal_light <= 0.001 {
-        return CelestialDiscSampleDirections(light, light);
+    if angular_radius_rad <= 0.0 {
+        return CelestialDiscSampleDirections(light, light, light);
     }
-    let horizontal_direction = light.xy / horizontal_light;
+    let horizontal_direction = select(
+        vec2<f32>(1.0, 0.0),
+        light.xy / max(horizontal_light, 0.001),
+        horizontal_light > 0.001,
+    );
     let elevation_rad = asin(clamp(light.z, -1.0, 1.0));
     let visible_lower_rad = max(
         elevation_rad - angular_radius_rad,
@@ -584,19 +640,27 @@ fn celestial_disc_sample_directions(
     );
     let visible_upper_rad = elevation_rad + angular_radius_rad;
     if visible_lower_rad >= visible_upper_rad {
-        return CelestialDiscSampleDirections(light, light);
+        return CelestialDiscSampleDirections(light, light, light);
     }
-    let lower_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 0.25);
-    let upper_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 0.75);
+    let visible_span_rad = visible_upper_rad - visible_lower_rad;
+    let lower_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 1.0 / 3.0);
+    let upper_elevation_rad = mix(visible_lower_rad, visible_upper_rad, 5.0 / 6.0);
+    let lateral = vec3<f32>(
+        -horizontal_direction.y,
+        horizontal_direction.x,
+        0.0,
+    ) * (visible_span_rad * 0.28867513);
+    let lower_base = vec3<f32>(
+        cos(lower_elevation_rad) * horizontal_direction,
+        sin(lower_elevation_rad),
+    );
     return CelestialDiscSampleDirections(
-        vec3<f32>(
-            cos(lower_elevation_rad) * horizontal_direction,
-            sin(lower_elevation_rad),
-        ),
+        normalize(lower_base - lateral),
         vec3<f32>(
             cos(upper_elevation_rad) * horizontal_direction,
             sin(upper_elevation_rad),
         ),
+        normalize(lower_base + lateral),
     );
 }
 
@@ -606,18 +670,18 @@ fn celestial_disc_projection_separation_m(
     cloud_height_m: f32,
     directions: CelestialDiscSampleDirections,
 ) -> f32 {
-    return length(
-        projected_cloud_position(
-            position_m,
-            source_height_m,
-            cloud_height_m,
-            directions.lower,
-        ) - projected_cloud_position(
-            position_m,
-            source_height_m,
-            cloud_height_m,
-            directions.upper,
-        ),
+    let lower = projected_cloud_position(
+        position_m, source_height_m, cloud_height_m, directions.lower,
+    );
+    let upper = projected_cloud_position(
+        position_m, source_height_m, cloud_height_m, directions.upper,
+    );
+    let side = projected_cloud_position(
+        position_m, source_height_m, cloud_height_m, directions.side,
+    );
+    return max(
+        length(lower - upper),
+        max(length(lower - side), length(upper - side)),
     );
 }
 
@@ -683,15 +747,32 @@ fn cloud_shadow_depths_for_light_at(
         surface_height_m,
         directions.upper,
     );
+    let side_projection = cloud_shadow_projection_at(
+        position_m,
+        surface_height_m,
+        directions.side,
+    );
     let maximum_separation_m = max(
         select(
             0.0,
-            length(lower_projection.low_position_m - upper_projection.low_position_m),
+            max(
+                length(lower_projection.low_position_m - upper_projection.low_position_m),
+                max(
+                    length(lower_projection.low_position_m - side_projection.low_position_m),
+                    length(upper_projection.low_position_m - side_projection.low_position_m),
+                ),
+            ),
             layer_visibility.y > 0.0,
         ),
         select(
             0.0,
-            length(lower_projection.upper_position_m - upper_projection.upper_position_m),
+            max(
+                length(lower_projection.upper_position_m - upper_projection.upper_position_m),
+                max(
+                    length(lower_projection.upper_position_m - side_projection.upper_position_m),
+                    length(upper_projection.upper_position_m - side_projection.upper_position_m),
+                ),
+            ),
             layer_visibility.z > 0.0,
         ),
     );
@@ -709,15 +790,16 @@ fn cloud_shadow_depths_for_light_at(
             ),
         );
         return CloudDiscShadowDepths(
-            vec2<f32>(depths.low, depths.low),
-            vec2<f32>(depths.upper, depths.upper),
+            vec3<f32>(depths.low),
+            vec3<f32>(depths.upper),
         );
     }
     let lower_depths = sampled_cloud_shadow_depths_at(lower_projection);
     let upper_depths = sampled_cloud_shadow_depths_at(upper_projection);
+    let side_depths = sampled_cloud_shadow_depths_at(side_projection);
     return CloudDiscShadowDepths(
-        vec2<f32>(lower_depths.low, upper_depths.low),
-        vec2<f32>(lower_depths.upper, upper_depths.upper),
+        vec3<f32>(lower_depths.low, upper_depths.low, side_depths.low),
+        vec3<f32>(lower_depths.upper, upper_depths.upper, side_depths.upper),
     );
 }
 
@@ -727,8 +809,8 @@ fn celestial_cloud_shadow_depths_at(
     direct_light: CelestialReceiverLight,
 ) -> CelestialCloudShadowDepths {
     let empty_depths = CloudDiscShadowDepths(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(0.0, 0.0),
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
     );
     var celestial_depths = CelestialCloudShadowDepths(empty_depths, empty_depths);
     if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
@@ -783,10 +865,11 @@ fn cloud_shadow_transmittance(depth: f32, light: vec3<f32>) -> f32 {
     return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
 }
 
-fn cloud_disc_shadow_transmittance(depths: vec2<f32>, light: vec3<f32>) -> f32 {
-    return 0.5 * (
+fn cloud_disc_shadow_transmittance(depths: vec3<f32>, light: vec3<f32>) -> f32 {
+    return (1.0 / 3.0) * (
         cloud_shadow_transmittance(depths.x, light)
             + cloud_shadow_transmittance(depths.y, light)
+            + cloud_shadow_transmittance(depths.z, light)
     );
 }
 
@@ -809,8 +892,8 @@ fn cloud_layer_transmittance(
 }
 
 fn effective_cloud_shadow_amount(
-    sun_depths: vec2<f32>,
-    moon_depths: vec2<f32>,
+    sun_depths: vec3<f32>,
+    moon_depths: vec3<f32>,
     receiver: CelestialReceiverLight,
 ) -> f32 {
     let visibility = direct_light_visibility();

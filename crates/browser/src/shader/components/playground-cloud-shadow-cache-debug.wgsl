@@ -45,7 +45,7 @@ fn shadow_cache_tile_texels() -> u32 {
 }
 
 fn record_shadow_cache_lookup(layer: u32, hit: bool) {
-    if cloud_shadow_cache_debug.mode != 1u {
+    if cloud_shadow_cache_debug.mode != 1u && cloud_shadow_cache_debug.mode != 4u {
         return;
     }
     if !hit {
@@ -133,6 +133,13 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
 }
 
 fn apply_shadow_cache_debug(color: vec4<f32>) -> vec4<f32> {
+    if cloud_shadow_cache_debug.mode == 4u {
+        return vec4<f32>(vec3<f32>(
+            select(0.0, 1.0, cloud_shadow_cache_debug_hits.x > 0u),
+            select(0.0, 1.0, cloud_shadow_cache_debug_hits.z > 0u),
+            select(0.0, 1.0, cloud_shadow_cache_debug_hits.y > 0u),
+        ), 1.0);
+    }
     if cloud_shadow_cache_debug.mode != 1u {
         return color;
     }
