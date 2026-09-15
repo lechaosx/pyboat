@@ -45,6 +45,13 @@ pub(crate) fn disconnect_and_clear_pending_snapshot(
     client.disconnect();
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn requeue_failed_viewport(pending: &mut Option<Vec<u8>>, failed: Vec<u8>) {
+    if pending.is_none() {
+        *pending = Some(failed);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloudShadowCacheLayout {
     pub atlas_width: u32,
@@ -1103,6 +1110,29 @@ mod tests {
 
         queue_latest_snapshot(&mut pending, snapshot(9));
         assert_eq!(pending, Some(snapshot(9)));
+    }
+
+    #[test]
+    fn failed_viewport_send_remains_queued_until_superseded() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        let failed =
+            protocol::encode_client_message(&client.update_viewport(10.0).unwrap()).unwrap();
+        let mut pending = None;
+
+        requeue_failed_viewport(&mut pending, failed.clone());
+        assert_eq!(pending, Some(failed.clone()));
+        assert_eq!(client.update_viewport(10.0), None);
+
+        let newer =
+            protocol::encode_client_message(&client.update_viewport(20.0).unwrap()).unwrap();
+        pending = Some(newer.clone());
+        requeue_failed_viewport(&mut pending, failed);
+        assert_eq!(pending, Some(newer));
     }
 
     #[test]

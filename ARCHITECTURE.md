@@ -563,6 +563,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   updates are sequenced so independently completed streams cannot restore stale
   interest. An acknowledgement covers only input already used by an
   authoritative tick.
+- **[Implicit]** A failed viewport stream leaves its queued update available for
+  retry unless a newer viewport update has superseded it.
 - **[Implicit]** A protocol decoding or version failure closes the WebTransport
   session and discards its queued snapshot so neither peer retains incompatible
   replicated state.

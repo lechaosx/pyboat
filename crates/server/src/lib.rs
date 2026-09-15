@@ -23,7 +23,7 @@ use tokio::time::{interval, timeout};
 use wtransport::{
     Connection, Endpoint, Identity, ServerConfig, VarInt,
     endpoint::{IncomingSession, endpoint_side::Server},
-    error::SendDatagramError,
+    error::{SendDatagramError, StreamReadError},
     stream::RecvStream,
 };
 
@@ -716,12 +716,13 @@ fn receive_messages(
                 Ok(stream) => {
                     let messages = messages.clone();
                     reads.spawn(async move {
-                        let message = receive_reliable_message(stream)
-                            .await
-                            .and_then(|message| {
-                                decode_client_message(&message).map_err(|error| error.into())
-                            })
-                            .map(IncomingMessage::Reliable);
+                        let message = match receive_reliable_message(stream).await {
+                            Ok(Some(message)) => decode_client_message(&message)
+                                .map(IncomingMessage::Reliable)
+                                .map_err(|error| error.into()),
+                            Ok(None) => return,
+                            Err(error) => Err(error),
+                        };
                         let _ = messages.send(message).await;
                     });
                 }
@@ -742,10 +743,16 @@ async fn send_reliable_message(connection: &Connection, message: &[u8]) -> Conne
     Ok(())
 }
 
-async fn receive_reliable_message(mut stream: RecvStream) -> ConnectionResult<Vec<u8>> {
+async fn receive_reliable_message(mut stream: RecvStream) -> ConnectionResult<Option<Vec<u8>>> {
     let mut message = Vec::new();
     let mut buffer = [0; 256];
-    while let Some(read) = stream.read(&mut buffer).await? {
+    loop {
+        let read = match stream.read(&mut buffer).await {
+            Ok(Some(read)) => read,
+            Ok(None) => break,
+            Err(StreamReadError::Reset(_)) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         if message.len() + read > MAX_CLIENT_MESSAGE_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -755,7 +762,7 @@ async fn receive_reliable_message(mut stream: RecvStream) -> ConnectionResult<Ve
         }
         message.extend_from_slice(&buffer[..read]);
     }
-    Ok(message)
+    Ok(Some(message))
 }
 
 fn new_match_seed() -> u64 {

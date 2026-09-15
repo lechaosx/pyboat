@@ -28,9 +28,9 @@ use wgpu::util::DeviceExt;
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER,
     Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
-    periodic_effect_time, queue_latest_snapshot, sample_production_world_environment,
-    sample_world_geometry, scale_bar, seasonal_phase_factors, viewport_interest_radius_m,
-    visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
+    periodic_effect_time, queue_latest_snapshot, requeue_failed_viewport,
+    sample_production_world_environment, sample_world_geometry, scale_bar, seasonal_phase_factors,
+    viewport_interest_radius_m, visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
 };
 
 #[cfg(feature = "playground")]
@@ -1564,6 +1564,10 @@ fn receive_datagrams(
 ) {
     spawn_local(async move {
         while let Ok(message) = session.recv_datagram().await {
+            // web-transport-wasm maps datagram-readable EOF to an empty buffer.
+            if message.is_empty() {
+                break;
+            }
             if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
                 fail_protocol(
                     &session,
@@ -1718,7 +1722,7 @@ fn pump_reliable(
             }
             .await;
             if result.is_err() {
-                pending.borrow_mut().take();
+                requeue_failed_viewport(&mut pending.borrow_mut(), message);
                 break;
             }
         }

@@ -514,10 +514,77 @@ async fn unfinished_reliable_stream_does_not_block_input_datagrams() {
 }
 
 #[tokio::test]
+async fn reset_reliable_stream_does_not_block_later_viewport_updates() {
+    let server = start_server();
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        clients.push(connect(&server).await.0);
+    }
+    let (registered_tick, _, _) = next_snapshot(&clients[4]).await;
+
+    let mut reset_stream = clients[0]
+        .connection
+        .open_uni()
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    reset_stream.write_all(&[PROTOCOL_VERSION]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    reset_stream.reset(0_u32.into()).unwrap();
+
+    let viewport = encode_client_message(&ClientMessage::Viewport {
+        sequence: 1,
+        radius: 1.0,
+    })
+    .unwrap();
+    send_reliable(&clients[0].connection, &viewport).await;
+
+    timeout(Duration::from_secs(1), async {
+        let mut checked = 0;
+        while checked < 5 {
+            let (tick, boats, _) = next_snapshot(&clients[0]).await;
+            if tick >= registered_tick
+                && boats
+                    .iter()
+                    .all(|boat| !matches!(boat.id.as_str(), "player-3" | "player-4" | "player-5"))
+            {
+                checked += 1;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    for client in &clients {
+        close(client);
+    }
+    server.task.abort();
+}
+
+#[tokio::test]
 async fn server_rejects_client_messages_larger_than_one_kibibyte() {
     let server = start_server();
     let (client, _) = connect(&server).await;
     send_reliable(&client.connection, &vec![0; 1025]).await;
+
+    timeout(Duration::from_secs(1), client.connection.closed())
+        .await
+        .unwrap();
+    server.task.abort();
+}
+
+#[tokio::test]
+async fn unsupported_reliable_protocol_version_closes_the_session() {
+    let server = start_server();
+    let (client, _) = connect(&server).await;
+    let mut viewport = encode_client_message(&ClientMessage::Viewport {
+        sequence: 1,
+        radius: 10.0,
+    })
+    .unwrap();
+    viewport[0] = PROTOCOL_VERSION - 1;
+    send_reliable(&client.connection, &viewport).await;
 
     timeout(Duration::from_secs(1), client.connection.closed())
         .await
