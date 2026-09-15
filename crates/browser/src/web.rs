@@ -1564,11 +1564,14 @@ fn receive_datagrams(
 ) {
     spawn_local(async move {
         while let Ok(message) = session.recv_datagram().await {
-            // web-transport-wasm maps datagram-readable EOF to an empty buffer.
-            if message.is_empty() {
-                break;
-            }
-            if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
+            if accept_server_message(
+                &message,
+                &protocol_client,
+                &pending_snapshot,
+                &connection_status,
+            )
+            .is_err()
+            {
                 fail_protocol(
                     &session,
                     &protocol_client,
@@ -1602,7 +1605,14 @@ fn receive_reliable_messages(
             if !complete {
                 continue;
             }
-            if accept_server_message(&message, &protocol_client, &pending_snapshot).is_err() {
+            if accept_server_message(
+                &message,
+                &protocol_client,
+                &pending_snapshot,
+                &connection_status,
+            )
+            .is_err()
+            {
                 fail_protocol(
                     &session,
                     &protocol_client,
@@ -1620,7 +1630,11 @@ fn accept_server_message(
     bytes: &[u8],
     protocol_client: &Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
+    connection_status: &Rc<Cell<ConnectionStatus>>,
 ) -> Result<(), protocol::ProtocolError> {
+    if connection_status.get() != ConnectionStatus::Connected {
+        return Ok(());
+    }
     match decode_server_message(bytes)? {
         message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
         message @ ServerMessage::Snapshot { .. } => {
@@ -1718,10 +1732,11 @@ fn pump_reliable(
             let result = async {
                 let mut stream = session.open_uni().await?;
                 stream.write(&message).await?;
-                stream.finish()
+                stream.finish()?;
+                stream.closed().await
             }
             .await;
-            if result.is_err() {
+            if !matches!(result, Ok(None)) {
                 requeue_failed_viewport(&mut pending.borrow_mut(), message);
                 break;
             }

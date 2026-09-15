@@ -35,6 +35,7 @@ const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
 const MAX_VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_PENDING_CONNECTION_EVENTS: usize = 256;
+const MAX_ACTIVE_SESSIONS: usize = 256;
 const MAX_PENDING_CONNECTION_MESSAGES: usize = 16;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBTRANSPORT_PATH: &str = "/game";
@@ -466,6 +467,7 @@ where
     let mut next_player_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
     let mut upgrades = tokio::task::JoinSet::new();
+    let mut sessions = tokio::task::JoinSet::new();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -511,13 +513,24 @@ where
                     eprintln!("WebTransport connection upgrade task failed: {error}");
                 }
             }
+            Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                if let Err(error) = result {
+                    eprintln!("WebTransport session task failed: {error}");
+                }
+            }
             Some(event) = incoming_events.recv() => match event {
                 ConnectionEvent::Upgraded { connection } => {
+                    if sessions.len() >= MAX_ACTIVE_SESSIONS
+                        || connections.len() >= MAX_ACTIVE_SESSIONS
+                    {
+                        connection.close(VarInt::from_u32(1), b"Match is full");
+                        continue;
+                    }
                     let player_number = next_player_number;
                     let player_id = format!("player-{player_number}");
                     next_player_number += 1;
                     let events = events.clone();
-                    tokio::spawn(async move {
+                    sessions.spawn(async move {
                         if let Err(error) = handle_connection(
                             connection,
                             player_id,
