@@ -404,11 +404,24 @@ impl CylindricalSpatialIndex {
     fn query(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
         let wrapped_m = Vector::from(self.world_geometry.wrap_position_m(center_m.into()));
         let center_x_m = wrapped_m.x + self.world_geometry.width_m() / 2.0;
+        let columns = wrapped_cell_indices(center_x_m, radius_m, self.cell_width_m, self.columns);
+        let (minimum_row, maximum_row) = linear_cell_bounds(wrapped_m.y, radius_m, SPATIAL_CELL_M);
+        let row_count = i64::from(maximum_row) - i64::from(minimum_row) + 1;
         let mut indices = BTreeSet::new();
-        for column in wrapped_cell_indices(center_x_m, radius_m, self.cell_width_m, self.columns) {
-            for row in linear_cell_indices(wrapped_m.y, radius_m, SPATIAL_CELL_M) {
-                if let Some(cell_indices) = self.cells.get(&(column, row)) {
+        if row_count.saturating_mul(columns.len() as i64) > self.cells.len() as i64 {
+            for (&(column, row), cell_indices) in &self.cells {
+                if columns.binary_search(&column).is_ok()
+                    && (minimum_row..=maximum_row).contains(&row)
+                {
                     indices.extend(cell_indices.iter().copied());
+                }
+            }
+        } else {
+            for column in columns {
+                for row in minimum_row..=maximum_row {
+                    if let Some(cell_indices) = self.cells.get(&(column, row)) {
+                        indices.extend(cell_indices.iter().copied());
+                    }
                 }
             }
         }
@@ -417,9 +430,15 @@ impl CylindricalSpatialIndex {
 }
 
 fn linear_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32) -> Vec<i32> {
-    let minimum = ((center_m - extent_m) / cell_size_m).floor() as i32;
-    let maximum = ((center_m + extent_m) / cell_size_m).floor() as i32;
+    let (minimum, maximum) = linear_cell_bounds(center_m, extent_m, cell_size_m);
     (minimum..=maximum).collect()
+}
+
+fn linear_cell_bounds(center_m: f32, extent_m: f32, cell_size_m: f32) -> (i32, i32) {
+    (
+        ((center_m - extent_m) / cell_size_m).floor() as i32,
+        ((center_m + extent_m) / cell_size_m).floor() as i32,
+    )
 }
 
 fn wrapped_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32, count: i32) -> Vec<i32> {
@@ -1909,6 +1928,20 @@ mod cylinder_spatial_tests {
         assert!(search.pairs.contains(&(575, 1_000)));
         assert!(!search.pairs.contains(&(0, 1_000)));
         assert!(search.exact_checks < positions_m.len() * 4);
+    }
+
+    #[test]
+    fn broad_radius_query_scans_the_finite_occupied_index() {
+        let world_geometry = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let index = CylindricalSpatialIndex::new(
+            world_geometry,
+            &[
+                Vector::new(-3_000.0, -3_000.0),
+                Vector::new(3_000.0, 3_000.0),
+            ],
+        );
+
+        assert_eq!(index.query(Vector::ZERO, f32::MAX), vec![0, 1]);
     }
 
     #[test]

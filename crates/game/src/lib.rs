@@ -346,7 +346,9 @@ struct TidalSample {
 struct OceanQuery {
     world_geometry: WorldGeometry,
     match_seed: u64,
-    tick: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    current_time_coordinate: f32,
     position_m: Vector,
     celestial: CelestialConditions,
     weather: ProceduralWeather,
@@ -1127,16 +1129,58 @@ pub fn procedural_world_environment(
     tick: u64,
     position_m: Vector,
 ) -> WorldEnvironment {
-    let world_time_seconds = tick as f64 * f64::from(DT_SECONDS);
-    let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
-    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
-    let primary = procedural_atmosphere_primary_with_conditions(
+    procedural_world_environment_for_render_clocks(
         world_geometry,
         match_seed,
         tick,
+        0.0,
+        tick,
+        0.0,
+        tick,
+        0.0,
+        tick,
+        0.0,
+        position_m,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn procedural_world_environment_for_render_clocks(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    scalar_tick: u64,
+    scalar_tick_fraction: f32,
+    pressure_tick: u64,
+    pressure_tick_fraction: f32,
+    current_tick: u64,
+    current_tick_fraction: f32,
+    position_m: Vector,
+) -> WorldEnvironment {
+    let world_time_seconds =
+        (world_tick as f64 + f64::from(world_tick_fraction)) * f64::from(DT_SECONDS);
+    let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
+    let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
+    let scalar_time = scalar_field_time_coordinates_interpolated(scalar_tick, scalar_tick_fraction);
+    let pressure_time = vector_field_time_coordinates_interpolated(
+        world_geometry,
+        pressure_tick,
+        pressure_tick_fraction,
+    );
+    let current_time = vector_field_time_coordinates_interpolated(
+        world_geometry,
+        current_tick,
+        current_tick_fraction,
+    );
+    let primary = procedural_atmosphere_primary_with_conditions(
+        world_geometry,
+        match_seed,
         position_m,
         climate,
         celestial,
+        scalar_time,
+        pressure_time,
     );
     let weather = derive_weather(primary, climate, celestial);
     let tidal_sample = procedural_tidal_sample(world_geometry, match_seed, position_m);
@@ -1183,7 +1227,9 @@ pub fn procedural_world_environment(
     let ocean = procedural_ocean_state(OceanQuery {
         world_geometry,
         match_seed,
-        tick,
+        world_tick,
+        world_tick_fraction,
+        current_time_coordinate: current_time.ocean_current,
         position_m,
         celestial,
         weather,
@@ -1236,13 +1282,12 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         query.position_m,
         query.celestial,
     );
-    let time = vector_field_time_coordinates(query.world_geometry, query.tick);
     let gyre = spatiotemporal_fractal_noise_sample(
         query.world_geometry,
         query.match_seed ^ OCEAN_CURRENT_NOISE_SALT,
         query.position_m,
         query.world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
-        time.ocean_current,
+        query.current_time_coordinate,
         OCEAN_CURRENT_OCTAVE_COUNT,
         0.5,
     );
@@ -1462,7 +1507,8 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         let angular_frequency = libm::sqrt(GRAVITY_M_S2 * wave_number);
         let phase = wave_number_x * f64::from(query.position_m.x).rem_euclid(width_m)
             + wave_number_y * f64::from(query.position_m.y)
-            - tick_phase_radians(query.tick, angular_frequency * f64::from(DT_SECONDS))
+            - tick_phase_radians(query.world_tick, angular_frequency * f64::from(DT_SECONDS))
+            - f64::from(query.world_tick_fraction) * angular_frequency * f64::from(DT_SECONDS)
             + std::f64::consts::TAU * hash_unit(mode_key ^ 0xbf58_476d_1ce4_e5b9);
         *mode = (
             actual_direction_x,
@@ -1560,14 +1606,17 @@ pub fn procedural_weather(
         position_m,
     );
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
+    let scalar_time = scalar_field_time_coordinates(tick);
+    let vector_time = vector_field_time_coordinates(world_geometry, tick);
     derive_weather(
         procedural_atmosphere_primary_with_conditions(
             world_geometry,
             match_seed,
-            tick,
             position_m,
             climate,
             celestial,
+            scalar_time,
+            vector_time,
         ),
         climate,
         celestial,
@@ -1585,27 +1634,36 @@ pub fn procedural_atmosphere_primary(
         tick as f64 * f64::from(DT_SECONDS),
         position_m,
     );
+    let scalar_time = scalar_field_time_coordinates(tick);
+    let vector_time = vector_field_time_coordinates(world_geometry, tick);
     procedural_atmosphere_primary_with_conditions(
         world_geometry,
         match_seed,
-        tick,
         position_m,
         world_climate_conditions(celestial.geographic_latitude_degrees),
         celestial,
+        scalar_time,
+        vector_time,
     )
 }
 
 fn procedural_atmosphere_primary_with_conditions(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    tick: u64,
     position_m: Vector,
     climate: ClimateConditions,
     celestial: CelestialConditions,
+    scalar_time: ScalarFieldTimeCoordinates,
+    vector_time: VectorFieldTimeCoordinates,
 ) -> AtmospherePrimary {
-    let pressure = procedural_pressure_sample(world_geometry, match_seed, tick, position_m);
-    let surface_temperature =
-        sample_surface_air_temperature_anomaly_c(world_geometry, match_seed, tick, position_m);
+    let pressure =
+        procedural_pressure_sample_at_time(world_geometry, match_seed, vector_time, position_m);
+    let surface_temperature = sample_surface_air_temperature_anomaly_c(
+        world_geometry,
+        match_seed,
+        scalar_time.air_temperature,
+        position_m,
+    );
     let surface_air_temperature_anomaly_c = surface_temperature.value;
     let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(climate, celestial)
         + SURFACE_AIR_MASS_COUPLING_500_HPA * surface_air_temperature_anomaly_c
@@ -1613,9 +1671,9 @@ fn procedural_atmosphere_primary_with_conditions(
             * procedural_weather_noise(
                 world_geometry,
                 match_seed,
-                tick,
                 position_m,
                 AIR_TEMPERATURE_500_HPA_NOISE,
+                scalar_time.upper_air_temperature,
             ) as f32;
     let climate_air_temperature_c = current_air_temperature_c(
         ClimateConditions {
@@ -1631,9 +1689,9 @@ fn procedural_atmosphere_primary_with_conditions(
             * procedural_weather_noise(
                 world_geometry,
                 match_seed,
-                tick,
                 position_m,
                 WATER_VAPOR_NOISE,
+                scalar_time.water_vapor,
             ) as f32;
     let water_vapor_g_kg =
         (climate_saturation_capacity_g_kg * water_vapor_fraction).clamp(0.5, 25.0);
@@ -1749,15 +1807,15 @@ pub fn derive_weather(
 fn sample_surface_air_temperature_anomaly_c(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    tick: u64,
+    time_coordinate: f32,
     position_m: Vector,
 ) -> TemperatureSample {
     let noise = procedural_weather_noise_sample(
         world_geometry,
         match_seed,
-        tick,
         position_m,
         SURFACE_AIR_TEMPERATURE_NOISE,
+        time_coordinate,
     );
     let latitude = world_geometry.latitude_degrees(position_m.y);
     let scale_c = latitude_curve_value(TEMPERATURE_ANOMALY_SCALE_C, latitude);
@@ -2190,15 +2248,10 @@ pub fn vector_field_time_coordinates_interpolated(
 fn procedural_weather_noise(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    tick: u64,
     position_m: Vector,
     parameters: WeatherNoiseParameters,
+    time: f32,
 ) -> f64 {
-    let time = noise_time_coordinate(
-        tick,
-        parameters.evolution_speed_m_s,
-        parameters.wavelength_m,
-    );
     parameters.scale
         * spatiotemporal_fractal_noise_sample(
             world_geometry,
@@ -2215,15 +2268,10 @@ fn procedural_weather_noise(
 fn procedural_weather_noise_sample(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    tick: u64,
     position_m: Vector,
     parameters: WeatherNoiseParameters,
+    time: f32,
 ) -> ScalarNoiseSample {
-    let time = noise_time_coordinate(
-        tick,
-        parameters.evolution_speed_m_s,
-        parameters.wavelength_m,
-    );
     let mut sample = spatiotemporal_fractal_noise_sample(
         world_geometry,
         match_seed ^ parameters.salt,
@@ -2833,6 +2881,7 @@ pub fn procedural_unsheltered_wind_velocity_m_s(
     procedural_weather(world_geometry, match_seed, tick, position_m).wind_velocity_m_s
 }
 
+#[cfg(test)]
 fn procedural_pressure_sample(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -2840,6 +2889,15 @@ fn procedural_pressure_sample(
     position_m: Vector,
 ) -> PressureSample {
     let time = vector_field_time_coordinates(world_geometry, tick);
+    procedural_pressure_sample_at_time(world_geometry, match_seed, time, position_m)
+}
+
+fn procedural_pressure_sample_at_time(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    time: VectorFieldTimeCoordinates,
+    position_m: Vector,
+) -> PressureSample {
     let latitude_rad = world_geometry.latitude_degrees(position_m.y).to_radians();
     let midlatitude_sine = libm::sinf(2.0 * latitude_rad);
     let midlatitude = midlatitude_sine * midlatitude_sine;
@@ -2923,10 +2981,6 @@ fn procedural_pressure_sample(
         synoptic_gradient_m_s,
         surface_gust_signal,
     }
-}
-
-fn noise_time_coordinate(tick: u64, evolution_speed_m_s: f32, wavelength_m: f32) -> f32 {
-    noise_time_coordinate_interpolated(tick, 0.0, evolution_speed_m_s, wavelength_m)
 }
 
 fn noise_time_coordinate_interpolated(
@@ -3090,6 +3144,20 @@ mod tests {
         let after = vector_field_time_coordinates(world, u64::MAX);
         assert_ne!(before.pressure, after.pressure);
         assert_ne!(before.ocean_current, after.ocean_current);
+    }
+
+    #[test]
+    fn render_clock_environment_matches_the_integer_simulation_clock() {
+        let world = WorldGeometry::default();
+        let position = Vector::new(123.0, -456.0);
+        let tick = 12_345;
+
+        assert_eq!(
+            procedural_world_environment(world, 42, tick, position),
+            procedural_world_environment_for_render_clocks(
+                world, 42, tick, 0.0, tick, 0.0, tick, 0.0, tick, 0.0, position,
+            ),
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@ function runFrames(frameCount: number, elapsedSeconds: number): number {
   const clock: FixedClock = { accumulatorSeconds: 0 };
   let ticks = 0;
   for (let frame = 0; frame < frameCount; frame += 1) {
-    advanceFixedClock(clock, elapsedSeconds, () => {
-      ticks += 1;
+    advanceFixedClock(clock, elapsedSeconds, (elapsedTicks) => {
+      ticks += elapsedTicks;
     });
   }
   return ticks;
@@ -26,9 +26,9 @@ describe("fixed playground clock", () => {
   test("retains partial frame time", () => {
     const clock: FixedClock = { accumulatorSeconds: 0 };
     let ticks = 0;
-    advanceFixedClock(clock, 1 / 120, () => { ticks += 1; });
+    advanceFixedClock(clock, 1 / 120, (elapsedTicks) => { ticks += elapsedTicks; });
     expect(ticks).toBe(0);
-    advanceFixedClock(clock, 1 / 120, () => { ticks += 1; });
+    advanceFixedClock(clock, 1 / 120, (elapsedTicks) => { ticks += elapsedTicks; });
     expect(ticks).toBe(1);
   });
 
@@ -41,7 +41,17 @@ describe("fixed playground clock", () => {
   test("catches up every tick after a long frame", () => {
     const clock: FixedClock = { accumulatorSeconds: 0 };
     let ticks = 0;
-    advanceFixedClock(clock, 1, () => { ticks += 1; });
+    advanceFixedClock(clock, 1, (elapsedTicks) => { ticks += elapsedTicks; });
     expect(ticks).toBe(60);
+  });
+
+  test("batches a long suspension into one state update", () => {
+    const clock: FixedClock = { accumulatorSeconds: 0 };
+    let callbacks = 0;
+
+    const ticks = advanceFixedClock(clock, 10, () => { callbacks += 1; });
+
+    expect(ticks).toBe(600);
+    expect(callbacks).toBe(1);
   });
 });

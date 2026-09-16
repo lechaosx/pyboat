@@ -9,10 +9,11 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
 use game::{
-    CelestialConditions, celestial_lighting, celestial_orbit, cloud_field_time_coordinates,
-    cloud_field_time_coordinates_interpolated, moon_phase, scalar_field_time_coordinates,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    CelestialConditions, celestial_lighting, celestial_orbit,
+    cloud_field_time_coordinates_interpolated, moon_phase,
+    procedural_world_environment_for_render_clocks,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -27,16 +28,17 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER,
-    Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
+    ViewCloudMotion, Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
     periodic_effect_time, queue_latest_snapshot, requeue_failed_viewport,
     sample_production_world_environment, sample_world_geometry, scale_bar, seasonal_phase_factors,
-    viewport_interest_radius_m, visual_pixel_footprint_m, windsock_extension, zoom_view_height_m,
+    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
+    windsock_extension, zoom_view_height_m,
 };
 
 #[cfg(feature = "playground")]
 use crate::PLAYGROUND_STARTUP_SHADER;
 
-const MAX_VERTICES: usize = 32768;
+const INITIAL_VERTEX_CAPACITY: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
 const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
 
@@ -243,15 +245,29 @@ pub fn sample_playground_environment(
     width_m: f32,
     height_m: f32,
     match_seed: u64,
-    tick: u64,
+    scalar_tick: u64,
+    scalar_tick_fraction: f32,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    pressure_tick: u64,
+    pressure_tick_fraction: f32,
+    current_tick: u64,
+    current_tick_fraction: f32,
     center_x_m: f32,
     center_y_m: f32,
 ) -> Result<PlaygroundEnvironmentSample, JsValue> {
     let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
-    let sample = sample_production_world_environment(
+    let sample = procedural_world_environment_for_render_clocks(
         geometry,
         match_seed,
-        tick,
+        world_tick,
+        world_tick_fraction,
+        scalar_tick,
+        scalar_tick_fraction,
+        pressure_tick,
+        pressure_tick_fraction,
+        current_tick,
+        current_tick_fraction,
         Vector::new(center_x_m, center_y_m),
     );
     let primary = sample.weather.primary;
@@ -512,38 +528,6 @@ struct SceneUniforms {
     celestial_orbit_light: [f32; 4],
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
-}
-
-#[derive(Default)]
-struct ViewCloudMotion {
-    last_tick: Option<u64>,
-    low_offset_m: [f64; 2],
-    upper_offset_m: [f64; 2],
-    previous_low_wind_m_s: [f64; 2],
-    previous_upper_wind_m_s: [f64; 2],
-}
-
-impl ViewCloudMotion {
-    fn advance(&mut self, tick: u64, low_wind: Vector, upper_wind: Vector) {
-        let low_wind = [f64::from(low_wind.x), f64::from(low_wind.y)];
-        let upper_wind = [f64::from(upper_wind.x), f64::from(upper_wind.y)];
-        if let Some(last_tick) = self.last_tick {
-            if tick < last_tick {
-                *self = Self::default();
-            } else {
-                let seconds = (tick - last_tick) as f64 * f64::from(simulation::DT_SECONDS);
-                for axis in 0..2 {
-                    self.low_offset_m[axis] +=
-                        0.5 * seconds * (self.previous_low_wind_m_s[axis] + low_wind[axis]);
-                    self.upper_offset_m[axis] +=
-                        0.5 * seconds * (self.previous_upper_wind_m_s[axis] + upper_wind[axis]);
-                }
-            }
-        }
-        self.last_tick = Some(tick);
-        self.previous_low_wind_m_s = low_wind;
-        self.previous_upper_wind_m_s = upper_wind;
-    }
 }
 
 #[repr(C)]
@@ -972,6 +956,7 @@ struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    vertex_capacity: usize,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     cloud_shadow_cache: CloudShadowCache,
@@ -1074,7 +1059,7 @@ impl Renderer {
         });
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic vertices"),
-            size: (MAX_VERTICES * mem::size_of::<Vertex>()) as u64,
+            size: (INITIAL_VERTEX_CAPACITY * mem::size_of::<Vertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1101,6 +1086,7 @@ impl Renderer {
             config,
             pipeline,
             vertex_buffer,
+            vertex_capacity: INITIAL_VERTEX_CAPACITY,
             uniform_buffer,
             bind_group,
             cloud_shadow_cache,
@@ -1113,7 +1099,7 @@ impl Renderer {
         scenes: &[BoatScene],
         match_seed: Option<u64>,
         world_geometry: WorldGeometry,
-        tick: u64,
+        render_clock: Option<(u64, f32)>,
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
@@ -1126,13 +1112,28 @@ impl Renderer {
             self.config.height,
             view_height_m,
         );
+        if vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = vertices.len().next_power_of_two();
+            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dynamic vertices"),
+                size: (self.vertex_capacity * mem::size_of::<Vertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
-        let celestial =
-            world_celestial_conditions(world_geometry, tick as f64 / 60.0, Vector::ZERO);
+        let (tick, tick_fraction) = render_clock.unwrap_or_default();
+        let celestial = world_celestial_conditions(
+            world_geometry,
+            tick as f64 / 60.0 + f64::from(tick_fraction) / 60.0,
+            Vector::ZERO,
+        );
         let orbit = celestial_orbit(celestial);
+        self.cloud_motion
+            .use_world(match_seed.map(|match_seed| (match_seed, world_geometry)));
         let match_seed = match_seed.unwrap_or(0);
         let view_weather = sample_production_world_environment(
             world_geometry,
@@ -1143,12 +1144,19 @@ impl Renderer {
         .weather;
         let low_cloud_wind =
             view_weather.wind_velocity_m_s - view_weather.surface_gust_velocity_m_s;
-        self.cloud_motion
-            .advance(tick, low_cloud_wind, view_weather.upper_wind_velocity_m_s);
+        if render_clock.is_some() {
+            self.cloud_motion.advance(
+                tick,
+                tick_fraction,
+                low_cloud_wind,
+                view_weather.upper_wind_velocity_m_s,
+            );
+        }
         let precipitation_time = periodic_effect_time(tick, PRECIPITATION_CONTACT_PERIOD_TICKS);
-        let scalar_time = scalar_field_time_coordinates(tick);
-        let vector_time = vector_field_time_coordinates(world_geometry, tick);
-        let cloud_time = cloud_field_time_coordinates(tick);
+        let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
+        let vector_time =
+            vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
+        let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -1403,7 +1411,7 @@ impl BrowserGame {
             &client.scenes(),
             client.match_seed(),
             client.world_geometry().unwrap_or_default(),
-            client.prediction_tick,
+            client.render_clock(),
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
         )
@@ -1803,7 +1811,8 @@ fn server_url() -> Result<String, JsValue> {
     let location = web_sys::window()
         .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?
         .location();
-    Ok(format!("https://{}:8765/game", location.hostname()?))
+    webtransport_server_url(&location.hostname()?, &location.search()?)
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
@@ -1899,7 +1908,6 @@ fn scene_vertices(
             );
         }
     }
-    assert!(vertices.len() <= MAX_VERTICES);
     vertices
 }
 

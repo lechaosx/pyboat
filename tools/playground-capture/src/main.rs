@@ -3,8 +3,9 @@ use std::{env, fs, path::PathBuf};
 use browser::{seasonal_phase_factors, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
-    celestial_lighting, celestial_orbit, cloud_field_time_coordinates,
-    procedural_world_environment, scalar_field_time_coordinates, vector_field_time_coordinates,
+    celestial_lighting, celestial_orbit, cloud_field_time_coordinates_interpolated,
+    procedural_world_environment, procedural_world_environment_for_render_clocks,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
     world_celestial_conditions,
 };
 use serde::Serialize;
@@ -1107,9 +1108,15 @@ fn print_help() {
     );
 }
 
+fn split_tick_seconds(seconds: f64) -> (u64, f32) {
+    let tick_position = seconds.max(0.0) / f64::from(simulation::DT_SECONDS);
+    let tick = tick_position.floor() as u64;
+    (tick, (tick_position - tick as f64) as f32)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_diagnostic;
+    use super::{parse_diagnostic, split_tick_seconds};
 
     #[test]
     fn diagnostics_select_semantic_shader_modules_and_overrides() {
@@ -1118,6 +1125,13 @@ mod tests {
         assert_eq!(pressure.constants, &[("PRESSURE_ANOMALY_OUTPUT", 1.0)]);
         assert!(parse_diagnostic("cloud_low_amount").is_err());
         assert!(parse_diagnostic("59").is_err());
+    }
+
+    #[test]
+    fn capture_clock_preserves_fractional_tick_progress() {
+        let (tick, fraction) = split_tick_seconds(10.5 / 60.0);
+        assert_eq!(tick, 10);
+        assert!((fraction - 0.5).abs() < 1.0e-5);
     }
 }
 
@@ -1362,15 +1376,18 @@ fn render_world(
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
     let precipitation_epoch = (options.cloud_time_seconds / 1800.0).floor() as u64;
     let precipitation_phase = options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0;
-    let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+    let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
     let orbit = celestial_orbit(conditions);
-    let cloud_tick = (options.cloud_time_seconds / simulation::DT_SECONDS) as u64;
-    let scalar_time = scalar_field_time_coordinates(cloud_tick);
-    let pressure_time = vector_field_time_coordinates(world_geometry, cloud_tick);
-    let current_time = vector_field_time_coordinates(world_geometry, tick);
-    let cloud_time = cloud_field_time_coordinates(cloud_tick);
+    let (cloud_tick, cloud_tick_fraction) =
+        split_tick_seconds(f64::from(options.cloud_time_seconds));
+    let scalar_time = scalar_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
+    let pressure_time =
+        vector_field_time_coordinates_interpolated(world_geometry, cloud_tick, cloud_tick_fraction);
+    let current_time =
+        vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
+    let cloud_time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
     let view_weather = procedural_world_environment(
         world_geometry,
         options.seed,
@@ -1823,11 +1840,20 @@ fn capture_report(
 ) -> Result<CaptureReport, String> {
     let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
-    let tick = (options.world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
-    let sample = procedural_world_environment(
+    let (world_tick, world_tick_fraction) = split_tick_seconds(options.world_time_seconds);
+    let (cloud_tick, cloud_tick_fraction) =
+        split_tick_seconds(f64::from(options.cloud_time_seconds));
+    let sample = procedural_world_environment_for_render_clocks(
         world,
         options.seed,
-        tick,
+        world_tick,
+        world_tick_fraction,
+        cloud_tick,
+        cloud_tick_fraction,
+        cloud_tick,
+        cloud_tick_fraction,
+        world_tick,
+        world_tick_fraction,
         [options.camera_x_m, options.camera_y_m].into(),
     );
     let celestial = celestial_lighting(sample.celestial);

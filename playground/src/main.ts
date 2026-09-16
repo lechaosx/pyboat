@@ -20,6 +20,7 @@ import {
   type FixedClock,
 } from "./fixed-clock";
 import { deriveIntermediateVisibility } from "./feature-visibility";
+import { CloudMotion } from "./cloud-motion";
 import {
   diagnosticGroups,
   diagnosticShaders,
@@ -312,11 +313,7 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 
 let renderedCameraX = 0;
 let renderedCameraY = 0;
-let previousCloudTimeSeconds: number | undefined;
-const lowCloudMotionM = [0, 0];
-const upperCloudMotionM = [0, 0];
-let previousLowCloudWindMS = [0, 0];
-let previousUpperCloudWindMS = [0, 0];
+const cloudMotion = new CloudMotion();
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -1409,12 +1406,28 @@ function parsedSeed(): bigint {
   }
 }
 
-function sampleWorldCenterDiagnostics(worldTimeSeconds: number): WorldCenterDiagnostics {
+function sampleWorldCenterDiagnostics(
+  cloudTimeSeconds: number,
+  worldTimeSeconds: number,
+  pressureTimeSeconds: number,
+  currentTimeSeconds: number,
+): WorldCenterDiagnostics {
+  const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
+  const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
+  const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
+  const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const sample = sample_playground_environment(
     state.worldWidthM,
     state.worldHeightM,
     parsedSeed(),
-    BigInt(Math.max(0, Math.floor(worldTimeSeconds * 60))),
+    cloudTick,
+    cloudTickFraction,
+    worldTick,
+    worldTickFraction,
+    pressureTick,
+    pressureTickFraction,
+    currentTick,
+    currentTickFraction,
     state.cameraX,
     state.cameraY,
   );
@@ -1553,10 +1566,20 @@ function updateRenderedGeometry(): void {
   sample.free();
 }
 
-function updateViewCenterDiagnostics(worldTimeSeconds: number): void {
+function updateViewCenterDiagnostics(
+  cloudTimeSeconds: number,
+  worldTimeSeconds: number,
+  pressureTimeSeconds: number,
+  currentTimeSeconds: number,
+): void {
   updateRenderedGeometry();
   replaceDiagnosticRows(positionMeasurementsElement, positionMeasurements);
-  updateDerivedOutput(sampleWorldCenterDiagnostics(worldTimeSeconds));
+  updateDerivedOutput(sampleWorldCenterDiagnostics(
+    cloudTimeSeconds,
+    worldTimeSeconds,
+    pressureTimeSeconds,
+    currentTimeSeconds,
+  ));
 }
 
 function splitTick(timeSeconds: number): [bigint, number] {
@@ -1685,22 +1708,11 @@ function writeUniforms(
   );
   const lowWind = [viewCloud[0], viewCloud[1]];
   const upperWind = [viewCloud[2], viewCloud[3]];
-  if (previousCloudTimeSeconds === undefined || cloudTimeSeconds < previousCloudTimeSeconds) {
-    lowCloudMotionM.fill(0);
-    upperCloudMotionM.fill(0);
-  } else {
-    const elapsedSeconds = cloudTimeSeconds - previousCloudTimeSeconds;
-    for (let axis = 0; axis < 2; axis += 1) {
-      lowCloudMotionM[axis] += 0.5 * elapsedSeconds
-        * (previousLowCloudWindMS[axis] + lowWind[axis]);
-      upperCloudMotionM[axis] += 0.5 * elapsedSeconds
-        * (previousUpperCloudWindMS[axis] + upperWind[axis]);
-    }
-  }
-  previousCloudTimeSeconds = cloudTimeSeconds;
-  previousLowCloudWindMS = lowWind;
-  previousUpperCloudWindMS = upperWind;
-  sceneFloats.set([...lowCloudMotionM, ...upperCloudMotionM], 48);
+  sceneFloats.set(cloudMotion.advance({
+    seed: parsedSeed().toString(),
+    widthM: state.worldWidthM,
+    heightM: state.worldHeightM,
+  }, cloudTimeSeconds, lowWind, upperWind), 48);
   sceneFloats.set(viewCloud.subarray(4, 8), 52);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
@@ -1924,11 +1936,12 @@ function frame(now: number): void {
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
-  const ticks = advanceFixedClock(clock, elapsed, () => {
-    state.time += fixedTickSeconds * state.cloudTimeScale;
-    state.pressureTimeSeconds += fixedTickSeconds * state.pressureTimeScale;
-    state.currentTimeSeconds += fixedTickSeconds * state.currentTimeScale;
-    state.worldTimeSeconds += fixedTickSeconds * state.worldTimeScale;
+  const ticks = advanceFixedClock(clock, elapsed, (elapsedTicks) => {
+    const elapsedFixedSeconds = elapsedTicks * fixedTickSeconds;
+    state.time += elapsedFixedSeconds * state.cloudTimeScale;
+    state.pressureTimeSeconds += elapsedFixedSeconds * state.pressureTimeScale;
+    state.currentTimeSeconds += elapsedFixedSeconds * state.currentTimeScale;
+    state.worldTimeSeconds += elapsedFixedSeconds * state.worldTimeScale;
   });
   const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
   const cloudTimeSeconds = state.time + renderFractionSeconds * state.cloudTimeScale;
@@ -1940,7 +1953,12 @@ function frame(now: number): void {
     + renderFractionSeconds * state.worldTimeScale;
   updateRenderedGeometry();
   if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {
-    updateViewCenterDiagnostics(worldTimeSeconds);
+    updateViewCenterDiagnostics(
+      cloudTimeSeconds,
+      worldTimeSeconds,
+      pressureTimeSeconds,
+      currentTimeSeconds,
+    );
     nextDiagnosticsAt = now + 250;
   }
   writeUniforms(

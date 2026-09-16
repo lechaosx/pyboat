@@ -240,6 +240,8 @@ current playable behavior; this file does not track delivery status.
 - **[Explicit]** Seed, geometry, position, and clocks always generate the world's
   environmental causes. Derived conditions are read-only; playground controls
   tune or enable existing mechanisms without replacing world-generated values.
+  Derived readouts use the same independently controlled clocks as the rendered
+  scene.
 - **[Explicit]** Production tuning is available as a preset, while world state
   has no arbitrary default reset and the initial view shows final composition.
 - **[Explicit]** The lab supports drag panning, cursor-anchored zoom, typed values,

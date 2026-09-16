@@ -323,7 +323,7 @@ async fn snapshots_are_complete_current_interest_sets() {
 }
 
 #[tokio::test]
-async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
+async fn server_clamps_viewport_interest_to_prediction_minimum() {
     let server = start_server();
     let mut clients = Vec::new();
     for _ in 0..5 {
@@ -337,7 +337,6 @@ async fn server_clamps_viewport_interest_to_prediction_and_visibility_bounds() {
             &["player-1", "player-2"],
             &["player-3", "player-4", "player-5"],
         ),
-        (100.0, &["player-1", "player-2", "player-3"], &["player-5"]),
         (1.0, &["player-1"], &["player-3", "player-4", "player-5"]),
     ];
     for (index, (radius, required_ids, forbidden_ids)) in cases.iter().enumerate() {

@@ -32,10 +32,11 @@ type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
-const MAX_VISIBILITY_RADIUS_M: f32 = 24.0;
+const DEFAULT_VISIBILITY_RADIUS_M: f32 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_PENDING_CONNECTION_EVENTS: usize = 256;
-const MAX_ACTIVE_SESSIONS: usize = 256;
+const MAX_MATCH_BOATS: usize = 64;
+const MAX_ACTIVE_SESSIONS: usize = MAX_MATCH_BOATS;
 const MAX_PENDING_CONNECTION_MESSAGES: usize = 16;
 const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBTRANSPORT_PATH: &str = "/game";
@@ -130,6 +131,10 @@ impl GameMatch {
         }
     }
 
+    fn has_player_capacity(&self, pending_players: usize) -> bool {
+        self.players.len().saturating_add(pending_players) < MAX_MATCH_BOATS
+    }
+
     fn add_player(&mut self, player_id: String, player_number: u64) {
         let spawn_origin_m = self.spawn_origin_m.unwrap_or(Vector::ZERO);
         let fleet_radius_m = (0..self.players.len())
@@ -160,6 +165,13 @@ impl GameMatch {
                     spawn_origin_m + Vector::new(bearing_rad.cos(), bearing_rad.sin()) * radius_m;
                 let candidate_m =
                     Vector::from(self.world_geometry.wrap_position_m(candidate_m.into()));
+                let cylindrical_displacement_m = Vector::from(
+                    self.world_geometry
+                        .minimum_image_displacement_m((candidate_m - spawn_origin_m).into()),
+                );
+                if cylindrical_displacement_m.length() < minimum_radius_m {
+                    continue;
+                }
                 if procedural_match_environment(
                     self.world_geometry,
                     self.match_seed,
@@ -205,7 +217,7 @@ impl GameMatch {
             last_received_input: 0,
             pending_inputs: VecDeque::new(),
             last_received_viewport: None,
-            visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+            visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
             health: BOAT_MAX_HEALTH,
             last_hit_tick: None,
             wreck: false,
@@ -265,8 +277,7 @@ impl GameMatch {
             return;
         }
         player.last_received_viewport = Some(sequence);
-        player.visibility_radius_m =
-            radius_m.clamp(PHYSICS_BUBBLE_RADIUS_M, MAX_VISIBILITY_RADIUS_M);
+        player.visibility_radius_m = radius_m.max(PHYSICS_BUBBLE_RADIUS_M);
     }
 
     fn advance(&mut self) {
@@ -520,8 +531,10 @@ where
             }
             Some(event) = incoming_events.recv() => match event {
                 ConnectionEvent::Upgraded { connection } => {
+                    let pending_players = sessions.len().saturating_sub(connections.len());
                     if sessions.len() >= MAX_ACTIVE_SESSIONS
                         || connections.len() >= MAX_ACTIVE_SESSIONS
+                        || !game_match.has_player_capacity(pending_players)
                     {
                         connection.close(VarInt::from_u32(1), b"Match is full");
                         continue;
@@ -814,7 +827,7 @@ mod tests {
                 last_received_input: 0,
                 pending_inputs: VecDeque::new(),
                 last_received_viewport: None,
-                visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+                visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
                 health: BOAT_MAX_HEALTH,
                 last_hit_tick: None,
                 wreck: false,
@@ -877,7 +890,7 @@ mod tests {
                     last_received_input: 0,
                     pending_inputs: VecDeque::new(),
                     last_received_viewport: None,
-                    visibility_radius_m: MAX_VISIBILITY_RADIUS_M,
+                    visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
                     health: BOAT_MAX_HEALTH,
                     last_hit_tick: None,
                     wreck: false,
@@ -970,6 +983,25 @@ mod tests {
     }
 
     #[test]
+    fn spawn_clearance_survives_longitude_wrapping() {
+        let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let fleet_radius_m = 4_500.0;
+        for player_number in 1..=64 {
+            let mut game_match = game_match_with_boats(world, &[Vector::new(0.0, fleet_radius_m)]);
+            game_match.spawn_origin_m = Some(Vector::ZERO);
+
+            game_match.add_player("new-player".to_owned(), player_number);
+
+            let spawned = game_match.simulation.motion(1).position_m;
+            let displacement = Vector::from(world.minimum_image_displacement_m(spawned.into()));
+            assert!(
+                displacement.length() >= fleet_radius_m + SPAWN_CLEARANCE_M,
+                "player number {player_number} spawned at {spawned:?}",
+            );
+        }
+    }
+
+    #[test]
     fn collision_damage_respects_bow_side_and_stern_strength() {
         let mut losses = Vec::new();
         for contact_x_m in [1.5, 0.0, -1.5] {
@@ -1032,6 +1064,30 @@ mod tests {
         assert!(boats[2].turn.is_none());
         assert!(boats[3].forward.is_none());
         assert!(boats[3].turn.is_none());
+    }
+
+    #[test]
+    fn viewport_interest_honors_radii_beyond_the_default_view() {
+        let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let mut game_match = game_match_with_boats(world, &[Vector::ZERO, Vector::new(40.0, 0.0)]);
+
+        game_match.set_viewport("player-1", 1, 50.0);
+
+        assert_eq!(game_match.visible_boats("player-1"), vec![0, 1]);
+    }
+
+    #[test]
+    fn retained_wrecks_consume_the_finite_match_capacity() {
+        let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let positions = vec![Vector::ZERO; MAX_MATCH_BOATS];
+        let mut game_match = game_match_with_boats(world, &positions);
+        for player in &mut game_match.players {
+            player.wreck = true;
+        }
+
+        assert!(!game_match.has_player_capacity(0));
+        game_match.set_viewport("player-1", 1, f32::MAX);
+        assert_eq!(game_match.visible_boats("player-1").len(), MAX_MATCH_BOATS);
     }
 
     #[test]

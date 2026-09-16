@@ -52,6 +52,23 @@ pub(crate) fn requeue_failed_viewport(pending: &mut Option<Vec<u8>>, failed: Vec
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn webtransport_server_url(hostname: &str, search: &str) -> Result<String, String> {
+    let configured_port = search
+        .trim_start_matches('?')
+        .split('&')
+        .filter_map(|parameter| parameter.split_once('='))
+        .find_map(|(key, value)| (key == "webtransportPort").then_some(value));
+    let port = configured_port.map_or(Ok(8765), |value| {
+        value
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port > 0)
+            .ok_or_else(|| "WebTransport port must be an integer from 1 through 65535".to_owned())
+    })?;
+    Ok(format!("https://{hostname}:{port}/game"))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloudShadowCacheLayout {
     pub atlas_width: u32,
@@ -174,6 +191,58 @@ pub struct PeriodicEffectTime {
     pub epoch: u64,
     pub age_ticks: u64,
     pub phase: f32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+pub(crate) struct ViewCloudMotion {
+    world: Option<(u64, WorldGeometry)>,
+    last_tick: Option<u64>,
+    last_tick_fraction: f32,
+    pub(crate) low_offset_m: [f64; 2],
+    pub(crate) upper_offset_m: [f64; 2],
+    previous_low_wind_m_s: [f64; 2],
+    previous_upper_wind_m_s: [f64; 2],
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl ViewCloudMotion {
+    pub(crate) fn use_world(&mut self, world: Option<(u64, WorldGeometry)>) {
+        if self.world != world {
+            *self = Self {
+                world,
+                ..Self::default()
+            };
+        }
+    }
+
+    pub(crate) fn advance(
+        &mut self,
+        tick: u64,
+        tick_fraction: f32,
+        low_wind: Vector,
+        upper_wind: Vector,
+    ) {
+        let low_wind = [f64::from(low_wind.x), f64::from(low_wind.y)];
+        let upper_wind = [f64::from(upper_wind.x), f64::from(upper_wind.y)];
+        if let Some(last_tick) = self.last_tick {
+            if (tick, tick_fraction) >= (last_tick, self.last_tick_fraction) {
+                let elapsed_ticks =
+                    (tick - last_tick) as f64 + f64::from(tick_fraction - self.last_tick_fraction);
+                let seconds = elapsed_ticks * f64::from(DT_SECONDS);
+                for axis in 0..2 {
+                    self.low_offset_m[axis] +=
+                        0.5 * seconds * (self.previous_low_wind_m_s[axis] + low_wind[axis]);
+                    self.upper_offset_m[axis] +=
+                        0.5 * seconds * (self.previous_upper_wind_m_s[axis] + upper_wind[axis]);
+                }
+            }
+        }
+        self.last_tick = Some(tick);
+        self.last_tick_fraction = tick_fraction;
+        self.previous_low_wind_m_s = low_wind;
+        self.previous_upper_wind_m_s = upper_wind;
+    }
 }
 
 pub fn periodic_effect_time(tick: u64, period_ticks: u64) -> PeriodicEffectTime {
@@ -539,6 +608,15 @@ impl MultiplayerClient {
         let position_m = self.local_motion()?.position_m;
         Some(Vector::from(
             self.world_geometry?.wrap_position_m(position_m.into()),
+        ))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn render_clock(&self) -> Option<(u64, f32)> {
+        self.tick?;
+        Some((
+            self.prediction_tick,
+            (self.input_accumulator_seconds / DT_SECONDS).clamp(0.0, 1.0),
         ))
     }
 
@@ -1186,6 +1264,19 @@ mod tests {
     }
 
     #[test]
+    fn webtransport_url_uses_the_configured_server_port() {
+        assert_eq!(
+            webtransport_server_url("localhost", "?webtransportPort=9000").unwrap(),
+            "https://localhost:9000/game",
+        );
+        assert_eq!(
+            webtransport_server_url("localhost", "").unwrap(),
+            "https://localhost:8765/game",
+        );
+        assert!(webtransport_server_url("localhost", "?webtransportPort=0").is_err());
+    }
+
+    #[test]
     fn disconnect_discards_a_queued_snapshot() {
         let mut client = MultiplayerClient::new();
         client.accept(ServerMessage::Welcome {
@@ -1358,6 +1449,94 @@ mod tests {
         assert_eq!(client.input_history.len(), MAXIMUM_REPLAY_COMMANDS);
         assert_eq!(client.input_history[0].sequence, 136);
         assert_eq!(client.input_history[14].sequence, 150);
+    }
+
+    #[test]
+    fn cloud_motion_rebases_its_clock_without_discarding_offsets() {
+        let mut motion = ViewCloudMotion::default();
+        let low_wind = Vector::new(2.0, -1.0);
+        let upper_wind = Vector::new(-3.0, 4.0);
+        motion.advance(100, 0.0, low_wind, upper_wind);
+        motion.advance(110, 0.0, low_wind, upper_wind);
+        let low_offset = motion.low_offset_m;
+        let upper_offset = motion.upper_offset_m;
+
+        motion.advance(105, 0.0, low_wind, upper_wind);
+
+        assert_eq!(motion.low_offset_m, low_offset);
+        assert_eq!(motion.upper_offset_m, upper_offset);
+        motion.advance(106, 0.0, low_wind, upper_wind);
+        assert_eq!(
+            motion.low_offset_m,
+            [
+                low_offset[0] + 2.0 * f64::from(DT_SECONDS),
+                low_offset[1] - f64::from(DT_SECONDS),
+            ],
+        );
+    }
+
+    #[test]
+    fn cloud_motion_discards_offsets_when_the_rendered_world_changes() {
+        let mut motion = ViewCloudMotion::default();
+        let wind = Vector::new(2.0, -1.0);
+        motion.advance(100, 0.0, wind, wind);
+        motion.advance(110, 0.0, wind, wind);
+
+        motion.use_world(Some((42, WorldGeometry::default())));
+
+        assert_eq!(motion.low_offset_m, [0.0, 0.0]);
+        assert_eq!(motion.upper_offset_m, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn render_clock_keeps_fractional_progress_between_simulation_ticks() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        client.accept(snapshot(0));
+
+        client.take_inputs(DT_SECONDS * 0.5);
+
+        assert_eq!(client.render_clock(), Some((0, 0.5)));
+    }
+
+    #[test]
+    fn render_clock_starts_with_the_first_authoritative_snapshot() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+
+        assert_eq!(client.render_clock(), None);
+        client.accept(ServerMessage::Snapshot {
+            tick: 900_000,
+            boats: vec![BoatSnapshot {
+                id: "player-1".to_owned(),
+                health: 100.0,
+                last_hit_tick: None,
+                wreck: false,
+                x: 0.0,
+                y: 0.0,
+                vx: 0.0,
+                vy: 0.0,
+                angle: 0.0,
+                angular_velocity: 0.0,
+                sail: 0.0,
+                sail_angular_velocity: 0.0,
+                rudder: 0.0,
+                rudder_angular_velocity: 0.0,
+                forward: Some(0.0),
+                turn: Some(0.0),
+                acknowledged_input: Some(0),
+            }],
+            removed_player_ids: Vec::new(),
+        });
+        assert_eq!(client.render_clock(), Some((900_000, 0.0)));
     }
 
     #[test]

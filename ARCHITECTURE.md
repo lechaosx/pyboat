@@ -223,7 +223,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   faster rendering presents the interval toward the next tick without WGSL
   converting total time to `f32` or interpolating temporal snapshots. A seeded
   phase on each field and octave prevents unrelated spectra from changing in
-  lockstep.
+  lockstep. Host-integrated cloud transport rebases its clock after prediction
+  reconciliation without discarding the displacement accumulated during the
+  current session.
 - **[Explicit]** Rust and WGSL evaluate the same climate, synoptic, and local
   simplex pressure potential plus a separate scalar gust pulse directly from
   match seed, position, world geometry, and bounded time coordinates. Resolved
@@ -562,7 +564,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Browser protocol readiness begins when Welcome initializes
   player identity and world geometry. The newest queued snapshot remains
   pending until then; after disconnection, late messages cannot resume
-  replicated updates.
+  replicated updates. Render-time environmental motion begins with the first
+  authoritative snapshot rather than the Welcome delivery race.
 - **[Explicit]** WebTransport is always encrypted. Local development pins a
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.
@@ -571,8 +574,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   updates are sequenced so independently completed streams cannot restore stale
   interest. An acknowledgement covers only input already used by an
   authoritative tick.
-- **[Implicit]** A persistent match admits at most 256 active WebTransport
-  sessions; further upgraded sessions are closed before player registration.
+- **[Implicit]** A persistent match retains at most 64 boats, including
+  disconnected wrecks, and admits at most the same number of active WebTransport
+  sessions. This bounds authoritative simulation, complete per-recipient
+  snapshots, and rendered boat geometry without imposing a viewport-distance
+  cap. Further upgraded sessions are closed before player registration.
 - **[Implicit]** A failed viewport stream leaves its queued update available for
   retry unless a newer viewport update has superseded it.
 - **[Implicit]** A protocol decoding or version failure closes the WebTransport
@@ -599,8 +605,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   while render placement and correction offsets use cylindrical minimum-image
   displacement relative to the local boat.
 - **[Explicit]** Boats sufficiently outside the viewport may be omitted from a
-  recipient's snapshots. Server visibility and physics-bubble membership use
-  longitude minimum-image displacement and ordinary north-south distance.
+  recipient's snapshots. The client requests the viewport half-diagonal plus a
+  margin, and the server does not impose a smaller fixed world-distance cap.
+  Server visibility and physics-bubble membership use longitude minimum-image
+  displacement and ordinary north-south distance.
 
 ## Operations
 
@@ -611,7 +619,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   checked-in image collection.
 - **[Explicit]** Headless capture renders one deterministic procedural world from
   explicit seed, geometry, camera, cloud-time, and world-time inputs and writes a
-  derived-condition summary beside it.
+  derived-condition summary from those same fractional render clocks beside it.
 - **[Explicit]** Capture requires a hardware Vulkan GPU and has no
   software-rendering path.
 

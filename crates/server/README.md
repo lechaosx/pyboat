@@ -11,6 +11,12 @@ Pass a listen address as the first argument:
 cargo run -p server -- 0.0.0.0:9000
 ```
 
+Point the browser at the same port:
+
+```text
+http://localhost:5173/?webtransportPort=9000&webtransportCertificateHash=d7:3a:...:72:48
+```
+
 ## Certificates
 
 Without certificate arguments, the server creates a short-lived self-signed

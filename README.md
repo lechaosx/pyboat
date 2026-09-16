@@ -12,7 +12,8 @@ globally shaped, locally wind-translated and parallax-projected cloud fields and
 shadows, zero-net local circulation, and phase-resolved gameplay waves.
 Prediction, ramming, damage, and persistent wrecks remain deterministic. Boats
 sail longitude laps and interact across that seam, while successive north and
-south poles pass without a world edge.
+south poles pass without a world edge. A match retains at most 64 boats,
+including disconnected wrecks.
 
 The intended game grows this foundation into persistent, drop-in matches with
 varied ships, mostly automatic weapons, progression, and a vast procedural sea.
