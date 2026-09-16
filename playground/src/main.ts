@@ -3,6 +3,7 @@ import {
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
   playground_scene_shader_source,
+  playground_shadow_cache_layout,
   playground_startup_shader_source,
   sample_playground_celestial_orbit,
   sample_playground_environment,
@@ -1136,28 +1137,18 @@ function createCloudShadowCache(
   const width = previewCanvas.width;
   const height = previewCanvas.height;
   const tileTexels = shadowCacheTileTexels;
-  const physicalTileTexels = tileTexels + 2;
-  const maximumAxisTiles = Math.max(
-    1,
-    Math.floor(device.limits.maxTextureDimension2D / physicalTileTexels),
-  );
-  const screenFootprintTiles =
-    (Math.ceil(width / tileTexels) + 1) * (Math.ceil(height / tileTexels) + 1);
-  const desiredTiles = Math.max(1, 6 * screenFootprintTiles);
-  const maximumTiles = Math.min(desiredTiles, maximumAxisTiles ** 2);
-  const atlasColumns = Math.max(
-    1,
-    Math.min(maximumAxisTiles, Math.ceil(Math.sqrt(maximumTiles))),
-  );
-  const atlasRows = Math.ceil(maximumTiles / atlasColumns);
-  const markerTiles = Math.max(1, 26 * screenFootprintTiles);
-  let tableEntries = 1;
-  while (tableEntries < 2 * markerTiles) tableEntries *= 2;
+  const [atlasWidth, atlasHeight, atlasColumns, maximumTiles, tableEntries] =
+    playground_shadow_cache_layout(
+      width,
+      height,
+      device.limits.maxTextureDimension2D,
+      tileTexels,
+    );
   const cacheUniforms = new Uint32Array([
     width,
     height,
-    atlasColumns * physicalTileTexels,
-    atlasRows * physicalTileTexels,
+    atlasWidth,
+    atlasHeight,
     tableEntries - 1,
     maximumTiles,
     atlasColumns,

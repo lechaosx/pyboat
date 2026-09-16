@@ -243,13 +243,10 @@ fn landform_shadow_cache_offset(
 
 struct CloudShadowCacheFootprint {
     enabled: bool,
-    light: vec3<f32>,
-    receiver_height_m: f32,
-    cloud_height_m: f32,
+    projected_position_m: vec2<f32>,
 };
 
 fn cloud_shadow_cache_footprint(
-    position_m: vec2<f32>,
     footprint_index: u32,
     layer: u32,
     surface_light: CelestialReceiverLight,
@@ -291,7 +288,7 @@ fn cloud_shadow_cache_footprint(
         angular_radius_rad,
     );
     var separation_m = celestial_disc_projection_separation_m(
-        position_m,
+        receiver_light.position_m,
         receiver_light.height_m,
         cloud_height_m,
         directions,
@@ -311,7 +308,7 @@ fn cloud_shadow_cache_footprint(
             separation_m = max(
                 separation_m,
                 celestial_disc_projection_separation_m(
-                    position_m,
+                    receiver_light.position_m,
                     receiver_light.height_m,
                     other_cloud_height_m,
                     directions,
@@ -347,24 +344,16 @@ fn cloud_shadow_cache_footprint(
             && cloud_shadow_contrast(center_light) > 0.0
             && (tap_index == 0u || resolved);
     }
-    return CloudShadowCacheFootprint(
-        enabled,
-        light,
-        receiver_light.height_m,
-        cloud_height_m,
-    );
-}
-
-fn cloud_shadow_cache_footprint_position(
-    receiver_position_m: vec2<f32>,
-    footprint: CloudShadowCacheFootprint,
-) -> vec2<f32> {
-    return projected_cloud_position(
-        receiver_position_m,
-        footprint.receiver_height_m,
-        footprint.cloud_height_m,
-        footprint.light,
-    );
+    var projected_position_m = vec2<f32>(0.0);
+    if enabled {
+        projected_position_m = projected_cloud_position(
+            receiver_light.position_m,
+            receiver_light.height_m,
+            cloud_height_m,
+            light,
+        );
+    }
+    return CloudShadowCacheFootprint(enabled, projected_position_m);
 }
 
 @compute @workgroup_size(8, 8)
@@ -396,22 +385,16 @@ fn discover_cloud_shadow_cache_tiles(
     let reach_m = max(tuning.landform_lighting.z, 1.0);
     let surface_receiver_height_m = max(broad_receiver_elevation_m, water_height_m);
     let surface_light = celestial_receiver_light_at_height(surface_receiver_height_m);
+    let low_cloud_position_m = visible_low_cloud_position_m(position_m);
     let low_cloud_light = celestial_receiver_light_at_position_and_height(
-        visible_low_cloud_position_m(position_m),
+        low_cloud_position_m,
         LOW_CLOUD_BASE_HEIGHT_M,
     );
     for (var layer = 0u; layer < 2u; layer++) {
         let footprint_count = select(12u, 6u, layer == 0u);
         var footprints: array<CloudShadowCacheFootprint, 12>;
         for (var footprint_index = 0u; footprint_index < footprint_count; footprint_index++) {
-            let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
-            let receiver_position_m = select(
-                position_m,
-                visible_low_cloud_position_m(position_m),
-                receives_at_low_cloud,
-            );
             footprints[footprint_index] = cloud_shadow_cache_footprint(
-                receiver_position_m,
                 footprint_index,
                 layer,
                 surface_light,
@@ -423,18 +406,8 @@ fn discover_cloud_shadow_cache_tiles(
             if !footprint.enabled {
                 continue;
             }
-            let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
-            let receiver_position_m = select(
-                position_m,
-                visible_low_cloud_position_m(position_m),
-                receives_at_low_cloud,
-            );
-            let projected_position_m = cloud_shadow_cache_footprint_position(
-                receiver_position_m,
-                footprint,
-            );
             mark_cloud_shadow_cache_tile_key(
-                cloud_shadow_cache_tile_key(projected_position_m),
+                cloud_shadow_cache_tile_key(footprint.projected_position_m),
                 layer,
                 footprint_index / 3u,
             );

@@ -303,7 +303,7 @@ pub struct MultiplayerClient {
     player_id: Option<String>,
     match_seed: Option<u64>,
     world_geometry: Option<WorldGeometry>,
-    connection_active: bool,
+    session_state: ClientSessionState,
     boats: HashMap<String, ReplicatedBoat>,
     snapshot_received_at_seconds: HashMap<String, f32>,
     tick: Option<u64>,
@@ -321,6 +321,13 @@ pub struct MultiplayerClient {
     correction_started_at_seconds: f32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClientSessionState {
+    AwaitingWelcome,
+    Active,
+    Disconnected,
+}
+
 impl Default for MultiplayerClient {
     fn default() -> Self {
         Self::new()
@@ -333,7 +340,7 @@ impl MultiplayerClient {
             player_id: None,
             match_seed: None,
             world_geometry: None,
-            connection_active: false,
+            session_state: ClientSessionState::AwaitingWelcome,
             boats: HashMap::new(),
             snapshot_received_at_seconds: HashMap::new(),
             tick: None,
@@ -359,16 +366,22 @@ impl MultiplayerClient {
                 match_seed,
                 world_geometry,
             } => {
+                if self.session_state != ClientSessionState::AwaitingWelcome {
+                    return;
+                }
                 self.player_id = Some(player_id);
                 self.match_seed = Some(match_seed);
                 self.world_geometry = Some(world_geometry);
-                self.connection_active = true;
+                self.session_state = ClientSessionState::Active;
             }
             ServerMessage::Snapshot {
                 tick,
                 boats,
                 removed_player_ids: _,
             } => {
+                if self.session_state != ClientSessionState::Active {
+                    return;
+                }
                 if self.tick.is_some_and(|current| tick < current) {
                     return;
                 }
@@ -411,8 +424,12 @@ impl MultiplayerClient {
         self.world_geometry
     }
 
+    pub(crate) fn is_ready(&self) -> bool {
+        self.session_state == ClientSessionState::Active
+    }
+
     pub fn disconnect(&mut self) {
-        self.connection_active = false;
+        self.session_state = ClientSessionState::Disconnected;
         self.input_history.clear();
         self.sent_viewport_radius_m = None;
         let player_id = self.player_id.clone();
@@ -446,7 +463,7 @@ impl MultiplayerClient {
     }
 
     pub fn update_viewport(&mut self, radius_m: f32) -> Option<ClientMessage> {
-        if !self.connection_active || self.sent_viewport_radius_m == Some(radius_m) {
+        if !self.is_ready() || self.sent_viewport_radius_m == Some(radius_m) {
             return None;
         }
         self.sent_viewport_radius_m = Some(radius_m);
@@ -496,7 +513,7 @@ impl MultiplayerClient {
             .is_some_and(|boat| boat.snapshot.wreck);
         let mut inputs = Vec::new();
         while self.input_accumulator_seconds >= DT_SECONDS {
-            if self.connection_active && !local_wreck {
+            if self.is_ready() && !local_wreck {
                 let command = InputCommand {
                     sequence: self.next_input_sequence,
                     intent: self.motion_intent,
@@ -1110,6 +1127,39 @@ mod tests {
 
         queue_latest_snapshot(&mut pending, snapshot(9));
         assert_eq!(pending, Some(snapshot(9)));
+    }
+
+    #[test]
+    fn snapshot_before_welcome_does_not_initialize_replication() {
+        let mut client = MultiplayerClient::new();
+
+        client.accept(snapshot(7));
+
+        assert_eq!(client.tick(), None);
+        assert_eq!(client.world_geometry(), None);
+    }
+
+    #[test]
+    fn disconnected_client_ignores_late_welcome_and_snapshot() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-1".to_owned(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        client.disconnect();
+
+        client.accept(snapshot(7));
+        client.accept(ServerMessage::Welcome {
+            player_id: "player-2".to_owned(),
+            match_seed: 99,
+            world_geometry: WorldGeometry::default(),
+        });
+
+        assert_eq!(client.tick(), None);
+        assert_eq!(client.player_id(), Some("player-1"));
+        assert_eq!(client.match_seed(), Some(42));
+        assert_eq!(client.update_viewport(10.0), None);
     }
 
     #[test]

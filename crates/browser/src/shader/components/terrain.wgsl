@@ -670,16 +670,14 @@ fn landform_shadow_sample_direction(
 }
 
 fn landform_shadow_transmittance(
-    position_m: vec2<f32>,
-    elevation_m: f32,
     direct_light: CelestialReceiverLight,
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let is_sun = source_index == 0u;
         transmittance[source_index] = landform_shadow_transmittance_for_light(
-            position_m,
-            elevation_m,
+            direct_light.position_m,
+            direct_light.height_m,
             landform_shadow_sample_direction(direct_light, source_index),
             select(
                 direct_light.moon_amount,

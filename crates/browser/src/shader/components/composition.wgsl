@@ -138,7 +138,6 @@ fn cloud_color(
 }
 
 fn upper_cloud_transmittance_at_low_cloud_for_light(
-    position_m: vec2<f32>,
     low_cloud_light: CelestialReceiverLight,
     upper_height_m: f32,
     light: vec3<f32>,
@@ -154,19 +153,19 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
         angular_radius_rad,
     );
     let lower_position_m = projected_cloud_position(
-        position_m,
+        low_cloud_light.position_m,
         low_cloud_light.height_m,
         upper_height_m,
         directions.lower,
     );
     let upper_position_m = projected_cloud_position(
-        position_m,
+        low_cloud_light.position_m,
         low_cloud_light.height_m,
         upper_height_m,
         directions.upper,
     );
     let side_position_m = projected_cloud_position(
-        position_m,
+        low_cloud_light.position_m,
         low_cloud_light.height_m,
         upper_height_m,
         directions.side,
@@ -184,7 +183,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
             angular_radius_rad,
         );
         let projected_position_m = projected_cloud_position(
-            position_m,
+            low_cloud_light.position_m,
             low_cloud_light.height_m,
             upper_height_m,
             representative_light,
@@ -228,7 +227,6 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
 }
 
 fn upper_cloud_transmittance_at_low_cloud(
-    position_m: vec2<f32>,
     upper_height_m: f32,
     low_cloud_light: CelestialReceiverLight,
 ) -> vec2<f32> {
@@ -251,7 +249,6 @@ fn upper_cloud_transmittance_at_low_cloud(
             is_sun,
         );
         transmittance[source_index] = upper_cloud_transmittance_at_low_cloud_for_light(
-            position_m,
             low_cloud_light,
             upper_height_m,
             light,
@@ -264,8 +261,6 @@ fn upper_cloud_transmittance_at_low_cloud(
 
 fn fragment_surface_color(
     surface_color: vec3<f32>,
-    position_m: vec2<f32>,
-    elevation_m: f32,
     direct_light: CelestialReceiverLight,
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec3<f32>,
@@ -273,11 +268,7 @@ fn fragment_surface_color(
 ) -> vec3<f32> {
     let layer = fragment_layer_visibility();
     let contribution = fragment_light_visibility();
-    let depths = celestial_cloud_shadow_depths_at(
-        position_m,
-        elevation_m,
-        direct_light,
-    );
+    let depths = celestial_cloud_shadow_depths_at(direct_light);
     let sun_transmittance = cloud_disc_shadow_transmittance(
         layer.y * depths.sun.low + layer.z * depths.sun.upper,
         direct_light.sun_direction,
@@ -398,15 +389,9 @@ fn final_scene_color(
             );
         }
         surface_color = surface.color;
-        let terrain_shadow_transmittance = landform_shadow_transmittance(
-            input.world_position_m,
-            surface_height_m,
-            surface_direct_light,
-        );
+        let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
         fragment_color = fragment_surface_color(
             surface_color,
-            input.world_position_m,
-            surface_height_m,
             surface_direct_light,
             terrain_shadow_transmittance,
             surface_light_grade,
@@ -433,7 +418,6 @@ fn final_scene_color(
                 var upper_transmittance = vec2<f32>(1.0);
                 if layer_visibility.w > 0.0 {
                     upper_transmittance = upper_cloud_transmittance_at_low_cloud(
-                        low_cloud_position_m,
                         upper_height_m,
                         low_cloud_light,
                     );

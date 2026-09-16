@@ -555,6 +555,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   seed, and validated world geometry. Server and browser retain the same
   geometry for authoritative and predicted match inputs. A player enters the
   authoritative match only after the welcome message is sent successfully.
+- **[Explicit]** Browser protocol readiness begins when Welcome initializes
+  player identity and world geometry. The newest queued snapshot remains
+  pending until then; after disconnection, late messages cannot resume
+  replicated updates.
 - **[Explicit]** WebTransport is always encrypted. Local development pins a
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.

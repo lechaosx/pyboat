@@ -54,6 +54,29 @@ pub fn playground_cloud_shadow_cache_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn playground_shadow_cache_layout(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+    tile_texels: u32,
+) -> Vec<u32> {
+    let layout = crate::cloud_shadow_cache_layout_for_tile_size(
+        viewport_width,
+        viewport_height,
+        maximum_texture_dimension,
+        tile_texels,
+    );
+    vec![
+        layout.atlas_width,
+        layout.atlas_height,
+        layout.atlas_columns,
+        layout.maximum_tiles,
+        layout.table_entries,
+    ]
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn playground_direct_scene_shader_source() -> String {
     crate::playground_direct_scene_shader_source().to_owned()
 }
@@ -1292,7 +1315,7 @@ pub struct BrowserGame {
 #[derive(Clone, Copy, PartialEq)]
 enum ConnectionStatus {
     Connecting,
-    Connected,
+    Open,
     Error,
     Closed,
 }
@@ -1367,9 +1390,12 @@ impl BrowserGame {
             &self.pending_viewport,
             &self.sending_reliable,
         );
-        if self.connection_status.get() == ConnectionStatus::Connected {
-            if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
-                self.client.borrow_mut().accept(snapshot);
+        {
+            let mut client = self.client.borrow_mut();
+            if client.is_ready() {
+                if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
+                    client.accept(snapshot);
+                }
             }
         }
         let client = self.client.borrow();
@@ -1477,7 +1503,7 @@ impl BrowserGame {
     pub fn status(&self) -> String {
         match self.connection_status.get() {
             ConnectionStatus::Connecting => "Connecting to authoritative server…".to_owned(),
-            ConnectionStatus::Connected => self
+            ConnectionStatus::Open => self
                 .client
                 .borrow()
                 .player_id()
@@ -1526,7 +1552,7 @@ fn connect_webtransport(
             }
         };
         transport.replace(Some(session.clone()));
-        connection_status.set(ConnectionStatus::Connected);
+        connection_status.set(ConnectionStatus::Open);
         receive_datagrams(
             session.clone(),
             Rc::clone(&protocol_client),
@@ -1632,7 +1658,7 @@ fn accept_server_message(
     pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
     connection_status: &Rc<Cell<ConnectionStatus>>,
 ) -> Result<(), protocol::ProtocolError> {
-    if connection_status.get() != ConnectionStatus::Connected {
+    if connection_status.get() != ConnectionStatus::Open {
         return Ok(());
     }
     match decode_server_message(bytes)? {

@@ -42,11 +42,7 @@ fn diagnostic_cloud_shadow_sample(position_m: vec2<f32>) -> DiagnosticCloudShado
     let surface_height_m = max(terrain.elevation_m, tide_height_m());
     let receiver = celestial_receiver_light_at_height(surface_height_m);
     return DiagnosticCloudShadowSample(
-        celestial_cloud_shadow_depths_at(
-            position_m,
-            surface_height_m,
-            receiver,
-        ),
+        celestial_cloud_shadow_depths_at(receiver),
         receiver,
     );
 }
@@ -164,7 +160,6 @@ fn diagnostic_lighting_low_cloud_canopy_transmittance(
         LOW_CLOUD_BASE_HEIGHT_M,
     );
     let transmittance = upper_cloud_transmittance_at_low_cloud(
-        input.world_position_m,
         WEATHER_CANOPY_HEIGHT_M,
         low_cloud_light,
     );
@@ -286,18 +281,16 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
 }
 
 fn diagnostic_landform_shadow_disc_radii(input: VertexOutput) -> vec4<f32> {
-    var receiver = celestial_receiver_light_at_height(0.0);
+    let position_m = input.world_position_m;
+    var receiver = celestial_receiver_light_at_height(
+        broad_landform_elevation_m(position_m),
+    );
     let direction = normalize(vec3<f32>(0.95, 0.30, 0.02));
     receiver.sun_direction = direction;
     receiver.moon_direction = direction;
     receiver.sun_amount = 1.0;
     receiver.moon_amount = 1.0;
-    let position_m = input.world_position_m;
-    let transmittance = landform_shadow_transmittance(
-        position_m,
-        broad_landform_elevation_m(position_m),
-        receiver,
-    );
+    let transmittance = landform_shadow_transmittance(receiver);
     return vec4<f32>(scalar_debug_color(clamp(
         500.0 * (transmittance.x - transmittance.y),
         0.0,
@@ -382,7 +375,6 @@ fn diagnostic_low_cloud_canopy_shadow_disc_radius(input: VertexOutput) -> vec4<f
     let direction = normalize(vec3<f32>(0.95, 0.30, 0.20));
     let receiver = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
     let point_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
-        input.world_position_m,
         receiver,
         WEATHER_CANOPY_HEIGHT_M,
         direction,
@@ -390,7 +382,6 @@ fn diagnostic_low_cloud_canopy_shadow_disc_radius(input: VertexOutput) -> vec4<f
         0.0,
     );
     let disc_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
-        input.world_position_m,
         receiver,
         WEATHER_CANOPY_HEIGHT_M,
         direction,

@@ -95,6 +95,7 @@ fn sun_direction() -> vec3<f32> {
 }
 
 struct CelestialReceiverLight {
+    position_m: vec2<f32>,
     height_m: f32,
     horizon_z: f32,
     sun_direction: vec3<f32>,
@@ -205,6 +206,7 @@ fn sun_amount_at_horizon_with_eclipse(
 }
 
 fn celestial_receiver_light_for_directions(
+    position_m: vec2<f32>,
     height_m: f32,
     sun: vec3<f32>,
     geocentric_moon: vec3<f32>,
@@ -236,6 +238,7 @@ fn celestial_receiver_light_for_directions(
         )
         * (0.35 + 0.65 * sqrt(moon_elevation));
     return CelestialReceiverLight(
+        position_m,
         height_m,
         horizon_z,
         sun,
@@ -248,6 +251,7 @@ fn celestial_receiver_light_for_directions(
 
 fn celestial_receiver_light_at_height(height_m: f32) -> CelestialReceiverLight {
     return celestial_receiver_light_for_directions(
+        surface_position_m,
         height_m,
         sun_light_direction,
         geocentric_moon_light_direction,
@@ -269,7 +273,12 @@ fn celestial_receiver_light_at_position_and_height(
         scene.celestial_orbit_angles.z,
         hour_angle + scene.celestial_orbit_angles.y - scene.celestial_orbit_angles.w,
     );
-    return celestial_receiver_light_for_directions(height_m, sun, geocentric_moon);
+    return celestial_receiver_light_for_directions(
+        position_m,
+        height_m,
+        sun,
+        geocentric_moon,
+    );
 }
 
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
@@ -814,8 +823,6 @@ fn cloud_shadow_depths_for_light_at(
 }
 
 fn celestial_cloud_shadow_depths_at(
-    position_m: vec2<f32>,
-    surface_height_m: f32,
     direct_light: CelestialReceiverLight,
 ) -> CelestialCloudShadowDepths {
     let empty_depths = CloudDiscShadowDepths(
@@ -845,8 +852,8 @@ fn celestial_cloud_shadow_depths_at(
                 is_sun,
             );
             let depths = cloud_shadow_depths_for_light_at(
-                position_m,
-                surface_height_m,
+                direct_light.position_m,
+                direct_light.height_m,
                 direct_light.horizon_z,
                 light,
                 angular_radius_rad,
