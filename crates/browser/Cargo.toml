@@ -29,6 +29,7 @@ wtransport = "0.7.2"
 bytemuck = { version = "1.25", features = ["derive"] }
 bytes = "1"
 console_error_panic_hook = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 url = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

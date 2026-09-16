@@ -147,6 +147,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "console_error_panic_hook",
+ "futures-util",
  "game",
  "naga",
  "protocol",

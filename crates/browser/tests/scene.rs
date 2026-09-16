@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 
 use browser::{
-    Demo, PointOfSail, boat_scene, point_of_sail, scale_bar, viewport_interest_radius_m,
-    windsock_extension, zoom_view_height_m,
+    Demo, PointOfSail, boat_scene, point_of_sail, scale_bar, view_width_m,
+    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 use game::dinghy_parameters;
 use rapier2d::prelude::Vector;
@@ -42,6 +42,15 @@ fn boat_scene_follows_hull_and_surface_motion() {
 #[test]
 fn viewport_interest_covers_the_visible_rectangle_and_boat_margin() {
     assert!((viewport_interest_radius_m(4.0 / 3.0, 15.0) - 15.0).abs() < 1.0e-5);
+}
+
+#[test]
+fn viewport_interest_remains_finite_at_extreme_zoom() {
+    assert!(viewport_interest_radius_m(4.0, f32::MAX).is_finite());
+    assert!(view_width_m(4.0, f32::MAX).is_finite());
+    let scale = scale_bar(f32::MAX, 1.0);
+    assert!(scale.distance_m.is_finite());
+    assert!(scale.width_px.is_finite());
 }
 
 #[test]

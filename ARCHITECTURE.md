@@ -223,9 +223,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   faster rendering presents the interval toward the next tick without WGSL
   converting total time to `f32` or interpolating temporal snapshots. A seeded
   phase on each field and octave prevents unrelated spectra from changing in
-  lockstep. Host-integrated cloud transport rebases its clock after prediction
-  reconciliation without discarding the displacement accumulated during the
-  current session.
+  lockstep. Host-integrated cloud transport is renderer-local displacement: each
+  presented frame adds the current view-centre wind multiplied by that frame's
+  elapsed duration. The displacement persists across prediction reconciliation,
+  procedural-clock changes, and world-configuration changes.
 - **[Explicit]** Cloud-transport displacement accumulates in host `f64` and is
   uploaded to WGSL as absolute `f32` metres. Increasing spatial quantization
   after very long uninterrupted transport is an accepted rendering limit.
@@ -578,10 +579,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   short-lived self-signed server certificate through its SHA-256 hash; deployed
   environments provide a browser-trusted certificate.
 - **[Implicit]** Network queues are bounded and latest-biased so delayed clients
-  cannot accumulate stale commands or snapshots. Input commands and viewport
-  updates are sequenced so independently completed streams cannot restore stale
-  interest. An acknowledgement covers only input already used by an
-  authoritative tick.
+  cannot accumulate stale commands or snapshots. The browser reads a bounded set
+  of independent reliable streams concurrently so loss on one stream does not
+  block newer fallback snapshots. Input commands and viewport updates are
+  sequenced so independently completed streams cannot restore stale interest. An
+  acknowledgement covers only input already used by an authoritative tick.
 - **[Implicit]** A persistent match retains at most 64 boats, including
   disconnected wrecks, and admits at most the same number of active WebTransport
   sessions. This bounds authoritative simulation, complete per-recipient
@@ -628,6 +630,7 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** Headless capture renders one deterministic procedural world from
   explicit seed, geometry, camera, cloud-time, and world-time inputs and writes a
   derived-condition summary from those same fractional render clocks beside it.
+  A fresh one-frame capture has zero renderer-local cloud displacement.
 - **[Explicit]** Capture requires a hardware Vulkan GPU and has no
   software-rendering path.
 

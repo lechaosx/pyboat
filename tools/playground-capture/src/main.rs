@@ -1,12 +1,11 @@
 use std::{env, fs, path::PathBuf};
 
-use browser::{seasonal_phase_factors, visual_pixel_footprint_m};
+use browser::{seasonal_phase_factors, view_width_m, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
     celestial_lighting, celestial_orbit, cloud_field_time_coordinates_interpolated,
-    procedural_world_environment_for_render_clocks,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
-    world_celestial_conditions,
+    procedural_world_environment_for_render_clocks, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use serde::Serialize;
 use simulation::WorldGeometry;
@@ -651,9 +650,14 @@ fn parse_options() -> Result<Options, String> {
             _ => return Err(format!("unknown option: {argument}")),
         }
     }
-    if options.width == 0 || options.height == 0 {
-        return Err("capture dimensions must be positive".to_owned());
-    }
+    validate_capture_dimensions(options.width, options.height, u32::MAX)?;
+    validate_time_seconds(options.cloud_time_seconds, "--cloud-time")?;
+    validate_time_seconds(options.world_time_seconds, "--world-time")?;
+    validate_capture_spatial_inputs(
+        options.camera_x_m,
+        options.camera_y_m,
+        options.view_height_m,
+    )?;
     if !(8_000.0..=256_000.0).contains(&options.world_width_m)
         || !(8_000.0..=256_000.0).contains(&options.world_height_m)
     {
@@ -680,9 +684,14 @@ fn parse_f32x4(value: &str, option: &str) -> Result<[f32; 4], String> {
         .split(',')
         .map(|value| parse(value, option))
         .collect::<Result<Vec<_>, _>>()?;
-    values
+    let values: [f32; 4] = values
         .try_into()
-        .map_err(|_| format!("{option} requires four comma-separated values"))
+        .map_err(|_| format!("{option} requires four comma-separated values"))?;
+    if values.iter().all(|value| value.is_finite()) {
+        Ok(values)
+    } else {
+        Err(format!("{option} values must be finite"))
+    }
 }
 
 fn parse_u32x4(value: &str, option: &str) -> Result<[u32; 4], String> {
@@ -1089,66 +1098,91 @@ fn print_help() {
         "playground-capture [options]\n\n\
          Options:\n\
            --output PATH          output path (default playground-capture.png)\n\
-           --width N --height N   output dimensions (default 960x600)\n\
-           --camera-x M --camera-y M  world-space camera centre\n\
+           --width N --height N   positive GPU-supported output dimensions (default 960x600)\n\
+           --camera-x M --camera-y M  finite world-space camera centre\n\
            --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
-           --view-height METRES   vertical world span (default 480)\n\
+           --view-height METRES   positive finite vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
-           --cloud-time SECONDS   deterministic cloud animation time (default 37)\n\
-           --world-time SECONDS   deterministic world time (default 0)\n\
+           --cloud-time SECONDS   nonnegative deterministic cloud animation time (default 37)\n\
+           --world-time SECONDS   nonnegative deterministic world time (default 0)\n\
            --diagnostic NAME      semantic diagnostic output (default scene)\n\n\
-           --light-balance V,V,V,V  Sun, Moon, clear-sky, and canopy light scales\n\
+           --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
-           --cloud-rendering V,V,V,V  lower-cloud depth, opacity, storm, parallax\n\
-           --cloud-shadows V,V,V,V  low/canopy strength, extinction, contrast\n\
-           --landform-lighting V,V,V,V  relief, shadow, reach, padding\n\
+           --cloud-rendering V,V,V,V  finite lower-cloud depth, opacity, storm, parallax\n\
+           --cloud-shadows V,V,V,V  finite low/canopy strength, extinction, contrast\n\
+           --landform-lighting V,V,V,V  finite relief, shadow, reach, padding\n\
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
-           --landscape-visibility V,V,V,V  landscape mechanism visibility\n\n\
+           --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics."
     );
 }
 
 fn split_tick_seconds(seconds: f64) -> (u64, f32) {
-    let tick_position = seconds.max(0.0) / f64::from(simulation::DT_SECONDS);
+    let tick_position = seconds / f64::from(simulation::DT_SECONDS);
     let tick = tick_position.floor() as u64;
     (tick, (tick_position - tick as f64) as f32)
 }
 
-fn integrate_cloud_motion<F>(
-    duration_seconds: f64,
-    maximum_step_seconds: f64,
-    mut wind_at: F,
-) -> [f64; 4]
-where
-    F: FnMut(f64) -> ([f64; 2], [f64; 2]),
-{
-    let duration_seconds = duration_seconds.max(0.0);
-    if duration_seconds == 0.0 {
-        return [0.0; 4];
+fn validate_time_seconds(seconds: f64, option: &str) -> Result<(), String> {
+    let tick_position = seconds / f64::from(simulation::DT_SECONDS);
+    if seconds.is_finite() && seconds >= 0.0 && tick_position < u64::MAX as f64 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{option} must be finite, nonnegative, and representable as a simulation tick",
+        ))
     }
-    let step_count = (duration_seconds / maximum_step_seconds)
-        .ceil()
-        .clamp(1.0, 100_000.0) as u64;
-    let step_seconds = duration_seconds / step_count as f64;
-    let (mut previous_low, mut previous_upper) = wind_at(0.0);
-    let mut motion = [0.0; 4];
-    for step in 1..=step_count {
-        let seconds = step as f64 * step_seconds;
-        let (low, upper) = wind_at(seconds);
-        for axis in 0..2 {
-            motion[axis] += 0.5 * step_seconds * (previous_low[axis] + low[axis]);
-            motion[axis + 2] += 0.5 * step_seconds * (previous_upper[axis] + upper[axis]);
-        }
-        previous_low = low;
-        previous_upper = upper;
+}
+
+fn validate_capture_spatial_inputs(
+    camera_x_m: f32,
+    camera_y_m: f32,
+    view_height_m: f32,
+) -> Result<(), String> {
+    if !camera_x_m.is_finite() || !camera_y_m.is_finite() {
+        return Err("capture camera coordinates must be finite".to_owned());
     }
-    motion
+    if !view_height_m.is_finite() || view_height_m <= 0.0 {
+        return Err("capture view height must be finite and positive".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_capture_dimensions(
+    width: u32,
+    height: u32,
+    maximum_texture_dimension: u32,
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("capture dimensions must be positive".to_owned());
+    }
+    if width > maximum_texture_dimension || height > maximum_texture_dimension {
+        return Err(format!(
+            "capture dimensions exceed the device limit of {maximum_texture_dimension} pixels",
+        ));
+    }
+    let bytes_per_row = width
+        .checked_mul(4)
+        .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
+    let padded_bytes_per_row = bytes_per_row
+        .checked_add(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1)
+        .map(|bytes| {
+            bytes / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+        })
+        .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
+    u64::from(padded_bytes_per_row)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| "capture buffer size exceeds supported arithmetic".to_owned())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{integrate_cloud_motion, parse_diagnostic, split_tick_seconds};
+    use super::{
+        parse_diagnostic, parse_f32x4, split_tick_seconds, validate_capture_dimensions,
+        validate_capture_spatial_inputs, validate_time_seconds,
+    };
 
     #[test]
     fn diagnostics_select_semantic_shader_modules_and_overrides() {
@@ -1167,12 +1201,30 @@ mod tests {
     }
 
     #[test]
-    fn cloud_motion_integrates_wind_over_the_whole_interval() {
-        let motion =
-            integrate_cloud_motion(2.5, 1.0, |seconds| ([seconds, 0.0], [0.0, 2.0 * seconds]));
+    fn capture_times_must_be_finite_and_nonnegative() {
+        assert!(validate_time_seconds(0.0, "--cloud-time").is_ok());
+        assert!(validate_time_seconds(365.0 * 86_400.0, "--cloud-time").is_ok());
+        assert!(validate_time_seconds(-1.0, "--cloud-time").is_err());
+        assert!(validate_time_seconds(f64::NAN, "--world-time").is_err());
+        assert!(validate_time_seconds(f64::INFINITY, "--world-time").is_err());
+        assert!(validate_time_seconds(f64::MAX, "--world-time").is_err());
+    }
 
-        assert!((motion[0] - 3.125).abs() < 1.0e-12);
-        assert!((motion[3] - 6.25).abs() < 1.0e-12);
+    #[test]
+    fn capture_dimensions_must_fit_the_device_and_readback_arithmetic() {
+        assert!(validate_capture_dimensions(8_192, 8_192, 8_192).is_ok());
+        assert!(validate_capture_dimensions(8_193, 1, 8_192).is_err());
+        assert!(validate_capture_dimensions(u32::MAX, u32::MAX, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn capture_spatial_and_tuning_inputs_must_be_finite() {
+        assert!(validate_capture_spatial_inputs(0.0, 0.0, 1.0).is_ok());
+        assert!(validate_capture_spatial_inputs(f32::NAN, 0.0, 1.0).is_err());
+        assert!(validate_capture_spatial_inputs(0.0, f32::INFINITY, 1.0).is_err());
+        assert!(validate_capture_spatial_inputs(0.0, 0.0, 0.0).is_err());
+        assert!(validate_capture_spatial_inputs(0.0, 0.0, f32::INFINITY).is_err());
+        assert!(parse_f32x4("1,NaN,3,4", "--cloud-shadows").is_err());
     }
 }
 
@@ -1207,6 +1259,11 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
+    validate_capture_dimensions(
+        options.width,
+        options.height,
+        device.limits().max_texture_dimension_2d,
+    )?;
     let cached_scene = matches!(
         options.diagnostic.id.as_str(),
         "scene_cached" | "scene_cached_activity" | "scene_cached_hits"
@@ -1428,37 +1485,14 @@ fn render_world(
     let current_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
-    let view_cloud_motion =
-        integrate_cloud_motion(options.cloud_time_seconds, 1.0, |sample_time_seconds| {
-            let (sample_tick, sample_tick_fraction) = split_tick_seconds(sample_time_seconds);
-            let weather = procedural_world_environment_for_render_clocks(
-                world_geometry,
-                options.seed,
-                sample_tick,
-                sample_tick_fraction,
-                sample_tick,
-                sample_tick_fraction,
-                sample_tick,
-                sample_tick_fraction,
-                sample_tick,
-                sample_tick_fraction,
-                canonical_camera_m.into(),
-            )
-            .weather;
-            let low_wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
-            (
-                [f64::from(low_wind.x), f64::from(low_wind.y)],
-                [
-                    f64::from(weather.upper_wind_velocity_m_s.x),
-                    f64::from(weather.upper_wind_velocity_m_s.y),
-                ],
-            )
-        });
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
             canonical_camera_m[1],
-            options.view_height_m * options.width as f32 / options.height as f32,
+            view_width_m(
+                options.width as f32 / options.height as f32,
+                options.view_height_m,
+            ),
             options.view_height_m,
         ],
         scalar_field_time_coordinates: [
@@ -1500,12 +1534,7 @@ fn render_world(
             orbit.lunar_umbra_fraction,
             0.0,
         ],
-        view_cloud_motion_m: [
-            view_cloud_motion[0] as f32,
-            view_cloud_motion[1] as f32,
-            view_cloud_motion[2] as f32,
-            view_cloud_motion[3] as f32,
-        ],
+        view_cloud_motion_m: [0.0; 4],
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1557,12 +1586,22 @@ fn render_world(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let bytes_per_row = options.width * 4;
-    let padded_bytes_per_row = bytes_per_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let bytes_per_row = options
+        .width
+        .checked_mul(4)
+        .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
+    let padded_bytes_per_row = bytes_per_row
+        .checked_add(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1)
+        .map(|bytes| {
+            bytes / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+        })
+        .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
+    let readback_size = u64::from(padded_bytes_per_row)
+        .checked_mul(u64::from(options.height))
+        .ok_or_else(|| "capture buffer size exceeds supported arithmetic".to_owned())?;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("playground capture readback"),
-        size: u64::from(padded_bytes_per_row * options.height),
+        size: readback_size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -1870,9 +1909,9 @@ fn test_cloud_shadow_cache_tide_initialization() {
     } else {
         [0, 0, 0, 255]
     };
-    Ok((0..viewport_width * viewport_height)
-        .flat_map(|_| pixel)
-        .collect())
+    let pixel_count = usize::try_from(u64::from(viewport_width) * u64::from(viewport_height))
+        .map_err(|_| "capture pixel count exceeds supported arithmetic".to_owned())?;
+    Ok((0..pixel_count).flat_map(|_| pixel).collect())
 }
 
 fn fullscreen_vertices() -> [Vertex; 6] {

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use game::{
-    WorldEnvironment, computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment,
-    dinghy_parameters, match_environment, procedural_match_environment,
-    procedural_world_environment,
+    CloudFieldTimeCoordinates, WorldEnvironment, cloud_field_time_coordinates_interpolated,
+    computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
+    match_environment, procedural_match_environment, procedural_world_environment,
+    procedural_world_environment_for_render_clocks,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::{Rotation, Vector};
@@ -19,6 +20,18 @@ mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 pub const CLOUD_SHADOW_CACHE_TILE_TEXELS: u32 = 128;
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) const MAX_SERVER_MESSAGE_BYTES: usize = 16 * 1024;
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn append_reliable_server_message_chunk(message: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if chunk.len() > MAX_SERVER_MESSAGE_BYTES - message.len() {
+        return false;
+    }
+    message.extend_from_slice(chunk);
+    true
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn queue_latest_snapshot(pending: &mut Option<ServerMessage>, snapshot: ServerMessage) {
@@ -196,52 +209,20 @@ pub struct PeriodicEffectTime {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Default)]
 pub(crate) struct ViewCloudMotion {
-    world: Option<(u64, WorldGeometry)>,
-    last_tick: Option<u64>,
-    last_tick_fraction: f32,
     pub(crate) low_offset_m: [f64; 2],
     pub(crate) upper_offset_m: [f64; 2],
-    previous_low_wind_m_s: [f64; 2],
-    previous_upper_wind_m_s: [f64; 2],
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl ViewCloudMotion {
-    pub(crate) fn use_world(&mut self, world: Option<(u64, WorldGeometry)>) {
-        if self.world != world {
-            *self = Self {
-                world,
-                ..Self::default()
-            };
-        }
-    }
-
-    pub(crate) fn advance(
-        &mut self,
-        tick: u64,
-        tick_fraction: f32,
-        low_wind: Vector,
-        upper_wind: Vector,
-    ) {
+    pub(crate) fn advance(&mut self, elapsed_seconds: f32, low_wind: Vector, upper_wind: Vector) {
+        let elapsed_seconds = f64::from(elapsed_seconds.max(0.0));
         let low_wind = [f64::from(low_wind.x), f64::from(low_wind.y)];
         let upper_wind = [f64::from(upper_wind.x), f64::from(upper_wind.y)];
-        if let Some(last_tick) = self.last_tick {
-            if (tick, tick_fraction) >= (last_tick, self.last_tick_fraction) {
-                let elapsed_ticks =
-                    (tick - last_tick) as f64 + f64::from(tick_fraction - self.last_tick_fraction);
-                let seconds = elapsed_ticks * f64::from(DT_SECONDS);
-                for axis in 0..2 {
-                    self.low_offset_m[axis] +=
-                        0.5 * seconds * (self.previous_low_wind_m_s[axis] + low_wind[axis]);
-                    self.upper_offset_m[axis] +=
-                        0.5 * seconds * (self.previous_upper_wind_m_s[axis] + upper_wind[axis]);
-                }
-            }
+        for axis in 0..2 {
+            self.low_offset_m[axis] += elapsed_seconds * low_wind[axis];
+            self.upper_offset_m[axis] += elapsed_seconds * upper_wind[axis];
         }
-        self.last_tick = Some(tick);
-        self.last_tick_fraction = tick_fraction;
-        self.previous_low_wind_m_s = low_wind;
-        self.previous_upper_wind_m_s = upper_wind;
     }
 }
 
@@ -296,6 +277,51 @@ pub fn sample_production_world_environment(
     center_m: Vector,
 ) -> WorldEnvironment {
     procedural_world_environment(geometry, match_seed, tick, center_m)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewCloudState {
+    pub low_wind_velocity_m_s: Vector,
+    pub upper_wind_velocity_m_s: Vector,
+    pub cloud_time_coordinates: CloudFieldTimeCoordinates,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sample_view_cloud_state_for_render_clocks(
+    geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    cloud_tick: u64,
+    cloud_tick_fraction: f32,
+    pressure_tick: u64,
+    pressure_tick_fraction: f32,
+    current_tick: u64,
+    current_tick_fraction: f32,
+    center_m: Vector,
+) -> ViewCloudState {
+    let weather = procedural_world_environment_for_render_clocks(
+        geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        cloud_tick,
+        cloud_tick_fraction,
+        pressure_tick,
+        pressure_tick_fraction,
+        current_tick,
+        current_tick_fraction,
+        center_m,
+    )
+    .weather;
+    ViewCloudState {
+        low_wind_velocity_m_s: weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s,
+        upper_wind_velocity_m_s: weather.upper_wind_velocity_m_s,
+        cloud_time_coordinates: cloud_field_time_coordinates_interpolated(
+            cloud_tick,
+            cloud_tick_fraction,
+        ),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -906,8 +932,14 @@ impl MultiplayerClient {
 }
 
 pub fn viewport_interest_radius_m(aspect_ratio: f32, view_height_m: f32) -> f32 {
-    let view_width_m = view_height_m * aspect_ratio;
-    view_width_m.hypot(view_height_m) / 2.0 + VIEWPORT_INTEREST_MARGIN_M
+    let view_height_m = f64::from(view_height_m);
+    let view_width_m = view_height_m * f64::from(aspect_ratio);
+    (view_width_m.hypot(view_height_m) / 2.0 + f64::from(VIEWPORT_INTEREST_MARGIN_M))
+        .min(f64::from(f32::MAX)) as f32
+}
+
+pub fn view_width_m(aspect_ratio: f32, view_height_m: f32) -> f32 {
+    (f64::from(view_height_m) * f64::from(aspect_ratio)).min(f64::from(f32::MAX)) as f32
 }
 
 pub fn visual_pixel_footprint_m(view_height_m: f32, render_height_px: u32) -> f32 {
@@ -932,8 +964,8 @@ pub struct ScaleBar {
 // Keep the 1-2-5 selection synchronized with `updateScaleBar` in
 // `playground/src/main.ts`; gameplay and the lab share one physical-scale convention.
 pub fn scale_bar(view_height_m: f32, viewport_height_px: f32) -> ScaleBar {
-    let target_distance_m = view_height_m * 120.0 / viewport_height_px;
-    let magnitude_m = 10.0_f32.powf(target_distance_m.log10().floor());
+    let target_distance_m = f64::from(view_height_m) * 120.0 / f64::from(viewport_height_px);
+    let magnitude_m = 10.0_f64.powf(target_distance_m.log10().floor());
     let normalized_distance = target_distance_m / magnitude_m;
     let readable_multiplier = if normalized_distance < 1.5 {
         1.0
@@ -944,7 +976,7 @@ pub fn scale_bar(view_height_m: f32, viewport_height_px: f32) -> ScaleBar {
     } else {
         10.0
     };
-    let distance_m = readable_multiplier * magnitude_m;
+    let distance_m = (readable_multiplier * magnitude_m).min(f64::from(f32::MAX)) as f32;
     let label = if distance_m >= 1_000.0 {
         format!("{:.0} km", distance_m / 1_000.0)
     } else if distance_m >= 1.0 {
@@ -960,7 +992,8 @@ pub fn scale_bar(view_height_m: f32, viewport_height_px: f32) -> ScaleBar {
     };
     ScaleBar {
         distance_m,
-        width_px: distance_m / view_height_m * viewport_height_px,
+        width_px: (f64::from(distance_m) / f64::from(view_height_m) * f64::from(viewport_height_px))
+            .min(f64::from(f32::MAX)) as f32,
         label,
     }
 }
@@ -1461,40 +1494,88 @@ mod tests {
     }
 
     #[test]
-    fn cloud_motion_rebases_its_clock_without_discarding_offsets() {
+    fn cloud_motion_advances_once_by_each_frame_interval() {
         let mut motion = ViewCloudMotion::default();
         let low_wind = Vector::new(2.0, -1.0);
         let upper_wind = Vector::new(-3.0, 4.0);
-        motion.advance(100, 0.0, low_wind, upper_wind);
-        motion.advance(110, 0.0, low_wind, upper_wind);
-        let low_offset = motion.low_offset_m;
-        let upper_offset = motion.upper_offset_m;
 
-        motion.advance(105, 0.0, low_wind, upper_wind);
+        motion.advance(0.5, low_wind, upper_wind);
+        motion.advance(0.25, low_wind, upper_wind);
 
-        assert_eq!(motion.low_offset_m, low_offset);
-        assert_eq!(motion.upper_offset_m, upper_offset);
-        motion.advance(106, 0.0, low_wind, upper_wind);
-        assert_eq!(
-            motion.low_offset_m,
-            [
-                low_offset[0] + 2.0 * f64::from(DT_SECONDS),
-                low_offset[1] - f64::from(DT_SECONDS),
-            ],
-        );
+        assert_eq!(motion.low_offset_m, [1.5, -0.75]);
+        assert_eq!(motion.upper_offset_m, [-2.25, 3.0]);
     }
 
     #[test]
-    fn cloud_motion_discards_offsets_when_the_rendered_world_changes() {
-        let mut motion = ViewCloudMotion::default();
-        let wind = Vector::new(2.0, -1.0);
-        motion.advance(100, 0.0, wind, wind);
-        motion.advance(110, 0.0, wind, wind);
+    fn reliable_server_message_chunks_are_byte_bounded() {
+        let mut message = vec![0; MAX_SERVER_MESSAGE_BYTES - 1];
 
-        motion.use_world(Some((42, WorldGeometry::default())));
+        assert!(append_reliable_server_message_chunk(&mut message, &[1]));
+        assert!(!append_reliable_server_message_chunk(&mut message, &[2]));
+        assert_eq!(message.len(), MAX_SERVER_MESSAGE_BYTES);
+    }
 
-        assert_eq!(motion.low_offset_m, [0.0, 0.0]);
-        assert_eq!(motion.upper_offset_m, [0.0, 0.0]);
+    #[test]
+    fn reliable_server_message_limit_fits_the_largest_match_snapshot() {
+        let boat = BoatSnapshot {
+            id: "player-18446744073709551615".to_owned(),
+            health: 100.0,
+            last_hit_tick: Some(u64::MAX),
+            wreck: true,
+            x: f32::MAX,
+            y: f32::MAX,
+            vx: f32::MAX,
+            vy: f32::MAX,
+            angle: f32::MAX,
+            angular_velocity: f32::MAX,
+            sail: f32::MAX,
+            sail_angular_velocity: f32::MAX,
+            rudder: f32::MAX,
+            rudder_angular_velocity: f32::MAX,
+            forward: Some(1.0),
+            turn: Some(1.0),
+            acknowledged_input: Some(i64::MAX),
+        };
+        let encoded = protocol::encode_server_message(&ServerMessage::Snapshot {
+            tick: u64::MAX,
+            boats: vec![boat; 64],
+            removed_player_ids: Vec::new(),
+        })
+        .unwrap();
+
+        assert!(encoded.len() <= MAX_SERVER_MESSAGE_BYTES);
+    }
+
+    #[test]
+    fn view_cloud_state_uses_each_render_clock() {
+        let geometry = WorldGeometry::default();
+        let position_m = Vector::new(1_234.0, 5_678.0);
+        let state = sample_view_cloud_state_for_render_clocks(
+            geometry, 42, 90_000, 0.25, 12_000, 0.5, 45_000, 0.75, 3_000, 0.125, position_m,
+        );
+        let expected = game::procedural_world_environment_for_render_clocks(
+            geometry, 42, 90_000, 0.25, 12_000, 0.5, 45_000, 0.75, 3_000, 0.125, position_m,
+        );
+
+        assert_eq!(
+            state.low_wind_velocity_m_s,
+            expected.weather.wind_velocity_m_s - expected.weather.surface_gust_velocity_m_s,
+        );
+        assert_eq!(
+            state.upper_wind_velocity_m_s,
+            expected.weather.upper_wind_velocity_m_s,
+        );
+        assert_eq!(
+            state.cloud_time_coordinates,
+            game::cloud_field_time_coordinates_interpolated(12_000, 0.5),
+        );
+        let cloud_locked = sample_view_cloud_state_for_render_clocks(
+            geometry, 42, 12_000, 0.5, 12_000, 0.5, 12_000, 0.5, 12_000, 0.5, position_m,
+        );
+        assert_ne!(
+            state.low_wind_velocity_m_s,
+            cloud_locked.low_wind_velocity_m_s
+        );
     }
 
     #[test]

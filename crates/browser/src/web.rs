@@ -8,12 +8,14 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use bytes::Bytes;
+use futures_util::{
+    future::{Either, select},
+    stream::{FuturesUnordered, StreamExt},
+};
 use game::{
-    CelestialConditions, celestial_lighting, celestial_orbit,
-    cloud_field_time_coordinates_interpolated, moon_phase,
-    procedural_world_environment_for_render_clocks,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
-    world_celestial_conditions,
+    CelestialConditions, celestial_lighting, celestial_orbit, moon_phase,
+    procedural_world_environment_for_render_clocks, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
@@ -22,15 +24,17 @@ use url::Url;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlCanvasElement;
-use web_transport_wasm::{ClientBuilder, Session};
+use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER,
-    ViewCloudMotion, Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_production_world_environment, sample_world_geometry, scale_bar, seasonal_phase_factors,
+    BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MAX_SERVER_MESSAGE_BYTES,
+    MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
+    append_reliable_server_message_chunk, cloud_shadow_cache_layout,
+    disconnect_and_clear_pending_snapshot, periodic_effect_time_interpolated,
+    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
+    sample_world_geometry, scale_bar, seasonal_phase_factors, view_width_m,
     viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
     windsock_extension, zoom_view_height_m,
 };
@@ -40,6 +44,7 @@ use crate::PLAYGROUND_STARTUP_SHADER;
 
 const INITIAL_VERTEX_CAPACITY: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
+const MAXIMUM_CONCURRENT_RELIABLE_RECEIVES: usize = 8;
 const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
 
 #[cfg(feature = "playground")]
@@ -367,29 +372,39 @@ pub fn sample_playground_view_cloud_state(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
     cloud_tick: u64,
     cloud_tick_fraction: f32,
+    pressure_tick: u64,
+    pressure_tick_fraction: f32,
+    current_tick: u64,
+    current_tick_fraction: f32,
     camera_x_m: f32,
     camera_y_m: f32,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let weather = sample_production_world_environment(
+    let state = sample_view_cloud_state_for_render_clocks(
         geometry,
         match_seed,
+        world_tick,
+        world_tick_fraction,
         cloud_tick,
+        cloud_tick_fraction,
+        pressure_tick,
+        pressure_tick_fraction,
+        current_tick,
+        current_tick_fraction,
         Vector::new(camera_x_m, camera_y_m),
-    )
-    .weather;
-    let low_wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
-    let time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
+    );
     Ok(vec![
-        low_wind.x,
-        low_wind.y,
-        weather.upper_wind_velocity_m_s.x,
-        weather.upper_wind_velocity_m_s.y,
-        time.low,
-        time.upper,
+        state.low_wind_velocity_m_s.x,
+        state.low_wind_velocity_m_s.y,
+        state.upper_wind_velocity_m_s.x,
+        state.upper_wind_velocity_m_s.y,
+        state.cloud_time_coordinates.low,
+        state.cloud_time_coordinates.upper,
         0.0,
         0.0,
     ])
@@ -1100,6 +1115,7 @@ impl Renderer {
         match_seed: Option<u64>,
         world_geometry: WorldGeometry,
         render_clock: Option<(u64, f32)>,
+        elapsed_seconds: f32,
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
@@ -1123,7 +1139,10 @@ impl Renderer {
         }
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-        let view_width_m = view_height_m * self.config.width as f32 / self.config.height as f32;
+        let view_width_m = view_width_m(
+            self.config.width as f32 / self.config.height as f32,
+            view_height_m,
+        );
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let celestial = world_celestial_conditions(
@@ -1132,24 +1151,25 @@ impl Renderer {
             Vector::ZERO,
         );
         let orbit = celestial_orbit(celestial);
-        self.cloud_motion
-            .use_world(match_seed.map(|match_seed| (match_seed, world_geometry)));
         let match_seed = match_seed.unwrap_or(0);
-        let view_weather = sample_production_world_environment(
+        let view_cloud_state = sample_view_cloud_state_for_render_clocks(
             world_geometry,
             match_seed,
             tick,
+            tick_fraction,
+            tick,
+            tick_fraction,
+            tick,
+            tick_fraction,
+            tick,
+            tick_fraction,
             canonical_camera_m.into(),
-        )
-        .weather;
-        let low_cloud_wind =
-            view_weather.wind_velocity_m_s - view_weather.surface_gust_velocity_m_s;
+        );
         if render_clock.is_some() {
             self.cloud_motion.advance(
-                tick,
-                tick_fraction,
-                low_cloud_wind,
-                view_weather.upper_wind_velocity_m_s,
+                elapsed_seconds,
+                view_cloud_state.low_wind_velocity_m_s,
+                view_cloud_state.upper_wind_velocity_m_s,
             );
         }
         let precipitation_time = periodic_effect_time_interpolated(
@@ -1160,7 +1180,7 @@ impl Renderer {
         let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
         let vector_time =
             vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
-        let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
+        let cloud_time = view_cloud_state.cloud_time_coordinates;
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -1421,6 +1441,7 @@ impl BrowserGame {
             client.match_seed(),
             client.world_geometry().unwrap_or_default(),
             client.render_clock(),
+            elapsed_seconds,
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
         )
@@ -1636,18 +1657,50 @@ fn receive_reliable_messages(
     transport: Rc<RefCell<Option<Session>>>,
 ) {
     spawn_local(async move {
-        while let Ok(mut stream) = session.accept_uni().await {
-            let mut message = Vec::new();
-            let complete = loop {
-                match stream.read(64 * 1024).await {
-                    Ok(Some(chunk)) => message.extend_from_slice(&chunk),
-                    Ok(None) => break true,
-                    Err(_) => break false,
+        let mut reads = FuturesUnordered::new();
+        loop {
+            if reads.is_empty() {
+                match session.accept_uni().await {
+                    Ok(stream) => reads.push(read_reliable_server_message(stream)),
+                    Err(_) => break,
                 }
-            };
-            if !complete {
                 continue;
             }
+            let message = if reads.len() >= MAXIMUM_CONCURRENT_RELIABLE_RECEIVES {
+                reads
+                    .next()
+                    .await
+                    .unwrap_or(ReliableServerMessageRead::Discarded)
+            } else {
+                match select(Box::pin(session.accept_uni()), Box::pin(reads.next())).await {
+                    Either::Left((stream, read)) => {
+                        drop(read);
+                        match stream {
+                            Ok(stream) => reads.push(read_reliable_server_message(stream)),
+                            Err(_) => break,
+                        }
+                        continue;
+                    }
+                    Either::Right((message, accept)) => {
+                        drop(accept);
+                        message.unwrap_or(ReliableServerMessageRead::Discarded)
+                    }
+                }
+            };
+            let message = match message {
+                ReliableServerMessageRead::Complete(message) => message,
+                ReliableServerMessageRead::Discarded => continue,
+                ReliableServerMessageRead::TooLarge => {
+                    fail_protocol(
+                        &session,
+                        &protocol_client,
+                        &pending_snapshot,
+                        &connection_status,
+                        &transport,
+                    );
+                    break;
+                }
+            };
             if accept_server_message(
                 &message,
                 &protocol_client,
@@ -1667,6 +1720,27 @@ fn receive_reliable_messages(
             }
         }
     });
+}
+
+enum ReliableServerMessageRead {
+    Complete(Vec<u8>),
+    Discarded,
+    TooLarge,
+}
+
+async fn read_reliable_server_message(mut stream: RecvStream) -> ReliableServerMessageRead {
+    let mut message = Vec::new();
+    loop {
+        match stream.read(MAX_SERVER_MESSAGE_BYTES + 1).await {
+            Ok(Some(chunk)) => {
+                if !append_reliable_server_message_chunk(&mut message, &chunk) {
+                    return ReliableServerMessageRead::TooLarge;
+                }
+            }
+            Ok(None) => return ReliableServerMessageRead::Complete(message),
+            Err(_) => return ReliableServerMessageRead::Discarded,
+        }
+    }
 }
 
 fn accept_server_message(
@@ -1842,7 +1916,7 @@ fn scene_vertices(
     view_height_m: f32,
 ) -> Vec<Vertex> {
     let aspect = width as f32 / height as f32;
-    let view_width_m = view_height_m * aspect;
+    let view_width_m = view_width_m(aspect, view_height_m);
     let mut vertices = Vec::new();
 
     if render_terrain {

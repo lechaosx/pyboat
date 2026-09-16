@@ -1593,6 +1593,7 @@ function writeUniforms(
   worldTimeSeconds: number,
   pressureTimeSeconds: number,
   currentTimeSeconds: number,
+  elapsedSeconds: number,
 ): void {
   const enabled = (key: NumericStateKey): number => Number(state[key] > 0.5);
   const light = [
@@ -1702,18 +1703,20 @@ function writeUniforms(
     state.worldWidthM,
     state.worldHeightM,
     (BigInt(seedHigh) << 32n) | BigInt(seedLow),
+    worldTick,
+    worldTickFraction,
     cloudTick,
     cloudTickFraction,
+    pressureTick,
+    pressureTickFraction,
+    currentTick,
+    currentTickFraction,
     renderedCameraX,
     renderedCameraY,
   );
   const lowWind = [viewCloud[0], viewCloud[1]];
   const upperWind = [viewCloud[2], viewCloud[3]];
-  sceneFloats.set(cloudMotion.advance({
-    seed: parsedSeed().toString(),
-    widthM: state.worldWidthM,
-    heightM: state.worldHeightM,
-  }, cloudTimeSeconds, lowWind, upperWind), 48);
+  sceneFloats.set(cloudMotion.advance(elapsedSeconds, lowWind, upperWind), 48);
   sceneFloats.set(viewCloud.subarray(4, 8), 52);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
@@ -1967,6 +1970,7 @@ function frame(now: number): void {
     worldTimeSeconds,
     pressureTimeSeconds,
     currentTimeSeconds,
+    elapsed,
   );
   const encoder = device.createCommandEncoder();
   const renderResources = renderResourcesForFrame();
