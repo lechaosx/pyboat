@@ -1,4 +1,7 @@
-use browser::{periodic_effect_time, sample_production_world_environment, sample_world_geometry};
+use browser::{
+    periodic_effect_time, periodic_effect_time_interpolated, sample_production_world_environment,
+    sample_world_geometry,
+};
 use game::{procedural_match_environment, procedural_world_environment};
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -31,6 +34,15 @@ fn periodic_effect_time_keeps_integer_epochs_and_bounded_ages() {
     assert_eq!(huge.epoch, u64::MAX / 108_000);
     assert!(huge.age_ticks < 108_000);
     assert!((0.0..1.0).contains(&huge.phase));
+}
+
+#[test]
+fn periodic_effect_time_preserves_fractional_render_progress() {
+    let sample = periodic_effect_time_interpolated(90, 0.5, 180);
+
+    assert_eq!(sample.epoch, 0);
+    assert_eq!(sample.age_ticks, 90);
+    assert!((sample.phase - 0.502_777_76).abs() < 1.0e-7);
 }
 
 #[test]

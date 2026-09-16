@@ -1642,7 +1642,7 @@ function writeUniforms(
     state.viewHeight * aspect,
     state.viewHeight,
   ], 0);
-  const [worldTick] = splitTick(worldTimeSeconds);
+  const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
   const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
   const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
   const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
@@ -1690,6 +1690,7 @@ function writeUniforms(
     0,
     0,
   ], 24);
+  sceneFloats[26] = worldTickFraction;
   sceneFloats.set(fieldTimes.subarray(4, 8), 28);
   sceneFloats.set(fieldTimes.subarray(8, 12), 32);
   sceneFloats.set(sample_playground_seasonal_phase_factors(seasonPhase), 36);

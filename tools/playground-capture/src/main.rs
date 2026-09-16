@@ -4,7 +4,7 @@ use browser::{seasonal_phase_factors, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
     celestial_lighting, celestial_orbit, cloud_field_time_coordinates_interpolated,
-    procedural_world_environment, procedural_world_environment_for_render_clocks,
+    procedural_world_environment_for_render_clocks,
     scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
     world_celestial_conditions,
 };
@@ -38,7 +38,7 @@ struct Options {
     world_height_m: f32,
     view_height_m: f32,
     seed: u64,
-    cloud_time_seconds: f32,
+    cloud_time_seconds: f64,
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
     light_balance: [f32; 4],
@@ -556,7 +556,7 @@ struct CaptureReport {
     world_size_m: [f32; 2],
     view_height_m: f32,
     seed: u64,
-    cloud_time_seconds: f32,
+    cloud_time_seconds: f64,
     world_time_seconds: f64,
     diagnostic: String,
     derived: DerivedOutput,
@@ -1078,6 +1078,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 3.0)])
         }
         "water_tide_height" => diagnostic(value, "water_tide_height", &[]),
+        "water_physical_wave_normals" => diagnostic(value, "water_physical_wave_normals", &[]),
         _ => return Err(format!("unknown diagnostic: {value}")),
     };
     Ok(selection)
@@ -1114,9 +1115,40 @@ fn split_tick_seconds(seconds: f64) -> (u64, f32) {
     (tick, (tick_position - tick as f64) as f32)
 }
 
+fn integrate_cloud_motion<F>(
+    duration_seconds: f64,
+    maximum_step_seconds: f64,
+    mut wind_at: F,
+) -> [f64; 4]
+where
+    F: FnMut(f64) -> ([f64; 2], [f64; 2]),
+{
+    let duration_seconds = duration_seconds.max(0.0);
+    if duration_seconds == 0.0 {
+        return [0.0; 4];
+    }
+    let step_count = (duration_seconds / maximum_step_seconds)
+        .ceil()
+        .clamp(1.0, 100_000.0) as u64;
+    let step_seconds = duration_seconds / step_count as f64;
+    let (mut previous_low, mut previous_upper) = wind_at(0.0);
+    let mut motion = [0.0; 4];
+    for step in 1..=step_count {
+        let seconds = step as f64 * step_seconds;
+        let (low, upper) = wind_at(seconds);
+        for axis in 0..2 {
+            motion[axis] += 0.5 * step_seconds * (previous_low[axis] + low[axis]);
+            motion[axis + 2] += 0.5 * step_seconds * (previous_upper[axis] + upper[axis]);
+        }
+        previous_low = low;
+        previous_upper = upper;
+    }
+    motion
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_diagnostic, split_tick_seconds};
+    use super::{integrate_cloud_motion, parse_diagnostic, split_tick_seconds};
 
     #[test]
     fn diagnostics_select_semantic_shader_modules_and_overrides() {
@@ -1132,6 +1164,15 @@ mod tests {
         let (tick, fraction) = split_tick_seconds(10.5 / 60.0);
         assert_eq!(tick, 10);
         assert!((fraction - 0.5).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn cloud_motion_integrates_wind_over_the_whole_interval() {
+        let motion =
+            integrate_cloud_motion(2.5, 1.0, |seconds| ([seconds, 0.0], [0.0, 2.0 * seconds]));
+
+        assert!((motion[0] - 3.125).abs() < 1.0e-12);
+        assert!((motion[3] - 6.25).abs() < 1.0e-12);
     }
 }
 
@@ -1375,27 +1416,44 @@ fn render_world(
     let canonical_camera_m =
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
     let precipitation_epoch = (options.cloud_time_seconds / 1800.0).floor() as u64;
-    let precipitation_phase = options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0;
+    let precipitation_phase = (options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0) as f32;
     let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
     let orbit = celestial_orbit(conditions);
-    let (cloud_tick, cloud_tick_fraction) =
-        split_tick_seconds(f64::from(options.cloud_time_seconds));
+    let (cloud_tick, cloud_tick_fraction) = split_tick_seconds(options.cloud_time_seconds);
     let scalar_time = scalar_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
     let pressure_time =
         vector_field_time_coordinates_interpolated(world_geometry, cloud_tick, cloud_tick_fraction);
     let current_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
-    let view_weather = procedural_world_environment(
-        world_geometry,
-        options.seed,
-        cloud_tick,
-        canonical_camera_m.into(),
-    )
-    .weather;
-    let low_wind = view_weather.wind_velocity_m_s - view_weather.surface_gust_velocity_m_s;
+    let view_cloud_motion =
+        integrate_cloud_motion(options.cloud_time_seconds, 1.0, |sample_time_seconds| {
+            let (sample_tick, sample_tick_fraction) = split_tick_seconds(sample_time_seconds);
+            let weather = procedural_world_environment_for_render_clocks(
+                world_geometry,
+                options.seed,
+                sample_tick,
+                sample_tick_fraction,
+                sample_tick,
+                sample_tick_fraction,
+                sample_tick,
+                sample_tick_fraction,
+                sample_tick,
+                sample_tick_fraction,
+                canonical_camera_m.into(),
+            )
+            .weather;
+            let low_wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
+            (
+                [f64::from(low_wind.x), f64::from(low_wind.y)],
+                [
+                    f64::from(weather.upper_wind_velocity_m_s.x),
+                    f64::from(weather.upper_wind_velocity_m_s.y),
+                ],
+            )
+        });
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -1426,7 +1484,7 @@ fn render_world(
             conditions.lunar_longitude_phase,
             visual_pixel_footprint_m(options.view_height_m, options.height),
         ],
-        world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
+        world_tick_and_padding: [tick as u32, (tick >> 32) as u32, tick_fraction.to_bits(), 0],
         pressure_time_coordinate: pressure_time.pressure,
         ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
         seasonal_phase_factors: seasonal_phase_factors(conditions.season_phase),
@@ -1443,10 +1501,10 @@ fn render_world(
             0.0,
         ],
         view_cloud_motion_m: [
-            low_wind.x * options.cloud_time_seconds,
-            low_wind.y * options.cloud_time_seconds,
-            view_weather.upper_wind_velocity_m_s.x * options.cloud_time_seconds,
-            view_weather.upper_wind_velocity_m_s.y * options.cloud_time_seconds,
+            view_cloud_motion[0] as f32,
+            view_cloud_motion[1] as f32,
+            view_cloud_motion[2] as f32,
+            view_cloud_motion[3] as f32,
         ],
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
     };
@@ -1841,8 +1899,7 @@ fn capture_report(
     let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
     let (world_tick, world_tick_fraction) = split_tick_seconds(options.world_time_seconds);
-    let (cloud_tick, cloud_tick_fraction) =
-        split_tick_seconds(f64::from(options.cloud_time_seconds));
+    let (cloud_tick, cloud_tick_fraction) = split_tick_seconds(options.cloud_time_seconds);
     let sample = procedural_world_environment_for_render_clocks(
         world,
         options.seed,

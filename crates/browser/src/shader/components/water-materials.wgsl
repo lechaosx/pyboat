@@ -138,6 +138,7 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
 
 fn ocean_tick_phase_radians(phase_per_tick_radians: f32) -> f32 {
     let tick = scene.world_tick_and_padding.xy;
+    let tick_fraction = bitcast<f32>(scene.world_tick_and_padding.z);
     let chunks = array<u32, 4>(
         tick.y >> 16u,
         tick.y & 0xffffu,
@@ -148,7 +149,7 @@ fn ocean_tick_phase_radians(phase_per_tick_radians: f32) -> f32 {
     for (var chunk_index = 0u; chunk_index < 4u; chunk_index++) {
         phase = (phase * 65536.0 + f32(chunks[chunk_index]) * phase_per_tick_radians) % TAU;
     }
-    return phase;
+    return (phase + tick_fraction * phase_per_tick_radians) % TAU;
 }
 
 fn ocean_hash_unit(key: vec2<u32>) -> f32 {

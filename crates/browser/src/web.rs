@@ -29,7 +29,7 @@ use wgpu::util::DeviceExt;
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MultiplayerClient, SCENE_SHADER,
     ViewCloudMotion, Windsock, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
-    periodic_effect_time, queue_latest_snapshot, requeue_failed_viewport,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
     sample_production_world_environment, sample_world_geometry, scale_bar, seasonal_phase_factors,
     viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
     windsock_extension, zoom_view_height_m,
@@ -1152,7 +1152,11 @@ impl Renderer {
                 view_weather.upper_wind_velocity_m_s,
             );
         }
-        let precipitation_time = periodic_effect_time(tick, PRECIPITATION_CONTACT_PERIOD_TICKS);
+        let precipitation_time = periodic_effect_time_interpolated(
+            tick,
+            tick_fraction,
+            PRECIPITATION_CONTACT_PERIOD_TICKS,
+        );
         let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
         let vector_time =
             vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
@@ -1190,7 +1194,12 @@ impl Renderer {
                     celestial.lunar_longitude_phase,
                     visual_pixel_footprint_m(view_height_m, self.config.height),
                 ],
-                world_tick_and_padding: [tick as u32, (tick >> 32) as u32, 0, 0],
+                world_tick_and_padding: [
+                    tick as u32,
+                    (tick >> 32) as u32,
+                    tick_fraction.to_bits(),
+                    0,
+                ],
                 pressure_time_coordinate: vector_time.pressure,
                 ocean_current_time_coordinate_and_padding: [
                     vector_time.ocean_current,

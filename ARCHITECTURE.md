@@ -226,6 +226,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   lockstep. Host-integrated cloud transport rebases its clock after prediction
   reconciliation without discarding the displacement accumulated during the
   current session.
+- **[Explicit]** Cloud-transport displacement accumulates in host `f64` and is
+  uploaded to WGSL as absolute `f32` metres. Increasing spatial quantization
+  after very long uninterrupted transport is an accepted rendering limit.
 - **[Explicit]** Rust and WGSL evaluate the same climate, synoptic, and local
   simplex pressure potential plus a separate scalar gust pulse directly from
   match seed, position, world geometry, and bounded time coordinates. Resolved
@@ -534,6 +537,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   far hemisphere while its direction remains continuous in the cylindrical
   chart. Longitude, terrain, materials, and seeded atmosphere fields retain
   their unbounded, non-repeating north-south coordinate.
+- **[Explicit]** Runtime physics, procedural sampling, snapshots, and rendering
+  retain single-precision spatial coordinates. North-south position remains
+  topologically unbounded, while boat-scale detail becoming quantized after
+  prolonged travel millions of metres from the origin is an accepted precision
+  limit.
 - **[Implicit]** World and view coordinates use positive X for east/right and
   positive Y for north/up. Input adapters convert down-positive device
   coordinates at their boundaries.

@@ -11,6 +11,42 @@ use simulation::WorldGeometry;
 const SEED: u64 = 0x5eed;
 
 #[test]
+fn physical_waves_advance_with_fractional_world_ticks() {
+    let world = WorldGeometry::default();
+    let position_m = (0..64)
+        .flat_map(|y_index| {
+            (0..64).map(move |x_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 64.0 - 0.5),
+                    0.5 * world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                )
+            })
+        })
+        .find(|position_m| procedural_terrain_elevation_m(world, SEED, *position_m) < -20.0)
+        .unwrap();
+    let before = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        12_345.0,
+        80.0,
+        "water_physical_wave_normals",
+        32,
+        32,
+    );
+    let after = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        12_345.0 + 0.75 / 60.0,
+        80.0,
+        "water_physical_wave_normals",
+        32,
+        32,
+    );
+
+    assert_ne!(before, after);
+}
+
+#[test]
 fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
     for (index, world) in [
         WorldGeometry::new(8_000.0, 256_000.0).unwrap(),

@@ -246,12 +246,20 @@ impl ViewCloudMotion {
 }
 
 pub fn periodic_effect_time(tick: u64, period_ticks: u64) -> PeriodicEffectTime {
+    periodic_effect_time_interpolated(tick, 0.0, period_ticks)
+}
+
+pub fn periodic_effect_time_interpolated(
+    tick: u64,
+    tick_fraction: f32,
+    period_ticks: u64,
+) -> PeriodicEffectTime {
     let epoch = tick / period_ticks;
     let age_ticks = tick % period_ticks;
     PeriodicEffectTime {
         epoch,
         age_ticks,
-        phase: age_ticks as f32 / period_ticks as f32,
+        phase: (age_ticks as f32 + tick_fraction.clamp(0.0, 1.0)) / period_ticks as f32,
     }
 }
 
@@ -374,7 +382,7 @@ pub struct MultiplayerClient {
     world_geometry: Option<WorldGeometry>,
     session_state: ClientSessionState,
     boats: HashMap<String, ReplicatedBoat>,
-    snapshot_received_at_seconds: HashMap<String, f32>,
+    snapshot_received_at_seconds: HashMap<String, f64>,
     tick: Option<u64>,
     prediction_tick: u64,
     motion_intent: MotionIntent,
@@ -383,11 +391,11 @@ pub struct MultiplayerClient {
     input_accumulator_seconds: f32,
     next_viewport_sequence: i64,
     sent_viewport_radius_m: Option<f32>,
-    time_seconds: f32,
+    time_seconds: f64,
     prediction: SharedSimulation,
     predicted_boats: HashMap<String, PredictedBoat>,
     corrections: HashMap<String, MotionCorrection>,
-    correction_started_at_seconds: f32,
+    correction_started_at_seconds: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -573,7 +581,7 @@ impl MultiplayerClient {
 
     pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
         let elapsed_seconds = elapsed_seconds.max(0.0);
-        self.time_seconds += elapsed_seconds;
+        self.time_seconds += f64::from(elapsed_seconds);
         self.input_accumulator_seconds += elapsed_seconds.min(MAXIMUM_PREDICTION_SECONDS);
         let local_wreck = self
             .player_id
@@ -841,7 +849,8 @@ impl MultiplayerClient {
         let boat = self.boats.get(player_id)?;
         let mut motion = snapshot_motion(&boat.snapshot);
         let received_at = self.snapshot_received_at_seconds[player_id];
-        let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
+        let seconds = (self.time_seconds - received_at)
+            .clamp(0.0, f64::from(MAXIMUM_PREDICTION_SECONDS)) as f32;
         motion.position_m += motion.velocity_m_s * seconds;
         motion.position_m = Vector::from(
             self.world_geometry
@@ -857,7 +866,7 @@ impl MultiplayerClient {
     fn render_motion(&self, player_id: &str) -> Option<BoatMotion> {
         let mut motion = self.predicted_motion(player_id)?;
         if let Some(correction) = self.corrections.get(player_id) {
-            let elapsed_seconds = self.time_seconds - self.correction_started_at_seconds;
+            let elapsed_seconds = (self.time_seconds - self.correction_started_at_seconds) as f32;
             let (position_m, velocity_m_s) = cubic_vector_correction(
                 correction.position_m,
                 correction.velocity_m_s,
@@ -1537,6 +1546,16 @@ mod tests {
             removed_player_ids: Vec::new(),
         });
         assert_eq!(client.render_clock(), Some((900_000, 0.0)));
+    }
+
+    #[test]
+    fn long_running_presentation_clock_keeps_subframe_resolution() {
+        let mut client = MultiplayerClient::new();
+        client.time_seconds = 1_000_000.0;
+
+        client.take_inputs(1.0 / 120.0);
+
+        assert!((client.time_seconds as f64 - (1_000_000.0 + 1.0 / 120.0)).abs() < 1.0e-9);
     }
 
     #[test]
