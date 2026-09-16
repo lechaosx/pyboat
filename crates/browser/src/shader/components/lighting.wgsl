@@ -105,6 +105,28 @@ struct CelestialReceiverLight {
     moon_amount: f32,
 };
 
+struct CelestialSourceLight {
+    direction: vec3<f32>,
+    amount: f32,
+    angular_radius_rad: f32,
+};
+
+fn celestial_source_light(
+    receiver: CelestialReceiverLight,
+    source_index: u32,
+) -> CelestialSourceLight {
+    let is_sun = source_index == 0u;
+    return CelestialSourceLight(
+        select(receiver.moon_direction, receiver.sun_direction, is_sun),
+        select(receiver.moon_amount, receiver.sun_amount, is_sun),
+        select(
+            MOON_ANGULAR_RADIUS_RAD,
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+            is_sun,
+        ),
+    );
+}
+
 fn celestial_horizon_z_at_height(height_m: f32) -> f32 {
     let world_radius_m = scene.world_size_m.x / TAU;
     let observer_radius_m = world_radius_m + max(height_m, 0.0);
@@ -632,6 +654,16 @@ struct CelestialDiscSampleDirections {
     side: vec3<f32>,
 };
 
+struct CloudShadowQuery {
+    receiver: CelestialReceiverLight,
+    source: CelestialSourceLight,
+    directions: CelestialDiscSampleDirections,
+    lower_projection: CloudShadowProjection,
+    upper_projection: CloudShadowProjection,
+    side_projection: CloudShadowProjection,
+    resolved: bool,
+};
+
 fn celestial_disc_sample_directions(
     horizon_z: f32,
     light: vec3<f32>,
@@ -683,27 +715,6 @@ fn celestial_disc_sample_directions(
     );
 }
 
-fn celestial_disc_projection_separation_m(
-    position_m: vec2<f32>,
-    source_height_m: f32,
-    cloud_height_m: f32,
-    directions: CelestialDiscSampleDirections,
-) -> f32 {
-    let lower = projected_cloud_position(
-        position_m, source_height_m, cloud_height_m, directions.lower,
-    );
-    let upper = projected_cloud_position(
-        position_m, source_height_m, cloud_height_m, directions.upper,
-    );
-    let side = projected_cloud_position(
-        position_m, source_height_m, cloud_height_m, directions.side,
-    );
-    return max(
-        length(lower - upper),
-        max(length(lower - side), length(upper - side)),
-    );
-}
-
 fn cloud_shadow_projection_at(
     position_m: vec2<f32>,
     surface_height_m: f32,
@@ -727,6 +738,132 @@ fn cloud_shadow_projection_at(
     );
 }
 
+fn cloud_shadow_projection_sample_separation_m(
+    lower_projection: CloudShadowProjection,
+    upper_projection: CloudShadowProjection,
+    side_projection: CloudShadowProjection,
+    sample_upper: bool,
+) -> f32 {
+    let lower = select(
+        lower_projection.low_position_m,
+        lower_projection.upper_position_m,
+        sample_upper,
+    );
+    let upper = select(
+        upper_projection.low_position_m,
+        upper_projection.upper_position_m,
+        sample_upper,
+    );
+    let side = select(
+        side_projection.low_position_m,
+        side_projection.upper_position_m,
+        sample_upper,
+    );
+    return max(
+        length(lower - upper),
+        max(length(lower - side), length(upper - side)),
+    );
+}
+
+fn cloud_shadow_query(
+    receiver: CelestialReceiverLight,
+    source: CelestialSourceLight,
+    sample_low: bool,
+    sample_upper: bool,
+) -> CloudShadowQuery {
+    let directions = celestial_disc_sample_directions(
+        receiver.horizon_z,
+        source.direction,
+        source.angular_radius_rad,
+    );
+    let lower_projection = cloud_shadow_projection_at(
+        receiver.position_m,
+        receiver.height_m,
+        directions.lower,
+    );
+    let upper_projection = cloud_shadow_projection_at(
+        receiver.position_m,
+        receiver.height_m,
+        directions.upper,
+    );
+    let side_projection = cloud_shadow_projection_at(
+        receiver.position_m,
+        receiver.height_m,
+        directions.side,
+    );
+    var maximum_separation_m = 0.0;
+    if sample_low {
+        maximum_separation_m = cloud_shadow_projection_sample_separation_m(
+            lower_projection,
+            upper_projection,
+            side_projection,
+            false,
+        );
+    }
+    if sample_upper {
+        maximum_separation_m = max(
+            maximum_separation_m,
+            cloud_shadow_projection_sample_separation_m(
+                lower_projection,
+                upper_projection,
+                side_projection,
+                true,
+            ),
+        );
+    }
+    return CloudShadowQuery(
+        receiver,
+        source,
+        directions,
+        lower_projection,
+        upper_projection,
+        side_projection,
+        maximum_separation_m > visual_pixel_footprint_m,
+    );
+}
+
+fn cloud_shadow_query_direction(
+    query: CloudShadowQuery,
+    tap_index: u32,
+) -> vec3<f32> {
+    if !query.resolved {
+        return celestial_visible_disc_sample_direction_at_horizon(
+            query.receiver.horizon_z,
+            query.source.direction,
+            query.source.angular_radius_rad,
+        );
+    }
+    var direction = select(
+        query.directions.lower,
+        query.directions.upper,
+        tap_index == 1u,
+    );
+    if tap_index == 2u {
+        direction = query.directions.side;
+    }
+    return direction;
+}
+
+fn cloud_shadow_query_projection(
+    query: CloudShadowQuery,
+    tap_index: u32,
+) -> CloudShadowProjection {
+    if !query.resolved {
+        return cloud_shadow_projection_at(
+            query.receiver.position_m,
+            query.receiver.height_m,
+            cloud_shadow_query_direction(query, tap_index),
+        );
+    }
+    var projection = query.lower_projection;
+    if tap_index == 1u {
+        projection = query.upper_projection;
+    } else if tap_index == 2u {
+        projection = query.side_projection;
+    }
+    return projection;
+}
+
 fn procedural_cloud_shadow_depths_at(
     projection: CloudShadowProjection,
 ) -> CloudShadowDepths {
@@ -744,78 +881,21 @@ fn procedural_cloud_shadow_depths_at(
     return depths;
 }
 
-fn cloud_shadow_depths_for_light_at(
-    position_m: vec2<f32>,
-    surface_height_m: f32,
-    horizon_z: f32,
-    light: vec3<f32>,
-    angular_radius_rad: f32,
+fn cloud_shadow_depths_for_query(
+    query: CloudShadowQuery,
 ) -> CloudDiscShadowDepths {
-    let directions = celestial_disc_sample_directions(
-        horizon_z,
-        light,
-        angular_radius_rad,
-    );
-    let lower_projection = cloud_shadow_projection_at(
-        position_m,
-        surface_height_m,
-        directions.lower,
-    );
-    let upper_projection = cloud_shadow_projection_at(
-        position_m,
-        surface_height_m,
-        directions.upper,
-    );
-    let side_projection = cloud_shadow_projection_at(
-        position_m,
-        surface_height_m,
-        directions.side,
-    );
-    let maximum_separation_m = max(
-        select(
-            0.0,
-            max(
-                length(lower_projection.low_position_m - upper_projection.low_position_m),
-                max(
-                    length(lower_projection.low_position_m - side_projection.low_position_m),
-                    length(upper_projection.low_position_m - side_projection.low_position_m),
-                ),
-            ),
-            layer_visibility.y > 0.0,
-        ),
-        select(
-            0.0,
-            max(
-                length(lower_projection.upper_position_m - upper_projection.upper_position_m),
-                max(
-                    length(lower_projection.upper_position_m - side_projection.upper_position_m),
-                    length(upper_projection.upper_position_m - side_projection.upper_position_m),
-                ),
-            ),
-            layer_visibility.z > 0.0,
-        ),
-    );
-    if maximum_separation_m <= visual_pixel_footprint_m {
-        let representative_light = celestial_visible_disc_sample_direction_at_horizon(
-            horizon_z,
-            light,
-            angular_radius_rad,
-        );
+    if !query.resolved {
         let depths = sampled_cloud_shadow_depths_at(
-            cloud_shadow_projection_at(
-                position_m,
-                surface_height_m,
-                representative_light,
-            ),
+            cloud_shadow_query_projection(query, 0u),
         );
         return CloudDiscShadowDepths(
             vec3<f32>(depths.low),
             vec3<f32>(depths.upper),
         );
     }
-    let lower_depths = sampled_cloud_shadow_depths_at(lower_projection);
-    let upper_depths = sampled_cloud_shadow_depths_at(upper_projection);
-    let side_depths = sampled_cloud_shadow_depths_at(side_projection);
+    let lower_depths = sampled_cloud_shadow_depths_at(query.lower_projection);
+    let upper_depths = sampled_cloud_shadow_depths_at(query.upper_projection);
+    let side_depths = sampled_cloud_shadow_depths_at(query.side_projection);
     return CloudDiscShadowDepths(
         vec3<f32>(lower_depths.low, upper_depths.low, side_depths.low),
         vec3<f32>(lower_depths.upper, upper_depths.upper, side_depths.upper),
@@ -834,31 +914,16 @@ fn celestial_cloud_shadow_depths_at(
         return celestial_depths;
     }
     for (var source_index = 0u; source_index < 2u; source_index++) {
-        let is_sun = source_index == 0u;
-        let light = select(
-            direct_light.moon_direction,
-            direct_light.sun_direction,
-            is_sun,
-        );
-        let light_amount = select(
-            direct_light.moon_amount,
-            direct_light.sun_amount,
-            is_sun,
-        );
-        if light_amount > 0.0 && cloud_shadow_contrast(light) > 0.0 {
-            let angular_radius_rad = select(
-                MOON_ANGULAR_RADIUS_RAD,
-                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-                is_sun,
+        let source = celestial_source_light(direct_light, source_index);
+        if source.amount > 0.0 && cloud_shadow_contrast(source.direction) > 0.0 {
+            let query = cloud_shadow_query(
+                direct_light,
+                source,
+                layer_visibility.y > 0.0,
+                layer_visibility.z > 0.0,
             );
-            let depths = cloud_shadow_depths_for_light_at(
-                direct_light.position_m,
-                direct_light.height_m,
-                direct_light.horizon_z,
-                light,
-                angular_radius_rad,
-            );
-            if is_sun {
+            let depths = cloud_shadow_depths_for_query(query);
+            if source_index == 0u {
                 celestial_depths.sun = depths;
             } else {
                 celestial_depths.moon = depths;

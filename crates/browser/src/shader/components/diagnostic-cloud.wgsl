@@ -159,10 +159,7 @@ fn diagnostic_lighting_low_cloud_canopy_transmittance(
     let low_cloud_light = celestial_receiver_light_at_height(
         LOW_CLOUD_BASE_HEIGHT_M,
     );
-    let transmittance = upper_cloud_transmittance_at_low_cloud(
-        WEATHER_CANOPY_HEIGHT_M,
-        low_cloud_light,
-    );
+    let transmittance = upper_cloud_transmittance_at_low_cloud(low_cloud_light);
     return vec4<f32>(scalar_debug_color(min(
         transmittance.x,
         transmittance.y,
@@ -336,7 +333,10 @@ fn diagnostic_landform_shadow_partial_disc_ray() -> vec4<f32> {
         -0.5 * CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
     ));
     receiver.sun_amount = 0.5;
-    let direction = landform_shadow_sample_direction(receiver, 0u);
+    let direction = landform_shadow_sample_direction(
+        receiver,
+        celestial_source_light(receiver, 0u),
+    );
     return vec4<f32>(scalar_debug_color(select(
         0.0,
         1.0,
@@ -345,22 +345,22 @@ fn diagnostic_landform_shadow_partial_disc_ray() -> vec4<f32> {
 }
 
 fn diagnostic_cloud_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
-    let position_m = input.world_position_m;
     let direction = normalize(vec3<f32>(0.95, 0.30, 0.20));
-    let point_depths = cloud_shadow_depths_for_light_at(
-        position_m,
-        0.0,
-        0.0,
-        direction,
-        0.0,
+    let receiver = celestial_receiver_light_at_height(0.0);
+    let point_query = cloud_shadow_query(
+        receiver,
+        CelestialSourceLight(direction, 1.0, 0.0),
+        layer_visibility.y > 0.0,
+        layer_visibility.z > 0.0,
     );
-    let disc_depths = cloud_shadow_depths_for_light_at(
-        position_m,
-        0.0,
-        0.0,
-        direction,
-        0.05,
+    let disc_query = cloud_shadow_query(
+        receiver,
+        CelestialSourceLight(direction, 1.0, 0.05),
+        layer_visibility.y > 0.0,
+        layer_visibility.z > 0.0,
     );
+    let point_depths = cloud_shadow_depths_for_query(point_query);
+    let disc_depths = cloud_shadow_depths_for_query(disc_query);
     let difference = abs(
         cloud_disc_shadow_transmittance(point_depths.low, direction)
             - cloud_disc_shadow_transmittance(disc_depths.low, direction),
@@ -374,19 +374,13 @@ fn diagnostic_cloud_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
 fn diagnostic_low_cloud_canopy_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
     let direction = normalize(vec3<f32>(0.95, 0.30, 0.20));
     let receiver = celestial_receiver_light_at_height(LOW_CLOUD_BASE_HEIGHT_M);
-    let point_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
+    let point_transmittance = upper_cloud_transmittance_at_low_cloud_for_source(
         receiver,
-        WEATHER_CANOPY_HEIGHT_M,
-        direction,
-        1.0,
-        0.0,
+        CelestialSourceLight(direction, 1.0, 0.0),
     );
-    let disc_transmittance = upper_cloud_transmittance_at_low_cloud_for_light(
+    let disc_transmittance = upper_cloud_transmittance_at_low_cloud_for_source(
         receiver,
-        WEATHER_CANOPY_HEIGHT_M,
-        direction,
-        1.0,
-        0.05,
+        CelestialSourceLight(direction, 1.0, 0.05),
     );
     return vec4<f32>(scalar_debug_color(clamp(
         20.0 * abs(point_transmittance - disc_transmittance),

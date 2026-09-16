@@ -542,10 +542,10 @@ fn landform_light_grade(
         return vec3<f32>(1.0);
     }
     let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    let sun_direction = direct_light.sun_direction;
-    let moon_direction = direct_light.moon_direction;
-    let combined_light = direct_light.sun_amount * sun_direction
-        + direct_light.moon_amount * moon_direction;
+    let sun = celestial_source_light(direct_light, 0u);
+    let moon = celestial_source_light(direct_light, 1u);
+    let combined_light = sun.amount * sun.direction
+        + moon.amount * moon.direction;
     let light_direction = select(
         vec3<f32>(0.0, 0.0, 1.0),
         normalize(combined_light),
@@ -557,17 +557,13 @@ fn landform_light_grade(
     let specular_exponent = mix(56.0, 7.0, clamp(roughness, 0.0, 1.0));
     var direct_grades = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
-        let light_direction = select(
-            moon_direction,
-            sun_direction,
-            source_index == 0u,
-        );
+        let source = celestial_source_light(direct_light, source_index);
         let direct_facing = smoothstep(
             -0.12,
             1.0,
-            dot(normal, light_direction),
+            dot(normal, source.direction),
         );
-        let half_direction_sum = light_direction + vec3<f32>(0.0, 0.0, 1.0);
+        let half_direction_sum = source.direction + vec3<f32>(0.0, 0.0, 1.0);
         var specular = 0.0;
         if length(half_direction_sum) > 0.001 {
             specular = pow(
@@ -649,23 +645,12 @@ fn landform_disc_occlusion(
 
 fn landform_shadow_sample_direction(
     direct_light: CelestialReceiverLight,
-    source_index: u32,
+    source: CelestialSourceLight,
 ) -> vec3<f32> {
-    let is_sun = source_index == 0u;
-    let direction = select(
-        direct_light.moon_direction,
-        direct_light.sun_direction,
-        is_sun,
-    );
-    let angular_radius_rad = select(
-        MOON_ANGULAR_RADIUS_RAD,
-        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-        is_sun,
-    );
     return celestial_visible_disc_sample_direction_at_horizon(
         direct_light.horizon_z,
-        direction,
-        angular_radius_rad,
+        source.direction,
+        source.angular_radius_rad,
     );
 }
 
@@ -674,21 +659,13 @@ fn landform_shadow_transmittance(
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
-        let is_sun = source_index == 0u;
+        let source = celestial_source_light(direct_light, source_index);
         transmittance[source_index] = landform_shadow_transmittance_for_light(
             direct_light.position_m,
             direct_light.height_m,
-            landform_shadow_sample_direction(direct_light, source_index),
-            select(
-                direct_light.moon_amount,
-                direct_light.sun_amount,
-                is_sun,
-            ),
-            select(
-                MOON_ANGULAR_RADIUS_RAD,
-                CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-                is_sun,
-            ),
+            landform_shadow_sample_direction(direct_light, source),
+            source.amount,
+            source.angular_radius_rad,
         );
     }
     return transmittance;

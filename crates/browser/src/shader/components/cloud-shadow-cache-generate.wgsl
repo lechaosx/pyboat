@@ -226,15 +226,10 @@ fn landform_shadow_cache_offset(
     reach_m: f32,
     direct_light: CelestialReceiverLight,
 ) -> vec3<f32> {
-    let is_sun = source_index == 0u;
-    let light = landform_shadow_sample_direction(direct_light, source_index);
-    let light_amount = select(
-        direct_light.moon_amount,
-        direct_light.sun_amount,
-        is_sun,
-    );
+    let source = celestial_source_light(direct_light, source_index);
+    let light = landform_shadow_sample_direction(direct_light, source);
     let horizontal_light = length(light.xy);
-    if light_amount <= 0.0 || horizontal_light <= 0.001 {
+    if source.amount <= 0.0 || horizontal_light <= 0.001 {
         return vec3<f32>(0.0);
     }
     let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
@@ -255,84 +250,24 @@ fn cloud_shadow_cache_footprint(
     // All disc taps share one receiver/source identity for reuse eligibility.
     let tap_index = footprint_index % 3u;
     let source_index = (footprint_index / 3u) % 2u;
-    let is_sun = source_index == 0u;
     let receives_at_low_cloud = layer == 1u && footprint_index >= 6u;
     var receiver_light = surface_light;
     if receives_at_low_cloud {
         receiver_light = low_cloud_light;
     }
-    let center_light = select(
-        receiver_light.moon_direction,
-        receiver_light.sun_direction,
-        is_sun,
-    );
-    let light_amount = select(
-        receiver_light.moon_amount,
-        receiver_light.sun_amount,
-        is_sun,
+    let source = celestial_source_light(receiver_light, source_index);
+    let query = cloud_shadow_query(
+        receiver_light,
+        source,
+        !receives_at_low_cloud && layer_visibility.y > 0.0,
+        receives_at_low_cloud || layer_visibility.z > 0.0,
     );
     var enabled = false;
-    let cloud_height_m = select(
-        WEATHER_CANOPY_HEIGHT_M,
-        LOW_CLOUD_BASE_HEIGHT_M,
-        layer == 0u,
-    );
-    let angular_radius_rad = select(
-        MOON_ANGULAR_RADIUS_RAD,
-        CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-        is_sun,
-    );
-    let directions = celestial_disc_sample_directions(
-        receiver_light.horizon_z,
-        center_light,
-        angular_radius_rad,
-    );
-    var separation_m = celestial_disc_projection_separation_m(
-        receiver_light.position_m,
-        receiver_light.height_m,
-        cloud_height_m,
-        directions,
-    );
-    if !receives_at_low_cloud {
-        let other_layer_active = select(
-            layer_visibility.y > 0.0,
-            layer_visibility.z > 0.0,
-            layer == 0u,
-        );
-        if other_layer_active {
-            let other_cloud_height_m = select(
-                LOW_CLOUD_BASE_HEIGHT_M,
-                WEATHER_CANOPY_HEIGHT_M,
-                layer == 0u,
-            );
-            separation_m = max(
-                separation_m,
-                celestial_disc_projection_separation_m(
-                    receiver_light.position_m,
-                    receiver_light.height_m,
-                    other_cloud_height_m,
-                    directions,
-                ),
-            );
-        }
-    }
-    let resolved = separation_m > visual_pixel_footprint_m;
-    var light = celestial_visible_disc_sample_direction_at_horizon(
-        receiver_light.horizon_z,
-        center_light,
-        angular_radius_rad,
-    );
-    if resolved {
-        light = select(directions.lower, directions.upper, tap_index == 1u);
-        if tap_index == 2u {
-            light = directions.side;
-        }
-    }
     if receives_at_low_cloud {
         enabled = layer_visibility.x > 0.0
             && layer_visibility.w > 0.0
-            && light_amount > 0.0
-            && (tap_index == 0u || resolved);
+            && source.amount > 0.0
+            && (tap_index == 0u || query.resolved);
     } else {
         let layer_active = select(
             layer_visibility.z > 0.0 && tuning.cloud_shadows.y > 0.0,
@@ -340,17 +275,17 @@ fn cloud_shadow_cache_footprint(
             layer == 0u,
         );
         enabled = layer_active
-            && light_amount > 0.0
-            && cloud_shadow_contrast(center_light) > 0.0
-            && (tap_index == 0u || resolved);
+            && source.amount > 0.0
+            && cloud_shadow_contrast(source.direction) > 0.0
+            && (tap_index == 0u || query.resolved);
     }
     var projected_position_m = vec2<f32>(0.0);
     if enabled {
-        projected_position_m = projected_cloud_position(
-            receiver_light.position_m,
-            receiver_light.height_m,
-            cloud_height_m,
-            light,
+        let projection = cloud_shadow_query_projection(query, tap_index);
+        projected_position_m = select(
+            projection.upper_position_m,
+            projection.low_position_m,
+            layer == 0u,
         );
     }
     return CloudShadowCacheFootprint(enabled, projected_position_m);

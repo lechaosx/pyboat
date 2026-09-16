@@ -516,6 +516,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   transverse spread from the width of its visible circular segment. Subpixel
   separation collapses to the representative ray. All samples retain one
   source-and-receiver footprint identity for sparse-atlas reuse eligibility.
+- **[Explicit]** Direct cloud-shadow evaluation and sparse-atlas discovery
+  consume the same receiver, celestial-source, finite-disc sampling, and
+  projected-footprint query. Discovery adds allocation policy without
+  independently reconstructing shadow geometry.
 - **[Explicit]** North-south position maps linearly through -90 degrees at the
   first southern pole, the equator, and +90 degrees at the first northern pole,
   then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate

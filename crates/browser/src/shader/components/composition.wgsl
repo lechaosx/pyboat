@@ -137,57 +137,25 @@ fn cloud_color(
     return mix(surface_color, cloud, opacity);
 }
 
-fn upper_cloud_transmittance_at_low_cloud_for_light(
+fn upper_cloud_transmittance_at_low_cloud_for_source(
     low_cloud_light: CelestialReceiverLight,
-    upper_height_m: f32,
-    light: vec3<f32>,
-    light_amount: f32,
-    angular_radius_rad: f32,
+    source: CelestialSourceLight,
 ) -> f32 {
-    if light_amount <= 0.0 {
+    if source.amount <= 0.0 {
         return 1.0;
     }
-    let directions = celestial_disc_sample_directions(
-        low_cloud_light.horizon_z,
-        light,
-        angular_radius_rad,
+    let query = cloud_shadow_query(
+        low_cloud_light,
+        source,
+        false,
+        true,
     );
-    let lower_position_m = projected_cloud_position(
-        low_cloud_light.position_m,
-        low_cloud_light.height_m,
-        upper_height_m,
-        directions.lower,
-    );
-    let upper_position_m = projected_cloud_position(
-        low_cloud_light.position_m,
-        low_cloud_light.height_m,
-        upper_height_m,
-        directions.upper,
-    );
-    let side_position_m = projected_cloud_position(
-        low_cloud_light.position_m,
-        low_cloud_light.height_m,
-        upper_height_m,
-        directions.side,
-    );
-    if max(
-        length(lower_position_m - upper_position_m),
-        max(
-            length(lower_position_m - side_position_m),
-            length(upper_position_m - side_position_m),
-        ),
-    ) <= visual_pixel_footprint_m {
-        let representative_light = celestial_visible_disc_sample_direction_at_horizon(
-            low_cloud_light.horizon_z,
-            light,
-            angular_radius_rad,
-        );
-        let projected_position_m = projected_cloud_position(
-            low_cloud_light.position_m,
-            low_cloud_light.height_m,
-            upper_height_m,
-            representative_light,
-        );
+    if !query.resolved {
+        let representative_light = cloud_shadow_query_direction(query, 0u);
+        let projected_position_m = cloud_shadow_query_projection(
+            query,
+            0u,
+        ).upper_position_m;
         let upper_optical_depth = tuning.cloud_shadows.y
             * sampled_upper_cloud_optical_depth_at(projected_position_m);
         return mix(
@@ -195,65 +163,46 @@ fn upper_cloud_transmittance_at_low_cloud_for_light(
             cloud_layer_transmittance(
                 upper_optical_depth,
                 representative_light,
-                low_cloud_light.horizon_z,
+                query.receiver.horizon_z,
             ),
             layer_visibility.w,
         );
     }
     let lower_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(lower_position_m);
+        * sampled_upper_cloud_optical_depth_at(query.lower_projection.upper_position_m);
     let upper_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(upper_position_m);
+        * sampled_upper_cloud_optical_depth_at(query.upper_projection.upper_position_m);
     let side_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(side_position_m);
+        * sampled_upper_cloud_optical_depth_at(query.side_projection.upper_position_m);
     let transmittance = (1.0 / 3.0) * (
         cloud_layer_transmittance(
             lower_optical_depth,
-            directions.lower,
-            low_cloud_light.horizon_z,
+            query.directions.lower,
+            query.receiver.horizon_z,
         )
             + cloud_layer_transmittance(
                 upper_optical_depth,
-                directions.upper,
-                low_cloud_light.horizon_z,
+                query.directions.upper,
+                query.receiver.horizon_z,
             )
             + cloud_layer_transmittance(
                 side_optical_depth,
-                directions.side,
-                low_cloud_light.horizon_z,
+                query.directions.side,
+                query.receiver.horizon_z,
             )
     );
     return mix(1.0, transmittance, layer_visibility.w);
 }
 
 fn upper_cloud_transmittance_at_low_cloud(
-    upper_height_m: f32,
     low_cloud_light: CelestialReceiverLight,
 ) -> vec2<f32> {
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
-        let is_sun = source_index == 0u;
-        var light = select(
-            low_cloud_light.moon_direction,
-            low_cloud_light.sun_direction,
-            is_sun,
-        );
-        let light_amount = select(
-            low_cloud_light.moon_amount,
-            low_cloud_light.sun_amount,
-            is_sun,
-        );
-        let angular_radius_rad = select(
-            MOON_ANGULAR_RADIUS_RAD,
-            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-            is_sun,
-        );
-        transmittance[source_index] = upper_cloud_transmittance_at_low_cloud_for_light(
+        let source = celestial_source_light(low_cloud_light, source_index);
+        transmittance[source_index] = upper_cloud_transmittance_at_low_cloud_for_source(
             low_cloud_light,
-            upper_height_m,
-            light,
-            light_amount,
-            angular_radius_rad,
+            source,
         );
     }
     return transmittance;
@@ -399,7 +348,6 @@ fn final_scene_color(
         );
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
-            let upper_height_m = WEATHER_CANOPY_HEIGHT_M;
             let low_cloud_position_m = visible_low_cloud_position_m(input.world_position_m);
             let low_cloud_weather = cloud_weather_at(low_cloud_position_m);
             let low_cloud = procedural_low_cloud_sample(
@@ -417,10 +365,7 @@ fn final_scene_color(
                 );
                 var upper_transmittance = vec2<f32>(1.0);
                 if layer_visibility.w > 0.0 {
-                    upper_transmittance = upper_cloud_transmittance_at_low_cloud(
-                        upper_height_m,
-                        low_cloud_light,
-                    );
+                    upper_transmittance = upper_cloud_transmittance_at_low_cloud(low_cloud_light);
                 }
                 let clouded_fragment_color = cloud_color(
                     fragment_color,
