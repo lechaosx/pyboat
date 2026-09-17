@@ -560,12 +560,21 @@ struct CloudShadowCacheUniforms {
 struct CloudShadowCacheResources {
     entries: wgpu::Buffer,
     header: wgpu::Buffer,
-    _tiles: wgpu::Buffer,
-    _atlas: wgpu::Texture,
+    tiles: wgpu::Buffer,
+    atlas: wgpu::Texture,
     atlas_view: wgpu::TextureView,
     discovery_bind_group: wgpu::BindGroup,
     fill_bind_group: wgpu::BindGroup,
     sample_bind_group: wgpu::BindGroup,
+}
+
+impl CloudShadowCacheResources {
+    fn destroy(&self) {
+        self.entries.destroy();
+        self.header.destroy();
+        self.tiles.destroy();
+        self.atlas.destroy();
+    }
 }
 
 struct CloudShadowCache {
@@ -894,8 +903,8 @@ impl CloudShadowCache {
         CloudShadowCacheResources {
             entries,
             header,
-            _tiles: tiles,
-            _atlas: atlas,
+            tiles,
+            atlas,
             atlas_view,
             discovery_bind_group,
             fill_bind_group,
@@ -904,6 +913,7 @@ impl CloudShadowCache {
     }
 
     fn resize(&mut self, device: &wgpu::Device, viewport_width: u32, viewport_height: u32) {
+        self.resources.destroy();
         self.resources = Self::create_resources(
             device,
             &self.sample_layout,
@@ -1114,7 +1124,7 @@ impl Renderer {
         match_seed: Option<u64>,
         world_geometry: WorldGeometry,
         render_clock: Option<(u64, f32)>,
-        elapsed_seconds: f32,
+        elapsed_seconds: f64,
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
@@ -1400,7 +1410,7 @@ impl BrowserGame {
         })
     }
 
-    pub fn frame(&mut self, elapsed_seconds: f32) -> Result<(), JsValue> {
+    pub fn frame(&mut self, elapsed_seconds: f64) -> Result<(), JsValue> {
         let viewport_radius_m =
             viewport_interest_radius_m(self.renderer.aspect_ratio(), self.view_height_m);
         let mut client = self.client.borrow_mut();

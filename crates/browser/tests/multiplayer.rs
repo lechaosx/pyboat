@@ -2,7 +2,9 @@ use browser::MultiplayerClient;
 use game::{procedural_match_environment, procedural_water_depth_m};
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::Vector;
-use simulation::{DT_SECONDS, WorldGeometry, apparent_flow};
+use simulation::{TICKS_PER_SECOND, WorldGeometry, apparent_flow};
+
+const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
 fn boat(id: &str, x: f32) -> BoatSnapshot {
     BoatSnapshot {
@@ -58,16 +60,16 @@ fn multiplayer_client_discards_boats_omitted_from_interest() {
 fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
     let mut client = MultiplayerClient::new();
     client.set_motion_intent(2.0, -2.0);
-    assert!(client.take_inputs(DT_SECONDS).is_empty());
+    assert!(client.take_inputs(TICK_SECONDS).is_empty());
     client.accept(ServerMessage::Welcome {
         player_id: "player-1".to_owned(),
         match_seed: 42,
         world_geometry: WorldGeometry::default(),
     });
 
-    assert!(client.take_inputs(DT_SECONDS / 2.0).is_empty());
+    assert!(client.take_inputs(TICK_SECONDS / 2.0).is_empty());
     assert_eq!(
-        client.take_inputs(DT_SECONDS / 2.0),
+        client.take_inputs(TICK_SECONDS / 2.0),
         vec![ClientMessage::Input {
             sequence: 1,
             forward: 1.0,
@@ -75,7 +77,7 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
         }]
     );
     assert_eq!(
-        client.take_inputs(2.0 * DT_SECONDS),
+        client.take_inputs(2.0 * TICK_SECONDS),
         vec![
             ClientMessage::Input {
                 sequence: 2,
@@ -375,7 +377,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
             boats: vec![local],
             removed_player_ids: Vec::new(),
         });
-        client.take_inputs(DT_SECONDS);
+        client.take_inputs(TICK_SECONDS);
         client.view().unwrap().speed_m_s
     }
 
@@ -478,7 +480,7 @@ fn multiplayer_client_predicts_local_input_before_server_acknowledgement() {
     });
 
     client.set_motion_intent(1.0, 1.0);
-    client.take_inputs(DT_SECONDS);
+    client.take_inputs(TICK_SECONDS);
 
     assert!(client.camera_m().unwrap().x > 0.05);
 }
@@ -492,7 +494,7 @@ fn multiplayer_client_replays_input_emitted_before_the_first_snapshot() {
         world_geometry: WorldGeometry::default(),
     });
     client.set_motion_intent(1.0, 1.0);
-    client.take_inputs(DT_SECONDS);
+    client.take_inputs(TICK_SECONDS);
     let mut local = boat("player-1", 0.0);
     local.y = 0.0;
     local.vx = 4.0;

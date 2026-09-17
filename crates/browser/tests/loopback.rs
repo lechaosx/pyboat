@@ -1,8 +1,10 @@
 use browser::MultiplayerClient;
 use protocol::{ClientMessage, ServerMessage, decode_server_message, encode_client_message};
-use simulation::DT_SECONDS;
+use simulation::TICKS_PER_SECOND;
 use tokio::time::{Duration, timeout};
 use wtransport::{ClientConfig, Connection, Endpoint, Identity};
+
+const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
 async fn next_server_message(connection: &Connection) -> ServerMessage {
     let message = timeout(Duration::from_secs(1), async {
@@ -55,7 +57,7 @@ async fn browser_client_predicts_and_reconciles_against_the_real_server() {
     let authoritative = timeout(Duration::from_secs(2), async {
         loop {
             if last_sequence < 30 {
-                for input in client.take_inputs(DT_SECONDS) {
+                for input in client.take_inputs(TICK_SECONDS) {
                     let ClientMessage::Input { sequence, .. } = &input else {
                         panic!("fixed-tick input generation returned a viewport message");
                     };

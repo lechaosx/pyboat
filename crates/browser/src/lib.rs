@@ -10,7 +10,7 @@ use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::{Rotation, Vector};
 use simulation::{
     ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
-    MotionIntent, SharedSimulation, WorldGeometry, apparent_flow, hull_outline_m,
+    MotionIntent, SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
 #[cfg(test)]
@@ -20,6 +20,9 @@ mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 pub const CLOUD_SHADOW_CACHE_TILE_TEXELS: u32 = 128;
+const CLOUD_SHADOW_CACHE_REFERENCE_PIXELS: u64 = 1920 * 1080;
+const CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES: u64 = 64 * 1024 * 1024;
+const CLOUD_SHADOW_CACHE_ATLAS_BYTES_PER_TEXEL: u64 = 4;
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) const MAX_SERVER_MESSAGE_BYTES: usize = 16 * 1024;
@@ -118,9 +121,25 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
     let desired_tiles = 6u32.saturating_mul(screen_footprint_tiles).max(1);
     let physical_tile_texels = tile_texels + 2;
     let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
-    let maximum_tiles = desired_tiles.min(maximum_axis_tiles.saturating_pow(2));
+    let tile_bytes = u64::from(physical_tile_texels)
+        .saturating_pow(2)
+        .saturating_mul(CLOUD_SHADOW_CACHE_ATLAS_BYTES_PER_TEXEL);
+    let viewport_pixels = u64::from(viewport_width)
+        .saturating_mul(u64::from(viewport_height))
+        .max(1);
+    let resolution_scale =
+        (viewport_pixels as f64 / CLOUD_SHADOW_CACHE_REFERENCE_PIXELS as f64).sqrt();
+    let atlas_byte_budget =
+        (CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES as f64 * resolution_scale) as u64;
+    let memory_limited_tiles =
+        (atlas_byte_budget / tile_bytes).clamp(1, u64::from(u32::MAX)) as u32;
+    let mut maximum_tiles = desired_tiles
+        .min(maximum_axis_tiles.saturating_pow(2))
+        .min(memory_limited_tiles);
     let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
     let atlas_columns = square_columns.min(maximum_axis_tiles).max(1);
+    let maximum_memory_rows = memory_limited_tiles / atlas_columns;
+    maximum_tiles = maximum_tiles.min(atlas_columns * maximum_memory_rows.max(1));
     let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
     // Discovery retains eighteen cloud-disc and eight landform footprints, including
     // singletons that never consume atlas space.
@@ -185,7 +204,8 @@ pub fn playground_diagnostic_shader_source(name: &str) -> Option<&'static str> {
     generated_playground_diagnostic_shader(name)
 }
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
-const MAXIMUM_PREDICTION_SECONDS: f32 = 0.25;
+const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
+const MAXIMUM_PREDICTION_SECONDS: f64 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
@@ -215,8 +235,8 @@ pub(crate) struct ViewCloudMotion {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl ViewCloudMotion {
-    pub(crate) fn advance(&mut self, elapsed_seconds: f32, low_wind: Vector, upper_wind: Vector) {
-        let elapsed_seconds = f64::from(elapsed_seconds.max(0.0));
+    pub(crate) fn advance(&mut self, elapsed_seconds: f64, low_wind: Vector, upper_wind: Vector) {
+        let elapsed_seconds = elapsed_seconds.max(0.0);
         let low_wind = [f64::from(low_wind.x), f64::from(low_wind.y)];
         let upper_wind = [f64::from(upper_wind.x), f64::from(upper_wind.y)];
         for axis in 0..2 {
@@ -414,7 +434,7 @@ pub struct MultiplayerClient {
     motion_intent: MotionIntent,
     next_input_sequence: i64,
     input_history: Vec<InputCommand>,
-    input_accumulator_seconds: f32,
+    input_accumulator_seconds: f64,
     next_viewport_sequence: i64,
     sent_viewport_radius_m: Option<f32>,
     time_seconds: f64,
@@ -605,9 +625,9 @@ impl MultiplayerClient {
         };
     }
 
-    pub fn take_inputs(&mut self, elapsed_seconds: f32) -> Vec<ClientMessage> {
+    pub fn take_inputs(&mut self, elapsed_seconds: f64) -> Vec<ClientMessage> {
         let elapsed_seconds = elapsed_seconds.max(0.0);
-        self.time_seconds += f64::from(elapsed_seconds);
+        self.time_seconds += elapsed_seconds;
         self.input_accumulator_seconds += elapsed_seconds.min(MAXIMUM_PREDICTION_SECONDS);
         let local_wreck = self
             .player_id
@@ -615,7 +635,7 @@ impl MultiplayerClient {
             .and_then(|player_id| self.boats.get(player_id))
             .is_some_and(|boat| boat.snapshot.wreck);
         let mut inputs = Vec::new();
-        while self.input_accumulator_seconds >= DT_SECONDS {
+        while self.input_accumulator_seconds >= TICK_SECONDS {
             if self.is_ready() && !local_wreck {
                 let command = InputCommand {
                     sequence: self.next_input_sequence,
@@ -633,7 +653,7 @@ impl MultiplayerClient {
                 self.next_input_sequence += 1;
             }
             self.advance_prediction(self.motion_intent);
-            self.input_accumulator_seconds -= DT_SECONDS;
+            self.input_accumulator_seconds -= TICK_SECONDS;
         }
         inputs
     }
@@ -650,7 +670,7 @@ impl MultiplayerClient {
         self.tick?;
         Some((
             self.prediction_tick,
-            (self.input_accumulator_seconds / DT_SECONDS).clamp(0.0, 1.0),
+            (self.input_accumulator_seconds / TICK_SECONDS).clamp(0.0, 1.0) as f32,
         ))
     }
 
@@ -1424,6 +1444,18 @@ mod tests {
     }
 
     #[test]
+    fn cloud_shadow_cache_atlas_budget_scales_with_backing_resolution() {
+        let full_hd = cloud_shadow_cache_layout(1920, 1080, 8192);
+        let ultra_hd = cloud_shadow_cache_layout(3840, 2160, 8192);
+        let full_hd_bytes = u64::from(full_hd.atlas_width) * u64::from(full_hd.atlas_height) * 4;
+        let ultra_hd_bytes = u64::from(ultra_hd.atlas_width) * u64::from(ultra_hd.atlas_height) * 4;
+
+        assert!(ultra_hd.maximum_tiles >= 2 * full_hd.maximum_tiles);
+        assert!(ultra_hd_bytes > full_hd_bytes);
+        assert!(ultra_hd_bytes <= 128 * 1024 * 1024);
+    }
+
+    #[test]
     fn cloud_shadow_cache_capacity_tracks_selected_tile_size() {
         let layout = cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 64);
 
@@ -1534,6 +1566,16 @@ mod tests {
     }
 
     #[test]
+    fn cloud_motion_preserves_the_double_precision_frame_interval() {
+        let mut motion = ViewCloudMotion::default();
+        let elapsed_seconds = 1.0_f64 / 60.0 + 1.0e-12;
+
+        motion.advance(elapsed_seconds, Vector::new(1.0, 0.0), Vector::ZERO);
+
+        assert_eq!(motion.low_offset_m[0], elapsed_seconds);
+    }
+
+    #[test]
     fn reliable_server_message_chunks_are_byte_bounded() {
         let mut message = vec![0; MAX_SERVER_MESSAGE_BYTES - 1];
 
@@ -1615,7 +1657,7 @@ mod tests {
         });
         client.accept(snapshot(0));
 
-        client.take_inputs(DT_SECONDS * 0.5);
+        client.take_inputs(TICK_SECONDS * 0.5);
 
         assert_eq!(client.render_clock(), Some((0, 0.5)));
     }

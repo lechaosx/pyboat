@@ -221,14 +221,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   progress into bounded scalar-weather, pressure, and current noise-time
   coordinates before upload. Simulation state advances only on integer ticks;
   render clocks convert seconds at exactly 60 ticks per second rather than using
-  the rounded `f32` physics step. Faster rendering presents the interval toward
-  the next tick without WGSL converting total time to `f32` or interpolating
-  temporal snapshots. A seeded phase on each field and octave prevents unrelated
-  spectra from changing in lockstep. Host-integrated cloud transport is
-  renderer-local displacement: each presented frame adds the current view-centre
-  wind multiplied by that frame's elapsed duration. The displacement persists
-  across prediction reconciliation, procedural-clock changes, and
-  world-configuration changes.
+  the rounded `f32` physics step. Production retains frame intervals and its
+  fixed-step accumulator as `f64`, casting only bounded presentation fractions
+  and physics inputs. Faster rendering presents the interval toward the next tick
+  without WGSL converting total time to `f32` or interpolating temporal
+  snapshots. A seeded phase on each field and octave prevents unrelated spectra
+  from changing in lockstep. Host-integrated cloud transport is renderer-local
+  displacement: each presented frame adds the current view-centre wind multiplied
+  by that frame's elapsed duration. The displacement persists across prediction
+  reconciliation, procedural-clock changes, and world-configuration changes.
 - **[Explicit]** Cloud-transport displacement accumulates in host `f64` and is
   uploaded to WGSL as absolute `f32` metres. Increasing spatial quantization
   after very long uninterrupted transport is an accepted rendering limit.
@@ -294,6 +295,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   missing or capacity-limited tile falls back to the canonical procedural query.
   The atlas has no temporal persistence, does not become simulation state, and
   is not used for visible lower-cloud bodies or ambient sky light.
+- **[Implicit]** The `Rg16Float` shadow atlas retains fixed-resolution tiles. Its
+  allocation budget is 64 MiB at a 1920×1080 backing resolution and scales with
+  the square root of backing-pixel count; the device texture-dimension limit is
+  the final bound. WebGPU exposes structural limits but no usable-memory budget,
+  so tiles beyond the resolution-derived budget use the exact direct fallback.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -461,7 +467,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   or the aspect-preserved current atlas, and can recreate it with 32-, 64-, 128-,
   or 256-texel tiles without changing the world-space resolution of one texel.
   Its counters, tile metadata, and debug bindings are absent from the production
-  scene shader.
+  scene shader. Cache recreation waits for interactive resizing to settle;
+  retired GPU resources are destroyed after submitted work and diagnostic
+  readback complete.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

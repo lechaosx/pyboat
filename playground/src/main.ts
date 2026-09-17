@@ -366,7 +366,7 @@ function renderControls(): void {
       shadowCacheDebugMode = 0;
       cacheDebugSelect.value = "0";
       cacheLegend.hidden = true;
-      recreateShadowCache();
+      scheduleShadowCacheRecreation();
     }
     updateDiagnosticUI();
   });
@@ -398,7 +398,7 @@ function renderControls(): void {
       shadowCacheDebugMode = 0;
       cacheDebugSelect.value = "0";
       cacheLegend.hidden = true;
-      recreateShadowCache();
+      scheduleShadowCacheRecreation();
     }
   });
   cacheLabel.append(cacheInput, cacheHeading);
@@ -433,7 +433,7 @@ function renderControls(): void {
       diagnosticSelect.value = state.diagnostic;
       updateDiagnosticUI();
     }
-    recreateShadowCache();
+    scheduleShadowCacheRecreation();
   });
   cacheDebugLabel.append(cacheDebugHeading, cacheDebugSelect);
   const tileSizeLabel = document.createElement("div");
@@ -453,7 +453,7 @@ function renderControls(): void {
   tileSizeSelect.value = String(shadowCacheTileTexels);
   tileSizeSelect.addEventListener("change", () => {
     shadowCacheTileTexels = Number(tileSizeSelect.value);
-    recreateShadowCache();
+    scheduleShadowCacheRecreation();
   });
   tileSizeLabel.append(tileSizeHeading, tileSizeSelect);
   shadowCacheInfoElement = document.createElement("div");
@@ -1125,6 +1125,8 @@ type CloudShadowCache = {
   entries: any;
   header: any;
   atlasView: any;
+  retired: boolean;
+  submittedWorkDone: boolean;
   resources: any[];
 };
 
@@ -1248,7 +1250,18 @@ function createCloudShadowCache(
     entries,
     header,
     atlasView,
-    resources: [uniformBuffer, tiles, atlas, sampler, tileCountReadback, debugBuffer],
+    retired: false,
+    submittedWorkDone: false,
+    resources: [
+      uniformBuffer,
+      header,
+      entries,
+      tiles,
+      atlas,
+      sampler,
+      tileCountReadback,
+      debugBuffer,
+    ],
   };
 }
 const timestampQuerySet = timestampQueriesSupported
@@ -1288,6 +1301,8 @@ let sceneCompilationStatus = "compiling full scene";
 const diagnosticShaderModules = new Map<string, any>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
+const shadowCacheResizeSettleMilliseconds = 100;
+let shadowCacheRecreateAfter: number | undefined;
 
 function updateShadowCacheInfo(cache?: CloudShadowCache): void {
   if (!shadowCacheInfoElement) return;
@@ -1303,21 +1318,49 @@ function updateShadowCacheInfo(cache?: CloudShadowCache): void {
   if (shadowCacheInfoElement.textContent !== text) shadowCacheInfoElement.textContent = text;
 }
 
-function recreateShadowCache(): void {
+function destroyRetiredShadowCache(cache: CloudShadowCache): void {
+  if (!cache.retired || !cache.submittedWorkDone || cache.tileCountPending) return;
+  for (const resource of cache.resources) resource.destroy?.();
+  cache.resources.length = 0;
+}
+
+function retireShadowCache(cache: CloudShadowCache): void {
+  cache.retired = true;
+  void device.queue.onSubmittedWorkDone().catch(() => {}).finally(() => {
+    cache.submittedWorkDone = true;
+    destroyRetiredShadowCache(cache);
+  });
+}
+
+function scheduleShadowCacheRecreation(delayMilliseconds = 0): void {
+  if (!sceneRenderResources.cloudShadowCache) return;
+  const recreateAfter = performance.now() + delayMilliseconds;
+  shadowCacheRecreateAfter = Math.max(shadowCacheRecreateAfter ?? 0, recreateAfter);
+}
+
+function applyScheduledShadowCacheRecreation(now: number): void {
+  if (shadowCacheRecreateAfter === undefined || now < shadowCacheRecreateAfter) return;
   const cache = sceneRenderResources.cloudShadowCache;
-  if (!cache) return;
+  if (!cache) {
+    shadowCacheRecreateAfter = undefined;
+    return;
+  }
   sceneRenderResources.cloudShadowCache = createCloudShadowCache(
     cache.discoveryPipeline,
     cache.fillPipeline,
     sceneRenderResources.pipeline,
   );
+  shadowCacheRecreateAfter = undefined;
+  retireShadowCache(cache);
   updateShadowCacheInfo(sceneRenderResources.cloudShadowCache);
 }
 
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
   if (selection === "scene") {
-    return useShadowCache ? sceneRenderResources : directSceneRenderResources;
+    return useShadowCache && shadowCacheRecreateAfter === undefined
+      ? sceneRenderResources
+      : directSceneRenderResources;
   }
   const ready = diagnosticRenderResources.get(selection);
   if (ready) return ready;
@@ -1856,7 +1899,7 @@ function resize(): void {
     previewCanvas.height = height;
     const cache = sceneRenderResources.cloudShadowCache;
     if (cache) {
-      recreateShadowCache();
+      scheduleShadowCacheRecreation(shadowCacheResizeSettleMilliseconds);
     }
   }
 }
@@ -1943,6 +1986,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
 
 function frame(now: number): void {
   resize();
+  applyScheduledShadowCacheRecreation(now);
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
@@ -2100,6 +2144,7 @@ function frame(now: number): void {
       }
     }).catch(() => {}).finally(() => {
       readbackCache.tileCountPending = false;
+      destroyRetiredShadowCache(readbackCache);
     });
   }
   if (timestampReadback) {
