@@ -99,35 +99,42 @@ try {
   });
 
   function frame(timeMs: number): void {
-    const gamepad = firstGamepad();
-    const worldX = gamepad?.axes[0] ?? 0;
-    const worldY = -(gamepad?.axes[1] ?? 0);
-    game.set_player_input(
-      keyboardAxis("KeyW", "KeyS"),
-      keyboardAxis("KeyD", "KeyA"),
-      worldX,
-      worldY,
-    );
-    game.frame((timeMs - previousTimeMs) / 1000);
-    statusElement.textContent = game.status();
-    speedElement.textContent = game.speed_m_s().toFixed(1);
-    apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
-    pointOfSailElement.textContent = game.point_of_sail();
-    healthElement.textContent = game.health().toFixed(0);
-    waterDepthElement.textContent = game.water_depth_m().toFixed(1);
-    bottomClearanceElement.textContent = game.bottom_clearance_m().toFixed(1);
-    const bottomContactFraction = game.bottom_contact_fraction();
-    bottomContactElement.textContent =
-      bottomContactFraction >= 1
-        ? "grounded"
-        : bottomContactFraction > 0
-          ? `dragging ${(bottomContactFraction * 100).toFixed(0)}%`
-          : "clear";
-    bottomContactElement.classList.toggle("active", bottomContactFraction > 0);
-    scaleLabelElement.textContent = game.scale_bar_label();
-    scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
+    const elapsedSeconds = (timeMs - previousTimeMs) / 1000;
     previousTimeMs = timeMs;
-    requestAnimationFrame(frame);
+    try {
+      const gamepad = firstGamepad();
+      const worldX = gamepad?.axes[0] ?? 0;
+      const worldY = -(gamepad?.axes[1] ?? 0);
+      game.set_player_input(
+        keyboardAxis("KeyW", "KeyS"),
+        keyboardAxis("KeyD", "KeyA"),
+        worldX,
+        worldY,
+      );
+      game.frame(elapsedSeconds);
+      statusElement.textContent = game.status();
+      speedElement.textContent = game.speed_m_s().toFixed(1);
+      apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
+      pointOfSailElement.textContent = game.point_of_sail();
+      healthElement.textContent = game.health().toFixed(0);
+      waterDepthElement.textContent = game.water_depth_m().toFixed(1);
+      bottomClearanceElement.textContent = game.bottom_clearance_m().toFixed(1);
+      const bottomContactFraction = game.bottom_contact_fraction();
+      bottomContactElement.textContent =
+        bottomContactFraction >= 1
+          ? "grounded"
+          : bottomContactFraction > 0
+            ? `dragging ${(bottomContactFraction * 100).toFixed(0)}%`
+            : "clear";
+      bottomContactElement.classList.toggle("active", bottomContactFraction > 0);
+      scaleLabelElement.textContent = game.scale_bar_label();
+      scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
+    } catch (error) {
+      statusElement.textContent = "Rendering failed; retrying";
+      console.error(error);
+    } finally {
+      requestAnimationFrame(frame);
+    }
   }
 
   requestAnimationFrame(frame);

@@ -24,6 +24,12 @@ import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
 import {
+  maximumWorldYear,
+  worldDateTimeSeconds,
+  worldDaySeconds,
+  worldYearDays,
+} from "./world-date";
+import {
   diagnosticGroups,
   diagnosticShaders,
   type DiagnosticSelection,
@@ -229,8 +235,6 @@ const defaults: State = {
   diagnostic: "scene",
 };
 
-const worldDaySeconds = 86_400;
-const worldYearDays = 365;
 const lunarMonthDays = 28;
 const firstBloodMoonSeconds = 91 * worldDaySeconds - 4 * 60;
 const celestialEventPresets = {
@@ -742,7 +746,7 @@ timeToolbarElement.innerHTML = `
     <summary>Date &amp; time</summary>
     <section class="world-toolbar-section"><h3>World calendar</h3>
       <div class="world-datetime-grid">
-        <label><span>Solar year</span><input id="world-year" type="number" min="1" step="1"></label>
+        <label><span>Solar year</span><input id="world-year" type="number" min="1" max="${maximumWorldYear}" step="1"></label>
         <label><span>Year day</span><input id="world-year-day" type="number" min="1" max="365" step="1"></label>
         <label><span>Lunar month</span><input id="world-lunar-month" type="number" readonly></label>
         <label><span>Lunar day</span><input id="world-lunar-day" type="number" readonly></label>
@@ -817,16 +821,12 @@ function syncWorldDateInputs(): void {
 }
 
 function setWorldDateFromInputs(): void {
-  const year = Math.max(1, Math.floor(worldYearInput.valueAsNumber || 1));
-  const day = Math.min(worldYearDays, Math.max(1, Math.floor(worldYearDayInput.valueAsNumber || 1)));
+  const year = worldYearInput.valueAsNumber || 1;
+  const day = worldYearDayInput.valueAsNumber || 1;
   const [hours = 0, minutes = 0, seconds = 0] = worldTimeInput.value
     .split(":")
     .map((value) => Number.parseInt(value, 10) || 0);
-  const dayIndex = (year - 1) * worldYearDays + day - 1;
-  state.worldTimeSeconds = dayIndex * worldDaySeconds
-    + Math.min(23, hours) * 3600
-    + Math.min(59, minutes) * 60
-    + Math.min(59, seconds);
+  state.worldTimeSeconds = worldDateTimeSeconds(year, day, hours, minutes, seconds);
   syncWorldDateInputs();
 }
 
@@ -1127,6 +1127,7 @@ type CloudShadowCache = {
   atlasView: any;
   retired: boolean;
   submittedWorkDone: boolean;
+  retirementComplete?: () => void;
   resources: any[];
 };
 
@@ -1303,6 +1304,12 @@ const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>(
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
 const shadowCacheResizeSettleMilliseconds = 100;
 let shadowCacheRecreateAfter: number | undefined;
+let shadowCacheRetirement: Promise<void> | undefined;
+let retiredShadowCachePipelines: {
+  discovery: any;
+  fill: any;
+  scene: any;
+} | undefined;
 
 function updateShadowCacheInfo(cache?: CloudShadowCache): void {
   if (!shadowCacheInfoElement) return;
@@ -1322,36 +1329,59 @@ function destroyRetiredShadowCache(cache: CloudShadowCache): void {
   if (!cache.retired || !cache.submittedWorkDone || cache.tileCountPending) return;
   for (const resource of cache.resources) resource.destroy?.();
   cache.resources.length = 0;
+  cache.retirementComplete?.();
+  cache.retirementComplete = undefined;
 }
 
-function retireShadowCache(cache: CloudShadowCache): void {
+function retireShadowCache(cache: CloudShadowCache): Promise<void> {
   cache.retired = true;
+  const complete = new Promise<void>((resolve) => {
+    cache.retirementComplete = resolve;
+  });
   void device.queue.onSubmittedWorkDone().catch(() => {}).finally(() => {
     cache.submittedWorkDone = true;
     destroyRetiredShadowCache(cache);
   });
+  return complete;
 }
 
 function scheduleShadowCacheRecreation(delayMilliseconds = 0): void {
-  if (!sceneRenderResources.cloudShadowCache) return;
+  if (!sceneRenderResources.cloudShadowCache && !shadowCacheRetirement) return;
   const recreateAfter = performance.now() + delayMilliseconds;
   shadowCacheRecreateAfter = Math.max(shadowCacheRecreateAfter ?? 0, recreateAfter);
 }
 
 function applyScheduledShadowCacheRecreation(now: number): void {
   if (shadowCacheRecreateAfter === undefined || now < shadowCacheRecreateAfter) return;
+  if (shadowCacheRetirement) return;
   const cache = sceneRenderResources.cloudShadowCache;
-  if (!cache) {
+  if (cache) {
+    retiredShadowCachePipelines = {
+      discovery: cache.discoveryPipeline,
+      fill: cache.fillPipeline,
+      scene: sceneRenderResources.pipeline,
+    };
+    sceneRenderResources.cloudShadowCache = undefined;
+    shadowCacheRecreateAfter = undefined;
+    shadowCacheRetirement = retireShadowCache(cache).finally(() => {
+      shadowCacheRetirement = undefined;
+      shadowCacheRecreateAfter ??= performance.now();
+    });
+    updateShadowCacheInfo();
+    return;
+  }
+  const pipelines = retiredShadowCachePipelines;
+  if (!pipelines) {
     shadowCacheRecreateAfter = undefined;
     return;
   }
   sceneRenderResources.cloudShadowCache = createCloudShadowCache(
-    cache.discoveryPipeline,
-    cache.fillPipeline,
-    sceneRenderResources.pipeline,
+    pipelines.discovery,
+    pipelines.fill,
+    pipelines.scene,
   );
+  retiredShadowCachePipelines = undefined;
   shadowCacheRecreateAfter = undefined;
-  retireShadowCache(cache);
   updateShadowCacheInfo(sceneRenderResources.cloudShadowCache);
 }
 
@@ -1984,7 +2014,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   syncWorldDateInputs();
 }
 
-function frame(now: number): void {
+function renderFrame(now: number): void {
   resize();
   applyScheduledShadowCacheRecreation(now);
   updateScaleBar();
@@ -2174,7 +2204,17 @@ function frame(now: number): void {
     });
   }
   updateStatus(now, ticks, cloudTimeSeconds);
-  requestAnimationFrame(frame);
+}
+
+function frame(now: number): void {
+  try {
+    renderFrame(now);
+  } catch (error) {
+    statusElement.textContent = "Rendering failed; retrying";
+    console.error(error);
+  } finally {
+    requestAnimationFrame(frame);
+  }
 }
 
 requestAnimationFrame(frame);

@@ -113,6 +113,30 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
     maximum_texture_dimension: u32,
     tile_texels: u32,
 ) -> CloudShadowCacheLayout {
+    try_cloud_shadow_cache_layout_for_tile_size(
+        viewport_width,
+        viewport_height,
+        maximum_texture_dimension,
+        tile_texels,
+    )
+    .expect("internal shadow-cache dimensions are valid")
+}
+
+pub fn try_cloud_shadow_cache_layout_for_tile_size(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+    tile_texels: u32,
+) -> Result<CloudShadowCacheLayout, &'static str> {
+    if viewport_width == 0 || viewport_height == 0 {
+        return Err("viewport dimensions must be positive");
+    }
+    let physical_tile_texels = tile_texels
+        .checked_add(2)
+        .ok_or("tile size exceeds supported arithmetic")?;
+    if tile_texels == 0 || physical_tile_texels > maximum_texture_dimension {
+        return Err("tile size exceeds the device texture limit");
+    }
     let viewport_pixels = u64::from(viewport_width)
         .saturating_mul(u64::from(viewport_height))
         .max(1);
@@ -120,7 +144,7 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
         (viewport_pixels as f64 / CLOUD_SHADOW_CACHE_REFERENCE_PIXELS as f64).sqrt();
     let atlas_byte_budget =
         (CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES as f64 * resolution_scale) as u64;
-    cloud_shadow_cache_layout_for_tile_size_and_budget(
+    try_cloud_shadow_cache_layout_for_tile_size_and_budget(
         viewport_width,
         viewport_height,
         maximum_texture_dimension,
@@ -135,29 +159,40 @@ pub fn cloud_shadow_cache_layout_with_budget(
     maximum_texture_dimension: u32,
     atlas_byte_budget: u64,
 ) -> CloudShadowCacheLayout {
-    cloud_shadow_cache_layout_for_tile_size_and_budget(
+    try_cloud_shadow_cache_layout_for_tile_size_and_budget(
         viewport_width,
         viewport_height,
         maximum_texture_dimension,
         CLOUD_SHADOW_CACHE_TILE_TEXELS,
         atlas_byte_budget,
     )
+    .expect("internal shadow-cache dimensions are valid")
 }
 
-fn cloud_shadow_cache_layout_for_tile_size_and_budget(
+fn try_cloud_shadow_cache_layout_for_tile_size_and_budget(
     viewport_width: u32,
     viewport_height: u32,
     maximum_texture_dimension: u32,
     tile_texels: u32,
     atlas_byte_budget: u64,
-) -> CloudShadowCacheLayout {
+) -> Result<CloudShadowCacheLayout, &'static str> {
     let screen_columns = viewport_width.div_ceil(tile_texels);
     let screen_rows = viewport_height.div_ceil(tile_texels);
     let screen_footprint_tiles = screen_columns
-        .saturating_add(1)
-        .saturating_mul(screen_rows.saturating_add(1));
-    let desired_tiles = 6u32.saturating_mul(screen_footprint_tiles).max(1);
-    let physical_tile_texels = tile_texels + 2;
+        .checked_add(1)
+        .and_then(|columns| {
+            screen_rows
+                .checked_add(1)
+                .and_then(|rows| columns.checked_mul(rows))
+        })
+        .ok_or("viewport tile count exceeds supported arithmetic")?;
+    let desired_tiles = 6u32
+        .checked_mul(screen_footprint_tiles)
+        .ok_or("viewport tile count exceeds supported arithmetic")?
+        .max(1);
+    let physical_tile_texels = tile_texels
+        .checked_add(2)
+        .ok_or("tile size exceeds supported arithmetic")?;
     let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
     let tile_bytes = u64::from(physical_tile_texels)
         .saturating_pow(2)
@@ -174,16 +209,22 @@ fn cloud_shadow_cache_layout_for_tile_size_and_budget(
     let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
     // Discovery retains eighteen cloud-disc and eight landform footprints, including
     // singletons that never consume atlas space.
-    let marker_tiles = 26u32.saturating_mul(screen_footprint_tiles).max(1);
-    let table_entries = marker_tiles.saturating_mul(2).next_power_of_two();
+    let marker_tiles = 26u32
+        .checked_mul(screen_footprint_tiles)
+        .ok_or("marker table exceeds supported arithmetic")?
+        .max(1);
+    let table_entries = marker_tiles
+        .checked_mul(2)
+        .and_then(u32::checked_next_power_of_two)
+        .ok_or("marker table exceeds supported arithmetic")?;
 
-    CloudShadowCacheLayout {
+    Ok(CloudShadowCacheLayout {
         atlas_width: atlas_columns * physical_tile_texels,
         atlas_height: atlas_rows * physical_tile_texels,
         atlas_columns,
         maximum_tiles,
         table_entries,
-    }
+    })
 }
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) const SCENE_SHADER: &str =
@@ -1528,6 +1569,14 @@ mod tests {
         let atlas_bytes = u64::from(layout.atlas_width) * u64::from(layout.atlas_height) * 4;
 
         assert!(atlas_bytes <= CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES);
+    }
+
+    #[test]
+    fn shadow_cache_layout_rejects_invalid_external_dimensions() {
+        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 128).is_ok());
+        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 0).is_err());
+        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, u32::MAX).is_err());
+        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 64, 128).is_err());
     }
 
     #[test]

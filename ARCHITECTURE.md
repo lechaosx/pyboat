@@ -472,8 +472,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   or 256-texel tiles without changing the world-space resolution of one texel.
   Its counters, tile metadata, and debug bindings are absent from the production
   scene shader. Cache recreation waits for interactive resizing to settle;
-  retired GPU resources are destroyed after submitted work and diagnostic
-  readback complete.
+  after submitted work and diagnostic readback complete, retired GPU resources
+  are destroyed before their replacement is allocated.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers

@@ -40,7 +40,7 @@ use crate::{
 };
 
 #[cfg(feature = "playground")]
-use crate::PLAYGROUND_STARTUP_SHADER;
+use crate::{PLAYGROUND_STARTUP_SHADER, try_cloud_shadow_cache_layout_for_tile_size};
 
 const INITIAL_VERTEX_CAPACITY: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
@@ -66,20 +66,21 @@ pub fn playground_shadow_cache_layout(
     viewport_height: u32,
     maximum_texture_dimension: u32,
     tile_texels: u32,
-) -> Vec<u32> {
-    let layout = crate::cloud_shadow_cache_layout_for_tile_size(
+) -> Result<Vec<u32>, JsValue> {
+    let layout = try_cloud_shadow_cache_layout_for_tile_size(
         viewport_width,
         viewport_height,
         maximum_texture_dimension,
         tile_texels,
-    );
-    vec![
+    )
+    .map_err(|error| JsValue::from_str(error))?;
+    Ok(vec![
         layout.atlas_width,
         layout.atlas_height,
         layout.atlas_columns,
         layout.maximum_tiles,
         layout.table_entries,
-    ]
+    ])
 }
 
 #[cfg(feature = "playground")]

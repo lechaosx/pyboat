@@ -704,9 +704,14 @@ fn parse_u32x4(value: &str, option: &str) -> Result<[u32; 4], String> {
         .split(',')
         .map(|value| parse(value, option))
         .collect::<Result<Vec<_>, _>>()?;
-    values
+    let values: [u32; 4] = values
         .try_into()
-        .map_err(|_| format!("{option} requires four comma-separated values"))
+        .map_err(|_| format!("{option} requires four comma-separated values"))?;
+    if values.iter().all(|value| *value <= 1) {
+        Ok(values)
+    } else {
+        Err(format!("{option} values must be zero or one"))
+    }
 }
 
 fn diagnostic(
@@ -801,6 +806,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             value,
             "lighting_cloud_shadow",
             &[("CLOUD_SHADOW_OUTPUT", 1.0)],
+        ),
+        "lighting_combined_transmittance" => diagnostic(
+            value,
+            "lighting_cloud_shadow",
+            &[("CLOUD_SHADOW_OUTPUT", 2.0)],
         ),
         "lighting_ambient_sky_occlusion" => diagnostic(
             value,
@@ -1036,6 +1046,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         }
         "temperature_gradient" => diagnostic(value, "temperature_gradient", &[]),
         "surface_air_temperature" => diagnostic(value, "surface_air_temperature", &[]),
+        "pressure_gradient" => diagnostic(value, "pressure_gradient", &[]),
         "pressure_broad_anomaly" => diagnostic(
             value,
             "pressure_anomaly",
@@ -1074,11 +1085,27 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "wind_upper" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 0.0)]),
         "wind_resolved_surface" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 1.0)]),
         "wind_broad_synoptic" => diagnostic(value, "wind_flow", &[("WIND_FLOW_OUTPUT", 2.0)]),
+        "wind_terrain_shelter" => diagnostic(value, "wind_terrain_shelter", &[]),
         "terrain_elevation" => diagnostic(
             value,
             "terrain_geometry",
             &[("TERRAIN_GEOMETRY_OUTPUT", 0.0)],
         ),
+        "terrain_slope" => diagnostic(
+            value,
+            "terrain_geometry",
+            &[("TERRAIN_GEOMETRY_OUTPUT", 1.0)],
+        ),
+        "terrain_normals" => diagnostic(
+            value,
+            "terrain_geometry",
+            &[("TERRAIN_GEOMETRY_OUTPUT", 2.0)],
+        ),
+        "terrain_island_clusters" => diagnostic(value, "terrain_island_clusters", &[]),
+        "terrain_island_detail" => diagnostic(value, "terrain_island_detail", &[]),
+        "terrain_coastal_reef" => diagnostic(value, "terrain_coastal_reef", &[]),
+        "material_vegetation" => diagnostic(value, "material_vegetation", &[]),
+        "material_coastal_character" => diagnostic(value, "material_coastal_character", &[]),
         "climate_solid_ice" => {
             diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 0.0)])
         }
@@ -1091,8 +1118,24 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "climate_composition" => {
             diagnostic(value, "climate_surface", &[("CLIMATE_SURFACE_OUTPUT", 3.0)])
         }
+        "climate_annual_temperature" => diagnostic(value, "climate_annual_temperature", &[]),
+        "climate_spatial_ice" => diagnostic(value, "climate_spatial_ice", &[]),
         "water_tide_height" => diagnostic(value, "water_tide_height", &[]),
+        "water_ocean_current" => diagnostic(
+            value,
+            "water_ocean_forcing",
+            &[("OCEAN_FORCING_OUTPUT", 0.0)],
+        ),
+        "water_significant_wave_height" => diagnostic(
+            value,
+            "water_ocean_forcing",
+            &[("OCEAN_FORCING_OUTPUT", 1.0)],
+        ),
+        "water_visual_normals" => diagnostic(value, "water_visual_normals", &[]),
         "water_physical_wave_normals" => diagnostic(value, "water_physical_wave_normals", &[]),
+        "water_precipitation_contact_normals" => {
+            diagnostic(value, "water_precipitation_contact_normals", &[])
+        }
         _ => return Err(format!("unknown diagnostic: {value}")),
     };
     Ok(selection)
@@ -1200,8 +1243,9 @@ fn validate_capture_dimensions(
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_diagnostic, parse_f32x4, split_tick_seconds, validate_capture_dimensions,
-        validate_capture_output_path, validate_capture_spatial_inputs, validate_time_seconds,
+        parse_diagnostic, parse_f32x4, parse_u32x4, split_tick_seconds,
+        validate_capture_dimensions, validate_capture_output_path, validate_capture_spatial_inputs,
+        validate_time_seconds,
     };
 
     #[test]
@@ -1209,8 +1253,37 @@ mod tests {
         let pressure = parse_diagnostic("pressure_full_anomaly").unwrap();
         assert_eq!(pressure.module, Some("pressure_anomaly"));
         assert_eq!(pressure.constants, &[("PRESSURE_ANOMALY_OUTPUT", 1.0)]);
+        for diagnostic in [
+            "lighting_combined_transmittance",
+            "pressure_gradient",
+            "wind_terrain_shelter",
+            "terrain_slope",
+            "terrain_normals",
+            "terrain_island_clusters",
+            "terrain_island_detail",
+            "terrain_coastal_reef",
+            "material_vegetation",
+            "material_coastal_character",
+            "climate_annual_temperature",
+            "climate_spatial_ice",
+            "water_ocean_current",
+            "water_visual_normals",
+            "water_significant_wave_height",
+            "water_precipitation_contact_normals",
+        ] {
+            assert!(parse_diagnostic(diagnostic).is_ok(), "{diagnostic}");
+        }
         assert!(parse_diagnostic("cloud_low_amount").is_err());
         assert!(parse_diagnostic("59").is_err());
+    }
+
+    #[test]
+    fn capture_visibility_switches_are_binary() {
+        assert_eq!(
+            parse_u32x4("1,0,1,0", "--light-contributions").unwrap(),
+            [1, 0, 1, 0]
+        );
+        assert!(parse_u32x4("2,0,0,0", "--light-contributions").is_err());
     }
 
     #[test]
