@@ -29,8 +29,8 @@ use wgpu::CurrentSurfaceTexture;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MAX_SERVER_MESSAGE_BYTES,
-    MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
+    BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheResizeSettle, DEFAULT_VIEW_HEIGHT_M,
+    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
     append_reliable_server_message_chunk, bounded_canvas_dimensions, cloud_shadow_cache_layout,
     disconnect_and_clear_pending_snapshot, periodic_effect_time_interpolated,
     queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
@@ -577,6 +577,88 @@ impl CloudShadowCacheResources {
     }
 }
 
+struct CloudShadowCacheFallback {
+    _uniform_buffer: wgpu::Buffer,
+    _entries: wgpu::Buffer,
+    _atlas: wgpu::Texture,
+    _sampler: wgpu::Sampler,
+    bind_group: wgpu::BindGroup,
+}
+
+impl CloudShadowCacheFallback {
+    fn new(device: &wgpu::Device, sample_layout: &wgpu::BindGroupLayout) -> Self {
+        let uniforms = CloudShadowCacheUniforms {
+            viewport_size_px: [1, 1],
+            atlas_size_px: [1, 1],
+            table_mask: 0,
+            maximum_tiles: 0,
+            atlas_columns: 1,
+            tile_texels: crate::CLOUD_SHADOW_CACHE_TILE_TEXELS,
+            padding: [0; 4],
+        };
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Empty cloud shadow cache uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let entries = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Empty cloud shadow cache page table"),
+            contents: bytemuck::cast_slice(&[0u32; 2]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Empty cloud shadow cache atlas"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Empty cloud shadow cache sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Empty cloud shadow cache sampling bind group"),
+            layout: sample_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: entries.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        Self {
+            _uniform_buffer: uniform_buffer,
+            _entries: entries,
+            _atlas: atlas,
+            _sampler: sampler,
+            bind_group,
+        }
+    }
+}
+
 struct CloudShadowCache {
     sample_layout: wgpu::BindGroupLayout,
     discovery_layout: wgpu::BindGroupLayout,
@@ -985,6 +1067,8 @@ struct Renderer {
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     cloud_shadow_cache: CloudShadowCache,
+    cloud_shadow_cache_fallback: CloudShadowCacheFallback,
+    cloud_shadow_cache_resize_settle: CloudShadowCacheResizeSettle,
     cloud_motion: ViewCloudMotion,
 }
 
@@ -1101,6 +1185,8 @@ impl Renderer {
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+        let cloud_shadow_cache_fallback =
+            CloudShadowCacheFallback::new(&device, &cloud_shadow_cache.sample_layout);
 
         Ok(Self {
             canvas,
@@ -1113,7 +1199,9 @@ impl Renderer {
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
             uniform_buffer,
             bind_group,
+            cloud_shadow_cache_fallback,
             cloud_shadow_cache,
+            cloud_shadow_cache_resize_settle: CloudShadowCacheResizeSettle::default(),
             cloud_motion: ViewCloudMotion::default(),
         })
     }
@@ -1128,7 +1216,22 @@ impl Renderer {
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
-        self.resize();
+        let resized = self.resize();
+        if resized {
+            self.cloud_shadow_cache_resize_settle.note_resize();
+        }
+        let use_shadow_cache = if resized {
+            false
+        } else if self
+            .cloud_shadow_cache_resize_settle
+            .advance(elapsed_seconds)
+        {
+            self.cloud_shadow_cache
+                .resize(&self.device, self.config.width, self.config.height);
+            true
+        } else {
+            !self.cloud_shadow_cache_resize_settle.is_pending()
+        };
         let vertices = scene_vertices(
             scenes,
             match_seed.is_some(),
@@ -1285,12 +1388,14 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Frame encoder"),
             });
-        self.cloud_shadow_cache.encode(
-            &mut encoder,
-            &self.bind_group,
-            self.config.width,
-            self.config.height,
-        );
+        if use_shadow_cache {
+            self.cloud_shadow_cache.encode(
+                &mut encoder,
+                &self.bind_group,
+                self.config.width,
+                self.config.height,
+            );
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene pass"),
@@ -1315,7 +1420,11 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_bind_group(2, &self.cloud_shadow_cache.resources.sample_bind_group, &[]);
+            if use_shadow_cache {
+                pass.set_bind_group(2, &self.cloud_shadow_cache.resources.sample_bind_group, &[]);
+            } else {
+                pass.set_bind_group(2, &self.cloud_shadow_cache_fallback.bind_group, &[]);
+            }
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -1324,18 +1433,18 @@ impl Renderer {
         Ok(())
     }
 
-    fn resize(&mut self) {
+    fn resize(&mut self) -> bool {
         let (width, height) =
             canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
         if self.config.width == width && self.config.height == height {
-            return;
+            return false;
         }
         self.canvas.set_width(width);
         self.canvas.set_height(height);
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.cloud_shadow_cache.resize(&self.device, width, height);
+        true
     }
 
     fn aspect_ratio(&self) -> f32 {

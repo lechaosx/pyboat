@@ -300,6 +300,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   the square root of backing-pixel count; the device texture-dimension limit is
   the final bound. WebGPU exposes structural limits but no usable-memory budget,
   so tiles beyond the resolution-derived budget use the exact direct fallback.
+- **[Explicit]** Interactive surface resize takes effect immediately and uses the
+  direct shadow path until backing dimensions have remained unchanged for 100
+  milliseconds. The renderer then creates one cache for the settled size and
+  explicitly destroys the retired allocation.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -645,6 +649,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   derived-condition summary to a distinct `.json` sidecar from those same
   fractional render clocks. The reserved `.json` output extension is rejected. A
   fresh one-frame capture has zero renderer-local cloud displacement.
+- **[Implicit]** Headless output is limited to 16,777,216 pixels and cached
+  captures use a fixed 64 MiB shadow atlas. Capture dimensions express requested
+  output, not device memory capability; per-axis WebGPU limits remain additional
+  bounds.
 - **[Explicit]** Capture requires a hardware Vulkan GPU and has no
   software-rendering path.
 

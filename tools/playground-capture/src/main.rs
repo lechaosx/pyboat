@@ -11,6 +11,9 @@ use serde::Serialize;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use wgpu::util::DeviceExt;
 
+const MAXIMUM_CAPTURE_PIXELS: u64 = 4096 * 4096;
+const CAPTURE_SHADOW_CACHE_ATLAS_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq)]
 struct ShaderSelection {
     id: String,
@@ -295,10 +298,11 @@ impl CaptureCloudShadowCache {
             multiview_mask: None,
             cache: None,
         });
-        let layout = browser::cloud_shadow_cache_layout(
+        let layout = browser::cloud_shadow_cache_layout_with_budget(
             viewport_width,
             viewport_height,
             device.limits().max_texture_dimension_2d,
+            CAPTURE_SHADOW_CACHE_ATLAS_BYTES,
         );
         let uniforms = CloudShadowCacheUniforms {
             viewport_size_px: [viewport_width, viewport_height],
@@ -1099,7 +1103,7 @@ fn print_help() {
         "playground-capture [options]\n\n\
          Options:\n\
            --output PATH          image path; .json is reserved for the sidecar (default playground-capture.png)\n\
-           --width N --height N   positive GPU-supported output dimensions (default 960x600)\n\
+           --width N --height N   positive output dimensions, at most 16.8 megapixels (default 960x600)\n\
            --camera-x M --camera-y M  finite world-space camera centre\n\
            --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
            --view-height METRES   positive finite vertical world span (default 480)\n\
@@ -1175,6 +1179,9 @@ fn validate_capture_dimensions(
             "capture dimensions exceed the device limit of {maximum_texture_dimension} pixels",
         ));
     }
+    if u64::from(width) * u64::from(height) > MAXIMUM_CAPTURE_PIXELS {
+        return Err("capture dimensions exceed the 16,777,216-pixel resource budget".to_owned());
+    }
     let bytes_per_row = width
         .checked_mul(4)
         .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
@@ -1229,7 +1236,9 @@ mod tests {
 
     #[test]
     fn capture_dimensions_must_fit_the_device_and_readback_arithmetic() {
-        assert!(validate_capture_dimensions(8_192, 8_192, 8_192).is_ok());
+        assert!(validate_capture_dimensions(4_096, 4_096, 8_192).is_ok());
+        assert!(validate_capture_dimensions(4_097, 4_096, 8_192).is_err());
+        assert!(validate_capture_dimensions(8_192, 8_192, 8_192).is_err());
         assert!(validate_capture_dimensions(8_193, 1, 8_192).is_err());
         assert!(validate_capture_dimensions(u32::MAX, u32::MAX, u32::MAX).is_err());
     }
@@ -1715,10 +1724,11 @@ fn discover_cloud_shadow_cache_tiles(
     viewport_height: u32,
     test_entry_point: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let layout = browser::cloud_shadow_cache_layout(
+    let layout = browser::cloud_shadow_cache_layout_with_budget(
         viewport_width,
         viewport_height,
         device.limits().max_texture_dimension_2d,
+        CAPTURE_SHADOW_CACHE_ATLAS_BYTES,
     );
     let cache_uniforms = CloudShadowCacheUniforms {
         viewport_size_px: [viewport_width, viewport_height],

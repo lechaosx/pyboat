@@ -113,6 +113,44 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
     maximum_texture_dimension: u32,
     tile_texels: u32,
 ) -> CloudShadowCacheLayout {
+    let viewport_pixels = u64::from(viewport_width)
+        .saturating_mul(u64::from(viewport_height))
+        .max(1);
+    let resolution_scale =
+        (viewport_pixels as f64 / CLOUD_SHADOW_CACHE_REFERENCE_PIXELS as f64).sqrt();
+    let atlas_byte_budget =
+        (CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES as f64 * resolution_scale) as u64;
+    cloud_shadow_cache_layout_for_tile_size_and_budget(
+        viewport_width,
+        viewport_height,
+        maximum_texture_dimension,
+        tile_texels,
+        atlas_byte_budget,
+    )
+}
+
+pub fn cloud_shadow_cache_layout_with_budget(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+    atlas_byte_budget: u64,
+) -> CloudShadowCacheLayout {
+    cloud_shadow_cache_layout_for_tile_size_and_budget(
+        viewport_width,
+        viewport_height,
+        maximum_texture_dimension,
+        CLOUD_SHADOW_CACHE_TILE_TEXELS,
+        atlas_byte_budget,
+    )
+}
+
+fn cloud_shadow_cache_layout_for_tile_size_and_budget(
+    viewport_width: u32,
+    viewport_height: u32,
+    maximum_texture_dimension: u32,
+    tile_texels: u32,
+    atlas_byte_budget: u64,
+) -> CloudShadowCacheLayout {
     let screen_columns = viewport_width.div_ceil(tile_texels);
     let screen_rows = viewport_height.div_ceil(tile_texels);
     let screen_footprint_tiles = screen_columns
@@ -124,13 +162,6 @@ pub fn cloud_shadow_cache_layout_for_tile_size(
     let tile_bytes = u64::from(physical_tile_texels)
         .saturating_pow(2)
         .saturating_mul(CLOUD_SHADOW_CACHE_ATLAS_BYTES_PER_TEXEL);
-    let viewport_pixels = u64::from(viewport_width)
-        .saturating_mul(u64::from(viewport_height))
-        .max(1);
-    let resolution_scale =
-        (viewport_pixels as f64 / CLOUD_SHADOW_CACHE_REFERENCE_PIXELS as f64).sqrt();
-    let atlas_byte_budget =
-        (CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES as f64 * resolution_scale) as u64;
     let memory_limited_tiles =
         (atlas_byte_budget / tile_bytes).clamp(1, u64::from(u32::MAX)) as u32;
     let mut maximum_tiles = desired_tiles
@@ -206,9 +237,40 @@ pub fn playground_diagnostic_shader_source(name: &str) -> Option<&'static str> {
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 const MAXIMUM_PREDICTION_SECONDS: f64 = 0.25;
+#[cfg(any(target_arch = "wasm32", test))]
+const CLOUD_SHADOW_CACHE_RESIZE_SETTLE_SECONDS: f64 = 0.1;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+pub(crate) struct CloudShadowCacheResizeSettle {
+    remaining_seconds: Option<f64>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl CloudShadowCacheResizeSettle {
+    pub(crate) fn note_resize(&mut self) {
+        self.remaining_seconds = Some(CLOUD_SHADOW_CACHE_RESIZE_SETTLE_SECONDS);
+    }
+
+    pub(crate) fn advance(&mut self, elapsed_seconds: f64) -> bool {
+        let Some(remaining_seconds) = &mut self.remaining_seconds else {
+            return false;
+        };
+        *remaining_seconds -= elapsed_seconds.max(0.0);
+        if *remaining_seconds > 0.0 {
+            return false;
+        }
+        self.remaining_seconds = None;
+        true
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        self.remaining_seconds.is_some()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldGeometrySample {
@@ -1453,6 +1515,31 @@ mod tests {
         assert!(ultra_hd.maximum_tiles >= 2 * full_hd.maximum_tiles);
         assert!(ultra_hd_bytes > full_hd_bytes);
         assert!(ultra_hd_bytes <= 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn explicit_shadow_cache_budget_bounds_offscreen_rendering() {
+        let layout = cloud_shadow_cache_layout_with_budget(
+            4096,
+            4096,
+            8192,
+            CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES,
+        );
+        let atlas_bytes = u64::from(layout.atlas_width) * u64::from(layout.atlas_height) * 4;
+
+        assert!(atlas_bytes <= CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES);
+    }
+
+    #[test]
+    fn production_cache_resize_waits_for_a_stable_viewport() {
+        let mut settle = CloudShadowCacheResizeSettle::default();
+
+        settle.note_resize();
+        assert!(!settle.advance(0.06));
+        settle.note_resize();
+        assert!(!settle.advance(0.06));
+        assert!(settle.advance(0.05));
+        assert!(!settle.is_pending());
     }
 
     #[test]
