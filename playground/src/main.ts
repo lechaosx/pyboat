@@ -24,7 +24,7 @@ import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
 import {
-  advanceWorldTimeSeconds,
+  advanceProceduralTimeSeconds,
   maximumWorldYear,
   worldDateTimeSeconds,
   worldDaySeconds,
@@ -2039,21 +2039,37 @@ function renderFrame(now: number): void {
   previous = now;
   const ticks = advanceFixedClock(clock, elapsed, (elapsedTicks) => {
     const elapsedFixedSeconds = elapsedTicks * fixedTickSeconds;
-    state.time += elapsedFixedSeconds * state.cloudTimeScale;
-    state.pressureTimeSeconds += elapsedFixedSeconds * state.pressureTimeScale;
-    state.currentTimeSeconds += elapsedFixedSeconds * state.currentTimeScale;
-    state.worldTimeSeconds = advanceWorldTimeSeconds(
+    state.time = advanceProceduralTimeSeconds(
+      state.time,
+      elapsedFixedSeconds * state.cloudTimeScale,
+    );
+    state.pressureTimeSeconds = advanceProceduralTimeSeconds(
+      state.pressureTimeSeconds,
+      elapsedFixedSeconds * state.pressureTimeScale,
+    );
+    state.currentTimeSeconds = advanceProceduralTimeSeconds(
+      state.currentTimeSeconds,
+      elapsedFixedSeconds * state.currentTimeScale,
+    );
+    state.worldTimeSeconds = advanceProceduralTimeSeconds(
       state.worldTimeSeconds,
       elapsedFixedSeconds * state.worldTimeScale,
     );
   });
   const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
-  const cloudTimeSeconds = state.time + renderFractionSeconds * state.cloudTimeScale;
-  const pressureTimeSeconds = state.pressureTimeSeconds
-    + renderFractionSeconds * state.pressureTimeScale;
-  const currentTimeSeconds = state.currentTimeSeconds
-    + renderFractionSeconds * state.currentTimeScale;
-  const worldTimeSeconds = advanceWorldTimeSeconds(
+  const cloudTimeSeconds = advanceProceduralTimeSeconds(
+    state.time,
+    renderFractionSeconds * state.cloudTimeScale,
+  );
+  const pressureTimeSeconds = advanceProceduralTimeSeconds(
+    state.pressureTimeSeconds,
+    renderFractionSeconds * state.pressureTimeScale,
+  );
+  const currentTimeSeconds = advanceProceduralTimeSeconds(
+    state.currentTimeSeconds,
+    renderFractionSeconds * state.currentTimeScale,
+  );
+  const worldTimeSeconds = advanceProceduralTimeSeconds(
     state.worldTimeSeconds,
     renderFractionSeconds * state.worldTimeScale,
   );

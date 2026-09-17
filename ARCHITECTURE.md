@@ -402,10 +402,10 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   slower than the tick rate. Faster rendering uses fractional progress toward
   the next tick.
 - **[Implicit]** Playground and headless-capture clocks retain at least 256
-  representable double-precision values per fixed tick. The playground reserves
-  an equal range beyond its maximum selectable world date for subsequent
-  playback and clamps at that precision-derived terminal time; capture rejects
-  time inputs at or beyond the terminal range.
+  representable double-precision values per fixed tick. Every independently
+  advancing playground procedural clock and its calendar controls share the same
+  precision-derived terminal time; capture rejects time inputs at or beyond that
+  range.
 - **[Explicit]** Production and playground backing canvases preserve their CSS
   aspect ratio and uniformly reduce pixel resolution when either dimension would
   exceed the WebGPU device's texture limit.
@@ -648,7 +648,8 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   work may suspend.
 - **[Implicit]** Production stops its animation-frame loop after WebGPU device
   loss or a nonrecoverable validation, memory, or internal device error.
-  Transient surface states remain recoverable inside the renderer.
+  It closes the multiplayer transport and clears queued network state before
+  stopping; transient surface states remain recoverable inside the renderer.
 - **[Explicit]** Visual procedural-world work uses the interactive playground and
   deterministic headless capture rather than a separate native showcase or a
   checked-in image collection.

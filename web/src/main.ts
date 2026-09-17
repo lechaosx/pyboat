@@ -132,6 +132,7 @@ try {
     } catch (error) {
       console.error(error);
       if (!game.renderer_is_available()) {
+        game.shutdown();
         statusElement.textContent = "Rendering stopped; reload to reconnect to the GPU";
         return;
       }

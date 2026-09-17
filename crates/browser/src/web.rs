@@ -1601,6 +1601,19 @@ impl BrowserGame {
         self.renderer.is_available()
     }
 
+    pub fn shutdown(&mut self) {
+        self.connection_status.set(ConnectionStatus::Closed);
+        self.pending_datagrams.borrow_mut().clear();
+        self.pending_viewport.borrow_mut().take();
+        disconnect_and_clear_pending_snapshot(
+            &mut self.client.borrow_mut(),
+            &mut self.pending_snapshot.borrow_mut(),
+        );
+        if let Some(session) = self.transport.borrow_mut().take() {
+            session.close(0, "Client shutdown");
+        }
+    }
+
     pub fn zoom(&mut self, wheel_delta_y: f32) {
         self.view_height_m = zoom_view_height_m(self.view_height_m, wheel_delta_y);
     }
@@ -1737,12 +1750,18 @@ fn connect_webtransport(
         let session = match webtransport_client.connect(url).await {
             Ok(session) => session,
             Err(error) => {
-                protocol_client.borrow_mut().disconnect();
-                close_notice.replace(Some(error.to_string()));
-                connection_status.set(ConnectionStatus::Error);
+                if connection_status.get() == ConnectionStatus::Connecting {
+                    protocol_client.borrow_mut().disconnect();
+                    close_notice.replace(Some(error.to_string()));
+                    connection_status.set(ConnectionStatus::Error);
+                }
                 return;
             }
         };
+        if connection_status.get() != ConnectionStatus::Connecting {
+            session.close(0, "Client shutdown");
+            return;
+        }
         transport.replace(Some(session.clone()));
         connection_status.set(ConnectionStatus::Open);
         receive_datagrams(
@@ -1922,6 +1941,9 @@ fn fail_protocol(
     connection_status: &Rc<Cell<ConnectionStatus>>,
     transport: &Rc<RefCell<Option<Session>>>,
 ) {
+    if connection_status.get() != ConnectionStatus::Open {
+        return;
+    }
     disconnect_and_clear_pending_snapshot(
         &mut protocol_client.borrow_mut(),
         &mut pending_snapshot.borrow_mut(),
@@ -1995,6 +2017,7 @@ fn pump_reliable(
     sending.set(true);
     let pending = Rc::clone(pending);
     let sending = Rc::clone(sending);
+    let transport = Rc::clone(transport);
     spawn_local(async move {
         loop {
             let Some(message) = pending.borrow_mut().take() else {
@@ -2008,7 +2031,9 @@ fn pump_reliable(
             }
             .await;
             if !matches!(result, Ok(None)) {
-                requeue_failed_viewport(&mut pending.borrow_mut(), message);
+                if transport.borrow().is_some() {
+                    requeue_failed_viewport(&mut pending.borrow_mut(), message);
+                }
                 break;
             }
         }
