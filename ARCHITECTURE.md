@@ -220,13 +220,15 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 - **[Explicit]** The host reduces the full integer tick plus fractional render
   progress into bounded scalar-weather, pressure, and current noise-time
   coordinates before upload. Simulation state advances only on integer ticks;
-  faster rendering presents the interval toward the next tick without WGSL
-  converting total time to `f32` or interpolating temporal snapshots. A seeded
-  phase on each field and octave prevents unrelated spectra from changing in
-  lockstep. Host-integrated cloud transport is renderer-local displacement: each
-  presented frame adds the current view-centre wind multiplied by that frame's
-  elapsed duration. The displacement persists across prediction reconciliation,
-  procedural-clock changes, and world-configuration changes.
+  render clocks convert seconds at exactly 60 ticks per second rather than using
+  the rounded `f32` physics step. Faster rendering presents the interval toward
+  the next tick without WGSL converting total time to `f32` or interpolating
+  temporal snapshots. A seeded phase on each field and octave prevents unrelated
+  spectra from changing in lockstep. Host-integrated cloud transport is
+  renderer-local displacement: each presented frame adds the current view-centre
+  wind multiplied by that frame's elapsed duration. The displacement persists
+  across prediction reconciliation, procedural-clock changes, and
+  world-configuration changes.
 - **[Explicit]** Cloud-transport displacement accumulates in host `f64` and is
   uploaded to WGSL as absolute `f32` metres. Increasing spatial quantization
   after very long uninterrupted transport is an accepted rendering limit.
@@ -389,6 +391,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   only the newest state, skipping intermediate presentations when rendering is
   slower than the tick rate. Faster rendering uses fractional progress toward
   the next tick.
+- **[Explicit]** Production and playground backing canvases preserve their CSS
+  aspect ratio and uniformly reduce pixel resolution when either dimension would
+  exceed the WebGPU device's texture limit.
 - **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
   seeded elevation at each pixel and zoom level; physics samples depth only where
   boats require it.
@@ -629,8 +634,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   checked-in image collection.
 - **[Explicit]** Headless capture renders one deterministic procedural world from
   explicit seed, geometry, camera, cloud-time, and world-time inputs and writes a
-  derived-condition summary from those same fractional render clocks beside it.
-  A fresh one-frame capture has zero renderer-local cloud displacement.
+  derived-condition summary to a distinct `.json` sidecar from those same
+  fractional render clocks. The reserved `.json` output extension is rejected. A
+  fresh one-frame capture has zero renderer-local cloud displacement.
 - **[Explicit]** Capture requires a hardware Vulkan GPU and has no
   software-rendering path.
 

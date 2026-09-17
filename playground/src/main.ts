@@ -17,10 +17,12 @@ import {
   advanceFixedClock,
   fixedClockFraction,
   fixedTickSeconds,
+  fixedTicksPerSecond,
   type FixedClock,
 } from "./fixed-clock";
 import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
+import { boundedCanvasDimensions } from "./canvas-dimensions";
 import {
   diagnosticGroups,
   diagnosticShaders,
@@ -1583,7 +1585,7 @@ function updateViewCenterDiagnostics(
 }
 
 function splitTick(timeSeconds: number): [bigint, number] {
-  const tickPosition = Math.max(0, timeSeconds * 60);
+  const tickPosition = Math.max(0, timeSeconds * fixedTicksPerSecond);
   const wholeTick = Math.floor(tickPosition);
   return [BigInt(wholeTick), tickPosition - wholeTick];
 }
@@ -1843,8 +1845,12 @@ function writeUniforms(
 
 function resize(): void {
   const scale = Math.min(devicePixelRatio, 2);
-  const width = Math.max(1, Math.floor(previewCanvas.clientWidth * scale));
-  const height = Math.max(1, Math.floor(previewCanvas.clientHeight * scale));
+  const [width, height] = boundedCanvasDimensions(
+    previewCanvas.clientWidth,
+    previewCanvas.clientHeight,
+    scale,
+    device.limits.maxTextureDimension2D,
+  );
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;

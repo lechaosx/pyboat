@@ -1,5 +1,6 @@
 use std::f32::consts::PI;
 
+use rapier2d::prelude::{RigidBody, Rotation, Vector};
 use simulation::{
     ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
     DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
@@ -8,7 +9,6 @@ use simulation::{
     surface_control_input, surface_target_control_torques, target_control_torques,
     yaw_rate_move_control,
 };
-use rapier2d::prelude::{RigidBody, Rotation, Vector};
 
 fn reference_parameters() -> BoatParameters {
     BoatParameters {

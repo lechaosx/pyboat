@@ -3,11 +3,12 @@
 
 use rapier2d::prelude::Vector;
 use simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
-    MotionIntent, WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input,
+    ActuatorTorques, BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent,
+    TICKS_PER_SECOND, WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input,
     surface_target_control_torques, yaw_rate_move_control,
 };
 
+const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 const WIND_WEIBULL_SCALE_M_S: f64 = 9.0;
 // These gains fit the accepted k=2, lambda=9 m/s wind distribution; they are
 // gameplay calibration, not pressure amplitudes transferred from Earth data.
@@ -502,9 +503,9 @@ pub fn celestial_lighting_at_height(
         smoothstep_range(-0.156_434_5, 0.017_452_4, f64::from(moon_direction[2])) as f32;
     let lunar_upper_afterglow =
         smoothstep_range(-0.309_017, -0.139_173_1, f64::from(moon_direction[2])) as f32
-        * (1.0
-            - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(moon_direction[2]))
-                as f32);
+            * (1.0
+                - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(moon_direction[2]))
+                    as f32);
     let lunar_ambient = lunar_daylight * (0.45 + 0.515 * moon_elevation)
         + 0.30 * (1.0 - lunar_daylight) * lunar_lower_twilight
         + 0.065 * lunar_upper_afterglow;
@@ -1158,8 +1159,7 @@ pub fn procedural_world_environment_for_render_clocks(
     current_tick_fraction: f32,
     position_m: Vector,
 ) -> WorldEnvironment {
-    let world_time_seconds =
-        (world_tick as f64 + f64::from(world_tick_fraction)) * f64::from(DT_SECONDS);
+    let world_time_seconds = (world_tick as f64 + f64::from(world_tick_fraction)) * TICK_SECONDS;
     let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
     let scalar_time = scalar_field_time_coordinates_interpolated(scalar_tick, scalar_tick_fraction);
@@ -1507,8 +1507,8 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         let angular_frequency = libm::sqrt(GRAVITY_M_S2 * wave_number);
         let phase = wave_number_x * f64::from(query.position_m.x).rem_euclid(width_m)
             + wave_number_y * f64::from(query.position_m.y)
-            - tick_phase_radians(query.world_tick, angular_frequency * f64::from(DT_SECONDS))
-            - f64::from(query.world_tick_fraction) * angular_frequency * f64::from(DT_SECONDS)
+            - tick_phase_radians(query.world_tick, angular_frequency * TICK_SECONDS)
+            - f64::from(query.world_tick_fraction) * angular_frequency * TICK_SECONDS
             + std::f64::consts::TAU * hash_unit(mode_key ^ 0xbf58_476d_1ce4_e5b9);
         *mode = (
             actual_direction_x,
@@ -1600,11 +1600,8 @@ pub fn procedural_weather(
     tick: u64,
     position_m: Vector,
 ) -> ProceduralWeather {
-    let celestial = world_celestial_conditions(
-        world_geometry,
-        tick as f64 * f64::from(DT_SECONDS),
-        position_m,
-    );
+    let celestial =
+        world_celestial_conditions(world_geometry, tick as f64 * TICK_SECONDS, position_m);
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
     let scalar_time = scalar_field_time_coordinates(tick);
     let vector_time = vector_field_time_coordinates(world_geometry, tick);
@@ -1629,11 +1626,8 @@ pub fn procedural_atmosphere_primary(
     tick: u64,
     position_m: Vector,
 ) -> AtmospherePrimary {
-    let celestial = world_celestial_conditions(
-        world_geometry,
-        tick as f64 * f64::from(DT_SECONDS),
-        position_m,
-    );
+    let celestial =
+        world_celestial_conditions(world_geometry, tick as f64 * TICK_SECONDS, position_m);
     let scalar_time = scalar_field_time_coordinates(tick);
     let vector_time = vector_field_time_coordinates(world_geometry, tick);
     procedural_atmosphere_primary_with_conditions(
@@ -2991,7 +2985,7 @@ fn noise_time_coordinate_interpolated(
 ) -> f32 {
     const TIME_COORDINATE_PERIOD: f64 = 8192.0;
     let coordinate_per_tick =
-        f64::from(DT_SECONDS) * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
+        TICK_SECONDS * f64::from(evolution_speed_m_s) / f64::from(wavelength_m);
     let mut coordinate = 0.0;
     // Horner reduction incorporates the full tick without first rounding the
     // absolute clock to floating point.
@@ -3157,6 +3151,22 @@ mod tests {
             procedural_world_environment_for_render_clocks(
                 world, 42, tick, 0.0, tick, 0.0, tick, 0.0, tick, 0.0, position,
             ),
+        );
+    }
+
+    #[test]
+    fn render_clock_uses_exact_sixtieths_after_one_year() {
+        let world = WorldGeometry::default();
+        let position = Vector::new(123.0, -456.0);
+        let seconds = 365_u64 * 86_400;
+        let tick = seconds * 60;
+        let rendered = procedural_world_environment_for_render_clocks(
+            world, 42, tick, 0.0, tick, 0.0, tick, 0.0, tick, 0.0, position,
+        );
+
+        assert_eq!(
+            rendered.celestial,
+            world_celestial_conditions(world, seconds as f64, position),
         );
     }
 

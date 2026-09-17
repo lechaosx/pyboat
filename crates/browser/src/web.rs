@@ -19,7 +19,7 @@ use game::{
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d::prelude::Vector;
-use simulation::WorldGeometry;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use url::Url;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -31,7 +31,7 @@ use wgpu::util::DeviceExt;
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, DEFAULT_VIEW_HEIGHT_M, MAX_SERVER_MESSAGE_BYTES,
     MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
-    append_reliable_server_message_chunk, cloud_shadow_cache_layout,
+    append_reliable_server_message_chunk, bounded_canvas_dimensions, cloud_shadow_cache_layout,
     disconnect_and_clear_pending_snapshot, periodic_effect_time_interpolated,
     queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
     sample_world_geometry, scale_bar, seasonal_phase_factors, view_width_m,
@@ -980,10 +980,6 @@ struct Renderer {
 
 impl Renderer {
     async fn new(canvas: HtmlCanvasElement) -> Result<Self, JsValue> {
-        let (width, height) = canvas_dimensions(&canvas);
-        canvas.set_width(width);
-        canvas.set_height(height);
-
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -1008,6 +1004,9 @@ impl Renderer {
             })
             .await
             .map_err(js_error)?;
+        let (width, height) = canvas_dimensions(&canvas, device.limits().max_texture_dimension_2d);
+        canvas.set_width(width);
+        canvas.set_height(height);
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| JsValue::from_str("WebGPU surface has no supported configuration"))?;
@@ -1147,7 +1146,7 @@ impl Renderer {
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let celestial = world_celestial_conditions(
             world_geometry,
-            tick as f64 / 60.0 + f64::from(tick_fraction) / 60.0,
+            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
             Vector::ZERO,
         );
         let orbit = celestial_orbit(celestial);
@@ -1316,7 +1315,8 @@ impl Renderer {
     }
 
     fn resize(&mut self) {
-        let (width, height) = canvas_dimensions(&self.canvas);
+        let (width, height) =
+            canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
         if self.config.width == width && self.config.height == height {
             return;
         }
@@ -1329,7 +1329,8 @@ impl Renderer {
     }
 
     fn aspect_ratio(&self) -> f32 {
-        let (width, height) = canvas_dimensions(&self.canvas);
+        let (width, height) =
+            canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
         width as f32 / height as f32
     }
 }
@@ -1898,13 +1899,16 @@ fn server_url() -> Result<String, JsValue> {
         .map_err(|error| JsValue::from_str(&error))
 }
 
-fn canvas_dimensions(canvas: &HtmlCanvasElement) -> (u32, u32) {
+fn canvas_dimensions(canvas: &HtmlCanvasElement, maximum_dimension: u32) -> (u32, u32) {
     let scale = web_sys::window()
         .map(|window| window.device_pixel_ratio())
         .unwrap_or(1.0);
-    let width = (f64::from(canvas.client_width()) * scale).round() as u32;
-    let height = (f64::from(canvas.client_height()) * scale).round() as u32;
-    (width.max(1), height.max(1))
+    bounded_canvas_dimensions(
+        canvas.client_width(),
+        canvas.client_height(),
+        scale,
+        maximum_dimension,
+    )
 }
 
 fn scene_vertices(

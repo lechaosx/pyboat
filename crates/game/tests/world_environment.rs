@@ -6,7 +6,7 @@ use game::{
     world_climate_conditions,
 };
 use rapier2d::prelude::Vector;
-use simulation::{DT_SECONDS, WorldGeometry};
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
 const TICK: u64 = 12_345;
@@ -263,7 +263,8 @@ fn world_environment_is_deterministic_and_locally_continuous() {
     );
     assert!((sample.weather.wind_velocity_m_s - nearby.weather.wind_velocity_m_s).length() < 0.1);
     assert!((sample.celestial.day_phase - nearby.celestial.day_phase).abs() < 0.001);
-    let expected = world_celestial_conditions(world, TICK as f64 * f64::from(DT_SECONDS), position);
+    let expected =
+        world_celestial_conditions(world, TICK as f64 / TICKS_PER_SECOND as f64, position);
     assert_eq!(sample.celestial, expected);
 }
 

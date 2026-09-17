@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 
 use browser::{
-    Demo, PointOfSail, boat_scene, point_of_sail, scale_bar, view_width_m,
-    viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
+    Demo, PointOfSail, boat_scene, bounded_canvas_dimensions, point_of_sail, scale_bar,
+    view_width_m, viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 use game::dinghy_parameters;
 use rapier2d::prelude::Vector;
@@ -51,6 +51,18 @@ fn viewport_interest_remains_finite_at_extreme_zoom() {
     let scale = scale_bar(f32::MAX, 1.0);
     assert!(scale.distance_m.is_finite());
     assert!(scale.width_px.is_finite());
+}
+
+#[test]
+fn canvas_dimensions_preserve_aspect_ratio_within_the_device_limit() {
+    assert_eq!(
+        bounded_canvas_dimensions(800, 600, 2.0, 8_192),
+        (1_600, 1_200)
+    );
+    assert_eq!(
+        bounded_canvas_dimensions(10_000, 5_000, 2.0, 8_192),
+        (8_192, 4_096),
+    );
 }
 
 #[test]

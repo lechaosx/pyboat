@@ -8,7 +8,7 @@ use game::{
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use serde::Serialize;
-use simulation::WorldGeometry;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -650,6 +650,7 @@ fn parse_options() -> Result<Options, String> {
             _ => return Err(format!("unknown option: {argument}")),
         }
     }
+    validate_capture_output_path(&options.output)?;
     validate_capture_dimensions(options.width, options.height, u32::MAX)?;
     validate_time_seconds(options.cloud_time_seconds, "--cloud-time")?;
     validate_time_seconds(options.world_time_seconds, "--world-time")?;
@@ -1097,7 +1098,7 @@ fn print_help() {
     println!(
         "playground-capture [options]\n\n\
          Options:\n\
-           --output PATH          output path (default playground-capture.png)\n\
+           --output PATH          image path; .json is reserved for the sidecar (default playground-capture.png)\n\
            --width N --height N   positive GPU-supported output dimensions (default 960x600)\n\
            --camera-x M --camera-y M  finite world-space camera centre\n\
            --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
@@ -1119,19 +1120,31 @@ fn print_help() {
 }
 
 fn split_tick_seconds(seconds: f64) -> (u64, f32) {
-    let tick_position = seconds / f64::from(simulation::DT_SECONDS);
+    let tick_position = seconds * TICKS_PER_SECOND as f64;
     let tick = tick_position.floor() as u64;
     (tick, (tick_position - tick as f64) as f32)
 }
 
 fn validate_time_seconds(seconds: f64, option: &str) -> Result<(), String> {
-    let tick_position = seconds / f64::from(simulation::DT_SECONDS);
+    let tick_position = seconds * TICKS_PER_SECOND as f64;
     if seconds.is_finite() && seconds >= 0.0 && tick_position < u64::MAX as f64 {
         Ok(())
     } else {
         Err(format!(
             "{option} must be finite, nonnegative, and representable as a simulation tick",
         ))
+    }
+}
+
+fn validate_capture_output_path(path: &std::path::Path) -> Result<(), String> {
+    if path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        Err("capture output must not use the reserved .json sidecar extension".to_owned())
+    } else {
+        Ok(())
     }
 }
 
@@ -1181,7 +1194,7 @@ fn validate_capture_dimensions(
 mod tests {
     use super::{
         parse_diagnostic, parse_f32x4, split_tick_seconds, validate_capture_dimensions,
-        validate_capture_spatial_inputs, validate_time_seconds,
+        validate_capture_output_path, validate_capture_spatial_inputs, validate_time_seconds,
     };
 
     #[test]
@@ -1198,6 +1211,10 @@ mod tests {
         let (tick, fraction) = split_tick_seconds(10.5 / 60.0);
         assert_eq!(tick, 10);
         assert!((fraction - 0.5).abs() < 1.0e-5);
+
+        let (tick, fraction) = split_tick_seconds(365.0 * 86_400.0);
+        assert_eq!(tick, 365 * 86_400 * 60);
+        assert_eq!(fraction, 0.0);
     }
 
     #[test]
@@ -1225,6 +1242,13 @@ mod tests {
         assert!(validate_capture_spatial_inputs(0.0, 0.0, 0.0).is_err());
         assert!(validate_capture_spatial_inputs(0.0, 0.0, f32::INFINITY).is_err());
         assert!(parse_f32x4("1,NaN,3,4", "--cloud-shadows").is_err());
+    }
+
+    #[test]
+    fn capture_output_must_not_collide_with_its_json_sidecar() {
+        assert!(validate_capture_output_path(std::path::Path::new("capture.png")).is_ok());
+        assert!(validate_capture_output_path(std::path::Path::new("capture.json")).is_err());
+        assert!(validate_capture_output_path(std::path::Path::new("capture.JSON")).is_err());
     }
 }
 

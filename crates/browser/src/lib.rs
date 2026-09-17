@@ -938,6 +938,33 @@ pub fn viewport_interest_radius_m(aspect_ratio: f32, view_height_m: f32) -> f32 
         .min(f64::from(f32::MAX)) as f32
 }
 
+pub fn bounded_canvas_dimensions(
+    css_width_px: i32,
+    css_height_px: i32,
+    device_scale: f64,
+    maximum_dimension: u32,
+) -> (u32, u32) {
+    let device_scale = if device_scale.is_finite() && device_scale > 0.0 {
+        device_scale
+    } else {
+        1.0
+    };
+    let requested_width = (f64::from(css_width_px.max(1)) * device_scale)
+        .floor()
+        .max(1.0);
+    let requested_height = (f64::from(css_height_px.max(1)) * device_scale)
+        .floor()
+        .max(1.0);
+    let maximum_dimension = f64::from(maximum_dimension.max(1));
+    let reduction = (maximum_dimension / requested_width.max(requested_height)).min(1.0);
+    let bounded = |dimension: f64| {
+        (dimension * reduction)
+            .floor()
+            .clamp(1.0, maximum_dimension) as u32
+    };
+    (bounded(requested_width), bounded(requested_height))
+}
+
 pub fn view_width_m(aspect_ratio: f32, view_height_m: f32) -> f32 {
     (f64::from(view_height_m) * f64::from(aspect_ratio)).min(f64::from(f32::MAX)) as f32
 }

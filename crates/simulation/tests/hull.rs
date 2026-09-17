@@ -1,5 +1,5 @@
-use simulation::{HullParameters, create_hull, hull_outline_m};
 use rapier2d::prelude::{ColliderSet, RigidBodySet, Vector};
+use simulation::{HullParameters, create_hull, hull_outline_m};
 
 fn reference_hull() -> HullParameters {
     HullParameters {

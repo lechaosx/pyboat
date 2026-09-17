@@ -1,10 +1,10 @@
 use std::f32::consts::PI;
 
-use simulation::{
-    BoatMotion, BoatParameters, HullParameters, create_boat, read_motion, restore_motion,
-};
 use rapier2d::prelude::{
     ColliderSet, ImpulseJointSet, MotorModel, RigidBody, RigidBodySet, Vector,
+};
+use simulation::{
+    BoatMotion, BoatParameters, HullParameters, create_boat, read_motion, restore_motion,
 };
 
 fn reference_parameters() -> BoatParameters {

@@ -2,7 +2,8 @@ export type FixedClock = {
   accumulatorSeconds: number;
 };
 
-export const fixedTickSeconds = 1 / 60;
+export const fixedTicksPerSecond = 60;
+export const fixedTickSeconds = 1 / fixedTicksPerSecond;
 
 export function advanceFixedClock(
   clock: FixedClock,

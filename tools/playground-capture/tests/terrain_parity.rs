@@ -1441,7 +1441,7 @@ fn cache_discovery_initializes_procedural_tide_state() {
     let (world_time_seconds, tide_height_m) = (0..96)
         .map(|quarter_hour| {
             let world_time_seconds = quarter_hour as f64 * 900.0;
-            let tick = (world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+            let tick = (world_time_seconds * simulation::TICKS_PER_SECOND as f64) as u64;
             let tide_height_m =
                 procedural_world_environment(world, SEED, tick, position_m).water_height_m;
             (world_time_seconds, tide_height_m)
@@ -1533,7 +1533,7 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
     let season_phase = 0.09;
     let world_time_seconds = world_time_for_season_phase(season_phase);
-    let tick = (world_time_seconds / f64::from(simulation::DT_SECONDS)) as u64;
+    let tick = (world_time_seconds * simulation::TICKS_PER_SECOND as f64) as u64;
     let position_m = (0..512)
         .map(|index| {
             Vector::new(

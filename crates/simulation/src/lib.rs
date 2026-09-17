@@ -11,7 +11,8 @@ use rapier2d::prelude::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-pub const DT_SECONDS: f32 = 1.0 / 60.0;
+pub const TICKS_PER_SECOND: u64 = 60;
+pub const DT_SECONDS: f32 = 1.0 / TICKS_PER_SECOND as f32;
 // Opposing hull extrema at this speed remain below half the minimum supported beam per 1/32 tick.
 pub const MAXIMUM_SHARED_HULL_POINT_SPEED_M_S: f32 = 700.0;
 const CONTROL_SELECTION_TIE_TOLERANCE: f32 = 1.0e-6;
