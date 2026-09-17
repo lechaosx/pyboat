@@ -1,11 +1,23 @@
+import { fixedTicksPerSecond } from "./fixed-clock";
+
 export const worldDaySeconds = 86_400;
 export const worldYearDays = 365;
 
-const maximumExactTick = Number.MAX_SAFE_INTEGER;
-const ticksPerSecond = 60;
-const maximumWholeDay = Math.floor(maximumExactTick / ticksPerSecond / worldDaySeconds);
+const minimumClockStepsPerUlp = 256;
+// Keep floating-point spacing at least 256 times finer than one fixed tick.
+const maximumClockExponent = 52
+  + Math.floor(Math.log2(1 / fixedTicksPerSecond / minimumClockStepsPerUlp))
+  + 1;
+export const maximumWorldTimeSeconds = 2 ** maximumClockExponent - 1;
+// Reserve equal clock range for playback beyond the largest selectable date.
+const maximumSelectableTimeSeconds = Math.floor(maximumWorldTimeSeconds / 2);
+const maximumWholeDay = Math.floor(maximumSelectableTimeSeconds / worldDaySeconds);
 
 export const maximumWorldYear = Math.floor((maximumWholeDay - worldYearDays + 1) / worldYearDays) + 1;
+
+export function advanceWorldTimeSeconds(timeSeconds: number, elapsedSeconds: number): number {
+  return Math.min(maximumWorldTimeSeconds, timeSeconds + Math.max(0, elapsedSeconds));
+}
 
 export function worldDateTimeSeconds(
   year: number,

@@ -301,9 +301,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   the final bound. WebGPU exposes structural limits but no usable-memory budget,
   so tiles beyond the resolution-derived budget use the exact direct fallback.
 - **[Explicit]** Interactive surface resize takes effect immediately and uses the
-  direct shadow path until backing dimensions have remained unchanged for 100
-  milliseconds. The renderer then creates one cache for the settled size and
-  explicitly destroys the retired allocation.
+  direct shadow path while the previous cache retires. GPU queue completion,
+  rather than a time delay, gates destruction and replacement; resizes during
+  retirement coalesce into the latest backing dimensions.
 - **[Explicit]** Rain remains a global weather field queried at actual world
   positions. It does not condition either visual cloud field and does not move
   with a client's cloud translation, so rendered precipitation is independent
@@ -401,6 +401,11 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   only the newest state, skipping intermediate presentations when rendering is
   slower than the tick rate. Faster rendering uses fractional progress toward
   the next tick.
+- **[Implicit]** Playground and headless-capture clocks retain at least 256
+  representable double-precision values per fixed tick. The playground reserves
+  an equal range beyond its maximum selectable world date for subsequent
+  playback and clamps at that precision-derived terminal time; capture rejects
+  time inputs at or beyond the terminal range.
 - **[Explicit]** Production and playground backing canvases preserve their CSS
   aspect ratio and uniformly reduce pixel resolution when either dimension would
   exceed the WebGPU device's texture limit.
@@ -471,9 +476,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   or the aspect-preserved current atlas, and can recreate it with 32-, 64-, 128-,
   or 256-texel tiles without changing the world-space resolution of one texel.
   Its counters, tile metadata, and debug bindings are absent from the production
-  scene shader. Cache recreation waits for interactive resizing to settle;
+  scene shader. Cache recreation immediately switches to direct evaluation;
   after submitted work and diagnostic readback complete, retired GPU resources
-  are destroyed before their replacement is allocated.
+  are destroyed before one replacement is allocated for the latest dimensions.
 - **[Explicit]** Celestial state includes geographic latitude with normalized
   day and season phases plus independently advancing lunar longitude.
   Rendering-grade astronomy derives Sun and Moon directions first, then infers
@@ -641,6 +646,9 @@ and tests remain the source of truth for algorithms, constants, and schemas.
 
 - **[Explicit]** Server and browser orchestration use asynchronous I/O wherever
   work may suspend.
+- **[Implicit]** Production stops its animation-frame loop after WebGPU device
+  loss or a nonrecoverable validation, memory, or internal device error.
+  Transient surface states remain recoverable inside the renderer.
 - **[Explicit]** Visual procedural-world work uses the interactive playground and
   deterministic headless capture rather than a separate native showcase or a
   checked-in image collection.

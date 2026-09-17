@@ -278,38 +278,36 @@ pub fn playground_diagnostic_shader_source(name: &str) -> Option<&'static str> {
 const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 const MAXIMUM_PREDICTION_SECONDS: f64 = 0.25;
-#[cfg(any(target_arch = "wasm32", test))]
-const CLOUD_SHADOW_CACHE_RESIZE_SETTLE_SECONDS: f64 = 0.1;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Default)]
-pub(crate) struct CloudShadowCacheResizeSettle {
-    remaining_seconds: Option<f64>,
+pub(crate) struct CloudShadowCacheReplacement {
+    pending: bool,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-impl CloudShadowCacheResizeSettle {
-    pub(crate) fn note_resize(&mut self) {
-        self.remaining_seconds = Some(CLOUD_SHADOW_CACHE_RESIZE_SETTLE_SECONDS);
-    }
-
-    pub(crate) fn advance(&mut self, elapsed_seconds: f64) -> bool {
-        let Some(remaining_seconds) = &mut self.remaining_seconds else {
-            return false;
-        };
-        *remaining_seconds -= elapsed_seconds.max(0.0);
-        if *remaining_seconds > 0.0 {
+impl CloudShadowCacheReplacement {
+    pub(crate) fn note_resize(&mut self) -> bool {
+        if self.pending {
             return false;
         }
-        self.remaining_seconds = None;
+        self.pending = true;
+        true
+    }
+
+    pub(crate) fn finish_retirement(&mut self, queue_complete: bool) -> bool {
+        if !self.pending || !queue_complete {
+            return false;
+        }
+        self.pending = false;
         true
     }
 
     pub(crate) fn is_pending(&self) -> bool {
-        self.remaining_seconds.is_some()
+        self.pending
     }
 }
 
@@ -1580,15 +1578,14 @@ mod tests {
     }
 
     #[test]
-    fn production_cache_resize_waits_for_a_stable_viewport() {
-        let mut settle = CloudShadowCacheResizeSettle::default();
+    fn production_cache_resize_waits_for_queue_retirement() {
+        let mut replacement = CloudShadowCacheReplacement::default();
 
-        settle.note_resize();
-        assert!(!settle.advance(0.06));
-        settle.note_resize();
-        assert!(!settle.advance(0.06));
-        assert!(settle.advance(0.05));
-        assert!(!settle.is_pending());
+        assert!(replacement.note_resize());
+        assert!(!replacement.note_resize());
+        assert!(!replacement.finish_retirement(false));
+        assert!(replacement.finish_retirement(true));
+        assert!(!replacement.is_pending());
     }
 
     #[test]

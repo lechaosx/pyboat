@@ -4,6 +4,10 @@ use std::{
     collections::VecDeque,
     mem,
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -29,7 +33,7 @@ use wgpu::CurrentSurfaceTexture;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheResizeSettle, DEFAULT_VIEW_HEIGHT_M,
+    BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
     append_reliable_server_message_chunk, bounded_canvas_dimensions, cloud_shadow_cache_layout,
     disconnect_and_clear_pending_snapshot, periodic_effect_time_interpolated,
@@ -1069,7 +1073,9 @@ struct Renderer {
     bind_group: wgpu::BindGroup,
     cloud_shadow_cache: CloudShadowCache,
     cloud_shadow_cache_fallback: CloudShadowCacheFallback,
-    cloud_shadow_cache_resize_settle: CloudShadowCacheResizeSettle,
+    cloud_shadow_cache_replacement: CloudShadowCacheReplacement,
+    cloud_shadow_cache_queue_complete: Arc<AtomicBool>,
+    terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
 }
 
@@ -1099,6 +1105,15 @@ impl Renderer {
             })
             .await
             .map_err(js_error)?;
+        let terminal_error = Arc::new(AtomicBool::new(false));
+        let device_lost_callback = Arc::clone(&terminal_error);
+        device.set_device_lost_callback(move |_, _| {
+            device_lost_callback.store(true, Ordering::Release);
+        });
+        let uncaptured_error_callback = Arc::clone(&terminal_error);
+        device.on_uncaptured_error(Arc::new(move |_| {
+            uncaptured_error_callback.store(true, Ordering::Release);
+        }));
         let (width, height) = canvas_dimensions(&canvas, device.limits().max_texture_dimension_2d);
         canvas.set_width(width);
         canvas.set_height(height);
@@ -1202,7 +1217,9 @@ impl Renderer {
             bind_group,
             cloud_shadow_cache_fallback,
             cloud_shadow_cache,
-            cloud_shadow_cache_resize_settle: CloudShadowCacheResizeSettle::default(),
+            cloud_shadow_cache_replacement: CloudShadowCacheReplacement::default(),
+            cloud_shadow_cache_queue_complete: Arc::new(AtomicBool::new(false)),
+            terminal_error,
             cloud_motion: ViewCloudMotion::default(),
         })
     }
@@ -1217,22 +1234,26 @@ impl Renderer {
         camera_m: Vector,
         view_height_m: f32,
     ) -> Result<(), JsValue> {
-        let resized = self.resize();
-        if resized {
-            self.cloud_shadow_cache_resize_settle.note_resize();
+        if self.terminal_error.load(Ordering::Acquire) {
+            return Err(JsValue::from_str("WebGPU device was lost"));
         }
-        let use_shadow_cache = if resized {
-            false
-        } else if self
-            .cloud_shadow_cache_resize_settle
-            .advance(elapsed_seconds)
-        {
+        let resized = self.resize();
+        if resized && self.cloud_shadow_cache_replacement.note_resize() {
+            self.cloud_shadow_cache_queue_complete
+                .store(false, Ordering::Release);
+            let queue_complete = Arc::clone(&self.cloud_shadow_cache_queue_complete);
+            self.queue.on_submitted_work_done(move || {
+                queue_complete.store(true, Ordering::Release);
+            });
+        }
+        if self.cloud_shadow_cache_replacement.finish_retirement(
+            self.cloud_shadow_cache_queue_complete
+                .load(Ordering::Acquire),
+        ) {
             self.cloud_shadow_cache
                 .resize(&self.device, self.config.width, self.config.height);
-            true
-        } else {
-            !self.cloud_shadow_cache_resize_settle.is_pending()
-        };
+        }
+        let use_shadow_cache = !self.cloud_shadow_cache_replacement.is_pending();
         let vertices = scene_vertices(
             scenes,
             match_seed.is_some(),
@@ -1376,6 +1397,7 @@ impl Renderer {
                 return Ok(());
             }
             CurrentSurfaceTexture::Validation => {
+                self.terminal_error.store(true, Ordering::Release);
                 return Err(JsValue::from_str(
                     "WebGPU rejected the current surface texture",
                 ));
@@ -1453,6 +1475,10 @@ impl Renderer {
             canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
         width as f32 / height as f32
     }
+
+    fn is_available(&self) -> bool {
+        !self.terminal_error.load(Ordering::Acquire)
+    }
 }
 
 #[wasm_bindgen]
@@ -1521,6 +1547,9 @@ impl BrowserGame {
     }
 
     pub fn frame(&mut self, elapsed_seconds: f64) -> Result<(), JsValue> {
+        if !self.renderer.is_available() {
+            return Err(JsValue::from_str("WebGPU renderer is unavailable"));
+        }
         let viewport_radius_m =
             viewport_interest_radius_m(self.renderer.aspect_ratio(), self.view_height_m);
         let mut client = self.client.borrow_mut();
@@ -1566,6 +1595,10 @@ impl BrowserGame {
             client.camera_m().unwrap_or(Vector::ZERO),
             self.view_height_m,
         )
+    }
+
+    pub fn renderer_is_available(&self) -> bool {
+        self.renderer.is_available()
     }
 
     pub fn zoom(&mut self, wheel_delta_y: f32) {

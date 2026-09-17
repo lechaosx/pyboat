@@ -130,11 +130,14 @@ try {
       scaleLabelElement.textContent = game.scale_bar_label();
       scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
     } catch (error) {
-      statusElement.textContent = "Rendering failed; retrying";
       console.error(error);
-    } finally {
-      requestAnimationFrame(frame);
+      if (!game.renderer_is_available()) {
+        statusElement.textContent = "Rendering stopped; reload to reconnect to the GPU";
+        return;
+      }
+      statusElement.textContent = "Rendering failed; retrying";
     }
+    requestAnimationFrame(frame);
   }
 
   requestAnimationFrame(frame);

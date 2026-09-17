@@ -1172,13 +1172,22 @@ fn split_tick_seconds(seconds: f64) -> (u64, f32) {
     (tick, (tick_position - tick as f64) as f32)
 }
 
+const MINIMUM_TIME_VALUES_PER_TICK: u64 = 256;
+const MAXIMUM_PRECISE_TIME_SECONDS: f64 = ((1_u64 << (f64::MANTISSA_DIGITS - 1))
+    / (TICKS_PER_SECOND * MINIMUM_TIME_VALUES_PER_TICK))
+    .next_power_of_two() as f64;
+
 fn validate_time_seconds(seconds: f64, option: &str) -> Result<(), String> {
     let tick_position = seconds * TICKS_PER_SECOND as f64;
-    if seconds.is_finite() && seconds >= 0.0 && tick_position < u64::MAX as f64 {
+    if seconds.is_finite()
+        && seconds >= 0.0
+        && seconds < MAXIMUM_PRECISE_TIME_SECONDS
+        && tick_position < u64::MAX as f64
+    {
         Ok(())
     } else {
         Err(format!(
-            "{option} must be finite, nonnegative, and representable as a simulation tick",
+            "{option} must be finite, nonnegative, and precise enough to select a 60 Hz simulation tick",
         ))
     }
 }
@@ -1298,9 +1307,12 @@ mod tests {
     }
 
     #[test]
-    fn capture_times_must_be_finite_and_nonnegative() {
+    fn capture_times_must_preserve_fixed_tick_precision() {
         assert!(validate_time_seconds(0.0, "--cloud-time").is_ok());
         assert!(validate_time_seconds(365.0 * 86_400.0, "--cloud-time").is_ok());
+        assert!(validate_time_seconds((2.0_f64).powi(39) - 1.0, "--cloud-time").is_ok());
+        assert!(validate_time_seconds((2.0_f64).powi(39), "--cloud-time").is_err());
+        assert!(validate_time_seconds(1.0e16, "--world-time").is_err());
         assert!(validate_time_seconds(-1.0, "--cloud-time").is_err());
         assert!(validate_time_seconds(f64::NAN, "--world-time").is_err());
         assert!(validate_time_seconds(f64::INFINITY, "--world-time").is_err());

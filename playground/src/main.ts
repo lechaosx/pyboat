@@ -24,6 +24,7 @@ import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
 import {
+  advanceWorldTimeSeconds,
   maximumWorldYear,
   worldDateTimeSeconds,
   worldDaySeconds,
@@ -1053,8 +1054,27 @@ const timestampQueriesSupported = adapter.features.has("timestamp-query");
 const device = await adapter.requestDevice({
   requiredFeatures: timestampQueriesSupported ? ["timestamp-query"] : [],
 });
-if (import.meta.hot) import.meta.hot.dispose(() => device.destroy());
-window.addEventListener("pagehide", () => device.destroy(), { once: true });
+let renderLoopActive = true;
+function stopRendering(message: string): void {
+  if (!renderLoopActive) return;
+  renderLoopActive = false;
+  statusElement.textContent = message;
+}
+function endGpuSession(message: string): void {
+  stopRendering(message);
+  device.destroy();
+}
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => endGpuSession("WebGPU session ended"));
+}
+window.addEventListener(
+  "pagehide",
+  () => endGpuSession("WebGPU session ended; reload to resume"),
+  { once: true },
+);
+void device.lost.then(() => {
+  stopRendering("WebGPU device lost; reload to resume");
+});
 const context = previewCanvas.getContext("webgpu") as any;
 const formatName = gpu.getPreferredCanvasFormat();
 context.configure({ device, format: formatName, alphaMode: "opaque" });
@@ -1302,8 +1322,7 @@ let sceneCompilationStatus = "compiling full scene";
 const diagnosticShaderModules = new Map<string, any>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
-const shadowCacheResizeSettleMilliseconds = 100;
-let shadowCacheRecreateAfter: number | undefined;
+let shadowCacheRecreationRequested = false;
 let shadowCacheRetirement: Promise<void> | undefined;
 let retiredShadowCachePipelines: {
   discovery: any;
@@ -1345,15 +1364,13 @@ function retireShadowCache(cache: CloudShadowCache): Promise<void> {
   return complete;
 }
 
-function scheduleShadowCacheRecreation(delayMilliseconds = 0): void {
+function scheduleShadowCacheRecreation(): void {
   if (!sceneRenderResources.cloudShadowCache && !shadowCacheRetirement) return;
-  const recreateAfter = performance.now() + delayMilliseconds;
-  shadowCacheRecreateAfter = Math.max(shadowCacheRecreateAfter ?? 0, recreateAfter);
+  shadowCacheRecreationRequested = true;
 }
 
-function applyScheduledShadowCacheRecreation(now: number): void {
-  if (shadowCacheRecreateAfter === undefined || now < shadowCacheRecreateAfter) return;
-  if (shadowCacheRetirement) return;
+function applyScheduledShadowCacheRecreation(): void {
+  if (!shadowCacheRecreationRequested || shadowCacheRetirement) return;
   const cache = sceneRenderResources.cloudShadowCache;
   if (cache) {
     retiredShadowCachePipelines = {
@@ -1362,17 +1379,17 @@ function applyScheduledShadowCacheRecreation(now: number): void {
       scene: sceneRenderResources.pipeline,
     };
     sceneRenderResources.cloudShadowCache = undefined;
-    shadowCacheRecreateAfter = undefined;
+    shadowCacheRecreationRequested = false;
     shadowCacheRetirement = retireShadowCache(cache).finally(() => {
       shadowCacheRetirement = undefined;
-      shadowCacheRecreateAfter ??= performance.now();
+      shadowCacheRecreationRequested = true;
     });
     updateShadowCacheInfo();
     return;
   }
   const pipelines = retiredShadowCachePipelines;
   if (!pipelines) {
-    shadowCacheRecreateAfter = undefined;
+    shadowCacheRecreationRequested = false;
     return;
   }
   sceneRenderResources.cloudShadowCache = createCloudShadowCache(
@@ -1381,14 +1398,14 @@ function applyScheduledShadowCacheRecreation(now: number): void {
     pipelines.scene,
   );
   retiredShadowCachePipelines = undefined;
-  shadowCacheRecreateAfter = undefined;
+  shadowCacheRecreationRequested = false;
   updateShadowCacheInfo(sceneRenderResources.cloudShadowCache);
 }
 
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
   if (selection === "scene") {
-    return useShadowCache && shadowCacheRecreateAfter === undefined
+    return useShadowCache && sceneRenderResources.cloudShadowCache
       ? sceneRenderResources
       : directSceneRenderResources;
   }
@@ -1929,7 +1946,7 @@ function resize(): void {
     previewCanvas.height = height;
     const cache = sceneRenderResources.cloudShadowCache;
     if (cache) {
-      scheduleShadowCacheRecreation(shadowCacheResizeSettleMilliseconds);
+      scheduleShadowCacheRecreation();
     }
   }
 }
@@ -2016,7 +2033,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
 
 function renderFrame(now: number): void {
   resize();
-  applyScheduledShadowCacheRecreation(now);
+  applyScheduledShadowCacheRecreation();
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
@@ -2025,7 +2042,10 @@ function renderFrame(now: number): void {
     state.time += elapsedFixedSeconds * state.cloudTimeScale;
     state.pressureTimeSeconds += elapsedFixedSeconds * state.pressureTimeScale;
     state.currentTimeSeconds += elapsedFixedSeconds * state.currentTimeScale;
-    state.worldTimeSeconds += elapsedFixedSeconds * state.worldTimeScale;
+    state.worldTimeSeconds = advanceWorldTimeSeconds(
+      state.worldTimeSeconds,
+      elapsedFixedSeconds * state.worldTimeScale,
+    );
   });
   const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
   const cloudTimeSeconds = state.time + renderFractionSeconds * state.cloudTimeScale;
@@ -2033,8 +2053,10 @@ function renderFrame(now: number): void {
     + renderFractionSeconds * state.pressureTimeScale;
   const currentTimeSeconds = state.currentTimeSeconds
     + renderFractionSeconds * state.currentTimeScale;
-  const worldTimeSeconds = state.worldTimeSeconds
-    + renderFractionSeconds * state.worldTimeScale;
+  const worldTimeSeconds = advanceWorldTimeSeconds(
+    state.worldTimeSeconds,
+    renderFractionSeconds * state.worldTimeScale,
+  );
   updateRenderedGeometry();
   if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {
     updateViewCenterDiagnostics(
@@ -2207,13 +2229,14 @@ function renderFrame(now: number): void {
 }
 
 function frame(now: number): void {
+  if (!renderLoopActive) return;
   try {
     renderFrame(now);
   } catch (error) {
-    statusElement.textContent = "Rendering failed; retrying";
+    if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
     console.error(error);
   } finally {
-    requestAnimationFrame(frame);
+    if (renderLoopActive) requestAnimationFrame(frame);
   }
 }
 
