@@ -488,7 +488,7 @@ where
                 for outbound in connections.values() {
                     outbound.send_replace(Some(OutboundMessage::Close));
                 }
-                let _ = timeout(CONNECTION_SHUTDOWN_TIMEOUT, async {
+                drop(timeout(CONNECTION_SHUTDOWN_TIMEOUT, async {
                     while !connections.is_empty() {
                         let Some(event) = incoming_events.recv().await else {
                             break;
@@ -503,7 +503,7 @@ where
                     // until their idle timeout expires.
                     endpoint.wait_idle().await;
                 })
-                .await;
+                .await);
                 return Ok(());
             }
             incoming_session = endpoint.accept(), if upgrades.len() < MAX_PENDING_CONNECTION_EVENTS => {
@@ -511,9 +511,7 @@ where
                 upgrades.spawn(async move {
                     match upgrade_connection(incoming_session).await {
                         Ok(connection) => {
-                            let _ = events.send(ConnectionEvent::Upgraded {
-                                connection,
-                            }).await;
+                            drop(events.send(ConnectionEvent::Upgraded { connection }).await);
                         }
                         Err(error) => eprintln!("WebTransport connection failed: {error}"),
                     }
@@ -564,7 +562,7 @@ where
                 } => {
                     game_match.add_player(player_id.clone(), player_number);
                     connections.insert(player_id, outbound);
-                    let _ = registered.send(());
+                    let _registration_result = registered.send(());
                 }
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     game_match.set_input(&player_id, sequence, intent);
@@ -692,9 +690,11 @@ async fn handle_connection(
     for task in receive_tasks {
         task.abort();
     }
-    let _ = events
-        .send(ConnectionEvent::Disconnected { player_id })
-        .await;
+    drop(
+        events
+            .send(ConnectionEvent::Disconnected { player_id })
+            .await,
+    );
     result?;
     Ok(())
 }
@@ -749,11 +749,11 @@ fn receive_messages(
                             Ok(None) => return,
                             Err(error) => Err(error),
                         };
-                        let _ = messages.send(message).await;
+                        drop(messages.send(message).await);
                     });
                 }
                 Err(error) => {
-                    let _ = messages.send(Err(error.into())).await;
+                    drop(messages.send(Err(error.into())).await);
                     break;
                 }
             }

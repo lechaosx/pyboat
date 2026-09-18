@@ -279,15 +279,14 @@ fn every_primary_atmosphere_field_joins_across_longitude() {
         procedural_atmosphere_primary(world, SEED, TICK, position + Vector::new(160_000.0, 0.0)),
     );
 
-    for (left, right) in [(
+    let (left, right) = (
         Vector::new(-40_000.0, 6_250.0),
         Vector::new(40_000.0, 6_250.0),
-    )] {
-        assert_primary_close(
-            procedural_atmosphere_primary(world, SEED, TICK, left),
-            procedural_atmosphere_primary(world, SEED, TICK, right),
-        );
-    }
+    );
+    assert_primary_close(
+        procedural_atmosphere_primary(world, SEED, TICK, left),
+        procedural_atmosphere_primary(world, SEED, TICK, right),
+    );
 }
 
 #[test]

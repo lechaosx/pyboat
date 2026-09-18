@@ -2417,8 +2417,8 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                 let mut deep_water = [[false; 8]; 8];
                 let mut shallow_water_samples = 0;
                 let mut shallow_patch_relief_16_m = Vec::new();
-                for sample_x in 0..8 {
-                    for sample_y in 0..8 {
+                for (sample_x, deep_water_column) in deep_water.iter_mut().enumerate() {
+                    for (sample_y, is_deep_water) in deep_water_column.iter_mut().enumerate() {
                         let position_m = Vector::new(
                             patch_x as f32 * 256.0 + (sample_x as f32 - 3.5) * 32.0,
                             patch_y as f32 * 256.0 + (sample_y as f32 - 3.5) * 32.0,
@@ -2462,7 +2462,7 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
                         }
                         has_outcrop |= elevation_m >= 0.25;
                         has_navigable_water |= elevation_m <= -1.5;
-                        deep_water[sample_x][sample_y] = elevation_m <= -4.0;
+                        *is_deep_water = elevation_m <= -4.0;
                         shallow_water_samples += usize::from((-2.0..=-0.2).contains(&elevation_m));
                         if elevation_m >= 0.0 {
                             let gradient = Vector::new(

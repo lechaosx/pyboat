@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 
+[lints]
+workspace = true
+
 [dependencies]
 rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
 serde = { version = "1.0.229", features = ["derive"] }

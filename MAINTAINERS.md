@@ -9,8 +9,9 @@ Repository-wide checks:
 
 | Surface | Command |
 | --- | --- |
+| Rust diagnostics | `cargo clippy --workspace --all-targets --all-features` |
 | Native Rust workspace | `cargo test --workspace` |
-| Rust browser target | `cargo check -p browser --target wasm32-unknown-unknown` |
+| Rust browser target | `cargo clippy -p browser --target wasm32-unknown-unknown --all-features` |
 | Browser and playground | `bun run build` |
 
 Some integration tests open loopback UDP sockets for real WebTransport sessions.

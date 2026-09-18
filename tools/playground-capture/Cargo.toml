@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.89"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
 browser = { path = "../../crates/browser", features = ["playground"] }

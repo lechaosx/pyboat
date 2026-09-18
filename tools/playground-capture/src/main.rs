@@ -1180,8 +1180,7 @@ const MAXIMUM_PRECISE_TIME_SECONDS: f64 = ((1_u64 << (f64::MANTISSA_DIGITS - 1))
 fn validate_time_seconds(seconds: f64, option: &str) -> Result<(), String> {
     let tick_position = seconds * TICKS_PER_SECOND as f64;
     if seconds.is_finite()
-        && seconds >= 0.0
-        && seconds < MAXIMUM_PRECISE_TIME_SECONDS
+        && (0.0..MAXIMUM_PRECISE_TIME_SECONDS).contains(&seconds)
         && tick_position < u64::MAX as f64
     {
         Ok(())
@@ -1250,6 +1249,7 @@ fn validate_capture_dimensions(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         parse_diagnostic, parse_f32x4, parse_u32x4, split_tick_seconds,

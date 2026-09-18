@@ -2153,19 +2153,19 @@ pub fn scalar_field_time_coordinates_interpolated(
             tick,
             tick_fraction,
             SURFACE_AIR_TEMPERATURE_NOISE.evolution_speed_m_s,
-            SURFACE_AIR_TEMPERATURE_NOISE.wavelength_m as f32,
+            SURFACE_AIR_TEMPERATURE_NOISE.wavelength_m,
         ),
         upper_air_temperature: noise_time_coordinate_interpolated(
             tick,
             tick_fraction,
             AIR_TEMPERATURE_500_HPA_NOISE.evolution_speed_m_s,
-            AIR_TEMPERATURE_500_HPA_NOISE.wavelength_m as f32,
+            AIR_TEMPERATURE_500_HPA_NOISE.wavelength_m,
         ),
         water_vapor: noise_time_coordinate_interpolated(
             tick,
             tick_fraction,
             WATER_VAPOR_NOISE.evolution_speed_m_s,
-            WATER_VAPOR_NOISE.wavelength_m as f32,
+            WATER_VAPOR_NOISE.wavelength_m,
         ),
         decorative_water: noise_time_coordinate_interpolated(
             tick,
@@ -2445,6 +2445,7 @@ fn spatiotemporal_simplex_noise_4d(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spatiotemporal_pressure_noise_4d(
     world_geometry: WorldGeometry,
     field_seed: u64,

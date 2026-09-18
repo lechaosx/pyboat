@@ -246,7 +246,7 @@ const celestialEventPresets = {
 
 function worldPhases(worldTimeSeconds: number): [number, number, number, number] {
   const phases = sample_playground_world_phases(worldTimeSeconds);
-  return [phases[0], phases[1], phases[2], phases[3]];
+  return [phases[0]!, phases[1]!, phases[2]!, phases[3]!];
 }
 const lunarEpochDays = worldPhases(0)[3] * lunarMonthDays;
 
@@ -345,7 +345,7 @@ function renderControls(): void {
       const optionGroup = document.createElement("optgroup");
       optionGroup.label = group.label === "Overview"
         ? group.label
-        : `${domain[0].toUpperCase()}${domain.slice(1)} · ${group.label}`;
+        : `${domain.charAt(0).toUpperCase()}${domain.slice(1)} · ${group.label}`;
       for (const [value, name] of group.options) {
         const option = document.createElement("option");
         option.value = value;
@@ -420,7 +420,7 @@ function renderControls(): void {
     ["1", "Lookups"],
     ["2", "Tiles"],
     ["3", "Atlas"],
-  ]) {
+  ] as const) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = label;
@@ -1159,13 +1159,17 @@ function createCloudShadowCache(
   const width = previewCanvas.width;
   const height = previewCanvas.height;
   const tileTexels = shadowCacheTileTexels;
-  const [atlasWidth, atlasHeight, atlasColumns, maximumTiles, tableEntries] =
-    playground_shadow_cache_layout(
-      width,
-      height,
-      device.limits.maxTextureDimension2D,
-      tileTexels,
-    );
+  const layout = playground_shadow_cache_layout(
+    width,
+    height,
+    device.limits.maxTextureDimension2D,
+    tileTexels,
+  );
+  const atlasWidth = layout[0]!;
+  const atlasHeight = layout[1]!;
+  const atlasColumns = layout[2]!;
+  const maximumTiles = layout[3]!;
+  const tableEntries = layout[4]!;
   const cacheUniforms = new Uint32Array([
     width,
     height,
@@ -1209,7 +1213,7 @@ function createCloudShadowCache(
   new Uint32Array(debugBuffer.getMappedRange()).set(debugUniforms);
   debugBuffer.unmap();
   const atlas = device.createTexture({
-    size: [cacheUniforms[2], cacheUniforms[3]],
+    size: [atlasWidth, atlasHeight],
     format: "rg16float",
     usage: 0x04 | 0x10,
   });
@@ -1221,8 +1225,8 @@ function createCloudShadowCache(
     height,
     tileTexels,
     maximumTiles,
-    atlasWidth: cacheUniforms[2],
-    atlasHeight: cacheUniforms[3],
+    atlasWidth,
+    atlasHeight,
     tileCountPending: false,
     tileCountReadback,
     discoveryPipeline,
@@ -1349,7 +1353,7 @@ function destroyRetiredShadowCache(cache: CloudShadowCache): void {
   for (const resource of cache.resources) resource.destroy?.();
   cache.resources.length = 0;
   cache.retirementComplete?.();
-  cache.retirementComplete = undefined;
+  delete cache.retirementComplete;
 }
 
 function retireShadowCache(cache: CloudShadowCache): Promise<void> {
@@ -1378,7 +1382,7 @@ function applyScheduledShadowCacheRecreation(): void {
       fill: cache.fillPipeline,
       scene: sceneRenderResources.pipeline,
     };
-    sceneRenderResources.cloudShadowCache = undefined;
+    delete sceneRenderResources.cloudShadowCache;
     shadowCacheRecreationRequested = false;
     shadowCacheRetirement = retireShadowCache(cache).finally(() => {
       shadowCacheRetirement = undefined;
@@ -1806,8 +1810,8 @@ function writeUniforms(
     renderedCameraX,
     renderedCameraY,
   );
-  const lowWind = [viewCloud[0], viewCloud[1]];
-  const upperWind = [viewCloud[2], viewCloud[3]];
+  const lowWind: [number, number] = [viewCloud[0]!, viewCloud[1]!];
+  const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
   sceneFloats.set(cloudMotion.advance(elapsedSeconds, lowWind, upperWind), 48);
   sceneFloats.set(viewCloud.subarray(4, 8), 52);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
@@ -2205,7 +2209,7 @@ function renderFrame(now: number): void {
     void readbackCache.tileCountReadback.mapAsync(0x0001).then(() => {
       readbackCache.liveTiles = new Uint32Array(
         readbackCache.tileCountReadback.getMappedRange(),
-      )[1];
+      )[1]!;
       readbackCache.tileCountReadback.unmap();
       if (sceneRenderResources.cloudShadowCache === readbackCache) {
         updateShadowCacheInfo(readbackCache);
@@ -2218,9 +2222,9 @@ function renderFrame(now: number): void {
   if (timestampReadback) {
     void timestampReadback.buffer.mapAsync(0x0001).then(() => {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
-      const startedAt = timestamps[0];
+      const startedAt = timestamps[0]!;
       const cached = timestampReadback.cached;
-      const finishedAt = timestamps[cached ? 3 : 1];
+      const finishedAt = timestamps[cached ? 3 : 1]!;
       if (
         timestampReadback.pipeline === timedPipeline
         && startedAt > 0n
@@ -2228,11 +2232,11 @@ function renderFrame(now: number): void {
       ) {
         gpuMillisecondsInWindow += Number(finishedAt - startedAt) / 1_000_000;
         if (cached) {
-          discoveryGpuMillisecondsInWindow += Number(timestamps[1] - timestamps[0]) / 1_000_000;
-          fillGpuMillisecondsInWindow += Number(timestamps[2] - timestamps[1]) / 1_000_000;
-          sceneGpuMillisecondsInWindow += Number(timestamps[3] - timestamps[2]) / 1_000_000;
+          discoveryGpuMillisecondsInWindow += Number(timestamps[1]! - timestamps[0]!) / 1_000_000;
+          fillGpuMillisecondsInWindow += Number(timestamps[2]! - timestamps[1]!) / 1_000_000;
+          sceneGpuMillisecondsInWindow += Number(timestamps[3]! - timestamps[2]!) / 1_000_000;
         } else {
-          sceneGpuMillisecondsInWindow += Number(timestamps[1] - timestamps[0]) / 1_000_000;
+          sceneGpuMillisecondsInWindow += Number(timestamps[1]! - timestamps[0]!) / 1_000_000;
         }
         gpuSamplesInWindow += 1;
       }

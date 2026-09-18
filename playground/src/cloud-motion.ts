@@ -1,13 +1,13 @@
 export class CloudMotion {
-  private readonly lowOffsetM = [0, 0];
-  private readonly upperOffsetM = [0, 0];
+  private readonly lowOffsetM: [number, number] = [0, 0];
+  private readonly upperOffsetM: [number, number] = [0, 0];
 
   advance(
     elapsedSeconds: number,
-    lowWindMS: number[],
-    upperWindMS: number[],
+    lowWindMS: [number, number],
+    upperWindMS: [number, number],
   ): number[] {
-    for (let axis = 0; axis < 2; axis += 1) {
+    for (const axis of [0, 1] as const) {
       this.lowOffsetM[axis] += elapsedSeconds * lowWindMS[axis];
       this.upperOffsetM[axis] += elapsedSeconds * upperWindMS[axis];
     }

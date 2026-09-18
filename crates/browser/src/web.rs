@@ -77,7 +77,7 @@ pub fn playground_shadow_cache_layout(
         maximum_texture_dimension,
         tile_texels,
     )
-    .map_err(|error| JsValue::from_str(error))?;
+    .map_err(JsValue::from_str)?;
     Ok(vec![
         layout.atlas_width,
         layout.atlas_height,
@@ -251,6 +251,7 @@ environment_sample_getters!(
 );
 
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_environment(
     width_m: f32,
     height_m: f32,
@@ -343,6 +344,7 @@ pub fn sample_playground_environment(
 }
 
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_field_time_coordinates(
     world_width_m: f32,
     world_height_m: f32,
@@ -373,6 +375,7 @@ pub fn sample_playground_field_time_coordinates(
 }
 
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_view_cloud_state(
     world_width_m: f32,
     world_height_m: f32,
@@ -1224,6 +1227,7 @@ impl Renderer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         scenes: &[BoatScene],
@@ -1579,10 +1583,10 @@ impl BrowserGame {
         );
         {
             let mut client = self.client.borrow_mut();
-            if client.is_ready() {
-                if let Some(snapshot) = self.pending_snapshot.borrow_mut().take() {
-                    client.accept(snapshot);
-                }
+            if client.is_ready()
+                && let Some(snapshot) = self.pending_snapshot.borrow_mut().take()
+            {
+                client.accept(snapshot);
             }
         }
         let client = self.client.borrow();
@@ -2176,6 +2180,7 @@ fn scene_vertices(
     vertices
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_quad(
     vertices: &mut Vec<Vertex>,
     start_m: Vector,
