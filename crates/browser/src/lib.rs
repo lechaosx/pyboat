@@ -996,8 +996,8 @@ impl MultiplayerClient {
         let boat = self.boats.get(player_id)?;
         let mut motion = snapshot_motion(&boat.snapshot);
         let received_at = self.snapshot_received_at_seconds[player_id];
-        let seconds = (self.time_seconds - received_at)
-            .clamp(0.0, MAXIMUM_PREDICTION_SECONDS) as f32;
+        let seconds =
+            (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS) as f32;
         motion.position_m += motion.velocity_m_s * seconds;
         motion.position_m = Vector::from(
             self.world_geometry
