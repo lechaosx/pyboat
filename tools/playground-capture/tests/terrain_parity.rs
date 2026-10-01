@@ -316,7 +316,12 @@ fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     );
     let mut clear_pixels = 0;
     let mut scattering_pixels = 0;
-    for (coverage, scattering) in coverage.chunks_exact(4).zip(scattering.chunks_exact(4)) {
+    for (coverage, scattering) in coverage
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(scattering.as_chunks::<4>().0.iter())
+    {
         let coverage = scalar_debug_amount(coverage);
         let scattering = scalar_debug_amount(scattering);
         if coverage <= 0.002 {
@@ -380,9 +385,11 @@ fn scene_light_contribution_gates_compose_independently() {
     let world = WorldGeometry::default();
     let canopy = render_diagnostic_image(world, "lighting_ambient_sky_occlusion", 64, 64);
     let mixed_canopy_pixel = canopy
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
-        .filter(|(_, pixel)| (0.3..0.7).contains(&scalar_debug_amount(pixel)))
+        .filter(|(_, pixel)| (0.3..0.7).contains(&scalar_debug_amount(*pixel)))
         .min_by_key(|(pixel_index, _)| (pixel_index / 64).abs_diff(32))
         .map(|(pixel_index, _)| pixel_index)
         .expect("the world should contain mixed canopy conditions");
@@ -416,11 +423,15 @@ fn scene_light_contribution_gates_compose_independently() {
         ],
     );
     assert!(
-        off.chunks_exact(4)
+        off.as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| &pixel[..3])
             .all(|channel| *channel <= 1),
         "all disabled: maximum channel {}",
-        off.chunks_exact(4)
+        off.as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| &pixel[..3])
             .copied()
             .max()
@@ -467,7 +478,9 @@ fn scene_light_contribution_gates_compose_independently() {
         ],
     );
     let mean_error = all
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .flat_map(|(pixel_index, pixel)| {
             (0..3).map({
@@ -501,7 +514,9 @@ fn canopy_shadow_control_disables_attenuation_on_lower_clouds() {
     );
     assert!(
         disabled
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|pixel| scalar_debug_amount(pixel) > 0.99),
     );
     let enabled = render_controlled_image_at(
@@ -516,8 +531,10 @@ fn canopy_shadow_control_disables_attenuation_on_lower_clouds() {
     );
     assert!(
         enabled
-            .chunks_exact(4)
-            .zip(disabled.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(disabled.as_chunks::<4>().0.iter())
             .any(|(enabled, disabled)| {
                 scalar_debug_amount(enabled) + 0.02 < scalar_debug_amount(disabled)
             }),
@@ -764,7 +781,13 @@ fn landform_shadows_use_source_specific_apparent_radii() {
     );
 
     let baseline = scalar_debug_pixel(0.0);
-    let maximum = image.chunks_exact(4).map(|pixel| pixel[0]).max().unwrap();
+    let maximum = image
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| pixel[0])
+        .max()
+        .unwrap();
     assert!(
         maximum > baseline[0].saturating_add(1),
         "Sun and Moon landform penumbrae were identical: {maximum} <= {}",
@@ -787,8 +810,10 @@ fn landform_shadows_are_continuous_across_the_local_tangent() {
     );
 
     let maximum = image
-        .chunks_exact(4)
-        .map(scalar_debug_amount)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| scalar_debug_amount(pixel))
         .fold(0.0, f32::max);
     assert!(maximum < 0.02, "shadow discontinuity was {maximum}");
 }
@@ -942,8 +967,10 @@ fn cloud_shadow_softness_responds_to_celestial_disc_radius() {
         256,
     );
     let maximum = image
-        .chunks_exact(4)
-        .map(scalar_debug_amount)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| scalar_debug_amount(pixel))
         .fold(0.0, f32::max);
     assert!(
         maximum > 0.02,
@@ -963,8 +990,10 @@ fn low_cloud_canopy_shadow_softness_responds_to_celestial_disc_radius() {
         256,
     );
     let maximum = image
-        .chunks_exact(4)
-        .map(scalar_debug_amount)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| scalar_debug_amount(pixel))
         .fold(0.0, f32::max);
     assert!(
         maximum > 0.02,
@@ -1043,9 +1072,11 @@ fn landform_cast_shadows_reach_open_water() {
             ],
         );
         for ((elevation, unshadowed), shadowed) in elevation
-            .chunks_exact(4)
-            .zip(unshadowed.chunks_exact(4))
-            .zip(shadowed.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(unshadowed.as_chunks::<4>().0.iter())
+            .zip(shadowed.as_chunks::<4>().0.iter())
         {
             if elevation[2] > elevation[0].saturating_add(2) {
                 maximum_water_difference = maximum_water_difference
@@ -1489,8 +1520,10 @@ fn cached_scene_matches_direct_scene_across_longitude_seam() {
         128,
     );
     let differences = direct
-        .chunks_exact(4)
-        .zip(cached.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(cached.as_chunks::<4>().0.iter())
         .map(|(direct, cached)| {
             (0..3)
                 .map(|channel| direct[channel].abs_diff(cached[channel]) as f32)
@@ -1647,7 +1680,9 @@ fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
         overview_size as u32,
     );
     let cloud_pixel = overview
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .position(|pixel| scalar_debug_amount(pixel) > 0.2)
         .expect("representative view should contain an opaque low cloud");
     let row = cloud_pixel / overview_size;
@@ -1755,7 +1790,9 @@ fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
         overview_size as u32,
     );
     let cloud_pixel = overview
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .position(|pixel| pixel[..3] != scalar_debug_pixel(0.0)[..3])
         .expect("representative view should contain a low cloud");
     let row = cloud_pixel / overview_size;
@@ -2087,8 +2124,10 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
     );
 
     let mean_difference = before_sunset
-        .chunks_exact(4)
-        .zip(after_sunset.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(after_sunset.as_chunks::<4>().0.iter())
         .map(|(before, after)| {
             (0..3)
                 .map(|channel| before[channel].abs_diff(after[channel]) as f32 / 255.0)
@@ -2126,10 +2165,12 @@ fn projected_upper_clouds_can_shadow_locally_clear_ground() {
         height as u32,
     );
     let shadowed_clear_ground = sky
-        .chunks_exact(4)
-        .zip(shadow.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(shadow.as_chunks::<4>().0.iter())
         .filter(|(sky, shadow)| {
-            sky[..3] == scalar_debug_pixel(0.0)[..3] && scalar_debug_amount(shadow) > 0.05
+            sky[..3] == scalar_debug_pixel(0.0)[..3] && scalar_debug_amount(*shadow) > 0.05
         })
         .count();
 
@@ -2152,13 +2193,17 @@ fn rendered_pressure_is_spatial_across_world() {
     );
     assert!(
         pressure
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[0] > pixel[2].saturating_add(8)),
         "pressure diagnostic contains no high-pressure red"
     );
     assert!(
         pressure
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[2] > pixel[0].saturating_add(8)),
         "pressure diagnostic contains no low-pressure blue"
     );
@@ -2444,10 +2489,15 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
 }
 
 fn normalized_mean_neighbor_scalar_difference(bytes: &[u8], width: usize, height: usize) -> f32 {
-    let (minimum, maximum) = bytes.chunks_exact(4).map(scalar_debug_amount).fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(minimum, maximum), value| (minimum.min(value), maximum.max(value)),
-    );
+    let (minimum, maximum) = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| scalar_debug_amount(pixel))
+        .fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(minimum, maximum), value| (minimum.min(value), maximum.max(value)),
+        );
     let range = maximum - minimum;
     let mut difference = 0.0;
     let mut count = 0;
@@ -2482,12 +2532,16 @@ fn pearson_correlation(left: &[f32], right: &[f32]) -> f32 {
 
 fn channel_range(bytes: &[u8], channel: usize) -> f32 {
     let minimum = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| pixel[channel])
         .min()
         .unwrap();
     let maximum = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| pixel[channel])
         .max()
         .unwrap();
@@ -2519,7 +2573,13 @@ fn linear_luminance(pixel: &[u8]) -> f32 {
 }
 
 fn mean_linear_luminance(image: &[u8]) -> f32 {
-    image.chunks_exact(4).map(linear_luminance).sum::<f32>() / (image.len() / 4) as f32
+    image
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| linear_luminance(pixel))
+        .sum::<f32>()
+        / (image.len() / 4) as f32
 }
 
 fn assert_rgb_close(left: &[u8], right: &[u8], tolerance: u8) {

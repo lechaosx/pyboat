@@ -12,7 +12,8 @@ Repository-wide checks:
 | Rust diagnostics | `cargo clippy --workspace --all-targets --all-features` |
 | Native Rust workspace | `cargo test --workspace` |
 | Rust browser target | `cargo clippy -p browser --target wasm32-unknown-unknown --all-features` |
-| Browser and playground | `bun run build` |
+| TypeScript tooling tests | `npm test` |
+| Browser and playground | `npm run build` |
 
 Some integration tests open loopback UDP sockets for real WebTransport sessions.
 Restricted environments must allow loopback networking for those tests.

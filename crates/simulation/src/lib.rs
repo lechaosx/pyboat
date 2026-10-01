@@ -1603,6 +1603,7 @@ impl SharedSimulation {
                 &mut self.world.colliders,
                 &mut self.world.impulse_joints,
                 &mut self.world.multibody_joints,
+                &mut self.world.soft_bodies,
                 true,
             );
         }
@@ -1846,7 +1847,7 @@ impl SharedSimulation {
                 let first_boat = *self.boat_indices_by_collider.get(&pair.collider1)?;
                 let second_boat = *self.boat_indices_by_collider.get(&pair.collider2)?;
                 let (first_contact_local_m, second_contact_local_m, contact_count) = pair
-                    .manifolds
+                    .manifolds()
                     .iter()
                     .flat_map(|manifold| &manifold.points)
                     .fold(

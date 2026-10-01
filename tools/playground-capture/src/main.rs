@@ -2013,7 +2013,9 @@ fn test_cloud_shadow_cache_tide_initialization() {
     let tile_count = u32::from_ne_bytes(data[4..8].try_into().unwrap());
     let entries_start = usize::try_from(entries_offset).unwrap();
     let mut allocated_slots = data[entries_start..]
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .filter_map(|entry| {
             let slot = u32::from_ne_bytes(entry[4..].try_into().unwrap());
             (slot & 0x8000_0000 != 0)
@@ -2120,13 +2122,17 @@ fn capture_report(
 fn image_metrics(rgba: &[u8], width: u32, height: u32) -> ImageMetrics {
     let pixel_count = rgba.len() as f32 / 4.0;
     let channel_mean = |channel: usize| {
-        rgba.chunks_exact(4)
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| f32::from(pixel[channel]) / 255.0)
             .sum::<f32>()
             / pixel_count
     };
     let warm_pixel_fraction = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| {
             let red = f32::from(pixel[0]);
             let green = f32::from(pixel[1]);
@@ -2165,7 +2171,9 @@ fn image_metrics(rgba: &[u8], width: u32, height: u32) -> ImageMetrics {
         .sum::<f32>()
         / width as f32;
     let mut luminances: Vec<f32> = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
             (0.2126 * f32::from(pixel[0])
                 + 0.7152 * f32::from(pixel[1])

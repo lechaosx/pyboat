@@ -3,18 +3,18 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "browser": "workspace:*"
+    "browser": "*"
   },
   "scripts": {
-    "prebuild": "bun run --cwd .. build:wasm:playground",
-    "predev": "bun run --cwd .. build:wasm:playground:dev",
+    "prebuild": "npm --prefix .. run build:wasm:playground",
+    "predev": "npm --prefix .. run build:wasm:playground:dev",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "vite": "^8.0.13",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
     "vite-plugin-wasm": "^3.6.0"
   }
 }

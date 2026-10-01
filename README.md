@@ -23,20 +23,21 @@ current prototype as the complete design.
 ## Start here
 
 Development needs Rust with the `wasm32-unknown-unknown` target, `wasm-pack`, and
-Bun. The optional Nix shell provides the complete toolchain on `x86_64-linux`.
+Node.js 24 LTS and npm. The optional Nix shell provides the complete toolchain on
+`x86_64-linux`.
 
 ```sh
 nix develop       # optional
-bun install
+npm ci
 ```
 
 Choose what you want to run:
 
 | Goal | Command |
 | --- | --- |
-| Procedural playground | `bun run dev:playground` |
+| Procedural playground | `npm run dev:playground` |
 | Authoritative server | `cargo run -p server` |
-| Browser workspace | `bun run dev` |
+| Browser workspace | `npm run dev` |
 
 The procedural playground keeps a full live preview beside one continuous panel
 for tuning, playback, field diagnostics, and sparse shadow-cache inspection.
@@ -52,7 +53,7 @@ for tuning, playback, field diagnostics, and sparse shadow-cache inspection.
 2. In another terminal, start the browser workspace:
 
    ```sh
-   bun run dev
+   npm run dev
    ```
 
 3. Copy the server's complete `Browser certificate hash` and append it to the

@@ -25,6 +25,12 @@ and tests remain the source of truth for algorithms, constants, and schemas.
   state, prediction, reconciliation, physics, and rendering. TypeScript, HTML,
   and CSS own menus and DOM presentation and receive only commands, discrete
   events, and a small derived UI view.
+- **[Explicit]** JavaScript development tooling runs on Node.js for compatibility
+  with its tooling ecosystem.
+- **[Implicit]** Development uses the latest Node.js LTS line.
+- **[Implicit]** npm manages JavaScript workspace dependencies and scripts.
+- **[Implicit]** TypeScript tooling tests use Node.js's built-in test runner and
+  native type stripping.
 
 ## Authority and simulation
 

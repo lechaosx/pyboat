@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import {
   advanceProceduralTimeSeconds,
   maximumProceduralTimeSeconds,
@@ -6,7 +7,7 @@ import {
   worldDaySeconds,
   worldDateTimeSeconds,
   worldYearDays,
-} from "../src/world-date";
+} from "../src/world-date.ts";
 
 describe("playground world date", () => {
   test("keeps fixed ticks representable at the maximum editable year", () => {
@@ -14,19 +15,21 @@ describe("playground world date", () => {
     const tickSeconds = 1 / 60;
     const representedTick = seconds + tickSeconds - seconds;
 
-    expect(representedTick).toBeGreaterThan(0);
-    expect(Math.abs(representedTick - tickSeconds)).toBeLessThanOrEqual(tickSeconds / 256);
-    expect(seconds).toBeLessThanOrEqual(maximumProceduralTimeSeconds);
+    assert.ok(representedTick > 0);
+    assert.ok(Math.abs(representedTick - tickSeconds) <= tickSeconds / 256);
+    assert.ok(seconds <= maximumProceduralTimeSeconds);
   });
 
   test("clamps unbounded years before converting them to time", () => {
-    expect(worldDateTimeSeconds(Number.MAX_VALUE, 1, 0, 0, 0)).toBe(
+    assert.equal(
+      worldDateTimeSeconds(Number.MAX_VALUE, 1, 0, 0, 0),
       worldDateTimeSeconds(maximumWorldYear, 1, 0, 0, 0),
     );
   });
 
   test("clamps continued playback at the precise clock boundary", () => {
-    expect(advanceProceduralTimeSeconds(maximumProceduralTimeSeconds - 1, 100_000)).toBe(
+    assert.equal(
+      advanceProceduralTimeSeconds(maximumProceduralTimeSeconds - 1, 100_000),
       maximumProceduralTimeSeconds,
     );
   });
@@ -36,9 +39,9 @@ describe("playground world date", () => {
       maximumProceduralTimeSeconds / worldDaySeconds / worldYearDays,
     ) + 1;
 
-    expect(maximumWorldYear).toBe(terminalYear);
-    expect(worldDateTimeSeconds(terminalYear, 1, 0, 0, 0)).toBeGreaterThan(
-      maximumProceduralTimeSeconds / 2,
+    assert.equal(maximumWorldYear, terminalYear);
+    assert.ok(
+      worldDateTimeSeconds(terminalYear, 1, 0, 0, 0) > maximumProceduralTimeSeconds / 2,
     );
   });
 });

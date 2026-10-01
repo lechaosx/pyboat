@@ -21,7 +21,8 @@
     "noUnusedParameters": true,
     "noEmit": true,
     "types": ["vite/client"],
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src"]
 }

@@ -18,8 +18,7 @@
 				pkgs.clippy
 				pkgs.rust-analyzer
 				pkgs.wasm-pack
-				pkgs.bun
-				pkgs.nodejs
+				pkgs.nodejs_24
 				pkgs.cargo-watch
 				pkgs.lld
 				pkgs.vulkan-loader

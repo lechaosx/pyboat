@@ -2,7 +2,7 @@
 name = "browser"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.90"
 
 [lints]
 workspace = true
@@ -17,13 +17,13 @@ crate-type = ["cdylib", "rlib"]
 game = { path = "../game" }
 protocol = { path = "../protocol" }
 simulation = { path = "../simulation" }
-rapier2d = { version = "0.35.1", features = ["enhanced-determinism"] }
+rapier2d = { version = "0.36.0", features = ["enhanced-determinism"] }
 
 [build-dependencies]
-naga = { version = "30.0.0", features = ["wgsl-in", "wgsl-out"] }
+naga = { version = "30.0.1", features = ["wgsl-in", "wgsl-out"] }
 
 [dev-dependencies]
-naga = { version = "30.0.0", features = ["wgsl-in"] }
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 server = { path = "../server" }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
 wtransport = "0.7.2"
@@ -37,8 +37,8 @@ url = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Location", "Window"] }
-web-transport-wasm = "0.6.0"
-wgpu = { version = "30.0.0", default-features = false, features = ["std", "webgpu", "wgsl"] }
+web-transport-wasm = "0.8.0"
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "webgpu", "wgsl"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-bulk-memory"]

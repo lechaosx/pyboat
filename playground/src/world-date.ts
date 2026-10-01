@@ -1,4 +1,4 @@
-import { fixedTicksPerSecond } from "./fixed-clock";
+import { fixedTicksPerSecond } from "./fixed-clock.ts";
 
 export const worldDaySeconds = 86_400;
 export const worldYearDays = 365;
