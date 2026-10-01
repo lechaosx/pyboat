@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     error::Error,
     fmt,
+    ops::RangeInclusive,
 };
 
 use rapier2d::prelude::{
@@ -430,9 +431,9 @@ impl CylindricalSpatialIndex {
     }
 }
 
-fn linear_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32) -> Vec<i32> {
+fn linear_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32) -> RangeInclusive<i32> {
     let (minimum, maximum) = linear_cell_bounds(center_m, extent_m, cell_size_m);
-    (minimum..=maximum).collect()
+    minimum..=maximum
 }
 
 fn linear_cell_bounds(center_m: f32, extent_m: f32, cell_size_m: f32) -> (i32, i32) {

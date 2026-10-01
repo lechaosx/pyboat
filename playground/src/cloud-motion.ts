@@ -6,7 +6,7 @@ export class CloudMotion {
     elapsedSeconds: number,
     lowWindMS: [number, number],
     upperWindMS: [number, number],
-  ): number[] {
+  ): [number, number, number, number] {
     for (const axis of [0, 1] as const) {
       this.lowOffsetM[axis] += elapsedSeconds * lowWindMS[axis];
       this.upperOffsetM[axis] += elapsedSeconds * upperWindMS[axis];

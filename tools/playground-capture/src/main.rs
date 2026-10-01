@@ -2024,7 +2024,7 @@ fn test_cloud_shadow_cache_tide_initialization() {
         })
         .collect::<Vec<_>>();
     allocated_slots.sort_unstable();
-    let valid = allocated_slots == (0..tile_count).collect::<Vec<_>>();
+    let valid = allocated_slots.iter().copied().eq(0..tile_count);
     let pixel = if tile_count > 0 && valid {
         [255, 255, 255, 255]
     } else {

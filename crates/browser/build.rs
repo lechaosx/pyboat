@@ -170,7 +170,7 @@ fn compose(components: &[&str]) -> String {
 
 fn write_shader(source: &str, entry_points: &[&str], output_name: &str) {
     let module = parse_shader(source);
-    write_selected_shader(&module, entry_points, output_name);
+    write_selected_shader(module, entry_points, output_name);
 }
 
 fn parse_shader(source: &str) -> naga::Module {
@@ -184,8 +184,7 @@ fn parse_shader(source: &str) -> naga::Module {
     module
 }
 
-fn write_selected_shader(module: &naga::Module, entry_points: &[&str], output_name: &str) {
-    let mut module = module.clone();
+fn write_selected_shader(mut module: naga::Module, entry_points: &[&str], output_name: &str) {
     module
         .entry_points
         .retain(|entry| entry_points.contains(&entry.name.as_str()));

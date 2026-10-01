@@ -37,8 +37,6 @@ import {
 } from "./diagnostics";
 import "./style.css";
 
-type Domain = "weather" | "landscape" | "water";
-
 let useShadowCache = true;
 let shadowCacheTileTexels = 128;
 let shadowCacheDebugMode = 0;
@@ -339,7 +337,7 @@ function renderControls(): void {
   const diagnosticSelect = document.createElement("select");
   diagnosticSelect.id = "diagnostic-output";
   diagnosticHeading.htmlFor = diagnosticSelect.id;
-  for (const domain of ["weather", "landscape", "water"] as Domain[]) {
+  for (const domain of ["weather", "landscape", "water"] as const) {
     for (const group of diagnosticGroups[domain]) {
       if (group.label === "Overview" && domain !== "weather") continue;
       const optionGroup = document.createElement("optgroup");
@@ -892,75 +890,53 @@ function syncTimeScaleInputs(): void {
   worldTimeValueInput.value = String(state.worldTimeScale);
   lockTimeScalesInput.checked = state.timeScalesLocked;
 }
-function setCloudTimeScale(value: number): void {
-  state.cloudTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
+function setTimeScale(
+  key: "cloudTimeScale" | "pressureTimeScale" | "currentTimeScale" | "worldTimeScale",
+  value: number,
+): void {
+  const scale = Math.min(maximumTimeScale, Math.max(0, value));
+  state[key] = scale;
   if (state.timeScalesLocked) {
-    state.pressureTimeScale = state.cloudTimeScale;
-    state.currentTimeScale = state.cloudTimeScale;
-    state.worldTimeScale = state.cloudTimeScale;
-  }
-  syncTimeScaleInputs();
-}
-function setPressureTimeScale(value: number): void {
-  state.pressureTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) {
-    state.cloudTimeScale = state.pressureTimeScale;
-    state.currentTimeScale = state.pressureTimeScale;
-    state.worldTimeScale = state.pressureTimeScale;
-  }
-  syncTimeScaleInputs();
-}
-function setCurrentTimeScale(value: number): void {
-  state.currentTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) {
-    state.cloudTimeScale = state.currentTimeScale;
-    state.pressureTimeScale = state.currentTimeScale;
-    state.worldTimeScale = state.currentTimeScale;
-  }
-  syncTimeScaleInputs();
-}
-function setWorldTimeScale(value: number): void {
-  state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
-  if (state.timeScalesLocked) {
-    state.cloudTimeScale = state.worldTimeScale;
-    state.pressureTimeScale = state.worldTimeScale;
-    state.currentTimeScale = state.worldTimeScale;
+    state.cloudTimeScale = scale;
+    state.pressureTimeScale = scale;
+    state.currentTimeScale = scale;
+    state.worldTimeScale = scale;
   }
   syncTimeScaleInputs();
 }
 cloudTimeScaleInput.addEventListener("input", () => {
-  setCloudTimeScale(timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
+  setTimeScale("cloudTimeScale", timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
 });
 cloudTimeValueInput.addEventListener("input", () => {
   if (Number.isFinite(cloudTimeValueInput.valueAsNumber)) {
-    setCloudTimeScale(cloudTimeValueInput.valueAsNumber);
+    setTimeScale("cloudTimeScale", cloudTimeValueInput.valueAsNumber);
   }
 });
 cloudTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 pressureTimeScaleInput.addEventListener("input", () => {
-  setPressureTimeScale(timeScaleFromSlider(pressureTimeScaleInput.valueAsNumber));
+  setTimeScale("pressureTimeScale", timeScaleFromSlider(pressureTimeScaleInput.valueAsNumber));
 });
 pressureTimeValueInput.addEventListener("input", () => {
   if (Number.isFinite(pressureTimeValueInput.valueAsNumber)) {
-    setPressureTimeScale(pressureTimeValueInput.valueAsNumber);
+    setTimeScale("pressureTimeScale", pressureTimeValueInput.valueAsNumber);
   }
 });
 pressureTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 currentTimeScaleInput.addEventListener("input", () => {
-  setCurrentTimeScale(timeScaleFromSlider(currentTimeScaleInput.valueAsNumber));
+  setTimeScale("currentTimeScale", timeScaleFromSlider(currentTimeScaleInput.valueAsNumber));
 });
 currentTimeValueInput.addEventListener("input", () => {
   if (Number.isFinite(currentTimeValueInput.valueAsNumber)) {
-    setCurrentTimeScale(currentTimeValueInput.valueAsNumber);
+    setTimeScale("currentTimeScale", currentTimeValueInput.valueAsNumber);
   }
 });
 currentTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 worldTimeScaleInput.addEventListener("input", () => {
-  setWorldTimeScale(timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
+  setTimeScale("worldTimeScale", timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
 });
 worldTimeValueInput.addEventListener("input", () => {
   if (Number.isFinite(worldTimeValueInput.valueAsNumber)) {
-    setWorldTimeScale(worldTimeValueInput.valueAsNumber);
+    setTimeScale("worldTimeScale", worldTimeValueInput.valueAsNumber);
   }
 });
 worldTimeValueInput.addEventListener("change", syncTimeScaleInputs);
@@ -1040,7 +1016,7 @@ async function showStartupPhase(message: string): Promise<void> {
 }
 
 await showStartupPhase("Requesting WebGPU adapter…");
-const gpu = (navigator as Navigator & { gpu?: any }).gpu;
+const gpu = navigator.gpu;
 if (!gpu) throw new Error("WebGPU is unavailable");
 const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
 if (!adapter) throw new Error("No WebGPU adapter available");
@@ -1075,17 +1051,17 @@ window.addEventListener(
 void device.lost.then(() => {
   stopRendering("WebGPU device lost; reload to resume");
 });
-const context = previewCanvas.getContext("webgpu") as any;
+const context = previewCanvas.getContext("webgpu") as GPUCanvasContext;
 const formatName = gpu.getPreferredCanvasFormat();
 context.configure({ device, format: formatName, alphaMode: "opaque" });
 
 await showStartupPhase("Creating startup shader…");
 const startupShader = device.createShaderModule({ code: playground_startup_shader_source() });
 function createPlaygroundPipeline(
-  shader: any,
+  shader: GPUShaderModule,
   entryPoint: string,
   constants?: Record<string, number>,
-): Promise<any> {
+): Promise<GPURenderPipeline> {
   return device.createRenderPipelineAsync({
     layout: "auto",
     vertex: {
@@ -1100,7 +1076,12 @@ function createPlaygroundPipeline(
         ],
       }],
     },
-    fragment: { module: shader, entryPoint, constants, targets: [{ format: formatName }] },
+    fragment: {
+      module: shader,
+      entryPoint,
+      ...(constants ? { constants } : {}),
+      targets: [{ format: formatName }],
+    },
     primitive: { topology: "triangle-list" },
   });
 }
@@ -1132,29 +1113,29 @@ type CloudShadowCache = {
   atlasHeight: number;
   liveTiles?: number;
   tileCountPending: boolean;
-  tileCountReadback: any;
-  discoveryPipeline: any;
-  fillPipeline: any;
-  discoverySceneBindGroup: any;
-  discoveryPlaygroundBindGroup: any;
-  discoveryBindGroup: any;
-  fillSceneBindGroup: any;
-  fillPlaygroundBindGroup: any;
-  fillBindGroup: any;
-  sampleBindGroup: any;
-  entries: any;
-  header: any;
-  atlasView: any;
+  tileCountReadback: GPUBuffer;
+  discoveryPipeline: GPUComputePipeline;
+  fillPipeline: GPURenderPipeline;
+  discoverySceneBindGroup: GPUBindGroup;
+  discoveryPlaygroundBindGroup: GPUBindGroup;
+  discoveryBindGroup: GPUBindGroup;
+  fillSceneBindGroup: GPUBindGroup;
+  fillPlaygroundBindGroup: GPUBindGroup;
+  fillBindGroup: GPUBindGroup;
+  sampleBindGroup: GPUBindGroup;
+  entries: GPUBuffer;
+  header: GPUBuffer;
+  atlasView: GPUTextureView;
   retired: boolean;
   submittedWorkDone: boolean;
   retirementComplete?: () => void;
-  resources: any[];
+  resources: (GPUBuffer | GPUTexture)[];
 };
 
 function createCloudShadowCache(
-  discoveryPipeline: any,
-  fillPipeline: any,
-  scenePipeline: any,
+  discoveryPipeline: GPUComputePipeline,
+  fillPipeline: GPURenderPipeline,
+  scenePipeline: GPURenderPipeline,
 ): CloudShadowCache {
   const width = previewCanvas.width;
   const height = previewCanvas.height;
@@ -1283,7 +1264,6 @@ function createCloudShadowCache(
       entries,
       tiles,
       atlas,
-      sampler,
       tileCountReadback,
       debugBuffer,
     ],
@@ -1296,9 +1276,9 @@ const timestampResolveBuffer = timestampQueriesSupported
   ? device.createBuffer({ size: 32, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
-  buffer: any;
+  buffer: GPUBuffer;
   pending: boolean;
-  pipeline?: any;
+  pipeline?: GPURenderPipeline;
   cached?: boolean;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
@@ -1312,9 +1292,9 @@ const startupSceneBindGroup = device.createBindGroup({
   entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
 });
 type RenderResources = {
-  pipeline: any;
-  sceneBindGroup: any;
-  playgroundBindGroup?: any;
+  pipeline: GPURenderPipeline;
+  sceneBindGroup: GPUBindGroup;
+  playgroundBindGroup?: GPUBindGroup;
   cloudShadowCache?: CloudShadowCache;
 };
 let sceneRenderResources: RenderResources = {
@@ -1323,15 +1303,15 @@ let sceneRenderResources: RenderResources = {
 };
 let directSceneRenderResources = sceneRenderResources;
 let sceneCompilationStatus = "compiling full scene";
-const diagnosticShaderModules = new Map<string, any>();
+const diagnosticShaderModules = new Map<string, GPUShaderModule>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
 let shadowCacheRecreationRequested = false;
 let shadowCacheRetirement: Promise<void> | undefined;
 let retiredShadowCachePipelines: {
-  discovery: any;
-  fill: any;
-  scene: any;
+  discovery: GPUComputePipeline;
+  fill: GPURenderPipeline;
+  scene: GPURenderPipeline;
 } | undefined;
 
 function updateShadowCacheInfo(cache?: CloudShadowCache): void {
@@ -1350,7 +1330,7 @@ function updateShadowCacheInfo(cache?: CloudShadowCache): void {
 
 function destroyRetiredShadowCache(cache: CloudShadowCache): void {
   if (!cache.retired || !cache.submittedWorkDone || cache.tileCountPending) return;
-  for (const resource of cache.resources) resource.destroy?.();
+  for (const resource of cache.resources) resource.destroy();
   cache.resources.length = 0;
   cache.retirementComplete?.();
   delete cache.retirementComplete;
@@ -1994,7 +1974,7 @@ let gpuSamplesInWindow = 0;
 let measuredDiscoveryGpuMilliseconds: number | undefined;
 let measuredFillGpuMilliseconds: number | undefined;
 let measuredSceneGpuMilliseconds: number | undefined;
-let timedPipeline: any;
+let timedPipeline: GPURenderPipeline | undefined;
 let timedCache: CloudShadowCache | undefined;
 let timedUsesShadowCache = false;
 let nextDiagnosticsAt = 0;
@@ -2115,8 +2095,8 @@ function renderFrame(now: number): void {
   if (cache) {
     encoder.clearBuffer(cache.entries);
     encoder.clearBuffer(cache.header, 4, 4);
-    const discoveryPassDescriptor: any = {};
-    if (timestampReadback) {
+    const discoveryPassDescriptor: GPUComputePassDescriptor = {};
+    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
       discoveryPassDescriptor.timestampWrites = {
         querySet: timestampQuerySet,
         beginningOfPassWriteIndex: 0,
@@ -2133,7 +2113,7 @@ function renderFrame(now: number): void {
       Math.ceil(previewCanvas.height / 128),
     );
     discoveryPass.end();
-    const fillPassDescriptor: any = {
+    const fillPassDescriptor: GPURenderPassDescriptor = {
       colorAttachments: [{
         view: cache.atlasView,
         ...(shadowCacheDebugMode === 3
@@ -2142,7 +2122,7 @@ function renderFrame(now: number): void {
         storeOp: "store",
       }],
     };
-    if (timestampReadback) {
+    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
       fillPassDescriptor.timestampWrites = {
         querySet: timestampQuerySet,
         endOfPassWriteIndex: 2,
@@ -2156,7 +2136,7 @@ function renderFrame(now: number): void {
     fillPass.drawIndirect(cache.header, 0);
     fillPass.end();
   }
-  const renderPassDescriptor: any = {
+  const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
@@ -2164,7 +2144,7 @@ function renderFrame(now: number): void {
       storeOp: "store",
     }],
   };
-  if (timestampReadback) {
+  if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet,
       ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
@@ -2188,7 +2168,7 @@ function renderFrame(now: number): void {
     cacheInfoReadback = cache;
     nextShadowCacheInfoAt = now + 500;
   }
-  if (timestampReadback) {
+  if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
     const timestampCount = cache ? 4 : 2;
     const timestampBytes = timestampCount * 8;
     encoder.resolveQuerySet(timestampQuerySet, 0, timestampCount, timestampResolveBuffer, 0);

@@ -1922,9 +1922,9 @@ async fn read_reliable_server_message(mut stream: RecvStream) -> ReliableServerM
 
 fn accept_server_message(
     bytes: &[u8],
-    protocol_client: &Rc<RefCell<MultiplayerClient>>,
-    pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
-    connection_status: &Rc<Cell<ConnectionStatus>>,
+    protocol_client: &RefCell<MultiplayerClient>,
+    pending_snapshot: &RefCell<Option<ServerMessage>>,
+    connection_status: &Cell<ConnectionStatus>,
 ) -> Result<(), protocol::ProtocolError> {
     if connection_status.get() != ConnectionStatus::Open {
         return Ok(());
@@ -1940,10 +1940,10 @@ fn accept_server_message(
 
 fn fail_protocol(
     session: &Session,
-    protocol_client: &Rc<RefCell<MultiplayerClient>>,
-    pending_snapshot: &Rc<RefCell<Option<ServerMessage>>>,
-    connection_status: &Rc<Cell<ConnectionStatus>>,
-    transport: &Rc<RefCell<Option<Session>>>,
+    protocol_client: &RefCell<MultiplayerClient>,
+    pending_snapshot: &RefCell<Option<ServerMessage>>,
+    connection_status: &Cell<ConnectionStatus>,
+    transport: &RefCell<Option<Session>>,
 ) {
     if connection_status.get() != ConnectionStatus::Open {
         return;

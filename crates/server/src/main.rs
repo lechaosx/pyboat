@@ -4,11 +4,12 @@ use wtransport::{Identity, tls::Sha256DigestFmt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let address = env::args()
-        .nth(1)
+    let mut arguments = env::args().skip(1);
+    let address = arguments
+        .next()
         .unwrap_or_else(|| "127.0.0.1:8765".to_owned());
-    let certificate_path = env::args().nth(2);
-    let private_key_path = env::args().nth(3);
+    let certificate_path = arguments.next();
+    let private_key_path = arguments.next();
     let identity = match (certificate_path, private_key_path) {
         (Some(certificate_path), Some(private_key_path)) => {
             Identity::load_pemfiles(certificate_path, private_key_path).await?

@@ -20,31 +20,19 @@ export function deriveIntermediateVisibility(
   contributions: FragmentContributionState,
   diagnosticActive: boolean,
 ): IntermediateVisibility {
-  if (diagnosticActive) {
-    return {
-      pressure: true,
-      temperature: true,
-      moisture: true,
-      weather: true,
-      materials: true,
-      oceanForcing: true,
-      waveSpectrum: true,
-    };
-  }
-
-  const colorPipeline = contributions.colorLayer
+  const enabled = diagnosticActive || (contributions.colorLayer
     && (contributions.sun
       || contributions.moon
       || contributions.clearSkyAmbient
-      || contributions.canopyAmbient);
+      || contributions.canopyAmbient));
 
   return {
-    pressure: colorPipeline,
-    temperature: colorPipeline,
-    moisture: colorPipeline,
-    weather: colorPipeline,
-    materials: colorPipeline,
-    oceanForcing: colorPipeline,
-    waveSpectrum: colorPipeline,
+    pressure: enabled,
+    temperature: enabled,
+    moisture: enabled,
+    weather: enabled,
+    materials: enabled,
+    oceanForcing: enabled,
+    waveSpectrum: enabled,
   };
 }

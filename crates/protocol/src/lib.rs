@@ -121,11 +121,8 @@ pub fn encode_server_message(message: &ServerMessage) -> Result<Vec<u8>, Protoco
 }
 
 fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, ProtocolError> {
-    let mut encoded = vec![PROTOCOL_VERSION];
-    encoded.extend(
-        postcard::to_allocvec(message).map_err(|error| ProtocolError::Codec(error.to_string()))?,
-    );
-    Ok(encoded)
+    postcard::to_extend(message, vec![PROTOCOL_VERSION])
+        .map_err(|error| ProtocolError::Codec(error.to_string()))
 }
 
 fn decode_message<'a, T: Deserialize<'a>>(message: &'a [u8]) -> Result<T, ProtocolError> {

@@ -656,16 +656,16 @@ impl MultiplayerClient {
         self.session_state = ClientSessionState::Disconnected;
         self.input_history.clear();
         self.sent_viewport_radius_m = None;
-        let player_id = self.player_id.clone();
+        let player_id = self.player_id.as_ref();
         for (boat_id, boat) in &mut self.boats {
-            if Some(boat_id) == player_id.as_ref() {
+            if Some(boat_id) == player_id {
                 continue;
             }
             boat.snapshot.health = 0.0;
             boat.snapshot.wreck = true;
         }
         for (boat_id, boat) in &mut self.predicted_boats {
-            if Some(boat_id) != player_id.as_ref() {
+            if Some(boat_id) != player_id {
                 boat.wreck = true;
             }
         }
