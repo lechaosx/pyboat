@@ -1,11 +1,8 @@
 # Maintainer guide
 
-This is the repository-level operating guide. Use the
-[root setup](README.md#start-here) before running repository checks.
+Use the [root setup](README.md#start-here) before running checks.
 
 ## Verification
-
-Repository-wide checks:
 
 | Surface | Command |
 | --- | --- |
@@ -15,19 +12,36 @@ Repository-wide checks:
 | TypeScript tooling tests | `npm test` |
 | Browser and playground | `npm run build` |
 
-Some integration tests open loopback UDP sockets for real WebTransport sessions.
-Restricted environments must allow loopback networking for those tests.
-Headless capture and its rendering integration tests require a hardware Vulkan
-GPU; software adapters are rejected.
+WebTransport integration tests need loopback UDP access. Headless rendering tests
+need a hardware Vulkan GPU; software adapters are rejected.
 
-A successful build does not validate appearance. The
-[procedural playground](README.md#start-here) and browser provide interactive
-visual checks.
+## Visual checks
 
-## Repository map
+A build cannot validate appearance. Use `npm run dev:playground` to inspect the
+world and `npm run dev` with the server to check it during play.
 
-| Area | Paths |
+For repeatable visual checks, capture an image outside the repository:
+
+```sh
+cargo run -p playground-capture -- --output /tmp/pyboat.png
+```
+
+The PNG's `.json` sidecar records world inputs, derived conditions, and image
+metrics. Use `cargo run -p playground-capture -- --help` for world, camera, clock,
+and diagnostic options and limits. A fresh capture has no accumulated cloud
+transport, so matching its clock alone does not reproduce a long-running
+interactive cloud view. Capture requires a hardware Vulkan GPU.
+
+## Source navigation
+
+| Find | Start at |
 | --- | --- |
-| Shared Rust | [`crates/simulation`](crates/simulation), [`crates/game`](crates/game), [`crates/protocol`](crates/protocol) |
-| Rust applications | [`crates/server`](crates/server), [`crates/browser`](crates/browser) |
-| Web and tools | [`web`](web), [`playground`](playground), [`tools`](tools) |
+| Physics, control, world geometry | [simulation](crates/simulation/src/lib.rs), [behavior tests](crates/simulation/tests) |
+| Game policy, environment, calibration | [game](crates/game/src/lib.rs), [behavior tests](crates/game/tests) |
+| Wire messages | [protocol](crates/protocol/src/lib.rs) |
+| Server lifecycle and transport | [server](crates/server/src/lib.rs), [operation guide](crates/server/README.md) |
+| Prediction and browser rendering | [browser](crates/browser/src/lib.rs), [WebGPU/WebTransport adapter](crates/browser/src/web.rs) |
+| Procedural shader mechanisms | [shader components](crates/browser/src/shader/components) |
+| Browser presentation | [web](web/src/main.ts) |
+| Playground controls and diagnostics | [playground](playground/src/main.ts), [tooling tests](playground/tests) |
+| Headless capture | [capture](tools/playground-capture/src/main.rs) |

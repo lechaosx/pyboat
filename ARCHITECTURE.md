@@ -1,680 +1,251 @@
 # Architecture decisions
 
-This record contains technical choices that constrain future implementation. Code
-and tests remain the source of truth for algorithms, constants, and schemas.
+These choices constrain implementation. Algorithms, constants, schemas, and
+calibration provenance belong beside their code; accepted behavior belongs in
+tests. [PRODUCT.md](PRODUCT.md) owns player experience and future scope.
+Use [source navigation](MAINTAINERS.md#source-navigation) to find implementation
+and verification details.
 
-| Mark | Meaning |
-| --- | --- |
-| **[Explicit]** | The user requested or clearly endorsed the choice, including after it was initially implicit |
-| **[Implicit]** | An agent selected the choice |
+**[Explicit]** means requested or clearly endorsed by the user.
+**[Implicit]** means selected by an agent; passive acceptance does not change it.
 
 ## Runtime boundaries
 
-- **[Explicit]** Rust is the gameplay runtime. The same simulation compiles
-  to WebAssembly for the browser and runs natively on the dedicated server.
-- **[Implicit]** The runtime-independent `simulation` crate owns reusable physics
-  and control behavior and canonical world-coordinate geometry. `game` owns
-  concrete game policy, tuning, control composition, and procedural environment
-  sampling shared by native and browser runtimes. Transport serializes the
-  canonical geometry type rather than owning a parallel wire representation.
-- **[Explicit]** Rapier 2D provides target rigid-body physics on native and
-  WebAssembly builds.
-- **[Explicit]** The browser renderer is Rust `wgpu`, initially WebGPU-only rather
-  than carrying a WebGL compatibility backend.
-- **[Explicit]** Rust/WASM owns gameplay transport, protocol decoding, replicated
-  state, prediction, reconciliation, physics, and rendering. TypeScript, HTML,
-  and CSS own menus and DOM presentation and receive only commands, discrete
-  events, and a small derived UI view.
-- **[Explicit]** JavaScript development tooling runs on Node.js for compatibility
-  with its tooling ecosystem.
-- **[Implicit]** Development uses the latest Node.js LTS line.
-- **[Implicit]** npm manages JavaScript workspace dependencies and scripts.
-- **[Implicit]** TypeScript tooling tests use Node.js's built-in test runner and
-  native type stripping.
+- **[Explicit]** Rust gameplay runs natively on the dedicated server and as
+  WebAssembly in the browser, sharing the same simulation.
+- **[Implicit]** `simulation` owns runtime-independent physics, control, and
+  canonical world geometry. `game` owns game policy, tuning, control composition,
+  and procedural sampling. Transport serializes the canonical geometry type.
+- **[Explicit]** Rapier 2D supplies native and WebAssembly rigid-body physics.
+- **[Explicit]** The browser renderer uses Rust `wgpu` with WebGPU as its initial backend.
+- **[Explicit]** Rust/WASM owns transport, decoding, replication, prediction,
+  reconciliation, physics, and rendering. TypeScript/HTML/CSS own DOM presentation,
+  exchanging commands, discrete events, and a small derived UI view with Rust.
+- **[Explicit]** JavaScript tooling runs on Node.js for ecosystem compatibility.
+- **[Implicit]** Development follows the latest Node.js LTS line.
+- **[Implicit]** npm manages JavaScript dependencies and scripts.
+- **[Implicit]** TypeScript tooling tests use Node's built-in runner and native type stripping.
+- **[Explicit]** Server and browser orchestration use asynchronous I/O wherever work may suspend.
 
-## Authority and simulation
+## Authority and coordinates
 
-- **[Explicit]** The dedicated server is authoritative. Clients predict locally
-  and reconcile corrections without exposing them where practical.
-- **[Explicit]** Each match has a cylindrical `WorldGeometry` with independently
-  selectable longitude circumference and pole-to-pole span in metres. It defines
-  canonical coordinates in `[-width/2, width/2) x R`; minimum-image displacement
-  wraps only longitude. Latitude mirror-repeats between -90 and +90 degrees at
-  successive poles without wrapping north-south position. Authoritative simulation, client
-  prediction, reconciliation, rendering placement, spatial interest, and
-  replication use that shared geometry. The origin is the equator and reference
-  meridian.
-- **[Explicit]** Rapier steps finite planar charts of the cylinder. Each tick uses
-  per-hull swept extents in longitude-wrapped fixed-size spatial columns and
-  unbounded north-south rows, plus exact
-  minimum-image swept proximity to form deterministic contact components, then
-  places every complete articulated boat assembly in a common chart. Shared
-  simulation supports hull beams of at least 1.5 m and bounds each hull's linear
-  speed plus angular extremity speed to 700 m/s, over an order of magnitude above
-  the tuned vessel's reachable speed. Non-finite motion becomes rest and
-  over-limit linear and angular motion scale together at the shared simulation
-  boundary, so authority and prediction apply the same rule. Thirty-two substeps
-  therefore resolve opposing supported hull extrema to half the minimum beam
-  without relying on dynamic-body CCD. Damage comes only from pair-specific
-  solver contacts. The same cylindrical index narrows interest queries. Chart
-  changes move whole assemblies without changing their canonical logical
-  position; no one-sided collision ghosts participate in the solver.
-- **[Implicit]** Geometry dimensions use `f32` and accept exactly representable
-  values from 8,000 through 256,000 metres on each axis. Exact half-period
-  minimum-image ties select the positive half-period on either axis. The
-  production default is a 64,000 m square, while server construction accepts any
-  validated rectangle.
-- **[Implicit]** Each match advances all boats and wrecks together in one
-  fixed-step physics world. Runtime adapters gather asynchronous work
-  before a synchronous tick and publish results afterward; simulation never
-  awaits I/O, timers, persistence, rendering, or UI.
-- **[Implicit]** Project code owns fluid loads, articulated control, game rules,
-  damage, and wreck behavior. Rapier owns rigid-body integration, joints,
-  collision response, and spatial queries.
-- **[Explicit]** Rendered hull geometry and collision geometry agree.
-- **[Explicit]** A destroyed boat retains its bodies, momentum, fluid forces, and
-  collisions but has no controller. Its owner stays connected as a spectator
-  centered on it.
+- **[Explicit]** The dedicated server is authoritative; clients predict and reconcile.
+- **[Explicit]** One validated cylindrical geometry governs simulation,
+  prediction, reconciliation, render placement, interest, and replication.
+  Longitude wraps around an equatorial reference origin; north-south position is
+  unbounded, and minimum-image displacement wraps only longitude.
+- **[Explicit]** Climate uses mirror-repeating latitude; celestial geometry uses
+  continuous latitude phase to connect each descending band to the far hemisphere.
+  Terrain and seeded fields retain the unbounded north-south coordinate. The
+  thermally lagged daylight response reverses in descending bands and vanishes
+  continuously at poles and in polar night.
+- **[Explicit]** Canonical normalized east-west position is longitude. Local
+  solar phase adds longitude to global day phase; season and lunar longitude stay global.
+- **[Implicit]** Positive X is east/right and positive Y is north/up; input
+  adapters convert down-positive device coordinates at their boundaries.
+- **[Explicit]** Runtime spatial coordinates remain single precision. Quantized
+  boat-scale detail millions of metres from the origin is an accepted limit of
+  unbounded travel.
+- **[Explicit]** Cylindrical collision handling puts complete articulated boats
+  in common planar contact charts selected by deterministic swept proximity.
+  Chart changes preserve logical positions; solver contacts alone cause damage.
+  Shared motion bounds and substeps protect the supported hull collision domain.
+- **[Implicit]** One fixed-step world advances all boats and wrecks. Runtime
+  adapters gather work before a synchronous tick and publish afterward;
+  simulation never awaits external work.
+- **[Implicit]** Project code owns fluid loads, control, game rules, damage, and
+  wreck policy. Rapier owns integration, joints, collision response, and spatial queries.
+- **[Explicit]** Rendered and collision hull geometry agree.
+- **[Explicit]** Destruction removes the controller while retaining bodies,
+  momentum, fluid forces, and collisions. The owner spectates the wreck.
 
-## Procedural environment and rendering
+## Procedural contracts
 
-- **[Explicit]** Environment models are locally plausible deterministic,
-  stateless queries rather than global fluid, climate, storm-lifecycle, or
-  ocean-basin simulations.
+- **[Explicit]** Environment models are deterministic, stateless, locally
+  plausible queries rather than global climate, fluid, storm-lifecycle, or basin solves.
+- **[Implicit]** `game` is authoritative for terrain, atmosphere, tides, shelter,
+  and depth; native and WASM sample match seed, tick, and world position.
+- **[Explicit]** Clients receive seed and geometry as procedural-world data.
+  Snapshots synchronize boats rather than sampled fields or model parameters.
+- **[Explicit]** Every seeded spatial field joins in value and gradient across
+  longitude and continues without repetition north-south. Coordinate wrapping
+  alone cannot make an ordinary noise field periodic.
+- **[Explicit]** Noise basis is a fixed semantic choice per field and octave,
+  independent of geometry. Broad terrain/tide use longitude-circle embeddings;
+  evolving weather adds noise time; fine relief and material detail use periodic
+  triangular simplex. Preserve local metre scales when dimensions change;
+  changing octave partition requires explicit, profiled retuning.
+- **[Explicit]** Generators remain portable between Rust and WGSL through
+  reproducible hashing, coordinates, constants, and mirrorable arithmetic.
+  Shared queries agree within narrow numeric tolerance and preserve categorical
+  boundaries outside it; bitwise CPU/GPU floating-point identity is unnecessary.
+- **[Implicit]** WGSL mirrors authoritative terrain and short environment
+  derivations; Rust governs when a rendering approximation differs.
+
+## Terrain and physical environment
 
 ### Terrain
 
-- **[Explicit]** Static terrain is a continuous seeded density field composed at
-  multiple scales in uncompressed metres. Reefs and rocks are field features, not
-  replicated objects. Land occupancy stays sparse enough for open water to remain
-  overwhelmingly connected across representative seeds; this is a measured
-  statistical outcome rather than a structural guarantee. Rough physical
-  phenomena may retain a one-metre wavelength band, while genuinely smooth
-  surfaces remain low-frequency; finer structure is appearance-only and cannot
-  change depth, collision, or the shoreline.
-- **[Explicit]** Large-scale archipelago suitability uses three octaves of
-  four-dimensional simplex-gradient noise sampled through a longitude circle
-  and a linear north-south path. Independent island morphology uses the same
-  basis for its first three octaves and longitude-periodic two-dimensional
-  triangular simplex for its two finer octaves. A high sea-level threshold keeps
-  the land excursion set below the regime where it commonly divides the sea.
-- **[Explicit]** Coastal appearance is the expression of shared latent physical
-  fields rather than independent material masks. Broad substrate rockiness and
-  coastal ruggedness cross the shoreline: rocky and reef-forming regions drive
-  land relief, submerged relief, and outcrops, while low-rock depositional regions
-  accumulate broad sand or pebble beaches and low-deposition regions allow
-  vegetation to reach the water. Local detail varies each expression without
-  changing its regional cause. Material zones span the configured astronomical
-  tidal range: low tide exposes wet rock or sediment, and ordinary vegetation
-  begins above the permanent intertidal band. Below the shoreline, a monotonic
-  shelf-to-slope transfer of the signed landform field preserves its level sets,
-  so shelf geometry follows the coast and its physical width emerges from the
-  field gradient before depth reaches the ocean basin. Fine signed relief shapes
-  the inner reef, intertidal rock, and sparse emergent peaks. A non-overlapping
-  outer rocky-shelf band adds portable multi-scale simplex relief that the shared
-  ruggedness field transforms toward connected ridges and cuts; depositional
-  shelves remain comparatively smooth.
-- **[Explicit]** Inland physical relief uses a portable simplex field spanning
-  hill to one-metre scale. The shared broad coastal-ruggedness field continuously
-  blends that relief from smooth rolling ground into ridged rock, correlating
-  cliff-forming coasts with the terrain behind them without a separate mountain
-  mask.
-- **[Explicit]** Terrain appearance retains slope, elevation, coastal geology,
-  deposition, tidal exposure, vegetation, canopy, and snow as continuous cover
-  capacities. Rock exposure is their continuous union; sediment, wet ground,
-  and vegetation consume the remaining surface in turn, and snow overlays the
-  resulting color, detail gradient, and roughness. No categorical material ID or
-  distance from an inferred boundary participates.
-- **[Implicit]** Cover response uses the existing hill-to-eight-metre physical
-  relief but excludes metre-scale micro-relief, preventing broad contour zoning
-  without turning cover into aliased speckle.
-- **[Explicit]** Broad coastal substrate and ruggedness use circle-embedded
-  four-dimensional simplex with linear north-south coordinates. Shoal and finer
-  physical relief use longitude-periodic two-dimensional triangular simplex.
-
-### Shared procedural fields
-
-- **[Implicit]** `game` is authoritative for deterministic terrain,
-  atmosphere, tide, shelter, and physical depth. Native and WebAssembly runtimes
-  sample from match seed, tick, and world position rather than transferring
-  sampled fields through the protocol.
-- **[Explicit]** The match seed and world geometry are the procedural-world data
-  sent to a client. Snapshots synchronize boats, not sampled environment fields
-  or model parameters.
-- **[Explicit]** Every seeded spatial field joins without a value or gradient seam
-  across the longitude period and continues without repetition north-south,
-  including beyond the geographic poles. Canonicalizing sample coordinates alone
-  does not make an ordinary noise field periodic.
-- **[Explicit]** Noise basis is a fixed semantic property of each field and
-  octave, independent of world geometry. Broad terrain and tide response use a
-  four-dimensional longitude-circle and linear-north-south embedding, preserving
-  the requested local metre scale without stretching either axis.
-  Evolving scalar weather uses longitude-circle, linear-latitude, noise-time
-  simplex. Fine physical terrain and material spectra use longitude-periodic
-  two-dimensional triangular simplex. Changing the
-  supported geometry range never silently reclassifies an octave; any partition
-  change is an explicit, profiled retuning decision.
-- **[Explicit]** Procedural generator implementations remain portable between
-  Rust and WGSL even when a field is currently evaluated on only one side. Each
-  field may select the noise family and variant appropriate to its phenomenon,
-  but uses reproducible integer hashing, coordinate conventions, constants, and
-  `f32` operations that the other runtime can mirror. Shared evaluations agree
-  within a narrow numeric tolerance and preserve categorical boundaries outside
-  that tolerance; bitwise floating-point identity across CPU and WebGPU is not a
-  portability requirement.
-- **[Explicit]** Broad unthresholded tide response uses double-precision
-  cylindrical four-dimensional simplex noise with analytic chain-rule
-  world-space gradients. Evolving scalar weather uses portable single-precision
-  four-dimensional simplex with analytic horizontal gradients; the host reduces
-  the full tick into bounded time coordinates before shader evaluation.
+- **[Explicit]** Terrain is a continuous multiscale seeded field in physical
+  metres; reefs and rocks are field features. Open-sea connectivity is measured
+  statistically across seeds, not structurally guaranteed. Metre-scale physical
+  relief may affect depth and grounding; finer detail is appearance-only.
+- **[Explicit]** Land and sea relief, outcrops, and material cover share
+  geological causes across the shoreline and into inland terrain.
+- **[Explicit]** Terrain materials compete as continuous physical cover
+  capacities rather than categorical IDs or inferred boundary distances.
+  Vegetation starts above the astronomical intertidal band; snow overlays color,
+  detail, and roughness.
 
 ### Atmosphere and climate
 
-- **[Explicit]** Primary atmosphere and climate state is distinct from derived
-  weather. The seeded surface-air field is a weather anomaly; analytic climate,
-  signed latitude, season, and local solar time supply its baseline in both Rust
-  and WGSL. Derived values have no override path.
-- **[Explicit]** Smooth latitude-knot curves fit observed daily land-temperature
-  means, medians, seasonal and diurnal variability, and representative warm and
-  cold tail probabilities.
-- **[Explicit]** Specific humidity follows climatic saturation capacity plus a
-  seeded anomaly.
-- **[Explicit]** Absolute 500 hPa temperature has muted seasonality, a shared
-  surface air-mass anomaly, independent variability, and no diurnal cycle.
-- **[Explicit]** Water uses separate ocean-moderated climatology.
-- **[Explicit]** At a fixed place and time, unsheltered wind speed follows a
-  Weibull distribution with `k = 2` and `lambda = 9 m/s`.
-- **[Explicit]** Wind direction and speed vary continuously from gust to broad
-  weather scales. Latitude pressure climatology and the climate-pressure band's
-  meridional wavelength scale with world height; its zonal wavelength remains
-  fixed at 19.2 km. Synoptic and local pressure retain fixed 3.2 km and 960 m
-  wavelengths, while a fixed 256 m field supplies gust occurrence rather than
-  resolved pressure. A smooth midlatitude envelope
-  transfers variance between broad and synoptic bands without changing total
-  transient gradient energy, and stretches those bands zonally while preserving
-  an analytic pressure gradient. Band amplitudes, relative variance, anisotropy,
-  evolution rate, and gust timing are gameplay calibration rather than scaled
-  Earth values. The gust magnitude approximation follows ECMWF's split between
-  surface-stress/stability gustiness and convective downward momentum transport:
-  sustained surface wind substitutes for unavailable friction velocity, column
-  instability substitutes for boundary-layer stability, and moist lift gates
-  60% of positive upper-to-surface speed shear.
-- **[Explicit]** Deterministic terrain shelter weakens authoritative wind in the
-  lee of land over nearby water. Rust evaluates shelter only for requested
-  environment positions, including boat positions. Production rendering uses
-  unsheltered wind and does not probe terrain across the view; the playground
-  retains a debug-only approximate shelter field.
-- **[Explicit]** Atmosphere uses a compact match-seeded scalar spectral pressure
-  potential whose analytic gradient drives surface wind. Coriolis turns that
-  flow in opposite directions between hemispheres and fades smoothly to
-  down-gradient flow at the equator. Broad pressure drives upper flow,
-  horizontal local weather-anomaly temperature gradient contributes thermal
-  wind and frontal lift without turning its latitude-dependent statistical
-  amplitude envelope into a physical front, and vertical shear is derived. Each
-  pressure band and the gust-occurrence field directly evaluate simplex noise
-  over longitude, latitude, and a tick-derived time coordinate. Systems
-  evolve and move locally without a field-wide velocity, stored history, weather
-  grid, or storm entity. Longitude is circle-embedded for a continuous seam
-  while the meridional noise coordinate remains linear and does not tile
-  vertically; only latitude-derived calibration envelopes repeat.
-- **[Explicit]** Surface rendering derives signed latitude, local solar time,
-  climate, evolving surface temperature and moisture, snow and solid ice,
-  astronomical tide, and celestial lighting at every rendered world position.
-  Its procedural inputs are match seed, geometry, global day and season phases,
-  lunar longitude, and tick; the view-center Rust sample is diagnostic and never
-  drives the surface scene.
-- **[Explicit]** The host reduces the full integer tick plus fractional render
-  progress into bounded scalar-weather, pressure, and current noise-time
-  coordinates before upload. Simulation state advances only on integer ticks;
-  render clocks convert seconds at exactly 60 ticks per second rather than using
-  the rounded `f32` physics step. Production retains frame intervals and its
-  fixed-step accumulator as `f64`, casting only bounded presentation fractions
-  and physics inputs. Faster rendering presents the interval toward the next tick
-  without WGSL converting total time to `f32` or interpolating temporal
-  snapshots. A seeded phase on each field and octave prevents unrelated spectra
-  from changing in lockstep. Host-integrated cloud transport is renderer-local
-  displacement: each presented frame adds the current view-centre wind multiplied
-  by that frame's elapsed duration. The displacement persists across prediction
-  reconciliation, procedural-clock changes, and world-configuration changes.
-- **[Explicit]** Cloud-transport displacement accumulates in host `f64` and is
-  uploaded to WGSL as absolute `f32` metres. Increasing spatial quantization
-  after very long uninterrupted transport is an accepted rendering limit.
-- **[Explicit]** Rust and WGSL evaluate the same climate, synoptic, and local
-  simplex pressure potential plus a separate scalar gust pulse directly from
-  match seed, position, world geometry, and bounded time coordinates. Resolved
-  surface wind directs mechanical gusts; moist convection can mix faster upper
-  wind downward. Global cloudiness, pressure diagnostics, and rendered wind
-  therefore query their canonical causes analytically at world position.
-  Spatial temperature and moisture use the same spatiotemporal query model in
-  Rust and WGSL rather than accepting center-derived weather. No evolving scalar
-  or vector field receives a global spatial transport offset.
-- **[Explicit]** Lower clouds and the weather canopy are continuous,
-  longitude-periodic global fields. Match seed, global cloud time, and the
-  existing spatial atmosphere determine their latent structure, occurrence,
-  coverage, and character without tracked bodies, compact kernels, birth
-  cohorts, or temporal anchors. Weather is evaluated at the sampled cloud point:
-  an analytic virtual-perspective intersection with the fixed-altitude lower
-  layer supplies visible bodies, surface positions supply ambient conditions,
-  and directional shadows use each light ray's intersection with the cloud
-  layer. The lower-cloud projection scales around the camera's world position
-  and wraps longitude relative to it, keeping the center aligned and the field
-  continuous across the cylindrical seam. Ground shadows remain anchored to
-  their world positions.
-  Weather remains stationary while the only per-client cloud input, the
-  integrated view-center system-wind translation, offsets each layer's latent
-  noise. Each latent field normalizes its evolution coordinate by its own base
-  wavelength. Changing wind therefore curves cloud texture paths without
-  stretching them, instantaneous translation speed matches wind speed one-to-one,
-  and advecting texture adopts the stationary weather regime it enters.
-- **[Explicit]** The lower field continuously drives visible amount, optical
-  depth, analytic body normals, and projected shadows at a fixed 900-metre
-  height. Body size, occurrence, detail character, blob shape, contrast, edge,
-  normal strength, optical depth, opacity, projection strength, and shadow
-  darkness remain playground tunings. Cloud amount, normals, optical depth, and
-  shadows at a sampled world position are independent of camera zoom and pixel
-  footprint; zoom changes only which positions are sampled. Scalar shadow queries
-  omit body-gradient work.
-- **[Explicit]** The unseen 3600-metre weather canopy uses a broader continuous
-  spatiotemporal latent noise field. Its regional sky fraction and mean optical
-  thickness are algebraic outputs of the shared weather derivation from
-  independent moisture, temperature, and pressure fields. A surface atmosphere
-  query retains the broad components needed by the canopy; a projected-shadow
-  query samples only those broad components at the cloud-layer intersection.
-  Sky fraction sets target coverage while the translated latent texture
-  determines individual bodies and openings. Its translation follows the
-  integrated view-center upper wind one-to-one, and its continuous optical depth
-  supplies connected projected Sun and Moon shadows.
-- **[Explicit]** Directional shadow rendering stores lower-cloud optical depth,
-  canopy optical depth, and broad landform elevation in distinct logical layers
-  of one frame-local sparse world-space tile atlas. A GPU discovery pass requests
-  a tile only where two or more active light or receiver footprints reuse its
-  field samples; unique queries remain direct. Canopy samples requested for
-  ground shadows can therefore shade visible lower clouds, and overlapping
-  post-sunset Sun and Moon footprints on lower clouds can share canopy tiles.
-  An isolated elevated-Sun footprint remains direct. Overlapping landform-shadow
-  rays share their blocker elevation without eagerly evaluating disjoint
-  close-zoom rays. Cloud discovery uses broad receiver elevation while final
-  cloud projection retains exact fragment elevation. Production tiles have
-  fixed 128-texel dimensions while their world-space texel size equals the view's
-  world-space pixel footprint, so resolution follows zoom exactly as direct
-  fragment evaluation did. Evaluated gutters preserve filtered seams, and a
-  missing or capacity-limited tile falls back to the canonical procedural query.
-  The atlas has no temporal persistence, does not become simulation state, and
-  is not used for visible lower-cloud bodies or ambient sky light.
-- **[Implicit]** The `Rg16Float` shadow atlas retains fixed-resolution tiles. Its
-  allocation budget is 64 MiB at a 1920×1080 backing resolution and scales with
-  the square root of backing-pixel count; the device texture-dimension limit is
-  the final bound. WebGPU exposes structural limits but no usable-memory budget,
-  so tiles beyond the resolution-derived budget use the exact direct fallback.
-- **[Explicit]** Interactive surface resize takes effect immediately and uses the
-  direct shadow path while the previous cache retires. GPU queue completion,
-  rather than a time delay, gates destruction and replacement; resizes during
-  retirement coalesce into the latest backing dimensions.
-- **[Explicit]** Rain remains a global weather field queried at actual world
-  positions. It does not condition either visual cloud field and does not move
-  with a client's cloud translation, so rendered precipitation is independent
-  of individual visible cloud bodies and canopy openings.
-- **[Explicit]** Ambient sky occlusion is a globally coherent estimate of the
-  average cloud fraction and optical thickness of the whole overhead sky dome.
-  It derives continuously from the lowest-frequency existing temperature,
-  moisture, and pressure conditions and their condensation and lift response,
-  rather than from an independent noise field or a sampled canopy pixel. Its
-  spatial lookup stays at the receiving surface point and is never projected
-  along a Sun or Moon direction; celestial state affects the resulting sky-dome
-  radiance, not the estimated canopy fraction. Its spatial variation remains
-  materially lower-frequency than the directional canopy, so nearby points can
-  lie on opposite sides of a directional cloud shadow while retaining nearly
-  identical ambient light. Broad humid low-pressure weather can therefore
-  darken ambient light while a local canopy opening still admits direct Sun or
-  Moon light.
-- **[Explicit]** Surface climate and astronomical tide are stateless analytic
-  models. Broad tide response and phase fields represent unresolved basin
-  dynamics independently of terrain; bathymetry affects resulting water depth,
-  not tide generation. Tide contributes to authoritative and predicted depth as
-  well as the rendered shoreline.
-- **[Explicit]** Stateless equilibrium snow exaggerates a temperature-index
-  snowpack driven by several-day freezing opportunity, relative humidity, cold
-  precipitation, elevation, and above-freezing melt; sea ice is not an input.
-- **[Implicit]** Ground temperature attenuates the daily cycle and current air
-  anomaly while retaining the seasonal cycle.
-- **[Implicit]** Transported absolute water vapor follows seasonal climate, and
-  local saturation supplies relative humidity.
-- **[Implicit]** Perennial land ice requires a colder annual climate or
-  sufficient elevation.
-- **[Explicit]** Solid ice extends the authoritative solid-surface field used for
-  depth and grounding. WGSL mirrors that surface, blends it into land, and
-  preserves a sharp water-facing boundary.
-- **[Explicit]** Solid ice derives from climate rather than an authored latitude
-  front, island-distance field, or propagation solve. The calibrated polar
-  climate remains frozen through summer.
-- **[Implicit]** Seasonal water temperature combines with a broad cylindrical
-  maritime heat anomaly derived from an existing landform field, producing a
-  small, variable cap independently of water depth.
-- **[Explicit]** Frozen water renders the authoritative immovable solid body
-  directly. Its opaque material distinguishes plate interiors, fractures,
-  shores, and bedrock-controlled shallows without creating independent movable
-  floes or a second collision surface.
-- **[Explicit]** Plate interiors come from a seeded longitude-periodic,
-  north-south-unbounded jittered Voronoi field with approximately 192-metre cells
-  and a fixed nine-candidate search.
-  Nearest-cell identity supplies a constant plate tilt; the nearest/second-nearest
-  gap supplies angular fractures whose visibility follows existing broad ice
-  variation. Fragment-footprint filtering removes the network before it aliases.
+- **[Explicit]** Primary climate/atmosphere is separate from derived weather.
+  Latitude, season, and local solar time provide the baseline; seeded fields
+  supply anomalies. Derived values have no override path.
+- **[Explicit]** Wind derives from shared atmospheric causes rather than an
+  independently generated vector field.
+- **[Explicit]** Latitude climatology and meridional climate-pressure scale follow
+  world height; zonal climate scale and synoptic/local system sizes stay fixed.
+  Midlatitude variance transfer and zonal coherence preserve total transient wind energy.
+- **[Explicit]** Authoritative wind shelter samples land near requested positions.
+  Production surface rendering uses unsheltered wind; the lab may show approximate shelter.
+- **[Implicit]** Shelter and long terrain shadows share island-scale blockers;
+  fine depth relief does not multiply each shelter ray's cost.
 
-### Ocean dynamics
+### Ice and ocean
 
-- **[Explicit]** Authoritative currents include large local gyres, coastal flow,
-  and reversing tidal flow without a uniform prevailing vector. Gyre wavelengths
-  scale with world circumference, and Coriolis reverses rotational circulation
-  between hemispheres with a smooth equatorial fade. World-scale net transport
-  remains zero, and local current enters the same water-relative load path on the
-  server and predicting client.
-- **[Explicit]** A longitude-periodic scalar streamfunction directly evaluates
-  seeded simplex noise over longitude, latitude, and a tick-derived time
-  coordinate, then combines it with weak evolving pressure coupling. Broad
-  landform capacity steers it around island groups, latitude closes it at every
-  pole, and a separate scalar potential uses spatial tide response and
-  phase gradients. Both vanish where there is no navigable water. This is an
-  analytic local approximation, not a stored basin solve. Basin-scale wavelength
-  follows world circumference; spectrum, strength, pressure coupling, and
-  evolution rate are provisional gameplay values without hydrodynamic
-  calibration.
-- **[Explicit]** Shared gameplay waves are deterministic from match state and
-  local conditions, affect boat-relative water motion, and have no persistent
-  drift. Exceptional crests emerge from interference rather than an event flag.
-- **[Implicit]** Sixteen fixed-cost modes split into locally wind-weighted wind
-  sea and upper-wind-weighted swell. Integer longitudinal wave numbers preserve
-  the cylinder seam while continuous north-south wave numbers preserve requested
-  local scale. Deep-water dispersion advances phase from every bit of the
-  absolute tick; significant height grows with wind and is limited by the
-  shallow-water breaking ratio. First-order horizontal orbital velocity enters
-  `Environment.true_water_velocity_m_s`; a quadratic bound-wave response
-  sharpens severe crests without adding mean horizontal motion. Vertical heave,
-  roll, capsize, refraction, and diffraction remain outside the planar physics
-  model.
-- **[Explicit]** The renderer evaluates seeded current and significant wave
-  height directly at each queried world position from the same local causes as
-  the authoritative model. Each fragment evaluates a fixed sixteen-mode seeded
-  wave spectrum from that height and local wind direction; world-space footprint
-  attenuation removes unresolved wavelengths. The final water material uses its
-  slope, while the playground exposes separate wave-normal, current, and
-  significant-height diagnostics. Fine capillary breakup remains appearance-only.
+- **[Explicit]** Tide response models unresolved basin dynamics independently of
+  terrain. Bathymetry affects depth, while astronomical tide affects authority,
+  prediction, and the rendered shoreline.
+- **[Explicit]** Climate-derived ice extends the authoritative solid surface
+  used by depth and grounding. WGSL renders that same immovable body with a sharp
+  water boundary, and the calibrated polar climate remains frozen through summer.
+- **[Explicit]** Ocean motion enters the same water-relative load path on the
+  authoritative server and predicting client.
+- **[Implicit]** Ocean forcing remains planar: horizontal orbital motion affects
+  sailing, while heave, roll, capsize, refraction, and diffraction are outside the model.
 
-### Browser rendering and playground
+## Rendering and lighting
 
-- **[Explicit]** The playground advances its simulation clocks at 60 fixed ticks
-  per real second. A render executes every tick due at that moment and presents
-  only the newest state, skipping intermediate presentations when rendering is
-  slower than the tick rate. Faster rendering uses fractional progress toward
-  the next tick.
-- **[Implicit]** Playground and headless-capture clocks retain at least 256
-  representable double-precision values per fixed tick. Every independently
-  advancing playground procedural clock and its calendar controls share the same
-  precision-derived terminal time; capture rejects time inputs at or beyond that
-  range.
-- **[Explicit]** Production and playground backing canvases preserve their CSS
-  aspect ratio and uniformly reduce pixel resolution when either dimension would
-  exceed the WebGPU device's texture limit.
-- **[Explicit]** Browser terrain is not polygonized. A fullscreen pass evaluates
-  seeded elevation at each pixel and zoom level; physics samples depth only where
-  boats require it.
-- **[Explicit]** A single procedural surface normal combines the authoritative
-  heightfield gradient with material-specific visual detail before celestial
-  lighting. Appearance-only material spectra may extend below thirty centimetres.
-- **[Explicit]** Appearance-only material spectra use the portable 24-direction
-  longitude-periodic two-dimensional simplex kernel with non-binary octave
-  spacing; each octave chooses an integer longitude cycle count and fades out
-  against the fragment's world-space pixel footprint before it can alias.
-  Material relief remains single-sample, without parallax or per-material ray
-  marching.
-  Bounded broad-relief samples follow spherical light rays and cast finite-disc
-  shadows across both terrain and water without displaced geometry.
-  In clear shallow water, filtered material reflectance produces scalar contrast
-  through the water palette according to round-trip optical transmittance.
-  Reflective substrates remain visible farther, but every substrate approaches a
-  visible bottom signal as water depth approaches zero. Underwater rendering
-  adds neither a separate visual-detail height field nor bottom-normal lighting.
-- **[Explicit]** Unfrozen water adds an appearance-only normal field from four
-  fixed, metre-scale octaves of longitude-periodic, linear-latitude,
-  spatiotemporal simplex. It evolves locally without a field-wide velocity. Its
-  octave count and evaluation cost do not depend on world size. The fragment
-  footprint filters unresolved octaves, and the resulting normal and low
-  roughness enter the shared diffuse and directional surface-light model. This
-  field changes neither authoritative water height nor boat physics.
-- **[Explicit]** Visible precipitation contacts the world-space open-water
-  surface. Individual contacts retain physical scale and filter out when the
-  fragment footprint cannot resolve them. Rendering does not replace unresolved
-  contacts with atmospheric haze or screen-space falling streaks.
-- **[Explicit]** A fixed 3-by-3 search over longitude-periodic,
-  north-south-unbounded 1.5-metre cells renders a deterministic representative
-  subset of precipitation contacts. Each cell has
-  a jittered impact and 0.75-second lifecycle derived from a bounded periodic
-  effect clock. Rain rings expand from 1.8 to 22 centimetres; cold precipitation
-  produces smaller melting dimples. The contact path exits before its search in
-  dry weather or above a 30-centimetre fragment footprint.
-- **[Implicit]** WGSL mirrors the authoritative terrain and short environment
-  derivations. Rust remains authoritative when a rendering approximation differs.
-- **[Implicit]** Authoritative wind shelter probes the same island-scale landform
-  used for long terrain shadows. Metre-scale terrain remains authoritative for
-  depth and grounding but does not multiply the cost of every shelter ray or act
-  as an aerodynamically significant blocker by itself.
-- **[Explicit]** Gameplay and the procedural playground compose shared WGSL data
-  types and pure rendering mechanisms from dependency-explicit source components.
-  Gameplay binds scene state and fixed production tuning; the lab supplies its
-  live tuning through a separate interface.
-- **[Explicit]** Playground color visibility preserves two orthogonal
-  compositional axes: color-producing material layers and direct Sun, direct
-  Moon, diffuse clear sky, or diffuse regional-canopy light. A row or column gate
-  omits its Cartesian color products without disabling operands or downstream
-  computation. Independent shadow gates omit terrain, visible-cloud self, low
-  cloud, or canopy attenuation from the composed color without disabling their
-  inputs or computation.
-- **[Explicit]** The shader source shipped to players contains only the production
-  entry points, bindings, and their reachable components. Playground diagnostic
-  sources and interfaces are feature-gated from production artifacts and compile
-  as separate lazy modules containing only the selected diagnostic layer's
-  dependency closure. Related scalar views share diagnostic modules selected by
-  pipeline overrides while reading the same primary and derived field functions
-  as production rendering.
-- **[Explicit]** Playground cache diagnostics report live and allocated tile
-  counts, atlas dimensions, and world-space texel resolution. The lab can display
-  per-fragment cache lookups, axis-aligned resident tiles in world sample space,
-  or the aspect-preserved current atlas, and can recreate it with 32-, 64-, 128-,
-  or 256-texel tiles without changing the world-space resolution of one texel.
-  Its counters, tile metadata, and debug bindings are absent from the production
-  scene shader. Cache recreation immediately switches to direct evaluation;
-  after submitted work and diagnostic readback complete, retired GPU resources
-  are destroyed before one replacement is allocated for the latest dimensions.
-- **[Explicit]** Celestial state includes geographic latitude with normalized
-  day and season phases plus independently advancing lunar longitude.
-  Rendering-grade astronomy derives Sun and Moon directions first, then infers
-  lunar illumination phase and tidal separation from their geometry. A world day
-  lasts 24 hours, the seasonal year lasts 365 days, and the independent lunar
-  month lasts 28 days. The lunar orbital rate produces one Sun-relative phase
-  cycle per month, advancing lunar phase by one day between corresponding points
-  in successive years and repeating the combined geometry after 28 years. Season
-  phase zero is the northern winter solstice. The Moon follows a circular orbit
-  inclined 5.145 degrees to the ecliptic at a fixed node and an Earth-like 60.3
-  planetary radii. Observer parallax at each receiver height and finite Sun/Moon
-  discs derive receiver-local solar overlap;
-  finite umbra and penumbra discs derive lunar eclipses. The fixed node produces
-  two eclipse seasons per year while individual events shift between years.
-- **[Explicit]** Sun and Moon remain independent directional light sources whose
-  direct contributions use their respective direction, intensity, color, and
-  cloud and terrain transmittance. Ambient light separately combines a clear-sky
-  dome, blue by day, with a canopy-underlight source weighted by broad overhead
-  cloud fraction. The clear-sky dome sums solar-disc daylight, lower-atmosphere
-  twilight, and weaker upper-atmosphere afterglow; broad regional scattering
-  modulates the two twilight components and all canopy-underlight sources.
-  Direct Sun and Moon colors instead use receiver-local aerosol, humidity, and
-  rain. At zero optical thickness the canopy transfer equals clear-sky diffuse
-  light. Increasing thickness attenuates and backscatters that diffuse light,
-  while intercepted altitude-visible Sun and Moon light escapes from the
-  underside most strongly at moderate thickness and is absorbed by thick storm
-  canopy.
-  Moon-fed diffuse sky light uses the same daylight, lower-twilight, and
-  upper-afterglow bands as solar diffuse light, scaled by lunar phase and eclipse.
-  Direct moonlight and direct Moon-to-canopy scattering retain finite-disc
-  visibility.
-  The resulting ambient pair is evaluated once per fragment and lights both the
-  surface and visible lower clouds; visible lower clouds never feed it.
-  Solar overlap attenuates direct and diffuse daylight. Lunar penumbra attenuates
-  moonlight slightly; increasing umbral coverage replaces blocked direct
-  sunlight with dim orange-red light filtered through the atmosphere, and the
-  eclipse color enters both the local direct and regional diffuse Moon paths.
-- **[Explicit]** Cloud-shadow displacement follows physical layer height and
-  light direction at every zoom. Rays intersect a spherical shell using world
-  width as circumference and the receiver-local connected celestial direction.
-  The resulting local angular displacement uses the physical metres-per-radian
-  scale derived from world circumference and offsets the receiver's unbounded
-  cylindrical coordinates, without folding longitude or north-south cloud fields
-  at a pole. Sun and Moon visibility at each receiver
-  layer derive their Earth-shadow horizon from world circumference and physical
-  altitude, with each finite disc smoothing its transition. Rendered terrain and
-  water use their local surface elevation, including below datum; the
-  900-metre visible-cloud and 3600-metre canopy layers use their fixed physical
-  altitudes. The canopy can therefore scatter sunlight after ground sunset.
-  Visible clouds evaluate celestial geometry at their displayed projected
-  position. They can remain
-  sunlit or be blocked by detailed canopy optical depth. While the disc is only
-  partly visible, projected attenuation uses the midpoint of its visible
-  vertical slice so the representative ray clears the
-  planet rather than selecting the canopy shell beyond it. Below-surface-horizon
-  sunlight contributes only edge and internal scattering; top-facing direct
-  response uses datum-horizon visibility at the cloud's projected world
-  position. Its direct color uses weather sampled at that position. Grazing
-  optical paths remain finite. The apparent angular radius of the Sun and Moon
-  supplies a distance-proportional penumbra for landform shadows.
-- **[Implicit]** Resolvable cloud-shadow penumbrae average three samples
-  across both axes of each visible celestial disc. A horizon-clipped disc keeps
-  transverse spread from the width of its visible circular segment. Subpixel
-  separation collapses to the representative ray. All samples retain one
-  source-and-receiver footprint identity for sparse-atlas reuse eligibility.
-- **[Explicit]** Direct cloud-shadow evaluation and sparse-atlas discovery
-  consume the same receiver, celestial-source, finite-disc sampling, and
-  projected-footprint query. Discovery adds allocation policy without
-  independently reconstructing shadow geometry.
-- **[Explicit]** North-south position maps linearly through -90 degrees at the
-  first southern pole, the equator, and +90 degrees at the first northern pole,
-  then mirror-repeats as `0, +90, 0, -90, 0` over successive half-spans. Climate
-  and its analytic meridional gradients use that mirrored latitude. Its diurnal
-  temperature phase and weak-forcing availability follow the thermally lagged
-  first harmonic of nonnegative solar elevation, while the calibrated diurnal
-  range sets its saturated amplitude. The response therefore vanishes in polar
-  night and continuously at each pole. Celestial geometry instead uses the
-  continuous latitude phase, so each descending band represents the connected
-  far hemisphere while its direction remains continuous in the cylindrical
-  chart. Longitude, terrain, materials, and seeded atmosphere fields retain
-  their unbounded, non-repeating north-south coordinate.
-- **[Explicit]** Runtime physics, procedural sampling, snapshots, and rendering
-  retain single-precision spatial coordinates. North-south position remains
-  topologically unbounded, while boat-scale detail becoming quantized after
-  prolonged travel millions of metres from the origin is an accepted precision
-  limit.
-- **[Implicit]** World and view coordinates use positive X for east/right and
-  positive Y for north/up. Input adapters convert down-positive device
-  coordinates at their boundaries.
-- **[Explicit]** Canonical normalized east-west position is longitude. Local
-  solar phase is the wrapped sum of global day phase and normalized longitude;
-  season phase and lunar longitude remain global.
-- **[Explicit]** Playground diagnostics may approximate authoritative shelter but
-  never feed derived results back into primary inputs or gameplay physics.
-- **[Explicit]** The playground always samples live production state through the
-  browser's Rust/WASM boundary. World controls set seed, geometry, and clock
-  rates; model and shader controls only tune or enable mechanisms already present
-  in that world. The view-center sample supplies the per-client visual cloud
-  fields and their winds; other procedural surface state remains independently
-  derived at each rendered position. The overlay marks the raw center, repeated
-  reference meridians and longitude seams, the equator, and both finite poles.
-  Raw camera coordinates remain unbounded north-south.
-- **[Implicit]** Playground longitude-circumference and pole-to-pole-span controls
-  cover 8 km to 256 km independently in 1 km steps, with equal 64 km defaults.
+### Surface rendering
 
-## Transport
+- **[Explicit]** A fullscreen pass evaluates terrain and environment at each
+  rendered world position. Physics samples where needed; a view-center weather
+  sample never supplies the surface scene.
+- **[Explicit]** One surface normal combines authoritative relief with visual
+  material detail before celestial lighting.
+- **[Explicit]** Water rendering evaluates current, wave height, and wave slope
+  from shared local causes. Fine surface breakup changes appearance alone, evolves
+  without field-wide velocity, and has fixed cost independent of world size.
 
-- **[Explicit]** The stack uses versioned, Postcard-encoded binary messages over
-  WebTransport.
-- **[Implicit]** The versioned welcome message carries player identity, match
-  seed, and validated world geometry. Server and browser retain the same
-  geometry for authoritative and predicted match inputs. A player enters the
-  authoritative match only after the welcome message is sent successfully.
-- **[Explicit]** Browser protocol readiness begins when Welcome initializes
-  player identity and world geometry. The newest queued snapshot remains
-  pending until then; after disconnection, late messages cannot resume
-  replicated updates. Render-time environmental motion begins with the first
-  authoritative snapshot rather than the Welcome delivery race.
-- **[Explicit]** WebTransport is always encrypted. Local development pins a
-  short-lived self-signed server certificate through its SHA-256 hash; deployed
-  environments provide a browser-trusted certificate.
-- **[Implicit]** Network queues are bounded and latest-biased so delayed clients
-  cannot accumulate stale commands or snapshots. The browser reads a bounded set
-  of independent reliable streams concurrently so loss on one stream does not
-  block newer fallback snapshots. Input commands and viewport updates are
-  sequenced so independently completed streams cannot restore stale interest. An
-  acknowledgement covers only input already used by an authoritative tick.
-- **[Implicit]** A persistent match retains at most 64 boats, including
-  disconnected wrecks, and admits at most the same number of active WebTransport
-  sessions. This bounds authoritative simulation, complete per-recipient
-  snapshots, and rendered boat geometry without imposing a viewport-distance
-  cap. Further upgraded sessions are closed before player registration.
-- **[Implicit]** A failed viewport stream leaves its queued update available for
-  retry unless a newer viewport update has superseded it.
-- **[Implicit]** A protocol decoding or version failure closes the WebTransport
-  session and discards its queued snapshot so neither peer retains incompatible
-  replicated state.
-- **[Implicit]** An independently reset reliable stream is discarded without
-  disabling reception of later streams from the same session.
-- **[Explicit]** Snapshots are assembled for each recipient because nearby boats
-  need prediction data that distant visible boats do not.
+### Celestial and cloud light
 
-## Prediction and interest
+- **[Explicit]** Sun and Moon are independent directional sources. Diffuse light
+  combines clear sky with regional canopy underlight and illuminates surfaces
+  and visible clouds; lower clouds do not supply ambient light.
+- **[Explicit]** Regional canopy fraction and cloudy-sky optical thickness come
+  from broad existing weather causes at the receiver, independently of overhead
+  texture and directional shadow samples. That fraction also governs detailed
+  canopy coverage. Ambient aerosol/scattering remains regional; direct Sun/Moon
+  colors retain local humidity, rain, and aerosol response.
+- **[Explicit]** Diffuse solar and lunar light have daylight, lower twilight, and
+  weaker upper-afterglow bands. Lunar bands follow phase and eclipse; thin canopy
+  approaches clear sky, moderate canopy scatters available celestial light, and
+  thick canopy absorbs it. High ice-cloud effects belong in canopy/sky diffusion.
+- **[Explicit]** A single world clock drives a 24-hour day, 365-day year, and
+  independent 28-day lunar phase cycle, with northern winter solstice at season
+  zero. Sun/Moon geometry determines illumination, tides, and eclipses; finite
+  discs, observer parallax, an inclined lunar orbit, and a fixed node yield
+  altitude-dependent solar overlap and shifting paired eclipse seasons. Combined
+  geometry repeats after 28 years.
+- **[Explicit]** Cloud and landform shadow projection uses physical altitude,
+  spherical curvature, connected celestial direction, and finite-disc penumbrae
+  at every zoom. Projected positions retain unbounded cylindrical coordinates;
+  receiver-local geometry permits cloud sunlight after surface sunset.
+- **[Explicit]** Lower clouds and canopy are continuous global periodic fields.
+  Each layer's amount drives its body, optical depth, and shadows independently
+  of zoom. Renderer-local integrated view-center wind translates latent texture
+  one-to-one while weather stays at world positions; ground shadows stay world-anchored.
 
-- **[Explicit]** Source-style prediction and reconciliation provides responsive
-  steering and includes physical interaction between the local boat and nearby
-  boats.
-- **[Implicit]** The client restores acknowledged authoritative state, replays a
-  bounded history of unacknowledged fixed-tick commands, and applies corrections
-  to physics immediately while smoothing render pose and velocity.
-- **[Explicit]** The nearby physics bubble starts before contact. Entering or
-  leaving it, and accepting authoritative corrections, must not visibly snap or
-  jerk boats.
-- **[Implicit]** Nearby boats share the local prediction world; distant boats use
-  bounded kinematic extrapolation. Extrapolated longitude wraps canonically,
-  while render placement and correction offsets use cylindrical minimum-image
-  displacement relative to the local boat.
-- **[Explicit]** Boats sufficiently outside the viewport may be omitted from a
-  recipient's snapshots. The client requests the viewport half-diagonal plus a
-  margin, and the server does not impose a smaller fixed world-distance cap.
-  Server visibility and physics-bubble membership use longitude minimum-image
-  displacement and ordinary north-south distance.
+### Clocks and renderer lifecycle
 
-## Operations
+- **[Explicit]** Host clocks reduce integer ticks plus fractional presentation
+  into bounded shader time coordinates at exactly 60 ticks per second. Simulation
+  advances only at integer ticks. Double-precision frame timing and cloud
+  displacement survive reconciliation and world/clock changes; uploaded `f32`
+  cloud metres accept quantization after prolonged uninterrupted transport.
+- **[Explicit]** Shadow caching is a frame-local sparse world-space atlas for
+  reused cloud-depth and landform queries. Discovery and direct evaluation share
+  projection and finite-disc geometry; unique, missing, or capacity-limited
+  samples evaluate directly. Cache resolution follows the pixel footprint and
+  gutters preserve seams. Visible cloud bodies and ambient light remain uncached.
+- **[Implicit]** Atlas allocation follows backing resolution and device limits
+  because WebGPU has no usable-memory budget; overflow uses canonical direct evaluation.
+- **[Explicit]** Resizes take effect immediately through direct rendering while
+  caches retire. Queue completion gates destruction before replacement, and
+  intervening resize requests coalesce to the latest dimensions.
+- **[Explicit]** Canvas backing resolution preserves CSS aspect ratio while
+  fitting device texture limits.
+- **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close
+  transport, clearing queued state; transient surface errors remain recoverable.
 
-- **[Explicit]** Server and browser orchestration use asynchronous I/O wherever
-  work may suspend.
-- **[Implicit]** Production stops its animation-frame loop after WebGPU device
-  loss or a nonrecoverable validation, memory, or internal device error.
-  It closes the multiplayer transport and clears queued network state before
-  stopping; transient surface states remain recoverable inside the renderer.
-- **[Explicit]** Visual procedural-world work uses the interactive playground and
-  deterministic headless capture rather than a separate native showcase or a
-  checked-in image collection.
-- **[Explicit]** Headless capture renders one deterministic procedural world from
-  explicit seed, geometry, camera, cloud-time, and world-time inputs and writes a
-  derived-condition summary to a distinct `.json` sidecar from those same
-  fractional render clocks. The reserved `.json` output extension is rejected. A
-  fresh one-frame capture has zero renderer-local cloud displacement.
-- **[Implicit]** Headless output is limited to 16,777,216 pixels and cached
-  captures use a fixed 64 MiB shadow atlas. Capture dimensions express requested
-  output, not device memory capability; per-axis WebGPU limits remain additional
-  bounds.
-- **[Explicit]** Capture requires a hardware Vulkan GPU and has no
-  software-rendering path.
+## Playground boundary
+
+- **[Explicit]** Gameplay and the lab share pure WGSL mechanisms and data types
+  through dependency-explicit components, with separate production and live-tuning interfaces.
+- **[Explicit]** Production ships only reachable production shader components.
+  Feature-gated diagnostics compile lazily by dependency closure; related views
+  use overrides and the same field functions as production.
+- **[Explicit]** The lab samples live production state through Rust/WASM.
+  Diagnostics may approximate shelter but never feed derived state into primary
+  inputs or physics. Visibility gates omit composed color/shadow effects while
+  retaining operands and downstream calculations.
+- **[Explicit]** The lab advances all due fixed ticks and presents the newest
+  state, using fractional progress when rendering faster than ticks.
+- **[Implicit]** Lab and capture clocks share terminal bounds that preserve
+  fixed-tick precision.
+
+## Transport and prediction
+
+- **[Explicit]** Versioned Postcard binary messages travel over encrypted
+  WebTransport. Development pins a short-lived certificate hash; deployment
+  uses a browser-trusted certificate.
+- **[Implicit]** Welcome establishes identity, seed, and validated shared geometry
+  before authoritative registration; a failed send does not create a player.
+- **[Explicit]** Browser replication waits for Welcome, retaining the newest
+  pending snapshot. Environmental render motion starts with the first
+  authoritative snapshot; late messages after disconnection cannot restart replication.
+- **[Implicit]** Bounded latest-biased queues and concurrent independent stream
+  reads prevent stale backlog and head-of-line blocking. Sequenced commands and
+  interest updates cannot regress state; acknowledgements cover only tick-applied input.
+- **[Implicit]** Failed viewport sends remain retryable until superseded.
+- **[Implicit]** Individual stream resets leave later streams usable.
+- **[Implicit]** Protocol/version failure closes the session and discards queued replicated state.
+- **[Implicit]** Match boat and session capacity is bounded, including wrecks,
+  to bound simulation, complete snapshots, and rendering without a distance cap.
+  Excess sessions close before registration.
+- **[Explicit]** Source-style prediction includes local/nearby boat interaction
+  before contact. Bubble transitions and authoritative corrections remain visually smooth.
+- **[Implicit]** Reconciliation restores acknowledged authority and replays bounded
+  unacknowledged fixed-tick input, correcting physics immediately and smoothing
+  render pose/velocity. Nearby boats share prediction; distant boats use bounded
+  kinematic extrapolation with minimum-image render displacement.
+- **[Explicit]** Snapshots are per recipient because nearby boats need prediction
+  data. Viewport half-diagonal plus margin sets interest with no smaller fixed
+  world-distance cap; proximity wraps longitude only.
+
+## Visual verification
+
+- **[Explicit]** Procedural visual work uses the interactive playground and
+  deterministic headless capture, keeping generated images outside version control.
+  Captures include a sidecar derived from the
+  same explicit world inputs and fractional render clocks; fresh one-frame
+  captures have zero renderer-local cloud displacement.
+- **[Explicit]** Capture requires a hardware Vulkan GPU.
 
 ## Open questions
 
 | Area | Unresolved choice |
 | --- | --- |
-| Wreck lifecycle | Time-, distance-, capacity-, or salvage-driven cleanup |
-| Snapshot format | Whether measured scale eventually justifies batching or application-level deltas |
-| Convective outflow | Whether rain-cooled cold pools need their own mesoscale pressure, temperature, lifetime, and radial gust-front mechanism |
+| Snapshot format | Whether measured scale justifies batching or application-level deltas |
+| Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |

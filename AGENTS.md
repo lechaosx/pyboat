@@ -6,6 +6,15 @@
   [MAINTAINERS.md](MAINTAINERS.md) before planning or implementing changes.
 - Follow the documentation ownership map in
   [README.md](README.md#project-guide).
+- Keep decision records durable: general enough to survive routine commits,
+  specific enough to verify, and focused on constraints and rationale that are
+  hard to recover from code, tests, manifests, or tool help. Do not record a
+  changing inventory of algorithms, constants, controls, or delivered features.
+  Keep tuning notes out of decision records; calibration values and their
+  rationale belong beside the governing code.
+- Make all documentation human-skimmable: plain language, short passages, and
+  useful headings. Trim repetition without dropping unique information or
+  packing it into dense lists or feature-catalogue sentences.
 - Transform the canonical decision passage in the same change that introduces,
   changes, or removes a decision. Revise it in place so it positively describes
   the current snapshot; do not append migration history or frame the decision
@@ -33,9 +42,12 @@
 - Prefer sources that stay correct by construction: manifests for requirements,
   CLI help for options, tests for accepted behavior, and generator metadata on
   generated artifacts.
-- Put non-obvious rationale, invariants, calibration provenance, and cross-file
-  synchronization constraints beside the relevant code. Do not add task context,
-  reasoning history, absence justifications, or restatements as comments.
+- Include implementation detail in docs only when essential to their purpose.
+  Keep valuable non-obvious rationale, invariants, calibration provenance, and
+  synchronization constraints beside the relevant code. Before removing unique
+  information, preserve it at its canonical owner; link to that owner instead of
+  repeating it. Do not add task context, reasoning history, absence
+  justifications, or restatements as comments.
 - Avoid duplicated instructions, implementation inventories, delivery matrices,
   and explanations of behavior that code states plainly.
 - Treat unimplemented target behavior as future scope, not a contradiction. When

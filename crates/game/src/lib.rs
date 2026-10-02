@@ -1813,6 +1813,8 @@ fn sample_surface_air_temperature_anomaly_c(
     );
     let latitude = world_geometry.latitude_degrees(position_m.y);
     let scale_c = latitude_curve_value(TEMPERATURE_ANOMALY_SCALE_C, latitude);
+    // The latitude amplitude envelope is statistical calibration, not a physical
+    // front; only the local anomaly gradient drives thermal wind and frontal lift.
     TemperatureSample {
         value: scale_c * noise.value as f32,
         gradient_per_m: Vector::new(

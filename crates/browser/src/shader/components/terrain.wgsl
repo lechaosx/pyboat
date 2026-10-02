@@ -263,6 +263,7 @@ fn procedural_terrain_sample_with_climate_from_circle(
                 + shaped_land_detail.gradient
                     * land_detail_mask.value * land_detail_amount
         );
+        // Cover needs hill-scale variation without metre-scale aliased speckle.
         terrain.material_elevation_m = terrain.elevation_m;
         terrain.material_gradient = terrain.gradient;
         let land_micro_relief_amount = terrain_smoothstep_sample(
