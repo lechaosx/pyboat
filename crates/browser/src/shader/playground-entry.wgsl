@@ -3,15 +3,18 @@ fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
     let initialized = initialize_playground_scene(input);
     initialize_shadow_cache_debug();
     if shadow_cache_debug_mode() == 2u {
-        return shadow_cache_debug_tiles(initialized.input.world_position_m);
+        let color = shadow_cache_debug_tiles(initialized.input.world_position_m);
+        return vec4<f32>(encode_display_color(color.rgb), color.a);
     }
     if shadow_cache_debug_mode() == 3u {
-        return shadow_cache_debug_atlas(input.position.xy);
+        let color = shadow_cache_debug_atlas(input.position.xy);
+        return vec4<f32>(encode_display_color(color.rgb), color.a);
     }
     let color = final_scene_color(
         initialized.input,
         initialized.atmosphere,
         initialized.surface_circle_position,
     );
-    return apply_shadow_cache_debug(color);
+    let displayed = apply_shadow_cache_debug(vec4<f32>(tone_map_scene_color(color.rgb), color.a));
+    return vec4<f32>(encode_display_color(displayed.rgb), displayed.a);
 }

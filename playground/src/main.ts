@@ -1,4 +1,5 @@
 import {
+  PlaygroundExposure,
   playground_cloud_shadow_cache_shader_source,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
@@ -319,6 +320,7 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 const cloudMotion = new CloudMotion();
+const exposure = new PlaygroundExposure();
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -1053,7 +1055,30 @@ void device.lost.then(() => {
 });
 const context = previewCanvas.getContext("webgpu") as GPUCanvasContext;
 const formatName = gpu.getPreferredCanvasFormat();
-context.configure({ device, format: formatName, alphaMode: "opaque" });
+const sdrViewFormat = `${formatName}-srgb` as GPUTextureFormat;
+let hdrSupported = false;
+if (window.matchMedia("(dynamic-range: high)").matches) {
+  try {
+    context.configure({
+      device, format: "rgba16float", alphaMode: "opaque",
+      toneMapping: { mode: "extended" },
+    });
+    hdrSupported = context.getConfiguration?.()?.toneMapping?.mode === "extended";
+  } catch {
+    hdrSupported = false;
+  }
+}
+let canvasHdr = hdrSupported;
+function configureCanvas(hdr: boolean): void {
+  context.configure(hdr ? {
+    device, format: "rgba16float", alphaMode: "opaque",
+    toneMapping: { mode: "extended" },
+  } : {
+    device, format: formatName, viewFormats: [sdrViewFormat], alphaMode: "opaque",
+  });
+  canvasHdr = hdr;
+}
+configureCanvas(hdrSupported);
 
 await showStartupPhase("Creating startup shader…");
 const startupShader = device.createShaderModule({ code: playground_startup_shader_source() });
@@ -1080,7 +1105,9 @@ function createPlaygroundPipeline(
       module: shader,
       entryPoint,
       ...(constants ? { constants } : {}),
-      targets: [{ format: formatName }],
+      targets: [{ format: hdrSupported && (
+        entryPoint === "fragment_playground_scene" || entryPoint === "fragment_playground_startup"
+      ) ? "rgba16float" : sdrViewFormat }],
     },
     primitive: { topology: "triangle-list" },
   });
@@ -1097,7 +1124,7 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(56);
+const sceneFloats = new Float32Array(60);
 const sceneUints = new Uint32Array(sceneFloats.buffer);
 const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1296,10 +1323,12 @@ type RenderResources = {
   sceneBindGroup: GPUBindGroup;
   playgroundBindGroup?: GPUBindGroup;
   cloudShadowCache?: CloudShadowCache;
+  hdr?: boolean;
 };
 let sceneRenderResources: RenderResources = {
   pipeline: startupPipeline,
   sceneBindGroup: startupSceneBindGroup,
+  hdr: hdrSupported,
 };
 let directSceneRenderResources = sceneRenderResources;
 let sceneCompilationStatus = "compiling full scene";
@@ -1794,6 +1823,16 @@ function writeUniforms(
   const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
   sceneFloats.set(cloudMotion.advance(elapsedSeconds, lowWind, upperWind), 48);
   sceneFloats.set(viewCloud.subarray(4, 8), 52);
+  sceneFloats.set([
+    exposure.advance(
+      state.worldWidthM, state.worldHeightM, worldTimeSeconds,
+      renderedCameraX, renderedCameraY, elapsedSeconds,
+    ),
+    // The browser reports HDR capability, not numeric display headroom.
+    canvasHdr && window.matchMedia("(dynamic-range: high)").matches ? 4 : 1,
+    Number(canvasHdr),
+    0,
+  ], 56);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
@@ -2067,6 +2106,10 @@ function renderFrame(now: number): void {
     );
     nextDiagnosticsAt = now + 250;
   }
+  const renderResources = renderResourcesForFrame();
+  if (canvasHdr !== Boolean(renderResources.hdr)) {
+    configureCanvas(Boolean(renderResources.hdr));
+  }
   writeUniforms(
     cloudTimeSeconds,
     worldTimeSeconds,
@@ -2075,7 +2118,6 @@ function renderFrame(now: number): void {
     elapsed,
   );
   const encoder = device.createCommandEncoder();
-  const renderResources = renderResourcesForFrame();
   if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {
     timedPipeline = renderResources.pipeline;
     timedCache = renderResources.cloudShadowCache;
@@ -2138,7 +2180,9 @@ function renderFrame(now: number): void {
   }
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
-      view: context.getCurrentTexture().createView(),
+      view: context.getCurrentTexture().createView({
+        format: canvasHdr ? "rgba16float" : sdrViewFormat,
+      }),
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
       loadOp: "clear",
       storeOp: "store",
@@ -2275,6 +2319,7 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     ]);
     sceneRenderResources = {
       pipeline: scenePipeline,
+      hdr: hdrSupported,
       sceneBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(0),
         entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
@@ -2291,6 +2336,7 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     };
     directSceneRenderResources = {
       pipeline: directScenePipeline,
+      hdr: hdrSupported,
       sceneBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(0),
         entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],

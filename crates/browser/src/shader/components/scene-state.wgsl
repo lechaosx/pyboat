@@ -15,6 +15,7 @@ struct SceneUniforms {
     celestial_orbit_light: vec4<f32>,
     view_cloud_motion_m: vec4<f32>,
     cloud_time_coordinates: vec4<f32>,
+    exposure_and_output: vec4<f32>,
 };
 
 struct SceneTuning {

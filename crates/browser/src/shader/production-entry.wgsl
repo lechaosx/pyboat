@@ -1,7 +1,7 @@
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain <= 0.5 {
-        return vec4<f32>(input.color, 1.0);
+        return vec4<f32>(encode_display_color(input.color), 1.0);
     }
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = production_tuning();
@@ -21,11 +21,12 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     local_horizon_scattering = calculate_local_horizon_scattering();
     regional_horizon_scattering = calculate_regional_horizon_scattering();
-    return final_scene_color(
+    let color = final_scene_color(
         periodic_input,
         surface_weather.atmosphere,
         surface_circle_position,
     );
+    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb)), color.a);
 }
 
 fn environment_feature_visibility() -> vec4<f32> {

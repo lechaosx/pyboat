@@ -34,14 +34,66 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
-    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, Windsock,
-    append_reliable_server_message_chunk, bounded_canvas_dimensions, cloud_shadow_cache_layout,
-    disconnect_and_clear_pending_snapshot, periodic_effect_time_interpolated,
-    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
-    sample_world_geometry, scale_bar, seasonal_phase_factors, view_width_m,
-    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
-    windsock_extension, zoom_view_height_m,
+    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, ViewExposure,
+    Windsock, append_reliable_server_message_chunk, bounded_canvas_dimensions,
+    cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
+    sample_view_cloud_state_for_render_clocks, sample_world_geometry, scale_bar,
+    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
+    webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
+
+#[wasm_bindgen(
+    inline_js = "export function canvasHasHdrOutput(canvas) { return canvas.getContext('webgpu').getConfiguration?.()?.toneMapping?.mode === 'extended' && matchMedia('(dynamic-range: high)').matches; }"
+)]
+extern "C" {
+    #[wasm_bindgen(js_name = canvasHasHdrOutput)]
+    fn canvas_has_hdr_output(canvas: &HtmlCanvasElement) -> bool;
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub struct PlaygroundExposure {
+    exposure: ViewExposure,
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundExposure {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            exposure: ViewExposure::default(),
+        }
+    }
+
+    pub fn advance(
+        &mut self,
+        width_m: f32,
+        height_m: f32,
+        world_time_seconds: f64,
+        camera_x_m: f32,
+        camera_y_m: f32,
+        elapsed_seconds: f64,
+    ) -> Result<f32, JsValue> {
+        let geometry = WorldGeometry::new(width_m, height_m)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let conditions = world_celestial_conditions(
+            geometry,
+            world_time_seconds,
+            Vector::new(camera_x_m, camera_y_m),
+        );
+        let target = crate::exposure_target(celestial_lighting(conditions).ambient_intensity);
+        Ok(self.exposure.advance(target, elapsed_seconds))
+    }
+}
+
+#[cfg(feature = "playground")]
+impl Default for PlaygroundExposure {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(feature = "playground")]
 use crate::{PLAYGROUND_STARTUP_SHADER, try_cloud_shadow_cache_layout_for_tile_size};
@@ -551,6 +603,7 @@ struct SceneUniforms {
     celestial_orbit_light: [f32; 4],
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
+    exposure_and_output: [f32; 4],
 }
 
 #[repr(C)]
@@ -1080,6 +1133,7 @@ struct Renderer {
     cloud_shadow_cache_queue_complete: Arc<AtomicBool>,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
+    exposure: ViewExposure,
 }
 
 impl Renderer {
@@ -1120,9 +1174,31 @@ impl Renderer {
         let (width, height) = canvas_dimensions(&canvas, device.limits().max_texture_dimension_2d);
         canvas.set_width(width);
         canvas.set_height(height);
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| JsValue::from_str("WebGPU surface has no supported configuration"))?;
+        let capabilities = surface.get_capabilities(&adapter);
+        let hdr_display = surface
+            .display_hdr_info(&adapter)
+            .coarse
+            .is_some_and(|info| info.high_dynamic_range == Some(true));
+        if hdr_display
+            && capabilities
+                .color_spaces(wgpu::TextureFormat::Rgba16Float)
+                .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB)
+        {
+            let sdr_config = config.clone();
+            config.format = wgpu::TextureFormat::Rgba16Float;
+            config.color_space = wgpu::SurfaceColorSpace::ExtendedSrgb;
+            surface.configure(&device, &config);
+            if !canvas_has_hdr_output(&canvas) {
+                config = sdr_config;
+            }
+        }
+        let output_format = config.format.add_srgb_suffix();
+        if output_format != config.format {
+            config.view_formats.push(output_format);
+        }
         surface.configure(&device, &config);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1175,7 +1251,7 @@ impl Renderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fragment"),
-                targets: &[Some(config.format.into())],
+                targets: &[Some(output_format.into())],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -1224,6 +1300,7 @@ impl Renderer {
             cloud_shadow_cache_queue_complete: Arc::new(AtomicBool::new(false)),
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
+            exposure: ViewExposure::default(),
         })
     }
 
@@ -1319,6 +1396,23 @@ impl Renderer {
         let vector_time =
             vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
         let cloud_time = view_cloud_state.cloud_time_coordinates;
+        let local_celestial = world_celestial_conditions(
+            world_geometry,
+            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
+            canonical_camera_m.into(),
+        );
+        let target = crate::exposure_target(celestial_lighting(local_celestial).ambient_intensity);
+        let exposure = if render_clock.is_some() {
+            self.exposure.advance(target, elapsed_seconds)
+        } else {
+            1.0
+        };
+        let hdr = self.config.format == wgpu::TextureFormat::Rgba16Float;
+        let output_peak = if hdr && canvas_has_hdr_output(&self.canvas) {
+            4.0
+        } else {
+            1.0
+        };
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -1385,6 +1479,8 @@ impl Renderer {
                     self.cloud_motion.upper_offset_m[1] as f32,
                 ],
                 cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
+                // WebGPU exposes HDR capability but no numeric display headroom.
+                exposure_and_output: [exposure, output_peak, f32::from(hdr), 0.0],
             }),
         );
 
@@ -1407,9 +1503,10 @@ impl Renderer {
                 ));
             }
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format.add_srgb_suffix()),
+            ..Default::default()
+        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

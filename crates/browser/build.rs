@@ -6,6 +6,7 @@ mod diagnostics;
 const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/scene-state.wgsl",
     "src/shader/components/vertex.wgsl",
+    "src/shader/components/display.wgsl",
     "src/shader/components/noise.wgsl",
     "src/shader/components/environment.wgsl",
     "src/shader/components/clouds.wgsl",
@@ -62,6 +63,7 @@ fn main() {
     let startup = read_components(&[
         "src/shader/components/scene-state.wgsl",
         "src/shader/components/vertex.wgsl",
+        "src/shader/components/display.wgsl",
         "src/shader/playground-startup-entry.wgsl",
     ]);
     write_shader(

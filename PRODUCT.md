@@ -75,6 +75,12 @@ See [README.md](README.md) for what is playable now and
 
 ## Readable presentation
 
+- **[Explicit]** Night remains dark while boats, coastlines, and navigation hazards
+  stay readable; moonlight and storm cover retain their visual differences.
+- **[Explicit]** Exposure adapts gradually when moving between dark and bright
+  environments, like eyes adjusting to light.
+- **[Explicit]** HDR-capable displays use brighter highlights when the browser
+  supports HDR output, with SDR output as the fallback.
 - **[Explicit]** Procedural graphics communicate physical scale and environment,
   including waves around islands and moving ships.
 - **[Explicit]** Authored sprites are appropriate for discrete detail such as

@@ -7,7 +7,7 @@ struct CloudShadowCacheTile {
 
 struct CloudShadowCacheHeader {
     vertex_count: u32,
-    instance_count: atomic<u32>,
+    instance_count: u32,
     first_vertex: u32,
     first_instance: u32,
 };
@@ -118,7 +118,7 @@ fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
     let physical_tile_texels = shadow_cache_tile_texels() + 2u;
     let atlas_tile = atlas_position_px / vec2<u32>(physical_tile_texels);
     let slot = atlas_tile.y * cloud_shadow_cache.atlas_columns + atlas_tile.x;
-    if slot >= atomicLoad(&cloud_shadow_cache_header.instance_count) {
+    if slot >= cloud_shadow_cache_header.instance_count {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     let layer = cloud_shadow_cache_tiles[slot].layer;

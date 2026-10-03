@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+mod exposure;
+pub use exposure::{ViewExposure, exposure_target};
+
 use game::{
     CloudFieldTimeCoordinates, WorldEnvironment, cloud_field_time_coordinates_interpolated,
     computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,

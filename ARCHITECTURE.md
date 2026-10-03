@@ -129,6 +129,13 @@ and verification details.
 
 ### Surface rendering
 
+- **[Explicit]** Lighting and composition use linear color, followed by exposure,
+  tone mapping, and display encoding shared by gameplay and the playground.
+- **[Explicit]** Bounded exposure follows local celestial illumination rather
+  than screen contents, keeping adaptation independent of zoom and surface color.
+- **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
+  ratios have the same response.
+- **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
 - **[Explicit]** A fullscreen pass evaluates terrain and environment at each
   rendered world position. Physics samples where needed; a view-center weather
   sample never supplies the surface scene.
@@ -241,6 +248,8 @@ and verification details.
   Captures include a sidecar derived from the
   same explicit world inputs and fractional render clocks; fresh one-frame
   captures have zero renderer-local cloud displacement.
+- **[Implicit]** Still captures use settled exposure and SDR output; their sidecar
+  records exposure so they can be compared with an adapted interactive view.
 - **[Explicit]** Capture requires a hardware Vulkan GPU.
 
 ## Open questions

@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use browser::{seasonal_phase_factors, view_width_m, visual_pixel_footprint_m};
+use browser::{exposure_target, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m};
 use bytemuck::{Pod, Zeroable};
 use game::{
     celestial_lighting, celestial_orbit, cloud_field_time_coordinates_interpolated,
@@ -79,6 +79,7 @@ struct SceneUniforms {
     celestial_orbit_light: [f32; 4],
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
+    exposure_and_output: [f32; 4],
 }
 
 #[repr(C)]
@@ -511,6 +512,7 @@ struct DerivedOutput {
     lunar_penumbra_fraction: f32,
     lunar_umbra_fraction: f32,
     clear_sky_ambient_intensity: f32,
+    settled_exposure_multiplier: f32,
     ground_temperature_c: f32,
     water_temperature_c: f32,
     seasonal_snow_cover: f32,
@@ -1603,6 +1605,12 @@ fn render_world(
     let current_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
+    let local_celestial = world_celestial_conditions(
+        world_geometry,
+        options.world_time_seconds,
+        canonical_camera_m.into(),
+    );
+    let exposure = exposure_target(celestial_lighting(local_celestial).ambient_intensity);
     let uniforms = SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -1654,6 +1662,7 @@ fn render_world(
         ],
         view_cloud_motion_m: [0.0; 4],
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
+        exposure_and_output: [exposure, 1.0, 0.0, 0.0],
     };
     let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("scene uniforms"),
@@ -2096,6 +2105,7 @@ fn capture_report(
             lunar_penumbra_fraction: celestial.lunar_penumbra_fraction,
             lunar_umbra_fraction: celestial.lunar_umbra_fraction,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
+            settled_exposure_multiplier: exposure_target(celestial.ambient_intensity),
             ground_temperature_c: sample.surface_climate.ground_temperature_c,
             water_temperature_c: sample.surface_climate.water_temperature_c,
             seasonal_snow_cover: sample.surface_climate.seasonal_snow_cover,
