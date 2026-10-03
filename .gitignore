@@ -1,4 +1,5 @@
 /.idea/
+/.direnv/
 /target/
 /node_modules/
 /web/node_modules/
