@@ -15,6 +15,6 @@ fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
         initialized.atmosphere,
         initialized.surface_circle_position,
     );
-    let displayed = apply_shadow_cache_debug(vec4<f32>(tone_map_scene_color(color.rgb), color.a));
+    let displayed = apply_shadow_cache_debug(vec4<f32>(tone_map_scene_color(color.rgb, input.position.xy), color.a));
     return vec4<f32>(encode_display_color(displayed.rgb), displayed.a);
 }

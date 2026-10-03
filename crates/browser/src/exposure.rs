@@ -18,9 +18,9 @@ impl ViewExposure {
 }
 
 pub fn exposure_target(illumination: f32) -> f32 {
-    // Partial compensation preserves the difference between moonlit and
-    // moonless nights. Two stops bound the gain on the darkest scenes.
-    illumination.max(0.001).powf(-0.4).clamp(1.0, 4.0)
+    // Linear material reflectance needs several stops at night; partial
+    // compensation retains the difference between moonlit and moonless scenes.
+    (0.45 / illumination.max(0.001)).powf(0.95).clamp(1.0, 16.0)
 }
 
 #[cfg(test)]
@@ -33,11 +33,71 @@ mod tests {
         let moonlight = exposure_target(0.12);
         let night = exposure_target(0.035);
         assert!(day < moonlight && moonlight < night);
+        let maximum = exposure_target(0.0);
+        assert!(maximum.is_finite());
         for illumination in [0.0, 0.035, 0.12, 1.0, 10.0] {
-            assert!((1.0..=4.0).contains(&exposure_target(illumination)));
+            assert!((day..=maximum).contains(&exposure_target(illumination)));
         }
         assert!(0.035 * night < 0.12 * moonlight);
         assert!(0.12 * moonlight < day);
+    }
+
+    #[test]
+    fn exposure_only_compensates_darkness_and_plateaus_at_the_dark_limit() {
+        for illumination in [0.45, 0.6, 0.8, 1.0, 10.0] {
+            assert_eq!(exposure_target(illumination), 1.0);
+        }
+        assert_eq!(exposure_target(0.0), exposure_target(0.0001));
+    }
+
+    #[test]
+    fn compensation_preserves_illumination_order_through_the_full_range() {
+        let mut previous = 0.0;
+        for sample in 1..=512 {
+            let illumination = sample as f32 / 256.0;
+            let compensated = illumination * exposure_target(illumination);
+            assert!(
+                compensated > previous,
+                "brightness reversed at illumination {illumination}"
+            );
+            previous = compensated;
+        }
+    }
+
+    #[test]
+    fn moonlight_reduces_compensation_through_combined_celestial_illumination() {
+        let world = simulation::WorldGeometry::default();
+        let position = rapier2d::prelude::Vector::ZERO;
+        let night_samples: Vec<_> = (0..28 * 24)
+            .map(|hour| {
+                game::celestial_lighting(game::world_celestial_conditions(
+                    world,
+                    f64::from(hour) * 3600.0,
+                    position,
+                ))
+            })
+            .filter(|light| light.sun_direction[2] < -0.3)
+            .collect();
+        let moonless = night_samples
+            .iter()
+            .min_by(|a, b| {
+                a.moon_ambient_intensity
+                    .total_cmp(&b.moon_ambient_intensity)
+            })
+            .unwrap();
+        let moonlit = night_samples
+            .iter()
+            .max_by(|a, b| {
+                a.moon_ambient_intensity
+                    .total_cmp(&b.moon_ambient_intensity)
+            })
+            .unwrap();
+        assert!(moonlit.moon_ambient_intensity > moonless.moon_ambient_intensity);
+        assert!(moonlit.ambient_intensity > moonless.ambient_intensity);
+        assert!(
+            exposure_target(moonlit.ambient_intensity)
+                < exposure_target(moonless.ambient_intensity)
+        );
     }
 
     #[test]

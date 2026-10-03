@@ -1699,6 +1699,7 @@ function writeUniforms(
   pressureTimeSeconds: number,
   currentTimeSeconds: number,
   elapsedSeconds: number,
+  presentationTimeMs: number,
 ): void {
   const enabled = (key: NumericStateKey): number => Number(state[key] > 0.5);
   const light = [
@@ -1831,7 +1832,7 @@ function writeUniforms(
     // The browser reports HDR capability, not numeric display headroom.
     canvasHdr && window.matchMedia("(dynamic-range: high)").matches ? 4 : 1,
     Number(canvasHdr),
-    0,
+    (presentationTimeMs * 0.008) % 4096,
   ], 56);
   device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
@@ -2116,6 +2117,7 @@ function renderFrame(now: number): void {
     pressureTimeSeconds,
     currentTimeSeconds,
     elapsed,
+    now,
   );
   const encoder = device.createCommandEncoder();
   if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {

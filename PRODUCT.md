@@ -75,10 +75,18 @@ See [README.md](README.md) for what is playable now and
 
 ## Readable presentation
 
-- **[Explicit]** Night remains dark while boats, coastlines, and navigation hazards
-  stay readable; moonlight and storm cover retain their visual differences.
+- **[Explicit]** A view adapted to clear-sky daylight retains its calibrated
+  daytime brightness and material colors.
+- **[Explicit]** Modest compensation keeps night dark while boats, coastlines,
+  and navigation hazards stay readable; moonlight and storm cover retain their
+  visual differences.
 - **[Explicit]** Exposure adapts gradually when moving between dark and bright
   environments, like eyes adjusting to light.
+- **[Explicit]** Exposure and tone mapping apply to the whole rendered view.
+- **[Explicit]** Dark adaptation progressively shifts the rendered view from
+  color-sensitive cone vision toward achromatic rod vision, making red dimmer
+  relative to blue-green.
+- **[Explicit]** Faint night detail has subtle, evolving visual noise.
 - **[Explicit]** HDR-capable displays use brighter highlights when the browser
   supports HDR output, with SDR output as the fallback.
 - **[Explicit]** Procedural graphics communicate physical scale and environment,

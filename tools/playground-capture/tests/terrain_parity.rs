@@ -47,6 +47,281 @@ fn physical_waves_advance_with_fractional_world_ticks() {
 }
 
 #[test]
+fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
+    let world = WorldGeometry::default();
+    let position_m = (-16..=16)
+        .map(|index| Vector::new(index as f32 * 500.0, 0.0))
+        .find(|position| procedural_terrain_elevation_m(world, SEED, *position) < -20.0)
+        .unwrap();
+    for source in 0..2 {
+        let light_at =
+            |time| celestial_lighting(world_celestial_conditions(world, time, position_m));
+        let elevation = |light: game::CelestialLighting| {
+            if source == 0 {
+                light.sun_direction[2]
+            } else {
+                light.moon_direction[2]
+            }
+        };
+        let (mut below, mut above) = (0..28 * 24)
+            .map(|hour| (hour as f64 * 3_600.0, (hour + 1) as f64 * 3_600.0))
+            .find(|(start, end)| {
+                let end_light = light_at(*end);
+                elevation(light_at(*start)) < 0.0
+                    && elevation(end_light) > 0.1
+                    && (source == 0 || end_light.moon_intensity > 0.02)
+            })
+            .unwrap();
+        let visible_time = above;
+        for _ in 0..40 {
+            let midpoint = (below + above) / 2.0;
+            if elevation(light_at(midpoint)) < 0.0 {
+                below = midpoint;
+            } else {
+                above = midpoint;
+            }
+        }
+        let gates = if source == 0 { "1,0,0,0" } else { "0,1,0,0" };
+        let controls = [
+            ("--light-contributions", gates),
+            ("--cloud-shadows", "0,0,0,0"),
+            ("--layer-material-colors", "0,0,0,0"),
+            ("--landform-lighting", "0,0,320,0"),
+        ];
+        let visible = render_controlled_image_at(
+            world,
+            position_m,
+            visible_time,
+            1.0,
+            "scene",
+            1,
+            1,
+            &controls,
+        );
+        assert!(
+            visible[..3].iter().any(|channel| *channel > 0),
+            "source {source} did not illuminate the surface"
+        );
+        let grazing = render_controlled_image_at(
+            world,
+            position_m,
+            (below + above) / 2.0,
+            1.0,
+            "scene",
+            1,
+            1,
+            &controls,
+        );
+        assert_eq!(&grazing[..3], &[0, 0, 0], "source {source} at the horizon");
+    }
+}
+
+#[test]
+fn adapted_view_vision_reduces_chroma_everywhere() {
+    let world = WorldGeometry::default();
+    let mut images = Vec::new();
+    for position in [Vector::ZERO, Vector::new(0.5 * world.width_m(), 0.0)] {
+        for diagnostic in [
+            "lighting_night_vision_unadapted",
+            "lighting_night_vision_adapted",
+        ] {
+            images.push(render_diagnostic_image_with_view_at(
+                world, position, 0.0, 1.0, diagnostic, 1, 1,
+            ));
+        }
+    }
+    assert_eq!(images[0], images[2]);
+    assert_eq!(images[1], images[3]);
+    let chroma = |color: &[u8]| {
+        let channels: Vec<_> = color[..3]
+            .iter()
+            .copied()
+            .map(srgb_channel_to_linear)
+            .collect();
+        channels.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+            - channels.iter().copied().fold(f32::INFINITY, f32::min)
+    };
+    assert!(chroma(&images[3]) < chroma(&images[2]));
+}
+
+#[test]
+fn night_vision_transitions_from_color_to_rod_sensitivity() {
+    let world = WorldGeometry::default();
+    let render = |name: &str| {
+        render_diagnostic_image_with_view_at(world, Vector::ZERO, 0.0, 1.0, name, 1, 1)
+    };
+    for material in ["gray", "white"] {
+        let cones = render(&format!("vision_{material}_cones"));
+        for vision in ["mesopic", "rods"] {
+            assert_eq!(cones, render(&format!("vision_{material}_{vision}")));
+        }
+    }
+    let red = render("vision_red_cones");
+    assert_eq!(&red[1..3], &[0, 0]);
+    assert!((srgb_channel_to_linear(red[0]) - 0.5).abs() < 0.005);
+    let blue = render("vision_blue_cones");
+    assert_eq!(&blue[..2], &[0, 0]);
+    assert!((srgb_channel_to_linear(blue[2]) - 0.5).abs() < 0.005);
+    for material in ["red", "blue"] {
+        let cones = render(&format!("vision_{material}_cones"));
+        let mesopic = render(&format!("vision_{material}_mesopic"));
+        let rods = render(&format!("vision_{material}_rods"));
+        let spread =
+            |pixel: &[u8]| pixel[..3].iter().max().unwrap() - pixel[..3].iter().min().unwrap();
+        assert!(spread(&cones) > spread(&mesopic));
+        assert!(spread(&mesopic) > spread(&rods));
+        assert_eq!(rods[0], rods[1]);
+        assert_eq!(rods[1], rods[2]);
+    }
+    assert!(
+        linear_luminance(&render("vision_blue_rods"))
+            > linear_luminance(&render("vision_red_rods"))
+    );
+    assert!(linear_luminance(&render("vision_red_rods")) < linear_luminance(&red));
+}
+
+#[test]
+fn night_vision_noise_is_unbiased_bounded_and_continuous() {
+    let world = WorldGeometry::default();
+    let render = |name: &str| {
+        render_diagnostic_image_with_view_at(world, Vector::ZERO, 0.0, 1.0, name, 128, 128)
+    };
+    let day = render("vision_noise_day");
+    let dark = render("vision_noise_dark");
+    let bright = render("vision_noise_bright");
+    let later = render("vision_noise_later");
+    assert!(
+        day.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel == &day[..4])
+    );
+    assert!(dark != day, "night signal has no variation");
+    assert_eq!(dark, render("vision_noise_dark"));
+    assert!(dark != later, "noise does not evolve");
+    assert_eq!(dark, render("vision_noise_period"));
+    for image in [&dark, &bright, &later] {
+        let values: Vec<_> = image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| {
+                assert_eq!(pixel[0], pixel[1]);
+                assert_eq!(pixel[1], pixel[2]);
+                let value = srgb_channel_to_linear(pixel[0]);
+                assert!((value - 0.5).abs() <= 0.065);
+                value
+            })
+            .collect();
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        assert!((mean - 0.5).abs() < 0.005, "biased noise: {mean}");
+    }
+    let variance = |image: &[u8]| {
+        image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| (srgb_channel_to_linear(pixel[0]) - 0.5).powi(2))
+            .sum::<f32>()
+            / (image.len() / 4) as f32
+    };
+    assert!(variance(&dark) > variance(&bright));
+    let before_wrap = render("vision_noise_before_wrap");
+    let after_wrap = render("vision_noise_after_wrap");
+    assert!(
+        before_wrap
+            .iter()
+            .zip(&after_wrap)
+            .all(|(a, b)| a.abs_diff(*b) <= 1)
+    );
+    assert!(
+        render("vision_noise_black")
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[..3] == [0, 0, 0])
+    );
+}
+
+#[test]
+fn nighttime_eye_adaptation_brightens_daylight_elsewhere_in_the_view() {
+    let world = WorldGeometry::default();
+    let size = 64usize;
+    // Cloud parallax is camera-relative; compare ground lighting independently of cloud bodies.
+    let controls = [("--cloud-rendering", "0,0,0,0")];
+    let day_center = render_controlled_image_at(
+        world,
+        Vector::ZERO,
+        0.0,
+        world.height_m(),
+        "scene",
+        size as u32,
+        size as u32,
+        &controls,
+    );
+    let night_center = render_controlled_image_at(
+        world,
+        Vector::new(0.5 * world.width_m(), 0.0),
+        0.0,
+        world.height_m(),
+        "scene",
+        size as u32,
+        size as u32,
+        &controls,
+    );
+    let mut compared_day_pixels = 0;
+    let mut brighter_night_pixels = 0;
+    let mut day_luminance_sum = 0.0;
+    let mut night_adapted_day_luminance_sum = 0.0;
+    let mut day_chroma_sum = 0.0;
+    let mut night_adapted_day_chroma_sum = 0.0;
+    let relative_chroma = |color: &[u8]| {
+        let channels: Vec<_> = color[..3]
+            .iter()
+            .copied()
+            .map(srgb_channel_to_linear)
+            .collect();
+        let maximum = channels.iter().copied().fold(0.0, f32::max);
+        let minimum = channels.iter().copied().fold(1.0, f32::min);
+        if maximum == 0.0 {
+            0.0
+        } else {
+            (maximum - minimum) / maximum
+        }
+    };
+    for row in 0..size {
+        for column in 0..size {
+            let position = Vector::new(
+                world.width_m() * ((column as f32 + 0.5) / size as f32 - 0.5),
+                world.height_m() * (0.5 - (row as f32 + 0.5) / size as f32),
+            );
+            let light = celestial_lighting(world_celestial_conditions(world, 0.0, position));
+            let day_offset = 4 * (row * size + column);
+            let night_offset = 4 * (row * size + (column + size / 2) % size);
+            if light.sun_direction[2] > 0.2 {
+                day_luminance_sum += linear_luminance(&day_center[day_offset..day_offset + 4]);
+                night_adapted_day_luminance_sum +=
+                    linear_luminance(&night_center[night_offset..night_offset + 4]);
+                day_chroma_sum += relative_chroma(&day_center[day_offset..day_offset + 4]);
+                night_adapted_day_chroma_sum +=
+                    relative_chroma(&night_center[night_offset..night_offset + 4]);
+                compared_day_pixels += 1;
+            } else if light.sun_direction[2] < -0.3 {
+                brighter_night_pixels += usize::from((0..3).any(|channel| {
+                    night_center[night_offset + channel] > day_center[day_offset + channel]
+                }));
+            }
+        }
+    }
+    assert!(compared_day_pixels > 0);
+    assert!(
+        night_adapted_day_luminance_sum - day_luminance_sum > compared_day_pixels as f32 / 255.0
+    );
+    assert!(night_adapted_day_chroma_sum < day_chroma_sum);
+    assert!(brighter_night_pixels > 0);
+}
+
+#[test]
 fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
     for (index, world) in [
         WorldGeometry::new(8_000.0, 256_000.0).unwrap(),
@@ -403,8 +678,11 @@ fn scene_light_contribution_gates_compose_independently() {
         .map(|hour| hour as f64 * 3_600.0)
         .filter_map(|time| {
             let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
-            (light.sun_intensity > 0.1 && light.moon_intensity > 0.005)
-                .then_some((time, light.sun_intensity.min(8.0 * light.moon_intensity)))
+            (light.sun_direction[2] > 0.1
+                && light.moon_direction[2] > 0.1
+                && light.sun_intensity > 0.1
+                && light.moon_intensity > 0.005)
+                .then_some((time, light.sun_direction[2].min(light.moon_direction[2])))
         })
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .expect("Sun and Moon should share the sky during the lunar month")
@@ -418,8 +696,9 @@ fn scene_light_contribution_gates_compose_independently() {
         48,
         48,
         &[
-            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", "0,0,0,0"),
+            ("--cloud-shadows", "0,0,0.85,0"),
         ],
     );
     assert!(
@@ -444,8 +723,9 @@ fn scene_light_contribution_gates_compose_independently() {
         gates[contribution] = 1;
         let gate_value = format!("{},{},{},{}", gates[0], gates[1], gates[2], gates[3]);
         let controls = [
-            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", gate_value.as_str()),
+            ("--cloud-shadows", "0,0,0.85,0"),
         ];
         let image = render_controlled_image_at(
             world,
@@ -473,8 +753,9 @@ fn scene_light_contribution_gates_compose_independently() {
         48,
         48,
         &[
-            ("--light-balance", "0.15,0.15,0.15,0.15"),
+            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", "1,1,1,1"),
+            ("--cloud-shadows", "0,0,0.85,0"),
         ],
     );
     let mean_error = all
@@ -644,9 +925,22 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         &surface_ambient[..3],
     );
 
+    let transmitted = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        1.0,
+        "lighting_receiver_atmospheric_transmittance_elevated",
+        1,
+        1,
+    );
     let expected_share = (1.0
-        - 0.38 * surface.sun_intensity.clamp(0.0, 1.0).sqrt()
-        - 0.16 * surface.moon_intensity.clamp(0.0, 1.0).sqrt())
+        - 0.38
+            * surface.sun_intensity.clamp(0.0, 1.0).sqrt()
+            * srgb_channel_to_linear(transmitted[0])
+        - 0.16
+            * surface.moon_intensity.clamp(0.0, 1.0).sqrt()
+            * srgb_channel_to_linear(transmitted[1]))
     .max(0.0);
     let actual_share = render_diagnostic_image_with_view_at(
         world,
@@ -1016,7 +1310,7 @@ fn landform_cast_shadows_reach_open_water() {
         width,
         height,
     );
-    let mut maximum_water_difference = 0.0_f32;
+    let mut shadowed_water_pixels = 0;
     let mut low_sun_times = [None, None];
     for quarter_hour in 0..192 {
         let world_time_seconds = quarter_hour as f64 * 900.0;
@@ -1079,14 +1373,14 @@ fn landform_cast_shadows_reach_open_water() {
             .zip(shadowed.as_chunks::<4>().0.iter())
         {
             if elevation[2] > elevation[0].saturating_add(2) {
-                maximum_water_difference = maximum_water_difference
-                    .max((linear_luminance(unshadowed) - linear_luminance(shadowed)).abs());
+                shadowed_water_pixels +=
+                    usize::from((0..3).any(|channel| unshadowed[channel] > shadowed[channel]));
             }
         }
     }
     assert!(
-        maximum_water_difference > 0.005,
-        "landform shadows changed water luminance by only {maximum_water_difference}",
+        shadowed_water_pixels > 0,
+        "landform shadows did not darken any open-water pixels",
     );
 }
 

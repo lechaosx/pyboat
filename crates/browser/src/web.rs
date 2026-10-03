@@ -1134,6 +1134,7 @@ struct Renderer {
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
     exposure: ViewExposure,
+    vision_noise_phase: f64,
 }
 
 impl Renderer {
@@ -1301,6 +1302,7 @@ impl Renderer {
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
             exposure: ViewExposure::default(),
+            vision_noise_phase: 0.0,
         })
     }
 
@@ -1407,6 +1409,8 @@ impl Renderer {
         } else {
             1.0
         };
+        self.vision_noise_phase =
+            (self.vision_noise_phase + elapsed_seconds.max(0.0) * 8.0) % 4096.0;
         let hdr = self.config.format == wgpu::TextureFormat::Rgba16Float;
         let output_peak = if hdr && canvas_has_hdr_output(&self.canvas) {
             4.0
@@ -1480,7 +1484,12 @@ impl Renderer {
                 ],
                 cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
                 // WebGPU exposes HDR capability but no numeric display headroom.
-                exposure_and_output: [exposure, output_peak, f32::from(hdr), 0.0],
+                exposure_and_output: [
+                    exposure,
+                    output_peak,
+                    f32::from(hdr),
+                    self.vision_noise_phase as f32,
+                ],
             }),
         );
 

@@ -131,8 +131,9 @@ and verification details.
 
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
-- **[Explicit]** Bounded exposure follows local celestial illumination rather
-  than screen contents, keeping adaptation independent of zoom and surface color.
+- **[Explicit]** Bounded exposure applies to the entire view and follows summed
+  celestial illumination at its center. Adaptation stays independent of zoom and
+  surface color.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.

@@ -18,14 +18,14 @@ const CAPTURE_SHADOW_CACHE_ATLAS_BYTES: u64 = 64 * 1024 * 1024;
 struct ShaderSelection {
     id: String,
     module: Option<&'static str>,
-    constants: &'static [(&'static str, f64)],
+    constants: Vec<(&'static str, f64)>,
 }
 
 fn scene_selection() -> ShaderSelection {
     ShaderSelection {
         id: "scene".to_owned(),
         module: None,
-        constants: &[],
+        constants: Vec::new(),
     }
 }
 
@@ -719,12 +719,12 @@ fn parse_u32x4(value: &str, option: &str) -> Result<[u32; 4], String> {
 fn diagnostic(
     id: &str,
     module: &'static str,
-    constants: &'static [(&'static str, f64)],
+    constants: &[(&'static str, f64)],
 ) -> ShaderSelection {
     ShaderSelection {
         id: id.to_owned(),
         module: Some(module),
-        constants,
+        constants: constants.to_vec(),
     }
 }
 
@@ -734,7 +734,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         "scene_cached" | "scene_cached_activity" | "scene_cached_hits" => ShaderSelection {
             id: value.to_owned(),
             module: None,
-            constants: &[],
+            constants: Vec::new(),
         },
         "atmosphere_water_vapor" => diagnostic(
             value,
@@ -914,6 +914,66 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 0.0)],
         ),
+        "lighting_night_vision_unadapted" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 21.0),
+                ("LIGHTING_MODEL_EXPOSURE_GAIN", 1.0),
+            ],
+        ),
+        "lighting_night_vision_adapted" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 21.0),
+                ("LIGHTING_MODEL_EXPOSURE_GAIN", 16.0),
+            ],
+        ),
+        name if name.starts_with("vision_") => {
+            let (output, gain, color, signal, phase) = match name {
+                "vision_noise_day" => (22.0, 1.0, [0.0; 3], 0.0001, 0.0),
+                "vision_noise_dark" => (22.0, 16.0, [0.0; 3], 0.0001, 0.0),
+                "vision_noise_bright" => (22.0, 16.0, [0.0; 3], 0.01, 0.0),
+                "vision_noise_later" => (22.0, 16.0, [0.0; 3], 0.0001, 0.5),
+                "vision_noise_period" => (22.0, 16.0, [0.0; 3], 0.0001, 4096.0),
+                "vision_noise_before_wrap" => (22.0, 16.0, [0.0; 3], 0.0001, 4095.999),
+                "vision_noise_after_wrap" => (22.0, 16.0, [0.0; 3], 0.0001, 0.001),
+                "vision_noise_black" => (23.0, 16.0, [0.0; 3], 0.0001, 0.0),
+                _ => {
+                    let (color, response) = name[7..]
+                        .split_once('_')
+                        .ok_or_else(|| format!("unknown diagnostic: {name}"))?;
+                    let color = match color {
+                        "red" => [0.5, 0.0, 0.0],
+                        "blue" => [0.0, 0.0, 0.5],
+                        "gray" => [0.5; 3],
+                        "white" => [1.0; 3],
+                        _ => return Err(format!("unknown diagnostic: {name}")),
+                    };
+                    let gain = match response {
+                        "cones" => 1.0,
+                        "mesopic" => 4.0,
+                        "rods" => 16.0,
+                        _ => return Err(format!("unknown diagnostic: {name}")),
+                    };
+                    (21.0, gain, color, 0.0001, 0.0)
+                }
+            };
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", output),
+                    ("LIGHTING_MODEL_EXPOSURE_GAIN", gain),
+                    ("LIGHTING_MODEL_VISION_RED", color[0]),
+                    ("LIGHTING_MODEL_VISION_GREEN", color[1]),
+                    ("LIGHTING_MODEL_VISION_BLUE", color[2]),
+                    ("LIGHTING_MODEL_SIGNAL", signal),
+                    ("LIGHTING_MODEL_NOISE_PHASE", phase),
+                ],
+            )
+        }
         "lighting_landform_sun_grade_moon_coupling" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1016,6 +1076,14 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
+        "lighting_receiver_atmospheric_transmittance_elevated" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 19.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+            ],
+        ),
         "lighting_ambient_horizon_datum" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1038,7 +1106,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         | "cloud_shadow_cache_tide_initialization" => ShaderSelection {
             id: value.to_owned(),
             module: Some("cloud_shadow_cache"),
-            constants: &[],
+            constants: Vec::new(),
         },
         "lighting_aerosol_optical_depth" => {
             diagnostic(value, "lighting_aerosol_optical_depth", &[])
@@ -1453,7 +1521,7 @@ async fn render(options: &Options) -> Result<(), String> {
             entry_point: Some(&fragment_entry),
             targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: options.diagnostic.constants,
+                constants: &options.diagnostic.constants,
                 ..Default::default()
             },
         }),

@@ -353,11 +353,12 @@ fn moon_canopy_scattered_light(
     let slant_cosine = max(
         (canopy_light.moon_direction.z - canopy_light.horizon_z)
             / (1.0 - canopy_light.horizon_z),
-        0.04,
+        0.001,
     );
     let intercepted_moon = 1.0 - exp(-optical_thickness / slant_cosine);
     return 0.38
         * canopy_light.moon_amount
+        * celestial_atmospheric_transmittance(canopy_light, canopy_light.moon_direction)
         * intercepted_moon
         * underside_escape
         * calculate_moon_light_color_for_direction(
@@ -403,13 +404,15 @@ fn calculate_atmospheric_ambient_light(
     let horizon_glow = max(lower_twilight, 0.35 * upper_afterglow)
         * (1.0 - smoothstep(0.18, 0.55, sun.z));
     let sunset_warmth = horizon_glow * regional_horizon_scattering;
-    let sun_source = receiver.sun_amount * sun_diffuse_light_color();
+    let sun_source_amount = receiver.sun_amount
+        * celestial_atmospheric_transmittance(receiver, receiver.sun_direction);
+    let sun_source = sun_source_amount * sun_diffuse_light_color();
     let moon_source = moon_ambient_amount
         * calculate_moon_light_color_for_direction(
             regional_horizon_scattering,
             receiver.moon_direction,
         );
-    let source_amount = receiver.sun_amount + moon_ambient_amount;
+    let source_amount = sun_source_amount + moon_ambient_amount;
     let source_color = select(
         vec3<f32>(0.72, 0.80, 0.88),
         (sun_source + moon_source) / max(source_amount, 0.0001),
@@ -467,12 +470,13 @@ fn calculate_atmospheric_ambient_light(
     );
     let slant_cosine = max(
         (sun.z - canopy_receiver.horizon_z) / (1.0 - canopy_receiver.horizon_z),
-        0.04,
+        0.001,
     );
     let intercepted_sun = 1.0 - exp(-optical_thickness / slant_cosine);
     let underside_escape = exp(-0.42 * optical_thickness);
     let scattered_sun_light = 0.38
         * canopy_receiver.sun_amount
+        * celestial_atmospheric_transmittance(canopy_receiver, canopy_receiver.sun_direction)
         * intercepted_sun
         * underside_escape
         * sun_diffuse_light_color();
@@ -545,6 +549,20 @@ fn calculate_local_horizon_scattering() -> f32 {
     return calculate_local_horizon_scattering_at(surface_cloud_weather);
 }
 
+fn celestial_atmospheric_transmittance(
+    receiver: CelestialReceiverLight,
+    direction: vec3<f32>,
+) -> f32 {
+    let slant_cosine = max(
+        (direction.z - receiver.horizon_z) / (1.0 - receiver.horizon_z),
+        0.001,
+    );
+    // Palette intensity is calibrated at zenith. Extra air mass extinguishes
+    // grazing rays before finite-disc visibility ends at the geometric horizon.
+    return exp(-regional_aerosol_optical_depth_at(surface_cloud_weather.regional)
+        * (1.0 / slant_cosine - 1.0));
+}
+
 fn calculate_moon_light_color_for_direction(
     scattering: f32,
     moon: vec3<f32>,
@@ -575,8 +593,10 @@ fn sun_diffuse_light_color() -> vec3<f32> {
     return sun_light_color_for_direction(regional_horizon_scattering, sun_direction());
 }
 
-fn sun_direct_contribution_color_for_amount(amount: f32) -> vec3<f32> {
-    return 0.38 * sqrt(clamp(amount, 0.0, 1.0)) * sun_direct_light_color();
+fn sun_direct_contribution_color_for_receiver(receiver: CelestialReceiverLight) -> vec3<f32> {
+    return 0.38 * sqrt(clamp(receiver.sun_amount, 0.0, 1.0))
+        * celestial_atmospheric_transmittance(receiver, receiver.sun_direction)
+        * sun_direct_light_color();
 }
 
 fn moon_direct_contribution_color_for_receiver(
@@ -584,6 +604,7 @@ fn moon_direct_contribution_color_for_receiver(
 ) -> vec3<f32> {
     return 0.16
         * sqrt(clamp(receiver.moon_amount, 0.0, 1.0))
+        * celestial_atmospheric_transmittance(receiver, receiver.moon_direction)
         * calculate_moon_light_color_for_direction(
             local_horizon_scattering,
             receiver.moon_direction,
@@ -593,9 +614,11 @@ fn moon_direct_contribution_color_for_receiver(
 fn ambient_contribution_share(receiver: CelestialReceiverLight) -> f32 {
     let visibility = direct_light_visibility();
     let sun_share = 0.38
-        * sqrt(clamp(visibility.x * receiver.sun_amount, 0.0, 1.0));
+        * sqrt(clamp(visibility.x * receiver.sun_amount, 0.0, 1.0))
+        * celestial_atmospheric_transmittance(receiver, receiver.sun_direction);
     let moon_share = 0.16
-        * sqrt(clamp(visibility.y * receiver.moon_amount, 0.0, 1.0));
+        * sqrt(clamp(visibility.y * receiver.moon_amount, 0.0, 1.0))
+        * celestial_atmospheric_transmittance(receiver, receiver.moon_direction);
     return max(1.0 - sun_share - moon_share, 0.0);
 }
 

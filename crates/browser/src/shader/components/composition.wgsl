@@ -44,6 +44,12 @@ fn cloud_color(
     let sun_facing = max(dot(cloud_normal, low_cloud_light.sun_direction), 0.0);
     let moon_facing = max(dot(cloud_normal, low_cloud_light.moon_direction), 0.0);
     let low_cloud_sun = low_cloud_sun_lighting(low_cloud_light);
+    let sun_atmospheric_transmittance = celestial_atmospheric_transmittance(
+        low_cloud_light, low_cloud_light.sun_direction,
+    );
+    let moon_atmospheric_transmittance = celestial_atmospheric_transmittance(
+        low_cloud_light, low_cloud_light.moon_direction,
+    );
     let sun_direct_shape = low_cloud_sun.surface_amount * sun_facing;
     let moon_direct_shape = low_cloud_light.moon_amount * moon_facing;
     let elevated_sun_scatter = low_cloud_sun.elevated_amount;
@@ -70,22 +76,23 @@ fn cloud_color(
         vec3<f32>(0.12, 0.15, 0.17),
         storm_amount,
     );
-    let neutral_cloud = max(
+    let neutral_cloud = linear_material_color(max(
         vec3<f32>(0.16, 0.18, 0.20),
         0.70 * neutral_material - depth_shadow,
-    );
+    ));
     let direct_whitening = 0.70 * 0.25
         * (1.0 - storm_amount)
-        * (vec3<f32>(0.96, 0.97, 0.96) - vec3<f32>(0.68, 0.72, 0.74));
+        * (linear_material_color(vec3<f32>(0.96, 0.97, 0.96))
+            - linear_material_color(vec3<f32>(0.68, 0.72, 0.74)));
     let sun_cloud = neutral_cloud
         + direct_whitening * sun_direct_shape
-        + neutral_material
+        + linear_material_color(neutral_material)
             * sunlight
             * mix(0.12, 0.36, sun_direct_shape)
         + sunlight * edge_response;
     let moon_cloud = neutral_cloud
         + direct_whitening * moon_direct_shape
-        + neutral_material
+        + linear_material_color(neutral_material)
             * moonlight
             * mix(0.12, 0.36, moon_direct_shape)
         + moonlight * edge_response;
@@ -98,6 +105,7 @@ fn cloud_color(
         * upper_transmittance.x
         * 0.26
         * sqrt(elevated_sun_scatter)
+        * sun_atmospheric_transmittance
         * direct_sun_color
         * (0.12 + 0.88 * edge_response);
     let ambient_color = ambient_contribution_share(low_cloud_light) * (
@@ -113,6 +121,7 @@ fn cloud_color(
     let sun_color = contribution_visibility.x * upper_transmittance.x
         * 0.38
         * sqrt(clamp(low_cloud_sun.surface_amount, 0.0, 1.0))
+        * sun_atmospheric_transmittance
         * direct_sun_color
         * mix(0.25, 1.0, sun_facing)
         + elevated_sun_light;
@@ -120,6 +129,7 @@ fn cloud_color(
         * upper_transmittance.y
         * 0.16
         * sqrt(clamp(low_cloud_light.moon_amount, 0.0, 1.0))
+        * moon_atmospheric_transmittance
         * calculate_moon_light_color_for_direction(
             cloud_horizon_scattering,
             low_cloud_light.moon_direction,
@@ -241,13 +251,13 @@ fn fragment_surface_color(
             * terrain_shadow_transmittance.x
             * sun_transmittance
             * landform_grade.y
-            * sun_direct_contribution_color_for_amount(direct_light.sun_amount)
+            * sun_direct_contribution_color_for_receiver(direct_light)
         + contribution.y
             * terrain_shadow_transmittance.y
             * moon_transmittance
             * landform_grade.z
             * moon_direct_contribution_color_for_receiver(direct_light);
-    return surface_color * light;
+    return linear_material_color(surface_color) * light;
 }
 
 fn final_scene_color(
