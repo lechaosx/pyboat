@@ -32,6 +32,7 @@ use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
 use wgpu::util::DeviceExt;
 
+use crate::frame_queue::FrameQueue;
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, ViewExposure,
@@ -1120,6 +1121,7 @@ struct Renderer {
     canvas: HtmlCanvasElement,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    frame_queue: FrameQueue,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
@@ -1288,6 +1290,7 @@ impl Renderer {
             canvas,
             device,
             queue,
+            frame_queue: FrameQueue::default(),
             surface,
             config,
             pipeline,
@@ -1337,25 +1340,6 @@ impl Renderer {
                 .resize(&self.device, self.config.width, self.config.height);
         }
         let use_shadow_cache = !self.cloud_shadow_cache_replacement.is_pending();
-        let vertices = scene_vertices(
-            scenes,
-            match_seed.is_some(),
-            camera_m,
-            self.config.width,
-            self.config.height,
-            view_height_m,
-        );
-        if vertices.len() > self.vertex_capacity {
-            self.vertex_capacity = vertices.len().next_power_of_two();
-            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Dynamic vertices"),
-                size: (self.vertex_capacity * mem::size_of::<Vertex>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        self.queue
-            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let view_width_m = view_width_m(
             self.config.width as f32 / self.config.height as f32,
             view_height_m,
@@ -1368,6 +1352,7 @@ impl Renderer {
             Vector::ZERO,
         );
         let orbit = celestial_orbit(celestial);
+        let has_match = match_seed.is_some();
         let match_seed = match_seed.unwrap_or(0);
         let view_cloud_state = sample_view_cloud_state_for_render_clocks(
             world_geometry,
@@ -1417,6 +1402,47 @@ impl Renderer {
         } else {
             1.0
         };
+        let Some(frame_permit) = self.frame_queue.try_acquire() else {
+            return Ok(());
+        };
+        let frame = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) => frame,
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(()),
+            CurrentSurfaceTexture::Suboptimal(frame) => {
+                drop(frame);
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            CurrentSurfaceTexture::Validation => {
+                self.terminal_error.store(true, Ordering::Release);
+                return Err(JsValue::from_str(
+                    "WebGPU rejected the current surface texture",
+                ));
+            }
+        };
+        let vertices = scene_vertices(
+            scenes,
+            has_match,
+            camera_m,
+            self.config.width,
+            self.config.height,
+            view_height_m,
+        );
+        if vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = vertices.len().next_power_of_two();
+            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dynamic vertices"),
+                size: (self.vertex_capacity * mem::size_of::<Vertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -1493,25 +1519,6 @@ impl Renderer {
             }),
         );
 
-        let frame = match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame) => frame,
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(()),
-            CurrentSurfaceTexture::Suboptimal(frame) => {
-                drop(frame);
-                self.surface.configure(&self.device, &self.config);
-                return Ok(());
-            }
-            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                return Ok(());
-            }
-            CurrentSurfaceTexture::Validation => {
-                self.terminal_error.store(true, Ordering::Release);
-                return Err(JsValue::from_str(
-                    "WebGPU rejected the current surface texture",
-                ));
-            }
-        };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.add_srgb_suffix()),
             ..Default::default()
@@ -1562,6 +1569,8 @@ impl Renderer {
             pass.draw(0..vertices.len() as u32, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
+        self.queue
+            .on_submitted_work_done(move || drop(frame_permit));
         self.queue.present(frame);
         Ok(())
     }

@@ -182,6 +182,9 @@ and verification details.
   advances only at integer ticks. Double-precision frame timing and cloud
   displacement survive reconciliation and world/clock changes; uploaded `f32`
   cloud metres accept quantization after prolonged uninterrupted transport.
+- **[Implicit]** Animation callbacks keep input, simulation, and presentation
+  clocks advancing while GPU submissions are bounded to prevent stale-view
+  backlog. The browser owns display synchronization and presentation buffering.
 - **[Explicit]** Shadow caching is a frame-local sparse world-space atlas for
   reused cloud-depth and landform queries. Discovery and direct evaluation share
   projection and finite-disc geometry; unique, missing, or capacity-limited

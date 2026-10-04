@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 mod exposure;
+#[cfg(any(target_arch = "wasm32", test))]
+mod frame_queue;
 pub use exposure::{ViewExposure, exposure_target};
 
 use game::{

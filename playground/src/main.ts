@@ -24,6 +24,7 @@ import {
 import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
+import { startRenderLoop } from "./render-loop";
 import {
   advanceProceduralTimeSeconds,
   maximumWorldYear,
@@ -1693,7 +1694,7 @@ function splitTick(timeSeconds: number): [bigint, number] {
   return [BigInt(wholeTick), tickPosition - wholeTick];
 }
 
-function writeUniforms(
+function updateUniforms(
   cloudTimeSeconds: number,
   worldTimeSeconds: number,
   pressureTimeSeconds: number,
@@ -1834,7 +1835,6 @@ function writeUniforms(
     Number(canvasHdr),
     (presentationTimeMs * 0.008) % 4096,
   ], 56);
-  device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
 
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
@@ -1954,7 +1954,6 @@ function writeUniforms(
     0,
     0,
   ], 100);
-  device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
 }
 
 function resize(): void {
@@ -2022,7 +2021,6 @@ let nextShadowCacheInfoAt = 0;
 
 function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
   updateShadowCacheInfo(renderResourcesForFrame().cloudShadowCache);
-  framesInWindow += 1;
   ticksInWindow += ticks;
   const windowSeconds = (now - statisticsStartedAt) / 1000;
   if (windowSeconds < 1) return;
@@ -2055,7 +2053,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   syncWorldDateInputs();
 }
 
-function renderFrame(now: number): void {
+function advanceFrame(now: number): void {
   resize();
   applyScheduledShadowCacheRecreation();
   updateScaleBar();
@@ -2111,7 +2109,7 @@ function renderFrame(now: number): void {
   if (canvasHdr !== Boolean(renderResources.hdr)) {
     configureCanvas(Boolean(renderResources.hdr));
   }
-  writeUniforms(
+  updateUniforms(
     cloudTimeSeconds,
     worldTimeSeconds,
     pressureTimeSeconds,
@@ -2119,6 +2117,13 @@ function renderFrame(now: number): void {
     elapsed,
     now,
   );
+  updateStatus(now, ticks, cloudTimeSeconds);
+}
+
+function renderFrame(now: number): Promise<void> {
+  const renderResources = renderResourcesForFrame();
+  device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
+  device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
   const encoder = device.createCommandEncoder();
   if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {
     timedPipeline = renderResources.pipeline;
@@ -2230,6 +2235,7 @@ function renderFrame(now: number): void {
     timestampReadback.cached = Boolean(cache);
   }
   device.queue.submit([encoder.finish()]);
+  framesInWindow += 1;
   if (cacheInfoReadback) {
     const readbackCache = cacheInfoReadback;
     void readbackCache.tileCountReadback.mapAsync(0x0001).then(() => {
@@ -2271,22 +2277,13 @@ function renderFrame(now: number): void {
       timestampReadback.pending = false;
     });
   }
-  updateStatus(now, ticks, cloudTimeSeconds);
+  return device.queue.onSubmittedWorkDone();
 }
 
-function frame(now: number): void {
-  if (!renderLoopActive) return;
-  try {
-    renderFrame(now);
-  } catch (error) {
-    if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
-    console.error(error);
-  } finally {
-    if (renderLoopActive) requestAnimationFrame(frame);
-  }
-}
-
-requestAnimationFrame(frame);
+startRenderLoop(advanceFrame, renderFrame, () => renderLoopActive, (error) => {
+  if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
+  console.error(error);
+});
 
 void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   .then(async () => {
