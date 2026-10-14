@@ -359,8 +359,8 @@ fn diagnostic_cloud_shadow_disc_radius(input: VertexOutput) -> vec4<f32> {
         layer_visibility.y > 0.0,
         layer_visibility.z > 0.0,
     );
-    let point_depths = cloud_shadow_depths_for_query(point_query);
-    let disc_depths = cloud_shadow_depths_for_query(disc_query);
+    let point_depths = cloud_shadow_depths_for_query(point_query, 0u);
+    let disc_depths = cloud_shadow_depths_for_query(disc_query, 0u);
     let difference = abs(
         cloud_disc_shadow_transmittance(point_depths.low, direction)
             - cloud_disc_shadow_transmittance(disc_depths.low, direction),

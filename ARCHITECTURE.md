@@ -149,8 +149,8 @@ and verification details.
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
   stay per pixel.
-- **[Implicit]** Environment field grids have a fixed texel budget; views too
-  wide for it coarsen the spacing instead of allocating more memory.
+- **[Implicit]** Per-frame field grids have fixed texel budgets; windows too
+  wide for one coarsen its spacing instead of allocating more memory.
 - **[Explicit]** One surface normal combines authoritative relief with visual
   material detail before celestial lighting.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
@@ -162,6 +162,8 @@ and verification details.
 - **[Explicit]** Sun and Moon are independent directional sources. Diffuse light
   combines clear sky with regional canopy underlight and illuminates surfaces
   and visible clouds; lower clouds do not supply ambient light.
+- **[Explicit]** Ambient light is evaluated per pixel rather than read from
+  field grids.
 - **[Explicit]** Regional canopy fraction and cloudy-sky optical thickness come
   from broad existing weather causes at the receiver, independently of overhead
   texture and directional shadow samples. That fraction also governs detailed
@@ -196,16 +198,18 @@ and verification details.
 - **[Implicit]** Animation callbacks keep input, simulation, and presentation
   clocks advancing while GPU submissions are bounded to prevent stale-view
   backlog. The browser owns display synchronization and presentation buffering.
-- **[Explicit]** Shadow caching is a frame-local sparse world-space atlas for
-  reused cloud-depth and landform queries. Discovery and direct evaluation share
-  projection and finite-disc geometry; unique, missing, or capacity-limited
-  samples evaluate directly. Cache resolution follows the pixel footprint and
-  gutters preserve seams. Visible cloud bodies and ambient light remain uncached.
-- **[Implicit]** Atlas allocation follows backing resolution and device limits
-  because WebGPU has no usable-memory budget; overflow uses canonical direct evaluation.
-- **[Explicit]** Resizes take effect immediately through direct rendering while
-  caches retire. Queue completion gates destruction before replacement, and
-  intervening resize requests coalesce to the latest dimensions.
+- **[Explicit]** Lower-cloud bodies and optical depth, canopy optical depth, and
+  broad landform elevation are reconstructed from per-frame grids.
+- **[Explicit]** Grid spacing follows each field's finest detail and the
+  finite-disc penumbra, not the pixel footprint.
+- **[Explicit]** Grid windows bound every finite-disc shadow tap from the light
+  geometry and every landform sample from the shadow reach, so coverage holds by
+  construction and the scene reads these fields only from grids.
+- **[Implicit]** Lower-cloud and canopy grids move with their layer's cloud
+  transport, so translating latent texture is never resampled; landform grids
+  stay fixed to the world.
+- **[Explicit]** Resizes take effect on the next frame at the latest dimensions
+  by reconfiguring the surface; field textures keep their size.
 - **[Explicit]** Canvas backing resolution preserves CSS aspect ratio while
   fitting device texture limits.
 - **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close

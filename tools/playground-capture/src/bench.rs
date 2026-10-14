@@ -8,13 +8,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
-use browser::EnvironmentFieldGrid;
+use browser::FieldGrids;
 
 use super::{
-    CaptureCloudShadowCache, CaptureEnvironmentFields, Options, PlaygroundUniforms, Vertex,
-    bind_group, capture_environment_field_grid, capture_texture, default_options,
-    fullscreen_vertices, hardware_device, parse_seed, read_texture, scene_uniforms, uniform_layout,
-    validate_capture_dimensions, validate_capture_spatial_inputs, validate_time_seconds, write_png,
+    CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
+    capture_field_grids, capture_texture, default_options, fullscreen_vertices, hardware_device,
+    parse_seed, read_texture, scene_uniforms, uniform_layout, validate_capture_dimensions,
+    validate_capture_spatial_inputs, validate_time_seconds, write_png,
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
@@ -23,8 +23,8 @@ const VISIBLE_DIFFERENCE_LEVELS: u8 = 2;
 const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
-/// Discovery, fill, environment field, and scene pass begin/end pairs.
-const TIMESTAMP_COUNT: u32 = 8;
+/// Environment field, occluder field, and scene pass begin/end pairs.
+const TIMESTAMP_COUNT: u32 = 6;
 
 pub struct BenchOptions {
     pub output_dir: PathBuf,
@@ -57,10 +57,10 @@ struct Timing {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModeReport {
-    discovery: Option<Timing>,
-    fill: Option<Timing>,
     #[serde(default)]
     fields: Option<Timing>,
+    #[serde(default)]
+    occluders: Option<Timing>,
     scene: Option<Timing>,
     total: Timing,
     total_ns_per_pixel: f64,
@@ -119,17 +119,14 @@ struct BenchReport {
 
 struct ModeRenderer {
     pipeline: wgpu::RenderPipeline,
-    cache: CaptureCloudShadowCache,
+    fields: CaptureFields,
 }
 
 impl ModeRenderer {
     fn new(
         device: &wgpu::Device,
         scene_layout: &wgpu::BindGroupLayout,
-        environment_field_scene_layout: &wgpu::BindGroupLayout,
         unused_layout: &wgpu::BindGroupLayout,
-        width: u32,
-        height: u32,
         evaluate_all_branches: bool,
     ) -> Result<Self, String> {
         // WebGPU rejects constants a module does not declare, and compaction
@@ -142,27 +139,19 @@ impl ModeRenderer {
                 &[]
             }
         };
-        let cache_source = browser::production_cloud_shadow_cache_shader_source();
+        let occluder_source = browser::occluder_field_shader_source();
         let scene_source = browser::production_scene_shader_source();
         if evaluate_all_branches && !declares_override(scene_source) {
             return Err(
                 "the production scene shader no longer declares EVALUATE_ALL_BRANCHES".to_owned(),
             );
         }
-        let cache = CaptureCloudShadowCache::new(
+        let fields = CaptureFields::new(
             device,
             scene_layout,
             unused_layout,
-            cache_source,
-            constants(cache_source),
-            browser::cloud_shadow_cache_layout(
-                width,
-                height,
-                device.limits().max_texture_dimension_2d,
-            ),
-            width,
-            height,
-            0,
+            occluder_source,
+            constants(occluder_source),
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("bench production scene shader"),
@@ -170,11 +159,7 @@ impl ModeRenderer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("bench production scene pipeline layout"),
-            bind_group_layouts: &[
-                Some(environment_field_scene_layout),
-                Some(unused_layout),
-                Some(&cache.sample_layout),
-            ],
+            bind_group_layouts: &[Some(&fields.scene_layout), Some(unused_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -205,7 +190,7 @@ impl ModeRenderer {
             multiview_mask: None,
             cache: None,
         });
-        Ok(Self { pipeline, cache })
+        Ok(Self { pipeline, fields })
     }
 
     fn encode(
@@ -213,24 +198,14 @@ impl ModeRenderer {
         encoder: &mut wgpu::CommandEncoder,
         bindings: &FrameBindings<'_>,
         target: &wgpu::TextureView,
-        width: u32,
-        height: u32,
         timestamps: Option<&wgpu::QuerySet>,
     ) {
-        // Production keeps stale atlas texels; only allocated tiles are sampled.
-        self.cache.encode(
+        self.fields.encode(
             encoder,
             bindings.scene,
+            bindings.fields,
             bindings.unused,
-            width,
-            height,
-            wgpu::LoadOp::Load,
-            timestamps,
-        );
-        bindings.environment_fields.encode(
-            encoder,
-            bindings.scene,
-            bindings.environment_field_grid,
+            bindings.field_grids,
             timestamps,
         );
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -247,16 +222,15 @@ impl ModeRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: timestamps.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(6),
-                end_of_pass_write_index: Some(7),
+                beginning_of_pass_write_index: Some(4),
+                end_of_pass_write_index: Some(5),
             }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, bindings.fields_scene, &[]);
+        pass.set_bind_group(0, &bindings.fields.scene, &[]);
         pass.set_bind_group(1, bindings.unused, &[]);
-        pass.set_bind_group(2, &self.cache.sample_bind_group, &[]);
         pass.set_vertex_buffer(0, bindings.vertices.slice(..));
         pass.draw(0..6, 0..1);
     }
@@ -264,17 +238,34 @@ impl ModeRenderer {
 
 struct FrameBindings<'a> {
     scene: &'a wgpu::BindGroup,
-    fields_scene: &'a wgpu::BindGroup,
-    environment_fields: &'a CaptureEnvironmentFields,
-    environment_field_grid: &'a EnvironmentFieldGrid,
+    fields: &'a CaptureFieldBindings,
+    field_grids: &'a FieldGrids,
     unused: &'a wgpu::BindGroup,
     vertices: &'a wgpu::Buffer,
 }
 
 struct ScenarioBindings {
     scene: wgpu::BindGroup,
-    fields_scene: wgpu::BindGroup,
-    environment_field_grid: EnvironmentFieldGrid,
+    /// Shipped, then forced.
+    fields: [CaptureFieldBindings; 2],
+    field_grids: FieldGrids,
+}
+
+impl ScenarioBindings {
+    fn frame<'a>(
+        &'a self,
+        mode: usize,
+        unused: &'a wgpu::BindGroup,
+        vertices: &'a wgpu::Buffer,
+    ) -> FrameBindings<'a> {
+        FrameBindings {
+            scene: &self.scene,
+            fields: &self.fields[mode],
+            field_grids: &self.field_grids,
+            unused,
+            vertices,
+        }
+    }
 }
 
 struct TimestampReadback {
@@ -358,25 +349,10 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         usage: wgpu::BufferUsages::VERTEX,
     });
     eprintln!("compiling production pipelines");
-    let environment_fields = CaptureEnvironmentFields::new(&device, &scene_layout);
-    let shipped_renderer = ModeRenderer::new(
-        &device,
-        &scene_layout,
-        &environment_fields.scene_layout,
-        &unused_layout,
-        options.width,
-        options.height,
-        false,
-    )?;
-    let all_branches_renderer = ModeRenderer::new(
-        &device,
-        &scene_layout,
-        &environment_fields.scene_layout,
-        &unused_layout,
-        options.width,
-        options.height,
-        true,
-    )?;
+    let renderers = [
+        ModeRenderer::new(&device, &scene_layout, &unused_layout, false)?,
+        ModeRenderer::new(&device, &scene_layout, &unused_layout, true)?,
+    ];
     let timing = if timestamps.is_some() {
         "timestamp-query"
     } else {
@@ -430,8 +406,10 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             });
             Ok(ScenarioBindings {
                 scene: bind_group(&device, &scene_layout, &buffer, "bench scene"),
-                fields_scene: environment_fields.scene_bind_group(&device, &buffer),
-                environment_field_grid: capture_environment_field_grid(&scenario_options)?,
+                fields: renderers
+                    .each_ref()
+                    .map(|renderer| renderer.fields.bindings(&device, &buffer)),
+                field_grids: capture_field_grids(&scenario_options)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -439,20 +417,12 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
     // scenario, including the first, be timed in that settled state.
     eprintln!("warming up");
     for scene in &scene_bind_groups {
-        let bindings = FrameBindings {
-            scene: &scene.scene,
-            fields_scene: &scene.fields_scene,
-            environment_fields: &environment_fields,
-            environment_field_grid: &scene.environment_field_grid,
-            unused: &unused,
-            vertices: &vertices,
-        };
-        for renderer in [&shipped_renderer, &all_branches_renderer] {
+        for (mode, renderer) in renderers.iter().enumerate() {
             time_mode(
                 &device,
                 &queue,
                 renderer,
-                &bindings,
+                &scene.frame(mode, &unused, &vertices),
                 timestamps.as_ref(),
                 options,
                 0,
@@ -464,41 +434,41 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
     let mut thumbnails = Vec::new();
     for (scenario, scene) in scenarios.into_iter().zip(&scene_bind_groups) {
         eprintln!("{}", scenario.id);
-        let bindings = FrameBindings {
-            scene: &scene.scene,
-            fields_scene: &scene.fields_scene,
-            environment_fields: &environment_fields,
-            environment_field_grid: &scene.environment_field_grid,
-            unused: &unused,
-            vertices: &vertices,
-        };
+        let shipped_bindings = scene.frame(0, &unused, &vertices);
         let shipped = mode_report(
             time_mode(
                 &device,
                 &queue,
-                &shipped_renderer,
-                &bindings,
+                &renderers[0],
+                &shipped_bindings,
                 timestamps.as_ref(),
                 options,
                 options.timed_iterations,
             )?,
             pixels,
         )?;
-        let shipped_rgba = render_image(&device, &queue, &shipped_renderer, &bindings, options)?;
+        let shipped_rgba =
+            render_image(&device, &queue, &renderers[0], &shipped_bindings, options)?;
+        let all_branches_bindings = scene.frame(1, &unused, &vertices);
         let all_branches = mode_report(
             time_mode(
                 &device,
                 &queue,
-                &all_branches_renderer,
-                &bindings,
+                &renderers[1],
+                &all_branches_bindings,
                 timestamps.as_ref(),
                 options,
                 options.timed_iterations,
             )?,
             pixels,
         )?;
-        let all_branches_rgba =
-            render_image(&device, &queue, &all_branches_renderer, &bindings, options)?;
+        let all_branches_rgba = render_image(
+            &device,
+            &queue,
+            &renderers[1],
+            &all_branches_bindings,
+            options,
+        )?;
         let image = format!("{}.png", scenario.id);
         write_png(
             &options.output_dir.join(&image),
@@ -584,9 +554,9 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
     })
 }
 
-/// Pass durations in milliseconds: discovery, fill, environment fields, scene,
+/// Pass durations in milliseconds: environment fields, occluder fields, scene,
 /// and first begin to last end.
-type FrameTimes = [Option<f64>; 5];
+type FrameTimes = [Option<f64>; 4];
 
 struct TimedFrames {
     frames: Vec<FrameTimes>,
@@ -617,8 +587,6 @@ fn time_mode(
             &mut encoder,
             bindings,
             &view,
-            options.width,
-            options.height,
             timestamps.map(|timestamps| &timestamps.query_set),
         );
         if let Some(timestamps) = timestamps {
@@ -678,11 +646,10 @@ fn time_mode(
                     milliseconds(0, 1),
                     milliseconds(2, 3),
                     milliseconds(4, 5),
-                    milliseconds(6, 7),
-                    milliseconds(0, 7),
+                    milliseconds(0, 5),
                 ]
             }
-            _ => [None, None, None, None, Some(wall_ms)],
+            _ => [None, None, None, Some(wall_ms)],
         };
         if iteration < options.warmup_iterations {
             continue;
@@ -690,7 +657,7 @@ fn time_mode(
         let complete = if timestamps.is_some() {
             frame.iter().all(Option::is_some)
         } else {
-            frame[4].is_some()
+            frame[3].is_some()
         };
         if complete {
             timed.frames.push(frame);
@@ -716,8 +683,6 @@ fn render_image(
         &mut encoder,
         bindings,
         &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        options.width,
-        options.height,
         None,
     );
     read_texture(device, queue, encoder, &texture)
@@ -735,12 +700,11 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
             min_ms: samples.iter().copied().fold(f64::INFINITY, f64::min),
         })
     };
-    let total = pass(4).ok_or("every timed frame had invalid timestamps")?;
+    let total = pass(3).ok_or("every timed frame had invalid timestamps")?;
     Ok(ModeReport {
-        discovery: pass(0),
-        fill: pass(1),
-        fields: pass(2),
-        scene: pass(3),
+        fields: pass(0),
+        occluders: pass(1),
+        scene: pass(2),
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
@@ -948,42 +912,43 @@ fn print_summary(report: &BenchReport) {
         "forced: EVALUATE_ALL_BRANCHES; Δmax: largest 8-bit difference from the shipped image"
     );
     println!(
-        "{:<22} {:>9} {:>7} {:>9} {:>7} {:>7} {:>9} {:>10} {:>12} {:>10} {:>9}",
+        "{:<22} {:>9} {:>7} {:>7} {:>9} {:>9} {:>10} {:>12} {:>10} {:>12} {:>9}",
         "scenario",
         "total ms",
         "ns/px",
-        "discover",
-        "fill",
         "fields",
+        "occluders",
         "scene",
         "forced ms",
         "forced Δmax",
         "vs base",
+        "forced base",
         "base p99"
     );
     for scenario in &report.scenarios {
         let shipped = &scenario.shipped;
-        let (ratio, baseline_p99) = scenario.baseline.as_ref().map_or_else(
-            || ("-".to_owned(), "-".to_owned()),
+        let (ratio, forced_ratio, baseline_p99) = scenario.baseline.as_ref().map_or_else(
+            || ("-".to_owned(), "-".to_owned(), "-".to_owned()),
             |baseline| {
                 (
                     format!("{:.3}x", baseline.total_ratio),
+                    format!("{:.3}x", baseline.all_branches_total_ratio),
                     baseline.image_difference.p99.to_string(),
                 )
             },
         );
         println!(
-            "{:<22} {:>9.2} {:>7.1} {:>9} {:>7} {:>7} {:>9} {:>10.2} {:>12} {:>10} {:>9}",
+            "{:<22} {:>9.2} {:>7.1} {:>7} {:>9} {:>9} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
             scenario.scenario.id,
             shipped.total.median_ms,
             shipped.total_ns_per_pixel,
-            milliseconds(shipped.discovery),
-            milliseconds(shipped.fill),
             milliseconds(shipped.fields),
+            milliseconds(shipped.occluders),
             milliseconds(shipped.scene),
             scenario.all_branches.total.median_ms,
             scenario.all_branches_image_difference.max,
             ratio,
+            forced_ratio,
             baseline_p99,
         );
         let discarded = shipped.discarded_frames + scenario.all_branches.discarded_frames;

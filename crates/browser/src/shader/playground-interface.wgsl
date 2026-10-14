@@ -25,6 +25,7 @@ struct PlaygroundUniforms {
     environment_features: vec4<f32>,
     material_features: vec4<f32>,
     effect_features: vec4<f32>,
+    occluder_field_inspection: vec4<u32>,
 };
 
 @group(1) @binding(0)

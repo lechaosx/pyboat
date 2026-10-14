@@ -456,19 +456,18 @@ pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting 
     celestial_lighting_at_height(WorldGeometry::default(), conditions, 0.0)
 }
 
-pub fn celestial_lighting_at_height(
+/// Local east/north/up Sun and topocentric Moon directions. The orbit depends
+/// only on global phases, so callers sampling many positions compute it once.
+pub fn celestial_directions_at_height(
     world_geometry: WorldGeometry,
+    orbit: CelestialOrbit,
     conditions: CelestialConditions,
     receiver_height_m: f32,
-) -> CelestialLighting {
-    let orbit = celestial_orbit(conditions);
+) -> ([f32; 3], [f32; 3]) {
     let latitude = f64::from(conditions.celestial_latitude_degrees).to_radians();
     let solar_hour_angle = std::f64::consts::TAU * (f64::from(conditions.day_phase) - 0.5);
     let sun_direction =
         celestial_direction(latitude, orbit.solar_declination_rad, solar_hour_angle);
-    let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
-    let sun_elevation = ((sun_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
-    let sun_elevation = libm::sqrt(f64::from(sun_elevation)) as f32;
     let lunar_hour_angle =
         solar_hour_angle + orbit.solar_right_ascension_rad - orbit.lunar_right_ascension_rad;
     let geocentric_moon_direction =
@@ -477,6 +476,20 @@ pub fn celestial_lighting_at_height(
     let observer_radius_planet_radii = (world_radius_m + receiver_height_m) / world_radius_m;
     let moon_direction =
         topocentric_moon_direction(geocentric_moon_direction, observer_radius_planet_radii);
+    (sun_direction, moon_direction)
+}
+
+pub fn celestial_lighting_at_height(
+    world_geometry: WorldGeometry,
+    conditions: CelestialConditions,
+    receiver_height_m: f32,
+) -> CelestialLighting {
+    let orbit = celestial_orbit(conditions);
+    let (sun_direction, moon_direction) =
+        celestial_directions_at_height(world_geometry, orbit, conditions, receiver_height_m);
+    let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
+    let sun_elevation = ((sun_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
+    let sun_elevation = libm::sqrt(f64::from(sun_elevation)) as f32;
     let solar_separation =
         angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
     let solar_eclipse_fraction = circle_overlap_fraction(

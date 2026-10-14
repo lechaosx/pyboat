@@ -1654,144 +1654,112 @@ fn diffuse_moon_horizon_matches_authoritative_rust() {
     }
 }
 
+/// Times when a source at the view centre has just become or is just about to
+/// stop being bright enough for shadow taps: the Sun or Moon at the surface
+/// contrast gate, or at the low-cloud base horizon. Footprints reach farthest there.
+fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
+    let step_seconds = 60.0;
+    let lit = |world_time_seconds: f64| {
+        let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+        let surface = celestial_lighting_at_height(world, conditions, 0.0);
+        let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
+        [
+            surface.sun_direction[2] > 0.04,
+            surface.moon_direction[2] > 0.04,
+            low_cloud.sun_intensity > 0.0,
+            low_cloud.moon_intensity > 0.0,
+        ]
+    };
+    let start_seconds = 9_072_240.0;
+    let mut times = Vec::new();
+    let mut previous = lit(start_seconds);
+    for step in 1..=(2 * 86_400 / 60) {
+        let world_time_seconds = start_seconds + f64::from(step) * step_seconds;
+        let current = lit(world_time_seconds);
+        for (now, before) in current.into_iter().zip(previous) {
+            if now != before {
+                times.push(if now {
+                    world_time_seconds
+                } else {
+                    world_time_seconds - step_seconds
+                });
+            }
+        }
+        previous = current;
+    }
+    times
+}
+
+fn clamped_lookup_pixels(image: &[u8]) -> usize {
+    image
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[..3] == [255, 0, 255])
+        .count()
+}
+
 #[test]
-fn shadow_atlas_requires_two_distinct_reused_footprints() {
+fn occluder_field_lookups_stay_inside_their_grids() {
     let world = WorldGeometry::default();
-    for (label, position_m, view_height_m) in [
-        ("local", Vector::ZERO, 8_000.0),
-        ("wide", Vector::ZERO, 24_000.0),
-        (
-            "north-pole",
-            Vector::new(0.0, 0.46 * world.height_m()),
-            12_000.0,
-        ),
-        (
-            "south-pole",
-            Vector::new(0.0, -0.46 * world.height_m()),
-            12_000.0,
-        ),
-    ] {
-        let world_time_seconds = (0..365 * 24)
-            .map(|hour| hour as f64 * 3_600.0)
-            .filter_map(|time| {
-                let conditions = world_celestial_conditions(world, time, position_m);
-                let surface = celestial_lighting_at_height(world, conditions, 0.0);
-                let low = celestial_lighting_at_height(world, conditions, 900.0);
-                (surface.sun_intensity > 0.12
-                    && low.sun_intensity > 0.12
-                    && low.moon_intensity == 0.0
-                    && low.moon_direction[2] < -0.20)
-                    .then_some((time, surface.sun_intensity.min(low.sun_intensity)))
-            })
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-            .unwrap_or_else(|| panic!("{label}: no isolated Sun interval"))
-            .0;
-        let single = render_controlled_image_at(
-            world,
-            position_m,
-            world_time_seconds,
-            1_000.0,
-            "cloud_shadow_cache_tiles",
-            128,
-            128,
-            &[
-                ("--landscape-visibility", "1,1,1,0"),
-                ("--cloud-shadows", "0,0,0.85,1"),
-            ],
-        );
-        assert!(
-            scalar_debug_amount(&single) < 0.01,
-            "{label}: single footprint was cached",
-        );
-        let reused = render_controlled_image_at(
-            world,
-            position_m,
-            world_time_seconds,
-            view_height_m,
-            "cloud_shadow_cache_tiles",
-            128,
-            128,
-            &[
-                ("--landscape-visibility", "1,1,1,0"),
-                ("--cloud-shadows", "0,1,0.85,1"),
-            ],
-        );
-        assert!(
-            scalar_debug_amount(&reused) > 0.99,
-            "{label}: two overlapping receiver footprints were not cached",
-        );
+    let views = [
+        (Vector::new(2_400.0, 2_000.0), 1_500.0),
+        (Vector::new(-3_700.0, -13_400.0), 2_400.0),
+        (Vector::new(-4_000.0, 0.0), 20_000.0),
+        (Vector::new(0.5 * world.width_m() - 200.0, 0.0), 4_000.0),
+        (Vector::new(0.0, 0.46 * world.height_m()), 2_400.0),
+        (Vector::new(800.0, 0.0), 300.0),
+    ];
+    for (position_m, view_height_m) in views {
+        let times = grazing_light_times(world, position_m);
+        assert!(times.len() >= 4, "{position_m:?}: {times:?}");
+        for world_time_seconds in times {
+            let image = render_diagnostic_image_with_view_at(
+                world,
+                position_m,
+                world_time_seconds,
+                view_height_m,
+                "scene_occluder_coverage",
+                96,
+                54,
+            );
+            assert_eq!(
+                clamped_lookup_pixels(&image),
+                0,
+                "{position_m:?} with a {view_height_m} m view at {world_time_seconds} s",
+            );
+        }
     }
 }
 
 #[test]
-fn allocated_shadow_atlas_slot_survives_later_footprint_marks() {
-    let image = render_diagnostic_image_with_view_at(
-        WorldGeometry::default(),
-        Vector::ZERO,
-        0.0,
-        1.0,
-        "cloud_shadow_cache_marker_integrity",
-        1,
-        1,
-    );
-
-    assert!(
-        scalar_debug_amount(&image) > 0.99,
-        "allocated marker no longer identifies its atlas slot",
-    );
-}
-
-#[test]
-fn shadow_atlas_capacity_fallback_is_not_cache_corruption() {
-    let image = render_diagnostic_image_with_view_at(
-        WorldGeometry::default(),
-        Vector::ZERO,
-        0.0,
-        1.0,
-        "cloud_shadow_cache_fallback_integrity",
-        1,
-        1,
-    );
-
-    assert!(
-        scalar_debug_amount(&image) > 0.99,
-        "non-resident fallback was reported as an invalid atlas slot",
-    );
-}
-
-#[test]
-fn cache_discovery_initializes_procedural_tide_state() {
+fn coverage_view_marks_lookups_outside_their_grids() {
     let world = WorldGeometry::default();
-    let position_m = Vector::ZERO;
-    let (world_time_seconds, tide_height_m) = (0..96)
-        .map(|quarter_hour| {
-            let world_time_seconds = quarter_hour as f64 * 900.0;
-            let tick = (world_time_seconds * simulation::TICKS_PER_SECOND as f64) as u64;
-            let tide_height_m =
-                procedural_world_environment(world, SEED, tick, position_m).water_height_m;
-            (world_time_seconds, tide_height_m)
+    let position_m = Vector::new(800.0, 0.0);
+    let night_seconds = (0..96)
+        .map(|quarter_hour| f64::from(quarter_hour) * 900.0)
+        .find(|&world_time_seconds| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            celestial_lighting_at_height(world, conditions, 900.0).sun_direction[2] < -0.6
         })
-        .find(|(_, tide_height_m)| tide_height_m.abs() > 0.05)
-        .expect("test position should have a nonzero tide during the day");
-    assert!(tide_height_m.abs() > 0.05);
+        .expect("the view centre should have a deep night");
+    // Forced branches take Sun shadow taps at night, outside the minimal
+    // grid an unlit source gets.
     let image = render_diagnostic_image_with_view_at(
         world,
         position_m,
-        world_time_seconds,
-        1.0,
-        "cloud_shadow_cache_tide_initialization",
-        1,
-        1,
+        night_seconds,
+        300.0,
+        "scene_occluder_coverage_all_branches",
+        96,
+        54,
     );
 
-    assert!(
-        scalar_debug_amount(&image) > 0.99,
-        "cache discovery used uninitialized tide state",
-    );
+    assert!(clamped_lookup_pixels(&image) > 96 * 54 / 2);
 }
 
 #[test]
-fn cached_scene_matches_direct_scene_across_longitude_seam() {
+fn grid_scene_matches_direct_scene_across_longitude_seam() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.5 * world.width_m() - 200.0, 0.0);
     let world_time_seconds = 0.25 * 86_400.0;
@@ -1800,16 +1768,16 @@ fn cached_scene_matches_direct_scene_across_longitude_seam() {
         position_m,
         world_time_seconds,
         4_000.0,
-        "scene",
+        "scene_direct",
         256,
         128,
     );
-    let cached = render_diagnostic_image_with_view_at(
+    let grid = render_diagnostic_image_with_view_at(
         world,
         position_m,
         world_time_seconds,
         4_000.0,
-        "scene_cached",
+        "scene",
         256,
         128,
     );
@@ -1817,41 +1785,64 @@ fn cached_scene_matches_direct_scene_across_longitude_seam() {
         .as_chunks::<4>()
         .0
         .iter()
-        .zip(cached.as_chunks::<4>().0.iter())
-        .map(|(direct, cached)| {
+        .zip(grid.as_chunks::<4>().0.iter())
+        .map(|(direct, grid)| {
             (0..3)
-                .map(|channel| direct[channel].abs_diff(cached[channel]) as f32)
+                .map(|channel| direct[channel].abs_diff(grid[channel]) as f32)
                 .sum::<f32>()
                 / 3.0
         })
         .collect::<Vec<_>>();
     let mean = differences.iter().sum::<f32>() / differences.len() as f32;
-    let maximum = differences.iter().copied().fold(0.0, f32::max);
+    // Away from the seam, coarsened low-cloud grids soften small cloud edges.
+    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
+        + 128.0) as usize;
+    let seam_maximum = differences
+        .chunks(256)
+        .flat_map(|row| &row[seam_column - 8..seam_column + 8])
+        .copied()
+        .fold(0.0, f32::max);
 
-    assert!(mean < 0.1, "mean cached/direct byte difference: {mean}");
-    assert!(
-        maximum < 3.0,
-        "maximum cached/direct byte difference: {maximum}"
-    );
-
-    let hits = render_diagnostic_image_with_view_at(
+    let without_occluders = render_controlled_image_at(
         world,
         position_m,
         world_time_seconds,
         4_000.0,
-        "scene_cached_hits",
+        "scene_direct",
         256,
         128,
+        &[
+            ("--cloud-rendering", "0,0,1,1"),
+            ("--cloud-shadows", "0,0,0.85,0"),
+        ],
     );
-    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
-        + 128.0) as usize;
+    let occluder_maximum = direct
+        .as_chunks::<4>()
+        .0
+        .chunks(256)
+        .zip(without_occluders.as_chunks::<4>().0.chunks(256))
+        .flat_map(|(direct, bare)| {
+            direct[seam_column - 8..seam_column + 8]
+                .iter()
+                .zip(&bare[seam_column - 8..seam_column + 8])
+        })
+        .map(|(direct, bare)| {
+            (0..3)
+                .map(|channel| direct[channel].abs_diff(bare[channel]))
+                .max()
+                .unwrap()
+        })
+        .max()
+        .unwrap();
+
     assert!(
-        (0..128).any(|row| {
-            let left = &hits[4 * (row * 256 + seam_column - 1)..];
-            let right = &hits[4 * (row * 256 + seam_column)..];
-            (left[0] > 240 && right[0] > 240) || (left[2] > 240 && right[2] > 240)
-        }),
-        "longitude-seam parity capture did not sample the same cached cloud layer on both sides",
+        occluder_maximum > 3,
+        "clouds and their shadows do not reach the seam: {occluder_maximum}"
+    );
+    assert!(mean < 0.1, "mean grid/direct byte difference: {mean}");
+    assert!(
+        seam_maximum < 3.0,
+        "maximum grid/direct byte difference beside the seam: {seam_maximum}"
     );
 }
 

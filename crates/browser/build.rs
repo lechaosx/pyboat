@@ -19,22 +19,15 @@ const SCENE_COMPONENTS: &[&str] = &[
 
 fn main() {
     let scene = read_components(SCENE_COMPONENTS);
-    let cache_sample = read_component("src/shader/components/cloud-shadow-cache-sample.wgsl");
-    let cache_debug_disabled =
-        read_component("src/shader/components/cloud-shadow-cache-debug-disabled.wgsl");
-    let cache_fixed_tile =
-        read_component("src/shader/components/cloud-shadow-cache-fixed-tile.wgsl");
-    let cache_runtime_tile =
-        read_component("src/shader/components/cloud-shadow-cache-runtime-tile.wgsl");
-    let playground_cache_debug =
-        read_component("src/shader/components/playground-cloud-shadow-cache-debug.wgsl");
-    let direct_cloud_shadows = read_component("src/shader/components/direct-cloud-shadows.wgsl");
+    let occluder_fields = read_component("src/shader/components/occluder-fields.wgsl");
+    let direct_occluder_fields =
+        read_component("src/shader/components/direct-occluder-fields.wgsl");
+    let occluder_generate = read_component("src/shader/components/occluder-field-generate.wgsl");
     let production_entry = read_component("src/shader/production-entry.wgsl");
     let production = compose(&[
         &scene,
-        &cache_sample,
-        &cache_fixed_tile,
-        &cache_debug_disabled,
+        &occluder_fields,
+        &read_component("src/shader/components/occluder-field-inspection-disabled.wgsl"),
         &production_entry,
     ]);
     write_shader(
@@ -42,27 +35,9 @@ fn main() {
         &["vertex", "fragment"],
         "scene-production.wgsl",
     );
-    let cache_generate = read_component("src/shader/components/cloud-shadow-cache-generate.wgsl");
-    let production_cache = compose(&[
-        &scene,
-        &direct_cloud_shadows,
-        &cache_fixed_tile,
-        &production_entry,
-        &cache_generate,
-        &read_component("src/shader/production-cloud-shadow-cache-entry.wgsl"),
-    ]);
-    write_shader(
-        &production_cache,
-        &[
-            "discover_cloud_shadow_cache_tiles",
-            "cloud_shadow_cache_vertex",
-            "cloud_shadow_cache_fragment",
-        ],
-        "scene-production-cloud-shadow-cache.wgsl",
-    );
     let environment_fields = compose(&[
         &scene,
-        &direct_cloud_shadows,
+        &direct_occluder_fields,
         &production_entry,
         &read_component("src/shader/components/environment-field-generate.wgsl"),
     ]);
@@ -70,6 +45,18 @@ fn main() {
         &environment_fields,
         &["generate_environment_fields"],
         "environment-fields.wgsl",
+    );
+    let production_occluders = compose(&[
+        &scene,
+        &direct_occluder_fields,
+        &production_entry,
+        &read_component("src/shader/production-occluder-field-entry.wgsl"),
+        &occluder_generate,
+    ]);
+    write_shader(
+        &production_occluders,
+        &["generate_occluder_fields"],
+        "occluder-fields.wgsl",
     );
     let playground_interface = read_component("src/shader/playground-interface.wgsl");
     let startup = read_components(&[
@@ -85,8 +72,8 @@ fn main() {
     );
     let playground = compose(&[
         &scene,
-        &cache_sample,
-        &playground_cache_debug,
+        &occluder_fields,
+        &read_component("src/shader/components/playground-occluder-field-inspection.wgsl"),
         &playground_interface,
         &read_component("src/shader/playground-entry.wgsl"),
     ]);
@@ -97,31 +84,26 @@ fn main() {
     );
     let playground_direct = compose(&[
         &scene,
-        &direct_cloud_shadows,
+        &direct_occluder_fields,
         &playground_interface,
-        &read_component("src/shader/playground-entry.wgsl"),
+        &read_component("src/shader/playground-direct-entry.wgsl"),
     ]);
     write_shader(
         &playground_direct,
         &["vertex", "fragment_playground_scene"],
         "scene-playground-direct.wgsl",
     );
-    let playground_cache = compose(&[
+    let playground_occluders = compose(&[
         &scene,
-        &direct_cloud_shadows,
-        &cache_runtime_tile,
+        &direct_occluder_fields,
         &playground_interface,
-        &cache_generate,
-        &read_component("src/shader/playground-cloud-shadow-cache-entry.wgsl"),
+        &read_component("src/shader/playground-occluder-field-entry.wgsl"),
+        &occluder_generate,
     ]);
     write_shader(
-        &playground_cache,
-        &[
-            "discover_cloud_shadow_cache_tiles",
-            "cloud_shadow_cache_vertex",
-            "cloud_shadow_cache_fragment",
-        ],
-        "scene-playground-cloud-shadow-cache.wgsl",
+        &playground_occluders,
+        &["generate_occluder_fields"],
+        "occluder-fields-playground.wgsl",
     );
     let diagnostic_common = read_component("src/shader/components/diagnostic-common.wgsl");
     for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
@@ -129,7 +111,7 @@ fn main() {
         let entry = read_component(&format!("src/shader/diagnostics/{name}.wgsl"));
         let diagnostic = compose(&[
             &scene,
-            &direct_cloud_shadows,
+            &direct_occluder_fields,
             &playground_interface,
             &diagnostic_common,
             &mechanism,

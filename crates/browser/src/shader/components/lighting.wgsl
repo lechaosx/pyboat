@@ -908,11 +908,13 @@ fn procedural_cloud_shadow_depths_at(
 
 fn cloud_shadow_depths_for_query(
     query: CloudShadowQuery,
+    source_index: u32,
 ) -> CloudDiscShadowDepths {
     var disc_depths: CloudDiscShadowDepths;
     if !query.resolved || EVALUATE_ALL_BRANCHES {
         let depths = sampled_cloud_shadow_depths_at(
             cloud_shadow_query_projection(query, 0u),
+            source_index,
         );
         disc_depths = CloudDiscShadowDepths(
             vec3<f32>(depths.low),
@@ -920,9 +922,9 @@ fn cloud_shadow_depths_for_query(
         );
     }
     if query.resolved || EVALUATE_ALL_BRANCHES {
-        let lower_depths = sampled_cloud_shadow_depths_at(query.lower_projection);
-        let upper_depths = sampled_cloud_shadow_depths_at(query.upper_projection);
-        let side_depths = sampled_cloud_shadow_depths_at(query.side_projection);
+        let lower_depths = sampled_cloud_shadow_depths_at(query.lower_projection, source_index);
+        let upper_depths = sampled_cloud_shadow_depths_at(query.upper_projection, source_index);
+        let side_depths = sampled_cloud_shadow_depths_at(query.side_projection, source_index);
         disc_depths = CloudDiscShadowDepths(
             select(
                 disc_depths.low,
@@ -960,7 +962,7 @@ fn celestial_cloud_shadow_depths_at(
                 layer_visibility.y > 0.0,
                 layer_visibility.z > 0.0,
             );
-            let query_depths = cloud_shadow_depths_for_query(query);
+            let query_depths = cloud_shadow_depths_for_query(query, source_index);
             let depths = CloudDiscShadowDepths(
                 select(vec3<f32>(0.0), query_depths.low, shadowed),
                 select(vec3<f32>(0.0), query_depths.upper, shadowed),

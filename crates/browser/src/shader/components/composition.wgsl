@@ -375,16 +375,13 @@ fn final_scene_color(
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let low_cloud_position_m = visible_low_cloud_position_m(input.world_position_m);
-            let low_cloud_weather = cloud_weather_from_environment_fields(low_cloud_position_m);
-            let low_cloud = procedural_low_cloud_sample(
-                low_cloud_position_m,
-                low_cloud_weather,
-            );
+            let low_cloud = sampled_low_cloud_sample(low_cloud_position_m);
             let low_cloud_visible = low_cloud.body_amount > 0.08
                 && low_cloud.optical_depth > 0.0
                 && tuning.cloud_rendering.x > 0.0
                 && tuning.cloud_rendering.y > 0.0;
             if low_cloud_visible || EVALUATE_ALL_BRANCHES {
+                let low_cloud_weather = low_cloud_weather_at(low_cloud_position_m);
                 let low_cloud_light = celestial_receiver_light_at_position_and_height(
                     low_cloud_position_m,
                     low_height_m,

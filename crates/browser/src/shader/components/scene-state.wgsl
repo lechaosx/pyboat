@@ -17,8 +17,13 @@ struct SceneUniforms {
     exposure_and_output: vec4<f32>,
     environment_field_grid_m: vec4<f32>,
     environment_field_texels: vec4<u32>,
+    occluder_field_grid_m: array<vec4<f32>, OCCLUDER_FIELD_LAYERS>,
+    occluder_field_texels: array<vec4<u32>, OCCLUDER_FIELD_LAYERS>,
     ocean_wave_modes: array<vec4<f32>, 16>,
 };
+
+// Keep synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
+const OCCLUDER_FIELD_LAYERS: u32 = 5u;
 
 struct SceneTuning {
     cloud_detail: vec4<f32>,

@@ -2,16 +2,15 @@ import {
   PlaygroundExposure,
   environment_field_shader_source,
   environment_field_texture_size,
-  playground_cloud_shadow_cache_shader_source,
+  occluder_field_shader_source,
+  occluder_field_texture_size,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
-  playground_environment_field_workgroups,
+  playground_occluder_field_shader_source,
   playground_scene_shader_source,
   playground_scene_uniform_bytes,
   playground_scene_uniforms,
-  playground_shadow_cache_layout,
   playground_startup_shader_source,
-  production_cloud_shadow_cache_shader_source,
   production_scene_shader_source,
   sample_playground_environment,
   sample_playground_view_cloud_state,
@@ -53,14 +52,19 @@ import benchScenarios from "./bench-scenarios.json" with { type: "json" };
 import "./style.css";
 
 const bench = benchSettings(location.search);
-// The bench times the shipped shaders, which leave group 1 empty and bind
-// only the first four shadow-cache sampling entries.
+// The bench times the shipped shaders, which leave group 1 empty.
 const productionShaders = Boolean(bench);
 
-let useShadowCache = true;
-let shadowCacheTileTexels = 128;
-let shadowCacheDebugMode = 0;
-let shadowCacheInfoElement: HTMLElement | undefined;
+let directReference = false;
+let occluderFieldInspection = 0;
+let occluderFieldInfoElement: HTMLElement | undefined;
+const occluderFieldLayers = [
+  { name: "Low-cloud body", color: "#dde3ea" },
+  { name: "Sun low-cloud shadow", color: "#ff9e38" },
+  { name: "Moon low-cloud shadow", color: "#8cb8ff" },
+  { name: "Canopy", color: "#b873ff" },
+  { name: "Landform", color: "#33bf4d" },
+] as const;
 
 type State = {
   seed: string;
@@ -386,11 +390,9 @@ function renderControls(): void {
   };
   diagnosticSelect.addEventListener("change", () => {
     state.diagnostic = diagnosticSelect.value as DiagnosticSelection;
-    if (state.diagnostic !== "scene" && shadowCacheDebugMode !== 0) {
-      shadowCacheDebugMode = 0;
-      cacheDebugSelect.value = "0";
-      cacheLegend.hidden = true;
-      scheduleShadowCacheRecreation();
+    if (state.diagnostic !== "scene") {
+      occluderFieldInspection = 0;
+      fieldViewSelect.value = "0";
     }
     updateDiagnosticUI();
   });
@@ -406,102 +408,57 @@ function renderControls(): void {
     diagnosticReset,
   );
   diagnosticSection.append(diagnosticLabel);
-  const cacheLabel = document.createElement("div");
-  cacheLabel.className = "control toggle-control no-reset";
-  const cacheInput = document.createElement("input");
-  cacheInput.id = "shadow-cache-enabled";
-  cacheInput.type = "checkbox";
-  cacheInput.checked = useShadowCache;
-  const cacheHeading = document.createElement("label");
-  cacheHeading.className = "control-name";
-  cacheHeading.htmlFor = cacheInput.id;
-  cacheHeading.textContent = "Cached shadow fields";
-  cacheInput.addEventListener("change", () => {
-    useShadowCache = cacheInput.checked;
-    if (!useShadowCache && shadowCacheDebugMode !== 0) {
-      shadowCacheDebugMode = 0;
-      cacheDebugSelect.value = "0";
-      cacheLegend.hidden = true;
-      scheduleShadowCacheRecreation();
+  const directLabel = document.createElement("div");
+  directLabel.className = "control toggle-control no-reset";
+  const directInput = document.createElement("input");
+  directInput.id = "direct-reference";
+  directInput.type = "checkbox";
+  directInput.checked = directReference;
+  const directHeading = document.createElement("label");
+  directHeading.className = "control-name";
+  directHeading.htmlFor = directInput.id;
+  directHeading.textContent = "Direct reference";
+  directInput.addEventListener("change", () => {
+    directReference = directInput.checked;
+    if (directReference) {
+      occluderFieldInspection = 0;
+      fieldViewSelect.value = "0";
     }
   });
-  cacheLabel.append(cacheInput, cacheHeading);
-  const cacheDebugLabel = document.createElement("div");
-  cacheDebugLabel.className = "select-control cache-control";
-  const cacheDebugHeading = document.createElement("label");
-  cacheDebugHeading.className = "control-name";
-  cacheDebugHeading.textContent = "Cache view";
-  const cacheDebugSelect = document.createElement("select");
-  cacheDebugSelect.id = "shadow-cache-debug";
-  cacheDebugHeading.htmlFor = cacheDebugSelect.id;
+  directLabel.append(directInput, directHeading);
+  const fieldViewLabel = document.createElement("div");
+  fieldViewLabel.className = "select-control field-control";
+  const fieldViewHeading = document.createElement("label");
+  fieldViewHeading.className = "control-name";
+  fieldViewHeading.textContent = "Field view";
+  const fieldViewSelect = document.createElement("select");
+  fieldViewSelect.id = "occluder-field-view";
+  fieldViewHeading.htmlFor = fieldViewSelect.id;
   for (const [value, label] of [
     ["0", "Scene"],
-    ["1", "Lookups"],
-    ["2", "Tiles"],
-    ["3", "Atlas"],
+    ["1", "Grids"],
+    ["2", "Coverage"],
   ] as const) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = label;
-    cacheDebugSelect.append(option);
+    fieldViewSelect.append(option);
   }
-  cacheDebugSelect.value = String(shadowCacheDebugMode);
-  cacheDebugSelect.addEventListener("change", () => {
-    shadowCacheDebugMode = Number(cacheDebugSelect.value);
-    cacheLegend.hidden = shadowCacheDebugMode === 0;
-    cacheFallbackLegend.hidden = shadowCacheDebugMode !== 1;
-    if (shadowCacheDebugMode !== 0) {
-      useShadowCache = true;
-      cacheInput.checked = true;
+  fieldViewSelect.value = String(occluderFieldInspection);
+  fieldViewSelect.addEventListener("change", () => {
+    occluderFieldInspection = Number(fieldViewSelect.value);
+    if (occluderFieldInspection !== 0) {
+      directReference = false;
+      directInput.checked = false;
       state.diagnostic = "scene";
       diagnosticSelect.value = state.diagnostic;
       updateDiagnosticUI();
     }
-    scheduleShadowCacheRecreation();
   });
-  cacheDebugLabel.append(cacheDebugHeading, cacheDebugSelect);
-  const tileSizeLabel = document.createElement("div");
-  tileSizeLabel.className = "select-control cache-control";
-  const tileSizeHeading = document.createElement("label");
-  tileSizeHeading.className = "control-name";
-  tileSizeHeading.textContent = "Tile size";
-  const tileSizeSelect = document.createElement("select");
-  tileSizeSelect.id = "shadow-cache-tile-size";
-  tileSizeHeading.htmlFor = tileSizeSelect.id;
-  for (const tileTexels of [32, 64, 128, 256]) {
-    const option = document.createElement("option");
-    option.value = String(tileTexels);
-    option.textContent = `${tileTexels} px`;
-    tileSizeSelect.append(option);
-  }
-  tileSizeSelect.value = String(shadowCacheTileTexels);
-  tileSizeSelect.addEventListener("change", () => {
-    shadowCacheTileTexels = Number(tileSizeSelect.value);
-    scheduleShadowCacheRecreation();
-  });
-  tileSizeLabel.append(tileSizeHeading, tileSizeSelect);
-  shadowCacheInfoElement = document.createElement("div");
-  shadowCacheInfoElement.className = "cache-info";
-  const cacheLegend = document.createElement("div");
-  cacheLegend.className = "cache-legend";
-  cacheLegend.hidden = shadowCacheDebugMode === 0;
-  cacheLegend.innerHTML = [
-    '<span><i class="cache-low"></i>Low cloud</span>',
-    '<span><i class="cache-upper"></i>Canopy</span>',
-    '<span><i class="cache-terrain"></i>Terrain</span>',
-    '<span class="cache-fallback-label"><i class="cache-fallback"></i>Fallback</span>',
-  ].join("");
-  const cacheFallbackLegend = cacheLegend.querySelector<HTMLElement>(
-    ".cache-fallback-label",
-  )!;
-  cacheFallbackLegend.hidden = shadowCacheDebugMode !== 1;
-  diagnosticSection.append(
-    cacheLabel,
-    cacheDebugLabel,
-    tileSizeLabel,
-    shadowCacheInfoElement,
-    cacheLegend,
-  );
+  fieldViewLabel.append(fieldViewHeading, fieldViewSelect);
+  occluderFieldInfoElement = document.createElement("div");
+  occluderFieldInfoElement.className = "field-info";
+  diagnosticSection.append(directLabel, fieldViewLabel, occluderFieldInfoElement);
   controlsElement.append(diagnosticSection);
 }
 
@@ -1146,7 +1103,7 @@ const vertices = new Float32Array([
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
 let sceneUniforms: Uint8Array = new Uint8Array(playground_scene_uniform_bytes());
-const tuningFloats = new Float32Array(104);
+const tuningFloats = new Float32Array(108);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1155,200 +1112,40 @@ const environmentFieldView = device.createTexture({
   format: "rgba32float",
   usage: 0x04 | 0x08,
 }).createView({ dimension: "2d-array" });
-let environmentFieldWorkgroups = new Uint32Array([1, 1]);
+const occluderFieldView = device.createTexture({
+  size: [...occluder_field_texture_size()],
+  format: "rgba16float",
+  usage: 0x04 | 0x08,
+}).createView({ dimension: "2d-array" });
+const occluderFieldSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+// Environment and occluder workgroup counts, then spacing and texels per occluder layer.
+let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5]);
 
-type EnvironmentFieldPass = {
-  pipeline: GPUComputePipeline;
-  sceneBindGroup: GPUBindGroup;
-  outputBindGroup: GPUBindGroup;
+type FieldPasses = {
+  environmentPipeline: GPUComputePipeline;
+  environmentSceneBindGroup: GPUBindGroup;
+  environmentOutputBindGroup: GPUBindGroup;
+  occluderPipeline: GPUComputePipeline;
+  occluderInputBindGroup: GPUBindGroup;
+  occluderPlaygroundBindGroup: GPUBindGroup;
+  occluderOutputBindGroup: GPUBindGroup;
 };
 
-type CloudShadowCache = {
-  width: number;
-  height: number;
-  tileTexels: number;
-  maximumTiles: number;
-  atlasWidth: number;
-  atlasHeight: number;
-  liveTiles?: number;
-  tileCountPending: boolean;
-  tileCountReadback: GPUBuffer;
-  discoveryPipeline: GPUComputePipeline;
-  fillPipeline: GPURenderPipeline;
-  discoverySceneBindGroup: GPUBindGroup;
-  discoveryPlaygroundBindGroup: GPUBindGroup;
-  discoveryBindGroup: GPUBindGroup;
-  fillSceneBindGroup: GPUBindGroup;
-  fillPlaygroundBindGroup: GPUBindGroup;
-  fillBindGroup: GPUBindGroup;
-  sampleBindGroup: GPUBindGroup;
-  entries: GPUBuffer;
-  header: GPUBuffer;
-  atlasView: GPUTextureView;
-  retired: boolean;
-  submittedWorkDone: boolean;
-  retirementComplete?: () => void;
-  resources: (GPUBuffer | GPUTexture)[];
-};
-
-function createCloudShadowCache(
-  discoveryPipeline: GPUComputePipeline,
-  fillPipeline: GPURenderPipeline,
-  scenePipeline: GPURenderPipeline,
-): CloudShadowCache {
-  const width = previewCanvas.width;
-  const height = previewCanvas.height;
-  const tileTexels = shadowCacheTileTexels;
-  const layout = playground_shadow_cache_layout(
-    width,
-    height,
-    device.limits.maxTextureDimension2D,
-    tileTexels,
-  );
-  const atlasWidth = layout[0]!;
-  const atlasHeight = layout[1]!;
-  const atlasColumns = layout[2]!;
-  const maximumTiles = layout[3]!;
-  const tableEntries = layout[4]!;
-  const cacheUniforms = new Uint32Array([
-    width,
-    height,
-    atlasWidth,
-    atlasHeight,
-    tableEntries - 1,
-    maximumTiles,
-    atlasColumns,
-    tileTexels,
-    0,
-    0,
-    0,
-    0,
-  ]);
-  const uniformBuffer = device.createBuffer({
-    size: cacheUniforms.byteLength,
-    usage: 0x40 | 0x08,
-    mappedAtCreation: true,
-  });
-  new Uint32Array(uniformBuffer.getMappedRange()).set(cacheUniforms);
-  uniformBuffer.unmap();
-  const header = device.createBuffer({
-    size: 16,
-    usage: 0x80 | 0x100 | 0x08 | 0x04,
-    mappedAtCreation: true,
-  });
-  new Uint32Array(header.getMappedRange()).set([6, 0, 0, 0]);
-  header.unmap();
-  const entries = device.createBuffer({
-    size: tableEntries * 8,
-    usage: 0x80 | 0x08,
-  });
-  const tiles = device.createBuffer({ size: maximumTiles * 16, usage: 0x80 });
-  const tileCountReadback = device.createBuffer({ size: 16, usage: 0x01 | 0x08 });
-  const debugUniforms = new Uint32Array([shadowCacheDebugMode, 0, 0, 0]);
-  const debugBuffer = device.createBuffer({
-    size: debugUniforms.byteLength,
-    usage: 0x40,
-    mappedAtCreation: true,
-  });
-  new Uint32Array(debugBuffer.getMappedRange()).set(debugUniforms);
-  debugBuffer.unmap();
-  const atlas = device.createTexture({
-    size: [atlasWidth, atlasHeight],
-    format: "rg16float",
-    usage: 0x04 | 0x10,
-  });
-  const atlasView = atlas.createView();
-  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-  const uniformEntry = { binding: 0, resource: { buffer: uniformBuffer } };
-  const playgroundEntries = productionShaders
-    ? []
-    : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
-  const sampleEntries = [
-    uniformEntry,
-    { binding: 1, resource: { buffer: entries } },
-    { binding: 2, resource: atlasView },
-    { binding: 3, resource: sampler },
-    { binding: 4, resource: { buffer: tiles } },
-    { binding: 5, resource: { buffer: header } },
-    { binding: 6, resource: { buffer: debugBuffer } },
-  ];
-  return {
-    width,
-    height,
-    tileTexels,
-    maximumTiles,
-    atlasWidth,
-    atlasHeight,
-    tileCountPending: false,
-    tileCountReadback,
-    discoveryPipeline,
-    fillPipeline,
-    discoverySceneBindGroup: device.createBindGroup({
-      layout: discoveryPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
-    }),
-    discoveryPlaygroundBindGroup: device.createBindGroup({
-      layout: discoveryPipeline.getBindGroupLayout(1),
-      entries: playgroundEntries,
-    }),
-    discoveryBindGroup: device.createBindGroup({
-      layout: discoveryPipeline.getBindGroupLayout(2),
-      entries: [
-        uniformEntry,
-        { binding: 1, resource: { buffer: header } },
-        { binding: 2, resource: { buffer: entries } },
-        { binding: 3, resource: { buffer: tiles } },
-      ],
-    }),
-    fillSceneBindGroup: device.createBindGroup({
-      layout: fillPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
-    }),
-    fillPlaygroundBindGroup: device.createBindGroup({
-      layout: fillPipeline.getBindGroupLayout(1),
-      entries: playgroundEntries,
-    }),
-    fillBindGroup: device.createBindGroup({
-      layout: fillPipeline.getBindGroupLayout(2),
-      entries: [uniformEntry, { binding: 4, resource: { buffer: tiles } }],
-    }),
-    sampleBindGroup: device.createBindGroup({
-      layout: scenePipeline.getBindGroupLayout(2),
-      entries: productionShaders ? sampleEntries.slice(0, 4) : sampleEntries,
-    }),
-    entries,
-    header,
-    atlasView,
-    retired: false,
-    submittedWorkDone: false,
-    resources: [
-      uniformBuffer,
-      header,
-      entries,
-      tiles,
-      atlas,
-      tileCountReadback,
-      debugBuffer,
-    ],
-  };
-}
 const timestampQuerySet = timestampQueriesSupported
-  ? device.createQuerySet({ type: "timestamp", count: 5 })
+  ? device.createQuerySet({ type: "timestamp", count: 4 })
   : undefined;
 const timestampResolveBuffer = timestampQueriesSupported
-  ? device.createBuffer({ size: 40, usage: 0x0200 | 0x0004 })
+  ? device.createBuffer({ size: 32, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
   buffer: GPUBuffer;
   pending: boolean;
   pipeline?: GPURenderPipeline;
-  cached?: boolean;
   fields?: boolean;
-  sceneEnd?: number;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
   ? Array.from({ length: 3 }, () => ({
-      buffer: device.createBuffer({ size: 40, usage: 0x0001 | 0x0008 }),
+      buffer: device.createBuffer({ size: 32, usage: 0x0001 | 0x0008 }),
       pending: false,
     }))
   : [];
@@ -1360,8 +1157,7 @@ type RenderResources = {
   pipeline: GPURenderPipeline;
   sceneBindGroup: GPUBindGroup;
   playgroundBindGroup?: GPUBindGroup;
-  cloudShadowCache?: CloudShadowCache;
-  environmentFields?: EnvironmentFieldPass;
+  fields?: FieldPasses;
   hdr?: boolean;
 };
 let sceneRenderResources: RenderResources = {
@@ -1374,92 +1170,25 @@ let sceneCompilationStatus = "compiling full scene";
 const diagnosticShaderModules = new Map<string, GPUShaderModule>();
 const diagnosticRenderResources = new Map<DiagnosticSelection, RenderResources>();
 const diagnosticPipelinesRequested = new Set<DiagnosticSelection>();
-let shadowCacheRecreationRequested = false;
-let shadowCacheRetirement: Promise<void> | undefined;
-let retiredShadowCachePipelines: {
-  discovery: GPUComputePipeline;
-  fill: GPURenderPipeline;
-  scene: GPURenderPipeline;
-} | undefined;
 
-function updateShadowCacheInfo(cache?: CloudShadowCache): void {
-  if (!shadowCacheInfoElement) return;
-  if (!cache) {
-    if (shadowCacheInfoElement.textContent !== "Direct evaluation") {
-      shadowCacheInfoElement.textContent = "Direct evaluation";
-    }
-    return;
-  }
-  const liveTiles = cache.liveTiles === undefined ? "—" : String(cache.liveTiles);
-  const worldTexelM = state.viewHeight / previewCanvas.height;
-  const text = `${liveTiles} / ${cache.maximumTiles} live tiles · ${cache.atlasWidth} × ${cache.atlasHeight} atlas · ${formatDistance(worldTexelM)}/texel`;
-  if (shadowCacheInfoElement.textContent !== text) shadowCacheInfoElement.textContent = text;
-}
-
-function destroyRetiredShadowCache(cache: CloudShadowCache): void {
-  if (!cache.retired || !cache.submittedWorkDone || cache.tileCountPending) return;
-  for (const resource of cache.resources) resource.destroy();
-  cache.resources.length = 0;
-  cache.retirementComplete?.();
-  delete cache.retirementComplete;
-}
-
-function retireShadowCache(cache: CloudShadowCache): Promise<void> {
-  cache.retired = true;
-  const complete = new Promise<void>((resolve) => {
-    cache.retirementComplete = resolve;
-  });
-  void device.queue.onSubmittedWorkDone().catch(() => {}).finally(() => {
-    cache.submittedWorkDone = true;
-    destroyRetiredShadowCache(cache);
-  });
-  return complete;
-}
-
-function scheduleShadowCacheRecreation(): void {
-  if (!sceneRenderResources.cloudShadowCache && !shadowCacheRetirement) return;
-  shadowCacheRecreationRequested = true;
-}
-
-function applyScheduledShadowCacheRecreation(): void {
-  if (!shadowCacheRecreationRequested || shadowCacheRetirement) return;
-  const cache = sceneRenderResources.cloudShadowCache;
-  if (cache) {
-    retiredShadowCachePipelines = {
-      discovery: cache.discoveryPipeline,
-      fill: cache.fillPipeline,
-      scene: sceneRenderResources.pipeline,
-    };
-    delete sceneRenderResources.cloudShadowCache;
-    shadowCacheRecreationRequested = false;
-    shadowCacheRetirement = retireShadowCache(cache).finally(() => {
-      shadowCacheRetirement = undefined;
-      shadowCacheRecreationRequested = true;
-    });
-    updateShadowCacheInfo();
-    return;
-  }
-  const pipelines = retiredShadowCachePipelines;
-  if (!pipelines) {
-    shadowCacheRecreationRequested = false;
-    return;
-  }
-  sceneRenderResources.cloudShadowCache = createCloudShadowCache(
-    pipelines.discovery,
-    pipelines.fill,
-    pipelines.scene,
-  );
-  retiredShadowCachePipelines = undefined;
-  shadowCacheRecreationRequested = false;
-  updateShadowCacheInfo(sceneRenderResources.cloudShadowCache);
+function updateOccluderFieldInfo(resources: RenderResources): void {
+  if (!occluderFieldInfoElement) return;
+  const lines = resources.fields
+    ? occluderFieldLayers.map(({ name, color }, layer) => {
+      const [columnSpacing, rowSpacing, columns, rows] = fieldGrids.subarray(5 + 4 * layer, 9 + 4 * layer);
+      const extent = (texels: number, spacing: number) => ((texels - 1) * spacing / 1000).toFixed(1);
+      return `<span><i style="background:${color}"></i>${name} · ${formatDistance(rowSpacing!)} · `
+        + `${columns}×${rows} · ${extent(columns!, columnSpacing!)} × ${extent(rows!, rowSpacing!)} km</span>`;
+    })
+    : ["<span>Direct evaluation</span>"];
+  const html = lines.join("");
+  if (occluderFieldInfoElement.innerHTML !== html) occluderFieldInfoElement.innerHTML = html;
 }
 
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
   if (selection === "scene") {
-    return useShadowCache && sceneRenderResources.cloudShadowCache
-      ? sceneRenderResources
-      : directSceneRenderResources;
+    return directReference ? directSceneRenderResources : sceneRenderResources;
   }
   const ready = diagnosticRenderResources.get(selection);
   if (ready) return ready;
@@ -1804,15 +1533,7 @@ function updateUniforms(
   );
   const lowWind: [number, number] = [viewCloud[0]!, viewCloud[1]!];
   const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
-  environmentFieldWorkgroups = new Uint32Array(playground_environment_field_workgroups(
-    state.worldWidthM,
-    renderedCameraX,
-    renderedCameraY,
-    state.viewHeight,
-    previewCanvas.width,
-    previewCanvas.height,
-  ));
-  sceneUniforms = playground_scene_uniforms(
+  const frame = playground_scene_uniforms(
     state.worldWidthM,
     state.worldHeightM,
     seed,
@@ -1841,7 +1562,12 @@ function updateUniforms(
       Number(canvasHdr),
       (presentationTimeMs * 0.008) % 4096,
     ]),
+    state.lowCloudBodySize,
+    state.landformShadowReach,
   );
+  sceneUniforms = frame.uniforms;
+  fieldGrids = frame.field_grids;
+  frame.free();
 
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
@@ -1961,6 +1687,7 @@ function updateUniforms(
     0,
     0,
   ], 100);
+  tuningUints.set([occluderFieldInspection, previewCanvas.width, previewCanvas.height, 0], 104);
 }
 
 function resize(): void {
@@ -1976,10 +1703,6 @@ function resize(): void {
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;
-    const cache = sceneRenderResources.cloudShadowCache;
-    if (cache) {
-      scheduleShadowCacheRecreation();
-    }
   }
 }
 
@@ -2015,24 +1738,20 @@ let measuredFramesPerSecond: number | undefined;
 let measuredTicksPerSecond: number | undefined;
 let measuredGpuMilliseconds: number | undefined;
 let gpuMillisecondsInWindow = 0;
-let discoveryGpuMillisecondsInWindow = 0;
-let fillGpuMillisecondsInWindow = 0;
 let fieldsGpuMillisecondsInWindow = 0;
+let occludersGpuMillisecondsInWindow = 0;
 let sceneGpuMillisecondsInWindow = 0;
 let gpuSamplesInWindow = 0;
-let measuredDiscoveryGpuMilliseconds: number | undefined;
-let measuredFillGpuMilliseconds: number | undefined;
 let measuredFieldsGpuMilliseconds: number | undefined;
+let measuredOccludersGpuMilliseconds: number | undefined;
 let measuredSceneGpuMilliseconds: number | undefined;
 let timedPipeline: GPURenderPipeline | undefined;
-let timedCache: CloudShadowCache | undefined;
-let timedUsesShadowCache = false;
+let timedUsesFields = false;
 let latestPassTimes: Promise<PassTimes | undefined> = Promise.resolve(undefined);
 let nextDiagnosticsAt = 0;
-let nextShadowCacheInfoAt = 0;
 
 function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
-  updateShadowCacheInfo(renderResourcesForFrame().cloudShadowCache);
+  updateOccluderFieldInfo(renderResourcesForFrame());
   ticksInWindow += ticks;
   const windowSeconds = (now - statisticsStartedAt) / 1000;
   if (windowSeconds < 1) return;
@@ -2040,27 +1759,25 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   measuredTicksPerSecond = ticksInWindow / windowSeconds;
   if (gpuSamplesInWindow > 0) {
     measuredGpuMilliseconds = gpuMillisecondsInWindow / gpuSamplesInWindow;
-    measuredDiscoveryGpuMilliseconds = discoveryGpuMillisecondsInWindow / gpuSamplesInWindow;
-    measuredFillGpuMilliseconds = fillGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredFieldsGpuMilliseconds = fieldsGpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredOccludersGpuMilliseconds = occludersGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredSceneGpuMilliseconds = sceneGpuMillisecondsInWindow / gpuSamplesInWindow;
   }
   statisticsStartedAt = now;
   framesInWindow = 0;
   ticksInWindow = 0;
   gpuMillisecondsInWindow = 0;
-  discoveryGpuMillisecondsInWindow = 0;
-  fillGpuMillisecondsInWindow = 0;
   fieldsGpuMillisecondsInWindow = 0;
+  occludersGpuMillisecondsInWindow = 0;
   sceneGpuMillisecondsInWindow = 0;
   gpuSamplesInWindow = 0;
   const rates = `${measuredFramesPerSecond.toFixed(0)} FPS · ${measuredTicksPerSecond.toFixed(0)} TPS`;
   const gpuTiming = measuredGpuMilliseconds === undefined
     ? timestampQueriesSupported ? " · measuring GPU" : ""
-    : timedUsesShadowCache && measuredDiscoveryGpuMilliseconds !== undefined
-      && measuredFillGpuMilliseconds !== undefined && measuredFieldsGpuMilliseconds !== undefined
+    : timedUsesFields && measuredFieldsGpuMilliseconds !== undefined
+      && measuredOccludersGpuMilliseconds !== undefined
       && measuredSceneGpuMilliseconds !== undefined
-    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredDiscoveryGpuMilliseconds.toFixed(1)} discover + ${measuredFillGpuMilliseconds.toFixed(1)} fill + ${measuredFieldsGpuMilliseconds.toFixed(1)} fields + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
+    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredFieldsGpuMilliseconds.toFixed(1)} fields + ${measuredOccludersGpuMilliseconds.toFixed(1)} occluders + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
     : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU scene`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = `${rates}${gpuTiming}${compilation}`;
@@ -2070,7 +1787,6 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
 
 function advanceFrame(now: number): void {
   resize();
-  applyScheduledShadowCacheRecreation();
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
@@ -2135,93 +1851,58 @@ function advanceFrame(now: number): void {
   updateStatus(now, ticks, cloudTimeSeconds);
 }
 
-function renderFrame(now: number): Promise<void> {
+function renderFrame(): Promise<void> {
   const renderResources = renderResourcesForFrame();
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
   const encoder = device.createCommandEncoder();
-  if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {
+  if (renderResources.pipeline !== timedPipeline) {
     timedPipeline = renderResources.pipeline;
-    timedCache = renderResources.cloudShadowCache;
-    timedUsesShadowCache = Boolean(renderResources.cloudShadowCache);
+    timedUsesFields = Boolean(renderResources.fields);
     measuredGpuMilliseconds = undefined;
-    measuredDiscoveryGpuMilliseconds = undefined;
-    measuredFillGpuMilliseconds = undefined;
     measuredFieldsGpuMilliseconds = undefined;
+    measuredOccludersGpuMilliseconds = undefined;
     measuredSceneGpuMilliseconds = undefined;
     gpuMillisecondsInWindow = 0;
-    discoveryGpuMillisecondsInWindow = 0;
-    fillGpuMillisecondsInWindow = 0;
     fieldsGpuMillisecondsInWindow = 0;
+    occludersGpuMillisecondsInWindow = 0;
     sceneGpuMillisecondsInWindow = 0;
     gpuSamplesInWindow = 0;
   }
-  const timestampReadback = timestampReadbacks.find((readback) => !readback.pending);
-  const cache = renderResources.cloudShadowCache;
-  if (cache) {
-    encoder.clearBuffer(cache.entries);
-    encoder.clearBuffer(cache.header, 4, 4);
-    const discoveryPassDescriptor: GPUComputePassDescriptor = {};
-    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
-      discoveryPassDescriptor.timestampWrites = {
-        querySet: timestampQuerySet,
+  const timestampReadback = timestampQuerySet && timestampResolveBuffer
+    ? timestampReadbacks.find((readback) => !readback.pending)
+    : undefined;
+  const fields = renderResources.fields;
+  // Pass-end query indices: the field passes end at 1 and 2 and the scene at 3;
+  // the first timed pass also writes its beginning to 0.
+  const sceneEnd = fields ? 3 : 1;
+  if (fields) {
+    const environmentPassDescriptor: GPUComputePassDescriptor = {};
+    const occluderPassDescriptor: GPUComputePassDescriptor = {};
+    if (timestampReadback) {
+      environmentPassDescriptor.timestampWrites = {
+        querySet: timestampQuerySet!,
         beginningOfPassWriteIndex: 0,
         endOfPassWriteIndex: 1,
       };
-    }
-    const discoveryPass = encoder.beginComputePass(discoveryPassDescriptor);
-    discoveryPass.setPipeline(cache.discoveryPipeline);
-    discoveryPass.setBindGroup(0, cache.discoverySceneBindGroup);
-    discoveryPass.setBindGroup(1, cache.discoveryPlaygroundBindGroup);
-    discoveryPass.setBindGroup(2, cache.discoveryBindGroup);
-    discoveryPass.dispatchWorkgroups(
-      Math.ceil(previewCanvas.width / 128),
-      Math.ceil(previewCanvas.height / 128),
-    );
-    discoveryPass.end();
-    const fillPassDescriptor: GPURenderPassDescriptor = {
-      colorAttachments: [{
-        view: cache.atlasView,
-        ...(shadowCacheDebugMode === 3
-          ? { clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear" }
-          : { loadOp: "load" }),
-        storeOp: "store",
-      }],
-    };
-    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
-      fillPassDescriptor.timestampWrites = {
-        querySet: timestampQuerySet,
+      occluderPassDescriptor.timestampWrites = {
+        querySet: timestampQuerySet!,
         endOfPassWriteIndex: 2,
       };
     }
-    const fillPass = encoder.beginRenderPass(fillPassDescriptor);
-    fillPass.setPipeline(cache.fillPipeline);
-    fillPass.setBindGroup(0, cache.fillSceneBindGroup);
-    fillPass.setBindGroup(1, cache.fillPlaygroundBindGroup);
-    fillPass.setBindGroup(2, cache.fillBindGroup);
-    fillPass.drawIndirect(cache.header, 0);
-    fillPass.end();
-  }
-  const fields = renderResources.environmentFields;
-  // Pass-end query indices: discovery and fill take 1 and 2 when cached; the
-  // first timed pass also writes its beginning to 0.
-  const fieldsEnd = cache ? 3 : 1;
-  const sceneEnd = fields ? fieldsEnd + 1 : fieldsEnd;
-  if (fields) {
-    const fieldPassDescriptor: GPUComputePassDescriptor = {};
-    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
-      fieldPassDescriptor.timestampWrites = {
-        querySet: timestampQuerySet,
-        ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
-        endOfPassWriteIndex: fieldsEnd,
-      };
-    }
-    const fieldPass = encoder.beginComputePass(fieldPassDescriptor);
-    fieldPass.setPipeline(fields.pipeline);
-    fieldPass.setBindGroup(0, fields.sceneBindGroup);
-    fieldPass.setBindGroup(1, fields.outputBindGroup);
-    fieldPass.dispatchWorkgroups(environmentFieldWorkgroups[0]!, environmentFieldWorkgroups[1]!);
-    fieldPass.end();
+    const environmentPass = encoder.beginComputePass(environmentPassDescriptor);
+    environmentPass.setPipeline(fields.environmentPipeline);
+    environmentPass.setBindGroup(0, fields.environmentSceneBindGroup);
+    environmentPass.setBindGroup(1, fields.environmentOutputBindGroup);
+    environmentPass.dispatchWorkgroups(fieldGrids[0]!, fieldGrids[1]!);
+    environmentPass.end();
+    const occluderPass = encoder.beginComputePass(occluderPassDescriptor);
+    occluderPass.setPipeline(fields.occluderPipeline);
+    occluderPass.setBindGroup(0, fields.occluderInputBindGroup);
+    occluderPass.setBindGroup(1, fields.occluderPlaygroundBindGroup);
+    occluderPass.setBindGroup(2, fields.occluderOutputBindGroup);
+    occluderPass.dispatchWorkgroups(fieldGrids[2]!, fieldGrids[3]!, fieldGrids[4]!);
+    occluderPass.end();
   }
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
@@ -2233,10 +1914,10 @@ function renderFrame(now: number): Promise<void> {
       storeOp: "store",
     }],
   };
-  if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
+  if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
-      querySet: timestampQuerySet,
-      ...(cache || fields ? {} : { beginningOfPassWriteIndex: 0 }),
+      querySet: timestampQuerySet!,
+      ...(fields ? {} : { beginningOfPassWriteIndex: 0 }),
       endOfPassWriteIndex: sceneEnd,
     };
   }
@@ -2246,23 +1927,14 @@ function renderFrame(now: number): Promise<void> {
   if (renderResources.playgroundBindGroup) {
     pass.setBindGroup(1, renderResources.playgroundBindGroup);
   }
-  if (cache) pass.setBindGroup(2, cache.sampleBindGroup);
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
-  let cacheInfoReadback: CloudShadowCache | undefined;
-  if (cache && now >= nextShadowCacheInfoAt && !cache.tileCountPending) {
-    encoder.copyBufferToBuffer(cache.header, 0, cache.tileCountReadback, 0, 16);
-    cache.tileCountPending = true;
-    cacheInfoReadback = cache;
-    nextShadowCacheInfoAt = now + 500;
-  }
-  if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
-    const timestampCount = sceneEnd + 1;
-    const timestampBytes = timestampCount * 8;
-    encoder.resolveQuerySet(timestampQuerySet, 0, timestampCount, timestampResolveBuffer, 0);
+  if (timestampReadback) {
+    const timestampBytes = (sceneEnd + 1) * 8;
+    encoder.resolveQuerySet(timestampQuerySet!, 0, sceneEnd + 1, timestampResolveBuffer!, 0);
     encoder.copyBufferToBuffer(
-      timestampResolveBuffer,
+      timestampResolveBuffer!,
       0,
       timestampReadback.buffer,
       0,
@@ -2270,64 +1942,36 @@ function renderFrame(now: number): Promise<void> {
     );
     timestampReadback.pending = true;
     timestampReadback.pipeline = renderResources.pipeline;
-    timestampReadback.cached = Boolean(cache);
     timestampReadback.fields = Boolean(fields);
-    timestampReadback.sceneEnd = sceneEnd;
   }
   device.queue.submit([encoder.finish()]);
   framesInWindow += 1;
-  if (cacheInfoReadback) {
-    const readbackCache = cacheInfoReadback;
-    void readbackCache.tileCountReadback.mapAsync(0x0001).then(() => {
-      readbackCache.liveTiles = new Uint32Array(
-        readbackCache.tileCountReadback.getMappedRange(),
-      )[1]!;
-      readbackCache.tileCountReadback.unmap();
-      if (sceneRenderResources.cloudShadowCache === readbackCache) {
-        updateShadowCacheInfo(readbackCache);
-      }
-    }).catch(() => {}).finally(() => {
-      readbackCache.tileCountPending = false;
-      destroyRetiredShadowCache(readbackCache);
-    });
-  }
   latestPassTimes = Promise.resolve(undefined);
   if (timestampReadback) {
     latestPassTimes = timestampReadback.buffer.mapAsync(0x0001).then(() => {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
+      const withFields = Boolean(timestampReadback.fields);
+      const sceneEnd = withFields ? 3 : 1;
       const startedAt = timestamps[0]!;
-      const cached = timestampReadback.cached;
-      const sceneEnd = timestampReadback.sceneEnd!;
       const finishedAt = timestamps[sceneEnd]!;
       const milliseconds = (begin: number, end: number): number =>
         Number(timestamps[end]! - timestamps[begin]!) / 1_000_000;
-      const passes: PassTimes | undefined = cached && startedAt > 0n && finishedAt >= startedAt
+      const valid = startedAt > 0n && finishedAt >= startedAt;
+      const passes: PassTimes | undefined = withFields && valid
         ? {
-          discoveryMs: milliseconds(0, 1),
-          fillMs: milliseconds(1, sceneEnd - 2),
-          fieldsMs: milliseconds(sceneEnd - 2, sceneEnd - 1),
-          sceneMs: milliseconds(sceneEnd - 1, sceneEnd),
-          totalMs: milliseconds(0, sceneEnd),
+          fieldsMs: milliseconds(0, 1),
+          occludersMs: milliseconds(1, 2),
+          sceneMs: milliseconds(2, 3),
+          totalMs: milliseconds(0, 3),
         }
         : undefined;
-      if (
-        timestampReadback.pipeline === timedPipeline
-        && startedAt > 0n
-        && finishedAt >= startedAt
-      ) {
-        gpuMillisecondsInWindow += Number(finishedAt - startedAt) / 1_000_000;
-        if (cached) {
-          discoveryGpuMillisecondsInWindow += Number(timestamps[1]! - timestamps[0]!) / 1_000_000;
-          fillGpuMillisecondsInWindow += Number(timestamps[2]! - timestamps[1]!) / 1_000_000;
+      if (timestampReadback.pipeline === timedPipeline && valid) {
+        gpuMillisecondsInWindow += milliseconds(0, sceneEnd);
+        if (withFields) {
+          fieldsGpuMillisecondsInWindow += milliseconds(0, 1);
+          occludersGpuMillisecondsInWindow += milliseconds(1, 2);
         }
-        if (timestampReadback.fields) {
-          fieldsGpuMillisecondsInWindow += Number(
-            timestamps[sceneEnd - 1]! - timestamps[sceneEnd - 2]!,
-          ) / 1_000_000;
-        }
-        sceneGpuMillisecondsInWindow += Number(
-          timestamps[sceneEnd]! - timestamps[sceneEnd - 1]!,
-        ) / 1_000_000;
+        sceneGpuMillisecondsInWindow += milliseconds(sceneEnd - 1, sceneEnd);
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
@@ -2357,18 +2001,17 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
     const directSceneShader = device.createShaderModule({
       code: playground_direct_scene_shader_source(),
     });
-    const cacheShader = device.createShaderModule({
+    const occluderShader = device.createShaderModule({
       code: productionShaders
-        ? production_cloud_shadow_cache_shader_source()
-        : playground_cloud_shadow_cache_shader_source(),
+        ? occluder_field_shader_source()
+        : playground_occluder_field_shader_source(),
     });
     const fieldShader = device.createShaderModule({ code: environment_field_shader_source() });
     const [
       scenePipeline,
       directScenePipeline,
-      discoveryPipeline,
-      fillPipeline,
-      fieldPipeline,
+      environmentPipeline,
+      occluderPipeline,
     ] = await Promise.all([
       createPlaygroundPipeline(
         sceneShader,
@@ -2377,66 +2020,67 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       createPlaygroundPipeline(directSceneShader, "fragment_playground_scene"),
       device.createComputePipelineAsync({
         layout: "auto",
-        compute: {
-          module: cacheShader,
-          entryPoint: "discover_cloud_shadow_cache_tiles",
-        },
-      }),
-      device.createRenderPipelineAsync({
-        layout: "auto",
-        vertex: { module: cacheShader, entryPoint: "cloud_shadow_cache_vertex" },
-        fragment: {
-          module: cacheShader,
-          entryPoint: "cloud_shadow_cache_fragment",
-          targets: [{ format: "rg16float" }],
-        },
-        primitive: { topology: "triangle-list" },
+        compute: { module: fieldShader, entryPoint: "generate_environment_fields" },
       }),
       device.createComputePipelineAsync({
         layout: "auto",
-        compute: { module: fieldShader, entryPoint: "generate_environment_fields" },
+        compute: { module: occluderShader, entryPoint: "generate_occluder_fields" },
       }),
     ]);
-    const environmentFields: EnvironmentFieldPass = {
-      pipeline: fieldPipeline,
-      sceneBindGroup: device.createBindGroup({
-        layout: fieldPipeline.getBindGroupLayout(0),
+    const playgroundEntries = productionShaders
+      ? []
+      : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
+    const fields: FieldPasses = {
+      environmentPipeline,
+      environmentSceneBindGroup: device.createBindGroup({
+        layout: environmentPipeline.getBindGroupLayout(0),
         entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
       }),
-      outputBindGroup: device.createBindGroup({
-        layout: fieldPipeline.getBindGroupLayout(1),
+      environmentOutputBindGroup: device.createBindGroup({
+        layout: environmentPipeline.getBindGroupLayout(1),
         entries: [{ binding: 0, resource: environmentFieldView }],
       }),
+      occluderPipeline,
+      occluderInputBindGroup: device.createBindGroup({
+        layout: occluderPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: sceneBuffer } },
+          { binding: 1, resource: environmentFieldView },
+        ],
+      }),
+      occluderPlaygroundBindGroup: device.createBindGroup({
+        layout: occluderPipeline.getBindGroupLayout(1),
+        entries: playgroundEntries,
+      }),
+      occluderOutputBindGroup: device.createBindGroup({
+        layout: occluderPipeline.getBindGroupLayout(2),
+        entries: [{ binding: 0, resource: occluderFieldView }],
+      }),
     };
-    const sceneEntries = [
-      { binding: 0, resource: { buffer: sceneBuffer } },
-      { binding: 1, resource: environmentFieldView },
-    ];
     sceneRenderResources = {
       pipeline: scenePipeline,
       hdr: hdrSupported,
-      environmentFields,
+      fields,
       sceneBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(0),
-        entries: sceneEntries,
+        entries: [
+          { binding: 0, resource: { buffer: sceneBuffer } },
+          { binding: 1, resource: environmentFieldView },
+          { binding: 2, resource: occluderFieldView },
+          { binding: 3, resource: occluderFieldSampler },
+        ],
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(1),
-        entries: productionShaders ? [] : [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+        entries: playgroundEntries,
       }),
-      cloudShadowCache: createCloudShadowCache(
-        discoveryPipeline,
-        fillPipeline,
-        scenePipeline,
-      ),
     };
     directSceneRenderResources = {
       pipeline: directScenePipeline,
       hdr: hdrSupported,
-      environmentFields,
       sceneBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(0),
-        entries: sceneEntries,
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(1),
@@ -2455,7 +2099,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
 async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
   resize();
   await fullSceneReady;
-  if (!sceneRenderResources.cloudShadowCache) {
+  if (!sceneRenderResources.fields) {
     statusElement.textContent = `Bench cannot start: ${sceneCompilationStatus}`;
     return;
   }
@@ -2499,7 +2143,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
         now,
       );
       const startedAt = performance.now();
-      await renderFrame(now);
+      await renderFrame();
       const submittedToDoneMs = performance.now() - startedAt;
       const passes = await latestPassTimes;
       if (frame >= settings.warmupFrames) samples.push({ submittedToDoneMs, passes });
@@ -2525,9 +2169,8 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
     id,
     submittedToDoneMs,
     gpuTotalMs: passes?.totalMs,
-    discoveryMs: passes?.discoveryMs,
-    fillMs: passes?.fillMs,
     fieldsMs: passes?.fieldsMs,
+    occludersMs: passes?.occludersMs,
     sceneMs: passes?.sceneMs,
     nsPerPixel,
   })));
@@ -2540,7 +2183,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       `${(passes?.totalMs ?? submittedToDoneMs).toFixed(1).padStart(7)} ms`,
       `${nsPerPixel.toFixed(0).padStart(5)} ns/px`,
       passes
-        ? `(${passes.discoveryMs.toFixed(1)} discover + ${passes.fillMs.toFixed(1)} fill + ${passes.fieldsMs.toFixed(1)} fields + ${passes.sceneMs.toFixed(1)} scene)`
+        ? `(${passes.fieldsMs.toFixed(1)} fields + ${passes.occludersMs.toFixed(1)} occluders + ${passes.sceneMs.toFixed(1)} scene)`
         : `submit to completion`,
     ].join(" ")),
   ].join("\n");

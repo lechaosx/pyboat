@@ -16,9 +16,8 @@ export type BenchSettings = {
 };
 
 export type PassTimes = {
-  discoveryMs: number;
-  fillMs: number;
   fieldsMs: number;
+  occludersMs: number;
   sceneMs: number;
   totalMs: number;
 };
@@ -77,9 +76,8 @@ export function summarizeScenario(
     return { id, submittedToDoneMs, nsPerPixel: submittedToDoneMs * 1e6 / pixels };
   }
   const passes = {
-    discoveryMs: median(timed.map((pass) => pass.discoveryMs)),
-    fillMs: median(timed.map((pass) => pass.fillMs)),
     fieldsMs: median(timed.map((pass) => pass.fieldsMs)),
+    occludersMs: median(timed.map((pass) => pass.occludersMs)),
     sceneMs: median(timed.map((pass) => pass.sceneMs)),
     totalMs: median(timed.map((pass) => pass.totalMs)),
   };

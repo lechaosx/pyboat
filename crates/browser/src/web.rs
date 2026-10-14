@@ -30,20 +30,18 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlCanvasElement;
 use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
-use wgpu::util::DeviceExt;
 
 use crate::frame_queue::FrameQueue;
 use crate::{
-    BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
-    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS,
-    EnvironmentFieldGrid, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER,
-    ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
-    bounded_canvas_dimensions, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
-    environment_field_grid, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
-    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
-    sample_world_geometry, scale_bar, seasonal_phase_factors, view_width_m,
-    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
-    windsock_extension, zoom_view_height_m,
+    BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
+    ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, MAX_SERVER_MESSAGE_BYTES,
+    MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS,
+    SCENE_SHADER, ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
+    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
+    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
+    requeue_failed_viewport, sample_view_cloud_state_for_render_clocks, sample_world_geometry,
+    scale_bar, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
+    visual_pixel_footprint_m, webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -99,7 +97,7 @@ impl Default for PlaygroundExposure {
 }
 
 #[cfg(feature = "playground")]
-use crate::{PLAYGROUND_STARTUP_SHADER, try_cloud_shadow_cache_layout_for_tile_size};
+use crate::PLAYGROUND_STARTUP_SHADER;
 
 const INITIAL_VERTEX_CAPACITY: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
@@ -114,8 +112,8 @@ pub fn production_scene_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
-pub fn production_cloud_shadow_cache_shader_source() -> String {
-    CLOUD_SHADOW_CACHE_SHADER.to_owned()
+pub fn occluder_field_shader_source() -> String {
+    OCCLUDER_FIELD_SHADER.to_owned()
 }
 
 #[cfg(feature = "playground")]
@@ -142,60 +140,43 @@ pub fn environment_field_texture_size() -> Vec<u32> {
 }
 
 #[cfg(feature = "playground")]
-/// Field-pass workgroup counts for the view that `playground_scene_uniforms`
-/// describes with the same arguments.
+/// Width, height, and layer count of the occluder field texture.
 #[wasm_bindgen]
-pub fn playground_environment_field_workgroups(
-    world_width_m: f32,
-    camera_x_m: f32,
-    camera_y_m: f32,
-    view_height_m: f32,
-    render_width_px: u32,
-    render_height_px: u32,
-) -> Vec<u32> {
-    environment_field_grid(
-        world_width_m,
-        [camera_x_m, camera_y_m],
-        [
-            view_width_m(
-                render_width_px as f32 / render_height_px as f32,
-                view_height_m,
-            ),
-            view_height_m,
-        ],
-    )
-    .workgroups()
-    .to_vec()
+pub fn occluder_field_texture_size() -> Vec<u32> {
+    vec![
+        OCCLUDER_FIELD_TEXELS,
+        OCCLUDER_FIELD_TEXELS,
+        OCCLUDER_FIELD_LAYERS as u32,
+    ]
 }
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
-pub fn playground_cloud_shadow_cache_shader_source() -> String {
-    crate::playground_cloud_shadow_cache_shader_source().to_owned()
+pub fn playground_occluder_field_shader_source() -> String {
+    crate::playground_occluder_field_shader_source().to_owned()
 }
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
-pub fn playground_shadow_cache_layout(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-    tile_texels: u32,
-) -> Result<Vec<u32>, JsValue> {
-    let layout = try_cloud_shadow_cache_layout_for_tile_size(
-        viewport_width,
-        viewport_height,
-        maximum_texture_dimension,
-        tile_texels,
-    )
-    .map_err(JsValue::from_str)?;
-    Ok(vec![
-        layout.atlas_width,
-        layout.atlas_height,
-        layout.atlas_columns,
-        layout.maximum_tiles,
-        layout.table_entries,
-    ])
+pub struct PlaygroundSceneFrame {
+    uniforms: Vec<u8>,
+    field_grids: Vec<f32>,
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundSceneFrame {
+    #[wasm_bindgen(getter)]
+    pub fn uniforms(&self) -> Vec<u8> {
+        self.uniforms.clone()
+    }
+
+    /// Environment and occluder workgroup counts (2 and 3 values), then column
+    /// spacing, row spacing, columns and rows for each occluder layer.
+    #[wasm_bindgen(getter)]
+    pub fn field_grids(&self) -> Vec<f32> {
+        self.field_grids.clone()
+    }
 }
 
 #[cfg(feature = "playground")]
@@ -517,8 +498,9 @@ pub fn playground_scene_uniform_bytes() -> usize {
 }
 
 #[cfg(feature = "playground")]
-/// Scene uniforms for the lab's independent clocks. The view-local cloud motion,
-/// cloud time, and exposure/output rows come from lab state.
+/// Scene uniforms for the lab's independent clocks, with the field grids they
+/// describe. The view-local cloud motion, cloud time, and exposure/output rows
+/// come from lab state.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn playground_scene_uniforms(
@@ -541,7 +523,9 @@ pub fn playground_scene_uniforms(
     view_cloud_motion_m: &[f32],
     cloud_time_coordinates: &[f32],
     exposure_and_output: &[f32],
-) -> Result<Vec<u8>, JsValue> {
+    low_cloud_body_size: f32,
+    landform_shadow_reach_m: f32,
+) -> Result<PlaygroundSceneFrame, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let row = |values: &[f32]| -> Result<[f32; 4], JsValue> {
@@ -549,6 +533,7 @@ pub fn playground_scene_uniforms(
             .try_into()
             .map_err(|_| JsValue::from_str("scene uniform rows need four values"))
     };
+    let view_cloud_motion_m = row(view_cloud_motion_m)?;
     let precipitation_time = periodic_effect_time_interpolated(
         cloud_tick,
         cloud_tick_fraction,
@@ -572,8 +557,18 @@ pub fn playground_scene_uniforms(
         ),
         view_height_m,
     ];
-    let environment_field_grid =
-        environment_field_grid(world_width_m, [camera_x_m, camera_y_m], view_size_m);
+    let grids = field_grids(
+        geometry,
+        (world_tick as f64 + f64::from(world_tick_fraction)) / TICKS_PER_SECOND as f64,
+        [camera_x_m, camera_y_m],
+        view_size_m,
+        view_cloud_motion_m,
+        FieldGridTuning {
+            low_cloud_body_size,
+            landform_shadow_reach_m,
+        },
+    );
+    let (occluder_field_grid_m, occluder_field_texels) = grids.occluder_uniforms();
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         scalar_field_time_coordinates: [
@@ -611,11 +606,13 @@ pub fn playground_scene_uniforms(
             orbit.lunar_umbra_fraction,
             0.0,
         ],
-        view_cloud_motion_m: row(view_cloud_motion_m)?,
+        view_cloud_motion_m,
         cloud_time_coordinates: row(cloud_time_coordinates)?,
         exposure_and_output: row(exposure_and_output)?,
-        environment_field_grid_m: environment_field_grid.uniforms,
-        environment_field_texels: environment_field_grid.texel_uniforms(),
+        environment_field_grid_m: grids.environment.uniforms,
+        environment_field_texels: grids.environment.texel_uniforms(),
+        occluder_field_grid_m,
+        occluder_field_texels,
         ocean_wave_modes: ocean_wave_mode_uniforms(
             geometry,
             match_seed,
@@ -623,7 +620,25 @@ pub fn playground_scene_uniforms(
             world_tick_fraction,
         ),
     };
-    Ok(bytemuck::bytes_of(&uniforms).to_vec())
+    let mut field_grid_summary: Vec<f32> = grids
+        .environment
+        .workgroups()
+        .into_iter()
+        .chain(grids.occluder_workgroups())
+        .map(|count| count as f32)
+        .collect();
+    for grid in &grids.occluders {
+        field_grid_summary.extend([
+            grid.uniforms[2],
+            grid.uniforms[3],
+            grid.texels[0] as f32,
+            grid.texels[1] as f32,
+        ]);
+    }
+    Ok(PlaygroundSceneFrame {
+        uniforms: bytemuck::bytes_of(&uniforms).to_vec(),
+        field_grids: field_grid_summary,
+    })
 }
 
 #[wasm_bindgen]
@@ -720,517 +735,9 @@ struct SceneUniforms {
     exposure_and_output: [f32; 4],
     environment_field_grid_m: [f32; 4],
     environment_field_texels: [u32; 4],
+    occluder_field_grid_m: [[f32; 4]; OCCLUDER_FIELD_LAYERS],
+    occluder_field_texels: [[u32; 4]; OCCLUDER_FIELD_LAYERS],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct CloudShadowCacheUniforms {
-    viewport_size_px: [u32; 2],
-    atlas_size_px: [u32; 2],
-    table_mask: u32,
-    maximum_tiles: u32,
-    atlas_columns: u32,
-    tile_texels: u32,
-    padding: [u32; 4],
-}
-
-struct CloudShadowCacheResources {
-    entries: wgpu::Buffer,
-    header: wgpu::Buffer,
-    tiles: wgpu::Buffer,
-    atlas: wgpu::Texture,
-    atlas_view: wgpu::TextureView,
-    discovery_bind_group: wgpu::BindGroup,
-    fill_bind_group: wgpu::BindGroup,
-    sample_bind_group: wgpu::BindGroup,
-}
-
-impl CloudShadowCacheResources {
-    fn destroy(&self) {
-        self.entries.destroy();
-        self.header.destroy();
-        self.tiles.destroy();
-        self.atlas.destroy();
-    }
-}
-
-struct CloudShadowCacheFallback {
-    _uniform_buffer: wgpu::Buffer,
-    _entries: wgpu::Buffer,
-    _atlas: wgpu::Texture,
-    _sampler: wgpu::Sampler,
-    bind_group: wgpu::BindGroup,
-}
-
-impl CloudShadowCacheFallback {
-    fn new(device: &wgpu::Device, sample_layout: &wgpu::BindGroupLayout) -> Self {
-        let uniforms = CloudShadowCacheUniforms {
-            viewport_size_px: [1, 1],
-            atlas_size_px: [1, 1],
-            table_mask: 0,
-            maximum_tiles: 0,
-            atlas_columns: 1,
-            tile_texels: crate::CLOUD_SHADOW_CACHE_TILE_TEXELS,
-            padding: [0; 4],
-        };
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Empty cloud shadow cache uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let entries = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Empty cloud shadow cache page table"),
-            contents: bytemuck::cast_slice(&[0u32; 2]),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        let atlas = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Empty cloud shadow cache atlas"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Empty cloud shadow cache sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Empty cloud shadow cache sampling bind group"),
-            layout: sample_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: entries.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-        Self {
-            _uniform_buffer: uniform_buffer,
-            _entries: entries,
-            _atlas: atlas,
-            _sampler: sampler,
-            bind_group,
-        }
-    }
-}
-
-struct CloudShadowCache {
-    sample_layout: wgpu::BindGroupLayout,
-    discovery_layout: wgpu::BindGroupLayout,
-    fill_layout: wgpu::BindGroupLayout,
-    discovery_pipeline: wgpu::ComputePipeline,
-    fill_pipeline: wgpu::RenderPipeline,
-    sampler: wgpu::Sampler,
-    resources: CloudShadowCacheResources,
-}
-
-impl CloudShadowCache {
-    fn new(
-        device: &wgpu::Device,
-        scene_layout: &wgpu::BindGroupLayout,
-        empty_layout: &wgpu::BindGroupLayout,
-        viewport_width: u32,
-        viewport_height: u32,
-    ) -> Self {
-        let sample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cloud shadow cache sampling layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let discovery_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cloud shadow cache discovery layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let fill_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cloud shadow cache fill layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Cloud shadow cache shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(CLOUD_SHADOW_CACHE_SHADER)),
-        });
-        let discovery_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cloud shadow cache discovery pipeline layout"),
-                bind_group_layouts: &[
-                    Some(scene_layout),
-                    Some(empty_layout),
-                    Some(&discovery_layout),
-                ],
-                immediate_size: 0,
-            });
-        let discovery_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Cloud shadow cache discovery pipeline"),
-            layout: Some(&discovery_pipeline_layout),
-            module: &shader,
-            entry_point: Some("discover_cloud_shadow_cache_tiles"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let fill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Cloud shadow cache fill pipeline layout"),
-            bind_group_layouts: &[Some(scene_layout), Some(empty_layout), Some(&fill_layout)],
-            immediate_size: 0,
-        });
-        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cloud shadow cache fill pipeline"),
-            layout: Some(&fill_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("cloud_shadow_cache_vertex"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("cloud_shadow_cache_fragment"),
-                targets: &[Some(wgpu::TextureFormat::Rg16Float.into())],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Cloud shadow cache sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let resources = Self::create_resources(
-            device,
-            &sample_layout,
-            &discovery_layout,
-            &fill_layout,
-            &sampler,
-            viewport_width,
-            viewport_height,
-        );
-        Self {
-            sample_layout,
-            discovery_layout,
-            fill_layout,
-            discovery_pipeline,
-            fill_pipeline,
-            sampler,
-            resources,
-        }
-    }
-
-    fn create_resources(
-        device: &wgpu::Device,
-        sample_layout: &wgpu::BindGroupLayout,
-        discovery_layout: &wgpu::BindGroupLayout,
-        fill_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        viewport_width: u32,
-        viewport_height: u32,
-    ) -> CloudShadowCacheResources {
-        let layout = cloud_shadow_cache_layout(
-            viewport_width,
-            viewport_height,
-            device.limits().max_texture_dimension_2d,
-        );
-        let uniforms = CloudShadowCacheUniforms {
-            viewport_size_px: [viewport_width, viewport_height],
-            atlas_size_px: [layout.atlas_width, layout.atlas_height],
-            table_mask: layout.table_entries - 1,
-            maximum_tiles: layout.maximum_tiles,
-            atlas_columns: layout.atlas_columns,
-            tile_texels: crate::CLOUD_SHADOW_CACHE_TILE_TEXELS,
-            padding: [0; 4],
-        };
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cloud shadow cache uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cloud shadow cache draw arguments"),
-            contents: bytemuck::cast_slice(&[6u32, 0, 0, 0]),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::INDIRECT
-                | wgpu::BufferUsages::COPY_DST,
-        });
-        let entries = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cloud shadow cache page table"),
-            size: u64::from(layout.table_entries) * 8,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let tiles = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cloud shadow cache tiles"),
-            size: u64::from(layout.maximum_tiles) * 16,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let atlas = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Cloud shadow cache atlas"),
-            size: wgpu::Extent3d {
-                width: layout.atlas_width,
-                height: layout.atlas_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
-        let discovery_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cloud shadow cache discovery bind group"),
-            layout: discovery_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: header.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: entries.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tiles.as_entire_binding(),
-                },
-            ],
-        });
-        let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cloud shadow cache fill bind group"),
-            layout: fill_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: tiles.as_entire_binding(),
-                },
-            ],
-        });
-        let sample_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cloud shadow cache sampling bind group"),
-            layout: sample_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: entries.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
-        CloudShadowCacheResources {
-            entries,
-            header,
-            tiles,
-            atlas,
-            atlas_view,
-            discovery_bind_group,
-            fill_bind_group,
-            sample_bind_group,
-        }
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, viewport_width: u32, viewport_height: u32) {
-        self.resources.destroy();
-        self.resources = Self::create_resources(
-            device,
-            &self.sample_layout,
-            &self.discovery_layout,
-            &self.fill_layout,
-            &self.sampler,
-            viewport_width,
-            viewport_height,
-        );
-    }
-
-    fn encode(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        scene_bind_group: &wgpu::BindGroup,
-        viewport_width: u32,
-        viewport_height: u32,
-    ) {
-        encoder.clear_buffer(&self.resources.entries, 0, None);
-        encoder.clear_buffer(&self.resources.header, 4, Some(4));
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Cloud shadow cache discovery pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.discovery_pipeline);
-            pass.set_bind_group(0, scene_bind_group, &[]);
-            pass.set_bind_group(2, &self.resources.discovery_bind_group, &[]);
-            pass.dispatch_workgroups(
-                viewport_width.div_ceil(128),
-                viewport_height.div_ceil(128),
-                1,
-            );
-        }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cloud shadow cache fill pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.resources.atlas_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.fill_pipeline);
-            pass.set_bind_group(0, scene_bind_group, &[]);
-            pass.set_bind_group(2, &self.resources.fill_bind_group, &[]);
-            pass.draw_indirect(&self.resources.header, 0);
-        }
-    }
 }
 
 struct EnvironmentFields {
@@ -1310,7 +817,7 @@ impl EnvironmentFields {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scene_uniform_bind_group: &wgpu::BindGroup,
-        grid: &EnvironmentFieldGrid,
+        grids: &FieldGrids,
     ) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Environment field pass"),
@@ -1319,8 +826,157 @@ impl EnvironmentFields {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, scene_uniform_bind_group, &[]);
         pass.set_bind_group(1, &self.output_bind_group, &[]);
-        let [columns, rows] = grid.workgroups();
+        let [columns, rows] = grids.environment.workgroups();
         pass.dispatch_workgroups(columns, rows, 1);
+    }
+}
+
+struct OccluderFields {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    pipeline: wgpu::ComputePipeline,
+    input_bind_group: wgpu::BindGroup,
+    output_bind_group: wgpu::BindGroup,
+}
+
+impl OccluderFields {
+    fn new(
+        device: &wgpu::Device,
+        uniform_buffer: &wgpu::Buffer,
+        environment_fields: &EnvironmentFields,
+        empty_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Occluder fields"),
+            size: wgpu::Extent3d {
+                width: OCCLUDER_FIELD_TEXELS,
+                height: OCCLUDER_FIELD_TEXELS,
+                depth_or_array_layers: OCCLUDER_FIELD_LAYERS as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Occluder field input layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Occluder field output layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                },
+                count: None,
+            }],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Occluder field shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(OCCLUDER_FIELD_SHADER)),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Occluder field pipeline layout"),
+            bind_group_layouts: &[
+                Some(&input_layout),
+                Some(empty_layout),
+                Some(&output_layout),
+            ],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Occluder field pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("generate_occluder_fields"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let input_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Occluder field input bind group"),
+            layout: &input_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&environment_fields.view),
+                },
+            ],
+        });
+        let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Occluder field output bind group"),
+            layout: &output_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        Self {
+            _texture: texture,
+            view,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Occluder field sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            pipeline,
+            input_bind_group,
+            output_bind_group,
+        }
+    }
+
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        empty_bind_group: &wgpu::BindGroup,
+        grids: &FieldGrids,
+    ) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Occluder field pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.input_bind_group, &[]);
+        pass.set_bind_group(1, empty_bind_group, &[]);
+        pass.set_bind_group(2, &self.output_bind_group, &[]);
+        let [columns, rows, layers] = grids.occluder_workgroups();
+        pass.dispatch_workgroups(columns, rows, layers);
     }
 }
 
@@ -1337,11 +993,9 @@ struct Renderer {
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     scene_bind_group: wgpu::BindGroup,
+    empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
-    cloud_shadow_cache: CloudShadowCache,
-    cloud_shadow_cache_fallback: CloudShadowCacheFallback,
-    cloud_shadow_cache_replacement: CloudShadowCacheReplacement,
-    cloud_shadow_cache_queue_complete: Arc<AtomicBool>,
+    occluder_fields: OccluderFields,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
     exposure: ViewExposure,
@@ -1435,13 +1089,6 @@ impl Renderer {
                 label: Some("Empty bind group layout"),
                 entries: &[],
             });
-        let cloud_shadow_cache = CloudShadowCache::new(
-            &device,
-            &bind_group_layout,
-            &empty_bind_group_layout,
-            width,
-            height,
-        );
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Scene layout"),
             entries: &[
@@ -1465,15 +1112,27 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Scene pipeline layout"),
-            bind_group_layouts: &[
-                Some(&scene_layout),
-                Some(&empty_bind_group_layout),
-                Some(&cloud_shadow_cache.sample_layout),
-            ],
+            bind_group_layouts: &[Some(&scene_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1518,6 +1177,12 @@ impl Renderer {
             }],
         });
         let environment_fields = EnvironmentFields::new(&device, &bind_group_layout);
+        let occluder_fields = OccluderFields::new(
+            &device,
+            &uniform_buffer,
+            &environment_fields,
+            &empty_bind_group_layout,
+        );
         let scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scene bind group"),
             layout: &scene_layout,
@@ -1530,10 +1195,21 @@ impl Renderer {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&environment_fields.view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&occluder_fields.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&occluder_fields.sampler),
+                },
             ],
         });
-        let cloud_shadow_cache_fallback =
-            CloudShadowCacheFallback::new(&device, &cloud_shadow_cache.sample_layout);
+        let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Empty bind group"),
+            layout: &empty_bind_group_layout,
+            entries: &[],
+        });
 
         Ok(Self {
             canvas,
@@ -1548,11 +1224,9 @@ impl Renderer {
             uniform_buffer,
             bind_group,
             scene_bind_group,
+            empty_bind_group,
             environment_fields,
-            cloud_shadow_cache_fallback,
-            cloud_shadow_cache,
-            cloud_shadow_cache_replacement: CloudShadowCacheReplacement::default(),
-            cloud_shadow_cache_queue_complete: Arc::new(AtomicBool::new(false)),
+            occluder_fields,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
             exposure: ViewExposure::default(),
@@ -1574,33 +1248,12 @@ impl Renderer {
         if self.terminal_error.load(Ordering::Acquire) {
             return Err(JsValue::from_str("WebGPU device was lost"));
         }
-        let resized = self.resize();
-        if resized && self.cloud_shadow_cache_replacement.note_resize() {
-            self.cloud_shadow_cache_queue_complete
-                .store(false, Ordering::Release);
-            let queue_complete = Arc::clone(&self.cloud_shadow_cache_queue_complete);
-            self.queue.on_submitted_work_done(move || {
-                queue_complete.store(true, Ordering::Release);
-            });
-        }
-        if self.cloud_shadow_cache_replacement.finish_retirement(
-            self.cloud_shadow_cache_queue_complete
-                .load(Ordering::Acquire),
-        ) {
-            self.cloud_shadow_cache
-                .resize(&self.device, self.config.width, self.config.height);
-        }
-        let use_shadow_cache = !self.cloud_shadow_cache_replacement.is_pending();
+        self.resize();
         let view_width_m = view_width_m(
             self.config.width as f32 / self.config.height as f32,
             view_height_m,
         );
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
-        let environment_field_grid = environment_field_grid(
-            world_geometry.width_m(),
-            canonical_camera_m,
-            [view_width_m, view_height_m],
-        );
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let celestial = world_celestial_conditions(
             world_geometry,
@@ -1639,6 +1292,21 @@ impl Renderer {
         let vector_time =
             vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
         let cloud_time = view_cloud_state.cloud_time_coordinates;
+        let view_cloud_motion_m = [
+            self.cloud_motion.low_offset_m[0] as f32,
+            self.cloud_motion.low_offset_m[1] as f32,
+            self.cloud_motion.upper_offset_m[0] as f32,
+            self.cloud_motion.upper_offset_m[1] as f32,
+        ];
+        let field_grids = field_grids(
+            world_geometry,
+            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
+            canonical_camera_m,
+            [view_width_m, view_height_m],
+            view_cloud_motion_m,
+            FieldGridTuning::PRODUCTION,
+        );
+        let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
         let local_celestial = world_celestial_conditions(
             world_geometry,
             (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
@@ -1752,12 +1420,7 @@ impl Renderer {
                     orbit.lunar_umbra_fraction,
                     0.0,
                 ],
-                view_cloud_motion_m: [
-                    self.cloud_motion.low_offset_m[0] as f32,
-                    self.cloud_motion.low_offset_m[1] as f32,
-                    self.cloud_motion.upper_offset_m[0] as f32,
-                    self.cloud_motion.upper_offset_m[1] as f32,
-                ],
+                view_cloud_motion_m,
                 cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
                 // WebGPU exposes HDR capability but no numeric display headroom.
                 exposure_and_output: [
@@ -1766,8 +1429,10 @@ impl Renderer {
                     f32::from(hdr),
                     self.vision_noise_phase as f32,
                 ],
-                environment_field_grid_m: environment_field_grid.uniforms,
-                environment_field_texels: environment_field_grid.texel_uniforms(),
+                environment_field_grid_m: field_grids.environment.uniforms,
+                environment_field_texels: field_grids.environment.texel_uniforms(),
+                occluder_field_grid_m,
+                occluder_field_texels,
                 ocean_wave_modes: ocean_wave_mode_uniforms(
                     world_geometry,
                     match_seed,
@@ -1786,16 +1451,10 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Frame encoder"),
             });
-        if use_shadow_cache {
-            self.cloud_shadow_cache.encode(
-                &mut encoder,
-                &self.bind_group,
-                self.config.width,
-                self.config.height,
-            );
-        }
         self.environment_fields
-            .encode(&mut encoder, &self.bind_group, &environment_field_grid);
+            .encode(&mut encoder, &self.bind_group, &field_grids);
+        self.occluder_fields
+            .encode(&mut encoder, &self.empty_bind_group, &field_grids);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene pass"),
@@ -1820,11 +1479,6 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.scene_bind_group, &[]);
-            if use_shadow_cache {
-                pass.set_bind_group(2, &self.cloud_shadow_cache.resources.sample_bind_group, &[]);
-            } else {
-                pass.set_bind_group(2, &self.cloud_shadow_cache_fallback.bind_group, &[]);
-            }
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -1835,18 +1489,17 @@ impl Renderer {
         Ok(())
     }
 
-    fn resize(&mut self) -> bool {
+    fn resize(&mut self) {
         let (width, height) =
             canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
         if self.config.width == width && self.config.height == height {
-            return false;
+            return;
         }
         self.canvas.set_width(width);
         self.canvas.set_height(height);
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        true
     }
 
     fn aspect_ratio(&self) -> f32 {

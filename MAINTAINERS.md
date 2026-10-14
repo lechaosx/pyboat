@@ -34,7 +34,7 @@ interactive cloud view. Capture requires a hardware Vulkan GPU.
 
 ## Rendering performance
 
-The scenario bench times the production environment-field, shadow-cache, and
+The scenario bench times the production environment-field, occluder-field, and
 scene passes for the views in
 [bench-scenarios.json](playground/src/bench-scenarios.json), as shipped and with
 normally skipped shader work forced:
@@ -45,8 +45,7 @@ cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-aft
 ```
 
 Each run writes `report.json`, one PNG per scenario, and a contact sheet; a
-baseline adds timing ratios, image differences, and difference images. Small
-image differences between identical runs are normal for cached frames. On
+baseline adds timing ratios, image differences, and difference images. On
 thermally limited hardware, consecutive runs can differ by about 5% in timing,
 so repeat runs or start comparisons from a similar thermal state. Use `--help`
 for resolution and frame counts.

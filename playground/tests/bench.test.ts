@@ -22,7 +22,7 @@ test("median uses the middle sample or the mean of the middle pair", () => {
 
 test("per-pixel cost follows GPU timestamps only when every frame has them", () => {
   const passes = (totalMs: number) => ({
-    discoveryMs: 1, fillMs: 2, fieldsMs: 0.5, sceneMs: totalMs - 3.5, totalMs,
+    fieldsMs: 0.5, occludersMs: 2, sceneMs: totalMs - 2.5, totalMs,
   });
   const timed = summarizeScenario("coast", [
     { submittedToDoneMs: 30, passes: passes(20) },
@@ -32,7 +32,7 @@ test("per-pixel cost follows GPU timestamps only when every frame has them", () 
   assert.deepEqual(timed, {
     id: "coast",
     submittedToDoneMs: 40,
-    passes: { discoveryMs: 1, fillMs: 2, fieldsMs: 0.5, sceneMs: 26.5, totalMs: 30 },
+    passes: { fieldsMs: 0.5, occludersMs: 2, sceneMs: 27.5, totalMs: 30 },
     nsPerPixel: 30,
   });
 

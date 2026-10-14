@@ -1,22 +1,10 @@
-fn initialize_shadow_cache_debug() {}
-
-fn shadow_cache_debug_mode() -> u32 {
-    return 0u;
+fn sampled_low_cloud_sample(position_m: vec2<f32>) -> LowCloudSample {
+    return procedural_low_cloud_sample(position_m, cloud_weather_at(position_m));
 }
 
-fn shadow_cache_debug_atlas(fragment_position_px: vec2<f32>) -> vec4<f32> {
-    return vec4<f32>(0.0);
+fn low_cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    return cloud_weather_at(position_m);
 }
-
-fn shadow_cache_debug_tiles(position_m: vec2<f32>) -> vec4<f32> {
-    return vec4<f32>(0.0);
-}
-
-fn apply_shadow_cache_debug(color: vec4<f32>) -> vec4<f32> {
-    return color;
-}
-
-fn record_shadow_cache_lookup(layer: u32, hit: bool) {}
 
 fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
     let canopy = regional_canopy_conditions_at(position_m);
@@ -29,6 +17,7 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
 
 fn sampled_cloud_shadow_depths_at(
     projection: CloudShadowProjection,
+    source_index: u32,
 ) -> CloudShadowDepths {
     return procedural_cloud_shadow_depths_at(projection);
 }

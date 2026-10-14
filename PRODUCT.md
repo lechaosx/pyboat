@@ -175,10 +175,10 @@ See [README.md](README.md) for what is playable now and
   atmosphere, derived weather, transport, then clouds, shadows, lighting, and
   composition. Individual pressure bands and wind mechanisms stay separately
   inspectable without diagnostic-only world fields.
-- **[Explicit]** Shadow-cache inspection shows lookup activity, resident tiles,
-  and an aspect-preserved atlas with field colors and occupancy/resolution
-  readouts. Tile-size comparison activates cached final composition;
-  production contains no playground instrumentation.
+- **[Explicit]** Occluder-grid inspection shows each per-frame occluder grid
+  window aspect-preserved with field colors and coverage/resolution readouts, and
+  marks any lookup outside its window. A direct reference composition evaluates every
+  field per pixel; production contains no playground instrumentation.
 
 ## Open questions
 

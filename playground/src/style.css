@@ -375,32 +375,19 @@ output {
   font-size: 0.72rem;
 }
 
-.select-control.cache-control { grid-template-columns: 5rem minmax(0, 1fr); }
+.select-control.field-control { grid-template-columns: 5rem minmax(0, 1fr); }
 
-.cache-info {
+.field-info {
+  display: grid;
+  gap: 0.15rem;
   margin-top: 0.55rem;
   color: var(--muted);
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   line-height: 1.4;
 }
 
-.cache-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem 0.65rem;
-  margin-top: 0.4rem;
-  color: var(--muted);
-  font-size: 0.62rem;
-}
-
-.cache-legend[hidden] { display: none; }
-.cache-legend span[hidden] { display: none; }
-.cache-legend span { display: flex; align-items: center; gap: 0.25rem; }
-.cache-legend i { width: 0.55rem; height: 0.55rem; border-radius: 0.12rem; }
-.cache-low { background: #f33; }
-.cache-upper { background: #44f; }
-.cache-terrain { background: #2c5; }
-.cache-fallback { background: #f85a00; }
+.field-info span { display: flex; align-items: center; gap: 0.3rem; }
+.field-info i { flex: none; width: 0.55rem; height: 0.55rem; border-radius: 0.12rem; }
 
 .category-presets {
   display: flex;

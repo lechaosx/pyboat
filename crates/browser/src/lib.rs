@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
 mod exposure;
+mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
 pub use exposure::{ViewExposure, exposure_target};
+pub use field_grids::{
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridTuning, FieldGrids,
+    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
+};
 
 use game::{
     CloudFieldTimeCoordinates, OCEAN_WAVE_MODE_COUNT, WorldEnvironment,
@@ -25,19 +30,6 @@ mod diagnostics;
 mod web;
 
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
-pub const CLOUD_SHADOW_CACHE_TILE_TEXELS: u32 = 128;
-const CLOUD_SHADOW_CACHE_REFERENCE_PIXELS: u64 = 1920 * 1080;
-const CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES: u64 = 64 * 1024 * 1024;
-const CLOUD_SHADOW_CACHE_ATLAS_BYTES_PER_TEXEL: u64 = 4;
-/// Views reach this budget only when the grid already spans about five to seven
-/// screen pixels per texel on common displays, so a larger budget buys little.
-pub const ENVIRONMENT_FIELD_TEXELS: u32 = 384;
-/// Keep synchronized with the layer packing in environment-fields.wgsl.
-pub const ENVIRONMENT_FIELD_LAYERS: u32 = 5;
-/// The finest stored octaves are the 960 m local pressure band and 512 m water
-/// vapour. Eight or more texels per wavelength keep bilinear error below 8% of
-/// that octave's amplitude, about 0.3% of the water-vapour field.
-const ENVIRONMENT_FIELD_SPACING_M: f64 = 64.0;
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) const MAX_SERVER_MESSAGE_BYTES: usize = 16 * 1024;
@@ -100,221 +92,12 @@ pub(crate) fn webtransport_server_url(hostname: &str, search: &str) -> Result<St
     Ok(format!("https://{hostname}:{port}/game"))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CloudShadowCacheLayout {
-    pub atlas_width: u32,
-    pub atlas_height: u32,
-    pub atlas_columns: u32,
-    pub maximum_tiles: u32,
-    pub table_entries: u32,
-}
-
-pub fn cloud_shadow_cache_layout(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-) -> CloudShadowCacheLayout {
-    cloud_shadow_cache_layout_for_tile_size(
-        viewport_width,
-        viewport_height,
-        maximum_texture_dimension,
-        CLOUD_SHADOW_CACHE_TILE_TEXELS,
-    )
-}
-
-pub fn cloud_shadow_cache_layout_for_tile_size(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-    tile_texels: u32,
-) -> CloudShadowCacheLayout {
-    try_cloud_shadow_cache_layout_for_tile_size(
-        viewport_width,
-        viewport_height,
-        maximum_texture_dimension,
-        tile_texels,
-    )
-    .expect("internal shadow-cache dimensions are valid")
-}
-
-pub fn try_cloud_shadow_cache_layout_for_tile_size(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-    tile_texels: u32,
-) -> Result<CloudShadowCacheLayout, &'static str> {
-    if viewport_width == 0 || viewport_height == 0 {
-        return Err("viewport dimensions must be positive");
-    }
-    let physical_tile_texels = tile_texels
-        .checked_add(2)
-        .ok_or("tile size exceeds supported arithmetic")?;
-    if tile_texels == 0 || physical_tile_texels > maximum_texture_dimension {
-        return Err("tile size exceeds the device texture limit");
-    }
-    let viewport_pixels = u64::from(viewport_width)
-        .saturating_mul(u64::from(viewport_height))
-        .max(1);
-    let resolution_scale =
-        (viewport_pixels as f64 / CLOUD_SHADOW_CACHE_REFERENCE_PIXELS as f64).sqrt();
-    let atlas_byte_budget =
-        (CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES as f64 * resolution_scale) as u64;
-    try_cloud_shadow_cache_layout_for_tile_size_and_budget(
-        viewport_width,
-        viewport_height,
-        maximum_texture_dimension,
-        tile_texels,
-        atlas_byte_budget,
-    )
-}
-
-pub fn cloud_shadow_cache_layout_with_budget(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-    atlas_byte_budget: u64,
-) -> CloudShadowCacheLayout {
-    try_cloud_shadow_cache_layout_for_tile_size_and_budget(
-        viewport_width,
-        viewport_height,
-        maximum_texture_dimension,
-        CLOUD_SHADOW_CACHE_TILE_TEXELS,
-        atlas_byte_budget,
-    )
-    .expect("internal shadow-cache dimensions are valid")
-}
-
-fn try_cloud_shadow_cache_layout_for_tile_size_and_budget(
-    viewport_width: u32,
-    viewport_height: u32,
-    maximum_texture_dimension: u32,
-    tile_texels: u32,
-    atlas_byte_budget: u64,
-) -> Result<CloudShadowCacheLayout, &'static str> {
-    let screen_columns = viewport_width.div_ceil(tile_texels);
-    let screen_rows = viewport_height.div_ceil(tile_texels);
-    let screen_footprint_tiles = screen_columns
-        .checked_add(1)
-        .and_then(|columns| {
-            screen_rows
-                .checked_add(1)
-                .and_then(|rows| columns.checked_mul(rows))
-        })
-        .ok_or("viewport tile count exceeds supported arithmetic")?;
-    let desired_tiles = 6u32
-        .checked_mul(screen_footprint_tiles)
-        .ok_or("viewport tile count exceeds supported arithmetic")?
-        .max(1);
-    let physical_tile_texels = tile_texels
-        .checked_add(2)
-        .ok_or("tile size exceeds supported arithmetic")?;
-    let maximum_axis_tiles = (maximum_texture_dimension / physical_tile_texels).max(1);
-    let tile_bytes = u64::from(physical_tile_texels)
-        .saturating_pow(2)
-        .saturating_mul(CLOUD_SHADOW_CACHE_ATLAS_BYTES_PER_TEXEL);
-    let memory_limited_tiles =
-        (atlas_byte_budget / tile_bytes).clamp(1, u64::from(u32::MAX)) as u32;
-    let mut maximum_tiles = desired_tiles
-        .min(maximum_axis_tiles.saturating_pow(2))
-        .min(memory_limited_tiles);
-    let square_columns = (maximum_tiles as f64).sqrt().ceil() as u32;
-    let atlas_columns = square_columns.min(maximum_axis_tiles).max(1);
-    let maximum_memory_rows = memory_limited_tiles / atlas_columns;
-    maximum_tiles = maximum_tiles.min(atlas_columns * maximum_memory_rows.max(1));
-    let atlas_rows = maximum_tiles.div_ceil(atlas_columns);
-    // Discovery retains eighteen cloud-disc and eight landform footprints, including
-    // singletons that never consume atlas space.
-    let marker_tiles = 26u32
-        .checked_mul(screen_footprint_tiles)
-        .ok_or("marker table exceeds supported arithmetic")?
-        .max(1);
-    let table_entries = marker_tiles
-        .checked_mul(2)
-        .and_then(u32::checked_next_power_of_two)
-        .ok_or("marker table exceeds supported arithmetic")?;
-
-    Ok(CloudShadowCacheLayout {
-        atlas_width: atlas_columns * physical_tile_texels,
-        atlas_height: atlas_rows * physical_tile_texels,
-        atlas_columns,
-        maximum_tiles,
-        table_entries,
-    })
-}
-
-pub struct EnvironmentFieldGrid {
-    /// First texel centre relative to the camera, then texel spacing, as the
-    /// scene shader's `environment_field_grid_m` reads them.
-    pub uniforms: [f32; 4],
-    /// Texels per axis that the field pass evaluates.
-    pub texels: [u32; 2],
-}
-
-impl EnvironmentFieldGrid {
-    /// The scene shader's `environment_field_texels` row.
-    pub fn texel_uniforms(&self) -> [u32; 4] {
-        [self.texels[0], self.texels[1], 0, 0]
-    }
-
-    /// Keep synchronized with `@workgroup_size` in environment-field-generate.wgsl.
-    pub fn workgroups(&self) -> [u32; 2] {
-        self.texels.map(|texels| texels.div_ceil(8))
-    }
-}
-
-/// Lattice for the per-frame environment field pass. Texel centres sit on
-/// multiples of the spacing in world coordinates, so panning never moves them;
-/// views too wide for `ENVIRONMENT_FIELD_TEXELS` double the spacing.
-pub fn environment_field_grid(
-    world_width_m: f32,
-    camera_m: [f32; 2],
-    view_size_m: [f32; 2],
-) -> EnvironmentFieldGrid {
-    let world_width_m = f64::from(world_width_m);
-    let mut spacing_m = ENVIRONMENT_FIELD_SPACING_M;
-    loop {
-        // Whole columns per longitude lap keep the lattice continuous across the seam.
-        let laps_per_column = spacing_m / world_width_m;
-        let column_spacing_m = if laps_per_column < 1.0 {
-            world_width_m / laps_per_column.recip().round()
-        } else {
-            world_width_m * laps_per_column.round()
-        };
-        let spacing = [column_spacing_m, spacing_m];
-        let mut grid = EnvironmentFieldGrid {
-            uniforms: [0.0; 4],
-            texels: [0; 2],
-        };
-        for axis in 0..2 {
-            let camera_m = f64::from(camera_m[axis]);
-            let half_view_m = 0.5 * f64::from(view_size_m[axis]);
-            // A texel beyond each edge pixel's bilinear neighbours absorbs
-            // single-precision rounding of shader positions.
-            let first = ((camera_m - half_view_m) / spacing[axis]).floor() - 1.0;
-            let last = ((camera_m + half_view_m) / spacing[axis]).ceil() + 1.0;
-            grid.uniforms[axis] = (first * spacing[axis] - camera_m) as f32;
-            grid.uniforms[2 + axis] = spacing[axis] as f32;
-            grid.texels[axis] = (last - first + 1.0) as u32;
-        }
-        if grid
-            .texels
-            .iter()
-            .all(|&texels| texels <= ENVIRONMENT_FIELD_TEXELS)
-        {
-            return grid;
-        }
-        spacing_m *= 2.0;
-    }
-}
-
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
-pub(crate) const CLOUD_SHADOW_CACHE_SHADER: &str = include_str!(concat!(
-    env!("OUT_DIR"),
-    "/scene-production-cloud-shadow-cache.wgsl"
-));
+pub(crate) const OCCLUDER_FIELD_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/occluder-fields.wgsl"));
 
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
@@ -329,10 +112,8 @@ const PLAYGROUND_DIRECT_SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-playground-direct.wgsl"));
 
 #[cfg(any(feature = "playground", test))]
-pub(crate) const PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER: &str = include_str!(concat!(
-    env!("OUT_DIR"),
-    "/scene-playground-cloud-shadow-cache.wgsl"
-));
+pub(crate) const PLAYGROUND_OCCLUDER_FIELD_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/occluder-fields-playground.wgsl"));
 
 #[cfg(any(all(target_arch = "wasm32", feature = "playground"), test))]
 pub(crate) const PLAYGROUND_STARTUP_SHADER: &str =
@@ -347,8 +128,8 @@ pub fn production_scene_shader_source() -> &'static str {
 }
 
 #[cfg(feature = "playground")]
-pub fn production_cloud_shadow_cache_shader_source() -> &'static str {
-    CLOUD_SHADOW_CACHE_SHADER
+pub fn occluder_field_shader_source() -> &'static str {
+    OCCLUDER_FIELD_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -367,8 +148,8 @@ pub fn playground_direct_scene_shader_source() -> &'static str {
 }
 
 #[cfg(feature = "playground")]
-pub fn playground_cloud_shadow_cache_shader_source() -> &'static str {
-    PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER
+pub fn playground_occluder_field_shader_source() -> &'static str {
+    PLAYGROUND_OCCLUDER_FIELD_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -381,35 +162,6 @@ const MAXIMUM_PREDICTION_SECONDS: f64 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
 const CORRECTION_SECONDS: f32 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
-
-#[cfg(any(target_arch = "wasm32", test))]
-#[derive(Default)]
-pub(crate) struct CloudShadowCacheReplacement {
-    pending: bool,
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-impl CloudShadowCacheReplacement {
-    pub(crate) fn note_resize(&mut self) -> bool {
-        if self.pending {
-            return false;
-        }
-        self.pending = true;
-        true
-    }
-
-    pub(crate) fn finish_retirement(&mut self, queue_complete: bool) -> bool {
-        if !self.pending || !queue_complete {
-            return false;
-        }
-        self.pending = false;
-        true
-    }
-
-    pub(crate) fn is_pending(&self) -> bool {
-        self.pending
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldGeometrySample {
@@ -1621,103 +1373,19 @@ mod tests {
             variable
                 .binding
                 .as_ref()
-                .is_none_or(|binding| binding.group == 0 || binding.group == 2)
-        }));
-        assert!(module.global_variables.iter().all(|(_, variable)| {
-            variable
-                .binding
-                .as_ref()
-                .is_none_or(|binding| binding.group != 2 || binding.binding <= 3)
+                .is_none_or(|binding| binding.group == 0)
         }));
 
-        let cache = naga::front::wgsl::parse_str(CLOUD_SHADOW_CACHE_SHADER).unwrap();
-        let cache_entry_points: Vec<_> = cache
+        let occluder_fields = naga::front::wgsl::parse_str(OCCLUDER_FIELD_SHADER).unwrap();
+        let occluder_entry_points: Vec<_> = occluder_fields
             .entry_points
             .iter()
             .map(|entry| (entry.stage, entry.name.as_str()))
             .collect();
         assert_eq!(
-            cache_entry_points,
-            [
-                (
-                    naga::ShaderStage::Compute,
-                    "discover_cloud_shadow_cache_tiles",
-                ),
-                (naga::ShaderStage::Vertex, "cloud_shadow_cache_vertex"),
-                (naga::ShaderStage::Fragment, "cloud_shadow_cache_fragment",),
-            ],
+            occluder_entry_points,
+            [(naga::ShaderStage::Compute, "generate_occluder_fields")],
         );
-    }
-
-    #[test]
-    fn cloud_shadow_cache_capacity_tracks_screen_resolution() {
-        let layout = cloud_shadow_cache_layout(1920, 1080, 8192);
-
-        assert_eq!(layout.maximum_tiles, 6 * 16 * 10);
-        assert!(layout.table_entries >= 2 * 26 * 16 * 10);
-        assert!(layout.table_entries.is_power_of_two());
-        assert!(layout.atlas_width <= 8192);
-        assert!(layout.atlas_height <= 8192);
-        assert!(layout.atlas_columns > 0);
-
-        let texture_limited_layout = cloud_shadow_cache_layout(1920, 1080, 1024);
-        assert_eq!(texture_limited_layout.table_entries, layout.table_entries);
-    }
-
-    #[test]
-    fn cloud_shadow_cache_atlas_budget_scales_with_backing_resolution() {
-        let full_hd = cloud_shadow_cache_layout(1920, 1080, 8192);
-        let ultra_hd = cloud_shadow_cache_layout(3840, 2160, 8192);
-        let full_hd_bytes = u64::from(full_hd.atlas_width) * u64::from(full_hd.atlas_height) * 4;
-        let ultra_hd_bytes = u64::from(ultra_hd.atlas_width) * u64::from(ultra_hd.atlas_height) * 4;
-
-        assert!(ultra_hd.maximum_tiles >= 2 * full_hd.maximum_tiles);
-        assert!(ultra_hd_bytes > full_hd_bytes);
-        assert!(ultra_hd_bytes <= 128 * 1024 * 1024);
-    }
-
-    #[test]
-    fn explicit_shadow_cache_budget_bounds_offscreen_rendering() {
-        let layout = cloud_shadow_cache_layout_with_budget(
-            4096,
-            4096,
-            8192,
-            CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES,
-        );
-        let atlas_bytes = u64::from(layout.atlas_width) * u64::from(layout.atlas_height) * 4;
-
-        assert!(atlas_bytes <= CLOUD_SHADOW_CACHE_REFERENCE_ATLAS_BYTES);
-    }
-
-    #[test]
-    fn shadow_cache_layout_rejects_invalid_external_dimensions() {
-        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 128).is_ok());
-        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 0).is_err());
-        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, u32::MAX).is_err());
-        assert!(try_cloud_shadow_cache_layout_for_tile_size(1920, 1080, 64, 128).is_err());
-    }
-
-    #[test]
-    fn production_cache_resize_waits_for_queue_retirement() {
-        let mut replacement = CloudShadowCacheReplacement::default();
-
-        assert!(replacement.note_resize());
-        assert!(!replacement.note_resize());
-        assert!(!replacement.finish_retirement(false));
-        assert!(replacement.finish_retirement(true));
-        assert!(!replacement.is_pending());
-    }
-
-    #[test]
-    fn cloud_shadow_cache_capacity_tracks_selected_tile_size() {
-        let layout = cloud_shadow_cache_layout_for_tile_size(1920, 1080, 8192, 64);
-
-        assert_eq!(layout.maximum_tiles, 6 * 31 * 18);
-        assert!(layout.table_entries >= 2 * 26 * 31 * 18);
-        assert_eq!(layout.atlas_width % 66, 0);
-        assert_eq!(layout.atlas_height % 66, 0);
-        assert!(layout.atlas_width <= 8192);
-        assert!(layout.atlas_height <= 8192);
     }
 
     #[test]
@@ -1756,14 +1424,15 @@ mod tests {
             ],
         );
 
-        let cache = naga::front::wgsl::parse_str(PLAYGROUND_CLOUD_SHADOW_CACHE_SHADER).unwrap();
+        let occluder_fields =
+            naga::front::wgsl::parse_str(PLAYGROUND_OCCLUDER_FIELD_SHADER).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::empty(),
         )
-        .validate(&cache)
+        .validate(&occluder_fields)
         .unwrap();
-        assert_eq!(cache.entry_points.len(), 3);
+        assert_eq!(occluder_fields.entry_points.len(), 1);
 
         let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();
         assert_eq!(direct.entry_points.len(), 2);
@@ -1965,62 +1634,5 @@ mod tests {
     fn visual_pixel_footprint_follows_view_height_and_render_height() {
         assert_eq!(visual_pixel_footprint_m(480.0, 960), 0.5);
         assert_eq!(visual_pixel_footprint_m(480.0, 1), 480.0);
-    }
-
-    fn assert_environment_field_grid_covers_view(
-        grid: &EnvironmentFieldGrid,
-        view_size_m: [f32; 2],
-    ) {
-        for (axis, view_m) in view_size_m.into_iter().enumerate() {
-            let origin_m = f64::from(grid.uniforms[axis]);
-            let spacing_m = f64::from(grid.uniforms[2 + axis]);
-            let half_view_m = 0.5 * f64::from(view_m);
-            let last_m = origin_m + f64::from(grid.texels[axis] - 1) * spacing_m;
-            assert!(origin_m <= -half_view_m - spacing_m, "axis {axis}");
-            assert!(last_m >= half_view_m + spacing_m, "axis {axis}");
-            assert!(grid.texels[axis] <= ENVIRONMENT_FIELD_TEXELS, "axis {axis}");
-        }
-    }
-
-    #[test]
-    fn environment_field_texels_stay_on_a_world_lattice_while_panning() {
-        let view_size_m = [427.0, 240.0];
-        for camera_m in [[1234.5, -987.25], [1244.5, -980.25], [-31_990.0, 2.0e6]] {
-            let grid = environment_field_grid(64_000.0, camera_m, view_size_m);
-            assert_eq!([grid.uniforms[2], grid.uniforms[3]], [64.0, 64.0]);
-            for axis in 0..2 {
-                let lattice_index =
-                    (f64::from(camera_m[axis]) + f64::from(grid.uniforms[axis])) / 64.0;
-                assert!(
-                    (lattice_index - lattice_index.round()).abs() < 1.0e-3,
-                    "{camera_m:?} axis {axis}: {lattice_index}",
-                );
-            }
-            assert_environment_field_grid_covers_view(&grid, view_size_m);
-        }
-    }
-
-    #[test]
-    fn environment_field_columns_tile_the_world_circumference() {
-        for world_width_m in [1000.0, 64_000.0, 100_003.0] {
-            let grid = environment_field_grid(world_width_m, [0.0, 0.0], [100.0, 100.0]);
-            let columns = f64::from(world_width_m) / f64::from(grid.uniforms[2]);
-            assert!(
-                (columns - columns.round()).abs() < 1.0e-3,
-                "{world_width_m}"
-            );
-        }
-    }
-
-    #[test]
-    fn environment_field_grid_stays_bounded_at_any_zoom() {
-        for view_height_m in [15.0, 20_000.0, 1.0e6, 1.0e9] {
-            let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
-            let grid = environment_field_grid(64_000.0, [500.0, 1.0e5], view_size_m);
-            assert_environment_field_grid_covers_view(&grid, view_size_m);
-            let portrait = [view_width_m(9.0 / 16.0, view_height_m), view_height_m];
-            let grid = environment_field_grid(64_000.0, [500.0, 1.0e5], portrait);
-            assert_environment_field_grid_covers_view(&grid, portrait);
-        }
     }
 }
