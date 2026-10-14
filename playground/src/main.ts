@@ -4,14 +4,13 @@ import {
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
   playground_scene_shader_source,
+  playground_scene_uniform_bytes,
+  playground_scene_uniforms,
   playground_shadow_cache_layout,
   playground_startup_shader_source,
   production_cloud_shadow_cache_shader_source,
   production_scene_shader_source,
-  sample_playground_celestial_orbit,
   sample_playground_environment,
-  sample_playground_field_time_coordinates,
-  sample_playground_seasonal_phase_factors,
   sample_playground_view_cloud_state,
   sample_playground_world_geometry,
   sample_playground_world_phases,
@@ -1143,11 +1142,10 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
-const sceneFloats = new Float32Array(60);
-const sceneUints = new Uint32Array(sceneFloats.buffer);
+let sceneUniforms: Uint8Array = new Uint8Array(playground_scene_uniform_bytes());
 const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
-const sceneBuffer = device.createBuffer({ size: sceneFloats.byteLength, usage: 0x40 | 0x08 });
+const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
 
 type CloudShadowCache = {
@@ -1765,73 +1763,16 @@ function updateUniforms(
     canopyAmbient: light[3] > 0,
   }, state.diagnostic !== "scene");
   const visible = (value: boolean): number => Number(value);
-  const aspect = previewCanvas.width / previewCanvas.height;
-  sceneFloats.set([
-    renderedCameraX,
-    renderedCameraY,
-    state.viewHeight * aspect,
-    state.viewHeight,
-  ], 0);
   const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
   const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
   const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
   const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
-  const fieldTimes = sample_playground_field_time_coordinates(
-    state.worldWidthM,
-    state.worldHeightM,
-    cloudTick,
-    cloudTickFraction,
-    pressureTick,
-    pressureTickFraction,
-    currentTick,
-    currentTickFraction,
-  );
-  sceneFloats.set(fieldTimes.subarray(0, 4), 4);
   const [seedLow, seedHigh] = splitSeed(state.seed);
-  const precipitationEpoch = BigInt(Math.floor(cloudTimeSeconds / 1800));
-  sceneUints.set([
-    seedLow,
-    seedHigh,
-    Number(precipitationEpoch & 0xffff_ffffn),
-    Number((precipitationEpoch >> 32n) & 0xffff_ffffn),
-  ], 8);
-  sceneFloats.set([
-    state.worldWidthM,
-    state.worldHeightM,
-    1 / state.worldWidthM,
-    1 / state.worldHeightM,
-  ], 12);
-  sceneFloats.set([
-    (cloudTimeSeconds % 1800) / 1800,
-    0,
-    0,
-    0,
-  ], 16);
-  const [dayPhase, seasonPhase, lunarLongitudePhase] = worldPhases(worldTimeSeconds);
-  sceneFloats.set([
-    dayPhase,
-    seasonPhase,
-    lunarLongitudePhase,
-    state.viewHeight / previewCanvas.height,
-  ], 20);
-  sceneUints.set([
-    Number(worldTick & 0xffff_ffffn),
-    Number((worldTick >> 32n) & 0xffff_ffffn),
-    0,
-    0,
-  ], 24);
-  sceneFloats[26] = worldTickFraction;
-  sceneFloats.set(fieldTimes.subarray(4, 8), 28);
-  sceneFloats.set(fieldTimes.subarray(8, 12), 32);
-  sceneFloats.set(sample_playground_seasonal_phase_factors(seasonPhase), 36);
-  sceneFloats.set(sample_playground_celestial_orbit(
-    seasonPhase,
-    lunarLongitudePhase,
-  ), 40);
+  const seed = (BigInt(seedHigh) << 32n) | BigInt(seedLow);
   const viewCloud = sample_playground_view_cloud_state(
     state.worldWidthM,
     state.worldHeightM,
-    (BigInt(seedHigh) << 32n) | BigInt(seedLow),
+    seed,
     worldTick,
     worldTickFraction,
     cloudTick,
@@ -1845,18 +1786,36 @@ function updateUniforms(
   );
   const lowWind: [number, number] = [viewCloud[0]!, viewCloud[1]!];
   const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
-  sceneFloats.set(cloudMotion.advance(elapsedSeconds, lowWind, upperWind), 48);
-  sceneFloats.set(viewCloud.subarray(4, 8), 52);
-  sceneFloats.set([
-    exposure.advance(
-      state.worldWidthM, state.worldHeightM, worldTimeSeconds,
-      renderedCameraX, renderedCameraY, elapsedSeconds,
-    ),
-    // The browser reports HDR capability, not numeric display headroom.
-    canvasHdr && window.matchMedia("(dynamic-range: high)").matches ? 4 : 1,
-    Number(canvasHdr),
-    (presentationTimeMs * 0.008) % 4096,
-  ], 56);
+  sceneUniforms = playground_scene_uniforms(
+    state.worldWidthM,
+    state.worldHeightM,
+    seed,
+    worldTick,
+    worldTickFraction,
+    cloudTick,
+    cloudTickFraction,
+    pressureTick,
+    pressureTickFraction,
+    currentTick,
+    currentTickFraction,
+    renderedCameraX,
+    renderedCameraY,
+    state.viewHeight,
+    previewCanvas.width,
+    previewCanvas.height,
+    new Float32Array(cloudMotion.advance(elapsedSeconds, lowWind, upperWind)),
+    viewCloud.subarray(4, 8),
+    new Float32Array([
+      exposure.advance(
+        state.worldWidthM, state.worldHeightM, worldTimeSeconds,
+        renderedCameraX, renderedCameraY, elapsedSeconds,
+      ),
+      // The browser reports HDR capability, not numeric display headroom.
+      canvasHdr && window.matchMedia("(dynamic-range: high)").matches ? 4 : 1,
+      Number(canvasHdr),
+      (presentationTimeMs * 0.008) % 4096,
+    ]),
+  );
 
   tuningFloats.set([
     state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
@@ -2147,7 +2106,7 @@ function advanceFrame(now: number): void {
 
 function renderFrame(now: number): Promise<void> {
   const renderResources = renderResourcesForFrame();
-  device.queue.writeBuffer(sceneBuffer, 0, sceneFloats);
+  device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
   const encoder = device.createCommandEncoder();
   if (renderResources.pipeline !== timedPipeline || renderResources.cloudShadowCache !== timedCache) {

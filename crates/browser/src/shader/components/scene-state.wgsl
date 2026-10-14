@@ -7,7 +7,6 @@ struct SceneUniforms {
     inverse_world_size_m: vec2<f32>,
     precipitation_phase_and_padding: vec4<f32>,
     world_phases_and_pixel_footprint_m: vec4<f32>,
-    world_tick_and_padding: vec4<u32>,
     pressure_time_coordinate: vec4<f32>,
     ocean_current_time_coordinate_and_padding: vec4<f32>,
     seasonal_phase_factors: vec4<f32>,
@@ -16,6 +15,7 @@ struct SceneUniforms {
     view_cloud_motion_m: vec4<f32>,
     cloud_time_coordinates: vec4<f32>,
     exposure_and_output: vec4<f32>,
+    ocean_wave_modes: array<vec4<f32>, 16>,
 };
 
 struct SceneTuning {

@@ -124,6 +124,9 @@ and verification details.
   authoritative server and predicting client.
 - **[Implicit]** Ocean forcing remains planar: horizontal orbital motion affects
   sailing, while heave, roll, capsize, refraction, and diffraction are outside the model.
+- **[Implicit]** Rendering takes ocean wave modes and their clock phases from the
+  authoritative Rust modes, computed once per frame in double precision; shaders
+  evaluate only position-dependent wave terms.
 
 ## Rendering and lighting
 

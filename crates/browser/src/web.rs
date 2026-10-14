@@ -17,7 +17,7 @@ use futures_util::{
     stream::{FuturesUnordered, StreamExt},
 };
 use game::{
-    CelestialConditions, celestial_lighting, celestial_orbit, moon_phase,
+    OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit, moon_phase,
     procedural_world_environment_for_render_clocks, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
@@ -37,7 +37,7 @@ use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, ViewExposure,
     Windsock, append_reliable_server_message_chunk, bounded_canvas_dimensions,
-    cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
+    cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
     sample_view_cloud_state_for_render_clocks, sample_world_geometry, scale_bar,
     seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
@@ -410,37 +410,6 @@ pub fn sample_playground_environment(
 
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
-pub fn sample_playground_field_time_coordinates(
-    world_width_m: f32,
-    world_height_m: f32,
-    scalar_tick: u64,
-    scalar_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
-) -> Result<Vec<f32>, JsValue> {
-    let geometry = WorldGeometry::new(world_width_m, world_height_m)
-        .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let scalar = scalar_field_time_coordinates_interpolated(scalar_tick, scalar_tick_fraction);
-    let pressure =
-        vector_field_time_coordinates_interpolated(geometry, pressure_tick, pressure_tick_fraction);
-    let current =
-        vector_field_time_coordinates_interpolated(geometry, current_tick, current_tick_fraction);
-    let mut values = Vec::with_capacity(12);
-    values.extend([
-        scalar.air_temperature,
-        scalar.upper_air_temperature,
-        scalar.water_vapor,
-        scalar.decorative_water,
-    ]);
-    values.extend(pressure.pressure);
-    values.extend([current.ocean_current, 0.0, 0.0, 0.0]);
-    Ok(values)
-}
-
-#[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_view_cloud_state(
     world_width_m: f32,
     world_height_m: f32,
@@ -484,11 +453,6 @@ pub fn sample_playground_view_cloud_state(
 }
 
 #[wasm_bindgen]
-pub fn sample_playground_seasonal_phase_factors(season_phase: f32) -> Vec<f32> {
-    seasonal_phase_factors(season_phase).to_vec()
-}
-
-#[wasm_bindgen]
 pub fn sample_playground_world_phases(world_time_seconds: f64) -> Vec<f32> {
     let conditions =
         world_celestial_conditions(WorldGeometry::default(), world_time_seconds, Vector::ZERO);
@@ -500,28 +464,117 @@ pub fn sample_playground_world_phases(world_time_seconds: f64) -> Vec<f32> {
     ]
 }
 
+#[cfg(feature = "playground")]
 #[wasm_bindgen]
-pub fn sample_playground_celestial_orbit(
-    season_phase: f32,
-    lunar_longitude_phase: f32,
-) -> Vec<f32> {
-    let orbit = celestial_orbit(CelestialConditions {
-        geographic_latitude_degrees: 0.0,
-        celestial_latitude_degrees: 0.0,
-        season_phase,
-        day_phase: 0.0,
-        lunar_longitude_phase,
-    });
-    vec![
-        orbit.solar_declination_rad as f32,
-        orbit.solar_right_ascension_rad as f32,
-        orbit.lunar_declination_rad as f32,
-        orbit.lunar_right_ascension_rad as f32,
-        orbit.illuminated_fraction as f32,
-        orbit.lunar_penumbra_fraction,
-        orbit.lunar_umbra_fraction,
-        0.0,
-    ]
+pub fn playground_scene_uniform_bytes() -> usize {
+    mem::size_of::<SceneUniforms>()
+}
+
+#[cfg(feature = "playground")]
+/// Scene uniforms for the lab's independent clocks. The view-local cloud motion,
+/// cloud time, and exposure/output rows come from lab state.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn playground_scene_uniforms(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    cloud_tick: u64,
+    cloud_tick_fraction: f32,
+    pressure_tick: u64,
+    pressure_tick_fraction: f32,
+    current_tick: u64,
+    current_tick_fraction: f32,
+    camera_x_m: f32,
+    camera_y_m: f32,
+    view_height_m: f32,
+    render_width_px: u32,
+    render_height_px: u32,
+    view_cloud_motion_m: &[f32],
+    cloud_time_coordinates: &[f32],
+    exposure_and_output: &[f32],
+) -> Result<Vec<u8>, JsValue> {
+    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let row = |values: &[f32]| -> Result<[f32; 4], JsValue> {
+        values
+            .try_into()
+            .map_err(|_| JsValue::from_str("scene uniform rows need four values"))
+    };
+    let precipitation_time = periodic_effect_time_interpolated(
+        cloud_tick,
+        cloud_tick_fraction,
+        PRECIPITATION_CONTACT_PERIOD_TICKS,
+    );
+    let scalar_time = scalar_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
+    let pressure_time =
+        vector_field_time_coordinates_interpolated(geometry, pressure_tick, pressure_tick_fraction);
+    let current_time =
+        vector_field_time_coordinates_interpolated(geometry, current_tick, current_tick_fraction);
+    let celestial = world_celestial_conditions(
+        geometry,
+        (world_tick as f64 + f64::from(world_tick_fraction)) / TICKS_PER_SECOND as f64,
+        Vector::ZERO,
+    );
+    let orbit = celestial_orbit(celestial);
+    let uniforms = SceneUniforms {
+        camera_and_view_m: [
+            camera_x_m,
+            camera_y_m,
+            view_width_m(
+                render_width_px as f32 / render_height_px as f32,
+                view_height_m,
+            ),
+            view_height_m,
+        ],
+        scalar_field_time_coordinates: [
+            scalar_time.air_temperature,
+            scalar_time.upper_air_temperature,
+            scalar_time.water_vapor,
+            scalar_time.decorative_water,
+        ],
+        match_seed: [match_seed as u32, (match_seed >> 32) as u32],
+        precipitation_epoch: [
+            precipitation_time.epoch as u32,
+            (precipitation_time.epoch >> 32) as u32,
+        ],
+        world_size_m: [world_width_m, world_height_m],
+        inverse_world_size_m: [world_width_m.recip(), world_height_m.recip()],
+        precipitation_phase_and_padding: [precipitation_time.phase, 0.0, 0.0, 0.0],
+        world_phases_and_pixel_footprint_m: [
+            celestial.day_phase,
+            celestial.season_phase,
+            celestial.lunar_longitude_phase,
+            visual_pixel_footprint_m(view_height_m, render_height_px),
+        ],
+        pressure_time_coordinate: pressure_time.pressure,
+        ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
+        seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
+        celestial_orbit_angles: [
+            orbit.solar_declination_rad as f32,
+            orbit.solar_right_ascension_rad as f32,
+            orbit.lunar_declination_rad as f32,
+            orbit.lunar_right_ascension_rad as f32,
+        ],
+        celestial_orbit_light: [
+            orbit.illuminated_fraction as f32,
+            orbit.lunar_penumbra_fraction,
+            orbit.lunar_umbra_fraction,
+            0.0,
+        ],
+        view_cloud_motion_m: row(view_cloud_motion_m)?,
+        cloud_time_coordinates: row(cloud_time_coordinates)?,
+        exposure_and_output: row(exposure_and_output)?,
+        ocean_wave_modes: ocean_wave_mode_uniforms(
+            geometry,
+            match_seed,
+            world_tick,
+            world_tick_fraction,
+        ),
+    };
+    Ok(bytemuck::bytes_of(&uniforms).to_vec())
 }
 
 #[wasm_bindgen]
@@ -608,7 +661,6 @@ struct SceneUniforms {
     inverse_world_size_m: [f32; 2],
     precipitation_phase_and_padding: [f32; 4],
     world_phases_and_pixel_footprint_m: [f32; 4],
-    world_tick_and_padding: [u32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
     seasonal_phase_factors: [f32; 4],
@@ -617,6 +669,7 @@ struct SceneUniforms {
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
     exposure_and_output: [f32; 4],
+    ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
 #[repr(C)]
@@ -1488,12 +1541,6 @@ impl Renderer {
                     celestial.lunar_longitude_phase,
                     visual_pixel_footprint_m(view_height_m, self.config.height),
                 ],
-                world_tick_and_padding: [
-                    tick as u32,
-                    (tick >> 32) as u32,
-                    tick_fraction.to_bits(),
-                    0,
-                ],
                 pressure_time_coordinate: vector_time.pressure,
                 ocean_current_time_coordinate_and_padding: [
                     vector_time.ocean_current,
@@ -1528,6 +1575,12 @@ impl Renderer {
                     f32::from(hdr),
                     self.vision_noise_phase as f32,
                 ],
+                ocean_wave_modes: ocean_wave_mode_uniforms(
+                    world_geometry,
+                    match_seed,
+                    tick,
+                    tick_fraction,
+                ),
             }),
         );
 

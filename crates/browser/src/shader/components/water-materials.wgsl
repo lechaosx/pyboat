@@ -138,26 +138,6 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
     );
 }
 
-fn ocean_tick_phase_radians(phase_per_tick_radians: f32) -> f32 {
-    let tick = scene.world_tick_and_padding.xy;
-    let tick_fraction = bitcast<f32>(scene.world_tick_and_padding.z);
-    let chunks = array<u32, 4>(
-        tick.y >> 16u,
-        tick.y & 0xffffu,
-        tick.x >> 16u,
-        tick.x & 0xffffu,
-    );
-    var phase = 0.0;
-    for (var chunk_index = 0u; chunk_index < 4u; chunk_index++) {
-        phase = (phase * 65536.0 + f32(chunks[chunk_index]) * phase_per_tick_radians) % TAU;
-    }
-    return (phase + tick_fraction * phase_per_tick_radians) % TAU;
-}
-
-fn ocean_hash_unit(key: vec2<u32>) -> f32 {
-    return (f32(terrain_hash(key).y >> 8u) + 0.5) / 16777216.0;
-}
-
 struct OceanForcingSample {
     current_m_s: vec2<f32>,
     significant_height_m: f32,
@@ -349,54 +329,21 @@ fn physical_water_wave_sample_from_surface(
         energy_direction / max(energy_direction_length, 0.0001),
         energy_direction_length > 0.0,
     );
-    let rotation = TAU * ocean_hash_unit(
-        scene.match_seed ^ vec2<u32>(0xfe94f82bu, 0x3c6ef372u),
-    );
     let amplitude_scale = significant_height_m / 5.676266;
     var displacement_m = 0.0;
 
     for (var mode_index = 0u; mode_index < 16u; mode_index++) {
-        let mode_key = scene.match_seed
-            ^ vec2<u32>(0x299f31d0u, 0xa4093822u)
-            ^ multiply_u64(
-                vec2<u32>(mode_index, 0u),
-                vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-            );
-        let angle = rotation + TAU * f32(mode_index) / 16.0;
-        let original_direction = vec2<f32>(cos(angle), sin(angle));
-        let is_wind_sea = mode_index < 12u;
-        let wavelength_fraction = ocean_hash_unit(
-            mode_key ^ vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        );
-        let minimum_wavelength_m = select(120.0, 8.0, is_wind_sea);
-        let maximum_wavelength_m = select(600.0, 180.0, is_wind_sea);
-        let wavelength_m = minimum_wavelength_m * pow(
-            maximum_wavelength_m / minimum_wavelength_m,
-            wavelength_fraction,
-        );
-        var mode_x = round(
-            original_direction.x * scene.world_size_m.x / wavelength_m,
-        );
-        if mode_x == 0.0 && abs(original_direction.y) < 0.000001 {
-            mode_x = select(1.0, -1.0, original_direction.x < 0.0);
-        }
-        let wave_number_x = TAU * mode_x
-            * scene.inverse_world_size_m.x;
-        let wave_number_y = TAU * original_direction.y / wavelength_m;
-        let wave_number = length(vec2<f32>(wave_number_x, wave_number_y));
-        let direction = vec2<f32>(wave_number_x, wave_number_y) / wave_number;
+        let mode = scene.ocean_wave_modes[mode_index];
+        let wave_number = mode.z;
+        let direction = mode.xy / wave_number;
         let alignment = max(dot(direction, dominant_direction), 0.0);
         let weight = 0.20 + pow(alignment, 4.0);
         let amplitude_m = weight * amplitude_scale;
-        let angular_frequency = sqrt(9.81 * wave_number);
-        let phase = wave_number_x
+        let phase = mode.x
             * fract(position_m.x * scene.inverse_world_size_m.x)
             * scene.world_size_m.x
-            + wave_number_y * position_m.y
-            - ocean_tick_phase_radians(angular_frequency / 60.0)
-            + TAU * ocean_hash_unit(
-                mode_key ^ vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
-            );
+            + mode.y * position_m.y
+            + mode.w;
         let footprint_attenuation = exp(
             -0.5 * pow(wave_number * visual_pixel_footprint_m, 2.0),
         );

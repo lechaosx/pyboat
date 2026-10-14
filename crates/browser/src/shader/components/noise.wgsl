@@ -38,6 +38,11 @@ fn multiply_u64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
     );
 }
 
+fn add_u64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+    let low = a.x + b.x;
+    return vec2<u32>(low, a.y + b.y + select(0u, 1u, low < a.x));
+}
+
 fn shift_right_u64(value: vec2<u32>, amount: u32) -> vec2<u32> {
     return vec2<u32>(
         (value.x >> amount) | (value.y << (32u - amount)),
@@ -80,15 +85,24 @@ struct Simplex4dSample {
     gradient: vec4<f32>,
 };
 
+// A lattice key XORs one product per lattice axis. Since (n + 1)C = nC + C
+// modulo 2^64, every simplex vertex key derives from its cell's products by
+// 64-bit addition.
+const LATTICE_KEY_MULTIPLIERS = array<vec2<u32>, 4>(
+    vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+    vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+    vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+    vec2<u32>(0x133111ebu, 0x94d049bbu),
+);
+
 struct Simplex4dDomain {
-    lattice: vec4<i32>,
+    lattice_products: array<vec2<u32>, 4>,
     first: vec4<f32>,
     rank: vec4<i32>,
 };
 
 struct Simplex2dDomain {
-    cell: vec2<i32>,
-    lattice_offsets: array<vec2<i32>, 3>,
+    lattice_keys: array<vec2<u32>, 3>,
     offsets: array<vec2<f32>, 3>,
     x_cycles: i32,
     y_scale_per_m: f32,
@@ -138,26 +152,8 @@ fn positive_mod(value: i32, period: i32) -> i32 {
     return ((value % period) + period) % period;
 }
 
-fn terrain_simplex_lattice_gradient(
-    seed: vec2<u32>,
-    x: i32,
-    y: i32,
-    x_cycles: i32,
-) -> vec2<f32> {
-    // x-y is the longitude axis of the triangular lattice. Wrapping only this
-    // residue preserves the cylindrical seam without repeating latitude.
-    let periodic_x = positive_mod(x - y, 2 * x_cycles);
-    let unbounded_y = x + y;
-    let key = seed
-        ^ multiply_u64(
-            signed_u64(periodic_x),
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-        )
-        ^ multiply_u64(
-            signed_u64(unbounded_y),
-            vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-        );
-    return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(key).x % 24u];
+fn terrain_simplex_lattice_gradient(seed: vec2<u32>, lattice_key: vec2<u32>) -> vec2<f32> {
+    return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(seed ^ lattice_key).x % 24u];
 }
 
 fn terrain_simplex_domain(
@@ -184,18 +180,50 @@ fn terrain_simplex_domain(
     let cell = vec2<i32>(floor(scaled + vec2<f32>(skew)));
     let unskew = f32(cell.x + cell.y) * unskew_factor;
     let first_offset = scaled - (vec2<f32>(cell) - vec2<f32>(unskew));
-    let middle_lattice_offset = select(
-        vec2<i32>(0, 1),
-        vec2<i32>(1, 0),
-        first_offset.x > first_offset.y,
-    );
+    let middle_steps_x = first_offset.x > first_offset.y;
+    let middle_lattice_offset = select(vec2<i32>(0, 1), vec2<i32>(1, 0), middle_steps_x);
     let middle_offset = first_offset
         - vec2<f32>(middle_lattice_offset)
         + vec2<f32>(unskew_factor);
     let last_offset = first_offset - vec2<f32>(1.0 - 2.0 * unskew_factor);
+    // Lattice keys combine the wrapped x-y residue, the longitude axis of the
+    // triangular lattice, with the unbounded x+y sum. Wrapping only the residue
+    // preserves the cylindrical seam without repeating latitude. The first and
+    // last vertices share a residue; the middle vertex steps one residue up or
+    // down, and the sum rises by one per vertex.
+    let residue_multiplier = LATTICE_KEY_MULTIPLIERS[0];
+    let sum_multiplier = LATTICE_KEY_MULTIPLIERS[1];
+    let residue_period = 2 * x_cycles;
+    let lower_residue = positive_mod(
+        cell.x - cell.y - select(1, 0, middle_steps_x),
+        residue_period,
+    );
+    let lower_residue_product = multiply_u64(signed_u64(lower_residue), residue_multiplier);
+    let upper_residue_product = select(
+        add_u64(lower_residue_product, residue_multiplier),
+        vec2<u32>(0u),
+        lower_residue == residue_period - 1,
+    );
+    let first_residue_product = select(
+        upper_residue_product,
+        lower_residue_product,
+        middle_steps_x,
+    );
+    let middle_residue_product = select(
+        lower_residue_product,
+        upper_residue_product,
+        middle_steps_x,
+    );
+    let last_residue_product = first_residue_product;
+    let first_sum_product = multiply_u64(signed_u64(cell.x + cell.y), sum_multiplier);
+    let middle_sum_product = add_u64(first_sum_product, sum_multiplier);
+    let last_sum_product = add_u64(middle_sum_product, sum_multiplier);
     return Simplex2dDomain(
-        cell,
-        array<vec2<i32>, 3>(vec2<i32>(0), middle_lattice_offset, vec2<i32>(1)),
+        array<vec2<u32>, 3>(
+            first_residue_product ^ first_sum_product,
+            middle_residue_product ^ middle_sum_product,
+            last_residue_product ^ last_sum_product,
+        ),
         array<vec2<f32>, 3>(first_offset, middle_offset, last_offset),
         x_cycles,
         y_scale_per_m,
@@ -217,13 +245,7 @@ fn terrain_simplex_noise(
         if attenuation <= 0.0 {
             continue;
         }
-        let lattice = domain.cell + domain.lattice_offsets[vertex];
-        let gradient = terrain_simplex_lattice_gradient(
-            seed,
-            lattice.x,
-            lattice.y,
-            domain.x_cycles,
-        );
+        let gradient = terrain_simplex_lattice_gradient(seed, domain.lattice_keys[vertex]);
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
         let attenuation_cubed = attenuation_squared * attenuation;
@@ -255,13 +277,7 @@ fn terrain_simplex_noise_value(
         if attenuation <= 0.0 {
             continue;
         }
-        let lattice = domain.cell + domain.lattice_offsets[vertex];
-        let gradient = terrain_simplex_lattice_gradient(
-            seed,
-            lattice.x,
-            lattice.y,
-            domain.x_cycles,
-        );
+        let gradient = terrain_simplex_lattice_gradient(seed, domain.lattice_keys[vertex]);
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
         value += attenuation_squared * attenuation_squared * ramp;
@@ -271,13 +287,20 @@ fn terrain_simplex_noise_value(
 
 fn terrain_simplex_lattice_gradient_4d(
     seed: vec2<u32>,
-    lattice: vec4<i32>,
+    domain: Simplex4dDomain,
+    lattice_offset: vec4<i32>,
 ) -> vec4<f32> {
-    let key = seed
-        ^ multiply_u64(signed_u64(lattice.x), vec2<u32>(0x7f4a7c15u, 0x9e3779b9u))
-        ^ multiply_u64(signed_u64(lattice.y), vec2<u32>(0xa0b428dbu, 0xe7037ed1u))
-        ^ multiply_u64(signed_u64(lattice.z), vec2<u32>(0x1ce4e5b9u, 0xbf58476du))
-        ^ multiply_u64(signed_u64(lattice.w), vec2<u32>(0x133111ebu, 0x94d049bbu));
+    var key = seed;
+    for (var axis = 0u; axis < 4u; axis++) {
+        key ^= add_u64(
+            domain.lattice_products[axis],
+            select(
+                vec2<u32>(0u),
+                LATTICE_KEY_MULTIPLIERS[axis],
+                lattice_offset[axis] != 0i,
+            ),
+        );
+    }
     let hash = terrain_hash(key).x;
     let zero_axis = hash & 3u;
     var sign_bit = 2u;
@@ -321,7 +344,14 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
     if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
     if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
-    return Simplex4dDomain(lattice, first, rank);
+    var lattice_products: array<vec2<u32>, 4>;
+    for (var axis = 0u; axis < 4u; axis++) {
+        lattice_products[axis] = multiply_u64(
+            signed_u64(lattice[axis]),
+            LATTICE_KEY_MULTIPLIERS[axis],
+        );
+    }
+    return Simplex4dDomain(lattice_products, first, rank);
 }
 
 fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
@@ -346,7 +376,8 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
                 seed,
-                domain.lattice + lattice_offset,
+                domain,
+                lattice_offset,
             );
             let ramp = dot(gradient, offset);
             let attenuation_squared = attenuation * attenuation;
@@ -383,7 +414,8 @@ fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
                 seed,
-                domain.lattice + lattice_offset,
+                domain,
+                lattice_offset,
             );
             let ramp = dot(gradient, offset);
             let attenuation_squared = attenuation * attenuation;

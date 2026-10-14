@@ -6,9 +6,10 @@ mod frame_queue;
 pub use exposure::{ViewExposure, exposure_target};
 
 use game::{
-    CloudFieldTimeCoordinates, WorldEnvironment, cloud_field_time_coordinates_interpolated,
-    computed_yaw_rate_torques, computed_yaw_rate_torques_in_environment, dinghy_parameters,
-    match_environment, procedural_match_environment, procedural_world_environment,
+    CloudFieldTimeCoordinates, OCEAN_WAVE_MODE_COUNT, WorldEnvironment,
+    cloud_field_time_coordinates_interpolated, computed_yaw_rate_torques,
+    computed_yaw_rate_torques_in_environment, dinghy_parameters, match_environment,
+    procedural_match_environment, procedural_world_environment,
     procedural_world_environment_for_render_clocks,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
@@ -390,6 +391,26 @@ pub fn seasonal_phase_factors(season_phase: f32) -> [f32; 4] {
         ground_angle.cos(),
         water_angle.sin(),
     ]
+}
+
+/// Wave-number vector, its length, and phase at the world clock in `[0, TAU)`,
+/// as the scene shader's `ocean_wave_modes` reads them.
+pub fn ocean_wave_mode_uniforms(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+) -> [[f32; 4]; OCEAN_WAVE_MODE_COUNT] {
+    game::ocean_wave_modes(world_geometry, match_seed, world_tick, world_tick_fraction).map(
+        |mode| {
+            [
+                mode.wave_number_x_per_m as f32,
+                mode.wave_number_y_per_m as f32,
+                mode.wave_number_per_m as f32,
+                mode.phase_rad.rem_euclid(std::f64::consts::TAU) as f32,
+            ]
+        },
+    )
 }
 
 pub fn sample_world_geometry(

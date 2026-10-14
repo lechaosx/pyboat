@@ -1,11 +1,15 @@
 use std::{env, fs, path::PathBuf};
 
-use browser::{exposure_target, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m};
+use browser::{
+    exposure_target, ocean_wave_mode_uniforms, seasonal_phase_factors, view_width_m,
+    visual_pixel_footprint_m,
+};
 use bytemuck::{Pod, Zeroable};
 use game::{
-    celestial_lighting, celestial_orbit, cloud_field_time_coordinates_interpolated,
-    procedural_world_environment_for_render_clocks, scalar_field_time_coordinates_interpolated,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit,
+    cloud_field_time_coordinates_interpolated, procedural_world_environment_for_render_clocks,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions,
 };
 use serde::Serialize;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
@@ -73,7 +77,6 @@ struct SceneUniforms {
     inverse_world_size_m: [f32; 2],
     precipitation_phase_and_padding: [f32; 4],
     world_phases_and_pixel_footprint_m: [f32; 4],
-    world_tick_and_padding: [u32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
     seasonal_phase_factors: [f32; 4],
@@ -82,6 +85,7 @@ struct SceneUniforms {
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
     exposure_and_output: [f32; 4],
+    ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
 #[repr(C)]
@@ -1895,7 +1899,6 @@ fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
             conditions.lunar_longitude_phase,
             visual_pixel_footprint_m(options.view_height_m, options.height),
         ],
-        world_tick_and_padding: [tick as u32, (tick >> 32) as u32, tick_fraction.to_bits(), 0],
         pressure_time_coordinate: pressure_time.pressure,
         ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
         seasonal_phase_factors: seasonal_phase_factors(conditions.season_phase),
@@ -1914,6 +1917,12 @@ fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
         view_cloud_motion_m: [0.0; 4],
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: [exposure, 1.0, 0.0, 0.0],
+        ocean_wave_modes: ocean_wave_mode_uniforms(
+            world_geometry,
+            options.seed,
+            tick,
+            tick_fraction,
+        ),
     })
 }
 

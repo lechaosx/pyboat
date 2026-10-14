@@ -96,7 +96,7 @@ const OCEAN_CURRENT_PRESSURE_COUPLING: f64 = 0.006;
 const OCEAN_CURRENT_EVOLUTION_SPEED_M_S: f32 = 0.012;
 const OCEAN_TIDAL_POTENTIAL_SCALE_M2_S: f64 = 1_200.0;
 const MAX_SIGNIFICANT_WAVE_HEIGHT_M: f32 = 14.0;
-const OCEAN_WAVE_MODE_COUNT: usize = 16;
+pub const OCEAN_WAVE_MODE_COUNT: usize = 16;
 const OCEAN_WIND_SEA_MODE_COUNT: usize = 12;
 const GRAVITY_M_S2: f64 = 9.81;
 // OpenSimplex2's CC0 24-direction 2D gradient layout reduces repeated contour
@@ -296,6 +296,17 @@ pub struct OceanState {
     pub surface_slope: Vector,
     pub dominant_wave_direction: Vector,
     pub rogue_crest_excess_m: f32,
+}
+
+/// A wave mode's spatial phase is `wave_number_x_per_m * x + wave_number_y_per_m * y`
+/// with `x` in `[0, width)`; `phase_rad` adds the mode's phase at the queried clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OceanWaveMode {
+    pub wave_number_x_per_m: f64,
+    pub wave_number_y_per_m: f64,
+    pub wave_number_per_m: f64,
+    pub angular_frequency_rad_s: f64,
+    pub phase_rad: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1457,39 +1468,19 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         0.0
     };
 
-    let rotation = std::f64::consts::TAU * hash_unit(query.match_seed ^ 0x3c6e_f372_fe94_f82b);
+    let wave_modes = ocean_wave_modes(
+        query.world_geometry,
+        query.match_seed,
+        query.world_tick,
+        query.world_tick_fraction,
+    );
     let mut modes = [(0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64); OCEAN_WAVE_MODE_COUNT];
     let mut wind_weight_square_sum = 0.0;
     let mut swell_weight_square_sum = 0.0;
-    for (mode_index, mode) in modes.iter_mut().enumerate() {
-        let mode_key = query.match_seed
-            ^ 0xa409_3822_299f_31d0
-            ^ (mode_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        let direction_angle =
-            rotation + std::f64::consts::TAU * mode_index as f64 / OCEAN_WAVE_MODE_COUNT as f64;
-        let (direction_y, direction_x) = libm::sincos(direction_angle);
+    for (mode_index, (mode, wave_mode)) in modes.iter_mut().zip(wave_modes).enumerate() {
         let is_wind_sea = mode_index < OCEAN_WIND_SEA_MODE_COUNT;
-        let wavelength_fraction = hash_unit(mode_key ^ 0xe703_7ed1_a0b4_28db);
-        let (minimum_wavelength_m, maximum_wavelength_m) = if is_wind_sea {
-            (8.0_f64, 180.0_f64)
-        } else {
-            (120.0_f64, 600.0_f64)
-        };
-        let wavelength_m = minimum_wavelength_m
-            * libm::pow(
-                maximum_wavelength_m / minimum_wavelength_m,
-                wavelength_fraction,
-            );
-        let width_m = f64::from(query.world_geometry.width_m());
-        let mut mode_x = libm::round(direction_x * width_m / wavelength_m) as i64;
-        if mode_x == 0 && direction_y.abs() < 1.0e-6 {
-            mode_x = if direction_x < 0.0 { -1 } else { 1 };
-        }
-        let wave_number_x = std::f64::consts::TAU * mode_x as f64 / width_m;
-        let wave_number_y = std::f64::consts::TAU * direction_y / wavelength_m;
-        let wave_number = libm::hypot(wave_number_x, wave_number_y);
-        let actual_direction_x = wave_number_x / wave_number;
-        let actual_direction_y = wave_number_y / wave_number;
+        let actual_direction_x = wave_mode.wave_number_x_per_m / wave_mode.wave_number_per_m;
+        let actual_direction_y = wave_mode.wave_number_y_per_m / wave_mode.wave_number_per_m;
         let source_direction = if is_wind_sea {
             wind_direction
         } else {
@@ -1504,17 +1495,16 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         } else {
             swell_weight_square_sum += weight * weight;
         }
-        let angular_frequency = libm::sqrt(GRAVITY_M_S2 * wave_number);
-        let phase = wave_number_x * f64::from(query.position_m.x).rem_euclid(width_m)
-            + wave_number_y * f64::from(query.position_m.y)
-            - tick_phase_radians(query.world_tick, angular_frequency * TICK_SECONDS)
-            - f64::from(query.world_tick_fraction) * angular_frequency * TICK_SECONDS
-            + std::f64::consts::TAU * hash_unit(mode_key ^ 0xbf58_476d_1ce4_e5b9);
+        let width_m = f64::from(query.world_geometry.width_m());
+        let phase = wave_mode.wave_number_x_per_m
+            * f64::from(query.position_m.x).rem_euclid(width_m)
+            + wave_mode.wave_number_y_per_m * f64::from(query.position_m.y)
+            + wave_mode.phase_rad;
         *mode = (
             actual_direction_x,
             actual_direction_y,
-            wave_number,
-            angular_frequency,
+            wave_mode.wave_number_per_m,
+            wave_mode.angular_frequency_rad_s,
             phase,
             weight,
         );
@@ -1582,6 +1572,53 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         dominant_wave_direction,
         rogue_crest_excess_m: (surface_displacement_m - significant_wave_height_m).max(0.0),
     }
+}
+
+pub fn ocean_wave_modes(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+) -> [OceanWaveMode; OCEAN_WAVE_MODE_COUNT] {
+    let rotation = std::f64::consts::TAU * hash_unit(match_seed ^ 0x3c6e_f372_fe94_f82b);
+    let width_m = f64::from(world_geometry.width_m());
+    std::array::from_fn(|mode_index| {
+        let mode_key = match_seed
+            ^ 0xa409_3822_299f_31d0
+            ^ (mode_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let direction_angle =
+            rotation + std::f64::consts::TAU * mode_index as f64 / OCEAN_WAVE_MODE_COUNT as f64;
+        let (direction_y, direction_x) = libm::sincos(direction_angle);
+        let wavelength_fraction = hash_unit(mode_key ^ 0xe703_7ed1_a0b4_28db);
+        let (minimum_wavelength_m, maximum_wavelength_m) = if mode_index < OCEAN_WIND_SEA_MODE_COUNT
+        {
+            (8.0_f64, 180.0_f64)
+        } else {
+            (120.0_f64, 600.0_f64)
+        };
+        let wavelength_m = minimum_wavelength_m
+            * libm::pow(
+                maximum_wavelength_m / minimum_wavelength_m,
+                wavelength_fraction,
+            );
+        let mut mode_x = libm::round(direction_x * width_m / wavelength_m) as i64;
+        if mode_x == 0 && direction_y.abs() < 1.0e-6 {
+            mode_x = if direction_x < 0.0 { -1 } else { 1 };
+        }
+        let wave_number_x_per_m = std::f64::consts::TAU * mode_x as f64 / width_m;
+        let wave_number_y_per_m = std::f64::consts::TAU * direction_y / wavelength_m;
+        let wave_number_per_m = libm::hypot(wave_number_x_per_m, wave_number_y_per_m);
+        let angular_frequency_rad_s = libm::sqrt(GRAVITY_M_S2 * wave_number_per_m);
+        OceanWaveMode {
+            wave_number_x_per_m,
+            wave_number_y_per_m,
+            wave_number_per_m,
+            angular_frequency_rad_s,
+            phase_rad: std::f64::consts::TAU * hash_unit(mode_key ^ 0xbf58_476d_1ce4_e5b9)
+                - tick_phase_radians(world_tick, angular_frequency_rad_s * TICK_SECONDS)
+                - f64::from(world_tick_fraction) * angular_frequency_rad_s * TICK_SECONDS,
+        }
+    })
 }
 
 fn tick_phase_radians(tick: u64, phase_per_tick_radians: f64) -> f64 {
