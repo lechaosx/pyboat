@@ -106,6 +106,18 @@ const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn production_scene_shader_source() -> String {
+    SCENE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn production_cloud_shadow_cache_shader_source() -> String {
+    CLOUD_SHADOW_CACHE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn playground_scene_shader_source() -> String {
     crate::playground_scene_shader_source().to_owned()
 }

@@ -231,10 +231,10 @@ fn try_cloud_shadow_cache_layout_for_tile_size_and_budget(
         table_entries,
     })
 }
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const CLOUD_SHADOW_CACHE_SHADER: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/scene-production-cloud-shadow-cache.wgsl"
@@ -260,6 +260,16 @@ pub(crate) const PLAYGROUND_STARTUP_SHADER: &str =
 
 #[cfg(any(feature = "playground", test))]
 include!(concat!(env!("OUT_DIR"), "/diagnostic-shaders.rs"));
+
+#[cfg(feature = "playground")]
+pub fn production_scene_shader_source() -> &'static str {
+    SCENE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn production_cloud_shadow_cache_shader_source() -> &'static str {
+    CLOUD_SHADOW_CACHE_SHADER
+}
 
 #[cfg(feature = "playground")]
 pub fn playground_scene_shader_source() -> &'static str {

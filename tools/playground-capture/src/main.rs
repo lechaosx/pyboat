@@ -11,6 +11,8 @@ use serde::Serialize;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use wgpu::util::DeviceExt;
 
+mod bench;
+
 const MAXIMUM_CAPTURE_PIXELS: u64 = 4096 * 4096;
 const CAPTURE_SHADOW_CACHE_ATLAS_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -141,10 +143,14 @@ struct CaptureCloudShadowCache {
 }
 
 impl CaptureCloudShadowCache {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
         scene_layout: &wgpu::BindGroupLayout,
         playground_layout: &wgpu::BindGroupLayout,
+        shader_source: &str,
+        constants: &[(&str, f64)],
+        layout: browser::CloudShadowCacheLayout,
         viewport_width: u32,
         viewport_height: u32,
         debug_mode: u32,
@@ -247,10 +253,12 @@ impl CaptureCloudShadowCache {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("capture cache shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                browser::playground_cloud_shadow_cache_shader_source().into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
+        let compilation_options = wgpu::PipelineCompilationOptions {
+            constants,
+            ..Default::default()
+        };
         let discovery_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("capture cache discovery pipeline layout"),
@@ -266,7 +274,7 @@ impl CaptureCloudShadowCache {
             layout: Some(&discovery_pipeline_layout),
             module: &shader,
             entry_point: Some("discover_cloud_shadow_cache_tiles"),
-            compilation_options: Default::default(),
+            compilation_options: compilation_options.clone(),
             cache: None,
         });
         let fill_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -285,13 +293,13 @@ impl CaptureCloudShadowCache {
                 module: &shader,
                 entry_point: Some("cloud_shadow_cache_vertex"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: compilation_options.clone(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("cloud_shadow_cache_fragment"),
                 targets: &[Some(wgpu::TextureFormat::Rg16Float.into())],
-                compilation_options: Default::default(),
+                compilation_options,
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -299,12 +307,6 @@ impl CaptureCloudShadowCache {
             multiview_mask: None,
             cache: None,
         });
-        let layout = browser::cloud_shadow_cache_layout_with_budget(
-            viewport_width,
-            viewport_height,
-            device.limits().max_texture_dimension_2d,
-            CAPTURE_SHADOW_CACHE_ATLAS_BYTES,
-        );
         let uniforms = CloudShadowCacheUniforms {
             viewport_size_px: [viewport_width, viewport_height],
             atlas_size_px: [layout.atlas_width, layout.atlas_height],
@@ -450,6 +452,9 @@ impl CaptureCloudShadowCache {
         }
     }
 
+    /// Timestamps, when requested, go to query indices 0 to 3: discovery begin
+    /// and end, then fill begin and end.
+    #[allow(clippy::too_many_arguments)]
     fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -457,13 +462,19 @@ impl CaptureCloudShadowCache {
         playground_bind_group: &wgpu::BindGroup,
         viewport_width: u32,
         viewport_height: u32,
+        atlas_load: wgpu::LoadOp<wgpu::Color>,
+        timestamps: Option<&wgpu::QuerySet>,
     ) {
         encoder.clear_buffer(&self.entries, 0, None);
         encoder.clear_buffer(&self.header, 4, Some(4));
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("capture cache discovery pass"),
-                timestamp_writes: None,
+                timestamp_writes: timestamps.map(|query_set| wgpu::ComputePassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
             });
             pass.set_pipeline(&self.discovery_pipeline);
             pass.set_bind_group(0, scene_bind_group, &[]);
@@ -482,12 +493,16 @@ impl CaptureCloudShadowCache {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: atlas_load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: timestamps.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(2),
+                end_of_pass_write_index: Some(3),
+            }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -576,12 +591,19 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let options = parse_options()?;
-    pollster::block_on(render(&options))
+    match parse_options()? {
+        Command::Capture(options) => pollster::block_on(render(&options)),
+        Command::Bench(options) => pollster::block_on(bench::run(&options)),
+    }
 }
 
-fn parse_options() -> Result<Options, String> {
-    let mut options = Options {
+enum Command {
+    Capture(Options),
+    Bench(bench::BenchOptions),
+}
+
+fn default_options() -> Options {
+    Options {
         output: PathBuf::from("playground-capture.png"),
         width: 960,
         height: 600,
@@ -601,7 +623,20 @@ fn parse_options() -> Result<Options, String> {
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
         layer_material_color_visibility: [1; 4],
-    };
+    }
+}
+
+fn parse_options() -> Result<Command, String> {
+    let mut options = default_options();
+    let mut bench = false;
+    let mut output_dir = None;
+    let mut baseline = None;
+    let mut warmup_iterations = 5;
+    let mut timed_iterations = 20;
+    let mut width = None;
+    let mut height = None;
+    let mut bench_only_option = None;
+    let mut capture_only_option = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = |arguments: &mut std::iter::Skip<std::env::Args>| {
@@ -610,9 +645,23 @@ fn parse_options() -> Result<Options, String> {
                 .ok_or_else(|| format!("{argument} requires a value"))
         };
         match argument.as_str() {
+            "--bench" | "--output-dir" | "--baseline" | "--warmup" | "--iterations" => {
+                bench_only_option.get_or_insert_with(|| argument.clone());
+            }
+            "--width" | "--height" | "--help" | "-h" => {}
+            _ => {
+                capture_only_option.get_or_insert_with(|| argument.clone());
+            }
+        }
+        match argument.as_str() {
+            "--bench" => bench = true,
+            "--output-dir" => output_dir = Some(PathBuf::from(value(&mut arguments)?)),
+            "--baseline" => baseline = Some(PathBuf::from(value(&mut arguments)?)),
+            "--warmup" => warmup_iterations = parse(&value(&mut arguments)?, &argument)?,
+            "--iterations" => timed_iterations = parse(&value(&mut arguments)?, &argument)?,
             "--output" => options.output = value(&mut arguments)?.into(),
-            "--width" => options.width = parse(&value(&mut arguments)?, &argument)?,
-            "--height" => options.height = parse(&value(&mut arguments)?, &argument)?,
+            "--width" => width = Some(parse(&value(&mut arguments)?, &argument)?),
+            "--height" => height = Some(parse(&value(&mut arguments)?, &argument)?),
             "--camera-x" => options.camera_x_m = parse(&value(&mut arguments)?, &argument)?,
             "--camera-y" => options.camera_y_m = parse(&value(&mut arguments)?, &argument)?,
             "--world-width" => options.world_width_m = parse(&value(&mut arguments)?, &argument)?,
@@ -656,6 +705,29 @@ fn parse_options() -> Result<Options, String> {
             _ => return Err(format!("unknown option: {argument}")),
         }
     }
+    if bench {
+        if let Some(option) = capture_only_option {
+            return Err(format!("{option} does not apply to --bench"));
+        }
+        let (width, height) = (width.unwrap_or(1920), height.unwrap_or(1080));
+        validate_capture_dimensions(width, height, u32::MAX)?;
+        if timed_iterations == 0 {
+            return Err("--iterations must be positive".to_owned());
+        }
+        return Ok(Command::Bench(bench::BenchOptions {
+            output_dir: output_dir.ok_or("--bench requires --output-dir")?,
+            baseline,
+            width,
+            height,
+            warmup_iterations,
+            timed_iterations,
+        }));
+    }
+    if let Some(option) = bench_only_option {
+        return Err(format!("{option} requires --bench"));
+    }
+    options.width = width.unwrap_or(options.width);
+    options.height = height.unwrap_or(options.height);
     validate_capture_output_path(&options.output)?;
     validate_capture_dimensions(options.width, options.height, u32::MAX)?;
     validate_time_seconds(options.cloud_time_seconds, "--cloud-time")?;
@@ -670,7 +742,7 @@ fn parse_options() -> Result<Options, String> {
     {
         return Err("world dimensions must be between 8000 and 256000 metres".to_owned());
     }
-    Ok(options)
+    Ok(Command::Capture(options))
 }
 
 fn parse<T: std::str::FromStr>(value: &str, option: &str) -> Result<T, String> {
@@ -1232,7 +1304,21 @@ fn print_help() {
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
            --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
-         and image metrics."
+         and image metrics.\n\n\
+         playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
+         Times the production scene, shadow-cache passes included, for each built-in\n\
+         scenario in playground/src/bench-scenarios.json, once as shipped and once with\n\
+         EVALUATE_ALL_BRANCHES forcing normally skipped work.\n\n\
+         Bench options:\n\
+           --output-dir DIR       receives report.json, one PNG per scenario, and contact-sheet.png\n\
+           --baseline DIR         earlier bench output to compare timings and images against;\n\
+                                  writes a <scenario>-diff.png heat image per scenario\n\
+           --width N --height N   render dimensions (default 1920x1080)\n\
+           --warmup N             untimed frames per scenario and mode, also used for one\n\
+                                  untimed sweep over every scenario first (default 5)\n\
+           --iterations N         timed frames per scenario and mode (default 20)\n\n\
+         Timing uses GPU timestamp queries when the adapter supports them and\n\
+         falls back to submit-to-completion wall-clock time."
     );
 }
 
@@ -1416,7 +1502,9 @@ mod tests {
     }
 }
 
-async fn render(options: &Options) -> Result<(), String> {
+async fn hardware_device(
+    optional_features: wgpu::Features,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -1439,7 +1527,7 @@ async fn render(options: &Options) -> Result<(), String> {
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Playground capture device"),
-            required_features: wgpu::Features::empty(),
+            required_features: adapter.features() & optional_features,
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::MemoryUsage,
@@ -1447,6 +1535,11 @@ async fn render(options: &Options) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("failed to create capture device: {error}"))?;
+    Ok((adapter, device, queue))
+}
+
+async fn render(options: &Options) -> Result<(), String> {
+    let (_, device, queue) = hardware_device(wgpu::Features::empty()).await?;
     validate_capture_dimensions(
         options.width,
         options.height,
@@ -1481,6 +1574,14 @@ async fn render(options: &Options) -> Result<(), String> {
             &device,
             &scene_layout,
             &playground_layout,
+            browser::playground_cloud_shadow_cache_shader_source(),
+            &[],
+            browser::cloud_shadow_cache_layout_with_budget(
+                options.width,
+                options.height,
+                device.limits().max_texture_dimension_2d,
+                CAPTURE_SHADOW_CACHE_ATLAS_BYTES,
+            ),
             options.width,
             options.height,
             match options.diagnostic.id.as_str() {
@@ -1656,6 +1757,88 @@ fn render_world(
     cloud_shadow_cache: Option<&CaptureCloudShadowCache>,
     options: &Options,
 ) -> Result<Vec<u8>, String> {
+    let uniforms = scene_uniforms(options)?;
+    let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("scene uniforms"),
+        contents: bytemuck::bytes_of(&uniforms),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let scene_bind_group = bind_group(
+        device,
+        scene_layout,
+        &scene_buffer,
+        "scene uniforms bind group",
+    );
+    if options.diagnostic.module == Some("cloud_shadow_cache") {
+        return discover_cloud_shadow_cache_tiles(
+            device,
+            queue,
+            scene_layout,
+            playground_layout,
+            &scene_bind_group,
+            playground_bind_group,
+            options.width,
+            options.height,
+            match options.diagnostic.id.as_str() {
+                "cloud_shadow_cache_marker_integrity" => {
+                    Some("test_cloud_shadow_cache_marker_integrity")
+                }
+                "cloud_shadow_cache_fallback_integrity" => {
+                    Some("test_cloud_shadow_cache_fallback_integrity")
+                }
+                "cloud_shadow_cache_tide_initialization" => {
+                    Some("test_cloud_shadow_cache_tide_initialization")
+                }
+                _ => None,
+            },
+        );
+    }
+    let texture = capture_texture(device, options.width, options.height);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("playground capture encoder"),
+    });
+    if let Some(cache) = cloud_shadow_cache {
+        cache.encode(
+            &mut encoder,
+            &scene_bind_group,
+            playground_bind_group,
+            options.width,
+            options.height,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            None,
+        );
+    }
+    {
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("playground capture pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &scene_bind_group, &[]);
+        pass.set_bind_group(1, playground_bind_group, &[]);
+        if let Some(cache) = cloud_shadow_cache {
+            pass.set_bind_group(2, &cache.sample_bind_group, &[]);
+        }
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        pass.draw(0..6, 0..1);
+    }
+    read_texture(device, queue, encoder, &texture)
+}
+
+fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
     let canonical_camera_m =
@@ -1679,7 +1862,7 @@ fn render_world(
         canonical_camera_m.into(),
     );
     let exposure = exposure_target(celestial_lighting(local_celestial).ambient_intensity);
-    let uniforms = SceneUniforms {
+    Ok(SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
             canonical_camera_m[1],
@@ -1731,47 +1914,15 @@ fn render_world(
         view_cloud_motion_m: [0.0; 4],
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: [exposure, 1.0, 0.0, 0.0],
-    };
-    let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("scene uniforms"),
-        contents: bytemuck::bytes_of(&uniforms),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    let scene_bind_group = bind_group(
-        device,
-        scene_layout,
-        &scene_buffer,
-        "scene uniforms bind group",
-    );
-    if options.diagnostic.module == Some("cloud_shadow_cache") {
-        return discover_cloud_shadow_cache_tiles(
-            device,
-            queue,
-            scene_layout,
-            playground_layout,
-            &scene_bind_group,
-            playground_bind_group,
-            options.width,
-            options.height,
-            match options.diagnostic.id.as_str() {
-                "cloud_shadow_cache_marker_integrity" => {
-                    Some("test_cloud_shadow_cache_marker_integrity")
-                }
-                "cloud_shadow_cache_fallback_integrity" => {
-                    Some("test_cloud_shadow_cache_fallback_integrity")
-                }
-                "cloud_shadow_cache_tide_initialization" => {
-                    Some("test_cloud_shadow_cache_tide_initialization")
-                }
-                _ => None,
-            },
-        );
-    }
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    })
+}
+
+fn capture_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
         label: Some("procedural world capture"),
         size: wgpu::Extent3d {
-            width: options.width,
-            height: options.height,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -1780,9 +1931,18 @@ fn render_world(
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
-    });
-    let bytes_per_row = options
-        .width
+    })
+}
+
+/// Submits `encoder` after copying `texture` out and returns its tightly packed RGBA rows.
+fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut encoder: wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+) -> Result<Vec<u8>, String> {
+    let (width, height) = (texture.width(), texture.height());
+    let bytes_per_row = width
         .checked_mul(4)
         .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
     let padded_bytes_per_row = bytes_per_row
@@ -1792,7 +1952,7 @@ fn render_world(
         })
         .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
     let readback_size = u64::from(padded_bytes_per_row)
-        .checked_mul(u64::from(options.height))
+        .checked_mul(u64::from(height))
         .ok_or_else(|| "capture buffer size exceeds supported arithmetic".to_owned())?;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("playground capture readback"),
@@ -1800,45 +1960,6 @@ fn render_world(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("playground capture encoder"),
-    });
-    if let Some(cache) = cloud_shadow_cache {
-        cache.encode(
-            &mut encoder,
-            &scene_bind_group,
-            playground_bind_group,
-            options.width,
-            options.height,
-        );
-    }
-    {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("playground capture pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &scene_bind_group, &[]);
-        pass.set_bind_group(1, playground_bind_group, &[]);
-        if let Some(cache) = cloud_shadow_cache {
-            pass.set_bind_group(2, &cache.sample_bind_group, &[]);
-        }
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.draw(0..6, 0..1);
-    }
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -1846,7 +1967,7 @@ fn render_world(
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(options.height),
+                rows_per_image: Some(height),
             },
         },
         texture.size(),

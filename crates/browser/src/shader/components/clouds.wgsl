@@ -110,11 +110,12 @@ fn procedural_low_cloud_sample(
     weather: CloudWeatherSample,
 ) -> LowCloudSample {
     let field_position_m = position_m - scene.view_cloud_motion_m.xy;
-    if visible_low_cloud_coverage(weather) <= 0.0 || tuning.cloud_wisps.w <= 0.0 {
+    let present = visible_low_cloud_coverage(weather) > 0.0 && tuning.cloud_wisps.w > 0.0;
+    if !present && !EVALUATE_ALL_BRANCHES {
         return LowCloudSample(0.0, 0.0, vec2<f32>(0.0));
     }
     let latent = low_cloud_latent_sample(field_position_m);
-    let shape = low_cloud_shape(latent.value, weather);
+    let shape = select(vec3<f32>(0.0), low_cloud_shape(latent.value, weather), present);
     let normal_strength = mix(0.20, 1.0, clamp(tuning.cloud_wisps.y, 0.0, 1.0));
     return LowCloudSample(
         shape.x,
@@ -128,10 +129,15 @@ fn procedural_low_cloud_optical_depth(
     weather: CloudWeatherSample,
 ) -> f32 {
     let field_position_m = position_m - scene.view_cloud_motion_m.xy;
-    if visible_low_cloud_coverage(weather) <= 0.0 || tuning.cloud_wisps.w <= 0.0 {
+    let present = visible_low_cloud_coverage(weather) > 0.0 && tuning.cloud_wisps.w > 0.0;
+    if !present && !EVALUATE_ALL_BRANCHES {
         return 0.0;
     }
-    return low_cloud_shape(low_cloud_latent_value(field_position_m), weather).y;
+    return select(
+        0.0,
+        low_cloud_shape(low_cloud_latent_value(field_position_m), weather).y,
+        present,
+    );
 }
 
 struct RegionalCanopyConditions {
@@ -181,7 +187,7 @@ fn procedural_upper_cloud_optical_depth(
 ) -> f32 {
     let field_position_m = position_m - scene.view_cloud_motion_m.zw;
     let cover = regional.sky_fraction;
-    if cover <= 0.0 {
+    if cover <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return 0.0;
     }
     let latent = spatiotemporal_fractal_value(
@@ -194,7 +200,9 @@ fn procedural_upper_cloud_optical_depth(
     );
     let threshold = 0.70 * (0.5 - cover) + 0.04;
     let amount = smoothstep(threshold - 0.08, threshold + 0.08, latent);
-    return amount
-        * mix(0.72, 1.0, 0.5 + 0.5 * latent)
-        * regional.mean_optical_thickness;
+    return select(
+        0.0,
+        amount * mix(0.72, 1.0, 0.5 + 0.5 * latent) * regional.mean_optical_thickness,
+        cover > 0.0,
+    );
 }

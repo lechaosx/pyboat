@@ -151,7 +151,8 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
     low_cloud_light: CelestialReceiverLight,
     source: CelestialSourceLight,
 ) -> f32 {
-    if source.amount <= 0.0 {
+    let lit = source.amount > 0.0;
+    if !lit && !EVALUATE_ALL_BRANCHES {
         return 1.0;
     }
     let query = cloud_shadow_query(
@@ -160,7 +161,8 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
         false,
         true,
     );
-    if !query.resolved {
+    var transmittance = 1.0;
+    if !query.resolved || EVALUATE_ALL_BRANCHES {
         let representative_light = cloud_shadow_query_direction(query, 0u);
         let projected_position_m = cloud_shadow_query_projection(
             query,
@@ -168,7 +170,7 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
         ).upper_position_m;
         let upper_optical_depth = tuning.cloud_shadows.y
             * sampled_upper_cloud_optical_depth_at(projected_position_m);
-        return mix(
+        transmittance = mix(
             1.0,
             cloud_layer_transmittance(
                 upper_optical_depth,
@@ -178,6 +180,17 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
             layer_visibility.w,
         );
     }
+    if query.resolved || EVALUATE_ALL_BRANCHES {
+        transmittance = select(
+            transmittance,
+            resolved_upper_cloud_transmittance(query),
+            query.resolved,
+        );
+    }
+    return select(1.0, transmittance, lit);
+}
+
+fn resolved_upper_cloud_transmittance(query: CloudShadowQuery) -> f32 {
     let lower_optical_depth = tuning.cloud_shadows.y
         * sampled_upper_cloud_optical_depth_at(query.lower_projection.upper_position_m);
     let upper_optical_depth = tuning.cloud_shadows.y
@@ -276,26 +289,35 @@ fn final_scene_color(
         );
         let water_height_m = tide_height_m();
         let is_land = terrain.elevation_m >= water_height_m;
+        let bare_land = is_land && terrain.water_ice_amount == 0.0;
         var land_surface = 0.0;
-        if is_land && terrain.water_ice_amount == 0.0 {
-            land_surface = material_fractal_value(
+        if bare_land || EVALUATE_ALL_BRANCHES {
+            land_surface = select(0.0, material_fractal_value(
                 vec2<u32>(0x6a09e667u, 0xbb67ae85u),
                 input.world_position_m,
                 96.0,
                 4u,
-            );
+            ), bare_land);
         }
+        let sea_ice = terrain.water_ice_amount > 0.0;
+        let land_ice = !sea_ice && is_land && terrain.ice_amount >= 1.0;
         var surface: TerrainSurface;
-        if terrain.water_ice_amount > 0.0 {
+        if sea_ice || EVALUATE_ALL_BRANCHES {
             surface = sea_ice_surface(
                 input.world_position_m,
                 terrain.water_ice_amount,
                 terrain.bedrock_elevation_m,
             );
-        } else if is_land && terrain.ice_amount >= 1.0 {
-            surface = ice_surface(input.world_position_m, land_surface);
-        } else {
-            surface = terrain_surface(
+        }
+        if land_ice || EVALUATE_ALL_BRANCHES {
+            surface = select_terrain_surface(
+                surface,
+                ice_surface(input.world_position_m, land_surface),
+                land_ice,
+            );
+        }
+        if !(sea_ice || land_ice) || EVALUATE_ALL_BRANCHES {
+            surface = select_terrain_surface(surface, terrain_surface(
                 input.world_position_m,
                 terrain.cluster,
                 terrain.elevation_m,
@@ -308,7 +330,7 @@ fn final_scene_color(
                 water_height_m,
                 land_surface,
                 atmosphere,
-            );
+            ), !(sea_ice || land_ice));
         }
         let surface_height_m = max(terrain.elevation_m, water_height_m);
         let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
@@ -317,24 +339,18 @@ fn final_scene_color(
             surface_direct_light,
         );
         var surface_light_grade = vec3<f32>(1.0);
+        let partial_land_ice = bare_land
+            && terrain.ice_amount > 0.0
+            && terrain.ice_amount < 1.0;
+        if partial_land_ice || EVALUATE_ALL_BRANCHES {
+            let ice = ice_surface(input.world_position_m, land_surface);
+            surface = select_terrain_surface(surface, TerrainSurface(
+                mix(surface.color, ice.color, terrain.ice_amount),
+                mix(surface.detail_gradient, ice.detail_gradient, terrain.ice_amount),
+                mix(surface.roughness, ice.roughness, terrain.ice_amount),
+            ), partial_land_ice);
+        }
         if is_land {
-            if terrain.water_ice_amount == 0.0
-                && terrain.ice_amount > 0.0
-                && terrain.ice_amount < 1.0
-            {
-                let ice = ice_surface(input.world_position_m, land_surface);
-                surface.color = mix(surface.color, ice.color, terrain.ice_amount);
-                surface.detail_gradient = mix(
-                    surface.detail_gradient,
-                    ice.detail_gradient,
-                    terrain.ice_amount,
-                );
-                surface.roughness = mix(
-                    surface.roughness,
-                    ice.roughness,
-                    terrain.ice_amount,
-                );
-            }
             surface_light_grade = landform_light_grade(
                 3.0 * terrain.gradient + surface.detail_gradient,
                 surface.roughness,
@@ -364,11 +380,11 @@ fn final_scene_color(
                 low_cloud_position_m,
                 low_cloud_weather,
             );
-            if low_cloud.body_amount > 0.08
+            let low_cloud_visible = low_cloud.body_amount > 0.08
                 && low_cloud.optical_depth > 0.0
                 && tuning.cloud_rendering.x > 0.0
-                && tuning.cloud_rendering.y > 0.0
-            {
+                && tuning.cloud_rendering.y > 0.0;
+            if low_cloud_visible || EVALUATE_ALL_BRANCHES {
                 let low_cloud_light = celestial_receiver_light_at_position_and_height(
                     low_cloud_position_m,
                     low_height_m,
@@ -386,8 +402,12 @@ fn final_scene_color(
                     low_cloud_weather,
                     low_cloud_light,
                 );
-                fragment_color += layer_visibility.x
-                    * (clouded_fragment_color - fragment_color);
+                fragment_color = select(
+                    fragment_color,
+                    fragment_color + layer_visibility.x
+                        * (clouded_fragment_color - fragment_color),
+                    low_cloud_visible,
+                );
             }
         }
     }

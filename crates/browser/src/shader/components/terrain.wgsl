@@ -142,7 +142,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
     var coastal_rock: TerrainNoiseSample;
     coastal_rock.value = 0.0;
     coastal_rock.gradient = vec2<f32>(0.0);
-    if landscape_visibility.x > 0.0 && base.value > -32.0 && base.value < 4.0 {
+    let coastal_relief = landscape_visibility.x > 0.0
+        && base.value > -32.0
+        && base.value < 4.0;
+    if coastal_relief || EVALUATE_ALL_BRANCHES {
         let reef_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
@@ -152,10 +155,9 @@ fn procedural_terrain_sample_with_climate_from_circle(
             0.5,
             TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
-        reef_ruggedness = terrain_smoothstep_sample(
-            -0.25,
-            0.25,
-            reef_ruggedness_noise,
+        reef_ruggedness = noise_sample_or_zero(
+            terrain_smoothstep_sample(-0.25, 0.25, reef_ruggedness_noise),
+            coastal_relief,
         );
         let coastal_substrate = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
@@ -166,7 +168,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
             0.5,
             TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
-        coastal_rock = terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate);
+        coastal_rock = noise_sample_or_zero(
+            terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate),
+            coastal_relief,
+        );
     }
     var coastal_sediment: TerrainNoiseSample;
     coastal_sediment.value = (1.0 - coastal_rock.value)
@@ -212,7 +217,8 @@ fn procedural_terrain_sample_with_climate_from_circle(
     terrain.coastal_outcrop_amount = 0.0;
     terrain.coastal_sediment_amount = 0.0;
     let land_detail_mask = terrain_smoothstep_sample(4.0, 12.0, base);
-    if land_detail_mask.value > 0.0 {
+    // Forced detail below adds exactly zero where its mask is zero.
+    if land_detail_mask.value > 0.0 || EVALUATE_ALL_BRANCHES {
         let land_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
             terrain_position_m,
@@ -271,7 +277,7 @@ fn procedural_terrain_sample_with_climate_from_circle(
             0.70,
             land_ruggedness,
         );
-        if land_micro_relief_amount.value > 0.0 {
+        if land_micro_relief_amount.value > 0.0 || EVALUATE_ALL_BRANCHES {
             let land_micro_relief = terrain_simplex_fractal_sample_from_circle(
                 vec2<u32>(0xfe94f82bu, 0x3c6ef372u),
                 terrain_position_m,
@@ -328,10 +334,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
     let outer_reef_shore_gate_value = 1.0 - outer_reef_shore_rise.value;
     let outer_reef_mask_value = outer_reef_deep_gate.value
         * outer_reef_shore_gate_value;
-    if seabed_mask_value == 0.0
-        && rock_mask_value == 0.0
-        && outer_reef_mask_value == 0.0
-    {
+    let coastal_detail = seabed_mask_value != 0.0
+        || rock_mask_value != 0.0
+        || outer_reef_mask_value != 0.0;
+    if !coastal_detail && !EVALUATE_ALL_BRANCHES {
         return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
@@ -344,7 +350,8 @@ fn procedural_terrain_sample_with_climate_from_circle(
     var shoal: TerrainNoiseSample;
     shoal.value = 0.0;
     shoal.gradient = vec2<f32>(0.0);
-    if landscape_visibility.x > 0.0 && seabed_mask_value > 0.0 {
+    // Forced reef detail below adds exactly zero where its masks are zero.
+    if (landscape_visibility.x > 0.0 && seabed_mask_value > 0.0) || EVALUATE_ALL_BRANCHES {
         shoal = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0xd192ed03u, 0xd1b54a32u),
             terrain_position_m,
@@ -368,9 +375,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
     var reef: TerrainNoiseSample;
     reef.value = 0.0;
     reef.gradient = vec2<f32>(0.0);
-    if landscape_visibility.x > 0.0
+    if (landscape_visibility.x > 0.0
         && coastal_detail_mask_value > 0.0
-        && coastal_rock_relief.value > 0.0
+        && coastal_rock_relief.value > 0.0)
+        || EVALUATE_ALL_BRANCHES
     {
         reef = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x75374cc3u, 0x589965ccu),
@@ -386,9 +394,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
     var outer_reef: TerrainNoiseSample;
     outer_reef.value = 0.0;
     outer_reef.gradient = vec2<f32>(0.0);
-    if landscape_visibility.x > 0.0
+    if (landscape_visibility.x > 0.0
         && outer_reef_mask_value > 0.0
-        && coastal_rock_relief.value > 0.0
+        && coastal_rock_relief.value > 0.0)
+        || EVALUATE_ALL_BRANCHES
     {
         outer_reef = terrain_simplex_fractal_sample_from_circle(
             vec2<u32>(0x9c88c6e3u, 0x8ebc6af0u),
@@ -468,14 +477,14 @@ fn procedural_terrain_sample_with_climate_from_circle(
     if submerged_material_mask_value > visible_coastal_mask_value {
         visible_coastal_mask_value = submerged_material_mask_value;
     }
-    terrain.coastal_rock_amount = landscape_visibility.x
-        * visible_coastal_mask_value * coastal_rock_amount;
+    terrain.coastal_rock_amount = select(0.0, landscape_visibility.x
+        * visible_coastal_mask_value * coastal_rock_amount, coastal_detail);
     terrain.coastal_outcrop_amount = landscape_visibility.x
         * rock_mask_value * coastal_rock_relief.value * reef_peak.value;
-    terrain.coastal_sediment_amount = landscape_visibility.x
+    terrain.coastal_sediment_amount = select(0.0, landscape_visibility.x
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
-        * (1.0 - reef_ruggedness.value);
+        * (1.0 - reef_ruggedness.value), coastal_detail);
     return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
 }
 
@@ -596,10 +605,10 @@ fn landform_shadow_transmittance_for_light(
         1.0,
     );
     let horizontal_light = length(light_direction.xy);
-    if strength <= 0.0
+    let unshadowed = strength <= 0.0
         || light_amount <= 0.0
-        || horizontal_light <= 0.001
-    {
+        || horizontal_light <= 0.001;
+    if unshadowed && !EVALUATE_ALL_BRANCHES {
         return 1.0;
     }
     let toward_light = light_direction.xy / horizontal_light;
@@ -630,7 +639,7 @@ fn landform_shadow_transmittance_for_light(
             ),
         );
     }
-    return 1.0 - strength * occlusion;
+    return select(1.0 - strength * occlusion, 1.0, unshadowed);
 }
 
 fn landform_disc_occlusion(

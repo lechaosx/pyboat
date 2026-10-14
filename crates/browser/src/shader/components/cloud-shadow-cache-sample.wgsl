@@ -135,18 +135,23 @@ fn cached_cloud_shadow_optical_depth(
 
 fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
     let cached_depth = cached_cloud_shadow_optical_depth(position_m, 1u);
-    if cached_depth >= 0.0 {
+    if cached_depth >= 0.0 && !EVALUATE_ALL_BRANCHES {
         return cached_depth;
     }
     let canopy = regional_canopy_conditions_at(position_m);
-    return procedural_upper_cloud_optical_depth(position_m, canopy);
+    return select(
+        procedural_upper_cloud_optical_depth(position_m, canopy),
+        cached_depth,
+        cached_depth >= 0.0,
+    );
 }
 
 fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     let key = cloud_shadow_cache_tile_key(position_m);
     let slot = cloud_shadow_cache_slot(key, 2u);
-    record_shadow_cache_lookup(2u, slot < cloud_shadow_cache.maximum_tiles);
-    if slot >= cloud_shadow_cache.maximum_tiles {
+    let cached = slot < cloud_shadow_cache.maximum_tiles;
+    record_shadow_cache_lookup(2u, cached);
+    if !cached && !EVALUATE_ALL_BRANCHES {
         return broad_landform_elevation_m(position_m);
     }
     let slot_origin_px = vec2<u32>(
@@ -166,6 +171,13 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         atlas_uv,
         0.0,
     ).xy;
+    if EVALUATE_ALL_BRANCHES {
+        return select(
+            broad_landform_elevation_m(position_m),
+            cached_elevation_m.x + cached_elevation_m.y,
+            cached,
+        );
+    }
     return cached_elevation_m.x + cached_elevation_m.y;
 }
 
@@ -175,12 +187,12 @@ fn sampled_cloud_shadow_depths_at(
     var depths = CloudShadowDepths(0.0, 0.0);
     if layer_visibility.y > 0.0 {
         var low_depth = cached_cloud_shadow_optical_depth(projection.low_position_m, 0u);
-        if low_depth < 0.0 {
+        if low_depth < 0.0 || EVALUATE_ALL_BRANCHES {
             let weather = cloud_weather_conditions_at(projection.low_position_m);
-            low_depth = procedural_low_cloud_optical_depth(
+            low_depth = select(low_depth, procedural_low_cloud_optical_depth(
                 projection.low_position_m,
                 weather,
-            );
+            ), low_depth < 0.0);
         }
         depths.low = layer_visibility.y * tuning.cloud_shadows.x * low_depth;
     }

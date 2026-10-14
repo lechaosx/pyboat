@@ -444,10 +444,10 @@ fn calculate_atmospheric_ambient_light(
 
     let optical_thickness = max(canopy.mean_optical_thickness, 0.0);
     let clear_contribution = (1.0 - canopy.sky_fraction) * clear_sky_light;
-    if canopy.sky_fraction <= 0.0 {
+    if canopy.sky_fraction <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return AtmosphericAmbientLight(clear_contribution, vec3<f32>(0.0));
     }
-    if optical_thickness <= 0.0 {
+    if optical_thickness <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return AtmosphericAmbientLight(
             clear_contribution,
             canopy.sky_fraction * clear_sky_light,
@@ -485,13 +485,15 @@ fn calculate_atmospheric_ambient_light(
         underside_escape,
         canopy_receiver,
     );
-    let canopy_light = transformed_sky_light
-        + scattered_sun_light
-        + scattered_moon_light;
+    let canopy_light = select(
+        transformed_sky_light + scattered_sun_light + scattered_moon_light,
+        clear_sky_light,
+        optical_thickness <= 0.0,
+    );
 
     return AtmosphericAmbientLight(
         clear_contribution,
-        canopy.sky_fraction * canopy_light,
+        select(canopy.sky_fraction * canopy_light, vec3<f32>(0.0), canopy.sky_fraction <= 0.0),
     );
 }
 
@@ -907,22 +909,34 @@ fn procedural_cloud_shadow_depths_at(
 fn cloud_shadow_depths_for_query(
     query: CloudShadowQuery,
 ) -> CloudDiscShadowDepths {
-    if !query.resolved {
+    var disc_depths: CloudDiscShadowDepths;
+    if !query.resolved || EVALUATE_ALL_BRANCHES {
         let depths = sampled_cloud_shadow_depths_at(
             cloud_shadow_query_projection(query, 0u),
         );
-        return CloudDiscShadowDepths(
+        disc_depths = CloudDiscShadowDepths(
             vec3<f32>(depths.low),
             vec3<f32>(depths.upper),
         );
     }
-    let lower_depths = sampled_cloud_shadow_depths_at(query.lower_projection);
-    let upper_depths = sampled_cloud_shadow_depths_at(query.upper_projection);
-    let side_depths = sampled_cloud_shadow_depths_at(query.side_projection);
-    return CloudDiscShadowDepths(
-        vec3<f32>(lower_depths.low, upper_depths.low, side_depths.low),
-        vec3<f32>(lower_depths.upper, upper_depths.upper, side_depths.upper),
-    );
+    if query.resolved || EVALUATE_ALL_BRANCHES {
+        let lower_depths = sampled_cloud_shadow_depths_at(query.lower_projection);
+        let upper_depths = sampled_cloud_shadow_depths_at(query.upper_projection);
+        let side_depths = sampled_cloud_shadow_depths_at(query.side_projection);
+        disc_depths = CloudDiscShadowDepths(
+            select(
+                disc_depths.low,
+                vec3<f32>(lower_depths.low, upper_depths.low, side_depths.low),
+                query.resolved,
+            ),
+            select(
+                disc_depths.upper,
+                vec3<f32>(lower_depths.upper, upper_depths.upper, side_depths.upper),
+                query.resolved,
+            ),
+        );
+    }
+    return disc_depths;
 }
 
 fn celestial_cloud_shadow_depths_at(
@@ -938,14 +952,19 @@ fn celestial_cloud_shadow_depths_at(
     }
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let source = celestial_source_light(direct_light, source_index);
-        if source.amount > 0.0 && cloud_shadow_contrast(source.direction) > 0.0 {
+        let shadowed = source.amount > 0.0 && cloud_shadow_contrast(source.direction) > 0.0;
+        if shadowed || EVALUATE_ALL_BRANCHES {
             let query = cloud_shadow_query(
                 direct_light,
                 source,
                 layer_visibility.y > 0.0,
                 layer_visibility.z > 0.0,
             );
-            let depths = cloud_shadow_depths_for_query(query);
+            let query_depths = cloud_shadow_depths_for_query(query);
+            let depths = CloudDiscShadowDepths(
+                select(vec3<f32>(0.0), query_depths.low, shadowed),
+                select(vec3<f32>(0.0), query_depths.upper, shadowed),
+            );
             if source_index == 0u {
                 celestial_depths.sun = depths;
             } else {

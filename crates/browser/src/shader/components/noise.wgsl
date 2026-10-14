@@ -115,6 +115,25 @@ struct TerrainSurface {
     roughness: f32,
 };
 
+fn noise_sample_or_zero(sample: TerrainNoiseSample, keep: bool) -> TerrainNoiseSample {
+    return TerrainNoiseSample(
+        select(0.0, sample.value, keep),
+        select(vec2<f32>(0.0), sample.gradient, keep),
+    );
+}
+
+fn select_terrain_surface(
+    otherwise: TerrainSurface,
+    chosen: TerrainSurface,
+    condition: bool,
+) -> TerrainSurface {
+    return TerrainSurface(
+        select(otherwise.color, chosen.color, condition),
+        select(otherwise.detail_gradient, chosen.detail_gradient, condition),
+        select(otherwise.roughness, chosen.roughness, condition),
+    );
+}
+
 fn positive_mod(value: i32, period: i32) -> i32 {
     return ((value % period) + period) % period;
 }
@@ -776,7 +795,7 @@ fn material_fractal_sample(
             2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
-        if octave_visibility > 0.0 {
+        if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
             let octave_seed = scene.match_seed
                 ^ field_salt
                 ^ OCTAVE_SALTS[octave];
@@ -813,7 +832,7 @@ fn material_fractal_value(
             2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
-        if octave_visibility > 0.0 {
+        if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
             let octave_seed = scene.match_seed
                 ^ field_salt
                 ^ OCTAVE_SALTS[octave];

@@ -467,3 +467,17 @@ output {
   .text-control { grid-template-columns: 6.7rem minmax(0, 1fr) 1.55rem; }
   .text-control.no-reset { grid-template-columns: 6.7rem minmax(0, 1fr); }
 }
+
+.bench-results {
+  position: fixed;
+  inset: auto 0.5rem 0.5rem 0.5rem;
+  z-index: 10;
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0.6rem;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.72rem;
+  white-space: pre;
+}

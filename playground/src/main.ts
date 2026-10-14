@@ -6,6 +6,8 @@ import {
   playground_scene_shader_source,
   playground_shadow_cache_layout,
   playground_startup_shader_source,
+  production_cloud_shadow_cache_shader_source,
+  production_scene_shader_source,
   sample_playground_celestial_orbit,
   sample_playground_environment,
   sample_playground_field_time_coordinates,
@@ -37,7 +39,21 @@ import {
   diagnosticShaders,
   type DiagnosticSelection,
 } from "./diagnostics";
+import {
+  benchSettings,
+  summarizeScenario,
+  type BenchScenario,
+  type FrameSample,
+  type PassTimes,
+  type ScenarioSummary,
+} from "./bench";
+import benchScenarios from "./bench-scenarios.json" with { type: "json" };
 import "./style.css";
+
+const bench = benchSettings(location.search);
+// The bench times the shipped shaders, which leave group 1 empty and bind
+// only the first four shadow-cache sampling entries.
+const productionShaders = Boolean(bench);
 
 let useShadowCache = true;
 let shadowCacheTileTexels = 128;
@@ -321,7 +337,7 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 const cloudMotion = new CloudMotion();
-const exposure = new PlaygroundExposure();
+let exposure = new PlaygroundExposure();
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -1107,7 +1123,9 @@ function createPlaygroundPipeline(
       entryPoint,
       ...(constants ? { constants } : {}),
       targets: [{ format: hdrSupported && (
-        entryPoint === "fragment_playground_scene" || entryPoint === "fragment_playground_startup"
+        entryPoint === "fragment_playground_scene"
+          || entryPoint === "fragment_playground_startup"
+          || entryPoint === "fragment"
       ) ? "rgba16float" : sdrViewFormat }],
     },
     primitive: { topology: "triangle-list" },
@@ -1229,6 +1247,18 @@ function createCloudShadowCache(
   const atlasView = atlas.createView();
   const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
   const uniformEntry = { binding: 0, resource: { buffer: uniformBuffer } };
+  const playgroundEntries = productionShaders
+    ? []
+    : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
+  const sampleEntries = [
+    uniformEntry,
+    { binding: 1, resource: { buffer: entries } },
+    { binding: 2, resource: atlasView },
+    { binding: 3, resource: sampler },
+    { binding: 4, resource: { buffer: tiles } },
+    { binding: 5, resource: { buffer: header } },
+    { binding: 6, resource: { buffer: debugBuffer } },
+  ];
   return {
     width,
     height,
@@ -1246,7 +1276,7 @@ function createCloudShadowCache(
     }),
     discoveryPlaygroundBindGroup: device.createBindGroup({
       layout: discoveryPipeline.getBindGroupLayout(1),
-      entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      entries: playgroundEntries,
     }),
     discoveryBindGroup: device.createBindGroup({
       layout: discoveryPipeline.getBindGroupLayout(2),
@@ -1263,7 +1293,7 @@ function createCloudShadowCache(
     }),
     fillPlaygroundBindGroup: device.createBindGroup({
       layout: fillPipeline.getBindGroupLayout(1),
-      entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      entries: playgroundEntries,
     }),
     fillBindGroup: device.createBindGroup({
       layout: fillPipeline.getBindGroupLayout(2),
@@ -1271,15 +1301,7 @@ function createCloudShadowCache(
     }),
     sampleBindGroup: device.createBindGroup({
       layout: scenePipeline.getBindGroupLayout(2),
-      entries: [
-        uniformEntry,
-        { binding: 1, resource: { buffer: entries } },
-        { binding: 2, resource: atlasView },
-        { binding: 3, resource: sampler },
-        { binding: 4, resource: { buffer: tiles } },
-        { binding: 5, resource: { buffer: header } },
-        { binding: 6, resource: { buffer: debugBuffer } },
-      ],
+      entries: productionShaders ? sampleEntries.slice(0, 4) : sampleEntries,
     }),
     entries,
     header,
@@ -1958,12 +1980,14 @@ function updateUniforms(
 
 function resize(): void {
   const scale = Math.min(devicePixelRatio, 2);
-  const [width, height] = boundedCanvasDimensions(
-    previewCanvas.clientWidth,
-    previewCanvas.clientHeight,
-    scale,
-    device.limits.maxTextureDimension2D,
-  );
+  const [width, height] = bench
+    ? [bench.width, bench.height]
+    : boundedCanvasDimensions(
+      previewCanvas.clientWidth,
+      previewCanvas.clientHeight,
+      scale,
+      device.limits.maxTextureDimension2D,
+    );
   if (previewCanvas.width !== width || previewCanvas.height !== height) {
     previewCanvas.width = width;
     previewCanvas.height = height;
@@ -2016,6 +2040,7 @@ let measuredSceneGpuMilliseconds: number | undefined;
 let timedPipeline: GPURenderPipeline | undefined;
 let timedCache: CloudShadowCache | undefined;
 let timedUsesShadowCache = false;
+let latestPassTimes: Promise<PassTimes | undefined> = Promise.resolve(undefined);
 let nextDiagnosticsAt = 0;
 let nextShadowCacheInfoAt = 0;
 
@@ -2251,12 +2276,23 @@ function renderFrame(now: number): Promise<void> {
       destroyRetiredShadowCache(readbackCache);
     });
   }
+  latestPassTimes = Promise.resolve(undefined);
   if (timestampReadback) {
-    void timestampReadback.buffer.mapAsync(0x0001).then(() => {
+    latestPassTimes = timestampReadback.buffer.mapAsync(0x0001).then(() => {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
       const startedAt = timestamps[0]!;
       const cached = timestampReadback.cached;
       const finishedAt = timestamps[cached ? 3 : 1]!;
+      const milliseconds = (begin: number, end: number): number =>
+        Number(timestamps[end]! - timestamps[begin]!) / 1_000_000;
+      const passes: PassTimes | undefined = cached && startedAt > 0n && finishedAt >= startedAt
+        ? {
+          discoveryMs: milliseconds(0, 1),
+          fillMs: milliseconds(1, 2),
+          sceneMs: milliseconds(2, 3),
+          totalMs: milliseconds(0, 3),
+        }
+        : undefined;
       if (
         timestampReadback.pipeline === timedPipeline
         && startedAt > 0n
@@ -2273,30 +2309,42 @@ function renderFrame(now: number): Promise<void> {
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
-    }).catch(() => {}).finally(() => {
+      return passes;
+    }).catch(() => undefined).finally(() => {
       timestampReadback.pending = false;
     });
   }
   return device.queue.onSubmittedWorkDone();
 }
 
-startRenderLoop(advanceFrame, renderFrame, () => renderLoopActive, (error) => {
-  if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
-  console.error(error);
-});
+if (!bench) {
+  startRenderLoop(advanceFrame, renderFrame, () => renderLoopActive, (error) => {
+    if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
+    console.error(error);
+  });
+}
 
-void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   .then(async () => {
     const compilationStartedAt = performance.now();
-    const sceneShader = device.createShaderModule({ code: playground_scene_shader_source() });
+    const sceneShader = device.createShaderModule({
+      code: productionShaders
+        ? production_scene_shader_source()
+        : playground_scene_shader_source(),
+    });
     const directSceneShader = device.createShaderModule({
       code: playground_direct_scene_shader_source(),
     });
     const cacheShader = device.createShaderModule({
-      code: playground_cloud_shadow_cache_shader_source(),
+      code: productionShaders
+        ? production_cloud_shadow_cache_shader_source()
+        : playground_cloud_shadow_cache_shader_source(),
     });
     const [scenePipeline, directScenePipeline, discoveryPipeline, fillPipeline] = await Promise.all([
-      createPlaygroundPipeline(sceneShader, "fragment_playground_scene"),
+      createPlaygroundPipeline(
+        sceneShader,
+        productionShaders ? "fragment" : "fragment_playground_scene",
+      ),
       createPlaygroundPipeline(directSceneShader, "fragment_playground_scene"),
       device.createComputePipelineAsync({
         layout: "auto",
@@ -2325,7 +2373,7 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(1),
-        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+        entries: productionShaders ? [] : [{ binding: 0, resource: { buffer: playgroundBuffer } }],
       }),
       cloudShadowCache: createCloudShadowCache(
         discoveryPipeline,
@@ -2351,3 +2399,107 @@ void new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     sceneCompilationStatus = `scene shader failed: ${String(error)}`;
     console.error(error);
   });
+
+// Each frame waits for the previous one to finish on the GPU, so
+// submit-to-completion time excludes queueing and display synchronization.
+async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
+  resize();
+  await fullSceneReady;
+  if (!sceneRenderResources.cloudShadowCache) {
+    statusElement.textContent = `Bench cannot start: ${sceneCompilationStatus}`;
+    return;
+  }
+  playgroundMainElement.inert = true;
+  const scenarios = benchScenarios as BenchScenario[];
+  const summaries: ScenarioSummary[] = [];
+  // GPU clocks settle lower under sustained load; an untimed sweep first lets
+  // every scenario, including the first, be timed in that settled state.
+  for (const timedFrames of [0, settings.timedFrames]) for (const [index, scenario] of scenarios.entries()) {
+    statusElement.textContent = timedFrames === 0
+      ? `Bench warm-up ${index + 1}/${scenarios.length}`
+      : `Bench ${index + 1}/${scenarios.length}: ${scenario.id}`;
+    exposure.free();
+    exposure = new PlaygroundExposure();
+    Object.assign(state, {
+      seed: scenario.seed,
+      cameraX: scenario.cameraM[0],
+      cameraY: scenario.cameraM[1],
+      viewHeight: scenario.viewHeightM,
+      time: scenario.cloudTimeSeconds,
+      pressureTimeSeconds: scenario.cloudTimeSeconds,
+      currentTimeSeconds: scenario.worldTimeSeconds,
+      worldTimeSeconds: scenario.worldTimeSeconds,
+    });
+    updateRenderedGeometry();
+    const samples: FrameSample[] = [];
+    for (let frame = 0; frame < settings.warmupFrames + timedFrames; frame += 1) {
+      const now = await new Promise<number>((resolve) => requestAnimationFrame(resolve));
+      if (!renderLoopActive) {
+        statusElement.textContent = `Bench stopped at ${scenario.id}: ${statusElement.textContent}`;
+        return;
+      }
+      // A fresh exposure starts settled, and zero elapsed time keeps it and
+      // cloud transport fixed, as in capture.
+      updateUniforms(
+        state.time,
+        state.worldTimeSeconds,
+        state.pressureTimeSeconds,
+        state.currentTimeSeconds,
+        0,
+        now,
+      );
+      const startedAt = performance.now();
+      await renderFrame(now);
+      const submittedToDoneMs = performance.now() - startedAt;
+      const passes = await latestPassTimes;
+      if (frame >= settings.warmupFrames) samples.push({ submittedToDoneMs, passes });
+    }
+    if (timedFrames > 0) summaries.push(summarizeScenario(
+      scenario.id,
+      samples,
+      previewCanvas.width * previewCanvas.height,
+    ));
+  }
+  const report = {
+    adapter: adapterName,
+    userAgent: navigator.userAgent,
+    width: previewCanvas.width,
+    height: previewCanvas.height,
+    timestampQueries: timestampQueriesSupported,
+    warmupFrames: settings.warmupFrames,
+    timedFrames: settings.timedFrames,
+    scenarios: summaries,
+  };
+  console.log(JSON.stringify(report));
+  console.table(summaries.map(({ id, submittedToDoneMs, passes, nsPerPixel }) => ({
+    id,
+    submittedToDoneMs,
+    gpuTotalMs: passes?.totalMs,
+    discoveryMs: passes?.discoveryMs,
+    fillMs: passes?.fillMs,
+    sceneMs: passes?.sceneMs,
+    nsPerPixel,
+  })));
+  const output = document.createElement("pre");
+  output.className = "bench-results";
+  output.textContent = [
+    `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · median of ${settings.timedFrames} frames`,
+    ...summaries.map(({ id, submittedToDoneMs, passes, nsPerPixel }) => [
+      id.padEnd(22),
+      `${(passes?.totalMs ?? submittedToDoneMs).toFixed(1).padStart(7)} ms`,
+      `${nsPerPixel.toFixed(0).padStart(5)} ns/px`,
+      passes
+        ? `(${passes.discoveryMs.toFixed(1)} discover + ${passes.fillMs.toFixed(1)} fill + ${passes.sceneMs.toFixed(1)} scene)`
+        : `submit to completion`,
+    ].join(" ")),
+  ].join("\n");
+  document.body.append(output);
+  statusElement.textContent = "Bench complete";
+}
+
+if (bench) {
+  void runBench(bench).catch((error) => {
+    statusElement.textContent = `Bench failed: ${String(error)}`;
+    console.error(error);
+  });
+}

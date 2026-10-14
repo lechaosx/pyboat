@@ -13,7 +13,8 @@ fn precipitation_water_contact_sample_from_atmosphere(
         return sample;
     }
     let precipitation = surface_cloud_weather.rain;
-    if precipitation <= 0.001 || visual_pixel_footprint_m >= 0.30 {
+    let contacts_resolved = precipitation > 0.001 && visual_pixel_footprint_m < 0.30;
+    if !contacts_resolved && !EVALUATE_ALL_BRANCHES {
         return sample;
     }
     let cell_x_cycles = max(1, i32(round(scene.world_size_m.x / 1.50)));
@@ -80,7 +81,8 @@ fn precipitation_water_contact_sample_from_atmosphere(
                 visual_hash_unit(impact_hash.x) + 0.10,
                 precipitation,
             );
-            if presence <= 0.0 {
+            // A forced absent contact adds exactly zero through `presence`.
+            if presence <= 0.0 && !EVALUATE_ALL_BRANCHES {
                 continue;
             }
             let impact_position = 0.05 + 0.90 * vec2<f32>(
@@ -126,7 +128,7 @@ fn precipitation_water_contact_sample_from_atmosphere(
             sample.gradient += mix(rain_gradient, snow_gradient, snow_fraction);
         }
     }
-    return sample;
+    return noise_sample_or_zero(sample, contacts_resolved);
 }
 
 fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
@@ -324,7 +326,7 @@ fn physical_water_wave_sample_from_surface(
     var sample: TerrainNoiseSample;
     sample.value = significant_height_m;
     sample.gradient = vec2<f32>(0.0);
-    if significant_height_m <= 0.0 {
+    if significant_height_m <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return sample;
     }
     if material_feature_visibility().z <= 0.0 {
@@ -405,6 +407,7 @@ fn physical_water_wave_sample_from_surface(
     let nonlinear_strength = 0.5 * smoothstep(1.5, 3.0, significant_height_m);
     sample.gradient *= 1.0
         + 2.0 * nonlinear_strength * displacement_m / significant_height_m;
+    sample.gradient = select(vec2<f32>(0.0), sample.gradient, significant_height_m > 0.0);
     return sample;
 }
 
@@ -434,7 +437,7 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
             2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
-        if octave_visibility > 0.0 {
+        if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
             let octave_seed = scene.match_seed
                 ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u)
                 ^ OCTAVE_SALTS[octave];
@@ -555,7 +558,9 @@ fn terrain_surface(
         );
     }
     let slope = length(material_gradient);
-    if elevation_m < water_height_m {
+    let is_water = elevation_m < water_height_m;
+    var water_surface: TerrainSurface;
+    if is_water || EVALUATE_ALL_BRANCHES {
         let depth_m = water_height_m - elevation_m;
         let water_color = vec3<f32>(0.025, 0.11, 0.15);
         let bottom_transmittance = exp(
@@ -592,21 +597,25 @@ fn terrain_surface(
             let visible_water_color = water_color_gate.x * water_color
                 + water_color_gate.y * bottom_visibility
                     * (water_veiled_bottom - water_color);
-            return visual_water_surface(
+            water_surface = visual_water_surface(
                 position_m,
                 visible_water_color,
                 terrain_cluster,
                 elevation_m,
                 atmosphere,
             );
+        } else {
+            water_surface = visual_water_surface(
+                position_m,
+                water_color_gate.x * water_color,
+                terrain_cluster,
+                elevation_m,
+                atmosphere,
+            );
         }
-        return visual_water_surface(
-            position_m,
-            water_color_gate.x * water_color,
-            terrain_cluster,
-            elevation_m,
-            atmosphere,
-        );
+    }
+    if is_water && !EVALUATE_ALL_BRANCHES {
+        return water_surface;
     }
 
     var micro_height = TerrainNoiseSample(0.0, vec2<f32>(0.0));
@@ -645,7 +654,7 @@ fn terrain_surface(
         0.22 * tuning.land_material_normals.w * micro_height.gradient,
         0.70,
     );
-    if snow_amount >= 1.0 {
+    if snow_amount >= 1.0 && !EVALUATE_ALL_BRANCHES {
         return snow_surface;
     }
     var vegetation = 0.0;
@@ -758,18 +767,19 @@ fn terrain_surface(
         * (1.0 - smoothstep(0.04, 0.08, slope));
     var canopy_detail = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     var canopy_cluster = 0.0;
-    if forest_amount > 0.0 && landscape_visibility.y > 0.0 {
-        canopy_detail = material_fractal_sample(
+    let canopy_visible = forest_amount > 0.0 && landscape_visibility.y > 0.0;
+    if canopy_visible || EVALUATE_ALL_BRANCHES {
+        canopy_detail = noise_sample_or_zero(material_fractal_sample(
             vec2<u32>(0x428a2f98u, 0x71374491u),
             position_m,
             56.0,
             3u,
-        );
-        canopy_cluster = smoothstep(
+        ), canopy_visible);
+        canopy_cluster = select(0.0, smoothstep(
             -0.22,
             0.38,
             canopy_detail.value + 0.32 * vegetation,
-        );
+        ), canopy_visible);
     }
     var grass_color = mix(
         vec3<f32>(0.09, 0.24, 0.10),
@@ -831,13 +841,13 @@ fn terrain_surface(
     let intertidal_cover = non_rock_sediment_cover * intertidal_capacity;
     let vegetation_cover = non_rock_sediment_cover - intertidal_cover;
     var rock_surface = vegetation_surface;
-    if rock_cover > 0.0 {
-        rock_surface = terrain_rock_surface(
+    if rock_cover > 0.0 || EVALUATE_ALL_BRANCHES {
+        rock_surface = select_terrain_surface(rock_surface, terrain_rock_surface(
             position_m,
             terrain_gradient,
             material_gradient,
             elevation_m,
-        );
+        ), rock_cover > 0.0);
     }
     let composed_surface = TerrainSurface(
         vegetation_cover * vegetation_surface.color
@@ -853,5 +863,10 @@ fn terrain_surface(
             + sediment_cover * beach_surface.roughness
             + rock_cover * rock_surface.roughness,
     );
-    return blend_terrain_surface(composed_surface, snow_surface, snow_amount);
+    let land_surface = select_terrain_surface(
+        blend_terrain_surface(composed_surface, snow_surface, snow_amount),
+        snow_surface,
+        snow_amount >= 1.0,
+    );
+    return select_terrain_surface(land_surface, water_surface, is_water);
 }

@@ -32,6 +32,29 @@ and diagnostic options and limits. A fresh capture has no accumulated cloud
 transport, so matching its clock alone does not reproduce a long-running
 interactive cloud view. Capture requires a hardware Vulkan GPU.
 
+## Rendering performance
+
+The scenario bench times the production scene and shadow-cache passes for the
+views in [bench-scenarios.json](playground/src/bench-scenarios.json), as
+shipped and with normally skipped shader work forced:
+
+```sh
+cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-before
+cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-after --baseline /tmp/bench-before
+```
+
+Each run writes `report.json`, one PNG per scenario, and a contact sheet; a
+baseline adds timing ratios, image differences, and difference images. Small
+image differences between identical runs are normal for cached frames. On
+thermally limited hardware, consecutive runs can differ by about 5% in timing,
+so repeat runs or start comparisons from a similar thermal state. Use `--help`
+for resolution and frame counts.
+
+On phones and other browsers, open the playground with `?bench` (optionally
+`&width=`, `&height=`, `&warmup=`, `&frames=`). It renders the same scenarios
+with the production shaders and shows per-pass GPU times when the adapter
+supports timestamp queries, otherwise submit-to-completion time.
+
 ## Source navigation
 
 | Find | Start at |
@@ -45,3 +68,4 @@ interactive cloud view. Capture requires a hardware Vulkan GPU.
 | Browser presentation | [web](web/src/main.ts) |
 | Playground controls and diagnostics | [playground](playground/src/main.ts), [tooling tests](playground/tests) |
 | Headless capture | [capture](tools/playground-capture/src/main.rs) |
+| Rendering performance bench | [scenarios](playground/src/bench-scenarios.json), [capture bench](tools/playground-capture/src/bench.rs), [browser bench](playground/src/bench.ts) |

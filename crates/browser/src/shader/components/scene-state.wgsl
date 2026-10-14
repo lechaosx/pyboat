@@ -73,6 +73,9 @@ override WATER_BOTTOM_VISIBILITY: f32 = 1.0;
 override LANDFORM_RELIEF_STRENGTH: f32 = 1.0;
 override LANDFORM_SHADOW_STRENGTH: f32 = 0.7;
 override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
+// Lab-only worst-case timing: evaluate work that conditions normally skip, then
+// select the same result. False folds away when pipelines are compiled.
+override EVALUATE_ALL_BRANCHES: bool = false;
 
 // Entry points initialize private state so shared rendering functions work with
 // either production overrides or the playground tuning uniform.

@@ -22,7 +22,8 @@
     "noEmit": true,
     "types": ["vite/client"],
     "verbatimModuleSyntax": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
   },
   "include": ["src"]
 }
