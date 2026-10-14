@@ -9,6 +9,7 @@ const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/display.wgsl",
     "src/shader/components/noise.wgsl",
     "src/shader/components/environment.wgsl",
+    "src/shader/components/environment-fields.wgsl",
     "src/shader/components/clouds.wgsl",
     "src/shader/components/lighting.wgsl",
     "src/shader/components/terrain.wgsl",
@@ -58,6 +59,17 @@ fn main() {
             "cloud_shadow_cache_fragment",
         ],
         "scene-production-cloud-shadow-cache.wgsl",
+    );
+    let environment_fields = compose(&[
+        &scene,
+        &direct_cloud_shadows,
+        &production_entry,
+        &read_component("src/shader/components/environment-field-generate.wgsl"),
+    ]);
+    write_shader(
+        &environment_fields,
+        &["generate_environment_fields"],
+        "environment-fields.wgsl",
     );
     let playground_interface = read_component("src/shader/playground-interface.wgsl");
     let startup = read_components(&[

@@ -140,9 +140,17 @@ and verification details.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
-- **[Explicit]** A fullscreen pass evaluates terrain and environment at each
-  rendered world position. Physics samples where needed; a view-center weather
-  sample never supplies the surface scene.
+- **[Explicit]** A fullscreen pass evaluates terrain at each rendered world
+  position and reconstructs environment fields there from a per-frame grid
+  anchored to world coordinates, with spacing matched to the fields' finest
+  detail. Physics samples where needed; a view-center weather sample never
+  supplies the surface scene.
+- **[Implicit]** Environment field grids store seeded noise and the terms
+  inseparable from it, such as latitude-dependent pressure scaling; analytic
+  terms applied afterwards, such as temperature climatology and solar phase,
+  stay per pixel.
+- **[Implicit]** Environment field grids have a fixed texel budget; views too
+  wide for it coarsen the spacing instead of allocating more memory.
 - **[Explicit]** One surface normal combines authoritative relief with visual
   material detail before celestial lighting.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
@@ -273,3 +281,4 @@ and verification details.
 | --- | --- |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
+| Cloud amount at wide views | Whether lower-cloud amounts may approximate the canonical fields where the environment grid coarsens beyond its texel budget, slightly varying with zoom |

@@ -36,19 +36,8 @@ const CLOUD_SHADOW_CACHE_SLOT_VALUE_MASK: u32 = 0x7fffffffu;
 const CLOUD_SHADOW_CACHE_KEY_MIN: f32 = -16384.0;
 const CLOUD_SHADOW_CACHE_KEY_MAX: f32 = 16383.0;
 
-fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
-    let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
-    let wrapped_longitude_delta_m = longitude_delta_m
-        - round(longitude_delta_m * scene.inverse_world_size_m.x)
-            * scene.world_size_m.x;
-    return vec2<f32>(
-        wrapped_longitude_delta_m,
-        position_m.y - scene.camera_and_view_m.y,
-    );
-}
-
 fn cloud_shadow_cache_tile_key(position_m: vec2<f32>) -> vec2<f32> {
-    let sample_position = cloud_shadow_cache_relative_position(position_m)
+    let sample_position = camera_relative_position_m(position_m)
         / visual_pixel_footprint_m;
     return floor(
         (sample_position - vec2<f32>(0.5))
@@ -118,7 +107,7 @@ fn cached_cloud_shadow_optical_depth(
         slot % cloud_shadow_cache.atlas_columns,
         slot / cloud_shadow_cache.atlas_columns,
     ) * (shadow_cache_tile_texels() + 2u);
-    let sample_position = cloud_shadow_cache_relative_position(position_m)
+    let sample_position = camera_relative_position_m(position_m)
         / visual_pixel_footprint_m;
     let local_position_px = sample_position
         - key * f32(shadow_cache_tile_texels())
@@ -158,7 +147,7 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         slot % cloud_shadow_cache.atlas_columns,
         slot / cloud_shadow_cache.atlas_columns,
     ) * (shadow_cache_tile_texels() + 2u);
-    let sample_position = cloud_shadow_cache_relative_position(position_m)
+    let sample_position = camera_relative_position_m(position_m)
         / visual_pixel_footprint_m;
     let local_position_px = sample_position
         - key * f32(shadow_cache_tile_texels())

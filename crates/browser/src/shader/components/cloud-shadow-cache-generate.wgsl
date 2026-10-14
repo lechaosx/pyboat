@@ -57,19 +57,8 @@ const CLOUD_SHADOW_CACHE_DISCOVERY_STRIDE_PX: u32 = 16u;
 // precise below the shortest land-shadow transition after f16 conversion.
 const LAND_ELEVATION_CACHE_COARSE_STEP_M: f32 = 16.0;
 
-fn cloud_shadow_cache_relative_position(position_m: vec2<f32>) -> vec2<f32> {
-    let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
-    let wrapped_longitude_delta_m = longitude_delta_m
-        - round(longitude_delta_m * scene.inverse_world_size_m.x)
-            * scene.world_size_m.x;
-    return vec2<f32>(
-        wrapped_longitude_delta_m,
-        position_m.y - scene.camera_and_view_m.y,
-    );
-}
-
 fn cloud_shadow_cache_tile_key(position_m: vec2<f32>) -> vec2<f32> {
-    let sample_position = cloud_shadow_cache_relative_position(position_m)
+    let sample_position = camera_relative_position_m(position_m)
         / visual_pixel_footprint_m;
     return floor(
         (sample_position - vec2<f32>(0.5))

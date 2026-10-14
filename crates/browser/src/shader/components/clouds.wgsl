@@ -5,13 +5,7 @@ struct LowCloudSample {
 };
 
 fn visible_low_cloud_position_m(position_m: vec2<f32>) -> vec2<f32> {
-    let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
-    let wrapped_longitude_delta_m = longitude_delta_m
-        - round(longitude_delta_m * scene.inverse_world_size_m.x) * scene.world_size_m.x;
-    let camera_delta_m = vec2<f32>(
-        wrapped_longitude_delta_m,
-        position_m.y - scene.camera_and_view_m.y,
-    );
+    let camera_delta_m = camera_relative_position_m(position_m);
     let projection_scale = 1.0 - clamp(tuning.cloud_rendering.w, 0.0, 2.0)
         * LOW_CLOUD_BASE_HEIGHT_M / LOW_CLOUD_PROJECTION_EYE_HEIGHT_M;
     return canonical_world_position(

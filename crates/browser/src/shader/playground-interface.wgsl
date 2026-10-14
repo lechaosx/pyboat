@@ -135,6 +135,28 @@ fn initialize_playground_atmospheric_lighting() {
     regional_horizon_scattering = calculate_regional_horizon_scattering();
 }
 
+fn initialize_playground_scene_from_environment_fields(
+    input: VertexOutput,
+) -> InitializedPlaygroundScene {
+    let periodic_input = initialize_playground_base(input);
+    let surface_circle_position = periodic_noise_circle_position_from_canonical(
+        surface_position_m,
+    );
+    let fields = environment_field_sample(surface_position_m);
+    let surface_weather = cloud_weather_field_from_environment_fields(
+        surface_position_m,
+        fields,
+    );
+    surface_cloud_weather = surface_weather.weather;
+    initialize_surface_tide_from_sample(fields.tide);
+    initialize_playground_atmospheric_lighting();
+    return InitializedPlaygroundScene(
+        periodic_input,
+        surface_weather.atmosphere,
+        surface_circle_position,
+    );
+}
+
 fn initialize_playground_scene(input: VertexOutput) -> InitializedPlaygroundScene {
     let periodic_input = initialize_playground_base(input);
     let surface_circle_position = periodic_noise_circle_position_from_canonical(

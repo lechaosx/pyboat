@@ -18,6 +18,7 @@ export type BenchSettings = {
 export type PassTimes = {
   discoveryMs: number;
   fillMs: number;
+  fieldsMs: number;
   sceneMs: number;
   totalMs: number;
 };
@@ -78,6 +79,7 @@ export function summarizeScenario(
   const passes = {
     discoveryMs: median(timed.map((pass) => pass.discoveryMs)),
     fillMs: median(timed.map((pass) => pass.fillMs)),
+    fieldsMs: median(timed.map((pass) => pass.fieldsMs)),
     sceneMs: median(timed.map((pass) => pass.sceneMs)),
     totalMs: median(timed.map((pass) => pass.totalMs)),
   };

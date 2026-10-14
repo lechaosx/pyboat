@@ -1,8 +1,11 @@
 import {
   PlaygroundExposure,
+  environment_field_shader_source,
+  environment_field_texture_size,
   playground_cloud_shadow_cache_shader_source,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
+  playground_environment_field_workgroups,
   playground_scene_shader_source,
   playground_scene_uniform_bytes,
   playground_scene_uniforms,
@@ -1147,6 +1150,18 @@ const tuningFloats = new Float32Array(104);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
+const environmentFieldView = device.createTexture({
+  size: [...environment_field_texture_size()],
+  format: "rgba32float",
+  usage: 0x04 | 0x08,
+}).createView({ dimension: "2d-array" });
+let environmentFieldWorkgroups = new Uint32Array([1, 1]);
+
+type EnvironmentFieldPass = {
+  pipeline: GPUComputePipeline;
+  sceneBindGroup: GPUBindGroup;
+  outputBindGroup: GPUBindGroup;
+};
 
 type CloudShadowCache = {
   width: number;
@@ -1318,20 +1333,22 @@ function createCloudShadowCache(
   };
 }
 const timestampQuerySet = timestampQueriesSupported
-  ? device.createQuerySet({ type: "timestamp", count: 4 })
+  ? device.createQuerySet({ type: "timestamp", count: 5 })
   : undefined;
 const timestampResolveBuffer = timestampQueriesSupported
-  ? device.createBuffer({ size: 32, usage: 0x0200 | 0x0004 })
+  ? device.createBuffer({ size: 40, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
   buffer: GPUBuffer;
   pending: boolean;
   pipeline?: GPURenderPipeline;
   cached?: boolean;
+  fields?: boolean;
+  sceneEnd?: number;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
   ? Array.from({ length: 3 }, () => ({
-      buffer: device.createBuffer({ size: 32, usage: 0x0001 | 0x0008 }),
+      buffer: device.createBuffer({ size: 40, usage: 0x0001 | 0x0008 }),
       pending: false,
     }))
   : [];
@@ -1344,6 +1361,7 @@ type RenderResources = {
   sceneBindGroup: GPUBindGroup;
   playgroundBindGroup?: GPUBindGroup;
   cloudShadowCache?: CloudShadowCache;
+  environmentFields?: EnvironmentFieldPass;
   hdr?: boolean;
 };
 let sceneRenderResources: RenderResources = {
@@ -1786,6 +1804,14 @@ function updateUniforms(
   );
   const lowWind: [number, number] = [viewCloud[0]!, viewCloud[1]!];
   const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
+  environmentFieldWorkgroups = new Uint32Array(playground_environment_field_workgroups(
+    state.worldWidthM,
+    renderedCameraX,
+    renderedCameraY,
+    state.viewHeight,
+    previewCanvas.width,
+    previewCanvas.height,
+  ));
   sceneUniforms = playground_scene_uniforms(
     state.worldWidthM,
     state.worldHeightM,
@@ -1991,10 +2017,12 @@ let measuredGpuMilliseconds: number | undefined;
 let gpuMillisecondsInWindow = 0;
 let discoveryGpuMillisecondsInWindow = 0;
 let fillGpuMillisecondsInWindow = 0;
+let fieldsGpuMillisecondsInWindow = 0;
 let sceneGpuMillisecondsInWindow = 0;
 let gpuSamplesInWindow = 0;
 let measuredDiscoveryGpuMilliseconds: number | undefined;
 let measuredFillGpuMilliseconds: number | undefined;
+let measuredFieldsGpuMilliseconds: number | undefined;
 let measuredSceneGpuMilliseconds: number | undefined;
 let timedPipeline: GPURenderPipeline | undefined;
 let timedCache: CloudShadowCache | undefined;
@@ -2014,6 +2042,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
     measuredGpuMilliseconds = gpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredDiscoveryGpuMilliseconds = discoveryGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredFillGpuMilliseconds = fillGpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredFieldsGpuMilliseconds = fieldsGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredSceneGpuMilliseconds = sceneGpuMillisecondsInWindow / gpuSamplesInWindow;
   }
   statisticsStartedAt = now;
@@ -2022,14 +2051,16 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   gpuMillisecondsInWindow = 0;
   discoveryGpuMillisecondsInWindow = 0;
   fillGpuMillisecondsInWindow = 0;
+  fieldsGpuMillisecondsInWindow = 0;
   sceneGpuMillisecondsInWindow = 0;
   gpuSamplesInWindow = 0;
   const rates = `${measuredFramesPerSecond.toFixed(0)} FPS · ${measuredTicksPerSecond.toFixed(0)} TPS`;
   const gpuTiming = measuredGpuMilliseconds === undefined
     ? timestampQueriesSupported ? " · measuring GPU" : ""
     : timedUsesShadowCache && measuredDiscoveryGpuMilliseconds !== undefined
-      && measuredFillGpuMilliseconds !== undefined && measuredSceneGpuMilliseconds !== undefined
-    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredDiscoveryGpuMilliseconds.toFixed(1)} discover + ${measuredFillGpuMilliseconds.toFixed(1)} fill + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
+      && measuredFillGpuMilliseconds !== undefined && measuredFieldsGpuMilliseconds !== undefined
+      && measuredSceneGpuMilliseconds !== undefined
+    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredDiscoveryGpuMilliseconds.toFixed(1)} discover + ${measuredFillGpuMilliseconds.toFixed(1)} fill + ${measuredFieldsGpuMilliseconds.toFixed(1)} fields + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
     : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU scene`;
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = `${rates}${gpuTiming}${compilation}`;
@@ -2116,10 +2147,12 @@ function renderFrame(now: number): Promise<void> {
     measuredGpuMilliseconds = undefined;
     measuredDiscoveryGpuMilliseconds = undefined;
     measuredFillGpuMilliseconds = undefined;
+    measuredFieldsGpuMilliseconds = undefined;
     measuredSceneGpuMilliseconds = undefined;
     gpuMillisecondsInWindow = 0;
     discoveryGpuMillisecondsInWindow = 0;
     fillGpuMillisecondsInWindow = 0;
+    fieldsGpuMillisecondsInWindow = 0;
     sceneGpuMillisecondsInWindow = 0;
     gpuSamplesInWindow = 0;
   }
@@ -2169,6 +2202,27 @@ function renderFrame(now: number): Promise<void> {
     fillPass.drawIndirect(cache.header, 0);
     fillPass.end();
   }
+  const fields = renderResources.environmentFields;
+  // Pass-end query indices: discovery and fill take 1 and 2 when cached; the
+  // first timed pass also writes its beginning to 0.
+  const fieldsEnd = cache ? 3 : 1;
+  const sceneEnd = fields ? fieldsEnd + 1 : fieldsEnd;
+  if (fields) {
+    const fieldPassDescriptor: GPUComputePassDescriptor = {};
+    if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
+      fieldPassDescriptor.timestampWrites = {
+        querySet: timestampQuerySet,
+        ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
+        endOfPassWriteIndex: fieldsEnd,
+      };
+    }
+    const fieldPass = encoder.beginComputePass(fieldPassDescriptor);
+    fieldPass.setPipeline(fields.pipeline);
+    fieldPass.setBindGroup(0, fields.sceneBindGroup);
+    fieldPass.setBindGroup(1, fields.outputBindGroup);
+    fieldPass.dispatchWorkgroups(environmentFieldWorkgroups[0]!, environmentFieldWorkgroups[1]!);
+    fieldPass.end();
+  }
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
       view: context.getCurrentTexture().createView({
@@ -2182,8 +2236,8 @@ function renderFrame(now: number): Promise<void> {
   if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet,
-      ...(cache ? {} : { beginningOfPassWriteIndex: 0 }),
-      endOfPassWriteIndex: cache ? 3 : 1,
+      ...(cache || fields ? {} : { beginningOfPassWriteIndex: 0 }),
+      endOfPassWriteIndex: sceneEnd,
     };
   }
   const pass = encoder.beginRenderPass(renderPassDescriptor);
@@ -2204,7 +2258,7 @@ function renderFrame(now: number): Promise<void> {
     nextShadowCacheInfoAt = now + 500;
   }
   if (timestampReadback && timestampQuerySet && timestampResolveBuffer) {
-    const timestampCount = cache ? 4 : 2;
+    const timestampCount = sceneEnd + 1;
     const timestampBytes = timestampCount * 8;
     encoder.resolveQuerySet(timestampQuerySet, 0, timestampCount, timestampResolveBuffer, 0);
     encoder.copyBufferToBuffer(
@@ -2217,6 +2271,8 @@ function renderFrame(now: number): Promise<void> {
     timestampReadback.pending = true;
     timestampReadback.pipeline = renderResources.pipeline;
     timestampReadback.cached = Boolean(cache);
+    timestampReadback.fields = Boolean(fields);
+    timestampReadback.sceneEnd = sceneEnd;
   }
   device.queue.submit([encoder.finish()]);
   framesInWindow += 1;
@@ -2241,15 +2297,17 @@ function renderFrame(now: number): Promise<void> {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
       const startedAt = timestamps[0]!;
       const cached = timestampReadback.cached;
-      const finishedAt = timestamps[cached ? 3 : 1]!;
+      const sceneEnd = timestampReadback.sceneEnd!;
+      const finishedAt = timestamps[sceneEnd]!;
       const milliseconds = (begin: number, end: number): number =>
         Number(timestamps[end]! - timestamps[begin]!) / 1_000_000;
       const passes: PassTimes | undefined = cached && startedAt > 0n && finishedAt >= startedAt
         ? {
           discoveryMs: milliseconds(0, 1),
-          fillMs: milliseconds(1, 2),
-          sceneMs: milliseconds(2, 3),
-          totalMs: milliseconds(0, 3),
+          fillMs: milliseconds(1, sceneEnd - 2),
+          fieldsMs: milliseconds(sceneEnd - 2, sceneEnd - 1),
+          sceneMs: milliseconds(sceneEnd - 1, sceneEnd),
+          totalMs: milliseconds(0, sceneEnd),
         }
         : undefined;
       if (
@@ -2261,10 +2319,15 @@ function renderFrame(now: number): Promise<void> {
         if (cached) {
           discoveryGpuMillisecondsInWindow += Number(timestamps[1]! - timestamps[0]!) / 1_000_000;
           fillGpuMillisecondsInWindow += Number(timestamps[2]! - timestamps[1]!) / 1_000_000;
-          sceneGpuMillisecondsInWindow += Number(timestamps[3]! - timestamps[2]!) / 1_000_000;
-        } else {
-          sceneGpuMillisecondsInWindow += Number(timestamps[1]! - timestamps[0]!) / 1_000_000;
         }
+        if (timestampReadback.fields) {
+          fieldsGpuMillisecondsInWindow += Number(
+            timestamps[sceneEnd - 1]! - timestamps[sceneEnd - 2]!,
+          ) / 1_000_000;
+        }
+        sceneGpuMillisecondsInWindow += Number(
+          timestamps[sceneEnd]! - timestamps[sceneEnd - 1]!,
+        ) / 1_000_000;
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
@@ -2299,7 +2362,14 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         ? production_cloud_shadow_cache_shader_source()
         : playground_cloud_shadow_cache_shader_source(),
     });
-    const [scenePipeline, directScenePipeline, discoveryPipeline, fillPipeline] = await Promise.all([
+    const fieldShader = device.createShaderModule({ code: environment_field_shader_source() });
+    const [
+      scenePipeline,
+      directScenePipeline,
+      discoveryPipeline,
+      fillPipeline,
+      fieldPipeline,
+    ] = await Promise.all([
       createPlaygroundPipeline(
         sceneShader,
         productionShaders ? "fragment" : "fragment_playground_scene",
@@ -2322,13 +2392,33 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         },
         primitive: { topology: "triangle-list" },
       }),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module: fieldShader, entryPoint: "generate_environment_fields" },
+      }),
     ]);
+    const environmentFields: EnvironmentFieldPass = {
+      pipeline: fieldPipeline,
+      sceneBindGroup: device.createBindGroup({
+        layout: fieldPipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      outputBindGroup: device.createBindGroup({
+        layout: fieldPipeline.getBindGroupLayout(1),
+        entries: [{ binding: 0, resource: environmentFieldView }],
+      }),
+    };
+    const sceneEntries = [
+      { binding: 0, resource: { buffer: sceneBuffer } },
+      { binding: 1, resource: environmentFieldView },
+    ];
     sceneRenderResources = {
       pipeline: scenePipeline,
       hdr: hdrSupported,
+      environmentFields,
       sceneBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+        entries: sceneEntries,
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: scenePipeline.getBindGroupLayout(1),
@@ -2343,9 +2433,10 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
     directSceneRenderResources = {
       pipeline: directScenePipeline,
       hdr: hdrSupported,
+      environmentFields,
       sceneBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+        entries: sceneEntries,
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(1),
@@ -2436,6 +2527,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
     gpuTotalMs: passes?.totalMs,
     discoveryMs: passes?.discoveryMs,
     fillMs: passes?.fillMs,
+    fieldsMs: passes?.fieldsMs,
     sceneMs: passes?.sceneMs,
     nsPerPixel,
   })));
@@ -2448,7 +2540,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       `${(passes?.totalMs ?? submittedToDoneMs).toFixed(1).padStart(7)} ms`,
       `${nsPerPixel.toFixed(0).padStart(5)} ns/px`,
       passes
-        ? `(${passes.discoveryMs.toFixed(1)} discover + ${passes.fillMs.toFixed(1)} fill + ${passes.sceneMs.toFixed(1)} scene)`
+        ? `(${passes.discoveryMs.toFixed(1)} discover + ${passes.fillMs.toFixed(1)} fill + ${passes.fieldsMs.toFixed(1)} fields + ${passes.sceneMs.toFixed(1)} scene)`
         : `submit to completion`,
     ].join(" ")),
   ].join("\n");

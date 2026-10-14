@@ -34,9 +34,10 @@ interactive cloud view. Capture requires a hardware Vulkan GPU.
 
 ## Rendering performance
 
-The scenario bench times the production scene and shadow-cache passes for the
-views in [bench-scenarios.json](playground/src/bench-scenarios.json), as
-shipped and with normally skipped shader work forced:
+The scenario bench times the production environment-field, shadow-cache, and
+scene passes for the views in
+[bench-scenarios.json](playground/src/bench-scenarios.json), as shipped and with
+normally skipped shader work forced:
 
 ```sh
 cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-before

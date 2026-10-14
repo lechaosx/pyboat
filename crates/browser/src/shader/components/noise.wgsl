@@ -18,6 +18,16 @@ fn canonical_world_position(position_m: vec2<f32>) -> vec2<f32> {
     );
 }
 
+fn camera_relative_position_m(position_m: vec2<f32>) -> vec2<f32> {
+    let longitude_delta_m = position_m.x - scene.camera_and_view_m.x;
+    return vec2<f32>(
+        longitude_delta_m
+            - round(longitude_delta_m * scene.inverse_world_size_m.x)
+                * scene.world_size_m.x,
+        position_m.y - scene.camera_and_view_m.y,
+    );
+}
+
 fn multiply_high_u32(a: u32, b: u32) -> u32 {
     let a_low = a & 0xffffu;
     let a_high = a >> 16u;

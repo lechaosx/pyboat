@@ -80,7 +80,7 @@ fn shadow_cache_debug_tiles(position_m: vec2<f32>) -> vec4<f32> {
     if all(color == vec3<f32>(0.0)) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let sample_position_px = cloud_shadow_cache_relative_position(position_m)
+    let sample_position_px = camera_relative_position_m(position_m)
         / visual_pixel_footprint_m;
     let tile_position_px = sample_position_px
         - key * f32(shadow_cache_tile_texels())

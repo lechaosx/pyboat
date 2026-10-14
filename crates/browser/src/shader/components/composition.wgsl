@@ -375,7 +375,7 @@ fn final_scene_color(
         if layer_visibility.x > 0.0 {
             let low_height_m = LOW_CLOUD_BASE_HEIGHT_M;
             let low_cloud_position_m = visible_low_cloud_position_m(input.world_position_m);
-            let low_cloud_weather = cloud_weather_at(low_cloud_position_m);
+            let low_cloud_weather = cloud_weather_from_environment_fields(low_cloud_position_m);
             let low_cloud = procedural_low_cloud_sample(
                 low_cloud_position_m,
                 low_cloud_weather,

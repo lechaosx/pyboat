@@ -594,15 +594,8 @@ fn surface_air_temperature_anomaly_sample_from_climate(
     return surface_air_temperature_anomaly_field_from_climate(position_m, climate).sample;
 }
 
-fn surface_air_temperature_anomaly_field_from_climate(
-    position_m: vec2<f32>,
-    climate: SurfaceClimateSample,
-) -> AtmosphereTemperatureField {
-    let scale_c = latitude_curve_value(
-        TEMPERATURE_ANOMALY_SCALE_C,
-        climate.latitude_degrees,
-    );
-    let noise = spatiotemporal_fractal_sample_with_broad(
+fn surface_air_temperature_anomaly_noise_at(position_m: vec2<f32>) -> FractalNoiseSample {
+    return spatiotemporal_fractal_sample_with_broad(
         vec2<u32>(0x38d01377u, 0x452821e6u),
         position_m,
         65536.0,
@@ -610,16 +603,88 @@ fn surface_air_temperature_anomaly_field_from_climate(
         4u,
         0.5,
     );
+}
+
+fn surface_air_temperature_anomaly_field_from_noise(
+    climate: SurfaceClimateSample,
+    noise: TerrainNoiseSample,
+    broad_noise: f32,
+) -> AtmosphereTemperatureField {
+    let scale_c = latitude_curve_value(
+        TEMPERATURE_ANOMALY_SCALE_C,
+        climate.latitude_degrees,
+    );
     return AtmosphereTemperatureField(
         TerrainNoiseSample(
-            scale_c * 0.85 * noise.total.value,
-            scale_c * 0.85 * noise.total.gradient,
+            scale_c * 0.85 * noise.value,
+            scale_c * 0.85 * noise.gradient,
         ),
-        scale_c * 0.85 * noise.broad.value,
+        scale_c * 0.85 * broad_noise,
     );
 }
 
+fn surface_air_temperature_anomaly_field_from_climate(
+    position_m: vec2<f32>,
+    climate: SurfaceClimateSample,
+) -> AtmosphereTemperatureField {
+    let noise = surface_air_temperature_anomaly_noise_at(position_m);
+    return surface_air_temperature_anomaly_field_from_noise(
+        climate,
+        noise.total,
+        noise.broad.value,
+    );
+}
+
+// Seeded inputs of the surface atmosphere: complete pressure, plus raw
+// temperature and water-vapour noise that latitude climatology scales.
+struct AtmosphereNoiseSample {
+    pressure: PressureFieldSample,
+    temperature: TerrainNoiseSample,
+    broad_temperature: f32,
+    water_vapor: vec2<f32>,
+}
+
+fn atmosphere_noise_sample_at(position_m: vec2<f32>) -> AtmosphereNoiseSample {
+    var noise = AtmosphereNoiseSample(
+        PressureFieldSample(
+            0.0,
+            vec2<f32>(0.0),
+            vec2<f32>(0.0),
+            vec2<f32>(0.0),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ),
+        TerrainNoiseSample(0.0, vec2<f32>(0.0)),
+        0.0,
+        vec2<f32>(0.0),
+    );
+    if environment_feature_visibility().x > 0.0 {
+        noise.pressure = procedural_pressure_sample_without_surface_gust(position_m);
+    }
+    if environment_feature_visibility().y > 0.0 {
+        let temperature = surface_air_temperature_anomaly_noise_at(position_m);
+        noise.temperature = temperature.total;
+        noise.broad_temperature = temperature.broad.value;
+    }
+    if environment_feature_visibility().z > 0.0 {
+        noise.water_vapor = surface_water_vapor_noise_at(position_m);
+    }
+    return noise;
+}
+
 fn surface_atmosphere_sample_at(position_m: vec2<f32>) -> SurfaceAtmosphereSample {
+    return surface_atmosphere_sample_from_noise(
+        position_m,
+        atmosphere_noise_sample_at(position_m),
+    );
+}
+
+fn surface_atmosphere_sample_from_noise(
+    position_m: vec2<f32>,
+    noise: AtmosphereNoiseSample,
+) -> SurfaceAtmosphereSample {
     let climate = surface_climate_sample_at(position_m);
     var pressure = PressureFieldSample(
         0.0,
@@ -632,21 +697,22 @@ fn surface_atmosphere_sample_at(position_m: vec2<f32>) -> SurfaceAtmosphereSampl
         0.0,
     );
     if environment_feature_visibility().x > 0.0 {
-        pressure = procedural_pressure_sample_without_surface_gust(position_m);
+        pressure = noise.pressure;
     }
     var temperature = AtmosphereTemperatureField(
         TerrainNoiseSample(0.0, vec2<f32>(0.0)),
         0.0,
     );
     if environment_feature_visibility().y > 0.0 {
-        temperature = surface_air_temperature_anomaly_field_from_climate(
-            position_m,
+        temperature = surface_air_temperature_anomaly_field_from_noise(
             climate,
+            noise.temperature,
+            noise.broad_temperature,
         );
     }
     var water_vapor = AtmosphereScalarField(0.0, 0.0);
     if environment_feature_visibility().z > 0.0 {
-        water_vapor = surface_water_vapor_field_from_climate(position_m, climate);
+        water_vapor = surface_water_vapor_field_from_noise(climate, noise.water_vapor);
     }
     return SurfaceAtmosphereSample(
         pressure,
@@ -689,18 +755,8 @@ fn upper_air_temperature_500_hpa_c_from_atmosphere(
     ).value;
 }
 
-fn upper_air_temperature_500_hpa_field_from_atmosphere(
-    position_m: vec2<f32>,
-    surface_anomaly_c: f32,
-    broad_surface_anomaly_c: f32,
-    climate: SurfaceClimateSample,
-) -> AtmosphereScalarField {
-    let climate_temperature_c = climate.annual_mean_air_temperature_c
-        - 35.5
-        + 0.25 * climate.seasonal_temperature_range_c
-            * climate.seasonal_latitude_factor
-            * scene.seasonal_phase_factors.x;
-    let independent_noise = 0.75 * spatiotemporal_fractal_value_with_broad(
+fn upper_air_temperature_500_hpa_noise_at(position_m: vec2<f32>) -> vec2<f32> {
+    return spatiotemporal_fractal_value_with_broad(
         vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
         position_m,
         65536.0,
@@ -708,6 +764,34 @@ fn upper_air_temperature_500_hpa_field_from_atmosphere(
         4u,
         0.5,
     );
+}
+
+fn upper_air_temperature_500_hpa_field_from_atmosphere(
+    position_m: vec2<f32>,
+    surface_anomaly_c: f32,
+    broad_surface_anomaly_c: f32,
+    climate: SurfaceClimateSample,
+) -> AtmosphereScalarField {
+    return upper_air_temperature_500_hpa_field_from_noise(
+        surface_anomaly_c,
+        broad_surface_anomaly_c,
+        climate,
+        upper_air_temperature_500_hpa_noise_at(position_m),
+    );
+}
+
+fn upper_air_temperature_500_hpa_field_from_noise(
+    surface_anomaly_c: f32,
+    broad_surface_anomaly_c: f32,
+    climate: SurfaceClimateSample,
+    noise: vec2<f32>,
+) -> AtmosphereScalarField {
+    let climate_temperature_c = climate.annual_mean_air_temperature_c
+        - 35.5
+        + 0.25 * climate.seasonal_temperature_range_c
+            * climate.seasonal_latitude_factor
+            * scene.seasonal_phase_factors.x;
+    let independent_noise = 0.75 * noise;
     return AtmosphereScalarField(
         climate_temperature_c
             + 0.45 * surface_anomaly_c
@@ -757,16 +841,8 @@ fn surface_water_vapor_g_kg_from_climate(
     return surface_water_vapor_field_from_climate(position_m, climate).value;
 }
 
-fn surface_water_vapor_field_from_climate(
-    position_m: vec2<f32>,
-    climate: SurfaceClimateSample,
-) -> AtmosphereScalarField {
-    let climate_temperature_c = climate.annual_mean_air_temperature_c
-        + 0.5 * climate.seasonal_temperature_range_c
-            * climate.seasonal_latitude_factor
-            * scene.seasonal_phase_factors.x;
-    let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.75 * spatiotemporal_fractal_value_with_broad(
+fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
+    return spatiotemporal_fractal_value_with_broad(
         vec2<u32>(0xec4e6c89u, 0x082efa98u),
         position_m,
         8192.0,
@@ -774,6 +850,28 @@ fn surface_water_vapor_field_from_climate(
         5u,
         0.5,
     );
+}
+
+fn surface_water_vapor_field_from_climate(
+    position_m: vec2<f32>,
+    climate: SurfaceClimateSample,
+) -> AtmosphereScalarField {
+    return surface_water_vapor_field_from_noise(
+        climate,
+        surface_water_vapor_noise_at(position_m),
+    );
+}
+
+fn surface_water_vapor_field_from_noise(
+    climate: SurfaceClimateSample,
+    raw_noise: vec2<f32>,
+) -> AtmosphereScalarField {
+    let climate_temperature_c = climate.annual_mean_air_temperature_c
+        + 0.5 * climate.seasonal_temperature_range_c
+            * climate.seasonal_latitude_factor
+            * scene.seasonal_phase_factors.x;
+    let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
+    let noise = 0.75 * raw_noise;
     return AtmosphereScalarField(
         clamp(capacity_g_kg * (0.72 + 0.65 * noise.x), 0.5, 25.0),
         clamp(capacity_g_kg * (0.72 + 0.65 * noise.y), 0.5, 25.0),
@@ -1063,10 +1161,14 @@ fn surface_tide_sample_at(position_m: vec2<f32>) -> SurfaceTideSample {
 }
 
 fn initialize_surface_tide_from_circle(circle_position: vec4<f32>) {
-    surface_tide_sample = surface_tide_sample_from_circle(
+    initialize_surface_tide_from_sample(surface_tide_sample_from_circle(
         surface_position_m,
         circle_position,
-    );
+    ));
+}
+
+fn initialize_surface_tide_from_sample(sample: SurfaceTideSample) {
+    surface_tide_sample = sample;
     surface_tidal_range_m = 1.25 + 0.75 * surface_tide_sample.response.value;
     surface_tidal_phase_offset = 0.08 * surface_tide_sample.lag.value;
 }
@@ -1215,6 +1317,27 @@ fn cloud_weather_from_atmosphere(
     atmosphere: SurfaceAtmosphereSample,
 ) -> CloudWeatherSample {
     if environment_feature_visibility().w <= 0.0 {
+        return cloud_weather_from_atmosphere_and_upper_air(
+            atmosphere,
+            AtmosphereScalarField(0.0, 0.0),
+        );
+    }
+    return cloud_weather_from_atmosphere_and_upper_air(
+        atmosphere,
+        upper_air_temperature_500_hpa_field_from_atmosphere(
+            position_m,
+            atmosphere.temperature_anomaly.value,
+            atmosphere.broad_temperature_anomaly_c,
+            atmosphere.climate,
+        ),
+    );
+}
+
+fn cloud_weather_from_atmosphere_and_upper_air(
+    atmosphere: SurfaceAtmosphereSample,
+    upper_air_temperature: AtmosphereScalarField,
+) -> CloudWeatherSample {
+    if environment_feature_visibility().w <= 0.0 {
         return CloudWeatherSample(
             0.0,
             0.0,
@@ -1240,12 +1363,6 @@ fn cloud_weather_from_atmosphere(
         atmosphere.water_vapor_g_kg / saturation_capacity_g_kg,
         0.0,
         1.5,
-    );
-    let upper_air_temperature = upper_air_temperature_500_hpa_field_from_atmosphere(
-        position_m,
-        surface_anomaly.value,
-        atmosphere.broad_temperature_anomaly_c,
-        atmosphere.climate,
     );
     let temperature_gradient = surface_anomaly.gradient;
     let instability = smoothstep(

@@ -35,13 +35,15 @@ use wgpu::util::DeviceExt;
 use crate::frame_queue::FrameQueue;
 use crate::{
     BoatScene, CLOUD_SHADOW_CACHE_SHADER, CloudShadowCacheReplacement, DEFAULT_VIEW_HEIGHT_M,
-    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER, ViewCloudMotion, ViewExposure,
-    Windsock, append_reliable_server_message_chunk, bounded_canvas_dimensions,
-    cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot, ocean_wave_mode_uniforms,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state_for_render_clocks, sample_world_geometry, scale_bar,
-    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
-    webtransport_server_url, windsock_extension, zoom_view_height_m,
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS,
+    EnvironmentFieldGrid, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, SCENE_SHADER,
+    ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
+    bounded_canvas_dimensions, cloud_shadow_cache_layout, disconnect_and_clear_pending_snapshot,
+    environment_field_grid, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
+    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state_for_render_clocks,
+    sample_world_geometry, scale_bar, seasonal_phase_factors, view_width_m,
+    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
+    windsock_extension, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -120,6 +122,50 @@ pub fn production_cloud_shadow_cache_shader_source() -> String {
 #[wasm_bindgen]
 pub fn playground_scene_shader_source() -> String {
     crate::playground_scene_shader_source().to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn environment_field_shader_source() -> String {
+    ENVIRONMENT_FIELD_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+/// Width, height, and layer count of the environment field texture.
+#[wasm_bindgen]
+pub fn environment_field_texture_size() -> Vec<u32> {
+    vec![
+        ENVIRONMENT_FIELD_TEXELS,
+        ENVIRONMENT_FIELD_TEXELS,
+        ENVIRONMENT_FIELD_LAYERS,
+    ]
+}
+
+#[cfg(feature = "playground")]
+/// Field-pass workgroup counts for the view that `playground_scene_uniforms`
+/// describes with the same arguments.
+#[wasm_bindgen]
+pub fn playground_environment_field_workgroups(
+    world_width_m: f32,
+    camera_x_m: f32,
+    camera_y_m: f32,
+    view_height_m: f32,
+    render_width_px: u32,
+    render_height_px: u32,
+) -> Vec<u32> {
+    environment_field_grid(
+        world_width_m,
+        [camera_x_m, camera_y_m],
+        [
+            view_width_m(
+                render_width_px as f32 / render_height_px as f32,
+                view_height_m,
+            ),
+            view_height_m,
+        ],
+    )
+    .workgroups()
+    .to_vec()
 }
 
 #[cfg(feature = "playground")]
@@ -519,16 +565,17 @@ pub fn playground_scene_uniforms(
         Vector::ZERO,
     );
     let orbit = celestial_orbit(celestial);
-    let uniforms = SceneUniforms {
-        camera_and_view_m: [
-            camera_x_m,
-            camera_y_m,
-            view_width_m(
-                render_width_px as f32 / render_height_px as f32,
-                view_height_m,
-            ),
+    let view_size_m = [
+        view_width_m(
+            render_width_px as f32 / render_height_px as f32,
             view_height_m,
-        ],
+        ),
+        view_height_m,
+    ];
+    let environment_field_grid =
+        environment_field_grid(world_width_m, [camera_x_m, camera_y_m], view_size_m);
+    let uniforms = SceneUniforms {
+        camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         scalar_field_time_coordinates: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
@@ -567,6 +614,8 @@ pub fn playground_scene_uniforms(
         view_cloud_motion_m: row(view_cloud_motion_m)?,
         cloud_time_coordinates: row(cloud_time_coordinates)?,
         exposure_and_output: row(exposure_and_output)?,
+        environment_field_grid_m: environment_field_grid.uniforms,
+        environment_field_texels: environment_field_grid.texel_uniforms(),
         ocean_wave_modes: ocean_wave_mode_uniforms(
             geometry,
             match_seed,
@@ -669,6 +718,8 @@ struct SceneUniforms {
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
     exposure_and_output: [f32; 4],
+    environment_field_grid_m: [f32; 4],
+    environment_field_texels: [u32; 4],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
@@ -1182,6 +1233,97 @@ impl CloudShadowCache {
     }
 }
 
+struct EnvironmentFields {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    pipeline: wgpu::ComputePipeline,
+    output_bind_group: wgpu::BindGroup,
+}
+
+impl EnvironmentFields {
+    fn new(device: &wgpu::Device, scene_uniform_layout: &wgpu::BindGroupLayout) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Environment fields"),
+            size: wgpu::Extent3d {
+                width: ENVIRONMENT_FIELD_TEXELS,
+                height: ENVIRONMENT_FIELD_TEXELS,
+                depth_or_array_layers: ENVIRONMENT_FIELD_LAYERS,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Environment field output layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                },
+                count: None,
+            }],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Environment field shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(ENVIRONMENT_FIELD_SHADER)),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Environment field pipeline layout"),
+            bind_group_layouts: &[Some(scene_uniform_layout), Some(&output_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Environment field pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("generate_environment_fields"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Environment field output bind group"),
+            layout: &output_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        Self {
+            _texture: texture,
+            view,
+            pipeline,
+            output_bind_group,
+        }
+    }
+
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene_uniform_bind_group: &wgpu::BindGroup,
+        grid: &EnvironmentFieldGrid,
+    ) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Environment field pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, scene_uniform_bind_group, &[]);
+        pass.set_bind_group(1, &self.output_bind_group, &[]);
+        let [columns, rows] = grid.workgroups();
+        pass.dispatch_workgroups(columns, rows, 1);
+    }
+}
+
 struct Renderer {
     canvas: HtmlCanvasElement,
     device: wgpu::Device,
@@ -1194,6 +1336,8 @@ struct Renderer {
     vertex_capacity: usize,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    scene_bind_group: wgpu::BindGroup,
+    environment_fields: EnvironmentFields,
     cloud_shadow_cache: CloudShadowCache,
     cloud_shadow_cache_fallback: CloudShadowCacheFallback,
     cloud_shadow_cache_replacement: CloudShadowCacheReplacement,
@@ -1298,10 +1442,35 @@ impl Renderer {
             width,
             height,
         );
+        let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Scene layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Scene pipeline layout"),
             bind_group_layouts: &[
-                Some(&bind_group_layout),
+                Some(&scene_layout),
                 Some(&empty_bind_group_layout),
                 Some(&cloud_shadow_cache.sample_layout),
             ],
@@ -1348,6 +1517,21 @@ impl Renderer {
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+        let environment_fields = EnvironmentFields::new(&device, &bind_group_layout);
+        let scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Scene bind group"),
+            layout: &scene_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&environment_fields.view),
+                },
+            ],
+        });
         let cloud_shadow_cache_fallback =
             CloudShadowCacheFallback::new(&device, &cloud_shadow_cache.sample_layout);
 
@@ -1363,6 +1547,8 @@ impl Renderer {
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
             uniform_buffer,
             bind_group,
+            scene_bind_group,
+            environment_fields,
             cloud_shadow_cache_fallback,
             cloud_shadow_cache,
             cloud_shadow_cache_replacement: CloudShadowCacheReplacement::default(),
@@ -1410,6 +1596,11 @@ impl Renderer {
             view_height_m,
         );
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
+        let environment_field_grid = environment_field_grid(
+            world_geometry.width_m(),
+            canonical_camera_m,
+            [view_width_m, view_height_m],
+        );
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let celestial = world_celestial_conditions(
             world_geometry,
@@ -1575,6 +1766,8 @@ impl Renderer {
                     f32::from(hdr),
                     self.vision_noise_phase as f32,
                 ],
+                environment_field_grid_m: environment_field_grid.uniforms,
+                environment_field_texels: environment_field_grid.texel_uniforms(),
                 ocean_wave_modes: ocean_wave_mode_uniforms(
                     world_geometry,
                     match_seed,
@@ -1601,6 +1794,8 @@ impl Renderer {
                 self.config.height,
             );
         }
+        self.environment_fields
+            .encode(&mut encoder, &self.bind_group, &environment_field_grid);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene pass"),
@@ -1624,7 +1819,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(0, &self.scene_bind_group, &[]);
             if use_shadow_cache {
                 pass.set_bind_group(2, &self.cloud_shadow_cache.resources.sample_bind_group, &[]);
             } else {

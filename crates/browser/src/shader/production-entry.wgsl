@@ -17,9 +17,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface_circle_position = periodic_noise_circle_position_from_canonical(
         surface_position_m,
     );
-    let surface_weather = cloud_weather_field_at(surface_position_m);
+    let fields = environment_field_sample(surface_position_m);
+    let surface_weather = cloud_weather_field_from_environment_fields(
+        surface_position_m,
+        fields,
+    );
     surface_cloud_weather = surface_weather.weather;
-    initialize_surface_tide_from_circle(surface_circle_position);
+    initialize_surface_tide_from_sample(fields.tide);
     initialize_celestial_lighting();
     local_horizon_scattering = calculate_local_horizon_scattering();
     regional_horizon_scattering = calculate_regional_horizon_scattering();

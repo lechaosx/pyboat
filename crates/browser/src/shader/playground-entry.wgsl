@@ -1,6 +1,6 @@
 @fragment
 fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
-    let initialized = initialize_playground_scene(input);
+    let initialized = initialize_playground_scene_from_environment_fields(input);
     initialize_shadow_cache_debug();
     if shadow_cache_debug_mode() == 2u {
         let color = shadow_cache_debug_tiles(initialized.input.world_position_m);
