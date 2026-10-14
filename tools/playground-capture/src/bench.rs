@@ -8,7 +8,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
-use browser::FieldGrids;
+use browser::{
+    FieldGrids, MINIMUM_RENDER_SCALE, UpscaleTargets, Upscaler, scene_render_size,
+    visual_pixel_footprint_m,
+};
 
 use super::{
     CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
@@ -23,8 +26,8 @@ const VISIBLE_DIFFERENCE_LEVELS: u8 = 2;
 const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
-/// Environment field, occluder field, and scene pass begin/end pairs.
-const TIMESTAMP_COUNT: u32 = 6;
+/// Environment field, occluder field, scene, and upscale begin/end pairs.
+const TIMESTAMP_COUNT: u32 = 8;
 
 pub struct BenchOptions {
     pub output_dir: PathBuf,
@@ -45,6 +48,8 @@ struct Scenario {
     view_height_m: f32,
     cloud_time_seconds: f64,
     world_time_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    render_scale: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -62,6 +67,8 @@ struct ModeReport {
     #[serde(default)]
     occluders: Option<Timing>,
     scene: Option<Timing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upscale: Option<Timing>,
     total: Timing,
     total_ns_per_pixel: f64,
     #[serde(default)]
@@ -197,7 +204,7 @@ impl ModeRenderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         bindings: &FrameBindings<'_>,
-        target: &wgpu::TextureView,
+        target: &wgpu::Texture,
         timestamps: Option<&wgpu::QuerySet>,
     ) {
         self.fields.encode(
@@ -208,10 +215,13 @@ impl ModeRenderer {
             bindings.field_grids,
             timestamps,
         );
+        let output_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bench scene pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: bindings
+                    .upscale
+                    .map_or(&output_view, |upscale| &upscale.scene_view),
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -233,6 +243,18 @@ impl ModeRenderer {
         pass.set_bind_group(1, bindings.unused, &[]);
         pass.set_vertex_buffer(0, bindings.vertices.slice(..));
         pass.draw(0..6, 0..1);
+        drop(pass);
+        if let Some(upscale) = bindings.upscale {
+            bindings.upscaler.encode(
+                encoder,
+                upscale,
+                &target.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(wgpu::TextureFormat::Rgba8Unorm),
+                    ..Default::default()
+                }),
+                timestamps.map(|query_set| (query_set, 6, 7)),
+            );
+        }
     }
 }
 
@@ -242,6 +264,8 @@ struct FrameBindings<'a> {
     field_grids: &'a FieldGrids,
     unused: &'a wgpu::BindGroup,
     vertices: &'a wgpu::Buffer,
+    upscaler: &'a Upscaler,
+    upscale: Option<&'a UpscaleTargets>,
 }
 
 struct ScenarioBindings {
@@ -249,6 +273,7 @@ struct ScenarioBindings {
     /// Shipped, then forced.
     fields: [CaptureFieldBindings; 2],
     field_grids: FieldGrids,
+    upscale: Option<UpscaleTargets>,
 }
 
 impl ScenarioBindings {
@@ -257,6 +282,7 @@ impl ScenarioBindings {
         mode: usize,
         unused: &'a wgpu::BindGroup,
         vertices: &'a wgpu::Buffer,
+        upscaler: &'a Upscaler,
     ) -> FrameBindings<'a> {
         FrameBindings {
             scene: &self.scene,
@@ -264,6 +290,8 @@ impl ScenarioBindings {
             field_grids: &self.field_grids,
             unused,
             vertices,
+            upscaler,
+            upscale: self.upscale.as_ref(),
         }
     }
 }
@@ -353,6 +381,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         ModeRenderer::new(&device, &scene_layout, &unused_layout, false)?,
         ModeRenderer::new(&device, &scene_layout, &unused_layout, true)?,
     ];
+    let upscaler = Upscaler::new(&device, wgpu::TextureFormat::Rgba8Unorm);
     let timing = if timestamps.is_some() {
         "timestamp-query"
     } else {
@@ -398,7 +427,15 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         .iter()
         .map(|scenario| {
             let scenario_options = scenario_options(scenario, options.width, options.height)?;
-            let uniforms = scene_uniforms(&scenario_options)?;
+            let mut uniforms = scene_uniforms(&scenario_options)?;
+            let output_size = (options.width, options.height);
+            let scene_size = scene_render_size(
+                options.width,
+                options.height,
+                scenario.render_scale.unwrap_or(1.0),
+            );
+            uniforms.world_phases_and_pixel_footprint_m[3] =
+                visual_pixel_footprint_m(scenario.view_height_m, scene_size.1);
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("bench scene uniforms"),
                 contents: bytemuck::bytes_of(&uniforms),
@@ -410,6 +447,14 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                     .each_ref()
                     .map(|renderer| renderer.fields.bindings(&device, &buffer)),
                 field_grids: capture_field_grids(&scenario_options)?,
+                upscale: (scene_size != output_size).then(|| {
+                    upscaler.targets(
+                        &device,
+                        scene_size,
+                        output_size,
+                        wgpu::TextureFormat::Rgba8UnormSrgb,
+                    )
+                }),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -422,7 +467,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 &device,
                 &queue,
                 renderer,
-                &scene.frame(mode, &unused, &vertices),
+                &scene.frame(mode, &unused, &vertices, &upscaler),
                 timestamps.as_ref(),
                 options,
                 0,
@@ -434,7 +479,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
     let mut thumbnails = Vec::new();
     for (scenario, scene) in scenarios.into_iter().zip(&scene_bind_groups) {
         eprintln!("{}", scenario.id);
-        let shipped_bindings = scene.frame(0, &unused, &vertices);
+        let shipped_bindings = scene.frame(0, &unused, &vertices, &upscaler);
         let shipped = mode_report(
             time_mode(
                 &device,
@@ -449,7 +494,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         )?;
         let shipped_rgba =
             render_image(&device, &queue, &renderers[0], &shipped_bindings, options)?;
-        let all_branches_bindings = scene.frame(1, &unused, &vertices);
+        let all_branches_bindings = scene.frame(1, &unused, &vertices, &upscaler);
         let all_branches = mode_report(
             time_mode(
                 &device,
@@ -539,6 +584,14 @@ fn builtin_scenarios() -> Result<Vec<Scenario>, String> {
 fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Options, String> {
     let [camera_x_m, camera_y_m] = scenario.camera_m;
     validate_capture_spatial_inputs(camera_x_m, camera_y_m, scenario.view_height_m)?;
+    if scenario
+        .render_scale
+        .is_some_and(|scale| !(MINIMUM_RENDER_SCALE..=1.0).contains(&scale))
+    {
+        return Err(format!(
+            "renderScale must be from {MINIMUM_RENDER_SCALE} through 1"
+        ));
+    }
     validate_time_seconds(scenario.cloud_time_seconds, "cloudTimeSeconds")?;
     validate_time_seconds(scenario.world_time_seconds, "worldTimeSeconds")?;
     Ok(Options {
@@ -555,8 +608,8 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
 }
 
 /// Pass durations in milliseconds: environment fields, occluder fields, scene,
-/// and first begin to last end.
-type FrameTimes = [Option<f64>; 4];
+/// upscale, and first begin to last end.
+type FrameTimes = [Option<f64>; 5];
 
 struct TimedFrames {
     frames: Vec<FrameTimes>,
@@ -574,7 +627,6 @@ fn time_mode(
     timed_frames: u32,
 ) -> Result<TimedFrames, String> {
     let target = capture_texture(device, options.width, options.height);
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let mut timed = TimedFrames {
         frames: Vec::new(),
         discarded: 0,
@@ -586,7 +638,7 @@ fn time_mode(
         renderer.encode(
             &mut encoder,
             bindings,
-            &view,
+            &target,
             timestamps.map(|timestamps| &timestamps.query_set),
         );
         if let Some(timestamps) = timestamps {
@@ -642,22 +694,26 @@ fn time_mode(
                         .checked_sub(ticks[begin])
                         .map(|ticks| ticks as f64 * timestamps.period_ns / 1e6)
                 };
+                let last = if bindings.upscale.is_some() { 7 } else { 5 };
                 [
                     milliseconds(0, 1),
                     milliseconds(2, 3),
                     milliseconds(4, 5),
-                    milliseconds(0, 5),
+                    bindings.upscale.and(milliseconds(6, 7)),
+                    milliseconds(0, last),
                 ]
             }
-            _ => [None, None, None, Some(wall_ms)],
+            _ => [None, None, None, None, Some(wall_ms)],
         };
         if iteration < options.warmup_iterations {
             continue;
         }
         let complete = if timestamps.is_some() {
-            frame.iter().all(Option::is_some)
+            frame[..3].iter().all(Option::is_some)
+                && frame[3].is_some() == bindings.upscale.is_some()
+                && frame[4].is_some()
         } else {
-            frame[3].is_some()
+            frame[4].is_some()
         };
         if complete {
             timed.frames.push(frame);
@@ -679,12 +735,7 @@ fn render_image(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("bench image encoder"),
     });
-    renderer.encode(
-        &mut encoder,
-        bindings,
-        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        None,
-    );
+    renderer.encode(&mut encoder, bindings, &texture, None);
     read_texture(device, queue, encoder, &texture)
 }
 
@@ -700,11 +751,12 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
             min_ms: samples.iter().copied().fold(f64::INFINITY, f64::min),
         })
     };
-    let total = pass(3).ok_or("every timed frame had invalid timestamps")?;
+    let total = pass(4).ok_or("every timed frame had invalid timestamps")?;
     Ok(ModeReport {
         fields: pass(0),
         occluders: pass(1),
         scene: pass(2),
+        upscale: pass(3),
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
@@ -912,13 +964,14 @@ fn print_summary(report: &BenchReport) {
         "forced: EVALUATE_ALL_BRANCHES; Δmax: largest 8-bit difference from the shipped image"
     );
     println!(
-        "{:<22} {:>9} {:>7} {:>7} {:>9} {:>9} {:>10} {:>12} {:>10} {:>12} {:>9}",
+        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>9} {:>8} {:>10} {:>12} {:>10} {:>12} {:>9}",
         "scenario",
         "total ms",
         "ns/px",
         "fields",
         "occluders",
         "scene",
+        "upscale",
         "forced ms",
         "forced Δmax",
         "vs base",
@@ -938,13 +991,14 @@ fn print_summary(report: &BenchReport) {
             },
         );
         println!(
-            "{:<22} {:>9.2} {:>7.1} {:>7} {:>9} {:>9} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
+            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>9} {:>8} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
             scenario.scenario.id,
             shipped.total.median_ms,
             shipped.total_ns_per_pixel,
             milliseconds(shipped.fields),
             milliseconds(shipped.occluders),
             milliseconds(shipped.scene),
+            milliseconds(shipped.upscale),
             scenario.all_branches.total.median_ms,
             scenario.all_branches_image_difference.max,
             ratio,

@@ -42,3 +42,20 @@ test("per-pixel cost follows GPU timestamps only when every frame has them", () 
   ], 1_000_000);
   assert.deepEqual(partial, { id: "coast", submittedToDoneMs: 40, nsPerPixel: 40 });
 });
+
+test("an upscaled scenario reports the upscale pass and cost per output pixel", () => {
+  const passes = (upscaleMs: number) => ({
+    fieldsMs: 0.5, occludersMs: 2, sceneMs: 7.5, upscaleMs, totalMs: 10 + upscaleMs,
+  });
+  const summary = summarizeScenario("coast-scale-0.5", [
+    { submittedToDoneMs: 12, passes: passes(1) },
+    { submittedToDoneMs: 13, passes: passes(3) },
+    { submittedToDoneMs: 14, passes: passes(2) },
+  ], 2_000_000);
+  assert.deepEqual(summary, {
+    id: "coast-scale-0.5",
+    submittedToDoneMs: 13,
+    passes: { fieldsMs: 0.5, occludersMs: 2, sceneMs: 7.5, upscaleMs: 2, totalMs: 12 },
+    nsPerPixel: 6,
+  });
+});

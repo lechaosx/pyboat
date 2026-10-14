@@ -59,7 +59,7 @@ fn precipitation_water_contact_sample_from_atmosphere(
                         vec2<u32>(0x13198a2eu, 0x03707344u),
                     ),
             );
-            let local_cycle_time = scene.precipitation_phase_and_padding.x
+            let local_cycle_time = scene.precipitation_phase_and_css_view_height_px.x
                 * f32(cycles_per_anchor)
                 + visual_hash_unit(cell_hash.x);
             let local_cycle = u32(floor(local_cycle_time));

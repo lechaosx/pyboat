@@ -5,7 +5,7 @@ struct SceneUniforms {
     precipitation_epoch: vec2<u32>,
     world_size_m: vec2<f32>,
     inverse_world_size_m: vec2<f32>,
-    precipitation_phase_and_padding: vec4<f32>,
+    precipitation_phase_and_css_view_height_px: vec4<f32>,
     world_phases_and_pixel_footprint_m: vec4<f32>,
     pressure_time_coordinate: vec4<f32>,
     ocean_current_time_coordinate_and_padding: vec4<f32>,

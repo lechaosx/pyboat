@@ -1,5 +1,7 @@
 import {
   PlaygroundExposure,
+  PlaygroundFramePacer,
+  PlaygroundResolutionController,
   environment_field_shader_source,
   environment_field_texture_size,
   occluder_field_shader_source,
@@ -7,6 +9,7 @@ import {
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
   playground_occluder_field_shader_source,
+  playground_scene_render_size,
   playground_scene_shader_source,
   playground_scene_uniform_bytes,
   playground_scene_uniforms,
@@ -16,6 +19,7 @@ import {
   sample_playground_view_cloud_state,
   sample_playground_world_geometry,
   sample_playground_world_phases,
+  upscale_shader_source,
 } from "browser/playground";
 import {
   advanceFixedClock,
@@ -157,6 +161,10 @@ type State = {
   crossIsobarScale: number;
   thermalWindScale: number;
   shelterStrength: number;
+  renderScale: number;
+  automaticResolution: number;
+  maximumPixelRatio: number;
+  frameRateCap: number;
   diagnostic: DiagnosticSelection;
 };
 
@@ -255,6 +263,10 @@ const defaults: State = {
   crossIsobarScale: 1,
   thermalWindScale: 1,
   shelterStrength: 1,
+  renderScale: 1,
+  automaticResolution: 0,
+  maximumPixelRatio: 2,
+  frameRateCap: 0,
   diagnostic: "scene",
 };
 
@@ -584,6 +596,15 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "crossIsobarScale", label: "Cross-isobar flow", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "thermalWindScale", label: "Thermal shear", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "shelterStrength", label: "Terrain shelter", min: 0, max: 1, step: 0.05 },
+    ],
+  },
+  {
+    label: "Rendering",
+    controls: [
+      { type: "range", key: "renderScale", label: "Scene scale", min: 0.5, max: 1, step: 0.05 },
+      { type: "toggle", key: "automaticResolution", label: "Automatic scale" },
+      { type: "range", key: "maximumPixelRatio", label: "Pixel-ratio cap", min: 1, max: 4, step: 0.25 },
+      { type: "range", key: "frameRateCap", label: "FPS cap · 0 off", min: 0, max: 240, step: 5 },
     ],
   },
 ];
@@ -1102,6 +1123,64 @@ const vertices = new Float32Array([
 ]);
 const vertexBuffer = device.createBuffer({ size: vertices.byteLength, usage: 0x20 | 0x08 });
 device.queue.writeBuffer(vertexBuffer, 0, vertices);
+const upscaleShader = device.createShaderModule({ code: upscale_shader_source() });
+type UpscalePipelines = { easu: GPURenderPipeline; rcas: GPURenderPipeline };
+const upscalePipelines = new Map<GPUTextureFormat, UpscalePipelines>();
+type UpscaleTargets = {
+  key: string;
+  textures: GPUTexture[];
+  pipelines: UpscalePipelines;
+  sceneView: GPUTextureView;
+  easuInput: GPUBindGroup;
+  easuOutput: GPUTextureView;
+  rcasInput: GPUBindGroup;
+};
+let upscaleTargets: UpscaleTargets | undefined;
+// Both filters read and write display-encoded values through non-sRGB views.
+function prepareUpscale(sceneWidth: number, sceneHeight: number): UpscaleTargets {
+  const format: GPUTextureFormat = canvasHdr ? "rgba16float" : formatName;
+  const key = [sceneWidth, sceneHeight, previewCanvas.width, previewCanvas.height, format].join();
+  if (upscaleTargets?.key === key) return upscaleTargets;
+  for (const texture of upscaleTargets?.textures ?? []) texture.destroy();
+  let pipelines = upscalePipelines.get(format);
+  if (!pipelines) {
+    const pipeline = (entryPoint: string) => device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: upscaleShader, entryPoint: "fullscreen_vertex" },
+      fragment: { module: upscaleShader, entryPoint, targets: [{ format }] },
+      primitive: { topology: "triangle-list" },
+    });
+    pipelines = { easu: pipeline("easu"), rcas: pipeline("rcas") };
+    upscalePipelines.set(format, pipelines);
+  }
+  const texture = (width: number, height: number, viewFormats: GPUTextureFormat[]) =>
+    device.createTexture({ size: [width, height], format, usage: 0x10 | 0x04, viewFormats });
+  const scene = texture(sceneWidth, sceneHeight, canvasHdr ? [] : [sdrViewFormat]);
+  const easuOutput = texture(previewCanvas.width, previewCanvas.height, []);
+  const input = (pipeline: GPURenderPipeline, source: GPUTexture) => device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: source.createView() }],
+  });
+  upscaleTargets = {
+    key,
+    textures: [scene, easuOutput],
+    pipelines,
+    sceneView: scene.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat }),
+    easuInput: input(pipelines.easu, scene),
+    easuOutput: easuOutput.createView(),
+    rcasInput: input(pipelines.rcas, easuOutput),
+  };
+  return upscaleTargets;
+}
+const framePacer = new PlaygroundFramePacer();
+let renderDue = true;
+let lastCompletionAt = 0;
+let resolutionController: PlaygroundResolutionController | undefined;
+let automaticRenderScale: number | undefined;
+let sceneSize: Uint32Array = new Uint32Array([1, 1]);
+function frameRateCap(): number | undefined {
+  return state.frameRateCap > 0 ? state.frameRateCap : undefined;
+}
 let sceneUniforms: Uint8Array = new Uint8Array(playground_scene_uniform_bytes());
 const tuningFloats = new Float32Array(108);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
@@ -1132,20 +1211,21 @@ type FieldPasses = {
 };
 
 const timestampQuerySet = timestampQueriesSupported
-  ? device.createQuerySet({ type: "timestamp", count: 4 })
+  ? device.createQuerySet({ type: "timestamp", count: 5 })
   : undefined;
 const timestampResolveBuffer = timestampQueriesSupported
-  ? device.createBuffer({ size: 32, usage: 0x0200 | 0x0004 })
+  ? device.createBuffer({ size: 40, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
   buffer: GPUBuffer;
   pending: boolean;
   pipeline?: GPURenderPipeline;
   fields?: boolean;
+  upscaled?: boolean;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
   ? Array.from({ length: 3 }, () => ({
-      buffer: device.createBuffer({ size: 32, usage: 0x0001 | 0x0008 }),
+      buffer: device.createBuffer({ size: 40, usage: 0x0001 | 0x0008 }),
       pending: false,
     }))
   : [];
@@ -1469,6 +1549,11 @@ function updateUniforms(
   elapsedSeconds: number,
   presentationTimeMs: number,
 ): void {
+  sceneSize = playground_scene_render_size(
+    previewCanvas.width,
+    previewCanvas.height,
+    automaticRenderScale ?? state.renderScale,
+  );
   const enabled = (key: NumericStateKey): number => Number(state[key] > 0.5);
   const light = [
     enabled("sunLightVisible"),
@@ -1550,6 +1635,8 @@ function updateUniforms(
     state.viewHeight,
     previewCanvas.width,
     previewCanvas.height,
+    sceneSize[1]!,
+    bench ? previewCanvas.height : previewCanvas.clientHeight,
     new Float32Array(cloudMotion.advance(elapsedSeconds, lowWind, upperWind)),
     viewCloud.subarray(4, 8),
     new Float32Array([
@@ -1687,11 +1774,11 @@ function updateUniforms(
     0,
     0,
   ], 100);
-  tuningUints.set([occluderFieldInspection, previewCanvas.width, previewCanvas.height, 0], 104);
+  tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 104);
 }
 
 function resize(): void {
-  const scale = Math.min(devicePixelRatio, 2);
+  const scale = Math.min(devicePixelRatio, state.maximumPixelRatio);
   const [width, height] = bench
     ? [bench.width, bench.height]
     : boundedCanvasDimensions(
@@ -1745,6 +1832,8 @@ let gpuSamplesInWindow = 0;
 let measuredFieldsGpuMilliseconds: number | undefined;
 let measuredOccludersGpuMilliseconds: number | undefined;
 let measuredSceneGpuMilliseconds: number | undefined;
+let upscaleGpuMillisecondsInWindow = 0;
+let measuredUpscaleGpuMilliseconds = 0;
 let timedPipeline: GPURenderPipeline | undefined;
 let timedUsesFields = false;
 let latestPassTimes: Promise<PassTimes | undefined> = Promise.resolve(undefined);
@@ -1762,6 +1851,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
     measuredFieldsGpuMilliseconds = fieldsGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredOccludersGpuMilliseconds = occludersGpuMillisecondsInWindow / gpuSamplesInWindow;
     measuredSceneGpuMilliseconds = sceneGpuMillisecondsInWindow / gpuSamplesInWindow;
+    measuredUpscaleGpuMilliseconds = upscaleGpuMillisecondsInWindow / gpuSamplesInWindow;
   }
   statisticsStartedAt = now;
   framesInWindow = 0;
@@ -1770,6 +1860,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   fieldsGpuMillisecondsInWindow = 0;
   occludersGpuMillisecondsInWindow = 0;
   sceneGpuMillisecondsInWindow = 0;
+  upscaleGpuMillisecondsInWindow = 0;
   gpuSamplesInWindow = 0;
   const rates = `${measuredFramesPerSecond.toFixed(0)} FPS · ${measuredTicksPerSecond.toFixed(0)} TPS`;
   const gpuTiming = measuredGpuMilliseconds === undefined
@@ -1777,11 +1868,13 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
     : timedUsesFields && measuredFieldsGpuMilliseconds !== undefined
       && measuredOccludersGpuMilliseconds !== undefined
       && measuredSceneGpuMilliseconds !== undefined
-    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredFieldsGpuMilliseconds.toFixed(1)} fields + ${measuredOccludersGpuMilliseconds.toFixed(1)} occluders + ${measuredSceneGpuMilliseconds.toFixed(1)} scene)`
+    ? ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU (${measuredFieldsGpuMilliseconds.toFixed(1)} fields + ${measuredOccludersGpuMilliseconds.toFixed(1)} occluders + ${measuredSceneGpuMilliseconds.toFixed(1)} scene${measuredUpscaleGpuMilliseconds > 0 ? ` + ${measuredUpscaleGpuMilliseconds.toFixed(1)} upscale` : ""})`
     : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU scene`;
+  const sceneScale = sceneSize[1]! / previewCanvas.height;
+  const scale = sceneScale < 1 ? ` · scene ${(sceneScale * 100).toFixed(0)}%` : "";
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
-  statusElement.textContent = `${rates}${gpuTiming}${compilation}`;
-  statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · ${format(cloudTimeSeconds, 1)} s`;
+  statusElement.textContent = `${rates}${gpuTiming}${scale}${compilation}`;
+  statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · scene ${sceneSize[0]} × ${sceneSize[1]} · ${format(cloudTimeSeconds, 1)} s`;
   syncWorldDateInputs();
 }
 
@@ -1840,6 +1933,14 @@ function advanceFrame(now: number): void {
   if (canvasHdr !== Boolean(renderResources.hdr)) {
     configureCanvas(Boolean(renderResources.hdr));
   }
+  if (state.automaticResolution > 0.5) {
+    resolutionController ??= new PlaygroundResolutionController(state.renderScale);
+  } else if (resolutionController) {
+    resolutionController.free();
+    resolutionController = undefined;
+    automaticRenderScale = undefined;
+  }
+  renderDue = framePacer.frame_due(elapsed, frameRateCap());
   updateUniforms(
     cloudTimeSeconds,
     worldTimeSeconds,
@@ -1863,19 +1964,29 @@ function renderFrame(): Promise<void> {
     measuredFieldsGpuMilliseconds = undefined;
     measuredOccludersGpuMilliseconds = undefined;
     measuredSceneGpuMilliseconds = undefined;
+    measuredUpscaleGpuMilliseconds = 0;
     gpuMillisecondsInWindow = 0;
     fieldsGpuMillisecondsInWindow = 0;
     occludersGpuMillisecondsInWindow = 0;
     sceneGpuMillisecondsInWindow = 0;
+    upscaleGpuMillisecondsInWindow = 0;
     gpuSamplesInWindow = 0;
   }
   const timestampReadback = timestampQuerySet && timestampResolveBuffer
     ? timestampReadbacks.find((readback) => !readback.pending)
     : undefined;
   const fields = renderResources.fields;
-  // Pass-end query indices: the field passes end at 1 and 2 and the scene at 3;
-  // the first timed pass also writes its beginning to 0.
+  // Pass-end query indices: the field passes end at 1 and 2, the scene at 3,
+  // and an upscale after it; the first timed pass also writes its beginning to 0.
   const sceneEnd = fields ? 3 : 1;
+  const upscale = sceneSize[0] !== previewCanvas.width || sceneSize[1] !== previewCanvas.height
+    ? prepareUpscale(sceneSize[0]!, sceneSize[1]!)
+    : undefined;
+  if (!upscale && upscaleTargets) {
+    for (const texture of upscaleTargets.textures) texture.destroy();
+    upscaleTargets = undefined;
+  }
+  const lastEnd = upscale ? sceneEnd + 1 : sceneEnd;
   if (fields) {
     const environmentPassDescriptor: GPUComputePassDescriptor = {};
     const occluderPassDescriptor: GPUComputePassDescriptor = {};
@@ -1904,9 +2015,10 @@ function renderFrame(): Promise<void> {
     occluderPass.dispatchWorkgroups(fieldGrids[2]!, fieldGrids[3]!, fieldGrids[4]!);
     occluderPass.end();
   }
+  const canvasTexture = context.getCurrentTexture();
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
-      view: context.getCurrentTexture().createView({
+      view: upscale?.sceneView ?? canvasTexture.createView({
         format: canvasHdr ? "rgba16float" : sdrViewFormat,
       }),
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
@@ -1930,9 +2042,26 @@ function renderFrame(): Promise<void> {
   pass.setVertexBuffer(0, vertexBuffer);
   pass.draw(6);
   pass.end();
+  if (upscale) {
+    for (const [pipeline, input, view] of [
+      [upscale.pipelines.easu, upscale.easuInput, upscale.easuOutput],
+      [upscale.pipelines.rcas, upscale.rcasInput, canvasTexture.createView()],
+    ] as const) {
+      const upscalePass = encoder.beginRenderPass({
+        colorAttachments: [{ view, loadOp: "clear", storeOp: "store" }],
+        ...(timestampReadback && pipeline === upscale.pipelines.rcas
+          ? { timestampWrites: { querySet: timestampQuerySet!, endOfPassWriteIndex: lastEnd } }
+          : {}),
+      });
+      upscalePass.setPipeline(pipeline);
+      upscalePass.setBindGroup(0, input);
+      upscalePass.draw(3);
+      upscalePass.end();
+    }
+  }
   if (timestampReadback) {
-    const timestampBytes = (sceneEnd + 1) * 8;
-    encoder.resolveQuerySet(timestampQuerySet!, 0, sceneEnd + 1, timestampResolveBuffer!, 0);
+    const timestampBytes = (lastEnd + 1) * 8;
+    encoder.resolveQuerySet(timestampQuerySet!, 0, lastEnd + 1, timestampResolveBuffer!, 0);
     encoder.copyBufferToBuffer(
       timestampResolveBuffer!,
       0,
@@ -1943,8 +2072,10 @@ function renderFrame(): Promise<void> {
     timestampReadback.pending = true;
     timestampReadback.pipeline = renderResources.pipeline;
     timestampReadback.fields = Boolean(fields);
+    timestampReadback.upscaled = Boolean(upscale);
   }
   device.queue.submit([encoder.finish()]);
+  const submittedAt = performance.now();
   framesInWindow += 1;
   latestPassTimes = Promise.resolve(undefined);
   if (timestampReadback) {
@@ -1952,8 +2083,9 @@ function renderFrame(): Promise<void> {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
       const withFields = Boolean(timestampReadback.fields);
       const sceneEnd = withFields ? 3 : 1;
+      const lastEnd = timestampReadback.upscaled ? sceneEnd + 1 : sceneEnd;
       const startedAt = timestamps[0]!;
-      const finishedAt = timestamps[sceneEnd]!;
+      const finishedAt = timestamps[lastEnd]!;
       const milliseconds = (begin: number, end: number): number =>
         Number(timestamps[end]! - timestamps[begin]!) / 1_000_000;
       const valid = startedAt > 0n && finishedAt >= startedAt;
@@ -1962,16 +2094,18 @@ function renderFrame(): Promise<void> {
           fieldsMs: milliseconds(0, 1),
           occludersMs: milliseconds(1, 2),
           sceneMs: milliseconds(2, 3),
-          totalMs: milliseconds(0, 3),
+          ...(timestampReadback.upscaled ? { upscaleMs: milliseconds(3, 4) } : {}),
+          totalMs: milliseconds(0, lastEnd),
         }
         : undefined;
       if (timestampReadback.pipeline === timedPipeline && valid) {
-        gpuMillisecondsInWindow += milliseconds(0, sceneEnd);
+        gpuMillisecondsInWindow += milliseconds(0, lastEnd);
         if (withFields) {
           fieldsGpuMillisecondsInWindow += milliseconds(0, 1);
           occludersGpuMillisecondsInWindow += milliseconds(1, 2);
         }
         sceneGpuMillisecondsInWindow += milliseconds(sceneEnd - 1, sceneEnd);
+        upscaleGpuMillisecondsInWindow += milliseconds(sceneEnd, lastEnd);
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
@@ -1980,11 +2114,34 @@ function renderFrame(): Promise<void> {
       timestampReadback.pending = false;
     });
   }
-  return device.queue.onSubmittedWorkDone();
+  const controller = resolutionController;
+  return device.queue.onSubmittedWorkDone().then(() => {
+    const completedAt = performance.now();
+    // Work queued behind the previous frame starts when that frame completes.
+    // Browsers can report several completions in one task; the later ones then
+    // measure nothing and are skipped.
+    const queued = submittedAt < lastCompletionAt;
+    const startedAt = Math.max(submittedAt, lastCompletionAt);
+    lastCompletionAt = completedAt;
+    if (queued && completedAt - startedAt < 1) return;
+    if (controller && controller === resolutionController) {
+      automaticRenderScale = controller.record_frame(
+        completedAt - startedAt,
+        frameRateCap(),
+        state.renderScale,
+      );
+    }
+  });
 }
 
 if (!bench) {
-  startRenderLoop(advanceFrame, renderFrame, () => renderLoopActive, (error) => {
+  // The loop calls this only when a frame slot is free, so the pacer is charged
+  // only for frames that are actually submitted.
+  startRenderLoop(advanceFrame, () => {
+    if (!renderDue) return Promise.resolve();
+    framePacer.frame_rendered(frameRateCap());
+    return renderFrame();
+  }, () => renderLoopActive, (error) => {
     if (renderLoopActive) statusElement.textContent = "Rendering failed; retrying";
     console.error(error);
   });
@@ -2123,6 +2280,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       pressureTimeSeconds: scenario.cloudTimeSeconds,
       currentTimeSeconds: scenario.worldTimeSeconds,
       worldTimeSeconds: scenario.worldTimeSeconds,
+      renderScale: scenario.renderScale ?? 1,
     });
     updateRenderedGeometry();
     const samples: FrameSample[] = [];
@@ -2172,6 +2330,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
     fieldsMs: passes?.fieldsMs,
     occludersMs: passes?.occludersMs,
     sceneMs: passes?.sceneMs,
+    upscaleMs: passes?.upscaleMs,
     nsPerPixel,
   })));
   const output = document.createElement("pre");
@@ -2179,11 +2338,11 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
   output.textContent = [
     `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · median of ${settings.timedFrames} frames`,
     ...summaries.map(({ id, submittedToDoneMs, passes, nsPerPixel }) => [
-      id.padEnd(22),
+      id.padEnd(30),
       `${(passes?.totalMs ?? submittedToDoneMs).toFixed(1).padStart(7)} ms`,
       `${nsPerPixel.toFixed(0).padStart(5)} ns/px`,
       passes
-        ? `(${passes.fieldsMs.toFixed(1)} fields + ${passes.occludersMs.toFixed(1)} occluders + ${passes.sceneMs.toFixed(1)} scene)`
+        ? `(${passes.fieldsMs.toFixed(1)} fields + ${passes.occludersMs.toFixed(1)} occluders + ${passes.sceneMs.toFixed(1)} scene${passes.upscaleMs === undefined ? "" : ` + ${passes.upscaleMs.toFixed(1)} upscale`})`
         : `submit to completion`,
     ].join(" ")),
   ].join("\n");

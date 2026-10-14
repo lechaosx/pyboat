@@ -58,6 +58,26 @@ fn main() {
         &["generate_occluder_fields"],
         "occluder-fields.wgsl",
     );
+    let upscale = read_component("src/shader/upscale.wgsl");
+    write_shader(
+        &upscale,
+        &["fullscreen_vertex", "easu", "rcas"],
+        "upscale.wgsl",
+    );
+    // The served shader must carry the source's licence notice, which naga drops
+    // with every other comment.
+    let licence: String = upscale
+        .lines()
+        .take_while(|line| line.starts_with("//"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(
+        licence.contains("Copyright"),
+        "upscale.wgsl must start with its licence"
+    );
+    let upscale_output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("upscale.wgsl");
+    let upscale_shader = fs::read_to_string(&upscale_output).unwrap();
+    fs::write(upscale_output, format!("{licence}\n{upscale_shader}")).unwrap();
     let playground_interface = read_component("src/shader/playground-interface.wgsl");
     let startup = read_components(&[
         "src/shader/components/scene-state.wgsl",

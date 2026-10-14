@@ -6,6 +6,7 @@ export type BenchScenario = {
   viewHeightM: number;
   cloudTimeSeconds: number;
   worldTimeSeconds: number;
+  renderScale?: number;
 };
 
 export type BenchSettings = {
@@ -19,6 +20,7 @@ export type PassTimes = {
   fieldsMs: number;
   occludersMs: number;
   sceneMs: number;
+  upscaleMs?: number;
   totalMs: number;
 };
 
@@ -75,10 +77,12 @@ export function summarizeScenario(
   if (timed.length !== samples.length) {
     return { id, submittedToDoneMs, nsPerPixel: submittedToDoneMs * 1e6 / pixels };
   }
-  const passes = {
+  const upscaleMs = timed.flatMap((pass) => pass.upscaleMs === undefined ? [] : [pass.upscaleMs]);
+  const passes: PassTimes = {
     fieldsMs: median(timed.map((pass) => pass.fieldsMs)),
     occludersMs: median(timed.map((pass) => pass.occludersMs)),
     sceneMs: median(timed.map((pass) => pass.sceneMs)),
+    ...(upscaleMs.length === timed.length ? { upscaleMs: median(upscaleMs) } : {}),
     totalMs: median(timed.map((pass) => pass.totalMs)),
   };
   return { id, submittedToDoneMs, passes, nsPerPixel: passes.totalMs * 1e6 / pixels };

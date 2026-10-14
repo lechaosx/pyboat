@@ -2,7 +2,7 @@
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if input.is_terrain <= 0.5 {
         return vec4<f32>(encode_display_color(tone_map_scene_color(
-            linear_material_color(input.color), input.position.xy,
+            linear_material_color(input.color), input.css_position_px,
         )), 1.0);
     }
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
@@ -32,7 +32,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         surface_weather.atmosphere,
         surface_circle_position,
     );
-    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, input.position.xy)), color.a);
+    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, input.css_position_px)), color.a);
 }
 
 fn environment_feature_visibility() -> vec4<f32> {

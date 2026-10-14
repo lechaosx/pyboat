@@ -76,7 +76,7 @@ struct SceneUniforms {
     precipitation_epoch: [u32; 2],
     world_size_m: [f32; 2],
     inverse_world_size_m: [f32; 2],
-    precipitation_phase_and_padding: [f32; 4],
+    precipitation_phase_and_css_view_height_px: [f32; 4],
     world_phases_and_pixel_footprint_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
@@ -1772,7 +1772,12 @@ fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
             options.world_width_m.recip(),
             options.world_height_m.recip(),
         ],
-        precipitation_phase_and_padding: [precipitation_phase, 0.0, 0.0, 0.0],
+        precipitation_phase_and_css_view_height_px: [
+            precipitation_phase,
+            options.height as f32,
+            0.0,
+            0.0,
+        ],
         world_phases_and_pixel_footprint_m: [
             conditions.day_phase,
             conditions.season_phase,
@@ -1823,7 +1828,7 @@ fn capture_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Text
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
     })
 }
 

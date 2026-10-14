@@ -38,6 +38,11 @@ Replace the hash and reload after every server restart. TLS alert 42 usually
 means the hash is missing or stale. Omit it when using a browser-trusted server
 certificate; the local Vite page can use HTTP, but WebTransport stays encrypted.
 
+Graphics settings are URL parameters: `renderScale` (scene resolution
+fraction), `pixelRatio` (device pixel ratio cap), `fps` (frame-rate cap, 0 for
+none), and `autoResolution` (1 to lower the scale when frames run long). Touch
+screens default to a reduced scale, a frame-rate cap, and automatic resolution.
+
 ## Controls
 
 | Input | Action |

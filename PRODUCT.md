@@ -128,6 +128,15 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** The browser HUD reports sailing state, depth, under-keel clearance,
   and grounding. Zoom has no gameplay limit and middle-click restores its original value.
 
+## Graphics settings
+
+- **[Explicit]** No graphics setting, whether detail, resolution, or frame rate,
+  gives any player an advantage or affects physics or gameplay.
+- **[Implicit]** Night and storm darkening, shallow-water hazards, shorelines,
+  the ice edge, and boats stay visible and legible at every graphics setting.
+- **[Implicit]** Touch screens default to battery-friendly frame rate and
+  resolution; other devices default to full quality.
+
 ## Controls and multiplayer
 
 - **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
@@ -189,3 +198,4 @@ See [README.md](README.md) for what is playable now and
 | Grounding | Recovery, rock damage, draft, spawn clearance, and friction tuning |
 | Navigation | Large-ship drafts and reef-passage availability by class |
 | Combat | Health, impact thresholds, damage conversion, and hull-zone balance after playtesting |
+| Graphics settings | Where players choose graphics settings, and which presets they see |

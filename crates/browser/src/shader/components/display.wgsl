@@ -32,7 +32,7 @@ fn vision_noise_field(cell: vec2<u32>, blend: vec2<f32>, phase: u32) -> f32 {
     );
 }
 
-fn adapted_view_color(linear_color: vec3<f32>, adapted_gain: f32, pixel_position: vec2<f32>, noise_phase: f32) -> vec3<f32> {
+fn adapted_view_color(linear_color: vec3<f32>, adapted_gain: f32, css_position_px: vec2<f32>, noise_phase: f32) -> vec3<f32> {
     if adapted_gain <= 1.0 {
         return linear_color;
     }
@@ -42,7 +42,8 @@ fn adapted_view_color(linear_color: vec3<f32>, adapted_gain: f32, pixel_position
     // Relative uncertainty grows as photon signal falls. Multiplicative noise
     // preserves black and has zero mean; the cap keeps faint hazards readable.
     let amplitude = rod_fraction * min(0.12, 0.002 / sqrt(max(signal, 0.000001)));
-    let grid = pixel_position / 4.0;
+    // CSS-pixel cells keep the grain's on-screen size the same at every graphics setting.
+    let grid = css_position_px / 4.0;
     let cell = vec2<u32>(floor(grid));
     let blend = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), fract(grid));
     let phase = noise_phase % 4096.0;
@@ -69,9 +70,9 @@ fn encode_display_color(linear_color: vec3<f32>) -> vec3<f32> {
     );
 }
 
-fn tone_map_scene_color(scene_color: vec3<f32>, pixel_position: vec2<f32>) -> vec3<f32> {
+fn tone_map_scene_color(scene_color: vec3<f32>, css_position_px: vec2<f32>) -> vec3<f32> {
     let exposed = max(
-        adapted_view_color(scene_color, scene.exposure_and_output.x, pixel_position, scene.exposure_and_output.w) * scene.exposure_and_output.x,
+        adapted_view_color(scene_color, scene.exposure_and_output.x, css_position_px, scene.exposure_and_output.w) * scene.exposure_and_output.x,
         vec3<f32>(0.0),
     );
     let maximum = max(exposed.r, max(exposed.g, exposed.b));

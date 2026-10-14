@@ -5,7 +5,7 @@ use std::{
     mem,
     rc::Rc,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -34,13 +34,14 @@ use wgpu::CurrentSurfaceTexture;
 use crate::frame_queue::FrameQueue;
 use crate::{
     BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
-    ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, MAX_SERVER_MESSAGE_BYTES,
-    MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS,
-    SCENE_SHADER, ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
+    ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings,
+    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, UpscaleTargets, Upscaler,
+    ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
     bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
     ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
     requeue_failed_viewport, sample_view_cloud_state_for_render_clocks, sample_world_geometry,
-    scale_bar, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
+    scale_bar, scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
     visual_pixel_footprint_m, webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
 
@@ -94,6 +95,74 @@ impl Default for PlaygroundExposure {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct PlaygroundFramePacer {
+    pacer: FramePacer,
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundFramePacer {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn frame_due(&mut self, elapsed_seconds: f64, frame_rate_cap: Option<f64>) -> bool {
+        self.pacer.frame_due(elapsed_seconds, frame_rate_cap)
+    }
+
+    pub fn frame_rendered(&mut self, frame_rate_cap: Option<f64>) {
+        self.pacer.frame_rendered(frame_rate_cap);
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub struct PlaygroundResolutionController {
+    controller: ResolutionController,
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundResolutionController {
+    #[wasm_bindgen(constructor)]
+    pub fn new(scale: f32) -> Self {
+        Self {
+            controller: ResolutionController::new(scale),
+        }
+    }
+
+    pub fn record_frame(
+        &mut self,
+        frame_ms: f64,
+        frame_rate_cap: Option<f64>,
+        maximum_scale: f32,
+    ) -> f32 {
+        self.controller
+            .record_frame(frame_ms, frame_rate_cap, maximum_scale)
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_scene_render_size(
+    output_width: u32,
+    output_height: u32,
+    render_scale: f32,
+) -> Vec<u32> {
+    let (width, height) = scene_render_size(output_width, output_height, render_scale);
+    vec![width, height]
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn upscale_shader_source() -> String {
+    crate::UPSCALE_SHADER.to_owned()
 }
 
 #[cfg(feature = "playground")]
@@ -520,6 +589,8 @@ pub fn playground_scene_uniforms(
     view_height_m: f32,
     render_width_px: u32,
     render_height_px: u32,
+    scene_height_px: u32,
+    css_view_height_px: f32,
     view_cloud_motion_m: &[f32],
     cloud_time_coordinates: &[f32],
     exposure_and_output: &[f32],
@@ -584,12 +655,17 @@ pub fn playground_scene_uniforms(
         ],
         world_size_m: [world_width_m, world_height_m],
         inverse_world_size_m: [world_width_m.recip(), world_height_m.recip()],
-        precipitation_phase_and_padding: [precipitation_time.phase, 0.0, 0.0, 0.0],
+        precipitation_phase_and_css_view_height_px: [
+            precipitation_time.phase,
+            css_view_height_px,
+            0.0,
+            0.0,
+        ],
         world_phases_and_pixel_footprint_m: [
             celestial.day_phase,
             celestial.season_phase,
             celestial.lunar_longitude_phase,
-            visual_pixel_footprint_m(view_height_m, render_height_px),
+            visual_pixel_footprint_m(view_height_m, scene_height_px),
         ],
         pressure_time_coordinate: pressure_time.pressure,
         ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
@@ -723,7 +799,7 @@ struct SceneUniforms {
     precipitation_epoch: [u32; 2],
     world_size_m: [f32; 2],
     inverse_world_size_m: [f32; 2],
-    precipitation_phase_and_padding: [f32; 4],
+    precipitation_phase_and_css_view_height_px: [f32; 4],
     world_phases_and_pixel_footprint_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
@@ -996,14 +1072,27 @@ struct Renderer {
     empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
+    upscaler: Upscaler,
+    upscale_targets: Option<UpscaleTargets>,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
     exposure: ViewExposure,
     vision_noise_phase: f64,
+    graphics: GraphicsSettings,
+    frame_pacer: FramePacer,
+    render_scale: f32,
+    resolution: Option<ResolutionController>,
+    frame_timing: Arc<Mutex<FrameTiming>>,
+}
+
+#[derive(Default)]
+struct FrameTiming {
+    last_completion_ms: f64,
+    frame_ms: Vec<f64>,
 }
 
 impl Renderer {
-    async fn new(canvas: HtmlCanvasElement) -> Result<Self, JsValue> {
+    async fn new(canvas: HtmlCanvasElement, graphics: GraphicsSettings) -> Result<Self, JsValue> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -1037,7 +1126,11 @@ impl Renderer {
         device.on_uncaptured_error(Arc::new(move |_| {
             uncaptured_error_callback.store(true, Ordering::Release);
         }));
-        let (width, height) = canvas_dimensions(&canvas, device.limits().max_texture_dimension_2d);
+        let (width, height) = canvas_dimensions(
+            &canvas,
+            device.limits().max_texture_dimension_2d,
+            graphics.maximum_pixel_ratio,
+        );
         canvas.set_width(width);
         canvas.set_height(height);
         let mut config = surface
@@ -1210,6 +1303,7 @@ impl Renderer {
             layout: &empty_bind_group_layout,
             entries: &[],
         });
+        let upscaler = Upscaler::new(&device, config.format);
 
         Ok(Self {
             canvas,
@@ -1227,10 +1321,19 @@ impl Renderer {
             empty_bind_group,
             environment_fields,
             occluder_fields,
+            upscaler,
+            upscale_targets: None,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
             exposure: ViewExposure::default(),
             vision_noise_phase: 0.0,
+            frame_pacer: FramePacer::default(),
+            render_scale: graphics.render_scale,
+            resolution: graphics
+                .automatic_resolution
+                .then(|| ResolutionController::new(graphics.render_scale)),
+            graphics,
+            frame_timing: Arc::default(),
         })
     }
 
@@ -1249,18 +1352,9 @@ impl Renderer {
             return Err(JsValue::from_str("WebGPU device was lost"));
         }
         self.resize();
-        let view_width_m = view_width_m(
-            self.config.width as f32 / self.config.height as f32,
-            view_height_m,
-        );
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
-        let celestial = world_celestial_conditions(
-            world_geometry,
-            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
-            Vector::ZERO,
-        );
-        let orbit = celestial_orbit(celestial);
+        let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
         let has_match = match_seed.is_some();
         let match_seed = match_seed.unwrap_or(0);
         let view_cloud_state = sample_view_cloud_state_for_render_clocks(
@@ -1283,33 +1377,9 @@ impl Renderer {
                 view_cloud_state.upper_wind_velocity_m_s,
             );
         }
-        let precipitation_time = periodic_effect_time_interpolated(
-            tick,
-            tick_fraction,
-            PRECIPITATION_CONTACT_PERIOD_TICKS,
-        );
-        let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
-        let vector_time =
-            vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
-        let cloud_time = view_cloud_state.cloud_time_coordinates;
-        let view_cloud_motion_m = [
-            self.cloud_motion.low_offset_m[0] as f32,
-            self.cloud_motion.low_offset_m[1] as f32,
-            self.cloud_motion.upper_offset_m[0] as f32,
-            self.cloud_motion.upper_offset_m[1] as f32,
-        ];
-        let field_grids = field_grids(
-            world_geometry,
-            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
-            canonical_camera_m,
-            [view_width_m, view_height_m],
-            view_cloud_motion_m,
-            FieldGridTuning::PRODUCTION,
-        );
-        let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
         let local_celestial = world_celestial_conditions(
             world_geometry,
-            (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64,
+            world_time_seconds,
             canonical_camera_m.into(),
         );
         let target = crate::exposure_target(celestial_lighting(local_celestial).ambient_intensity);
@@ -1320,12 +1390,21 @@ impl Renderer {
         };
         self.vision_noise_phase =
             (self.vision_noise_phase + elapsed_seconds.max(0.0) * 8.0) % 4096.0;
-        let hdr = self.config.format == wgpu::TextureFormat::Rgba16Float;
-        let output_peak = if hdr && canvas_has_hdr_output(&self.canvas) {
-            4.0
-        } else {
-            1.0
-        };
+        if let Some(resolution) = &mut self.resolution {
+            for frame_ms in self.frame_timing.lock().unwrap().frame_ms.drain(..) {
+                self.render_scale = resolution.record_frame(
+                    frame_ms,
+                    self.graphics.frame_rate_cap,
+                    self.graphics.render_scale,
+                );
+            }
+        }
+        if !self
+            .frame_pacer
+            .frame_due(elapsed_seconds, self.graphics.frame_rate_cap)
+        {
+            return Ok(());
+        }
         let Some(frame_permit) = self.frame_queue.try_acquire() else {
             return Ok(());
         };
@@ -1348,7 +1427,46 @@ impl Renderer {
                 ));
             }
         };
-        let vertices = scene_vertices(
+        self.frame_pacer
+            .frame_rendered(self.graphics.frame_rate_cap);
+        let view_width_m = view_width_m(
+            self.config.width as f32 / self.config.height as f32,
+            view_height_m,
+        );
+        let celestial =
+            world_celestial_conditions(world_geometry, world_time_seconds, Vector::ZERO);
+        let orbit = celestial_orbit(celestial);
+        let precipitation_time = periodic_effect_time_interpolated(
+            tick,
+            tick_fraction,
+            PRECIPITATION_CONTACT_PERIOD_TICKS,
+        );
+        let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
+        let vector_time =
+            vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
+        let cloud_time = view_cloud_state.cloud_time_coordinates;
+        let view_cloud_motion_m = [
+            self.cloud_motion.low_offset_m[0] as f32,
+            self.cloud_motion.low_offset_m[1] as f32,
+            self.cloud_motion.upper_offset_m[0] as f32,
+            self.cloud_motion.upper_offset_m[1] as f32,
+        ];
+        let field_grids = field_grids(
+            world_geometry,
+            world_time_seconds,
+            canonical_camera_m,
+            [view_width_m, view_height_m],
+            view_cloud_motion_m,
+            FieldGridTuning::PRODUCTION,
+        );
+        let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
+        let hdr = self.config.format == wgpu::TextureFormat::Rgba16Float;
+        let output_peak = if hdr && canvas_has_hdr_output(&self.canvas) {
+            4.0
+        } else {
+            1.0
+        };
+        let (vertices, terrain_vertex_count) = scene_vertices(
             scenes,
             has_match,
             camera_m,
@@ -1356,6 +1474,9 @@ impl Renderer {
             self.config.height,
             view_height_m,
         );
+        let output_size = (self.config.width, self.config.height);
+        let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
+        let upscaled = scene_size != output_size && terrain_vertex_count > 0;
         if vertices.len() > self.vertex_capacity {
             self.vertex_capacity = vertices.len().next_power_of_two();
             self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1393,12 +1514,24 @@ impl Renderer {
                     world_geometry.width_m().recip(),
                     world_geometry.height_m().recip(),
                 ],
-                precipitation_phase_and_padding: [precipitation_time.phase, 0.0, 0.0, 0.0],
+                precipitation_phase_and_css_view_height_px: [
+                    precipitation_time.phase,
+                    self.canvas.client_height() as f32,
+                    0.0,
+                    0.0,
+                ],
                 world_phases_and_pixel_footprint_m: [
                     celestial.day_phase,
                     celestial.season_phase,
                     celestial.lunar_longitude_phase,
-                    visual_pixel_footprint_m(view_height_m, self.config.height),
+                    visual_pixel_footprint_m(
+                        view_height_m,
+                        if upscaled {
+                            scene_size.1
+                        } else {
+                            output_size.1
+                        },
+                    ),
                 ],
                 pressure_time_coordinate: vector_time.pressure,
                 ocean_current_time_coordinate_and_padding: [
@@ -1442,8 +1575,9 @@ impl Renderer {
             }),
         );
 
+        let output_format = self.config.format.add_srgb_suffix();
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.config.format.add_srgb_suffix()),
+            format: Some(output_format),
             ..Default::default()
         });
         let mut encoder = self
@@ -1455,43 +1589,116 @@ impl Renderer {
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Scene pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.025,
-                            g: 0.11,
-                            b: 0.15,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.scene_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..vertices.len() as u32, 0..1);
+        let vertex_count = vertices.len() as u32;
+        if !upscaled {
+            self.upscale_targets = None;
+        } else if self.upscale_targets.as_ref().is_none_or(|targets| {
+            (targets.scene_size, targets.output_size) != (scene_size, output_size)
+        }) {
+            self.upscale_targets =
+                Some(
+                    self.upscaler
+                        .targets(&self.device, scene_size, output_size, output_format),
+                );
+        }
+        let clear = wgpu::LoadOp::Clear(wgpu::Color {
+            r: 0.025,
+            g: 0.11,
+            b: 0.15,
+            a: 1.0,
+        });
+        if let Some(targets) = &self.upscale_targets {
+            // Boats and other overlays follow the terrain quad and draw at backing
+            // resolution after the upscale, so a reduced scene scale never hides them.
+            self.encode_scene_pass(
+                &mut encoder,
+                &targets.scene_view,
+                clear,
+                0..terrain_vertex_count,
+            );
+            self.upscaler.encode(
+                &mut encoder,
+                targets,
+                &frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
+                None,
+            );
+            if vertex_count > terrain_vertex_count {
+                self.encode_scene_pass(
+                    &mut encoder,
+                    &view,
+                    wgpu::LoadOp::Load,
+                    terrain_vertex_count..vertex_count,
+                );
+            }
+        } else {
+            self.encode_scene_pass(&mut encoder, &view, clear, 0..vertex_count);
         }
         self.queue.submit(Some(encoder.finish()));
-        self.queue
-            .on_submitted_work_done(move || drop(frame_permit));
+        let frame_timing = self
+            .resolution
+            .is_some()
+            .then(|| Arc::clone(&self.frame_timing));
+        let submitted_ms = now_ms();
+        self.queue.on_submitted_work_done(move || {
+            if let Some(frame_timing) = frame_timing {
+                let completed_ms = now_ms();
+                let mut frame_timing = frame_timing.lock().unwrap();
+                // Work queued behind the previous frame starts when that frame
+                // completes. Browsers can report several completions in one task;
+                // the later ones then measure nothing and are skipped.
+                let queued = submitted_ms < frame_timing.last_completion_ms;
+                let started_ms = submitted_ms.max(frame_timing.last_completion_ms);
+                if !(queued && completed_ms - started_ms < 1.0) {
+                    frame_timing.frame_ms.push(completed_ms - started_ms);
+                }
+                frame_timing.last_completion_ms = completed_ms;
+            }
+            drop(frame_permit);
+        });
         self.queue.present(frame);
         Ok(())
     }
 
+    fn encode_scene_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        vertices: std::ops::Range<u32>,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Scene pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if vertices.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.scene_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.draw(vertices, 0..1);
+    }
+
     fn resize(&mut self) {
-        let (width, height) =
-            canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
+        let (width, height) = canvas_dimensions(
+            &self.canvas,
+            self.device.limits().max_texture_dimension_2d,
+            self.graphics.maximum_pixel_ratio,
+        );
         if self.config.width == width && self.config.height == height {
             return;
         }
@@ -1503,8 +1710,11 @@ impl Renderer {
     }
 
     fn aspect_ratio(&self) -> f32 {
-        let (width, height) =
-            canvas_dimensions(&self.canvas, self.device.limits().max_texture_dimension_2d);
+        let (width, height) = canvas_dimensions(
+            &self.canvas,
+            self.device.limits().max_texture_dimension_2d,
+            self.graphics.maximum_pixel_ratio,
+        );
         width as f32 / height as f32
     }
 
@@ -1540,7 +1750,13 @@ enum ConnectionStatus {
 impl BrowserGame {
     pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserGame, JsValue> {
         console_error_panic_hook::set_once();
-        let renderer = Renderer::new(canvas).await?;
+        let window =
+            web_sys::window().ok_or_else(|| JsValue::from_str("browser window is unavailable"))?;
+        let touch_screen = window
+            .match_media("(pointer: coarse)")?
+            .is_some_and(|query| query.matches());
+        let graphics = GraphicsSettings::from_query(&window.location().search()?, touch_screen);
+        let renderer = Renderer::new(canvas, graphics).await?;
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
@@ -2109,10 +2325,15 @@ fn server_url() -> Result<String, JsValue> {
         .map_err(|error| JsValue::from_str(&error))
 }
 
-fn canvas_dimensions(canvas: &HtmlCanvasElement, maximum_dimension: u32) -> (u32, u32) {
+fn canvas_dimensions(
+    canvas: &HtmlCanvasElement,
+    maximum_dimension: u32,
+    maximum_pixel_ratio: f64,
+) -> (u32, u32) {
     let scale = web_sys::window()
         .map(|window| window.device_pixel_ratio())
-        .unwrap_or(1.0);
+        .unwrap_or(1.0)
+        .min(maximum_pixel_ratio);
     bounded_canvas_dimensions(
         canvas.client_width(),
         canvas.client_height(),
@@ -2128,7 +2349,7 @@ fn scene_vertices(
     width: u32,
     height: u32,
     view_height_m: f32,
-) -> Vec<Vertex> {
+) -> (Vec<Vertex>, u32) {
     let aspect = width as f32 / height as f32;
     let view_width_m = view_width_m(aspect, view_height_m);
     let mut vertices = Vec::new();
@@ -2149,6 +2370,7 @@ fn scene_vertices(
             });
         }
     }
+    let terrain_vertex_count = vertices.len() as u32;
 
     for scene in scenes {
         let hull_color = if scene.wreck {
@@ -2205,7 +2427,7 @@ fn scene_vertices(
             );
         }
     }
-    vertices
+    (vertices, terrain_vertex_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2308,6 +2530,12 @@ fn world_to_clip_position(
 ) -> [f32; 2] {
     let relative_m = point_m - camera_m;
     [relative_m.x / view_width_m, relative_m.y / view_height_m].map(|component| 2.0 * component)
+}
+
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
 }
 
 fn js_error(error: impl ToString) -> JsValue {

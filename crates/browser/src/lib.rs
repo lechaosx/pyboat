@@ -4,10 +4,14 @@ mod exposure;
 mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
+mod graphics;
 pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridTuning, FieldGrids,
     OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
+};
+pub use graphics::{
+    FramePacer, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController, scene_render_size,
 };
 
 use game::{
@@ -26,6 +30,10 @@ use simulation::{
 
 #[cfg(test)]
 mod diagnostics;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod upscale;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use upscale::{UpscaleTargets, Upscaler};
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -102,6 +110,9 @@ pub(crate) const OCCLUDER_FIELD_SHADER: &str =
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/environment-fields.wgsl"));
+
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub(crate) const UPSCALE_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/upscale.wgsl"));
 
 #[cfg(any(feature = "playground", test))]
 pub(crate) const PLAYGROUND_SCENE_SHADER: &str =

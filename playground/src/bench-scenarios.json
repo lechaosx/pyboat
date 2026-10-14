@@ -88,5 +88,75 @@
     "viewHeightM": 60,
     "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
+  },
+  {
+    "id": "reef-coast-scale-0.67",
+    "exercises": "Reef coast upscaled from two-thirds scene resolution: coastline, reefs and rocky shallows through EASU and RCAS",
+    "seed": "0x5eed",
+    "cameraM": [-5560, -2990],
+    "viewHeightM": 240,
+    "cloudTimeSeconds": 37,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.67
+  },
+  {
+    "id": "reef-coast-scale-0.5",
+    "exercises": "Reef coast upscaled from the minimum half scene resolution: coastline, reefs and rocky shallows stay legible",
+    "seed": "0x5eed",
+    "cameraM": [-5560, -2990],
+    "viewHeightM": 240,
+    "cloudTimeSeconds": 37,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5
+  },
+  {
+    "id": "land-interior-scale-0.5",
+    "exercises": "Island interior upscaled from half scene resolution: lower-cloud edges and fine land detail",
+    "seed": "0x5eed",
+    "cameraM": [800, 0],
+    "viewHeightM": 300,
+    "cloudTimeSeconds": 37,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5
+  },
+  {
+    "id": "polar-ice-edge-scale-0.5",
+    "exercises": "Ice edge upscaled from half scene resolution: sharp sea-ice boundary and fractures",
+    "seed": "0x5eed",
+    "cameraM": [2300, 25300],
+    "viewHeightM": 2400,
+    "cloudTimeSeconds": 15595200,
+    "worldTimeSeconds": 15595200,
+    "renderScale": 0.5
+  },
+  {
+    "id": "storm-rain-scale-0.5",
+    "exercises": "Storm upscaled from half scene resolution: storm darkening and rain contacts",
+    "seed": "0x5eed",
+    "cameraM": [8000, -20000],
+    "viewHeightM": 40,
+    "cloudTimeSeconds": 63037,
+    "worldTimeSeconds": 63037,
+    "renderScale": 0.5
+  },
+  {
+    "id": "moonlit-night-scale-0.5",
+    "exercises": "Moonlit coast upscaled from half scene resolution: night readability of coast and hazards",
+    "seed": "0x5eed",
+    "cameraM": [-5420, -2700],
+    "viewHeightM": 400,
+    "cloudTimeSeconds": 209700,
+    "worldTimeSeconds": 209700,
+    "renderScale": 0.5
+  },
+  {
+    "id": "archipelago-overview-scale-0.5",
+    "exercises": "Wide archipelago upscaled from half scene resolution: many thin coastlines per frame",
+    "seed": "0x5eed",
+    "cameraM": [-4000, 0],
+    "viewHeightM": 20000,
+    "cloudTimeSeconds": 37,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5
   }
 ]

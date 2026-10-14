@@ -198,6 +198,8 @@ and verification details.
 - **[Implicit]** Animation callbacks keep input, simulation, and presentation
   clocks advancing while GPU submissions are bounded to prevent stale-view
   backlog. The browser owns display synchronization and presentation buffering.
+- **[Explicit]** A frame-rate cap skips only rendering; input, simulation, and
+  prediction run every display frame.
 - **[Explicit]** Lower-cloud bodies and optical depth, canopy optical depth, and
   broad landform elevation are reconstructed from per-frame grids.
 - **[Explicit]** Grid spacing follows each field's finest detail and the
@@ -210,8 +212,16 @@ and verification details.
   stay fixed to the world.
 - **[Explicit]** Resizes take effect on the next frame at the latest dimensions
   by reconfiguring the surface; field textures keep their size.
-- **[Explicit]** Canvas backing resolution preserves CSS aspect ratio while
-  fitting device texture limits.
+- **[Explicit]** Canvas backing resolution follows CSS size at the device pixel
+  ratio up to a chosen cap, preserving CSS aspect ratio within device texture
+  limits.
+- **[Explicit]** The scene renders below the canvas backing resolution at a
+  chosen scale.
+- **[Explicit]** A spatial upscale fills the canvas from the scene.
+- **[Implicit]** The upscale uses neither temporal accumulation nor optional GPU
+  features, so it runs on mobile WebGPU without history artifacts.
+- **[Implicit]** Boats and other gameplay overlays draw at canvas backing
+  resolution after the upscale.
 - **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close
   transport, clearing queued state; transient surface errors remain recoverable.
 
