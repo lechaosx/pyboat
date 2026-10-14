@@ -140,11 +140,12 @@ and verification details.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
-- **[Explicit]** A fullscreen pass evaluates terrain at each rendered world
-  position and reconstructs environment fields there from a per-frame grid
-  anchored to world coordinates, with spacing matched to the fields' finest
-  detail. Physics samples where needed; a view-center weather sample never
-  supplies the surface scene.
+- **[Explicit]** A fullscreen pass composes terrain at each rendered world
+  position, reading broad terrain octaves from the terrain cache, and
+  reconstructs environment fields there from a per-frame grid anchored to world
+  coordinates, with spacing matched to the fields' finest detail. Physics
+  samples where needed; a view-center weather sample never supplies the
+  surface scene.
 - **[Implicit]** Environment field grids store seeded noise and the terms
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
@@ -225,6 +226,29 @@ and verification details.
 - **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close
   transport, clearing queued state; transient surface errors remain recoverable.
 
+### Terrain cache
+
+- **[Explicit]** Static terrain inputs persist between frames in a world-anchored
+  cache; a frame refills only texels the view newly exposes or an input change
+  invalidates.
+- **[Implicit]** The cache holds the circle-embedded octaves of the broad terrain
+  noises, from which the scene composes terrain per pixel with the same
+  composition as direct evaluation.
+- **[Implicit]** Cache levels form a clipmap of camera-centred, toroidally
+  addressed windows whose spacing doubles per level.
+- **[Implicit]** Each level holds only the octaves with enough texels per
+  wavelength to bound its reconstruction error.
+- **[Implicit]** The scene reads the finest level whose window holds the view.
+- **[Implicit]** Cached terrain places shorelines and shallows within a small
+  fraction of a pixel of direct evaluation.
+- **[Implicit]** Cells where the 4D simplex kernel jumps evaluate those noises
+  directly, keeping the canonical discontinuities.
+- **[Implicit]** A frame completes the active level and spends a small budget on
+  its two neighbours.
+- **[Implicit]** No level fills while none holds the view.
+- **[Implicit]** Positions without valid cache texels evaluate the noises
+  directly.
+
 ## Playground boundary
 
 - **[Explicit]** Gameplay and the lab share pure WGSL mechanisms and data types
@@ -296,3 +320,4 @@ and verification details.
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Cloud amount at wide views | Whether lower-cloud amounts may approximate the canonical fields where the environment grid coarsens beyond its texel budget, slightly varying with zoom |
+| Terrain cache scope | Whether finer levels near boat zoom should also cache the coarser 2D terrain octaves and material noise |

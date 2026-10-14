@@ -5,6 +5,7 @@ mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
 mod graphics;
+mod terrain_cache;
 pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridTuning, FieldGrids,
@@ -13,6 +14,9 @@ pub use field_grids::{
 pub use graphics::{
     FramePacer, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController, scene_render_size,
 };
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use terrain_cache::TerrainCachePass;
+pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
     CloudFieldTimeCoordinates, OCEAN_WAVE_MODE_COUNT, WorldEnvironment,
@@ -107,6 +111,10 @@ pub(crate) const SCENE_SHADER: &str =
 pub(crate) const OCCLUDER_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/occluder-fields.wgsl"));
 
+#[cfg(any(target_arch = "wasm32", feature = "playground", test))]
+pub(crate) const TERRAIN_CACHE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/terrain-cache.wgsl"));
+
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/environment-fields.wgsl"));
@@ -141,6 +149,11 @@ pub fn production_scene_shader_source() -> &'static str {
 #[cfg(feature = "playground")]
 pub fn occluder_field_shader_source() -> &'static str {
     OCCLUDER_FIELD_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn terrain_cache_shader_source() -> &'static str {
+    TERRAIN_CACHE_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -1396,6 +1409,17 @@ mod tests {
         assert_eq!(
             occluder_entry_points,
             [(naga::ShaderStage::Compute, "generate_occluder_fields")],
+        );
+
+        let terrain_cache = naga::front::wgsl::parse_str(TERRAIN_CACHE_SHADER).unwrap();
+        let terrain_cache_entry_points: Vec<_> = terrain_cache
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            terrain_cache_entry_points,
+            [(naga::ShaderStage::Compute, "generate_terrain_cache")],
         );
     }
 

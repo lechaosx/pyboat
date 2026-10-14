@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     fs,
     io::BufReader,
     path::{Path, PathBuf},
@@ -9,15 +10,15 @@ use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use browser::{
-    FieldGrids, MINIMUM_RENDER_SCALE, UpscaleTargets, Upscaler, scene_render_size,
+    FieldGrids, MINIMUM_RENDER_SCALE, TerrainCache, UpscaleTargets, Upscaler, scene_render_size,
     visual_pixel_footprint_m,
 };
 
 use super::{
     CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
-    capture_field_grids, capture_texture, default_options, fullscreen_vertices, hardware_device,
-    parse_seed, read_texture, scene_uniforms, uniform_layout, validate_capture_dimensions,
-    validate_capture_spatial_inputs, validate_time_seconds, write_png,
+    capture_field_grids, capture_terrain_cache_frame, capture_texture, default_options,
+    fullscreen_vertices, hardware_device, parse_seed, read_texture, scene_uniforms, uniform_layout,
+    validate_capture_dimensions, validate_capture_spatial_inputs, validate_time_seconds, write_png,
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
@@ -26,8 +27,9 @@ const VISIBLE_DIFFERENCE_LEVELS: u8 = 2;
 const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
-/// Environment field, occluder field, scene, and upscale begin/end pairs.
-const TIMESTAMP_COUNT: u32 = 8;
+/// Environment field, occluder field, scene, upscale, and terrain cache
+/// begin/end pairs.
+const TIMESTAMP_COUNT: u32 = 10;
 
 pub struct BenchOptions {
     pub output_dir: PathBuf,
@@ -69,6 +71,8 @@ struct ModeReport {
     scene: Option<Timing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     upscale: Option<Timing>,
+    #[serde(default)]
+    terrain_cache: Option<Timing>,
     total: Timing,
     total_ns_per_pixel: f64,
     #[serde(default)]
@@ -127,6 +131,11 @@ struct BenchReport {
 struct ModeRenderer {
     pipeline: wgpu::RenderPipeline,
     fields: CaptureFields,
+    /// The scenario the cache was last filled for; another one starts from an
+    /// empty cache, like a teleport.
+    terrain_cache: RefCell<(String, TerrainCache)>,
+    /// Refills the active cache level every frame, bounding a refill burst.
+    refill_terrain_cache: bool,
 }
 
 impl ModeRenderer {
@@ -197,16 +206,72 @@ impl ModeRenderer {
             multiview_mask: None,
             cache: None,
         });
-        Ok(Self { pipeline, fields })
+        Ok(Self {
+            pipeline,
+            fields,
+            terrain_cache: RefCell::default(),
+            refill_terrain_cache: evaluate_all_branches,
+        })
     }
 
     fn encode(
         &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         bindings: &FrameBindings<'_>,
         target: &wgpu::Texture,
         timestamps: Option<&wgpu::QuerySet>,
-    ) {
+    ) -> Result<(), String> {
+        let mut cache = self.terrain_cache.borrow_mut();
+        if cache.0 != bindings.scenario_id {
+            // Fill the new scenario's cache completely first, so warm-up and
+            // timed frames see the settled cache whatever their count.
+            *cache = (bindings.scenario_id.to_owned(), TerrainCache::default());
+            loop {
+                let frame = capture_terrain_cache_frame(bindings.options, &mut cache.1)?;
+                if frame.has_fills() {
+                    let mut fill_encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("bench terrain cache settle encoder"),
+                        });
+                    self.fields.encode_terrain_cache(
+                        queue,
+                        &mut fill_encoder,
+                        bindings.scene,
+                        &frame,
+                        None,
+                    );
+                    queue.submit([fill_encoder.finish()]);
+                    cache.1.commit();
+                } else {
+                    break;
+                }
+            }
+        }
+        let terrain_cache = &mut cache.1;
+        if self.refill_terrain_cache {
+            terrain_cache.invalidate();
+        }
+        let terrain_cache_frame = capture_terrain_cache_frame(bindings.options, terrain_cache)?;
+        terrain_cache.commit();
+        // Scene uniforms are written once per scenario; the active level is
+        // complete within every frame, so its rows match a fresh cache's.
+        if (
+            terrain_cache_frame.grid_m,
+            terrain_cache_frame.texels,
+            terrain_cache_frame.level,
+        ) != bindings.terrain_cache_rows
+        {
+            return Err("terrain cache rows changed at a fixed camera".to_owned());
+        }
+        self.fields.encode_terrain_cache(
+            queue,
+            encoder,
+            bindings.scene,
+            &terrain_cache_frame,
+            timestamps,
+        );
         self.fields.encode(
             encoder,
             bindings.scene,
@@ -255,10 +320,16 @@ impl ModeRenderer {
                 timestamps.map(|query_set| (query_set, 6, 7)),
             );
         }
+        Ok(())
     }
 }
 
+type TerrainCacheRows = ([f32; 4], [u32; 4], [u32; 4]);
+
 struct FrameBindings<'a> {
+    scenario_id: &'a str,
+    options: &'a Options,
+    terrain_cache_rows: TerrainCacheRows,
     scene: &'a wgpu::BindGroup,
     fields: &'a CaptureFieldBindings,
     field_grids: &'a FieldGrids,
@@ -269,6 +340,9 @@ struct FrameBindings<'a> {
 }
 
 struct ScenarioBindings {
+    id: String,
+    options: Options,
+    terrain_cache_rows: TerrainCacheRows,
     scene: wgpu::BindGroup,
     /// Shipped, then forced.
     fields: [CaptureFieldBindings; 2],
@@ -285,6 +359,9 @@ impl ScenarioBindings {
         upscaler: &'a Upscaler,
     ) -> FrameBindings<'a> {
         FrameBindings {
+            scenario_id: &self.id,
+            options: &self.options,
+            terrain_cache_rows: self.terrain_cache_rows,
             scene: &self.scene,
             fields: &self.fields[mode],
             field_grids: &self.field_grids,
@@ -427,7 +504,9 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         .iter()
         .map(|scenario| {
             let scenario_options = scenario_options(scenario, options.width, options.height)?;
-            let mut uniforms = scene_uniforms(&scenario_options)?;
+            let terrain_cache_frame =
+                capture_terrain_cache_frame(&scenario_options, &mut TerrainCache::default())?;
+            let mut uniforms = scene_uniforms(&scenario_options, &terrain_cache_frame)?;
             let output_size = (options.width, options.height);
             let scene_size = scene_render_size(
                 options.width,
@@ -442,11 +521,18 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             Ok(ScenarioBindings {
+                id: scenario.id.clone(),
+                terrain_cache_rows: (
+                    terrain_cache_frame.grid_m,
+                    terrain_cache_frame.texels,
+                    terrain_cache_frame.level,
+                ),
                 scene: bind_group(&device, &scene_layout, &buffer, "bench scene"),
                 fields: renderers
                     .each_ref()
                     .map(|renderer| renderer.fields.bindings(&device, &buffer)),
                 field_grids: capture_field_grids(&scenario_options)?,
+                options: scenario_options,
                 upscale: (scene_size != output_size).then(|| {
                     upscaler.targets(
                         &device,
@@ -608,8 +694,8 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
 }
 
 /// Pass durations in milliseconds: environment fields, occluder fields, scene,
-/// upscale, and first begin to last end.
-type FrameTimes = [Option<f64>; 5];
+/// upscale, first begin to last end, and terrain cache.
+type FrameTimes = [Option<f64>; 6];
 
 struct TimedFrames {
     frames: Vec<FrameTimes>,
@@ -636,11 +722,13 @@ fn time_mode(
             label: Some("bench frame encoder"),
         });
         renderer.encode(
+            device,
+            queue,
             &mut encoder,
             bindings,
             &target,
             timestamps.map(|timestamps| &timestamps.query_set),
-        );
+        )?;
         if let Some(timestamps) = timestamps {
             encoder.resolve_query_set(
                 &timestamps.query_set,
@@ -700,10 +788,11 @@ fn time_mode(
                     milliseconds(2, 3),
                     milliseconds(4, 5),
                     bindings.upscale.and(milliseconds(6, 7)),
-                    milliseconds(0, last),
+                    milliseconds(8, last),
+                    milliseconds(8, 9),
                 ]
             }
-            _ => [None, None, None, None, Some(wall_ms)],
+            _ => [None, None, None, None, Some(wall_ms), None],
         };
         if iteration < options.warmup_iterations {
             continue;
@@ -711,7 +800,7 @@ fn time_mode(
         let complete = if timestamps.is_some() {
             frame[..3].iter().all(Option::is_some)
                 && frame[3].is_some() == bindings.upscale.is_some()
-                && frame[4].is_some()
+                && frame[4..].iter().all(Option::is_some)
         } else {
             frame[4].is_some()
         };
@@ -735,7 +824,7 @@ fn render_image(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("bench image encoder"),
     });
-    renderer.encode(&mut encoder, bindings, &texture, None);
+    renderer.encode(device, queue, &mut encoder, bindings, &texture, None)?;
     read_texture(device, queue, encoder, &texture)
 }
 
@@ -757,6 +846,7 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
         occluders: pass(1),
         scene: pass(2),
         upscale: pass(3),
+        terrain_cache: pass(5),
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
@@ -964,12 +1054,13 @@ fn print_summary(report: &BenchReport) {
         "forced: EVALUATE_ALL_BRANCHES; Δmax: largest 8-bit difference from the shipped image"
     );
     println!(
-        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>9} {:>8} {:>10} {:>12} {:>10} {:>12} {:>9}",
+        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>7} {:>9} {:>8} {:>10} {:>12} {:>10} {:>12} {:>9}",
         "scenario",
         "total ms",
         "ns/px",
         "fields",
         "occluders",
+        "cache",
         "scene",
         "upscale",
         "forced ms",
@@ -991,12 +1082,13 @@ fn print_summary(report: &BenchReport) {
             },
         );
         println!(
-            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>9} {:>8} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
+            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>7} {:>9} {:>8} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
             scenario.scenario.id,
             shipped.total.median_ms,
             shipped.total_ns_per_pixel,
             milliseconds(shipped.fields),
             milliseconds(shipped.occluders),
+            milliseconds(shipped.terrain_cache),
             milliseconds(shipped.scene),
             milliseconds(shipped.upscale),
             scenario.all_branches.total.median_ms,

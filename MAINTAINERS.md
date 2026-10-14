@@ -34,11 +34,14 @@ interactive cloud view. Capture requires a hardware Vulkan GPU.
 
 ## Rendering performance
 
-The scenario bench times the production environment-field, occluder-field,
-scene, and upscale passes for the views in
+The scenario bench times the production terrain-cache, environment-field,
+occluder-field, scene, and upscale passes for the views in
 [bench-scenarios.json](playground/src/bench-scenarios.json), as shipped and with
-normally skipped shader work forced. Scenarios with a `renderScale` render the
-scene below the output size and report cost per output pixel:
+normally skipped shader work forced. Each scenario's terrain cache is filled
+until it settles before its first frame; forced runs refill its active level
+every frame.
+Scenarios with a `renderScale` render the scene below the output size and report
+cost per output pixel:
 
 ```sh
 cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-before

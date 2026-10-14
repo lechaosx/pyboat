@@ -1,5 +1,6 @@
 use std::{fs, io::BufReader, process::Command};
 
+use browser::DEFAULT_VIEW_HEIGHT_M;
 use game::{
     celestial_disc_visibility_at_height, celestial_lighting, celestial_lighting_at_height,
     procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
@@ -1844,6 +1845,187 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
         seam_maximum < 3.0,
         "maximum grid/direct byte difference beside the seam: {seam_maximum}"
     );
+}
+
+#[test]
+fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
+    let end = [
+        "--camera-x",
+        "-5560",
+        "--camera-y",
+        "-2990",
+        "--view-height",
+        "240",
+    ];
+    // Pans within one finest-level window while zooming out through coarser
+    // levels and back, so the end view reuses texels from every step.
+    let mut prior_views = Vec::new();
+    for view in [
+        "-6400,-3150,240",
+        "-6150,-3100,240",
+        "-5900,-3040,600",
+        "-5800,-3000,2400",
+        "-5650,-2990,600",
+        "-5600,-2995,240",
+    ] {
+        prior_views.extend(["--prior-view", view]);
+    }
+    let fresh = render_capture("cache-fresh", &end);
+    let incremental = render_capture("cache-incremental", &[&end[..], &prior_views].concat());
+    let unfilled = render_capture(
+        "cache-unfilled",
+        &[&end[..], &prior_views, &["--skip-prior-fills"]].concat(),
+    );
+
+    let incremental_differences = pixel_differences(&fresh, &incremental);
+    assert!(
+        incremental_differences
+            .iter()
+            .all(|&difference| difference <= 1),
+        "incremental fills differ from a fresh fill by up to {}",
+        incremental_differences.iter().max().unwrap(),
+    );
+    let unfilled_pixels = pixel_differences(&fresh, &unfilled)
+        .iter()
+        .filter(|&&difference| difference > 16)
+        .count();
+    assert!(
+        unfilled_pixels > fresh.len() / 4 / 10,
+        "unfilled cache texels left only {unfilled_pixels} pixels visibly wrong",
+    );
+}
+
+#[test]
+fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
+    let world = WorldGeometry::default();
+    let reef_y_m = -2_990.0;
+    let reef_shore_x_m = (0..4_000)
+        .map(|step| -6_560.0 + 0.5 * step as f32)
+        .find(|&x_m| {
+            let elevation =
+                |x_m| procedural_terrain_elevation_m(world, SEED, Vector::new(x_m, reef_y_m));
+            elevation(x_m).signum() != elevation(x_m + 0.5).signum()
+        })
+        .expect("a shoreline should cross the reef coast row");
+    let seam_x_m = 0.5 * world.width_m() - 1.0;
+    let seam_shore_y_m = (0..60_000)
+        .map(|step| 10.0 * step as f32)
+        .find(|&y_m| {
+            let elevation =
+                |y_m| procedural_terrain_elevation_m(world, SEED, Vector::new(seam_x_m, y_m));
+            elevation(y_m).signum() != elevation(y_m + 10.0).signum()
+        })
+        .expect("a shoreline should cross the longitude seam");
+    // The default boat zoom and the reef coast at the finest level, a
+    // shoreline across the longitude seam, then views the two coarsest levels
+    // hold; the coarsest caches no island or coastal-substrate octave.
+    for (camera_x_m, camera_y_m, view_height_m) in [
+        (reef_shore_x_m, reef_y_m, DEFAULT_VIEW_HEIGHT_M),
+        (-5_560.0, reef_y_m, 240.0),
+        (seam_x_m, seam_shore_y_m, 240.0),
+        (-5_560.0, reef_y_m, 8_000.0),
+        (-5_560.0, reef_y_m, 16_000.0),
+    ] {
+        let pixel_m = view_height_m / 144.0;
+        let render = |label, diagnostic, camera_x_m: f32| {
+            render_capture(
+                label,
+                &[
+                    "--camera-x",
+                    &camera_x_m.to_string(),
+                    "--camera-y",
+                    &camera_y_m.to_string(),
+                    "--view-height",
+                    &view_height_m.to_string(),
+                    "--diagnostic",
+                    diagnostic,
+                    "--cloud-rendering",
+                    "0,0,1,1",
+                    "--cloud-shadows",
+                    "0,0,0.85,0",
+                ],
+            )
+        };
+        let cached = render("shore-cached", "scene", camera_x_m);
+        let direct = render("shore-direct", "scene_direct", camera_x_m);
+        let shifted = render("shore-shifted", "scene_direct", camera_x_m + pixel_m);
+
+        let label = format!("{view_height_m} m view at ({camera_x_m}, {camera_y_m})");
+        let visible = |left: &[u8], right: &[u8]| {
+            pixel_differences(left, right)
+                .into_iter()
+                .filter(|&difference| difference > 2)
+                .count()
+        };
+        // Pixels whose elevation lies within single-precision noise of a
+        // threshold may flip; a misplaced shoreline moves whole runs of them.
+        let shift_pixels = visible(&shifted, &direct);
+        let cached_pixels = visible(&cached, &direct);
+        assert!(
+            shift_pixels >= 200,
+            "{label}: a one-pixel shift changes only {shift_pixels} pixels",
+        );
+        assert!(
+            cached_pixels * 50 <= shift_pixels,
+            "{label}: the cached scene changes {cached_pixels} pixels, a one-pixel shift {shift_pixels}",
+        );
+    }
+}
+
+/// Renders a 256x144 capture of the default world at a daytime clock.
+fn render_capture(label: &str, arguments: &[&str]) -> Vec<u8> {
+    let output = std::env::temp_dir().join(format!(
+        "pyboat-{label}-{}-{:016x}.png",
+        std::process::id(),
+        arguments
+            .join(" ")
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            }),
+    ));
+    let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
+        .args([
+            "--width",
+            "256",
+            "--height",
+            "144",
+            "--seed",
+            &SEED.to_string(),
+            "--cloud-time",
+            "37",
+            "--world-time",
+            "37",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .args(arguments)
+        .output()
+        .expect("headless capture should start");
+    assert!(
+        capture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&capture.stderr),
+    );
+    let bytes = read_image(&output);
+    fs::remove_file(&output).unwrap();
+    fs::remove_file(output.with_extension("json")).unwrap();
+    bytes
+}
+
+/// Each pixel's largest RGB channel difference.
+fn pixel_differences(left: &[u8], right: &[u8]) -> Vec<u8> {
+    left.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(right.as_chunks::<4>().0)
+        .map(|(left, right)| {
+            (0..3)
+                .map(|channel| left[channel].abs_diff(right[channel]))
+                .max()
+                .unwrap()
+        })
+        .collect()
 }
 
 #[test]

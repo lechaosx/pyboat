@@ -106,6 +106,7 @@ const LATTICE_KEY_MULTIPLIERS = array<vec2<u32>, 4>(
 );
 
 struct Simplex4dDomain {
+    lattice: vec4<i32>,
     lattice_products: array<vec2<u32>, 4>,
     first: vec4<f32>,
     rank: vec4<i32>,
@@ -342,11 +343,9 @@ fn periodic_noise_circle_position(position_m: vec2<f32>) -> vec4<f32> {
 
 fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     let skew_factor = 0.309017;
-    let unskew_factor = 0.1381966;
     let skew = dot(point, vec4<f32>(skew_factor));
     let lattice = vec4<i32>(floor(point + vec4<f32>(skew)));
-    let unskew = f32(lattice.x + lattice.y + lattice.z + lattice.w) * unskew_factor;
-    let first = point - (vec4<f32>(lattice) - vec4<f32>(unskew));
+    let first = simplex_noise_offset_4d(point, lattice);
     var rank = vec4<i32>(0);
     if first.x > first.y { rank.x += 1; } else { rank.y += 1; }
     if first.x > first.z { rank.x += 1; } else { rank.z += 1; }
@@ -354,6 +353,22 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
     if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
     if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
+    return simplex_noise_domain_4d_in(point, lattice, rank);
+}
+
+fn simplex_noise_offset_4d(point: vec4<f32>, lattice: vec4<i32>) -> vec4<f32> {
+    let unskew_factor = 0.1381966;
+    let unskew = f32(lattice.x + lattice.y + lattice.z + lattice.w) * unskew_factor;
+    return point - (vec4<f32>(lattice) - vec4<f32>(unskew));
+}
+
+// The domain of the simplex with this lattice cell and axis rank, which need
+// not contain `point`.
+fn simplex_noise_domain_4d_in(
+    point: vec4<f32>,
+    lattice: vec4<i32>,
+    rank: vec4<i32>,
+) -> Simplex4dDomain {
     var lattice_products: array<vec2<u32>, 4>;
     for (var axis = 0u; axis < 4u; axis++) {
         lattice_products[axis] = multiply_u64(
@@ -361,7 +376,12 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
             LATTICE_KEY_MULTIPLIERS[axis],
         );
     }
-    return Simplex4dDomain(lattice_products, first, rank);
+    return Simplex4dDomain(
+        lattice,
+        lattice_products,
+        simplex_noise_offset_4d(point, lattice),
+        rank,
+    );
 }
 
 fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
@@ -405,8 +425,11 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
 }
 
 fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
+    return simplex_noise_value_4d_from_domain(seed, simplex_noise_domain_4d(point));
+}
+
+fn simplex_noise_value_4d_from_domain(seed: vec2<u32>, domain: Simplex4dDomain) -> f32 {
     let unskew_factor = 0.1381966;
-    let domain = simplex_noise_domain_4d(point);
     var value = 0.0;
     for (var vertex = 0i; vertex < 5i; vertex++) {
         let threshold = 4i - vertex;
@@ -514,13 +537,52 @@ fn terrain_simplex_fractal_sample_from_circle(
     persistence: f32,
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
+    let sample = terrain_simplex_octave_sum_from_circle(
+        field_salt,
+        position_m,
+        circle_position,
+        initial_wavelength_m,
+        0u,
+        octave_count,
+        persistence,
+        circle_octave_count,
+    );
+    let amplitude_sum = fractal_amplitude_sum(octave_count, persistence);
+    return TerrainNoiseSample(
+        sample.value / amplitude_sum,
+        sample.gradient / amplitude_sum,
+    );
+}
+
+fn fractal_amplitude_sum(octave_count: u32, persistence: f32) -> f32 {
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    for (var octave = 0u; octave < octave_count; octave++) {
+        amplitude_sum += amplitude;
+        amplitude *= persistence;
+    }
+    return amplitude_sum;
+}
+
+// The amplitude-weighted sum of octaves `first_octave` up to `end_octave`,
+// before the fractal's normalization.
+fn terrain_simplex_octave_sum_from_circle(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    first_octave: u32,
+    end_octave: u32,
+    persistence: f32,
+    circle_octave_count: u32,
+) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
-    var amplitude = 1.0;
-    var amplitude_sum = 0.0;
-    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
-    for (var octave = 0u; octave < octave_count; octave++) {
+    var amplitude = pow(persistence, f32(first_octave));
+    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x
+        * exp2(-f32(first_octave));
+    for (var octave = first_octave; octave < end_octave; octave++) {
         let octave_seed = scene.match_seed
             ^ field_salt
             ^ OCTAVE_SALTS[octave];
@@ -536,12 +598,9 @@ fn terrain_simplex_fractal_sample_from_circle(
         }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
-        amplitude_sum += amplitude;
         amplitude *= persistence;
         wavelength_m *= 0.5;
     }
-    sample.value /= amplitude_sum;
-    sample.gradient /= amplitude_sum;
     return sample;
 }
 

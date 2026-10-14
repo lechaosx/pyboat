@@ -2,6 +2,7 @@ import {
   PlaygroundExposure,
   PlaygroundFramePacer,
   PlaygroundResolutionController,
+  PlaygroundTerrainCache,
   environment_field_shader_source,
   environment_field_texture_size,
   occluder_field_shader_source,
@@ -14,11 +15,14 @@ import {
   playground_scene_uniform_bytes,
   playground_scene_uniforms,
   playground_startup_shader_source,
+  playground_terrain_cache_fill_bytes,
   production_scene_shader_source,
   sample_playground_environment,
   sample_playground_view_cloud_state,
   sample_playground_world_geometry,
   sample_playground_world_phases,
+  terrain_cache_shader_source,
+  terrain_cache_texture_size,
   upscale_shader_source,
 } from "browser/playground";
 import {
@@ -1197,6 +1201,35 @@ const occluderFieldView = device.createTexture({
   usage: 0x04 | 0x08,
 }).createView({ dimension: "2d-array" });
 const occluderFieldSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+const [terrainCacheTexels, terrainCacheLayers, terrainCacheLevels] = (() => {
+  const [texels, , layers, levels] = terrain_cache_texture_size();
+  return [texels!, layers!, levels!];
+})();
+const terrainCacheView = device.createTexture({
+  size: [terrainCacheTexels, terrainCacheTexels, terrainCacheLayers],
+  format: "rgba32float",
+  usage: 0x04 | 0x08,
+}).createView({ dimension: "2d-array" });
+const terrainCacheJumpView = device.createTexture({
+  size: [terrainCacheTexels, terrainCacheTexels, terrainCacheLevels],
+  format: "rgba8unorm",
+  usage: 0x04 | 0x08,
+}).createView({ dimension: "2d-array" });
+const terrainCacheFillBuffer = device.createBuffer({
+  size: playground_terrain_cache_fill_bytes(),
+  usage: 0x40 | 0x08,
+});
+// The fill schedule advances only when a frame encodes its fill pass, so frames
+// that are skipped or rendered before the pass compiles leave nothing stale.
+const terrainCache = new PlaygroundTerrainCache();
+let terrainCacheFill: Uint8Array = new Uint8Array(0);
+let terrainCacheWorkgroups = 0;
+type TerrainCachePass = {
+  pipeline: GPUComputePipeline;
+  sceneBindGroup: GPUBindGroup;
+  fillBindGroup: GPUBindGroup;
+};
+let terrainCachePass: TerrainCachePass | undefined;
 // Environment and occluder workgroup counts, then spacing and texels per occluder layer.
 let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5]);
 
@@ -1651,9 +1684,13 @@ function updateUniforms(
     ]),
     state.lowCloudBodySize,
     state.landformShadowReach,
+    terrainCache,
+    productionShaders ? undefined : state.terrainScale,
   );
   sceneUniforms = frame.uniforms;
   fieldGrids = frame.field_grids;
+  terrainCacheFill = frame.terrain_cache_fill;
+  terrainCacheWorkgroups = frame.terrain_cache_workgroups;
   frame.free();
 
   tuningFloats.set([
@@ -1987,6 +2024,18 @@ function renderFrame(): Promise<void> {
     upscaleTargets = undefined;
   }
   const lastEnd = upscale ? sceneEnd + 1 : sceneEnd;
+  if (terrainCachePass) {
+    if (terrainCacheWorkgroups > 0) {
+      device.queue.writeBuffer(terrainCacheFillBuffer, 0, terrainCacheFill);
+      const terrainCacheEncoder = encoder.beginComputePass();
+      terrainCacheEncoder.setPipeline(terrainCachePass.pipeline);
+      terrainCacheEncoder.setBindGroup(0, terrainCachePass.sceneBindGroup);
+      terrainCacheEncoder.setBindGroup(1, terrainCachePass.fillBindGroup);
+      terrainCacheEncoder.dispatchWorkgroups(terrainCacheWorkgroups);
+      terrainCacheEncoder.end();
+    }
+    terrainCache.commit();
+  }
   if (fields) {
     const environmentPassDescriptor: GPUComputePassDescriptor = {};
     const occluderPassDescriptor: GPUComputePassDescriptor = {};
@@ -2164,11 +2213,13 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         : playground_occluder_field_shader_source(),
     });
     const fieldShader = device.createShaderModule({ code: environment_field_shader_source() });
+    const terrainCacheShader = device.createShaderModule({ code: terrain_cache_shader_source() });
     const [
       scenePipeline,
       directScenePipeline,
       environmentPipeline,
       occluderPipeline,
+      terrainCachePipeline,
     ] = await Promise.all([
       createPlaygroundPipeline(
         sceneShader,
@@ -2182,6 +2233,10 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       device.createComputePipelineAsync({
         layout: "auto",
         compute: { module: occluderShader, entryPoint: "generate_occluder_fields" },
+      }),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module: terrainCacheShader, entryPoint: "generate_terrain_cache" },
       }),
     ]);
     const playgroundEntries = productionShaders
@@ -2225,6 +2280,8 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
           { binding: 1, resource: environmentFieldView },
           { binding: 2, resource: occluderFieldView },
           { binding: 3, resource: occluderFieldSampler },
+          { binding: 4, resource: terrainCacheView },
+          { binding: 5, resource: terrainCacheJumpView },
         ],
       }),
       playgroundBindGroup: device.createBindGroup({
@@ -2242,6 +2299,21 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       playgroundBindGroup: device.createBindGroup({
         layout: directScenePipeline.getBindGroupLayout(1),
         entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      }),
+    };
+    terrainCachePass = {
+      pipeline: terrainCachePipeline,
+      sceneBindGroup: device.createBindGroup({
+        layout: terrainCachePipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      fillBindGroup: device.createBindGroup({
+        layout: terrainCachePipeline.getBindGroupLayout(1),
+        entries: [
+          { binding: 0, resource: { buffer: terrainCacheFillBuffer } },
+          { binding: 1, resource: terrainCacheView },
+          { binding: 2, resource: terrainCacheJumpView },
+        ],
       }),
     };
     sceneCompilationStatus = `full scene ready in ${((performance.now() - compilationStartedAt) / 1000).toFixed(1)} s`;

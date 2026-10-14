@@ -23,10 +23,13 @@ fn main() {
     let direct_occluder_fields =
         read_component("src/shader/components/direct-occluder-fields.wgsl");
     let occluder_generate = read_component("src/shader/components/occluder-field-generate.wgsl");
+    let terrain_cache = read_component("src/shader/components/terrain-cache.wgsl");
+    let direct_terrain_noise = read_component("src/shader/components/direct-terrain-noise.wgsl");
     let production_entry = read_component("src/shader/production-entry.wgsl");
     let production = compose(&[
         &scene,
         &occluder_fields,
+        &terrain_cache,
         &read_component("src/shader/components/occluder-field-inspection-disabled.wgsl"),
         &production_entry,
     ]);
@@ -38,6 +41,7 @@ fn main() {
     let environment_fields = compose(&[
         &scene,
         &direct_occluder_fields,
+        &direct_terrain_noise,
         &production_entry,
         &read_component("src/shader/components/environment-field-generate.wgsl"),
     ]);
@@ -49,6 +53,7 @@ fn main() {
     let production_occluders = compose(&[
         &scene,
         &direct_occluder_fields,
+        &direct_terrain_noise,
         &production_entry,
         &read_component("src/shader/production-occluder-field-entry.wgsl"),
         &occluder_generate,
@@ -57,6 +62,18 @@ fn main() {
         &production_occluders,
         &["generate_occluder_fields"],
         "occluder-fields.wgsl",
+    );
+    let terrain_cache_generate = compose(&[
+        &scene,
+        &direct_occluder_fields,
+        &direct_terrain_noise,
+        &production_entry,
+        &read_component("src/shader/components/terrain-cache-generate.wgsl"),
+    ]);
+    write_shader(
+        &terrain_cache_generate,
+        &["generate_terrain_cache"],
+        "terrain-cache.wgsl",
     );
     let upscale = read_component("src/shader/upscale.wgsl");
     write_shader(
@@ -93,6 +110,7 @@ fn main() {
     let playground = compose(&[
         &scene,
         &occluder_fields,
+        &terrain_cache,
         &read_component("src/shader/components/playground-occluder-field-inspection.wgsl"),
         &playground_interface,
         &read_component("src/shader/playground-entry.wgsl"),
@@ -105,6 +123,7 @@ fn main() {
     let playground_direct = compose(&[
         &scene,
         &direct_occluder_fields,
+        &direct_terrain_noise,
         &playground_interface,
         &read_component("src/shader/playground-direct-entry.wgsl"),
     ]);
@@ -116,6 +135,7 @@ fn main() {
     let playground_occluders = compose(&[
         &scene,
         &direct_occluder_fields,
+        &direct_terrain_noise,
         &playground_interface,
         &read_component("src/shader/playground-occluder-field-entry.wgsl"),
         &occluder_generate,
@@ -132,6 +152,7 @@ fn main() {
         let diagnostic = compose(&[
             &scene,
             &direct_occluder_fields,
+            &direct_terrain_noise,
             &playground_interface,
             &diagnostic_common,
             &mechanism,

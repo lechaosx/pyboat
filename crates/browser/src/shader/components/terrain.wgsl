@@ -1,3 +1,80 @@
+// Broad terrain noises whose leading octaves follow the longitude circle.
+// `terrain_broad_noise` reads them from the persistent terrain cache where a
+// composition binds it, and evaluates them directly elsewhere.
+const TERRAIN_CLUSTER_NOISE: u32 = 0u;
+const TERRAIN_ISLAND_NOISE: u32 = 1u;
+const TERRAIN_RUGGEDNESS_NOISE: u32 = 2u;
+const TERRAIN_COASTAL_SUBSTRATE_NOISE: u32 = 3u;
+const TERRAIN_BROAD_NOISE_SALTS = array<vec2<u32>, 4>(
+    vec2<u32>(0x78bd642fu, 0xa0761d64u),
+    vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+    vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+    vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+);
+const TERRAIN_BROAD_NOISE_WAVELENGTHS_M = array<f32, 4>(8192.0, 1536.0, 2048.0, 1536.0);
+const TERRAIN_BROAD_NOISE_OCTAVES = array<u32, 4>(3u, 5u, 3u, 3u);
+const TERRAIN_BROAD_NOISE_PERSISTENCE = array<f32, 4>(0.5, 0.35, 0.5, 0.5);
+const TERRAIN_BROAD_NOISE_CIRCLE_OCTAVES = array<u32, 4>(
+    TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
+    TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
+    TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
+    TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
+);
+
+fn terrain_broad_octave_sum(
+    field: u32,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    first_octave: u32,
+    end_octave: u32,
+) -> TerrainNoiseSample {
+    return terrain_simplex_octave_sum_from_circle(
+        TERRAIN_BROAD_NOISE_SALTS[field],
+        position_m,
+        circle_position,
+        TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field],
+        first_octave,
+        end_octave,
+        TERRAIN_BROAD_NOISE_PERSISTENCE[field],
+        TERRAIN_BROAD_NOISE_CIRCLE_OCTAVES[field],
+    );
+}
+
+const TERRAIN_BROAD_NOISE_COUNT: u32 = 4u;
+// Sixteen texels per wavelength bound bicubic Hermite error near 6e-5 of an
+// octave's amplitude: about a millimetre of elevation for the finest cached
+// island octave on the most rugged islands.
+const TERRAIN_CACHE_TEXELS_PER_WAVELENGTH: f32 = 16.0;
+
+// Leading circle octaves of `field` that a cache level with this spacing holds.
+fn terrain_cache_octaves(field: u32, spacing_m: f32, horizontal_scale: f32) -> u32 {
+    var octaves = 0u;
+    var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field] * horizontal_scale;
+    while octaves < TERRAIN_BROAD_NOISE_CIRCLE_OCTAVES[field]
+        && wavelength_m >= TERRAIN_CACHE_TEXELS_PER_WAVELENGTH * spacing_m
+    {
+        octaves += 1u;
+        wavelength_m *= 0.5;
+    }
+    return octaves;
+}
+
+fn direct_terrain_broad_noise(
+    field: u32,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+) -> TerrainNoiseSample {
+    return terrain_simplex_fractal_sample_from_circle(
+        TERRAIN_BROAD_NOISE_SALTS[field],
+        position_m,
+        circle_position,
+        TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field],
+        TERRAIN_BROAD_NOISE_OCTAVES[field],
+        TERRAIN_BROAD_NOISE_PERSISTENCE[field],
+        TERRAIN_BROAD_NOISE_CIRCLE_OCTAVES[field],
+    );
+}
+
 fn terrain_smoothstep_sample(
     lower: f32,
     upper: f32,
@@ -98,23 +175,15 @@ fn procedural_terrain_sample_with_climate_from_circle(
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
     // for physical depth.
     let terrain_position_m = position_m;
-    let cluster = terrain_simplex_fractal_sample_from_circle(
-        vec2<u32>(0x78bd642fu, 0xa0761d64u),
+    let cluster = terrain_broad_noise(
+        TERRAIN_CLUSTER_NOISE,
         terrain_position_m,
         terrain_circle_position,
-        8192.0,
-        3u,
-        0.5,
-        TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     );
-    let island = terrain_simplex_fractal_sample_from_circle(
-        vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+    let island = terrain_broad_noise(
+        TERRAIN_ISLAND_NOISE,
         terrain_position_m,
         terrain_circle_position,
-        1536.0,
-        5u,
-        0.35,
-        TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     );
     var unscaled: TerrainNoiseSample;
     unscaled.value = 18.0 * (0.78 * cluster.value + 0.22 * island.value - 0.30);
@@ -146,27 +215,19 @@ fn procedural_terrain_sample_with_climate_from_circle(
         && base.value > -32.0
         && base.value < 4.0;
     if coastal_relief || EVALUATE_ALL_BRANCHES {
-        let reef_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
-            vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+        let reef_ruggedness_noise = terrain_broad_noise(
+            TERRAIN_RUGGEDNESS_NOISE,
             terrain_position_m,
             terrain_circle_position,
-            2048.0,
-            3u,
-            0.5,
-            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         reef_ruggedness = noise_sample_or_zero(
             terrain_smoothstep_sample(-0.25, 0.25, reef_ruggedness_noise),
             coastal_relief,
         );
-        let coastal_substrate = terrain_simplex_fractal_sample_from_circle(
-            vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+        let coastal_substrate = terrain_broad_noise(
+            TERRAIN_COASTAL_SUBSTRATE_NOISE,
             terrain_position_m,
             terrain_circle_position,
-            1536.0,
-            3u,
-            0.5,
-            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         coastal_rock = noise_sample_or_zero(
             terrain_smoothstep_sample(-0.25, 0.35, coastal_substrate),
@@ -219,14 +280,10 @@ fn procedural_terrain_sample_with_climate_from_circle(
     let land_detail_mask = terrain_smoothstep_sample(4.0, 12.0, base);
     // Forced detail below adds exactly zero where its mask is zero.
     if land_detail_mask.value > 0.0 || EVALUATE_ALL_BRANCHES {
-        let land_ruggedness_noise = terrain_simplex_fractal_sample_from_circle(
-            vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+        let land_ruggedness_noise = terrain_broad_noise(
+            TERRAIN_RUGGEDNESS_NOISE,
             terrain_position_m,
             terrain_circle_position,
-            2048.0,
-            3u,
-            0.5,
-            TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
         );
         let land_ruggedness = terrain_smoothstep_sample(
             -0.25,

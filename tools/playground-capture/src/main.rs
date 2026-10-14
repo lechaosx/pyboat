@@ -2,8 +2,9 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, exposure_target, field_grids,
-    ocean_wave_mode_uniforms, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
+    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
+    TerrainCachePass, exposure_target, field_grids, ocean_wave_mode_uniforms,
+    seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -57,6 +58,10 @@ struct Options {
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
     layer_material_color_visibility: [u32; 4],
+    /// Camera x, camera y, and view height of earlier frames whose terrain
+    /// cache fills the requested view's frame reuses.
+    prior_views: Vec<[f32; 3]>,
+    skip_prior_fills: bool,
 }
 
 #[repr(C)]
@@ -90,6 +95,9 @@ struct SceneUniforms {
     environment_field_texels: [u32; 4],
     occluder_field_grid_m: [[f32; 4]; OCCLUDER_FIELD_LAYERS],
     occluder_field_texels: [[u32; 4]; OCCLUDER_FIELD_LAYERS],
+    terrain_cache_grid_m: [f32; 4],
+    terrain_cache_texels: [u32; 4],
+    terrain_cache_level: [u32; 4],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
@@ -133,6 +141,7 @@ struct CaptureFields {
     sampler: wgpu::Sampler,
     environment_pipeline: wgpu::ComputePipeline,
     occluder_pipeline: wgpu::ComputePipeline,
+    terrain_cache: TerrainCachePass,
     environment_output: wgpu::BindGroup,
     occluder_output: wgpu::BindGroup,
     _textures: [wgpu::Texture; 2],
@@ -185,6 +194,8 @@ impl CaptureFields {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                field_entry(4, wgpu::ShaderStages::FRAGMENT, false),
+                field_entry(5, wgpu::ShaderStages::FRAGMENT, false),
             ],
         });
         let field_reading_layout =
@@ -331,6 +342,7 @@ impl CaptureFields {
             }),
             environment_pipeline,
             occluder_pipeline,
+            terrain_cache: TerrainCachePass::new(device, scene_uniform_layout),
             _textures: [environment_texture, occluder_texture],
         }
     }
@@ -359,6 +371,16 @@ impl CaptureFields {
                         binding: 3,
                         resource: wgpu::BindingResource::Sampler(&self.sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.terrain_cache.noise_view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&self.terrain_cache.jump_view),
+                    },
                 ],
             }),
             field_reading: device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -367,6 +389,29 @@ impl CaptureFields {
                 entries: &[uniforms, environment],
             }),
         }
+    }
+
+    /// Evaluates the texels `terrain_cache` schedules; timestamps, when
+    /// requested, go to query indices 8 and 9.
+    fn encode_terrain_cache(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scene_uniform_bind_group: &wgpu::BindGroup,
+        terrain_cache: &TerrainCacheFrame,
+        timestamps: Option<&wgpu::QuerySet>,
+    ) {
+        self.terrain_cache.encode(
+            queue,
+            encoder,
+            scene_uniform_bind_group,
+            terrain_cache,
+            timestamps.map(|query_set| wgpu::ComputePassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(8),
+                end_of_pass_write_index: Some(9),
+            }),
+        );
     }
 
     /// Timestamps, when requested, go to query indices 0 to 3.
@@ -495,7 +540,7 @@ fn run() -> Result<(), String> {
 }
 
 enum Command {
-    Capture(Options),
+    Capture(Box<Options>),
     Bench(bench::BenchOptions),
 }
 
@@ -520,6 +565,8 @@ fn default_options() -> Options {
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
         layer_material_color_visibility: [1; 4],
+        prior_views: Vec::new(),
+        skip_prior_fills: false,
     }
 }
 
@@ -595,6 +642,12 @@ fn parse_options() -> Result<Command, String> {
                 options.layer_material_color_visibility =
                     parse_u32x4(&value(&mut arguments)?, &argument)?
             }
+            "--prior-view" => {
+                let view = parse_f32x3(&value(&mut arguments)?, &argument)?;
+                validate_capture_spatial_inputs(view[0], view[1], view[2])?;
+                options.prior_views.push(view);
+            }
+            "--skip-prior-fills" => options.skip_prior_fills = true,
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -639,7 +692,7 @@ fn parse_options() -> Result<Command, String> {
     {
         return Err("world dimensions must be between 8000 and 256000 metres".to_owned());
     }
-    Ok(Command::Capture(options))
+    Ok(Command::Capture(Box::new(options)))
 }
 
 fn parse<T: std::str::FromStr>(value: &str, option: &str) -> Result<T, String> {
@@ -653,6 +706,16 @@ fn parse_seed(value: &str) -> Result<u64, String> {
         .strip_prefix("0x")
         .map_or_else(|| value.parse(), |hex| u64::from_str_radix(hex, 16))
         .map_err(|_| format!("invalid seed: {value}"))
+}
+
+fn parse_f32x3(value: &str, option: &str) -> Result<[f32; 3], String> {
+    let values = value
+        .split(',')
+        .map(|value| parse(value, option))
+        .collect::<Result<Vec<_>, _>>()?;
+    values
+        .try_into()
+        .map_err(|_| format!("{option} requires three comma-separated values"))
 }
 
 fn parse_f32x4(value: &str, option: &str) -> Result<[f32; 4], String> {
@@ -1197,13 +1260,18 @@ fn print_help() {
            --cloud-shadows V,V,V,V  finite low/canopy strength, extinction, contrast\n\
            --landform-lighting V,V,V,V  finite relief, shadow, reach, padding\n\
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
-           --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\n\
+           --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\
+           --prior-view X,Y,HEIGHT  render an earlier frame's terrain cache fills first;\n\
+                                  repeat for a pan or zoom sequence ending at the capture\n\
+           --skip-prior-fills     count the prior views' cache fills as done without running\n\
+                                  them, a test control that reads unwritten texels\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics.\n\n\
          playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
-         Times the production scene, environment-field and occluder-field passes,\n\
-         for each built-in scenario in playground/src/bench-scenarios.json, once as shipped\n\
-         and once with EVALUATE_ALL_BRANCHES forcing normally skipped work.\n\n\
+         Times the production terrain-cache, environment-field, occluder-field, scene,\n\
+         and upscale passes for each built-in scenario in playground/src/bench-scenarios.json,\n\
+         once as shipped and once with EVALUATE_ALL_BRANCHES forcing normally skipped work\n\
+         and a refill of the active terrain cache level every frame.\n\n\
          Bench options:\n\
            --output-dir DIR       receives report.json, one PNG per scenario, and contact-sheet.png\n\
            --baseline DIR         earlier bench output to compare timings and images against;\n\
@@ -1441,6 +1509,9 @@ async fn render(options: &Options) -> Result<(), String> {
         device.limits().max_texture_dimension_2d,
     )?;
     let grid_scene = options.diagnostic.module.is_none() && options.diagnostic.id != "scene_direct";
+    if !grid_scene && !options.prior_views.is_empty() {
+        return Err("--prior-view applies only to the scene composition".to_owned());
+    }
     let shader_source = options.diagnostic.module.map_or_else(
         || {
             if grid_scene {
@@ -1640,18 +1711,47 @@ fn render_world(
     fields: Option<&CaptureFields>,
     options: &Options,
 ) -> Result<Vec<u8>, String> {
-    let uniforms = scene_uniforms(options)?;
-    let scene_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("scene uniforms"),
-        contents: bytemuck::bytes_of(&uniforms),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    let scene_bind_group = bind_group(
-        device,
-        scene_layout,
-        &scene_buffer,
-        "scene uniforms bind group",
-    );
+    let mut terrain_cache = TerrainCache::default();
+    let scene_bind_group = |terrain_cache_frame: &TerrainCacheFrame, options: &Options| {
+        let uniforms = scene_uniforms(options, terrain_cache_frame)?;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("scene uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bind_group = bind_group(device, scene_layout, &buffer, "scene uniforms bind group");
+        Ok::<_, String>((buffer, bind_group))
+    };
+    if let Some(fields) = fields {
+        for &[camera_x_m, camera_y_m, view_height_m] in &options.prior_views {
+            let prior = Options {
+                camera_x_m,
+                camera_y_m,
+                view_height_m,
+                ..options.clone()
+            };
+            let terrain_cache_frame = capture_terrain_cache_frame(&prior, &mut terrain_cache)?;
+            terrain_cache.commit();
+            if options.skip_prior_fills {
+                continue;
+            }
+            let (_, prior_bind_group) = scene_bind_group(&terrain_cache_frame, &prior)?;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("prior view terrain cache encoder"),
+            });
+            fields.encode_terrain_cache(
+                queue,
+                &mut encoder,
+                &prior_bind_group,
+                &terrain_cache_frame,
+                None,
+            );
+            queue.submit([encoder.finish()]);
+        }
+    }
+    let terrain_cache_frame = capture_terrain_cache_frame(options, &mut terrain_cache)?;
+    terrain_cache.commit();
+    let (scene_buffer, scene_bind_group) = scene_bind_group(&terrain_cache_frame, options)?;
     let texture = capture_texture(device, options.width, options.height);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("playground capture encoder"),
@@ -1659,6 +1759,13 @@ fn render_world(
     let fragment_scene_bind_group = match fields {
         Some(fields) => {
             let bindings = fields.bindings(device, &scene_buffer);
+            fields.encode_terrain_cache(
+                queue,
+                &mut encoder,
+                &scene_bind_group,
+                &terrain_cache_frame,
+                None,
+            );
             fields.encode(
                 &mut encoder,
                 &scene_bind_group,
@@ -1720,7 +1827,31 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
     ))
 }
 
-fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
+fn capture_terrain_cache_frame(
+    options: &Options,
+    terrain_cache: &mut TerrainCache,
+) -> Result<TerrainCacheFrame, String> {
+    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .map_err(|error| error.to_string())?;
+    Ok(terrain_cache.frame(
+        world_geometry,
+        options.seed,
+        None,
+        world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]),
+        [
+            view_width_m(
+                options.width as f32 / options.height as f32,
+                options.view_height_m,
+            ),
+            options.view_height_m,
+        ],
+    ))
+}
+
+fn scene_uniforms(
+    options: &Options,
+    terrain_cache: &TerrainCacheFrame,
+) -> Result<SceneUniforms, String> {
     let field_grids = capture_field_grids(options)?;
     let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
@@ -1806,6 +1937,9 @@ fn scene_uniforms(options: &Options) -> Result<SceneUniforms, String> {
         environment_field_texels: field_grids.environment.texel_uniforms(),
         occluder_field_grid_m,
         occluder_field_texels,
+        terrain_cache_grid_m: terrain_cache.grid_m,
+        terrain_cache_texels: terrain_cache.texels,
+        terrain_cache_level: terrain_cache.level,
         ocean_wave_modes: ocean_wave_mode_uniforms(
             world_geometry,
             options.seed,

@@ -36,13 +36,14 @@ use crate::{
     BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
     ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, UpscaleTargets, Upscaler,
-    ViewCloudMotion, ViewExposure, Windsock, append_reliable_server_message_chunk,
-    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
-    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
-    requeue_failed_viewport, sample_view_cloud_state_for_render_clocks, sample_world_geometry,
-    scale_bar, scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
-    visual_pixel_footprint_m, webtransport_server_url, windsock_extension, zoom_view_height_m,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
+    UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
+    append_reliable_server_message_chunk, bounded_canvas_dimensions,
+    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
+    sample_view_cloud_state_for_render_clocks, sample_world_geometry, scale_bar, scene_render_size,
+    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
+    webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -221,6 +222,52 @@ pub fn occluder_field_texture_size() -> Vec<u32> {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn terrain_cache_shader_source() -> String {
+    crate::TERRAIN_CACHE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+/// Width, height, rgba32float noise layers, and rgba8unorm jump-flag layers of
+/// the terrain cache textures.
+#[wasm_bindgen]
+pub fn terrain_cache_texture_size() -> Vec<u32> {
+    use crate::terrain_cache::{TERRAIN_CACHE_LAYERS, TERRAIN_CACHE_LEVELS, TERRAIN_CACHE_TEXELS};
+    vec![
+        TERRAIN_CACHE_TEXELS,
+        TERRAIN_CACHE_TEXELS,
+        TERRAIN_CACHE_LAYERS,
+        TERRAIN_CACHE_LEVELS,
+    ]
+}
+
+/// The lab's terrain cache schedule, kept between frames.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct PlaygroundTerrainCache(TerrainCache);
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundTerrainCache {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records that the latest frame's fill pass was encoded.
+    pub fn commit(&mut self) {
+        self.0.commit();
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_terrain_cache_fill_bytes() -> usize {
+    crate::terrain_cache::TERRAIN_CACHE_FILL_BYTES
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn playground_occluder_field_shader_source() -> String {
     crate::playground_occluder_field_shader_source().to_owned()
 }
@@ -230,6 +277,8 @@ pub fn playground_occluder_field_shader_source() -> String {
 pub struct PlaygroundSceneFrame {
     uniforms: Vec<u8>,
     field_grids: Vec<f32>,
+    terrain_cache_fill: Vec<u8>,
+    terrain_cache_workgroups: u32,
 }
 
 #[cfg(feature = "playground")]
@@ -245,6 +294,18 @@ impl PlaygroundSceneFrame {
     #[wasm_bindgen(getter)]
     pub fn field_grids(&self) -> Vec<f32> {
         self.field_grids.clone()
+    }
+
+    /// The terrain cache fill table; dispatch the fill pass only when
+    /// `terrain_cache_workgroups` is positive.
+    #[wasm_bindgen(getter)]
+    pub fn terrain_cache_fill(&self) -> Vec<u8> {
+        self.terrain_cache_fill.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn terrain_cache_workgroups(&self) -> u32 {
+        self.terrain_cache_workgroups
     }
 }
 
@@ -596,6 +657,8 @@ pub fn playground_scene_uniforms(
     exposure_and_output: &[f32],
     low_cloud_body_size: f32,
     landform_shadow_reach_m: f32,
+    terrain_cache: &mut PlaygroundTerrainCache,
+    terrain_horizontal_scale: Option<f32>,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -640,6 +703,13 @@ pub fn playground_scene_uniforms(
         },
     );
     let (occluder_field_grid_m, occluder_field_texels) = grids.occluder_uniforms();
+    let terrain_cache_frame = terrain_cache.0.frame(
+        geometry,
+        match_seed,
+        terrain_horizontal_scale,
+        [camera_x_m, camera_y_m],
+        view_size_m,
+    );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         scalar_field_time_coordinates: [
@@ -689,6 +759,9 @@ pub fn playground_scene_uniforms(
         environment_field_texels: grids.environment.texel_uniforms(),
         occluder_field_grid_m,
         occluder_field_texels,
+        terrain_cache_grid_m: terrain_cache_frame.grid_m,
+        terrain_cache_texels: terrain_cache_frame.texels,
+        terrain_cache_level: terrain_cache_frame.level,
         ocean_wave_modes: ocean_wave_mode_uniforms(
             geometry,
             match_seed,
@@ -714,6 +787,8 @@ pub fn playground_scene_uniforms(
     Ok(PlaygroundSceneFrame {
         uniforms: bytemuck::bytes_of(&uniforms).to_vec(),
         field_grids: field_grid_summary,
+        terrain_cache_fill: terrain_cache_frame.fill_bytes().0.to_vec(),
+        terrain_cache_workgroups: terrain_cache_frame.fill_bytes().1,
     })
 }
 
@@ -813,6 +888,9 @@ struct SceneUniforms {
     environment_field_texels: [u32; 4],
     occluder_field_grid_m: [[f32; 4]; OCCLUDER_FIELD_LAYERS],
     occluder_field_texels: [[u32; 4]; OCCLUDER_FIELD_LAYERS],
+    terrain_cache_grid_m: [f32; 4],
+    terrain_cache_texels: [u32; 4],
+    terrain_cache_level: [u32; 4],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
@@ -1072,6 +1150,8 @@ struct Renderer {
     empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
+    terrain_cache_pass: TerrainCachePass,
+    terrain_cache: TerrainCache,
     upscaler: Upscaler,
     upscale_targets: Option<UpscaleTargets>,
     terminal_error: Arc<AtomicBool>,
@@ -1221,6 +1301,26 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1276,6 +1376,7 @@ impl Renderer {
             &environment_fields,
             &empty_bind_group_layout,
         );
+        let terrain_cache_pass = TerrainCachePass::new(&device, &bind_group_layout);
         let scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scene bind group"),
             layout: &scene_layout,
@@ -1295,6 +1396,14 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&occluder_fields.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.noise_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.jump_view),
                 },
             ],
         });
@@ -1321,6 +1430,8 @@ impl Renderer {
             empty_bind_group,
             environment_fields,
             occluder_fields,
+            terrain_cache_pass,
+            terrain_cache: TerrainCache::default(),
             upscaler,
             upscale_targets: None,
             terminal_error,
@@ -1460,6 +1571,13 @@ impl Renderer {
             FieldGridTuning::PRODUCTION,
         );
         let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
+        let terrain_cache_frame = self.terrain_cache.frame(
+            world_geometry,
+            match_seed,
+            None,
+            canonical_camera_m,
+            [view_width_m, view_height_m],
+        );
         let hdr = self.config.format == wgpu::TextureFormat::Rgba16Float;
         let output_peak = if hdr && canvas_has_hdr_output(&self.canvas) {
             4.0
@@ -1566,6 +1684,9 @@ impl Renderer {
                 environment_field_texels: field_grids.environment.texel_uniforms(),
                 occluder_field_grid_m,
                 occluder_field_texels,
+                terrain_cache_grid_m: terrain_cache_frame.grid_m,
+                terrain_cache_texels: terrain_cache_frame.texels,
+                terrain_cache_level: terrain_cache_frame.level,
                 ocean_wave_modes: ocean_wave_mode_uniforms(
                     world_geometry,
                     match_seed,
@@ -1585,6 +1706,14 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Frame encoder"),
             });
+        self.terrain_cache_pass.encode(
+            &self.queue,
+            &mut encoder,
+            &self.bind_group,
+            &terrain_cache_frame,
+            None,
+        );
+        self.terrain_cache.commit();
         self.environment_fields
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
