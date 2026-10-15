@@ -20,6 +20,7 @@
 				pkgs.wasm-pack
 				pkgs.nodejs_24
 				pkgs.cargo-watch
+				pkgs.cargo-about
 				pkgs.lld
 				pkgs.vulkan-loader
 			];

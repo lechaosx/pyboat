@@ -6,6 +6,7 @@
     "prebuild": "npm --prefix .. run build:wasm",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.build.json && vite build",
+    "postbuild": "cargo about generate --frozen -m ../crates/browser/Cargo.toml ../crates/browser/about.hbs -o dist/third-party-licenses-rust.md",
     "preview": "vite preview"
   },
   "dependencies": {

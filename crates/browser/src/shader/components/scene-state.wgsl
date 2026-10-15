@@ -86,6 +86,9 @@ override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.
 override EVALUATE_ALL_BRANCHES: bool = false;
+// Lab-only comparison: 1 takes each cloud-shadow lookup from one direction at
+// the centre of the visible disc instead of averaging three across it.
+override CLOUD_SHADOW_TAPS: u32 = 3u;
 // Graphics tiers set these through `GraphicsQuality::scene_constants`; the
 // defaults are the high tier.
 override DECORATIVE_WATER_OCTAVES: u32 = 4u;

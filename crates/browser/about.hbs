@@ -1,0 +1,16 @@
+# Rust licenses
+
+The WebAssembly module compiles crates under the following licenses:
+{{#each licenses}}
+
+## {{name}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+```
+{{{text}}}
+```
+{{/each}}

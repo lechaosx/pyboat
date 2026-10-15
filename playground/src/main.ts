@@ -124,6 +124,7 @@ type State = {
   canopyShadowStrength: number;
   cloudShadowDensity: number;
   cloudShadowOpacity: number;
+  oneTapCloudShadows: number;
   terrainScale: number;
   elevationScale: number;
   cliffSlope: number;
@@ -220,6 +221,7 @@ const defaults: State = {
   canopyShadowStrength: 1,
   cloudShadowDensity: 0.85,
   cloudShadowOpacity: 1,
+  oneTapCloudShadows: 0,
   terrainScale: 1,
   elevationScale: 3,
   cliffSlope: 0.08,
@@ -581,6 +583,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "canopyShadowStrength", label: "Canopy depth", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudShadowDensity", label: "Density", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudShadowOpacity", label: "Opacity", min: 0, max: 1, step: 0.05 },
+      { type: "toggle", key: "oneTapCloudShadows", label: "One-tap penumbra" },
     ],
   },
   {
@@ -1836,10 +1839,10 @@ function advanceFrame(now: number): void {
     resolutionController = undefined;
     automaticRenderScale = undefined;
   }
-  const quality = Math.round(state.graphicsQuality);
-  if (quality !== failedGraphicsQuality) failedGraphicsQuality = undefined;
-  if (sceneShaders && quality !== scenePipelinesQuality && quality !== failedGraphicsQuality) {
-    void matchScenePipelinesToQuality();
+  const variant = scenePipelineVariant();
+  if (variant !== failedScenePipelineVariant) failedScenePipelineVariant = undefined;
+  if (sceneShaders && variant !== scenePipelinesVariant && variant !== failedScenePipelineVariant) {
+    void matchScenePipelinesToState();
   }
   renderDue = framePacer.frame_due(elapsed, frameRateCap());
   updateUniforms(worldTimeSeconds, elapsed, now);
@@ -2058,18 +2061,24 @@ type SceneShaders = { scene: GPUShaderModule; direct?: GPUShaderModule };
 type ScenePipelines = { scene: GPURenderPipeline; direct?: GPURenderPipeline };
 let sceneShaders: SceneShaders | undefined;
 let sceneFields: FieldPasses | undefined;
-const scenePipelinesByQuality = new Map<number, Promise<ScenePipelines>>();
-let scenePipelinesQuality: number | undefined;
+const scenePipelinesByVariant = new Map<string, Promise<ScenePipelines>>();
+let scenePipelinesVariant: string | undefined;
 let scenePipelinesMatch: Promise<void> | undefined;
-let failedGraphicsQuality: number | undefined;
+let failedScenePipelineVariant: string | undefined;
 let tierCompilationStatus = "";
 
-function scenePipelines(shaders: SceneShaders, quality: number): Promise<ScenePipelines> {
-  let pipelines = scenePipelinesByQuality.get(quality);
+function scenePipelineVariant(): string {
+  return `${Math.round(state.graphicsQuality)}:${state.oneTapCloudShadows > 0.5 ? 1 : 3}`;
+}
+
+function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePipelines> {
+  let pipelines = scenePipelinesByVariant.get(variant);
   if (!pipelines) {
-    const constants = graphics_quality_scene_constants(
-      graphicsQualities[quality]!,
-    ) as Record<string, number>;
+    const [quality, cloudShadowTaps] = variant.split(":").map(Number);
+    const constants = {
+      ...graphics_quality_scene_constants(graphicsQualities[quality!]!) as Record<string, number>,
+      CLOUD_SHADOW_TAPS: cloudShadowTaps!,
+    };
     pipelines = Promise.all([
       createPlaygroundPipeline(
         shaders.scene,
@@ -2079,7 +2088,7 @@ function scenePipelines(shaders: SceneShaders, quality: number): Promise<ScenePi
       shaders.direct
         && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
     ]).then(([scene, direct]) => ({ scene, ...(direct ? { direct } : {}) }));
-    scenePipelinesByQuality.set(quality, pipelines);
+    scenePipelinesByVariant.set(variant, pipelines);
   }
   return pipelines;
 }
@@ -2123,23 +2132,25 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
   }
 }
 
-// Graphics tiers are pipeline override constants, so each tier has its own
-// scene pipelines; the previous tier keeps rendering until they are ready. A
-// tier that failed to compile is not retried until another one is selected.
-function matchScenePipelinesToQuality(): Promise<void> {
+// Graphics tiers and tap counts are pipeline override constants, so each
+// variant has its own scene pipelines; the previous variant keeps rendering
+// until they are ready. A variant that failed to compile is not retried until
+// another one is selected.
+function matchScenePipelinesToState(): Promise<void> {
   scenePipelinesMatch ??= (async () => {
     while (sceneShaders && sceneFields) {
-      const quality = Math.round(state.graphicsQuality);
-      if (quality === scenePipelinesQuality || quality === failedGraphicsQuality) break;
-      tierCompilationStatus = `compiling ${graphicsQualities[quality]} tier`;
+      const variant = scenePipelineVariant();
+      if (variant === scenePipelinesVariant || variant === failedScenePipelineVariant) break;
+      const tier = graphicsQualities[Math.round(state.graphicsQuality)];
+      tierCompilationStatus = `compiling ${tier} tier`;
       try {
-        installScenePipelines(await scenePipelines(sceneShaders, quality), sceneFields);
-        scenePipelinesQuality = quality;
+        installScenePipelines(await scenePipelines(sceneShaders, variant), sceneFields);
+        scenePipelinesVariant = variant;
         tierCompilationStatus = "";
       } catch (error) {
-        scenePipelinesByQuality.delete(quality);
-        failedGraphicsQuality = quality;
-        tierCompilationStatus = `${graphicsQualities[quality]} tier failed: ${String(error)}`;
+        scenePipelinesByVariant.delete(variant);
+        failedScenePipelineVariant = variant;
+        tierCompilationStatus = `${tier} tier failed: ${String(error)}`;
         console.error(error);
       }
     }
@@ -2163,7 +2174,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
           scene: sceneShader,
           direct: device.createShaderModule({ code: playground_direct_scene_shader_source() }),
         };
-    const quality = Math.round(state.graphicsQuality);
+    const variant = scenePipelineVariant();
     const occluderShader = device.createShaderModule({
       code: productionShaders
         ? occluder_field_shader_source()
@@ -2177,7 +2188,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       occluderPipeline,
       terrainCachePipeline,
     ] = await Promise.all([
-      scenePipelines(shaders, quality),
+      scenePipelines(shaders, variant),
       device.createComputePipelineAsync({
         layout: "auto",
         compute: { module: fieldShader, entryPoint: "generate_environment_fields" },
@@ -2224,7 +2235,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
     installScenePipelines(pipelines, fields);
     sceneShaders = shaders;
     sceneFields = fields;
-    scenePipelinesQuality = quality;
+    scenePipelinesVariant = variant;
     terrainCachePass = {
       pipeline: terrainCachePipeline,
       sceneBindGroup: device.createBindGroup({
@@ -2275,8 +2286,8 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       renderScale: scenario.renderScale ?? 1,
       graphicsQuality: graphicsQualities.indexOf(scenario.quality ?? "high"),
     });
-    await matchScenePipelinesToQuality();
-    if (scenePipelinesQuality !== state.graphicsQuality) {
+    await matchScenePipelinesToState();
+    if (scenePipelinesVariant !== scenePipelineVariant()) {
       throw new Error(`${scenario.id}: ${tierCompilationStatus}`);
     }
     updateRenderedGeometry();

@@ -323,3 +323,4 @@ and verification details.
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Terrain cache scope | Whether finer levels near boat zoom should also cache the coarser 2D terrain octaves and material noise |
+| Cloud-shadow taps | Whether one tap at the visible disc's centre may replace the three-tap disc average for cloud-shadow penumbrae |

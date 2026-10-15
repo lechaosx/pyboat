@@ -10,8 +10,9 @@ The intended game adds varied ships, mostly automatic weapons, and progression.
 
 ## Start here
 
-You need Rust, its `wasm32-unknown-unknown` target, `wasm-pack`, and Node.js/npm
-versions matching [package.json](package.json). On `x86_64-linux`, the optional
+You need Rust, its `wasm32-unknown-unknown` target, `wasm-pack`, `cargo-about`
+(for the web build's third-party notices), and Node.js/npm versions matching
+[package.json](package.json). On `x86_64-linux`, the optional
 Nix shell provides the toolchain:
 
 ```sh

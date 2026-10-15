@@ -843,7 +843,7 @@ fn cloud_shadow_query(
         lower_projection,
         upper_projection,
         side_projection,
-        maximum_separation_m > visual_pixel_footprint_m,
+        CLOUD_SHADOW_TAPS > 1u && maximum_separation_m > visual_pixel_footprint_m,
     );
 }
 

@@ -51,6 +51,7 @@ struct Options {
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
     quality: GraphicsQuality,
+    cloud_shadow_taps: u32,
     light_balance: [f32; 4],
     cloud_rendering: [f32; 4],
     cloud_shadows: [f32; 4],
@@ -518,6 +519,7 @@ struct CaptureReport {
     world_time_seconds: f64,
     diagnostic: String,
     quality: &'static str,
+    cloud_shadow_taps: u32,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
 }
@@ -555,6 +557,7 @@ fn default_options() -> Options {
         world_time_seconds: 37.0,
         diagnostic: scene_selection(),
         quality: GraphicsQuality::High,
+        cloud_shadow_taps: 3,
         light_balance: [1.0; 4],
         cloud_rendering: [1.0, 1.0, 1.0, 1.0],
         cloud_shadows: [1.0, 1.0, 0.85, 1.0],
@@ -619,6 +622,12 @@ fn parse_options() -> Result<Command, String> {
                 let name = value(&mut arguments)?;
                 options.quality = GraphicsQuality::parse(&name)
                     .ok_or_else(|| format!("invalid value for --quality: {name}"))?;
+            }
+            "--cloud-shadow-taps" => {
+                options.cloud_shadow_taps = parse(&value(&mut arguments)?, &argument)?;
+                if ![1, 3].contains(&options.cloud_shadow_taps) {
+                    return Err("--cloud-shadow-taps must be 1 or 3".to_owned());
+                }
             }
             "--light-balance" => {
                 options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
@@ -1266,7 +1275,9 @@ fn print_help() {
            --world-time SECONDS   nonnegative deterministic world time (default 37)\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids)\n\
-           --quality low|medium|high  graphics tier of scene compositions (default high)\n\n\
+           --quality low|medium|high  graphics tier of scene compositions (default high)\n\
+           --cloud-shadow-taps 1|3  directions averaged across the Sun's or Moon's disc per\n\
+                                  cloud-shadow lookup in scene compositions (default 3, as shipped)\n\n\
            --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
            --cloud-rendering V,V,V,V  finite lower-cloud depth, opacity, storm, parallax\n\
@@ -1531,12 +1542,15 @@ async fn render(options: &Options) -> Result<(), String> {
         [
             options.diagnostic.constants.as_slice(),
             options.quality.scene_constants(),
+            &[("CLOUD_SHADOW_TAPS", f64::from(options.cloud_shadow_taps))],
         ]
         .concat()
-    } else if options.quality == GraphicsQuality::High {
+    } else if options.quality == GraphicsQuality::High && options.cloud_shadow_taps == 3 {
         options.diagnostic.constants.clone()
     } else {
-        return Err("--quality applies only to scene compositions".to_owned());
+        return Err(
+            "--quality and --cloud-shadow-taps apply only to scene compositions".to_owned(),
+        );
     };
     let shader_source = options.diagnostic.module.map_or_else(
         || {
@@ -2093,6 +2107,7 @@ fn capture_report(
         world_time_seconds: options.world_time_seconds,
         diagnostic: options.diagnostic.id.clone(),
         quality: options.quality.name(),
+        cloud_shadow_taps: options.cloud_shadow_taps,
         derived: DerivedOutput {
             current_air_temperature_c: sample.weather.surface_air_temperature_c,
             sun_direction: celestial.sun_direction,
