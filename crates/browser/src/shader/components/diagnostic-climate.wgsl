@@ -25,7 +25,7 @@ fn diagnostic_climate_spatial_ice(input: VertexOutput) -> vec4<f32> {
     let maritime_temperature = 16.0
         * (1.0 - smoothstep(75.0, 90.0, abs(surface_latitude_degrees())))
         * terrain_simplex_fractal_value(
-            vec2<u32>(0x78bd642fu, 0xa0761d64u),
+            TERRAIN_CLUSTER_NOISE_FIELD,
             surface_position_m,
             8192.0,
             3u,

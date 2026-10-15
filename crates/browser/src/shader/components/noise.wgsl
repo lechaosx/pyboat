@@ -48,36 +48,22 @@ fn multiply_u64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
     );
 }
 
-fn add_u64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
-    let low = a.x + b.x;
-    return vec2<u32>(low, a.y + b.y + select(0u, 1u, low < a.x));
-}
-
-fn shift_right_u64(value: vec2<u32>, amount: u32) -> vec2<u32> {
-    return vec2<u32>(
-        (value.x >> amount) | (value.y << (32u - amount)),
-        value.y >> amount,
-    );
-}
-
-fn signed_u64(value: i32) -> vec2<u32> {
-    return vec2<u32>(
-        bitcast<u32>(value),
-        select(0u, 0xffffffffu, value < 0),
-    );
-}
-
-fn terrain_hash(initial_value: vec2<u32>) -> vec2<u32> {
+// lowbias32 by Chris Wellons (github.com/skeeto/hash-prospector, public
+// domain). Keep synchronized with `hash32` in crates/game/src/lib.rs.
+fn hash32(initial_value: u32) -> u32 {
     var value = initial_value;
-    value = multiply_u64(
-        value ^ shift_right_u64(value, 30u),
-        vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
-    );
-    value = multiply_u64(
-        value ^ shift_right_u64(value, 27u),
-        vec2<u32>(0x133111ebu, 0x94d049bbu),
-    );
-    return value ^ shift_right_u64(value, 31u);
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+// One field octave's lattice key from both seed words. Keep synchronized with
+// `noise_key` in crates/game/src/lib.rs, which explains the stream spreading.
+fn noise_key(field: u32, octave: u32) -> u32 {
+    let stream = (16u * field + octave) * 0x165667b1u;
+    return hash32(scene.match_seed.y ^ hash32(scene.match_seed.x ^ stream));
 }
 
 struct TerrainNoiseSample {
@@ -96,23 +82,24 @@ struct Simplex4dSample {
 };
 
 // A lattice key XORs one product per lattice axis. Since (n + 1)C = nC + C
-// modulo 2^64, every simplex vertex key derives from its cell's products by
-// 64-bit addition.
-const LATTICE_KEY_MULTIPLIERS = array<vec2<u32>, 4>(
-    vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
-    vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
-    vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
-    vec2<u32>(0x133111ebu, 0x94d049bbu),
+// modulo 2^32, every simplex vertex key derives from its cell's products by
+// addition. Keep synchronized with `LATTICE_KEY_MULTIPLIERS` in
+// crates/game/src/lib.rs.
+const LATTICE_KEY_MULTIPLIERS = array<u32, 4>(
+    0x9e3779b1u,
+    0x85ebca77u,
+    0xc2b2ae3du,
+    0x27d4eb2fu,
 );
 
 struct Simplex4dDomain {
-    lattice_products: array<vec2<u32>, 4>,
+    lattice_products: array<u32, 4>,
     first: vec4<f32>,
     rank: vec4<i32>,
 };
 
 struct Simplex2dDomain {
-    lattice_keys: array<vec2<u32>, 3>,
+    lattice_keys: array<u32, 3>,
     offsets: array<vec2<f32>, 3>,
     x_cycles: i32,
     y_scale_per_m: f32,
@@ -162,8 +149,8 @@ fn positive_mod(value: i32, period: i32) -> i32 {
     return ((value % period) + period) % period;
 }
 
-fn terrain_simplex_lattice_gradient(seed: vec2<u32>, lattice_key: vec2<u32>) -> vec2<f32> {
-    return SIMPLEX_GRADIENT_DIRECTIONS[terrain_hash(seed ^ lattice_key).x % 24u];
+fn terrain_simplex_lattice_gradient(key: u32, lattice_key: u32) -> vec2<f32> {
+    return SIMPLEX_GRADIENT_DIRECTIONS[hash32(key ^ lattice_key) % 24u];
 }
 
 fn terrain_simplex_domain(
@@ -208,10 +195,10 @@ fn terrain_simplex_domain(
         cell.x - cell.y - select(1, 0, middle_steps_x),
         residue_period,
     );
-    let lower_residue_product = multiply_u64(signed_u64(lower_residue), residue_multiplier);
+    let lower_residue_product = u32(lower_residue) * residue_multiplier;
     let upper_residue_product = select(
-        add_u64(lower_residue_product, residue_multiplier),
-        vec2<u32>(0u),
+        lower_residue_product + residue_multiplier,
+        0u,
         lower_residue == residue_period - 1,
     );
     let first_residue_product = select(
@@ -225,11 +212,11 @@ fn terrain_simplex_domain(
         middle_steps_x,
     );
     let last_residue_product = first_residue_product;
-    let first_sum_product = multiply_u64(signed_u64(cell.x + cell.y), sum_multiplier);
-    let middle_sum_product = add_u64(first_sum_product, sum_multiplier);
-    let last_sum_product = add_u64(middle_sum_product, sum_multiplier);
+    let first_sum_product = bitcast<u32>(cell.x + cell.y) * sum_multiplier;
+    let middle_sum_product = first_sum_product + sum_multiplier;
+    let last_sum_product = middle_sum_product + sum_multiplier;
     return Simplex2dDomain(
-        array<vec2<u32>, 3>(
+        array<u32, 3>(
             first_residue_product ^ first_sum_product,
             middle_residue_product ^ middle_sum_product,
             last_residue_product ^ last_sum_product,
@@ -241,7 +228,7 @@ fn terrain_simplex_domain(
 }
 
 fn terrain_simplex_noise(
-    seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
 ) -> TerrainNoiseSample {
@@ -255,7 +242,7 @@ fn terrain_simplex_noise(
         if attenuation <= 0.0 {
             continue;
         }
-        let gradient = terrain_simplex_lattice_gradient(seed, domain.lattice_keys[vertex]);
+        let gradient = terrain_simplex_lattice_gradient(key, domain.lattice_keys[vertex]);
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
         let attenuation_cubed = attenuation_squared * attenuation;
@@ -275,7 +262,7 @@ fn terrain_simplex_noise(
 }
 
 fn terrain_simplex_noise_value(
-    seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
 ) -> f32 {
@@ -287,7 +274,7 @@ fn terrain_simplex_noise_value(
         if attenuation <= 0.0 {
             continue;
         }
-        let gradient = terrain_simplex_lattice_gradient(seed, domain.lattice_keys[vertex]);
+        let gradient = terrain_simplex_lattice_gradient(key, domain.lattice_keys[vertex]);
         let ramp = dot(gradient, offset);
         let attenuation_squared = attenuation * attenuation;
         value += attenuation_squared * attenuation_squared * ramp;
@@ -296,22 +283,16 @@ fn terrain_simplex_noise_value(
 }
 
 fn terrain_simplex_lattice_gradient_4d(
-    seed: vec2<u32>,
+    key: u32,
     domain: Simplex4dDomain,
     lattice_offset: vec4<i32>,
 ) -> vec4<f32> {
-    var key = seed;
+    var lattice_key = key;
     for (var axis = 0u; axis < 4u; axis++) {
-        key ^= add_u64(
-            domain.lattice_products[axis],
-            select(
-                vec2<u32>(0u),
-                LATTICE_KEY_MULTIPLIERS[axis],
-                lattice_offset[axis] != 0i,
-            ),
-        );
+        lattice_key ^= domain.lattice_products[axis]
+            + select(0u, LATTICE_KEY_MULTIPLIERS[axis], lattice_offset[axis] != 0i);
     }
-    let hash = terrain_hash(key).x;
+    let hash = hash32(lattice_key);
     let zero_axis = hash & 3u;
     var sign_bit = 2u;
     var gradient = vec4<f32>(0.0);
@@ -354,17 +335,14 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
     if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
     if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
-    var lattice_products: array<vec2<u32>, 4>;
+    var lattice_products: array<u32, 4>;
     for (var axis = 0u; axis < 4u; axis++) {
-        lattice_products[axis] = multiply_u64(
-            signed_u64(lattice[axis]),
-            LATTICE_KEY_MULTIPLIERS[axis],
-        );
+        lattice_products[axis] = bitcast<u32>(lattice[axis]) * LATTICE_KEY_MULTIPLIERS[axis];
     }
     return Simplex4dDomain(lattice_products, first, rank);
 }
 
-fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
+fn simplex_noise_sample_4d(key: u32, point: vec4<f32>) -> Simplex4dSample {
     let unskew_factor = 0.1381966;
     let domain = simplex_noise_domain_4d(point);
     var sample: Simplex4dSample;
@@ -388,7 +366,7 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
         let attenuation = 0.5 - dot(offset, offset);
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
-                seed,
+                key,
                 domain,
                 lattice_offset,
             );
@@ -408,7 +386,7 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
     return sample;
 }
 
-fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
+fn simplex_noise_value_4d(key: u32, point: vec4<f32>) -> f32 {
     let unskew_factor = 0.1381966;
     let domain = simplex_noise_domain_4d(point);
     var value = 0.0;
@@ -427,7 +405,7 @@ fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
         let attenuation = 0.5 - dot(offset, offset);
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
-                seed,
+                key,
                 domain,
                 lattice_offset,
             );
@@ -440,13 +418,13 @@ fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
 }
 
 fn terrain_simplex_noise_4d_from_circle(
-    seed: vec2<u32>,
+    key: u32,
     circle_position: vec4<f32>,
     wavelength_m: f32,
 ) -> TerrainNoiseSample {
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
-    let simplex = simplex_noise_sample_4d(seed, vec4<f32>(
+    let simplex = simplex_noise_sample_4d(key, vec4<f32>(
         circle_radius * circle_position.x,
         circle_radius * circle_position.y,
         linear_y,
@@ -466,13 +444,13 @@ fn terrain_simplex_noise_4d_from_circle(
 }
 
 fn terrain_simplex_noise_value_4d_from_circle(
-    seed: vec2<u32>,
+    key: u32,
     circle_position: vec4<f32>,
     wavelength_m: f32,
 ) -> f32 {
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
-    return (114.3 / 83.1) * simplex_noise_value_4d(seed, vec4<f32>(
+    return (114.3 / 83.1) * simplex_noise_value_4d(key, vec4<f32>(
         circle_radius * circle_position.x,
         circle_radius * circle_position.y,
         linear_y,
@@ -481,19 +459,19 @@ fn terrain_simplex_noise_value_4d_from_circle(
 }
 
 fn terrain_simplex_noise_4d(
-    seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
 ) -> TerrainNoiseSample {
     return terrain_simplex_noise_4d_from_circle(
-        seed,
+        key,
         periodic_noise_circle_position(position_m),
         wavelength_m,
     );
 }
 
 fn terrain_simplex_fractal_sample(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
@@ -501,7 +479,7 @@ fn terrain_simplex_fractal_sample(
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
     return terrain_simplex_fractal_sample_from_circle(
-        field_salt,
+        field,
         position_m,
         periodic_noise_circle_position(position_m),
         initial_wavelength_m,
@@ -512,7 +490,7 @@ fn terrain_simplex_fractal_sample(
 }
 
 fn terrain_simplex_fractal_sample_from_circle(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
     initial_wavelength_m: f32,
@@ -521,7 +499,7 @@ fn terrain_simplex_fractal_sample_from_circle(
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
     let sample = terrain_simplex_octave_sum_from_circle(
-        field_salt,
+        field,
         position_m,
         circle_position,
         initial_wavelength_m,
@@ -550,7 +528,7 @@ fn fractal_amplitude_sum(octave_count: u32, persistence: f32) -> f32 {
 // The amplitude-weighted sum of octaves `first_octave` up to `end_octave`,
 // before the fractal's normalization.
 fn terrain_simplex_octave_sum_from_circle(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
     initial_wavelength_m: f32,
@@ -566,18 +544,16 @@ fn terrain_simplex_octave_sum_from_circle(
     var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x
         * exp2(-f32(first_octave));
     for (var octave = first_octave; octave < end_octave; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
             octave_sample = terrain_simplex_noise_4d_from_circle(
-                octave_seed,
+                octave_key,
                 circle_position,
                 wavelength_m,
             );
         } else {
-            octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
+            octave_sample = terrain_simplex_noise(octave_key, position_m, wavelength_m);
         }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
@@ -588,7 +564,7 @@ fn terrain_simplex_octave_sum_from_circle(
 }
 
 fn terrain_simplex_fractal_value(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
@@ -596,7 +572,7 @@ fn terrain_simplex_fractal_value(
     circle_octave_count: u32,
 ) -> f32 {
     return terrain_simplex_fractal_value_from_circle(
-        field_salt,
+        field,
         position_m,
         periodic_noise_circle_position(position_m),
         initial_wavelength_m,
@@ -607,7 +583,7 @@ fn terrain_simplex_fractal_value(
 }
 
 fn terrain_simplex_fractal_value_from_circle(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
     initial_wavelength_m: f32,
@@ -620,19 +596,17 @@ fn terrain_simplex_fractal_value_from_circle(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         var octave_value: f32;
         if octave < circle_octave_count {
             octave_value = terrain_simplex_noise_value_4d_from_circle(
-                octave_seed,
+                octave_key,
                 circle_position,
                 wavelength_m,
             );
         } else {
             octave_value = terrain_simplex_noise_value(
-                octave_seed,
+                octave_key,
                 position_m,
                 wavelength_m,
             );
@@ -646,7 +620,7 @@ fn terrain_simplex_fractal_value_from_circle(
 }
 
 fn spatiotemporal_fractal_sample(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     initial_time_coordinate: f32,
@@ -654,7 +628,7 @@ fn spatiotemporal_fractal_sample(
     persistence: f32,
 ) -> TerrainNoiseSample {
     return spatiotemporal_fractal_sample_with_broad(
-        field_salt,
+        field,
         position_m,
         initial_wavelength_m,
         initial_time_coordinate,
@@ -664,7 +638,7 @@ fn spatiotemporal_fractal_sample(
 }
 
 fn spatiotemporal_fractal_sample_with_broad(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     initial_time_coordinate: f32,
@@ -678,11 +652,9 @@ fn spatiotemporal_fractal_sample_with_broad(
     var wavelength_m = initial_wavelength_m;
     var time_coordinate = initial_time_coordinate;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         let octave_sample = spatiotemporal_noise_sample(
-            octave_seed,
+            octave_key,
             position_m,
             wavelength_m,
             time_coordinate,
@@ -701,7 +673,7 @@ fn spatiotemporal_fractal_sample_with_broad(
 }
 
 fn spatiotemporal_fractal_value(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     initial_time_coordinate: f32,
@@ -709,7 +681,7 @@ fn spatiotemporal_fractal_value(
     persistence: f32,
 ) -> f32 {
     return spatiotemporal_fractal_value_with_broad(
-        field_salt,
+        field,
         position_m,
         initial_wavelength_m,
         initial_time_coordinate,
@@ -719,7 +691,7 @@ fn spatiotemporal_fractal_value(
 }
 
 fn spatiotemporal_fractal_value_with_broad(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     initial_time_coordinate: f32,
@@ -733,11 +705,9 @@ fn spatiotemporal_fractal_value_with_broad(
     var wavelength_m = initial_wavelength_m;
     var time_coordinate = initial_time_coordinate;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         let octave_value = spatiotemporal_noise_value(
-            octave_seed,
+            octave_key,
             position_m,
             wavelength_m,
             time_coordinate,
@@ -753,14 +723,14 @@ fn spatiotemporal_fractal_value_with_broad(
 }
 
 fn spatial_weather_fractal_sample(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
     circle_octave_count: u32,
 ) -> TerrainNoiseSample {
     return spatial_weather_fractal_sample_from_circle(
-        field_salt,
+        field,
         position_m,
         periodic_noise_circle_position(position_m),
         initial_wavelength_m,
@@ -770,7 +740,7 @@ fn spatial_weather_fractal_sample(
 }
 
 fn spatial_weather_fractal_sample_from_circle(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
     initial_wavelength_m: f32,
@@ -782,18 +752,16 @@ fn spatial_weather_fractal_sample_from_circle(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         var octave_sample: TerrainNoiseSample;
         if octave < circle_octave_count {
             octave_sample = terrain_simplex_noise_4d_from_circle(
-                octave_seed,
+                octave_key,
                 circle_position,
                 wavelength_m,
             );
         } else {
-            octave_sample = terrain_simplex_noise(octave_seed, position_m, wavelength_m);
+            octave_sample = terrain_simplex_noise(octave_key, position_m, wavelength_m);
         }
         sample.value += amplitude * octave_sample.value;
         sample.gradient += amplitude * octave_sample.gradient;
@@ -807,14 +775,14 @@ fn spatial_weather_fractal_sample_from_circle(
 }
 
 fn spatial_weather_fractal(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
     circle_octave_count: u32,
 ) -> f32 {
     return spatial_weather_fractal_from_circle(
-        field_salt,
+        field,
         position_m,
         periodic_noise_circle_position(position_m),
         initial_wavelength_m,
@@ -824,7 +792,7 @@ fn spatial_weather_fractal(
 }
 
 fn spatial_weather_fractal_from_circle(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
     initial_wavelength_m: f32,
@@ -836,19 +804,17 @@ fn spatial_weather_fractal_from_circle(
     var amplitude_sum = 0.0;
     var wavelength_m = initial_wavelength_m;
     for (var octave = 0u; octave < octave_count; octave++) {
-        let octave_seed = scene.match_seed
-            ^ field_salt
-            ^ OCTAVE_SALTS[octave];
+        let octave_key = noise_key(field, octave);
         var octave_value: f32;
         if octave < circle_octave_count {
             octave_value = terrain_simplex_noise_value_4d_from_circle(
-                octave_seed,
+                octave_key,
                 circle_position,
                 wavelength_m,
             );
         } else {
             octave_value = terrain_simplex_noise_value(
-                octave_seed,
+                octave_key,
                 position_m,
                 wavelength_m,
             );
@@ -862,13 +828,13 @@ fn spatial_weather_fractal_from_circle(
 }
 
 fn material_fractal_sample(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
 ) -> TerrainNoiseSample {
     return material_fractal_sample_first_octaves(
-        field_salt,
+        field,
         position_m,
         initial_wavelength_m,
         octave_count,
@@ -879,7 +845,7 @@ fn material_fractal_sample(
 // Normalized over all `octave_count` octaves, so leaving out finer ones keeps
 // the coarser octaves' amplitudes, as footprint filtering does.
 fn material_fractal_sample_first_octaves(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
@@ -900,11 +866,9 @@ fn material_fractal_sample_first_octaves(
         if octave < evaluated_octave_count
             && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES)
         {
-            let octave_seed = scene.match_seed
-                ^ field_salt
-                ^ OCTAVE_SALTS[octave];
+            let octave_key = noise_key(field, octave);
             let octave_sample = terrain_simplex_noise(
-                octave_seed,
+                octave_key,
                 position_m,
                 wavelength_m,
             );
@@ -927,7 +891,7 @@ fn material_micro_relief_sample(
     initial_wavelength_m: f32,
 ) -> TerrainNoiseSample {
     return material_fractal_sample_first_octaves(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        MATERIAL_MICRO_RELIEF_NOISE_FIELD,
         position_m,
         initial_wavelength_m,
         6u,
@@ -936,7 +900,7 @@ fn material_micro_relief_sample(
 }
 
 fn material_fractal_value(
-    field_salt: vec2<u32>,
+    field: u32,
     position_m: vec2<f32>,
     initial_wavelength_m: f32,
     octave_count: u32,
@@ -952,11 +916,9 @@ fn material_fractal_value(
             wavelength_m,
         );
         if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
-            let octave_seed = scene.match_seed
-                ^ field_salt
-                ^ OCTAVE_SALTS[octave];
+            let octave_key = noise_key(field, octave);
             value += amplitude * octave_visibility * terrain_simplex_noise_value(
-                octave_seed,
+                octave_key,
                 position_m,
                 wavelength_m,
             );

@@ -293,7 +293,7 @@ fn final_scene_color(
         var land_surface = 0.0;
         if bare_land || EVALUATE_ALL_BRANCHES {
             land_surface = select(0.0, material_fractal_value(
-                vec2<u32>(0x6a09e667u, 0xbb67ae85u),
+                LAND_SURFACE_NOISE_FIELD,
                 input.world_position_m,
                 96.0,
                 4u,

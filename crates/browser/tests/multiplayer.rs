@@ -338,23 +338,9 @@ fn multiplayer_client_exposes_the_match_configuration() {
 
 #[test]
 fn multiplayer_prediction_applies_seeded_grounding_resistance() {
-    fn position_matching(match_seed: u64, predicate: impl Fn(f32) -> bool) -> Vector {
-        for x in -128..=128 {
-            for y in -128..=128 {
-                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
-                let depth_m = procedural_match_environment(
-                    WorldGeometry::default(),
-                    match_seed,
-                    9,
-                    position_m,
-                )
-                .water_depth_m;
-                if predicate(depth_m) {
-                    return position_m;
-                }
-            }
-        }
-        panic!("the representative terrain should contain the requested depth");
+    fn depth_m(match_seed: u64, position_m: Vector) -> f32 {
+        procedural_match_environment(WorldGeometry::default(), match_seed, 9, position_m)
+            .water_depth_m
     }
 
     fn predicted_speed_m_s(match_seed: u64, position_m: Vector) -> f32 {
@@ -382,8 +368,17 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
     }
 
     let match_seed = 42;
-    let deep_position_m = position_matching(match_seed, |depth_m| depth_m >= 1.5);
-    let grounded_position_m = position_matching(match_seed, |depth_m| depth_m == 0.0);
+    let grounded_position_m = (-128..=128)
+        .flat_map(|x| (-128..=128).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
+        .find(|&position_m| depth_m(match_seed, position_m) == 0.0)
+        .expect("the representative terrain should contain land");
+    // Open water beside the grounded position shares its wind and current.
+    let deep_position_m = (1..=128)
+        .flat_map(|step| {
+            [-16.0, 16.0].map(|step_m| grounded_position_m + Vector::new(step_m * step as f32, 0.0))
+        })
+        .find(|&position_m| depth_m(match_seed, position_m) >= 1.5)
+        .expect("open water should lie beside the grounded position");
 
     assert!(
         predicted_speed_m_s(match_seed, grounded_position_m)

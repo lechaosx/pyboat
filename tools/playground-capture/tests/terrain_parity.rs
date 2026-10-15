@@ -70,7 +70,9 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
                 let end_light = light_at(*end);
                 elevation(light_at(*start)) < 0.0
                     && elevation(end_light) > 0.1
-                    && (source == 0 || end_light.moon_intensity > 0.02)
+                    // Daylight exposure can leave moonlight below one 8-bit level.
+                    && (source == 0
+                        || (end_light.moon_intensity > 0.02 && end_light.sun_direction[2] < 0.0))
             })
             .unwrap();
         let visible_time = above;
@@ -1917,27 +1919,33 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
 
 #[test]
 fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
+    let coast_m = rugged_coast_m(WorldGeometry::default());
+    let (camera_x, camera_y) = (coast_m.x.to_string(), coast_m.y.to_string());
     let end = [
         "--camera-x",
-        "-5560",
+        &camera_x,
         "--camera-y",
-        "-2990",
+        &camera_y,
         "--view-height",
         "240",
     ];
     // Pans within one finest-level window while zooming out through coarser
     // levels and back, so the end view reuses texels from every step.
-    let mut prior_views = Vec::new();
-    for view in [
-        "-6400,-3150,240",
-        "-6150,-3100,240",
-        "-5900,-3040,600",
-        "-5800,-3000,2400",
-        "-5650,-2990,600",
-        "-5600,-2995,240",
-    ] {
-        prior_views.extend(["--prior-view", view]);
-    }
+    let prior_views = [
+        (-840.0, -160.0, 240.0),
+        (-590.0, -110.0, 240.0),
+        (-340.0, -50.0, 600.0),
+        (-240.0, -10.0, 2400.0),
+        (-90.0, 0.0, 600.0),
+        (-40.0, -5.0, 240.0),
+    ]
+    .map(|(x_m, y_m, view_height_m)| {
+        format!("{},{},{view_height_m}", coast_m.x + x_m, coast_m.y + y_m)
+    });
+    let prior_views = prior_views
+        .iter()
+        .flat_map(|view| ["--prior-view", view.as_str()])
+        .collect::<Vec<_>>();
     let fresh = render_capture("cache-fresh", &end);
     let incremental = render_capture("cache-incremental", &[&end[..], &prior_views].concat());
     let unfilled = render_capture(
@@ -1966,9 +1974,10 @@ fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
 #[test]
 fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
     let world = WorldGeometry::default();
-    let reef_y_m = -2_990.0;
+    let coast_m = rugged_coast_m(world);
+    let reef_y_m = coast_m.y;
     let reef_shore_x_m = (0..4_000)
-        .map(|step| -6_560.0 + 0.5 * step as f32)
+        .map(|step| coast_m.x - 1_000.0 + 0.5 * step as f32)
         .find(|&x_m| {
             let elevation =
                 |x_m| procedural_terrain_elevation_m(world, SEED, Vector::new(x_m, reef_y_m));
@@ -1989,10 +1998,10 @@ fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
     // hold; the coarsest caches no island or coastal-substrate octave.
     for (camera_x_m, camera_y_m, view_height_m) in [
         (reef_shore_x_m, reef_y_m, DEFAULT_VIEW_HEIGHT_M),
-        (-5_560.0, reef_y_m, 240.0),
+        (coast_m.x, reef_y_m, 240.0),
         (seam_x_m, seam_shore_y_m, 240.0),
-        (-5_560.0, reef_y_m, 8_000.0),
-        (-5_560.0, reef_y_m, 16_000.0),
+        (coast_m.x, reef_y_m, 8_000.0),
+        (coast_m.x, reef_y_m, 16_000.0),
     ] {
         let pixel_m = view_height_m / 144.0;
         let render = |label, diagnostic, camera_x_m: f32| {
@@ -2038,6 +2047,41 @@ fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
             "{label}: the cached scene changes {cached_pixels} pixels, a one-pixel shift {shift_pixels}",
         );
     }
+}
+
+/// The first view centre, scanning 500 m apart outward from the origin, that is
+/// daylit at 37 s and whose 240 m-high view has a shoreline that reefs and rocks
+/// break up: its middle row crosses the shoreline at least twelve times at 2 m
+/// spacing.
+fn rugged_coast_m(world: WorldGeometry) -> Vector {
+    let half_width_m = 0.5 * 240.0 * 16.0 / 9.0;
+    let crossings = |center_m: Vector, step_m: f32| {
+        let count = (2.0 * half_width_m / step_m) as usize;
+        (0..=count)
+            .map(|index| {
+                let x_m = center_m.x - half_width_m + step_m * index as f32;
+                procedural_terrain_elevation_m(world, SEED, Vector::new(x_m, center_m.y)) >= 0.0
+            })
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|pair| pair[0] != pair[1])
+            .count()
+    };
+    (0..32_i32)
+        .flat_map(|ring| {
+            (-ring..=ring).flat_map(move |y_index| {
+                (-ring..=ring)
+                    .filter(move |x_index| x_index.abs() == ring || y_index.abs() == ring)
+                    .map(move |x_index| Vector::new(500.0 * x_index as f32, 500.0 * y_index as f32))
+            })
+        })
+        .find(|&center_m| {
+            celestial_lighting(world_celestial_conditions(world, 37.0, center_m)).sun_direction[2]
+                > 0.5
+                && crossings(center_m, 36.0) > 0
+                && crossings(center_m, 2.0) >= 12
+        })
+        .expect("the world should have a rugged coast")
 }
 
 /// Renders a 256x144 capture of the default world at a daytime clock.
@@ -2201,37 +2245,7 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 #[test]
 fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
     let world = WorldGeometry::default();
-    let overview_size = 64usize;
-    let overview_height_m = 16_000.0;
-    // Early afternoon at the view on successive days, so the compared pixels
-    // are lit.
-    let (world_time_seconds, cloud_pixel) = (0..48)
-        .map(|day| f64::from(day) * 86_400.0 + 123.456)
-        .find_map(|world_time_seconds| {
-            let overview = render_diagnostic_image_with_view_at(
-                world,
-                Vector::new(0.0, -10_000.0),
-                world_time_seconds,
-                overview_height_m,
-                "cloud_low_optical_depth",
-                overview_size as u32,
-                overview_size as u32,
-            );
-            overview
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .position(|pixel| scalar_debug_amount(pixel) > 0.2)
-                .map(|cloud_pixel| (world_time_seconds, cloud_pixel))
-        })
-        .expect("some afternoon should show an opaque low cloud");
-    let row = cloud_pixel / overview_size;
-    let column = cloud_pixel % overview_size;
-    let position_m = Vector::new(
-        (column as f32 + 0.5) / overview_size as f32 * overview_height_m - 0.5 * overview_height_m,
-        -10_000.0 + 0.5 * overview_height_m
-            - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
-    );
+    let (world_time_seconds, position_m) = opaque_low_cloud();
     let row_hidden = render_controlled_image_at(
         world,
         position_m,
@@ -2255,14 +2269,59 @@ fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
     assert_rgb_close(&row_hidden, &opacity_disabled, 1);
 }
 
+/// An early-afternoon world time on the first day whose 16 km overview around
+/// `LOW_CLOUD_OVERVIEW_M` shows an opaque low cloud, and that cloud's position.
+/// Tests share one search, whose overview captures would otherwise collide.
+fn opaque_low_cloud() -> (f64, Vector) {
+    static LOW_CLOUD: std::sync::OnceLock<(f64, Vector)> = std::sync::OnceLock::new();
+    *LOW_CLOUD.get_or_init(search_opaque_low_cloud)
+}
+
+fn search_opaque_low_cloud() -> (f64, Vector) {
+    let overview_size = 64usize;
+    let overview_height_m = 16_000.0;
+    let (world_time_seconds, cloud_pixel) = (0..48)
+        .map(|day| f64::from(day) * 86_400.0 + 123.456)
+        .find_map(|world_time_seconds| {
+            let overview = render_diagnostic_image_with_view_at(
+                WorldGeometry::default(),
+                LOW_CLOUD_OVERVIEW_M,
+                world_time_seconds,
+                overview_height_m,
+                "cloud_low_optical_depth",
+                overview_size as u32,
+                overview_size as u32,
+            );
+            overview
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .position(|pixel| scalar_debug_amount(pixel) > 0.2)
+                .map(|cloud_pixel| (world_time_seconds, cloud_pixel))
+        })
+        .expect("some afternoon should show an opaque low cloud");
+    let row = cloud_pixel / overview_size;
+    let column = cloud_pixel % overview_size;
+    let position_m = LOW_CLOUD_OVERVIEW_M
+        + Vector::new(
+            (column as f32 + 0.5) / overview_size as f32 * overview_height_m
+                - 0.5 * overview_height_m,
+            0.5 * overview_height_m - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
+        );
+    (world_time_seconds, position_m)
+}
+
+const LOW_CLOUD_OVERVIEW_M: Vector = Vector::new(0.0, -10_000.0);
+
 #[test]
 fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(0.0, -10_000.0);
+    let position_m = LOW_CLOUD_OVERVIEW_M;
+    let (world_time_seconds, _) = opaque_low_cloud();
     let without_parallax = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         16_000.0,
         "scene",
         65,
@@ -2272,7 +2331,7 @@ fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
     let with_parallax = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         16_000.0,
         "scene",
         65,
@@ -2289,7 +2348,7 @@ fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
     let shadows_without_parallax = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         16_000.0,
         "scene",
         64,
@@ -2302,7 +2361,7 @@ fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
     let shadows_with_parallax = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         16_000.0,
         "scene",
         64,
@@ -2318,34 +2377,11 @@ fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
 #[test]
 fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
     let world = WorldGeometry::default();
-    let overview_size = 32usize;
-    let overview_height_m = 16_000.0;
-    let overview = render_diagnostic_image_with_view_at(
-        world,
-        Vector::new(0.0, -10_000.0),
-        0.0,
-        overview_height_m,
-        "cloud_low_optical_depth",
-        overview_size as u32,
-        overview_size as u32,
-    );
-    let cloud_pixel = overview
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .position(|pixel| pixel[..3] != scalar_debug_pixel(0.0)[..3])
-        .expect("representative view should contain a low cloud");
-    let row = cloud_pixel / overview_size;
-    let column = cloud_pixel % overview_size;
-    let position_m = Vector::new(
-        (column as f32 + 0.5) / overview_size as f32 * overview_height_m - 0.5 * overview_height_m,
-        -10_000.0 + 0.5 * overview_height_m
-            - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
-    );
+    let (world_time_seconds, position_m) = opaque_low_cloud();
     let near = render_diagnostic_image_with_view_at(
         world,
         position_m,
-        0.0,
+        world_time_seconds,
         1.0,
         "cloud_low_optical_depth",
         1,
@@ -2354,7 +2390,7 @@ fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
     let far = render_diagnostic_image_with_view_at(
         world,
         position_m,
-        0.0,
+        world_time_seconds,
         200.0,
         "cloud_low_optical_depth",
         1,
@@ -2475,31 +2511,41 @@ fn ambient_sky_occlusion_follows_existing_weather_conditions() {
     let world = WorldGeometry::default();
     let width = 32usize;
     let height = 32usize;
-    let ambient = render_diagnostic_image(
-        world,
-        "lighting_ambient_sky_occlusion",
-        width as u32,
-        height as u32,
-    );
-    let mut occlusion = Vec::with_capacity(width * height);
-    let mut cloud_condition = Vec::with_capacity(width * height);
-    for row in 0..height {
-        for column in 0..width {
-            let offset = 4 * (row * width + column);
-            occlusion.push(
-                (ambient[offset] as f32 + ambient[offset + 1] as f32 + ambient[offset + 2] as f32)
-                    / (3.0 * 255.0),
-            );
-            let position_m = Vector::new(
-                (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
-                (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
-            );
-            let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
-            cloud_condition.push(
-                weather
-                    .upper_cloudiness
-                    .max(0.5 * weather.cloudiness + 0.5 * weather.rain_intensity),
-            );
+    // One world's weather at one time spans few independent systems, so the
+    // correlation is pooled over a population of seeds.
+    let mut occlusion = Vec::new();
+    let mut cloud_condition = Vec::new();
+    for seed in [SEED, 1, 2, 3, 4, 5, 6, 7] {
+        let ambient = render_diagnostic_image_with_seed(
+            world,
+            seed,
+            Vector::ZERO,
+            0.0,
+            world.height_m(),
+            "lighting_ambient_sky_occlusion",
+            width as u32,
+            height as u32,
+        );
+        for row in 0..height {
+            for column in 0..width {
+                let offset = 4 * (row * width + column);
+                occlusion.push(
+                    (ambient[offset] as f32
+                        + ambient[offset + 1] as f32
+                        + ambient[offset + 2] as f32)
+                        / (3.0 * 255.0),
+                );
+                let position_m = Vector::new(
+                    (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
+                    (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
+                );
+                let weather = procedural_world_environment(world, seed, 0, position_m).weather;
+                cloud_condition.push(
+                    weather
+                        .upper_cloudiness
+                        .max(0.5 * weather.cloudiness + 0.5 * weather.rain_intensity),
+                );
+            }
         }
     }
 

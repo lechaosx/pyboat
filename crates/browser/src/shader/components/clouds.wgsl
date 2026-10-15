@@ -16,7 +16,7 @@ fn visible_low_cloud_position_m(position_m: vec2<f32>) -> vec2<f32> {
 fn low_cloud_latent_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let body_size = clamp(tuning.cloud_wisps.z, 0.25, 4.0);
     return spatiotemporal_fractal_sample(
-        vec2<u32>(0x6c8e9cf5u, 0x7a1d3b2fu),
+        LOW_CLOUD_NOISE_FIELD,
         position_m,
         640.0 * body_size,
         scene.cloud_time_coordinates.x,
@@ -28,7 +28,7 @@ fn low_cloud_latent_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
 fn low_cloud_latent_value(position_m: vec2<f32>) -> f32 {
     let body_size = clamp(tuning.cloud_wisps.z, 0.25, 4.0);
     return spatiotemporal_fractal_value(
-        vec2<u32>(0x6c8e9cf5u, 0x7a1d3b2fu),
+        LOW_CLOUD_NOISE_FIELD,
         position_m,
         640.0 * body_size,
         scene.cloud_time_coordinates.x,
@@ -185,7 +185,7 @@ fn procedural_upper_cloud_optical_depth(
         return 0.0;
     }
     let latent = spatiotemporal_fractal_value(
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        UPPER_CLOUD_NOISE_FIELD,
         field_position_m,
         4000.0,
         scene.cloud_time_coordinates.y,

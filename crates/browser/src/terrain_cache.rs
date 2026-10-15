@@ -50,6 +50,10 @@ struct TerrainCacheFill {
 }
 
 pub struct TerrainCacheFrame {
+    #[cfg_attr(
+        not(any(target_arch = "wasm32", feature = "playground")),
+        allow(dead_code)
+    )]
     fill: TerrainCacheFill,
     /// Texels the fill pass evaluates, one invocation each.
     fill_texels: u32,

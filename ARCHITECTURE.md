@@ -79,6 +79,10 @@ and verification details.
   reproducible hashing, coordinates, constants, and mirrorable arithmetic.
   Shared queries agree within narrow numeric tolerance and preserve categorical
   boundaries outside it; bitwise CPU/GPU floating-point identity is unnecessary.
+- **[Explicit]** Seeded noise and cell hashing that WGSL mirrors uses 32-bit
+  integer arithmetic, which WGSL supports natively.
+- **[Implicit]** Seeded fields mix both words of the 64-bit match seed into
+  their keys, so worlds stay distinct across the full seed range.
 - **[Implicit]** WGSL mirrors authoritative terrain and short environment
   derivations; Rust governs when a rendering approximation differs.
 
@@ -284,6 +288,9 @@ and verification details.
 - **[Implicit]** Failed viewport sends remain retryable until superseded.
 - **[Implicit]** Individual stream resets leave later streams usable.
 - **[Implicit]** Protocol/version failure closes the session and discards queued replicated state.
+- **[Implicit]** The protocol version also changes when the world generated
+  from a match seed changes, so a client cannot predict a different world than
+  its server.
 - **[Implicit]** Match boat and session capacity is bounded, including wrecks,
   to bound simulation, complete snapshots, and rendering without a distance cap.
   Excess sessions close before registration.

@@ -2,6 +2,11 @@ fn visual_hash_unit(value: u32) -> f32 {
     return f32(value >> 8u) / 16777216.0;
 }
 
+// Two independent units from the low and high halves of a hash.
+fn visual_hash_unit_pair(value: u32) -> vec2<f32> {
+    return vec2<f32>(vec2<u32>(value & 0xffffu, value >> 16u)) / 65536.0;
+}
+
 fn precipitation_water_contact_sample_from_atmosphere(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
@@ -41,6 +46,7 @@ fn precipitation_water_contact_sample_from_atmosphere(
             atmosphere.climate,
         ),
     );
+    let contact_key = noise_key(PRECIPITATION_CONTACT_NOISE_FIELD, 0u);
     for (var offset_y = -1; offset_y <= 1; offset_y++) {
         for (var offset_x = -1; offset_x <= 1; offset_x++) {
             let unwrapped_cell = base_cell + vec2<i32>(offset_x, offset_y);
@@ -48,20 +54,14 @@ fn precipitation_water_contact_sample_from_atmosphere(
                 positive_mod(unwrapped_cell.x, cell_x_cycles),
                 unwrapped_cell.y,
             );
-            let cell_hash = terrain_hash(
-                scene.match_seed
-                    ^ multiply_u64(
-                        signed_u64(wrapped_cell.x),
-                        vec2<u32>(0x243f6a88u, 0x85a308d3u),
-                    )
-                    ^ multiply_u64(
-                        signed_u64(wrapped_cell.y),
-                        vec2<u32>(0x13198a2eu, 0x03707344u),
-                    ),
+            let cell_hash = hash32(
+                contact_key
+                    ^ (u32(wrapped_cell.x) * LATTICE_KEY_MULTIPLIERS[0])
+                    ^ (bitcast<u32>(wrapped_cell.y) * LATTICE_KEY_MULTIPLIERS[1]),
             );
             let local_cycle_time = scene.precipitation_phase_and_css_view_height_px.x
                 * f32(cycles_per_anchor)
-                + visual_hash_unit(cell_hash.x);
+                + visual_hash_unit(cell_hash);
             let local_cycle = u32(floor(local_cycle_time));
             let age = fract(local_cycle_time);
             let impact_low = anchor_cycles.x + local_cycle;
@@ -69,26 +69,17 @@ fn precipitation_water_contact_sample_from_atmosphere(
                 impact_low,
                 anchor_cycles.y + select(0u, 1u, impact_low < anchor_cycles.x),
             );
-            let impact_hash = terrain_hash(
-                cell_hash
-                    ^ multiply_u64(
-                        impact_epoch,
-                        vec2<u32>(0x94d049bbu, 0x133111ebu),
-                    ),
-            );
+            let impact_hash = hash32(hash32(cell_hash ^ impact_epoch.x) ^ impact_epoch.y);
             let presence = smoothstep(
-                visual_hash_unit(impact_hash.x) - 0.10,
-                visual_hash_unit(impact_hash.x) + 0.10,
+                visual_hash_unit(impact_hash) - 0.10,
+                visual_hash_unit(impact_hash) + 0.10,
                 precipitation,
             );
             // A forced absent contact adds exactly zero through `presence`.
             if presence <= 0.0 && !EVALUATE_ALL_BRANCHES {
                 continue;
             }
-            let impact_position = 0.05 + 0.90 * vec2<f32>(
-                visual_hash_unit(impact_hash.x ^ 0x9e3779b9u),
-                visual_hash_unit(impact_hash.y ^ 0x7f4a7c15u),
-            );
+            let impact_position = 0.05 + 0.90 * visual_hash_unit_pair(hash32(impact_hash));
             let delta_m = (
                 cell_local
                     - vec2<f32>(f32(offset_x), f32(offset_y))
@@ -153,7 +144,7 @@ fn ocean_tide_height_sample(
     if tuning.terrain_tuning.x != 1.0 {
         tide = SurfaceTideSample(
             terrain_simplex_fractal_sample(
-                vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+                TIDE_RESPONSE_NOISE_FIELD,
                 position_m,
                 131072.0,
                 3u,
@@ -161,7 +152,7 @@ fn ocean_tide_height_sample(
                 3u,
             ),
             terrain_simplex_fractal_sample(
-                vec2<u32>(0x84caa73bu, 0xbb67ae85u),
+                TIDE_LAG_NOISE_FIELD,
                 position_m,
                 131072.0,
                 3u,
@@ -252,7 +243,7 @@ fn ocean_current_m_s_from_surface(
     let basin_squared_gradient = 2.0 * basin * basin_gradient;
 
     let gyre = spatiotemporal_fractal_sample(
-        vec2<u32>(0xc1059ed8u, 0xcbbb9d5du),
+        OCEAN_CURRENT_NOISE_FIELD,
         position_m,
         0.25 * scene.world_size_m.x,
         scene.ocean_current_time_coordinate_and_padding.x,
@@ -402,11 +393,8 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
         if octave < DECORATIVE_WATER_OCTAVES
             && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES)
         {
-            let octave_seed = scene.match_seed
-                ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u)
-                ^ OCTAVE_SALTS[octave];
             let octave_sample = spatiotemporal_noise_sample(
-                octave_seed,
+                noise_key(DECORATIVE_WATER_NOISE_FIELD, octave),
                 position_m,
                 wavelength_m,
                 time_coordinate,
@@ -611,7 +599,7 @@ fn terrain_surface(
     var vegetation = 0.0;
     if landscape_visibility.y > 0.0 {
         vegetation = material_fractal_value(
-            vec2<u32>(0x510e527fu, 0x9b05688cu),
+            VEGETATION_NOISE_FIELD,
             position_m,
             1536.0,
             4u,
@@ -721,7 +709,7 @@ fn terrain_surface(
     let canopy_visible = forest_amount > 0.0 && landscape_visibility.y > 0.0;
     if canopy_visible || EVALUATE_ALL_BRANCHES {
         canopy_detail = noise_sample_or_zero(material_fractal_sample(
-            vec2<u32>(0x428a2f98u, 0x71374491u),
+            CANOPY_DETAIL_NOISE_FIELD,
             position_m,
             56.0,
             3u,

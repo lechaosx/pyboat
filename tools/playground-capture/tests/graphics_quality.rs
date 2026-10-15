@@ -4,6 +4,14 @@
 
 use std::{fs, io::BufReader, process::Command};
 
+use game::{
+    celestial_lighting, procedural_terrain_elevation_m, procedural_world_environment,
+    world_celestial_conditions,
+};
+use rapier2d::prelude::Vector;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
+
+const SEED: u64 = 0x5eed;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 360;
 const LOWER_TIERS: [&str; 2] = ["medium", "low"];
@@ -27,46 +35,183 @@ const WATER_ONLY: [&str; 6] = [
     "0,0,0,0",
 ];
 
+#[derive(Clone, Copy)]
 struct View {
     camera_m: [f32; 2],
     view_height_m: f32,
     world_time_seconds: f64,
 }
 
-const REEF_COAST: View = View {
-    camera_m: [-5890.0, -2100.0],
-    view_height_m: 240.0,
-    world_time_seconds: 37.0,
-};
-const ROCKY_SHORE: View = View {
-    camera_m: [-5770.0, -2100.0],
-    view_height_m: 60.0,
-    world_time_seconds: 37.0,
-};
-const SUMMER_ICE_EDGE: View = View {
-    camera_m: [2300.0, 25300.0],
-    view_height_m: 2400.0,
-    world_time_seconds: 15_595_200.0,
-};
-/// A week of summer retreat moves the ice edge across open water.
-const SUMMER_ICE_EDGE_A_WEEK_LATER: View = View {
-    world_time_seconds: SUMMER_ICE_EDGE.world_time_seconds + 7.0 * 86_400.0,
-    ..SUMMER_ICE_EDGE
-};
-const MOONLIT_COAST: View = View {
-    camera_m: [-5420.0, -2700.0],
-    view_height_m: 400.0,
-    world_time_seconds: 209_700.0,
-};
-const MOONLIT_ROCKY_SHORE: View = View {
-    world_time_seconds: MOONLIT_COAST.world_time_seconds,
-    ..ROCKY_SHORE
-};
-const STORM: View = View {
-    camera_m: [8000.0, -20000.0],
-    view_height_m: 40.0,
-    world_time_seconds: 63_037.0,
-};
+fn reef_coast() -> View {
+    let coast_m = rugged_coast_m();
+    View {
+        camera_m: [coast_m.x, coast_m.y],
+        view_height_m: 240.0,
+        world_time_seconds: 37.0,
+    }
+}
+
+/// The first shoreline crossing along the reef coast's middle row.
+fn rocky_shore() -> View {
+    let coast_m = rugged_coast_m();
+    let is_land =
+        |x_m| procedural_terrain_elevation_m(world(), SEED, Vector::new(x_m, coast_m.y)) >= 0.0;
+    let shore_x_m = (0..1_000)
+        .map(|step| coast_m.x - 240.0 + 0.5 * step as f32)
+        .find(|&x_m| is_land(x_m) != is_land(x_m + 0.5))
+        .expect("the reef coast's middle row should cross the shoreline");
+    View {
+        camera_m: [shore_x_m, coast_m.y],
+        view_height_m: 60.0,
+        world_time_seconds: 37.0,
+    }
+}
+
+fn moonlit_coast() -> View {
+    moonlit(View {
+        view_height_m: 400.0,
+        ..reef_coast()
+    })
+}
+
+/// The view at the first hour whose night has a high, bright Moon.
+fn moonlit(view: View) -> View {
+    let position_m = Vector::new(view.camera_m[0], view.camera_m[1]);
+    let world_time_seconds = (0..28 * 24)
+        .map(|hour| f64::from(hour) * 3_600.0)
+        .find(|&world_time_seconds| {
+            let light = celestial_lighting(world_celestial_conditions(
+                world(),
+                world_time_seconds,
+                position_m,
+            ));
+            light.sun_direction[2] < -0.2
+                && light.moon_direction[2] > 0.7
+                && light.moon_intensity > 0.08
+        })
+        .expect("a lunar month should have a moonlit night");
+    View {
+        world_time_seconds,
+        ..view
+    }
+}
+
+/// A northern summer ice edge across open water beside an island, found by
+/// scanning meridians 500 m apart for where polar sea ice closes.
+fn summer_ice_edge() -> View {
+    let world_time_seconds = 15_595_200.0;
+    let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+    let is_land = |position_m| procedural_terrain_elevation_m(world(), SEED, position_m) >= 0.0;
+    let is_sea_ice = |position_m| {
+        !is_land(position_m)
+            && procedural_world_environment(world(), SEED, tick, position_m)
+                .surface_climate
+                .polar_ice_closure
+                > 0.5
+    };
+    let (half_width_m, half_height_m) = (2_133.0, 1_200.0);
+    let camera_m = (0..128)
+        .filter_map(|meridian| {
+            let x_m = 500.0 * meridian as f32 - 0.5 * world().width_m();
+            let edge_y_m = (0..128)
+                .map(|step| 0.3 * world().height_m() + 100.0 * step as f32)
+                .find(|&y_m| is_sea_ice(Vector::new(x_m, y_m)))?;
+            Some(Vector::new(x_m, edge_y_m - 0.6 * half_height_m))
+        })
+        .find(|&center_m| {
+            let land = (0..43 * 24)
+                .filter(|index| {
+                    is_land(
+                        center_m
+                            + Vector::new(
+                                100.0 * (index % 43) as f32 - half_width_m,
+                                100.0 * (index / 43) as f32 - half_height_m,
+                            ),
+                    )
+                })
+                .count();
+            (10..=200).contains(&land)
+        })
+        .expect("a summer ice edge should pass an island");
+    View {
+        camera_m: [camera_m.x, camera_m.y],
+        view_height_m: 2400.0,
+        world_time_seconds,
+    }
+}
+
+/// Heavy daytime rain over deep water, scanning 500 m apart outward from the
+/// origin.
+fn storm() -> View {
+    let world_time_seconds = 63_037.0;
+    let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+    let camera_m = rings(500.0)
+        .find(|&position_m| {
+            procedural_terrain_elevation_m(world(), SEED, position_m) < -20.0
+                && celestial_lighting(world_celestial_conditions(
+                    world(),
+                    world_time_seconds,
+                    position_m,
+                ))
+                .sun_direction[2]
+                    > 0.3
+                && procedural_world_environment(world(), SEED, tick, position_m)
+                    .weather
+                    .rain_intensity
+                    > 0.6
+        })
+        .expect("the world should have a daytime storm over water");
+    View {
+        camera_m: [camera_m.x, camera_m.y],
+        view_height_m: 40.0,
+        world_time_seconds,
+    }
+}
+
+/// The first view centre, scanning 500 m apart outward from the origin, that is
+/// daylit at 37 s and whose 240 m-high view has a shoreline that reefs and rocks
+/// break up: its middle row crosses the shoreline at least twelve times at 2 m
+/// spacing.
+fn rugged_coast_m() -> Vector {
+    let half_width_m = 0.5 * 240.0 * 16.0 / 9.0;
+    let crossings = |center_m: Vector, step_m: f32| {
+        let count = (2.0 * half_width_m / step_m) as usize;
+        (0..=count)
+            .map(|index| {
+                let x_m = center_m.x - half_width_m + step_m * index as f32;
+                procedural_terrain_elevation_m(world(), SEED, Vector::new(x_m, center_m.y)) >= 0.0
+            })
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|pair| pair[0] != pair[1])
+            .count()
+    };
+    rings(500.0)
+        .find(|&center_m| {
+            celestial_lighting(world_celestial_conditions(world(), 37.0, center_m)).sun_direction[2]
+                > 0.5
+                && crossings(center_m, 36.0) > 0
+                && crossings(center_m, 2.0) >= 12
+        })
+        .expect("the world should have a rugged coast")
+}
+
+/// Grid points `spacing_m` apart in square rings around the origin, within
+/// 16 km.
+fn rings(spacing_m: f32) -> impl Iterator<Item = Vector> {
+    let ring_count = (16_000.0 / spacing_m) as i32;
+    (0..ring_count).flat_map(move |ring| {
+        (-ring..=ring).flat_map(move |y_index| {
+            (-ring..=ring)
+                .filter(move |x_index| x_index.abs() == ring || y_index.abs() == ring)
+                .map(move |x_index| spacing_m * Vector::new(x_index as f32, y_index as f32))
+        })
+    })
+}
+
+fn world() -> WorldGeometry {
+    WorldGeometry::default()
+}
 
 #[derive(Debug)]
 struct WaterComparison {
@@ -96,7 +241,13 @@ impl LightComparison {
 
 #[test]
 fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
-    for view in [REEF_COAST, ROCKY_SHORE, SUMMER_ICE_EDGE, MOONLIT_COAST] {
+    let summer_ice_edge = summer_ice_edge();
+    for view in [
+        reef_coast(),
+        rocky_shore(),
+        summer_ice_edge,
+        moonlit_coast(),
+    ] {
         let high = capture(&view, &WATER_ONLY);
         for quality in LOWER_TIERS {
             let comparison = compare_water(
@@ -124,16 +275,21 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
             view.camera_m
         );
     }
+    // A week of summer retreat moves the ice edge across open water.
+    let a_week_later = View {
+        world_time_seconds: summer_ice_edge.world_time_seconds + 7.0 * 86_400.0,
+        ..summer_ice_edge
+    };
     let moved_ice_edge = compare_water(
-        &capture(&SUMMER_ICE_EDGE, &WATER_ONLY),
-        &capture(&SUMMER_ICE_EDGE_A_WEEK_LATER, &WATER_ONLY),
+        &capture(&summer_ice_edge, &WATER_ONLY),
+        &capture(&a_week_later, &WATER_ONLY),
     );
     assert!(!moved_ice_edge.matches(), "{moved_ice_edge:?}");
 }
 
 #[test]
 fn lower_tiers_keep_night_and_storm_darkening() {
-    for view in [MOONLIT_COAST, MOONLIT_ROCKY_SHORE, STORM] {
+    for view in [moonlit_coast(), moonlit(rocky_shore()), storm()] {
         let high = capture(&view, &[]);
         for quality in LOWER_TIERS {
             let comparison = compare_light(&high, &capture(&view, &["--quality", quality]));

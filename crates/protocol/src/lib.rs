@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 pub use simulation::WorldGeometry;
 
 // Postcard encodes these enums and structs positionally. Reordering or changing
-// fields is a wire-contract change and requires a new version.
-pub const PROTOCOL_VERSION: u8 = 4;
+// fields is a wire-contract change and requires a new version. So is changing
+// the world `game` generates from a match seed, because clients predict and
+// render that world from the seed in Welcome.
+pub const PROTOCOL_VERSION: u8 = 5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {

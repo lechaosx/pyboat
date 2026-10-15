@@ -21,7 +21,7 @@ fn diagnostic_terrain_broad_landform(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_terrain_island_clusters(input: VertexOutput) -> vec4<f32> {
     let cluster = terrain_simplex_fractal_value(
-        vec2<u32>(0x78bd642fu, 0xa0761d64u),
+        TERRAIN_CLUSTER_NOISE_FIELD,
         input.world_position_m,
         8192.0,
         3u,
@@ -33,7 +33,7 @@ fn diagnostic_terrain_island_clusters(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_terrain_island_detail(input: VertexOutput) -> vec4<f32> {
     let island = terrain_simplex_fractal_value(
-        vec2<u32>(0xa0b428dbu, 0xe7037ed1u),
+        TERRAIN_ISLAND_NOISE_FIELD,
         input.world_position_m,
         1536.0,
         5u,
@@ -45,7 +45,7 @@ fn diagnostic_terrain_island_detail(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_terrain_coastal_reef(input: VertexOutput) -> vec4<f32> {
     let reef = terrain_simplex_fractal_value(
-        vec2<u32>(0x75374cc3u, 0x589965ccu),
+        TERRAIN_REEF_NOISE_FIELD,
         input.world_position_m,
         32.0,
         6u,
@@ -57,7 +57,7 @@ fn diagnostic_terrain_coastal_reef(input: VertexOutput) -> vec4<f32> {
 
 fn diagnostic_material_vegetation(input: VertexOutput) -> vec4<f32> {
     let vegetation = material_fractal_value(
-        vec2<u32>(0x510e527fu, 0x9b05688cu),
+        VEGETATION_NOISE_FIELD,
         input.world_position_m,
         1536.0,
         4u,
@@ -68,7 +68,7 @@ fn diagnostic_material_vegetation(input: VertexOutput) -> vec4<f32> {
 fn diagnostic_material_coastal_character(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
     let substrate = terrain_simplex_fractal_value(
-        vec2<u32>(0x7f4a7c15u, 0x9e3779b9u),
+        TERRAIN_COASTAL_SUBSTRATE_NOISE_FIELD,
         position_m,
         1536.0,
         3u,
@@ -76,7 +76,7 @@ fn diagnostic_material_coastal_character(input: VertexOutput) -> vec4<f32> {
         TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT,
     );
     let ruggedness_noise = terrain_simplex_fractal_value(
-        vec2<u32>(0x1ce4e5b9u, 0xbf58476du),
+        TERRAIN_RUGGEDNESS_NOISE_FIELD,
         position_m,
         2048.0,
         3u,

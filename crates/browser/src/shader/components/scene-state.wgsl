@@ -125,24 +125,39 @@ const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: u32 = 0u;
-const OCTAVE_SALTS: array<vec2<u32>, 16> = array<vec2<u32>, 16>(
-    vec2<u32>(0x00000000u, 0x00000000u),
-    vec2<u32>(0xd192ed03u, 0xd1b54a32u),
-    vec2<u32>(0xa325da06u, 0xa36a9465u),
-    vec2<u32>(0x74b8c709u, 0x751fde98u),
-    vec2<u32>(0x464bb40cu, 0x46d528cbu),
-    vec2<u32>(0x17dea10fu, 0x188a72feu),
-    vec2<u32>(0xe9718e12u, 0xea3fbd30u),
-    vec2<u32>(0xbb047b15u, 0xbbf50763u),
-    vec2<u32>(0x8c976818u, 0x8daa5196u),
-    vec2<u32>(0x5e2a551bu, 0x5f5f9bc9u),
-    vec2<u32>(0x2fbd421eu, 0x3114e5fcu),
-    vec2<u32>(0x01502f21u, 0x02ca302fu),
-    vec2<u32>(0xd2e31c24u, 0xd47f7a61u),
-    vec2<u32>(0xa4760927u, 0xa634c494u),
-    vec2<u32>(0x7608f62au, 0x77ea0ec7u),
-    vec2<u32>(0x479be32du, 0x499f58fau),
-);
+// Each seeded noise field owns sixteen octave streams; distinct identifiers give
+// every field and octave an independent lattice. Keep the fields `game` also
+// samples synchronized with crates/game/src/lib.rs.
+const TERRAIN_CLUSTER_NOISE_FIELD: u32 = 1u;
+const TERRAIN_ISLAND_NOISE_FIELD: u32 = 2u;
+const TERRAIN_RUGGEDNESS_NOISE_FIELD: u32 = 3u;
+const TERRAIN_COASTAL_SUBSTRATE_NOISE_FIELD: u32 = 4u;
+const TERRAIN_LAND_RELIEF_NOISE_FIELD: u32 = 5u;
+const TERRAIN_LAND_MICRO_RELIEF_NOISE_FIELD: u32 = 6u;
+const TERRAIN_SHOAL_NOISE_FIELD: u32 = 7u;
+const TERRAIN_REEF_NOISE_FIELD: u32 = 8u;
+const TERRAIN_OUTER_REEF_NOISE_FIELD: u32 = 9u;
+const TIDE_RESPONSE_NOISE_FIELD: u32 = 10u;
+const TIDE_LAG_NOISE_FIELD: u32 = 11u;
+const SURFACE_AIR_TEMPERATURE_NOISE_FIELD: u32 = 12u;
+const AIR_TEMPERATURE_500_HPA_NOISE_FIELD: u32 = 13u;
+const WATER_VAPOR_NOISE_FIELD: u32 = 14u;
+const OCEAN_CURRENT_NOISE_FIELD: u32 = 15u;
+const PRESSURE_BAND_NOISE_FIELDS = array<u32, 4>(16u, 17u, 18u, 19u);
+const ROCK_GEOLOGY_NOISE_FIELD: u32 = 20u;
+const ROCK_SURFACE_HEIGHT_NOISE_FIELD: u32 = 21u;
+const MATERIAL_MICRO_RELIEF_NOISE_FIELD: u32 = 22u;
+const ICE_FINE_NOISE_FIELD: u32 = 23u;
+const SEA_ICE_BROAD_NOISE_FIELD: u32 = 24u;
+const SEA_ICE_FINE_NOISE_FIELD: u32 = 25u;
+const SEA_ICE_SLAB_NOISE_FIELD: u32 = 26u;
+const VEGETATION_NOISE_FIELD: u32 = 27u;
+const CANOPY_DETAIL_NOISE_FIELD: u32 = 28u;
+const LAND_SURFACE_NOISE_FIELD: u32 = 29u;
+const PRECIPITATION_CONTACT_NOISE_FIELD: u32 = 30u;
+const DECORATIVE_WATER_NOISE_FIELD: u32 = 31u;
+const LOW_CLOUD_NOISE_FIELD: u32 = 32u;
+const UPPER_CLOUD_NOISE_FIELD: u32 = 33u;
 // Keep this CC0 OpenSimplex2 gradient order synchronized with `game` so CPU and
 // WGSL hashes select the same direction for authoritative terrain.
 const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(

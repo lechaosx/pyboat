@@ -61,10 +61,8 @@ fn generate_terrain_cache(@builtin(global_invocation_id) invocation_id: vec3<u32
         var amplitude = 1.0;
         var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field] * tuning.terrain_tuning.x;
         for (var octave = 0u; octave < octaves; octave++) {
-            let seed = scene.match_seed
-                ^ TERRAIN_BROAD_NOISE_SALTS[field]
-                ^ OCTAVE_SALTS[octave];
-            sum += amplitude * terrain_cache_simplex_4d(seed, circle_position, wavelength_m);
+            let key = noise_key(TERRAIN_BROAD_NOISE_FIELDS[field], octave);
+            sum += amplitude * terrain_cache_simplex_4d(key, circle_position, wavelength_m);
             amplitude *= persistence;
             wavelength_m *= 0.5;
         }
@@ -80,7 +78,7 @@ fn generate_terrain_cache(@builtin(global_invocation_id) invocation_id: vec3<u32
 // One circle octave's value, x and y slopes, and cross derivative, matching
 // `terrain_simplex_noise_4d_from_circle`.
 fn terrain_cache_simplex_4d(
-    seed: vec2<u32>,
+    key: u32,
     circle_position: vec4<f32>,
     wavelength_m: f32,
 ) -> vec4<f32> {
@@ -111,7 +109,7 @@ fn terrain_cache_simplex_4d(
         let attenuation = 0.5 - dot(offset, offset);
         if attenuation > 0.0 {
             let lattice_gradient = terrain_simplex_lattice_gradient_4d(
-                seed,
+                key,
                 domain,
                 lattice_offset,
             );

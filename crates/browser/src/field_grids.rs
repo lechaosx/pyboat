@@ -30,11 +30,12 @@ const LOW_CLOUD_FIELD_SPACING_M: f64 = 4.0;
 /// 100 m wide; three texels span such an edge.
 const CANOPY_FIELD_SPACING_M: f64 = 32.0;
 /// The broad landform's island octaves run from 1536 m down to 96 m. Over a
-/// rugged island with 280 m peaks (seed 0x5eed around (2400, 2000) m), bilinear
-/// error at this spacing is 0.28 m at the 99th percentile and 0.68 m at most,
-/// near the 0.6 m minimum landform penumbra. Low-Sun shadows rendered from the
-/// grid there stay within 3 of 255 levels of direct evaluation at 15 m and
-/// 240 m views.
+/// rugged island with 320 m peaks (seed 0x5eed around (-10000, 2000) m),
+/// bilinear error at this spacing is 0.40 m at the 99th percentile and 0.71 m
+/// at most over land, near the 0.6 m minimum landform penumbra. At its steepest
+/// low-Sun shadow at world time 285240 s, grid shadows differ from direct
+/// evaluation by at most 11 of 255 levels (7 at the 99th percentile) in a 15 m
+/// view and 9 (2) in a 240 m view.
 const LANDFORM_FIELD_SPACING_M: f64 = 16.0;
 
 // Keep these synchronized with scene-state.wgsl and lighting.wgsl.

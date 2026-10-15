@@ -740,8 +740,10 @@ fn temperate_temperature_extremes_have_observed_probabilities() {
     let latitude = 50.0;
     let position_m = Vector::new(0.0, latitude / 180.0 * world.height_m());
     let climate = world_climate_conditions(latitude);
+    // The 40 °C tail holds about 0.4% of summer days, so it needs enough seeds
+    // to be measured well inside its band.
     let temperature_samples = |season_phase, day_phase| {
-        (0..4_096)
+        (0..65_536)
             .map(|seed| {
                 let anomaly = procedural_atmosphere_primary_in_world(world, seed, 0, position_m)
                     .surface_air_temperature_anomaly_c;
@@ -775,7 +777,10 @@ fn temperate_temperature_extremes_have_observed_probabilities() {
 
     assert!((0.30..=0.50).contains(&(frozen_winter_days as f32 / winter_highs.len() as f32)));
     assert!((0.02..=0.08).contains(&(hot_summer_days as f32 / summer_highs.len() as f32)));
-    assert!((1..=20).contains(&very_hot_summer_days));
+    assert!(
+        (1.0 / 4_096.0..=20.0 / 4_096.0)
+            .contains(&(very_hot_summer_days as f32 / summer_highs.len() as f32))
+    );
 }
 
 #[test]

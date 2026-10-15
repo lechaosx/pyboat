@@ -114,7 +114,7 @@ fn empty_snapshot_is_compact_and_round_trips() {
     let encoded = encode_server_message(&expected).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(encoded, [4, 1, 7, 0, 0]);
+    assert_eq!(encoded, [5, 1, 7, 0, 0]);
     assert_eq!(decoded, expected);
 }
 

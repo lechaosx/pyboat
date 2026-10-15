@@ -54,14 +54,12 @@ struct SpatiotemporalNoiseDomain {
 };
 
 fn spatiotemporal_noise_domain(
-    field_seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
     time_coordinate: f32,
 ) -> SpatiotemporalNoiseDomain {
-    let orientation = terrain_hash(
-        field_seed ^ vec2<u32>(0xf3bcc909u, 0x6a09e667u),
-    ).x;
+    let orientation = key;
     let longitude_offset = TAU * f32(orientation & 0xffu) / 256.0;
     let latitude_sign = select(1.0, -1.0, (orientation & 0x100u) != 0u);
     let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
@@ -83,18 +81,18 @@ fn spatiotemporal_noise_domain(
 }
 
 fn spatiotemporal_noise_sample(
-    field_seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
     time_coordinate: f32,
 ) -> TerrainNoiseSample {
     let domain = spatiotemporal_noise_domain(
-        field_seed,
+        key,
         position_m,
         wavelength_m,
         time_coordinate,
     );
-    let simplex = simplex_noise_sample_4d(field_seed, domain.point);
+    let simplex = simplex_noise_sample_4d(key, domain.point);
     return TerrainNoiseSample(
         simplex.value,
         vec2<f32>(
@@ -106,22 +104,22 @@ fn spatiotemporal_noise_sample(
 }
 
 fn spatiotemporal_noise_value(
-    field_seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     wavelength_m: f32,
     time_coordinate: f32,
 ) -> f32 {
     let domain = spatiotemporal_noise_domain(
-        field_seed,
+        key,
         position_m,
         wavelength_m,
         time_coordinate,
     );
-    return simplex_noise_value_4d(field_seed, domain.point);
+    return simplex_noise_value_4d(key, domain.point);
 }
 
 fn spatiotemporal_pressure_noise_sample(
-    field_seed: vec2<u32>,
+    key: u32,
     position_m: vec2<f32>,
     zonal_wavelength_m: f32,
     meridional_wavelength_m: f32,
@@ -129,9 +127,7 @@ fn spatiotemporal_pressure_noise_sample(
     zonal_aspect: f32,
     zonal_aspect_gradient_per_m: f32,
 ) -> TerrainNoiseSample {
-    let orientation = terrain_hash(
-        field_seed ^ vec2<u32>(0xf3bcc909u, 0x6a09e667u),
-    ).x;
+    let orientation = key;
     let longitude_offset = TAU * f32(orientation & 0xffu) / 256.0;
     let latitude_sign = select(1.0, -1.0, (orientation & 0x100u) != 0u);
     let latitude_offset = f32((orientation >> 9u) & 0xffu) / 16.0;
@@ -144,7 +140,7 @@ fn spatiotemporal_pressure_noise_sample(
     let circle_radius_gradient_per_m =
         -circle_radius * zonal_aspect_gradient_per_m / zonal_aspect;
     let simplex = simplex_noise_sample_4d(
-        field_seed,
+        key,
         vec4<f32>(
             circle_radius * cos(longitude),
             circle_radius * sin(longitude),
@@ -176,12 +172,6 @@ fn procedural_pressure_sample_filtered_bands(
     let variances = array<f32, 4>(0.30, 0.54, 0.08, 0.02);
     let midlatitude_variance_transfers = array<f32, 4>(-0.15, 0.15, 0.0, 0.0);
     let midlatitude_zonal_aspects = array<f32, 4>(1.25, 1.4, 1.0, 1.0);
-    let salts = array<vec2<u32>, 4>(
-        vec2<u32>(0xade682d1u, 0x510e527fu),
-        vec2<u32>(0x2b3e6c1fu, 0x9b05688cu),
-        vec2<u32>(0xfb41bd6bu, 0x1f83d9abu),
-        vec2<u32>(0x137e2179u, 0x5be0cd19u),
-    );
     let synoptic_coupling = array<f32, 4>(1.0, 1.0, 0.20, 0.0);
     let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let midlatitude_sine = sin(2.0 * latitude_rad);
@@ -216,7 +206,7 @@ fn procedural_pressure_sample_filtered_bands(
         let zonal_aspect_gradient_per_m =
             (midlatitude_zonal_aspects[band] - 1.0) * midlatitude_gradient_per_m;
         let noise = spatiotemporal_pressure_noise_sample(
-            scene.match_seed ^ salts[band],
+            noise_key(PRESSURE_BAND_NOISE_FIELDS[band], 0u),
             position_m,
             zonal_wavelength_m,
             meridional_wavelength_m,
@@ -571,7 +561,7 @@ fn surface_air_temperature_anomaly_c_from_climate(
         climate.latitude_degrees,
     );
     return scale_c * 0.85 * spatiotemporal_fractal_value(
-        vec2<u32>(0x38d01377u, 0x452821e6u),
+        SURFACE_AIR_TEMPERATURE_NOISE_FIELD,
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.x,
@@ -596,7 +586,7 @@ fn surface_air_temperature_anomaly_sample_from_climate(
 
 fn surface_air_temperature_anomaly_noise_at(position_m: vec2<f32>) -> FractalNoiseSample {
     return spatiotemporal_fractal_sample_with_broad(
-        vec2<u32>(0x38d01377u, 0x452821e6u),
+        SURFACE_AIR_TEMPERATURE_NOISE_FIELD,
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.x,
@@ -757,7 +747,7 @@ fn upper_air_temperature_500_hpa_c_from_atmosphere(
 
 fn upper_air_temperature_500_hpa_noise_at(position_m: vec2<f32>) -> vec2<f32> {
     return spatiotemporal_fractal_value_with_broad(
-        vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
+        AIR_TEMPERATURE_500_HPA_NOISE_FIELD,
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.y,
@@ -813,7 +803,7 @@ fn broad_upper_air_temperature_500_hpa_c_from_atmosphere(
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
     let independent_noise = 0.75 * spatiotemporal_noise_value(
-        vec2<u32>(0x34e90c6cu, 0xbe5466cfu) ^ scene.match_seed,
+        noise_key(AIR_TEMPERATURE_500_HPA_NOISE_FIELD, 0u),
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.y,
@@ -843,7 +833,7 @@ fn surface_water_vapor_g_kg_from_climate(
 
 fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
     return spatiotemporal_fractal_value_with_broad(
-        vec2<u32>(0xec4e6c89u, 0x082efa98u),
+        WATER_VAPOR_NOISE_FIELD,
         position_m,
         8192.0,
         scene.scalar_field_time_coordinates.z,
@@ -1135,7 +1125,7 @@ fn surface_tide_sample_from_circle(
 ) -> SurfaceTideSample {
     return SurfaceTideSample(
         spatial_weather_fractal_sample_from_circle(
-            vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+            TIDE_RESPONSE_NOISE_FIELD,
             position_m,
             circle_position,
             131072.0,
@@ -1143,7 +1133,7 @@ fn surface_tide_sample_from_circle(
             3u,
         ),
         spatial_weather_fractal_sample_from_circle(
-            vec2<u32>(0x84caa73bu, 0xbb67ae85u),
+            TIDE_LAG_NOISE_FIELD,
             position_m,
             circle_position,
             131072.0,
@@ -1182,7 +1172,7 @@ fn initialize_surface_tide() {
 fn initialize_surface_tide_value() {
     let circle_position = periodic_noise_circle_position(surface_position_m);
     surface_tidal_range_m = 1.25 + 0.75 * spatial_weather_fractal_from_circle(
-        vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+        TIDE_RESPONSE_NOISE_FIELD,
         surface_position_m,
         circle_position,
         131072.0,
@@ -1190,7 +1180,7 @@ fn initialize_surface_tide_value() {
         3u,
     );
     surface_tidal_phase_offset = 0.08 * spatial_weather_fractal_from_circle(
-        vec2<u32>(0x84caa73bu, 0xbb67ae85u),
+        TIDE_LAG_NOISE_FIELD,
         surface_position_m,
         circle_position,
         131072.0,
@@ -1273,7 +1263,7 @@ fn regional_cloud_drivers_at(position_m: vec2<f32>) -> RegionalCloudDrivers {
             climate.latitude_degrees,
         );
         broad_temperature_anomaly_c = scale_c * 0.85 * spatiotemporal_noise_value(
-            scene.match_seed ^ vec2<u32>(0x38d01377u, 0x452821e6u),
+            noise_key(SURFACE_AIR_TEMPERATURE_NOISE_FIELD, 0u),
             position_m,
             65536.0,
             scene.scalar_field_time_coordinates.x,
@@ -1287,7 +1277,7 @@ fn regional_cloud_drivers_at(position_m: vec2<f32>) -> RegionalCloudDrivers {
                 * scene.seasonal_phase_factors.x;
         let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
         let noise = 0.86 * spatiotemporal_noise_value(
-            scene.match_seed ^ vec2<u32>(0xec4e6c89u, 0x082efa98u),
+            noise_key(WATER_VAPOR_NOISE_FIELD, 0u),
             position_m,
             8192.0,
             scene.scalar_field_time_coordinates.z,
