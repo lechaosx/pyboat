@@ -106,7 +106,6 @@ const LATTICE_KEY_MULTIPLIERS = array<vec2<u32>, 4>(
 );
 
 struct Simplex4dDomain {
-    lattice: vec4<i32>,
     lattice_products: array<vec2<u32>, 4>,
     first: vec4<f32>,
     rank: vec4<i32>,
@@ -343,9 +342,11 @@ fn periodic_noise_circle_position(position_m: vec2<f32>) -> vec4<f32> {
 
 fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     let skew_factor = 0.309017;
+    let unskew_factor = 0.1381966;
     let skew = dot(point, vec4<f32>(skew_factor));
     let lattice = vec4<i32>(floor(point + vec4<f32>(skew)));
-    let first = simplex_noise_offset_4d(point, lattice);
+    let unskew = f32(lattice.x + lattice.y + lattice.z + lattice.w) * unskew_factor;
+    let first = point - (vec4<f32>(lattice) - vec4<f32>(unskew));
     var rank = vec4<i32>(0);
     if first.x > first.y { rank.x += 1; } else { rank.y += 1; }
     if first.x > first.z { rank.x += 1; } else { rank.z += 1; }
@@ -353,22 +354,6 @@ fn simplex_noise_domain_4d(point: vec4<f32>) -> Simplex4dDomain {
     if first.y > first.z { rank.y += 1; } else { rank.z += 1; }
     if first.y > first.w { rank.y += 1; } else { rank.w += 1; }
     if first.z > first.w { rank.z += 1; } else { rank.w += 1; }
-    return simplex_noise_domain_4d_in(point, lattice, rank);
-}
-
-fn simplex_noise_offset_4d(point: vec4<f32>, lattice: vec4<i32>) -> vec4<f32> {
-    let unskew_factor = 0.1381966;
-    let unskew = f32(lattice.x + lattice.y + lattice.z + lattice.w) * unskew_factor;
-    return point - (vec4<f32>(lattice) - vec4<f32>(unskew));
-}
-
-// The domain of the simplex with this lattice cell and axis rank, which need
-// not contain `point`.
-fn simplex_noise_domain_4d_in(
-    point: vec4<f32>,
-    lattice: vec4<i32>,
-    rank: vec4<i32>,
-) -> Simplex4dDomain {
     var lattice_products: array<vec2<u32>, 4>;
     for (var axis = 0u; axis < 4u; axis++) {
         lattice_products[axis] = multiply_u64(
@@ -376,12 +361,7 @@ fn simplex_noise_domain_4d_in(
             LATTICE_KEY_MULTIPLIERS[axis],
         );
     }
-    return Simplex4dDomain(
-        lattice,
-        lattice_products,
-        simplex_noise_offset_4d(point, lattice),
-        rank,
-    );
+    return Simplex4dDomain(lattice_products, first, rank);
 }
 
 fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample {
@@ -402,7 +382,10 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
         }
         let offset = domain.first - vec4<f32>(lattice_offset)
             + vec4<f32>(f32(vertex) * unskew_factor);
-        let attenuation = 0.6 - dot(offset, offset);
+        // The largest squared radius whose kernel vanishes on every simplex
+        // boundary, which keeps the noise continuous. Keep the 4D kernels
+        // here and in terrain-cache-generate.wgsl synchronized with Rust.
+        let attenuation = 0.5 - dot(offset, offset);
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
                 seed,
@@ -418,18 +401,16 @@ fn simplex_noise_sample_4d(seed: vec2<u32>, point: vec4<f32>) -> Simplex4dSample
                 - 8.0 * attenuation_cubed * ramp * offset;
         }
     }
-    // Keep this RMS calibration synchronized with the portable Rust kernel.
-    sample.value *= 33.4;
-    sample.gradient *= 33.4;
+    // Keep this slope-RMS normalization synchronized with
+    // `simplex_noise_sample_4d` in crates/game/src/lib.rs.
+    sample.value *= 83.1;
+    sample.gradient *= 83.1;
     return sample;
 }
 
 fn simplex_noise_value_4d(seed: vec2<u32>, point: vec4<f32>) -> f32 {
-    return simplex_noise_value_4d_from_domain(seed, simplex_noise_domain_4d(point));
-}
-
-fn simplex_noise_value_4d_from_domain(seed: vec2<u32>, domain: Simplex4dDomain) -> f32 {
     let unskew_factor = 0.1381966;
+    let domain = simplex_noise_domain_4d(point);
     var value = 0.0;
     for (var vertex = 0i; vertex < 5i; vertex++) {
         let threshold = 4i - vertex;
@@ -443,7 +424,7 @@ fn simplex_noise_value_4d_from_domain(seed: vec2<u32>, domain: Simplex4dDomain) 
         }
         let offset = domain.first - vec4<f32>(lattice_offset)
             + vec4<f32>(f32(vertex) * unskew_factor);
-        let attenuation = 0.6 - dot(offset, offset);
+        let attenuation = 0.5 - dot(offset, offset);
         if attenuation > 0.0 {
             let gradient = terrain_simplex_lattice_gradient_4d(
                 seed,
@@ -455,7 +436,7 @@ fn simplex_noise_value_4d_from_domain(seed: vec2<u32>, domain: Simplex4dDomain) 
             value += attenuation_squared * attenuation_squared * ramp;
         }
     }
-    return 33.4 * value;
+    return 83.1 * value;
 }
 
 fn terrain_simplex_noise_4d_from_circle(
@@ -471,7 +452,9 @@ fn terrain_simplex_noise_4d_from_circle(
         linear_y,
         linear_y + 0.5,
     ));
-    let cylindrical_scale = 35.7 / 33.4;
+    // Keep synchronized with `terrain_simplex_noise_4d` in crates/game/src/lib.rs,
+    // which records its calibration.
+    let cylindrical_scale = 114.3 / 83.1;
     return TerrainNoiseSample(
         cylindrical_scale * simplex.value,
         cylindrical_scale * vec2<f32>(
@@ -489,7 +472,7 @@ fn terrain_simplex_noise_value_4d_from_circle(
 ) -> f32 {
     let circle_radius = scene.world_size_m.x / (TAU * wavelength_m);
     let linear_y = circle_position.z / (sqrt(2.0) * wavelength_m);
-    return (35.7 / 33.4) * simplex_noise_value_4d(seed, vec4<f32>(
+    return (114.3 / 83.1) * simplex_noise_value_4d(seed, vec4<f32>(
         circle_radius * circle_position.x,
         circle_radius * circle_position.y,
         linear_y,

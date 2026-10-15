@@ -4,7 +4,6 @@ export type BenchScenario = {
   seed: string;
   cameraM: [number, number];
   viewHeightM: number;
-  cloudTimeSeconds: number;
   worldTimeSeconds: number;
   renderScale?: number;
 };

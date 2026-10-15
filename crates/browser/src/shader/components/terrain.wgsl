@@ -582,7 +582,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
         terrain_position_m,
         terrain_circle_position,
         1536.0,
-        3u,
+        TERRAIN_BROAD_NOISE_OCTAVES[TERRAIN_ISLAND_NOISE],
         0.35,
         TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT,
     );

@@ -185,9 +185,11 @@ and verification details.
   at every zoom. Projected positions retain unbounded cylindrical coordinates;
   receiver-local geometry permits cloud sunlight after surface sunset.
 - **[Explicit]** Lower clouds and canopy are continuous global periodic fields.
-  Each layer's amount drives its body, optical depth, and shadows independently
-  of zoom. Renderer-local integrated view-center wind translates latent texture
+  Each layer's amount drives its body, optical depth, and shadows.
+  Renderer-local integrated view-center wind translates latent texture
   one-to-one while weather stays at world positions; ground shadows stay world-anchored.
+- **[Explicit]** At wide views, where per-frame grids coarsen, clouds may soften
+  and small clouds may vanish.
 
 ### Clocks and renderer lifecycle
 
@@ -241,8 +243,6 @@ and verification details.
 - **[Implicit]** The scene reads the finest level whose window holds the view.
 - **[Implicit]** Cached terrain places shorelines and shallows within a small
   fraction of a pixel of direct evaluation.
-- **[Implicit]** Cells where the 4D simplex kernel jumps evaluate those noises
-  directly, keeping the canonical discontinuities.
 - **[Implicit]** A frame completes the active level and spends a small budget on
   its two neighbours.
 - **[Implicit]** No level fills while none holds the view.
@@ -299,7 +299,7 @@ and verification details.
 - **[Explicit]** Procedural visual work uses the interactive playground and
   deterministic headless capture, keeping generated images outside version control.
   Captures include a sidecar derived from the
-  same explicit world inputs and fractional render clocks; fresh one-frame
+  same explicit world inputs and fractional render clock; fresh one-frame
   captures have zero renderer-local cloud displacement.
 - **[Implicit]** Still captures use settled exposure and SDR output; their sidecar
   records exposure so they can be compared with an adapted interactive view.
@@ -319,5 +319,4 @@ and verification details.
 | --- | --- |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
-| Cloud amount at wide views | Whether lower-cloud amounts may approximate the canonical fields where the environment grid coarsens beyond its texel budget, slightly varying with zoom |
 | Terrain cache scope | Whether finer levels near boat zoom should also cache the coarser 2D terrain octaves and material noise |

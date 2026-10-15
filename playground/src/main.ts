@@ -81,15 +81,8 @@ type State = {
   worldWidthM: number;
   worldHeightM: number;
   viewHeight: number;
-  time: number;
-  cloudTimeScale: number;
-  pressureTimeScale: number;
-  currentTimeScale: number;
   worldTimeScale: number;
-  timeScalesLocked: boolean;
   worldTimeSeconds: number;
-  pressureTimeSeconds: number;
-  currentTimeSeconds: number;
   sunLightVisible: number;
   moonLightVisible: number;
   skyLightVisible: number;
@@ -174,7 +167,7 @@ type State = {
 
 type NumericStateKey = Exclude<
   keyof State,
-  "seed" | "timeScalesLocked" | "diagnostic"
+  "seed" | "diagnostic"
 >;
 const defaults: State = {
   seed: "0x5eed",
@@ -183,15 +176,8 @@ const defaults: State = {
   worldWidthM: 64_000,
   worldHeightM: 64_000,
   viewHeight: 480,
-  time: 37,
-  cloudTimeScale: 1,
-  pressureTimeScale: 1,
-  currentTimeScale: 1,
   worldTimeScale: 1,
-  timeScalesLocked: true,
-  worldTimeSeconds: 0,
-  pressureTimeSeconds: 0,
-  currentTimeSeconds: 0,
+  worldTimeSeconds: 37,
   sunLightVisible: 1,
   moonLightVisible: 1,
   skyLightVisible: 1,
@@ -762,11 +748,7 @@ timeToolbarElement.innerHTML = `
   <details open>
     <summary>Playback</summary>
     <section class="world-toolbar-section"><h3>Playback</h3>
-      <div class="control range-control no-reset"><label class="control-name" for="cloud-time-scale">Clouds · ×</label><input id="cloud-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.cloudTimeScale)}"><input id="cloud-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.cloudTimeScale}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="pressure-time-scale">Pressure · ×</label><input id="pressure-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.pressureTimeScale)}"><input id="pressure-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.pressureTimeScale}"></div>
-      <div class="control range-control no-reset"><label class="control-name" for="current-time-scale">Currents · ×</label><input id="current-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.currentTimeScale)}"><input id="current-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.currentTimeScale}"></div>
       <div class="control range-control no-reset"><label class="control-name" for="world-time-scale">World clock · ×</label><input id="world-time-scale" type="range" min="${minimumTimeScaleSlider}" max="5" step="0.01" value="${timeScaleToSlider(state.worldTimeScale)}"><input id="world-time-value" class="range-value" type="number" min="0" max="${maximumTimeScale}" step="0.1" value="${state.worldTimeScale}"></div>
-      <div class="control toggle-control no-reset"><input id="lock-time-scales" type="checkbox"><label class="control-name" for="lock-time-scales">Lock speeds together</label></div>
     </section>
   </details>`;
 diagnosticToolbarElement.innerHTML = `
@@ -791,15 +773,8 @@ const positionMeasurementsElement = diagnosticToolbarElement.querySelector<HTMLE
 const derivedOutputHeadingElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output-heading")!;
 const derivedOutputElement = diagnosticToolbarElement.querySelector<HTMLElement>("#derived-output")!;
 const diagnosticsDetailsElement = positionMeasurementsElement.closest<HTMLDetailsElement>("details")!;
-const cloudTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#cloud-time-scale")!;
-const cloudTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#cloud-time-value")!;
-const pressureTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#pressure-time-scale")!;
-const pressureTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#pressure-time-value")!;
-const currentTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#current-time-scale")!;
-const currentTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#current-time-value")!;
 const worldTimeScaleInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time-scale")!;
 const worldTimeValueInput = timeToolbarElement.querySelector<HTMLInputElement>("#world-time-value")!;
-const lockTimeScalesInput = timeToolbarElement.querySelector<HTMLInputElement>("#lock-time-scales")!;
 
 function syncWorldDateInputs(): void {
   const totalSeconds = Math.max(0, Math.floor(state.worldTimeSeconds));
@@ -883,75 +858,22 @@ worldHeightValueInput.addEventListener("change", () => {
   setWorldDimension("worldHeightM", state.worldHeightM / 1000, worldHeightInput, worldHeightValueInput);
 });
 function syncTimeScaleInputs(): void {
-  cloudTimeScaleInput.value = String(timeScaleToSlider(state.cloudTimeScale));
-  cloudTimeValueInput.value = String(state.cloudTimeScale);
-  pressureTimeScaleInput.value = String(timeScaleToSlider(state.pressureTimeScale));
-  pressureTimeValueInput.value = String(state.pressureTimeScale);
-  currentTimeScaleInput.value = String(timeScaleToSlider(state.currentTimeScale));
-  currentTimeValueInput.value = String(state.currentTimeScale);
   worldTimeScaleInput.value = String(timeScaleToSlider(state.worldTimeScale));
   worldTimeValueInput.value = String(state.worldTimeScale);
-  lockTimeScalesInput.checked = state.timeScalesLocked;
 }
-function setTimeScale(
-  key: "cloudTimeScale" | "pressureTimeScale" | "currentTimeScale" | "worldTimeScale",
-  value: number,
-): void {
-  const scale = Math.min(maximumTimeScale, Math.max(0, value));
-  state[key] = scale;
-  if (state.timeScalesLocked) {
-    state.cloudTimeScale = scale;
-    state.pressureTimeScale = scale;
-    state.currentTimeScale = scale;
-    state.worldTimeScale = scale;
-  }
+function setTimeScale(value: number): void {
+  state.worldTimeScale = Math.min(maximumTimeScale, Math.max(0, value));
   syncTimeScaleInputs();
 }
-cloudTimeScaleInput.addEventListener("input", () => {
-  setTimeScale("cloudTimeScale", timeScaleFromSlider(cloudTimeScaleInput.valueAsNumber));
-});
-cloudTimeValueInput.addEventListener("input", () => {
-  if (Number.isFinite(cloudTimeValueInput.valueAsNumber)) {
-    setTimeScale("cloudTimeScale", cloudTimeValueInput.valueAsNumber);
-  }
-});
-cloudTimeValueInput.addEventListener("change", syncTimeScaleInputs);
-pressureTimeScaleInput.addEventListener("input", () => {
-  setTimeScale("pressureTimeScale", timeScaleFromSlider(pressureTimeScaleInput.valueAsNumber));
-});
-pressureTimeValueInput.addEventListener("input", () => {
-  if (Number.isFinite(pressureTimeValueInput.valueAsNumber)) {
-    setTimeScale("pressureTimeScale", pressureTimeValueInput.valueAsNumber);
-  }
-});
-pressureTimeValueInput.addEventListener("change", syncTimeScaleInputs);
-currentTimeScaleInput.addEventListener("input", () => {
-  setTimeScale("currentTimeScale", timeScaleFromSlider(currentTimeScaleInput.valueAsNumber));
-});
-currentTimeValueInput.addEventListener("input", () => {
-  if (Number.isFinite(currentTimeValueInput.valueAsNumber)) {
-    setTimeScale("currentTimeScale", currentTimeValueInput.valueAsNumber);
-  }
-});
-currentTimeValueInput.addEventListener("change", syncTimeScaleInputs);
 worldTimeScaleInput.addEventListener("input", () => {
-  setTimeScale("worldTimeScale", timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
+  setTimeScale(timeScaleFromSlider(worldTimeScaleInput.valueAsNumber));
 });
 worldTimeValueInput.addEventListener("input", () => {
   if (Number.isFinite(worldTimeValueInput.valueAsNumber)) {
-    setTimeScale("worldTimeScale", worldTimeValueInput.valueAsNumber);
+    setTimeScale(worldTimeValueInput.valueAsNumber);
   }
 });
 worldTimeValueInput.addEventListener("change", syncTimeScaleInputs);
-lockTimeScalesInput.addEventListener("change", () => {
-  state.timeScalesLocked = lockTimeScalesInput.checked;
-  if (state.timeScalesLocked) {
-    state.pressureTimeScale = state.cloudTimeScale;
-    state.currentTimeScale = state.cloudTimeScale;
-    state.worldTimeScale = state.cloudTimeScale;
-  }
-  syncTimeScaleInputs();
-});
 syncTimeScaleInputs();
 syncWorldDateInputs();
 
@@ -1201,18 +1123,13 @@ const occluderFieldView = device.createTexture({
   usage: 0x04 | 0x08,
 }).createView({ dimension: "2d-array" });
 const occluderFieldSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-const [terrainCacheTexels, terrainCacheLayers, terrainCacheLevels] = (() => {
-  const [texels, , layers, levels] = terrain_cache_texture_size();
-  return [texels!, layers!, levels!];
+const [terrainCacheTexels, terrainCacheLayers] = (() => {
+  const [texels, , layers] = terrain_cache_texture_size();
+  return [texels!, layers!];
 })();
 const terrainCacheView = device.createTexture({
   size: [terrainCacheTexels, terrainCacheTexels, terrainCacheLayers],
   format: "rgba32float",
-  usage: 0x04 | 0x08,
-}).createView({ dimension: "2d-array" });
-const terrainCacheJumpView = device.createTexture({
-  size: [terrainCacheTexels, terrainCacheTexels, terrainCacheLevels],
-  format: "rgba8unorm",
   usage: 0x04 | 0x08,
 }).createView({ dimension: "2d-array" });
 const terrainCacheFillBuffer = device.createBuffer({
@@ -1393,27 +1310,15 @@ function parsedSeed(): bigint {
 }
 
 function sampleWorldCenterDiagnostics(
-  cloudTimeSeconds: number,
   worldTimeSeconds: number,
-  pressureTimeSeconds: number,
-  currentTimeSeconds: number,
 ): WorldCenterDiagnostics {
-  const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
   const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
-  const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
-  const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const sample = sample_playground_environment(
     state.worldWidthM,
     state.worldHeightM,
     parsedSeed(),
-    cloudTick,
-    cloudTickFraction,
     worldTick,
     worldTickFraction,
-    pressureTick,
-    pressureTickFraction,
-    currentTick,
-    currentTickFraction,
     state.cameraX,
     state.cameraY,
   );
@@ -1553,18 +1458,12 @@ function updateRenderedGeometry(): void {
 }
 
 function updateViewCenterDiagnostics(
-  cloudTimeSeconds: number,
   worldTimeSeconds: number,
-  pressureTimeSeconds: number,
-  currentTimeSeconds: number,
 ): void {
   updateRenderedGeometry();
   replaceDiagnosticRows(positionMeasurementsElement, positionMeasurements);
   updateDerivedOutput(sampleWorldCenterDiagnostics(
-    cloudTimeSeconds,
     worldTimeSeconds,
-    pressureTimeSeconds,
-    currentTimeSeconds,
   ));
 }
 
@@ -1575,10 +1474,7 @@ function splitTick(timeSeconds: number): [bigint, number] {
 }
 
 function updateUniforms(
-  cloudTimeSeconds: number,
   worldTimeSeconds: number,
-  pressureTimeSeconds: number,
-  currentTimeSeconds: number,
   elapsedSeconds: number,
   presentationTimeMs: number,
 ): void {
@@ -1629,9 +1525,6 @@ function updateUniforms(
   }, state.diagnostic !== "scene");
   const visible = (value: boolean): number => Number(value);
   const [worldTick, worldTickFraction] = splitTick(worldTimeSeconds);
-  const [cloudTick, cloudTickFraction] = splitTick(cloudTimeSeconds);
-  const [pressureTick, pressureTickFraction] = splitTick(pressureTimeSeconds);
-  const [currentTick, currentTickFraction] = splitTick(currentTimeSeconds);
   const [seedLow, seedHigh] = splitSeed(state.seed);
   const seed = (BigInt(seedHigh) << 32n) | BigInt(seedLow);
   const viewCloud = sample_playground_view_cloud_state(
@@ -1640,12 +1533,6 @@ function updateUniforms(
     seed,
     worldTick,
     worldTickFraction,
-    cloudTick,
-    cloudTickFraction,
-    pressureTick,
-    pressureTickFraction,
-    currentTick,
-    currentTickFraction,
     renderedCameraX,
     renderedCameraY,
   );
@@ -1657,12 +1544,6 @@ function updateUniforms(
     seed,
     worldTick,
     worldTickFraction,
-    cloudTick,
-    cloudTickFraction,
-    pressureTick,
-    pressureTickFraction,
-    currentTick,
-    currentTickFraction,
     renderedCameraX,
     renderedCameraY,
     state.viewHeight,
@@ -1670,8 +1551,7 @@ function updateUniforms(
     previewCanvas.height,
     sceneSize[1]!,
     bench ? previewCanvas.height : previewCanvas.clientHeight,
-    new Float32Array(cloudMotion.advance(elapsedSeconds, lowWind, upperWind)),
-    viewCloud.subarray(4, 8),
+    new Float32Array(cloudMotion.advance(elapsedSeconds * state.worldTimeScale, lowWind, upperWind)),
     new Float32Array([
       exposure.advance(
         state.worldWidthM, state.worldHeightM, worldTimeSeconds,
@@ -1876,7 +1756,7 @@ let timedUsesFields = false;
 let latestPassTimes: Promise<PassTimes | undefined> = Promise.resolve(undefined);
 let nextDiagnosticsAt = 0;
 
-function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): void {
+function updateStatus(now: number, ticks: number, worldTimeSeconds: number): void {
   updateOccluderFieldInfo(renderResourcesForFrame());
   ticksInWindow += ticks;
   const windowSeconds = (now - statisticsStartedAt) / 1000;
@@ -1911,7 +1791,7 @@ function updateStatus(now: number, ticks: number, cloudTimeSeconds: number): voi
   const scale = sceneScale < 1 ? ` · scene ${(sceneScale * 100).toFixed(0)}%` : "";
   const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
   statusElement.textContent = `${rates}${gpuTiming}${scale}${compilation}`;
-  statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · scene ${sceneSize[0]} × ${sceneSize[1]} · ${format(cloudTimeSeconds, 1)} s`;
+  statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · scene ${sceneSize[0]} × ${sceneSize[1]} · ${format(worldTimeSeconds, 1)} s`;
   syncWorldDateInputs();
 }
 
@@ -1922,48 +1802,19 @@ function advanceFrame(now: number): void {
   previous = now;
   const ticks = advanceFixedClock(clock, elapsed, (elapsedTicks) => {
     const elapsedFixedSeconds = elapsedTicks * fixedTickSeconds;
-    state.time = advanceProceduralTimeSeconds(
-      state.time,
-      elapsedFixedSeconds * state.cloudTimeScale,
-    );
-    state.pressureTimeSeconds = advanceProceduralTimeSeconds(
-      state.pressureTimeSeconds,
-      elapsedFixedSeconds * state.pressureTimeScale,
-    );
-    state.currentTimeSeconds = advanceProceduralTimeSeconds(
-      state.currentTimeSeconds,
-      elapsedFixedSeconds * state.currentTimeScale,
-    );
     state.worldTimeSeconds = advanceProceduralTimeSeconds(
       state.worldTimeSeconds,
       elapsedFixedSeconds * state.worldTimeScale,
     );
   });
   const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
-  const cloudTimeSeconds = advanceProceduralTimeSeconds(
-    state.time,
-    renderFractionSeconds * state.cloudTimeScale,
-  );
-  const pressureTimeSeconds = advanceProceduralTimeSeconds(
-    state.pressureTimeSeconds,
-    renderFractionSeconds * state.pressureTimeScale,
-  );
-  const currentTimeSeconds = advanceProceduralTimeSeconds(
-    state.currentTimeSeconds,
-    renderFractionSeconds * state.currentTimeScale,
-  );
   const worldTimeSeconds = advanceProceduralTimeSeconds(
     state.worldTimeSeconds,
     renderFractionSeconds * state.worldTimeScale,
   );
   updateRenderedGeometry();
   if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {
-    updateViewCenterDiagnostics(
-      cloudTimeSeconds,
-      worldTimeSeconds,
-      pressureTimeSeconds,
-      currentTimeSeconds,
-    );
+    updateViewCenterDiagnostics(worldTimeSeconds);
     nextDiagnosticsAt = now + 250;
   }
   const renderResources = renderResourcesForFrame();
@@ -1978,15 +1829,8 @@ function advanceFrame(now: number): void {
     automaticRenderScale = undefined;
   }
   renderDue = framePacer.frame_due(elapsed, frameRateCap());
-  updateUniforms(
-    cloudTimeSeconds,
-    worldTimeSeconds,
-    pressureTimeSeconds,
-    currentTimeSeconds,
-    elapsed,
-    now,
-  );
-  updateStatus(now, ticks, cloudTimeSeconds);
+  updateUniforms(worldTimeSeconds, elapsed, now);
+  updateStatus(now, ticks, worldTimeSeconds);
 }
 
 function renderFrame(): Promise<void> {
@@ -2281,7 +2125,6 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
           { binding: 2, resource: occluderFieldView },
           { binding: 3, resource: occluderFieldSampler },
           { binding: 4, resource: terrainCacheView },
-          { binding: 5, resource: terrainCacheJumpView },
         ],
       }),
       playgroundBindGroup: device.createBindGroup({
@@ -2312,7 +2155,6 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         entries: [
           { binding: 0, resource: { buffer: terrainCacheFillBuffer } },
           { binding: 1, resource: terrainCacheView },
-          { binding: 2, resource: terrainCacheJumpView },
         ],
       }),
     };
@@ -2348,9 +2190,6 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       cameraX: scenario.cameraM[0],
       cameraY: scenario.cameraM[1],
       viewHeight: scenario.viewHeightM,
-      time: scenario.cloudTimeSeconds,
-      pressureTimeSeconds: scenario.cloudTimeSeconds,
-      currentTimeSeconds: scenario.worldTimeSeconds,
       worldTimeSeconds: scenario.worldTimeSeconds,
       renderScale: scenario.renderScale ?? 1,
     });
@@ -2364,14 +2203,7 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       }
       // A fresh exposure starts settled, and zero elapsed time keeps it and
       // cloud transport fixed, as in capture.
-      updateUniforms(
-        state.time,
-        state.worldTimeSeconds,
-        state.pressureTimeSeconds,
-        state.currentTimeSeconds,
-        0,
-        now,
-      );
+      updateUniforms(state.worldTimeSeconds, 0, now);
       const startedAt = performance.now();
       await renderFrame();
       const submittedToDoneMs = performance.now() - startedAt;

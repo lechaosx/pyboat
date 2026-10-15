@@ -48,7 +48,6 @@ struct Scenario {
     seed: String,
     camera_m: [f32; 2],
     view_height_m: f32,
-    cloud_time_seconds: f64,
     world_time_seconds: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_scale: Option<f32>,
@@ -678,7 +677,6 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
             "renderScale must be from {MINIMUM_RENDER_SCALE} through 1"
         ));
     }
-    validate_time_seconds(scenario.cloud_time_seconds, "cloudTimeSeconds")?;
     validate_time_seconds(scenario.world_time_seconds, "worldTimeSeconds")?;
     Ok(Options {
         width,
@@ -687,7 +685,6 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
         camera_y_m,
         view_height_m: scenario.view_height_m,
         seed: parse_seed(&scenario.seed)?,
-        cloud_time_seconds: scenario.cloud_time_seconds,
         world_time_seconds: scenario.world_time_seconds,
         ..default_options()
     })

@@ -29,9 +29,12 @@ const LOW_CLOUD_FIELD_SPACING_M: f64 = 4.0;
 /// The canopy threshold turns its 2 km finest latent octave into edges about
 /// 100 m wide; three texels span such an edge.
 const CANOPY_FIELD_SPACING_M: f64 = 32.0;
-/// The finest broad-landform octave has a 384 m wavelength and about 20 m
-/// amplitude; bilinear error here stays near 0.2 m, below the 0.6 m minimum
-/// landform penumbra.
+/// The broad landform's island octaves run from 1536 m down to 96 m. Over a
+/// rugged island with 280 m peaks (seed 0x5eed around (2400, 2000) m), bilinear
+/// error at this spacing is 0.28 m at the 99th percentile and 0.68 m at most,
+/// near the 0.6 m minimum landform penumbra. Low-Sun shadows rendered from the
+/// grid there stay within 3 of 255 levels of direct evaluation at 15 m and
+/// 240 m views.
 const LANDFORM_FIELD_SPACING_M: f64 = 16.0;
 
 // Keep these synchronized with scene-state.wgsl and lighting.wgsl.

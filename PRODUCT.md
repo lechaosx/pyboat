@@ -159,19 +159,19 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** One browser lab covers weather, landscape, and water with
   production rendering. A spacious live preview remains beside one continuous
   scrolling panel ordered as time/playback, world, scene, then outputs/diagnostics.
-- **[Explicit]** Seed, geometry, position, and clocks generate environmental
-  causes; derived conditions stay read-only. Controls tune or enable existing
-  mechanisms and readouts follow the same clocks as rendering.
+- **[Explicit]** Seed, geometry, position, and the world clock generate
+  environmental causes; derived conditions stay read-only. Controls tune or enable
+  existing mechanisms and readouts follow the same clock as rendering.
 - **[Explicit]** The initial view is final composition. One action restores
   production appearance tuning while world state has no arbitrary default reset.
 - **[Explicit]** Navigation supports drag panning and cursor-anchored zoom;
   controls support typed values, immediate slider dragging, and eased track clicks.
 - **[Explicit]** Independent world dimensions regenerate the live world. Raw,
   cylindrical, and geographic view-center coordinates remain visible while panning.
-- **[Explicit]** Playback starts in real time with cloud, pressure, current, and
-  world-clock rates locked together, then permits independent rates. Calendar
-  controls and eclipse presets move the world clock without overriding orbital
-  state, view, playback, tuning, or diagnostics.
+- **[Explicit]** Playback starts in real time and runs one world clock, at one
+  adjustable rate, for clouds, pressure, currents, and every other procedural
+  process. Calendar controls and eclipse presets move the world clock without
+  overriding orbital state, view, playback, tuning, or diagnostics.
 - **[Explicit]** Collapsible scene controls group colors by the surface being
   rendered, followed by meaningful appearance and motion tuning. Changes take
   effect immediately; physical terrain, depth, and grounding remain authoritative.

@@ -23,7 +23,7 @@ use game::{
     cloud_field_time_coordinates_interpolated, computed_yaw_rate_torques,
     computed_yaw_rate_torques_in_environment, dinghy_parameters, match_environment,
     procedural_match_environment, procedural_world_environment,
-    procedural_world_environment_for_render_clocks,
+    procedural_world_environment_interpolated,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::{Rotation, Vector};
@@ -303,41 +303,25 @@ pub struct ViewCloudState {
     pub cloud_time_coordinates: CloudFieldTimeCoordinates,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn sample_view_cloud_state_for_render_clocks(
+pub fn sample_view_cloud_state(
     geometry: WorldGeometry,
     match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-    cloud_tick: u64,
-    cloud_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
+    tick: u64,
+    tick_fraction: f32,
     center_m: Vector,
 ) -> ViewCloudState {
-    let weather = procedural_world_environment_for_render_clocks(
+    let weather = procedural_world_environment_interpolated(
         geometry,
         match_seed,
-        world_tick,
-        world_tick_fraction,
-        cloud_tick,
-        cloud_tick_fraction,
-        pressure_tick,
-        pressure_tick_fraction,
-        current_tick,
-        current_tick_fraction,
+        tick,
+        tick_fraction,
         center_m,
     )
     .weather;
     ViewCloudState {
         low_wind_velocity_m_s: weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s,
         upper_wind_velocity_m_s: weather.upper_wind_velocity_m_s,
-        cloud_time_coordinates: cloud_field_time_coordinates_interpolated(
-            cloud_tick,
-            cloud_tick_fraction,
-        ),
+        cloud_time_coordinates: cloud_field_time_coordinates_interpolated(tick, tick_fraction),
     }
 }
 
@@ -1570,38 +1554,6 @@ mod tests {
         .unwrap();
 
         assert!(encoded.len() <= MAX_SERVER_MESSAGE_BYTES);
-    }
-
-    #[test]
-    fn view_cloud_state_uses_each_render_clock() {
-        let geometry = WorldGeometry::default();
-        let position_m = Vector::new(1_234.0, 5_678.0);
-        let state = sample_view_cloud_state_for_render_clocks(
-            geometry, 42, 90_000, 0.25, 12_000, 0.5, 45_000, 0.75, 3_000, 0.125, position_m,
-        );
-        let expected = game::procedural_world_environment_for_render_clocks(
-            geometry, 42, 90_000, 0.25, 12_000, 0.5, 45_000, 0.75, 3_000, 0.125, position_m,
-        );
-
-        assert_eq!(
-            state.low_wind_velocity_m_s,
-            expected.weather.wind_velocity_m_s - expected.weather.surface_gust_velocity_m_s,
-        );
-        assert_eq!(
-            state.upper_wind_velocity_m_s,
-            expected.weather.upper_wind_velocity_m_s,
-        );
-        assert_eq!(
-            state.cloud_time_coordinates,
-            game::cloud_field_time_coordinates_interpolated(12_000, 0.5),
-        );
-        let cloud_locked = sample_view_cloud_state_for_render_clocks(
-            geometry, 42, 12_000, 0.5, 12_000, 0.5, 12_000, 0.5, 12_000, 0.5, position_m,
-        );
-        assert_ne!(
-            state.low_wind_velocity_m_s,
-            cloud_locked.low_wind_velocity_m_s
-        );
     }
 
     #[test]

@@ -18,7 +18,7 @@ use futures_util::{
 };
 use game::{
     OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit, moon_phase,
-    procedural_world_environment_for_render_clocks, scalar_field_time_coordinates_interpolated,
+    procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
@@ -41,7 +41,7 @@ use crate::{
     append_reliable_server_message_chunk, bounded_canvas_dimensions,
     disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state_for_render_clocks, sample_world_geometry, scale_bar, scene_render_size,
+    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
     seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
     webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
@@ -227,16 +227,14 @@ pub fn terrain_cache_shader_source() -> String {
 }
 
 #[cfg(feature = "playground")]
-/// Width, height, rgba32float noise layers, and rgba8unorm jump-flag layers of
-/// the terrain cache textures.
+/// Width, height, and rgba32float layers of the terrain cache texture.
 #[wasm_bindgen]
 pub fn terrain_cache_texture_size() -> Vec<u32> {
-    use crate::terrain_cache::{TERRAIN_CACHE_LAYERS, TERRAIN_CACHE_LEVELS, TERRAIN_CACHE_TEXELS};
+    use crate::terrain_cache::{TERRAIN_CACHE_LAYERS, TERRAIN_CACHE_TEXELS};
     vec![
         TERRAIN_CACHE_TEXELS,
         TERRAIN_CACHE_TEXELS,
         TERRAIN_CACHE_LAYERS,
-        TERRAIN_CACHE_LEVELS,
     ]
 }
 
@@ -473,34 +471,21 @@ environment_sample_getters!(
 );
 
 #[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_environment(
     width_m: f32,
     height_m: f32,
     match_seed: u64,
-    scalar_tick: u64,
-    scalar_tick_fraction: f32,
-    world_tick: u64,
-    world_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
+    tick: u64,
+    tick_fraction: f32,
     center_x_m: f32,
     center_y_m: f32,
 ) -> Result<PlaygroundEnvironmentSample, JsValue> {
     let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
-    let sample = procedural_world_environment_for_render_clocks(
+    let sample = procedural_world_environment_interpolated(
         geometry,
         match_seed,
-        world_tick,
-        world_tick_fraction,
-        scalar_tick,
-        scalar_tick_fraction,
-        pressure_tick,
-        pressure_tick_fraction,
-        current_tick,
-        current_tick_fraction,
+        tick,
+        tick_fraction,
         Vector::new(center_x_m, center_y_m),
     );
     let primary = sample.weather.primary;
@@ -566,35 +551,22 @@ pub fn sample_playground_environment(
 }
 
 #[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
 pub fn sample_playground_view_cloud_state(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-    cloud_tick: u64,
-    cloud_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
+    tick: u64,
+    tick_fraction: f32,
     camera_x_m: f32,
     camera_y_m: f32,
 ) -> Result<Vec<f32>, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let state = sample_view_cloud_state_for_render_clocks(
+    let state = sample_view_cloud_state(
         geometry,
         match_seed,
-        world_tick,
-        world_tick_fraction,
-        cloud_tick,
-        cloud_tick_fraction,
-        pressure_tick,
-        pressure_tick_fraction,
-        current_tick,
-        current_tick_fraction,
+        tick,
+        tick_fraction,
         Vector::new(camera_x_m, camera_y_m),
     );
     Ok(vec![
@@ -602,10 +574,6 @@ pub fn sample_playground_view_cloud_state(
         state.low_wind_velocity_m_s.y,
         state.upper_wind_velocity_m_s.x,
         state.upper_wind_velocity_m_s.y,
-        state.cloud_time_coordinates.low,
-        state.cloud_time_coordinates.upper,
-        0.0,
-        0.0,
     ])
 }
 
@@ -628,23 +596,17 @@ pub fn playground_scene_uniform_bytes() -> usize {
 }
 
 #[cfg(feature = "playground")]
-/// Scene uniforms for the lab's independent clocks, with the field grids they
-/// describe. The view-local cloud motion, cloud time, and exposure/output rows
-/// come from lab state.
+/// Scene uniforms for the lab's world clock, with the field grids they
+/// describe. The view-local cloud motion and exposure/output rows come from lab
+/// state.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn playground_scene_uniforms(
     world_width_m: f32,
     world_height_m: f32,
     match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-    cloud_tick: u64,
-    cloud_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
+    tick: u64,
+    tick_fraction: f32,
     camera_x_m: f32,
     camera_y_m: f32,
     view_height_m: f32,
@@ -653,7 +615,6 @@ pub fn playground_scene_uniforms(
     scene_height_px: u32,
     css_view_height_px: f32,
     view_cloud_motion_m: &[f32],
-    cloud_time_coordinates: &[f32],
     exposure_and_output: &[f32],
     low_cloud_body_size: f32,
     landform_shadow_reach_m: f32,
@@ -668,21 +629,13 @@ pub fn playground_scene_uniforms(
             .map_err(|_| JsValue::from_str("scene uniform rows need four values"))
     };
     let view_cloud_motion_m = row(view_cloud_motion_m)?;
-    let precipitation_time = periodic_effect_time_interpolated(
-        cloud_tick,
-        cloud_tick_fraction,
-        PRECIPITATION_CONTACT_PERIOD_TICKS,
-    );
-    let scalar_time = scalar_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
-    let pressure_time =
-        vector_field_time_coordinates_interpolated(geometry, pressure_tick, pressure_tick_fraction);
-    let current_time =
-        vector_field_time_coordinates_interpolated(geometry, current_tick, current_tick_fraction);
-    let celestial = world_celestial_conditions(
-        geometry,
-        (world_tick as f64 + f64::from(world_tick_fraction)) / TICKS_PER_SECOND as f64,
-        Vector::ZERO,
-    );
+    let precipitation_time =
+        periodic_effect_time_interpolated(tick, tick_fraction, PRECIPITATION_CONTACT_PERIOD_TICKS);
+    let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
+    let vector_time = vector_field_time_coordinates_interpolated(geometry, tick, tick_fraction);
+    let cloud_time = game::cloud_field_time_coordinates_interpolated(tick, tick_fraction);
+    let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
+    let celestial = world_celestial_conditions(geometry, world_time_seconds, Vector::ZERO);
     let orbit = celestial_orbit(celestial);
     let view_size_m = [
         view_width_m(
@@ -693,7 +646,7 @@ pub fn playground_scene_uniforms(
     ];
     let grids = field_grids(
         geometry,
-        (world_tick as f64 + f64::from(world_tick_fraction)) / TICKS_PER_SECOND as f64,
+        world_time_seconds,
         [camera_x_m, camera_y_m],
         view_size_m,
         view_cloud_motion_m,
@@ -737,8 +690,8 @@ pub fn playground_scene_uniforms(
             celestial.lunar_longitude_phase,
             visual_pixel_footprint_m(view_height_m, scene_height_px),
         ],
-        pressure_time_coordinate: pressure_time.pressure,
-        ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
+        pressure_time_coordinate: vector_time.pressure,
+        ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
         seasonal_phase_factors: seasonal_phase_factors(celestial.season_phase),
         celestial_orbit_angles: [
             orbit.solar_declination_rad as f32,
@@ -753,7 +706,7 @@ pub fn playground_scene_uniforms(
             0.0,
         ],
         view_cloud_motion_m,
-        cloud_time_coordinates: row(cloud_time_coordinates)?,
+        cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: row(exposure_and_output)?,
         environment_field_grid_m: grids.environment.uniforms,
         environment_field_texels: grids.environment.texel_uniforms(),
@@ -762,12 +715,7 @@ pub fn playground_scene_uniforms(
         terrain_cache_grid_m: terrain_cache_frame.grid_m,
         terrain_cache_texels: terrain_cache_frame.texels,
         terrain_cache_level: terrain_cache_frame.level,
-        ocean_wave_modes: ocean_wave_mode_uniforms(
-            geometry,
-            match_seed,
-            world_tick,
-            world_tick_fraction,
-        ),
+        ocean_wave_modes: ocean_wave_mode_uniforms(geometry, match_seed, tick, tick_fraction),
     };
     let mut field_grid_summary: Vec<f32> = grids
         .environment
@@ -1311,16 +1259,6 @@ impl Renderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1401,10 +1339,6 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.noise_view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.jump_view),
-                },
             ],
         });
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1468,15 +1402,9 @@ impl Renderer {
         let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
         let has_match = match_seed.is_some();
         let match_seed = match_seed.unwrap_or(0);
-        let view_cloud_state = sample_view_cloud_state_for_render_clocks(
+        let view_cloud_state = sample_view_cloud_state(
             world_geometry,
             match_seed,
-            tick,
-            tick_fraction,
-            tick,
-            tick_fraction,
-            tick,
-            tick_fraction,
             tick,
             tick_fraction,
             canonical_camera_m.into(),

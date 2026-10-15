@@ -5,16 +5,14 @@
     "seed": "0x5eed",
     "cameraM": [-14900, -5330],
     "viewHeightM": 240,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
   },
   {
     "id": "reef-coast",
     "exercises": "Coast at boat zoom: reef, shoal and outer-reef noise, rocky shallows, beach and rock materials beside water",
     "seed": "0x5eed",
-    "cameraM": [-5560, -2990],
+    "cameraM": [-5890, -2100],
     "viewHeightM": 240,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
   },
   {
@@ -23,7 +21,6 @@
     "seed": "0x5eed",
     "cameraM": [800, 0],
     "viewHeightM": 300,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
   },
   {
@@ -32,7 +29,6 @@
     "seed": "0x5eed",
     "cameraM": [2300, 25300],
     "viewHeightM": 2400,
-    "cloudTimeSeconds": 15595200,
     "worldTimeSeconds": 15595200
   },
   {
@@ -41,7 +37,6 @@
     "seed": "0x5eed",
     "cameraM": [8000, -20000],
     "viewHeightM": 40,
-    "cloudTimeSeconds": 63037,
     "worldTimeSeconds": 63037
   },
   {
@@ -50,7 +45,6 @@
     "seed": "0x5eed",
     "cameraM": [2400, 2000],
     "viewHeightM": 1500,
-    "cloudTimeSeconds": 268500,
     "worldTimeSeconds": 268500
   },
   {
@@ -59,7 +53,6 @@
     "seed": "0x5eed",
     "cameraM": [-5420, -2700],
     "viewHeightM": 400,
-    "cloudTimeSeconds": 209700,
     "worldTimeSeconds": 209700
   },
   {
@@ -68,7 +61,6 @@
     "seed": "0x5eed",
     "cameraM": [-3700, -13400],
     "viewHeightM": 2400,
-    "cloudTimeSeconds": 9072240,
     "worldTimeSeconds": 9072240
   },
   {
@@ -77,25 +69,22 @@
     "seed": "0x5eed",
     "cameraM": [-4000, 0],
     "viewHeightM": 20000,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
   },
   {
     "id": "close-shore",
     "exercises": "About 60 m view of a rocky shore: every material octave resolved, rock and intertidal detail, shallow water",
     "seed": "0x5eed",
-    "cameraM": [-5431, -2755],
+    "cameraM": [-5770, -2100],
     "viewHeightM": 60,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37
   },
   {
     "id": "reef-coast-scale-0.67",
     "exercises": "Reef coast upscaled from two-thirds scene resolution: coastline, reefs and rocky shallows through EASU and RCAS",
     "seed": "0x5eed",
-    "cameraM": [-5560, -2990],
+    "cameraM": [-5890, -2100],
     "viewHeightM": 240,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37,
     "renderScale": 0.67
   },
@@ -103,9 +92,8 @@
     "id": "reef-coast-scale-0.5",
     "exercises": "Reef coast upscaled from the minimum half scene resolution: coastline, reefs and rocky shallows stay legible",
     "seed": "0x5eed",
-    "cameraM": [-5560, -2990],
+    "cameraM": [-5890, -2100],
     "viewHeightM": 240,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37,
     "renderScale": 0.5
   },
@@ -115,7 +103,6 @@
     "seed": "0x5eed",
     "cameraM": [800, 0],
     "viewHeightM": 300,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37,
     "renderScale": 0.5
   },
@@ -125,7 +112,6 @@
     "seed": "0x5eed",
     "cameraM": [2300, 25300],
     "viewHeightM": 2400,
-    "cloudTimeSeconds": 15595200,
     "worldTimeSeconds": 15595200,
     "renderScale": 0.5
   },
@@ -135,7 +121,6 @@
     "seed": "0x5eed",
     "cameraM": [8000, -20000],
     "viewHeightM": 40,
-    "cloudTimeSeconds": 63037,
     "worldTimeSeconds": 63037,
     "renderScale": 0.5
   },
@@ -145,7 +130,6 @@
     "seed": "0x5eed",
     "cameraM": [-5420, -2700],
     "viewHeightM": 400,
-    "cloudTimeSeconds": 209700,
     "worldTimeSeconds": 209700,
     "renderScale": 0.5
   },
@@ -155,7 +139,6 @@
     "seed": "0x5eed",
     "cameraM": [-4000, 0],
     "viewHeightM": 20000,
-    "cloudTimeSeconds": 37,
     "worldTimeSeconds": 37,
     "renderScale": 0.5
   }

@@ -139,19 +139,98 @@ fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSamp
 }
 
 struct OceanForcingSample {
-    current_m_s: vec2<f32>,
     significant_height_m: f32,
     surface_wind_m_s: vec2<f32>,
     upper_wind_m_s: vec2<f32>,
 }
 
+fn ocean_tide_height_sample(
+    position_m: vec2<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_tide: SurfaceTideSample,
+) -> TerrainNoiseSample {
+    var tide = surface_tide;
+    if tuning.terrain_tuning.x != 1.0 {
+        tide = SurfaceTideSample(
+            terrain_simplex_fractal_sample(
+                vec2<u32>(0xf3bcc909u, 0x6a09e667u),
+                position_m,
+                131072.0,
+                3u,
+                0.5,
+                3u,
+            ),
+            terrain_simplex_fractal_sample(
+                vec2<u32>(0x84caa73bu, 0xbb67ae85u),
+                position_m,
+                131072.0,
+                3u,
+                0.5,
+                3u,
+            ),
+        );
+    }
+    let tidal_range_m = 1.25 + 0.75 * tide.response.value;
+    let tidal_range_gradient = 0.75 * tide.response.gradient;
+    let tidal_phase = 0.08 * tide.lag.value;
+    let tidal_phase_gradient = 0.08 * tide.lag.gradient;
+    let solar_hour_angle = TAU * (atmosphere.climate.local_solar_phase - 0.5);
+    let solar_longitude_phase = scene.world_phases_and_pixel_footprint_m.y - 0.25;
+    let lunar_phase = scene.world_phases_and_pixel_footprint_m.z - solar_longitude_phase;
+    let lunar_hour_angle = solar_hour_angle + TAU * lunar_phase;
+    let lunar_angle = 2.0 * (lunar_hour_angle + TAU * tidal_phase);
+    let solar_angle = 2.0 * (solar_hour_angle + TAU * tidal_phase);
+    let tide_sum = cos(lunar_angle) + 0.46 * cos(solar_angle);
+    let angle_gradient = vec2<f32>(
+        TAU * scene.inverse_world_size_m.x,
+        0.0,
+    )
+        + TAU * tidal_phase_gradient;
+    let tide_sum_gradient = (-2.0 * sin(lunar_angle) - 0.92 * sin(solar_angle))
+        * angle_gradient;
+    let tide_height_m = 0.5 * tidal_range_m * tide_sum / 1.46;
+    let tide_gradient = 0.5 / 1.46
+        * (tide_sum * tidal_range_gradient + tidal_range_m * tide_sum_gradient);
+    return TerrainNoiseSample(tide_height_m, tide_gradient);
+}
+
 fn ocean_forcing_from_surface(
+    position_m: vec2<f32>,
+    terrain_elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_tide: SurfaceTideSample,
+) -> OceanForcingSample {
+    let tide_height_m = ocean_tide_height_sample(position_m, atmosphere, surface_tide).value;
+    let water_depth_m = max(tide_height_m - terrain_elevation_m, 0.0);
+    let surface_wind_m_s = resolved_surface_wind_m_s_from_pressure(
+        position_m,
+        atmosphere.pressure,
+    );
+    let upper_wind_m_s = upper_wind_m_s_from_atmosphere(position_m, atmosphere);
+    if water_depth_m == 0.0 {
+        return OceanForcingSample(0.0, surface_wind_m_s, upper_wind_m_s);
+    }
+    // Wave energy responds to sustained resolved flow, not an instantaneous
+    // 256 m surface gust.
+    let surface_speed_m_s = length(surface_wind_m_s);
+    let upper_speed_m_s = length(upper_wind_m_s);
+    let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
+    let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
+    let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
+    return OceanForcingSample(
+        min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
+        surface_wind_m_s,
+        upper_wind_m_s,
+    );
+}
+
+fn ocean_current_m_s_from_surface(
     position_m: vec2<f32>,
     terrain_cluster: TerrainNoiseSample,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
     surface_tide: SurfaceTideSample,
-) -> OceanForcingSample {
+) -> vec2<f32> {
     let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let cluster = terrain_cluster;
     let transition = clamp((cluster.value - 0.02) / 0.46, 0.0, 1.0);
@@ -198,96 +277,32 @@ fn ocean_forcing_from_surface(
         * (pressure_envelope * pressure.gradient_m_s
             + pressure.potential_m2_s * pressure_envelope_gradient);
 
-    var tide = surface_tide;
-    if tuning.terrain_tuning.x != 1.0 {
-        tide = SurfaceTideSample(
-            terrain_simplex_fractal_sample(
-                vec2<u32>(0xf3bcc909u, 0x6a09e667u),
-                position_m,
-                131072.0,
-                3u,
-                0.5,
-                3u,
-            ),
-            terrain_simplex_fractal_sample(
-                vec2<u32>(0x84caa73bu, 0xbb67ae85u),
-                position_m,
-                131072.0,
-                3u,
-                0.5,
-                3u,
-            ),
-        );
-    }
-    let tidal_range_m = 1.25 + 0.75 * tide.response.value;
-    let tidal_range_gradient = 0.75 * tide.response.gradient;
-    let tidal_phase = 0.08 * tide.lag.value;
-    let tidal_phase_gradient = 0.08 * tide.lag.gradient;
-    let solar_hour_angle = TAU * (atmosphere.climate.local_solar_phase - 0.5);
-    let solar_longitude_phase = scene.world_phases_and_pixel_footprint_m.y - 0.25;
-    let lunar_phase = scene.world_phases_and_pixel_footprint_m.z - solar_longitude_phase;
-    let lunar_hour_angle = solar_hour_angle + TAU * lunar_phase;
-    let lunar_angle = 2.0 * (lunar_hour_angle + TAU * tidal_phase);
-    let solar_angle = 2.0 * (solar_hour_angle + TAU * tidal_phase);
-    let tide_sum = cos(lunar_angle) + 0.46 * cos(solar_angle);
-    let angle_gradient = vec2<f32>(
-        TAU * scene.inverse_world_size_m.x,
-        0.0,
-    )
-        + TAU * tidal_phase_gradient;
-    let tide_sum_gradient = (-2.0 * sin(lunar_angle) - 0.92 * sin(solar_angle))
-        * angle_gradient;
-    let tide_height_m = 0.5 * tidal_range_m * tide_sum / 1.46;
-    let tide_gradient = 0.5 / 1.46
-        * (tide_sum * tidal_range_gradient + tidal_range_m * tide_sum_gradient);
+    let tide = ocean_tide_height_sample(position_m, atmosphere, surface_tide);
     let tidal_potential_gradient = 1200.0
-        * (basin * tide_gradient + tide_height_m * basin_gradient);
+        * (basin * tide.gradient + tide.value * basin_gradient);
     let current_m_s = rotate_left(base_gradient + weather_gradient) - tidal_potential_gradient;
-
-    let water_depth_m = max(tide_height_m - terrain_elevation_m, 0.0);
-    let surface_wind_m_s = resolved_surface_wind_m_s_from_pressure(
-        position_m,
-        atmosphere.pressure,
-    );
-    let upper_wind_m_s = upper_wind_m_s_from_atmosphere(position_m, atmosphere);
-    if water_depth_m == 0.0 {
-        return OceanForcingSample(
-            vec2<f32>(0.0),
-            0.0,
-            surface_wind_m_s,
-            upper_wind_m_s,
-        );
-    }
-    // Wave energy responds to sustained resolved flow, not an instantaneous
-    // 256 m surface gust.
-    let surface_speed_m_s = length(surface_wind_m_s);
-    let upper_speed_m_s = length(upper_wind_m_s);
-    let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
-    let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
-    let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
-    return OceanForcingSample(
-        current_m_s,
-        min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
-        surface_wind_m_s,
-        upper_wind_m_s,
-    );
+    return select(vec2<f32>(0.0), current_m_s, tide.value > terrain_elevation_m);
 }
 
 fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     let terrain = procedural_terrain_sample(position_m);
-    let forcing = ocean_forcing_from_surface(
-        position_m,
-        terrain.cluster,
-        terrain.elevation_m,
-        surface_atmosphere_sample_at(position_m),
-        surface_tide_sample_at(position_m),
+    let atmosphere = surface_atmosphere_sample_at(position_m);
+    let tide = surface_tide_sample_at(position_m);
+    return vec3<f32>(
+        ocean_current_m_s_from_surface(
+            position_m,
+            terrain.cluster,
+            terrain.elevation_m,
+            atmosphere,
+            tide,
+        ),
+        ocean_forcing_from_surface(position_m, terrain.elevation_m, atmosphere, tide)
+            .significant_height_m,
     );
-    return vec3<f32>(forcing.current_m_s, forcing.significant_height_m);
 }
 
 fn physical_water_wave_sample_from_surface(
     position_m: vec2<f32>,
-    terrain_cluster: TerrainNoiseSample,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
     tide: SurfaceTideSample,
@@ -297,7 +312,6 @@ fn physical_water_wave_sample_from_surface(
     }
     let forcing = ocean_forcing_from_surface(
         position_m,
-        terrain_cluster,
         terrain_elevation_m,
         atmosphere,
         tide,
@@ -362,7 +376,6 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let terrain = procedural_terrain_sample(position_m);
     return physical_water_wave_sample_from_surface(
         position_m,
-        terrain.cluster,
         terrain.elevation_m,
         surface_atmosphere_sample_at(position_m),
         surface_tide_sample_at(position_m),
@@ -410,14 +423,12 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
 
 fn visual_water_normal_sample_from_surface(
     position_m: vec2<f32>,
-    terrain_cluster: TerrainNoiseSample,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
     tide: SurfaceTideSample,
 ) -> TerrainNoiseSample {
     let physical = physical_water_wave_sample_from_surface(
         position_m,
-        terrain_cluster,
         terrain_elevation_m,
         atmosphere,
         tide,
@@ -434,7 +445,6 @@ fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     let terrain = procedural_terrain_sample(position_m);
     return visual_water_normal_sample_from_surface(
         position_m,
-        terrain.cluster,
         terrain.elevation_m,
         surface_atmosphere_sample_at(position_m),
         surface_tide_sample_at(position_m),
@@ -444,13 +454,11 @@ fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
 fn visual_water_surface(
     position_m: vec2<f32>,
     base_color: vec3<f32>,
-    terrain_cluster: TerrainNoiseSample,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
     let normal_detail = visual_water_normal_sample_from_surface(
         position_m,
-        terrain_cluster,
         terrain_elevation_m,
         atmosphere,
         surface_tide_sample,
@@ -482,7 +490,6 @@ fn visual_water_surface(
 
 fn terrain_surface(
     position_m: vec2<f32>,
-    terrain_cluster: TerrainNoiseSample,
     elevation_m: f32,
     terrain_gradient: vec2<f32>,
     material_elevation_m: f32,
@@ -547,7 +554,6 @@ fn terrain_surface(
             water_surface = visual_water_surface(
                 position_m,
                 visible_water_color,
-                terrain_cluster,
                 elevation_m,
                 atmosphere,
             );
@@ -555,7 +561,6 @@ fn terrain_surface(
             water_surface = visual_water_surface(
                 position_m,
                 water_color_gate.x * water_color,
-                terrain_cluster,
                 elevation_m,
                 atmosphere,
             );

@@ -2,9 +2,9 @@ use std::{fs, io::BufReader, process::Command};
 
 use browser::DEFAULT_VIEW_HEIGHT_M;
 use game::{
-    celestial_disc_visibility_at_height, celestial_lighting, celestial_lighting_at_height,
-    procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
-    procedural_world_environment, world_celestial_conditions,
+    broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
+    celestial_lighting_at_height, procedural_solid_surface_elevation_m,
+    procedural_terrain_elevation_m, procedural_world_environment, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -411,6 +411,69 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
             }
         }
     }
+}
+
+#[test]
+fn rendered_broad_landform_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let mut compared = 0;
+    for index in 0..400 {
+        let position_m = Vector::new(
+            (index % 20) as f32 * 1_610.0 - 16_000.0,
+            (index / 20) as f32 * 1_630.0 - 16_000.0,
+        );
+        let expected_m = broad_landform_elevation_m(world, SEED, position_m);
+        // The diagnostic resolves about 4 cm within 8 m of sea level.
+        if !(-7.0..=7.0).contains(&expected_m) {
+            continue;
+        }
+        let expected = signed_debug_pixel(expected_m / 8.0);
+        let actual = render_diagnostic_pixel(world, position_m, "terrain_broad_landform");
+        for channel in 0..3 {
+            assert!(
+                actual[channel].abs_diff(expected[channel]) <= 2,
+                "broad landform at {position_m:?}: {actual:?} != {expected:?} ({expected_m} m)",
+            );
+        }
+        compared += 1;
+    }
+    assert!(
+        compared >= 4,
+        "only {compared} positions were near sea level"
+    );
+}
+
+#[test]
+fn rendered_instability_matches_authoritative_rust_upper_air() {
+    let world = WorldGeometry::default();
+    let mut compared = 0;
+    for index in 0..64 {
+        let position_m = Vector::new(
+            (index % 8) as f32 * 3_700.0 - 13_000.0,
+            (index / 8) as f32 * 3_900.0 - 15_000.0,
+        );
+        let expected = procedural_world_environment(world, SEED, 0, position_m)
+            .weather
+            .instability;
+        // Saturated instability hides the 500 hPa temperature it derives from.
+        if !(0.1..=0.9).contains(&expected) {
+            continue;
+        }
+        let actual = scalar_debug_amount(&render_diagnostic_pixel(
+            world,
+            position_m,
+            "weather_instability",
+        ));
+        assert!(
+            (actual - expected).abs() < 0.05,
+            "instability at {position_m:?}: rendered {actual}, Rust {expected}",
+        );
+        compared += 1;
+    }
+    assert!(
+        compared >= 4,
+        "only {compared} positions had unsaturated instability"
+    );
 }
 
 #[test]
@@ -1763,16 +1826,59 @@ fn coverage_view_marks_lookups_outside_their_grids() {
 fn grid_scene_matches_direct_scene_across_longitude_seam() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.5 * world.width_m() - 200.0, 0.0);
-    let world_time_seconds = 0.25 * 86_400.0;
-    let direct = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        world_time_seconds,
-        4_000.0,
-        "scene_direct",
-        256,
-        128,
-    );
+    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
+        + 128.0) as usize;
+    let render_direct = |world_time_seconds, arguments: &[(&str, &str)]| {
+        render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            4_000.0,
+            "scene_direct",
+            256,
+            128,
+            arguments,
+        )
+    };
+    // The comparison needs a morning whose clouds or their shadows cross the seam.
+    let mut best_occluder_maximum = 0;
+    let (world_time_seconds, direct) = (0..16)
+        .map(|day| (day as f64 + 0.25) * 86_400.0)
+        .find_map(|world_time_seconds| {
+            let direct = render_direct(world_time_seconds, &[]);
+            let without_occluders = render_direct(
+                world_time_seconds,
+                &[
+                    ("--cloud-rendering", "0,0,1,1"),
+                    ("--cloud-shadows", "0,0,0.85,0"),
+                ],
+            );
+            let occluder_maximum = direct
+                .as_chunks::<4>()
+                .0
+                .chunks(256)
+                .zip(without_occluders.as_chunks::<4>().0.chunks(256))
+                .flat_map(|(direct, bare)| {
+                    direct[seam_column - 8..seam_column + 8]
+                        .iter()
+                        .zip(&bare[seam_column - 8..seam_column + 8])
+                })
+                .map(|(direct, bare)| {
+                    (0..3)
+                        .map(|channel| direct[channel].abs_diff(bare[channel]))
+                        .max()
+                        .unwrap()
+                })
+                .max()
+                .unwrap();
+            best_occluder_maximum = best_occluder_maximum.max(occluder_maximum);
+            (occluder_maximum > 3).then_some((world_time_seconds, direct))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "clouds and their shadows never reach the seam; the largest difference was {best_occluder_maximum}"
+            )
+        });
     let grid = render_diagnostic_image_with_view_at(
         world,
         position_m,
@@ -1796,50 +1902,12 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
         .collect::<Vec<_>>();
     let mean = differences.iter().sum::<f32>() / differences.len() as f32;
     // Away from the seam, coarsened low-cloud grids soften small cloud edges.
-    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
-        + 128.0) as usize;
     let seam_maximum = differences
         .chunks(256)
         .flat_map(|row| &row[seam_column - 8..seam_column + 8])
         .copied()
         .fold(0.0, f32::max);
 
-    let without_occluders = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        4_000.0,
-        "scene_direct",
-        256,
-        128,
-        &[
-            ("--cloud-rendering", "0,0,1,1"),
-            ("--cloud-shadows", "0,0,0.85,0"),
-        ],
-    );
-    let occluder_maximum = direct
-        .as_chunks::<4>()
-        .0
-        .chunks(256)
-        .zip(without_occluders.as_chunks::<4>().0.chunks(256))
-        .flat_map(|(direct, bare)| {
-            direct[seam_column - 8..seam_column + 8]
-                .iter()
-                .zip(&bare[seam_column - 8..seam_column + 8])
-        })
-        .map(|(direct, bare)| {
-            (0..3)
-                .map(|channel| direct[channel].abs_diff(bare[channel]))
-                .max()
-                .unwrap()
-        })
-        .max()
-        .unwrap();
-
-    assert!(
-        occluder_maximum > 3,
-        "clouds and their shadows do not reach the seam: {occluder_maximum}"
-    );
     assert!(mean < 0.1, "mean grid/direct byte difference: {mean}");
     assert!(
         seam_maximum < 3.0,
@@ -1992,8 +2060,6 @@ fn render_capture(label: &str, arguments: &[&str]) -> Vec<u8> {
             "144",
             "--seed",
             &SEED.to_string(),
-            "--cloud-time",
-            "37",
             "--world-time",
             "37",
             "--output",
@@ -2135,23 +2201,30 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 #[test]
 fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
     let world = WorldGeometry::default();
-    let overview_size = 32usize;
+    let overview_size = 64usize;
     let overview_height_m = 16_000.0;
-    let overview = render_diagnostic_image_with_view_at(
-        world,
-        Vector::new(0.0, -10_000.0),
-        123.456,
-        overview_height_m,
-        "cloud_low_optical_depth",
-        overview_size as u32,
-        overview_size as u32,
-    );
-    let cloud_pixel = overview
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .position(|pixel| scalar_debug_amount(pixel) > 0.2)
-        .expect("representative view should contain an opaque low cloud");
+    // Early afternoon at the view on successive days, so the compared pixels
+    // are lit.
+    let (world_time_seconds, cloud_pixel) = (0..48)
+        .map(|day| f64::from(day) * 86_400.0 + 123.456)
+        .find_map(|world_time_seconds| {
+            let overview = render_diagnostic_image_with_view_at(
+                world,
+                Vector::new(0.0, -10_000.0),
+                world_time_seconds,
+                overview_height_m,
+                "cloud_low_optical_depth",
+                overview_size as u32,
+                overview_size as u32,
+            );
+            overview
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .position(|pixel| scalar_debug_amount(pixel) > 0.2)
+                .map(|cloud_pixel| (world_time_seconds, cloud_pixel))
+        })
+        .expect("some afternoon should show an opaque low cloud");
     let row = cloud_pixel / overview_size;
     let column = cloud_pixel % overview_size;
     let position_m = Vector::new(
@@ -2162,7 +2235,7 @@ fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
     let row_hidden = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         1.0,
         "scene",
         1,
@@ -2172,7 +2245,7 @@ fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
     let opacity_disabled = render_controlled_image_at(
         world,
         position_m,
-        123.456,
+        world_time_seconds,
         1.0,
         "scene",
         1,
@@ -2294,66 +2367,107 @@ fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
 
 #[test]
 fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
-    let world = WorldGeometry::default();
-    let position_m = Vector::new(-12_000.0, -5_000.0);
-    let ambient = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        0.0,
-        4_000.0,
+    assert_regional_field_has_half_the_fine_variance_share(
         "lighting_ambient_sky_occlusion",
-        256,
-        64,
-    );
-    let canopy = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        0.0,
-        4_000.0,
         "cloud_weather_canopy_optical_depth",
-        256,
-        64,
-    );
-    let ambient_detail = normalized_mean_neighbor_scalar_difference(&ambient, 256, 64);
-    let canopy_detail = normalized_mean_neighbor_scalar_difference(&canopy, 256, 64);
-
-    assert!(canopy_detail > 0.0005, "{canopy_detail}");
-    assert!(
-        ambient_detail < 0.5 * canopy_detail,
-        "ambient {ambient_detail}, canopy {canopy_detail}",
     );
 }
 
 #[test]
 fn ambient_aerosol_is_lower_frequency_than_local_humidity() {
-    let world = WorldGeometry::default();
-    let position_m = Vector::new(-12_000.0, -5_000.0);
-    let aerosol = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        0.0,
-        4_000.0,
+    assert_regional_field_has_half_the_fine_variance_share(
         "lighting_aerosol_optical_depth",
-        256,
-        64,
-    );
-    let humidity = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        0.0,
-        4_000.0,
         "weather_relative_humidity",
-        256,
-        64,
     );
-    let aerosol_detail = normalized_mean_neighbor_scalar_difference(&aerosol, 256, 64);
-    let humidity_detail = normalized_mean_neighbor_scalar_difference(&humidity, 256, 64);
+}
 
-    assert!(humidity_detail > 0.0005, "{humidity_detail}");
+/// Over five 4 km-high views, the regional field keeps under half the local
+/// field's share of variance below about 1 km. The local field must keep at
+/// least 0.5% of its variance there, ten times the share that 8-bit
+/// quantization of a 0.3-wide range leaves, so the comparison is not between
+/// two smooth ramps.
+fn assert_regional_field_has_half_the_fine_variance_share(regional: &str, local: &str) {
+    let world = WorldGeometry::default();
+    let mut regional_fine_fraction = 0.0;
+    let mut local_fine_fraction = 0.0;
+    let positions_m = [
+        Vector::new(-12_000.0, -5_000.0),
+        Vector::new(9_000.0, 3_000.0),
+        Vector::new(-3_000.0, 14_000.0),
+        Vector::new(20_000.0, -15_000.0),
+        Vector::new(0.0, -24_000.0),
+    ];
+    for position_m in positions_m {
+        let render = |diagnostic| {
+            render_diagnostic_image_with_view_at(
+                world, position_m, 0.0, 4_000.0, diagnostic, 256, 64,
+            )
+        };
+        regional_fine_fraction += fine_scale_variance_fraction(
+            &render(regional),
+            256,
+            64,
+            &format!("{regional} at {position_m:?}"),
+        );
+        local_fine_fraction += fine_scale_variance_fraction(
+            &render(local),
+            256,
+            64,
+            &format!("{local} at {position_m:?}"),
+        );
+    }
+    let view_count = positions_m.len() as f32;
+
     assert!(
-        aerosol_detail < 0.5 * humidity_detail,
-        "aerosol {aerosol_detail}, humidity {humidity_detail}",
+        local_fine_fraction >= 0.005 * view_count,
+        "{local} kept only {local_fine_fraction} of its variance below 1 km over {view_count} views",
     );
+    assert!(
+        regional_fine_fraction < 0.5 * local_fine_fraction,
+        "fine-scale variance fraction: {regional} {regional_fine_fraction}, {local} {local_fine_fraction}",
+    );
+}
+
+/// The share of a scalar image's variance left after subtracting a 17-pixel box
+/// blur, about 1 km in the 4 km-high views above, over pixels whose blur lies
+/// inside the image. Water vapour and canopy texture still vary at that scale,
+/// while regional drivers start at 8 km wavelengths.
+fn fine_scale_variance_fraction(bytes: &[u8], width: usize, height: usize, view: &str) -> f32 {
+    const RADIUS: usize = 8;
+    let values = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| scalar_debug_amount(pixel))
+        .collect::<Vec<_>>();
+    let interior = |index: usize| {
+        let (row, column) = (index / width, index % width);
+        (RADIUS..height - RADIUS).contains(&row) && (RADIUS..width - RADIUS).contains(&column)
+    };
+    let interior_count = (width - 2 * RADIUS) * (height - 2 * RADIUS);
+    let mean = (0..values.len())
+        .filter(|&index| interior(index))
+        .map(|index| values[index])
+        .sum::<f32>()
+        / interior_count as f32;
+    let mut total_variance = 0.0;
+    let mut fine_variance = 0.0;
+    for row in RADIUS..height - RADIUS {
+        for column in RADIUS..width - RADIUS {
+            let mut blurred = 0.0;
+            for blur_row in row - RADIUS..=row + RADIUS {
+                for blur_column in column - RADIUS..=column + RADIUS {
+                    blurred += values[blur_row * width + blur_column];
+                }
+            }
+            blurred /= ((2 * RADIUS + 1) * (2 * RADIUS + 1)) as f32;
+            let value = values[row * width + column];
+            total_variance += (value - mean) * (value - mean);
+            fine_variance += (value - blurred) * (value - blurred);
+        }
+    }
+    assert!(total_variance > 0.0, "{view} has no variance");
+    fine_variance / total_variance
 }
 
 #[test]
@@ -2504,24 +2618,22 @@ fn canopy_coverage_tracks_ambient_sky_fraction() {
     let world = WorldGeometry::default();
     let width = 128usize;
     let height = 128usize;
-    for (seed, cloud_time_seconds) in [(SEED, 1_800.0), (1, 900.0), (0xdead_beef, 3_600.0)] {
-        let canopy = render_diagnostic_image_with_seed_and_cloud_time(
+    for (seed, world_time_seconds) in [(SEED, 1_800.0), (1, 900.0), (0xdead_beef, 3_600.0)] {
+        let canopy = render_diagnostic_image_with_seed(
             world,
             seed,
             Vector::ZERO,
-            0.0,
-            cloud_time_seconds,
+            world_time_seconds,
             world.height_m(),
             "cloud_weather_canopy_optical_depth",
             width as u32,
             height as u32,
         );
-        let ambient = render_diagnostic_image_with_seed_and_cloud_time(
+        let ambient = render_diagnostic_image_with_seed(
             world,
             seed,
             Vector::ZERO,
-            0.0,
-            cloud_time_seconds,
+            world_time_seconds,
             world.height_m(),
             "lighting_ambient_sky_occlusion",
             width as u32,
@@ -2758,35 +2870,11 @@ fn render_diagnostic_image_with_view_at(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    render_diagnostic_image_with_cloud_time(
-        world,
-        position_m,
-        world_time_seconds,
-        0.0,
-        view_height_m,
-        diagnostic,
-        width,
-        height,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_diagnostic_image_with_cloud_time(
-    world: WorldGeometry,
-    position_m: Vector,
-    world_time_seconds: f64,
-    cloud_time_seconds: f32,
-    view_height_m: f32,
-    diagnostic: &str,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
-    render_diagnostic_image_with_seed_and_cloud_time(
+    render_diagnostic_image_with_seed(
         world,
         SEED,
         position_m,
         world_time_seconds,
-        cloud_time_seconds,
         view_height_m,
         diagnostic,
         width,
@@ -2795,22 +2883,20 @@ fn render_diagnostic_image_with_cloud_time(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_diagnostic_image_with_seed_and_cloud_time(
+fn render_diagnostic_image_with_seed(
     world: WorldGeometry,
     seed: u64,
     position_m: Vector,
     world_time_seconds: f64,
-    cloud_time_seconds: f32,
     view_height_m: f32,
     diagnostic: &str,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{seed:016x}-{:016x}-{:08x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{seed:016x}-{:016x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
         std::process::id(),
         world_time_seconds.to_bits(),
-        cloud_time_seconds.to_bits(),
         position_m.x.to_bits(),
         position_m.y.to_bits(),
     ));
@@ -2832,8 +2918,6 @@ fn render_diagnostic_image_with_seed_and_cloud_time(
             &view_height_m.to_string(),
             "--seed",
             &seed.to_string(),
-            "--cloud-time",
-            &cloud_time_seconds.to_string(),
             "--world-time",
             &world_time_seconds.to_string(),
             "--diagnostic",
@@ -2890,8 +2974,6 @@ fn render_controlled_image_at(
         &view_height_m.to_string(),
         "--seed",
         &SEED.to_string(),
-        "--cloud-time",
-        "0",
         "--world-time",
         &world_time_seconds.to_string(),
         "--diagnostic",
@@ -2953,32 +3035,6 @@ fn column_luminance_range(bytes: &[u8], width: usize, height: usize) -> f32 {
         .collect();
     columns.iter().copied().fold(f32::NEG_INFINITY, f32::max)
         - columns.iter().copied().fold(f32::INFINITY, f32::min)
-}
-
-fn normalized_mean_neighbor_scalar_difference(bytes: &[u8], width: usize, height: usize) -> f32 {
-    let (minimum, maximum) = bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|pixel| scalar_debug_amount(pixel))
-        .fold(
-            (f32::INFINITY, f32::NEG_INFINITY),
-            |(minimum, maximum), value| (minimum.min(value), maximum.max(value)),
-        );
-    let range = maximum - minimum;
-    let mut difference = 0.0;
-    let mut count = 0;
-    for row in 0..height {
-        for column in 1..width {
-            let offset = 4 * (row * width + column);
-            difference += (scalar_debug_amount(&bytes[offset..])
-                - scalar_debug_amount(&bytes[offset - 4..]))
-            .abs()
-                / range;
-            count += 1;
-        }
-    }
-    difference / count as f32
 }
 
 fn pearson_correlation(left: &[f32], right: &[f32]) -> f32 {

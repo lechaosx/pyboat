@@ -14,6 +14,11 @@ fn diagnostic_terrain_normals(input: VertexOutput) -> vec4<f32> {
     return vec4<f32>(0.5 + 0.5 * normal, 1.0);
 }
 
+fn diagnostic_terrain_broad_landform(input: VertexOutput) -> vec4<f32> {
+    let elevation_m = broad_landform_elevation_m(input.world_position_m);
+    return vec4<f32>(signed_debug_color(elevation_m / 8.0), 1.0);
+}
+
 fn diagnostic_terrain_island_clusters(input: VertexOutput) -> vec4<f32> {
     let cluster = terrain_simplex_fractal_value(
         vec2<u32>(0x78bd642fu, 0xa0761d64u),

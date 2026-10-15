@@ -9,5 +9,8 @@ fn fragment_terrain_geometry(input: VertexOutput) -> @location(0) vec4<f32> {
     if TERRAIN_GEOMETRY_OUTPUT == 1u {
         return diagnostic_terrain_slope(periodic_input);
     }
+    if TERRAIN_GEOMETRY_OUTPUT == 3u {
+        return diagnostic_terrain_broad_landform(periodic_input);
+    }
     return diagnostic_terrain_normals(periodic_input);
 }

@@ -319,7 +319,6 @@ fn final_scene_color(
         if !(sea_ice || land_ice) || EVALUATE_ALL_BRANCHES {
             surface = select_terrain_surface(surface, terrain_surface(
                 input.world_position_m,
-                terrain.cluster,
                 terrain.elevation_m,
                 terrain.gradient,
                 terrain.material_elevation_m,

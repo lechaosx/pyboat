@@ -17,6 +17,19 @@ use game::{
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
 
+/// Seeds of a terrain population. Terrain statistics vary strongly between
+/// worlds, so they are measured over a population. Bounds are set from the
+/// statistic of the terrain the original thresholds were tuned on (commit
+/// 2f3a2fa), measured with the same test code. Occupancy and region shares may
+/// change by up to a factor of two, the change that turns sparse islands into a
+/// patchwork or into isolated rocks. Relief at the 90th percentile may fall by up
+/// to a quarter: these statistics lose about half their value when the relief
+/// term they test is removed, so a quarter is about half of that term's
+/// amplitude.
+fn terrain_population_seeds(count: u64) -> impl Iterator<Item = u64> {
+    (0..count).map(|index| 10 + 7_919 * index)
+}
+
 fn procedural_atmosphere_primary(
     match_seed: u64,
     tick: u64,
@@ -2264,18 +2277,20 @@ fn procedural_terrain_is_seeded_and_continuous() {
 
 #[test]
 fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
+    // The calibrated terrain covers this share of the population's samples with land.
+    const CALIBRATED_LAND_OCCUPANCY: f32 = 0.0342;
     let mut minimum_elevation_m = f32::MAX;
     let mut maximum_elevation_m = f32::MIN;
     let mut land_samples = 0;
     let mut samples = 0;
     let mut land_samples_with_distant_land = 0;
 
-    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+    for seed in terrain_population_seeds(16) {
         let land_samples_before_seed = land_samples;
         let samples_before_seed = samples;
-        for x in -128..=128 {
-            for y in -128..=128 {
-                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+        for x in -64..=64 {
+            for y in -64..=64 {
+                let position_m = Vector::new(x as f32 * 256.0, y as f32 * 256.0);
                 let elevation_m = procedural_terrain_elevation_m(seed, position_m);
                 minimum_elevation_m = minimum_elevation_m.min(elevation_m);
                 maximum_elevation_m = maximum_elevation_m.max(elevation_m);
@@ -2299,10 +2314,11 @@ fn procedural_terrain_forms_sparse_clusters_of_large_islands() {
 
     assert!(minimum_elevation_m < -4.0);
     assert!(maximum_elevation_m > 2.0);
+    let land_occupancy = land_samples as f32 / samples as f32;
     assert!(
-        (samples / 20..=samples * 3 / 20).contains(&land_samples),
-        "land occupied {} of {samples} samples",
-        land_samples
+        (0.5 * CALIBRATED_LAND_OCCUPANCY..=2.0 * CALIBRATED_LAND_OCCUPANCY)
+            .contains(&land_occupancy),
+        "land occupied {land_occupancy} of the population's samples"
     );
     assert!(
         land_samples_with_distant_land * 2 > land_samples,
@@ -2399,6 +2415,10 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     // BH5475HC (rocky Maine, 2026-06-01) and BH4TB55V (Florida Keys, 2026-05-20),
     // sampled in the same -4..1 m band. They bound roughness, not shoreline shape.
     // Source: https://www.nauticalcharts.noaa.gov/data/bluetopo.html
+    // Intertidal and beach relief may fall by up to a quarter from the
+    // calibrated terrain's 90th percentiles.
+    const CALIBRATED_INTERTIDAL_RELIEF_16_M_P90: f32 = 0.44;
+    const CALIBRATED_BEACH_RELIEF_16_M_P90: f32 = 0.57;
     let mut mixed_coastal_patches = 0;
     let mut deep_access_patches = 0;
     let mut maximum_slope: f32 = 0.0;
@@ -2409,9 +2429,9 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     let mut beach_relief_16_m = Vec::new();
     let mut shallow_patch_relief_16_m_p90 = Vec::new();
 
-    for seed in [0, 1, 0x5eed, 0xdead_beef] {
-        for patch_x in -24..=24 {
-            for patch_y in -24..=24 {
+    for seed in terrain_population_seeds(16) {
+        for patch_x in (-24..=24).step_by(2) {
+            for patch_y in (-24..=24).step_by(2) {
                 let mut has_outcrop = false;
                 let mut has_navigable_water = false;
                 let mut deep_water = [[false; 8]; 8];
@@ -2526,12 +2546,12 @@ fn procedural_coasts_naturally_mix_sharp_outcrops_and_navigable_water() {
     );
     let intertidal_relief_16_m_p90 = intertidal_relief_16_m[intertidal_relief_16_m.len() * 9 / 10];
     assert!(
-        intertidal_relief_16_m_p90 >= 0.45,
+        intertidal_relief_16_m_p90 >= 0.75 * CALIBRATED_INTERTIDAL_RELIEF_16_M_P90,
         "16 m intertidal relief p90 lost detail at {intertidal_relief_16_m_p90} m"
     );
     let beach_relief_16_m_p90 = beach_relief_16_m[beach_relief_16_m.len() * 9 / 10];
     assert!(
-        beach_relief_16_m_p90 >= 0.5,
+        beach_relief_16_m_p90 >= 0.75 * CALIBRATED_BEACH_RELIEF_16_M_P90,
         "16 m beach relief p90 lost detail at {beach_relief_16_m_p90} m"
     );
     let calm_shallow_patch_relief_m =
@@ -2699,12 +2719,16 @@ fn procedural_shorelines_do_not_fragment_at_reef_scale() {
 
 #[test]
 fn procedural_gentle_land_retains_zoomed_surface_relief() {
+    // The calibrated terrain's 90th-percentile 8 m relief on gentle land. It
+    // varies from 0.39 to 0.80 m between four-seed groups, so it is measured
+    // over 128 seeds.
+    const CALIBRATED_RELIEF_8_M_P90: f32 = 0.427;
     let mut relief_8_m = Vec::new();
 
-    for seed in [0, 1, 0x5eed, 0xdead_beef] {
-        for x in -64..=64 {
-            for y in -64..=64 {
-                let position_m = Vector::new(x as f32 * 128.0, y as f32 * 128.0);
+    for seed in terrain_population_seeds(128) {
+        for x in -32..=32 {
+            for y in -32..=32 {
+                let position_m = Vector::new(x as f32 * 256.0, y as f32 * 256.0);
                 let left_32_m =
                     procedural_terrain_elevation_m(seed, position_m - Vector::new(32.0, 0.0));
                 let right_32_m =
@@ -2727,7 +2751,7 @@ fn procedural_gentle_land_retains_zoomed_surface_relief() {
     relief_8_m.sort_by(f32::total_cmp);
     let relief_8_m_p90 = relief_8_m[relief_8_m.len() * 9 / 10];
     assert!(
-        relief_8_m_p90 >= 0.46,
+        relief_8_m_p90 >= 0.75 * CALIBRATED_RELIEF_8_M_P90,
         "8 m gentle-land relief p90 lost detail at {relief_8_m_p90} m"
     );
 }
@@ -2771,11 +2795,16 @@ fn procedural_rough_terrain_retains_metre_scale_relief() {
 
 #[test]
 fn procedural_islands_mix_gentle_beaches_with_steep_cliff_coasts() {
+    // Shares of coastal 2 km regions on the calibrated terrain; mixed and
+    // beach-dominant regions stay at least half as common. Cliff-dominant
+    // regions are few, so the population only has to contain them.
+    const CALIBRATED_MIXED_SHARE: f32 = 0.59;
+    const CALIBRATED_BEACH_SHARE: f32 = 0.22;
     let mut gentle_coast_points = 0;
     let mut cliff_coast_points = 0;
     let mut regional_coast_points = HashMap::<(u64, i32, i32), [usize; 2]>::new();
 
-    for seed in [0, 1, 0x5eed, 0xdead_beef] {
+    for seed in terrain_population_seeds(16) {
         for x in -192_i32..=192 {
             for y in -192_i32..=192 {
                 let position_m = Vector::new(x as f32 * 32.0, y as f32 * 32.0);
@@ -2846,18 +2875,24 @@ fn procedural_islands_mix_gentle_beaches_with_steep_cliff_coasts() {
         .values()
         .filter(|counts| counts[0] >= 8 && counts[1] * 10 < counts[0] + counts[1])
         .count();
+    let coastal_regions = regional_coast_points
+        .values()
+        .filter(|counts| counts[0] + counts[1] >= 8)
+        .count() as f32;
     assert!(
         cliff_dominant_regions > 0,
-        "no sampled coastal region was cliff-dominant"
+        "no coastal region was cliff-dominant"
     );
-    assert!(
-        mixed_regions > 0,
-        "no sampled coastal region mixed cliffs and beaches"
-    );
-    assert!(
-        beach_regions > 0,
-        "no sampled coastal region was beach-dominant"
-    );
+    for (label, regions, calibrated_share) in [
+        ("mixed", mixed_regions, CALIBRATED_MIXED_SHARE),
+        ("beach-dominant", beach_regions, CALIBRATED_BEACH_SHARE),
+    ] {
+        let share = regions as f32 / coastal_regions;
+        assert!(
+            share >= 0.5 * calibrated_share,
+            "{label} regions were {share} of {coastal_regions} coastal regions"
+        );
+    }
 }
 
 #[test]

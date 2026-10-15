@@ -41,6 +41,7 @@ export type DiagnosticId =
   | "terrain_elevation"
   | "terrain_slope"
   | "terrain_normals"
+  | "terrain_broad_landform"
   | "terrain_island_clusters"
   | "terrain_island_detail"
   | "terrain_coastal_reef"
@@ -185,6 +186,7 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
   terrain_elevation: { name: "terrain_geometry", constants: { TERRAIN_GEOMETRY_OUTPUT: 0 } },
   terrain_slope: { name: "terrain_geometry", constants: { TERRAIN_GEOMETRY_OUTPUT: 1 } },
   terrain_normals: { name: "terrain_geometry", constants: { TERRAIN_GEOMETRY_OUTPUT: 2 } },
+  terrain_broad_landform: { name: "terrain_geometry", constants: { TERRAIN_GEOMETRY_OUTPUT: 3 } },
   terrain_island_clusters: { name: "terrain_island_clusters" },
   terrain_island_detail: { name: "terrain_island_detail" },
   terrain_coastal_reef: { name: "terrain_coastal_reef" },
@@ -266,6 +268,7 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["terrain_elevation", "Elevation"],
       ["terrain_slope", "Slope"],
       ["terrain_normals", "Normals"],
+      ["terrain_broad_landform", "Shadow landform"],
       ["terrain_island_clusters", "Island clusters"],
       ["terrain_island_detail", "Island detail"],
       ["terrain_coastal_reef", "Coastal reef field"],

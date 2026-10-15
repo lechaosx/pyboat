@@ -757,7 +757,7 @@ fn upper_air_temperature_500_hpa_c_from_atmosphere(
 
 fn upper_air_temperature_500_hpa_noise_at(position_m: vec2<f32>) -> vec2<f32> {
     return spatiotemporal_fractal_value_with_broad(
-        vec2<u32>(0x9e0c6c89u, 0xbe5466cfu),
+        vec2<u32>(0x34e90c6cu, 0xbe5466cfu),
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.y,
@@ -813,7 +813,7 @@ fn broad_upper_air_temperature_500_hpa_c_from_atmosphere(
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
     let independent_noise = 0.75 * spatiotemporal_noise_value(
-        vec2<u32>(0x9e0c6c89u, 0xbe5466cfu) ^ scene.match_seed,
+        vec2<u32>(0x34e90c6cu, 0xbe5466cfu) ^ scene.match_seed,
         position_m,
         65536.0,
         scene.scalar_field_time_coordinates.y,
@@ -871,7 +871,7 @@ fn surface_water_vapor_field_from_noise(
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
     let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.75 * raw_noise;
+    let noise = 0.86 * raw_noise;
     return AtmosphereScalarField(
         clamp(capacity_g_kg * (0.72 + 0.65 * noise.x), 0.5, 25.0),
         clamp(capacity_g_kg * (0.72 + 0.65 * noise.y), 0.5, 25.0),
@@ -1286,7 +1286,7 @@ fn regional_cloud_drivers_at(position_m: vec2<f32>) -> RegionalCloudDrivers {
                 * climate.seasonal_latitude_factor
                 * scene.seasonal_phase_factors.x;
         let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-        let noise = 0.75 * spatiotemporal_noise_value(
+        let noise = 0.86 * spatiotemporal_noise_value(
             scene.match_seed ^ vec2<u32>(0xec4e6c89u, 0x082efa98u),
             position_m,
             8192.0,

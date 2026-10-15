@@ -2,8 +2,8 @@ use bytemuck::{Pod, Zeroable};
 use simulation::WorldGeometry;
 
 /// Texels per axis of every clipmap level, a power of two so shaders wrap slots
-/// by masking. With the noise and jump-flag layers below, the cache takes 22 MB,
-/// inside a 32 MB mobile budget.
+/// by masking. With the layers below, the cache takes 21 MB, inside a 32 MB
+/// mobile budget.
 pub const TERRAIN_CACHE_TEXELS: u32 = 256;
 /// Levels from 8 m to 128 m spacing hold views up to about 32 km wide; coarser
 /// levels would cache only the cluster noise's longest octaves.
@@ -12,8 +12,7 @@ pub const TERRAIN_CACHE_LEVELS: u32 = 5;
 /// the noise order in terrain.wgsl.
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 const NOISES_PER_LEVEL: u32 = 4;
-/// rgba32float noise layers; each level also has one rgba8unorm layer of
-/// per-noise jump flags.
+/// rgba32float noise layers.
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub const TERRAIN_CACHE_LAYERS: u32 = TERRAIN_CACHE_LEVELS * NOISES_PER_LEVEL;
 /// The active level and its two neighbours fill at most four strips each.
@@ -350,11 +349,9 @@ fn grow(valid: &mut Cells, window: Cells, budget: &mut i64) -> Vec<Cells> {
 /// renderer of the production scene.
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub struct TerrainCachePass {
-    _textures: [wgpu::Texture; 2],
+    _texture: wgpu::Texture,
     /// The scene's binding 4: rgba32float noise layers.
     pub noise_view: wgpu::TextureView,
-    /// The scene's binding 5: rgba8unorm jump flags, one layer per level.
-    pub jump_view: wgpu::TextureView,
     pipeline: wgpu::ComputePipeline,
     fill: wgpu::Buffer,
     fill_bind_group: wgpu::BindGroup,
@@ -364,53 +361,30 @@ pub struct TerrainCachePass {
 impl TerrainCachePass {
     /// `scene_uniform_layout` holds the scene uniform buffer alone at binding 0.
     pub fn new(device: &wgpu::Device, scene_uniform_layout: &wgpu::BindGroupLayout) -> Self {
-        let array = |label, layers, format| {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: TERRAIN_CACHE_TEXELS,
-                    height: TERRAIN_CACHE_TEXELS,
-                    depth_or_array_layers: layers,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                ..Default::default()
-            });
-            (texture, view)
-        };
-        let (noise_texture, noise_view) = array(
-            "Terrain cache noises",
-            TERRAIN_CACHE_LAYERS,
-            wgpu::TextureFormat::Rgba32Float,
-        );
-        let (jump_texture, jump_view) = array(
-            "Terrain cache jump flags",
-            TERRAIN_CACHE_LEVELS,
-            wgpu::TextureFormat::Rgba8Unorm,
-        );
+        let noise_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Terrain cache noises"),
+            size: wgpu::Extent3d {
+                width: TERRAIN_CACHE_TEXELS,
+                height: TERRAIN_CACHE_TEXELS,
+                depth_or_array_layers: TERRAIN_CACHE_LAYERS,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let noise_view = noise_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
         let fill = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Terrain cache fill"),
             size: size_of::<TerrainCacheFill>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let output = |binding, format| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::WriteOnly,
-                format,
-                view_dimension: wgpu::TextureViewDimension::D2Array,
-            },
-            count: None,
-        };
         let fill_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Terrain cache fill layout"),
             entries: &[
@@ -424,8 +398,16 @@ impl TerrainCachePass {
                     },
                     count: None,
                 },
-                output(1, wgpu::TextureFormat::Rgba32Float),
-                output(2, wgpu::TextureFormat::Rgba8Unorm),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                    },
+                    count: None,
+                },
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -459,16 +441,11 @@ impl TerrainCachePass {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&noise_view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&jump_view),
-                },
             ],
         });
         Self {
-            _textures: [noise_texture, jump_texture],
+            _texture: noise_texture,
             noise_view,
-            jump_view,
             pipeline,
             fill,
             fill_bind_group,

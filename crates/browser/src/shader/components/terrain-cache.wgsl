@@ -5,14 +5,10 @@
 // the active level's first valid texel centre relative to the camera, then its
 // spacing; `scene.terrain_cache_texels` is that texel's toroidal slot, then the
 // valid extent; `scene.terrain_cache_level.x` is the level. Each level has one
-// layer per broad noise and one layer of per-noise flags for cells that cross a
-// jump in the 4D simplex kernel. Positions outside the valid extent, and
-// flagged cells, evaluate the noises directly.
+// layer per broad noise. Positions outside the valid extent evaluate the noises
+// directly.
 @group(0) @binding(4)
 var terrain_cache: texture_2d_array<f32>;
-
-@group(0) @binding(5)
-var terrain_cache_jumps: texture_2d_array<f32>;
 
 fn terrain_broad_noise(
     field: u32,
@@ -31,19 +27,16 @@ fn terrain_broad_noise(
     let slot_mask = textureDimensions(terrain_cache).x - 1u;
     let first = scene.terrain_cache_texels.xy + vec2<u32>(vec2<i32>(texel));
     let lower = first & vec2<u32>(slot_mask);
-    let inside = cached_octaves > 0u
+    let cached = cached_octaves > 0u
         && all(texel >= vec2<f32>(0.0))
         && all(texel + 1.0 < vec2<f32>(scene.terrain_cache_texels.zw));
-    let level = scene.terrain_cache_level.x;
-    let cached = inside
-        && textureLoad(terrain_cache_jumps, lower, level, 0)[field] == 0.0;
     var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     if !cached || EVALUATE_ALL_BRANCHES {
         sample = direct_terrain_broad_noise(field, position_m, circle_position);
     }
     if cached || EVALUATE_ALL_BRANCHES {
         let upper = (first + 1u) & vec2<u32>(slot_mask);
-        let layer = level * TERRAIN_BROAD_NOISE_COUNT + field;
+        let layer = scene.terrain_cache_level.x * TERRAIN_BROAD_NOISE_COUNT + field;
         let partial = terrain_cache_hermite(
             textureLoad(terrain_cache, lower, layer, 0),
             textureLoad(terrain_cache, vec2<u32>(upper.x, lower.y), layer, 0),

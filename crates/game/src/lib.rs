@@ -36,10 +36,18 @@ const SURFACE_AIR_TEMPERATURE_NOISE_SALT: u64 = 0x4528_21e6_38d0_1377;
 const AIR_TEMPERATURE_500_HPA_NOISE_SALT: u64 = 0xbe54_66cf_34e9_0c6c;
 const WATER_VAPOR_NOISE_SALT: u64 = 0x082e_fa98_ec4e_6c89;
 // Four-dimensional slices use field-specific gains to preserve the independently
-// calibrated temperature tails and clear/cloudy/storm occupancy.
+// calibrated temperature tails and clear/cloudy/storm occupancy. Water vapour's
+// gain gives 67.6% clear, 24.4% cloudy, and 8.0% raining weather, against the
+// calibrated 65.9%, 25.0%, and 9.1%, with a mean one-minute cloud-cover change
+// of 0.042 against 0.040. It is the gain closest to that occupancy whose cloud
+// evolution stays within about 5% of the calibrated rate; rain responds little
+// to it.
+// Cloudy means cloudiness of at least 0.1 without rain; the samples are seeds
+// 100 000 to 101 023 at four positions, at ticks 12 345 + 7 919 (seed mod 16),
+// in the default world.
 const SURFACE_AIR_TEMPERATURE_NOISE_SCALE: f64 = 0.85;
 const AIR_TEMPERATURE_500_HPA_NOISE_SCALE: f64 = 0.75;
-const WATER_VAPOR_NOISE_SCALE: f64 = 0.75;
+const WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
 // Calibrated from 1991–2020 NASA POWER/MERRA-2 daily T2M, T2M_MIN, and T2M_MAX:
 // eight longitude-balanced, low-elevation land sites per 10° absolute-latitude
 // band, with Southern Hemisphere seasons shifted and grid elevation removed by
@@ -1154,49 +1162,22 @@ pub fn procedural_world_environment(
     tick: u64,
     position_m: Vector,
 ) -> WorldEnvironment {
-    procedural_world_environment_for_render_clocks(
-        world_geometry,
-        match_seed,
-        tick,
-        0.0,
-        tick,
-        0.0,
-        tick,
-        0.0,
-        tick,
-        0.0,
-        position_m,
-    )
+    procedural_world_environment_interpolated(world_geometry, match_seed, tick, 0.0, position_m)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn procedural_world_environment_for_render_clocks(
+pub fn procedural_world_environment_interpolated(
     world_geometry: WorldGeometry,
     match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-    scalar_tick: u64,
-    scalar_tick_fraction: f32,
-    pressure_tick: u64,
-    pressure_tick_fraction: f32,
-    current_tick: u64,
-    current_tick_fraction: f32,
+    tick: u64,
+    tick_fraction: f32,
     position_m: Vector,
 ) -> WorldEnvironment {
-    let world_time_seconds = (world_tick as f64 + f64::from(world_tick_fraction)) * TICK_SECONDS;
+    let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) * TICK_SECONDS;
     let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
-    let scalar_time = scalar_field_time_coordinates_interpolated(scalar_tick, scalar_tick_fraction);
-    let pressure_time = vector_field_time_coordinates_interpolated(
-        world_geometry,
-        pressure_tick,
-        pressure_tick_fraction,
-    );
-    let current_time = vector_field_time_coordinates_interpolated(
-        world_geometry,
-        current_tick,
-        current_tick_fraction,
-    );
+    let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
+    let vector_time =
+        vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let primary = procedural_atmosphere_primary_with_conditions(
         world_geometry,
         match_seed,
@@ -1204,7 +1185,7 @@ pub fn procedural_world_environment_for_render_clocks(
         climate,
         celestial,
         scalar_time,
-        pressure_time,
+        vector_time,
     );
     let weather = derive_weather(primary, climate, celestial);
     let tidal_sample = procedural_tidal_sample(world_geometry, match_seed, position_m);
@@ -1251,9 +1232,9 @@ pub fn procedural_world_environment_for_render_clocks(
     let ocean = procedural_ocean_state(OceanQuery {
         world_geometry,
         match_seed,
-        world_tick,
-        world_tick_fraction,
-        current_time_coordinate: current_time.ocean_current,
+        world_tick: tick,
+        world_tick_fraction: tick_fraction,
+        current_time_coordinate: vector_time.ocean_current,
         position_m,
         celestial,
         weather,
@@ -2114,7 +2095,7 @@ fn procedural_terrain_surface_causes(
     }
 }
 
-fn broad_landform_elevation_m(
+pub fn broad_landform_elevation_m(
     world_geometry: WorldGeometry,
     match_seed: u64,
     position_m: Vector,
@@ -2453,8 +2434,14 @@ fn terrain_simplex_noise_4d(
     let point = [circle_x * cos_x, circle_x * sin_x, linear_y, linear_y + 0.5];
     let (value, input_gradient) = simplex_noise_sample_4d(field_seed, point);
     // The linear north-south slice needs this scale to retain the calibrated
-    // broad-terrain occupancy and coastal-slope distribution.
-    let cylindrical_scale = 35.7 / 33.4;
+    // broad-terrain occupancy: 114.3 gives the 3.54% land fraction the terrain
+    // thresholds were tuned at, over seeds 10 + 7919 i for i < 40 on a 257 x 257
+    // grid of 128 m spacing centred on the default world's origin. For those
+    // seeds, shore points on a 32 m grid have a median slope of 0.057 and 37%
+    // are cliffs. Keep 114.3 synchronized with
+    // `cylindrical_simplex_noise_sample_f64`, the circle octaves in noise.wgsl,
+    // and terrain-cache-generate.wgsl.
+    let cylindrical_scale = 114.3 / 83.1;
     let gradient_per_m = cylindrical_scale
         * Vector::new(
             (-sin_x * input_gradient[0] + cos_x * input_gradient[1]) / wavelength_m,
@@ -2542,8 +2529,11 @@ fn spatiotemporal_pressure_noise_4d(
 fn simplex_noise_sample_4d(field_seed: u64, point: [f32; 4]) -> (f32, [f32; 4]) {
     const SKEW: f32 = 0.309_017;
     const UNSKEW: f32 = 0.138_196_6;
-    // Matches the portable 2D kernel's RMS value over representative seeds.
-    const NORMALIZATION: f32 = 33.4;
+    // Gives a slope RMS of 2.92 per input unit, which the wind and temperature
+    // calibrations were fitted at, over 400 000 points uniform in a
+    // 97 x 89 x 83 x 79 box with one seed per point. The 1% and 99% values are
+    // then +-0.94 and the value RMS 0.336. Keep synchronized with noise.wgsl.
+    const NORMALIZATION: f32 = 83.1;
 
     let skew = point.iter().sum::<f32>() * SKEW;
     let lattice = point.map(|coordinate| libm::floorf(coordinate + skew) as i32);
@@ -2569,7 +2559,9 @@ fn simplex_noise_sample_4d(field_seed: u64, point: [f32; 4]) -> (f32, [f32; 4]) 
         let offset = std::array::from_fn::<_, 4, _>(|axis| {
             first[axis] - offset_lattice[axis] as f32 + vertex as f32 * UNSKEW
         });
-        let attenuation = 0.6
+        // The largest squared radius whose kernel vanishes on every simplex
+        // boundary, which keeps the noise continuous.
+        let attenuation = 0.5
             - offset
                 .iter()
                 .map(|component| component * component)
@@ -2720,7 +2712,8 @@ fn cylindrical_simplex_noise_sample_f64(
 ) -> ScalarNoiseSample {
     const SKEW: f64 = 0.309_016_994_374_947_45;
     const UNSKEW: f64 = 0.138_196_601_125_010_5;
-    const NORMALIZATION: f64 = 35.7;
+    // Keep synchronized with the cylindrical scale in `terrain_simplex_noise_4d`.
+    const NORMALIZATION: f64 = 114.3;
 
     let width_m = f64::from(world_geometry.width_m());
     let angle_x = std::f64::consts::TAU * position_x_m.rem_euclid(width_m) / width_m;
@@ -2752,7 +2745,7 @@ fn cylindrical_simplex_noise_sample_f64(
         let offset = std::array::from_fn::<_, 4, _>(|axis| {
             first[axis] - offset_lattice[axis] as f64 + vertex as f64 * UNSKEW
         });
-        let attenuation = 0.6
+        let attenuation = 0.5
             - offset
                 .iter()
                 .map(|component| component * component)
@@ -3201,9 +3194,7 @@ mod tests {
 
         assert_eq!(
             procedural_world_environment(world, 42, tick, position),
-            procedural_world_environment_for_render_clocks(
-                world, 42, tick, 0.0, tick, 0.0, tick, 0.0, tick, 0.0, position,
-            ),
+            procedural_world_environment_interpolated(world, 42, tick, 0.0, position),
         );
     }
 
@@ -3213,9 +3204,7 @@ mod tests {
         let position = Vector::new(123.0, -456.0);
         let seconds = 365_u64 * 86_400;
         let tick = seconds * 60;
-        let rendered = procedural_world_environment_for_render_clocks(
-            world, 42, tick, 0.0, tick, 0.0, tick, 0.0, tick, 0.0, position,
-        );
+        let rendered = procedural_world_environment_interpolated(world, 42, tick, 0.0, position);
 
         assert_eq!(
             rendered.celestial,
@@ -3384,6 +3373,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cylindrical_noise_is_continuous_across_simplex_boundaries() {
+        let world = WorldGeometry::new(80_000.0, 40_000.0).unwrap();
+        let wavelength_m = 64.0;
+        let step_m = 1.0e-3;
+        let mut largest_excess: f64 = 0.0;
+        for seed in 0..8_u64 {
+            let (start_x, start_y) = (1_234.5 + 97.0 * seed as f64, -873.25 * seed as f64);
+            let mut previous =
+                cylindrical_simplex_noise_sample_f64(world, seed, start_x, start_y, wavelength_m);
+            for step in 1..200_000 {
+                let distance_m = step as f64 * step_m;
+                let sample = cylindrical_simplex_noise_sample_f64(
+                    world,
+                    seed,
+                    start_x + 0.6 * distance_m,
+                    start_y + 0.8 * distance_m,
+                    wavelength_m,
+                );
+                let slope = 0.6 * (sample.gradient_x_per_m + previous.gradient_x_per_m) / 2.0
+                    + 0.8 * (sample.gradient_y_per_m + previous.gradient_y_per_m) / 2.0;
+                largest_excess =
+                    largest_excess.max((sample.value - previous.value - slope * step_m).abs());
+                previous = sample;
+            }
+        }
+        assert!(largest_excess < 1.0e-6, "value jump {largest_excess}");
+    }
+
+    #[test]
+    fn weather_noise_is_continuous_across_simplex_boundaries() {
+        let direction = [0.5_f32, -0.3, 0.7, 0.4];
+        let step = 1.0e-3_f32;
+        let mut largest_excess: f32 = 0.0;
+        for seed in 0..8_u64 {
+            let start = [3.1 * seed as f32, 17.3, -5.2 * seed as f32, 0.37];
+            let point = |index: u32| {
+                std::array::from_fn(|axis| start[axis] + direction[axis] * step * index as f32)
+            };
+            let mut previous = simplex_noise_sample_4d(seed, point(0));
+            for index in 1..20_000 {
+                let sample = simplex_noise_sample_4d(seed, point(index));
+                let slope = (0..4)
+                    .map(|axis| direction[axis] * (sample.1[axis] + previous.1[axis]) / 2.0)
+                    .sum::<f32>();
+                largest_excess = largest_excess.max((sample.0 - previous.0 - slope * step).abs());
+                previous = sample;
+            }
+        }
+        assert!(largest_excess < 2.0e-4, "value jump {largest_excess}");
     }
 
     #[test]

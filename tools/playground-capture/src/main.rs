@@ -9,7 +9,7 @@ use browser::{
 use bytemuck::{Pod, Zeroable};
 use game::{
     OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit,
-    cloud_field_time_coordinates_interpolated, procedural_world_environment_for_render_clocks,
+    cloud_field_time_coordinates_interpolated, procedural_world_environment_interpolated,
     scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
     world_celestial_conditions,
 };
@@ -48,7 +48,6 @@ struct Options {
     world_height_m: f32,
     view_height_m: f32,
     seed: u64,
-    cloud_time_seconds: f64,
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
     light_balance: [f32; 4],
@@ -195,7 +194,6 @@ impl CaptureFields {
                     count: None,
                 },
                 field_entry(4, wgpu::ShaderStages::FRAGMENT, false),
-                field_entry(5, wgpu::ShaderStages::FRAGMENT, false),
             ],
         });
         let field_reading_layout =
@@ -377,10 +375,6 @@ impl CaptureFields {
                             &self.terrain_cache.noise_view,
                         ),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::TextureView(&self.terrain_cache.jump_view),
-                    },
                 ],
             }),
             field_reading: device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -518,7 +512,6 @@ struct CaptureReport {
     world_size_m: [f32; 2],
     view_height_m: f32,
     seed: u64,
-    cloud_time_seconds: f64,
     world_time_seconds: f64,
     diagnostic: String,
     derived: DerivedOutput,
@@ -555,8 +548,7 @@ fn default_options() -> Options {
         world_height_m: 64_000.0,
         view_height_m: 480.0,
         seed: 0x5eed,
-        cloud_time_seconds: 37.0,
-        world_time_seconds: 0.0,
+        world_time_seconds: 37.0,
         diagnostic: scene_selection(),
         light_balance: [1.0; 4],
         cloud_rendering: [1.0, 1.0, 1.0, 1.0],
@@ -612,9 +604,6 @@ fn parse_options() -> Result<Command, String> {
             "--world-height" => options.world_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--view-height" => options.view_height_m = parse(&value(&mut arguments)?, &argument)?,
             "--seed" => options.seed = parse_seed(&value(&mut arguments)?)?,
-            "--cloud-time" => {
-                options.cloud_time_seconds = parse(&value(&mut arguments)?, &argument)?
-            }
             "--world-time" => {
                 options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
             }
@@ -680,7 +669,6 @@ fn parse_options() -> Result<Command, String> {
     options.height = height.unwrap_or(options.height);
     validate_capture_output_path(&options.output)?;
     validate_capture_dimensions(options.width, options.height, u32::MAX)?;
-    validate_time_seconds(options.cloud_time_seconds, "--cloud-time")?;
     validate_time_seconds(options.world_time_seconds, "--world-time")?;
     validate_capture_spatial_inputs(
         options.camera_x_m,
@@ -1200,6 +1188,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "terrain_geometry",
             &[("TERRAIN_GEOMETRY_OUTPUT", 2.0)],
         ),
+        "terrain_broad_landform" => diagnostic(
+            value,
+            "terrain_geometry",
+            &[("TERRAIN_GEOMETRY_OUTPUT", 3.0)],
+        ),
         "terrain_island_clusters" => diagnostic(value, "terrain_island_clusters", &[]),
         "terrain_island_detail" => diagnostic(value, "terrain_island_detail", &[]),
         "terrain_coastal_reef" => diagnostic(value, "terrain_coastal_reef", &[]),
@@ -1250,8 +1243,7 @@ fn print_help() {
            --world-width M --world-height M  longitude circumference and pole span (default 64000 each)\n\
            --view-height METRES   positive finite vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
-           --cloud-time SECONDS   nonnegative deterministic cloud animation time (default 37)\n\
-           --world-time SECONDS   nonnegative deterministic world time (default 0)\n\
+           --world-time SECONDS   nonnegative deterministic world time (default 37)\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids)\n\n\
            --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
@@ -1427,12 +1419,12 @@ mod tests {
 
     #[test]
     fn capture_times_must_preserve_fixed_tick_precision() {
-        assert!(validate_time_seconds(0.0, "--cloud-time").is_ok());
-        assert!(validate_time_seconds(365.0 * 86_400.0, "--cloud-time").is_ok());
-        assert!(validate_time_seconds((2.0_f64).powi(39) - 1.0, "--cloud-time").is_ok());
-        assert!(validate_time_seconds((2.0_f64).powi(39), "--cloud-time").is_err());
+        assert!(validate_time_seconds(0.0, "--world-time").is_ok());
+        assert!(validate_time_seconds(365.0 * 86_400.0, "--world-time").is_ok());
+        assert!(validate_time_seconds((2.0_f64).powi(39) - 1.0, "--world-time").is_ok());
+        assert!(validate_time_seconds((2.0_f64).powi(39), "--world-time").is_err());
         assert!(validate_time_seconds(1.0e16, "--world-time").is_err());
-        assert!(validate_time_seconds(-1.0, "--cloud-time").is_err());
+        assert!(validate_time_seconds(-1.0, "--world-time").is_err());
         assert!(validate_time_seconds(f64::NAN, "--world-time").is_err());
         assert!(validate_time_seconds(f64::INFINITY, "--world-time").is_err());
         assert!(validate_time_seconds(f64::MAX, "--world-time").is_err());
@@ -1858,19 +1850,16 @@ fn scene_uniforms(
         .map_err(|error| error.to_string())?;
     let canonical_camera_m =
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
-    let precipitation_epoch = (options.cloud_time_seconds / 1800.0).floor() as u64;
-    let precipitation_phase = (options.cloud_time_seconds.rem_euclid(1800.0) / 1800.0) as f32;
+    let precipitation_epoch = (options.world_time_seconds / 1800.0).floor() as u64;
+    let precipitation_phase = (options.world_time_seconds.rem_euclid(1800.0) / 1800.0) as f32;
     let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
     let orbit = celestial_orbit(conditions);
-    let (cloud_tick, cloud_tick_fraction) = split_tick_seconds(options.cloud_time_seconds);
-    let scalar_time = scalar_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
-    let pressure_time =
-        vector_field_time_coordinates_interpolated(world_geometry, cloud_tick, cloud_tick_fraction);
-    let current_time =
+    let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
+    let vector_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
-    let cloud_time = cloud_field_time_coordinates_interpolated(cloud_tick, cloud_tick_fraction);
+    let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
     let local_celestial = world_celestial_conditions(
         world_geometry,
         options.world_time_seconds,
@@ -1915,8 +1904,8 @@ fn scene_uniforms(
             conditions.lunar_longitude_phase,
             visual_pixel_footprint_m(options.view_height_m, options.height),
         ],
-        pressure_time_coordinate: pressure_time.pressure,
-        ocean_current_time_coordinate_and_padding: [current_time.ocean_current, 0.0, 0.0, 0.0],
+        pressure_time_coordinate: vector_time.pressure,
+        ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
         seasonal_phase_factors: seasonal_phase_factors(conditions.season_phase),
         celestial_orbit_angles: [
             orbit.solar_declination_rad as f32,
@@ -2051,16 +2040,9 @@ fn capture_report(
     let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
     let (world_tick, world_tick_fraction) = split_tick_seconds(options.world_time_seconds);
-    let (cloud_tick, cloud_tick_fraction) = split_tick_seconds(options.cloud_time_seconds);
-    let sample = procedural_world_environment_for_render_clocks(
+    let sample = procedural_world_environment_interpolated(
         world,
         options.seed,
-        world_tick,
-        world_tick_fraction,
-        cloud_tick,
-        cloud_tick_fraction,
-        cloud_tick,
-        cloud_tick_fraction,
         world_tick,
         world_tick_fraction,
         [options.camera_x_m, options.camera_y_m].into(),
@@ -2074,7 +2056,6 @@ fn capture_report(
         world_size_m: [options.world_width_m, options.world_height_m],
         view_height_m: options.view_height_m,
         seed: options.seed,
-        cloud_time_seconds: options.cloud_time_seconds,
         world_time_seconds: options.world_time_seconds,
         diagnostic: options.diagnostic.id.clone(),
         derived: DerivedOutput {
