@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use browser::{
-    FieldGrids, MINIMUM_RENDER_SCALE, TerrainCache, UpscaleTargets, Upscaler, scene_render_size,
-    visual_pixel_footprint_m,
+    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, UpscaleTargets, Upscaler,
+    scene_render_size, visual_pixel_footprint_m,
 };
 
 use super::{
@@ -51,6 +51,19 @@ struct Scenario {
     world_time_seconds: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality: Option<String>,
+}
+
+impl Scenario {
+    fn graphics_quality(&self) -> Result<GraphicsQuality, String> {
+        self.quality
+            .as_deref()
+            .map_or(Ok(GraphicsQuality::High), |name| {
+                GraphicsQuality::parse(name)
+                    .ok_or_else(|| format!("{}: invalid quality {name}", self.id))
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -128,7 +141,8 @@ struct BenchReport {
 }
 
 struct ModeRenderer {
-    pipeline: wgpu::RenderPipeline,
+    /// Indexed by `GraphicsQuality`.
+    pipelines: [wgpu::RenderPipeline; 3],
     fields: CaptureFields,
     /// The scenario the cache was last filled for; another one starts from an
     /// empty cache, like a teleport.
@@ -177,36 +191,44 @@ impl ModeRenderer {
             bind_group_layouts: &[Some(&fields.scene_layout), Some(unused_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("bench production scene pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32],
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment"),
-                targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: constants(scene_source),
-                    ..Default::default()
+        let pipeline = |quality: GraphicsQuality| {
+            let scene_constants = [constants(scene_source), quality.scene_constants()].concat();
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("bench production scene pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32],
+                    })],
+                    compilation_options: Default::default(),
                 },
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fragment"),
+                    targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &scene_constants,
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         Ok(Self {
-            pipeline,
+            pipelines: [
+                GraphicsQuality::Low,
+                GraphicsQuality::Medium,
+                GraphicsQuality::High,
+            ]
+            .map(pipeline),
             fields,
             terrain_cache: RefCell::default(),
             refill_terrain_cache: evaluate_all_branches,
@@ -302,7 +324,7 @@ impl ModeRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.pipelines[bindings.quality as usize]);
         pass.set_bind_group(0, &bindings.fields.scene, &[]);
         pass.set_bind_group(1, bindings.unused, &[]);
         pass.set_vertex_buffer(0, bindings.vertices.slice(..));
@@ -327,6 +349,7 @@ type TerrainCacheRows = ([f32; 4], [u32; 4], [u32; 4]);
 
 struct FrameBindings<'a> {
     scenario_id: &'a str,
+    quality: GraphicsQuality,
     options: &'a Options,
     terrain_cache_rows: TerrainCacheRows,
     scene: &'a wgpu::BindGroup,
@@ -340,6 +363,7 @@ struct FrameBindings<'a> {
 
 struct ScenarioBindings {
     id: String,
+    quality: GraphicsQuality,
     options: Options,
     terrain_cache_rows: TerrainCacheRows,
     scene: wgpu::BindGroup,
@@ -359,6 +383,7 @@ impl ScenarioBindings {
     ) -> FrameBindings<'a> {
         FrameBindings {
             scenario_id: &self.id,
+            quality: self.quality,
             options: &self.options,
             terrain_cache_rows: self.terrain_cache_rows,
             scene: &self.scene,
@@ -521,6 +546,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             });
             Ok(ScenarioBindings {
                 id: scenario.id.clone(),
+                quality: scenario.graphics_quality()?,
                 terrain_cache_rows: (
                     terrain_cache_frame.grid_m,
                     terrain_cache_frame.texels,
@@ -678,6 +704,7 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
         ));
     }
     validate_time_seconds(scenario.world_time_seconds, "worldTimeSeconds")?;
+    scenario.graphics_quality()?;
     Ok(Options {
         width,
         height,

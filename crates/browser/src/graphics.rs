@@ -100,12 +100,61 @@ impl ResolutionController {
     }
 }
 
+/// Graphics tiers change only appearance-only surface detail;
+/// `tools/playground-capture/tests/graphics_quality.rs` checks that shorelines,
+/// shallow water, the sea-ice edge, and darkening match `High`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphicsQuality {
+    Low,
+    Medium,
+    High,
+}
+
+impl GraphicsQuality {
+    const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|quality| quality.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    /// Override constants for the scene shader's fragment stage; `High` keeps
+    /// the shader defaults. Measured at 1080p on a Radeon 780M against `High`:
+    /// - Decorative water normals evaluate four 4D octaves from 18 m. One
+    ///   octave saves about 2.5 ms of a 9.8 ms open-water frame, two about
+    ///   1.5 ms; 99th-percentile image changes stay at 1 level.
+    /// - The metre-scale micro-relief material field takes six octaves on
+    ///   land, rock, and ice. Three save 1-2 ms and none 2-4.5 ms over rocky
+    ///   land, at 99th-percentile changes of 1-3 and 3-6 levels.
+    pub fn scene_constants(self) -> &'static [(&'static str, f64)] {
+        match self {
+            Self::Low => &[
+                ("DECORATIVE_WATER_OCTAVES", 1.0),
+                ("MATERIAL_MICRO_OCTAVES", 0.0),
+            ],
+            Self::Medium => &[
+                ("DECORATIVE_WATER_OCTAVES", 2.0),
+                ("MATERIAL_MICRO_OCTAVES", 3.0),
+            ],
+            Self::High => &[],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphicsSettings {
     pub maximum_pixel_ratio: f64,
     pub render_scale: f32,
     pub frame_rate_cap: Option<f64>,
     pub automatic_resolution: bool,
+    pub quality: GraphicsQuality,
 }
 
 impl GraphicsSettings {
@@ -116,6 +165,7 @@ impl GraphicsSettings {
                 render_scale: 0.75,
                 frame_rate_cap: Some(30.0),
                 automatic_resolution: true,
+                quality: GraphicsQuality::Low,
             }
         } else {
             Self {
@@ -123,6 +173,7 @@ impl GraphicsSettings {
                 render_scale: 1.0,
                 frame_rate_cap: None,
                 automatic_resolution: false,
+                quality: GraphicsQuality::High,
             }
         };
         for (key, value) in search
@@ -143,6 +194,9 @@ impl GraphicsSettings {
                 ("fps", Some(rate)) if rate > 0.0 => settings.frame_rate_cap = Some(rate),
                 ("autoResolution", Some(enabled)) => {
                     settings.automatic_resolution = enabled != 0.0;
+                }
+                ("quality", _) => {
+                    settings.quality = GraphicsQuality::parse(value).unwrap_or(settings.quality);
                 }
                 _ => {}
             }
@@ -318,6 +372,7 @@ mod tests {
                 render_scale: 0.6,
                 frame_rate_cap: Some(45.0),
                 automatic_resolution: true,
+                quality: GraphicsQuality::High,
             }
         );
         let uncapped = GraphicsSettings::from_query("?fps=0&autoResolution=0", true);
@@ -334,6 +389,34 @@ mod tests {
         assert_eq!(
             GraphicsSettings::from_query("?renderScale=NaN&pixelRatio=x&fps=-5", false),
             desktop
+        );
+    }
+
+    #[test]
+    fn graphics_quality_defaults_by_device_and_accepts_named_tiers() {
+        assert_eq!(
+            GraphicsSettings::from_query("", false).quality,
+            GraphicsQuality::High
+        );
+        assert_eq!(
+            GraphicsSettings::from_query("", true).quality,
+            GraphicsQuality::Low
+        );
+        for (name, quality) in [
+            ("low", GraphicsQuality::Low),
+            ("medium", GraphicsQuality::Medium),
+            ("high", GraphicsQuality::High),
+        ] {
+            assert_eq!(GraphicsQuality::parse(name), Some(quality));
+            assert_eq!(
+                GraphicsSettings::from_query(&format!("?quality={name}"), true).quality,
+                quality
+            );
+        }
+        assert_eq!(GraphicsQuality::parse("ultra"), None);
+        assert_eq!(
+            GraphicsSettings::from_query("?quality=ultra&quality=", true).quality,
+            GraphicsQuality::Low
         );
     }
 }

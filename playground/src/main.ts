@@ -5,6 +5,7 @@ import {
   PlaygroundTerrainCache,
   environment_field_shader_source,
   environment_field_texture_size,
+  graphics_quality_scene_constants,
   occluder_field_shader_source,
   occluder_field_texture_size,
   playground_diagnostic_shader_source,
@@ -162,6 +163,7 @@ type State = {
   automaticResolution: number;
   maximumPixelRatio: number;
   frameRateCap: number;
+  graphicsQuality: number;
   diagnostic: DiagnosticSelection;
 };
 
@@ -257,8 +259,10 @@ const defaults: State = {
   automaticResolution: 0,
   maximumPixelRatio: 2,
   frameRateCap: 0,
+  graphicsQuality: 2,
   diagnostic: "scene",
 };
+const graphicsQualities = ["low", "medium", "high"] as const;
 
 const lunarMonthDays = 28;
 const firstBloodMoonSeconds = 91 * worldDaySeconds - 4 * 60;
@@ -595,6 +599,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "toggle", key: "automaticResolution", label: "Automatic scale" },
       { type: "range", key: "maximumPixelRatio", label: "Pixel-ratio cap", min: 1, max: 4, step: 0.25 },
       { type: "range", key: "frameRateCap", label: "FPS cap · 0 off", min: 0, max: 240, step: 5 },
+      { type: "range", key: "graphicsQuality", label: "Tier · 0 low, 2 high", min: 0, max: 2, step: 1 },
     ],
   },
 ];
@@ -1789,7 +1794,10 @@ function updateStatus(now: number, ticks: number, worldTimeSeconds: number): voi
     : ` · ${measuredGpuMilliseconds.toFixed(1)} ms GPU scene`;
   const sceneScale = sceneSize[1]! / previewCanvas.height;
   const scale = sceneScale < 1 ? ` · scene ${(sceneScale * 100).toFixed(0)}%` : "";
-  const compilation = sceneCompilationStatus ? ` · ${sceneCompilationStatus}` : "";
+  const compilation = [sceneCompilationStatus, tierCompilationStatus]
+    .filter(Boolean)
+    .map((status) => ` · ${status}`)
+    .join("");
   statusElement.textContent = `${rates}${gpuTiming}${scale}${compilation}`;
   statusElement.title = `${adapterName} · ${previewCanvas.width} × ${previewCanvas.height} · scene ${sceneSize[0]} × ${sceneSize[1]} · ${format(worldTimeSeconds, 1)} s`;
   syncWorldDateInputs();
@@ -1827,6 +1835,11 @@ function advanceFrame(now: number): void {
     resolutionController.free();
     resolutionController = undefined;
     automaticRenderScale = undefined;
+  }
+  const quality = Math.round(state.graphicsQuality);
+  if (quality !== failedGraphicsQuality) failedGraphicsQuality = undefined;
+  if (sceneShaders && quality !== scenePipelinesQuality && quality !== failedGraphicsQuality) {
+    void matchScenePipelinesToQuality();
   }
   renderDue = framePacer.frame_due(elapsed, frameRateCap());
   updateUniforms(worldTimeSeconds, elapsed, now);
@@ -2040,6 +2053,102 @@ if (!bench) {
   });
 }
 
+// The bench renders only the scene, so it compiles no direct reference.
+type SceneShaders = { scene: GPUShaderModule; direct?: GPUShaderModule };
+type ScenePipelines = { scene: GPURenderPipeline; direct?: GPURenderPipeline };
+let sceneShaders: SceneShaders | undefined;
+let sceneFields: FieldPasses | undefined;
+const scenePipelinesByQuality = new Map<number, Promise<ScenePipelines>>();
+let scenePipelinesQuality: number | undefined;
+let scenePipelinesMatch: Promise<void> | undefined;
+let failedGraphicsQuality: number | undefined;
+let tierCompilationStatus = "";
+
+function scenePipelines(shaders: SceneShaders, quality: number): Promise<ScenePipelines> {
+  let pipelines = scenePipelinesByQuality.get(quality);
+  if (!pipelines) {
+    const constants = graphics_quality_scene_constants(
+      graphicsQualities[quality]!,
+    ) as Record<string, number>;
+    pipelines = Promise.all([
+      createPlaygroundPipeline(
+        shaders.scene,
+        productionShaders ? "fragment" : "fragment_playground_scene",
+        constants,
+      ),
+      shaders.direct
+        && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
+    ]).then(([scene, direct]) => ({ scene, ...(direct ? { direct } : {}) }));
+    scenePipelinesByQuality.set(quality, pipelines);
+  }
+  return pipelines;
+}
+
+function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): void {
+  const playgroundEntries = productionShaders
+    ? []
+    : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
+  sceneRenderResources = {
+    pipeline: pipelines.scene,
+    hdr: hdrSupported,
+    fields,
+    sceneBindGroup: device.createBindGroup({
+      layout: pipelines.scene.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: sceneBuffer } },
+        { binding: 1, resource: environmentFieldView },
+        { binding: 2, resource: occluderFieldView },
+        { binding: 3, resource: occluderFieldSampler },
+        { binding: 4, resource: terrainCacheView },
+      ],
+    }),
+    playgroundBindGroup: device.createBindGroup({
+      layout: pipelines.scene.getBindGroupLayout(1),
+      entries: playgroundEntries,
+    }),
+  };
+  if (pipelines.direct) {
+    directSceneRenderResources = {
+      pipeline: pipelines.direct,
+      hdr: hdrSupported,
+      sceneBindGroup: device.createBindGroup({
+        layout: pipelines.direct.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      playgroundBindGroup: device.createBindGroup({
+        layout: pipelines.direct.getBindGroupLayout(1),
+        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+      }),
+    };
+  }
+}
+
+// Graphics tiers are pipeline override constants, so each tier has its own
+// scene pipelines; the previous tier keeps rendering until they are ready. A
+// tier that failed to compile is not retried until another one is selected.
+function matchScenePipelinesToQuality(): Promise<void> {
+  scenePipelinesMatch ??= (async () => {
+    while (sceneShaders && sceneFields) {
+      const quality = Math.round(state.graphicsQuality);
+      if (quality === scenePipelinesQuality || quality === failedGraphicsQuality) break;
+      tierCompilationStatus = `compiling ${graphicsQualities[quality]} tier`;
+      try {
+        installScenePipelines(await scenePipelines(sceneShaders, quality), sceneFields);
+        scenePipelinesQuality = quality;
+        tierCompilationStatus = "";
+      } catch (error) {
+        scenePipelinesByQuality.delete(quality);
+        failedGraphicsQuality = quality;
+        tierCompilationStatus = `${graphicsQualities[quality]} tier failed: ${String(error)}`;
+        console.error(error);
+      }
+    }
+  })().finally(() => {
+    scenePipelinesMatch = undefined;
+  });
+  return scenePipelinesMatch;
+}
+
 const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   .then(async () => {
     const compilationStartedAt = performance.now();
@@ -2048,9 +2157,13 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         ? production_scene_shader_source()
         : playground_scene_shader_source(),
     });
-    const directSceneShader = device.createShaderModule({
-      code: playground_direct_scene_shader_source(),
-    });
+    const shaders: SceneShaders = productionShaders
+      ? { scene: sceneShader }
+      : {
+          scene: sceneShader,
+          direct: device.createShaderModule({ code: playground_direct_scene_shader_source() }),
+        };
+    const quality = Math.round(state.graphicsQuality);
     const occluderShader = device.createShaderModule({
       code: productionShaders
         ? occluder_field_shader_source()
@@ -2059,17 +2172,12 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
     const fieldShader = device.createShaderModule({ code: environment_field_shader_source() });
     const terrainCacheShader = device.createShaderModule({ code: terrain_cache_shader_source() });
     const [
-      scenePipeline,
-      directScenePipeline,
+      pipelines,
       environmentPipeline,
       occluderPipeline,
       terrainCachePipeline,
     ] = await Promise.all([
-      createPlaygroundPipeline(
-        sceneShader,
-        productionShaders ? "fragment" : "fragment_playground_scene",
-      ),
-      createPlaygroundPipeline(directSceneShader, "fragment_playground_scene"),
+      scenePipelines(shaders, quality),
       device.createComputePipelineAsync({
         layout: "auto",
         compute: { module: fieldShader, entryPoint: "generate_environment_fields" },
@@ -2113,37 +2221,10 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         entries: [{ binding: 0, resource: occluderFieldView }],
       }),
     };
-    sceneRenderResources = {
-      pipeline: scenePipeline,
-      hdr: hdrSupported,
-      fields,
-      sceneBindGroup: device.createBindGroup({
-        layout: scenePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: sceneBuffer } },
-          { binding: 1, resource: environmentFieldView },
-          { binding: 2, resource: occluderFieldView },
-          { binding: 3, resource: occluderFieldSampler },
-          { binding: 4, resource: terrainCacheView },
-        ],
-      }),
-      playgroundBindGroup: device.createBindGroup({
-        layout: scenePipeline.getBindGroupLayout(1),
-        entries: playgroundEntries,
-      }),
-    };
-    directSceneRenderResources = {
-      pipeline: directScenePipeline,
-      hdr: hdrSupported,
-      sceneBindGroup: device.createBindGroup({
-        layout: directScenePipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
-      }),
-      playgroundBindGroup: device.createBindGroup({
-        layout: directScenePipeline.getBindGroupLayout(1),
-        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
-      }),
-    };
+    installScenePipelines(pipelines, fields);
+    sceneShaders = shaders;
+    sceneFields = fields;
+    scenePipelinesQuality = quality;
     terrainCachePass = {
       pipeline: terrainCachePipeline,
       sceneBindGroup: device.createBindGroup({
@@ -2192,7 +2273,12 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       viewHeight: scenario.viewHeightM,
       worldTimeSeconds: scenario.worldTimeSeconds,
       renderScale: scenario.renderScale ?? 1,
+      graphicsQuality: graphicsQualities.indexOf(scenario.quality ?? "high"),
     });
+    await matchScenePipelinesToQuality();
+    if (scenePipelinesQuality !== state.graphicsQuality) {
+      throw new Error(`${scenario.id}: ${tierCompilationStatus}`);
+    }
     updateRenderedGeometry();
     const samples: FrameSample[] = [];
     for (let frame = 0; frame < settings.warmupFrames + timedFrames; frame += 1) {

@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
+    GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
     TerrainCachePass, exposure_target, field_grids, ocean_wave_mode_uniforms,
     seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
@@ -50,12 +50,15 @@ struct Options {
     seed: u64,
     world_time_seconds: f64,
     diagnostic: ShaderSelection,
+    quality: GraphicsQuality,
     light_balance: [f32; 4],
     cloud_rendering: [f32; 4],
     cloud_shadows: [f32; 4],
     landform_lighting: [f32; 4],
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
+    land_material_color_visibility: [u32; 4],
+    solid_material_color_visibility: [u32; 4],
     layer_material_color_visibility: [u32; 4],
     /// Camera x, camera y, and view height of earlier frames whose terrain
     /// cache fills the requested view's frame reuses.
@@ -514,6 +517,7 @@ struct CaptureReport {
     seed: u64,
     world_time_seconds: f64,
     diagnostic: String,
+    quality: &'static str,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
 }
@@ -550,12 +554,15 @@ fn default_options() -> Options {
         seed: 0x5eed,
         world_time_seconds: 37.0,
         diagnostic: scene_selection(),
+        quality: GraphicsQuality::High,
         light_balance: [1.0; 4],
         cloud_rendering: [1.0, 1.0, 1.0, 1.0],
         cloud_shadows: [1.0, 1.0, 0.85, 1.0],
         landform_lighting: [1.0, 0.7, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
+        land_material_color_visibility: [1; 4],
+        solid_material_color_visibility: [1; 4],
         layer_material_color_visibility: [1; 4],
         prior_views: Vec::new(),
         skip_prior_fills: false,
@@ -608,6 +615,11 @@ fn parse_options() -> Result<Command, String> {
                 options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
             }
             "--diagnostic" => options.diagnostic = parse_diagnostic(&value(&mut arguments)?)?,
+            "--quality" => {
+                let name = value(&mut arguments)?;
+                options.quality = GraphicsQuality::parse(&name)
+                    .ok_or_else(|| format!("invalid value for --quality: {name}"))?;
+            }
             "--light-balance" => {
                 options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
@@ -625,6 +637,14 @@ fn parse_options() -> Result<Command, String> {
             }
             "--light-contributions" => {
                 options.light_contribution_visibility =
+                    parse_u32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--land-material-colors" => {
+                options.land_material_color_visibility =
+                    parse_u32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--solid-material-colors" => {
+                options.solid_material_color_visibility =
                     parse_u32x4(&value(&mut arguments)?, &argument)?
             }
             "--layer-material-colors" => {
@@ -1245,12 +1265,15 @@ fn print_help() {
            --seed N|0xHEX         deterministic visual seed\n\
            --world-time SECONDS   nonnegative deterministic world time (default 37)\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
-                                  scene_direct evaluates every field per pixel without grids)\n\n\
+                                  scene_direct evaluates every field per pixel without grids)\n\
+           --quality low|medium|high  graphics tier of scene compositions (default high)\n\n\
            --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
            --cloud-rendering V,V,V,V  finite lower-cloud depth, opacity, storm, parallax\n\
            --cloud-shadows V,V,V,V  finite low/canopy strength, extinction, contrast\n\
            --landform-lighting V,V,V,V  finite relief, shadow, reach, padding\n\
+           --land-material-colors V,V,V,V  grass, forest, intertidal, and beach color rows\n\
+           --solid-material-colors V,V,V,V  rock, snow, land-ice, and sea-ice color rows\n\
            --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
            --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\
            --prior-view X,Y,HEIGHT  render an earlier frame's terrain cache fills first;\n\
@@ -1504,6 +1527,17 @@ async fn render(options: &Options) -> Result<(), String> {
     if !grid_scene && !options.prior_views.is_empty() {
         return Err("--prior-view applies only to the scene composition".to_owned());
     }
+    let constants = if options.diagnostic.module.is_none() {
+        [
+            options.diagnostic.constants.as_slice(),
+            options.quality.scene_constants(),
+        ]
+        .concat()
+    } else if options.quality == GraphicsQuality::High {
+        options.diagnostic.constants.clone()
+    } else {
+        return Err("--quality applies only to scene compositions".to_owned());
+    };
     let shader_source = options.diagnostic.module.map_or_else(
         || {
             if grid_scene {
@@ -1564,7 +1598,7 @@ async fn render(options: &Options) -> Result<(), String> {
             entry_point: Some(&fragment_entry),
             targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &options.diagnostic.constants,
+                constants: &constants,
                 ..Default::default()
             },
         }),
@@ -1599,8 +1633,8 @@ async fn render(options: &Options) -> Result<(), String> {
         wind_model: [1.0; 4],
         climate_visibility: [1.0, 1.0, 0.0, 1.0],
         light_contribution_visibility: options.light_contribution_visibility,
-        land_material_color_visibility: [1; 4],
-        solid_material_color_visibility: [1; 4],
+        land_material_color_visibility: options.land_material_color_visibility,
+        solid_material_color_visibility: options.solid_material_color_visibility,
         water_material_color_visibility: [1; 4],
         layer_material_color_visibility: options.layer_material_color_visibility,
         environment_features: [1.0; 4],
@@ -2058,6 +2092,7 @@ fn capture_report(
         seed: options.seed,
         world_time_seconds: options.world_time_seconds,
         diagnostic: options.diagnostic.id.clone(),
+        quality: options.quality.name(),
         derived: DerivedOutput {
             current_air_temperature_c: sample.weather.surface_air_temperature_c,
             sun_direction: celestial.sun_direction,

@@ -6,6 +6,7 @@ export type BenchScenario = {
   viewHeightM: number;
   worldTimeSeconds: number;
   renderScale?: number;
+  quality?: "low" | "medium" | "high";
 };
 
 export type BenchSettings = {

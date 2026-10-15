@@ -41,7 +41,7 @@ normally skipped shader work forced. Each scenario's terrain cache is filled
 until it settles before its first frame; forced runs refill its active level
 every frame.
 Scenarios with a `renderScale` render the scene below the output size and report
-cost per output pixel:
+cost per output pixel; scenarios with a `quality` use that graphics tier:
 
 ```sh
 cargo run --release -p playground-capture -- --bench --output-dir /tmp/bench-before

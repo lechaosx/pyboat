@@ -134,8 +134,10 @@ See [README.md](README.md) for what is playable now and
   gives any player an advantage or affects physics or gameplay.
 - **[Implicit]** Night and storm darkening, shallow-water hazards, shorelines,
   the ice edge, and boats stay visible and legible at every graphics setting.
-- **[Implicit]** Touch screens default to battery-friendly frame rate and
-  resolution; other devices default to full quality.
+- **[Explicit]** Graphics quality tiers trade visual detail for rendering cost,
+  from battery-friendly mobile through richer mobile to the best desktop graphics.
+- **[Implicit]** Touch screens default to battery-friendly frame rate,
+  resolution, and quality tier; other devices default to full quality.
 
 ## Controls and multiplayer
 

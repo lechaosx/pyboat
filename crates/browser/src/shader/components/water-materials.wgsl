@@ -391,13 +391,17 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     var amplitude_sum = 0.0;
     var wavelength_m = 18.0;
     var time_coordinate = scene.scalar_field_time_coordinates.w;
+    // Normalized over all four octaves, so a graphics tier that leaves out
+    // finer ones keeps the coarser octaves' amplitudes.
     for (var octave = 0u; octave < 4u; octave++) {
         let octave_visibility = smoothstep(
             visual_pixel_footprint_m,
             2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
-        if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
+        if octave < DECORATIVE_WATER_OCTAVES
+            && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES)
+        {
             let octave_seed = scene.match_seed
                 ^ vec2<u32>(0x6a09e667u, 0xbb67ae85u)
                 ^ OCTAVE_SALTS[octave];
@@ -572,12 +576,7 @@ fn terrain_surface(
 
     var micro_height = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     if landscape_visibility.z > 0.0 {
-        micro_height = material_fractal_sample(
-            vec2<u32>(0xcbbb9d5du, 0x629a292au),
-            position_m,
-            2.5,
-            6u,
-        );
+        micro_height = material_micro_relief_sample(position_m, 2.5);
     }
     let surface_grade = clamp(
         0.5 + landscape_visibility.z

@@ -160,6 +160,19 @@ pub fn playground_scene_render_size(
     vec![width, height]
 }
 
+/// The scene pipeline's override constants for a named graphics tier.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn graphics_quality_scene_constants(quality: &str) -> Result<js_sys::Object, JsValue> {
+    let quality = crate::GraphicsQuality::parse(quality)
+        .ok_or_else(|| JsValue::from_str("unknown graphics quality"))?;
+    let constants = js_sys::Object::new();
+    for (name, value) in quality.scene_constants() {
+        js_sys::Reflect::set(&constants, &(*name).into(), &(*value).into())?;
+    }
+    Ok(constants)
+}
+
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
 pub fn upscale_shader_source() -> String {
@@ -1279,7 +1292,10 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("fragment"),
                 targets: &[Some(output_format.into())],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: graphics.quality.scene_constants(),
+                    ..Default::default()
+                },
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,

@@ -225,6 +225,9 @@ and verification details.
   features, so it runs on mobile WebGPU without history artifacts.
 - **[Implicit]** Boats and other gameplay overlays draw at canvas backing
   resolution after the upscale.
+- **[Implicit]** A graphics quality tier is a set of override constants on the
+  scene pipeline, so lower tiers carry no runtime branches and changing tier
+  rebuilds that pipeline.
 - **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close
   transport, clearing queued state; transient surface errors remain recoverable.
 

@@ -8,12 +8,58 @@
     "worldTimeSeconds": 37
   },
   {
+    "id": "open-ocean-medium",
+    "exercises": "Deep water at the medium graphics tier: two decorative water octaves over unchanged wave modes",
+    "seed": "0x5eed",
+    "cameraM": [-14900, -5330],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "quality": "medium"
+  },
+  {
+    "id": "open-ocean-low",
+    "exercises": "Deep water at the low tier: one decorative water octave over unchanged wave modes",
+    "seed": "0x5eed",
+    "cameraM": [-14900, -5330],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "quality": "low"
+  },
+  {
+    "id": "open-ocean-low-scale-0.5",
+    "exercises": "Deep daytime water at boat zoom at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-14900, -5330],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "reef-coast",
     "exercises": "Coast at boat zoom: reef, shoal and outer-reef noise, rocky shallows, beach and rock materials beside water",
     "seed": "0x5eed",
     "cameraM": [-5890, -2100],
     "viewHeightM": 240,
     "worldTimeSeconds": 37
+  },
+  {
+    "id": "reef-coast-medium",
+    "exercises": "Reef coast at the medium graphics tier: fewer decorative water and micro-relief octaves beside unchanged coastline and shallows",
+    "seed": "0x5eed",
+    "cameraM": [-5890, -2100],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "quality": "medium"
+  },
+  {
+    "id": "reef-coast-low",
+    "exercises": "Reef coast at the low tier: coastline, reefs and rocky shallows unchanged without micro relief",
+    "seed": "0x5eed",
+    "cameraM": [-5890, -2100],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "quality": "low"
   },
   {
     "id": "land-interior",
@@ -24,12 +70,39 @@
     "worldTimeSeconds": 37
   },
   {
+    "id": "land-interior-medium",
+    "exercises": "Island interior at the medium tier: rock and land micro relief reduced",
+    "seed": "0x5eed",
+    "cameraM": [800, 0],
+    "viewHeightM": 300,
+    "worldTimeSeconds": 37,
+    "quality": "medium"
+  },
+  {
+    "id": "land-interior-low",
+    "exercises": "Island interior at the low tier: land and rock without micro relief",
+    "seed": "0x5eed",
+    "cameraM": [800, 0],
+    "viewHeightM": 300,
+    "worldTimeSeconds": 37,
+    "quality": "low"
+  },
+  {
     "id": "polar-ice-edge",
     "exercises": "Northern summer ice edge: sea-ice plates and fractures, open polar water, a snow- and ice-covered island",
     "seed": "0x5eed",
     "cameraM": [2300, 25300],
     "viewHeightM": 2400,
     "worldTimeSeconds": 15595200
+  },
+  {
+    "id": "polar-ice-edge-low",
+    "exercises": "Ice edge at the low tier: sea-ice boundary unchanged without ice micro relief",
+    "seed": "0x5eed",
+    "cameraM": [2300, 25300],
+    "viewHeightM": 2400,
+    "worldTimeSeconds": 15595200,
+    "quality": "low"
   },
   {
     "id": "storm-rain",
@@ -48,6 +121,16 @@
     "worldTimeSeconds": 268500
   },
   {
+    "id": "twilight-sun-moon-low-scale-0.5",
+    "exercises": "Low Sun with the Moon up over an island at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [2400, 2000],
+    "viewHeightM": 1500,
+    "worldTimeSeconds": 268500,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "moonlit-night",
     "exercises": "Clear night under a high Moon at a coast: moonlight only, settled exposure near 4, low-light rod vision and night noise",
     "seed": "0x5eed",
@@ -64,6 +147,16 @@
     "worldTimeSeconds": 9072240
   },
   {
+    "id": "solar-eclipse-low-scale-0.5",
+    "exercises": "Partial solar eclipse over an island coast at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-3700, -13400],
+    "viewHeightM": 2400,
+    "worldTimeSeconds": 9072240,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "archipelago-overview",
     "exercises": "About 20 km view: many islands and coasts per frame, footprint-filtered detail, day/night terminator",
     "seed": "0x5eed",
@@ -78,6 +171,16 @@
     "cameraM": [-5770, -2100],
     "viewHeightM": 60,
     "worldTimeSeconds": 37
+  },
+  {
+    "id": "close-shore-low-scale-0.5",
+    "exercises": "About 60 m view of a rocky shore at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-5770, -2100],
+    "viewHeightM": 60,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "low"
   },
   {
     "id": "reef-coast-scale-0.67",
@@ -98,6 +201,26 @@
     "renderScale": 0.5
   },
   {
+    "id": "reef-coast-medium-scale-0.5",
+    "exercises": "Reef coast at the medium tier from half scene resolution",
+    "seed": "0x5eed",
+    "cameraM": [-5890, -2100],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "medium"
+  },
+  {
+    "id": "reef-coast-low-scale-0.5",
+    "exercises": "Coast at boat zoom at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-5890, -2100],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "land-interior-scale-0.5",
     "exercises": "Island interior upscaled from half scene resolution: lower-cloud edges and fine land detail",
     "seed": "0x5eed",
@@ -105,6 +228,26 @@
     "viewHeightM": 300,
     "worldTimeSeconds": 37,
     "renderScale": 0.5
+  },
+  {
+    "id": "land-interior-medium-scale-0.5",
+    "exercises": "Island interior at the medium tier from half scene resolution",
+    "seed": "0x5eed",
+    "cameraM": [800, 0],
+    "viewHeightM": 300,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "medium"
+  },
+  {
+    "id": "land-interior-low-scale-0.5",
+    "exercises": "Island interior at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [800, 0],
+    "viewHeightM": 300,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "low"
   },
   {
     "id": "polar-ice-edge-scale-0.5",
@@ -116,6 +259,16 @@
     "renderScale": 0.5
   },
   {
+    "id": "polar-ice-edge-low-scale-0.5",
+    "exercises": "Northern summer ice edge at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [2300, 25300],
+    "viewHeightM": 2400,
+    "worldTimeSeconds": 15595200,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "storm-rain-scale-0.5",
     "exercises": "Storm upscaled from half scene resolution: storm darkening and rain contacts",
     "seed": "0x5eed",
@@ -123,6 +276,16 @@
     "viewHeightM": 40,
     "worldTimeSeconds": 63037,
     "renderScale": 0.5
+  },
+  {
+    "id": "storm-rain-low-scale-0.5",
+    "exercises": "Daytime storm over water at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [8000, -20000],
+    "viewHeightM": 40,
+    "worldTimeSeconds": 63037,
+    "renderScale": 0.5,
+    "quality": "low"
   },
   {
     "id": "moonlit-night-scale-0.5",
@@ -134,6 +297,16 @@
     "renderScale": 0.5
   },
   {
+    "id": "moonlit-night-low-scale-0.5",
+    "exercises": "Clear night under a high Moon at a coast at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-5420, -2700],
+    "viewHeightM": 400,
+    "worldTimeSeconds": 209700,
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
     "id": "archipelago-overview-scale-0.5",
     "exercises": "Wide archipelago upscaled from half scene resolution: many thin coastlines per frame",
     "seed": "0x5eed",
@@ -141,5 +314,15 @@
     "viewHeightM": 20000,
     "worldTimeSeconds": 37,
     "renderScale": 0.5
+  },
+  {
+    "id": "archipelago-overview-low-scale-0.5",
+    "exercises": "About 20 km view at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "cameraM": [-4000, 0],
+    "viewHeightM": 20000,
+    "worldTimeSeconds": 37,
+    "renderScale": 0.5,
+    "quality": "low"
   }
 ]

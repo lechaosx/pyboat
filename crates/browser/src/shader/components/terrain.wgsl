@@ -764,12 +764,7 @@ fn terrain_rock_surface(
         28.0,
         4u,
     );
-    let micro_height = material_fractal_sample(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
-        position_m,
-        5.0,
-        6u,
-    );
+    let micro_height = material_micro_relief_sample(position_m, 5.0);
     let physical_ruggedness = smoothstep(
         0.01,
         0.08,
@@ -827,12 +822,7 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
             tuning.ice_surface.y,
         );
     }
-    let micro_height = material_fractal_sample(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
-        position_m,
-        4.0,
-        6u,
-    );
+    let micro_height = material_micro_relief_sample(position_m, 4.0);
     let fine = material_fractal_value(
         vec2<u32>(0x13198a2eu, 0x03707344u),
         position_m,
@@ -876,12 +866,7 @@ fn sea_ice_surface(
         72.0,
         3u,
     );
-    let micro = material_fractal_sample(
-        vec2<u32>(0xcbbb9d5du, 0x629a292au),
-        position_m,
-        4.0,
-        6u,
-    );
+    let micro = material_micro_relief_sample(position_m, 4.0);
     let target_slab_size_m = max(tuning.ice_structure.x, 1.0);
     let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / target_slab_size_m)));
     let slab_size_m = vec2<f32>(

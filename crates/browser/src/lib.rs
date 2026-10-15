@@ -12,7 +12,8 @@ pub use field_grids::{
     OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
 };
 pub use graphics::{
-    FramePacer, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController, scene_render_size,
+    FramePacer, GraphicsQuality, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController,
+    scene_render_size,
 };
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use terrain_cache::TerrainCachePass;

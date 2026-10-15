@@ -86,6 +86,10 @@ override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.
 override EVALUATE_ALL_BRANCHES: bool = false;
+// Graphics tiers set these through `GraphicsQuality::scene_constants`; the
+// defaults are the high tier.
+override DECORATIVE_WATER_OCTAVES: u32 = 4u;
+override MATERIAL_MICRO_OCTAVES: u32 = 6u;
 
 // Entry points initialize private state so shared rendering functions work with
 // either production overrides or the playground tuning uniform.

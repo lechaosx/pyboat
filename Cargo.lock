@@ -149,6 +149,7 @@ dependencies = [
  "console_error_panic_hook",
  "futures-util",
  "game",
+ "js-sys",
  "naga",
  "protocol",
  "rapier2d",

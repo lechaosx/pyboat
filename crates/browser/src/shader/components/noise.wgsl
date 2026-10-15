@@ -867,6 +867,24 @@ fn material_fractal_sample(
     initial_wavelength_m: f32,
     octave_count: u32,
 ) -> TerrainNoiseSample {
+    return material_fractal_sample_first_octaves(
+        field_salt,
+        position_m,
+        initial_wavelength_m,
+        octave_count,
+        octave_count,
+    );
+}
+
+// Normalized over all `octave_count` octaves, so leaving out finer ones keeps
+// the coarser octaves' amplitudes, as footprint filtering does.
+fn material_fractal_sample_first_octaves(
+    field_salt: vec2<u32>,
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    evaluated_octave_count: u32,
+) -> TerrainNoiseSample {
     var sample: TerrainNoiseSample;
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
@@ -879,7 +897,9 @@ fn material_fractal_sample(
             2.0 * visual_pixel_footprint_m,
             wavelength_m,
         );
-        if octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES {
+        if octave < evaluated_octave_count
+            && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES)
+        {
             let octave_seed = scene.match_seed
                 ^ field_salt
                 ^ OCTAVE_SALTS[octave];
@@ -898,6 +918,21 @@ fn material_fractal_sample(
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
     return sample;
+}
+
+// The metre-scale micro-relief material field, of which a graphics tier
+// evaluates the first `MATERIAL_MICRO_OCTAVES` octaves.
+fn material_micro_relief_sample(
+    position_m: vec2<f32>,
+    initial_wavelength_m: f32,
+) -> TerrainNoiseSample {
+    return material_fractal_sample_first_octaves(
+        vec2<u32>(0xcbbb9d5du, 0x629a292au),
+        position_m,
+        initial_wavelength_m,
+        6u,
+        MATERIAL_MICRO_OCTAVES,
+    );
 }
 
 fn material_fractal_value(
