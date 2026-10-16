@@ -29,8 +29,9 @@ cargo run -p playground-capture -- --output /tmp/pyboat.png
 The PNG's `.json` sidecar records world inputs, derived conditions, and image
 metrics. Use `cargo run -p playground-capture -- --help` for world, camera, clock,
 and diagnostic options and limits. A fresh capture has no accumulated cloud
-transport, so matching its clock alone does not reproduce a long-running
-interactive cloud view. Capture requires a hardware Vulkan GPU.
+transport unless `--cloud-motion` supplies it, so matching its clock alone does
+not reproduce a long-running interactive cloud view. Capture requires a hardware
+Vulkan GPU.
 
 ## Rendering performance
 

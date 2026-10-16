@@ -5,7 +5,7 @@ use browser::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids,
     GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
     TerrainCachePass, baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
-    seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
+    sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -50,6 +50,8 @@ struct Options {
     view_height_m: f32,
     seed: u64,
     world_time_seconds: f64,
+    /// Seconds of renderer-local cloud transport accumulated before the capture.
+    cloud_motion_seconds: f64,
     diagnostic: ShaderSelection,
     quality: GraphicsQuality,
     cloud_shadow_taps: u32,
@@ -577,6 +579,8 @@ struct CaptureReport {
     view_height_m: f32,
     seed: u64,
     world_time_seconds: f64,
+    cloud_motion_seconds: f64,
+    view_cloud_motion_m: [f32; 4],
     diagnostic: String,
     quality: &'static str,
     cloud_shadow_taps: u32,
@@ -616,6 +620,7 @@ fn default_options() -> Options {
         view_height_m: 480.0,
         seed: 0x5eed,
         world_time_seconds: 37.0,
+        cloud_motion_seconds: 0.0,
         diagnostic: scene_selection(),
         quality: GraphicsQuality::High,
         cloud_shadow_taps: 3,
@@ -683,6 +688,9 @@ fn parse_options() -> Result<Command, String> {
             "--seed" => options.seed = parse_seed(&value(&mut arguments)?)?,
             "--world-time" => {
                 options.world_time_seconds = parse(&value(&mut arguments)?, &argument)?
+            }
+            "--cloud-motion" => {
+                options.cloud_motion_seconds = parse(&value(&mut arguments)?, &argument)?
             }
             "--diagnostic" => options.diagnostic = parse_diagnostic(&value(&mut arguments)?)?,
             "--quality" => {
@@ -774,6 +782,9 @@ fn parse_options() -> Result<Command, String> {
     validate_capture_output_path(&options.output)?;
     validate_capture_dimensions(options.width, options.height, u32::MAX)?;
     validate_time_seconds(options.world_time_seconds, "--world-time")?;
+    if !(0.0..=options.world_time_seconds).contains(&options.cloud_motion_seconds) {
+        return Err("--cloud-motion must be from 0 through --world-time seconds".to_owned());
+    }
     validate_capture_spatial_inputs(
         options.camera_x_m,
         options.camera_y_m,
@@ -1363,6 +1374,8 @@ fn print_help() {
            --view-height METRES   positive finite vertical world span (default 480)\n\
            --seed N|0xHEX         deterministic visual seed\n\
            --world-time SECONDS   nonnegative deterministic world time (default 37)\n\
+           --cloud-motion SECONDS  cloud transport an interactive view accumulates over the\n\
+                                  SECONDS before --world-time at 1 s frames (default 0)\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids)\n\
            --quality low|medium|high  graphics tier of scene compositions (default high)\n\
@@ -1990,6 +2003,40 @@ fn render_world(
     read_texture(device, queue, encoder, &texture)
 }
 
+/// Lower-cloud then canopy offsets that a view held at the camera since
+/// `cloud_motion_seconds` before the capture has integrated from view-centre wind.
+fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
+    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .expect("parsed options hold a valid world geometry");
+    let camera_m = world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let mut offsets_m = [0.0_f64; 4];
+    let mut elapsed_seconds = 0.0;
+    while elapsed_seconds < options.cloud_motion_seconds {
+        let step_seconds = (options.cloud_motion_seconds - elapsed_seconds).min(1.0);
+        elapsed_seconds += step_seconds;
+        let (tick, tick_fraction) = split_tick_seconds(
+            options.world_time_seconds - options.cloud_motion_seconds + elapsed_seconds,
+        );
+        let state = sample_view_cloud_state(
+            world_geometry,
+            options.seed,
+            tick,
+            tick_fraction,
+            camera_m.into(),
+        );
+        let winds = [
+            state.low_wind_velocity_m_s.x,
+            state.low_wind_velocity_m_s.y,
+            state.upper_wind_velocity_m_s.x,
+            state.upper_wind_velocity_m_s.y,
+        ];
+        for (offset_m, wind_m_s) in offsets_m.iter_mut().zip(winds) {
+            *offset_m += step_seconds * f64::from(wind_m_s);
+        }
+    }
+    offsets_m.map(|offset_m| offset_m as f32)
+}
+
 fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
@@ -2004,7 +2051,7 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
             ),
             options.view_height_m,
         ],
-        [0.0; 4],
+        view_cloud_motion_m(options),
         FieldGridTuning {
             low_cloud_body_size: CAPTURE_LOW_CLOUD_BODY_SIZE,
             landform_shadow_reach_m: options.landform_lighting[2],
@@ -2151,7 +2198,7 @@ fn scene_uniforms(
             orbit.lunar_umbra_fraction,
             0.0,
         ],
-        view_cloud_motion_m: [0.0; 4],
+        view_cloud_motion_m: view_cloud_motion_m(options),
         cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: [exposure, 1.0, 0.0, 0.0],
         environment_field_grid_m: field_grids.environment.uniforms,
@@ -2292,6 +2339,8 @@ fn capture_report(
         view_height_m: options.view_height_m,
         seed: options.seed,
         world_time_seconds: options.world_time_seconds,
+        cloud_motion_seconds: options.cloud_motion_seconds,
+        view_cloud_motion_m: view_cloud_motion_m(options),
         diagnostic: options.diagnostic.id.clone(),
         quality: options.quality.name(),
         cloud_shadow_taps: options.cloud_shadow_taps,

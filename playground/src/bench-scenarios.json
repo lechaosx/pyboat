@@ -324,5 +324,37 @@
     "worldTimeSeconds": 37,
     "renderScale": 0.5,
     "quality": "low"
+  },
+  {
+    "id": "cumulus-field",
+    "exercises": "Fair-weather cumulus at boat zoom near noon: a lower-cloud body filling the view over open water",
+    "seed": "0x5eed",
+    "cameraM": [10030, -16940],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 324037
+  },
+  {
+    "id": "cumulus-overview",
+    "exercises": "About 16 km view of unstable humid air near noon: a lower-cloud field, its ground shadows and canopy shadows",
+    "seed": "0x5eed",
+    "cameraM": [-20500, -16500],
+    "viewHeightM": 16000,
+    "worldTimeSeconds": 626437
+  },
+  {
+    "id": "frontal-canopy",
+    "exercises": "About 6 km view under a frontal canopy edge with the Sun near 10 degrees: long canopy shadow projections",
+    "seed": "0x5eed",
+    "cameraM": [28500, -16500],
+    "viewHeightM": 6000,
+    "worldTimeSeconds": 237637
+  },
+  {
+    "id": "storm-edge",
+    "exercises": "About 16 km view across the edge of a rain area near noon: storm canopy, rain contacts and lower clouds beside it",
+    "seed": "0x5eed",
+    "cameraM": [-23500, -16500],
+    "viewHeightM": 16000,
+    "worldTimeSeconds": 21637
   }
 ]

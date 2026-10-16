@@ -139,5 +139,15 @@
       { "frame": 1, "cameraM": [7100, 29000], "viewHeightM": 2400 },
       { "frame": 40, "cameraM": [7100, 29000], "viewHeightM": 2400 }
     ]
+  },
+  {
+    "id": "pan-screen-cumulus",
+    "exercises": "Pan of one 16:9 screen width a second at 1.5 km through unstable humid air near noon: lower-cloud and canopy grids and their ground shadows refilled under motion",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 626437,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-21833, -16500], "viewHeightM": 1500 },
+      { "frame": 60, "cameraM": [-19167, -16500], "viewHeightM": 1500 }
+    ]
   }
 ]
