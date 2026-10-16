@@ -2214,6 +2214,204 @@ fn baked_sea_ice_differs_from_direct_less_than_a_half_pixel_pan() {
     }
 }
 
+#[test]
+fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
+    // A snow-covered glacier margin near midwinter, in pixels of boat-zoom and
+    // 600 m views 1080 pixels high.
+    for (world_time, (camera_x_m, camera_y_m), view_height_m) in [
+        ("31320000", (1_850.0, 39_215.0), 240.0),
+        ("31320000", (1_850.0, 39_215.0), 600.0),
+    ] {
+        let pixel_m = view_height_m / 1080.0;
+        let render = |label, diagnostic, arguments: &[&str]| {
+            render_capture(
+                label,
+                &[
+                    &[
+                        "--width",
+                        "480",
+                        "--height",
+                        "270",
+                        "--camera-x",
+                        &camera_x_m.to_string(),
+                        "--camera-y",
+                        &camera_y_m.to_string(),
+                        "--view-height",
+                        &(pixel_m * 270.0).to_string(),
+                        "--world-time",
+                        world_time,
+                        "--diagnostic",
+                        diagnostic,
+                        "--cloud-rendering",
+                        "0,0,1,1",
+                        "--cloud-shadows",
+                        "0,0,0.85,0",
+                    ],
+                    arguments,
+                ]
+                .concat(),
+            )
+        };
+        let without_ice = ["--solid-material-colors", "1,1,0,1"];
+        let direct = render("snow-ice-direct", "scene_direct", &[]);
+        let direct_without_ice = render("snow-ice-direct-hidden", "scene_direct", &without_ice);
+        let direct_without_snow = render(
+            "snow-ice-direct-snowless",
+            "scene_direct",
+            &["--solid-material-colors", "1,0,1,1"],
+        );
+        // Pixels whose colour both snow and land ice change.
+        let snow_and_ice: Vec<bool> = pixel_differences(&direct_without_snow, &direct)
+            .into_iter()
+            .zip(pixel_differences(&direct_without_ice, &direct))
+            .map(|(snow, ice)| snow > 2 && ice > 2)
+            .collect();
+        // The colour that hiding land ice removes from each pixel.
+        let ice_share = |with: &[u8], without: &[u8]| -> Vec<i16> {
+            with.iter()
+                .zip(without)
+                .map(|(&with, &without)| i16::from(with) - i16::from(without))
+                .collect()
+        };
+        let direct_share = ice_share(&direct, &direct_without_ice);
+        let baked_share = ice_share(
+            &render("snow-ice-baked", "scene", &[]),
+            &render("snow-ice-baked-hidden", "scene", &without_ice),
+        );
+        let (mut share, mut error, mut count) = (0.0, 0.0, 0_u32);
+        for (pixel, &selected) in snow_and_ice.iter().enumerate() {
+            if selected {
+                let channels = 4 * pixel..4 * pixel + 3;
+                share += f64::from(
+                    direct_share[channels.clone()]
+                        .iter()
+                        .map(|v| v.abs())
+                        .max()
+                        .unwrap(),
+                );
+                error += f64::from(
+                    channels
+                        .map(|channel| (baked_share[channel] - direct_share[channel]).abs())
+                        .max()
+                        .unwrap(),
+                );
+                count += 1;
+            }
+        }
+        let label =
+            format!("{view_height_m} m view at ({camera_x_m}, {camera_y_m}), {world_time} s");
+        assert!(
+            count as usize > snow_and_ice.len() / 2,
+            "{label}: too little snow over partial land ice",
+        );
+        // Snow and lighting approximations of the bake leave about 3% of the
+        // share; ice colour taken from autumn colour or left premultiplied
+        // leaves 6-10%.
+        assert!(
+            error <= 0.05 * share,
+            "{label}: the baked ice share differs by {} from the direct one of {}",
+            error / f64::from(count),
+            share / f64::from(count),
+        );
+    }
+}
+
+#[test]
+fn baked_land_ice_share_under_snow_ignores_vegetation_colours_at_coarse_spacing() {
+    // A small world seen whole in late-March daylight: each baked texel spans
+    // several degrees of latitude, so glacier margins border temperate land
+    // within one bilinear stencil.
+    let render = |label, diagnostic, arguments: &[&str]| {
+        render_capture(
+            label,
+            &[
+                &[
+                    "--width",
+                    "240",
+                    "--height",
+                    "135",
+                    "--world-width",
+                    "8000",
+                    "--world-height",
+                    "8000",
+                    "--camera-x",
+                    "4000",
+                    "--camera-y",
+                    "2800",
+                    "--view-height",
+                    "64000",
+                    "--world-time",
+                    "38394000",
+                    "--diagnostic",
+                    diagnostic,
+                    "--cloud-rendering",
+                    "0,0,1,1",
+                    "--cloud-shadows",
+                    "0,0,0.85,0",
+                ],
+                arguments,
+            ]
+            .concat(),
+        )
+    };
+    let without_ice = ["--solid-material-colors", "1,1,0,1"];
+    let without_vegetation = ["--land-material-colors", "0,0,1,1"];
+    let without_both = [&without_ice[..], &without_vegetation[..]].concat();
+    // The largest change hiding vegetation makes to the colour that hiding
+    // land ice removes, over pixels whose colour both snow and land ice change.
+    let vegetation_dependence = |diagnostic| {
+        let full = render("coarse-ice", diagnostic, &[]);
+        let snow_and_ice: Vec<bool> = pixel_differences(
+            &render(
+                "coarse-ice-snowless",
+                diagnostic,
+                &["--solid-material-colors", "1,0,1,1"],
+            ),
+            &full,
+        )
+        .into_iter()
+        .zip(pixel_differences(
+            &render("coarse-ice-hidden", diagnostic, &without_ice),
+            &full,
+        ))
+        .map(|(snow, ice)| snow > 2 && ice > 2)
+        .collect();
+        let ice_share = |with: &[u8], without: &[u8]| -> Vec<i16> {
+            with.iter()
+                .zip(without)
+                .map(|(&with, &without)| i16::from(with) - i16::from(without))
+                .collect()
+        };
+        let share = ice_share(
+            &full,
+            &render("coarse-ice-hidden", diagnostic, &without_ice),
+        );
+        let share_without_vegetation = ice_share(
+            &render("coarse-ice-vegetationless", diagnostic, &without_vegetation),
+            &render("coarse-ice-both-hidden", diagnostic, &without_both),
+        );
+        let largest = snow_and_ice
+            .iter()
+            .enumerate()
+            .filter(|&(_, &selected)| selected)
+            .flat_map(|(pixel, _)| 4 * pixel..4 * pixel + 3)
+            .map(|channel| (share[channel] - share_without_vegetation[channel]).abs())
+            .max()
+            .unwrap_or(0);
+        (largest, snow_and_ice.iter().filter(|&&both| both).count())
+    };
+    let (baked, baked_pixels) = vegetation_dependence("scene");
+    let (direct, _) = vegetation_dependence("scene_direct");
+    assert!(
+        baked_pixels > 100,
+        "only {baked_pixels} baked pixels of snow over land ice"
+    );
+    assert!(
+        baked <= direct.max(2),
+        "hiding vegetation changes the baked land-ice share by {baked}, the direct one by {direct}",
+    );
+}
+
 /// The mean over `selected` pixels of each one's largest RGB channel difference.
 fn mean_difference(left: &[u8], right: &[u8], selected: &[bool]) -> f64 {
     let (sum, count) = pixel_differences(left, right)

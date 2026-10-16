@@ -285,7 +285,7 @@ struct SceneSurface {
 fn direct_sea_ice_detail(position_m: vec2<f32>, terrain: TerrainSample) -> SeaIceDetail {
     var detail = SeaIceDetail(0.0, 0.0, vec2<f32>(0.0));
     if terrain.water_ice_amount > 0.0 || EVALUATE_ALL_BRANCHES {
-        detail = sea_ice_detail_at(position_m);
+        detail = sea_ice_detail_at(position_m, ice_micro_relief_sample(position_m));
     }
     return detail;
 }

@@ -62,7 +62,7 @@ fn terrain_cache_octaves(field: u32, spacing_m: f32, horizontal_scale: f32) -> u
 // Eight-bit colour layers per baked surface level. Keep synchronized with
 // `BAKED_SURFACE_COLOR_LAYERS` in baked_surface.rs.
 const BAKED_SURFACE_COLOR_LAYERS: u32 = 5u;
-// The largest land detail gradient the baked surface encodes.
+// The largest land and land-ice detail gradient the baked surface encodes.
 const BAKED_DETAIL_GRADIENT_RANGE: f32 = 4.0;
 // The largest sea-ice relief gradient the baked surface encodes. Ranges of
 // 0.25 and 1.0 render boat-zoom floes within two 8-bit levels of each other.
@@ -155,6 +155,8 @@ fn solid_ice_sample(
         latitude_curve_gradient_y_per_m_at(CLIMATE_ANNUAL_MEAN_C, position_m),
     )
         - 0.0065 * positive_bedrock.gradient;
+    // Far below the 3 °C onset of autumn colour, which texels of the baked
+    // surface with land ice give up for its detail.
     if annual_temperature.value >= -8.0 {
         return surface;
     }
@@ -852,6 +854,45 @@ fn terrain_rock_surface(
 }
 
 fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
+    var detail = LandIceDetail(0.0, vec2<f32>(0.0));
+    if landscape_visibility.z > 0.0 {
+        detail = land_ice_detail_at(position_m, surface, ice_micro_relief_sample(position_m));
+    }
+    return land_ice_surface(detail);
+}
+
+// The land-ice colour grade and micro-relief gradient, which depend only on
+// position.
+struct LandIceDetail {
+    grade: f32,
+    gradient: vec2<f32>,
+};
+
+// Land and sea ice share one micro-relief field, which the bake evaluates once
+// for both.
+fn ice_micro_relief_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+    return material_micro_relief_sample(position_m, 4.0);
+}
+
+fn land_ice_detail_at(
+    position_m: vec2<f32>,
+    surface: f32,
+    micro_height: TerrainNoiseSample,
+) -> LandIceDetail {
+    let fine = material_fractal_value(
+        ICE_FINE_NOISE_FIELD,
+        position_m,
+        72.0,
+        3u,
+    );
+    let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
+    return LandIceDetail(
+        clamp(0.45 + 0.35 * surface_grade + 0.22 * fine, 0.0, 1.0),
+        micro_height.gradient,
+    );
+}
+
+fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
     let color_visibility = solid_material_color_visibility().z;
     if landscape_visibility.z <= 0.0 {
         return TerrainSurface(
@@ -860,21 +901,13 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
             tuning.ice_surface.y,
         );
     }
-    let micro_height = material_micro_relief_sample(position_m, 4.0);
-    let fine = material_fractal_value(
-        ICE_FINE_NOISE_FIELD,
-        position_m,
-        72.0,
-        3u,
-    );
-    let surface_grade = 0.5 + 0.5 * landscape_visibility.z * surface;
     return TerrainSurface(
         color_visibility * mix(
             vec3<f32>(0.56, 0.75, 0.80),
             vec3<f32>(0.94, 0.97, 0.96),
-            clamp(0.45 + 0.35 * surface_grade + 0.22 * fine, 0.0, 1.0),
+            detail.grade,
         ),
-        tuning.ice_surface.x * micro_height.gradient,
+        tuning.ice_surface.x * detail.gradient,
         tuning.ice_surface.y,
     );
 }
@@ -886,14 +919,13 @@ struct SeaIceDetail {
     gradient: vec2<f32>,
 };
 
-fn sea_ice_detail_at(position_m: vec2<f32>) -> SeaIceDetail {
+fn sea_ice_detail_at(position_m: vec2<f32>, micro: TerrainNoiseSample) -> SeaIceDetail {
     let fine = material_fractal_sample(
         SEA_ICE_FINE_NOISE_FIELD,
         position_m,
         72.0,
         3u,
     );
-    let micro = material_micro_relief_sample(position_m, 4.0);
     return SeaIceDetail(
         material_fractal_value(SEA_ICE_BROAD_NOISE_FIELD, position_m, 768.0, 4u),
         fine.value,

@@ -1053,6 +1053,9 @@ fn autumn_vegetation_amount_from_anomaly(
 ) -> f32 {
     let annual_temperature = climate.annual_mean_air_temperature_c
         - 0.0065 * max(elevation_m, 0.0);
+    // Texels of the baked surface with land ice give up their autumn colour,
+    // which this onset, far above land ice's -8 °C in `solid_ice_sample`,
+    // keeps invisible.
     let temperate = smoothstep(3.0, 10.0, annual_temperature)
         * (1.0 - smoothstep(18.0, 25.0, annual_temperature));
     let cooling = smoothstep(

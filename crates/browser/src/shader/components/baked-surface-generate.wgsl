@@ -66,12 +66,14 @@ struct BakedSurfaceValues {
     snow_detail_scale: f32,
     dormancy_color: vec3<f32>,
     land_ice_amount: f32,
+    // Premultiplied by the land ice amount, so it interpolates as a share.
+    land_ice: LandIceDetail,
     sea_ice: SeaIceDetail,
 };
 
 // The static surface at one position: terrain with land ice, the dry,
 // snowless, unseasoned land composition with the factors the scene applies
-// for tide, snow, and seasons, and the sea-ice detail.
+// for tide, snow, and seasons, the land-ice detail, and the sea-ice detail.
 fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfaceValues {
     let circle_position = periodic_noise_circle_position_from_canonical(position_m);
     let bedrock = procedural_bedrock_sample_from_circle(position_m, circle_position);
@@ -122,20 +124,28 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
         maritime_scale * length(bedrock.cluster.gradient)
             + 3.2 * 180.0 * scene.inverse_world_size_m.y
     );
-    if coldest_water_c - reach_c < -1.0 || EVALUATE_ALL_BRANCHES {
-        values.sea_ice = sea_ice_detail_at(position_m);
+    let holds_sea_ice = coldest_water_c - reach_c < -1.0 || EVALUATE_ALL_BRANCHES;
+    let ice_amount = clamp(iced.ice_amount, 0.0, 1.0);
+    let holds_land_ice = (ice_amount > 0.0 || EVALUATE_ALL_BRANCHES) && landscape_visibility.z > 0.0;
+    var ice_micro = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    if holds_sea_ice || holds_land_ice {
+        ice_micro = ice_micro_relief_sample(position_m);
+    }
+    if holds_sea_ice {
+        values.sea_ice = sea_ice_detail_at(position_m, ice_micro);
     }
     if !composed && !EVALUATE_ALL_BRANCHES {
         return values;
     }
     initialize_surface_tide_value();
     let land_surface = material_fractal_value(LAND_SURFACE_NOISE_FIELD, position_m, 96.0, 4u);
-    let ice_amount = clamp(iced.ice_amount, 0.0, 1.0);
     let land_shows = ice_amount < 1.0;
-    var ice: TerrainSurface;
-    if ice_amount > 0.0 || EVALUATE_ALL_BRANCHES {
-        ice = ice_surface(position_m, land_surface);
+    var ice_detail = LandIceDetail(0.0, vec2<f32>(0.0));
+    if holds_land_ice {
+        ice_detail = land_ice_detail_at(position_m, land_surface, ice_micro);
     }
+    let ice = land_ice_surface(ice_detail);
+    values.land_ice = LandIceDetail(ice_amount * ice_detail.grade, ice_amount * ice_detail.gradient);
     var surface = ice;
     if land_shows || EVALUATE_ALL_BRANCHES {
         surface_baking = true;
@@ -205,11 +215,21 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
             values.surface_grade,
         ),
     );
+    // Texels whose land ice amount stores as nonzero hold its detail in place
+    // of the autumn colour change, which they give up: land ice forms only
+    // 11 °C colder in annual mean than autumn colour shows.
+    var seasonal_or_ice = values.autumn_color + 0.5;
+    if values.land_ice_amount >= 0.5 / 255.0 {
+        seasonal_or_ice = vec3<f32>(
+            values.land_ice.grade,
+            encode_detail_gradient(values.land_ice.gradient, BAKED_DETAIL_GRADIENT_RANGE),
+        );
+    }
     textureStore(
         baked_color_output,
         texel.slot,
         layer + 2u,
-        vec4<f32>(values.autumn_color + 0.5, 0.5 * values.snow_detail_scale),
+        vec4<f32>(seasonal_or_ice, 0.5 * values.snow_detail_scale),
     );
     textureStore(
         baked_color_output,

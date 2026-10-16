@@ -265,6 +265,12 @@ and verification details.
   waves, and all lighting, clouds, and shadows.
 - **[Implicit]** Sea-ice slabs and fractures, whose visibility follows the
   pixel footprint, are evaluated per pixel.
+- **[Implicit]** The bake keeps the land ice's own colour and relief beside the
+  composition, so snow covers only the land share of partial land ice without
+  evaluating ice per pixel.
+- **[Implicit]** Texels with land ice hold its detail in the channels of the
+  autumn colour change, which the far colder annual climate of land ice rules
+  out.
 - **[Implicit]** A frame bakes only texels the view newly exposes or an input
   change invalidates.
 - **[Explicit]** Level spacings form one fixed geometric ladder whose ratio is a

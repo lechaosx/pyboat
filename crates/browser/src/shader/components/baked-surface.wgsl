@@ -3,10 +3,12 @@
 // of elevation with land ice, its gradient, and bed reflectance, then
 // eight-bit layers of the dry, snowless, unseasoned land colour and roughness;
 // the land detail gradient, wetness fraction, and surface grade; the autumn
-// colour change and snow detail scale; the dormancy colour change and land ice
-// amount; and the sea-ice plate noises with their relief gradient, wherever the
-// coldest season freezes the water. The scene applies tide, sea-ice cover,
-// slabs, and fractures, snow, seasons, water, and lighting per pixel.
+// colour change, or on texels with land ice its colour grade and relief, and
+// the snow detail scale; the dormancy colour
+// change and land ice amount; and the sea-ice plate noises with their relief
+// gradient, wherever the coldest season freezes the water. The scene applies
+// tide, sea-ice cover, slabs, and fractures, snow, seasons, water, and
+// lighting per pixel.
 //
 // `scene.baked_surface_grid_m` is the read level's first valid texel centre
 // relative to the camera, then its spacing; `scene.baked_surface_texels` is
@@ -116,36 +118,70 @@ struct BakedLand {
     snow_detail_scale: f32,
     dormancy_color: vec3<f32>,
     land_ice_amount: f32,
+    land_ice: LandIceDetail,
 };
+
+fn decode_detail_gradient(encoded: vec2<f32>, range: f32) -> vec2<f32> {
+    let signed_gradient = 2.0 * encoded - 1.0;
+    return range * sign(signed_gradient) * signed_gradient * signed_gradient;
+}
 
 fn baked_land_at(cell: BakedSurfaceCell) -> BakedLand {
     let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x;
     let color = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
     let detail = baked_bilinear(baked_corners(baked_color, cell, layer + 1u), cell.fraction);
-    let autumn = baked_bilinear(baked_corners(baked_color, cell, layer + 2u), cell.fraction);
-    let dormancy = baked_bilinear(baked_corners(baked_color, cell, layer + 3u), cell.fraction);
-    let signed_gradient = 2.0 * detail.xy - 1.0;
+    let seasonal_corners = baked_corners(baked_color, cell, layer + 2u);
+    let seasonal = baked_bilinear(seasonal_corners, cell.fraction);
+    let dormancy_corners = baked_corners(baked_color, cell, layer + 3u);
+    let dormancy = baked_bilinear(dormancy_corners, cell.fraction);
+    // Texels with land ice hold its detail, premultiplied by its amount, in
+    // place of the autumn colour change, so each corner's share goes to one.
+    let fraction = cell.fraction;
+    let ice_weights = vec4<f32>(
+        (1.0 - fraction.x) * (1.0 - fraction.y),
+        fraction.x * (1.0 - fraction.y),
+        (1.0 - fraction.x) * fraction.y,
+        fraction.x * fraction.y,
+    ) * vec4<f32>(
+        vec4<bool>(
+            dormancy_corners.lower_left.a > 0.0,
+            dormancy_corners.lower_right.a > 0.0,
+            dormancy_corners.upper_left.a > 0.0,
+            dormancy_corners.upper_right.a > 0.0,
+        ),
+    );
+    let ice_payload = ice_weights.x * seasonal_corners.lower_left.rgb
+        + ice_weights.y * seasonal_corners.lower_right.rgb
+        + ice_weights.z * seasonal_corners.upper_left.rgb
+        + ice_weights.w * seasonal_corners.upper_right.rgb;
+    let seasonal_weight = 1.0 - dot(ice_weights, vec4<f32>(1.0));
+    // An encoded 0.5 is no relief.
+    let ice_detail = ice_payload + vec3<f32>(0.0, 0.5, 0.5) * seasonal_weight;
+    let ice_share = 1.0 / max(dormancy.a, 1e-3);
     return BakedLand(
         color.rgb,
         color.a,
-        BAKED_DETAIL_GRADIENT_RANGE * sign(signed_gradient) * signed_gradient * signed_gradient,
+        decode_detail_gradient(detail.xy, BAKED_DETAIL_GRADIENT_RANGE),
         detail.z / 3.0,
         detail.w,
-        autumn.rgb - 0.5,
-        2.0 * autumn.a,
+        seasonal.rgb - ice_payload - 0.5 * seasonal_weight,
+        2.0 * seasonal.a,
         dormancy.rgb - 0.5,
         dormancy.a,
+        LandIceDetail(
+            clamp(ice_share * ice_detail.r, 0.0, 1.0),
+            ice_share * decode_detail_gradient(ice_detail.gb, BAKED_DETAIL_GRADIENT_RANGE),
+        ),
     );
 }
 
 fn baked_sea_ice_detail_at(cell: BakedSurfaceCell) -> SeaIceDetail {
     let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x + 4u;
     let detail = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
-    let signed_gradient = 2.0 * detail.zw - 1.0;
     return SeaIceDetail(
         2.0 * detail.x - 1.0,
         2.0 * detail.y - 1.0,
-        BAKED_SEA_ICE_GRADIENT_RANGE * sign(signed_gradient) * signed_gradient * signed_gradient,
+        decode_detail_gradient(detail.zw, BAKED_SEA_ICE_GRADIENT_RANGE),
     );
 }
 
@@ -248,7 +284,6 @@ fn scene_surface_at(
         surface = select_terrain_surface(
             surface,
             baked_land_surface(
-                position_m,
                 baked_land_at(cell),
                 elevation.value,
                 water_height_m,
@@ -262,7 +297,6 @@ fn scene_surface_at(
 
 // The baked land composition with the live tide, seasons, and snow.
 fn baked_land_surface(
-    position_m: vec2<f32>,
     baked: BakedLand,
     elevation_m: f32,
     water_height_m: f32,
@@ -308,10 +342,7 @@ fn baked_land_surface(
         );
         let partial_ice = baked.land_ice_amount > 0.0;
         if partial_ice || EVALUATE_ALL_BRANCHES {
-            let ice = ice_surface(
-                position_m,
-                material_fractal_value(LAND_SURFACE_NOISE_FIELD, position_m, 96.0, 4u),
-            );
+            let ice = land_ice_surface(baked.land_ice);
             cover = select_terrain_surface(
                 cover,
                 blend_terrain_surface(cover, ice, baked.land_ice_amount),
