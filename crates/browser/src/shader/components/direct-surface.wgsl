@@ -4,13 +4,15 @@ fn scene_surface_at(
     water_height_m: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> SceneSurface {
+    let terrain = procedural_terrain_sample_with_climate_from_circle(
+        position_m,
+        circle_position,
+        atmosphere.climate,
+    );
     return composed_scene_surface(
         position_m,
-        procedural_terrain_sample_with_climate_from_circle(
-            position_m,
-            circle_position,
-            atmosphere.climate,
-        ),
+        terrain,
+        direct_sea_ice_detail(position_m, terrain),
         water_height_m,
         atmosphere,
     );

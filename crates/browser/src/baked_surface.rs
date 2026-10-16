@@ -12,7 +12,7 @@ pub const RUNGS_PER_OCTAVE: i32 = 2;
 pub const BAKED_SURFACE_LEVELS: u32 = 2;
 /// Eight-bit layers per level. Keep synchronized with
 /// `BAKED_SURFACE_COLOR_LAYERS` in terrain.wgsl.
-pub const BAKED_SURFACE_COLOR_LAYERS: u32 = 4;
+pub const BAKED_SURFACE_COLOR_LAYERS: u32 = 5;
 /// One rgba16float layer and the rgba8unorm layers.
 const BYTES_PER_TEXEL: u64 = 8 + 4 * BAKED_SURFACE_COLOR_LAYERS as u64;
 /// The WebGPU default limit, which the renderer requests.

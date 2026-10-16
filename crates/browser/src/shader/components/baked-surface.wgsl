@@ -3,9 +3,10 @@
 // of elevation with land ice, its gradient, and bed reflectance, then
 // eight-bit layers of the dry, snowless, unseasoned land colour and roughness;
 // the land detail gradient, wetness fraction, and surface grade; the autumn
-// colour change and snow detail scale; and the dormancy colour change and land
-// ice amount. The scene applies tide, sea ice, snow, seasons, water, and
-// lighting per pixel.
+// colour change and snow detail scale; the dormancy colour change and land ice
+// amount; and the sea-ice plate noises with their relief gradient, wherever the
+// coldest season freezes the water. The scene applies tide, sea-ice cover,
+// slabs, and fractures, snow, seasons, water, and lighting per pixel.
 //
 // `scene.baked_surface_grid_m` is the read level's first valid texel centre
 // relative to the camera, then its spacing; `scene.baked_surface_texels` is
@@ -137,14 +138,21 @@ fn baked_land_at(cell: BakedSurfaceCell) -> BakedLand {
     );
 }
 
-// The depth beyond which nothing rendered reads the bed: sea-ice shallowing
-// where the water freezes, elsewhere the vanishing of coastal detail, which
-// lies beyond depth-limited waves, and bottom tint.
-fn bed_unseen_depth_m(climate: SurfaceClimateSample, cluster: f32) -> f32 {
-    let water_c = water_temperature_c_from_climate(climate)
-        + maritime_temperature_scale_c(climate) * cluster;
-    let unseen_m = max(32.0, 2.0 + 2.0 * tuning.water_tuning.x);
-    return select(unseen_m, max(160.0, unseen_m), water_c < 0.0);
+fn baked_sea_ice_detail_at(cell: BakedSurfaceCell) -> SeaIceDetail {
+    let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x + 4u;
+    let detail = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
+    let signed_gradient = 2.0 * detail.zw - 1.0;
+    return SeaIceDetail(
+        2.0 * detail.x - 1.0,
+        2.0 * detail.y - 1.0,
+        BAKED_SEA_ICE_GRADIENT_RANGE * sign(signed_gradient) * signed_gradient * signed_gradient,
+    );
+}
+
+// The depth beyond which open water reads nothing of the bed: the vanishing of
+// coastal detail, which lies beyond depth-limited waves, and bottom tint.
+fn bed_unseen_depth_m() -> f32 {
+    return max(32.0, 2.0 + 2.0 * tuning.water_tuning.x);
 }
 
 fn scene_surface_at(
@@ -155,17 +163,19 @@ fn scene_surface_at(
 ) -> SceneSurface {
     let climate = atmosphere.climate;
     // The landform grid's broad elevation bounds the bed: offshore the bed
-    // deepens from it, and coastal and land detail vanish. A bed beyond what
-    // anything reads needs no bake. The 2 m margin covers the grid's
-    // interpolation.
+    // deepens from it, and coastal and land detail vanish. Open water over a
+    // bed beyond what anything reads needs no bake. The 2 m margin covers the
+    // grid's interpolation.
     let broad_depth_m = -sampled_broad_landform_elevation_m(position_m) - 2.0;
     let bed_depth_m = min(shaped_bed_depth_m(broad_depth_m), OCEAN_FLOOR_DEPTH_M);
     let offshore = broad_depth_m > 0.0;
     var cluster = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var open_water = TerrainNoiseSample(1.0, vec2<f32>(0.0));
     if offshore || EVALUATE_ALL_BRANCHES {
         cluster = terrain_broad_noise(TERRAIN_CLUSTER_NOISE, position_m, circle_position);
+        open_water = sea_ice_open_water(climate, cluster);
     }
-    if offshore && bed_depth_m > bed_unseen_depth_m(climate, cluster.value) {
+    if offshore && bed_depth_m > bed_unseen_depth_m() && 1.0 - open_water.value <= 0.5 {
         var bed: TerrainSample;
         bed.elevation_m = -bed_depth_m;
         bed.material_elevation_m = -bed_depth_m;
@@ -174,15 +184,22 @@ fn scene_surface_at(
         return composed_scene_surface(
             position_m,
             solid_ice_sample(bed, cluster, climate, position_m),
+            SeaIceDetail(0.0, 0.0, vec2<f32>(0.0)),
             water_height_m,
             atmosphere,
         );
     }
     let cell = baked_surface_cell(position_m);
     if !cell.valid {
+        let terrain = procedural_terrain_sample_with_climate_from_circle(
+            position_m,
+            circle_position,
+            climate,
+        );
         return composed_scene_surface(
             position_m,
-            procedural_terrain_sample_with_climate_from_circle(position_m, circle_position, climate),
+            terrain,
+            direct_sea_ice_detail(position_m, terrain),
             water_height_m,
             atmosphere,
         );
@@ -195,13 +212,8 @@ fn scene_surface_at(
     if submerged || EVALUATE_ALL_BRANCHES {
         if !offshore && !EVALUATE_ALL_BRANCHES {
             cluster = terrain_broad_noise(TERRAIN_CLUSTER_NOISE, position_m, circle_position);
+            open_water = sea_ice_open_water(climate, cluster);
         }
-        let maritime_scale = maritime_temperature_scale_c(climate);
-        var water_temperature: TerrainNoiseSample;
-        water_temperature.value = water_temperature_c_from_climate(climate)
-            + maritime_scale * cluster.value;
-        water_temperature.gradient = maritime_scale * cluster.gradient;
-        let open_water = terrain_smoothstep_sample(-2.0, 0.0, water_temperature);
         let cover = 1.0 - open_water.value;
         if submerged && cover > 0.5 {
             water_ice_amount = cover;
@@ -212,7 +224,12 @@ fn scene_surface_at(
     let is_land = sea_ice || elevation.value >= water_height_m;
     var surface: TerrainSurface;
     if sea_ice || EVALUATE_ALL_BRANCHES {
-        surface = sea_ice_surface(position_m, water_ice_amount, baked.elevation.value);
+        surface = sea_ice_surface(
+            position_m,
+            water_ice_amount,
+            baked.elevation.value,
+            baked_sea_ice_detail_at(cell),
+        );
     }
     if !is_land || EVALUATE_ALL_BRANCHES {
         surface = select_terrain_surface(

@@ -1,7 +1,7 @@
 /// Memory for the baked surface's textures by device class; above it the bake
-/// coarsens. At 24 bytes per texel and two levels on the √2 ladder, 256 MiB
-/// holds a 1080p scene at one texel per pixel (191 MiB) and 512 MiB a 1440p
-/// one (339 MiB). The raised cap needs `navigator.deviceMemory`'s largest
+/// coarsens. At 28 bytes per texel and two levels on the √2 ladder, 256 MiB
+/// holds a 1080p scene at one texel per pixel (223 MiB) and 512 MiB a 1440p
+/// one (396 MiB). The raised cap needs `navigator.deviceMemory`'s largest
 /// report, 8 GB; browsers without it keep 256 MiB.
 pub fn baked_surface_memory_bytes(touch_screen: bool, device_memory_gb: Option<f64>) -> u64 {
     if touch_screen {
@@ -147,7 +147,7 @@ impl GraphicsQuality {
     ///   1.5 ms; 99th-percentile image changes stay at 1 level.
     /// - The metre-scale micro-relief material field takes six octaves. The
     ///   baked surface holds all six at every tier, so the limit applies only
-    ///   to sea ice and to positions evaluated directly.
+    ///   to positions evaluated directly.
     pub fn scene_constants(self) -> &'static [(&'static str, f64)] {
         match self {
             Self::Low => &[

@@ -946,6 +946,11 @@ fn water_temperature_c() -> f32 {
 }
 
 fn water_temperature_c_from_climate(climate: SurfaceClimateSample) -> f32 {
+    return water_temperature_c_at_season(climate, scene.seasonal_phase_factors.w);
+}
+
+// `water_season` is the water's seasonal phase factor, between -1 and 1.
+fn water_temperature_c_at_season(climate: SurfaceClimateSample, water_season: f32) -> f32 {
     let normalized_latitude = clamp(abs(climate.latitude_degrees) / 90.0, 0.0, 1.0);
     let polar_fraction = pow(normalized_latitude, 1.5);
     let annual_temperature_c = 27.0 - 45.0 * polar_fraction;
@@ -955,8 +960,7 @@ fn water_temperature_c_from_climate(climate: SurfaceClimateSample) -> f32 {
     );
     return annual_temperature_c
         + maritime_moderation_c
-        + 0.28 * seasonal_temperature_range_c * climate.seasonal_latitude_factor
-            * scene.seasonal_phase_factors.w;
+        + 0.28 * seasonal_temperature_range_c * climate.seasonal_latitude_factor * water_season;
 }
 
 fn climate_moisture_support_from_water_vapor(

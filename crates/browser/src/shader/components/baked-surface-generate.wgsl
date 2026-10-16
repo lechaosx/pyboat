@@ -66,11 +66,12 @@ struct BakedSurfaceValues {
     snow_detail_scale: f32,
     dormancy_color: vec3<f32>,
     land_ice_amount: f32,
+    sea_ice: SeaIceDetail,
 };
 
-// The static surface at one position: terrain with land ice, and the dry,
+// The static surface at one position: terrain with land ice, the dry,
 // snowless, unseasoned land composition with the factors the scene applies
-// for tide, snow, and seasons.
+// for tide, snow, and seasons, and the sea-ice detail.
 fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfaceValues {
     let circle_position = periodic_noise_circle_position_from_canonical(position_m);
     let bedrock = procedural_bedrock_sample_from_circle(position_m, circle_position);
@@ -105,6 +106,25 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
         ),
     );
     values.roughness = 1.0;
+    // Sea ice follows the season per pixel and shows where water is below
+    // -1 °C, so texels hold its detail where the coldest season brings water
+    // below that anywhere within the bilinear stencil's reach. Coldest water,
+    // with its maritime anomaly, changes by at most 3.1 °C per degree of
+    // latitude, near 83°.
+    let stencil_reach_m = 2.0 * spacing_m;
+    let maritime_scale = maritime_temperature_scale_c(climate);
+    let coldest_water_c = water_temperature_c_at_season(
+        climate,
+        -sign(climate.seasonal_latitude_factor),
+    )
+        + maritime_scale * bedrock.cluster.value;
+    let reach_c = stencil_reach_m * (
+        maritime_scale * length(bedrock.cluster.gradient)
+            + 3.2 * 180.0 * scene.inverse_world_size_m.y
+    );
+    if coldest_water_c - reach_c < -1.0 || EVALUATE_ALL_BRANCHES {
+        values.sea_ice = sea_ice_detail_at(position_m);
+    }
     if !composed && !EVALUATE_ALL_BRANCHES {
         return values;
     }
@@ -157,8 +177,8 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
 }
 
 // Square-root companding keeps gentle gradients precise in eight bits.
-fn encode_detail_gradient(gradient: vec2<f32>) -> vec2<f32> {
-    let normalized = clamp(gradient / BAKED_DETAIL_GRADIENT_RANGE, vec2<f32>(-1.0), vec2<f32>(1.0));
+fn encode_detail_gradient(gradient: vec2<f32>, range: f32) -> vec2<f32> {
+    let normalized = clamp(gradient / range, vec2<f32>(-1.0), vec2<f32>(1.0));
     return 0.5 + 0.5 * sign(normalized) * sqrt(abs(normalized));
 }
 
@@ -180,7 +200,7 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
         texel.slot,
         layer + 1u,
         vec4<f32>(
-            encode_detail_gradient(values.detail_gradient),
+            encode_detail_gradient(values.detail_gradient, BAKED_DETAIL_GRADIENT_RANGE),
             3.0 * values.wet_fraction,
             values.surface_grade,
         ),
@@ -196,5 +216,14 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
         texel.slot,
         layer + 3u,
         vec4<f32>(values.dormancy_color + 0.5, values.land_ice_amount),
+    );
+    textureStore(
+        baked_color_output,
+        texel.slot,
+        layer + 4u,
+        vec4<f32>(
+            0.5 + 0.5 * vec2<f32>(values.sea_ice.broad, values.sea_ice.fine),
+            encode_detail_gradient(values.sea_ice.gradient, BAKED_SEA_ICE_GRADIENT_RANGE),
+        ),
     );
 }

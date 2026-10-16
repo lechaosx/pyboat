@@ -61,9 +61,12 @@ fn terrain_cache_octaves(field: u32, spacing_m: f32, horizontal_scale: f32) -> u
 
 // Eight-bit colour layers per baked surface level. Keep synchronized with
 // `BAKED_SURFACE_COLOR_LAYERS` in baked_surface.rs.
-const BAKED_SURFACE_COLOR_LAYERS: u32 = 4u;
+const BAKED_SURFACE_COLOR_LAYERS: u32 = 5u;
 // The largest land detail gradient the baked surface encodes.
 const BAKED_DETAIL_GRADIENT_RANGE: f32 = 4.0;
+// The largest sea-ice relief gradient the baked surface encodes. Ranges of
+// 0.25 and 1.0 render boat-zoom floes within two 8-bit levels of each other.
+const BAKED_SEA_ICE_GRADIENT_RANGE: f32 = 0.5;
 
 fn direct_terrain_broad_noise(
     field: u32,
@@ -102,6 +105,20 @@ fn maritime_temperature_scale_c(climate: SurfaceClimateSample) -> f32 {
     return 16.0 * (1.0 - smoothstep(75.0, 90.0, abs(climate.latitude_degrees)));
 }
 
+// The share of the water left open by sea ice, which shows where it covers
+// more than half.
+fn sea_ice_open_water(
+    climate: SurfaceClimateSample,
+    maritime_temperature: TerrainNoiseSample,
+) -> TerrainNoiseSample {
+    let maritime_scale = maritime_temperature_scale_c(climate);
+    var water_temperature: TerrainNoiseSample;
+    water_temperature.value = water_temperature_c_from_climate(climate)
+        + maritime_scale * maritime_temperature.value;
+    water_temperature.gradient = maritime_scale * maritime_temperature.gradient;
+    return terrain_smoothstep_sample(-2.0, 0.0, water_temperature);
+}
+
 fn solid_ice_sample(
     terrain: TerrainSample,
     maritime_temperature: TerrainNoiseSample,
@@ -115,11 +132,7 @@ fn solid_ice_sample(
     bedrock.value = terrain.elevation_m;
     bedrock.gradient = terrain.gradient;
     if bedrock.value < 0.0 {
-        var effective_water_temperature: TerrainNoiseSample;
-        effective_water_temperature.value = water_temperature_c_from_climate(climate)
-            + maritime_scale * maritime_temperature.value;
-        effective_water_temperature.gradient = maritime_scale * maritime_temperature.gradient;
-        let open_water = terrain_smoothstep_sample(-2.0, 0.0, effective_water_temperature);
+        let open_water = sea_ice_open_water(climate, maritime_temperature);
         let cover = 1.0 - open_water.value;
         if cover <= 0.5 {
             return surface;
@@ -866,10 +879,33 @@ fn ice_surface(position_m: vec2<f32>, surface: f32) -> TerrainSurface {
     );
 }
 
+// The sea-ice plate noises and their relief, which depend only on position.
+struct SeaIceDetail {
+    broad: f32,
+    fine: f32,
+    gradient: vec2<f32>,
+};
+
+fn sea_ice_detail_at(position_m: vec2<f32>) -> SeaIceDetail {
+    let fine = material_fractal_sample(
+        SEA_ICE_FINE_NOISE_FIELD,
+        position_m,
+        72.0,
+        3u,
+    );
+    let micro = material_micro_relief_sample(position_m, 4.0);
+    return SeaIceDetail(
+        material_fractal_value(SEA_ICE_BROAD_NOISE_FIELD, position_m, 768.0, 4u),
+        fine.value,
+        0.20 * fine.gradient + 0.16 * micro.gradient,
+    );
+}
+
 fn sea_ice_surface(
     position_m: vec2<f32>,
     cover: f32,
     bedrock_elevation_m: f32,
+    detail: SeaIceDetail,
 ) -> TerrainSurface {
     let color_visibility = solid_material_color_visibility().w;
     if landscape_visibility.z <= 0.0 {
@@ -879,19 +915,6 @@ fn sea_ice_surface(
             clamp(0.42 * tuning.ice_surface.w, 0.0, 1.0),
         );
     }
-    let broad = material_fractal_sample(
-        SEA_ICE_BROAD_NOISE_FIELD,
-        position_m,
-        768.0,
-        4u,
-    );
-    let fine = material_fractal_sample(
-        SEA_ICE_FINE_NOISE_FIELD,
-        position_m,
-        72.0,
-        3u,
-    );
-    let micro = material_micro_relief_sample(position_m, 4.0);
     let target_slab_size_m = max(tuning.ice_structure.x, 1.0);
     let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / target_slab_size_m)));
     let slab_size_m = vec2<f32>(
@@ -951,7 +974,7 @@ fn sea_ice_surface(
     let fracture_stress = smoothstep(
         -0.45,
         0.45,
-        0.72 * broad.value + 0.28 * fine.value,
+        0.72 * detail.broad + 0.28 * detail.fine,
     );
     let fracture = clamp(
         tuning.ice_structure.z
@@ -967,11 +990,11 @@ fn sea_ice_surface(
     let shallow = smoothstep(-120.0, -3.0, bedrock_elevation_m);
     let shore = smoothstep(-18.0, -1.0, bedrock_elevation_m);
     let compactness = smoothstep(0.50, 0.90, cover);
-    let plate_boundary = 1.0 - smoothstep(0.0, 0.16, abs(broad.value));
+    let plate_boundary = 1.0 - smoothstep(0.0, 0.16, abs(detail.broad));
     let surface_grade = clamp(
         0.55
-            + 0.28 * broad.value
-            + 0.10 * fine.value
+            + 0.28 * detail.broad
+            + 0.10 * detail.fine
             + 0.12 * slab_visibility * (slab_tone - 0.5)
             + 0.10 * compactness
             - 0.12 * plate_boundary
@@ -991,11 +1014,7 @@ fn sea_ice_surface(
     );
     return TerrainSurface(
         color_visibility * mix(deep_color, shallow_color, shallow),
-        tuning.ice_surface.z * (
-            mix(slab_visibility * slab_tilt, 0.45 * broad.gradient, fracture)
-                + 0.20 * fine.gradient
-                + 0.16 * micro.gradient
-        ),
+        tuning.ice_surface.z * ((1.0 - fracture) * slab_visibility * slab_tilt + detail.gradient),
         clamp(
             tuning.ice_surface.w * (
                 0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow

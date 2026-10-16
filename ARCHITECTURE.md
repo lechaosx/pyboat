@@ -257,11 +257,14 @@ and verification details.
 ### Baked surface
 
 - **[Explicit]** The static surface persists between frames in a world-anchored
-  clipmap: terrain with land ice, and the dry, snowless, unseasoned land
-  composition with the factors its wetness and seasons change.
+  clipmap: terrain with land ice, the dry, snowless, unseasoned land
+  composition with the factors its wetness and seasons change, and the sea-ice
+  plate noises and relief.
 - **[Explicit]** The scene applies per pixel only what changes with time,
   season, or weather: tide, sea ice, snow, autumn and dormancy colour, rain,
   waves, and all lighting, clouds, and shadows.
+- **[Implicit]** Sea-ice slabs and fractures, whose visibility follows the
+  pixel footprint, are evaluated per pixel.
 - **[Implicit]** A frame bakes only texels the view newly exposes or an input
   change invalidates.
 - **[Explicit]** Level spacings form one fixed geometric ladder whose ratio is a
@@ -302,8 +305,10 @@ and verification details.
   textures serve, with direct evaluation wherever no level holds the view.
 - **[Implicit]** Positions without valid baked texels compose the surface
   directly.
-- **[Implicit]** Water too deep for waves, bottom tint, or sea-ice shallowing to
-  reach its bed reads no bake.
+- **[Implicit]** Open water too deep for waves or bottom tint to reach its bed
+  reads no bake.
+- **[Implicit]** The bake holds sea-ice detail only where the coldest season
+  freezes the water.
 
 ## Playground boundary
 

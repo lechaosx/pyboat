@@ -97,7 +97,7 @@
   },
   {
     "id": "polar-ice-edge-low",
-    "exercises": "Ice edge at the low tier: sea-ice boundary unchanged without ice micro relief",
+    "exercises": "Ice edge at the low tier: sea-ice boundary and baked ice detail unchanged beside one decorative water octave",
     "seed": "0x5eed",
     "cameraM": [7100, 29000],
     "viewHeightM": 2400,

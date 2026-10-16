@@ -2128,6 +2128,104 @@ fn baked_scene_matches_direct_scene_at_shorelines_within_the_touch_budget() {
     );
 }
 
+#[test]
+fn baked_sea_ice_differs_from_direct_less_than_a_half_pixel_pan() {
+    // The bench's northern summer ice edge and the floes beyond it, and the
+    // coldest season's ice edge, where the bake's freeze mask ends, in pixels
+    // of boat-zoom and 2.4 km views 1080 pixels high.
+    for (world_time, (camera_x_m, camera_y_m), view_height_m) in [
+        ("15595200", (7_100.0, 29_055.0), 240.0),
+        ("15595200", (7_100.0, 29_600.0), 240.0),
+        ("15595200", (7_100.0, 29_000.0), 2_400.0),
+        ("5529600", (4_878.0, 23_000.0), 240.0),
+        ("5529600", (4_878.0, 23_000.0), 2_400.0),
+    ] {
+        let pixel_m = view_height_m / 1080.0;
+        let render = |label, diagnostic, camera_x_m: f32, arguments: &[&str]| {
+            render_capture(
+                label,
+                &[
+                    &[
+                        "--width",
+                        "480",
+                        "--height",
+                        "270",
+                        "--camera-x",
+                        &camera_x_m.to_string(),
+                        "--camera-y",
+                        &camera_y_m.to_string(),
+                        "--view-height",
+                        &(pixel_m * 270.0).to_string(),
+                        "--world-time",
+                        world_time,
+                        "--diagnostic",
+                        diagnostic,
+                        "--cloud-rendering",
+                        "0,0,1,1",
+                        "--cloud-shadows",
+                        "0,0,0.85,0",
+                    ],
+                    arguments,
+                ]
+                .concat(),
+            )
+        };
+        // Without its colour, sea ice renders black.
+        let sea_ice: Vec<bool> = render(
+            "sea-ice-mask",
+            "scene_direct",
+            camera_x_m,
+            &["--solid-material-colors", "1,1,1,0"],
+        )
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| pixel[..3] == [0, 0, 0])
+        .collect();
+        // Relief finer than a pixel aliases differently in each reconstruction,
+        // as in a sub-pixel pan, while lost or misplaced plate detail shifts
+        // every ice pixel.
+        let direct = render("sea-ice-direct", "scene_direct", camera_x_m, &[]);
+        let baked = mean_difference(
+            &render("sea-ice-baked", "scene", camera_x_m, &[]),
+            &direct,
+            &sea_ice,
+        );
+        let panned = mean_difference(
+            &render(
+                "sea-ice-panned",
+                "scene_direct",
+                camera_x_m + 0.5 * pixel_m,
+                &[],
+            ),
+            &direct,
+            &sea_ice,
+        );
+        let label =
+            format!("{view_height_m} m view at ({camera_x_m}, {camera_y_m}), {world_time} s");
+        assert!(
+            sea_ice.iter().filter(|&&ice| ice).count() > sea_ice.len() / 4,
+            "{label}: too little sea ice",
+        );
+        assert!(
+            baked <= panned,
+            "{label}: baked sea ice differs by {baked}, a half-pixel pan by {panned}",
+        );
+    }
+}
+
+/// The mean over `selected` pixels of each one's largest RGB channel difference.
+fn mean_difference(left: &[u8], right: &[u8], selected: &[bool]) -> f64 {
+    let (sum, count) = pixel_differences(left, right)
+        .into_iter()
+        .zip(selected)
+        .filter(|&(_, &selected)| selected)
+        .fold((0.0, 0), |(sum, count), (difference, _)| {
+            (sum + f64::from(difference), count + 1)
+        });
+    sum / f64::from(count)
+}
+
 /// Removes every material colour except water's, leaving land, ice, and lower
 /// clouds black.
 const WATER_ONLY: [&str; 6] = [
