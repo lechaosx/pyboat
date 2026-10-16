@@ -709,6 +709,7 @@ pub fn playground_scene_uniforms(
     exposure_and_output: &[f32],
     low_cloud_body_size: f32,
     landform_shadow_reach_m: f32,
+    terrain_elevation_scale: f32,
     terrain_cache: &mut PlaygroundTerrainCache,
     terrain_horizontal_scale: Option<f32>,
     baked_surface: &mut PlaygroundBakedSurface,
@@ -745,6 +746,7 @@ pub fn playground_scene_uniforms(
         FieldGridTuning {
             low_cloud_body_size,
             landform_shadow_reach_m,
+            terrain_elevation_scale,
         },
     );
     let (occluder_field_grid_m, occluder_field_texels) = grids.occluder_uniforms();

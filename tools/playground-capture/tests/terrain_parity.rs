@@ -1155,6 +1155,241 @@ fn landform_shadows_use_source_specific_apparent_radii() {
 }
 
 #[test]
+fn shadow_types_share_their_darkness_and_near_horizon_cutoff() {
+    let transmittance = |light_height: f32, cloud_depth: f32| {
+        let pixel = render_diagnostic_image_at(
+            WorldGeometry::default(),
+            Vector::ZERO,
+            0.0,
+            &format!("lighting_shadow_darkness_{light_height}_{cloud_depth}"),
+            1,
+            1,
+        );
+        [0, 1, 2].map(|channel| srgb_channel_to_linear(pixel[channel]))
+    };
+    let opaque_cloud_depth = 1_000.0;
+    for light_height in [0.02, 0.035] {
+        let shadows = transmittance(light_height, opaque_cloud_depth);
+        assert!(
+            shadows.iter().all(|&shadow| shadow > 0.99),
+            "shadows below the cutoff at light height {light_height} above the horizon: {shadows:?}",
+        );
+    }
+    for light_height in [0.045, 0.05, 0.055, 0.1, 0.3, 0.8] {
+        let [landform, ground_cloud, cloud_on_cloud] =
+            transmittance(light_height, opaque_cloud_depth);
+        assert!(
+            (landform - ground_cloud).abs() < 0.015
+                && (ground_cloud - cloud_on_cloud).abs() < 0.015,
+            "blocked light differs at light height {light_height} above the horizon: landform {landform}, \
+             ground cloud {ground_cloud}, cloud over cloud {cloud_on_cloud}",
+        );
+    }
+    for light_height in [0.1, 0.8] {
+        let [landform, ..] = transmittance(light_height, opaque_cloud_depth);
+        assert!(
+            landform < 0.01,
+            "blocking landform keeps {landform} at {light_height}"
+        );
+    }
+    for light_height in [0.05, 0.1, 0.3, 0.8] {
+        let [_, ground_cloud, cloud_on_cloud] = transmittance(light_height, 0.5);
+        assert!(
+            (ground_cloud - cloud_on_cloud).abs() < 0.015,
+            "cloud darkness curves differ at light height {light_height} above the horizon: \
+             ground {ground_cloud}, over cloud {cloud_on_cloud}",
+        );
+    }
+}
+
+/// The first time on `day` after local noon when the sea-level Sun at
+/// `position_m` sinks below `sun_z`.
+fn evening_time_at_sun_z(world: WorldGeometry, position_m: Vector, day: u32, sun_z: f32) -> f64 {
+    let sun_z_at = |world_time_seconds: f64| {
+        celestial_lighting(world_celestial_conditions(
+            world,
+            world_time_seconds,
+            position_m,
+        ))
+        .sun_direction[2]
+    };
+    let start_seconds = f64::from(day) * 86_400.0;
+    let noon_seconds = (0..=1_440)
+        .map(|minute| start_seconds + f64::from(minute) * 60.0)
+        .max_by(|left, right| sun_z_at(*left).total_cmp(&sun_z_at(*right)))
+        .unwrap();
+    (0..=1_440)
+        .map(|step| noon_seconds + f64::from(step) * 30.0)
+        .find(|&world_time_seconds| sun_z_at(world_time_seconds) < sun_z)
+        .expect("the Sun should set after noon")
+}
+
+/// Per-pixel share of direct sunlight that landform shadows remove, over pixels
+/// the Sun lights, at full shadow strength; with a reach, from the legacy look's
+/// fixed march of that length.
+fn landform_occlusion(
+    world: WorldGeometry,
+    position_m: Vector,
+    world_time_seconds: f64,
+    view_height_m: f32,
+    legacy_reach_m: Option<u32>,
+) -> Vec<Option<f32>> {
+    let (width, height) = (160, 90);
+    let sun_only = [
+        ("--cloud-shadows", "0,0,0.85,0"),
+        ("--layer-material-colors", "0,0,0,0"),
+        ("--light-contributions", "1,0,0,0"),
+    ];
+    let render = |landform: &str| {
+        let mut all = sun_only.to_vec();
+        if legacy_reach_m.is_some() {
+            all.push(("--legacy-shadow-look", ""));
+        }
+        all.push(("--landform-lighting", landform));
+        render_controlled_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            "scene",
+            width,
+            height,
+            &all,
+        )
+    };
+    let reach = legacy_reach_m.unwrap_or(320);
+    // The legacy look holds landform shadows to 70% of their strength.
+    let strength = if legacy_reach_m.is_some() { 0.7 } else { 1.0 };
+    let unshadowed = render(&format!("0,0,{reach},0"));
+    let shadowed = render(&format!("0,1,{reach},0"));
+    unshadowed
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(shadowed.as_chunks::<4>().0)
+        .map(|(off, on)| {
+            let off = linear_luminance(off);
+            (off > 2.0e-4).then(|| (off - linear_luminance(on)) / off / strength)
+        })
+        .collect()
+}
+
+#[test]
+fn low_sun_landform_shadows_keep_near_blockers_of_a_dense_march() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-8_700.0, 1_800.0);
+    let view_height_m = 300.0;
+    let world_time_seconds =
+        evening_time_at_sun_z(world, position_m, 3, 8.0_f32.to_radians().sin());
+    let occlusion = |legacy_reach_m| {
+        landform_occlusion(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            legacy_reach_m,
+        )
+    };
+    let shipped = occlusion(None);
+    // Fixed marches of many lengths, each with taps from a sixteenth of its
+    // reach to the whole, together sample every distance up to 320 m, the near
+    // field a longer march must not lose.
+    let mut reference = vec![None::<f32>; shipped.len()];
+    let mut high_light_march = Vec::new();
+    for reach_m in [20, 40, 80, 160, 320] {
+        let march = occlusion(Some(reach_m));
+        for (union, sample) in reference.iter_mut().zip(&march) {
+            *union = sample.map(|sample| union.map_or(sample, |union| union.max(sample)));
+        }
+        if reach_m == 320 {
+            high_light_march = march;
+        }
+    }
+    let missing_share = |march: &[Option<f32>]| {
+        let shadowed: Vec<_> = reference
+            .iter()
+            .zip(march)
+            .filter_map(|(reference, march)| Some((reference.filter(|&r| r > 0.3)?, (*march)?)))
+            .collect();
+        assert!(
+            shadowed.len() > 1_000,
+            "the reference shadows only {} pixels",
+            shadowed.len()
+        );
+        let missing = shadowed.iter().filter(|(_, march)| *march < 0.15).count();
+        missing as f32 / shadowed.len() as f32
+    };
+    // The longer march keeps the near blockers that the tuned march finds.
+    let shipped_missing = missing_share(&shipped);
+    let high_light_missing = missing_share(&high_light_march);
+    assert!(
+        shipped_missing < high_light_missing + 0.01,
+        "the march leaves {shipped_missing} of reference-shadowed pixels lit, \
+         the tuned 320 m march {high_light_missing}",
+    );
+}
+
+#[test]
+fn landform_shadows_stay_on_the_ground_while_the_camera_pans() {
+    let world = WorldGeometry::default();
+    let start_m = Vector::new(-8_700.0, 1_800.0);
+    let view_height_m = 300.0;
+    let world_time_seconds = evening_time_at_sun_z(world, start_m, 3, 20.0_f32.to_radians().sin());
+    // `landform_occlusion` renders 160 × 90 pixels, so a 100 m pan east moves
+    // the ground exactly 30 columns left.
+    let (width, height, shift) = (160, 90, 30);
+    let pan_change = |legacy_reach_m| {
+        let [before, after] = [start_m, start_m + Vector::new(100.0, 0.0)].map(|camera_m| {
+            landform_occlusion(
+                world,
+                camera_m,
+                world_time_seconds,
+                view_height_m,
+                legacy_reach_m,
+            )
+        });
+        let mut largest = 0.0_f32;
+        for row in 0..height {
+            for column in shift..width {
+                if let (Some(before), Some(after)) = (
+                    before[row * width + column],
+                    after[row * width + column - shift],
+                ) {
+                    largest = largest.max((before - after).abs());
+                }
+            }
+        }
+        largest
+    };
+    let shipped = pan_change(None);
+    let legacy = pan_change(Some(320));
+    assert!(
+        shipped <= legacy + 0.02,
+        "panning changed landform occlusion by {shipped}, the fixed march by {legacy}",
+    );
+}
+
+#[test]
+fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-10_000.0, 2_000.0);
+    let world_time_seconds =
+        evening_time_at_sun_z(world, position_m, 3, (-3.0_f32).to_radians().sin());
+    let occlusion = landform_occlusion(world, position_m, world_time_seconds, 2_000.0, None);
+    let lit = occlusion.iter().flatten().count();
+    let shadowed = occlusion
+        .iter()
+        .flatten()
+        .filter(|&&share| share > 0.3)
+        .count();
+    assert!(lit > 100, "only {lit} pixels are sunlit");
+    assert!(
+        shadowed * 50 > lit,
+        "{shadowed} of {lit} sunlit hilltop pixels are landform-shadowed",
+    );
+}
+
+#[test]
 fn landform_shadows_are_continuous_across_the_local_tangent() {
     let world = WorldGeometry::default();
     let position_m = representative_shore(world);
@@ -1384,7 +1619,8 @@ fn landform_cast_shadows_reach_open_water() {
             world_time_seconds,
             position_m,
         ));
-        if (0.0..0.7).contains(&light.sun_intensity) && light.sun_intensity > 0.0 {
+        // Above the light heights where shadows fade out near the horizon.
+        if light.sun_intensity < 0.7 && light.sun_direction[2] > 0.06 {
             let direction_index = usize::from(light.sun_direction[0] >= 0.0);
             if low_sun_times[direction_index]
                 .is_none_or(|(_, intensity)| light.sun_intensity < intensity)
@@ -1728,9 +1964,15 @@ fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
         let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
         let surface = celestial_lighting_at_height(world, conditions, 0.0);
         let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
+        // Raised receivers keep shadows while the light is below the
+        // sea-level cutoff.
         [
             surface.sun_direction[2] > 0.04,
             surface.moon_direction[2] > 0.04,
+            surface.sun_direction[2] > -0.15,
+            surface.sun_direction[2] > -0.3,
+            surface.moon_direction[2] > -0.15,
+            surface.moon_direction[2] > -0.3,
             low_cloud.sun_intensity > 0.0,
             low_cloud.moon_intensity > 0.0,
         ]
@@ -3480,7 +3722,10 @@ fn render_controlled_image_at(
         output.to_str().unwrap(),
     ]);
     for (option, value) in controls {
-        capture.args([option, value]);
+        capture.arg(option);
+        if !value.is_empty() {
+            capture.arg(value);
+        }
     }
     let capture = capture
         .output()

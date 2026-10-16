@@ -129,6 +129,7 @@ type State = {
   cloudShadowDensity: number;
   cloudShadowOpacity: number;
   oneTapCloudShadows: number;
+  legacyShadowLook: number;
   terrainScale: number;
   elevationScale: number;
   cliffSlope: number;
@@ -226,6 +227,7 @@ const defaults: State = {
   cloudShadowDensity: 0.85,
   cloudShadowOpacity: 1,
   oneTapCloudShadows: 0,
+  legacyShadowLook: 0,
   terrainScale: 1,
   elevationScale: 3,
   cliffSlope: 0.08,
@@ -255,7 +257,7 @@ const defaults: State = {
   snowCoverage: 1,
   landformReliefStrength: 1,
   landformShadowsVisible: 1,
-  landformShadowStrength: 0.7,
+  landformShadowStrength: 1,
   landformShadowReach: 320,
   pressureWindScale: 1,
   crossIsobarScale: 1,
@@ -504,6 +506,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "skyLightStrength", label: "Clear-sky strength", min: 0, max: 2, step: 0.05 },
       { type: "toggle", key: "canopyLightVisible", label: "Canopy ambient" },
       { type: "range", key: "canopyLightStrength", label: "Canopy strength", min: 0, max: 2, step: 0.05 },
+      { type: "toggle", key: "legacyShadowLook", label: "Legacy shadow look" },
     ],
   },
   {
@@ -515,7 +518,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "landformReliefStrength", label: "Relief strength", min: 0, max: 2, step: 0.05 },
       { type: "toggle", key: "landformShadowsVisible", label: "Cast shadows" },
       { type: "range", key: "landformShadowStrength", label: "Shadow strength", min: 0, max: 1, step: 0.05 },
-      { type: "range", key: "landformShadowReach", label: "Shadow reach · m", min: 40, max: 1200, step: 10 },
+      { type: "range", key: "landformShadowReach", label: "High-light reach · m", min: 40, max: 1200, step: 10 },
       { type: "toggle", key: "grassColorVisible", label: "Grass" },
       { type: "range", key: "grassNormalStrength", label: "Grass normals", min: 0, max: 3, step: 0.05 },
       { type: "toggle", key: "forestColorVisible", label: "Forest" },
@@ -1608,6 +1611,7 @@ function updateUniforms(
     ]),
     state.lowCloudBodySize,
     state.landformShadowReach,
+    state.elevationScale,
     terrainCache,
     productionShaders ? undefined : state.terrainScale,
     bakedSurface,
@@ -2131,16 +2135,21 @@ let failedScenePipelineVariant: string | undefined;
 let tierCompilationStatus = "";
 
 function scenePipelineVariant(): string {
-  return `${Math.round(state.graphicsQuality)}:${state.oneTapCloudShadows > 0.5 ? 1 : 3}`;
+  return [
+    Math.round(state.graphicsQuality),
+    state.oneTapCloudShadows > 0.5 ? 1 : 3,
+    state.legacyShadowLook > 0.5 ? 1 : 0,
+  ].join(":");
 }
 
 function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePipelines> {
   let pipelines = scenePipelinesByVariant.get(variant);
   if (!pipelines) {
-    const [quality, cloudShadowTaps] = variant.split(":").map(Number);
+    const [quality, cloudShadowTaps, legacyShadowLook] = variant.split(":").map(Number);
     const constants = {
       ...graphics_quality_scene_constants(graphicsQualities[quality!]!) as Record<string, number>,
       CLOUD_SHADOW_TAPS: cloudShadowTaps!,
+      LEGACY_SHADOW_LOOK: legacyShadowLook!,
     };
     pipelines = Promise.all([
       createPlaygroundPipeline(
@@ -2197,10 +2206,10 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
   }
 }
 
-// Graphics tiers and tap counts are pipeline override constants, so each
-// variant has its own scene pipelines; the previous variant keeps rendering
-// until they are ready. A variant that failed to compile is not retried until
-// another one is selected.
+// Graphics tiers and lab shadow comparisons are pipeline override constants,
+// so each variant has its own scene pipelines; the previous variant keeps
+// rendering until they are ready. A variant that failed to compile is not
+// retried until another one is selected.
 function matchScenePipelinesToState(): Promise<void> {
   scenePipelinesMatch ??= (async () => {
     while (sceneShaders && sceneFields) {

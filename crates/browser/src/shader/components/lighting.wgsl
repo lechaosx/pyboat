@@ -954,7 +954,11 @@ fn celestial_cloud_shadow_depths_at(
     }
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let source = celestial_source_light(direct_light, source_index);
-        let shadowed = source.amount > 0.0 && cloud_shadow_contrast(source.direction) > 0.0;
+        // The legacy look takes shadows only above the sea-level cutoff.
+        let cutoff_horizon_z = select(direct_light.horizon_z, 0.0, LEGACY_SHADOW_LOOK);
+        let shadowed = source.amount > 0.0 && shadow_horizon_cutoff(
+            light_height_above_horizon(source.direction.z, cutoff_horizon_z),
+        ) > 0.0;
         if shadowed || EVALUATE_ALL_BRANCHES {
             let query = cloud_shadow_query(
                 direct_light,
@@ -977,26 +981,36 @@ fn celestial_cloud_shadow_depths_at(
     return celestial_depths;
 }
 
-fn cloud_shadow_contrast(light: vec3<f32>) -> f32 {
-    return smoothstep(0.04, 0.22, light.z);
+// Every shadow fades out as the light's height above its receiver's horizon
+// falls between these; field_grids.rs bounds shadow taps from the lower.
+const SHADOW_CUTOFF_Z: f32 = 0.04;
+const SHADOW_CUTOFF_FULL_Z: f32 = 0.06;
+
+fn light_height_above_horizon(light_z: f32, horizon_z: f32) -> f32 {
+    return (light_z - horizon_z) / (1.0 - horizon_z);
 }
 
-fn cloud_shadow_transmittance(depth: f32, light: vec3<f32>) -> f32 {
-    let shadow = exp(
-        -tuning.cloud_shadows.z
-            * tuning.cloud_rendering.x
-            * cloud_shadow_contrast(light)
-            * depth,
-    );
-    return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
+fn shadow_horizon_cutoff(light_height: f32) -> f32 {
+    return smoothstep(SHADOW_CUTOFF_Z, SHADOW_CUTOFF_FULL_Z, light_height);
 }
 
-fn cloud_disc_shadow_transmittance(depths: vec3<f32>, light: vec3<f32>) -> f32 {
-    return (1.0 / 3.0) * (
-        cloud_shadow_transmittance(depths.x, light)
-            + cloud_shadow_transmittance(depths.y, light)
-            + cloud_shadow_transmittance(depths.z, light)
-    );
+// The mean over the disc's three depths, `cloud_layer_transmittance` per tap.
+fn cloud_disc_shadow_transmittance(
+    depths: vec3<f32>,
+    light: vec3<f32>,
+    horizon_z: f32,
+) -> f32 {
+    let extinction = tuning.cloud_shadows.z * tuning.cloud_rendering.x;
+    var strength = clamp(tuning.cloud_shadows.w, 0.0, 1.0);
+    var shadows: vec3<f32>;
+    if LEGACY_SHADOW_LOOK {
+        shadows = exp(-extinction * smoothstep(0.04, 0.22, light.z) * depths);
+    } else {
+        let light_height = light_height_above_horizon(light.z, horizon_z);
+        shadows = exp(-extinction / max(light_height, 0.20) * depths);
+        strength *= shadow_horizon_cutoff(light_height);
+    }
+    return mix(1.0, (1.0 / 3.0) * (shadows.x + shadows.y + shadows.z), strength);
 }
 
 fn cloud_layer_transmittance(
@@ -1004,17 +1018,19 @@ fn cloud_layer_transmittance(
     light: vec3<f32>,
     receiver_horizon_z: f32,
 ) -> f32 {
-    let slant_cosine = max(
-        (light.z - receiver_horizon_z) / (1.0 - receiver_horizon_z),
-        0.20,
-    );
+    let light_height = light_height_above_horizon(light.z, receiver_horizon_z);
+    let slant_cosine = max(light_height, 0.20);
     let shadow = exp(
         -tuning.cloud_shadows.z
             * tuning.cloud_rendering.x
             * depth
             / slant_cosine,
     );
-    return mix(1.0, shadow, clamp(tuning.cloud_shadows.w, 0.0, 1.0));
+    var strength = clamp(tuning.cloud_shadows.w, 0.0, 1.0);
+    if !LEGACY_SHADOW_LOOK {
+        strength *= shadow_horizon_cutoff(light_height);
+    }
+    return mix(1.0, shadow, strength);
 }
 
 fn effective_cloud_shadow_amount(
@@ -1028,11 +1044,13 @@ fn effective_cloud_shadow_amount(
                 * (1.0 - cloud_disc_shadow_transmittance(
                     sun_depths,
                     receiver.sun_direction,
+                    receiver.horizon_z,
                 ))
             + visibility.y * receiver.moon_amount
                 * (1.0 - cloud_disc_shadow_transmittance(
                     moon_depths,
                     receiver.moon_direction,
+                    receiver.horizon_z,
                 )),
         0.0,
         1.0,

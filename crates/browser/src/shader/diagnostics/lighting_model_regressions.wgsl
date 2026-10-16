@@ -6,6 +6,8 @@ override LIGHTING_MODEL_VISION_GREEN: f32 = 0.25;
 override LIGHTING_MODEL_VISION_BLUE: f32 = 0.1;
 override LIGHTING_MODEL_SIGNAL: f32 = 0.0001;
 override LIGHTING_MODEL_NOISE_PHASE: f32 = 0.0;
+override LIGHTING_MODEL_LIGHT_HEIGHT: f32 = 0.5;
+override LIGHTING_MODEL_CLOUD_DEPTH: f32 = 1.0;
 
 @fragment
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -27,6 +29,9 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             vec3<f32>(0.0), LIGHTING_MODEL_EXPOSURE_GAIN,
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
         ), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
+        return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 0u {
         return diagnostic_low_cloud_sun_lighting();

@@ -84,7 +84,7 @@ override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
 override WATER_ATTENUATION_LENGTH_M: f32 = 0.5;
 override WATER_BOTTOM_VISIBILITY: f32 = 1.0;
 override LANDFORM_RELIEF_STRENGTH: f32 = 1.0;
-override LANDFORM_SHADOW_STRENGTH: f32 = 0.7;
+override LANDFORM_SHADOW_STRENGTH: f32 = 1.0;
 override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.
@@ -92,6 +92,11 @@ override EVALUATE_ALL_BRANCHES: bool = false;
 // Lab-only comparison: 1 takes each cloud-shadow lookup from one direction at
 // the centre of the visible disc instead of averaging three across it.
 override CLOUD_SHADOW_TAPS: u32 = 3u;
+// Lab-only comparison: true fades ground cloud shadows between light heights
+// 0.22 and 0.04 without slant darkening, holds landform shadows to 70% of their
+// strength over the high-light reach at every light height, and keeps canopy
+// shadows on lower clouds until their horizon.
+override LEGACY_SHADOW_LOOK: bool = false;
 // Graphics tiers set these through `GraphicsQuality::scene_constants`; the
 // defaults are the high tier.
 override DECORATIVE_WATER_OCTAVES: u32 = 4u;

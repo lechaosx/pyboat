@@ -151,7 +151,13 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
     low_cloud_light: CelestialReceiverLight,
     source: CelestialSourceLight,
 ) -> f32 {
-    let lit = source.amount > 0.0;
+    let lit = source.amount > 0.0 && (
+        LEGACY_SHADOW_LOOK
+            || shadow_horizon_cutoff(light_height_above_horizon(
+                source.direction.z,
+                low_cloud_light.horizon_z,
+            )) > 0.0
+    );
     if !lit && !EVALUATE_ALL_BRANCHES {
         return 1.0;
     }
@@ -244,10 +250,12 @@ fn fragment_surface_color(
     let sun_transmittance = cloud_disc_shadow_transmittance(
         layer.y * depths.sun.low + layer.z * depths.sun.upper,
         direct_light.sun_direction,
+        direct_light.horizon_z,
     );
     let moon_transmittance = cloud_disc_shadow_transmittance(
         layer.y * depths.moon.low + layer.z * depths.moon.upper,
         direct_light.moon_direction,
+        direct_light.horizon_z,
     );
     let ambient = ambient_contribution_share(direct_light) * (
         contribution.z * atmospheric_ambient_color_with_visibility(

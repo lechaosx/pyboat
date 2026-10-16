@@ -688,19 +688,30 @@ fn landform_light_grade(
     );
 }
 
+const LANDFORM_SHADOW_TAPS: u32 = 4u;
+
 fn landform_shadow_transmittance_for_light(
     position_m: vec2<f32>,
     elevation_m: f32,
+    horizon_z: f32,
     light_direction: vec3<f32>,
     light_amount: f32,
     angular_radius_rad: f32,
 ) -> f32 {
-    let strength = clamp(
+    var strength = clamp(
         tuning.landform_lighting.y
             * landscape_visibility.w * lighting_feature_visibility().y,
         0.0,
         1.0,
     );
+    if LEGACY_SHADOW_LOOK {
+        strength *= 0.7;
+    } else {
+        strength *= shadow_horizon_cutoff(light_height_above_horizon(
+            light_direction.z,
+            horizon_z,
+        ));
+    }
     let horizontal_light = length(light_direction.xy);
     let unshadowed = strength <= 0.0
         || light_amount <= 0.0
@@ -709,12 +720,19 @@ fn landform_shadow_transmittance_for_light(
         return 1.0;
     }
     let toward_light = light_direction.xy / horizontal_light;
-    let reach_m = max(tuning.landform_lighting.z, 1.0);
     let world_radius_m = scene.world_size_m.x / TAU;
     let receiver_radius_m = world_radius_m + elevation_m;
+    // Taps run geometrically from a sixteenth of the tuned reach, which keeps
+    // near blockers under a low light, out to the whole reach.
+    let reach_m = landform_shadow_reach_m(light_direction.z, horizontal_light);
+    let nearest_m = max(tuning.landform_lighting.z, 1.0) / 16.0;
+    let tap_ratio = pow(max(reach_m / nearest_m, 1.0), 1.0 / f32(LANDFORM_SHADOW_TAPS - 1u));
+    var distance_m = nearest_m;
     var occlusion = 0.0;
-    for (var sample_index = 0u; sample_index < 4u; sample_index++) {
-        let distance_m = reach_m * exp2(mix(-4.0, 0.0, f32(sample_index) / 3.0));
+    for (var sample_index = 0u; sample_index < LANDFORM_SHADOW_TAPS; sample_index++) {
+        if sample_index > 0u {
+            distance_m *= tap_ratio;
+        }
         let blocker_elevation_m = sampled_broad_landform_elevation_m(
             position_m + distance_m * toward_light,
         );
@@ -737,6 +755,28 @@ fn landform_shadow_transmittance_for_light(
         );
     }
     return select(1.0 - strength * occlusion, 1.0, unshadowed);
+}
+
+// A light at 45° or higher marches the tuned reach. A lower light extends it
+// to where its ray from sea level has climbed that height, taking the ray's
+// horizontal run for the surface distance, which overshoots by a few percent
+// near the cutoff. The taps then meet about the same relief heights under every
+// light. Keep synchronized with `landform_shadow_reach_m` in field_grids.rs,
+// which bounds the landform grid window with it.
+fn landform_shadow_reach_m(light_z: f32, horizontal_light: f32) -> f32 {
+    let tuned_reach_m = max(tuning.landform_lighting.z, 1.0);
+    if LEGACY_SHADOW_LOOK {
+        return tuned_reach_m;
+    }
+    let world_radius_m = scene.world_size_m.x / TAU;
+    let sine = max(light_z, SHADOW_CUTOFF_Z);
+    let along_ray_m = world_radius_m * sine;
+    let ray_m = -along_ray_m + sqrt(
+        along_ray_m * along_ray_m
+            + tuned_reach_m * (2.0 * world_radius_m + tuned_reach_m),
+    );
+    let cosine = min(horizontal_light, sqrt(1.0 - SHADOW_CUTOFF_Z * SHADOW_CUTOFF_Z));
+    return max(tuned_reach_m, ray_m * cosine);
 }
 
 fn landform_disc_occlusion(
@@ -770,6 +810,7 @@ fn landform_shadow_transmittance(
         transmittance[source_index] = landform_shadow_transmittance_for_light(
             direct_light.position_m,
             direct_light.height_m,
+            direct_light.horizon_z,
             landform_shadow_sample_direction(direct_light, source),
             source.amount,
             source.angular_radius_rad,

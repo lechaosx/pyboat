@@ -154,7 +154,8 @@ and verification details.
   terms applied afterwards, such as temperature climatology and solar phase,
   stay per pixel.
 - **[Implicit]** Per-frame field grids have fixed texel budgets; windows too
-  wide for one coarsen its spacing instead of allocating more memory.
+  wide for one coarsen its spacing along each overflowing axis instead of
+  allocating more memory.
 - **[Explicit]** One surface normal combines authoritative relief with visual
   material detail before celestial lighting.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
@@ -187,6 +188,26 @@ and verification details.
   spherical curvature, connected celestial direction, and finite-disc penumbrae
   at every zoom. Projected positions retain unbounded cylindrical coordinates;
   receiver-local geometry permits cloud sunlight after surface sunset.
+- **[Explicit]** Every shadow type removes the same share of direct light for the
+  same occlusion: a landform blocking the whole disc is as dark as the densest cloud.
+- **[Explicit]** Under a low light above the cutoff, horizon dimming and
+  reddening of direct light alone reduce shadow contrast, alike for every
+  shadow type.
+- **[Explicit]** All shadow types fade out at one shared near-horizon cutoff.
+- **[Implicit]** The cutoff follows the light's height above each receiver's own
+  horizon, so raised land keeps its shadows after sea-level sunset. Shadow
+  windows bound receivers up to the highest landform the elevation scale allows.
+- **[Explicit]** Landform shadow reach grows as the light lowers.
+- **[Implicit]** Below 45°, the landform march reaches about where a ray from sea
+  level toward the light has climbed the high-light reach above the curved
+  surface. Each pixel takes the reach from its own light, so landform shadows
+  stay world-anchored while the camera pans.
+- **[Implicit]** A fixed tap count spreads geometrically from a sixteenth of the
+  high-light reach out to the march's reach.
+- **[Explicit]** Canopy shadows follow one darkness curve over cloud bodies and
+  on the ground.
+- **[Implicit]** That curve is extinction along the slant path through the layer.
+- **[Implicit]** Low-cloud shadows on the ground follow the same curve.
 - **[Explicit]** Lower clouds and canopy are continuous global periodic fields.
   Each layer's amount drives its body, optical depth, and shadows.
   Renderer-local integrated view-center wind translates latent texture
@@ -390,6 +411,7 @@ and verification details.
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Cloud-shadow taps | Whether one tap at the visible disc's centre may replace the three-tap disc average for cloud-shadow penumbrae |
+| Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |
 | Level switches | Whether switching baked levels needs blending, judged by eye |
 | Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
 | Edge smoothing | Whether shorelines and the sea-ice edge get smoothing as a look option |
