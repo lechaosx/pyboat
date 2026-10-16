@@ -25,11 +25,16 @@ fn main() {
     let occluder_generate = read_component("src/shader/components/occluder-field-generate.wgsl");
     let terrain_cache = read_component("src/shader/components/terrain-cache.wgsl");
     let direct_terrain_noise = read_component("src/shader/components/direct-terrain-noise.wgsl");
+    let baked_surface = read_component("src/shader/components/baked-surface.wgsl");
+    let direct_surface = read_component("src/shader/components/direct-surface.wgsl");
+    let baked_surface_generate =
+        read_component("src/shader/components/baked-surface-generate.wgsl");
     let production_entry = read_component("src/shader/production-entry.wgsl");
     let production = compose(&[
         &scene,
         &occluder_fields,
         &terrain_cache,
+        &baked_surface,
         &read_component("src/shader/components/occluder-field-inspection-disabled.wgsl"),
         &production_entry,
     ]);
@@ -42,6 +47,7 @@ fn main() {
         &scene,
         &direct_occluder_fields,
         &direct_terrain_noise,
+        &direct_surface,
         &production_entry,
         &read_component("src/shader/components/environment-field-generate.wgsl"),
     ]);
@@ -54,6 +60,7 @@ fn main() {
         &scene,
         &direct_occluder_fields,
         &direct_terrain_noise,
+        &direct_surface,
         &production_entry,
         &read_component("src/shader/production-occluder-field-entry.wgsl"),
         &occluder_generate,
@@ -67,6 +74,7 @@ fn main() {
         &scene,
         &direct_occluder_fields,
         &direct_terrain_noise,
+        &direct_surface,
         &production_entry,
         &read_component("src/shader/components/terrain-cache-generate.wgsl"),
     ]);
@@ -74,6 +82,20 @@ fn main() {
         &terrain_cache_generate,
         &["generate_terrain_cache"],
         "terrain-cache.wgsl",
+    );
+    let production_baked_surface_generate = compose(&[
+        &scene,
+        &direct_occluder_fields,
+        &terrain_cache,
+        &direct_surface,
+        &production_entry,
+        &read_component("src/shader/production-baked-surface-entry.wgsl"),
+        &baked_surface_generate,
+    ]);
+    write_shader(
+        &production_baked_surface_generate,
+        &["generate_baked_surface"],
+        "baked-surface.wgsl",
     );
     let upscale = read_component("src/shader/upscale.wgsl");
     write_shader(
@@ -111,6 +133,7 @@ fn main() {
         &scene,
         &occluder_fields,
         &terrain_cache,
+        &baked_surface,
         &read_component("src/shader/components/playground-occluder-field-inspection.wgsl"),
         &playground_interface,
         &read_component("src/shader/playground-entry.wgsl"),
@@ -124,6 +147,7 @@ fn main() {
         &scene,
         &direct_occluder_fields,
         &direct_terrain_noise,
+        &direct_surface,
         &playground_interface,
         &read_component("src/shader/playground-direct-entry.wgsl"),
     ]);
@@ -136,6 +160,7 @@ fn main() {
         &scene,
         &direct_occluder_fields,
         &direct_terrain_noise,
+        &direct_surface,
         &playground_interface,
         &read_component("src/shader/playground-occluder-field-entry.wgsl"),
         &occluder_generate,
@@ -145,6 +170,20 @@ fn main() {
         &["generate_occluder_fields"],
         "occluder-fields-playground.wgsl",
     );
+    let playground_baked_surface_generate = compose(&[
+        &scene,
+        &direct_occluder_fields,
+        &terrain_cache,
+        &direct_surface,
+        &playground_interface,
+        &read_component("src/shader/playground-baked-surface-entry.wgsl"),
+        &baked_surface_generate,
+    ]);
+    write_shader(
+        &playground_baked_surface_generate,
+        &["generate_baked_surface"],
+        "baked-surface-playground.wgsl",
+    );
     let diagnostic_common = read_component("src/shader/components/diagnostic-common.wgsl");
     for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
         let mechanism = read_component(diagnostic_mechanism(name));
@@ -153,6 +192,7 @@ fn main() {
             &scene,
             &direct_occluder_fields,
             &direct_terrain_noise,
+            &direct_surface,
             &playground_interface,
             &diagnostic_common,
             &mechanism,

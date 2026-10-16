@@ -1,6 +1,5 @@
 use std::{fs, io::BufReader, process::Command};
 
-use browser::DEFAULT_VIEW_HEIGHT_M;
 use game::{
     broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
     celestial_lighting_at_height, procedural_solid_surface_elevation_m,
@@ -1918,7 +1917,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
 }
 
 #[test]
-fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
+fn incrementally_filled_caches_render_like_fresh_ones() {
     let coast_m = rugged_coast_m(WorldGeometry::default());
     let (camera_x, camera_y) = (coast_m.x.to_string(), coast_m.y.to_string());
     let end = [
@@ -1930,14 +1929,16 @@ fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
         "240",
     ];
     // Pans within one finest-level window while zooming out through coarser
-    // levels and back, so the end view reuses texels from every step.
+    // levels and back, so the end view reuses texels from every step. The last
+    // step is narrower, so the end view zooms out and reads the baked level a
+    // fresh view reads; the check below covers a zoom in.
     let prior_views = [
         (-840.0, -160.0, 240.0),
         (-590.0, -110.0, 240.0),
         (-340.0, -50.0, 600.0),
         (-240.0, -10.0, 2400.0),
         (-90.0, 0.0, 600.0),
-        (-40.0, -5.0, 240.0),
+        (-40.0, -5.0, 200.0),
     ]
     .map(|(x_m, y_m, view_height_m)| {
         format!("{},{},{view_height_m}", coast_m.x + x_m, coast_m.y + y_m)
@@ -1969,10 +1970,40 @@ fn incrementally_filled_terrain_cache_renders_like_a_fresh_one() {
         unfilled_pixels > fresh.len() / 4 / 10,
         "unfilled cache texels left only {unfilled_pixels} pixels visibly wrong",
     );
+
+    // A zoom in may read a level one rung coarser than a fresh view reads.
+    let zoomed_in = render_capture(
+        "cache-zoomed-in",
+        &[&end[..], &prior_views[..prior_views.len() - 2]].concat(),
+    );
+    let quarter_pixel_m = 0.25 * 240.0 / 144.0;
+    let panned_x = (coast_m.x + quarter_pixel_m).to_string();
+    let direct = ["--diagnostic", "scene_direct"];
+    assert_flips_within_a_quarter_pixel_pan(
+        "a zoom in",
+        &zoomed_in,
+        &fresh,
+        &render_capture("cache-direct", &[&end[..], &direct].concat()),
+        &render_capture(
+            "cache-panned",
+            &[
+                &[
+                    "--camera-x",
+                    &panned_x,
+                    "--camera-y",
+                    &camera_y,
+                    "--view-height",
+                    "240",
+                ][..],
+                &direct,
+            ]
+            .concat(),
+        ),
+    );
 }
 
 #[test]
-fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
+fn baked_scene_matches_direct_scene_at_boat_zoom_shorelines_across_the_seam() {
     let world = WorldGeometry::default();
     let coast_m = rugged_coast_m(world);
     let reef_y_m = coast_m.y;
@@ -1984,6 +2015,94 @@ fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
             elevation(x_m).signum() != elevation(x_m + 0.5).signum()
         })
         .expect("a shoreline should cross the reef coast row");
+    // Boat-zoom pixels, as a 240 m view 1080 pixels high has: the reef
+    // shoreline, a broader reef coast view, and a shoreline across the seam.
+    for camera_m in [
+        (reef_shore_x_m, reef_y_m),
+        (coast_m.x, reef_y_m),
+        seam_shore_m(world),
+    ] {
+        assert_baked_shorelines_match_direct((480, 270), 240.0 / 1080.0, camera_m, &[]);
+    }
+}
+
+#[test]
+fn baked_scene_flips_no_more_pixels_than_a_quarter_pixel_pan_at_overview_zooms() {
+    let world = WorldGeometry::default();
+    let coast_m = rugged_coast_m(world);
+    // Pixels of 8 km and 16 km views 1080 pixels high, over the coast and the
+    // seam.
+    for view_height_m in [8_000.0, 16_000.0] {
+        let pixel_m = view_height_m / 1080.0;
+        for (camera_x_m, camera_y_m) in [(coast_m.x, coast_m.y), seam_shore_m(world)] {
+            let render = |label, diagnostic, camera_x_m: f32| {
+                render_capture(
+                    label,
+                    &[
+                        "--width",
+                        "480",
+                        "--height",
+                        "270",
+                        "--camera-x",
+                        &camera_x_m.to_string(),
+                        "--camera-y",
+                        &camera_y_m.to_string(),
+                        "--view-height",
+                        &(pixel_m * 270.0).to_string(),
+                        "--diagnostic",
+                        diagnostic,
+                        "--cloud-rendering",
+                        "0,0,1,1",
+                        "--cloud-shadows",
+                        "0,0,0.85,0",
+                    ],
+                )
+            };
+            let direct = render("overview-direct", "scene_direct", camera_x_m);
+            assert_flips_within_a_quarter_pixel_pan(
+                &format!("{view_height_m} m view at ({camera_x_m}, {camera_y_m})"),
+                &render("overview-baked", "scene", camera_x_m),
+                &direct,
+                &direct,
+                &render(
+                    "overview-panned",
+                    "scene_direct",
+                    camera_x_m + 0.25 * pixel_m,
+                ),
+            );
+        }
+    }
+}
+
+/// Pixels that change by more than 32 levels.
+fn flipped_pixels(left: &[u8], right: &[u8]) -> usize {
+    pixel_differences(left, right)
+        .into_iter()
+        .filter(|&difference| difference > 32)
+        .count()
+}
+
+/// Relief finer than a pixel aliases differently in each reconstruction, as in
+/// a sub-pixel pan, while a misplaced shoreline or reef edge flips whole runs
+/// of pixels; so `reconstructed` may flip against `reference` no more pixels
+/// than panning `direct` by a quarter pixel flips.
+fn assert_flips_within_a_quarter_pixel_pan(
+    label: &str,
+    reconstructed: &[u8],
+    reference: &[u8],
+    direct: &[u8],
+    panned: &[u8],
+) {
+    let reconstructed_flips = flipped_pixels(reconstructed, reference);
+    let pan_flips = flipped_pixels(panned, direct);
+    assert!(
+        reconstructed_flips <= pan_flips,
+        "{label}: {reconstructed_flips} pixels flip, a quarter-pixel pan flips {pan_flips}",
+    );
+}
+
+/// A point on the longitude seam where a shoreline crosses it.
+fn seam_shore_m(world: WorldGeometry) -> (f32, f32) {
     let seam_x_m = 0.5 * world.width_m() - 1.0;
     let seam_shore_y_m = (0..60_000)
         .map(|step| 10.0 * step as f32)
@@ -1993,27 +2112,69 @@ fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
             elevation(y_m).signum() != elevation(y_m + 10.0).signum()
         })
         .expect("a shoreline should cross the longitude seam");
-    // The default boat zoom and the reef coast at the finest level, a
-    // shoreline across the longitude seam, then views the two coarsest levels
-    // hold; the coarsest caches no island or coastal-substrate octave.
-    for (camera_x_m, camera_y_m, view_height_m) in [
-        (reef_shore_x_m, reef_y_m, DEFAULT_VIEW_HEIGHT_M),
-        (coast_m.x, reef_y_m, 240.0),
-        (seam_x_m, seam_shore_y_m, 240.0),
-        (coast_m.x, reef_y_m, 8_000.0),
-        (coast_m.x, reef_y_m, 16_000.0),
-    ] {
-        let pixel_m = view_height_m / 144.0;
-        let render = |label, diagnostic, camera_x_m: f32| {
-            render_capture(
-                label,
+    (seam_x_m, seam_shore_y_m)
+}
+
+#[test]
+fn baked_scene_matches_direct_scene_at_shorelines_within_the_touch_budget() {
+    let coast_m = rugged_coast_m(WorldGeometry::default());
+    // A 2048x2732 tablet's scene at the touch render scale of 0.75, whose
+    // bake coarsens to fit the budget.
+    assert_baked_shorelines_match_direct(
+        (1536, 2049),
+        240.0 / 2049.0,
+        (coast_m.x, coast_m.y),
+        &["--touch-budget"],
+    );
+}
+
+/// Removes every material colour except water's, leaving land, ice, and lower
+/// clouds black.
+const WATER_ONLY: [&str; 6] = [
+    "--land-material-colors",
+    "0,0,0,0",
+    "--solid-material-colors",
+    "0,0,0,0",
+    "--layer-material-colors",
+    "0,0,0,0",
+];
+
+/// Pixels that are water in one image and land or ice in the other.
+fn land_water_flips(left: &[u8], right: &[u8]) -> usize {
+    let is_water = |pixel: &[u8; 4]| pixel[..3].iter().any(|&channel| channel > 0);
+    left.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(right.as_chunks::<4>().0)
+        .filter(|(left, right)| is_water(left) != is_water(right))
+        .count()
+}
+
+/// Renders the shoreline at `camera_m` with baked and directly evaluated
+/// terrain, and asserts that baking moves far fewer pixels between land and
+/// water than shifting the view by one pixel of `pixel_m` does. This guards
+/// against gross breakage only: the rendered coast needs no closer match.
+fn assert_baked_shorelines_match_direct(
+    (width, height): (u32, u32),
+    pixel_m: f32,
+    (camera_x_m, camera_y_m): (f32, f32),
+    arguments: &[&str],
+) {
+    let render = |label, diagnostic, camera_x_m: f32| {
+        render_capture(
+            label,
+            &[
                 &[
+                    "--width",
+                    &width.to_string(),
+                    "--height",
+                    &height.to_string(),
                     "--camera-x",
                     &camera_x_m.to_string(),
                     "--camera-y",
                     &camera_y_m.to_string(),
                     "--view-height",
-                    &view_height_m.to_string(),
+                    &(pixel_m * height as f32).to_string(),
                     "--diagnostic",
                     diagnostic,
                     "--cloud-rendering",
@@ -2021,32 +2182,27 @@ fn cached_scene_matches_direct_scene_at_shorelines_on_every_cache_level() {
                     "--cloud-shadows",
                     "0,0,0.85,0",
                 ],
-            )
-        };
-        let cached = render("shore-cached", "scene", camera_x_m);
-        let direct = render("shore-direct", "scene_direct", camera_x_m);
-        let shifted = render("shore-shifted", "scene_direct", camera_x_m + pixel_m);
+                &WATER_ONLY[..],
+                arguments,
+            ]
+            .concat(),
+        )
+    };
+    let baked = render("shore-baked", "scene", camera_x_m);
+    let direct = render("shore-direct", "scene_direct", camera_x_m);
+    let shifted = render("shore-shifted", "scene_direct", camera_x_m + pixel_m);
 
-        let label = format!("{view_height_m} m view at ({camera_x_m}, {camera_y_m})");
-        let visible = |left: &[u8], right: &[u8]| {
-            pixel_differences(left, right)
-                .into_iter()
-                .filter(|&difference| difference > 2)
-                .count()
-        };
-        // Pixels whose elevation lies within single-precision noise of a
-        // threshold may flip; a misplaced shoreline moves whole runs of them.
-        let shift_pixels = visible(&shifted, &direct);
-        let cached_pixels = visible(&cached, &direct);
-        assert!(
-            shift_pixels >= 200,
-            "{label}: a one-pixel shift changes only {shift_pixels} pixels",
-        );
-        assert!(
-            cached_pixels * 50 <= shift_pixels,
-            "{label}: the cached scene changes {cached_pixels} pixels, a one-pixel shift {shift_pixels}",
-        );
-    }
+    let label = format!("{pixel_m} m pixels at ({camera_x_m}, {camera_y_m})");
+    let shift_flips = land_water_flips(&shifted, &direct);
+    let baked_flips = land_water_flips(&baked, &direct);
+    assert!(
+        shift_flips >= 200,
+        "{label}: a one-pixel shift moves only {shift_flips} pixels between land and water",
+    );
+    assert!(
+        baked_flips * 5 <= shift_flips,
+        "{label}: baking moves {baked_flips} pixels between land and water, a one-pixel shift {shift_flips}",
+    );
 }
 
 /// The first view centre, scanning 500 m apart outward from the origin, that is

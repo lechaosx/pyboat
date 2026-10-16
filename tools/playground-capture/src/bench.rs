@@ -10,15 +10,17 @@ use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use browser::{
-    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, UpscaleTargets, Upscaler,
-    scene_render_size, visual_pixel_footprint_m,
+    BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes, FieldGrids,
+    GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, TerrainCacheFrame, UpscaleTargets,
+    Upscaler, baked_surface_sizes, scene_render_size, visual_pixel_footprint_m,
 };
 
 use super::{
     CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
-    capture_field_grids, capture_terrain_cache_frame, capture_texture, default_options,
-    fullscreen_vertices, hardware_device, parse_seed, read_texture, scene_uniforms, uniform_layout,
-    validate_capture_dimensions, validate_capture_spatial_inputs, validate_time_seconds, write_png,
+    capture_baked_surface_frame, capture_field_grids, capture_terrain_cache_frame, capture_texture,
+    default_options, fullscreen_vertices, hardware_device, parse_seed, read_texture,
+    scene_uniforms, uniform_layout, validate_capture_dimensions, validate_capture_spatial_inputs,
+    validate_time_seconds, write_png,
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
@@ -27,9 +29,11 @@ const VISIBLE_DIFFERENCE_LEVELS: u8 = 2;
 const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
-/// Environment field, occluder field, scene, upscale, and terrain cache
-/// begin/end pairs.
-const TIMESTAMP_COUNT: u32 = 10;
+/// Environment field, occluder field, scene, upscale, terrain cache, and baked
+/// surface begin/end pairs.
+const TIMESTAMP_COUNT: u32 = 12;
+/// More frames than a cold start takes to settle at the bench's sizes.
+const MAXIMUM_COLD_START_FRAMES: u32 = 64;
 
 pub struct BenchOptions {
     pub output_dir: PathBuf,
@@ -85,10 +89,22 @@ struct ModeReport {
     upscale: Option<Timing>,
     #[serde(default)]
     terrain_cache: Option<Timing>,
+    #[serde(default)]
+    baked_surface: Option<Timing>,
     total: Timing,
     total_ns_per_pixel: f64,
     #[serde(default)]
     discarded_frames: u32,
+}
+
+/// Shipped frames from an empty terrain cache and bake until both settle, as
+/// after a teleport.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ColdStart {
+    frames: u32,
+    first_ms: f64,
+    max_ms: f64,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -120,6 +136,8 @@ struct ScenarioReport {
     image: String,
     shipped: ModeReport,
     all_branches: ModeReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cold_start: Option<ColdStart>,
     all_branches_image_difference: ImageDifference,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline: Option<BaselineComparison>,
@@ -143,12 +161,14 @@ struct BenchReport {
 struct ModeRenderer {
     /// Indexed by `GraphicsQuality`.
     pipelines: [wgpu::RenderPipeline; 3],
-    fields: CaptureFields,
-    /// The scenario the cache was last filled for; another one starts from an
-    /// empty cache, like a teleport.
-    terrain_cache: RefCell<(String, TerrainCache)>,
-    /// Refills the active cache level every frame, bounding a refill burst.
-    refill_terrain_cache: bool,
+    /// One per bake size, as the game sizes its bake for the scene.
+    fields: Vec<(BakedSurfaceSizes, CaptureFields)>,
+    /// The scenario the cache and surface were last filled for; another one
+    /// starts from empty ones, like a teleport.
+    surfaces: RefCell<(String, TerrainCache, BakedSurface)>,
+    /// Refills the active cache level and bakes one frame budget of the read
+    /// surface level every frame.
+    refill: bool,
 }
 
 impl ModeRenderer {
@@ -157,6 +177,7 @@ impl ModeRenderer {
         scene_layout: &wgpu::BindGroupLayout,
         unused_layout: &wgpu::BindGroupLayout,
         evaluate_all_branches: bool,
+        baked_surface_sizes: &[BakedSurfaceSizes],
     ) -> Result<Self, String> {
         // WebGPU rejects constants a module does not declare, and compaction
         // drops the override from modules that never consult it.
@@ -169,26 +190,43 @@ impl ModeRenderer {
             }
         };
         let occluder_source = browser::occluder_field_shader_source();
+        let baked_surface_source = browser::baked_surface_shader_source();
         let scene_source = browser::production_scene_shader_source();
         if evaluate_all_branches && !declares_override(scene_source) {
             return Err(
                 "the production scene shader no longer declares EVALUATE_ALL_BRANCHES".to_owned(),
             );
         }
-        let fields = CaptureFields::new(
-            device,
-            scene_layout,
-            unused_layout,
-            occluder_source,
-            constants(occluder_source),
-        );
+        if evaluate_all_branches && !declares_override(baked_surface_source) {
+            return Err(
+                "the baked surface shader no longer declares EVALUATE_ALL_BRANCHES".to_owned(),
+            );
+        }
+        let fields: Vec<_> = baked_surface_sizes
+            .iter()
+            .map(|&sizes| {
+                (
+                    sizes,
+                    CaptureFields::new(
+                        device,
+                        scene_layout,
+                        unused_layout,
+                        occluder_source,
+                        constants(occluder_source),
+                        baked_surface_source,
+                        constants(baked_surface_source),
+                        sizes,
+                    ),
+                )
+            })
+            .collect();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("bench production scene shader"),
             source: wgpu::ShaderSource::Wgsl(scene_source.into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("bench production scene pipeline layout"),
-            bind_group_layouts: &[Some(&fields.scene_layout), Some(unused_layout)],
+            bind_group_layouts: &[Some(&fields[0].1.scene_layout), Some(unused_layout)],
             immediate_size: 0,
         });
         let pipeline = |quality: GraphicsQuality| {
@@ -229,10 +267,23 @@ impl ModeRenderer {
                 GraphicsQuality::High,
             ]
             .map(pipeline),
+            surfaces: RefCell::new((
+                String::new(),
+                TerrainCache::default(),
+                BakedSurface::new(fields[0].0),
+            )),
             fields,
-            terrain_cache: RefCell::default(),
-            refill_terrain_cache: evaluate_all_branches,
+            refill: evaluate_all_branches,
         })
+    }
+
+    fn fields(&self, sizes: BakedSurfaceSizes) -> &CaptureFields {
+        &self
+            .fields
+            .iter()
+            .find(|(fields_sizes, _)| *fields_sizes == sizes)
+            .expect("every scenario's bake size has fields")
+            .1
     }
 
     fn encode(
@@ -244,40 +295,65 @@ impl ModeRenderer {
         target: &wgpu::Texture,
         timestamps: Option<&wgpu::QuerySet>,
     ) -> Result<(), String> {
-        let mut cache = self.terrain_cache.borrow_mut();
-        if cache.0 != bindings.scenario_id {
-            // Fill the new scenario's cache completely first, so warm-up and
-            // timed frames see the settled cache whatever their count.
-            *cache = (bindings.scenario_id.to_owned(), TerrainCache::default());
+        let mut surfaces = self.surfaces.borrow_mut();
+        let (scenario_id, terrain_cache, baked_surface) = &mut *surfaces;
+        if scenario_id != bindings.scenario_id {
+            // Fill the new scenario's cache and surface completely first, so
+            // warm-up and timed frames see them settled whatever their count.
+            *scenario_id = bindings.scenario_id.to_owned();
+            *terrain_cache = TerrainCache::default();
+            *baked_surface = BakedSurface::new(bindings.baked_surface_sizes);
             loop {
-                let frame = capture_terrain_cache_frame(bindings.options, &mut cache.1)?;
-                if frame.has_fills() {
-                    let mut fill_encoder =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("bench terrain cache settle encoder"),
-                        });
-                    self.fields.encode_terrain_cache(
-                        queue,
-                        &mut fill_encoder,
-                        bindings.scene,
-                        &frame,
-                        None,
-                    );
-                    queue.submit([fill_encoder.finish()]);
-                    cache.1.commit();
-                } else {
+                let cache_frame = capture_terrain_cache_frame(bindings.options, terrain_cache)?;
+                let surface_frame = capture_baked_surface_frame(
+                    bindings.options,
+                    bindings.pixel_footprint_m,
+                    baked_surface,
+                    false,
+                )?;
+                if !cache_frame.has_fills() && !surface_frame.has_fills() {
                     break;
                 }
+                let mut fill_encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("bench surface settle encoder"),
+                    });
+                let fields = self.fields(bindings.baked_surface_sizes);
+                fields.encode_terrain_cache(
+                    queue,
+                    &mut fill_encoder,
+                    bindings.scene,
+                    &cache_frame,
+                    None,
+                );
+                fields.encode_baked_surface(
+                    queue,
+                    &mut fill_encoder,
+                    bindings.fields,
+                    bindings.unused,
+                    &surface_frame,
+                    None,
+                );
+                queue.submit([fill_encoder.finish()]);
+                terrain_cache.commit();
+                baked_surface.commit();
             }
         }
-        let terrain_cache = &mut cache.1;
-        if self.refill_terrain_cache {
+        if self.refill {
             terrain_cache.invalidate();
         }
         let terrain_cache_frame = capture_terrain_cache_frame(bindings.options, terrain_cache)?;
         terrain_cache.commit();
-        // Scene uniforms are written once per scenario; the active level is
-        // complete within every frame, so its rows match a fresh cache's.
+        let baked_surface_frame = capture_baked_surface_frame(
+            bindings.options,
+            bindings.pixel_footprint_m,
+            baked_surface,
+            self.refill,
+        )?;
+        baked_surface.commit();
+        // Scene uniforms are written once per scenario; the active cache level
+        // is complete within every frame and the surface settled, so their rows
+        // match the scenario's.
         if (
             terrain_cache_frame.grid_m,
             terrain_cache_frame.texels,
@@ -286,14 +362,49 @@ impl ModeRenderer {
         {
             return Err("terrain cache rows changed at a fixed camera".to_owned());
         }
-        self.fields.encode_terrain_cache(
+        if baked_surface_rows(&baked_surface_frame) != bindings.baked_surface_rows {
+            return Err("baked surface rows changed at a fixed camera".to_owned());
+        }
+        self.encode_frame(
+            queue,
+            encoder,
+            bindings,
+            &terrain_cache_frame,
+            &baked_surface_frame,
+            target,
+            timestamps,
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_frame(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &FrameBindings<'_>,
+        terrain_cache_frame: &TerrainCacheFrame,
+        baked_surface_frame: &BakedSurfaceFrame,
+        target: &wgpu::Texture,
+        timestamps: Option<&wgpu::QuerySet>,
+    ) {
+        let fields = self.fields(bindings.baked_surface_sizes);
+        fields.encode_terrain_cache(
             queue,
             encoder,
             bindings.scene,
-            &terrain_cache_frame,
+            terrain_cache_frame,
             timestamps,
         );
-        self.fields.encode(
+        fields.encode_baked_surface(
+            queue,
+            encoder,
+            bindings.fields,
+            bindings.unused,
+            baked_surface_frame,
+            timestamps,
+        );
+        fields.encode(
             encoder,
             bindings.scene,
             bindings.fields,
@@ -341,17 +452,24 @@ impl ModeRenderer {
                 timestamps.map(|query_set| (query_set, 6, 7)),
             );
         }
-        Ok(())
     }
 }
 
-type TerrainCacheRows = ([f32; 4], [u32; 4], [u32; 4]);
+type SurfaceRows = ([f32; 4], [u32; 4], [u32; 4]);
 
+fn baked_surface_rows(frame: &BakedSurfaceFrame) -> SurfaceRows {
+    (frame.grid_m, frame.texels, frame.level)
+}
+
+#[derive(Clone, Copy)]
 struct FrameBindings<'a> {
     scenario_id: &'a str,
     quality: GraphicsQuality,
     options: &'a Options,
-    terrain_cache_rows: TerrainCacheRows,
+    pixel_footprint_m: f32,
+    baked_surface_sizes: BakedSurfaceSizes,
+    terrain_cache_rows: SurfaceRows,
+    baked_surface_rows: SurfaceRows,
     scene: &'a wgpu::BindGroup,
     fields: &'a CaptureFieldBindings,
     field_grids: &'a FieldGrids,
@@ -365,7 +483,10 @@ struct ScenarioBindings {
     id: String,
     quality: GraphicsQuality,
     options: Options,
-    terrain_cache_rows: TerrainCacheRows,
+    pixel_footprint_m: f32,
+    baked_surface_sizes: BakedSurfaceSizes,
+    terrain_cache_rows: SurfaceRows,
+    baked_surface_rows: SurfaceRows,
     scene: wgpu::BindGroup,
     /// Shipped, then forced.
     fields: [CaptureFieldBindings; 2],
@@ -385,7 +506,10 @@ impl ScenarioBindings {
             scenario_id: &self.id,
             quality: self.quality,
             options: &self.options,
+            pixel_footprint_m: self.pixel_footprint_m,
+            baked_surface_sizes: self.baked_surface_sizes,
             terrain_cache_rows: self.terrain_cache_rows,
+            baked_surface_rows: self.baked_surface_rows,
             scene: &self.scene,
             fields: &self.fields[mode],
             field_grids: &self.field_grids,
@@ -478,9 +602,25 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         usage: wgpu::BufferUsages::VERTEX,
     });
     eprintln!("compiling production pipelines");
+    let scenario_bake_sizes = |scenario: &Scenario| {
+        baked_surface_sizes(
+            scene_render_size(
+                options.width,
+                options.height,
+                scenario.render_scale.unwrap_or(1.0),
+            ),
+            default_options().bake_memory_bytes,
+        )
+    };
+    let mut bake_sizes: Vec<BakedSurfaceSizes> = Vec::new();
+    for sizes in scenarios.iter().map(scenario_bake_sizes) {
+        if !bake_sizes.contains(&sizes) {
+            bake_sizes.push(sizes);
+        }
+    }
     let renderers = [
-        ModeRenderer::new(&device, &scene_layout, &unused_layout, false)?,
-        ModeRenderer::new(&device, &scene_layout, &unused_layout, true)?,
+        ModeRenderer::new(&device, &scene_layout, &unused_layout, false, &bake_sizes)?,
+        ModeRenderer::new(&device, &scene_layout, &unused_layout, true, &bake_sizes)?,
     ];
     let upscaler = Upscaler::new(&device, wgpu::TextureFormat::Rgba8Unorm);
     let timing = if timestamps.is_some() {
@@ -528,17 +668,35 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         .iter()
         .map(|scenario| {
             let scenario_options = scenario_options(scenario, options.width, options.height)?;
-            let terrain_cache_frame =
-                capture_terrain_cache_frame(&scenario_options, &mut TerrainCache::default())?;
-            let mut uniforms = scene_uniforms(&scenario_options, &terrain_cache_frame)?;
             let output_size = (options.width, options.height);
             let scene_size = scene_render_size(
                 options.width,
                 options.height,
                 scenario.render_scale.unwrap_or(1.0),
             );
-            uniforms.world_phases_and_pixel_footprint_m[3] =
-                visual_pixel_footprint_m(scenario.view_height_m, scene_size.1);
+            let pixel_footprint_m = visual_pixel_footprint_m(scenario.view_height_m, scene_size.1);
+            let terrain_cache_frame =
+                capture_terrain_cache_frame(&scenario_options, &mut TerrainCache::default())?;
+            let baked_surface_sizes = scenario_bake_sizes(scenario);
+            let mut baked_surface = BakedSurface::new(baked_surface_sizes);
+            let baked_surface_frame = loop {
+                let frame = capture_baked_surface_frame(
+                    &scenario_options,
+                    pixel_footprint_m,
+                    &mut baked_surface,
+                    false,
+                )?;
+                baked_surface.commit();
+                if !frame.has_fills() {
+                    break frame;
+                }
+            };
+            let mut uniforms = scene_uniforms(
+                &scenario_options,
+                &terrain_cache_frame,
+                &baked_surface_frame,
+            )?;
+            uniforms.world_phases_and_pixel_footprint_m[3] = pixel_footprint_m;
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("bench scene uniforms"),
                 contents: bytemuck::bytes_of(&uniforms),
@@ -547,15 +705,20 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             Ok(ScenarioBindings {
                 id: scenario.id.clone(),
                 quality: scenario.graphics_quality()?,
+                pixel_footprint_m,
+                baked_surface_sizes,
                 terrain_cache_rows: (
                     terrain_cache_frame.grid_m,
                     terrain_cache_frame.texels,
                     terrain_cache_frame.level,
                 ),
+                baked_surface_rows: baked_surface_rows(&baked_surface_frame),
                 scene: bind_group(&device, &scene_layout, &buffer, "bench scene"),
-                fields: renderers
-                    .each_ref()
-                    .map(|renderer| renderer.fields.bindings(&device, &buffer)),
+                fields: renderers.each_ref().map(|renderer| {
+                    renderer
+                        .fields(baked_surface_sizes)
+                        .bindings(&device, &buffer)
+                }),
                 field_grids: capture_field_grids(&scenario_options)?,
                 options: scenario_options,
                 upscale: (scene_size != output_size).then(|| {
@@ -605,6 +768,15 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         )?;
         let shipped_rgba =
             render_image(&device, &queue, &renderers[0], &shipped_bindings, options)?;
+        let cold_start = time_cold_start(
+            &device,
+            &queue,
+            &renderers[0],
+            &scene_layout,
+            &shipped_bindings,
+            timestamps.as_ref(),
+            options,
+        )?;
         let all_branches_bindings = scene.frame(1, &unused, &vertices, &upscaler);
         let all_branches = mode_report(
             time_mode(
@@ -656,6 +828,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             image,
             shipped,
             all_branches,
+            cold_start,
             all_branches_image_difference: image_difference(&pixel_differences(
                 &shipped_rgba,
                 &all_branches_rgba,
@@ -718,8 +891,8 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
 }
 
 /// Pass durations in milliseconds: environment fields, occluder fields, scene,
-/// upscale, first begin to last end, and terrain cache.
-type FrameTimes = [Option<f64>; 6];
+/// upscale, first begin to last end, terrain cache, and baked surface.
+type FrameTimes = [Option<f64>; 7];
 
 struct TimedFrames {
     frames: Vec<FrameTimes>,
@@ -753,71 +926,13 @@ fn time_mode(
             &target,
             timestamps.map(|timestamps| &timestamps.query_set),
         )?;
-        if let Some(timestamps) = timestamps {
-            encoder.resolve_query_set(
-                &timestamps.query_set,
-                0..TIMESTAMP_COUNT,
-                &timestamps.resolve,
-                0,
-            );
-            encoder.copy_buffer_to_buffer(
-                &timestamps.resolve,
-                0,
-                &timestamps.readback,
-                0,
-                u64::from(TIMESTAMP_COUNT) * 8,
-            );
-        }
-        let started = Instant::now();
-        queue.submit([encoder.finish()]);
-        let mapped = timestamps.map(|timestamps| {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            timestamps
-                .readback
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    sender.send(result).unwrap();
-                });
-            receiver
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|error| format!("bench GPU poll failed: {error}"))?;
-        let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let frame = match (timestamps, mapped) {
-            (Some(timestamps), Some(mapped)) => {
-                mapped
-                    .recv()
-                    .map_err(|error| format!("timestamp readback stopped: {error}"))?
-                    .map_err(|error| format!("timestamp readback failed: {error}"))?;
-                let ticks: Vec<u64> = timestamps
-                    .readback
-                    .slice(..)
-                    .get_mapped_range()
-                    .map_err(|error| format!("failed to read timestamps: {error}"))?
-                    .as_chunks::<8>()
-                    .0
-                    .iter()
-                    .map(|bytes| u64::from_ne_bytes(*bytes))
-                    .collect();
-                timestamps.readback.unmap();
-                let milliseconds = |begin: usize, end: usize| {
-                    ticks[end]
-                        .checked_sub(ticks[begin])
-                        .map(|ticks| ticks as f64 * timestamps.period_ns / 1e6)
-                };
-                let last = if bindings.upscale.is_some() { 7 } else { 5 };
-                [
-                    milliseconds(0, 1),
-                    milliseconds(2, 3),
-                    milliseconds(4, 5),
-                    bindings.upscale.and(milliseconds(6, 7)),
-                    milliseconds(8, last),
-                    milliseconds(8, 9),
-                ]
-            }
-            _ => [None, None, None, None, Some(wall_ms), None],
-        };
+        let frame = submit_timed(
+            device,
+            queue,
+            encoder,
+            timestamps,
+            bindings.upscale.is_some(),
+        )?;
         if iteration < options.warmup_iterations {
             continue;
         }
@@ -835,6 +950,155 @@ fn time_mode(
         }
     }
     Ok(timed)
+}
+
+/// Times frames from an empty terrain cache and bake, writing scene uniforms
+/// each frame since the read rows change while they fill.
+fn time_cold_start(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &ModeRenderer,
+    scene_layout: &wgpu::BindGroupLayout,
+    bindings: &FrameBindings<'_>,
+    timestamps: Option<&TimestampReadback>,
+    options: &BenchOptions,
+) -> Result<Option<ColdStart>, String> {
+    let target = capture_texture(device, options.width, options.height);
+    let mut terrain_cache = TerrainCache::default();
+    let mut baked_surface = BakedSurface::new(bindings.baked_surface_sizes);
+    let mut totals = Vec::new();
+    for _ in 0..MAXIMUM_COLD_START_FRAMES {
+        let cache_frame = capture_terrain_cache_frame(bindings.options, &mut terrain_cache)?;
+        terrain_cache.commit();
+        let surface_frame = capture_baked_surface_frame(
+            bindings.options,
+            bindings.pixel_footprint_m,
+            &mut baked_surface,
+            false,
+        )?;
+        baked_surface.commit();
+        if !cache_frame.has_fills() && !surface_frame.has_fills() {
+            break;
+        }
+        let mut uniforms = scene_uniforms(bindings.options, &cache_frame, &surface_frame)?;
+        uniforms.world_phases_and_pixel_footprint_m[3] = bindings.pixel_footprint_m;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bench cold start scene uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let scene = bind_group(device, scene_layout, &buffer, "bench cold start scene");
+        let fields = renderer
+            .fields(bindings.baked_surface_sizes)
+            .bindings(device, &buffer);
+        let frame_bindings = FrameBindings {
+            scene: &scene,
+            fields: &fields,
+            ..*bindings
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("bench cold start encoder"),
+        });
+        renderer.encode_frame(
+            queue,
+            &mut encoder,
+            &frame_bindings,
+            &cache_frame,
+            &surface_frame,
+            &target,
+            timestamps.map(|timestamps| &timestamps.query_set),
+        );
+        let frame = submit_timed(
+            device,
+            queue,
+            encoder,
+            timestamps,
+            bindings.upscale.is_some(),
+        )?;
+        totals.extend(frame[4]);
+    }
+    Ok(totals.first().map(|&first_ms| ColdStart {
+        frames: totals.len() as u32,
+        first_ms,
+        max_ms: totals.iter().copied().fold(0.0, f64::max),
+    }))
+}
+
+/// Submits a frame and returns its pass durations.
+fn submit_timed(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut encoder: wgpu::CommandEncoder,
+    timestamps: Option<&TimestampReadback>,
+    upscaled: bool,
+) -> Result<FrameTimes, String> {
+    if let Some(timestamps) = timestamps {
+        encoder.resolve_query_set(
+            &timestamps.query_set,
+            0..TIMESTAMP_COUNT,
+            &timestamps.resolve,
+            0,
+        );
+        encoder.copy_buffer_to_buffer(
+            &timestamps.resolve,
+            0,
+            &timestamps.readback,
+            0,
+            u64::from(TIMESTAMP_COUNT) * 8,
+        );
+    }
+    let started = Instant::now();
+    queue.submit([encoder.finish()]);
+    let mapped = timestamps.map(|timestamps| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        timestamps
+            .readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap();
+            });
+        receiver
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|error| format!("bench GPU poll failed: {error}"))?;
+    let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let frame = match (timestamps, mapped) {
+        (Some(timestamps), Some(mapped)) => {
+            mapped
+                .recv()
+                .map_err(|error| format!("timestamp readback stopped: {error}"))?
+                .map_err(|error| format!("timestamp readback failed: {error}"))?;
+            let ticks: Vec<u64> = timestamps
+                .readback
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|error| format!("failed to read timestamps: {error}"))?
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|bytes| u64::from_ne_bytes(*bytes))
+                .collect();
+            timestamps.readback.unmap();
+            let milliseconds = |begin: usize, end: usize| {
+                ticks[end]
+                    .checked_sub(ticks[begin])
+                    .map(|ticks| ticks as f64 * timestamps.period_ns / 1e6)
+            };
+            let last = if upscaled { 7 } else { 5 };
+            [
+                milliseconds(0, 1),
+                milliseconds(2, 3),
+                milliseconds(4, 5),
+                milliseconds(6, 7).filter(|_| upscaled),
+                milliseconds(8, last),
+                milliseconds(8, 9),
+                milliseconds(10, 11),
+            ]
+        }
+        _ => [None, None, None, None, Some(wall_ms), None, None],
+    };
+    Ok(frame)
 }
 
 fn render_image(
@@ -871,6 +1135,7 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
         scene: pass(2),
         upscale: pass(3),
         terrain_cache: pass(5),
+        baked_surface: pass(6),
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
@@ -1075,20 +1340,34 @@ fn print_summary(report: &BenchReport) {
         report.adapter, report.width, report.height, report.timing, report.timed_iterations
     );
     println!(
-        "forced: EVALUATE_ALL_BRANCHES; Δmax: largest 8-bit difference from the shipped image"
+        "forced: EVALUATE_ALL_BRANCHES, baking one frame budget; Δmax: largest 8-bit difference from the shipped image"
+    );
+    let sizes = baked_surface_sizes(
+        (report.width, report.height),
+        default_options().bake_memory_bytes,
     );
     println!(
-        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>7} {:>9} {:>8} {:>10} {:>12} {:>10} {:>12} {:>9}",
+        "baked surface: {} levels of {}x{} texels, {:.0} MiB; cold: frames from empty caches until they settle",
+        BAKED_SURFACE_LEVELS,
+        sizes.texels[0],
+        sizes.texels[1],
+        sizes.bytes() as f64 / f64::from(1 << 20),
+    );
+    println!(
+        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
         "scenario",
         "total ms",
         "ns/px",
         "fields",
         "occluders",
         "cache",
+        "bake",
         "scene",
         "upscale",
         "forced ms",
+        "forced bake",
         "forced Δmax",
+        "cold max (n)",
         "vs base",
         "forced base",
         "base p99"
@@ -1105,18 +1384,25 @@ fn print_summary(report: &BenchReport) {
                 )
             },
         );
+        let cold_start = scenario.cold_start.map_or_else(
+            || "-".to_owned(),
+            |cold| format!("{:.2} ({})", cold.max_ms, cold.frames),
+        );
         println!(
-            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>7} {:>9} {:>8} {:>10.2} {:>12} {:>10} {:>12} {:>9}",
+            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10.2} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
             scenario.scenario.id,
             shipped.total.median_ms,
             shipped.total_ns_per_pixel,
             milliseconds(shipped.fields),
             milliseconds(shipped.occluders),
             milliseconds(shipped.terrain_cache),
+            milliseconds(shipped.baked_surface),
             milliseconds(shipped.scene),
             milliseconds(shipped.upscale),
             scenario.all_branches.total.median_ms,
+            milliseconds(scenario.all_branches.baked_surface),
             scenario.all_branches_image_difference.max,
+            cold_start,
             ratio,
             forced_ratio,
             baseline_p99,

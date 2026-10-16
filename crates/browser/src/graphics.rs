@@ -1,3 +1,18 @@
+/// Memory for the baked surface's textures by device class; above it the bake
+/// coarsens. At 24 bytes per texel and two levels on the √2 ladder, 256 MiB
+/// holds a 1080p scene at one texel per pixel (191 MiB) and 512 MiB a 1440p
+/// one (339 MiB). The raised cap needs `navigator.deviceMemory`'s largest
+/// report, 8 GB; browsers without it keep 256 MiB.
+pub fn baked_surface_memory_bytes(touch_screen: bool, device_memory_gb: Option<f64>) -> u64 {
+    if touch_screen {
+        64 << 20
+    } else if device_memory_gb.is_some_and(|memory| memory >= 8.0) {
+        512 << 20
+    } else {
+        256 << 20
+    }
+}
+
 /// Lowest scene scale, matching the 2× per-axis upscale EASU is designed for.
 /// The half-scale bench scenarios render images for inspecting shorelines,
 /// shallow hazards, and the ice edge at this scale.
@@ -130,9 +145,9 @@ impl GraphicsQuality {
     /// - Decorative water normals evaluate four 4D octaves from 18 m. One
     ///   octave saves about 2.5 ms of a 9.8 ms open-water frame, two about
     ///   1.5 ms; 99th-percentile image changes stay at 1 level.
-    /// - The metre-scale micro-relief material field takes six octaves on
-    ///   land, rock, and ice. Three save 1-2 ms and none 2-4.5 ms over rocky
-    ///   land, at 99th-percentile changes of 1-3 and 3-6 levels.
+    /// - The metre-scale micro-relief material field takes six octaves. The
+    ///   baked surface holds all six at every tier, so the limit applies only
+    ///   to sea ice and to positions evaluated directly.
     pub fn scene_constants(self) -> &'static [(&'static str, f64)] {
         match self {
             Self::Low => &[
@@ -208,6 +223,16 @@ impl GraphicsSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_reported_device_memory_raises_only_the_desktop_bake_memory() {
+        let desktop = baked_surface_memory_bytes(false, None);
+        assert_eq!(baked_surface_memory_bytes(false, Some(4.0)), desktop);
+        assert!(baked_surface_memory_bytes(false, Some(8.0)) > desktop);
+        let touch = baked_surface_memory_bytes(true, None);
+        assert!(touch < desktop);
+        assert_eq!(baked_surface_memory_bytes(true, Some(8.0)), touch);
+    }
 
     #[test]
     fn scene_size_rounds_the_scaled_output_within_its_bounds() {

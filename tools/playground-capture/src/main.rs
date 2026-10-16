@@ -1,9 +1,10 @@
 use std::{env, fs, path::PathBuf};
 
 use browser::{
+    BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceSizes, BakedSurfaceTextures,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids,
     GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
-    TerrainCachePass, exposure_target, field_grids, ocean_wave_mode_uniforms,
+    TerrainCachePass, baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
     seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
@@ -65,6 +66,7 @@ struct Options {
     /// cache fills the requested view's frame reuses.
     prior_views: Vec<[f32; 3]>,
     skip_prior_fills: bool,
+    bake_memory_bytes: u64,
 }
 
 #[repr(C)]
@@ -101,6 +103,9 @@ struct SceneUniforms {
     terrain_cache_grid_m: [f32; 4],
     terrain_cache_texels: [u32; 4],
     terrain_cache_level: [u32; 4],
+    baked_surface_grid_m: [f32; 4],
+    baked_surface_texels: [u32; 4],
+    baked_surface_level: [u32; 4],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
@@ -145,6 +150,7 @@ struct CaptureFields {
     environment_pipeline: wgpu::ComputePipeline,
     occluder_pipeline: wgpu::ComputePipeline,
     terrain_cache: TerrainCachePass,
+    baked_surface: BakedSurfacePass,
     environment_output: wgpu::BindGroup,
     occluder_output: wgpu::BindGroup,
     _textures: [wgpu::Texture; 2],
@@ -153,17 +159,22 @@ struct CaptureFields {
 struct CaptureFieldBindings {
     scene: wgpu::BindGroup,
     field_reading: wgpu::BindGroup,
+    baked_surface_input: wgpu::BindGroup,
 }
 
 impl CaptureFields {
-    /// `occluder_group_1_layout` is the playground uniform layout, or any layout
-    /// for the production generator, which leaves group 1 empty.
+    /// `group_1_layout` is the playground uniform layout, or any layout for the
+    /// production generators, which leave group 1 empty.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
         scene_uniform_layout: &wgpu::BindGroupLayout,
-        occluder_group_1_layout: &wgpu::BindGroupLayout,
+        group_1_layout: &wgpu::BindGroupLayout,
         occluder_shader_source: &str,
         occluder_constants: &[(&str, f64)],
+        baked_surface_shader_source: &str,
+        baked_surface_constants: &[(&str, f64)],
+        baked_surface_sizes: BakedSurfaceSizes,
     ) -> Self {
         let uniform_entry = |visibility| wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -198,6 +209,8 @@ impl CaptureFields {
                     count: None,
                 },
                 field_entry(4, wgpu::ShaderStages::FRAGMENT, false),
+                field_entry(5, wgpu::ShaderStages::FRAGMENT, false),
+                field_entry(6, wgpu::ShaderStages::FRAGMENT, false),
             ],
         });
         let field_reading_layout =
@@ -305,7 +318,7 @@ impl CaptureFields {
             occluder_shader_source,
             &[
                 Some(&field_reading_layout),
-                Some(occluder_group_1_layout),
+                Some(group_1_layout),
                 Some(&occluder_output_layout),
             ],
             "generate_occluder_fields",
@@ -345,6 +358,13 @@ impl CaptureFields {
             environment_pipeline,
             occluder_pipeline,
             terrain_cache: TerrainCachePass::new(device, scene_uniform_layout),
+            baked_surface: BakedSurfacePass::new(
+                device,
+                BakedSurfaceTextures::new(device, baked_surface_sizes),
+                baked_surface_shader_source,
+                baked_surface_constants,
+                group_1_layout,
+            ),
             _textures: [environment_texture, occluder_texture],
         }
     }
@@ -358,6 +378,7 @@ impl CaptureFields {
             binding: 1,
             resource: wgpu::BindingResource::TextureView(&self.environment_view),
         };
+        let baked = self.baked_surface.textures();
         CaptureFieldBindings {
             scene: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("scene uniforms and field grids"),
@@ -379,6 +400,14 @@ impl CaptureFields {
                             &self.terrain_cache.noise_view,
                         ),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&baked.height_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&baked.color_view),
+                    },
                 ],
             }),
             field_reading: device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -386,7 +415,37 @@ impl CaptureFields {
                 layout: &self.field_reading_layout,
                 entries: &[uniforms, environment],
             }),
+            baked_surface_input: self.baked_surface.input_bind_group(
+                device,
+                scene_buffer,
+                &self.terrain_cache.noise_view,
+            ),
         }
+    }
+
+    /// Bakes the texels `baked_surface` schedules; timestamps, when requested,
+    /// go to query indices 10 and 11.
+    fn encode_baked_surface(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &CaptureFieldBindings,
+        group_1: &wgpu::BindGroup,
+        baked_surface: &BakedSurfaceFrame,
+        timestamps: Option<&wgpu::QuerySet>,
+    ) {
+        self.baked_surface.encode(
+            queue,
+            encoder,
+            &bindings.baked_surface_input,
+            group_1,
+            baked_surface,
+            timestamps.map(|query_set| wgpu::ComputePassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(10),
+                end_of_pass_write_index: Some(11),
+            }),
+        );
     }
 
     /// Evaluates the texels `terrain_cache` schedules; timestamps, when
@@ -569,6 +628,8 @@ fn default_options() -> Options {
         layer_material_color_visibility: [1; 4],
         prior_views: Vec::new(),
         skip_prior_fills: false,
+        // A desktop's, without the raise for a large reported device memory.
+        bake_memory_bytes: browser::baked_surface_memory_bytes(false, None),
     }
 }
 
@@ -666,6 +727,9 @@ fn parse_options() -> Result<Command, String> {
                 options.prior_views.push(view);
             }
             "--skip-prior-fills" => options.skip_prior_fills = true,
+            "--touch-budget" => {
+                options.bake_memory_bytes = browser::baked_surface_memory_bytes(true, None)
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -1290,14 +1354,17 @@ fn print_help() {
            --prior-view X,Y,HEIGHT  render an earlier frame's terrain cache fills first;\n\
                                   repeat for a pan or zoom sequence ending at the capture\n\
            --skip-prior-fills     count the prior views' cache fills as done without running\n\
-                                  them, a test control that reads unwritten texels\n\n\
+                                  them, a test control that reads unwritten texels\n\
+           --touch-budget         bake the surface within touch devices' memory budget\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics.\n\n\
          playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
-         Times the production terrain-cache, environment-field, occluder-field, scene,\n\
-         and upscale passes for each built-in scenario in playground/src/bench-scenarios.json,\n\
-         once as shipped and once with EVALUATE_ALL_BRANCHES forcing normally skipped work\n\
-         and a refill of the active terrain cache level every frame.\n\n\
+         Times the production terrain-cache, surface-bake, environment-field, occluder-field,\n\
+         scene, and upscale passes for each built-in scenario in\n\
+         playground/src/bench-scenarios.json, once as shipped and once with\n\
+         EVALUATE_ALL_BRANCHES forcing normally skipped work, a refill of the active terrain\n\
+         cache level, and one frame budget of surface bakes every frame. Shipped frames from\n\
+         empty caches until they settle are timed as the cold start.\n\n\
          Bench options:\n\
            --output-dir DIR       receives report.json, one PNG per scenario, and contact-sheet.png\n\
            --baseline DIR         earlier bench output to compare timings and images against;\n\
@@ -1575,6 +1642,9 @@ async fn render(options: &Options) -> Result<(), String> {
             &playground_layout,
             browser::playground_occluder_field_shader_source(),
             &[],
+            browser::playground_baked_surface_shader_source(),
+            &[],
+            baked_surface_sizes((options.width, options.height), options.bake_memory_bytes),
         )
     });
     let bind_group_layouts = [
@@ -1752,8 +1822,14 @@ fn render_world(
     options: &Options,
 ) -> Result<Vec<u8>, String> {
     let mut terrain_cache = TerrainCache::default();
-    let scene_bind_group = |terrain_cache_frame: &TerrainCacheFrame, options: &Options| {
-        let uniforms = scene_uniforms(options, terrain_cache_frame)?;
+    let mut baked_surface = BakedSurface::new(baked_surface_sizes(
+        (options.width, options.height),
+        options.bake_memory_bytes,
+    ));
+    let scene_bind_group = |terrain_cache_frame: &TerrainCacheFrame,
+                            baked_surface_frame: &BakedSurfaceFrame,
+                            options: &Options| {
+        let uniforms = scene_uniforms(options, terrain_cache_frame, baked_surface_frame)?;
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene uniforms"),
             contents: bytemuck::bytes_of(&uniforms),
@@ -1762,36 +1838,61 @@ fn render_world(
         let bind_group = bind_group(device, scene_layout, &buffer, "scene uniforms bind group");
         Ok::<_, String>((buffer, bind_group))
     };
-    if let Some(fields) = fields {
-        for &[camera_x_m, camera_y_m, view_height_m] in &options.prior_views {
-            let prior = Options {
-                camera_x_m,
-                camera_y_m,
-                view_height_m,
-                ..options.clone()
-            };
-            let terrain_cache_frame = capture_terrain_cache_frame(&prior, &mut terrain_cache)?;
-            terrain_cache.commit();
-            if options.skip_prior_fills {
-                continue;
-            }
-            let (_, prior_bind_group) = scene_bind_group(&terrain_cache_frame, &prior)?;
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("prior view terrain cache encoder"),
-            });
-            fields.encode_terrain_cache(
-                queue,
-                &mut encoder,
-                &prior_bind_group,
-                &terrain_cache_frame,
-                None,
-            );
-            queue.submit([encoder.finish()]);
+    // Earlier views run one frame each; the requested view then runs until its
+    // surface is baked.
+    let views = options
+        .prior_views
+        .iter()
+        .map(|&[camera_x_m, camera_y_m, view_height_m]| {
+            (
+                Options {
+                    camera_x_m,
+                    camera_y_m,
+                    view_height_m,
+                    ..options.clone()
+                },
+                true,
+            )
+        })
+        .chain(std::iter::repeat_with(|| (options.clone(), false)));
+    let mut frames = None;
+    for (view, prior) in views {
+        let terrain_cache_frame = capture_terrain_cache_frame(&view, &mut terrain_cache)?;
+        terrain_cache.commit();
+        let baked_surface_frame = capture_baked_surface_frame(
+            &view,
+            visual_pixel_footprint_m(view.view_height_m, view.height),
+            &mut baked_surface,
+            false,
+        )?;
+        baked_surface.commit();
+        if !prior && (fields.is_none() || !baked_surface_frame.has_fills()) {
+            frames = Some((terrain_cache_frame, baked_surface_frame));
+            break;
         }
+        let Some(fields) = fields.filter(|_| !(prior && options.skip_prior_fills)) else {
+            continue;
+        };
+        let (buffer, bind_group) =
+            scene_bind_group(&terrain_cache_frame, &baked_surface_frame, &view)?;
+        let bindings = fields.bindings(device, &buffer);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("baking frame encoder"),
+        });
+        fields.encode_terrain_cache(queue, &mut encoder, &bind_group, &terrain_cache_frame, None);
+        fields.encode_baked_surface(
+            queue,
+            &mut encoder,
+            &bindings,
+            playground_bind_group,
+            &baked_surface_frame,
+            None,
+        );
+        queue.submit([encoder.finish()]);
     }
-    let terrain_cache_frame = capture_terrain_cache_frame(options, &mut terrain_cache)?;
-    terrain_cache.commit();
-    let (scene_buffer, scene_bind_group) = scene_bind_group(&terrain_cache_frame, options)?;
+    let (terrain_cache_frame, baked_surface_frame) = frames.unwrap();
+    let (scene_buffer, scene_bind_group) =
+        scene_bind_group(&terrain_cache_frame, &baked_surface_frame, options)?;
     let texture = capture_texture(device, options.width, options.height);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("playground capture encoder"),
@@ -1867,6 +1968,43 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
     ))
 }
 
+/// `rebake` bakes one frame budget into the read levels again, for timing the
+/// bake at its frame budget.
+fn capture_baked_surface_frame(
+    options: &Options,
+    pixel_footprint_m: f32,
+    baked_surface: &mut BakedSurface,
+    rebake: bool,
+) -> Result<BakedSurfaceFrame, String> {
+    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .map_err(|error| error.to_string())?;
+    let camera_m = world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let view_size_m = [
+        view_width_m(
+            options.width as f32 / options.height as f32,
+            options.view_height_m,
+        ),
+        options.view_height_m,
+    ];
+    Ok(if rebake {
+        baked_surface.frame_rebaking_budget(
+            world_geometry,
+            options.seed,
+            camera_m,
+            view_size_m,
+            pixel_footprint_m,
+        )
+    } else {
+        baked_surface.frame(
+            world_geometry,
+            options.seed,
+            camera_m,
+            view_size_m,
+            pixel_footprint_m,
+        )
+    })
+}
+
 fn capture_terrain_cache_frame(
     options: &Options,
     terrain_cache: &mut TerrainCache,
@@ -1891,6 +2029,7 @@ fn capture_terrain_cache_frame(
 fn scene_uniforms(
     options: &Options,
     terrain_cache: &TerrainCacheFrame,
+    baked_surface: &BakedSurfaceFrame,
 ) -> Result<SceneUniforms, String> {
     let field_grids = capture_field_grids(options)?;
     let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
@@ -1977,6 +2116,9 @@ fn scene_uniforms(
         terrain_cache_grid_m: terrain_cache.grid_m,
         terrain_cache_texels: terrain_cache.texels,
         terrain_cache_level: terrain_cache.level,
+        baked_surface_grid_m: baked_surface.grid_m,
+        baked_surface_texels: baked_surface.texels,
+        baked_surface_level: baked_surface.level,
         ocean_wave_modes: ocean_wave_mode_uniforms(
             world_geometry,
             options.seed,

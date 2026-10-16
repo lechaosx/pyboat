@@ -1,11 +1,18 @@
 use std::collections::HashMap;
 
+mod baked_surface;
 mod exposure;
 mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
 mod graphics;
 mod terrain_cache;
+pub use baked_surface::{
+    BAKED_SURFACE_COLOR_LAYERS, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame,
+    BakedSurfaceResize, BakedSurfaceSizes, baked_surface_sizes,
+};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use baked_surface::{BakedSurfacePass, BakedSurfaceTextures};
 pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridTuning, FieldGrids,
@@ -13,7 +20,7 @@ pub use field_grids::{
 };
 pub use graphics::{
     FramePacer, GraphicsQuality, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController,
-    scene_render_size,
+    baked_surface_memory_bytes, scene_render_size,
 };
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use terrain_cache::TerrainCachePass;
@@ -116,6 +123,14 @@ pub(crate) const OCCLUDER_FIELD_SHADER: &str =
 pub(crate) const TERRAIN_CACHE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/terrain-cache.wgsl"));
 
+#[cfg(any(target_arch = "wasm32", feature = "playground", test))]
+pub(crate) const BAKED_SURFACE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/baked-surface.wgsl"));
+
+#[cfg(any(feature = "playground", test))]
+pub(crate) const PLAYGROUND_BAKED_SURFACE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/baked-surface-playground.wgsl"));
+
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/environment-fields.wgsl"));
@@ -155,6 +170,16 @@ pub fn occluder_field_shader_source() -> &'static str {
 #[cfg(feature = "playground")]
 pub fn terrain_cache_shader_source() -> &'static str {
     TERRAIN_CACHE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn baked_surface_shader_source() -> &'static str {
+    BAKED_SURFACE_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn playground_baked_surface_shader_source() -> &'static str {
+    PLAYGROUND_BAKED_SURFACE_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -1406,6 +1431,19 @@ mod tests {
             terrain_cache_entry_points,
             [(naga::ShaderStage::Compute, "generate_terrain_cache")],
         );
+
+        for source in [BAKED_SURFACE_SHADER, PLAYGROUND_BAKED_SURFACE_SHADER] {
+            let baked_surface = naga::front::wgsl::parse_str(source).unwrap();
+            let baked_surface_entry_points: Vec<_> = baked_surface
+                .entry_points
+                .iter()
+                .map(|entry| (entry.stage, entry.name.as_str()))
+                .collect();
+            assert_eq!(
+                baked_surface_entry_points,
+                [(naga::ShaderStage::Compute, "generate_baked_surface")],
+            );
+        }
     }
 
     #[test]

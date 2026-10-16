@@ -119,21 +119,21 @@ struct CacheKey {
 
 /// Lattice columns and rows from `min` up to, not including, `max`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct Cells {
-    min: [i64; 2],
-    max: [i64; 2],
+pub(crate) struct Cells {
+    pub(crate) min: [i64; 2],
+    pub(crate) max: [i64; 2],
 }
 
 impl Cells {
-    fn size(self) -> [i64; 2] {
+    pub(crate) fn size(self) -> [i64; 2] {
         [0, 1].map(|axis| (self.max[axis] - self.min[axis]).max(0))
     }
 
-    fn is_empty(self) -> bool {
+    pub(crate) fn is_empty(self) -> bool {
         self.size().contains(&0)
     }
 
-    fn intersection(self, other: Self) -> Self {
+    pub(crate) fn intersection(self, other: Self) -> Self {
         Self {
             min: [0, 1].map(|axis| self.min[axis].max(other.min[axis])),
             max: [0, 1].map(|axis| self.max[axis].min(other.max[axis])),
@@ -243,7 +243,7 @@ impl TerrainCache {
             } else {
                 (FILL_BUDGET_TEXELS - i64::from(fill_texels)).max(0)
             };
-            for cells in grow(valid, level.window, &mut budget) {
+            for cells in grow(valid, level.window, &mut budget, [0, 1]) {
                 let size = cells.size();
                 fill.rects[fill.rect_count as usize] = FillRect {
                     first_texel: [
@@ -310,10 +310,15 @@ fn slot(cell: i64) -> u32 {
 }
 
 /// Extends `valid` towards `window` within `budget`, returning the cells to
-/// fill. Columns beside the valid rows come first, then rows across the valid
-/// columns, so the valid cells stay one rectangle; an empty level grows rows
-/// across the whole window.
-fn grow(valid: &mut Cells, window: Cells, budget: &mut i64) -> Vec<Cells> {
+/// fill. Strips across the valid extent along the first of `axes` come first,
+/// then along the second, so the valid cells stay one rectangle; an empty level
+/// grows rows across the whole window.
+pub(crate) fn grow(
+    valid: &mut Cells,
+    window: Cells,
+    budget: &mut i64,
+    axes: [usize; 2],
+) -> Vec<Cells> {
     if valid.is_empty() {
         *valid = Cells {
             min: window.min,
@@ -321,7 +326,7 @@ fn grow(valid: &mut Cells, window: Cells, budget: &mut i64) -> Vec<Cells> {
         };
     }
     let mut fills = Vec::new();
-    for axis in [0, 1] {
+    for axis in axes {
         let across = 1 - axis;
         let length = valid.size()[across];
         if length == 0 {

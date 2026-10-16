@@ -480,6 +480,121 @@ fn visual_water_surface(
     );
 }
 
+// While `surface_baking` is set, the land composition takes the dry,
+// snowless, unseasoned state and records how its colour responds to wetness,
+// autumn, and dormancy, so the scene applies their live amounts per pixel.
+struct SurfaceBakeFactors {
+    // Share of the dry colour's luminance that full wetness removes.
+    wet_fraction: f32,
+    // Colour changes at full autumn and at full dormancy, each alone.
+    autumn_color: vec3<f32>,
+    dormancy_color: vec3<f32>,
+    surface_grade: f32,
+    snow_detail_gradient: vec2<f32>,
+};
+
+var<private> surface_baking: bool = false;
+var<private> surface_bake_factors: SurfaceBakeFactors;
+
+fn bottom_reflectance(
+    coastal_rock_amount: f32,
+    coastal_outcrop_amount: f32,
+    coastal_sediment_amount: f32,
+) -> f32 {
+    let rock_amount = smoothstep(
+        0.25,
+        0.75,
+        max(coastal_rock_amount, coastal_outcrop_amount),
+    );
+    let sediment_amount = smoothstep(0.08, 0.60, coastal_sediment_amount)
+        * (1.0 - rock_amount);
+    let sediment_reflectance = 0.84;
+    let rock_reflectance = mix(
+        0.56,
+        0.72,
+        coastal_outcrop_amount,
+    );
+    let reflectance = mix(0.32, sediment_reflectance, sediment_amount);
+    return mix(reflectance, rock_reflectance, rock_amount);
+}
+
+fn water_column_surface(
+    position_m: vec2<f32>,
+    elevation_m: f32,
+    water_height_m: f32,
+    bottom_reflectance: f32,
+    atmosphere: SurfaceAtmosphereSample,
+) -> TerrainSurface {
+    let water_color_gate = water_material_color_visibility();
+    let depth_m = water_height_m - elevation_m;
+    let water_color = vec3<f32>(0.025, 0.11, 0.15);
+    let bottom_transmittance = exp(
+        -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
+    );
+    if effect_feature_visibility().y > 0.0 && bottom_transmittance > 0.02 {
+        let bottom_water_color = water_color
+            * (1.0 + tuning.water_tuning.z * bottom_reflectance);
+        let water_veiled_bottom = mix(
+            bottom_water_color,
+            water_color,
+            tuning.water_tuning.w * (1.0 - bottom_transmittance),
+        );
+        let bottom_visibility = clamp(
+            tuning.water_tuning.y * bottom_transmittance,
+            0.0,
+            1.0,
+        );
+        let visible_water_color = water_color_gate.x * water_color
+            + water_color_gate.y * bottom_visibility
+                * (water_veiled_bottom - water_color);
+        return visual_water_surface(
+            position_m,
+            visible_water_color,
+            elevation_m,
+            atmosphere,
+        );
+    }
+    return visual_water_surface(
+        position_m,
+        water_color_gate.x * water_color,
+        elevation_m,
+        atmosphere,
+    );
+}
+
+// Wet intertidal and beach colours as fractions of their dry colours.
+const INTERTIDAL_WET_SHADE: f32 = 0.70;
+const BEACH_WET_SHADE: f32 = 0.72;
+
+const SNOW_ROUGHNESS: f32 = 0.70;
+
+fn snow_color(surface_grade: f32) -> vec3<f32> {
+    return mix(
+        vec3<f32>(0.72, 0.76, 0.77),
+        vec3<f32>(0.96, 0.97, 0.96),
+        0.55 + 0.20 * surface_grade,
+    );
+}
+
+fn seasoned_grass_color(color: vec3<f32>, autumn: f32, dormancy: f32) -> vec3<f32> {
+    let autumn_color = mix(color, vec3<f32>(0.52, 0.28, 0.04), 0.62 * autumn);
+    return mix(autumn_color, vec3<f32>(0.23, 0.22, 0.15), 0.42 * dormancy);
+}
+
+fn seasoned_forest_color(
+    color: vec3<f32>,
+    autumn: f32,
+    dormancy: f32,
+    canopy_cluster: f32,
+) -> vec3<f32> {
+    let autumn_color = mix(
+        color,
+        vec3<f32>(0.62, 0.18, 0.025),
+        0.80 * autumn * (0.45 + 0.55 * canopy_cluster),
+    );
+    return mix(autumn_color, vec3<f32>(0.12, 0.13, 0.10), 0.32 * dormancy);
+}
+
 fn terrain_surface(
     position_m: vec2<f32>,
     elevation_m: f32,
@@ -495,7 +610,6 @@ fn terrain_surface(
 ) -> TerrainSurface {
     let land_color_gate = land_material_color_visibility();
     let solid_color_gate = solid_material_color_visibility();
-    let water_color_gate = water_material_color_visibility();
     if material_feature_visibility().x <= 0.0 {
         return TerrainSurface(
             select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
@@ -506,57 +620,18 @@ fn terrain_surface(
     let slope = length(material_gradient);
     let is_water = elevation_m < water_height_m;
     var water_surface: TerrainSurface;
-    if is_water || EVALUATE_ALL_BRANCHES {
-        let depth_m = water_height_m - elevation_m;
-        let water_color = vec3<f32>(0.025, 0.11, 0.15);
-        let bottom_transmittance = exp(
-            -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
-        );
-        if effect_feature_visibility().y > 0.0 && bottom_transmittance > 0.02 {
-            let rock_amount = smoothstep(
-                0.25,
-                0.75,
-                max(coastal_rock_amount, coastal_outcrop_amount),
-            );
-            let sediment_amount = smoothstep(0.08, 0.60, coastal_sediment_amount)
-                * (1.0 - rock_amount);
-            let sediment_reflectance = 0.84;
-            let rock_reflectance = mix(
-                0.56,
-                0.72,
+    if (is_water || EVALUATE_ALL_BRANCHES) && !surface_baking {
+        water_surface = water_column_surface(
+            position_m,
+            elevation_m,
+            water_height_m,
+            bottom_reflectance(
+                coastal_rock_amount,
                 coastal_outcrop_amount,
-            );
-            var bottom_reflectance = mix(0.32, sediment_reflectance, sediment_amount);
-            bottom_reflectance = mix(bottom_reflectance, rock_reflectance, rock_amount);
-            let bottom_water_color = water_color
-                * (1.0 + tuning.water_tuning.z * bottom_reflectance);
-            let water_veiled_bottom = mix(
-                bottom_water_color,
-                water_color,
-                tuning.water_tuning.w * (1.0 - bottom_transmittance),
-            );
-            let bottom_visibility = clamp(
-                tuning.water_tuning.y * bottom_transmittance,
-                0.0,
-                1.0,
-            );
-            let visible_water_color = water_color_gate.x * water_color
-                + water_color_gate.y * bottom_visibility
-                    * (water_veiled_bottom - water_color);
-            water_surface = visual_water_surface(
-                position_m,
-                visible_water_color,
-                elevation_m,
-                atmosphere,
-            );
-        } else {
-            water_surface = visual_water_surface(
-                position_m,
-                water_color_gate.x * water_color,
-                elevation_m,
-                atmosphere,
-            );
-        }
+                coastal_sediment_amount,
+            ),
+            atmosphere,
+        );
     }
     if is_water && !EVALUATE_ALL_BRANCHES {
         return water_surface;
@@ -584,14 +659,13 @@ fn terrain_surface(
         );
         snow_amount = clamp(tuning.material_coverage.w * snow_amount, 0.0, 1.0);
     }
+    if surface_baking {
+        snow_amount = 0.0;
+    }
     let snow_surface = TerrainSurface(
-        solid_color_gate.y * mix(
-            vec3<f32>(0.72, 0.76, 0.77),
-            vec3<f32>(0.96, 0.97, 0.96),
-            0.55 + 0.20 * surface_grade,
-        ),
+        solid_color_gate.y * snow_color(surface_grade),
         0.22 * tuning.land_material_normals.w * micro_height.gradient,
-        0.70,
+        SNOW_ROUGHNESS,
     );
     if snow_amount >= 1.0 && !EVALUATE_ALL_BRANCHES {
         return snow_surface;
@@ -670,11 +744,14 @@ fn terrain_surface(
         intertidal_ceiling_m + 1.0,
         material_elevation_m,
     );
-    let exposed_dryness = smoothstep(
+    var exposed_dryness = smoothstep(
         0.05,
         0.8,
         material_elevation_m - water_height_m,
     );
+    if surface_baking {
+        exposed_dryness = 1.0;
+    }
     let intertidal_grade = clamp(
         0.20 + 0.42 * surface_grade + 0.22 * coastal_rock_amount,
         0.0,
@@ -687,7 +764,7 @@ fn terrain_surface(
     );
     let intertidal_surface = TerrainSurface(
         land_color_gate.z * mix(
-            0.70 * intertidal_color,
+            INTERTIDAL_WET_SHADE * intertidal_color,
             intertidal_color,
             exposed_dryness,
         ),
@@ -695,7 +772,7 @@ fn terrain_surface(
         mix(0.96, 0.88, exposed_dryness),
     );
     let beach_surface = TerrainSurface(
-        land_color_gate.w * mix(0.72 * beach_color, beach_color, exposed_dryness),
+        land_color_gate.w * mix(BEACH_WET_SHADE * beach_color, beach_color, exposed_dryness),
         beach_micro_height_m * micro_height.gradient,
         mix(0.90, 0.82, exposed_dryness),
     );
@@ -747,14 +824,14 @@ fn terrain_surface(
             atmosphere.climate,
         );
     }
-    grass_color = mix(grass_color, vec3<f32>(0.52, 0.28, 0.04), 0.62 * autumn);
-    forest_color = mix(
-        forest_color,
-        vec3<f32>(0.62, 0.18, 0.025),
-        0.80 * autumn * (0.45 + 0.55 * canopy_cluster),
-    );
-    grass_color = mix(grass_color, vec3<f32>(0.23, 0.22, 0.15), 0.42 * dormancy);
-    forest_color = mix(forest_color, vec3<f32>(0.12, 0.13, 0.10), 0.32 * dormancy);
+    if surface_baking {
+        autumn = 0.0;
+        dormancy = 0.0;
+    }
+    let unseasoned_grass_color = grass_color;
+    let unseasoned_forest_color = forest_color;
+    grass_color = seasoned_grass_color(grass_color, autumn, dormancy);
+    forest_color = seasoned_forest_color(forest_color, autumn, dormancy, canopy_cluster);
     let forest_visibility = clamp(
         tuning.material_coverage.x
             * forest_amount
@@ -802,6 +879,31 @@ fn terrain_surface(
             + sediment_cover * beach_surface.roughness
             + rock_cover * rock_surface.roughness,
     );
+    if surface_baking {
+        // Linear in each amount, so their cross term is dropped.
+        let grass_share = land_color_gate.x * vegetation_cover * (1.0 - forest_visibility);
+        let forest_share = land_color_gate.y * vegetation_cover * forest_visibility;
+        surface_bake_factors.autumn_color = grass_share
+            * (seasoned_grass_color(unseasoned_grass_color, 1.0, 0.0) - unseasoned_grass_color)
+            + forest_share * (
+                seasoned_forest_color(unseasoned_forest_color, 1.0, 0.0, canopy_cluster)
+                    - unseasoned_forest_color
+            );
+        surface_bake_factors.dormancy_color = grass_share
+            * (seasoned_grass_color(unseasoned_grass_color, 0.0, 1.0) - unseasoned_grass_color)
+            + forest_share * (
+                seasoned_forest_color(unseasoned_forest_color, 0.0, 1.0, canopy_cluster)
+                    - unseasoned_forest_color
+            );
+        let drying_color = intertidal_cover * land_color_gate.z
+            * (1.0 - INTERTIDAL_WET_SHADE) * intertidal_color
+            + sediment_cover * land_color_gate.w * (1.0 - BEACH_WET_SHADE) * beach_color;
+        let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
+        surface_bake_factors.wet_fraction = dot(drying_color, luminance)
+            / max(dot(composed_surface.color, luminance), 1e-4);
+        surface_bake_factors.surface_grade = surface_grade;
+        surface_bake_factors.snow_detail_gradient = snow_surface.detail_gradient;
+    }
     let land_surface = select_terrain_surface(
         blend_terrain_surface(composed_surface, snow_surface, snow_amount),
         snow_surface,

@@ -59,6 +59,12 @@ fn terrain_cache_octaves(field: u32, spacing_m: f32, horizontal_scale: f32) -> u
     return octaves;
 }
 
+// Eight-bit colour layers per baked surface level. Keep synchronized with
+// `BAKED_SURFACE_COLOR_LAYERS` in baked_surface.rs.
+const BAKED_SURFACE_COLOR_LAYERS: u32 = 4u;
+// The largest land detail gradient the baked surface encodes.
+const BAKED_DETAIL_GRADIENT_RANGE: f32 = 4.0;
+
 fn direct_terrain_broad_noise(
     field: u32,
     position_m: vec2<f32>,
@@ -91,6 +97,11 @@ fn terrain_smoothstep_sample(
     return sample;
 }
 
+// How far the cluster noise moves water temperature from its climate.
+fn maritime_temperature_scale_c(climate: SurfaceClimateSample) -> f32 {
+    return 16.0 * (1.0 - smoothstep(75.0, 90.0, abs(climate.latitude_degrees)));
+}
+
 fn solid_ice_sample(
     terrain: TerrainSample,
     maritime_temperature: TerrainNoiseSample,
@@ -98,9 +109,7 @@ fn solid_ice_sample(
     position_m: vec2<f32>,
 ) -> TerrainSample {
     var surface = terrain;
-    let maritime_scale = 16.0 * (
-        1.0 - smoothstep(75.0, 90.0, abs(climate.latitude_degrees))
-    );
+    let maritime_scale = maritime_temperature_scale_c(climate);
     surface.maritime_temperature_anomaly_c = maritime_scale * maritime_temperature.value;
     var bedrock: TerrainNoiseSample;
     bedrock.value = terrain.elevation_m;
@@ -170,6 +179,15 @@ fn procedural_terrain_sample_with_climate_from_circle(
     position_m: vec2<f32>,
     terrain_circle_position: vec4<f32>,
     climate: SurfaceClimateSample,
+) -> TerrainSample {
+    let bedrock = procedural_bedrock_sample_from_circle(position_m, terrain_circle_position);
+    return solid_ice_sample(bedrock, bedrock.cluster, climate, position_m);
+}
+
+// Terrain before climate-derived ice.
+fn procedural_bedrock_sample_from_circle(
+    position_m: vec2<f32>,
+    terrain_circle_position: vec4<f32>,
 ) -> TerrainSample {
     // Keep the density composition synchronized with
     // `game::procedural_terrain_elevation_m`; Rust remains authoritative
@@ -241,13 +259,11 @@ fn procedural_terrain_sample_with_climate_from_circle(
         * (1.0 - reef_ruggedness.value)
         - reef_ruggedness.gradient * (1.0 - coastal_rock.value);
     var ocean_floor_depth: TerrainNoiseSample;
-    ocean_floor_depth.value = 3000.0 + 3000.0 * trench_depth.value;
+    ocean_floor_depth.value = OCEAN_FLOOR_DEPTH_M + 3000.0 * trench_depth.value;
     ocean_floor_depth.gradient = 3000.0 * trench_depth.gradient;
     let positive_base_depth_m = max(base_depth.value, 0.0);
     var shaped_depth: TerrainNoiseSample;
-    shaped_depth.value = base_depth.value
-        + 0.015 * positive_base_depth_m * positive_base_depth_m
-            * positive_base_depth_m * positive_base_depth_m;
+    shaped_depth.value = shaped_bed_depth_m(base_depth.value);
     shaped_depth.gradient = base_depth.gradient;
     if positive_base_depth_m > 0.0 {
         shaped_depth.gradient *= 1.0
@@ -395,7 +411,7 @@ fn procedural_terrain_sample_with_climate_from_circle(
         || rock_mask_value != 0.0
         || outer_reef_mask_value != 0.0;
     if !coastal_detail && !EVALUATE_ALL_BRANCHES {
-        return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
+        return terrain;
     }
     let seabed_mask_gradient = seabed_deep_gate.gradient * seabed_shore_gate_value
         - seabed_shore_rise.gradient * seabed_deep_gate.value;
@@ -542,7 +558,16 @@ fn procedural_terrain_sample_with_climate_from_circle(
         * visible_coastal_mask_value
         * (1.0 - coastal_rock_amount)
         * (1.0 - reef_ruggedness.value), coastal_detail);
-    return solid_ice_sample(terrain, cluster, climate, terrain_position_m);
+    return terrain;
+}
+
+const OCEAN_FLOOR_DEPTH_M: f32 = 3000.0;
+
+// Bed depth below sea level from the broad depth, deepening offshore.
+fn shaped_bed_depth_m(broad_depth_m: f32) -> f32 {
+    let positive_depth_m = max(broad_depth_m, 0.0);
+    return broad_depth_m
+        + 0.015 * positive_depth_m * positive_depth_m * positive_depth_m * positive_depth_m;
 }
 
 fn procedural_terrain_sample_with_climate(

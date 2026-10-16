@@ -1,13 +1,17 @@
 import {
+  PlaygroundBakedSurface,
   PlaygroundExposure,
   PlaygroundFramePacer,
   PlaygroundResolutionController,
   PlaygroundTerrainCache,
+  baked_surface_shader_source,
   environment_field_shader_source,
   environment_field_texture_size,
   graphics_quality_scene_constants,
   occluder_field_shader_source,
   occluder_field_texture_size,
+  playground_baked_surface_fill_bytes,
+  playground_baked_surface_shader_source,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
   playground_occluder_field_shader_source,
@@ -1155,6 +1159,38 @@ type TerrainCachePass = {
   fillBindGroup: GPUBindGroup;
 };
 let terrainCachePass: TerrainCachePass | undefined;
+// Sized for the largest scene the screen shows; a larger one bakes coarser.
+const bakedSurface = new PlaygroundBakedSurface(
+  Math.ceil(screen.width * devicePixelRatio),
+  Math.ceil(screen.height * devicePixelRatio),
+  matchMedia("(pointer: coarse)").matches,
+  (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+);
+const [bakedHeightView, bakedColorView] = (() => {
+  const [width, height, heightLayers, colorLayers] = bakedSurface.texture_size();
+  const view = (layers: number, format: GPUTextureFormat) =>
+    device.createTexture({
+      size: [width!, height!, layers],
+      format,
+      usage: 0x04 | 0x08,
+    }).createView({ dimension: "2d-array" });
+  return [view(heightLayers!, "rgba16float"), view(colorLayers!, "rgba8unorm")];
+})();
+const bakedSurfaceFillBuffer = device.createBuffer({
+  size: playground_baked_surface_fill_bytes(),
+  usage: 0x40 | 0x08,
+});
+let bakedSurfaceFill: Uint8Array = new Uint8Array(0);
+let bakedSurfaceWorkgroups = 0;
+// The playground uniforms the latest bakes used; any tuning change rebakes.
+let bakedTuning = new Uint8Array(0);
+type BakedSurfacePass = {
+  pipeline: GPUComputePipeline;
+  inputBindGroup: GPUBindGroup;
+  playgroundBindGroup: GPUBindGroup;
+  outputBindGroup: GPUBindGroup;
+};
+let bakedSurfacePass: BakedSurfacePass | undefined;
 // Environment and occluder workgroup counts, then spacing and texels per occluder layer.
 let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5]);
 
@@ -1574,11 +1610,14 @@ function updateUniforms(
     state.landformShadowReach,
     terrainCache,
     productionShaders ? undefined : state.terrainScale,
+    bakedSurface,
   );
   sceneUniforms = frame.uniforms;
   fieldGrids = frame.field_grids;
   terrainCacheFill = frame.terrain_cache_fill;
   terrainCacheWorkgroups = frame.terrain_cache_workgroups;
+  bakedSurfaceFill = frame.baked_surface_fill;
+  bakedSurfaceWorkgroups = frame.baked_surface_workgroups;
   frame.free();
 
   tuningFloats.set([
@@ -1700,6 +1739,11 @@ function updateUniforms(
     0,
   ], 100);
   tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 104);
+  const tuning = new Uint8Array(tuningFloats.buffer);
+  if (!productionShaders && tuning.some((byte, index) => byte !== bakedTuning[index])) {
+    bakedSurface.invalidate();
+    bakedTuning = tuning.slice();
+  }
 }
 
 function resize(): void {
@@ -1896,6 +1940,19 @@ function renderFrame(): Promise<void> {
     }
     terrainCache.commit();
   }
+  if (bakedSurfacePass) {
+    if (bakedSurfaceWorkgroups > 0) {
+      device.queue.writeBuffer(bakedSurfaceFillBuffer, 0, bakedSurfaceFill);
+      const bakedSurfaceEncoder = encoder.beginComputePass();
+      bakedSurfaceEncoder.setPipeline(bakedSurfacePass.pipeline);
+      bakedSurfaceEncoder.setBindGroup(0, bakedSurfacePass.inputBindGroup);
+      bakedSurfaceEncoder.setBindGroup(1, bakedSurfacePass.playgroundBindGroup);
+      bakedSurfaceEncoder.setBindGroup(2, bakedSurfacePass.outputBindGroup);
+      bakedSurfaceEncoder.dispatchWorkgroups(bakedSurfaceWorkgroups);
+      bakedSurfaceEncoder.end();
+    }
+    bakedSurface.commit();
+  }
   if (fields) {
     const environmentPassDescriptor: GPUComputePassDescriptor = {};
     const occluderPassDescriptor: GPUComputePassDescriptor = {};
@@ -2057,8 +2114,14 @@ if (!bench) {
 }
 
 // The bench renders only the scene, so it compiles no direct reference.
-type SceneShaders = { scene: GPUShaderModule; direct?: GPUShaderModule };
-type ScenePipelines = { scene: GPURenderPipeline; direct?: GPURenderPipeline };
+type SceneShaders = {
+  scene: GPUShaderModule;
+  direct?: GPUShaderModule;
+};
+type ScenePipelines = {
+  scene: GPURenderPipeline;
+  direct?: GPURenderPipeline;
+};
 let sceneShaders: SceneShaders | undefined;
 let sceneFields: FieldPasses | undefined;
 const scenePipelinesByVariant = new Map<string, Promise<ScenePipelines>>();
@@ -2109,6 +2172,8 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
         { binding: 2, resource: occluderFieldView },
         { binding: 3, resource: occluderFieldSampler },
         { binding: 4, resource: terrainCacheView },
+        { binding: 5, resource: bakedHeightView },
+        { binding: 6, resource: bakedColorView },
       ],
     }),
     playgroundBindGroup: device.createBindGroup({
@@ -2168,6 +2233,11 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         ? production_scene_shader_source()
         : playground_scene_shader_source(),
     });
+    const bakeShader = device.createShaderModule({
+      code: productionShaders
+        ? baked_surface_shader_source()
+        : playground_baked_surface_shader_source(),
+    });
     const shaders: SceneShaders = productionShaders
       ? { scene: sceneShader }
       : {
@@ -2187,6 +2257,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       environmentPipeline,
       occluderPipeline,
       terrainCachePipeline,
+      bakedSurfacePipeline,
     ] = await Promise.all([
       scenePipelines(shaders, variant),
       device.createComputePipelineAsync({
@@ -2200,6 +2271,10 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       device.createComputePipelineAsync({
         layout: "auto",
         compute: { module: terrainCacheShader, entryPoint: "generate_terrain_cache" },
+      }),
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: { module: bakeShader, entryPoint: "generate_baked_surface" },
       }),
     ]);
     const playgroundEntries = productionShaders
@@ -2236,6 +2311,28 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
     sceneShaders = shaders;
     sceneFields = fields;
     scenePipelinesVariant = variant;
+    bakedSurfacePass = {
+      pipeline: bakedSurfacePipeline,
+      inputBindGroup: device.createBindGroup({
+        layout: bakedSurfacePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: sceneBuffer } },
+          { binding: 4, resource: terrainCacheView },
+        ],
+      }),
+      playgroundBindGroup: device.createBindGroup({
+        layout: bakedSurfacePipeline.getBindGroupLayout(1),
+        entries: playgroundEntries,
+      }),
+      outputBindGroup: device.createBindGroup({
+        layout: bakedSurfacePipeline.getBindGroupLayout(2),
+        entries: [
+          { binding: 0, resource: { buffer: bakedSurfaceFillBuffer } },
+          { binding: 1, resource: bakedHeightView },
+          { binding: 2, resource: bakedColorView },
+        ],
+      }),
+    };
     terrainCachePass = {
       pipeline: terrainCachePipeline,
       sceneBindGroup: device.createBindGroup({

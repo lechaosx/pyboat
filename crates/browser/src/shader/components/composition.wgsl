@@ -273,6 +273,78 @@ fn fragment_surface_color(
     return linear_material_color(surface_color) * light;
 }
 
+// The composed surface at a rendered position: its height, the relief
+// gradient that lights it, and whether it lies above the water.
+struct SceneSurface {
+    elevation_m: f32,
+    gradient: vec2<f32>,
+    is_land: bool,
+    surface: TerrainSurface,
+};
+
+fn composed_scene_surface(
+    position_m: vec2<f32>,
+    terrain: TerrainSample,
+    water_height_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+) -> SceneSurface {
+    let is_land = terrain.elevation_m >= water_height_m;
+    let bare_land = is_land && terrain.water_ice_amount == 0.0;
+    var land_surface = 0.0;
+    if bare_land || EVALUATE_ALL_BRANCHES {
+        land_surface = select(0.0, material_fractal_value(
+            LAND_SURFACE_NOISE_FIELD,
+            position_m,
+            96.0,
+            4u,
+        ), bare_land);
+    }
+    let sea_ice = terrain.water_ice_amount > 0.0;
+    let land_ice = !sea_ice && is_land && terrain.ice_amount >= 1.0;
+    var surface: TerrainSurface;
+    if sea_ice || EVALUATE_ALL_BRANCHES {
+        surface = sea_ice_surface(
+            position_m,
+            terrain.water_ice_amount,
+            terrain.bedrock_elevation_m,
+        );
+    }
+    if land_ice || EVALUATE_ALL_BRANCHES {
+        surface = select_terrain_surface(
+            surface,
+            ice_surface(position_m, land_surface),
+            land_ice,
+        );
+    }
+    if !(sea_ice || land_ice) || EVALUATE_ALL_BRANCHES {
+        surface = select_terrain_surface(surface, terrain_surface(
+            position_m,
+            terrain.elevation_m,
+            terrain.gradient,
+            terrain.material_elevation_m,
+            terrain.material_gradient,
+            terrain.coastal_rock_amount,
+            terrain.coastal_outcrop_amount,
+            terrain.coastal_sediment_amount,
+            water_height_m,
+            land_surface,
+            atmosphere,
+        ), !(sea_ice || land_ice));
+    }
+    let partial_land_ice = bare_land
+        && terrain.ice_amount > 0.0
+        && terrain.ice_amount < 1.0;
+    if partial_land_ice || EVALUATE_ALL_BRANCHES {
+        let ice = ice_surface(position_m, land_surface);
+        surface = select_terrain_surface(surface, TerrainSurface(
+            mix(surface.color, ice.color, terrain.ice_amount),
+            mix(surface.detail_gradient, ice.detail_gradient, terrain.ice_amount),
+            mix(surface.roughness, ice.roughness, terrain.ice_amount),
+        ), partial_land_ice);
+    }
+    return SceneSurface(terrain.elevation_m, terrain.gradient, is_land, surface);
+}
+
 fn final_scene_color(
     input: VertexOutput,
     atmosphere: SurfaceAtmosphereSample,
@@ -282,76 +354,25 @@ fn final_scene_color(
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
         let ambient_sky = regional_canopy_conditions(surface_cloud_weather);
-        let terrain = procedural_terrain_sample_with_climate_from_circle(
+        let water_height_m = tide_height_m();
+        let scene_surface = scene_surface_at(
             input.world_position_m,
             surface_circle_position,
-            atmosphere.climate,
+            water_height_m,
+            atmosphere,
         );
-        let water_height_m = tide_height_m();
-        let is_land = terrain.elevation_m >= water_height_m;
-        let bare_land = is_land && terrain.water_ice_amount == 0.0;
-        var land_surface = 0.0;
-        if bare_land || EVALUATE_ALL_BRANCHES {
-            land_surface = select(0.0, material_fractal_value(
-                LAND_SURFACE_NOISE_FIELD,
-                input.world_position_m,
-                96.0,
-                4u,
-            ), bare_land);
-        }
-        let sea_ice = terrain.water_ice_amount > 0.0;
-        let land_ice = !sea_ice && is_land && terrain.ice_amount >= 1.0;
-        var surface: TerrainSurface;
-        if sea_ice || EVALUATE_ALL_BRANCHES {
-            surface = sea_ice_surface(
-                input.world_position_m,
-                terrain.water_ice_amount,
-                terrain.bedrock_elevation_m,
-            );
-        }
-        if land_ice || EVALUATE_ALL_BRANCHES {
-            surface = select_terrain_surface(
-                surface,
-                ice_surface(input.world_position_m, land_surface),
-                land_ice,
-            );
-        }
-        if !(sea_ice || land_ice) || EVALUATE_ALL_BRANCHES {
-            surface = select_terrain_surface(surface, terrain_surface(
-                input.world_position_m,
-                terrain.elevation_m,
-                terrain.gradient,
-                terrain.material_elevation_m,
-                terrain.material_gradient,
-                terrain.coastal_rock_amount,
-                terrain.coastal_outcrop_amount,
-                terrain.coastal_sediment_amount,
-                water_height_m,
-                land_surface,
-                atmosphere,
-            ), !(sea_ice || land_ice));
-        }
-        let surface_height_m = max(terrain.elevation_m, water_height_m);
+        let is_land = scene_surface.is_land;
+        var surface = scene_surface.surface;
+        let surface_height_m = max(scene_surface.elevation_m, water_height_m);
         let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
         let ambient_light = calculate_atmospheric_ambient_light(
             ambient_sky,
             surface_direct_light,
         );
         var surface_light_grade = vec3<f32>(1.0);
-        let partial_land_ice = bare_land
-            && terrain.ice_amount > 0.0
-            && terrain.ice_amount < 1.0;
-        if partial_land_ice || EVALUATE_ALL_BRANCHES {
-            let ice = ice_surface(input.world_position_m, land_surface);
-            surface = select_terrain_surface(surface, TerrainSurface(
-                mix(surface.color, ice.color, terrain.ice_amount),
-                mix(surface.detail_gradient, ice.detail_gradient, terrain.ice_amount),
-                mix(surface.roughness, ice.roughness, terrain.ice_amount),
-            ), partial_land_ice);
-        }
         if is_land {
             surface_light_grade = landform_light_grade(
-                3.0 * terrain.gradient + surface.detail_gradient,
+                3.0 * scene_surface.gradient + surface.detail_gradient,
                 surface.roughness,
                 surface_direct_light,
             );

@@ -144,12 +144,11 @@ and verification details.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
-- **[Explicit]** A fullscreen pass composes terrain at each rendered world
-  position, reading broad terrain octaves from the terrain cache, and
-  reconstructs environment fields there from a per-frame grid anchored to world
-  coordinates, with spacing matched to the fields' finest detail. Physics
-  samples where needed; a view-center weather sample never supplies the
-  surface scene.
+- **[Explicit]** A fullscreen pass composes terrain and materials at each
+  rendered world position and reconstructs environment fields there from a
+  per-frame grid anchored to world coordinates, with spacing matched to the
+  fields' finest detail. Physics samples where needed; a view-center weather
+  sample never supplies the surface scene.
 - **[Implicit]** Environment field grids store seeded noise and the terms
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
@@ -218,7 +217,7 @@ and verification details.
   transport, so translating latent texture is never resampled; landform grids
   stay fixed to the world.
 - **[Explicit]** Resizes take effect on the next frame at the latest dimensions
-  by reconfiguring the surface; field textures keep their size.
+  by reconfiguring the surface; per-frame field grid textures keep their size.
 - **[Explicit]** Canvas backing resolution follows CSS size at the device pixel
   ratio up to a chosen cap, preserving CSS aspect ratio within device texture
   limits.
@@ -241,8 +240,7 @@ and verification details.
   cache; a frame refills only texels the view newly exposes or an input change
   invalidates.
 - **[Implicit]** The cache holds the circle-embedded octaves of the broad terrain
-  noises, from which the scene composes terrain per pixel with the same
-  composition as direct evaluation.
+  noises, from which the surface bake and direct evaluation compose terrain.
 - **[Implicit]** Cache levels form a clipmap of camera-centred, toroidally
   addressed windows whose spacing doubles per level.
 - **[Implicit]** Each level holds only the octaves with enough texels per
@@ -255,6 +253,57 @@ and verification details.
 - **[Implicit]** No level fills while none holds the view.
 - **[Implicit]** Positions without valid cache texels evaluate the noises
   directly.
+
+### Baked surface
+
+- **[Explicit]** The static surface persists between frames in a world-anchored
+  clipmap: terrain with land ice, and the dry, snowless, unseasoned land
+  composition with the factors its wetness and seasons change.
+- **[Explicit]** The scene applies per pixel only what changes with time,
+  season, or weather: tide, sea ice, snow, autumn and dormancy colour, rain,
+  waves, and all lighting, clouds, and shadows.
+- **[Implicit]** A frame bakes only texels the view newly exposes or an input
+  change invalidates.
+- **[Explicit]** Level spacings form one fixed geometric ladder whose ratio is a
+  single constant, so another spacing needs no other change.
+- **[Explicit]** Bake memory follows the scene size at about one texel per
+  pixel, within a cap that the device class and its reported memory set; above
+  the cap the bake coarsens.
+- **[Implicit]** The clipmap keeps two levels at about one texel per pixel: the
+  finest rung whose camera-centred window holds the view, and the next coarser
+  one as standby.
+- **[Implicit]** The scene reads one level at a time, without blending between
+  levels.
+- **[Implicit]** The bake fades material octaves too short for a level's
+  lattice.
+- **[Implicit]** The bake reads broad terrain octaves from the terrain cache.
+- **[Implicit]** A view no level holds, as after a teleport, first bakes a
+  level of a quarter of the density and reads it until the full level holds
+  the view.
+- **[Explicit]** A zoom in reads the coarser level until the finer one holds
+  the view; any level that holds the view serves while the read level bakes.
+- **[Implicit]** Each frame's bake is bounded by a share of a level and by a
+  fixed texel count.
+- **[Implicit]** The standby bakes paced to the next rung change the footprint's
+  rate of change predicts, so a gentle zoom spreads it over many frames.
+- **[Implicit]** Bake textures that run out of memory are allocated again
+  with half the memory; once the smallest allocation fails, every position
+  evaluates directly.
+- **[Explicit]** Baked shorelines need no close match with direct evaluation;
+  tests guard only against gross breakage.
+- **[Explicit]** Lab tuning rebakes the surface.
+- **[Implicit]** The bake is the same at every graphics tier; tiers gate only
+  detail evaluated per pixel.
+- **[Implicit]** A rung change through the pixel footprint alone, with the view
+  unchanged, keeps the finer level in place of a new standby, so a resolution
+  controller stepping across a rung does not rebake.
+- **[Implicit]** Bake textures follow a resize once the new size has held for a
+  short settle period, then rebake from the view; until then the existing
+  textures serve, with direct evaluation wherever no level holds the view.
+- **[Implicit]** Positions without valid baked texels compose the surface
+  directly.
+- **[Implicit]** Water too deep for waves, bottom tint, or sea-ice shallowing to
+  reach its bed reads no bake.
 
 ## Playground boundary
 
@@ -319,9 +368,9 @@ and verification details.
 - **[Explicit]** Performance measurements time the shipped production shaders.
 - **[Explicit]** The browser playground runs the scenario bench on devices that
   headless capture cannot reach, such as phones.
-- **[Explicit]** A lab-only shader override evaluates normally skipped work
-  while selecting the shipped result, bounding worst-case per-pixel cost.
-  Production leaves it off.
+- **[Explicit]** A lab-only shader override takes the game's own cache and bake
+  paths but evaluates every content branch they normally skip, bounding the
+  worst-case per-pixel cost of play. Production leaves it off.
 
 ## Open questions
 
@@ -329,5 +378,9 @@ and verification details.
 | --- | --- |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
-| Terrain cache scope | Whether finer levels near boat zoom should also cache the coarser 2D terrain octaves and material noise |
 | Cloud-shadow taps | Whether one tap at the visible disc's centre may replace the three-tap disc average for cloud-shadow penumbrae |
+| Level switches | Whether switching baked levels needs blending, judged by eye |
+| Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
+| Edge smoothing | Whether shorelines and the sea-ice edge get smoothing as a look option |
+| Tidal wet band | How the wet band follows flat tidal coasts |
+| Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |

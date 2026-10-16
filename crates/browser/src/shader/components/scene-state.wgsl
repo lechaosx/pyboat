@@ -22,6 +22,9 @@ struct SceneUniforms {
     terrain_cache_grid_m: vec4<f32>,
     terrain_cache_texels: vec4<u32>,
     terrain_cache_level: vec4<u32>,
+    baked_surface_grid_m: vec4<f32>,
+    baked_surface_texels: vec4<u32>,
+    baked_surface_level: vec4<u32>,
     ocean_wave_modes: array<vec4<f32>, 16>,
 };
 

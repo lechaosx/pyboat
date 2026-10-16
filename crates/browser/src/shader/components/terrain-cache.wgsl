@@ -30,42 +30,32 @@ fn terrain_broad_noise(
     let cached = cached_octaves > 0u
         && all(texel >= vec2<f32>(0.0))
         && all(texel + 1.0 < vec2<f32>(scene.terrain_cache_texels.zw));
-    var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
-    if !cached || EVALUATE_ALL_BRANCHES {
-        sample = direct_terrain_broad_noise(field, position_m, circle_position);
+    if !cached {
+        return direct_terrain_broad_noise(field, position_m, circle_position);
     }
-    if cached || EVALUATE_ALL_BRANCHES {
-        let upper = (first + 1u) & vec2<u32>(slot_mask);
-        let layer = scene.terrain_cache_level.x * TERRAIN_BROAD_NOISE_COUNT + field;
-        let partial = terrain_cache_hermite(
-            textureLoad(terrain_cache, lower, layer, 0),
-            textureLoad(terrain_cache, vec2<u32>(upper.x, lower.y), layer, 0),
-            textureLoad(terrain_cache, vec2<u32>(lower.x, upper.y), layer, 0),
-            textureLoad(terrain_cache, upper, layer, 0),
-            texel_position - texel,
-            grid.zw,
-        );
-        let octaves = TERRAIN_BROAD_NOISE_OCTAVES[field];
-        let tail = terrain_broad_octave_sum(
-            field,
-            position_m,
-            circle_position,
-            cached_octaves,
-            octaves,
-        );
-        let amplitude_sum = fractal_amplitude_sum(
-            octaves,
-            TERRAIN_BROAD_NOISE_PERSISTENCE[field],
-        );
-        sample = noise_sample_or_zero(sample, !cached);
-        sample.value += select(0.0, (partial.value + tail.value) / amplitude_sum, cached);
-        sample.gradient += select(
-            vec2<f32>(0.0),
-            (partial.gradient + tail.gradient) / amplitude_sum,
-            cached,
-        );
-    }
-    return sample;
+    let upper = (first + 1u) & vec2<u32>(slot_mask);
+    let layer = scene.terrain_cache_level.x * TERRAIN_BROAD_NOISE_COUNT + field;
+    let partial = terrain_cache_hermite(
+        textureLoad(terrain_cache, lower, layer, 0),
+        textureLoad(terrain_cache, vec2<u32>(upper.x, lower.y), layer, 0),
+        textureLoad(terrain_cache, vec2<u32>(lower.x, upper.y), layer, 0),
+        textureLoad(terrain_cache, upper, layer, 0),
+        texel_position - texel,
+        grid.zw,
+    );
+    let octaves = TERRAIN_BROAD_NOISE_OCTAVES[field];
+    let tail = terrain_broad_octave_sum(
+        field,
+        position_m,
+        circle_position,
+        cached_octaves,
+        octaves,
+    );
+    let amplitude_sum = fractal_amplitude_sum(octaves, TERRAIN_BROAD_NOISE_PERSISTENCE[field]);
+    return TerrainNoiseSample(
+        (partial.value + tail.value) / amplitude_sum,
+        (partial.gradient + tail.gradient) / amplitude_sum,
+    );
 }
 
 // Corners are (value, x slope, y slope, cross derivative) at the lower-left,

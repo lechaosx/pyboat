@@ -33,12 +33,13 @@ use wgpu::CurrentSurfaceTexture;
 
 use crate::frame_queue::FrameQueue;
 use crate::{
-    BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
-    ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings,
-    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
-    UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
-    append_reliable_server_message_chunk, bounded_canvas_dimensions,
+    BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize,
+    BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
+    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, FramePacer,
+    GraphicsSettings, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS,
+    OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache,
+    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
+    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
     disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
     sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
@@ -251,6 +252,69 @@ pub fn terrain_cache_texture_size() -> Vec<u32> {
     ]
 }
 
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn baked_surface_shader_source() -> String {
+    BAKED_SURFACE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_baked_surface_shader_source() -> String {
+    crate::PLAYGROUND_BAKED_SURFACE_SHADER.to_owned()
+}
+
+/// The lab's baked surface schedule, kept between frames, for a scene of the
+/// given size on a desktop or touch device.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub struct PlaygroundBakedSurface(BakedSurface);
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundBakedSurface {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        scene_width: u32,
+        scene_height: u32,
+        touch_screen: bool,
+        device_memory_gb: Option<f64>,
+    ) -> Self {
+        Self(BakedSurface::new(baked_surface_sizes(
+            (scene_width, scene_height),
+            crate::baked_surface_memory_bytes(touch_screen, device_memory_gb),
+        )))
+    }
+
+    /// Width and height, then the rgba16float height and rgba8unorm colour
+    /// layer counts of the bake textures.
+    pub fn texture_size(&self) -> Vec<u32> {
+        let sizes = self.0.sizes();
+        vec![
+            sizes.texels[0],
+            sizes.texels[1],
+            crate::BAKED_SURFACE_LEVELS,
+            crate::BAKED_SURFACE_LEVELS * crate::BAKED_SURFACE_COLOR_LAYERS,
+        ]
+    }
+
+    /// Records that the latest frame's bake pass was encoded.
+    pub fn commit(&mut self) {
+        self.0.commit();
+    }
+
+    /// Rebakes from the next frame on, after a tuning change.
+    pub fn invalidate(&mut self) {
+        self.0.invalidate();
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_baked_surface_fill_bytes() -> usize {
+    crate::baked_surface::BAKED_SURFACE_FILL_BYTES
+}
+
 /// The lab's terrain cache schedule, kept between frames.
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
@@ -290,6 +354,8 @@ pub struct PlaygroundSceneFrame {
     field_grids: Vec<f32>,
     terrain_cache_fill: Vec<u8>,
     terrain_cache_workgroups: u32,
+    baked_surface_fill: Vec<u8>,
+    baked_surface_workgroups: u32,
 }
 
 #[cfg(feature = "playground")]
@@ -317,6 +383,18 @@ impl PlaygroundSceneFrame {
     #[wasm_bindgen(getter)]
     pub fn terrain_cache_workgroups(&self) -> u32 {
         self.terrain_cache_workgroups
+    }
+
+    /// The bake table; dispatch `generate_baked_surface` only when
+    /// `baked_surface_workgroups` is positive, after the terrain cache fill.
+    #[wasm_bindgen(getter)]
+    pub fn baked_surface_fill(&self) -> Vec<u8> {
+        self.baked_surface_fill.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn baked_surface_workgroups(&self) -> u32 {
+        self.baked_surface_workgroups
     }
 }
 
@@ -633,6 +711,7 @@ pub fn playground_scene_uniforms(
     landform_shadow_reach_m: f32,
     terrain_cache: &mut PlaygroundTerrainCache,
     terrain_horizontal_scale: Option<f32>,
+    baked_surface: &mut PlaygroundBakedSurface,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -676,6 +755,14 @@ pub fn playground_scene_uniforms(
         [camera_x_m, camera_y_m],
         view_size_m,
     );
+    let pixel_footprint_m = visual_pixel_footprint_m(view_height_m, scene_height_px);
+    let baked_surface_frame = baked_surface.0.frame(
+        geometry,
+        match_seed,
+        [camera_x_m, camera_y_m],
+        view_size_m,
+        pixel_footprint_m,
+    );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         scalar_field_time_coordinates: [
@@ -701,7 +788,7 @@ pub fn playground_scene_uniforms(
             celestial.day_phase,
             celestial.season_phase,
             celestial.lunar_longitude_phase,
-            visual_pixel_footprint_m(view_height_m, scene_height_px),
+            pixel_footprint_m,
         ],
         pressure_time_coordinate: vector_time.pressure,
         ocean_current_time_coordinate_and_padding: [vector_time.ocean_current, 0.0, 0.0, 0.0],
@@ -728,6 +815,9 @@ pub fn playground_scene_uniforms(
         terrain_cache_grid_m: terrain_cache_frame.grid_m,
         terrain_cache_texels: terrain_cache_frame.texels,
         terrain_cache_level: terrain_cache_frame.level,
+        baked_surface_grid_m: baked_surface_frame.grid_m,
+        baked_surface_texels: baked_surface_frame.texels,
+        baked_surface_level: baked_surface_frame.level,
         ocean_wave_modes: ocean_wave_mode_uniforms(geometry, match_seed, tick, tick_fraction),
     };
     let mut field_grid_summary: Vec<f32> = grids
@@ -750,6 +840,8 @@ pub fn playground_scene_uniforms(
         field_grids: field_grid_summary,
         terrain_cache_fill: terrain_cache_frame.fill_bytes().0.to_vec(),
         terrain_cache_workgroups: terrain_cache_frame.fill_bytes().1,
+        baked_surface_fill: baked_surface_frame.fill_bytes().0.to_vec(),
+        baked_surface_workgroups: baked_surface_frame.fill_bytes().1,
     })
 }
 
@@ -852,6 +944,9 @@ struct SceneUniforms {
     terrain_cache_grid_m: [f32; 4],
     terrain_cache_texels: [u32; 4],
     terrain_cache_level: [u32; 4],
+    baked_surface_grid_m: [f32; 4],
+    baked_surface_texels: [u32; 4],
+    baked_surface_level: [u32; 4],
     ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
 }
 
@@ -1107,12 +1202,21 @@ struct Renderer {
     vertex_capacity: usize,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    scene_layout: wgpu::BindGroupLayout,
     scene_bind_group: wgpu::BindGroup,
     empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
     terrain_cache_pass: TerrainCachePass,
     terrain_cache: TerrainCache,
+    baked_surface_pass: BakedSurfacePass,
+    baked_surface_input: wgpu::BindGroup,
+    baked_surface: BakedSurface,
+    baked_surface_resize: BakedSurfaceResize,
+    /// None once even the smallest bake ran out of memory; every position
+    /// then evaluates directly.
+    bake_memory_bytes: Option<u64>,
+    pending_baked_surface: Option<PendingBakedSurface>,
     upscaler: Upscaler,
     upscale_targets: Option<UpscaleTargets>,
     terminal_error: Arc<AtomicBool>,
@@ -1126,6 +1230,67 @@ struct Renderer {
     frame_timing: Arc<Mutex<FrameTiming>>,
 }
 
+fn scene_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_buffer: &wgpu::Buffer,
+    environment_fields: &EnvironmentFields,
+    occluder_fields: &OccluderFields,
+    terrain_cache_pass: &TerrainCachePass,
+    baked_surface_pass: &BakedSurfacePass,
+) -> wgpu::BindGroup {
+    let baked = baked_surface_pass.textures();
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Scene bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&environment_fields.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&occluder_fields.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(&occluder_fields.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.noise_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&baked.height_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&baked.color_view),
+            },
+        ],
+    })
+}
+
+/// Bake textures whose allocation is not yet known to have succeeded; the
+/// scene keeps reading the current ones until it has.
+struct PendingBakedSurface {
+    textures: BakedSurfaceTextures,
+    out_of_memory: Rc<Cell<Option<bool>>>,
+}
+
+/// Below this, an allocation failure is not a shortage of memory.
+const MINIMUM_BAKE_MEMORY_BYTES: u64 = 1 << 20;
+
+/// The memory to retry a bake with after `memory_bytes` ran out, if any.
+fn halved_bake_memory(memory_bytes: u64) -> Option<u64> {
+    Some(memory_bytes / 2).filter(|&halved| halved >= MINIMUM_BAKE_MEMORY_BYTES)
+}
+
 #[derive(Default)]
 struct FrameTiming {
     last_completion_ms: f64,
@@ -1133,7 +1298,11 @@ struct FrameTiming {
 }
 
 impl Renderer {
-    async fn new(canvas: HtmlCanvasElement, graphics: GraphicsSettings) -> Result<Self, JsValue> {
+    async fn new(
+        canvas: HtmlCanvasElement,
+        graphics: GraphicsSettings,
+        bake_memory_bytes: u64,
+    ) -> Result<Self, JsValue> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -1223,6 +1392,16 @@ impl Renderer {
                 label: Some("Empty bind group layout"),
                 entries: &[],
             });
+        let unfilterable_texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            },
+            count: None,
+        };
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Scene layout"),
             entries: &[
@@ -1262,16 +1441,9 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                unfilterable_texture_entry(4),
+                unfilterable_texture_entry(5),
+                unfilterable_texture_entry(6),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1331,32 +1503,47 @@ impl Renderer {
             &empty_bind_group_layout,
         );
         let terrain_cache_pass = TerrainCachePass::new(&device, &bind_group_layout);
-        let scene_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Scene bind group"),
-            layout: &scene_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&environment_fields.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&occluder_fields.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&occluder_fields.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&terrain_cache_pass.noise_view),
-                },
-            ],
-        });
+        let mut bake_memory_bytes = Some(bake_memory_bytes);
+        let baked_surface_textures = loop {
+            let Some(memory_bytes) = bake_memory_bytes else {
+                // Bindings need textures even when nothing bakes into them.
+                break BakedSurfaceTextures::new(&device, baked_surface_sizes((1, 1), u64::MAX));
+            };
+            let error_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let textures = BakedSurfaceTextures::new(
+                &device,
+                baked_surface_sizes(
+                    scene_render_size(width, height, graphics.render_scale),
+                    memory_bytes,
+                ),
+            );
+            if error_scope.pop().await.is_none() {
+                break textures;
+            }
+            textures.destroy();
+            bake_memory_bytes = halved_bake_memory(memory_bytes);
+        };
+        let baked_surface_pass = BakedSurfacePass::new(
+            &device,
+            baked_surface_textures,
+            BAKED_SURFACE_SHADER,
+            &[],
+            &empty_bind_group_layout,
+        );
+        let baked_surface_input = baked_surface_pass.input_bind_group(
+            &device,
+            &uniform_buffer,
+            &terrain_cache_pass.noise_view,
+        );
+        let scene_bind_group = scene_bind_group(
+            &device,
+            &scene_layout,
+            &uniform_buffer,
+            &environment_fields,
+            &occluder_fields,
+            &terrain_cache_pass,
+            &baked_surface_pass,
+        );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
             layout: &empty_bind_group_layout,
@@ -1376,12 +1563,19 @@ impl Renderer {
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
             uniform_buffer,
             bind_group,
+            scene_layout,
             scene_bind_group,
             empty_bind_group,
             environment_fields,
             occluder_fields,
             terrain_cache_pass,
             terrain_cache: TerrainCache::default(),
+            baked_surface: BakedSurface::new(baked_surface_pass.textures().sizes()),
+            baked_surface_resize: BakedSurfaceResize::default(),
+            bake_memory_bytes,
+            pending_baked_surface: None,
+            baked_surface_pass,
+            baked_surface_input,
             upscaler,
             upscale_targets: None,
             terminal_error,
@@ -1413,6 +1607,7 @@ impl Renderer {
             return Err(JsValue::from_str("WebGPU device was lost"));
         }
         self.resize();
+        self.follow_baked_surface_size(elapsed_seconds);
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
@@ -1539,6 +1734,25 @@ impl Renderer {
         let output_size = (self.config.width, self.config.height);
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
         let upscaled = scene_size != output_size && terrain_vertex_count > 0;
+        let pixel_footprint_m = visual_pixel_footprint_m(
+            view_height_m,
+            if upscaled {
+                scene_size.1
+            } else {
+                output_size.1
+            },
+        );
+        let baked_surface_frame = if self.bake_memory_bytes.is_some() {
+            self.baked_surface.frame(
+                world_geometry,
+                match_seed,
+                canonical_camera_m,
+                [view_width_m, view_height_m],
+                pixel_footprint_m,
+            )
+        } else {
+            BakedSurfaceFrame::direct()
+        };
         if vertices.len() > self.vertex_capacity {
             self.vertex_capacity = vertices.len().next_power_of_two();
             self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1586,14 +1800,7 @@ impl Renderer {
                     celestial.day_phase,
                     celestial.season_phase,
                     celestial.lunar_longitude_phase,
-                    visual_pixel_footprint_m(
-                        view_height_m,
-                        if upscaled {
-                            scene_size.1
-                        } else {
-                            output_size.1
-                        },
-                    ),
+                    pixel_footprint_m,
                 ],
                 pressure_time_coordinate: vector_time.pressure,
                 ocean_current_time_coordinate_and_padding: [
@@ -1631,6 +1838,9 @@ impl Renderer {
                 terrain_cache_grid_m: terrain_cache_frame.grid_m,
                 terrain_cache_texels: terrain_cache_frame.texels,
                 terrain_cache_level: terrain_cache_frame.level,
+                baked_surface_grid_m: baked_surface_frame.grid_m,
+                baked_surface_texels: baked_surface_frame.texels,
+                baked_surface_level: baked_surface_frame.level,
                 ocean_wave_modes: ocean_wave_mode_uniforms(
                     world_geometry,
                     match_seed,
@@ -1658,6 +1868,15 @@ impl Renderer {
             None,
         );
         self.terrain_cache.commit();
+        self.baked_surface_pass.encode(
+            &self.queue,
+            &mut encoder,
+            &self.baked_surface_input,
+            &self.empty_bind_group,
+            &baked_surface_frame,
+            None,
+        );
+        self.baked_surface.commit();
         self.environment_fields
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
@@ -1782,6 +2001,71 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
+    /// Reallocates the bake once the canvas size it needs has settled; until
+    /// then the schedule reads the existing textures' coarser levels. An
+    /// allocation out of memory halves the budget for the next one.
+    fn follow_baked_surface_size(&mut self, elapsed_seconds: f64) {
+        if let Some(pending) = &self.pending_baked_surface {
+            let Some(out_of_memory) = pending.out_of_memory.get() else {
+                return;
+            };
+            let pending = self.pending_baked_surface.take().unwrap();
+            if out_of_memory {
+                pending.textures.destroy();
+                self.bake_memory_bytes = self.bake_memory_bytes.and_then(halved_bake_memory);
+            } else {
+                self.install_baked_surface(pending.textures);
+            }
+            return;
+        }
+        let Some(memory_bytes) = self.bake_memory_bytes else {
+            return;
+        };
+        let wanted = baked_surface_sizes(
+            scene_render_size(
+                self.config.width,
+                self.config.height,
+                self.graphics.render_scale,
+            ),
+            memory_bytes,
+        );
+        let Some(sizes) = self.baked_surface_resize.follow(
+            self.baked_surface_pass.textures().sizes(),
+            wanted,
+            elapsed_seconds,
+        ) else {
+            return;
+        };
+        let error_scope = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let textures = BakedSurfaceTextures::new(&self.device, sizes);
+        let out_of_memory = Rc::new(Cell::new(None));
+        let outcome = Rc::clone(&out_of_memory);
+        let error = error_scope.pop();
+        spawn_local(async move {
+            outcome.set(Some(error.await.is_some()));
+        });
+        self.pending_baked_surface = Some(PendingBakedSurface {
+            textures,
+            out_of_memory,
+        });
+    }
+
+    fn install_baked_surface(&mut self, textures: BakedSurfaceTextures) {
+        let sizes = textures.sizes();
+        self.baked_surface_pass
+            .replace_textures(&self.device, textures);
+        self.scene_bind_group = scene_bind_group(
+            &self.device,
+            &self.scene_layout,
+            &self.uniform_buffer,
+            &self.environment_fields,
+            &self.occluder_fields,
+            &self.terrain_cache_pass,
+            &self.baked_surface_pass,
+        );
+        self.baked_surface = BakedSurface::new(sizes);
+    }
+
     fn aspect_ratio(&self) -> f32 {
         let (width, height) = canvas_dimensions(
             &self.canvas,
@@ -1829,7 +2113,15 @@ impl BrowserGame {
             .match_media("(pointer: coarse)")?
             .is_some_and(|query| query.matches());
         let graphics = GraphicsSettings::from_query(&window.location().search()?, touch_screen);
-        let renderer = Renderer::new(canvas, graphics).await?;
+        let navigator = js_sys::Reflect::get(&window, &JsValue::from_str("navigator"))?;
+        let device_memory_gb =
+            js_sys::Reflect::get(&navigator, &JsValue::from_str("deviceMemory"))?.as_f64();
+        let renderer = Renderer::new(
+            canvas,
+            graphics,
+            crate::baked_surface_memory_bytes(touch_screen, device_memory_gb),
+        )
+        .await?;
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
