@@ -29,7 +29,7 @@ struct SceneUniforms {
 };
 
 // Keep synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
-const OCCLUDER_FIELD_LAYERS: u32 = 5u;
+const OCCLUDER_FIELD_LAYERS: u32 = 7u;
 
 struct SceneTuning {
     cloud_detail: vec4<f32>,

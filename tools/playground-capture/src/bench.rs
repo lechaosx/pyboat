@@ -311,6 +311,7 @@ impl ModeRenderer {
             }
         };
         let occluder_source = browser::occluder_field_shader_source();
+        let landform_horizon_source = browser::landform_horizon_shader_source();
         let baked_surface_source = browser::baked_surface_shader_source();
         let scene_source = browser::production_scene_shader_source();
         if evaluate_all_branches && !declares_override(scene_source) {
@@ -334,6 +335,8 @@ impl ModeRenderer {
                         unused_layout,
                         occluder_source,
                         constants(occluder_source),
+                        landform_horizon_source,
+                        constants(landform_horizon_source),
                         baked_surface_source,
                         constants(baked_surface_source),
                         sizes,

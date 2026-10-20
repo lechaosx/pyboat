@@ -16,7 +16,8 @@ pub use baked_surface::{BakedSurfacePass, BakedSurfaceTextures};
 pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridHistory,
-    FieldGridTuning, FieldGrids, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
+    FieldGridTuning, FieldGrids, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
+    OCCLUDER_FIELD_TEXELS, field_grids,
 };
 pub use graphics::{
     FramePacer, GraphicsQuality, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController,
@@ -120,6 +121,10 @@ pub(crate) const OCCLUDER_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/occluder-fields.wgsl"));
 
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
+pub(crate) const LANDFORM_HORIZON_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/landform-horizons.wgsl"));
+
+#[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const TERRAIN_CACHE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/terrain-cache.wgsl"));
 
@@ -150,6 +155,12 @@ const PLAYGROUND_DIRECT_SCENE_SHADER: &str =
 pub(crate) const PLAYGROUND_OCCLUDER_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/occluder-fields-playground.wgsl"));
 
+#[cfg(any(feature = "playground", test))]
+pub(crate) const PLAYGROUND_LANDFORM_HORIZON_SHADER: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/landform-horizons-playground.wgsl"
+));
+
 #[cfg(any(all(target_arch = "wasm32", feature = "playground"), test))]
 pub(crate) const PLAYGROUND_STARTUP_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-playground-startup.wgsl"));
@@ -165,6 +176,11 @@ pub fn production_scene_shader_source() -> &'static str {
 #[cfg(feature = "playground")]
 pub fn occluder_field_shader_source() -> &'static str {
     OCCLUDER_FIELD_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn landform_horizon_shader_source() -> &'static str {
+    LANDFORM_HORIZON_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -200,6 +216,11 @@ pub fn playground_direct_scene_shader_source() -> &'static str {
 #[cfg(feature = "playground")]
 pub fn playground_occluder_field_shader_source() -> &'static str {
     PLAYGROUND_OCCLUDER_FIELD_SHADER
+}
+
+#[cfg(feature = "playground")]
+pub fn playground_landform_horizon_shader_source() -> &'static str {
+    PLAYGROUND_LANDFORM_HORIZON_SHADER
 }
 
 #[cfg(feature = "playground")]
@@ -1421,6 +1442,17 @@ mod tests {
             [(naga::ShaderStage::Compute, "generate_occluder_fields")],
         );
 
+        let landform_horizons = naga::front::wgsl::parse_str(LANDFORM_HORIZON_SHADER).unwrap();
+        let landform_horizon_entry_points: Vec<_> = landform_horizons
+            .entry_points
+            .iter()
+            .map(|entry| (entry.stage, entry.name.as_str()))
+            .collect();
+        assert_eq!(
+            landform_horizon_entry_points,
+            [(naga::ShaderStage::Compute, "generate_landform_horizons")],
+        );
+
         let terrain_cache = naga::front::wgsl::parse_str(TERRAIN_CACHE_SHADER).unwrap();
         let terrain_cache_entry_points: Vec<_> = terrain_cache
             .entry_points
@@ -1491,6 +1523,16 @@ mod tests {
         .validate(&occluder_fields)
         .unwrap();
         assert_eq!(occluder_fields.entry_points.len(), 1);
+
+        let landform_horizons =
+            naga::front::wgsl::parse_str(PLAYGROUND_LANDFORM_HORIZON_SHADER).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&landform_horizons)
+        .unwrap();
+        assert_eq!(landform_horizons.entry_points.len(), 1);
 
         let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();
         assert_eq!(direct.entry_points.len(), 2);

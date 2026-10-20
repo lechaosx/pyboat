@@ -21,17 +21,27 @@ const ENVIRONMENT_FIELD_SPACING_M: f64 = 64.0;
 /// shadow footprint of a boat-zoom view under a light at the sea-level cutoff.
 pub const OCCLUDER_FIELD_TEXELS: u32 = 512;
 /// Texels a frame evaluates per occluder layer at most. On a Radeon 780M the
-/// occluder pass of the 16 km bench views then takes about 0.8 ms, and the
+/// occluder pass of the 16 km bench views then takes about 0.9 ms, and the
 /// low-cloud body grid of 16:9 views up to 1.5 km tall keeps its spacing on
 /// both axes.
 const OCCLUDER_LAYER_TEXELS: u32 = OCCLUDER_FIELD_TEXELS * OCCLUDER_FIELD_TEXELS / 2;
+/// Each landform horizon texel marches about 30 landform samples per light
+/// under a high light and about 60 at the cutoff. At this budget 16:9 views up
+/// to about 1 km tall keep 8 m texels, and the occluder pass of the 2.4 km polar
+/// bench view takes about 0.7 ms rather than 0.9 ms at the full layer budget
+/// on a Radeon 780M.
+const LANDFORM_HORIZON_LAYER_TEXELS: u32 = OCCLUDER_LAYER_TEXELS / 4;
 /// A layer keeps its previous spacing while that stays within budget and a
 /// finer one would not fit in this share of the budgets, so a window that
 /// hovers at a threshold while the camera pans keeps its lattice.
 const OCCLUDER_REFINE_SHARE: f64 = 0.8;
-/// Low-cloud body, Sun and Moon low-cloud shadow depth, canopy depth, and broad
-/// landform elevation. Keep synchronized with occluder-fields.wgsl.
-pub const OCCLUDER_FIELD_LAYERS: usize = 5;
+/// Low-cloud body, Sun and Moon low-cloud shadow depth, canopy depth, broad
+/// landform elevation, and the Sun and Moon landform horizons. Keep
+/// synchronized with occluder-fields.wgsl.
+pub const OCCLUDER_FIELD_LAYERS: usize = 7;
+/// The horizon layers march the landform layer, so a second dispatch fills
+/// them after the others.
+pub const LANDFORM_HORIZON_LAYER: usize = 5;
 /// The finest low-cloud latent octave spans 40 m per unit body size; ten texels
 /// per wavelength keep bilinear error near 5% of that octave.
 const LOW_CLOUD_FIELD_SPACING_M: f64 = 4.0;
@@ -41,12 +51,14 @@ const CANOPY_FIELD_SPACING_M: f64 = 32.0;
 /// The broad landform's island octaves run from 1536 m down to 96 m. Over a
 /// rugged island with 320 m peaks (seed 0x5eed around (-10000, 2000) m),
 /// bilinear error at this spacing is 0.40 m at the 99th percentile and 0.71 m
-/// at most over land, near the 0.6 m minimum landform penumbra. On a shadow
-/// edge at (-9650, 1572) m under a light 3.5° high (world time 285240 s), grid
-/// shadows at full strength differ from direct evaluation of direct sunlight by
-/// at most 30 of 255 levels (22 at the 99th percentile) in a 15 m view, 34 (12)
-/// in a 240 m view, and 43 (5) in a 3.5 km view.
+/// at most over land, near the 0.6 m minimum landform penumbra.
 const LANDFORM_FIELD_SPACING_M: f64 = 16.0;
+/// Horizon heights bend where the blocker that defines them changes. In 240 m
+/// views of that island under a light 15° high, 16 m texels scallop shadow
+/// edges and leave 1.5% of sunlit pixels more than a quarter of the disc from
+/// the largest occlusion of a dense per-pixel march over directly evaluated
+/// landform; 8 m texels leave 0.5%.
+const LANDFORM_HORIZON_SPACING_M: f64 = 8.0;
 
 // Keep these synchronized with scene-state.wgsl and lighting.wgsl.
 const LOW_CLOUD_BASE_HEIGHT_M: f64 = 900.0;
@@ -118,14 +130,24 @@ impl FieldGrids {
         )
     }
 
-    /// One z slice per occluder layer, each covering the largest layer.
+    /// One z slice per layer before the landform horizons, each covering the
+    /// largest of them.
     pub fn occluder_workgroups(&self) -> [u32; 3] {
-        let [columns, rows] = self.occluders.iter().fold([0, 0], |largest, grid| {
-            let workgroups = grid.workgroups();
-            [largest[0].max(workgroups[0]), largest[1].max(workgroups[1])]
-        });
-        [columns, rows, OCCLUDER_FIELD_LAYERS as u32]
+        layer_workgroups(&self.occluders[..LANDFORM_HORIZON_LAYER])
     }
+
+    /// One z slice per landform horizon layer, each covering the larger.
+    pub fn landform_horizon_workgroups(&self) -> [u32; 3] {
+        layer_workgroups(&self.occluders[LANDFORM_HORIZON_LAYER..])
+    }
+}
+
+fn layer_workgroups(grids: &[FieldGrid]) -> [u32; 3] {
+    let [columns, rows] = grids.iter().fold([0, 0], |largest, grid| {
+        let workgroups = grid.workgroups();
+        [largest[0].max(workgroups[0]), largest[1].max(workgroups[1])]
+    });
+    [columns, rows, grids.len() as u32]
 }
 
 /// Tuning that changes which world positions the scene samples or how finely
@@ -171,6 +193,42 @@ pub fn field_grids(
     };
     let reach_m = f64::from(tuning.landform_shadow_reach_m.max(1.0));
     let highest_receiver_m = highest_receiver_m(tuning.terrain_elevation_scale);
+    let mut occluder_grid = |layer: usize, anchor: [f64; 2], region: Region, spacing_m: f64| {
+        let region = wrapped_region(world_width_m, region.or_origin());
+        let layer_texels = if layer >= LANDFORM_HORIZON_LAYER {
+            LANDFORM_HORIZON_LAYER_TEXELS
+        } else {
+            OCCLUDER_LAYER_TEXELS
+        };
+        let doublings = occluder_doublings(
+            world_width_m,
+            region,
+            spacing_m,
+            layer_texels,
+            history.occluder_doublings[layer],
+        );
+        history.occluder_doublings[layer] = Some(doublings);
+        field_grid_with_spacing(
+            camera,
+            anchor,
+            region,
+            [0, 1].map(|axis| lattice_spacing_m(world_width_m, spacing_m, axis, doublings[axis])),
+        )
+    };
+    let landform_horizons = [LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_LAYER + 1]
+        .map(|layer| occluder_grid(layer, [0.0; 2], view, LANDFORM_HORIZON_SPACING_M));
+    // Horizon texels beyond the view march from there.
+    let landform_receiver_margin_m = landform_horizons
+        .iter()
+        .map(|grid| {
+            let extent = grid.extent();
+            (0..2)
+                .map(|axis| {
+                    (extent.max[axis] - view.max[axis]).max(view.min[axis] - extent.min[axis])
+                })
+                .fold(0.0, f64::max)
+        })
+        .fold(0.0, f64::max);
     let footprints = shadow_footprints(
         world_geometry,
         world_time_seconds,
@@ -178,6 +236,7 @@ pub fn field_grids(
         half_view_m,
         reach_m,
         highest_receiver_m,
+        landform_receiver_margin_m,
     );
     let low_cloud_anchor = [
         f64::from(view_cloud_motion_m[0]),
@@ -189,39 +248,26 @@ pub fn field_grids(
     ];
     let low_cloud_spacing_m =
         LOW_CLOUD_FIELD_SPACING_M * f64::from(tuning.low_cloud_body_size.clamp(0.25, 4.0));
-    let layers = [
-        (low_cloud_anchor, view, low_cloud_spacing_m),
-        (
+    let [sun_horizon, moon_horizon] = landform_horizons;
+    let occluders = [
+        occluder_grid(0, low_cloud_anchor, view, low_cloud_spacing_m),
+        occluder_grid(
+            1,
             low_cloud_anchor,
             footprints.low_cloud[0],
             low_cloud_spacing_m,
         ),
-        (
+        occluder_grid(
+            2,
             low_cloud_anchor,
             footprints.low_cloud[1],
             low_cloud_spacing_m,
         ),
-        (canopy_anchor, footprints.canopy, CANOPY_FIELD_SPACING_M),
-        ([0.0; 2], footprints.landform, LANDFORM_FIELD_SPACING_M),
+        occluder_grid(3, canopy_anchor, footprints.canopy, CANOPY_FIELD_SPACING_M),
+        occluder_grid(4, [0.0; 2], footprints.landform, LANDFORM_FIELD_SPACING_M),
+        sun_horizon,
+        moon_horizon,
     ];
-    let mut layer = 0;
-    let occluders = layers.map(|(anchor, region, spacing_m)| {
-        let region = wrapped_region(world_width_m, region.or_origin());
-        let doublings = occluder_doublings(
-            world_width_m,
-            region,
-            spacing_m,
-            history.occluder_doublings[layer],
-        );
-        history.occluder_doublings[layer] = Some(doublings);
-        layer += 1;
-        field_grid_with_spacing(
-            camera,
-            anchor,
-            region,
-            [0, 1].map(|axis| lattice_spacing_m(world_width_m, spacing_m, axis, doublings[axis])),
-        )
-    });
     // Low-cloud texels reconstruct their weather from the environment grid,
     // which covers them. Its spacing fits the farthest footprint any light
     // could cast, so it follows zoom alone: footprints end within that reach
@@ -241,11 +287,15 @@ pub fn field_grids(
     )
     .unwrap_or(0.0);
     let footprint_bound = wrapped_region(world_width_m, view.expanded(footprint_reach_m));
-    let coarsest_doublings =
-        occluder_doubling_band(world_width_m, footprint_bound, low_cloud_spacing_m)
-            .into_iter()
-            .flatten()
-            .fold(0, i32::max);
+    let coarsest_doublings = occluder_doubling_band(
+        world_width_m,
+        footprint_bound,
+        low_cloud_spacing_m,
+        OCCLUDER_LAYER_TEXELS,
+    )
+    .into_iter()
+    .flatten()
+    .fold(0, i32::max);
     let low_cloud_texel_reach_m = [0, 1]
         .map(|axis| lattice_spacing_m(world_width_m, low_cloud_spacing_m, axis, coarsest_doublings))
         .into_iter()
@@ -343,7 +393,8 @@ struct ShadowFootprints {
 /// directions by at most the travelled angle of longitude and latitude. Each
 /// cell then contributes itself plus every displacement such a cone can project,
 /// including the landform march toward the light, as far as the cell's lowest
-/// direction reaches.
+/// direction reaches. Landform marches start from receivers up to
+/// `landform_receiver_margin_m` beyond the view.
 fn shadow_footprints(
     world_geometry: WorldGeometry,
     world_time_seconds: f64,
@@ -351,6 +402,7 @@ fn shadow_footprints(
     half_view_m: [f64; 2],
     tuned_landform_reach_m: f64,
     highest_receiver_m: f64,
+    landform_receiver_margin_m: f64,
 ) -> ShadowFootprints {
     let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
     let latitude_rad_per_m = PI / f64::from(world_geometry.height_m());
@@ -374,7 +426,7 @@ fn shadow_footprints(
             min: half_view_m.map(|half| -half),
             max: half_view_m,
         }
-        .expanded(tuned_landform_reach_m),
+        .expanded(tuned_landform_reach_m + landform_receiver_margin_m),
     };
     for row in 0..FOOTPRINT_CELLS {
         for column in 0..FOOTPRINT_CELLS {
@@ -414,23 +466,25 @@ fn shadow_footprints(
                 };
                 // Landform receivers lie below the canopy, so its parallax bounds theirs.
                 let landform_cone_rad = cell_rotation_rad
+                    + landform_receiver_margin_m * (1.0 / world_radius_m + latitude_rad_per_m)
                     + LARGEST_DISC_ANGULAR_RADIUS_RAD
                     + WEATHER_CANOPY_HEIGHT_M / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
                     + DIRECTION_TOLERANCE_RAD;
                 let [east, north, up] = surface_direction.map(f64::from);
                 let elevation_rad = up.atan2(east.hypot(north));
                 if elevation_rad + landform_cone_rad >= shadow_lit_rad {
-                    footprints
-                        .landform
-                        .include(cell.minkowski_sum(offsets_toward(
-                            surface_direction,
-                            landform_cone_rad,
-                            landform_shadow_reach_m(
-                                world_radius_m,
-                                tuned_landform_reach_m,
-                                elevation_rad - landform_cone_rad,
-                            ),
-                        )));
+                    footprints.landform.include(
+                        cell.expanded(landform_receiver_margin_m)
+                            .minkowski_sum(offsets_toward(
+                                surface_direction,
+                                landform_cone_rad,
+                                landform_shadow_reach_m(
+                                    world_radius_m,
+                                    tuned_landform_reach_m,
+                                    elevation_rad - landform_cone_rad,
+                                ),
+                            )),
+                    );
                 }
                 let projections = [
                     (
@@ -755,6 +809,7 @@ fn occluder_doubling_band(
     world_width_m: f64,
     region: Region,
     base_spacing_m: f64,
+    layer_texels: u32,
 ) -> [[i32; 2]; 2] {
     [1.0, OCCLUDER_REFINE_SHARE].map(|share| {
         field_doublings(
@@ -762,7 +817,7 @@ fn occluder_doubling_band(
             region,
             base_spacing_m,
             (share * f64::from(OCCLUDER_FIELD_TEXELS)) as u32,
-            (share * f64::from(OCCLUDER_LAYER_TEXELS)) as u32,
+            (share * f64::from(layer_texels)) as u32,
         )
     })
 }
@@ -771,9 +826,11 @@ fn occluder_doublings(
     world_width_m: f64,
     region: Region,
     base_spacing_m: f64,
+    layer_texels: u32,
     previous: Option<[i32; 2]>,
 ) -> [i32; 2] {
-    let [finest, refine_limit] = occluder_doubling_band(world_width_m, region, base_spacing_m);
+    let [finest, refine_limit] =
+        occluder_doubling_band(world_width_m, region, base_spacing_m, layer_texels);
     match previous {
         Some(previous)
             if (0..2).all(|axis| (finest[axis]..=refine_limit[axis]).contains(&previous[axis])) =>
@@ -960,6 +1017,8 @@ mod tests {
                     assert_covers(&grids.occluders[0], view, &label);
                     assert_covers(&grids.occluders[3], view, &label);
                     assert_covers(&grids.occluders[4], view.expanded(reach_m), &label);
+                    assert_covers(&grids.occluders[5], view, &label);
+                    assert_covers(&grids.occluders[6], view, &label);
                 }
             }
         }
@@ -1029,22 +1088,52 @@ mod tests {
         };
         // 2050 m needs 8 m columns; at 1900 m 4 m columns fit, though not in the
         // refine share, and at 1500 m they fit comfortably.
-        let coarse = occluder_doublings(world_width_m, region(2_050.0), 4.0, None);
+        let coarse = occluder_doublings(
+            world_width_m,
+            region(2_050.0),
+            4.0,
+            OCCLUDER_LAYER_TEXELS,
+            None,
+        );
         assert_eq!(coarse, [1, 0]);
         assert_eq!(
-            occluder_doublings(world_width_m, region(1_900.0), 4.0, None),
+            occluder_doublings(
+                world_width_m,
+                region(1_900.0),
+                4.0,
+                OCCLUDER_LAYER_TEXELS,
+                None
+            ),
             [0, 0]
         );
         assert_eq!(
-            occluder_doublings(world_width_m, region(1_900.0), 4.0, Some(coarse)),
+            occluder_doublings(
+                world_width_m,
+                region(1_900.0),
+                4.0,
+                OCCLUDER_LAYER_TEXELS,
+                Some(coarse)
+            ),
             coarse,
         );
         assert_eq!(
-            occluder_doublings(world_width_m, region(1_500.0), 4.0, Some(coarse)),
+            occluder_doublings(
+                world_width_m,
+                region(1_500.0),
+                4.0,
+                OCCLUDER_LAYER_TEXELS,
+                Some(coarse)
+            ),
             [0, 0],
         );
         assert_eq!(
-            occluder_doublings(world_width_m, region(2_050.0), 4.0, Some([0, 0])),
+            occluder_doublings(
+                world_width_m,
+                region(2_050.0),
+                4.0,
+                OCCLUDER_LAYER_TEXELS,
+                Some([0, 0])
+            ),
             coarse,
         );
     }
@@ -1132,6 +1221,90 @@ mod tests {
                                          taps layer {layer} at {tap_m:?} outside {extent:?}",
                                     );
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every landform horizon texel, including those beyond the view, marches
+    /// inside the landform window, bilinear neighbours included.
+    #[test]
+    fn landform_horizon_marches_land_inside_the_landform_window() {
+        let world = WorldGeometry::default();
+        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let tuned_reach_m = f64::from(FieldGridTuning::PRODUCTION.landform_shadow_reach_m);
+        let camera_m = [-23_500.0_f32, -16_500.0];
+        for view_height_m in [15.0, 240.0, 1_500.0, 6_000.0, 16_000.0] {
+            let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
+            for step in 0..96 {
+                let world_time_seconds = MIDNIGHT_SECONDS + f64::from(step) * 900.0;
+                let grids = production_grids(world_time_seconds, camera_m, view_size_m, NO_MOTION);
+                let landform = grids.occluders[4].extent();
+                let spacing_m = [0, 1].map(|axis| f64::from(grids.occluders[4].uniforms[2 + axis]));
+                let orbit = celestial_orbit(world_celestial_conditions(
+                    world,
+                    world_time_seconds,
+                    Vector::ZERO,
+                ));
+                for (source, layer) in [LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_LAYER + 1]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let horizons = grids.occluders[layer].extent();
+                    for row in 0..=8 {
+                        for column in 0..=8 {
+                            let texel_m = [
+                                horizons.min[0]
+                                    + (horizons.max[0] - horizons.min[0]) * f64::from(column) / 8.0,
+                                horizons.min[1]
+                                    + (horizons.max[1] - horizons.min[1]) * f64::from(row) / 8.0,
+                            ];
+                            let conditions = world_celestial_conditions(
+                                world,
+                                world_time_seconds,
+                                Vector::new(
+                                    camera_m[0] + texel_m[0] as f32,
+                                    camera_m[1] + texel_m[1] as f32,
+                                ),
+                            );
+                            let lights =
+                                celestial_directions_at_height(world, orbit, conditions, 0.0);
+                            let [east, north, up] = [lights.0, lights.1][source].map(f64::from);
+                            let elevation_rad = up.atan2(east.hypot(north));
+                            if elevation_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD
+                                < lowest_shadow_light_rad(
+                                    world_radius_m,
+                                    highest_receiver_m(
+                                        FieldGridTuning::PRODUCTION.terrain_elevation_scale,
+                                    ),
+                                )
+                            {
+                                continue;
+                            }
+                            let reach_m = landform_shadow_reach_m(
+                                world_radius_m,
+                                tuned_reach_m,
+                                elevation_rad,
+                            );
+                            let azimuth_rad = north.atan2(east);
+                            let end_m = [
+                                texel_m[0] + reach_m * azimuth_rad.cos(),
+                                texel_m[1] + reach_m * azimuth_rad.sin(),
+                            ];
+                            for point_m in [texel_m, end_m] {
+                                assert!(
+                                    (0..2).all(|axis| {
+                                        (landform.min[axis] + spacing_m[axis]
+                                            ..=landform.max[axis] - spacing_m[axis])
+                                            .contains(&point_m[axis])
+                                    }),
+                                    "{view_height_m} m view at {world_time_seconds} s: source \
+                                     {source} texel {texel_m:?} marches to {point_m:?} outside \
+                                     {landform:?}",
+                                );
                             }
                         }
                     }

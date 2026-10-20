@@ -295,6 +295,7 @@ fn diagnostic_shadow_darkness(light_height: f32, cloud_depth: f32) -> vec4<f32> 
             ground_light,
             1.0,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+            0u,
         ),
         cloud_shadow_transmittance(cloud_depth, ground_light, ground_horizon_z),
         cloud_layer_transmittance(
@@ -323,6 +324,7 @@ fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f3
         normalize(vec3<f32>(horizontal, -0.000001)),
         1.0,
         MOON_ANGULAR_RADIUS_RAD,
+        1u,
     );
     let above = landform_shadow_transmittance_for_light(
         position_m,
@@ -331,6 +333,7 @@ fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f3
         normalize(vec3<f32>(horizontal, 0.000001)),
         1.0,
         MOON_ANGULAR_RADIUS_RAD,
+        1u,
     );
     return vec4<f32>(scalar_debug_color(clamp(
         8.0 * abs(above - below),

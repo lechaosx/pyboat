@@ -1,4 +1,4 @@
-// Low clouds, canopy and broad landform evaluated once per frame on the
+// Low clouds, canopy, broad landform and its horizons evaluated once per frame on the
 // lattices in `scene.occluder_field_grid_m`: per layer, the first texel centre
 // relative to the camera, then the texel spacing. `scene.occluder_field_texels`
 // counts the texels written this frame; lookups clamp to them. Every value fits
@@ -15,6 +15,8 @@ const LOW_CLOUD_BODY_FIELD: u32 = 0u;
 const LOW_CLOUD_SHADOW_FIELD: u32 = 1u;
 const CANOPY_FIELD: u32 = 3u;
 const LANDFORM_FIELD: u32 = 4u;
+// Sun, then Moon.
+const LANDFORM_HORIZON_FIELD: u32 = 5u;
 
 fn occluder_field(position_m: vec2<f32>, layer: u32) -> vec4<f32> {
     let grid = scene.occluder_field_grid_m[layer];
@@ -49,6 +51,17 @@ fn sampled_upper_cloud_optical_depth_at(position_m: vec2<f32>) -> f32 {
 fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     let field = occluder_field(position_m, LANDFORM_FIELD);
     return field.x + field.y;
+}
+
+fn sampled_landform_horizon(
+    position_m: vec2<f32>,
+    light_direction: vec3<f32>,
+    angular_radius_rad: f32,
+    source_index: u32,
+) -> vec2<f32> {
+    let field = occluder_field(position_m, LANDFORM_HORIZON_FIELD + source_index);
+    note_occluder_field_lookup(field.w > 0.0);
+    return vec2<f32>(field.x + field.y, field.z);
 }
 
 fn sampled_cloud_shadow_depths_at(

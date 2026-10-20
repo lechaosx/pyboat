@@ -36,15 +36,16 @@ use crate::{
     BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize,
     BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
-    FieldGrids, FramePacer, GraphicsSettings, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController,
-    SCENE_SHADER, TerrainCache, TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion,
-    ViewExposure, Windsock, append_reliable_server_message_chunk, baked_surface_sizes,
-    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
-    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
-    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
-    scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
-    visual_pixel_footprint_m, webtransport_server_url, windsock_extension, zoom_view_height_m,
+    FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
+    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
+    UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
+    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
+    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
+    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
+    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
+    webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -202,6 +203,18 @@ pub fn occluder_field_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn landform_horizon_shader_source() -> String {
+    LANDFORM_HORIZON_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_landform_horizon_shader_source() -> String {
+    crate::playground_landform_horizon_shader_source().to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn playground_scene_shader_source() -> String {
     crate::playground_scene_shader_source().to_owned()
 }
@@ -232,6 +245,13 @@ pub fn occluder_field_texture_size() -> Vec<u32> {
         OCCLUDER_FIELD_TEXELS,
         OCCLUDER_FIELD_LAYERS as u32,
     ]
+}
+
+#[cfg(feature = "playground")]
+/// The first landform horizon layer of the occluder field texture.
+#[wasm_bindgen]
+pub fn landform_horizon_layer() -> u32 {
+    LANDFORM_HORIZON_LAYER as u32
 }
 
 #[cfg(feature = "playground")]
@@ -381,8 +401,9 @@ impl PlaygroundSceneFrame {
         self.uniforms.clone()
     }
 
-    /// Environment and occluder workgroup counts (2 and 3 values), then column
-    /// spacing, row spacing, columns and rows for each occluder layer.
+    /// Environment, occluder, and landform horizon workgroup counts (2, 3, and 3
+    /// values), then column spacing, row spacing, columns and rows for each
+    /// occluder layer.
     #[wasm_bindgen(getter)]
     pub fn field_grids(&self) -> Vec<f32> {
         self.field_grids.clone()
@@ -844,6 +865,7 @@ pub fn playground_scene_uniforms(
         .workgroups()
         .into_iter()
         .chain(grids.occluder_workgroups())
+        .chain(grids.landform_horizon_workgroups())
         .map(|count| count as f32)
         .collect();
     for grid in &grids.occluders {
@@ -1067,6 +1089,9 @@ struct OccluderFields {
     pipeline: wgpu::ComputePipeline,
     input_bind_group: wgpu::BindGroup,
     output_bind_group: wgpu::BindGroup,
+    landform_horizon_pipeline: wgpu::ComputePipeline,
+    landform_horizon_input_bind_group: wgpu::BindGroup,
+    landform_horizon_output_bind_group: wgpu::BindGroup,
 }
 
 impl OccluderFields {
@@ -1094,6 +1119,14 @@ impl OccluderFields {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
+        let layers_view = |layers: std::ops::Range<usize>| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                base_array_layer: layers.start as u32,
+                array_layer_count: Some(layers.len() as u32),
+                ..Default::default()
+            })
+        };
         let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Occluder field input layout"),
             entries: &[
@@ -1167,26 +1200,114 @@ impl OccluderFields {
                 },
             ],
         });
-        let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Occluder field output bind group"),
-            layout: &output_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
+        let output_bind_group = |label, view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &output_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }],
+            })
+        };
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Occluder field sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         });
+        let landform_horizon_input_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Landform horizon input layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let landform_horizon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Landform horizon shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(LANDFORM_HORIZON_SHADER)),
+        });
+        let landform_horizon_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Landform horizon pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&landform_horizon_input_layout),
+                    Some(empty_layout),
+                    Some(&output_layout),
+                ],
+                immediate_size: 0,
+            });
+        let landform_horizon_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Landform horizon pipeline"),
+                layout: Some(&landform_horizon_pipeline_layout),
+                module: &landform_horizon_shader,
+                entry_point: Some("generate_landform_horizons"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let landform_horizon_input_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Landform horizon input bind group"),
+                layout: &landform_horizon_input_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&layers_view(
+                            0..LANDFORM_HORIZON_LAYER,
+                        )),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
         Self {
+            output_bind_group: output_bind_group(
+                "Occluder field output bind group",
+                &layers_view(0..LANDFORM_HORIZON_LAYER),
+            ),
+            landform_horizon_output_bind_group: output_bind_group(
+                "Landform horizon output bind group",
+                &layers_view(LANDFORM_HORIZON_LAYER..OCCLUDER_FIELD_LAYERS),
+            ),
             _texture: texture,
             view,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("Occluder field sampler"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            sampler,
             pipeline,
             input_bind_group,
-            output_bind_group,
+            landform_horizon_pipeline,
+            landform_horizon_input_bind_group,
         }
     }
 
@@ -1205,6 +1326,11 @@ impl OccluderFields {
         pass.set_bind_group(1, empty_bind_group, &[]);
         pass.set_bind_group(2, &self.output_bind_group, &[]);
         let [columns, rows, layers] = grids.occluder_workgroups();
+        pass.dispatch_workgroups(columns, rows, layers);
+        pass.set_pipeline(&self.landform_horizon_pipeline);
+        pass.set_bind_group(0, &self.landform_horizon_input_bind_group, &[]);
+        pass.set_bind_group(2, &self.landform_horizon_output_bind_group, &[]);
+        let [columns, rows, layers] = grids.landform_horizon_workgroups();
         pass.dispatch_workgroups(columns, rows, layers);
     }
 }

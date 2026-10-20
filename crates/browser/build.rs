@@ -23,6 +23,10 @@ fn main() {
     let direct_occluder_fields =
         read_component("src/shader/components/direct-occluder-fields.wgsl");
     let occluder_generate = read_component("src/shader/components/occluder-field-generate.wgsl");
+    let landform_horizon_generate =
+        read_component("src/shader/components/landform-horizon-generate.wgsl");
+    let occluder_inspection_disabled =
+        read_component("src/shader/components/occluder-field-inspection-disabled.wgsl");
     let terrain_cache = read_component("src/shader/components/terrain-cache.wgsl");
     let direct_terrain_noise = read_component("src/shader/components/direct-terrain-noise.wgsl");
     let baked_surface = read_component("src/shader/components/baked-surface.wgsl");
@@ -35,7 +39,7 @@ fn main() {
         &occluder_fields,
         &terrain_cache,
         &baked_surface,
-        &read_component("src/shader/components/occluder-field-inspection-disabled.wgsl"),
+        &occluder_inspection_disabled,
         &production_entry,
     ]);
     write_shader(
@@ -69,6 +73,21 @@ fn main() {
         &production_occluders,
         &["generate_occluder_fields"],
         "occluder-fields.wgsl",
+    );
+    let production_landform_horizons = compose(&[
+        &scene,
+        &occluder_fields,
+        &direct_terrain_noise,
+        &direct_surface,
+        &occluder_inspection_disabled,
+        &production_entry,
+        &read_component("src/shader/production-occluder-field-entry.wgsl"),
+        &landform_horizon_generate,
+    ]);
+    write_shader(
+        &production_landform_horizons,
+        &["generate_landform_horizons"],
+        "landform-horizons.wgsl",
     );
     let terrain_cache_generate = compose(&[
         &scene,
@@ -169,6 +188,21 @@ fn main() {
         &playground_occluders,
         &["generate_occluder_fields"],
         "occluder-fields-playground.wgsl",
+    );
+    let playground_landform_horizons = compose(&[
+        &scene,
+        &occluder_fields,
+        &direct_terrain_noise,
+        &direct_surface,
+        &read_component("src/shader/components/playground-occluder-field-inspection.wgsl"),
+        &playground_interface,
+        &read_component("src/shader/playground-occluder-field-entry.wgsl"),
+        &landform_horizon_generate,
+    ]);
+    write_shader(
+        &playground_landform_horizons,
+        &["generate_landform_horizons"],
+        "landform-horizons-playground.wgsl",
     );
     let playground_baked_surface_generate = compose(&[
         &scene,

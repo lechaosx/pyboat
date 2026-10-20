@@ -1330,6 +1330,51 @@ fn low_sun_landform_shadows_keep_near_blockers_of_a_dense_march() {
 }
 
 #[test]
+fn low_light_landform_shadows_keep_every_blocker_within_their_reach() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-9_000.0, 2_017.0);
+    let view_height_m = 600.0;
+    // Across this view the march reaches over 1 km.
+    let world_time_seconds =
+        evening_time_at_sun_z(world, position_m, 3, 15.0_f32.to_radians().sin());
+    let shipped = landform_occlusion(world, position_m, world_time_seconds, view_height_m, None);
+    // Fixed marches from the high-light reach to 960 m together sample from
+    // 20 m to 960 m, all within the shipped march.
+    let mut reference = vec![None::<f32>; shipped.len()];
+    for reach_m in [320, 480, 640, 800, 960] {
+        let march = landform_occlusion(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            Some(reach_m),
+        );
+        for (union, sample) in reference.iter_mut().zip(&march) {
+            *union = sample.map(|sample| union.map_or(sample, |union| union.max(sample)));
+        }
+    }
+    let shadowed: Vec<_> = reference
+        .iter()
+        .zip(&shipped)
+        .filter_map(|(reference, shipped)| Some((reference.filter(|&r| r > 0.5)?, (*shipped)?)))
+        .collect();
+    assert!(
+        shadowed.len() > 1_000,
+        "the reference shadows only {} pixels",
+        shadowed.len()
+    );
+    let missing = shadowed
+        .iter()
+        .filter(|(_, shipped)| *shipped < 0.25)
+        .count();
+    assert!(
+        missing * 50 < shadowed.len(),
+        "{missing} of {} reference-shadowed pixels are lit",
+        shadowed.len(),
+    );
+}
+
+#[test]
 fn landform_shadows_stay_on_the_ground_while_the_camera_pans() {
     let world = WorldGeometry::default();
     let start_m = Vector::new(-8_700.0, 1_800.0);
@@ -2040,6 +2085,33 @@ fn coverage_view_marks_lookups_outside_their_grids() {
         world,
         position_m,
         night_seconds,
+        300.0,
+        "scene_occluder_coverage_all_branches",
+        96,
+        54,
+    );
+
+    assert!(clamped_lookup_pixels(&image) > 96 * 54 / 2);
+}
+
+#[test]
+fn coverage_view_marks_landform_horizon_marches_outside_the_landform_grid() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(800.0, 0.0);
+    let world_time_seconds = (0..28 * 96)
+        .map(|quarter_hour| f64::from(quarter_hour) * 900.0)
+        .find(|&world_time_seconds| {
+            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
+            let light = celestial_lighting_at_height(world, conditions, 0.0);
+            light.sun_direction[2] > 0.85 && light.moon_direction[2] > 0.85
+        })
+        .expect("Sun and Moon should both stand high during the lunar month");
+    // Under two high lights every grid but the landform's holds the forced
+    // taps, while forced horizons march the reach at the cutoff.
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
         300.0,
         "scene_occluder_coverage_all_branches",
         96,

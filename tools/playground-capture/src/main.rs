@@ -3,10 +3,10 @@ use std::{env, fs, path::PathBuf};
 use browser::{
     BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceSizes, BakedSurfaceTextures,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
-    FieldGrids, GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache,
-    TerrainCacheFrame, TerrainCachePass, baked_surface_sizes, exposure_target, field_grids,
-    ocean_wave_mode_uniforms, sample_view_cloud_state, seasonal_phase_factors, view_width_m,
-    visual_pixel_footprint_m,
+    FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
+    OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame, TerrainCachePass, baked_surface_sizes,
+    exposure_target, field_grids, ocean_wave_mode_uniforms, sample_view_cloud_state,
+    seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -152,16 +152,21 @@ struct CaptureFields {
     sampler: wgpu::Sampler,
     environment_pipeline: wgpu::ComputePipeline,
     occluder_pipeline: wgpu::ComputePipeline,
+    landform_horizon_layout: wgpu::BindGroupLayout,
+    landform_horizon_input_view: wgpu::TextureView,
+    landform_horizon_pipeline: wgpu::ComputePipeline,
     terrain_cache: TerrainCachePass,
     baked_surface: BakedSurfacePass,
     environment_output: wgpu::BindGroup,
     occluder_output: wgpu::BindGroup,
+    landform_horizon_output: wgpu::BindGroup,
     _textures: [wgpu::Texture; 2],
 }
 
 struct CaptureFieldBindings {
     scene: wgpu::BindGroup,
     field_reading: wgpu::BindGroup,
+    landform_horizon_input: wgpu::BindGroup,
     baked_surface_input: wgpu::BindGroup,
 }
 
@@ -175,6 +180,8 @@ impl CaptureFields {
         group_1_layout: &wgpu::BindGroupLayout,
         occluder_shader_source: &str,
         occluder_constants: &[(&str, f64)],
+        landform_horizon_shader_source: &str,
+        landform_horizon_constants: &[(&str, f64)],
         baked_surface_shader_source: &str,
         baked_surface_constants: &[(&str, f64)],
         baked_surface_sizes: BakedSurfaceSizes,
@@ -224,6 +231,20 @@ impl CaptureFields {
                     field_entry(1, wgpu::ShaderStages::COMPUTE, false),
                 ],
             });
+        let landform_horizon_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("scene uniforms and landform layer layout"),
+                entries: &[
+                    uniform_entry(wgpu::ShaderStages::COMPUTE),
+                    field_entry(2, wgpu::ShaderStages::COMPUTE, true),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
         let field_texture = |label, size, layers, format| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -260,6 +281,18 @@ impl CaptureFields {
         };
         let environment_view = array_view(&environment_texture);
         let occluder_view = array_view(&occluder_texture);
+        let occluder_layers_view = |layers: std::ops::Range<usize>| {
+            occluder_texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                base_array_layer: layers.start as u32,
+                array_layer_count: Some(layers.len() as u32),
+                ..Default::default()
+            })
+        };
+        let occluder_output_view = occluder_layers_view(0..LANDFORM_HORIZON_LAYER);
+        let landform_horizon_input_view = occluder_layers_view(0..LANDFORM_HORIZON_LAYER);
+        let landform_horizon_output_view =
+            occluder_layers_view(LANDFORM_HORIZON_LAYER..OCCLUDER_FIELD_LAYERS);
         let output_layout = |label, format| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some(label),
@@ -327,6 +360,17 @@ impl CaptureFields {
             "generate_occluder_fields",
             occluder_constants,
         );
+        let landform_horizon_pipeline = compute_pipeline(
+            "capture landform horizon pipeline",
+            landform_horizon_shader_source,
+            &[
+                Some(&landform_horizon_layout),
+                Some(group_1_layout),
+                Some(&occluder_output_layout),
+            ],
+            "generate_landform_horizons",
+            landform_horizon_constants,
+        );
         let output_bind_group = |label, layout, view| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
@@ -346,8 +390,16 @@ impl CaptureFields {
             occluder_output: output_bind_group(
                 "capture occluder field output",
                 &occluder_output_layout,
-                &occluder_view,
+                &occluder_output_view,
             ),
+            landform_horizon_output: output_bind_group(
+                "capture landform horizon output",
+                &occluder_output_layout,
+                &landform_horizon_output_view,
+            ),
+            landform_horizon_layout,
+            landform_horizon_input_view,
+            landform_horizon_pipeline,
             scene_layout,
             field_reading_layout,
             environment_view,
@@ -410,6 +462,23 @@ impl CaptureFields {
                     wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(&baked.color_view),
+                    },
+                ],
+            }),
+            landform_horizon_input: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("scene uniforms and landform layer"),
+                layout: &self.landform_horizon_layout,
+                entries: &[
+                    uniforms.clone(),
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.landform_horizon_input_view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
                     },
                 ],
             }),
@@ -512,6 +581,11 @@ impl CaptureFields {
         pass.set_bind_group(1, occluder_group_1, &[]);
         pass.set_bind_group(2, &self.occluder_output, &[]);
         let [columns, rows, layers] = grids.occluder_workgroups();
+        pass.dispatch_workgroups(columns, rows, layers);
+        pass.set_pipeline(&self.landform_horizon_pipeline);
+        pass.set_bind_group(0, &bindings.landform_horizon_input, &[]);
+        pass.set_bind_group(2, &self.landform_horizon_output, &[]);
+        let [columns, rows, layers] = grids.landform_horizon_workgroups();
         pass.dispatch_workgroups(columns, rows, layers);
     }
 }
@@ -1677,6 +1751,15 @@ async fn render(options: &Options) -> Result<(), String> {
             &playground_layout,
             browser::playground_occluder_field_shader_source(),
             &[],
+            browser::playground_landform_horizon_shader_source(),
+            &[
+                options.diagnostic.constants.as_slice(),
+                &[(
+                    "LEGACY_SHADOW_LOOK",
+                    f64::from(u8::from(options.legacy_shadow_look)),
+                )],
+            ]
+            .concat(),
             browser::playground_baked_surface_shader_source(),
             &[],
             baked_surface_sizes((options.width, options.height), options.bake_memory_bytes),

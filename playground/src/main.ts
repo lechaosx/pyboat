@@ -9,12 +9,15 @@ import {
   environment_field_shader_source,
   environment_field_texture_size,
   graphics_quality_scene_constants,
+  landform_horizon_layer,
+  landform_horizon_shader_source,
   occluder_field_shader_source,
   occluder_field_texture_size,
   playground_baked_surface_fill_bytes,
   playground_baked_surface_shader_source,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
+  playground_landform_horizon_shader_source,
   playground_occluder_field_shader_source,
   playground_scene_render_size,
   playground_scene_shader_source,
@@ -78,7 +81,10 @@ const occluderFieldLayers = [
   { name: "Moon low-cloud shadow", color: "#8cb8ff" },
   { name: "Canopy", color: "#b873ff" },
   { name: "Landform", color: "#33bf4d" },
+  { name: "Sun landform horizon", color: "#ffd84d" },
+  { name: "Moon landform horizon", color: "#7f8cff" },
 ] as const;
+const landformHorizonLayer = landform_horizon_layer();
 
 type State = {
   seed: string;
@@ -1130,11 +1136,18 @@ const environmentFieldView = device.createTexture({
   format: "rgba32float",
   usage: 0x04 | 0x08,
 }).createView({ dimension: "2d-array" });
-const occluderFieldView = device.createTexture({
+const occluderFieldTexture = device.createTexture({
   size: [...occluder_field_texture_size()],
   format: "rgba16float",
   usage: 0x04 | 0x08,
-}).createView({ dimension: "2d-array" });
+});
+const occluderFieldView = occluderFieldTexture.createView({ dimension: "2d-array" });
+const occluderFieldLayersView = (first: number, count: number) =>
+  occluderFieldTexture.createView({
+    dimension: "2d-array",
+    baseArrayLayer: first,
+    arrayLayerCount: count,
+  });
 const occluderFieldSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
 const [terrainCacheTexels, terrainCacheLayers] = (() => {
   const [texels, , layers] = terrain_cache_texture_size();
@@ -1193,8 +1206,9 @@ type BakedSurfacePass = {
   outputBindGroup: GPUBindGroup;
 };
 let bakedSurfacePass: BakedSurfacePass | undefined;
-// Environment and occluder workgroup counts, then spacing and texels per occluder layer.
-let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5]);
+// Environment, occluder, and landform horizon workgroup counts, then spacing and
+// texels per occluder layer.
+let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5, 1, 1, 2]);
 
 type FieldPasses = {
   environmentPipeline: GPUComputePipeline;
@@ -1204,6 +1218,14 @@ type FieldPasses = {
   occluderInputBindGroup: GPUBindGroup;
   occluderPlaygroundBindGroup: GPUBindGroup;
   occluderOutputBindGroup: GPUBindGroup;
+};
+// Lab shadow comparisons change how far horizons march, so this pass belongs to
+// each scene pipeline variant.
+type LandformHorizonPass = {
+  landformHorizonPipeline: GPUComputePipeline;
+  landformHorizonInputBindGroup: GPUBindGroup;
+  landformHorizonPlaygroundBindGroup: GPUBindGroup;
+  landformHorizonOutputBindGroup: GPUBindGroup;
 };
 
 const timestampQuerySet = timestampQueriesSupported
@@ -1233,7 +1255,7 @@ type RenderResources = {
   pipeline: GPURenderPipeline;
   sceneBindGroup: GPUBindGroup;
   playgroundBindGroup?: GPUBindGroup;
-  fields?: FieldPasses;
+  fields?: FieldPasses & LandformHorizonPass;
   hdr?: boolean;
 };
 let sceneRenderResources: RenderResources = {
@@ -1251,7 +1273,7 @@ function updateOccluderFieldInfo(resources: RenderResources): void {
   if (!occluderFieldInfoElement) return;
   const lines = resources.fields
     ? occluderFieldLayers.map(({ name, color }, layer) => {
-      const [columnSpacing, rowSpacing, columns, rows] = fieldGrids.subarray(5 + 4 * layer, 9 + 4 * layer);
+      const [columnSpacing, rowSpacing, columns, rows] = fieldGrids.subarray(8 + 4 * layer, 12 + 4 * layer);
       const extent = (texels: number, spacing: number) => ((texels - 1) * spacing / 1000).toFixed(1);
       return `<span><i style="background:${color}"></i>${name} · ${formatDistance(rowSpacing!)} · `
         + `${columns}×${rows} · ${extent(columns!, columnSpacing!)} × ${extent(rows!, rowSpacing!)} km</span>`;
@@ -1983,6 +2005,11 @@ function renderFrame(): Promise<void> {
     occluderPass.setBindGroup(1, fields.occluderPlaygroundBindGroup);
     occluderPass.setBindGroup(2, fields.occluderOutputBindGroup);
     occluderPass.dispatchWorkgroups(fieldGrids[2]!, fieldGrids[3]!, fieldGrids[4]!);
+    occluderPass.setPipeline(fields.landformHorizonPipeline);
+    occluderPass.setBindGroup(0, fields.landformHorizonInputBindGroup);
+    occluderPass.setBindGroup(1, fields.landformHorizonPlaygroundBindGroup);
+    occluderPass.setBindGroup(2, fields.landformHorizonOutputBindGroup);
+    occluderPass.dispatchWorkgroups(fieldGrids[5]!, fieldGrids[6]!, fieldGrids[7]!);
     occluderPass.end();
   }
   const canvasTexture = context.getCurrentTexture();
@@ -2121,10 +2148,12 @@ if (!bench) {
 type SceneShaders = {
   scene: GPUShaderModule;
   direct?: GPUShaderModule;
+  landformHorizon: GPUShaderModule;
 };
 type ScenePipelines = {
   scene: GPURenderPipeline;
   direct?: GPURenderPipeline;
+  landformHorizon: GPUComputePipeline;
 };
 let sceneShaders: SceneShaders | undefined;
 let sceneFields: FieldPasses | undefined;
@@ -2157,7 +2186,19 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
       ),
       shaders.direct
         && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
-    ]).then(([scene, direct]) => ({ scene, ...(direct ? { direct } : {}) }));
+      device.createComputePipelineAsync({
+        layout: "auto",
+        compute: {
+          module: shaders.landformHorizon,
+          entryPoint: "generate_landform_horizons",
+          constants: { LEGACY_SHADOW_LOOK: legacyShadowLook! },
+        },
+      }),
+    ]).then(([scene, direct, landformHorizon]) => ({
+      scene,
+      landformHorizon,
+      ...(direct ? { direct } : {}),
+    }));
     scenePipelinesByVariant.set(variant, pipelines);
   }
   return pipelines;
@@ -2167,10 +2208,36 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
   const playgroundEntries = productionShaders
     ? []
     : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
+  const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {
     pipeline: pipelines.scene,
     hdr: hdrSupported,
-    fields,
+    fields: {
+      ...fields,
+      landformHorizonPipeline,
+      landformHorizonInputBindGroup: device.createBindGroup({
+        layout: landformHorizonPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: sceneBuffer } },
+          { binding: 2, resource: occluderFieldLayersView(0, landformHorizonLayer) },
+          { binding: 3, resource: occluderFieldSampler },
+        ],
+      }),
+      landformHorizonPlaygroundBindGroup: device.createBindGroup({
+        layout: landformHorizonPipeline.getBindGroupLayout(1),
+        entries: playgroundEntries,
+      }),
+      landformHorizonOutputBindGroup: device.createBindGroup({
+        layout: landformHorizonPipeline.getBindGroupLayout(2),
+        entries: [{
+          binding: 0,
+          resource: occluderFieldLayersView(
+            landformHorizonLayer,
+            occluderFieldLayers.length - landformHorizonLayer,
+          ),
+        }],
+      }),
+    },
     sceneBindGroup: device.createBindGroup({
       layout: pipelines.scene.getBindGroupLayout(0),
       entries: [
@@ -2245,11 +2312,17 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
         ? baked_surface_shader_source()
         : playground_baked_surface_shader_source(),
     });
+    const landformHorizon = device.createShaderModule({
+      code: productionShaders
+        ? landform_horizon_shader_source()
+        : playground_landform_horizon_shader_source(),
+    });
     const shaders: SceneShaders = productionShaders
-      ? { scene: sceneShader }
+      ? { scene: sceneShader, landformHorizon }
       : {
           scene: sceneShader,
           direct: device.createShaderModule({ code: playground_direct_scene_shader_source() }),
+          landformHorizon,
         };
     const variant = scenePipelineVariant();
     const occluderShader = device.createShaderModule({
@@ -2311,7 +2384,7 @@ const fullSceneReady = new Promise<void>((resolve) => requestAnimationFrame(() =
       }),
       occluderOutputBindGroup: device.createBindGroup({
         layout: occluderPipeline.getBindGroupLayout(2),
-        entries: [{ binding: 0, resource: occluderFieldView }],
+        entries: [{ binding: 0, resource: occluderFieldLayersView(0, landformHorizonLayer) }],
       }),
     };
     installScenePipelines(pipelines, fields);

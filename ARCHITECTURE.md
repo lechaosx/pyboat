@@ -194,6 +194,11 @@ and verification details.
   Projected positions retain unbounded cylindrical coordinates; receiver-local
   geometry permits cloud sunlight after surface sunset.
 - **[Explicit]** Landform shadows have finite-disc penumbrae at every zoom.
+- **[Implicit]** Landform shadows read one per-frame horizon grid per light,
+  covering the view, whose texels march the landform grid toward that light.
+- **[Implicit]** A horizon texel keeps the receiver height at which landform
+  covers half the disc and the height span of that blocker's penumbra; each
+  pixel compares its own height with them.
 - **[Explicit]** Cloud shadows sample each light once per pixel; their softness
   comes from the cloud field.
 - **[Explicit]** Every shadow type removes the same share of direct light for the
@@ -208,10 +213,11 @@ and verification details.
 - **[Explicit]** Landform shadow reach grows as the light lowers.
 - **[Implicit]** Below 45°, the landform march reaches about where a ray from sea
   level toward the light has climbed the high-light reach above the curved
-  surface. Each pixel takes the reach from its own light, so landform shadows
-  stay world-anchored while the camera pans.
-- **[Implicit]** A fixed tap count spreads geometrically from a sixteenth of the
-  high-light reach out to the march's reach.
+  surface. Each horizon texel takes the reach from its own light, so landform
+  shadows stay world-anchored while the camera pans.
+- **[Implicit]** The march steps from a sixteenth of the high-light reach out to
+  the march's reach, with steps that widen in proportion to distance beyond a
+  fixed shortest step.
 - **[Explicit]** Canopy shadows follow one darkness curve over cloud bodies and
   on the ground.
 - **[Implicit]** That curve is extinction along the slant path through the layer.

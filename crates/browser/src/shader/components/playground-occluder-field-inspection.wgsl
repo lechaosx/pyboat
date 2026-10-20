@@ -23,18 +23,28 @@ fn occluder_field_inspection_color(layer: u32, field: vec4<f32>) -> vec3<f32> {
     if layer == CANOPY_FIELD {
         return vec3<f32>(0.72, 0.45, 1.0) * (0.08 + 0.92 * clamp(field.x / 5.43, 0.0, 1.0));
     }
-    let elevation_m = field.x + field.y;
+    let height_m = field.x + field.y;
+    if layer >= LANDFORM_HORIZON_FIELD {
+        // Half-cover receiver heights; black where no landform shadow can fall.
+        let tint = select(vec3<f32>(0.50, 0.55, 1.0), vec3<f32>(1.0, 0.85, 0.30), layer == LANDFORM_HORIZON_FIELD);
+        return select(
+            tint * clamp((height_m + 50.0) / 450.0, 0.08, 1.0),
+            vec3<f32>(0.0),
+            height_m <= LANDFORM_UNSHADOWED_HEIGHT_M,
+        );
+    }
+    let elevation_m = height_m;
     return select(vec3<f32>(0.10, 0.25, 0.60), vec3<f32>(0.20, 0.75, 0.30), elevation_m >= 0.0)
         * clamp(abs(elevation_m) / 400.0, 0.08, 1.0);
 }
 
-// Each layer's written texels, unfiltered and aspect-preserved in a 3 × 2
+// Each layer's written texels, unfiltered and aspect-preserved in a 4 × 2
 // arrangement, with the view outlined where the layer covers it.
 fn occluder_field_inspection_grids(fragment_position_px: vec2<f32>) -> vec3<f32> {
     let background = vec3<f32>(0.02);
-    let cell_px = vec2<f32>(playground.occluder_field_inspection.yz) / vec2<f32>(3.0, 2.0);
-    let cell = min(vec2<u32>(fragment_position_px / cell_px), vec2<u32>(2u, 1u));
-    let layer = cell.y * 3u + cell.x;
+    let cell_px = vec2<f32>(playground.occluder_field_inspection.yz) / vec2<f32>(4.0, 2.0);
+    let cell = min(vec2<u32>(fragment_position_px / cell_px), vec2<u32>(3u, 1u));
+    let layer = cell.y * 4u + cell.x;
     if layer >= OCCLUDER_FIELD_LAYERS {
         return background;
     }
