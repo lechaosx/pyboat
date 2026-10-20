@@ -395,8 +395,10 @@ and verification details.
 - **[Implicit]** Still captures use settled exposure and SDR output; their sidecar
   records exposure so they can be compared with an adapted interactive view.
 - **[Explicit]** Capture requires a hardware Vulkan GPU.
-- **[Explicit]** Rendering cost is judged on one fixed set of scenarios shared
-  by headless capture and the browser playground.
+- **[Explicit]** Still-view rendering cost is judged on one fixed set of
+  scenarios shared by headless capture and the browser playground.
+- **[Explicit]** Rendering cost during camera motion is judged on fixed camera
+  paths that only headless capture runs, as shipped.
 - **[Explicit]** Performance measurements time the shipped production shaders.
 - **[Explicit]** The browser playground runs the scenario bench on devices that
   headless capture cannot reach, such as phones.

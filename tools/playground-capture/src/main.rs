@@ -643,6 +643,7 @@ fn parse_options() -> Result<Command, String> {
     let mut baseline = None;
     let mut warmup_iterations = 5;
     let mut timed_iterations = 20;
+    let mut frame_budget_ms: f64 = 16.7;
     let mut width = None;
     let mut height = None;
     let mut bench_only_option = None;
@@ -655,7 +656,8 @@ fn parse_options() -> Result<Command, String> {
                 .ok_or_else(|| format!("{argument} requires a value"))
         };
         match argument.as_str() {
-            "--bench" | "--output-dir" | "--baseline" | "--warmup" | "--iterations" => {
+            "--bench" | "--output-dir" | "--baseline" | "--warmup" | "--iterations"
+            | "--frame-budget" => {
                 bench_only_option.get_or_insert_with(|| argument.clone());
             }
             "--width" | "--height" | "--help" | "-h" => {}
@@ -669,6 +671,7 @@ fn parse_options() -> Result<Command, String> {
             "--baseline" => baseline = Some(PathBuf::from(value(&mut arguments)?)),
             "--warmup" => warmup_iterations = parse(&value(&mut arguments)?, &argument)?,
             "--iterations" => timed_iterations = parse(&value(&mut arguments)?, &argument)?,
+            "--frame-budget" => frame_budget_ms = parse(&value(&mut arguments)?, &argument)?,
             "--output" => options.output = value(&mut arguments)?.into(),
             "--width" => width = Some(parse(&value(&mut arguments)?, &argument)?),
             "--height" => height = Some(parse(&value(&mut arguments)?, &argument)?),
@@ -750,6 +753,9 @@ fn parse_options() -> Result<Command, String> {
         if timed_iterations == 0 {
             return Err("--iterations must be positive".to_owned());
         }
+        if !(frame_budget_ms.is_finite() && frame_budget_ms > 0.0) {
+            return Err("--frame-budget must be positive and finite".to_owned());
+        }
         return Ok(Command::Bench(bench::BenchOptions {
             output_dir: output_dir.ok_or("--bench requires --output-dir")?,
             baseline,
@@ -757,6 +763,7 @@ fn parse_options() -> Result<Command, String> {
             height,
             warmup_iterations,
             timed_iterations,
+            frame_budget_ms,
         }));
     }
     if let Some(option) = bench_only_option {
@@ -1385,15 +1392,21 @@ fn print_help() {
          playground/src/bench-scenarios.json, once as shipped and once with\n\
          EVALUATE_ALL_BRANCHES forcing normally skipped work, a refill of the active terrain\n\
          cache level, and one frame budget of surface bakes every frame. Shipped frames from\n\
-         empty caches until they settle are timed as the cold start.\n\n\
+         empty caches until they settle are timed as the cold start. Then times shipped\n\
+         frames along each camera path in playground/src/bench-sequences.json, keeping\n\
+         every frame's pass durations.\n\n\
          Bench options:\n\
            --output-dir DIR       receives report.json, one PNG per scenario, and contact-sheet.png\n\
            --baseline DIR         earlier bench output to compare timings and images against;\n\
                                   writes a <scenario>-diff.png heat image per scenario\n\
            --width N --height N   render dimensions (default 1920x1080)\n\
-           --warmup N             untimed frames per scenario and mode, also used for one\n\
-                                  untimed sweep over every scenario first (default 5)\n\
-           --iterations N         timed frames per scenario and mode (default 20)\n\n\
+           --warmup N             untimed frames per scenario, mode, and sequence, and at\n\
+                                  least half a second of them before timed frames; N frames\n\
+                                  also make one untimed sweep over every scenario first\n\
+                                  (default 5)\n\
+           --iterations N         timed frames per scenario and mode (default 20)\n\
+           --frame-budget MS      sequence frames longer than this count as over budget\n\
+                                  (default 16.7)\n\n\
          Timing uses GPU timestamp queries when the adapter supports them and\n\
          falls back to submit-to-completion wall-clock time."
     );

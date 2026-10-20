@@ -3,7 +3,7 @@ use std::{
     fs,
     io::BufReader,
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ use super::{
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
+const SEQUENCES: &str = include_str!("../../../playground/src/bench-sequences.json");
 /// A pixel counts as visibly changed when one 8-bit channel moves by more than this.
 const VISIBLE_DIFFERENCE_LEVELS: u8 = 2;
 const DIFF_IMAGE_GAIN: u8 = 16;
@@ -34,6 +35,14 @@ const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
 const TIMESTAMP_COUNT: u32 = 12;
 /// More frames than a cold start takes to settle at the bench's sizes.
 const MAXIMUM_COLD_START_FRAMES: u32 = 64;
+/// GPU clocks drop while the bench reads back and encodes images, then take a
+/// few hundred milliseconds of frames, past a brief overshoot, to return to
+/// the level sustained rendering holds. Light frames need far more warm-up
+/// frames than heavy ones to span it. On a Radeon 780M, shipped medians after
+/// half a second differed from those after 1.5 seconds by -1.6% on average,
+/// -11% at worst, and by more than 5% in 10 of 36 scenarios, about the
+/// run-to-run noise there.
+const MINIMUM_TIMED_WARMUP: Duration = Duration::from_millis(500);
 
 pub struct BenchOptions {
     pub output_dir: PathBuf,
@@ -42,6 +51,7 @@ pub struct BenchOptions {
     pub height: u32,
     pub warmup_iterations: u32,
     pub timed_iterations: u32,
+    pub frame_budget_ms: f64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -67,6 +77,69 @@ impl Scenario {
                 GraphicsQuality::parse(name)
                     .ok_or_else(|| format!("{}: invalid quality {name}", self.id))
             })
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Keyframe {
+    frame: u32,
+    camera_m: [f32; 2],
+    view_height_m: f32,
+}
+
+/// A camera path through keyframes. Between two keyframes the camera moves
+/// linearly and the view height changes geometrically, so a zoom scales the view
+/// by the same factor every frame.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Sequence {
+    id: String,
+    exercises: String,
+    seed: String,
+    world_time_seconds: f64,
+    keyframes: Vec<Keyframe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    render_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality: Option<String>,
+}
+
+impl Sequence {
+    /// Timed frames, which follow frame 0, the settled first view.
+    fn frames(&self) -> u32 {
+        self.keyframes.last().map_or(0, |keyframe| keyframe.frame)
+    }
+
+    fn view(&self, frame: u32) -> Scenario {
+        let next = self
+            .keyframes
+            .iter()
+            .position(|keyframe| keyframe.frame >= frame)
+            .unwrap_or(self.keyframes.len() - 1);
+        let to = &self.keyframes[next];
+        let (camera_m, view_height_m) = if to.frame <= frame {
+            (to.camera_m, to.view_height_m)
+        } else {
+            let from = &self.keyframes[next - 1];
+            let progress = (frame - from.frame) as f32 / (to.frame - from.frame) as f32;
+            (
+                [0, 1].map(|axis| {
+                    from.camera_m[axis] + (to.camera_m[axis] - from.camera_m[axis]) * progress
+                }),
+                from.view_height_m * (to.view_height_m / from.view_height_m).powf(progress),
+            )
+        };
+        Scenario {
+            id: self.id.clone(),
+            exercises: self.exercises.clone(),
+            seed: self.seed.clone(),
+            camera_m,
+            view_height_m,
+            world_time_seconds: self.world_time_seconds,
+            render_scale: self.render_scale,
+            quality: self.quality.clone(),
+        }
     }
 }
 
@@ -105,6 +178,48 @@ struct ColdStart {
     frames: u32,
     first_ms: f64,
     max_ms: f64,
+}
+
+/// One pass's durations through a sequence, in frame order.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SequenceTiming {
+    mean_ms: f64,
+    median_ms: f64,
+    /// Nearest rank, so an observed duration.
+    p95_ms: f64,
+    max_ms: f64,
+    samples_ms: Vec<f64>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SequenceBaselineComparison {
+    mean_ratio: f64,
+    p95_ratio: f64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SequenceReport {
+    #[serde(flatten)]
+    sequence: Sequence,
+    fields: Option<SequenceTiming>,
+    occluders: Option<SequenceTiming>,
+    scene: Option<SequenceTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upscale: Option<SequenceTiming>,
+    terrain_cache: Option<SequenceTiming>,
+    baked_surface: Option<SequenceTiming>,
+    total: SequenceTiming,
+    frames_over_budget: u32,
+    /// Pixel footprint over the read level's texel spacing, below one while a
+    /// coarser level stands in.
+    texels_per_pixel_min: f32,
+    texels_per_pixel_last: f32,
+    discarded_frames: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baseline: Option<SequenceBaselineComparison>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -152,8 +267,14 @@ struct BenchReport {
     height: u32,
     warmup_iterations: u32,
     timed_iterations: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    minimum_warmup_ms: Option<f64>,
     contact_sheet: String,
     scenarios: Vec<ScenarioReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_budget_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sequences: Vec<SequenceReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     baseline_notes: Vec<String>,
 }
@@ -530,6 +651,7 @@ struct TimestampReadback {
 
 pub async fn run(options: &BenchOptions) -> Result<(), String> {
     let scenarios = builtin_scenarios()?;
+    let sequences = builtin_sequences()?;
     if options
         .baseline
         .as_ref()
@@ -612,8 +734,14 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             default_options().bake_memory_bytes,
         )
     };
+    let first_sequence_views: Vec<Scenario> =
+        sequences.iter().map(|sequence| sequence.view(0)).collect();
     let mut bake_sizes: Vec<BakedSurfaceSizes> = Vec::new();
-    for sizes in scenarios.iter().map(scenario_bake_sizes) {
+    for sizes in scenarios
+        .iter()
+        .chain(&first_sequence_views)
+        .map(scenario_bake_sizes)
+    {
         if !bake_sizes.contains(&sizes) {
             bake_sizes.push(sizes);
         }
@@ -637,32 +765,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 report.timing
             ));
         }
-        if report.adapter != adapter_name {
-            notes.push(format!(
-                "baseline adapter {} differs from {adapter_name}; timing ratios compare different GPUs",
-                report.adapter
-            ));
-        }
-        for previous in &report.scenarios {
-            if !scenarios
-                .iter()
-                .any(|scenario| scenario.id == previous.scenario.id)
-            {
-                notes.push(format!(
-                    "baseline scenario {} is not in this run",
-                    previous.scenario.id
-                ));
-            }
-        }
-        for scenario in &scenarios {
-            if !report
-                .scenarios
-                .iter()
-                .any(|previous| previous.scenario.id == scenario.id)
-            {
-                notes.push(format!("scenario {} has no baseline", scenario.id));
-            }
-        }
+        notes = baseline_notes(report, &adapter_name, &scenarios, &sequences);
     }
     let scene_bind_groups = scenarios
         .iter()
@@ -837,6 +940,35 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
             scenario,
         });
     }
+    let mut sequence_reports = Vec::new();
+    for sequence in sequences {
+        eprintln!("{}", sequence.id);
+        let (timed, texels_per_pixel) = time_sequence(
+            &device,
+            &queue,
+            &renderers[0],
+            &scene_layout,
+            &unused,
+            &vertices,
+            &upscaler,
+            &sequence,
+            timestamps.as_ref(),
+            options,
+        )?;
+        let previous = baseline.as_ref().and_then(|(_, report)| {
+            report
+                .sequences
+                .iter()
+                .find(|previous| previous.sequence.id == sequence.id)
+        });
+        sequence_reports.push(sequence_report(
+            sequence,
+            timed,
+            &texels_per_pixel,
+            options.frame_budget_ms,
+            previous,
+        )?);
+    }
     let contact_sheet = "contact-sheet.png".to_owned();
     write_contact_sheet(&options.output_dir.join(&contact_sheet), &thumbnails)?;
     let report = BenchReport {
@@ -846,8 +978,11 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         height: options.height,
         warmup_iterations: options.warmup_iterations,
         timed_iterations: options.timed_iterations,
+        minimum_warmup_ms: Some(minimum_warmup_ms()),
         contact_sheet,
         scenarios: reports,
+        frame_budget_ms: Some(options.frame_budget_ms),
+        sequences: sequence_reports,
         baseline_notes: notes,
     };
     let report_path = options.output_dir.join("report.json");
@@ -861,8 +996,103 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn minimum_warmup_ms() -> f64 {
+    MINIMUM_TIMED_WARMUP.as_secs_f64() * 1000.0
+}
+
+fn baseline_notes(
+    report: &BenchReport,
+    adapter_name: &str,
+    scenarios: &[Scenario],
+    sequences: &[Sequence],
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    match report.minimum_warmup_ms {
+        None => notes.push(
+            "baseline predates the timed warm-up minimum; light-scenario ratios are biased"
+                .to_owned(),
+        ),
+        Some(previous) if previous != minimum_warmup_ms() => notes.push(format!(
+            "baseline used a {previous} ms timed warm-up minimum, this run {} ms; light-scenario ratios are biased",
+            minimum_warmup_ms()
+        )),
+        Some(_) => {}
+    }
+    if report.adapter != adapter_name {
+        notes.push(format!(
+            "baseline adapter {} differs from {adapter_name}; timing ratios compare different GPUs",
+            report.adapter
+        ));
+    }
+    for previous in &report.scenarios {
+        if !scenarios
+            .iter()
+            .any(|scenario| scenario.id == previous.scenario.id)
+        {
+            notes.push(format!(
+                "baseline scenario {} is not in this run",
+                previous.scenario.id
+            ));
+        }
+    }
+    for scenario in scenarios {
+        if !report
+            .scenarios
+            .iter()
+            .any(|previous| previous.scenario.id == scenario.id)
+        {
+            notes.push(format!("scenario {} has no baseline", scenario.id));
+        }
+    }
+    for previous in &report.sequences {
+        if !sequences
+            .iter()
+            .any(|sequence| sequence.id == previous.sequence.id)
+        {
+            notes.push(format!(
+                "baseline sequence {} is not in this run",
+                previous.sequence.id
+            ));
+        }
+    }
+    for sequence in sequences {
+        if !report
+            .sequences
+            .iter()
+            .any(|previous| previous.sequence.id == sequence.id)
+        {
+            notes.push(format!("sequence {} has no baseline", sequence.id));
+        }
+    }
+    notes
+}
+
 fn builtin_scenarios() -> Result<Vec<Scenario>, String> {
     serde_json::from_str(SCENARIOS).map_err(|error| format!("invalid bench scenarios: {error}"))
+}
+
+fn builtin_sequences() -> Result<Vec<Sequence>, String> {
+    parse_sequences(SEQUENCES)
+}
+
+fn parse_sequences(json: &str) -> Result<Vec<Sequence>, String> {
+    let sequences: Vec<Sequence> =
+        serde_json::from_str(json).map_err(|error| format!("invalid bench sequences: {error}"))?;
+    for sequence in &sequences {
+        let keyframes = &sequence.keyframes;
+        if keyframes.len() < 2
+            || keyframes[0].frame != 0
+            || keyframes
+                .windows(2)
+                .any(|pair| pair[1].frame <= pair[0].frame)
+        {
+            return Err(format!(
+                "{}: keyframes must start at frame 0 and their frames increase",
+                sequence.id
+            ));
+        }
+    }
+    Ok(sequences)
 }
 
 fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Options, String> {
@@ -914,7 +1144,12 @@ fn time_mode(
         frames: Vec::new(),
         discarded: 0,
     };
-    for iteration in 0..options.warmup_iterations + timed_frames {
+    // Started after the first frame, which also fills a new scenario's caches.
+    let mut warmup_started = None;
+    let mut warmup_frames = 0;
+    while timed.frames.len() + (timed.discarded as usize) < timed_frames as usize
+        || warmup_frames < options.warmup_iterations
+    {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench frame encoder"),
         });
@@ -933,7 +1168,11 @@ fn time_mode(
             timestamps,
             bindings.upscale.is_some(),
         )?;
-        if iteration < options.warmup_iterations {
+        let warmup_started = *warmup_started.get_or_insert_with(Instant::now);
+        if warmup_frames < options.warmup_iterations
+            || (timed_frames > 0 && warmup_started.elapsed() < MINIMUM_TIMED_WARMUP)
+        {
+            warmup_frames += 1;
             continue;
         }
         let complete = if timestamps.is_some() {
@@ -1022,6 +1261,138 @@ fn time_cold_start(
         first_ms,
         max_ms: totals.iter().copied().fold(0.0, f64::max),
     }))
+}
+
+/// Times shipped frames along `sequence` through one terrain cache and bake,
+/// starting once both have settled at its first view and the GPU has warmed
+/// up there. Also returns each timed frame's baked texels per pixel.
+#[allow(clippy::too_many_arguments)]
+fn time_sequence(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &ModeRenderer,
+    scene_layout: &wgpu::BindGroupLayout,
+    unused: &wgpu::BindGroup,
+    vertices: &wgpu::Buffer,
+    upscaler: &Upscaler,
+    sequence: &Sequence,
+    timestamps: Option<&TimestampReadback>,
+    options: &BenchOptions,
+) -> Result<(TimedFrames, Vec<f32>), String> {
+    let first_view = sequence.view(0);
+    let quality = first_view.graphics_quality()?;
+    let output_size = (options.width, options.height);
+    let scene_size = scene_render_size(
+        options.width,
+        options.height,
+        sequence.render_scale.unwrap_or(1.0),
+    );
+    let surface_sizes = baked_surface_sizes(scene_size, default_options().bake_memory_bytes);
+    let upscale = (scene_size != output_size).then(|| {
+        upscaler.targets(
+            device,
+            scene_size,
+            output_size,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        )
+    });
+    let target = capture_texture(device, options.width, options.height);
+    let mut terrain_cache = TerrainCache::default();
+    let mut baked_surface = BakedSurface::new(surface_sizes);
+    let mut frame = |view: &Scenario| -> Result<(FrameTimes, bool, f32), String> {
+        let view_options = scenario_options(view, options.width, options.height)?;
+        let pixel_footprint_m = visual_pixel_footprint_m(view.view_height_m, scene_size.1);
+        let cache_frame = capture_terrain_cache_frame(&view_options, &mut terrain_cache)?;
+        terrain_cache.commit();
+        let surface_frame = capture_baked_surface_frame(
+            &view_options,
+            pixel_footprint_m,
+            &mut baked_surface,
+            false,
+        )?;
+        baked_surface.commit();
+        let mut uniforms = scene_uniforms(&view_options, &cache_frame, &surface_frame)?;
+        uniforms.world_phases_and_pixel_footprint_m[3] = pixel_footprint_m;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bench sequence scene uniforms"),
+            contents: bytemuck::bytes_of(&uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let scene = bind_group(device, scene_layout, &buffer, "bench sequence scene");
+        let fields = renderer.fields(surface_sizes).bindings(device, &buffer);
+        let field_grids = capture_field_grids(&view_options)?;
+        let bindings = FrameBindings {
+            scenario_id: &view.id,
+            quality,
+            options: &view_options,
+            pixel_footprint_m,
+            baked_surface_sizes: surface_sizes,
+            terrain_cache_rows: (cache_frame.grid_m, cache_frame.texels, cache_frame.level),
+            baked_surface_rows: baked_surface_rows(&surface_frame),
+            scene: &scene,
+            fields: &fields,
+            field_grids: &field_grids,
+            unused,
+            vertices,
+            upscaler,
+            upscale: upscale.as_ref(),
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("bench sequence encoder"),
+        });
+        renderer.encode_frame(
+            queue,
+            &mut encoder,
+            &bindings,
+            &cache_frame,
+            &surface_frame,
+            &target,
+            timestamps.map(|timestamps| &timestamps.query_set),
+        );
+        let times = submit_timed(device, queue, encoder, timestamps, upscale.is_some())?;
+        Ok((
+            times,
+            cache_frame.has_fills() || surface_frame.has_fills(),
+            pixel_footprint_m / surface_frame.grid_m[3],
+        ))
+    };
+    let mut warmup_started = None;
+    let mut warmup_frames = 0;
+    loop {
+        let (_, has_fills, _) = frame(&first_view)?;
+        warmup_frames += 1;
+        if has_fills {
+            continue;
+        }
+        let warmup_started = *warmup_started.get_or_insert_with(Instant::now);
+        if warmup_frames >= options.warmup_iterations
+            && warmup_started.elapsed() >= MINIMUM_TIMED_WARMUP
+        {
+            break;
+        }
+    }
+    let mut timed = TimedFrames {
+        frames: Vec::new(),
+        discarded: 0,
+    };
+    let mut texels_per_pixel = Vec::new();
+    for index in 1..=sequence.frames() {
+        let (times, _, frame_texels_per_pixel) = frame(&sequence.view(index))?;
+        texels_per_pixel.push(frame_texels_per_pixel);
+        let complete = if timestamps.is_some() {
+            times[..3].iter().all(Option::is_some)
+                && times[3].is_some() == upscale.is_some()
+                && times[4..].iter().all(Option::is_some)
+        } else {
+            times[4].is_some()
+        };
+        if complete {
+            timed.frames.push(times);
+        } else {
+            timed.discarded += 1;
+        }
+    }
+    Ok((timed, texels_per_pixel))
 }
 
 /// Submits a frame and returns its pass durations.
@@ -1139,6 +1510,61 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
+    })
+}
+
+fn sequence_report(
+    sequence: Sequence,
+    timed: TimedFrames,
+    texels_per_pixel: &[f32],
+    frame_budget_ms: f64,
+    previous: Option<&SequenceReport>,
+) -> Result<SequenceReport, String> {
+    let pass = |index: usize| {
+        let samples_ms: Vec<f64> = timed
+            .frames
+            .iter()
+            .filter_map(|frame| frame[index])
+            .collect();
+        (!samples_ms.is_empty()).then(|| {
+            let mut sorted = samples_ms.clone();
+            let median_ms = median(&mut sorted);
+            SequenceTiming {
+                mean_ms: samples_ms.iter().sum::<f64>() / samples_ms.len() as f64,
+                median_ms,
+                p95_ms: sorted[(95 * sorted.len()).div_ceil(100) - 1],
+                max_ms: sorted[sorted.len() - 1],
+                samples_ms,
+            }
+        })
+    };
+    let total = pass(4).ok_or("every sequence frame had invalid timestamps")?;
+    Ok(SequenceReport {
+        sequence,
+        fields: pass(0),
+        occluders: pass(1),
+        scene: pass(2),
+        upscale: pass(3),
+        terrain_cache: pass(5),
+        baked_surface: pass(6),
+        frames_over_budget: total
+            .samples_ms
+            .iter()
+            .filter(|&&ms| ms > frame_budget_ms)
+            .count() as u32,
+        texels_per_pixel_min: texels_per_pixel
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min),
+        texels_per_pixel_last: *texels_per_pixel
+            .last()
+            .expect("a sequence has timed frames"),
+        discarded_frames: timed.discarded,
+        baseline: previous.map(|previous| SequenceBaselineComparison {
+            mean_ratio: total.mean_ms / previous.total.mean_ms,
+            p95_ratio: total.p95_ms / previous.total.p95_ms,
+        }),
+        total,
     })
 }
 
@@ -1415,6 +1841,67 @@ fn print_summary(report: &BenchReport) {
             );
         }
     }
+    if let Some(budget_ms) = report.frame_budget_ms
+        && !report.sequences.is_empty()
+    {
+        println!(
+            "sequences: shipped frames from caches settled at the first view; over: frames above {budget_ms} ms; texels/px: baked texels per pixel"
+        );
+        println!(
+            "{:<26} {:>6} {:>7} {:>7} {:>7} {:>7} {:>5} {:>9} {:>8} {:>18} {:>9} {:>9}",
+            "sequence",
+            "frames",
+            "mean",
+            "median",
+            "p95",
+            "max",
+            "over",
+            "cache max",
+            "bake max",
+            "texels/px min,last",
+            "vs base",
+            "base p95"
+        );
+    }
+    let maximum = |timing: Option<&SequenceTiming>| {
+        timing.map_or_else(|| "-".to_owned(), |timing| format!("{:.2}", timing.max_ms))
+    };
+    for sequence in &report.sequences {
+        let total = &sequence.total;
+        let (mean_ratio, p95_ratio) = sequence.baseline.as_ref().map_or_else(
+            || ("-".to_owned(), "-".to_owned()),
+            |baseline| {
+                (
+                    format!("{:.3}x", baseline.mean_ratio),
+                    format!("{:.3}x", baseline.p95_ratio),
+                )
+            },
+        );
+        println!(
+            "{:<26} {:>6} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>5} {:>9} {:>8} {:>18} {:>9} {:>9}",
+            sequence.sequence.id,
+            total.samples_ms.len(),
+            total.mean_ms,
+            total.median_ms,
+            total.p95_ms,
+            total.max_ms,
+            sequence.frames_over_budget,
+            maximum(sequence.terrain_cache.as_ref()),
+            maximum(sequence.baked_surface.as_ref()),
+            format!(
+                "{:.2},{:.2}",
+                sequence.texels_per_pixel_min, sequence.texels_per_pixel_last
+            ),
+            mean_ratio,
+            p95_ratio,
+        );
+        if sequence.discarded_frames > 0 {
+            println!(
+                "  {} frames with reordered timestamps discarded",
+                sequence.discarded_frames
+            );
+        }
+    }
     for note in &report.baseline_notes {
         println!("note: {note}");
     }
@@ -1423,8 +1910,9 @@ fn print_summary(report: &BenchReport) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImageDifference, builtin_scenarios, image_difference, median, pixel_differences,
-        scenario_options,
+        BenchReport, ImageDifference, Sequence, TimedFrames, baseline_notes, builtin_scenarios,
+        builtin_sequences, image_difference, median, parse_sequences, pixel_differences,
+        scenario_options, sequence_report,
     };
 
     #[test]
@@ -1432,6 +1920,229 @@ mod tests {
         assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), 2.5);
         assert_eq!(median(&mut [7.0]), 7.0);
+    }
+
+    fn sequence(keyframes: serde_json::Value) -> Sequence {
+        serde_json::from_value(serde_json::json!({
+            "id": "test",
+            "exercises": "test",
+            "seed": "0x5eed",
+            "worldTimeSeconds": 37,
+            "keyframes": keyframes,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn sequence_views_move_linearly_and_zoom_geometrically_between_keyframes() {
+        let sequence = sequence(serde_json::json!([
+            { "frame": 0, "cameraM": [0, 0], "viewHeightM": 100 },
+            { "frame": 10, "cameraM": [100, -50], "viewHeightM": 400 },
+            { "frame": 11, "cameraM": [-300, 70], "viewHeightM": 30 },
+            { "frame": 20, "cameraM": [-300, 70], "viewHeightM": 30 },
+        ]));
+        let view = |frame| {
+            let view = sequence.view(frame);
+            (view.camera_m, view.view_height_m)
+        };
+
+        assert_eq!(sequence.frames(), 20);
+        assert_eq!(view(0), ([0.0, 0.0], 100.0));
+        assert_eq!(view(5), ([50.0, -25.0], 200.0));
+        assert_eq!(view(10), ([100.0, -50.0], 400.0));
+        assert_eq!(view(11), ([-300.0, 70.0], 30.0));
+        assert_eq!(view(15), ([-300.0, 70.0], 30.0));
+        assert_eq!(view(20), ([-300.0, 70.0], 30.0));
+    }
+
+    #[test]
+    fn sequences_need_increasing_keyframes_from_frame_zero() {
+        let parse = |keyframes: serde_json::Value| {
+            parse_sequences(&serde_json::json!([sequence(keyframes)]).to_string())
+        };
+        let keyframe =
+            |frame| serde_json::json!({ "frame": frame, "cameraM": [0, 0], "viewHeightM": 240 });
+
+        assert!(parse(serde_json::json!([keyframe(0), keyframe(1)])).is_ok());
+        assert!(parse(serde_json::json!([keyframe(0)])).is_err());
+        assert!(parse(serde_json::json!([keyframe(1), keyframe(2)])).is_err());
+        assert!(parse(serde_json::json!([keyframe(0), keyframe(2), keyframe(2)])).is_err());
+        assert!(parse(serde_json::json!([keyframe(0), keyframe(3), keyframe(2)])).is_err());
+    }
+
+    #[test]
+    fn builtin_sequences_have_unique_ids_and_valid_views() {
+        let sequences = builtin_sequences().unwrap();
+        assert!(!sequences.is_empty());
+        for (index, sequence) in sequences.iter().enumerate() {
+            assert!(
+                sequences[..index]
+                    .iter()
+                    .all(|previous| previous.id != sequence.id),
+                "{}",
+                sequence.id
+            );
+            for keyframe in &sequence.keyframes {
+                assert!(
+                    scenario_options(&sequence.view(keyframe.frame), 1920, 1080).is_ok(),
+                    "{} frame {}",
+                    sequence.id,
+                    keyframe.frame
+                );
+            }
+        }
+    }
+
+    fn frames(samples: &[f64]) -> TimedFrames {
+        TimedFrames {
+            frames: samples
+                .iter()
+                .map(|&ms| [Some(ms), None, Some(ms), None, Some(ms), None, None])
+                .collect(),
+            discarded: 2,
+        }
+    }
+
+    #[test]
+    fn sequence_report_keeps_frame_order_and_tail_statistics() {
+        let samples: Vec<f64> = std::iter::once(100.0)
+            .chain((1..20).rev().map(f64::from))
+            .collect();
+        let report = sequence_report(
+            sequence(serde_json::json!([])),
+            frames(&samples),
+            &[0.5, 0.25, 1.1, 1.2],
+            16.7,
+            None,
+        )
+        .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+        for pass in ["fields", "scene", "total"] {
+            assert_eq!(json[pass]["meanMs"], 14.5);
+            assert_eq!(json[pass]["medianMs"], 10.5);
+            assert_eq!(json[pass]["p95Ms"], 19.0);
+            assert_eq!(json[pass]["maxMs"], 100.0);
+            assert_eq!(json[pass]["samplesMs"], serde_json::json!(samples));
+        }
+        assert!(json["occluders"].is_null());
+        assert!(json.get("upscale").is_none());
+        assert_eq!(json["framesOverBudget"], 4);
+        assert_eq!(json["texelsPerPixelMin"], 0.25);
+        assert_eq!(json["texelsPerPixelLast"], 1.2_f32);
+        assert_eq!(json["discardedFrames"], 2);
+
+        let tight = sequence_report(
+            sequence(serde_json::json!([])),
+            frames(&samples),
+            &[1.0],
+            10.0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(tight.frames_over_budget, 10);
+    }
+
+    #[test]
+    fn sequence_report_accepts_one_frame() {
+        let report = sequence_report(
+            sequence(serde_json::json!([])),
+            frames(&[7.0]),
+            &[1.0],
+            16.7,
+            None,
+        )
+        .unwrap();
+        let total = &serde_json::to_value(report).unwrap()["total"];
+        for statistic in ["meanMs", "medianMs", "p95Ms", "maxMs"] {
+            assert_eq!(total[statistic], 7.0);
+        }
+        assert_eq!(total["samplesMs"], serde_json::json!([7.0]));
+    }
+
+    #[test]
+    fn sequence_report_compares_mean_and_p95_with_the_baseline() {
+        let previous = sequence_report(
+            sequence(serde_json::json!([])),
+            frames(&[2.0, 4.0, 4.0, 10.0]),
+            &[1.0],
+            16.7,
+            None,
+        )
+        .unwrap();
+        let report = sequence_report(
+            sequence(serde_json::json!([])),
+            frames(&[3.0, 3.0, 6.0, 8.0]),
+            &[1.0],
+            16.7,
+            Some(&previous),
+        )
+        .unwrap();
+        let baseline = report.baseline.unwrap();
+
+        assert_eq!(baseline.mean_ratio, 1.0);
+        assert_eq!(baseline.p95_ratio, 0.8);
+    }
+
+    #[test]
+    fn baseline_notes_flag_other_warmups_and_unmatched_sequences() {
+        let mut report: BenchReport = serde_json::from_value(serde_json::json!({
+            "adapter": "gpu",
+            "timing": "timestamp-query",
+            "width": 1920,
+            "height": 1080,
+            "warmupIterations": 5,
+            "timedIterations": 20,
+            "contactSheet": "contact-sheet.png",
+            "scenarios": [],
+        }))
+        .unwrap();
+        let mut removed = sequence(serde_json::json!([]));
+        removed.id = "removed".to_owned();
+        report
+            .sequences
+            .push(sequence_report(removed, frames(&[5.0]), &[1.0], 16.7, None).unwrap());
+        let current = [sequence(serde_json::json!([]))];
+        let warmup_notes = |report: &BenchReport| -> Vec<String> {
+            baseline_notes(report, "gpu", &[], &current)
+                .into_iter()
+                .filter(|note| note.contains("warm-up"))
+                .collect()
+        };
+
+        let notes = baseline_notes(&report, "gpu", &[], &current);
+        assert!(notes.contains(&"baseline sequence removed is not in this run".to_owned()));
+        assert!(notes.contains(&"sequence test has no baseline".to_owned()));
+        assert_eq!(
+            warmup_notes(&report),
+            ["baseline predates the timed warm-up minimum; light-scenario ratios are biased"]
+        );
+        report.minimum_warmup_ms = Some(250.0);
+        assert_eq!(
+            warmup_notes(&report),
+            [
+                "baseline used a 250 ms timed warm-up minimum, this run 500 ms; light-scenario ratios are biased"
+            ]
+        );
+        report.minimum_warmup_ms = Some(500.0);
+        assert!(warmup_notes(&report).is_empty());
+    }
+
+    #[test]
+    fn reports_without_sequences_stay_readable_as_baselines() {
+        let json = serde_json::json!({
+            "adapter": "gpu",
+            "timing": "timestamp-query",
+            "width": 1920,
+            "height": 1080,
+            "warmupIterations": 5,
+            "timedIterations": 20,
+            "contactSheet": "contact-sheet.png",
+            "scenarios": [],
+        });
+        let report: BenchReport = serde_json::from_value(json.clone()).unwrap();
+
+        assert!(report.sequences.is_empty());
+        assert_eq!(serde_json::to_value(report).unwrap(), json);
     }
 
     #[test]

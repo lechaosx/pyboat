@@ -54,7 +54,13 @@ Each run writes `report.json`, one PNG per scenario, and a contact sheet; a
 baseline adds timing ratios, image differences, and difference images. On
 thermally limited hardware, consecutive runs can differ by about 5% in timing,
 so repeat runs or start comparisons from a similar thermal state. Use `--help`
-for resolution and frame counts.
+for resolution, frame counts, and the frame budget.
+
+The same run then follows the camera paths in
+[bench-sequences.json](playground/src/bench-sequences.json), timed as shipped
+from caches settled at each path's first view. They show the slow frames that
+cache fills and bakes cause during motion, and the report keeps every frame's
+pass times for finding them.
 
 On phones and other browsers, open the playground with `?bench` (optionally
 `&width=`, `&height=`, `&warmup=`, `&frames=`). It renders the same scenarios
@@ -74,4 +80,4 @@ supports timestamp queries, otherwise submit-to-completion time.
 | Browser presentation | [web](web/src/main.ts) |
 | Playground controls and diagnostics | [playground](playground/src/main.ts), [tooling tests](playground/tests) |
 | Headless capture | [capture](tools/playground-capture/src/main.rs) |
-| Rendering performance bench | [scenarios](playground/src/bench-scenarios.json), [capture bench](tools/playground-capture/src/bench.rs), [browser bench](playground/src/bench.ts) |
+| Rendering performance bench | [scenarios](playground/src/bench-scenarios.json), [sequences](playground/src/bench-sequences.json), [capture bench](tools/playground-capture/src/bench.rs), [browser bench](playground/src/bench.ts) |

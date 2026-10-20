@@ -1,0 +1,143 @@
+[
+  {
+    "id": "zoom-in-slow",
+    "exercises": "Two-second zoom in to boat zoom at the reef coast: one rung change at a time, the standby level baking ahead of each",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 480 },
+      { "frame": 120, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 150, "cameraM": [-8500, 0], "viewHeightM": 240 }
+    ]
+  },
+  {
+    "id": "zoom-in-fast",
+    "exercises": "Half-second zoom in from 2.4 km to boat zoom at the reef coast: rung changes faster than the standby bakes, coarse levels standing in",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 2400 },
+      { "frame": 30, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 60, "cameraM": [-8500, 0], "viewHeightM": 240 }
+    ]
+  },
+  {
+    "id": "zoom-out-slow",
+    "exercises": "Two-second zoom out from boat zoom at the reef coast: coarser rungs read from the standby while the next one bakes",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 120, "cameraM": [-8500, 0], "viewHeightM": 480 },
+      { "frame": 150, "cameraM": [-8500, 0], "viewHeightM": 480 }
+    ]
+  },
+  {
+    "id": "zoom-out-fast",
+    "exercises": "Half-second zoom out from boat zoom to 2.4 km at the reef coast: terrain cache levels and bakes outrun by the view",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 30, "cameraM": [-8500, 0], "viewHeightM": 2400 },
+      { "frame": 60, "cameraM": [-8500, 0], "viewHeightM": 2400 }
+    ]
+  },
+  {
+    "id": "zoom-in-to-8km",
+    "exercises": "One-second zoom in from a 16 km to an 8 km view over the archipelago: wide-view bakes and terrain cache levels",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 16000 },
+      { "frame": 60, "cameraM": [-8500, 0], "viewHeightM": 8000 },
+      { "frame": 90, "cameraM": [-8500, 0], "viewHeightM": 8000 }
+    ]
+  },
+  {
+    "id": "teleport",
+    "exercises": "Jump from the reef coast to the island interior: a cold start from caches that hold nothing of the new view",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 1, "cameraM": [-8950, 800], "viewHeightM": 300 },
+      { "frame": 40, "cameraM": [-8950, 800], "viewHeightM": 300 }
+    ]
+  },
+  {
+    "id": "pan-boat",
+    "exercises": "Boat-speed pan along the reef coast at boat zoom: thin bake and cache strips each frame",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 60, "cameraM": [-8490, 0], "viewHeightM": 240 }
+    ]
+  },
+  {
+    "id": "pan-screen",
+    "exercises": "Pan of one 16:9 screen width a second along the reef coast at boat zoom: wide bake and cache strips each frame",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 60, "cameraM": [-8073.3, 0], "viewHeightM": 240 }
+    ]
+  },
+  {
+    "id": "pan-screen-low-scale-0.5",
+    "exercises": "Screen-width pan along the reef coast at the low tier from half scene resolution, the battery-friendly touch configuration",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 37,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 60, "cameraM": [-8073.3, 0], "viewHeightM": 240 }
+    ],
+    "renderScale": 0.5,
+    "quality": "low"
+  },
+  {
+    "id": "zoom-out-fast-land",
+    "exercises": "Half-second zoom out over the island interior: land, rock and forest bakes behind a lit lower-cloud body",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 1123237,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8950, 800], "viewHeightM": 300 },
+      { "frame": 30, "cameraM": [-8950, 800], "viewHeightM": 3000 },
+      { "frame": 60, "cameraM": [-8950, 800], "viewHeightM": 3000 }
+    ]
+  },
+  {
+    "id": "zoom-in-polar",
+    "exercises": "One-second zoom in at the northern summer ice edge: sea-ice plates, fractures and snow-covered land ice baked at finer rungs",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 15595200,
+    "keyframes": [
+      { "frame": 0, "cameraM": [7100, 29000], "viewHeightM": 2400 },
+      { "frame": 60, "cameraM": [7100, 29000], "viewHeightM": 240 },
+      { "frame": 90, "cameraM": [7100, 29000], "viewHeightM": 240 }
+    ]
+  },
+  {
+    "id": "pan-screen-polar",
+    "exercises": "Pan of one 16:9 screen width a second along the ice edge: sea-ice and land-ice strips baked each frame",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 15595200,
+    "keyframes": [
+      { "frame": 0, "cameraM": [7100, 29000], "viewHeightM": 2400 },
+      { "frame": 60, "cameraM": [11367, 29000], "viewHeightM": 2400 }
+    ]
+  },
+  {
+    "id": "teleport-polar",
+    "exercises": "Jump from the reef coast to the ice edge: a cold start of sea-ice and land-ice bakes",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 15595200,
+    "keyframes": [
+      { "frame": 0, "cameraM": [-8500, 0], "viewHeightM": 240 },
+      { "frame": 1, "cameraM": [7100, 29000], "viewHeightM": 2400 },
+      { "frame": 40, "cameraM": [7100, 29000], "viewHeightM": 2400 }
+    ]
+  }
+]
