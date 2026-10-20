@@ -2,15 +2,16 @@
   "private": true,
   "scripts": {
     "build:wasm": "wasm-pack build crates/browser --target bundler --out-dir pkg-production --no-pack -- --target-dir target/wasm-production",
+    "build:wasm:dev": "wasm-pack build crates/browser --target bundler --out-dir pkg-production --no-pack --dev -- --target-dir target/wasm-production",
     "build:wasm:playground": "wasm-pack build crates/browser --target bundler --out-dir pkg-playground --no-pack -- --target-dir target/wasm-playground --features playground",
     "build:wasm:playground:dev": "wasm-pack build crates/browser --target bundler --out-dir pkg-playground --no-pack --dev -- --target-dir target/wasm-playground --features playground",
     "build:web": "npm run build --workspace web",
     "build:playground": "npm run build --workspace procedural-lab",
     "build": "npm run build:playground && npm run build:web",
-    "dev:rust": "cargo-watch --watch crates/browser/src --watch crates/protocol/src --watch crates/simulation/src -s 'npm run build:wasm -- --dev'",
+    "dev:rust": "cargo-watch --watch crates/browser/src --watch crates/game/src --watch crates/protocol/src --watch crates/simulation/src -s 'npm run build:wasm:dev'",
     "dev:web": "npm run dev --workspace web",
     "dev:playground": "npm run dev --workspace procedural-lab",
-    "dev": "npm run build:wasm -- --dev && (npm run dev:rust & npm run dev:web)",
+    "dev": "npm run build:wasm:dev && (npm run dev:rust & npm run dev:web)",
     "test": "node --test playground/tests/*.test.ts"
   },
   "workspaces": ["crates/browser", "web", "playground"],
