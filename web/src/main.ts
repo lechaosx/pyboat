@@ -107,7 +107,7 @@ try {
       const worldY = -(gamepad?.axes[1] ?? 0);
       game.set_player_input(
         keyboardAxis("KeyW", "KeyS"),
-        keyboardAxis("KeyD", "KeyA"),
+        keyboardAxis("KeyA", "KeyD"),
         worldX,
         worldY,
       );
