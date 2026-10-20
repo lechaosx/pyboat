@@ -55,7 +55,6 @@ struct Options {
     cloud_motion_seconds: f64,
     diagnostic: ShaderSelection,
     quality: GraphicsQuality,
-    cloud_shadow_taps: u32,
     legacy_shadow_look: bool,
     light_balance: [f32; 4],
     cloud_rendering: [f32; 4],
@@ -584,7 +583,6 @@ struct CaptureReport {
     view_cloud_motion_m: [f32; 4],
     diagnostic: String,
     quality: &'static str,
-    cloud_shadow_taps: u32,
     legacy_shadow_look: bool,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
@@ -624,7 +622,6 @@ fn default_options() -> Options {
         cloud_motion_seconds: 0.0,
         diagnostic: scene_selection(),
         quality: GraphicsQuality::High,
-        cloud_shadow_taps: 3,
         legacy_shadow_look: false,
         light_balance: [1.0; 4],
         cloud_rendering: [1.0, 1.0, 1.0, 1.0],
@@ -698,12 +695,6 @@ fn parse_options() -> Result<Command, String> {
                 let name = value(&mut arguments)?;
                 options.quality = GraphicsQuality::parse(&name)
                     .ok_or_else(|| format!("invalid value for --quality: {name}"))?;
-            }
-            "--cloud-shadow-taps" => {
-                options.cloud_shadow_taps = parse(&value(&mut arguments)?, &argument)?;
-                if ![1, 3].contains(&options.cloud_shadow_taps) {
-                    return Err("--cloud-shadow-taps must be 1 or 3".to_owned());
-                }
             }
             "--legacy-shadow-look" => options.legacy_shadow_look = true,
             "--light-balance" => {
@@ -1198,11 +1189,6 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 16.0)],
         ),
-        "lighting_cloud_disc_transverse_spread" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 17.0)],
-        ),
         "lighting_projected_low_cloud_direct_color" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1380,8 +1366,6 @@ fn print_help() {
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids)\n\
            --quality low|medium|high  graphics tier of scene compositions (default high)\n\
-           --cloud-shadow-taps 1|3  directions averaged across the Sun's or Moon's disc per\n\
-                                  cloud-shadow lookup in scene compositions (default 3, as shipped)\n\
            --legacy-shadow-look   scene compositions fade cloud shadows from a light height of\n\
                                   0.22, cap landform shadows at 70%, and fix their reach\n\n\
            --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
@@ -1657,24 +1641,17 @@ async fn render(options: &Options) -> Result<(), String> {
         [
             options.diagnostic.constants.as_slice(),
             options.quality.scene_constants(),
-            &[
-                ("CLOUD_SHADOW_TAPS", f64::from(options.cloud_shadow_taps)),
-                (
-                    "LEGACY_SHADOW_LOOK",
-                    f64::from(u8::from(options.legacy_shadow_look)),
-                ),
-            ],
+            &[(
+                "LEGACY_SHADOW_LOOK",
+                f64::from(u8::from(options.legacy_shadow_look)),
+            )],
         ]
         .concat()
-    } else if options.quality == GraphicsQuality::High
-        && options.cloud_shadow_taps == 3
-        && !options.legacy_shadow_look
-    {
+    } else if options.quality == GraphicsQuality::High && !options.legacy_shadow_look {
         options.diagnostic.constants.clone()
     } else {
         return Err(
-            "--quality, --cloud-shadow-taps, and --legacy-shadow-look apply only to scene compositions"
-                .to_owned(),
+            "--quality and --legacy-shadow-look apply only to scene compositions".to_owned(),
         );
     };
     let shader_source = options.diagnostic.module.map_or_else(
@@ -2345,7 +2322,6 @@ fn capture_report(
         view_cloud_motion_m: view_cloud_motion_m(options),
         diagnostic: options.diagnostic.id.clone(),
         quality: options.quality.name(),
-        cloud_shadow_taps: options.cloud_shadow_taps,
         legacy_shadow_look: options.legacy_shadow_look,
         derived: DerivedOutput {
             current_air_temperature_c: sample.weather.surface_air_temperature_c,

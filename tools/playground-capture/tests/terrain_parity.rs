@@ -1531,26 +1531,10 @@ fn below_datum_water_elevation_changes_cloud_projection() {
     assert!(scalar_debug_amount(&image) > 0.98);
 }
 
+/// A disc wholly above the horizon casts the cloud shadow its centre would:
+/// each light takes one tap per pixel even where the disc spans many pixels.
 #[test]
-fn resolvable_cloud_disc_samples_spread_across_both_axes() {
-    let image = render_diagnostic_image_with_view_at(
-        WorldGeometry::default(),
-        Vector::ZERO,
-        0.0,
-        1.0,
-        "lighting_cloud_disc_transverse_spread",
-        1,
-        1,
-    );
-    let clipped_to_full_spread = 2.0 * scalar_debug_amount(&image);
-    assert!(
-        clipped_to_full_spread > 0.8 && clipped_to_full_spread < 1.2,
-        "clipped/full transverse spread ratio was {clipped_to_full_spread}",
-    );
-}
-
-#[test]
-fn cloud_shadow_softness_responds_to_celestial_disc_radius() {
+fn cloud_shadows_do_not_soften_with_disc_radius() {
     let image = render_diagnostic_image_with_view_at(
         WorldGeometry::default(),
         Vector::ZERO,
@@ -1567,13 +1551,13 @@ fn cloud_shadow_softness_responds_to_celestial_disc_radius() {
         .map(|pixel| scalar_debug_amount(pixel))
         .fold(0.0, f32::max);
     assert!(
-        maximum > 0.02,
-        "disc radius did not change cloud shadows: {maximum}"
+        maximum < 0.002,
+        "disc radius changed cloud shadows: {maximum}"
     );
 }
 
 #[test]
-fn low_cloud_canopy_shadow_softness_responds_to_celestial_disc_radius() {
+fn canopy_shadows_on_low_clouds_do_not_soften_with_disc_radius() {
     let image = render_diagnostic_image_with_view_at(
         WorldGeometry::default(),
         Vector::ZERO,
@@ -1590,8 +1574,8 @@ fn low_cloud_canopy_shadow_softness_responds_to_celestial_disc_radius() {
         .map(|pixel| scalar_debug_amount(pixel))
         .fold(0.0, f32::max);
     assert!(
-        maximum > 0.02,
-        "disc radius did not change canopy shadows on low clouds: {maximum}"
+        maximum < 0.002,
+        "disc radius changed canopy shadows on low clouds: {maximum}"
     );
 }
 

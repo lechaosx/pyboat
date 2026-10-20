@@ -116,7 +116,10 @@ See [README.md](README.md) for what is playable now and
   overcast can remain softly luminous.
 - **[Explicit]** Celestial lighting follows world curvature, allowing lower
   clouds to retain filtered edge and internal sunlight after ground sunset.
-  Finite Sun/Moon discs keep cloud and landform shadows physically soft.
+- **[Explicit]** Finite Sun and Moon discs keep landform shadows physically soft.
+- **[Explicit]** Cloud shadows take their softness from the cloud field.
+- **[Explicit]** Sunrise, sunset, moonrise, and moonset change light and
+  shadows gradually.
 - **[Explicit]** A tilted lunar orbit produces paired solar/lunar eclipse seasons.
   Lunar penumbra subtly dims moonlight; totality becomes dim orange-red from
   atmospheric refraction.

@@ -129,7 +129,6 @@ type State = {
   canopyShadowStrength: number;
   cloudShadowDensity: number;
   cloudShadowOpacity: number;
-  oneTapCloudShadows: number;
   legacyShadowLook: number;
   terrainScale: number;
   elevationScale: number;
@@ -227,7 +226,6 @@ const defaults: State = {
   canopyShadowStrength: 1,
   cloudShadowDensity: 0.85,
   cloudShadowOpacity: 1,
-  oneTapCloudShadows: 0,
   legacyShadowLook: 0,
   terrainScale: 1,
   elevationScale: 3,
@@ -591,7 +589,6 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "range", key: "canopyShadowStrength", label: "Canopy depth", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudShadowDensity", label: "Density", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudShadowOpacity", label: "Opacity", min: 0, max: 1, step: 0.05 },
-      { type: "toggle", key: "oneTapCloudShadows", label: "One-tap penumbra" },
     ],
   },
   {
@@ -2140,7 +2137,6 @@ let tierCompilationStatus = "";
 function scenePipelineVariant(): string {
   return [
     Math.round(state.graphicsQuality),
-    state.oneTapCloudShadows > 0.5 ? 1 : 3,
     state.legacyShadowLook > 0.5 ? 1 : 0,
   ].join(":");
 }
@@ -2148,10 +2144,9 @@ function scenePipelineVariant(): string {
 function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePipelines> {
   let pipelines = scenePipelinesByVariant.get(variant);
   if (!pipelines) {
-    const [quality, cloudShadowTaps, legacyShadowLook] = variant.split(":").map(Number);
+    const [quality, legacyShadowLook] = variant.split(":").map(Number);
     const constants = {
       ...graphics_quality_scene_constants(graphicsQualities[quality!]!) as Record<string, number>,
-      CLOUD_SHADOW_TAPS: cloudShadowTaps!,
       LEGACY_SHADOW_LOOK: legacyShadowLook!,
     };
     pipelines = Promise.all([

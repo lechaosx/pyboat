@@ -114,7 +114,7 @@
   },
   {
     "id": "twilight-sun-moon",
-    "exercises": "Low Sun with the Moon up over an island: both direct sources lit, resolved three-tap shadows, long landform shadows",
+    "exercises": "Low Sun with the Moon up over an island: both direct sources lit, cloud shadows from both, long landform shadows",
     "seed": "0x5eed",
     "cameraM": [-10000, 2000],
     "viewHeightM": 1500,

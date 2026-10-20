@@ -161,66 +161,21 @@ fn upper_cloud_transmittance_at_low_cloud_for_source(
     if !lit && !EVALUATE_ALL_BRANCHES {
         return 1.0;
     }
-    let query = cloud_shadow_query(
-        low_cloud_light,
-        source,
-        false,
-        true,
+    let light = cloud_shadow_direction(low_cloud_light, source);
+    let upper_optical_depth = tuning.cloud_shadows.y * sampled_upper_cloud_optical_depth_at(
+        projected_cloud_position(
+            low_cloud_light.position_m,
+            low_cloud_light.height_m,
+            WEATHER_CANOPY_HEIGHT_M,
+            light,
+        ),
     );
-    var transmittance = 1.0;
-    if !query.resolved || EVALUATE_ALL_BRANCHES {
-        let representative_light = cloud_shadow_query_direction(query, 0u);
-        let projected_position_m = cloud_shadow_query_projection(
-            query,
-            0u,
-        ).upper_position_m;
-        let upper_optical_depth = tuning.cloud_shadows.y
-            * sampled_upper_cloud_optical_depth_at(projected_position_m);
-        transmittance = mix(
-            1.0,
-            cloud_layer_transmittance(
-                upper_optical_depth,
-                representative_light,
-                query.receiver.horizon_z,
-            ),
-            layer_visibility.w,
-        );
-    }
-    if query.resolved || EVALUATE_ALL_BRANCHES {
-        transmittance = select(
-            transmittance,
-            resolved_upper_cloud_transmittance(query),
-            query.resolved,
-        );
-    }
+    let transmittance = mix(
+        1.0,
+        cloud_layer_transmittance(upper_optical_depth, light, low_cloud_light.horizon_z),
+        layer_visibility.w,
+    );
     return select(1.0, transmittance, lit);
-}
-
-fn resolved_upper_cloud_transmittance(query: CloudShadowQuery) -> f32 {
-    let lower_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(query.lower_projection.upper_position_m);
-    let upper_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(query.upper_projection.upper_position_m);
-    let side_optical_depth = tuning.cloud_shadows.y
-        * sampled_upper_cloud_optical_depth_at(query.side_projection.upper_position_m);
-    let transmittance = (1.0 / 3.0) * (
-        cloud_layer_transmittance(
-            lower_optical_depth,
-            query.directions.lower,
-            query.receiver.horizon_z,
-        )
-            + cloud_layer_transmittance(
-                upper_optical_depth,
-                query.directions.upper,
-                query.receiver.horizon_z,
-            )
-            + cloud_layer_transmittance(
-                side_optical_depth,
-                query.directions.side,
-                query.receiver.horizon_z,
-            )
-    );
-    return mix(1.0, transmittance, layer_visibility.w);
 }
 
 fn upper_cloud_transmittance_at_low_cloud(
@@ -247,12 +202,12 @@ fn fragment_surface_color(
     let layer = fragment_layer_visibility();
     let contribution = fragment_light_visibility();
     let depths = celestial_cloud_shadow_depths_at(direct_light);
-    let sun_transmittance = cloud_disc_shadow_transmittance(
+    let sun_transmittance = cloud_shadow_transmittance(
         layer.y * depths.sun.low + layer.z * depths.sun.upper,
         direct_light.sun_direction,
         direct_light.horizon_z,
     );
-    let moon_transmittance = cloud_disc_shadow_transmittance(
+    let moon_transmittance = cloud_shadow_transmittance(
         layer.y * depths.moon.low + layer.z * depths.moon.upper,
         direct_light.moon_direction,
         direct_light.horizon_z,

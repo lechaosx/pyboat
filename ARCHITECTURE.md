@@ -190,9 +190,12 @@ and verification details.
   altitude-dependent solar overlap and shifting paired eclipse seasons. Combined
   geometry repeats after 28 years.
 - **[Explicit]** Cloud and landform shadow projection uses physical altitude,
-  spherical curvature, connected celestial direction, and finite-disc penumbrae
-  at every zoom. Projected positions retain unbounded cylindrical coordinates;
-  receiver-local geometry permits cloud sunlight after surface sunset.
+  spherical curvature, and connected celestial direction at every zoom.
+  Projected positions retain unbounded cylindrical coordinates; receiver-local
+  geometry permits cloud sunlight after surface sunset.
+- **[Explicit]** Landform shadows have finite-disc penumbrae at every zoom.
+- **[Explicit]** Cloud shadows sample each light once per pixel; their softness
+  comes from the cloud field.
 - **[Explicit]** Every shadow type removes the same share of direct light for the
   same occlusion: a landform blocking the whole disc is as dark as the densest cloud.
 - **[Explicit]** Under a low light above the cutoff, horizon dimming and
@@ -417,7 +420,6 @@ and verification details.
 | --- | --- |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
-| Cloud-shadow taps | Whether one tap at the visible disc's centre may replace the three-tap disc average for cloud-shadow penumbrae |
 | Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |
 | Level switches | Whether switching baked levels needs blending, judged by eye |
 | Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
