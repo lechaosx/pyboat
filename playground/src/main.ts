@@ -1,6 +1,7 @@
 import {
   PlaygroundBakedSurface,
   PlaygroundExposure,
+  PlaygroundFieldGridHistory,
   PlaygroundFramePacer,
   PlaygroundResolutionController,
   PlaygroundTerrainCache,
@@ -1154,6 +1155,7 @@ const terrainCacheFillBuffer = device.createBuffer({
 // The fill schedule advances only when a frame encodes its fill pass, so frames
 // that are skipped or rendered before the pass compiles leave nothing stale.
 const terrainCache = new PlaygroundTerrainCache();
+const fieldGridHistory = new PlaygroundFieldGridHistory();
 let terrainCacheFill: Uint8Array = new Uint8Array(0);
 let terrainCacheWorkgroups = 0;
 type TerrainCachePass = {
@@ -1615,6 +1617,7 @@ function updateUniforms(
     terrainCache,
     productionShaders ? undefined : state.terrainScale,
     bakedSurface,
+    fieldGridHistory,
   );
   sceneUniforms = frame.uniforms;
   fieldGrids = frame.field_grids;

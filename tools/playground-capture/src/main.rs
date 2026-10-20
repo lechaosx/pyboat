@@ -2,10 +2,11 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceSizes, BakedSurfaceTextures,
-    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids,
-    GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
-    TerrainCachePass, baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
-    sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
+    FieldGrids, GraphicsQuality, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache,
+    TerrainCacheFrame, TerrainCachePass, baked_surface_sizes, exposure_target, field_grids,
+    ocean_wave_mode_uniforms, sample_view_cloud_state, seasonal_phase_factors, view_width_m,
+    visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -2057,6 +2058,7 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
             landform_shadow_reach_m: options.landform_lighting[2],
             terrain_elevation_scale: FieldGridTuning::PRODUCTION.terrain_elevation_scale,
         },
+        &mut FieldGridHistory::default(),
     ))
 }
 

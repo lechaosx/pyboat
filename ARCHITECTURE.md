@@ -156,6 +156,11 @@ and verification details.
 - **[Implicit]** Per-frame field grids have fixed texel budgets; windows too
   wide for one coarsen its spacing along each overflowing axis instead of
   allocating more memory.
+- **[Implicit]** Each occluder layer also has a total texel budget; a layer
+  over it coarsens its finer axis first.
+- **[Implicit]** An occluder layer keeps its previous spacing until a finer one
+  fits well within its budgets, so a window crossing a threshold while the
+  camera pans changes lattice once.
 - **[Explicit]** One surface normal combines authoritative relief with visual
   material detail before celestial lighting.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope

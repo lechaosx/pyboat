@@ -35,16 +35,16 @@ use crate::frame_queue::FrameQueue;
 use crate::{
     BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize,
     BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
-    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridTuning, FieldGrids, FramePacer,
-    GraphicsSettings, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache,
-    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
-    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
-    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
-    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
-    webtransport_server_url, windsock_extension, zoom_view_height_m,
+    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
+    FieldGrids, FramePacer, GraphicsSettings, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient,
+    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController,
+    SCENE_SHADER, TerrainCache, TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion,
+    ViewExposure, Windsock, append_reliable_server_message_chunk, baked_surface_sizes,
+    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
+    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
+    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
+    scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
+    visual_pixel_footprint_m, webtransport_server_url, windsock_extension, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -313,6 +313,21 @@ impl PlaygroundBakedSurface {
 #[wasm_bindgen]
 pub fn playground_baked_surface_fill_bytes() -> usize {
     crate::baked_surface::BAKED_SURFACE_FILL_BYTES
+}
+
+/// The lab's occluder grid spacing, kept between frames.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct PlaygroundFieldGridHistory(FieldGridHistory);
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundFieldGridHistory {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 /// The lab's terrain cache schedule, kept between frames.
@@ -713,6 +728,7 @@ pub fn playground_scene_uniforms(
     terrain_cache: &mut PlaygroundTerrainCache,
     terrain_horizontal_scale: Option<f32>,
     baked_surface: &mut PlaygroundBakedSurface,
+    field_grid_history: &mut PlaygroundFieldGridHistory,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
     let geometry = WorldGeometry::new(world_width_m, world_height_m)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -748,6 +764,7 @@ pub fn playground_scene_uniforms(
             landform_shadow_reach_m,
             terrain_elevation_scale,
         },
+        &mut field_grid_history.0,
     );
     let (occluder_field_grid_m, occluder_field_texels) = grids.occluder_uniforms();
     let terrain_cache_frame = terrain_cache.0.frame(
@@ -1223,6 +1240,7 @@ struct Renderer {
     upscale_targets: Option<UpscaleTargets>,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
+    field_grid_history: FieldGridHistory,
     exposure: ViewExposure,
     vision_noise_phase: f64,
     graphics: GraphicsSettings,
@@ -1582,6 +1600,7 @@ impl Renderer {
             upscale_targets: None,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
+            field_grid_history: FieldGridHistory::default(),
             exposure: ViewExposure::default(),
             vision_noise_phase: 0.0,
             frame_pacer: FramePacer::default(),
@@ -1710,6 +1729,7 @@ impl Renderer {
             [view_width_m, view_height_m],
             view_cloud_motion_m,
             FieldGridTuning::PRODUCTION,
+            &mut self.field_grid_history,
         );
         let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
         let terrain_cache_frame = self.terrain_cache.frame(

@@ -15,8 +15,8 @@ pub use baked_surface::{
 pub use baked_surface::{BakedSurfacePass, BakedSurfaceTextures};
 pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
-    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridTuning, FieldGrids,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridHistory,
+    FieldGridTuning, FieldGrids, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, field_grids,
 };
 pub use graphics::{
     FramePacer, GraphicsQuality, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController,

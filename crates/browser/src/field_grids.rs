@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use game::{celestial_directions_at_height, celestial_orbit, world_celestial_conditions};
@@ -19,12 +20,20 @@ const ENVIRONMENT_FIELD_SPACING_M: f64 = 64.0;
 /// Texels per axis of each occluder field layer; at 8 m this spans the 4 km
 /// shadow footprint of a boat-zoom view under a light at the sea-level cutoff.
 pub const OCCLUDER_FIELD_TEXELS: u32 = 512;
+/// Texels a frame evaluates per occluder layer at most. On a Radeon 780M the
+/// occluder pass of the 16 km bench views then takes about 0.8 ms, and the
+/// low-cloud body grid of 16:9 views up to 1.5 km tall keeps its spacing on
+/// both axes.
+const OCCLUDER_LAYER_TEXELS: u32 = OCCLUDER_FIELD_TEXELS * OCCLUDER_FIELD_TEXELS / 2;
+/// A layer keeps its previous spacing while that stays within budget and a
+/// finer one would not fit in this share of the budgets, so a window that
+/// hovers at a threshold while the camera pans keeps its lattice.
+const OCCLUDER_REFINE_SHARE: f64 = 0.8;
 /// Low-cloud body, Sun and Moon low-cloud shadow depth, canopy depth, and broad
 /// landform elevation. Keep synchronized with occluder-fields.wgsl.
 pub const OCCLUDER_FIELD_LAYERS: usize = 5;
 /// The finest low-cloud latent octave spans 40 m per unit body size; ten texels
-/// per wavelength keep bilinear error near 5% of that octave, and the spacing
-/// stays below the finite-disc penumbra, about 8 m at the cloud base under a high Sun.
+/// per wavelength keep bilinear error near 5% of that octave.
 const LOW_CLOUD_FIELD_SPACING_M: f64 = 4.0;
 /// The canopy threshold turns its 2 km finest latent octave into edges about
 /// 100 m wide; three texels span such an edge.
@@ -89,6 +98,12 @@ pub struct FieldGrids {
     pub occluders: [FieldGrid; OCCLUDER_FIELD_LAYERS],
 }
 
+/// Each occluder layer's spacing doublings from the previous frame.
+#[derive(Default)]
+pub struct FieldGridHistory {
+    occluder_doublings: [Option<[i32; 2]>; OCCLUDER_FIELD_LAYERS],
+}
+
 impl FieldGrids {
     /// The scene shader's `occluder_field_grid_m` and `occluder_field_texels` rows.
     pub fn occluder_uniforms(
@@ -145,6 +160,7 @@ pub fn field_grids(
     view_size_m: [f32; 2],
     view_cloud_motion_m: [f32; 4],
     tuning: FieldGridTuning,
+    history: &mut FieldGridHistory,
 ) -> FieldGrids {
     let world_width_m = f64::from(world_geometry.width_m());
     let camera = camera_m.map(f64::from);
@@ -173,53 +189,67 @@ pub fn field_grids(
     ];
     let low_cloud_spacing_m =
         LOW_CLOUD_FIELD_SPACING_M * f64::from(tuning.low_cloud_body_size.clamp(0.25, 4.0));
-    let occluder = |anchor: [f64; 2], region: Region, spacing_m: f64| {
-        field_grid(
-            world_width_m,
-            camera,
-            anchor,
-            region.or_origin(),
-            spacing_m,
-            OCCLUDER_FIELD_TEXELS,
-        )
-    };
-    let occluders = [
-        occluder(low_cloud_anchor, view, low_cloud_spacing_m),
-        occluder(
+    let layers = [
+        (low_cloud_anchor, view, low_cloud_spacing_m),
+        (
             low_cloud_anchor,
             footprints.low_cloud[0],
             low_cloud_spacing_m,
         ),
-        occluder(
+        (
             low_cloud_anchor,
             footprints.low_cloud[1],
             low_cloud_spacing_m,
         ),
-        occluder(canopy_anchor, footprints.canopy, CANOPY_FIELD_SPACING_M),
-        occluder([0.0; 2], footprints.landform, LANDFORM_FIELD_SPACING_M),
+        (canopy_anchor, footprints.canopy, CANOPY_FIELD_SPACING_M),
+        ([0.0; 2], footprints.landform, LANDFORM_FIELD_SPACING_M),
     ];
+    let mut layer = 0;
+    let occluders = layers.map(|(anchor, region, spacing_m)| {
+        let region = wrapped_region(world_width_m, region.or_origin());
+        let doublings = occluder_doublings(
+            world_width_m,
+            region,
+            spacing_m,
+            history.occluder_doublings[layer],
+        );
+        history.occluder_doublings[layer] = Some(doublings);
+        layer += 1;
+        field_grid_with_spacing(
+            camera,
+            anchor,
+            region,
+            [0, 1].map(|axis| lattice_spacing_m(world_width_m, spacing_m, axis, doublings[axis])),
+        )
+    });
     // Low-cloud texels reconstruct their weather from the environment grid,
     // which covers them. Its spacing fits the farthest footprint any light
     // could cast, so it follows zoom alone: footprints end within that reach
     // of the view, and a low-cloud grid's texels within two of its spacings
-    // beyond its region.
+    // beyond its region. A layer inside that bound fits its budgets, and
+    // their refine share, once both axes reach the bound's coarser doubling
+    // under them, so neither axis passes it.
     let world_radius_m = world_width_m / TAU;
-    let footprint_reach_m = projection_distance_m(
+    let footprint_reach_m = Receivers::Surface {
+        highest_m: highest_receiver_m,
+    }
+    .farthest_projection_m(
         world_radius_m,
-        lowest_shadow_light_rad(world_radius_m, highest_receiver_m)
-            - LARGEST_DISC_ANGULAR_RADIUS_RAD,
-        LOWEST_SHADOW_RECEIVER_M,
+        -FRAC_PI_2,
+        FRAC_PI_2,
         LOW_CLOUD_BASE_HEIGHT_M,
-    );
-    let footprint_bound = wrapped_region(world_width_m, view.expanded(footprint_reach_m));
-    let low_cloud_texel_reach_m = field_spacing_m(
-        world_width_m,
-        footprint_bound,
-        low_cloud_spacing_m,
-        OCCLUDER_FIELD_TEXELS,
     )
-    .into_iter()
-    .fold(0.0, f64::max);
+    .unwrap_or(0.0);
+    let footprint_bound = wrapped_region(world_width_m, view.expanded(footprint_reach_m));
+    let coarsest_doublings =
+        occluder_doubling_band(world_width_m, footprint_bound, low_cloud_spacing_m)
+            .into_iter()
+            .flatten()
+            .fold(0, i32::max);
+    let low_cloud_texel_reach_m = [0, 1]
+        .map(|axis| lattice_spacing_m(world_width_m, low_cloud_spacing_m, axis, coarsest_doublings))
+        .into_iter()
+        .fold(0.0, f64::max);
     let environment_spacing = field_spacing_m(
         world_width_m,
         wrapped_region(
@@ -228,6 +258,7 @@ pub fn field_grids(
         ),
         ENVIRONMENT_FIELD_SPACING_M,
         ENVIRONMENT_FIELD_TEXELS,
+        ENVIRONMENT_FIELD_TEXELS * ENVIRONMENT_FIELD_TEXELS,
     );
     let mut environment_region = view;
     for grid in &occluders[..3] {
@@ -375,17 +406,11 @@ fn shadow_footprints(
                     .into_iter()
                     .enumerate()
             {
-                // The highest receivers take the lowest taps and the lowest
-                // receivers project farthest along a tap; pairing them bounds both.
-                let surface_receivers = Receivers {
-                    lowest_height_m: LOWEST_SHADOW_RECEIVER_M,
-                    lit_elevation_rad: shadow_lit_rad,
-                    lowest_tap_elevation_rad: shadow_lit_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                let surface_receivers = Receivers::Surface {
+                    highest_m: highest_receiver_m,
                 };
-                let low_cloud_receivers = Receivers {
-                    lowest_height_m: LOW_CLOUD_BASE_HEIGHT_M,
-                    lit_elevation_rad: low_cloud_horizon_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD,
-                    lowest_tap_elevation_rad: low_cloud_horizon_rad,
+                let low_cloud_receivers = Receivers::LowCloud {
+                    horizon_rad: low_cloud_horizon_rad,
                 };
                 // Landform receivers lie below the canopy, so its parallax bounds theirs.
                 let landform_cone_rad = cell_rotation_rad
@@ -454,18 +479,16 @@ fn shadow_footprints(
 }
 
 #[derive(Clone, Copy)]
-struct Receivers {
-    lowest_height_m: f64,
-    /// Lowest disc-centre elevation at which these receivers take shadow taps.
-    lit_elevation_rad: f64,
-    lowest_tap_elevation_rad: f64,
+enum Receivers {
+    /// Ground and water from the lowest shadow receiver up to `highest_m`.
+    Surface { highest_m: f64 },
+    /// The lower-cloud base, shadowed while any of the disc clears its horizon.
+    LowCloud { horizon_rad: f64 },
 }
 
 impl Receivers {
-    /// Displacements from receivers at `lowest_height_m` or higher to a layer
-    /// along directions within `cone_rad` of `direction`; `None` when no such
-    /// direction is lit. Lower directions and lower receivers project farther,
-    /// so the farthest displacement comes from the lowest tap of the lowest receiver.
+    /// Displacements from these receivers to a layer along directions within
+    /// `cone_rad` of `direction`; `None` when no such direction is lit.
     fn projected_offsets(
         self,
         world_radius_m: f64,
@@ -475,16 +498,97 @@ impl Receivers {
     ) -> Option<Region> {
         let [east, north, up] = direction.map(f64::from);
         let elevation_rad = up.atan2(east.hypot(north));
-        if elevation_rad + cone_rad < self.lit_elevation_rad {
-            return None;
-        }
-        let distance_m = projection_distance_m(
+        let distance_m = self.farthest_projection_m(
             world_radius_m,
-            (elevation_rad - cone_rad).max(self.lowest_tap_elevation_rad),
-            self.lowest_height_m,
+            elevation_rad - cone_rad,
+            elevation_rad + cone_rad,
             layer_height_m,
-        );
+        )?;
         Some(offsets_toward(direction, cone_rad, distance_m))
+    }
+
+    /// Farthest surface distance to a layer from a receiver shadowed by a light
+    /// between the two elevations. Lower taps and lower receivers project
+    /// farther. A surface receiver takes taps down to its own cutoff less the
+    /// disc radius, and raising it lowers that cutoff; the farthest tap then
+    /// comes from the lowest receiver or from the one whose cutoff tap meets
+    /// `lowest_rad`, because along cutoff taps reach grows with receiver height
+    /// above sea level while the receiver stays below half the layer height.
+    fn farthest_projection_m(
+        self,
+        world_radius_m: f64,
+        lowest_rad: f64,
+        highest_rad: f64,
+        layer_height_m: f64,
+    ) -> Option<f64> {
+        match self {
+            Self::LowCloud { horizon_rad } => {
+                (highest_rad >= horizon_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD).then(|| {
+                    projection_distance_m(
+                        world_radius_m,
+                        lowest_rad.max(horizon_rad),
+                        LOW_CLOUD_BASE_HEIGHT_M,
+                        layer_height_m,
+                    )
+                })
+            }
+            Self::Surface { highest_m } => {
+                if highest_rad < lowest_shadow_light_rad(world_radius_m, highest_m) {
+                    return None;
+                }
+                let tap_rad = |height_m: f64| {
+                    lowest_rad.max(
+                        lowest_shadow_light_rad(world_radius_m, height_m)
+                            - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                    )
+                };
+                let reach_m = |height_m: f64| {
+                    projection_distance_m(
+                        world_radius_m,
+                        tap_rad(height_m),
+                        height_m,
+                        layer_height_m,
+                    )
+                };
+                if highest_m > 0.5 * layer_height_m {
+                    return Some(projection_distance_m(
+                        world_radius_m,
+                        lowest_rad.max(
+                            lowest_shadow_light_rad(world_radius_m, highest_m)
+                                - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                        ),
+                        LOWEST_SHADOW_RECEIVER_M,
+                        layer_height_m,
+                    ));
+                }
+                let meeting_m = receiver_height_with_cutoff_m(
+                    world_radius_m,
+                    lowest_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                )
+                .clamp(LOWEST_SHADOW_RECEIVER_M, highest_m);
+                let lowest_lit = highest_rad
+                    >= lowest_shadow_light_rad(world_radius_m, LOWEST_SHADOW_RECEIVER_M);
+                Some(if lowest_lit {
+                    reach_m(meeting_m).max(reach_m(LOWEST_SHADOW_RECEIVER_M))
+                } else {
+                    reach_m(meeting_m)
+                })
+            }
+        }
+    }
+}
+
+/// The receiver height whose shadow cutoff is `elevation_rad`, the inverse of
+/// `lowest_shadow_light_rad`: below sea level when every receiver's cutoff is at
+/// most that light, infinite when none reaches it.
+fn receiver_height_with_cutoff_m(world_radius_m: f64, elevation_rad: f64) -> f64 {
+    let horizon_z = (elevation_rad.sin() - SHADOW_CUTOFF_Z) / (1.0 - SHADOW_CUTOFF_Z);
+    if horizon_z >= 0.0 {
+        f64::NEG_INFINITY
+    } else if horizon_z <= -1.0 {
+        f64::INFINITY
+    } else {
+        world_radius_m / (1.0 - horizon_z * horizon_z).sqrt() - world_radius_m
     }
 }
 
@@ -574,52 +678,110 @@ fn wrapped_region(world_width_m: f64, region: Region) -> Region {
     region
 }
 
-/// Column and row spacing for a region of this size anywhere on the lattice:
-/// a placement adds a texel beyond each end and rounds each end outwards, so
-/// it never needs more than the extent plus five texels.
+/// Spacing along `axis` after `doublings` of the base spacing.
+fn lattice_spacing_m(world_width_m: f64, base_spacing_m: f64, axis: usize, doublings: i32) -> f64 {
+    let spacing_m = base_spacing_m * 2.0_f64.powi(doublings);
+    if axis == 1 {
+        return spacing_m;
+    }
+    // Whole columns per longitude lap keep the lattice continuous across the seam.
+    let laps_per_column = spacing_m / world_width_m;
+    if laps_per_column < 1.0 {
+        world_width_m / laps_per_column.recip().round()
+    } else {
+        world_width_m * laps_per_column.round()
+    }
+}
+
+/// Doublings of the base column and row spacing for a region of this size
+/// anywhere on the lattice: a placement adds a texel beyond each end and rounds
+/// each end outwards, so it never needs more than the extent plus five texels
+/// per axis.
+fn field_doublings(
+    world_width_m: f64,
+    region: Region,
+    base_spacing_m: f64,
+    axis_texels: u32,
+    layer_texels: u32,
+) -> [i32; 2] {
+    let texels = |axis: usize, doublings: i32| {
+        (region.max[axis] - region.min[axis])
+            / lattice_spacing_m(world_width_m, base_spacing_m, axis, doublings)
+            + 5.0
+    };
+    // Each axis coarsens alone, so within the layer budget a window long in one
+    // direction keeps its spacing across the other.
+    let mut doublings = [0; 2];
+    for (axis, axis_doublings) in doublings.iter_mut().enumerate() {
+        while texels(axis, *axis_doublings) > f64::from(axis_texels) {
+            *axis_doublings += 1;
+        }
+    }
+    // A layer over its budget coarsens its finer axis first.
+    loop {
+        let counts = [texels(0, doublings[0]), texels(1, doublings[1])];
+        if counts[0] * counts[1] <= f64::from(layer_texels) {
+            return doublings;
+        }
+        let axis = match doublings[0].cmp(&doublings[1]) {
+            Ordering::Less => 0,
+            Ordering::Greater => 1,
+            Ordering::Equal => usize::from(counts[1] > counts[0]),
+        };
+        doublings[axis] += 1;
+    }
+}
+
 fn field_spacing_m(
     world_width_m: f64,
     region: Region,
     base_spacing_m: f64,
-    texel_budget: u32,
+    axis_texels: u32,
+    layer_texels: u32,
 ) -> [f64; 2] {
-    let fits = |axis: usize, spacing_m: f64| {
-        (region.max[axis] - region.min[axis]) / spacing_m + 5.0 <= f64::from(texel_budget)
-    };
-    // Each axis coarsens alone, so a window long in one direction keeps its
-    // spacing across the other.
-    let mut spacing = [base_spacing_m; 2];
-    loop {
-        // Whole columns per longitude lap keep the lattice continuous across the seam.
-        let laps_per_column = spacing[0] / world_width_m;
-        let column_spacing_m = if laps_per_column < 1.0 {
-            world_width_m / laps_per_column.recip().round()
-        } else {
-            world_width_m * laps_per_column.round()
-        };
-        if fits(0, column_spacing_m) {
-            spacing[0] = column_spacing_m;
-            break;
-        }
-        spacing[0] *= 2.0;
-    }
-    while !fits(1, spacing[1]) {
-        spacing[1] *= 2.0;
-    }
-    spacing
+    let doublings = field_doublings(
+        world_width_m,
+        region,
+        base_spacing_m,
+        axis_texels,
+        layer_texels,
+    );
+    [0, 1].map(|axis| lattice_spacing_m(world_width_m, base_spacing_m, axis, doublings[axis]))
 }
 
-fn field_grid(
+/// The finest doublings that fit an occluder layer's budgets, then the finest
+/// that fit their refine share.
+fn occluder_doubling_band(
     world_width_m: f64,
-    camera_m: [f64; 2],
-    anchor_m: [f64; 2],
     region: Region,
     base_spacing_m: f64,
-    texel_budget: u32,
-) -> FieldGrid {
-    let region = wrapped_region(world_width_m, region);
-    let spacing = field_spacing_m(world_width_m, region, base_spacing_m, texel_budget);
-    field_grid_with_spacing(camera_m, anchor_m, region, spacing)
+) -> [[i32; 2]; 2] {
+    [1.0, OCCLUDER_REFINE_SHARE].map(|share| {
+        field_doublings(
+            world_width_m,
+            region,
+            base_spacing_m,
+            (share * f64::from(OCCLUDER_FIELD_TEXELS)) as u32,
+            (share * f64::from(OCCLUDER_LAYER_TEXELS)) as u32,
+        )
+    })
+}
+
+fn occluder_doublings(
+    world_width_m: f64,
+    region: Region,
+    base_spacing_m: f64,
+    previous: Option<[i32; 2]>,
+) -> [i32; 2] {
+    let [finest, refine_limit] = occluder_doubling_band(world_width_m, region, base_spacing_m);
+    match previous {
+        Some(previous)
+            if (0..2).all(|axis| (finest[axis]..=refine_limit[axis]).contains(&previous[axis])) =>
+        {
+            previous
+        }
+        _ => finest,
+    }
 }
 
 /// `region` must already be wrapped, and `spacing` must fit any region
@@ -669,6 +831,7 @@ mod tests {
             view_size_m,
             view_cloud_motion_m,
             FieldGridTuning::PRODUCTION,
+            &mut FieldGridHistory::default(),
         )
     }
 
@@ -750,6 +913,7 @@ mod tests {
                 [100.0, 100.0],
                 NO_MOTION,
                 FieldGridTuning::PRODUCTION,
+                &mut FieldGridHistory::default(),
             );
             for grid in std::iter::once(&grids.environment).chain(&grids.occluders) {
                 let columns = f64::from(world_width_m) / f64::from(grid.uniforms[2]);
@@ -796,6 +960,181 @@ mod tests {
                     assert_covers(&grids.occluders[0], view, &label);
                     assert_covers(&grids.occluders[3], view, &label);
                     assert_covers(&grids.occluders[4], view.expanded(reach_m), &label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn occluder_layers_stay_within_their_texel_budget() {
+        for view_height_m in [1_500.0, 6_000.0, 16_000.0, 20_000.0] {
+            let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
+            for hour in [0, 6, 12, 18] {
+                let world_time_seconds = MIDNIGHT_SECONDS + f64::from(hour) * 3_600.0;
+                let grids = production_grids(
+                    world_time_seconds,
+                    [-23_500.0, -16_500.0],
+                    view_size_m,
+                    NO_MOTION,
+                );
+                for (layer, grid) in grids.occluders.iter().enumerate() {
+                    assert!(
+                        grid.texels[0] * grid.texels[1] <= OCCLUDER_LAYER_TEXELS,
+                        "{view_height_m} m view at {world_time_seconds} s, layer {layer}: {:?}",
+                        grid.texels,
+                    );
+                }
+            }
+        }
+    }
+
+    fn occluder_doublings_for(width_m: f64, height_m: f64) -> [i32; 2] {
+        field_doublings(
+            f64::from(WorldGeometry::default().width_m()),
+            Region {
+                min: [0.0; 2],
+                max: [width_m, height_m],
+            },
+            4.0,
+            OCCLUDER_FIELD_TEXELS,
+            OCCLUDER_LAYER_TEXELS,
+        )
+    }
+
+    #[test]
+    fn a_window_within_the_layer_budget_keeps_each_axis_spacing() {
+        // 380 x 255 texels at 8 m by 4 m.
+        assert_eq!(occluder_doublings_for(3_000.0, 1_000.0), [1, 0]);
+    }
+
+    #[test]
+    fn a_layer_over_its_budget_coarsens_its_finer_axis_first() {
+        // 455 x 455 texels at 8 m by 4 m exceed the budget; 455 x 230 fit.
+        assert_eq!(occluder_doublings_for(3_600.0, 1_800.0), [1, 1]);
+    }
+
+    #[test]
+    fn a_layer_over_its_budget_at_equal_spacing_coarsens_the_axis_with_more_texels() {
+        // 505 x 380 texels at 8 m exceed the budget; 255 x 380 fit.
+        assert_eq!(occluder_doublings_for(4_000.0, 3_000.0), [2, 1]);
+        assert_eq!(occluder_doublings_for(3_000.0, 4_000.0), [1, 2]);
+    }
+
+    #[test]
+    fn an_occluder_layer_keeps_its_spacing_until_a_finer_one_fits_comfortably() {
+        let world_width_m = f64::from(WorldGeometry::default().width_m());
+        let region = |width_m: f64| Region {
+            min: [0.0; 2],
+            max: [width_m, 1_000.0],
+        };
+        // 2050 m needs 8 m columns; at 1900 m 4 m columns fit, though not in the
+        // refine share, and at 1500 m they fit comfortably.
+        let coarse = occluder_doublings(world_width_m, region(2_050.0), 4.0, None);
+        assert_eq!(coarse, [1, 0]);
+        assert_eq!(
+            occluder_doublings(world_width_m, region(1_900.0), 4.0, None),
+            [0, 0]
+        );
+        assert_eq!(
+            occluder_doublings(world_width_m, region(1_900.0), 4.0, Some(coarse)),
+            coarse,
+        );
+        assert_eq!(
+            occluder_doublings(world_width_m, region(1_500.0), 4.0, Some(coarse)),
+            [0, 0],
+        );
+        assert_eq!(
+            occluder_doublings(world_width_m, region(2_050.0), 4.0, Some([0, 0])),
+            coarse,
+        );
+    }
+
+    /// Every receiver the shader shadows, from low tide to the highest peak,
+    /// takes its cloud-shadow taps inside the Sun, Moon and canopy windows.
+    #[test]
+    fn cloud_shadow_taps_of_every_receiver_height_land_inside_their_windows() {
+        let world = WorldGeometry::default();
+        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let highest_m = highest_receiver_m(FieldGridTuning::PRODUCTION.terrain_elevation_scale);
+        let heights_m = [
+            LOWEST_SHADOW_RECEIVER_M,
+            0.0,
+            50.0,
+            150.0,
+            300.0,
+            500.0,
+            highest_m,
+        ];
+        let camera_m = [-23_500.0_f32, -16_500.0];
+        for view_height_m in [240.0, 1_500.0, 6_000.0, 16_000.0] {
+            let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
+            for step in 0..96 {
+                let world_time_seconds = MIDNIGHT_SECONDS + f64::from(step) * 900.0;
+                let grids = production_grids(world_time_seconds, camera_m, view_size_m, NO_MOTION);
+                let orbit = celestial_orbit(world_celestial_conditions(
+                    world,
+                    world_time_seconds,
+                    Vector::ZERO,
+                ));
+                for row in 0..=8 {
+                    for column in 0..=8 {
+                        let receiver_m = [
+                            f64::from(view_size_m[0]) * (f64::from(column) / 8.0 - 0.5),
+                            f64::from(view_size_m[1]) * (f64::from(row) / 8.0 - 0.5),
+                        ];
+                        let conditions = world_celestial_conditions(
+                            world,
+                            world_time_seconds,
+                            Vector::new(
+                                camera_m[0] + receiver_m[0] as f32,
+                                camera_m[1] + receiver_m[1] as f32,
+                            ),
+                        );
+                        for height_m in heights_m {
+                            let lights = celestial_directions_at_height(
+                                world,
+                                orbit,
+                                conditions,
+                                height_m as f32,
+                            );
+                            let radius_ratio =
+                                world_radius_m / (world_radius_m + height_m.max(0.0));
+                            let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
+                            for (source, light) in [lights.0, lights.1].into_iter().enumerate() {
+                                let [east, north, up] = light.map(f64::from);
+                                if (up - horizon_z) / (1.0 - horizon_z) <= SHADOW_CUTOFF_Z {
+                                    continue;
+                                }
+                                let azimuth_rad = north.atan2(east);
+                                let elevation_rad = up.atan2(east.hypot(north));
+                                for (layer, layer_height_m) in [
+                                    (1 + source, LOW_CLOUD_BASE_HEIGHT_M),
+                                    (3, WEATHER_CANOPY_HEIGHT_M),
+                                ] {
+                                    let extent = grids.occluders[layer].extent();
+                                    let distance_m = projection_distance_m(
+                                        world_radius_m,
+                                        elevation_rad,
+                                        height_m,
+                                        layer_height_m,
+                                    );
+                                    let tap_m = [
+                                        receiver_m[0] + distance_m * azimuth_rad.cos(),
+                                        receiver_m[1] + distance_m * azimuth_rad.sin(),
+                                    ];
+                                    assert!(
+                                        (0..2).all(|axis| {
+                                            (extent.min[axis]..=extent.max[axis])
+                                                .contains(&tap_m[axis])
+                                        }),
+                                        "{view_height_m} m view at {world_time_seconds} s: \
+                                         source {source} from {height_m} m at {receiver_m:?} \
+                                         taps layer {layer} at {tap_m:?} outside {extent:?}",
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -866,6 +1205,7 @@ mod tests {
             view_size_m,
             NO_MOTION,
             FieldGridTuning::PRODUCTION,
+            &mut FieldGridHistory::default(),
         );
         let sun = grids.occluders[1].extent();
         let spacing_m = f64::from(grids.occluders[1].uniforms[3]);
