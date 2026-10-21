@@ -25,13 +25,11 @@ const MAXIMUM_MEAN_LUMINANCE_CHANGE: f64 = 0.01;
 const MAXIMUM_REGIONAL_LUMINANCE_CHANGE: f64 = 0.05;
 
 /// Removes every material color except water and the shallow-water bottom
-/// tint, leaving land, ice, and lower clouds black.
-const WATER_ONLY: [&str; 6] = [
+/// tint, leaving land and ice black.
+const WATER_ONLY: [&str; 4] = [
     "--land-material-colors",
     "0,0,0,0",
     "--solid-material-colors",
-    "0,0,0,0",
-    "--layer-material-colors",
     "0,0,0,0",
 ];
 

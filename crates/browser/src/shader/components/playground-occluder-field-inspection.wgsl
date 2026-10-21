@@ -11,17 +11,10 @@ fn occluder_field_inspection_mode() -> u32 {
 }
 
 fn occluder_field_inspection_color(layer: u32, field: vec4<f32>) -> vec3<f32> {
-    if layer == LOW_CLOUD_BODY_FIELD {
-        return mix(vec3<f32>(0.04, 0.08, 0.16), vec3<f32>(1.0), clamp(field.x, 0.0, 1.0));
-    }
-    if layer == LOW_CLOUD_SHADOW_FIELD {
-        return vec3<f32>(1.0, 0.62, 0.22) * (0.08 + 0.92 * clamp(field.x / 1.25, 0.0, 1.0));
-    }
-    if layer == LOW_CLOUD_SHADOW_FIELD + 1u {
-        return vec3<f32>(0.55, 0.72, 1.0) * (0.08 + 0.92 * clamp(field.x / 1.25, 0.0, 1.0));
-    }
-    if layer == CANOPY_FIELD {
-        return vec3<f32>(0.72, 0.45, 1.0) * (0.08 + 0.92 * clamp(field.x / 5.43, 0.0, 1.0));
+    if layer < LANDFORM_FIELD {
+        // Cloud shadow depth, from the transmittance along the Sun or the Moon.
+        let tint = select(vec3<f32>(0.55, 0.72, 1.0), vec3<f32>(1.0, 0.62, 0.22), layer == CLOUD_SHADOW_FIELD);
+        return tint * (0.08 + 0.92 * (1.0 - cloud_shadow_field_transmittance(field)));
     }
     let height_m = field.x + field.y;
     if layer >= LANDFORM_HORIZON_FIELD {

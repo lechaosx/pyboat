@@ -5,6 +5,33 @@ var occluder_field_output: texture_storage_2d_array<rgba16float, write>;
 // precise below the shortest land-shadow transition after f16 conversion.
 const LANDFORM_FIELD_COARSE_STEP_M: f32 = 16.0;
 
+// Cloud shadows along one light from a point on the plane, with each cloud
+// type's drivers from the cloud weather grid.
+fn cloud_shadow_field(plane_position_m: vec2<f32>, source_index: u32) -> vec4<f32> {
+    let rays = cloud_shadow_rays(plane_position_m, source_index);
+    if rays.amount <= 0.0 && !EVALUATE_ALL_BRANCHES {
+        return cloud_shadow_texel_field(CloudShadowTexel(-CLOUD_SHADOW_RIM_LIMIT, 1.0, 1.0));
+    }
+    let guess = cumulus_ray(
+        plane_position_m,
+        rays,
+        cumulus_drivers_from_cloud_weather_fields(rays.deck.position_m).drivers.z,
+    );
+    let cumulus = cumulus_ray(
+        plane_position_m,
+        rays,
+        cumulus_drivers_from_cloud_weather_fields(guess.position_m).drivers.z,
+    );
+    return cloud_shadow_texel(
+        plane_position_m,
+        rays,
+        cumulus,
+        cumulus_drivers_from_cloud_weather_fields(cumulus.position_m),
+        deck_drivers_from_cloud_weather_fields(rays.deck.position_m),
+        scene.cloud_shadow_grids[source_index],
+    );
+}
+
 // One z slice per layer; slices smaller than the dispatch stop early.
 @compute @workgroup_size(8, 8)
 fn generate_occluder_fields(
@@ -20,22 +47,8 @@ fn generate_occluder_fields(
     );
     initialize_occluder_field_generation(position_m);
     var field = vec4<f32>(0.0);
-    if layer == 0u {
-        let low_cloud = procedural_low_cloud_sample(
-            position_m,
-            cloud_weather_from_environment_fields(position_m),
-        );
-        field = vec4<f32>(low_cloud.body_amount, low_cloud.optical_depth, low_cloud.gradient);
-    } else if layer < 3u {
-        field.x = procedural_low_cloud_optical_depth(
-            position_m,
-            cloud_weather_from_environment_fields(position_m),
-        );
-    } else if layer == 3u {
-        field.x = procedural_upper_cloud_optical_depth(
-            position_m,
-            regional_canopy_conditions_at(position_m),
-        );
+    if layer < 2u {
+        field = cloud_shadow_field(position_m, layer);
     } else {
         let elevation_m = broad_landform_elevation_m(position_m);
         let coarse_elevation_m = floor(elevation_m / LANDFORM_FIELD_COARSE_STEP_M)

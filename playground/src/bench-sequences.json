@@ -99,7 +99,7 @@
   },
   {
     "id": "zoom-out-fast-land",
-    "exercises": "Half-second zoom out over the island interior: land, rock and forest bakes behind a lit lower-cloud body",
+    "exercises": "Half-second zoom out over the island interior: land, rock and forest bakes under cloud shadows",
     "seed": "0x5eed",
     "worldTimeSeconds": 1123237,
     "keyframes": [
@@ -142,7 +142,7 @@
   },
   {
     "id": "pan-screen-cumulus",
-    "exercises": "Pan of one 16:9 screen width a second at 1.5 km through unstable humid air near noon: lower-cloud and canopy grids and their ground shadows refilled under motion",
+    "exercises": "Pan of one 16:9 screen width a second at 1.5 km through unstable humid air near noon: cloud shadow and cloud weather grids refilled under motion",
     "seed": "0x5eed",
     "worldTimeSeconds": 626437,
     "keyframes": [

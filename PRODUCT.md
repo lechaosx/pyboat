@@ -107,13 +107,15 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Frozen water is opaque, with angular plates, fine relief, and
   bedrock-derived shallow and shore response on the authoritative solid surface.
 - **[Explicit]** Weather-shaped clouds never conceal players or affect gameplay.
-- **[Explicit]** Sparse lower clouds in humid, unstable, non-storm conditions add
-  parallax and local shadows and show system wind across at most about one quarter
-  of the view.
-- **[Explicit]** An unseen weather canopy supplies primary weather shadows and
-  diffuse light. Thin cloud approaches clear sky, moderate cover can glow at
-  sunset or under moonlight, and thick storm cover darkens the scene while gray
-  overcast can remain softly luminous.
+- **[Explicit]** Lower clouds are sparse fractus and scud fragments below the
+  camera that add parallax and show system wind.
+- **[Explicit]** Local cumulus shadows come from the upper field, where convective
+  triggers set cumulus cover.
+- **[Explicit]** One unseen upper field holds every cloud above the camera, from
+  cumulus to decks, fronts, cirrus, and anvils, and supplies all cloud shadows.
+- **[Explicit]** Diffuse light from cloud stays regional. Thin cloud approaches
+  clear sky, moderate cover can glow at sunset or under moonlight, and thick
+  storm cover darkens the scene while gray overcast can remain softly luminous.
 - **[Explicit]** Celestial lighting follows world curvature, allowing lower
   clouds to retain filtered edge and internal sunlight after ground sunset.
 - **[Explicit]** Finite Sun and Moon discs keep landform shadows physically soft.

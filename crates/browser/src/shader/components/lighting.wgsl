@@ -624,16 +624,22 @@ fn ambient_contribution_share(receiver: CelestialReceiverLight) -> f32 {
     return max(1.0 - sun_share - moon_share, 0.0);
 }
 
-fn projected_cloud_position(
+struct CloudRay {
+    position_m: vec2<f32>,
+    // Distance along the light from the source height, and the sine of the
+    // light's elevation where it meets the cloud.
+    distance_m: f32,
+    sine_elevation: f32,
+};
+
+fn cloud_ray(
     position_m: vec2<f32>,
     source_height_m: f32,
     cloud_height_m: f32,
     light: vec3<f32>,
-) -> vec2<f32> {
-    let height_m = max(cloud_height_m - source_height_m, 0.0);
-    let horizontal_light = length(light.xy);
-    if height_m <= 0.0 || horizontal_light <= 0.001 {
-        return position_m;
+) -> CloudRay {
+    if cloud_height_m <= source_height_m {
+        return CloudRay(position_m, 0.0, light.z);
     }
     let world_radius_m = scene.world_size_m.x / TAU;
     let source_radius_m = world_radius_m + source_height_m;
@@ -644,51 +650,30 @@ fn projected_cloud_position(
             + cloud_radius_m * cloud_radius_m
             - source_radius_m * source_radius_m,
     );
+    let sine_elevation = (origin_along_ray_m + ray_distance_m) / cloud_radius_m;
+    let horizontal_light = length(light.xy);
+    if horizontal_light <= 0.001 {
+        return CloudRay(position_m, ray_distance_m, sine_elevation);
+    }
     let angular_distance = atan2(
         ray_distance_m * horizontal_light,
         source_radius_m + ray_distance_m * light.z,
     );
     let tangent_direction = light.xy / horizontal_light;
-    return position_m
-        + world_radius_m * angular_distance * tangent_direction;
+    return CloudRay(
+        position_m + world_radius_m * angular_distance * tangent_direction,
+        ray_distance_m,
+        sine_elevation,
+    );
 }
 
-struct CloudShadowProjection {
-    low_position_m: vec2<f32>,
-    upper_position_m: vec2<f32>,
-};
-
-struct CloudShadowDepths {
-    low: f32,
-    upper: f32,
-};
-
-struct CelestialCloudShadowDepths {
-    sun: CloudShadowDepths,
-    moon: CloudShadowDepths,
-};
-
-fn cloud_shadow_projection_at(
+fn projected_cloud_position(
     position_m: vec2<f32>,
-    surface_height_m: f32,
+    source_height_m: f32,
+    cloud_height_m: f32,
     light: vec3<f32>,
-) -> CloudShadowProjection {
-    let low_position_m = projected_cloud_position(
-        position_m,
-        surface_height_m,
-        LOW_CLOUD_BASE_HEIGHT_M,
-        light,
-    );
-    let upper_position_m = projected_cloud_position(
-        position_m,
-        surface_height_m,
-        WEATHER_CANOPY_HEIGHT_M,
-        light,
-    );
-    return CloudShadowProjection(
-        low_position_m,
-        upper_position_m,
-    );
+) -> vec2<f32> {
+    return cloud_ray(position_m, source_height_m, cloud_height_m, light).position_m;
 }
 
 // Cloud shadows take each light once per pixel, toward the centre of its
@@ -704,59 +689,56 @@ fn cloud_shadow_direction(
     );
 }
 
-fn procedural_cloud_shadow_depths_at(
-    projection: CloudShadowProjection,
-) -> CloudShadowDepths {
-    var depths = CloudShadowDepths(0.0, 0.0);
-    if layer_visibility.y > 0.0 {
-        let weather = cloud_weather_conditions_at(projection.low_position_m);
-        depths.low = layer_visibility.y * tuning.cloud_shadows.x
-            * procedural_low_cloud_optical_depth(projection.low_position_m, weather);
+// The Moon's cloud shadows fade out as the share of a receiver's clear-sky
+// light that the Moon supplies falls between these, about a just-noticeable
+// luminance step. field_grids.rs skips the Moon's cloud shadow grid from its
+// own estimate of this share, so keep `moon_clear_sky_share` and
+// `MOON_CLOUD_SHADOW_GRID_SHARE` there synchronized with this function.
+const MOON_CLOUD_SHADOW_SHARES: vec2<f32> = vec2<f32>(0.02, 0.04);
+
+fn moon_cloud_shadow_weight(receiver: CelestialReceiverLight) -> f32 {
+    if scene.cloud_shadow_grids.z <= 0.0 && !EVALUATE_ALL_BRANCHES {
+        return 0.0;
     }
-    if layer_visibility.z > 0.0 {
-        let canopy = regional_canopy_conditions_at(projection.upper_position_m);
-        depths.upper = layer_visibility.z * tuning.cloud_shadows.y
-            * procedural_upper_cloud_optical_depth(projection.upper_position_m, canopy);
-    }
-    return depths;
+    let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let sun = dot(sun_direct_contribution_color_for_receiver(receiver), luminance);
+    let moon = dot(moon_direct_contribution_color_for_receiver(receiver), luminance);
+    let clear_sky = ambient_contribution_share(receiver) * dot(
+        calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver).clear_sky,
+        luminance,
+    );
+    let share = moon / max(sun + moon + clear_sky, 1e-9);
+    return scene.cloud_shadow_grids.z
+        * smoothstep(MOON_CLOUD_SHADOW_SHARES.x, MOON_CLOUD_SHADOW_SHARES.y, share);
 }
 
-fn celestial_cloud_shadow_depths_at(
-    direct_light: CelestialReceiverLight,
-) -> CelestialCloudShadowDepths {
-    let empty_depths = CloudShadowDepths(0.0, 0.0);
-    var celestial_depths = CelestialCloudShadowDepths(empty_depths, empty_depths);
-    if layer_visibility.y <= 0.0 && layer_visibility.z <= 0.0 {
-        return celestial_depths;
-    }
+// Cloud field transmittance toward the Sun, then the Moon, for the lights
+// that shadow this receiver.
+fn celestial_cloud_transmittance_at(direct_light: CelestialReceiverLight) -> vec2<f32> {
+    var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let source = celestial_source_light(direct_light, source_index);
         // The legacy look takes shadows only above the sea-level cutoff.
         let cutoff_horizon_z = select(direct_light.horizon_z, 0.0, LEGACY_SHADOW_LOOK);
-        let shadowed = source.amount > 0.0 && shadow_horizon_cutoff(
-            light_height_above_horizon(source.direction.z, cutoff_horizon_z),
-        ) > 0.0;
+        let shadowed = source.amount > 0.0
+            && (source_index == 0u || scene.cloud_shadow_grids.z > 0.0)
+            && shadow_horizon_cutoff(
+                light_height_above_horizon(source.direction.z, cutoff_horizon_z),
+            ) > 0.0;
         if shadowed || EVALUATE_ALL_BRANCHES {
-            let sampled_depths = sampled_cloud_shadow_depths_at(
-                cloud_shadow_projection_at(
+            let sampled = sampled_cloud_transmittance_at(
+                projected_cloud_position(
                     direct_light.position_m,
                     direct_light.height_m,
+                    CLOUD_SHADOW_PLANE_HEIGHT_M,
                     cloud_shadow_direction(direct_light, source),
                 ),
                 source_index,
             );
-            let depths = CloudShadowDepths(
-                select(0.0, sampled_depths.low, shadowed),
-                select(0.0, sampled_depths.upper, shadowed),
-            );
-            if source_index == 0u {
-                celestial_depths.sun = depths;
-            } else {
-                celestial_depths.moon = depths;
-            }
+            transmittance[source_index] = select(1.0, sampled, shadowed);
         }
     }
-    return celestial_depths;
+    return transmittance;
 }
 
 // Every shadow fades out as the light's height above its receiver's horizon
@@ -772,63 +754,43 @@ fn shadow_horizon_cutoff(light_height: f32) -> f32 {
     return smoothstep(SHADOW_CUTOFF_Z, SHADOW_CUTOFF_FULL_Z, light_height);
 }
 
-// `cloud_layer_transmittance` on the ground, or the legacy look's fade.
+// The cloud field's shadow on the ground, or the legacy look's fade.
 fn cloud_shadow_transmittance(
-    depth: f32,
+    cloud_transmittance: f32,
     light: vec3<f32>,
     horizon_z: f32,
+    weight: f32,
 ) -> f32 {
-    let extinction = tuning.cloud_shadows.z * tuning.cloud_rendering.x;
-    var strength = clamp(tuning.cloud_shadows.w, 0.0, 1.0);
-    var shadow: f32;
+    var strength = clamp(tuning.cloud_shadows.z, 0.0, 1.0) * weight;
+    var shadow = cloud_transmittance;
     if LEGACY_SHADOW_LOOK {
-        shadow = exp(-extinction * smoothstep(0.04, 0.22, light.z) * depth);
+        shadow = pow(max(cloud_transmittance, 1e-30), smoothstep(0.04, 0.22, light.z));
     } else {
-        let light_height = light_height_above_horizon(light.z, horizon_z);
-        shadow = exp(-extinction / max(light_height, 0.20) * depth);
-        strength *= shadow_horizon_cutoff(light_height);
-    }
-    return mix(1.0, shadow, strength);
-}
-
-fn cloud_layer_transmittance(
-    depth: f32,
-    light: vec3<f32>,
-    receiver_horizon_z: f32,
-) -> f32 {
-    let light_height = light_height_above_horizon(light.z, receiver_horizon_z);
-    let slant_cosine = max(light_height, 0.20);
-    let shadow = exp(
-        -tuning.cloud_shadows.z
-            * tuning.cloud_rendering.x
-            * depth
-            / slant_cosine,
-    );
-    var strength = clamp(tuning.cloud_shadows.w, 0.0, 1.0);
-    if !LEGACY_SHADOW_LOOK {
-        strength *= shadow_horizon_cutoff(light_height);
+        strength *= shadow_horizon_cutoff(light_height_above_horizon(light.z, horizon_z));
     }
     return mix(1.0, shadow, strength);
 }
 
 fn effective_cloud_shadow_amount(
-    sun_depth: f32,
-    moon_depth: f32,
+    sun_transmittance: f32,
+    moon_transmittance: f32,
     receiver: CelestialReceiverLight,
 ) -> f32 {
     let visibility = direct_light_visibility();
     return clamp(
         visibility.x * receiver.sun_amount
                 * (1.0 - cloud_shadow_transmittance(
-                    sun_depth,
+                    sun_transmittance,
                     receiver.sun_direction,
                     receiver.horizon_z,
+                    1.0,
                 ))
             + visibility.y * receiver.moon_amount
                 * (1.0 - cloud_shadow_transmittance(
-                    moon_depth,
+                    moon_transmittance,
                     receiver.moon_direction,
                     receiver.horizon_z,
+                    moon_cloud_shadow_weight(receiver),
                 )),
         0.0,
         1.0,

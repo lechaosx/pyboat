@@ -1,11 +1,8 @@
 pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
     "atmosphere_conditions",
-    "cloud_low_latent_texture",
-    "cloud_low_sample",
-    "cloud_weather_canopy_optical_depth",
+    "cloud_field",
     "lighting_cloud_shadow",
     "lighting_canopy_transfer",
-    "lighting_low_cloud_canopy_transmittance",
     "lighting_model_regressions",
     "lighting_solar",
     "lighting_aerosol_optical_depth",

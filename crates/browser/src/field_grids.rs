@@ -1,17 +1,24 @@
 use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use game::{celestial_directions_at_height, celestial_orbit, world_celestial_conditions};
+use game::{
+    celestial_directions_at_height, celestial_lighting_at_height, celestial_orbit,
+    world_celestial_conditions,
+};
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
 
-/// The window adds the widest shadow footprint, about 8.5 km on each side of a
-/// default-world view under the lowest light that still reaches the highest
-/// peaks, so columns reach this budget in 16:9 views near 4 km tall and rows
-/// near 7 km.
+/// The scene's window covers the view, so 16:9 views reach this budget near
+/// 13 km tall.
 pub const ENVIRONMENT_FIELD_TEXELS: u32 = 384;
-/// Keep synchronized with the layer packing in environment-fields.wgsl.
-pub const ENVIRONMENT_FIELD_LAYERS: u32 = 5;
+/// The cloud weather window adds the farthest cloud weather read, about 17 km
+/// on each side of a default-world view, so its spacing starts at 256 m. The
+/// deck's drivers vary over 8 km and more; what coarsens is mainly the land
+/// share across coasts, which moves cumulus cover only where it is marginal.
+const CLOUD_WEATHER_FIELD_TEXELS: u32 = 192;
+/// The scene's five layers, then the cumulus and deck drivers on the cloud
+/// weather grid. Keep synchronized with environment-fields.wgsl.
+pub const ENVIRONMENT_FIELD_LAYERS: u32 = 7;
 /// The finest stored octaves are the 960 m local pressure band and 512 m water
 /// vapour. Eight or more texels per wavelength keep bilinear error below 8% of
 /// that octave's amplitude, about 0.3% of the water-vapour field.
@@ -21,9 +28,7 @@ const ENVIRONMENT_FIELD_SPACING_M: f64 = 64.0;
 /// shadow footprint of a boat-zoom view under a light at the sea-level cutoff.
 pub const OCCLUDER_FIELD_TEXELS: u32 = 512;
 /// Texels a frame evaluates per occluder layer at most. On a Radeon 780M the
-/// occluder pass of the 16 km bench views then takes about 0.9 ms, and the
-/// low-cloud body grid of 16:9 views up to 1.5 km tall keeps its spacing on
-/// both axes.
+/// occluder pass of the 16 km bench views then takes about 0.9 ms.
 const OCCLUDER_LAYER_TEXELS: u32 = OCCLUDER_FIELD_TEXELS * OCCLUDER_FIELD_TEXELS / 2;
 /// Each landform horizon texel marches about 30 landform samples per light
 /// under a high light and about 60 at the cutoff. At this budget 16:9 views up
@@ -31,23 +36,27 @@ const OCCLUDER_LAYER_TEXELS: u32 = OCCLUDER_FIELD_TEXELS * OCCLUDER_FIELD_TEXELS
 /// bench view takes about 0.7 ms rather than 0.9 ms at the full layer budget
 /// on a Radeon 780M.
 const LANDFORM_HORIZON_LAYER_TEXELS: u32 = OCCLUDER_LAYER_TEXELS / 4;
+/// A cloud shadow layer keeps the layer budget while its footprint spans up to
+/// `CLOUD_SHADOW_STRETCH_AREAS[0]` view areas and shrinks to this budget by
+/// `CLOUD_SHADOW_STRETCH_AREAS[1]`, as a low light stretches the footprint:
+/// texels beyond the view resolve shadow reach rather than detail on screen.
+const CLOUD_SHADOW_LAYER_TEXELS: u32 = OCCLUDER_LAYER_TEXELS / 2;
+const CLOUD_SHADOW_STRETCH_AREAS: [f64; 2] = [2.0, 4.0];
 /// A layer keeps its previous spacing while that stays within budget and a
 /// finer one would not fit in this share of the budgets, so a window that
 /// hovers at a threshold while the camera pans keeps its lattice.
 const OCCLUDER_REFINE_SHARE: f64 = 0.8;
-/// Low-cloud body, Sun and Moon low-cloud shadow depth, canopy depth, broad
-/// landform elevation, and the Sun and Moon landform horizons. Keep
-/// synchronized with occluder-fields.wgsl.
-pub const OCCLUDER_FIELD_LAYERS: usize = 7;
+/// Sun and Moon cloud shadow transmittance, broad landform elevation, and the
+/// Sun and Moon landform horizons. Keep synchronized with occluder-fields.wgsl.
+pub const OCCLUDER_FIELD_LAYERS: usize = 5;
+const LANDFORM_LAYER: usize = 2;
 /// The horizon layers march the landform layer, so a second dispatch fills
 /// them after the others.
-pub const LANDFORM_HORIZON_LAYER: usize = 5;
-/// The finest low-cloud latent octave spans 40 m per unit body size; ten texels
-/// per wavelength keep bilinear error near 5% of that octave.
-const LOW_CLOUD_FIELD_SPACING_M: f64 = 4.0;
-/// The canopy threshold turns its 2 km finest latent octave into edges about
-/// 100 m wide; three texels span such an edge.
-const CANOPY_FIELD_SPACING_M: f64 = 32.0;
+pub const LANDFORM_HORIZON_LAYER: usize = 3;
+/// Cloud shadow rims span at least the disc's penumbra, about 9 m under the
+/// lowest cumulus seen from sea level, so these texels put two or more across
+/// the narrowest rim.
+const CLOUD_SHADOW_SPACING_M: f64 = 4.0;
 /// The broad landform's island octaves run from 1536 m down to 96 m. Over a
 /// rugged island with 320 m peaks (seed 0x5eed around (-10000, 2000) m),
 /// bilinear error at this spacing is 0.40 m at the 99th percentile and 0.71 m
@@ -59,10 +68,23 @@ const LANDFORM_FIELD_SPACING_M: f64 = 16.0;
 /// the largest occlusion of a dense per-pixel march over directly evaluated
 /// landform; 8 m texels leave 0.5%.
 const LANDFORM_HORIZON_SPACING_M: f64 = 8.0;
+/// A grid's shortest resolved wavelength follows this multiple of the spacing
+/// its window needs before rounding to a doubling, and spans at least two base
+/// texels. Rounding and the refine share's hysteresis keep the actual spacing
+/// below 2.5 times the needed one, so the wavelength stays at least two actual
+/// texels while zoom changes it smoothly.
+const CLOUD_SHADOW_WAVELENGTH_PER_SPACING: f64 = 5.0;
+/// The Moon's grid is evaluated while its share of the clear-sky light
+/// reaches this anywhere in view: half the share at which lighting.wgsl starts
+/// fading its cloud shadows in, so the view's sample points need not land on
+/// the brightest receiver. Keep synchronized with `MOON_CLOUD_SHADOW_SHARES`
+/// in lighting.wgsl.
+const MOON_CLOUD_SHADOW_GRID_SHARE: f64 = 0.01;
 
 // Keep these synchronized with scene-state.wgsl and lighting.wgsl.
-const LOW_CLOUD_BASE_HEIGHT_M: f64 = 900.0;
-const WEATHER_CANOPY_HEIGHT_M: f64 = 3600.0;
+const CLOUD_SHADOW_PLANE_HEIGHT_M: f64 = 900.0;
+/// The deck's weather read is the farthest along each light: cumulus lie below it.
+const DECK_HEIGHT_M: f64 = 3600.0;
 const LUNAR_DISTANCE_PLANET_RADII: f64 = 60.3;
 const LARGEST_DISC_ANGULAR_RADIUS_RAD: f64 = 0.00465;
 /// `shadow_horizon_cutoff` in lighting.wgsl removes every shadow at and below
@@ -107,7 +129,13 @@ impl FieldGrid {
 
 pub struct FieldGrids {
     pub environment: FieldGrid,
+    /// Weather under every cloud that cloud shadow texels read.
+    pub cloud_weather: FieldGrid,
     pub occluders: [FieldGrid; OCCLUDER_FIELD_LAYERS],
+    /// The scene shader's `cloud_shadow_grids` row: the shortest wavelength
+    /// the Sun's and the Moon's cloud shadow grids resolve, then the weight
+    /// of the Moon's cloud shadows.
+    pub cloud_shadow_grids: [f32; 4],
 }
 
 /// Each occluder layer's spacing doublings from the previous frame.
@@ -117,6 +145,12 @@ pub struct FieldGridHistory {
 }
 
 impl FieldGrids {
+    /// One dispatch fills the environment and cloud weather grids.
+    pub fn environment_workgroups(&self) -> [u32; 2] {
+        let [scene, cloud] = [&self.environment, &self.cloud_weather].map(FieldGrid::workgroups);
+        [scene[0].max(cloud[0]), scene[1].max(cloud[1])]
+    }
+
     /// The scene shader's `occluder_field_grid_m` and `occluder_field_texels` rows.
     pub fn occluder_uniforms(
         &self,
@@ -150,21 +184,18 @@ fn layer_workgroups(grids: &[FieldGrid]) -> [u32; 3] {
     [columns, rows, grids.len() as u32]
 }
 
-/// Tuning that changes which world positions the scene samples or how finely
-/// it needs them.
+/// Tuning that changes which world positions the scene samples.
 #[derive(Clone, Copy)]
 pub struct FieldGridTuning {
-    pub low_cloud_body_size: f32,
     pub landform_shadow_reach_m: f32,
     pub terrain_elevation_scale: f32,
 }
 
 impl FieldGridTuning {
-    /// Keep synchronized with `production_tuning` in environment.wgsl and the
-    /// `LANDFORM_SHADOW_REACH_M` and `TERRAIN_ELEVATION_SCALE` overrides in
-    /// scene-state.wgsl; the reach is the one under a high light.
+    /// Keep synchronized with the `LANDFORM_SHADOW_REACH_M` and
+    /// `TERRAIN_ELEVATION_SCALE` overrides in scene-state.wgsl; the reach is
+    /// the one under a high light.
     pub const PRODUCTION: Self = Self {
-        low_cloud_body_size: 1.0,
         landform_shadow_reach_m: 320.0,
         terrain_elevation_scale: 3.0,
     };
@@ -197,6 +228,8 @@ pub fn field_grids(
         let region = wrapped_region(world_width_m, region.or_origin());
         let layer_texels = if layer >= LANDFORM_HORIZON_LAYER {
             LANDFORM_HORIZON_LAYER_TEXELS
+        } else if layer < LANDFORM_LAYER {
+            cloud_shadow_layer_texels(region, view)
         } else {
             OCCLUDER_LAYER_TEXELS
         };
@@ -208,15 +241,19 @@ pub fn field_grids(
             history.occluder_doublings[layer],
         );
         history.occluder_doublings[layer] = Some(doublings);
-        field_grid_with_spacing(
-            camera,
-            anchor,
+        (
+            field_grid_with_spacing(
+                camera,
+                anchor,
+                region,
+                [0, 1]
+                    .map(|axis| lattice_spacing_m(world_width_m, spacing_m, axis, doublings[axis])),
+            ),
             region,
-            [0, 1].map(|axis| lattice_spacing_m(world_width_m, spacing_m, axis, doublings[axis])),
         )
     };
     let landform_horizons = [LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_LAYER + 1]
-        .map(|layer| occluder_grid(layer, [0.0; 2], view, LANDFORM_HORIZON_SPACING_M));
+        .map(|layer| occluder_grid(layer, [0.0; 2], view, LANDFORM_HORIZON_SPACING_M).0);
     // Horizon texels beyond the view march from there.
     let landform_receiver_margin_m = landform_horizons
         .iter()
@@ -238,91 +275,244 @@ pub fn field_grids(
         highest_receiver_m,
         landform_receiver_margin_m,
     );
-    let low_cloud_anchor = [
+    let moon_grid = moon_clear_sky_share(
+        world_geometry,
+        world_time_seconds,
+        camera,
+        half_view_m,
+        highest_receiver_m,
+    ) >= MOON_CLOUD_SHADOW_GRID_SHARE;
+    let mut cloud_shadow_footprints = footprints.cloud_shadow;
+    if !moon_grid {
+        cloud_shadow_footprints[1] = Region::EMPTY;
+    }
+    // Cloud shadow texels move with the cumulus transport, so the cumulus
+    // texture is never resampled.
+    let cloud_anchor = [
         f64::from(view_cloud_motion_m[0]),
         f64::from(view_cloud_motion_m[1]),
     ];
-    let canopy_anchor = [
-        f64::from(view_cloud_motion_m[2]),
-        f64::from(view_cloud_motion_m[3]),
-    ];
-    let low_cloud_spacing_m =
-        LOW_CLOUD_FIELD_SPACING_M * f64::from(tuning.low_cloud_body_size.clamp(0.25, 4.0));
     let [sun_horizon, moon_horizon] = landform_horizons;
+    let cloud_shadows = [0, 1].map(|source| {
+        occluder_grid(
+            source,
+            cloud_anchor,
+            cloud_shadow_footprints[source],
+            CLOUD_SHADOW_SPACING_M,
+        )
+    });
+    let [sun_wavelength_m, moon_wavelength_m] = cloud_shadows.each_ref().map(|(_, region)| {
+        (CLOUD_SHADOW_WAVELENGTH_PER_SPACING
+            * fitting_spacing_m(
+                *region,
+                OCCLUDER_FIELD_TEXELS,
+                cloud_shadow_layer_texels(*region, view),
+            ))
+        .max(2.0 * CLOUD_SHADOW_SPACING_M)
+    });
+    let cloud_shadow_grids = [
+        sun_wavelength_m as f32,
+        moon_wavelength_m as f32,
+        f32::from(u8::from(moon_grid)),
+        0.0,
+    ];
+    let [(sun_cloud_shadow, _), (moon_cloud_shadow, _)] = cloud_shadows;
     let occluders = [
-        occluder_grid(0, low_cloud_anchor, view, low_cloud_spacing_m),
+        sun_cloud_shadow,
+        moon_cloud_shadow,
         occluder_grid(
-            1,
-            low_cloud_anchor,
-            footprints.low_cloud[0],
-            low_cloud_spacing_m,
-        ),
-        occluder_grid(
-            2,
-            low_cloud_anchor,
-            footprints.low_cloud[1],
-            low_cloud_spacing_m,
-        ),
-        occluder_grid(3, canopy_anchor, footprints.canopy, CANOPY_FIELD_SPACING_M),
-        occluder_grid(4, [0.0; 2], footprints.landform, LANDFORM_FIELD_SPACING_M),
+            LANDFORM_LAYER,
+            [0.0; 2],
+            footprints.landform,
+            LANDFORM_FIELD_SPACING_M,
+        )
+        .0,
         sun_horizon,
         moon_horizon,
     ];
-    // Low-cloud texels reconstruct their weather from the environment grid,
-    // which covers them. Its spacing fits the farthest footprint any light
-    // could cast, so it follows zoom alone: footprints end within that reach
-    // of the view, and a low-cloud grid's texels within two of its spacings
-    // beyond its region. A layer inside that bound fits its budgets, and
-    // their refine share, once both axes reach the bound's coarser doubling
-    // under them, so neither axis passes it.
+    // Cloud shadow texels reconstruct what the weather under their clouds sets
+    // from the cloud weather grid, which covers them. Its spacing fits the farthest
+    // read any light could cause, so it follows zoom alone: reads end within
+    // that reach of the view, and a cloud shadow grid's texels within two of
+    // its spacings beyond its region. A layer inside the plane's bound fits
+    // its budgets, and their refine share, once both axes reach the bound's
+    // coarser doubling under them, so neither axis passes it.
     let world_radius_m = world_width_m / TAU;
-    let footprint_reach_m = Receivers::Surface {
+    let receivers = Receivers {
         highest_m: highest_receiver_m,
-    }
-    .farthest_projection_m(
-        world_radius_m,
-        -FRAC_PI_2,
-        FRAC_PI_2,
-        LOW_CLOUD_BASE_HEIGHT_M,
-    )
-    .unwrap_or(0.0);
-    let footprint_bound = wrapped_region(world_width_m, view.expanded(footprint_reach_m));
+    };
+    let plane_reach_m = receivers
+        .farthest_projection_m(
+            world_radius_m,
+            -FRAC_PI_2,
+            FRAC_PI_2,
+            CLOUD_SHADOW_PLANE_HEIGHT_M,
+        )
+        .unwrap_or(0.0);
     let coarsest_doublings = occluder_doubling_band(
         world_width_m,
-        footprint_bound,
-        low_cloud_spacing_m,
-        OCCLUDER_LAYER_TEXELS,
+        wrapped_region(world_width_m, view.expanded(plane_reach_m)),
+        CLOUD_SHADOW_SPACING_M,
+        CLOUD_SHADOW_LAYER_TEXELS,
     )
     .into_iter()
     .flatten()
     .fold(0, i32::max);
-    let low_cloud_texel_reach_m = [0, 1]
-        .map(|axis| lattice_spacing_m(world_width_m, low_cloud_spacing_m, axis, coarsest_doublings))
+    let cloud_texel_reach_m = [0, 1]
+        .map(|axis| {
+            lattice_spacing_m(
+                world_width_m,
+                CLOUD_SHADOW_SPACING_M,
+                axis,
+                coarsest_doublings,
+            )
+        })
         .into_iter()
         .fold(0.0, f64::max);
-    let environment_spacing = field_spacing_m(
+    let cloud_weather_bound = wrapped_region(
         world_width_m,
-        wrapped_region(
-            world_width_m,
-            view.expanded(footprint_reach_m + 2.0 * low_cloud_texel_reach_m),
-        ),
-        ENVIRONMENT_FIELD_SPACING_M,
-        ENVIRONMENT_FIELD_TEXELS,
-        ENVIRONMENT_FIELD_TEXELS * ENVIRONMENT_FIELD_TEXELS,
+        view.expanded(receivers.farthest_cloud_weather_read_m(world_radius_m)),
     );
-    let mut environment_region = view;
-    for grid in &occluders[..3] {
-        environment_region.include(grid.extent());
+    let mut cloud_weather_region = Region::EMPTY;
+    for (source, footprint) in cloud_shadow_footprints.into_iter().enumerate() {
+        // Texels beyond a footprint read no farther beyond it than they lie.
+        let mut reads = deck_footprint(
+            world_geometry,
+            world_time_seconds,
+            camera,
+            footprint,
+            source,
+        )
+        .expanded(2.0 * cloud_texel_reach_m);
+        for axis in 0..2 {
+            reads.min[axis] = reads.min[axis].max(cloud_weather_bound.min[axis]);
+            reads.max[axis] = reads.max[axis].min(cloud_weather_bound.max[axis]);
+        }
+        if (0..2).all(|axis| reads.min[axis] <= reads.max[axis]) {
+            cloud_weather_region.include(reads);
+        }
     }
+    let wrapped_view = wrapped_region(world_width_m, view);
+    let environment_spacing = |region: Region, texels: u32| {
+        field_spacing_m(
+            world_width_m,
+            region,
+            ENVIRONMENT_FIELD_SPACING_M,
+            texels,
+            texels * texels,
+        )
+    };
     FieldGrids {
         environment: field_grid_with_spacing(
             camera,
             [0.0; 2],
-            wrapped_region(world_width_m, environment_region),
-            environment_spacing,
+            wrapped_view,
+            environment_spacing(wrapped_view, ENVIRONMENT_FIELD_TEXELS),
+        ),
+        cloud_weather: field_grid_with_spacing(
+            camera,
+            [0.0; 2],
+            wrapped_region(world_width_m, cloud_weather_region.or_origin()),
+            environment_spacing(
+                wrapped_region(
+                    world_width_m,
+                    cloud_weather_bound.expanded(2.0 * cloud_texel_reach_m),
+                ),
+                CLOUD_WEATHER_FIELD_TEXELS,
+            ),
         ),
         occluders,
+        cloud_shadow_grids,
     }
+}
+
+fn cloud_shadow_layer_texels(footprint: Region, view: Region) -> u32 {
+    let area = |region: Region| {
+        (0..2)
+            .map(|axis| (region.max[axis] - region.min[axis]).max(0.0))
+            .product::<f64>()
+    };
+    let [full, fewest] = CLOUD_SHADOW_STRETCH_AREAS;
+    let stretch =
+        ((area(footprint) / area(view).max(1.0) - full) / (fewest - full)).clamp(0.0, 1.0);
+    let texels = f64::from(OCCLUDER_LAYER_TEXELS);
+    (texels - stretch * (texels - f64::from(CLOUD_SHADOW_LAYER_TEXELS))) as u32
+}
+
+/// The spacing at which `region` would just fit the budgets of
+/// `field_doublings`, before rounding to a doubling.
+fn fitting_spacing_m(region: Region, axis_texels: u32, layer_texels: u32) -> f64 {
+    let size_m = [0, 1].map(|axis| (region.max[axis] - region.min[axis]).max(0.0));
+    let axis_spacing_m = size_m.map(|size| size / (f64::from(axis_texels) - 5.0));
+    // (w / s + 5)(h / s + 5) = texels, a quadratic in s.
+    let texels = f64::from(layer_texels) - 25.0;
+    let sum_m = size_m[0] + size_m[1];
+    let layer_spacing_m = (5.0 * sum_m
+        + (25.0 * sum_m * sum_m + 4.0 * texels * size_m[0] * size_m[1]).sqrt())
+        / (2.0 * texels);
+    axis_spacing_m[0]
+        .max(axis_spacing_m[1])
+        .max(layer_spacing_m)
+}
+
+/// The largest share of a receiver's clear-sky light that the Moon supplies
+/// over the view, composed as `moon_cloud_shadow_weight` in lighting.wgsl
+/// composes it; keep the two synchronized. A low Sun's light there crosses
+/// extra air mass and reddens; taking the densest regional aerosol and the
+/// reddest Sun overstates the Moon's share rather than understating it.
+fn moon_clear_sky_share(
+    world_geometry: WorldGeometry,
+    world_time_seconds: f64,
+    camera_m: [f64; 2],
+    half_view_m: [f64; 2],
+    highest_receiver_m: f64,
+) -> f64 {
+    const DENSEST_AEROSOL_OPTICAL_DEPTH: f64 = 0.32;
+    const REDDEST_SUN_LUMINANCE: f64 = 0.577;
+    let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
+    let mut share: f64 = 0.0;
+    for row in 0..=4 {
+        for column in 0..=4 {
+            let position_m = [
+                camera_m[0] + half_view_m[0] * (f64::from(column) / 2.0 - 1.0),
+                camera_m[1] + half_view_m[1] * (f64::from(row) / 2.0 - 1.0),
+            ];
+            let conditions = world_celestial_conditions(
+                world_geometry,
+                world_time_seconds,
+                Vector::new(position_m[0] as f32, position_m[1] as f32),
+            );
+            for height_m in [0.0, highest_receiver_m] {
+                let light =
+                    celestial_lighting_at_height(world_geometry, conditions, height_m as f32);
+                let [red, green, blue] = light.moon_color.map(f64::from);
+                let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));
+                let horizon_z = -(1.0 - radius_ratio * radius_ratio).sqrt();
+                let sun_z = f64::from(light.sun_direction[2]);
+                let slant_cosine = ((sun_z - horizon_z) / (1.0 - horizon_z)).max(0.001);
+                let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_z);
+                let sun_direct = 0.38
+                    * f64::from(light.sun_intensity).sqrt()
+                    * (-DENSEST_AEROSOL_OPTICAL_DEPTH * (1.0 / slant_cosine - 1.0)).exp()
+                    * (1.0 - low_sun * (1.0 - REDDEST_SUN_LUMINANCE));
+                let moon_direct = 0.16
+                    * f64::from(light.moon_intensity).sqrt()
+                    * (0.2126 * red + 0.7152 * green + 0.0722 * blue);
+                let diffuse =
+                    (1.0 - sun_direct - moon_direct).max(0.0) * f64::from(light.ambient_intensity);
+                let total = sun_direct + moon_direct + diffuse;
+                if total > 0.0 {
+                    share = share.max(moon_direct / total);
+                }
+            }
+        }
+    }
+    share
+}
+
+fn smoothstep(lower: f64, upper: f64, value: f64) -> f64 {
+    let fade = ((value - lower) / (upper - lower)).clamp(0.0, 1.0);
+    fade * fade * (3.0 - 2.0 * fade)
 }
 
 /// Camera-relative bounds; empty while `min` exceeds `max`.
@@ -380,9 +570,8 @@ impl Region {
 }
 
 struct ShadowFootprints {
-    /// Sun, then Moon.
-    low_cloud: [Region; 2],
-    canopy: Region,
+    /// Sun, then Moon: the cloud shadow plane positions that taps sample.
+    cloud_shadow: [Region; 2],
     /// Every landform sample position.
     landform: Region,
 }
@@ -413,15 +602,12 @@ fn shadow_footprints(
         world_time_seconds,
         Vector::new(camera_m[0] as f32, camera_m[1] as f32),
     ));
-    let horizon_z = |height_m: f64| {
-        let radius_ratio = world_radius_m / (world_radius_m + height_m);
-        -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt()
-    };
-    let low_cloud_horizon_rad = horizon_z(LOW_CLOUD_BASE_HEIGHT_M).asin();
     let shadow_lit_rad = lowest_shadow_light_rad(world_radius_m, highest_receiver_m);
+    let receivers = Receivers {
+        highest_m: highest_receiver_m,
+    };
     let mut footprints = ShadowFootprints {
-        low_cloud: [Region::EMPTY; 2],
-        canopy: Region::EMPTY,
+        cloud_shadow: [Region::EMPTY; 2],
         landform: Region {
             min: half_view_m.map(|half| -half),
             max: half_view_m,
@@ -447,36 +633,20 @@ fn shadow_footprints(
                 ),
             );
             let surface = celestial_directions_at_height(world_geometry, orbit, conditions, 0.0);
-            let low_cloud = celestial_directions_at_height(
-                world_geometry,
-                orbit,
-                conditions,
-                LOW_CLOUD_BASE_HEIGHT_M as f32,
-            );
-            for (source, (surface_direction, low_cloud_direction)) in
-                [(surface.0, low_cloud.0), (surface.1, low_cloud.1)]
-                    .into_iter()
-                    .enumerate()
-            {
-                let surface_receivers = Receivers::Surface {
-                    highest_m: highest_receiver_m,
-                };
-                let low_cloud_receivers = Receivers::LowCloud {
-                    horizon_rad: low_cloud_horizon_rad,
-                };
-                // Landform receivers lie below the canopy, so its parallax bounds theirs.
+            for (source, direction) in [surface.0, surface.1].into_iter().enumerate() {
+                // Landform receivers lie below the deck, so its parallax bounds theirs.
                 let landform_cone_rad = cell_rotation_rad
                     + landform_receiver_margin_m * (1.0 / world_radius_m + latitude_rad_per_m)
                     + LARGEST_DISC_ANGULAR_RADIUS_RAD
-                    + WEATHER_CANOPY_HEIGHT_M / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
+                    + DECK_HEIGHT_M / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
                     + DIRECTION_TOLERANCE_RAD;
-                let [east, north, up] = surface_direction.map(f64::from);
+                let [east, north, up] = direction.map(f64::from);
                 let elevation_rad = up.atan2(east.hypot(north));
                 if elevation_rad + landform_cone_rad >= shadow_lit_rad {
                     footprints.landform.include(
                         cell.expanded(landform_receiver_margin_m)
                             .minkowski_sum(offsets_toward(
-                                surface_direction,
+                                direction,
                                 landform_cone_rad,
                                 landform_shadow_reach_m(
                                     world_radius_m,
@@ -486,45 +656,18 @@ fn shadow_footprints(
                             )),
                     );
                 }
-                let projections = [
-                    (
-                        surface_receivers,
-                        surface_direction,
-                        LOW_CLOUD_BASE_HEIGHT_M,
-                    ),
-                    (
-                        surface_receivers,
-                        surface_direction,
-                        WEATHER_CANOPY_HEIGHT_M,
-                    ),
-                    (
-                        low_cloud_receivers,
-                        low_cloud_direction,
-                        WEATHER_CANOPY_HEIGHT_M,
-                    ),
-                ];
-                for (index, (receivers, direction, layer_height_m)) in
-                    projections.into_iter().enumerate()
-                {
-                    // Topocentric lunar parallax changes with receiver height up to the layer.
-                    let cone_rad = cell_rotation_rad
-                        + LARGEST_DISC_ANGULAR_RADIUS_RAD
-                        + layer_height_m / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
-                        + DIRECTION_TOLERANCE_RAD;
-                    let Some(offsets) = receivers.projected_offsets(
-                        world_radius_m,
-                        direction,
-                        cone_rad,
-                        layer_height_m,
-                    ) else {
-                        continue;
-                    };
-                    let footprint = cell.minkowski_sum(offsets);
-                    if index == 0 {
-                        footprints.low_cloud[source].include(footprint);
-                    } else {
-                        footprints.canopy.include(footprint);
-                    }
+                // Topocentric lunar parallax changes with receiver height up to the plane.
+                let cone_rad = cell_rotation_rad
+                    + LARGEST_DISC_ANGULAR_RADIUS_RAD
+                    + CLOUD_SHADOW_PLANE_HEIGHT_M / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
+                    + DIRECTION_TOLERANCE_RAD;
+                if let Some(offsets) = receivers.projected_offsets(
+                    world_radius_m,
+                    direction,
+                    cone_rad,
+                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                ) {
+                    footprints.cloud_shadow[source].include(cell.minkowski_sum(offsets));
                 }
             }
         }
@@ -532,15 +675,115 @@ fn shadow_footprints(
     footprints
 }
 
+/// Bounds the deck positions that cloud shadow texels in `plane_footprint`
+/// read along their own light, which turns from the receiver's along the way.
+/// The plane is cut into cells as `shadow_footprints` cuts the view, and a
+/// texel is evaluated while any of its light's disc clears the plane's horizon.
+fn deck_footprint(
+    world_geometry: WorldGeometry,
+    world_time_seconds: f64,
+    camera_m: [f64; 2],
+    plane_footprint: Region,
+    source: usize,
+) -> Region {
+    let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
+    let latitude_rad_per_m = PI / f64::from(world_geometry.height_m());
+    let mut footprint = Region::EMPTY;
+    if plane_footprint.min[0] > plane_footprint.max[0] {
+        return footprint;
+    }
+    let cells = FOOTPRINT_CELLS / 2;
+    let cell_half_m = [0, 1]
+        .map(|axis| 0.5 * (plane_footprint.max[axis] - plane_footprint.min[axis]) / cells as f64);
+    let cell_rotation_rad = cell_half_m[0] / world_radius_m + cell_half_m[1] * latitude_rad_per_m;
+    let cone_rad = cell_rotation_rad
+        + LARGEST_DISC_ANGULAR_RADIUS_RAD
+        + DECK_HEIGHT_M / (LUNAR_DISTANCE_PLANET_RADII * world_radius_m)
+        + DIRECTION_TOLERANCE_RAD;
+    let radius_ratio = world_radius_m / (world_radius_m + CLOUD_SHADOW_PLANE_HEIGHT_M);
+    let plane_horizon_rad = (-(1.0 - radius_ratio * radius_ratio).sqrt()).asin();
+    let orbit = celestial_orbit(world_celestial_conditions(
+        world_geometry,
+        world_time_seconds,
+        Vector::new(camera_m[0] as f32, camera_m[1] as f32),
+    ));
+    for row in 0..cells {
+        for column in 0..cells {
+            let center_m = [
+                plane_footprint.min[0] + (2 * column + 1) as f64 * cell_half_m[0],
+                plane_footprint.min[1] + (2 * row + 1) as f64 * cell_half_m[1],
+            ];
+            let conditions = world_celestial_conditions(
+                world_geometry,
+                world_time_seconds,
+                Vector::new(
+                    (camera_m[0] + center_m[0]) as f32,
+                    (camera_m[1] + center_m[1]) as f32,
+                ),
+            );
+            let lights = celestial_directions_at_height(
+                world_geometry,
+                orbit,
+                conditions,
+                CLOUD_SHADOW_PLANE_HEIGHT_M as f32,
+            );
+            let direction = [lights.0, lights.1][source];
+            let [east, north, up] = direction.map(f64::from);
+            let elevation_rad = up.atan2(east.hypot(north));
+            if elevation_rad + cone_rad < plane_horizon_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD {
+                continue;
+            }
+            let distance_m = projection_distance_m(
+                world_radius_m,
+                (elevation_rad - cone_rad).max(plane_horizon_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD),
+                CLOUD_SHADOW_PLANE_HEIGHT_M,
+                DECK_HEIGHT_M,
+            );
+            let cell = Region {
+                min: [center_m[0] - cell_half_m[0], center_m[1] - cell_half_m[1]],
+                max: [center_m[0] + cell_half_m[0], center_m[1] + cell_half_m[1]],
+            };
+            footprint.include(cell.minkowski_sum(offsets_toward(direction, cone_rad, distance_m)));
+        }
+    }
+    footprint
+}
+
+/// Ground and water from the lowest shadow receiver up to `highest_m`.
 #[derive(Clone, Copy)]
-enum Receivers {
-    /// Ground and water from the lowest shadow receiver up to `highest_m`.
-    Surface { highest_m: f64 },
-    /// The lower-cloud base, shadowed while any of the disc clears its horizon.
-    LowCloud { horizon_rad: f64 },
+struct Receivers {
+    highest_m: f64,
 }
 
 impl Receivers {
+    /// Farthest surface distance from a receiver to the deck weather that the
+    /// cloud shadow texel under its tap reads. The texel continues along its
+    /// own light, which turns toward the zenith on the way there by at least
+    /// nothing, so the deck lies at most as far beyond the plane as the
+    /// receiver's tap direction reaches from the plane.
+    fn farthest_cloud_weather_read_m(self, world_radius_m: f64) -> f64 {
+        (0..=32)
+            .map(|step| {
+                let height_m = LOWEST_SHADOW_RECEIVER_M
+                    + (self.highest_m - LOWEST_SHADOW_RECEIVER_M) * f64::from(step) / 32.0;
+                let tap_rad = lowest_shadow_light_rad(world_radius_m, height_m)
+                    - LARGEST_DISC_ANGULAR_RADIUS_RAD
+                    - DIRECTION_TOLERANCE_RAD;
+                projection_distance_m(
+                    world_radius_m,
+                    tap_rad,
+                    height_m,
+                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                ) + projection_distance_m(
+                    world_radius_m,
+                    tap_rad,
+                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                    DECK_HEIGHT_M,
+                )
+            })
+            .fold(0.0, f64::max)
+    }
+
     /// Displacements from these receivers to a layer along directions within
     /// `cone_rad` of `direction`; `None` when no such direction is lit.
     fn projected_offsets(
@@ -563,9 +806,9 @@ impl Receivers {
 
     /// Farthest surface distance to a layer from a receiver shadowed by a light
     /// between the two elevations. Lower taps and lower receivers project
-    /// farther. A surface receiver takes taps down to its own cutoff less the
-    /// disc radius, and raising it lowers that cutoff; the farthest tap then
-    /// comes from the lowest receiver or from the one whose cutoff tap meets
+    /// farther. A receiver takes taps down to its own cutoff less the disc
+    /// radius, and raising it lowers that cutoff; the farthest tap then comes
+    /// from the lowest receiver or from the one whose cutoff tap meets
     /// `lowest_rad`, because along cutoff taps reach grows with receiver height
     /// above sea level while the receiver stays below half the layer height.
     fn farthest_projection_m(
@@ -575,60 +818,41 @@ impl Receivers {
         highest_rad: f64,
         layer_height_m: f64,
     ) -> Option<f64> {
-        match self {
-            Self::LowCloud { horizon_rad } => {
-                (highest_rad >= horizon_rad - LARGEST_DISC_ANGULAR_RADIUS_RAD).then(|| {
-                    projection_distance_m(
-                        world_radius_m,
-                        lowest_rad.max(horizon_rad),
-                        LOW_CLOUD_BASE_HEIGHT_M,
-                        layer_height_m,
-                    )
-                })
-            }
-            Self::Surface { highest_m } => {
-                if highest_rad < lowest_shadow_light_rad(world_radius_m, highest_m) {
-                    return None;
-                }
-                let tap_rad = |height_m: f64| {
-                    lowest_rad.max(
-                        lowest_shadow_light_rad(world_radius_m, height_m)
-                            - LARGEST_DISC_ANGULAR_RADIUS_RAD,
-                    )
-                };
-                let reach_m = |height_m: f64| {
-                    projection_distance_m(
-                        world_radius_m,
-                        tap_rad(height_m),
-                        height_m,
-                        layer_height_m,
-                    )
-                };
-                if highest_m > 0.5 * layer_height_m {
-                    return Some(projection_distance_m(
-                        world_radius_m,
-                        lowest_rad.max(
-                            lowest_shadow_light_rad(world_radius_m, highest_m)
-                                - LARGEST_DISC_ANGULAR_RADIUS_RAD,
-                        ),
-                        LOWEST_SHADOW_RECEIVER_M,
-                        layer_height_m,
-                    ));
-                }
-                let meeting_m = receiver_height_with_cutoff_m(
-                    world_radius_m,
-                    lowest_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD,
-                )
-                .clamp(LOWEST_SHADOW_RECEIVER_M, highest_m);
-                let lowest_lit = highest_rad
-                    >= lowest_shadow_light_rad(world_radius_m, LOWEST_SHADOW_RECEIVER_M);
-                Some(if lowest_lit {
-                    reach_m(meeting_m).max(reach_m(LOWEST_SHADOW_RECEIVER_M))
-                } else {
-                    reach_m(meeting_m)
-                })
-            }
+        let highest_m = self.highest_m;
+        if highest_rad < lowest_shadow_light_rad(world_radius_m, highest_m) {
+            return None;
         }
+        let tap_rad = |height_m: f64| {
+            lowest_rad.max(
+                lowest_shadow_light_rad(world_radius_m, height_m) - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+            )
+        };
+        let reach_m = |height_m: f64| {
+            projection_distance_m(world_radius_m, tap_rad(height_m), height_m, layer_height_m)
+        };
+        if highest_m > 0.5 * layer_height_m {
+            return Some(projection_distance_m(
+                world_radius_m,
+                lowest_rad.max(
+                    lowest_shadow_light_rad(world_radius_m, highest_m)
+                        - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                ),
+                LOWEST_SHADOW_RECEIVER_M,
+                layer_height_m,
+            ));
+        }
+        let meeting_m = receiver_height_with_cutoff_m(
+            world_radius_m,
+            lowest_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD,
+        )
+        .clamp(LOWEST_SHADOW_RECEIVER_M, highest_m);
+        let lowest_lit =
+            highest_rad >= lowest_shadow_light_rad(world_radius_m, LOWEST_SHADOW_RECEIVER_M);
+        Some(if lowest_lit {
+            reach_m(meeting_m).max(reach_m(LOWEST_SHADOW_RECEIVER_M))
+        } else {
+            reach_m(meeting_m)
+        })
     }
 }
 
@@ -942,20 +1166,16 @@ mod tests {
             let grids = production_grids(43_200.0, camera_m, view_size_m, motion_m);
             let camera = camera_m.map(f64::from);
             let world_lattice = [-camera[0], -camera[1]];
-            let low_cloud_lattice = [
+            let cloud_lattice = [
                 f64::from(motion_m[0]) - camera[0],
                 f64::from(motion_m[1]) - camera[1],
             ];
-            let canopy_lattice = [
-                f64::from(motion_m[2]) - camera[0],
-                f64::from(motion_m[3]) - camera[1],
-            ];
             assert_on_lattice(&grids.environment, world_lattice, "environment");
-            for layer in 0..3 {
-                assert_on_lattice(&grids.occluders[layer], low_cloud_lattice, "low cloud");
+            assert_on_lattice(&grids.cloud_weather, world_lattice, "cloud weather");
+            for layer in 0..2 {
+                assert_on_lattice(&grids.occluders[layer], cloud_lattice, "cloud shadow");
             }
-            assert_on_lattice(&grids.occluders[3], canopy_lattice, "canopy");
-            assert_on_lattice(&grids.occluders[4], world_lattice, "landform");
+            assert_on_lattice(&grids.occluders[LANDFORM_LAYER], world_lattice, "landform");
         }
     }
 
@@ -972,7 +1192,10 @@ mod tests {
                 FieldGridTuning::PRODUCTION,
                 &mut FieldGridHistory::default(),
             );
-            for grid in std::iter::once(&grids.environment).chain(&grids.occluders) {
+            for grid in [&grids.environment, &grids.cloud_weather]
+                .into_iter()
+                .chain(&grids.occluders)
+            {
                 let columns = f64::from(world_width_m) / f64::from(grid.uniforms[2]);
                 assert!(
                     (columns - columns.round()).abs() < 1.0e-3,
@@ -997,14 +1220,15 @@ mod tests {
                     );
                     let view = view_region(view_size_m);
                     let label = format!("{view_size_m:?} at {world_time_seconds} s");
-                    assert!(
-                        grids
-                            .environment
-                            .texels
-                            .iter()
-                            .all(|&texels| texels <= ENVIRONMENT_FIELD_TEXELS),
-                        "{label}",
-                    );
+                    for (grid, budget) in [
+                        (&grids.environment, ENVIRONMENT_FIELD_TEXELS),
+                        (&grids.cloud_weather, CLOUD_WEATHER_FIELD_TEXELS),
+                    ] {
+                        assert!(
+                            grid.texels.iter().all(|&texels| texels <= budget),
+                            "{label}",
+                        );
+                    }
                     for grid in &grids.occluders {
                         assert!(
                             grid.texels
@@ -1014,11 +1238,13 @@ mod tests {
                         );
                     }
                     assert_covers(&grids.environment, view, &label);
-                    assert_covers(&grids.occluders[0], view, &label);
-                    assert_covers(&grids.occluders[3], view, &label);
-                    assert_covers(&grids.occluders[4], view.expanded(reach_m), &label);
-                    assert_covers(&grids.occluders[5], view, &label);
-                    assert_covers(&grids.occluders[6], view, &label);
+                    assert_covers(
+                        &grids.occluders[LANDFORM_LAYER],
+                        view.expanded(reach_m),
+                        &label,
+                    );
+                    assert_covers(&grids.occluders[LANDFORM_HORIZON_LAYER], view, &label);
+                    assert_covers(&grids.occluders[LANDFORM_HORIZON_LAYER + 1], view, &label);
                 }
             }
         }
@@ -1139,7 +1365,7 @@ mod tests {
     }
 
     /// Every receiver the shader shadows, from low tide to the highest peak,
-    /// takes its cloud-shadow taps inside the Sun, Moon and canopy windows.
+    /// takes its cloud-shadow taps inside the Sun and Moon windows.
     #[test]
     fn cloud_shadow_taps_of_every_receiver_height_land_inside_their_windows() {
         let world = WorldGeometry::default();
@@ -1191,36 +1417,32 @@ mod tests {
                             let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
                             for (source, light) in [lights.0, lights.1].into_iter().enumerate() {
                                 let [east, north, up] = light.map(f64::from);
-                                if (up - horizon_z) / (1.0 - horizon_z) <= SHADOW_CUTOFF_Z {
+                                if (up - horizon_z) / (1.0 - horizon_z) <= SHADOW_CUTOFF_Z
+                                    || (source == 1 && grids.cloud_shadow_grids[2] <= 0.0)
+                                {
                                     continue;
                                 }
                                 let azimuth_rad = north.atan2(east);
                                 let elevation_rad = up.atan2(east.hypot(north));
-                                for (layer, layer_height_m) in [
-                                    (1 + source, LOW_CLOUD_BASE_HEIGHT_M),
-                                    (3, WEATHER_CANOPY_HEIGHT_M),
-                                ] {
-                                    let extent = grids.occluders[layer].extent();
-                                    let distance_m = projection_distance_m(
-                                        world_radius_m,
-                                        elevation_rad,
-                                        height_m,
-                                        layer_height_m,
-                                    );
-                                    let tap_m = [
-                                        receiver_m[0] + distance_m * azimuth_rad.cos(),
-                                        receiver_m[1] + distance_m * azimuth_rad.sin(),
-                                    ];
-                                    assert!(
-                                        (0..2).all(|axis| {
-                                            (extent.min[axis]..=extent.max[axis])
-                                                .contains(&tap_m[axis])
-                                        }),
-                                        "{view_height_m} m view at {world_time_seconds} s: \
-                                         source {source} from {height_m} m at {receiver_m:?} \
-                                         taps layer {layer} at {tap_m:?} outside {extent:?}",
-                                    );
-                                }
+                                let extent = grids.occluders[source].extent();
+                                let distance_m = projection_distance_m(
+                                    world_radius_m,
+                                    elevation_rad,
+                                    height_m,
+                                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                                );
+                                let tap_m = [
+                                    receiver_m[0] + distance_m * azimuth_rad.cos(),
+                                    receiver_m[1] + distance_m * azimuth_rad.sin(),
+                                ];
+                                assert!(
+                                    (0..2).all(|axis| {
+                                        (extent.min[axis]..=extent.max[axis]).contains(&tap_m[axis])
+                                    }),
+                                    "{view_height_m} m view at {world_time_seconds} s: source \
+                                     {source} from {height_m} m at {receiver_m:?} taps at \
+                                     {tap_m:?} outside {extent:?}",
+                                );
                             }
                         }
                     }
@@ -1242,8 +1464,9 @@ mod tests {
             for step in 0..96 {
                 let world_time_seconds = MIDNIGHT_SECONDS + f64::from(step) * 900.0;
                 let grids = production_grids(world_time_seconds, camera_m, view_size_m, NO_MOTION);
-                let landform = grids.occluders[4].extent();
-                let spacing_m = [0, 1].map(|axis| f64::from(grids.occluders[4].uniforms[2 + axis]));
+                let landform = grids.occluders[LANDFORM_LAYER].extent();
+                let spacing_m = [0, 1]
+                    .map(|axis| f64::from(grids.occluders[LANDFORM_LAYER].uniforms[2 + axis]));
                 let orbit = celestial_orbit(world_celestial_conditions(
                     world,
                     world_time_seconds,
@@ -1313,31 +1536,202 @@ mod tests {
         }
     }
 
+    /// The plane texels under every receiver's cloud shadow tap read their
+    /// cumulus and deck weather inside the cloud weather grid, and so do
+    /// their bilinear neighbours, which lie within a texel of the tap.
     #[test]
-    fn environment_grid_covers_every_low_cloud_texel() {
-        for (camera_m, view_height_m) in [
-            ([800.0, 0.0], 300.0),
-            ([2400.0, 2000.0], 1_500.0),
-            ([-4000.0, 0.0], 20_000.0),
-        ] {
+    fn cloud_weather_grid_covers_every_cloud_weather_read() {
+        let world = WorldGeometry::default();
+        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let highest_m = highest_receiver_m(FieldGridTuning::PRODUCTION.terrain_elevation_scale);
+        let camera_m = [-23_500.0_f32, -16_500.0];
+        let horizon_z = |height_m: f64| {
+            let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));
+            -(1.0 - radius_ratio * radius_ratio).sqrt()
+        };
+        let toward = |point_m: [f64; 2], light: [f32; 3], from_m: f64, to_m: f64| {
+            let [east, north, up] = light.map(f64::from);
+            let azimuth_rad = north.atan2(east);
+            let distance_m =
+                projection_distance_m(world_radius_m, up.atan2(east.hypot(north)), from_m, to_m);
+            [
+                point_m[0] + distance_m * azimuth_rad.cos(),
+                point_m[1] + distance_m * azimuth_rad.sin(),
+            ]
+        };
+        let lights_at = |time_seconds: f64, point_m: [f64; 2], height_m: f64| {
+            let orbit = celestial_orbit(world_celestial_conditions(
+                world,
+                time_seconds,
+                Vector::ZERO,
+            ));
+            let conditions = world_celestial_conditions(
+                world,
+                time_seconds,
+                Vector::new(
+                    camera_m[0] + point_m[0] as f32,
+                    camera_m[1] + point_m[1] as f32,
+                ),
+            );
+            let lights = celestial_directions_at_height(world, orbit, conditions, height_m as f32);
+            [lights.0, lights.1]
+        };
+        for view_height_m in [240.0, 1_500.0, 6_000.0, 16_000.0] {
             let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
-            for hour in 0..24 {
-                let world_time_seconds = MIDNIGHT_SECONDS + f64::from(hour) * 3_600.0;
-                let grids = production_grids(
-                    world_time_seconds,
-                    camera_m,
-                    view_size_m,
-                    [120.0, -40.0, 0.0, 0.0],
-                );
-                for grid in &grids.occluders[..3] {
-                    assert_covers(
-                        &grids.environment,
-                        grid.extent(),
-                        &format!("{view_height_m} m view at {world_time_seconds} s"),
-                    );
+            for step in 0..96 {
+                let world_time_seconds = MIDNIGHT_SECONDS + f64::from(step) * 900.0;
+                let grids = production_grids(world_time_seconds, camera_m, view_size_m, NO_MOTION);
+                let environment = grids.cloud_weather.extent();
+                for row in 0..=8 {
+                    for column in 0..=8 {
+                        let receiver_m = [
+                            f64::from(view_size_m[0]) * (f64::from(column) / 8.0 - 0.5),
+                            f64::from(view_size_m[1]) * (f64::from(row) / 8.0 - 0.5),
+                        ];
+                        for height_m in [LOWEST_SHADOW_RECEIVER_M, 0.0, 150.0, 500.0, highest_m] {
+                            let lights = lights_at(world_time_seconds, receiver_m, height_m);
+                            for (source, light) in lights.into_iter().enumerate() {
+                                let up = f64::from(light[2]);
+                                let receiver_horizon_z = horizon_z(height_m);
+                                if (up - receiver_horizon_z) / (1.0 - receiver_horizon_z)
+                                    <= SHADOW_CUTOFF_Z
+                                    || (source == 1 && grids.cloud_shadow_grids[2] <= 0.0)
+                                {
+                                    continue;
+                                }
+                                let spacing_m = f64::from(
+                                    grids.occluders[source].uniforms[2]
+                                        .max(grids.occluders[source].uniforms[3]),
+                                );
+                                let tap_m = toward(
+                                    receiver_m,
+                                    light,
+                                    height_m,
+                                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                                );
+                                let plane_light = lights_at(
+                                    world_time_seconds,
+                                    tap_m,
+                                    CLOUD_SHADOW_PLANE_HEIGHT_M,
+                                )[source];
+                                for cloud_height_m in [1_000.0, 2_000.0, 3_000.0, DECK_HEIGHT_M] {
+                                    let read_m = toward(
+                                        tap_m,
+                                        plane_light,
+                                        CLOUD_SHADOW_PLANE_HEIGHT_M,
+                                        cloud_height_m,
+                                    );
+                                    assert!(
+                                        (0..2).all(|axis| {
+                                            (environment.min[axis] + spacing_m
+                                                ..=environment.max[axis] - spacing_m)
+                                                .contains(&read_m[axis])
+                                        }),
+                                        "{view_height_m} m view at {world_time_seconds} s: \
+                                         source {source} from {height_m} m at {receiver_m:?} \
+                                         reads {cloud_height_m} m cloud weather at {read_m:?} \
+                                         outside {environment:?}",
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Each cloud shadow grid resolves wavelengths of at least two texels, and
+    /// that shortest wavelength follows a slow zoom from boat zoom to 16 km
+    /// views without jumps.
+    #[test]
+    fn cloud_shadow_wavelengths_stay_resolved_and_follow_zoom_smoothly() {
+        for hours in [12.0, 17.0] {
+            let world_time_seconds = MIDNIGHT_SECONDS + hours * 3_600.0;
+            let mut history = FieldGridHistory::default();
+            let mut previous: Option<[f32; 2]> = None;
+            for step in 0..440 {
+                let view_height_m = 200.0 * 1.01_f32.powi(step);
+                let grids = field_grids(
+                    WorldGeometry::default(),
+                    world_time_seconds,
+                    [2_400.0, 2_000.0],
+                    [view_width_m(16.0 / 9.0, view_height_m), view_height_m],
+                    NO_MOTION,
+                    FieldGridTuning::PRODUCTION,
+                    &mut history,
+                );
+                let wavelengths_m = [grids.cloud_shadow_grids[0], grids.cloud_shadow_grids[1]];
+                for source in 0..2 {
+                    let grid = &grids.occluders[source];
+                    if grid.texels.iter().all(|&texels| texels <= 4) {
+                        continue;
+                    }
+                    let spacing_m = grid.uniforms[2].max(grid.uniforms[3]);
+                    assert!(
+                        wavelengths_m[source] >= 2.0 * spacing_m * 0.999,
+                        "{view_height_m} m view at {hours} h, source {source}: \
+                         {} m wavelengths on {spacing_m} m texels",
+                        wavelengths_m[source],
+                    );
+                    if let Some(previous) = previous {
+                        // Footprint cells that cross a light's cutoff move the
+                        // window by a few percent; a doubling would move it by half.
+                        let ratio = wavelengths_m[source] / previous[source];
+                        assert!(
+                            (1.0 / 1.1..=1.1).contains(&ratio),
+                            "{view_height_m} m view at {hours} h, source {source}: \
+                             the shortest wavelength jumped from {} m to {} m",
+                            previous[source],
+                            wavelengths_m[source],
+                        );
+                    }
+                }
+                previous = Some(wavelengths_m);
+            }
+        }
+    }
+
+    /// Under a high Sun a thin Moon's cloud shadows are negligible, so its grid
+    /// shrinks to the camera; at night it covers the view.
+    #[test]
+    fn moon_cloud_shadows_fade_out_while_the_sun_outshines_the_moon() {
+        let world = WorldGeometry::default();
+        let view_size_m = [427.0, 240.0];
+        let lighting = |time_seconds: f64| {
+            celestial_lighting_at_height(
+                world,
+                world_celestial_conditions(world, time_seconds, Vector::ZERO),
+                0.0,
+            )
+        };
+        let times = (0..28 * 24 * 4).map(|quarter| MIDNIGHT_SECONDS + f64::from(quarter) * 900.0);
+        let thin_moon_by_day = times
+            .clone()
+            .find(|&time_seconds| {
+                let light = lighting(time_seconds);
+                light.sun_intensity > 0.9
+                    && light.moon_intensity > 0.0
+                    && light.moon_intensity < 0.002
+            })
+            .expect("a thin Moon should rise by day within a lunar month");
+        let day = production_grids(thin_moon_by_day, [0.0, 0.0], view_size_m, NO_MOTION);
+        assert_eq!(day.cloud_shadow_grids[2], 0.0, "at {thin_moon_by_day} s");
+        assert!(day.occluders[1].texels.iter().all(|&texels| texels <= 4));
+        let moonlit_night = times
+            .clone()
+            .find(|&time_seconds| {
+                let light = lighting(time_seconds);
+                light.sun_intensity == 0.0 && light.moon_intensity > 0.03
+            })
+            .expect("a bright Moon should shine at night within a lunar month");
+        let night = production_grids(moonlit_night, [0.0, 0.0], view_size_m, NO_MOTION);
+        assert_eq!(night.cloud_shadow_grids[2], 1.0, "at {moonlit_night} s");
+        assert_covers(
+            &night.occluders[1],
+            view_region(view_size_m),
+            "moonlit night",
+        );
     }
 
     #[test]
@@ -1346,14 +1740,16 @@ mod tests {
             let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
             let spacings: Vec<_> = (0..24)
                 .map(|hour| {
-                    production_grids(
+                    let grids = production_grids(
                         MIDNIGHT_SECONDS + f64::from(hour) * 3_600.0,
                         [2_400.0, 2_000.0],
                         view_size_m,
                         NO_MOTION,
-                    )
-                    .environment
-                    .uniforms[3]
+                    );
+                    [
+                        grids.environment.uniforms[3],
+                        grids.cloud_weather.uniforms[3],
+                    ]
                 })
                 .collect();
             assert!(
@@ -1380,8 +1776,8 @@ mod tests {
             FieldGridTuning::PRODUCTION,
             &mut FieldGridHistory::default(),
         );
-        let sun = grids.occluders[1].extent();
-        let spacing_m = f64::from(grids.occluders[1].uniforms[3]);
+        let sun = grids.occluders[0].extent();
+        let spacing_m = f64::from(grids.occluders[0].uniforms[3]);
         assert!(
             sun.max[1] > 0.5 * f64::from(view_height_m) + 2.0 * spacing_m + 1_000.0,
             "Sun footprint stops at the view: {sun:?} with {spacing_m} m texels",
@@ -1392,29 +1788,29 @@ mod tests {
     fn shadow_grids_follow_the_light() {
         let view_size_m = [427.0, 240.0];
         let night = production_grids(MIDNIGHT_SECONDS, [0.0, 0.0], view_size_m, NO_MOTION);
-        assert!(night.occluders[1].texels.iter().all(|&texels| texels <= 4));
+        assert!(night.occluders[0].texels.iter().all(|&texels| texels <= 4));
         let noon = production_grids(
             MIDNIGHT_SECONDS + 43_200.0,
             [0.0, 0.0],
             view_size_m,
             NO_MOTION,
         );
-        assert_covers(&noon.occluders[1], view_region(view_size_m), "noon");
+        assert_covers(&noon.occluders[0], view_region(view_size_m), "noon");
         let afternoon = production_grids(
             MIDNIGHT_SECONDS + 64_000.0,
             [0.0, 0.0],
             view_size_m,
             NO_MOTION,
         );
-        let afternoon_extent = afternoon.occluders[1].extent();
-        let noon_extent = noon.occluders[1].extent();
+        let afternoon_extent = afternoon.occluders[0].extent();
+        let noon_extent = noon.occluders[0].extent();
         assert!(
             afternoon_extent.max[0] - afternoon_extent.min[0]
                 > 2.0 * (noon_extent.max[0] - noon_extent.min[0]),
             "a low western Sun stretches the footprint: {afternoon_extent:?} vs {noon_extent:?}",
         );
-        let afternoon_landform = afternoon.occluders[4].extent();
-        let noon_landform = noon.occluders[4].extent();
+        let afternoon_landform = afternoon.occluders[LANDFORM_LAYER].extent();
+        let noon_landform = noon.occluders[LANDFORM_LAYER].extent();
         assert!(
             afternoon_landform.min[0] < noon_landform.min[0] - 1_000.0,
             "a low western Sun lengthens the landform march: \

@@ -17,6 +17,11 @@ struct SceneUniforms {
     exposure_and_output: vec4<f32>,
     environment_field_grid_m: vec4<f32>,
     environment_field_texels: vec4<u32>,
+    cloud_weather_grid_m: vec4<f32>,
+    cloud_weather_texels: vec4<u32>,
+    // The shortest wavelength the Sun's and the Moon's cloud shadow grids
+    // resolve, then 1 while the Moon's grid is evaluated, else 0.
+    cloud_shadow_grids: vec4<f32>,
     occluder_field_grid_m: array<vec4<f32>, OCCLUDER_FIELD_LAYERS>,
     occluder_field_texels: array<vec4<u32>, OCCLUDER_FIELD_LAYERS>,
     terrain_cache_grid_m: vec4<f32>,
@@ -29,16 +34,13 @@ struct SceneUniforms {
 };
 
 // Keep synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
-const OCCLUDER_FIELD_LAYERS: u32 = 7u;
+const OCCLUDER_FIELD_LAYERS: u32 = 5u;
 
 struct SceneTuning {
-    cloud_detail: vec4<f32>,
-    cloud_wisps: vec4<f32>,
-    cloud_rendering: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
-    cloud_lighting: vec4<f32>,
+    // Optical depth scale, extinction, and opacity.
     cloud_shadows: vec4<f32>,
     water_surface: vec4<f32>,
     ice_surface: vec4<f32>,
@@ -62,6 +64,11 @@ struct CloudWeatherSample {
     low_coverage: f32,
     rain: f32,
     stratiform: f32,
+    // Afternoon heating of land and warming of the air by warmer water, each
+    // from 0 to 1, and the land share beneath.
+    land_heating: f32,
+    sea_warming: f32,
+    land_fraction: f32,
     regional: RegionalCloudDrivers,
 };
 
@@ -69,15 +76,6 @@ struct CloudWeatherSample {
 var<uniform> scene: SceneUniforms;
 
 
-override CLOUD_DETAIL_CHARACTER: f32 = 0.35;
-override CLOUD_DETAIL_BLOBINESS: f32 = 0.25;
-override CLOUD_DETAIL_CONTRAST: f32 = 1.15;
-override CLOUD_DETAIL_EDGE_SOFTNESS: f32 = 0.06;
-override CLOUD_MAX_WISP_COVERAGE: f32 = 0.25;
-override CLOUD_OPTICAL_DEPTH: f32 = 1.0;
-override CLOUD_OPACITY: f32 = 1.0;
-override CLOUD_DARKNESS: f32 = 1.0;
-override LOW_CLOUD_PARALLAX: f32 = 1.0;
 override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
@@ -89,10 +87,9 @@ override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.
 override EVALUATE_ALL_BRANCHES: bool = false;
-// Lab-only comparison: true fades ground cloud shadows between light heights
-// 0.22 and 0.04 without slant darkening, holds landform shadows to 70% of their
-// strength over the high-light reach at every light height, and keeps canopy
-// shadows on lower clouds until their horizon.
+// Lab-only comparison: true thins ground cloud shadows between light heights
+// 0.22 and 0.04 and holds landform shadows to 70% of their strength over the
+// high-light reach at every light height.
 override LEGACY_SHADOW_LOOK: bool = false;
 // Graphics tiers set these through `GraphicsQuality::scene_constants`; the
 // defaults are the high tier.
@@ -102,7 +99,6 @@ override MATERIAL_MICRO_OCTAVES: u32 = 6u;
 // Entry points initialize private state so shared rendering functions work with
 // either production overrides or the playground tuning uniform.
 var<private> tuning: SceneTuning;
-var<private> layer_visibility: vec4<f32>;
 var<private> landscape_visibility: vec4<f32>;
 var<private> atmosphere_model: vec4<f32>;
 var<private> climate_visibility: vec4<f32>;
@@ -123,8 +119,8 @@ const TAU: f32 = 6.283185307179586;
 const CELESTIAL_DISC_ANGULAR_RADIUS_RAD: f32 = 0.00465;
 const MOON_ANGULAR_RADIUS_RAD: f32 = 0.00452;
 const LUNAR_DISTANCE_PLANET_RADII: f32 = 60.3;
-const LOW_CLOUD_BASE_HEIGHT_M: f32 = 900.0;
-const LOW_CLOUD_PROJECTION_EYE_HEIGHT_M: f32 = 12000.0;
+// Above every shadow receiver; keep synchronized with field_grids.rs.
+const CLOUD_SHADOW_PLANE_HEIGHT_M: f32 = 900.0;
 const WEATHER_CANOPY_HEIGHT_M: f32 = 3600.0;
 const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: u32 = 3u;
 const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: u32 = 3u;
@@ -161,8 +157,9 @@ const CANOPY_DETAIL_NOISE_FIELD: u32 = 28u;
 const LAND_SURFACE_NOISE_FIELD: u32 = 29u;
 const PRECIPITATION_CONTACT_NOISE_FIELD: u32 = 30u;
 const DECORATIVE_WATER_NOISE_FIELD: u32 = 31u;
-const LOW_CLOUD_NOISE_FIELD: u32 = 32u;
-const UPPER_CLOUD_NOISE_FIELD: u32 = 33u;
+const CUMULUS_NOISE_FIELD: u32 = 32u;
+const DECK_NOISE_FIELD: u32 = 33u;
+const CIRRUS_NOISE_FIELD: u32 = 34u;
 // Keep this CC0 OpenSimplex2 gradient order synchronized with `game` so CPU and
 // WGSL hashes select the same direction for authoritative terrain.
 const SIMPLEX_GRADIENT_DIRECTIONS = array<vec2<f32>, 24>(

@@ -7,7 +7,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = production_tuning();
-    layer_visibility = vec4<f32>(1.0);
     landscape_visibility = vec4<f32>(1.0);
     atmosphere_model = vec4<f32>(1.0);
     climate_visibility = vec4<f32>(1.0);
@@ -73,8 +72,4 @@ fn solid_material_color_visibility() -> vec4<f32> {
 
 fn water_material_color_visibility() -> vec2<f32> {
     return vec2<f32>(1.0);
-}
-
-fn low_cloud_material_color_visibility() -> f32 {
-    return 1.0;
 }

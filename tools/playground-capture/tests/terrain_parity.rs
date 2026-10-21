@@ -87,7 +87,6 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
         let controls = [
             ("--light-contributions", gates),
             ("--cloud-shadows", "0,0,0,0"),
-            ("--layer-material-colors", "0,0,0,0"),
             ("--landform-lighting", "0,0,320,0"),
         ];
         let visible = render_controlled_image_at(
@@ -249,8 +248,7 @@ fn night_vision_noise_is_unbiased_bounded_and_continuous() {
 fn nighttime_eye_adaptation_brightens_daylight_elsewhere_in_the_view() {
     let world = WorldGeometry::default();
     let size = 64usize;
-    // Cloud parallax is camera-relative; compare ground lighting independently of cloud bodies.
-    let controls = [("--cloud-rendering", "0,0,0,0")];
+    let controls = [];
     let day_center = render_controlled_image_at(
         world,
         Vector::ZERO,
@@ -846,99 +844,6 @@ fn scene_light_contribution_gates_compose_independently() {
 }
 
 #[test]
-fn canopy_shadow_control_disables_attenuation_on_lower_clouds() {
-    let world = WorldGeometry::default();
-    let disabled = render_controlled_image_at(
-        world,
-        Vector::ZERO,
-        0.0,
-        world.height_m(),
-        "lighting_low_cloud_canopy_transmittance",
-        128,
-        64,
-        &[("--cloud-shadows", "1,0,0.85,1")],
-    );
-    assert!(
-        disabled
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|pixel| scalar_debug_amount(pixel) > 0.99),
-    );
-    let enabled = render_controlled_image_at(
-        world,
-        Vector::ZERO,
-        0.0,
-        world.height_m(),
-        "lighting_low_cloud_canopy_transmittance",
-        128,
-        64,
-        &[("--cloud-shadows", "1,1,0.85,1")],
-    );
-    assert!(
-        enabled
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(disabled.as_chunks::<4>().0.iter())
-            .any(|(enabled, disabled)| {
-                scalar_debug_amount(enabled) + 0.02 < scalar_debug_amount(disabled)
-            }),
-        "enabled canopy shadows produced no lower-cloud attenuation",
-    );
-}
-
-#[test]
-fn low_cloud_sunlight_uses_receiver_eclipse_with_surface_horizon_visibility() {
-    let world = WorldGeometry::default();
-    let world_time_seconds = 105.0 * 86_400.0;
-    let (position_m, datum, low_cloud) = (0..128)
-        .flat_map(|x_index| {
-            (0..64).map(move |y_index| {
-                Vector::new(
-                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
-                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
-                )
-            })
-        })
-        .filter_map(|position_m| {
-            let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
-            let datum = celestial_lighting_at_height(world, conditions, 0.0);
-            let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
-            (datum.sun_intensity > 0.05
-                && low_cloud.solar_eclipse_fraction > datum.solar_eclipse_fraction + 0.05)
-                .then_some((position_m, datum, low_cloud))
-        })
-        .max_by(|left, right| {
-            (left.2.solar_eclipse_fraction - left.1.solar_eclipse_fraction)
-                .total_cmp(&(right.2.solar_eclipse_fraction - right.1.solar_eclipse_fraction))
-        })
-        .expect("the eclipse should differ between datum and low-cloud receivers");
-    let datum_unoccluded = datum.sun_intensity / (1.0 - datum.solar_eclipse_fraction);
-    let expected_surface = datum_unoccluded * (1.0 - low_cloud.solar_eclipse_fraction);
-    let expected_elevated = (low_cloud.sun_intensity - expected_surface).max(0.0);
-    let actual = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        world_time_seconds,
-        1.0,
-        "lighting_low_cloud_sun_lighting",
-        1,
-        1,
-    );
-    for (channel, expected) in [expected_surface, low_cloud.sun_intensity, expected_elevated]
-        .into_iter()
-        .enumerate()
-    {
-        let actual = srgb_channel_to_linear(actual[channel]);
-        assert!(
-            (actual - expected).abs() < 0.015,
-            "channel {channel}: {actual} != {expected}; datum {datum:?}, low {low_cloud:?}",
-        );
-    }
-}
-
-#[test]
 fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
     let world = WorldGeometry::default();
     let world_time_seconds = 105.0 * 86_400.0;
@@ -1165,7 +1070,7 @@ fn shadow_types_share_their_darkness_and_near_horizon_cutoff() {
             1,
             1,
         );
-        [0, 1, 2].map(|channel| srgb_channel_to_linear(pixel[channel]))
+        [0, 1].map(|channel| srgb_channel_to_linear(pixel[channel]))
     };
     let opaque_cloud_depth = 1_000.0;
     for light_height in [0.02, 0.035] {
@@ -1176,13 +1081,11 @@ fn shadow_types_share_their_darkness_and_near_horizon_cutoff() {
         );
     }
     for light_height in [0.045, 0.05, 0.055, 0.1, 0.3, 0.8] {
-        let [landform, ground_cloud, cloud_on_cloud] =
-            transmittance(light_height, opaque_cloud_depth);
+        let [landform, cloud] = transmittance(light_height, opaque_cloud_depth);
         assert!(
-            (landform - ground_cloud).abs() < 0.015
-                && (ground_cloud - cloud_on_cloud).abs() < 0.015,
+            (landform - cloud).abs() < 0.015,
             "blocked light differs at light height {light_height} above the horizon: landform {landform}, \
-             ground cloud {ground_cloud}, cloud over cloud {cloud_on_cloud}",
+             cloud {cloud}",
         );
     }
     for light_height in [0.1, 0.8] {
@@ -1190,14 +1093,6 @@ fn shadow_types_share_their_darkness_and_near_horizon_cutoff() {
         assert!(
             landform < 0.01,
             "blocking landform keeps {landform} at {light_height}"
-        );
-    }
-    for light_height in [0.05, 0.1, 0.3, 0.8] {
-        let [_, ground_cloud, cloud_on_cloud] = transmittance(light_height, 0.5);
-        assert!(
-            (ground_cloud - cloud_on_cloud).abs() < 0.015,
-            "cloud darkness curves differ at light height {light_height} above the horizon: \
-             ground {ground_cloud}, over cloud {cloud_on_cloud}",
         );
     }
 }
@@ -1237,7 +1132,6 @@ fn landform_occlusion(
     let (width, height) = (160, 90);
     let sun_only = [
         ("--cloud-shadows", "0,0,0.85,0"),
-        ("--layer-material-colors", "0,0,0,0"),
         ("--light-contributions", "1,0,0,0"),
     ];
     let render = |landform: &str| {
@@ -1493,76 +1387,6 @@ fn partially_visible_disc_uses_a_ray_above_the_horizon() {
 }
 
 #[test]
-fn projected_low_cloud_receives_light_at_its_world_position() {
-    let world = WorldGeometry::default();
-    let camera_m = Vector::ZERO;
-    let ground_m = Vector::new(16_000.0, 0.0);
-    let projected_m = Vector::new(14_800.0, 0.0);
-    let (world_time_seconds, expected) = (0..96)
-        .map(|quarter_hour| quarter_hour as f64 * 900.0)
-        .map(|time| {
-            let ground = celestial_lighting_at_height(
-                world,
-                world_celestial_conditions(world, time, ground_m),
-                900.0,
-            );
-            let projected = celestial_lighting_at_height(
-                world,
-                world_celestial_conditions(world, time, projected_m),
-                900.0,
-            );
-            (time, ground, projected)
-        })
-        .max_by(|left, right| {
-            (left.1.sun_intensity - left.2.sun_intensity)
-                .abs()
-                .total_cmp(&(right.1.sun_intensity - right.2.sun_intensity).abs())
-        })
-        .map(|(time, ground, projected)| {
-            assert!((ground.sun_intensity - projected.sun_intensity).abs() > 0.03);
-            (time, projected.sun_intensity)
-        })
-        .unwrap();
-    let image = render_diagnostic_image_with_view_at(
-        world,
-        camera_m,
-        world_time_seconds,
-        16_000.0,
-        "lighting_projected_low_cloud_receiver",
-        3,
-        1,
-    );
-    let actual = srgb_channel_to_linear(image[4 * 2]);
-    assert!((actual - expected).abs() < 0.015, "{actual} != {expected}");
-}
-
-#[test]
-fn projected_low_cloud_direct_color_is_independent_of_background_position() {
-    let world = WorldGeometry::default();
-    let projected_position_m = Vector::new(14_800.0, 0.0);
-    let world_time_seconds = 0.065 * 86_400.0;
-    let offset_view = render_diagnostic_image_with_view_at(
-        world,
-        Vector::ZERO,
-        world_time_seconds,
-        16_000.0,
-        "lighting_projected_low_cloud_direct_color",
-        3,
-        1,
-    );
-    let centered_view = render_diagnostic_image_with_view_at(
-        world,
-        projected_position_m,
-        world_time_seconds,
-        1.0,
-        "lighting_projected_low_cloud_direct_color",
-        1,
-        1,
-    );
-    assert_rgb_close(&offset_view[8..], &centered_view, 2);
-}
-
-#[test]
 fn below_datum_water_elevation_changes_cloud_projection() {
     let image = render_diagnostic_image_with_view_at(
         WorldGeometry::default(),
@@ -1574,54 +1398,6 @@ fn below_datum_water_elevation_changes_cloud_projection() {
         1,
     );
     assert!(scalar_debug_amount(&image) > 0.98);
-}
-
-/// A disc wholly above the horizon casts the cloud shadow its centre would:
-/// each light takes one tap per pixel even where the disc spans many pixels.
-#[test]
-fn cloud_shadows_do_not_soften_with_disc_radius() {
-    let image = render_diagnostic_image_with_view_at(
-        WorldGeometry::default(),
-        Vector::ZERO,
-        0.0,
-        8_000.0,
-        "lighting_cloud_shadow_disc_radius",
-        256,
-        256,
-    );
-    let maximum = image
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|pixel| scalar_debug_amount(pixel))
-        .fold(0.0, f32::max);
-    assert!(
-        maximum < 0.002,
-        "disc radius changed cloud shadows: {maximum}"
-    );
-}
-
-#[test]
-fn canopy_shadows_on_low_clouds_do_not_soften_with_disc_radius() {
-    let image = render_diagnostic_image_with_view_at(
-        WorldGeometry::default(),
-        Vector::ZERO,
-        0.0,
-        8_000.0,
-        "lighting_low_cloud_canopy_shadow_disc_radius",
-        256,
-        256,
-    );
-    let maximum = image
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|pixel| scalar_debug_amount(pixel))
-        .fold(0.0, f32::max);
-    assert!(
-        maximum < 0.002,
-        "disc radius changed canopy shadows on low clouds: {maximum}"
-    );
 }
 
 #[test]
@@ -1662,7 +1438,6 @@ fn landform_cast_shadows_reach_open_water() {
     for (world_time_seconds, _) in low_sun_times.into_iter().flatten() {
         let controls = [
             ("--cloud-shadows", "0,0,0.85,0"),
-            ("--layer-material-colors", "0,0,0,0"),
             ("--light-contributions", "1,0,0,0"),
         ];
         let unshadowed = render_controlled_image_at(
@@ -1676,7 +1451,6 @@ fn landform_cast_shadows_reach_open_water() {
             &[
                 controls[0],
                 controls[1],
-                controls[2],
                 ("--landform-lighting", "0,0,320,0"),
             ],
         );
@@ -1691,7 +1465,6 @@ fn landform_cast_shadows_reach_open_water() {
             &[
                 controls[0],
                 controls[1],
-                controls[2],
                 ("--landform-lighting", "0,1,320,0"),
             ],
         );
@@ -1986,13 +1759,13 @@ fn diffuse_moon_horizon_matches_authoritative_rust() {
 
 /// Times when a source at the view centre has just become or is just about to
 /// stop being bright enough for shadow taps: the Sun or Moon at the surface
-/// contrast gate, or at the low-cloud base horizon. Footprints reach farthest there.
+/// contrast gate, or at the cloud shadow plane's horizon. Footprints reach farthest there.
 fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
     let step_seconds = 60.0;
     let lit = |world_time_seconds: f64| {
         let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
         let surface = celestial_lighting_at_height(world, conditions, 0.0);
-        let low_cloud = celestial_lighting_at_height(world, conditions, 900.0);
+        let plane = celestial_lighting_at_height(world, conditions, 900.0);
         // Raised receivers keep shadows while the light is below the
         // sea-level cutoff.
         [
@@ -2002,8 +1775,8 @@ fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
             surface.sun_direction[2] > -0.3,
             surface.moon_direction[2] > -0.15,
             surface.moon_direction[2] > -0.3,
-            low_cloud.sun_intensity > 0.0,
-            low_cloud.moon_intensity > 0.0,
+            plane.sun_intensity > 0.0,
+            plane.moon_intensity > 0.0,
         ]
     };
     let start_seconds = 9_072_240.0;
@@ -2147,10 +1920,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
             let direct = render_direct(world_time_seconds, &[]);
             let without_occluders = render_direct(
                 world_time_seconds,
-                &[
-                    ("--cloud-rendering", "0,0,1,1"),
-                    ("--cloud-shadows", "0,0,0.85,0"),
-                ],
+                &[("--cloud-shadows", "0,0,0.85,0")],
             );
             let occluder_maximum = direct
                 .as_chunks::<4>()
@@ -2200,7 +1970,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
         })
         .collect::<Vec<_>>();
     let mean = differences.iter().sum::<f32>() / differences.len() as f32;
-    // Away from the seam, coarsened low-cloud grids soften small cloud edges.
+    // Away from the seam, coarsened cloud shadow grids soften small cloud edges.
     let seam_maximum = differences
         .chunks(256)
         .flat_map(|row| &row[seam_column - 8..seam_column + 8])
@@ -2349,8 +2119,6 @@ fn baked_scene_flips_no_more_pixels_than_a_quarter_pixel_pan_at_overview_zooms()
                         &(pixel_m * 270.0).to_string(),
                         "--diagnostic",
                         diagnostic,
-                        "--cloud-rendering",
-                        "0,0,1,1",
                         "--cloud-shadows",
                         "0,0,0.85,0",
                     ],
@@ -2458,8 +2226,6 @@ fn baked_sea_ice_differs_from_direct_less_than_a_half_pixel_pan() {
                         world_time,
                         "--diagnostic",
                         diagnostic,
-                        "--cloud-rendering",
-                        "0,0,1,1",
                         "--cloud-shadows",
                         "0,0,0.85,0",
                     ],
@@ -2540,8 +2306,6 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
                         world_time,
                         "--diagnostic",
                         diagnostic,
-                        "--cloud-rendering",
-                        "0,0,1,1",
                         "--cloud-shadows",
                         "0,0,0.85,0",
                     ],
@@ -2642,8 +2406,6 @@ fn baked_land_ice_share_under_snow_ignores_vegetation_colours_at_coarse_spacing(
                     "38394000",
                     "--diagnostic",
                     diagnostic,
-                    "--cloud-rendering",
-                    "0,0,1,1",
                     "--cloud-shadows",
                     "0,0,0.85,0",
                 ],
@@ -2722,14 +2484,11 @@ fn mean_difference(left: &[u8], right: &[u8], selected: &[bool]) -> f64 {
     sum / f64::from(count)
 }
 
-/// Removes every material colour except water's, leaving land, ice, and lower
-/// clouds black.
-const WATER_ONLY: [&str; 6] = [
+/// Removes every material colour except water's, leaving land and ice black.
+const WATER_ONLY: [&str; 4] = [
     "--land-material-colors",
     "0,0,0,0",
     "--solid-material-colors",
-    "0,0,0,0",
-    "--layer-material-colors",
     "0,0,0,0",
 ];
 
@@ -2771,8 +2530,6 @@ fn assert_baked_shorelines_match_direct(
                     &(pixel_m * height as f32).to_string(),
                     "--diagnostic",
                     diagnostic,
-                    "--cloud-rendering",
-                    "0,0,1,1",
                     "--cloud-shadows",
                     "0,0,0.85,0",
                 ],
@@ -2993,169 +2750,10 @@ fn whole_world_winter_snow_and_sea_ice_swap_hemispheres() {
 }
 
 #[test]
-fn hidden_low_cloud_color_row_matches_zero_cloud_opacity() {
-    let world = WorldGeometry::default();
-    let (world_time_seconds, position_m) = opaque_low_cloud();
-    let row_hidden = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        1.0,
-        "scene",
-        1,
-        1,
-        &[("--layer-material-colors", "0,1,1,1")],
-    );
-    let opacity_disabled = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        1.0,
-        "scene",
-        1,
-        1,
-        &[("--cloud-rendering", "1,0,1,0")],
-    );
-    assert_rgb_close(&row_hidden, &opacity_disabled, 1);
-}
-
-/// An early-afternoon world time on the first day whose 16 km overview around
-/// `LOW_CLOUD_OVERVIEW_M` shows an opaque low cloud, and that cloud's position.
-/// Tests share one search, whose overview captures would otherwise collide.
-fn opaque_low_cloud() -> (f64, Vector) {
-    static LOW_CLOUD: std::sync::OnceLock<(f64, Vector)> = std::sync::OnceLock::new();
-    *LOW_CLOUD.get_or_init(search_opaque_low_cloud)
-}
-
-fn search_opaque_low_cloud() -> (f64, Vector) {
-    let overview_size = 64usize;
-    let overview_height_m = 16_000.0;
-    let (world_time_seconds, cloud_pixel) = (0..48)
-        .map(|day| f64::from(day) * 86_400.0 + 123.456)
-        .find_map(|world_time_seconds| {
-            let overview = render_diagnostic_image_with_view_at(
-                WorldGeometry::default(),
-                LOW_CLOUD_OVERVIEW_M,
-                world_time_seconds,
-                overview_height_m,
-                "cloud_low_optical_depth",
-                overview_size as u32,
-                overview_size as u32,
-            );
-            overview
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .position(|pixel| scalar_debug_amount(pixel) > 0.2)
-                .map(|cloud_pixel| (world_time_seconds, cloud_pixel))
-        })
-        .expect("some afternoon should show an opaque low cloud");
-    let row = cloud_pixel / overview_size;
-    let column = cloud_pixel % overview_size;
-    let position_m = LOW_CLOUD_OVERVIEW_M
-        + Vector::new(
-            (column as f32 + 0.5) / overview_size as f32 * overview_height_m
-                - 0.5 * overview_height_m,
-            0.5 * overview_height_m - (row as f32 + 0.5) / overview_size as f32 * overview_height_m,
-        );
-    (world_time_seconds, position_m)
-}
-
-const LOW_CLOUD_OVERVIEW_M: Vector = Vector::new(0.0, -10_000.0);
-
-#[test]
-fn low_cloud_parallax_moves_visible_bodies_without_moving_ground_shadows() {
-    let world = WorldGeometry::default();
-    let position_m = LOW_CLOUD_OVERVIEW_M;
-    let (world_time_seconds, _) = opaque_low_cloud();
-    let without_parallax = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        16_000.0,
-        "scene",
-        65,
-        65,
-        &[("--cloud-rendering", "1,1,1,0")],
-    );
-    let with_parallax = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        16_000.0,
-        "scene",
-        65,
-        65,
-        &[("--cloud-rendering", "1,1,1,1")],
-    );
-    assert_ne!(without_parallax, with_parallax);
-    let center_pixel = 4 * (32 * 65 + 32);
-    assert_eq!(
-        &without_parallax[center_pixel..center_pixel + 4],
-        &with_parallax[center_pixel..center_pixel + 4],
-    );
-
-    let shadows_without_parallax = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        16_000.0,
-        "scene",
-        64,
-        64,
-        &[
-            ("--cloud-rendering", "1,1,1,0"),
-            ("--layer-material-colors", "0,1,1,1"),
-        ],
-    );
-    let shadows_with_parallax = render_controlled_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        16_000.0,
-        "scene",
-        64,
-        64,
-        &[
-            ("--cloud-rendering", "1,1,1,1"),
-            ("--layer-material-colors", "0,1,1,1"),
-        ],
-    );
-    assert_eq!(shadows_without_parallax, shadows_with_parallax);
-}
-
-#[test]
-fn low_cloud_optical_depth_is_independent_of_pixel_footprint() {
-    let world = WorldGeometry::default();
-    let (world_time_seconds, position_m) = opaque_low_cloud();
-    let near = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        world_time_seconds,
-        1.0,
-        "cloud_low_optical_depth",
-        1,
-        1,
-    );
-    let far = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        world_time_seconds,
-        200.0,
-        "cloud_low_optical_depth",
-        1,
-        1,
-    );
-
-    assert_ne!(&near[..3], &scalar_debug_pixel(0.0)[..3]);
-    assert_eq!(&near[..3], &far[..3]);
-}
-
-#[test]
-fn ambient_sky_occlusion_is_lower_frequency_than_canopy_optical_depth() {
+fn ambient_sky_occlusion_is_lower_frequency_than_the_deck() {
     assert_regional_field_has_half_the_fine_variance_share(
         "lighting_ambient_sky_occlusion",
-        "cloud_weather_canopy_optical_depth",
+        "cloud_deck_shadow",
     );
 }
 
@@ -3174,8 +2772,9 @@ fn ambient_aerosol_is_lower_frequency_than_local_humidity() {
 /// two smooth ramps.
 fn assert_regional_field_has_half_the_fine_variance_share(regional: &str, local: &str) {
     let world = WorldGeometry::default();
-    let mut regional_fine_fraction = 0.0;
-    let mut local_fine_fraction = 0.0;
+    // Variances pool over the views, so a nearly uniform view cannot dominate.
+    let mut regional_variances = [0.0; 2];
+    let mut local_variances = [0.0; 2];
     let positions_m = [
         Vector::new(-12_000.0, -5_000.0),
         Vector::new(9_000.0, 3_000.0),
@@ -3189,24 +2788,25 @@ fn assert_regional_field_has_half_the_fine_variance_share(regional: &str, local:
                 world, position_m, 0.0, 4_000.0, diagnostic, 256, 64,
             )
         };
-        regional_fine_fraction += fine_scale_variance_fraction(
-            &render(regional),
-            256,
-            64,
-            &format!("{regional} at {position_m:?}"),
-        );
-        local_fine_fraction += fine_scale_variance_fraction(
-            &render(local),
-            256,
-            64,
-            &format!("{local} at {position_m:?}"),
-        );
+        for (variances, diagnostic) in [
+            (&mut regional_variances, regional),
+            (&mut local_variances, local),
+        ] {
+            let [fine, total] = fine_scale_variances(&render(diagnostic), 256, 64);
+            variances[0] += fine;
+            variances[1] += total;
+        }
     }
-    let view_count = positions_m.len() as f32;
+    assert!(
+        regional_variances[1] > 0.0 && local_variances[1] > 0.0,
+        "{regional} or {local} has no variance",
+    );
+    let regional_fine_fraction = regional_variances[0] / regional_variances[1];
+    let local_fine_fraction = local_variances[0] / local_variances[1];
 
     assert!(
-        local_fine_fraction >= 0.005 * view_count,
-        "{local} kept only {local_fine_fraction} of its variance below 1 km over {view_count} views",
+        local_fine_fraction >= 0.005,
+        "{local} kept only {local_fine_fraction} of its variance below 1 km",
     );
     assert!(
         regional_fine_fraction < 0.5 * local_fine_fraction,
@@ -3214,11 +2814,11 @@ fn assert_regional_field_has_half_the_fine_variance_share(regional: &str, local:
     );
 }
 
-/// The share of a scalar image's variance left after subtracting a 17-pixel box
-/// blur, about 1 km in the 4 km-high views above, over pixels whose blur lies
-/// inside the image. Water vapour and canopy texture still vary at that scale,
-/// while regional drivers start at 8 km wavelengths.
-fn fine_scale_variance_fraction(bytes: &[u8], width: usize, height: usize, view: &str) -> f32 {
+/// A scalar image's variance left after subtracting a 17-pixel box blur, about
+/// 1 km in the 4 km-high views above, then its whole variance, over pixels whose
+/// blur lies inside the image. Water vapour and deck texture still vary at that
+/// scale, while regional drivers start at 8 km wavelengths.
+fn fine_scale_variances(bytes: &[u8], width: usize, height: usize) -> [f32; 2] {
     const RADIUS: usize = 8;
     let values = bytes
         .as_chunks::<4>()
@@ -3252,8 +2852,7 @@ fn fine_scale_variance_fraction(bytes: &[u8], width: usize, height: usize, view:
             fine_variance += (value - blurred) * (value - blurred);
         }
     }
-    assert!(total_variance > 0.0, "{view} has no variance");
-    fine_variance / total_variance
+    [fine_variance, total_variance]
 }
 
 #[test]
@@ -3309,10 +2908,7 @@ fn visual_cloud_fields_are_independent_of_view_center_weather() {
     let width = 64usize;
     let height = 16usize;
     let mut differences = Vec::new();
-    for diagnostic in [
-        "cloud_low_optical_depth",
-        "cloud_weather_canopy_optical_depth",
-    ] {
+    for diagnostic in ["cloud_cumulus_shadow", "cloud_deck_shadow"] {
         let storm_centered = render_diagnostic_image_with_view_at(
             world,
             Vector::new(-4_000.0, 0.0),
@@ -3410,7 +3006,7 @@ fn broad_atmosphere_emerges_into_distinct_weather_regimes() {
 }
 
 #[test]
-fn canopy_coverage_tracks_ambient_sky_fraction() {
+fn deck_coverage_tracks_ambient_sky_fraction() {
     let world = WorldGeometry::default();
     let width = 128usize;
     let height = 128usize;
@@ -3421,7 +3017,7 @@ fn canopy_coverage_tracks_ambient_sky_fraction() {
             Vector::ZERO,
             world_time_seconds,
             world.height_m(),
-            "cloud_weather_canopy_optical_depth",
+            "cloud_deck_shadow",
             width as u32,
             height as u32,
         );
@@ -3475,7 +3071,7 @@ fn canopy_coverage_tracks_ambient_sky_fraction() {
 }
 
 #[test]
-fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
+fn cloud_shadows_fade_continuously_at_solar_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(0.0, 6_000.0);
     let sunset_seconds = 16_216.388_892_196_119;
@@ -3484,7 +3080,7 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
         position_m,
         sunset_seconds - 3.0,
         1_000.0,
-        "lighting_projected_upper_shadow",
+        "lighting_cloud_transmittance",
         64,
         64,
     );
@@ -3493,7 +3089,7 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
         position_m,
         sunset_seconds + 3.0,
         1_000.0,
-        "lighting_projected_upper_shadow",
+        "lighting_cloud_transmittance",
         64,
         64,
     );
@@ -3518,7 +3114,7 @@ fn projected_upper_shadow_fades_continuously_at_solar_horizon() {
 }
 
 #[test]
-fn projected_upper_clouds_can_shadow_locally_clear_ground() {
+fn projected_clouds_can_shadow_locally_clear_ground() {
     let world = WorldGeometry::default();
     let width = 128usize;
     let height = 64usize;
@@ -3535,7 +3131,7 @@ fn projected_upper_clouds_can_shadow_locally_clear_ground() {
         world,
         Vector::ZERO,
         world_time_seconds,
-        "lighting_projected_upper_shadow",
+        "lighting_cloud_transmittance",
         width as u32,
         height as u32,
     );
@@ -3551,8 +3147,114 @@ fn projected_upper_clouds_can_shadow_locally_clear_ground() {
 
     assert!(
         shadowed_clear_ground > 0,
-        "no projected canopy crossed a clear-sky boundary"
+        "no projected cloud crossed a clear-sky boundary"
     );
+}
+
+/// A cumulus takes its cover from the weather where the cloud is, so it casts
+/// the same shadow along lights from opposite sides. Counts pool over island
+/// afternoons so the check does not hang on any one of them having cumulus.
+#[test]
+fn cumulus_shadows_follow_the_weather_at_the_cloud() {
+    let world = WorldGeometry::default();
+    let (mut both, mut either) = (0, 0);
+    for (position_m, world_time_seconds) in island_afternoons() {
+        let image = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            8_000.0,
+            "cloud_cumulus_along_two_lights",
+            128,
+            128,
+        );
+        for pixel in image.as_chunks::<4>().0 {
+            let [first, second] = [pixel[0] < 128, pixel[1] < 128];
+            both += usize::from(first && second);
+            either += usize::from(first || second);
+        }
+    }
+    assert!(
+        either > 2_000,
+        "island afternoons have little cumulus: {either} px"
+    );
+    let overlap = both as f64 / either as f64;
+    assert!(overlap > 0.75, "shadows overlap {overlap}");
+}
+
+/// Cumulus shadows keep the detail of their field, not of the pixel that
+/// shows them.
+#[test]
+fn cumulus_shadows_are_independent_of_pixel_footprint() {
+    let world = WorldGeometry::default();
+    let view_height_m = 8_000.0;
+    let size = 64;
+    let partial = island_afternoons()
+        .into_iter()
+        .find_map(|(position_m, world_time_seconds)| {
+            let image = render_diagnostic_image_with_view_at(
+                world,
+                position_m,
+                world_time_seconds,
+                view_height_m,
+                "cloud_cumulus_shadow",
+                size,
+                size,
+            );
+            let (index, pixel) = image
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, pixel)| pixel[0].abs_diff(128))?;
+            let (column, row) = (
+                (index % size as usize) as f32,
+                (index / size as usize) as f32,
+            );
+            let half = 0.5 * size as f32;
+            let pixel_m = view_height_m / size as f32;
+            (pixel[0].abs_diff(128) < 32).then(|| {
+                (
+                    position_m
+                        + Vector::new(
+                            (column + 0.5 - half) * pixel_m,
+                            (half - row - 0.5) * pixel_m,
+                        ),
+                    world_time_seconds,
+                )
+            })
+        });
+    let (position_m, world_time_seconds) =
+        partial.expect("an island afternoon should have a partly shadowed pixel");
+    let [near, far] = [1.0, 200.0].map(|view_height_m| {
+        render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            "cloud_cumulus_shadow",
+            1,
+            1,
+        )
+    });
+    let amount = scalar_debug_amount(&near);
+    assert!((0.05..0.95).contains(&amount), "{position_m:?}: {amount}");
+    assert_eq!(&near[..3], &far[..3]);
+}
+
+/// Local mid-afternoons over two cumulus-prone islands on three days.
+fn island_afternoons() -> Vec<(Vector, f64)> {
+    let mut views = Vec::new();
+    for day in 2..=4 {
+        for position_m in [
+            Vector::new(500.0, -13_000.0),
+            Vector::new(-17_500.0, -10_500.0),
+        ] {
+            let afternoon_offset = (0.0417 - f64::from(position_m.x) / 64_000.0).rem_euclid(1.0);
+            views.push((position_m, 86_400.0 * (f64::from(day) + afternoon_offset)));
+        }
+    }
+    views
 }
 
 #[test]

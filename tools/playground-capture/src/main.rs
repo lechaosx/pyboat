@@ -22,7 +22,6 @@ use wgpu::util::DeviceExt;
 mod bench;
 
 const MAXIMUM_CAPTURE_PIXELS: u64 = 4096 * 4096;
-const CAPTURE_LOW_CLOUD_BODY_SIZE: f32 = 1.0;
 
 #[derive(Clone, Debug, PartialEq)]
 struct ShaderSelection {
@@ -57,14 +56,12 @@ struct Options {
     quality: GraphicsQuality,
     legacy_shadow_look: bool,
     light_balance: [f32; 4],
-    cloud_rendering: [f32; 4],
     cloud_shadows: [f32; 4],
     landform_lighting: [f32; 4],
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
     land_material_color_visibility: [u32; 4],
     solid_material_color_visibility: [u32; 4],
-    layer_material_color_visibility: [u32; 4],
     /// Camera x, camera y, and view height of earlier frames whose terrain
     /// cache fills the requested view's frame reuses.
     prior_views: Vec<[f32; 3]>,
@@ -101,6 +98,9 @@ struct SceneUniforms {
     exposure_and_output: [f32; 4],
     environment_field_grid_m: [f32; 4],
     environment_field_texels: [u32; 4],
+    cloud_weather_grid_m: [f32; 4],
+    cloud_weather_texels: [u32; 4],
+    cloud_shadow_grids: [f32; 4],
     occluder_field_grid_m: [[f32; 4]; OCCLUDER_FIELD_LAYERS],
     occluder_field_texels: [[u32; 4]; OCCLUDER_FIELD_LAYERS],
     terrain_cache_grid_m: [f32; 4],
@@ -115,13 +115,9 @@ struct SceneUniforms {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PlaygroundUniforms {
-    cloud_detail: [f32; 4],
-    cloud_wisps: [f32; 4],
-    cloud_rendering: [f32; 4],
     terrain_tuning: [f32; 4],
     water_tuning: [f32; 4],
     landform_lighting: [f32; 4],
-    cloud_lighting: [f32; 4],
     cloud_shadows: [f32; 4],
     water_surface: [f32; 4],
     ice_surface: [f32; 4],
@@ -137,7 +133,6 @@ struct PlaygroundUniforms {
     land_material_color_visibility: [u32; 4],
     solid_material_color_visibility: [u32; 4],
     water_material_color_visibility: [u32; 4],
-    layer_material_color_visibility: [u32; 4],
     environment_features: [f32; 4],
     material_features: [f32; 4],
     effect_features: [f32; 4],
@@ -569,7 +564,7 @@ impl CaptureFields {
             pass.set_pipeline(&self.environment_pipeline);
             pass.set_bind_group(0, scene_uniform_bind_group, &[]);
             pass.set_bind_group(1, &self.environment_output, &[]);
-            let [columns, rows] = grids.environment.workgroups();
+            let [columns, rows] = grids.environment_workgroups();
             pass.dispatch_workgroups(columns, rows, 1);
         }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -698,14 +693,12 @@ fn default_options() -> Options {
         quality: GraphicsQuality::High,
         legacy_shadow_look: false,
         light_balance: [1.0; 4],
-        cloud_rendering: [1.0, 1.0, 1.0, 1.0],
-        cloud_shadows: [1.0, 1.0, 0.85, 1.0],
+        cloud_shadows: [1.0, 0.85, 1.0, 0.0],
         landform_lighting: [1.0, 1.0, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
         land_material_color_visibility: [1; 4],
         solid_material_color_visibility: [1; 4],
-        layer_material_color_visibility: [1; 4],
         prior_views: Vec::new(),
         skip_prior_fills: false,
         // A desktop's, without the raise for a large reported device memory.
@@ -774,9 +767,6 @@ fn parse_options() -> Result<Command, String> {
             "--light-balance" => {
                 options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
-            "--cloud-rendering" => {
-                options.cloud_rendering = parse_f32x4(&value(&mut arguments)?, &argument)?
-            }
             "--cloud-shadows" => {
                 options.cloud_shadows = parse_f32x4(&value(&mut arguments)?, &argument)?
             }
@@ -796,10 +786,6 @@ fn parse_options() -> Result<Command, String> {
             }
             "--solid-material-colors" => {
                 options.solid_material_color_visibility =
-                    parse_u32x4(&value(&mut arguments)?, &argument)?
-            }
-            "--layer-material-colors" => {
-                options.layer_material_color_visibility =
                     parse_u32x4(&value(&mut arguments)?, &argument)?
             }
             "--prior-view" => {
@@ -997,33 +983,20 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "atmosphere_conditions",
             &[("ATMOSPHERE_CONDITION_OUTPUT", 6.0)],
         ),
-        "cloud_low_latent_texture" => diagnostic(value, "cloud_low_latent_texture", &[]),
-        "cloud_low_optical_depth" => {
-            diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 0.0)])
+        "cloud_cumulus_shadow" => diagnostic(value, "cloud_field", &[("CLOUD_FIELD_OUTPUT", 0.0)]),
+        "cloud_deck_shadow" => diagnostic(value, "cloud_field", &[("CLOUD_FIELD_OUTPUT", 1.0)]),
+        "cloud_cumulus_along_two_lights" => {
+            diagnostic(value, "cloud_field", &[("CLOUD_FIELD_OUTPUT", 2.0)])
         }
-        "cloud_low_normals" => diagnostic(value, "cloud_low_sample", &[("CLOUD_LOW_OUTPUT", 1.0)]),
-        "cloud_weather_canopy_optical_depth" => {
-            diagnostic(value, "cloud_weather_canopy_optical_depth", &[])
-        }
-        "lighting_projected_low_shadow" => diagnostic(
+        "lighting_cloud_transmittance" => diagnostic(
             value,
             "lighting_cloud_shadow",
             &[("CLOUD_SHADOW_OUTPUT", 0.0)],
         ),
-        "lighting_projected_upper_shadow" => diagnostic(
-            value,
-            "lighting_cloud_shadow",
-            &[("CLOUD_SHADOW_OUTPUT", 1.0)],
-        ),
-        "lighting_combined_transmittance" => diagnostic(
-            value,
-            "lighting_cloud_shadow",
-            &[("CLOUD_SHADOW_OUTPUT", 2.0)],
-        ),
         "lighting_ambient_sky_occlusion" => diagnostic(
             value,
             "lighting_cloud_shadow",
-            &[("CLOUD_SHADOW_OUTPUT", 3.0)],
+            &[("CLOUD_SHADOW_OUTPUT", 1.0)],
         ),
         "lighting_solar_elevation" => {
             diagnostic(value, "lighting_solar", &[("LIGHTING_SOLAR_OUTPUT", 0.0)])
@@ -1111,14 +1084,6 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("CANOPY_TRANSFER_OUTPUT", 1.0),
                 ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 6.0),
             ],
-        ),
-        "lighting_low_cloud_canopy_transmittance" => {
-            diagnostic(value, "lighting_low_cloud_canopy_transmittance", &[])
-        }
-        "lighting_low_cloud_sun_lighting" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 0.0)],
         ),
         "lighting_night_vision_unadapted" => diagnostic(
             value,
@@ -1243,30 +1208,10 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 12.0)],
         ),
-        "lighting_cloud_shadow_disc_radius" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 13.0)],
-        ),
-        "lighting_low_cloud_canopy_shadow_disc_radius" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 14.0)],
-        ),
-        "lighting_projected_low_cloud_receiver" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 15.0)],
-        ),
         "lighting_below_datum_cloud_projection" => diagnostic(
             value,
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 16.0)],
-        ),
-        "lighting_projected_low_cloud_direct_color" => diagnostic(
-            value,
-            "lighting_model_regressions",
-            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 18.0)],
         ),
         "lighting_receiver_ambient_datum" => diagnostic(
             value,
@@ -1444,12 +1389,10 @@ fn print_help() {
                                   0.22, cap landform shadows at 70%, and fix their reach\n\n\
            --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
-           --cloud-rendering V,V,V,V  finite lower-cloud depth, opacity, storm, parallax\n\
-           --cloud-shadows V,V,V,V  finite low/canopy strength, extinction, contrast\n\
+           --cloud-shadows V,V,V,V  finite cloud depth scale, extinction, opacity, padding\n\
            --landform-lighting V,V,V,V  finite relief, shadow, high-light reach, padding\n\
            --land-material-colors V,V,V,V  grass, forest, intertidal, and beach color rows\n\
            --solid-material-colors V,V,V,V  rock, snow, land-ice, and sea-ice color rows\n\
-           --layer-material-colors V,V,V,V  lower-cloud material color rows\n\
            --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\
            --prior-view X,Y,HEIGHT  render an earlier frame's terrain cache fills first;\n\
                                   repeat for a pan or zoom sequence ending at the capture\n\
@@ -1581,7 +1524,8 @@ mod tests {
         assert_eq!(pressure.module, Some("pressure_anomaly"));
         assert_eq!(pressure.constants, &[("PRESSURE_ANOMALY_OUTPUT", 1.0)]);
         for diagnostic in [
-            "lighting_combined_transmittance",
+            "lighting_cloud_transmittance",
+            "cloud_deck_shadow",
             "pressure_gradient",
             "wind_terrain_shelter",
             "terrain_slope",
@@ -1816,13 +1760,9 @@ async fn render(options: &Options) -> Result<(), String> {
         usage: wgpu::BufferUsages::VERTEX,
     });
     let playground_uniforms = PlaygroundUniforms {
-        cloud_detail: [0.35, 0.25, 1.15, 0.06],
-        cloud_wisps: [0.25, 0.0, CAPTURE_LOW_CLOUD_BODY_SIZE, 1.0],
-        cloud_rendering: options.cloud_rendering,
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
         water_tuning: [0.5, 1.0, 0.0, 0.0],
         landform_lighting: options.landform_lighting,
-        cloud_lighting: [0.18, 0.14, 0.0, 0.0],
         cloud_shadows: options.cloud_shadows,
         water_surface: [2.5, 0.2, 1.0, 1.0],
         ice_surface: [0.18, 0.32, 1.0, 1.0],
@@ -1838,7 +1778,6 @@ async fn render(options: &Options) -> Result<(), String> {
         land_material_color_visibility: options.land_material_color_visibility,
         solid_material_color_visibility: options.solid_material_color_visibility,
         water_material_color_visibility: [1; 4],
-        layer_material_color_visibility: options.layer_material_color_visibility,
         environment_features: [1.0; 4],
         material_features: [1.0; 4],
         effect_features: [1.0; 4],
@@ -2064,7 +2003,7 @@ fn render_world(
     read_texture(device, queue, encoder, &texture)
 }
 
-/// Lower-cloud then canopy offsets that a view held at the camera since
+/// Low-wind then upper-wind cloud offsets that a view held at the camera since
 /// `cloud_motion_seconds` before the capture has integrated from view-centre wind.
 fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
@@ -2114,7 +2053,6 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
         ],
         view_cloud_motion_m(options),
         FieldGridTuning {
-            low_cloud_body_size: CAPTURE_LOW_CLOUD_BODY_SIZE,
             landform_shadow_reach_m: options.landform_lighting[2],
             terrain_elevation_scale: FieldGridTuning::PRODUCTION.terrain_elevation_scale,
         },
@@ -2261,10 +2199,13 @@ fn scene_uniforms(
             0.0,
         ],
         view_cloud_motion_m: view_cloud_motion_m(options),
-        cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
+        cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: [exposure, 1.0, 0.0, 0.0],
         environment_field_grid_m: field_grids.environment.uniforms,
         environment_field_texels: field_grids.environment.texel_uniforms(),
+        cloud_weather_grid_m: field_grids.cloud_weather.uniforms,
+        cloud_weather_texels: field_grids.cloud_weather.texel_uniforms(),
+        cloud_shadow_grids: field_grids.cloud_shadow_grids,
         occluder_field_grid_m,
         occluder_field_texels,
         terrain_cache_grid_m: terrain_cache.grid_m,

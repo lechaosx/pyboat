@@ -44,8 +44,22 @@ fn field_time_coordinates_interpolate_between_simulation_ticks() {
 fn cloud_field_time_coordinates_use_each_visual_fields_wavelength() {
     let after_one_second = cloud_field_time_coordinates(60);
 
-    assert!((after_one_second.low - 1.0 / 640.0).abs() < 1.0e-7);
     assert!((after_one_second.upper - 1.0 / 4_000.0).abs() < 1.0e-7);
+}
+
+#[test]
+fn cumulus_evolution_stays_continuous_for_a_hundred_days() {
+    let ticks_per_hour = 3_600 * TICKS_PER_SECOND;
+    let hourly_step = cloud_field_time_coordinates(ticks_per_hour).cumulus;
+    assert!(hourly_step > 0.0);
+    for hour in 0..100 * 24 {
+        let step = cloud_field_time_coordinates((hour + 1) * ticks_per_hour).cumulus
+            - cloud_field_time_coordinates(hour * ticks_per_hour).cumulus;
+        assert!(
+            (step - hourly_step).abs() < 0.01 * hourly_step,
+            "hour {hour}: the cumulus coordinate moved by {step}",
+        );
+    }
 }
 
 #[test]

@@ -33,9 +33,6 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
         return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);
     }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 0u {
-        return diagnostic_low_cloud_sun_lighting();
-    }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 1u {
         return diagnostic_landform_sun_grade_moon_coupling();
     }
@@ -72,26 +69,14 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 10u {
         return diagnostic_landform_shadow_tangent_continuity(input);
     }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 15u {
-        return diagnostic_projected_low_cloud_receiver(input);
-    }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 16u {
         return diagnostic_below_datum_cloud_projection(input);
-    }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 18u {
-        return diagnostic_projected_low_cloud_direct_color(input);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 11u {
         return diagnostic_landform_shadow_penumbra_center();
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 12u {
         return diagnostic_landform_shadow_partial_disc_ray();
-    }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 13u {
-        return diagnostic_cloud_shadow_disc_radius(input);
-    }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 14u {
-        return diagnostic_low_cloud_canopy_shadow_disc_radius(input);
     }
     return diagnostic_ambient_with_surface_horizon(LIGHTING_MODEL_SURFACE_HEIGHT_M);
 }

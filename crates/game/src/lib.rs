@@ -87,7 +87,13 @@ const AIR_TEMPERATURE_500_HPA_EVOLUTION_SPEED_M_S: f32 = 6.9;
 const WATER_VAPOR_EVOLUTION_SPEED_M_S: f32 = 6.0;
 const DECORATIVE_WATER_EVOLUTION_SPEED_M_S: f32 = 0.65;
 const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
-const LOW_CLOUD_VISUAL_WAVELENGTH_M: f32 = 640.0;
+// Cumulus cells grow and dissipate within about 10–30 minutes, so the cumulus
+// field's broadest octave crosses one unit of noise time in this period,
+// independently of the wind. Overhead cumulus shadows of still fair-weather
+// views, blurred to a quarter of a cell, then keep a correlation of 1/e for
+// 12–13 minutes, as cells living about 20 minutes would; finer, more
+// convective fields lose it within 3–4 minutes.
+const CUMULUS_EVOLUTION_PERIOD_S: f32 = 5_700.0;
 const WEATHER_CANOPY_VISUAL_WAVELENGTH_M: f32 = 4_000.0;
 const LAND_WIND_SAMPLE_DISTANCES_M: [f32; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 const LAND_WIND_FULL_OBSTRUCTION_HEIGHT_M: f32 = 1.5;
@@ -354,7 +360,7 @@ pub struct ScalarFieldTimeCoordinates {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CloudFieldTimeCoordinates {
-    pub low: f32,
+    pub cumulus: f32,
     pub upper: f32,
 }
 
@@ -2243,11 +2249,11 @@ pub fn cloud_field_time_coordinates_interpolated(
     tick_fraction: f32,
 ) -> CloudFieldTimeCoordinates {
     CloudFieldTimeCoordinates {
-        low: noise_time_coordinate_interpolated(
+        cumulus: noise_time_coordinate_interpolated(
             tick,
             tick_fraction,
             1.0,
-            LOW_CLOUD_VISUAL_WAVELENGTH_M,
+            CUMULUS_EVOLUTION_PERIOD_S,
         ),
         upper: noise_time_coordinate_interpolated(
             tick,

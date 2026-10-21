@@ -743,7 +743,6 @@ pub fn playground_scene_uniforms(
     css_view_height_px: f32,
     view_cloud_motion_m: &[f32],
     exposure_and_output: &[f32],
-    low_cloud_body_size: f32,
     landform_shadow_reach_m: f32,
     terrain_elevation_scale: f32,
     terrain_cache: &mut PlaygroundTerrainCache,
@@ -781,7 +780,6 @@ pub fn playground_scene_uniforms(
         view_size_m,
         view_cloud_motion_m,
         FieldGridTuning {
-            low_cloud_body_size,
             landform_shadow_reach_m,
             terrain_elevation_scale,
         },
@@ -846,10 +844,13 @@ pub fn playground_scene_uniforms(
             0.0,
         ],
         view_cloud_motion_m,
-        cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
+        cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: row(exposure_and_output)?,
         environment_field_grid_m: grids.environment.uniforms,
         environment_field_texels: grids.environment.texel_uniforms(),
+        cloud_weather_grid_m: grids.cloud_weather.uniforms,
+        cloud_weather_texels: grids.cloud_weather.texel_uniforms(),
+        cloud_shadow_grids: grids.cloud_shadow_grids,
         occluder_field_grid_m,
         occluder_field_texels,
         terrain_cache_grid_m: terrain_cache_frame.grid_m,
@@ -861,8 +862,7 @@ pub fn playground_scene_uniforms(
         ocean_wave_modes: ocean_wave_mode_uniforms(geometry, match_seed, tick, tick_fraction),
     };
     let mut field_grid_summary: Vec<f32> = grids
-        .environment
-        .workgroups()
+        .environment_workgroups()
         .into_iter()
         .chain(grids.occluder_workgroups())
         .chain(grids.landform_horizon_workgroups())
@@ -980,6 +980,9 @@ struct SceneUniforms {
     exposure_and_output: [f32; 4],
     environment_field_grid_m: [f32; 4],
     environment_field_texels: [u32; 4],
+    cloud_weather_grid_m: [f32; 4],
+    cloud_weather_texels: [u32; 4],
+    cloud_shadow_grids: [f32; 4],
     occluder_field_grid_m: [[f32; 4]; OCCLUDER_FIELD_LAYERS],
     occluder_field_texels: [[u32; 4]; OCCLUDER_FIELD_LAYERS],
     terrain_cache_grid_m: [f32; 4],
@@ -1077,7 +1080,7 @@ impl EnvironmentFields {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, scene_uniform_bind_group, &[]);
         pass.set_bind_group(1, &self.output_bind_group, &[]);
-        let [columns, rows] = grids.environment.workgroups();
+        let [columns, rows] = grids.environment_workgroups();
         pass.dispatch_workgroups(columns, rows, 1);
     }
 }
@@ -1971,7 +1974,7 @@ impl Renderer {
                     0.0,
                 ],
                 view_cloud_motion_m,
-                cloud_time_coordinates: [cloud_time.low, cloud_time.upper, 0.0, 0.0],
+                cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
                 // WebGPU exposes HDR capability but no numeric display headroom.
                 exposure_and_output: [
                     exposure,
@@ -1981,6 +1984,9 @@ impl Renderer {
                 ],
                 environment_field_grid_m: field_grids.environment.uniforms,
                 environment_field_texels: field_grids.environment.texel_uniforms(),
+                cloud_weather_grid_m: field_grids.cloud_weather.uniforms,
+                cloud_weather_texels: field_grids.cloud_weather.texel_uniforms(),
+                cloud_shadow_grids: field_grids.cloud_shadow_grids,
                 occluder_field_grid_m,
                 occluder_field_texels,
                 terrain_cache_grid_m: terrain_cache_frame.grid_m,

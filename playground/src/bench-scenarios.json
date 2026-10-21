@@ -63,7 +63,7 @@
   },
   {
     "id": "land-interior",
-    "exercises": "Island interior: land detail and micro relief, rock and forest materials, a lit lower-cloud body",
+    "exercises": "Island interior: land detail and micro relief, rock and forest materials, cloud shadows over land",
     "seed": "0x5eed",
     "cameraM": [-8950, 800],
     "viewHeightM": 300,
@@ -222,7 +222,7 @@
   },
   {
     "id": "land-interior-scale-0.5",
-    "exercises": "Island interior upscaled from half scene resolution: lower-cloud edges and fine land detail",
+    "exercises": "Island interior upscaled from half scene resolution: cloud shadow rims and fine land detail",
     "seed": "0x5eed",
     "cameraM": [-8950, 800],
     "viewHeightM": 300,
@@ -327,7 +327,7 @@
   },
   {
     "id": "cumulus-field",
-    "exercises": "Fair-weather cumulus at boat zoom near noon: a lower-cloud body filling the view over open water",
+    "exercises": "Fair-weather cumulus at boat zoom near noon: cumulus shadows over open water",
     "seed": "0x5eed",
     "cameraM": [10030, -16940],
     "viewHeightM": 240,
@@ -335,7 +335,7 @@
   },
   {
     "id": "cumulus-overview",
-    "exercises": "About 16 km view of unstable humid air near noon: a lower-cloud field, its ground shadows and canopy shadows",
+    "exercises": "About 16 km view of unstable humid air near noon: cumulus and deck shadows",
     "seed": "0x5eed",
     "cameraM": [-20500, -16500],
     "viewHeightM": 16000,
@@ -343,7 +343,7 @@
   },
   {
     "id": "frontal-canopy",
-    "exercises": "About 6 km view under a frontal canopy edge with the Sun near 10 degrees: long canopy shadow projections",
+    "exercises": "About 6 km view under a frontal deck edge with the Sun near 10 degrees: long cloud shadow projections",
     "seed": "0x5eed",
     "cameraM": [28500, -16500],
     "viewHeightM": 6000,
@@ -351,7 +351,7 @@
   },
   {
     "id": "storm-edge",
-    "exercises": "About 16 km view across the edge of a rain area near noon: storm canopy, rain contacts and lower clouds beside it",
+    "exercises": "About 16 km view across the edge of a rain area near noon: storm deck, rain contacts and cumulus beside it",
     "seed": "0x5eed",
     "cameraM": [-23500, -16500],
     "viewHeightM": 16000,

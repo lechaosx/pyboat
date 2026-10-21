@@ -792,27 +792,6 @@ fn upper_air_temperature_500_hpa_field_from_noise(
     );
 }
 
-fn broad_upper_air_temperature_500_hpa_c_from_atmosphere(
-    position_m: vec2<f32>,
-    broad_surface_anomaly_c: f32,
-    climate: SurfaceClimateSample,
-) -> f32 {
-    let climate_temperature_c = climate.annual_mean_air_temperature_c
-        - 35.5
-        + 0.25 * climate.seasonal_temperature_range_c
-            * climate.seasonal_latitude_factor
-            * scene.seasonal_phase_factors.x;
-    let independent_noise = 0.75 * spatiotemporal_noise_value(
-        noise_key(AIR_TEMPERATURE_500_HPA_NOISE_FIELD, 0u),
-        position_m,
-        65536.0,
-        scene.scalar_field_time_coordinates.y,
-    );
-    return climate_temperature_c
-        + 0.45 * broad_surface_anomaly_c
-        + 19.0 * independent_noise;
-}
-
 fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
     return 3.5 * exp(0.055 * (air_temperature_c + 5.0));
 }
@@ -1250,65 +1229,6 @@ fn regional_cloud_drivers_from_atmosphere(
     );
 }
 
-fn regional_cloud_drivers_at(position_m: vec2<f32>) -> RegionalCloudDrivers {
-    if environment_feature_visibility().w <= 0.0 {
-        return RegionalCloudDrivers(0.0, 0.0, 0.0);
-    }
-    let climate = surface_climate_sample_at(position_m);
-    var broad_pressure_potential_m2_s = 0.0;
-    if environment_feature_visibility().x > 0.0 {
-        broad_pressure_potential_m2_s = procedural_pressure_sample_filtered_bands(
-            position_m,
-            0.0,
-            1u,
-        ).climate_potential_m2_s;
-    }
-    var broad_temperature_anomaly_c = 0.0;
-    if environment_feature_visibility().y > 0.0 {
-        let scale_c = latitude_curve_value(
-            TEMPERATURE_ANOMALY_SCALE_C,
-            climate.latitude_degrees,
-        );
-        broad_temperature_anomaly_c = scale_c * 0.85 * spatiotemporal_noise_value(
-            noise_key(SURFACE_AIR_TEMPERATURE_NOISE_FIELD, 0u),
-            position_m,
-            65536.0,
-            scene.scalar_field_time_coordinates.x,
-        );
-    }
-    var broad_water_vapor_g_kg = 0.0;
-    if environment_feature_visibility().z > 0.0 {
-        let climate_temperature_c = climate.annual_mean_air_temperature_c
-            + 0.5 * climate.seasonal_temperature_range_c
-                * climate.seasonal_latitude_factor
-                * scene.seasonal_phase_factors.x;
-        let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-        let noise = 0.86 * spatiotemporal_noise_value(
-            noise_key(WATER_VAPOR_NOISE_FIELD, 0u),
-            position_m,
-            8192.0,
-            scene.scalar_field_time_coordinates.z,
-        );
-        broad_water_vapor_g_kg = clamp(
-            capacity_g_kg * (0.72 + 0.65 * noise),
-            0.5,
-            25.0,
-        );
-    }
-    let broad_upper_air_temperature_c = broad_upper_air_temperature_500_hpa_c_from_atmosphere(
-        position_m,
-        broad_temperature_anomaly_c,
-        climate,
-    );
-    return regional_cloud_drivers_from_fields(
-        climate,
-        broad_pressure_potential_m2_s,
-        broad_temperature_anomaly_c,
-        broad_water_vapor_g_kg,
-        broad_upper_air_temperature_c,
-    );
-}
-
 fn cloud_weather_from_atmosphere(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
@@ -1336,6 +1256,9 @@ fn cloud_weather_from_atmosphere_and_upper_air(
 ) -> CloudWeatherSample {
     if environment_feature_visibility().w <= 0.0 {
         return CloudWeatherSample(
+            0.0,
+            0.0,
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -1402,9 +1325,34 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         0.0,
         1.0,
     );
+    // The lagged diurnal response peaks in the afternoon; convection over
+    // water needs water warmer than the air above it.
+    weather.land_heating = smoothstep(
+        0.0,
+        0.5,
+        atmosphere.climate.diurnal_temperature_factor,
+    );
+    weather.sea_warming = smoothstep(
+        -0.5,
+        2.0,
+        water_temperature_c_from_climate(atmosphere.climate) - air_temperature_c,
+    );
     weather.regional = regional_cloud_drivers_from_atmosphere(
         atmosphere,
         upper_air_temperature.broad_value,
+    );
+    return weather;
+}
+
+fn land_fraction_from_broad_elevation_m(elevation_m: f32) -> f32 {
+    return smoothstep(-1.0, 1.0, elevation_m);
+}
+
+// Weather under a cloud, with the land share beneath it.
+fn cloud_weather_with_land_at(position_m: vec2<f32>) -> CloudWeatherSample {
+    var weather = cloud_weather_at(position_m);
+    weather.land_fraction = land_fraction_from_broad_elevation_m(
+        broad_landform_elevation_m(position_m),
     );
     return weather;
 }
@@ -1468,33 +1416,8 @@ fn wind_shear_amount() -> f32 {
     return smoothstep(4.0, 15.0, length(upper_wind_m_s() - surface_wind_m_s()));
 }
 
-fn visible_low_cloud_coverage(weather: CloudWeatherSample) -> f32 {
-    let fair_weather_lift = smoothstep(0.12, 0.68, weather.instability)
-        * (1.0 - 0.90 * weather.stratiform);
-    return weather.low_coverage * mix(0.06, 1.0, fair_weather_lift);
-}
-
-
 fn production_tuning() -> SceneTuning {
     return SceneTuning(
-        vec4<f32>(
-            CLOUD_DETAIL_CHARACTER,
-            CLOUD_DETAIL_BLOBINESS,
-            CLOUD_DETAIL_CONTRAST,
-            CLOUD_DETAIL_EDGE_SOFTNESS,
-        ),
-        vec4<f32>(
-            CLOUD_MAX_WISP_COVERAGE,
-            0.0,
-            1.0,
-            1.0,
-        ),
-        vec4<f32>(
-            CLOUD_OPTICAL_DEPTH,
-            CLOUD_OPACITY,
-            CLOUD_DARKNESS,
-            LOW_CLOUD_PARALLAX,
-        ),
         vec4<f32>(
             TERRAIN_HORIZONTAL_SCALE,
             TERRAIN_ELEVATION_SCALE,
@@ -1513,8 +1436,7 @@ fn production_tuning() -> SceneTuning {
             LANDFORM_SHADOW_REACH_M,
             0.0,
         ),
-        vec4<f32>(0.18, 0.14, 0.0, 0.0),
-        vec4<f32>(1.0, 1.0, 0.85, CLOUD_OPACITY),
+        vec4<f32>(1.0, 0.85, 1.0, 0.0),
         vec4<f32>(2.5, 0.20, 1.0, 1.0),
         vec4<f32>(0.18, 0.32, 1.0, 1.0),
         vec4<f32>(192.0, 1.0, 1.0, 1.0),

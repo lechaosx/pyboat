@@ -10,13 +10,9 @@ export type DiagnosticId =
   | "weather_sky_fraction"
   | "weather_canopy_optical_thickness"
   | "weather_rain"
-  | "cloud_low_latent_texture"
-  | "cloud_low_optical_depth"
-  | "cloud_low_normals"
-  | "cloud_weather_canopy_optical_depth"
-  | "lighting_projected_low_shadow"
-  | "lighting_projected_upper_shadow"
-  | "lighting_combined_transmittance"
+  | "cloud_cumulus_shadow"
+  | "cloud_deck_shadow"
+  | "lighting_cloud_transmittance"
   | "lighting_ambient_sky_occlusion"
   | "lighting_solar_elevation"
   | "lighting_low_cloud_sun_visibility"
@@ -119,25 +115,15 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
     name: "atmosphere_conditions",
     constants: { ATMOSPHERE_CONDITION_OUTPUT: 6 },
   },
-  cloud_low_latent_texture: { name: "cloud_low_latent_texture" },
-  cloud_low_optical_depth: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 0 } },
-  cloud_low_normals: { name: "cloud_low_sample", constants: { CLOUD_LOW_OUTPUT: 1 } },
-  cloud_weather_canopy_optical_depth: { name: "cloud_weather_canopy_optical_depth" },
-  lighting_projected_low_shadow: {
+  cloud_cumulus_shadow: { name: "cloud_field", constants: { CLOUD_FIELD_OUTPUT: 0 } },
+  cloud_deck_shadow: { name: "cloud_field", constants: { CLOUD_FIELD_OUTPUT: 1 } },
+  lighting_cloud_transmittance: {
     name: "lighting_cloud_shadow",
     constants: { CLOUD_SHADOW_OUTPUT: 0 },
   },
-  lighting_projected_upper_shadow: {
-    name: "lighting_cloud_shadow",
-    constants: { CLOUD_SHADOW_OUTPUT: 1 },
-  },
-  lighting_combined_transmittance: {
-    name: "lighting_cloud_shadow",
-    constants: { CLOUD_SHADOW_OUTPUT: 2 },
-  },
   lighting_ambient_sky_occlusion: {
     name: "lighting_cloud_shadow",
-    constants: { CLOUD_SHADOW_OUTPUT: 3 },
+    constants: { CLOUD_SHADOW_OUTPUT: 1 },
   },
   lighting_solar_elevation: {
     name: "lighting_solar",
@@ -246,13 +232,9 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["wind_broad_synoptic", "Broad / synoptic circulation · RGB"],
     ] },
     { label: "Rendered consequences", options: [
-      ["cloud_low_latent_texture", "Low latent texture"],
-      ["cloud_low_optical_depth", "Low optical depth"],
-      ["cloud_low_normals", "Low normals"],
-      ["cloud_weather_canopy_optical_depth", "Canopy optical depth"],
-      ["lighting_projected_low_shadow", "Projected low shadow"],
-      ["lighting_projected_upper_shadow", "Projected upper shadow"],
-      ["lighting_combined_transmittance", "Combined transmittance"],
+      ["cloud_cumulus_shadow", "Overhead cumulus shadow"],
+      ["cloud_deck_shadow", "Overhead deck shadow"],
+      ["lighting_cloud_transmittance", "Cloud transmittance"],
       ["lighting_solar_elevation", "Solar elevation"],
       ["lighting_low_cloud_sun_visibility", "Sun visible at low clouds"],
       ["lighting_canopy_sun_visibility", "Sun visible at canopy"],

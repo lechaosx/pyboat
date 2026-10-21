@@ -3,7 +3,6 @@
 fn initialize_baked_surface_generation(position_m: vec2<f32>, spacing_m: f32) {
     visual_pixel_footprint_m = spacing_m;
     tuning = production_tuning();
-    layer_visibility = vec4<f32>(1.0);
     landscape_visibility = vec4<f32>(1.0);
     atmosphere_model = vec4<f32>(1.0);
     climate_visibility = vec4<f32>(1.0);

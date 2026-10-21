@@ -149,7 +149,11 @@ and verification details.
   per-frame grid anchored to world coordinates, with spacing matched to the
   fields' finest detail. Physics samples where needed; a view-center weather
   sample never supplies the surface scene.
-- **[Implicit]** Environment field grids store seeded noise and the terms
+- **[Implicit]** The scene's environment grid covers the view alone.
+- **[Implicit]** Cloud shadow texels read what the weather under each cloud
+  sets for it from a coarser cloud weather grid, whose window covers every such
+  read by construction.
+- **[Implicit]** The scene's environment grid stores seeded noise and the terms
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
   stay per pixel.
@@ -176,13 +180,16 @@ and verification details.
   field grids.
 - **[Explicit]** Regional canopy fraction and cloudy-sky optical thickness come
   from broad existing weather causes at the receiver, independently of overhead
-  texture and directional shadow samples. That fraction also governs detailed
-  canopy coverage. Ambient aerosol/scattering remains regional; direct Sun/Moon
-  colors retain local humidity, rain, and aerosol response.
+  texture and directional shadow samples. Taken under each deck, the regional
+  fraction governs only deck and overcast cover; cumulus cover follows local
+  convective triggers at each cloud's own position. Ambient aerosol/scattering
+  remains regional; direct Sun/Moon colors retain local humidity, rain, and
+  aerosol response.
 - **[Explicit]** Diffuse solar and lunar light have daylight, lower twilight, and
   weaker upper-afterglow bands. Lunar bands follow phase and eclipse; thin canopy
   approaches clear sky, moderate canopy scatters available celestial light, and
-  thick canopy absorbs it. High ice-cloud effects belong in canopy/sky diffusion.
+  thick canopy absorbs it. High ice cloud's diffuse effects belong in
+  canopy/sky diffusion; its direct shadow comes from the upper field.
 - **[Explicit]** A single world clock drives a 24-hour day, 365-day year, and
   independent 28-day lunar phase cycle, with northern winter solstice at season
   zero. Sun/Moon geometry determines illumination, tides, and eclipses; finite
@@ -201,6 +208,14 @@ and verification details.
   pixel compares its own height with them.
 - **[Explicit]** Cloud shadows sample each light once per pixel; their softness
   comes from the cloud field.
+- **[Explicit]** Each cloud type's octaves fade out at the width of the light's
+  disc at the slant distance to that type, so the field holds no detail the
+  disc would blur away.
+- **[Explicit]** Cloud shadow rims span at least the disc's penumbra.
+- **[Implicit]** The Moon's cloud shadows fade out at each receiver where the
+  Moon supplies less than a just-noticeable share of the receiver's clear-sky
+  light. The Moon's cloud shadow grid is not evaluated while that share stays
+  negligible everywhere in view.
 - **[Explicit]** Every shadow type removes the same share of direct light for the
   same occlusion: a landform blocking the whole disc is as dark as the densest cloud.
 - **[Explicit]** Under a low light above the cutoff, horizon dimming and
@@ -218,14 +233,17 @@ and verification details.
 - **[Implicit]** The march steps from a sixteenth of the high-light reach out to
   the march's reach, with steps that widen in proportion to distance beyond a
   fixed shortest step.
-- **[Explicit]** Canopy shadows follow one darkness curve over cloud bodies and
-  on the ground.
-- **[Implicit]** That curve is extinction along the slant path through the layer.
-- **[Implicit]** Low-cloud shadows on the ground follow the same curve.
-- **[Explicit]** Lower clouds and canopy are continuous global periodic fields.
-  Each layer's amount drives its body, optical depth, and shadows.
-  Renderer-local integrated view-center wind translates latent texture
-  one-to-one while weather stays at world positions; ground shadows stay world-anchored.
+- **[Explicit]** Upper-field shadows follow one darkness curve over cloud bodies
+  and on the ground.
+- **[Implicit]** That curve is extinction along each cloud type's slant path
+  through its own height.
+- **[Explicit]** The upper field is a set of cloud types, each a continuous
+  global periodic field at its own height. Renderer-local integrated view-center
+  wind translates each type's latent texture one-to-one, cumulus with the low
+  wind, decks with the upper wind, and cirrus faster, while weather stays at
+  world positions; ground shadows stay world-anchored.
+- **[Explicit]** Cumulus evolve over real cell lifetimes, independently of the
+  wind.
 - **[Explicit]** At wide views, where per-frame grids coarsen, clouds may soften
   and small clouds may vanish.
 
@@ -241,16 +259,19 @@ and verification details.
   backlog. The browser owns display synchronization and presentation buffering.
 - **[Explicit]** A frame-rate cap skips only rendering; input, simulation, and
   prediction run every display frame.
-- **[Explicit]** Lower-cloud bodies and optical depth, canopy optical depth, and
-  broad landform elevation are reconstructed from per-frame grids.
+- **[Explicit]** Each light's cloud shadow and broad landform elevation are
+  reconstructed from per-frame grids; each light's cloud shadow comes from one
+  grid on a plane above every shadow receiver.
 - **[Explicit]** Grid spacing follows each field's finest detail, not the pixel
   footprint; landform grids also resolve the finite-disc penumbra.
 - **[Explicit]** Grid windows bound every finite-disc shadow tap from the light
   geometry and every landform sample from the shadow reach, so coverage holds by
   construction and the scene reads these fields only from grids.
-- **[Implicit]** Lower-cloud and canopy grids move with their layer's cloud
-  transport, so translating latent texture is never resampled; landform grids
-  stay fixed to the world.
+- **[Implicit]** Cloud shadow grids move with the cumulus transport, so cumulus
+  texture is never resampled, while decks and cirrus are resampled on that
+  lattice; landform grids stay fixed to the world.
+- **[Implicit]** Each cloud shadow grid's shortest resolved wavelength changes
+  smoothly with zoom.
 - **[Explicit]** Resizes take effect on the next frame at the latest dimensions
   by reconfiguring the surface; per-frame field grid textures keep their size.
 - **[Explicit]** Canvas backing resolution follows CSS size at the device pixel
@@ -431,4 +452,5 @@ and verification details.
 | Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
 | Edge smoothing | Whether shorelines and the sea-ice edge get smoothing as a look option |
 | Tidal wet band | How the wet band follows flat tidal coasts |
+| Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |

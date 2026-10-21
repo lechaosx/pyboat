@@ -76,10 +76,8 @@ let directReference = false;
 let occluderFieldInspection = 0;
 let occluderFieldInfoElement: HTMLElement | undefined;
 const occluderFieldLayers = [
-  { name: "Low-cloud body", color: "#dde3ea" },
-  { name: "Sun low-cloud shadow", color: "#ff9e38" },
-  { name: "Moon low-cloud shadow", color: "#8cb8ff" },
-  { name: "Canopy", color: "#b873ff" },
+  { name: "Sun cloud shadow", color: "#ff9e38" },
+  { name: "Moon cloud shadow", color: "#8cb8ff" },
   { name: "Landform", color: "#33bf4d" },
   { name: "Sun landform horizon", color: "#ffd84d" },
   { name: "Moon landform horizon", color: "#7f8cff" },
@@ -113,26 +111,7 @@ type State = {
   waterColorVisible: number;
   bottomColorVisible: number;
   seaIceColorVisible: number;
-  lowCloudColorVisible: number;
-  detailCharacter: number;
-  detailBlobiness: number;
-  detailContrast: number;
-  detailEdgeSoftness: number;
-  maxWispCoverage: number;
-  cloudNormalStrength: number;
-  lowCloudBodySize: number;
-  lowCloudOccurrence: number;
-  opticalDepth: number;
-  opacity: number;
-  darkness: number;
-  lowCloudParallax: number;
-  cloudSelfShadowVisible: number;
-  cloudEdgeLightStrength: number;
-  cloudSelfShadowStrength: number;
-  lowCloudShadowsVisible: number;
-  canopyShadowsVisible: number;
-  lowCloudShadowStrength: number;
-  canopyShadowStrength: number;
+  cloudShadowsVisible: number;
   cloudShadowDensity: number;
   cloudShadowOpacity: number;
   legacyShadowLook: number;
@@ -210,26 +189,7 @@ const defaults: State = {
   waterColorVisible: 1,
   bottomColorVisible: 1,
   seaIceColorVisible: 1,
-  lowCloudColorVisible: 1,
-  detailCharacter: 0.35,
-  detailBlobiness: 0.25,
-  detailContrast: 1.15,
-  detailEdgeSoftness: 0.06,
-  maxWispCoverage: 0.25,
-  cloudNormalStrength: 0,
-  lowCloudBodySize: 1,
-  lowCloudOccurrence: 1,
-  opticalDepth: 1,
-  opacity: 1,
-  darkness: 1,
-  lowCloudParallax: 1,
-  cloudSelfShadowVisible: 1,
-  cloudEdgeLightStrength: 0.18,
-  cloudSelfShadowStrength: 0.14,
-  lowCloudShadowsVisible: 1,
-  canopyShadowsVisible: 1,
-  lowCloudShadowStrength: 1,
-  canopyShadowStrength: 1,
+  cloudShadowsVisible: 1,
   cloudShadowDensity: 0.85,
   cloudShadowOpacity: 1,
   legacyShadowLook: 0,
@@ -573,26 +533,7 @@ const tuningGroups: readonly TuningGroup[] = [
   {
     label: "Clouds",
     controls: [
-      { type: "toggle", key: "lowCloudColorVisible", label: "Cloud body" },
-      { type: "range", key: "detailCharacter", label: "Detail character", min: 0, max: 1, step: 0.05 },
-      { type: "range", key: "detailBlobiness", label: "Blobiness", min: 0, max: 1, step: 0.05 },
-      { type: "range", key: "maxWispCoverage", label: "Wisp coverage", min: 0, max: 0.95, step: 0.05 },
-      { type: "range", key: "lowCloudBodySize", label: "Body size", min: 0.25, max: 4, step: 0.05 },
-      { type: "range", key: "lowCloudOccurrence", label: "Occurrence", min: 0, max: 4, step: 0.05 },
-      { type: "range", key: "detailContrast", label: "Shape contrast", min: 0.25, max: 2.5, step: 0.05 },
-      { type: "range", key: "detailEdgeSoftness", label: "Edge softness", min: 0.005, max: 0.25, step: 0.005 },
-      { type: "range", key: "cloudNormalStrength", label: "Normal strength", min: 0, max: 1, step: 0.05 },
-      { type: "range", key: "opticalDepth", label: "Optical depth", min: 0, max: 3, step: 0.05 },
-      { type: "range", key: "opacity", label: "Opacity", min: 0, max: 1.5, step: 0.05 },
-      { type: "range", key: "darkness", label: "Darkening", min: 0, max: 2, step: 0.05 },
-      { type: "range", key: "lowCloudParallax", label: "Parallax", min: 0, max: 2, step: 0.05 },
-      { type: "range", key: "cloudEdgeLightStrength", label: "Edge light", min: 0, max: 0.6, step: 0.01 },
-      { type: "toggle", key: "cloudSelfShadowVisible", label: "Self-shadow" },
-      { type: "range", key: "cloudSelfShadowStrength", label: "Self-shadow", min: 0, max: 0.6, step: 0.01 },
-      { type: "toggle", key: "lowCloudShadowsVisible", label: "Low-cloud shadows" },
-      { type: "range", key: "lowCloudShadowStrength", label: "Low-cloud depth", min: 0, max: 2, step: 0.05 },
-      { type: "toggle", key: "canopyShadowsVisible", label: "Canopy shadows" },
-      { type: "range", key: "canopyShadowStrength", label: "Canopy depth", min: 0, max: 2, step: 0.05 },
+      { type: "toggle", key: "cloudShadowsVisible", label: "Cloud shadows" },
       { type: "range", key: "cloudShadowDensity", label: "Density", min: 0, max: 2, step: 0.05 },
       { type: "range", key: "cloudShadowOpacity", label: "Opacity", min: 0, max: 1, step: 0.05 },
     ],
@@ -1127,7 +1068,7 @@ function frameRateCap(): number | undefined {
   return state.frameRateCap > 0 ? state.frameRateCap : undefined;
 }
 let sceneUniforms: Uint8Array = new Uint8Array(playground_scene_uniform_bytes());
-const tuningFloats = new Float32Array(108);
+const tuningFloats = new Float32Array(88);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1576,16 +1517,13 @@ function updateUniforms(
     0,
     0,
   ] as const;
-  const layerMaterial = [enabled("lowCloudColorVisible"), 0, 0, 0] as const;
   const surfaceColorLayer = landMaterial.some(Boolean)
     || solidMaterial.some(Boolean)
     || waterMaterial.some(Boolean);
-  const anyColorLayer = surfaceColorLayer || layerMaterial[0] > 0;
-  const anyContribution = anyColorLayer && light.some(Boolean);
   const surfaceDirectContribution = surfaceColorLayer
     && (light[0] > 0 || light[1] > 0);
   const intermediate = deriveIntermediateVisibility({
-    colorLayer: anyColorLayer,
+    colorLayer: surfaceColorLayer,
     sun: light[0] > 0,
     moon: light[1] > 0,
     clearSkyAmbient: light[2] > 0,
@@ -1630,7 +1568,6 @@ function updateUniforms(
       Number(canvasHdr),
       (presentationTimeMs * 0.008) % 4096,
     ]),
-    state.lowCloudBodySize,
     state.landformShadowReach,
     state.elevationScale,
     terrainCache,
@@ -1646,125 +1583,108 @@ function updateUniforms(
   bakedSurfaceWorkgroups = frame.baked_surface_workgroups;
   frame.free();
 
-  tuningFloats.set([
-    state.detailCharacter, state.detailBlobiness, state.detailContrast, state.detailEdgeSoftness,
-  ], 0);
-  tuningFloats.set([
-    state.maxWispCoverage,
-    state.cloudNormalStrength,
-    state.lowCloudBodySize,
-    state.lowCloudOccurrence,
-  ], 4);
-  tuningFloats.set([state.opticalDepth, state.opacity, state.darkness, state.lowCloudParallax], 8);
-  tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 12);
+  tuningFloats.set([state.terrainScale, state.elevationScale, state.cliffSlope, 0], 0);
   tuningFloats.set([
     state.waterAttenuationLength,
     state.bottomVisibility,
     state.bottomReflectance,
     state.bottomVeil,
-  ], 16);
+  ], 4);
   tuningFloats.set([
     state.landformReliefStrength,
     state.landformShadowsVisible * state.landformShadowStrength,
     state.landformShadowReach,
     0,
-  ], 20);
+  ], 8);
   tuningFloats.set([
-    state.cloudEdgeLightStrength,
-    state.cloudSelfShadowVisible * state.cloudSelfShadowStrength,
-    0,
-    0,
-  ], 24);
-  tuningFloats.set([
-    state.lowCloudShadowsVisible * state.lowCloudShadowStrength,
-    state.canopyShadowsVisible * state.canopyShadowStrength,
+    state.cloudShadowsVisible,
     state.cloudShadowDensity,
     state.cloudShadowOpacity,
-  ], 28);
+    0,
+  ], 12);
   tuningFloats.set([
     state.waterWaveNormalStrength,
     state.waterCapillaryNormalStrength,
     state.waterRainNormalStrength,
     state.waterRoughnessScale,
-  ], 32);
+  ], 16);
   tuningFloats.set([
     state.landIceNormalStrength,
     state.landIceRoughness,
     state.seaIceNormalStrength,
     state.seaIceRoughnessScale,
-  ], 36);
+  ], 20);
   tuningFloats.set([
     state.seaIcePlateSize,
     state.seaIceFractureWidth,
     state.seaIceFractureContrast,
     state.seaIceShallowTint,
-  ], 40);
+  ], 24);
   tuningFloats.set([
     state.rockNormalStrength,
     state.grassNormalStrength,
     state.forestNormalStrength,
     state.snowNormalStrength,
-  ], 44);
+  ], 28);
   tuningFloats.set([
     state.forestCoverage,
     state.rockCoverage,
     state.beachCoverage,
     state.snowCoverage,
-  ], 48);
+  ], 32);
   tuningFloats.set([
     state.sunLightStrength,
     state.moonLightStrength,
     state.skyLightStrength,
     state.canopyLightStrength,
-  ], 52);
+  ], 36);
   tuningFloats.set([
-    Number(anyContribution),
+    0,
     Number(surfaceDirectContribution),
-    Number(surfaceDirectContribution),
-    Number(layerMaterial[0] > 0 && light.some(Boolean)),
-  ], 56);
+    0,
+    0,
+  ], 40);
   tuningFloats.set([
     1,
     1,
     1,
     1,
-  ], 60);
+  ], 44);
   tuningFloats.set([
     state.pressureWindScale,
     state.crossIsobarScale,
     state.thermalWindScale,
     state.shelterStrength,
-  ], 64);
+  ], 48);
   tuningFloats.set([
     1,
     1,
     0,
     1,
-  ], 68);
-  tuningUints.set(light, 72);
-  tuningUints.set(landMaterial, 76);
-  tuningUints.set(solidMaterial, 80);
-  tuningUints.set(waterMaterial, 84);
-  tuningUints.set(layerMaterial, 88);
+  ], 52);
+  tuningUints.set(light, 56);
+  tuningUints.set(landMaterial, 60);
+  tuningUints.set(solidMaterial, 64);
+  tuningUints.set(waterMaterial, 68);
   tuningFloats.set([
     visible(intermediate.pressure),
     visible(intermediate.temperature),
     visible(intermediate.moisture),
     visible(intermediate.weather),
-  ], 92);
+  ], 72);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.oceanForcing),
     visible(intermediate.waveSpectrum),
     visible(intermediate.materials),
-  ], 96);
+  ], 76);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.materials),
     0,
     0,
-  ], 100);
-  tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 104);
+  ], 80);
+  tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 84);
   const tuning = new Uint8Array(tuningFloats.buffer);
   if (!productionShaders && tuning.some((byte, index) => byte !== bakedTuning[index])) {
     bakedSurface.invalidate();

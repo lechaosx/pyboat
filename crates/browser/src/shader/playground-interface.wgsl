@@ -1,11 +1,7 @@
 struct PlaygroundUniforms {
-    cloud_detail: vec4<f32>,
-    cloud_wisps: vec4<f32>,
-    cloud_rendering: vec4<f32>,
     terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
-    cloud_lighting: vec4<f32>,
     cloud_shadows: vec4<f32>,
     water_surface: vec4<f32>,
     ice_surface: vec4<f32>,
@@ -21,7 +17,6 @@ struct PlaygroundUniforms {
     land_material_color_visibility: vec4<u32>,
     solid_material_color_visibility: vec4<u32>,
     water_material_color_visibility: vec4<u32>,
-    layer_material_color_visibility: vec4<u32>,
     environment_features: vec4<f32>,
     material_features: vec4<f32>,
     effect_features: vec4<f32>,
@@ -33,13 +28,9 @@ var<uniform> playground: PlaygroundUniforms;
 
 fn playground_scene_tuning() -> SceneTuning {
     return SceneTuning(
-        playground.cloud_detail,
-        playground.cloud_wisps,
-        playground.cloud_rendering,
         playground.terrain_tuning,
         playground.water_tuning,
         playground.landform_lighting,
-        playground.cloud_lighting,
         playground.cloud_shadows,
         playground.water_surface,
         playground.ice_surface,
@@ -59,7 +50,6 @@ struct InitializedPlaygroundScene {
 fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = playground_scene_tuning();
-    layer_visibility = vec4<f32>(1.0);
     landscape_visibility = playground.landscape_visibility;
     atmosphere_model = playground.wind_model;
     climate_visibility = playground.climate_visibility;
@@ -108,10 +98,6 @@ fn solid_material_color_visibility() -> vec4<f32> {
 
 fn water_material_color_visibility() -> vec2<f32> {
     return vec2<f32>(playground.water_material_color_visibility.xy);
-}
-
-fn low_cloud_material_color_visibility() -> f32 {
-    return f32(playground.layer_material_color_visibility.x);
 }
 
 fn initialize_playground_weather() {
