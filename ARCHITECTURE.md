@@ -243,8 +243,8 @@ and verification details.
   prediction run every display frame.
 - **[Explicit]** Lower-cloud bodies and optical depth, canopy optical depth, and
   broad landform elevation are reconstructed from per-frame grids.
-- **[Explicit]** Grid spacing follows each field's finest detail and the
-  finite-disc penumbra, not the pixel footprint.
+- **[Explicit]** Grid spacing follows each field's finest detail, not the pixel
+  footprint; landform grids also resolve the finite-disc penumbra.
 - **[Explicit]** Grid windows bound every finite-disc shadow tap from the light
   geometry and every landform sample from the shadow reach, so coverage holds by
   construction and the scene reads these fields only from grids.
