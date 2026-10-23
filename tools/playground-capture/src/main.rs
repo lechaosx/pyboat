@@ -693,7 +693,7 @@ fn default_options() -> Options {
         quality: GraphicsQuality::High,
         legacy_shadow_look: false,
         light_balance: [1.0; 4],
-        cloud_shadows: [1.0, 0.85, 1.0, 0.0],
+        cloud_shadows: [1.0, 1.0, 1.0, 0.0],
         landform_lighting: [1.0, 1.0, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
@@ -1077,12 +1077,28 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 0.0),
             ],
         ),
-        "lighting_canopy_transfer_thick" => diagnostic(
+        "lighting_canopy_transfer_veil" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 1.0),
+            ],
+        ),
+        "lighting_canopy_transfer_thin" => diagnostic(
             value,
             "lighting_canopy_transfer",
             &[
                 ("CANOPY_TRANSFER_OUTPUT", 1.0),
                 ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 6.0),
+            ],
+        ),
+        "lighting_canopy_transfer_thick" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 1.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 30.0),
             ],
         ),
         "lighting_night_vision_unadapted" => diagnostic(

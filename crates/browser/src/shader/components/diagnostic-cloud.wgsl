@@ -53,15 +53,19 @@ fn diagnostic_lighting_canopy_sun_visibility(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> {
-    let canopy = regional_canopy_conditions(surface_cloud_weather);
-    let underside_escape = exp(-0.42 * canopy.mean_optical_thickness);
-    let scattering = moon_canopy_scattered_light(
-        canopy.mean_optical_thickness,
-        underside_escape,
-        celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M),
+    let receiver = celestial_receiver_light_at_height(0.0);
+    let ambient = calculate_atmospheric_ambient_light(
+        regional_canopy_conditions(surface_cloud_weather),
+        receiver,
     );
-    let luminance = canopy.sky_fraction
-        * dot(scattering, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
+    let luminance = ambient.canopy_scattered_beams.y * dot(
+        calculate_moon_light_color_for_direction(
+            regional_horizon_scattering,
+            canopy_receiver.moon_direction,
+        ),
+        vec3<f32>(0.2126, 0.7152, 0.0722),
+    );
     return vec4<f32>(scalar_debug_color(luminance / 0.05), 1.0);
 }
 
@@ -340,7 +344,7 @@ fn diagnostic_receiver_ambient_share(surface_height_m: f32) -> vec4<f32> {
         calculate_atmospheric_ambient_light(
             RegionalCanopyConditions(0.0, 0.0),
             receiver,
-        ).split.diffuse_shares.x,
+        ).split.diffuse_share,
     ), 1.0);
 }
 

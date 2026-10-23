@@ -190,7 +190,7 @@ const defaults: State = {
   bottomColorVisible: 1,
   seaIceColorVisible: 1,
   cloudShadowsVisible: 1,
-  cloudShadowDensity: 0.85,
+  cloudShadowDensity: 1,
   cloudShadowOpacity: 1,
   legacyShadowLook: 0,
   terrainScale: 1,

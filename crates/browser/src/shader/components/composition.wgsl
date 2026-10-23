@@ -25,11 +25,8 @@ fn fragment_surface_color(
         moon_cloud_shadow_weight(direct_light, ambient_light),
     );
     let split = ambient_light.split;
-    let ambient = split.diffuse_shares.x * (
-        contribution.z * ambient_light.clear_sky
-            + contribution.w * ambient_light.canopy
-    )
-        + contribution.w * split.diffuse_shares.y * ambient_light.canopy_scattered;
+    let ambient = split.diffuse_share * contribution.z * ambient_light.clear_sky
+        + contribution.w * (ambient_light.canopy + ambient_light.canopy_scattered);
     let sun_light = split.direct.x * sun_direct_light_color();
     let moon_light = split.direct.y * moon_direct_light_color(direct_light);
     let beam_transmittance = bounce_conditions.cumulus_beam_transmittance

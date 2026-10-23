@@ -70,7 +70,7 @@ fn diagnostic_atmosphere_condition(input: VertexOutput, output: u32) -> vec4<f32
     }
     if output == 5u {
         let canopy = regional_canopy_conditions(weather);
-        return vec4<f32>(scalar_debug_color(canopy.mean_optical_thickness / 5.43), 1.0);
+        return vec4<f32>(scalar_debug_color(canopy.mean_optical_thickness / 100.0), 1.0);
     }
     if output == 6u {
         return vec4<f32>(scalar_debug_color(weather.rain), 1.0);

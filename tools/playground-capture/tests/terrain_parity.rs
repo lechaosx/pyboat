@@ -638,6 +638,89 @@ fn rendered_cloud_layer_sun_visibility_uses_the_world_horizon() {
 }
 
 #[test]
+fn full_canopy_keeps_a_moonless_night_no_brighter_than_clear_sky() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let world_time_seconds = (0..28 * 24 * 6)
+        .map(|step| step as f64 * 600.0)
+        .find(|time| {
+            let light = celestial_lighting(world_celestial_conditions(world, *time, position_m));
+            // Still above the canopy's horizon, so the canopy could see the Sun.
+            (-30.0_f32.to_radians().sin()..-25.0_f32.to_radians().sin())
+                .contains(&light.sun_direction[2])
+                && light.moon_direction[2] < (-10.0_f32).to_radians().sin()
+        })
+        .expect("the lunar month should hold a moonless night");
+    let render = |diagnostic| {
+        render_diagnostic_image_at(world, position_m, world_time_seconds, diagnostic, 1, 1)
+    };
+    let clear = render("lighting_canopy_transfer_clear");
+    let thin = render("lighting_canopy_transfer_thin");
+    let thick = render("lighting_canopy_transfer_thick");
+    // A full deck stops the Sun's beam where it crosses the deck's level on the
+    // far side, so the underside receives none of it and the canopy passes only
+    // part of the night sky's light.
+    let tolerance = |left: &[u8], right: &[u8]| 1.0 + green_step(left) + green_step(right);
+    assert!(
+        linear_luminance(&thin) <= tolerance(&thin, &clear) * linear_luminance(&clear),
+        "thin canopy {:?} against clear sky {:?}",
+        &thin[..3],
+        &clear[..3],
+    );
+    assert!(
+        linear_luminance(&thick) <= tolerance(&thick, &thin) * linear_luminance(&thin),
+        "thick canopy {:?} against thin canopy {:?}",
+        &thick[..3],
+        &thin[..3],
+    );
+}
+
+#[test]
+fn thin_full_canopy_passes_twilight_sky_light() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    for sun_degrees in [0.0_f32, -3.5, -7.0] {
+        let target_z = sun_degrees.to_radians().sin();
+        let time_seconds = (0..28 * 24 * 6)
+            .map(|step| step as f64 * 600.0)
+            .filter(|time| {
+                let light =
+                    celestial_lighting(world_celestial_conditions(world, *time, position_m));
+                light.moon_direction[2] < (-10.0_f32).to_radians().sin()
+            })
+            .min_by(|left, right| {
+                let offset = |time| {
+                    let light =
+                        celestial_lighting(world_celestial_conditions(world, time, position_m));
+                    (light.sun_direction[2] - target_z).abs()
+                };
+                offset(*left).total_cmp(&offset(*right))
+            })
+            .unwrap();
+        let render = |diagnostic| {
+            render_diagnostic_image_at(world, position_m, time_seconds, diagnostic, 1, 1)
+        };
+        let clear = render("lighting_canopy_transfer_clear");
+        // A full canopy of optical depth 0 and 1: with the Sun at or below the
+        // canopy's level its light reaches the layer diffuse, which passes the
+        // two-stream diffuse transmittance 2 / (2 + (1 - g) tau).
+        for (diagnostic, optical_depth) in [
+            ("lighting_canopy_transfer_zero", 0.0_f32),
+            ("lighting_canopy_transfer_veil", 1.0),
+        ] {
+            let covered = render(diagnostic);
+            let transmittance = 2.0 / (2.0 + 0.15 * optical_depth);
+            let lowest = transmittance / (1.0 + green_step(&covered) + green_step(&clear));
+            let ratio = linear_luminance(&covered) / linear_luminance(&clear);
+            assert!(
+                ratio >= lowest,
+                "{diagnostic}: ratio {ratio} below {lowest} with the Sun at {sun_degrees} degrees",
+            );
+        }
+    }
+}
+
+#[test]
 fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
@@ -688,7 +771,7 @@ fn full_moon_canopy_scattering_tracks_canopy_coverage() {
 }
 
 #[test]
-fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_attenuates_thick_canopy() {
+fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_transmits_as_a_two_stream_layer() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let world_time_seconds = (0..24 * 60)
@@ -717,20 +800,52 @@ fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_attenuates_thick_ca
     );
     assert_rgb_close(&clear, &zero, 1);
 
-    let thick = render_diagnostic_image_at(
-        world,
-        position_m,
-        world_time_seconds,
-        "lighting_canopy_transfer_thick",
-        1,
-        1,
-    );
-    assert!(
-        linear_luminance(&thick) < linear_luminance(&zero),
-        "zero {:?}, thick {:?}",
-        &zero[..3],
-        &thick[..3],
-    );
+    // Two-stream transmittance 2 / (2 + (1 - g) tau / mu) of a conservatively
+    // scattering layer with droplet asymmetry g = 0.85: diffuse sky light
+    // crosses it at mu = 1 and the Sun's beam at its own height, so light on
+    // level ground falls between the two at every Sun height.
+    for sun_degrees in [14.0_f32, 30.0, 53.0, 70.0] {
+        let target_z = sun_degrees.to_radians().sin();
+        let time_seconds = (0..365 * 24 * 6)
+            .map(|step| step as f64 * 600.0)
+            .min_by(|left, right| {
+                let offset = |time| {
+                    let light =
+                        celestial_lighting(world_celestial_conditions(world, time, position_m));
+                    (light.sun_direction[2] - target_z).abs()
+                };
+                offset(*left).total_cmp(&offset(*right))
+            })
+            .unwrap();
+        let sun_z = celestial_lighting(world_celestial_conditions(world, time_seconds, position_m))
+            .sun_direction[2];
+        let clear = render_diagnostic_image_at(
+            world,
+            position_m,
+            time_seconds,
+            "lighting_canopy_transfer_clear",
+            1,
+            1,
+        );
+        for (diagnostic, optical_depth) in [
+            ("lighting_canopy_transfer_thin", 6.0),
+            ("lighting_canopy_transfer_thick", 30.0),
+        ] {
+            let covered =
+                render_diagnostic_image_at(world, position_m, time_seconds, diagnostic, 1, 1);
+            let transmittance = |mu: f32| 2.0 / (2.0 + 0.15 * optical_depth / mu);
+            // 3% absorbs the 8-bit steps of a one-pixel capture, under 1% at these
+            // levels, and the colours of sky light and the Sun's beam, whose
+            // luminance weights mix the two transmittances slightly off their
+            // shares of the light.
+            let (lowest, highest) = (0.97 * transmittance(sun_z), 1.03 * transmittance(1.0));
+            let ratio = linear_luminance(&covered) / linear_luminance(&clear);
+            assert!(
+                (lowest..=highest).contains(&ratio),
+                "{diagnostic}: ratio {ratio} outside {lowest}..{highest} at sun z {sun_z}",
+            );
+        }
+    }
 }
 
 #[test]
@@ -2117,8 +2232,10 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
         mean < 0.045 * direct_light,
         "mean grid/direct byte difference {mean} against {direct_light} of direct light"
     );
+    // Grids soften opaque deck rims by up to about 5 bytes beside the seam and
+    // up to 10 in the columns elsewhere in this view where only cloud shadows differ.
     assert!(
-        seam_maximum < 3.0,
+        seam_maximum < 6.0,
         "maximum grid/direct byte difference beside the seam: {seam_maximum}"
     );
 }
@@ -3746,6 +3863,13 @@ fn channel_range(bytes: &[u8], channel: usize) -> f32 {
         .max()
         .unwrap();
     f32::from(maximum - minimum) / 255.0
+}
+
+// Relative change of linear light across one 8-bit step of a pixel's green
+// channel, which carries most of its luminance.
+fn green_step(pixel: &[u8]) -> f32 {
+    srgb_channel_to_linear(pixel[1].saturating_add(1)) / srgb_channel_to_linear(pixel[1].max(1))
+        - 1.0
 }
 
 fn srgb_channel_to_linear(channel: u8) -> f32 {

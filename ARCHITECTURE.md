@@ -191,16 +191,31 @@ and verification details.
 - **[Explicit]** Diffuse solar and lunar light have daylight, lower twilight, and
   weaker upper-afterglow bands. Lunar bands follow phase and eclipse; thin canopy
   approaches clear sky, moderate canopy scatters available celestial light, and
-  thick canopy absorbs it. High ice cloud's diffuse effects belong in
-  canopy/sky diffusion; its direct shadow comes from the upper field.
+  thick canopy reflects most of it back to space. High ice cloud's diffuse
+  effects belong in canopy/sky diffusion; its direct shadow comes from the
+  upper field.
 - **[Implicit]** Calibrated clear-sky light splits into direct and diffuse light
   on level ground by a physical clear-sky diffuse fraction of each light's
   height and the regional turbidity, for the Sun and the Moon alike. Under the
   Sun level ground keeps the calibrated total, so a full shadow leaves about
   that fraction; direct moonlight is scaled so moonlit scenes keep their
   calibrated mean brightness.
-- **[Implicit]** Light the canopy scatters down has its own weighting, so
-  overcast luminance does not depend on the clear-sky split.
+- **[Implicit]** The canopy's mean optical thickness is a physical cloud
+  optical depth, from thin decks through storm cover, and every canopy light
+  term, deck shadow, and ground-sky exchange reads that one depth.
+- **[Implicit]** The canopy is a non-absorbing two-stream layer. It passes the
+  clear sky's diffuse light and each beam's scattered part down and reflects
+  ground light back up; each beam's unscattered part reaches the ground
+  through the upper field's deck shadows alone.
+- **[Implicit]** Calibrated clear-sky light reaches the canopy's level face
+  split as on level ground: its direct part, which vanishes as the light
+  reaches the layer's level, lights the layer from above, and the rest arrives
+  diffuse, so overcast keeps the clear sky's calibration.
+- **[Implicit]** A light below the canopy's level but above its horizon lights
+  the layer's underside, which reflects it down. Its beam has crossed the
+  canopy's level once already on the far side, where the regional canopy's
+  cover and depth stop it.
+- **[Implicit]** Cloud layers keep real absolute heights on the small world.
 - **[Implicit]** Light that ground and sky exchange follows regional means, so
   it lifts every shadow in a region alike.
 - **[Implicit]** Regional albedo comes from broad ground causes, smooth over
@@ -471,4 +486,5 @@ and verification details.
 | Tidal wet band | How the wet band follows flat tidal coasts |
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
-| Canopy optical depth | Whether the canopy's mean optical thickness should be read as a physical cloud optical depth, which bounds ground-sky exchange over land |
+| Stratus calibration | Whether thick stratus matches measured transmittance, given how uncertain the conversion from measured cloud thickness to optical depth is |
+| Grazing deck light | Whether decks need sunlight entering through their breaks and edges while the Sun is near the canopy's level, where a plane-parallel layer passes almost none |

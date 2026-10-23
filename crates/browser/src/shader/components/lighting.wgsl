@@ -246,13 +246,7 @@ fn celestial_receiver_light_for_directions(
         0.0,
         1.0,
     );
-    let lunar_shadow_transmittance = max(
-        1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction,
-        0.04,
-    );
-    let moon_amount = lunar_shadow_transmittance
-        * 0.12
-        * scene.celestial_orbit_light.x
+    let moon_amount = lunar_light_scale()
         * celestial_disc_visibility_at_horizon(
             horizon_z,
             moon,
@@ -303,6 +297,19 @@ fn celestial_receiver_light_at_position_and_height(
     );
 }
 
+// Calibrated clear-sky light on level ground in daylight, for a light at the
+// given sine of its height above the horizon.
+fn daylight_light(height: f32) -> f32 {
+    return 0.45 + 0.515 * sqrt(height);
+}
+
+// The Moon's light relative to the Sun's, through its phase and Earth's shadow.
+fn lunar_light_scale() -> f32 {
+    return max(1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction, 0.04)
+        * 0.12
+        * scene.celestial_orbit_light.x;
+}
+
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
     // These atmospheric horizon thresholds must stay synchronized with game::celestial_lighting.
     let daylight = smoothstep(
@@ -330,50 +337,53 @@ fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
         0.0,
         1.0,
     );
-    let lunar_shadow_transmittance = max(
-        1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction,
-        0.04,
-    );
-    let lunar_ambient = daylight * (0.45 + 0.515 * sqrt(moon_elevation))
+    let lunar_ambient = daylight * daylight_light(moon_elevation)
         + mix(0.24, 0.36, regional_horizon_scattering)
             * (1.0 - daylight)
             * lower_twilight
         + mix(0.04, 0.09, regional_horizon_scattering) * upper_afterglow;
-    return lunar_shadow_transmittance
-        * 0.12
-        * scene.celestial_orbit_light.x
-        * lunar_ambient;
+    return lunar_light_scale() * lunar_ambient;
 }
 
-fn moon_canopy_scattered_light(
-    optical_thickness: f32,
-    underside_escape: f32,
-    canopy_light: CelestialReceiverLight,
-) -> vec3<f32> {
-    let slant_cosine = max(
-        (canopy_light.moon_direction.z - canopy_light.horizon_z)
-            / (1.0 - canopy_light.horizon_z),
-        0.001,
-    );
-    let intercepted_moon = 1.0 - exp(-optical_thickness / slant_cosine);
-    return 0.38
-        * canopy_light.moon_amount
-        * celestial_atmospheric_transmittance(canopy_light, canopy_light.moon_direction)
-        * intercepted_moon
-        * underside_escape
-        * calculate_moon_light_color_for_direction(
-            regional_horizon_scattering,
-            canopy_light.moon_direction,
-        );
+// Diffuse light that a non-absorbing cloud layer of optical depth `tau` and
+// regional cover `cover` sends down from each beam, for lights at `z`, the sines
+// of their elevations above the layer's level, by the two-stream form along
+// the slant path that measured transmittance under uniform cloud follows
+// against measured optical depth (Ezhova et al. 2020, Atmos. Meas. Tech. 13).
+// A light above the level lights the layer's top with `top`, its direct light
+// on level ground, and the layer passes its slant transmittance less the
+// unscattered beam, which reaches the ground through the upper field's deck
+// shadows. A light below the level but above the canopy's horizon lights the
+// layer's underside with `normal`, its beam across its path: the calibrated
+// direct light at the zenith by the light's clear-sky beam share above the
+// canopy's horizon. The layer reflects its slant reflectance of that beam,
+// projected on it, down. The beam crossed the layer's level once already on
+// the far side of its tangent point, at the same depth.
+fn canopy_scattered_beams(
+    tau: f32,
+    cover: f32,
+    z: vec2<f32>,
+    top: vec2<f32>,
+    normal: vec2<f32>,
+) -> vec2<f32> {
+    let slant_depth = tau / max(abs(z), vec2<f32>(0.001));
+    let scaled = (1.0 - CLOUD_ASYMMETRY) * slant_depth;
+    let reflectance = vec2<f32>(two_stream_reflectance(scaled.x), two_stream_reflectance(scaled.y));
+    let unscattered = exp(-slant_depth);
+    let from_above = top * max(1.0 - reflectance - unscattered, vec2<f32>(0.0));
+    let from_below = normal * abs(z) * reflectance * (1.0 - cover + cover * unscattered);
+    return select(from_below, from_above, z > vec2<f32>(0.0));
 }
 
 struct AtmosphericAmbientLight {
     // Clear-sky light over the whole sky, then its part where no canopy covers it.
     clear_sky_light: vec3<f32>,
     clear_sky: vec3<f32>,
-    // Clear-sky light the canopy transmits, then the light it scatters down.
+    // Diffuse light the canopy passes down from the clear sky above it, then
+    // from the beams it scatters, in total and per light.
     canopy: vec3<f32>,
     canopy_scattered: vec3<f32>,
+    canopy_scattered_beams: vec2<f32>,
     split: CelestialLightSplit,
     // Regional mean share of each light's beam that reaches the ground through
     // the canopy's gaps and body.
@@ -390,29 +400,29 @@ fn calculate_atmospheric_ambient_light(
         0.0,
         1.0,
     );
-    let sun_elevation = sqrt(receiver_sun_z);
     // These sine-of-elevation thresholds must stay synchronized with game::celestial_lighting.
     let daylight = smoothstep(-0.0348995, 0.1391731, sun.z);
     let lower_twilight = smoothstep(-0.1564345, 0.0174524, sun.z);
     let upper_afterglow = smoothstep(-0.309017, -0.1391731, sun.z)
         * (1.0 - smoothstep(-0.1391731, -0.0348995, sun.z));
-    let solar_ambient = daylight * (0.45 + 0.515 * sun_elevation)
+    let solar_ambient = daylight * daylight_light(receiver_sun_z)
         + mix(0.24, 0.36, regional_horizon_scattering)
             * (1.0 - daylight)
             * lower_twilight
         + mix(0.04, 0.09, regional_horizon_scattering) * upper_afterglow;
     let moon_ambient_amount = moon_atmospheric_amount(receiver);
+    let lunar_ambient = CLEAR_SKY_LUNAR_WEIGHT * moon_ambient_amount;
     let clear_intensity = min(
         1.0,
         0.035
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
                 * solar_ambient
-            + 0.85 * moon_ambient_amount,
+            + lunar_ambient,
     );
     let split = celestial_light_split(
         receiver,
         solar_ambient,
-        0.85 * moon_ambient_amount,
+        lunar_ambient,
         clear_intensity,
     );
     let horizon_glow = max(lower_twilight, 0.35 * upper_afterglow)
@@ -464,68 +474,41 @@ fn calculate_atmospheric_ambient_light(
             clear_contribution,
             vec3<f32>(0.0),
             vec3<f32>(0.0),
+            vec2<f32>(0.0),
             split,
             vec2<f32>(1.0),
         );
     }
-    if optical_thickness <= 0.0 && !EVALUATE_ALL_BRANCHES {
-        return AtmosphericAmbientLight(
-            clear_sky_light,
-            clear_contribution,
-            canopy.sky_fraction * clear_sky_light,
-            vec3<f32>(0.0),
-            split,
-            vec2<f32>(1.0),
-        );
-    }
-    let diffuse_transmittance = exp(-0.72 * optical_thickness);
-    let downward_albedo = mix(
-        0.58,
-        0.08,
-        smoothstep(1.50, 4.80, optical_thickness),
+    let diffuse_transmittance = 1.0 - two_stream_reflectance(
+        (1.0 - CLOUD_ASYMMETRY) * optical_thickness,
     );
-    let neutral_cloud_light = clear_intensity * vec3<f32>(0.78, 0.82, 0.86);
-
-    let canopy_receiver = celestial_receiver_light_at_height(
-        WEATHER_CANOPY_HEIGHT_M,
-    );
-    let slant_cosine = max(
-        (sun.z - canopy_receiver.horizon_z) / (1.0 - canopy_receiver.horizon_z),
-        0.001,
-    );
-    let intercepted_sun = 1.0 - exp(-optical_thickness / slant_cosine);
-    let underside_escape = exp(-0.42 * optical_thickness);
-    let scattered_sun_light = 0.38
-        * canopy_receiver.sun_amount
-        * celestial_atmospheric_transmittance(canopy_receiver, canopy_receiver.sun_direction)
-        * intercepted_sun
-        * underside_escape
-        * sun_diffuse_light_color();
-    let scattered_moon_light = moon_canopy_scattered_light(
+    // The canopy's level face takes the ground's split of clear-sky light: the
+    // direct part follows the light's height above that level and vanishes at
+    // it. The canopy's own height sees each light above its much lower horizon,
+    // which sets the beam that reaches the layer's underside.
+    let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
+    let daylight_beams = daylight_light(1.0) * vec2<f32>(1.0, CLEAR_SKY_LUNAR_WEIGHT * lunar_light_scale());
+    let scattered_beams = canopy_scattered_beams(
         optical_thickness,
-        underside_escape,
-        canopy_receiver,
+        canopy.sky_fraction,
+        vec2<f32>(canopy_receiver.sun_direction.z, canopy_receiver.moon_direction.z),
+        split.beam_shares * vec2<f32>(solar_ambient, lunar_ambient),
+        celestial_light_split(canopy_receiver, 1.0, 1.0, 1.0).beam_shares * daylight_beams,
     );
-    let thin = optical_thickness <= 0.0;
-    let transmitted_light = select(
-        diffuse_transmittance * clear_sky_light,
-        clear_sky_light,
-        thin,
+    let transmitted_light = diffuse_transmittance * split.diffuse_share * clear_sky_light;
+    let scattered_light = scattered_beams.x * sun_diffuse_light_color()
+        + scattered_beams.y * calculate_moon_light_color_for_direction(
+            regional_horizon_scattering,
+            canopy_receiver.moon_direction,
+        );
+    let ground_heights = max(
+        vec2<f32>(
+            light_height_above_horizon(receiver.sun_direction.z, receiver.horizon_z),
+            light_height_above_horizon(receiver.moon_direction.z, receiver.horizon_z),
+        ),
+        vec2<f32>(0.001),
     );
-    let scattered_light = select(
-        downward_albedo * (1.0 - diffuse_transmittance) * neutral_cloud_light
-            + scattered_sun_light
-            + scattered_moon_light,
-        vec3<f32>(0.0),
-        thin,
-    );
-
-    let moon_slant_cosine = max(
-        (canopy_receiver.moon_direction.z - canopy_receiver.horizon_z)
-            / (1.0 - canopy_receiver.horizon_z),
-        0.001,
-    );
-    let intercepted_moon = 1.0 - exp(-optical_thickness / moon_slant_cosine);
+    let intercepted = 1.0 - exp(-optical_thickness / ground_heights);
 
     let absent = canopy.sky_fraction <= 0.0;
     return AtmosphericAmbientLight(
@@ -533,8 +516,9 @@ fn calculate_atmospheric_ambient_light(
         clear_contribution,
         select(canopy.sky_fraction * transmitted_light, vec3<f32>(0.0), absent),
         select(canopy.sky_fraction * scattered_light, vec3<f32>(0.0), absent),
+        select(canopy.sky_fraction * scattered_beams, vec2<f32>(0.0), absent),
         split,
-        1.0 - canopy.sky_fraction * vec2<f32>(intercepted_sun, intercepted_moon),
+        1.0 - canopy.sky_fraction * intercepted,
     );
 }
 
@@ -671,9 +655,9 @@ fn regional_linke_turbidity() -> f32 {
 // calibrated so full-Moon scenes keep the mean brightness night exposure and
 // colour were tuned for, within 10%.
 const MOON_DIRECT_SCALE: f32 = 1.5;
-// Shares of each light, per square root of its amount, left out of the light
-// the canopy scatters down; they set overcast luminance at every light height.
-const CANOPY_SCATTERED_DIRECT_SHARES: vec2<f32> = vec2<f32>(0.38, 0.16);
+// Weight of the Moon's atmospheric light in calibrated clear-sky light;
+// field_grids.rs mirrors it in its Moon cloud-shadow estimate.
+const CLEAR_SKY_LUNAR_WEIGHT: f32 = 0.85;
 
 // Share of a light's clear-sky light on level ground that arrives direct.
 fn celestial_beam_share(
@@ -697,10 +681,12 @@ fn celestial_beam_share(
 }
 
 struct CelestialLightSplit {
-    // Sun and Moon direct light on level ground.
+    // Sun and Moon direct light on level ground, and each per unit of the
+    // light's clear-sky amount.
     direct: vec2<f32>,
-    // Shares of clear-sky light and of canopy-scattered light left diffuse.
-    diffuse_shares: vec2<f32>,
+    beam_shares: vec2<f32>,
+    // Share of clear-sky light left diffuse.
+    diffuse_share: f32,
 };
 
 // Splits the calibrated solar and lunar parts of clear-sky light into direct
@@ -716,41 +702,32 @@ fn celestial_light_split(
 ) -> CelestialLightSplit {
     let visibility = direct_light_visibility();
     let turbidity = regional_linke_turbidity();
-    let sun_beam = visibility.x
-        * (1.0 - receiver.solar_eclipse_fraction)
-        * celestial_beam_share(
+    let beam_shares = visibility * vec2<f32>(
+        (1.0 - receiver.solar_eclipse_fraction) * celestial_beam_share(
             receiver,
             receiver.sun_direction,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             turbidity,
-        )
-        * solar_ambient;
-    let moon_beam = visibility.y
-        * celestial_beam_share(
+        ),
+        celestial_beam_share(
             receiver,
             receiver.moon_direction,
             MOON_ANGULAR_RADIUS_RAD,
             turbidity,
-        )
-        * lunar_ambient;
-    let scattered_sun_share = CANOPY_SCATTERED_DIRECT_SHARES.x
-        * sqrt(clamp(visibility.x * receiver.sun_amount, 0.0, 1.0))
-        * celestial_atmospheric_transmittance(receiver, receiver.sun_direction);
-    let scattered_moon_share = CANOPY_SCATTERED_DIRECT_SHARES.y
-        * sqrt(clamp(visibility.y * receiver.moon_amount, 0.0, 1.0))
-        * celestial_atmospheric_transmittance(receiver, receiver.moon_direction);
-    return CelestialLightSplit(
-        vec2<f32>(sun_beam, MOON_DIRECT_SCALE * moon_beam),
-        vec2<f32>(
-            max(1.0 - (sun_beam + moon_beam) / max(clear_intensity, 1e-6), 0.0),
-            max(1.0 - scattered_sun_share - scattered_moon_share, 0.0),
         ),
+    );
+    let beams = beam_shares * vec2<f32>(solar_ambient, lunar_ambient);
+    return CelestialLightSplit(
+        beams * vec2<f32>(1.0, MOON_DIRECT_SCALE),
+        beam_shares,
+        max(1.0 - (beams.x + beams.y) / max(clear_intensity, 1e-6), 0.0),
     );
 }
 
-// Reflectance of a non-absorbing layer lit diffusely from below, by the
-// two-stream approximation (Bohren 1987, Am. J. Phys. 55), for optical
-// thickness scaled by one minus the asymmetry parameter.
+// Reflectance of a non-absorbing layer by the two-stream approximation
+// (Bohren 1987, Am. J. Phys. 55), for its optical thickness along the light's
+// path scaled by one minus the asymmetry parameter: the layer's own thickness
+// for diffuse light, its slant thickness for a beam.
 fn two_stream_reflectance(scaled_optical_thickness: f32) -> f32 {
     return scaled_optical_thickness / (2.0 + scaled_optical_thickness);
 }
@@ -865,7 +842,7 @@ fn moon_clear_sky_share(receiver: CelestialReceiverLight, ambient: AtmosphericAm
     let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
     let sun = ambient.split.direct.x * dot(sun_direct_light_color(), luminance);
     let moon = ambient.split.direct.y * dot(moon_direct_light_color(receiver), luminance);
-    let clear_sky = ambient.split.diffuse_shares.x * dot(ambient.clear_sky_light, luminance);
+    let clear_sky = ambient.split.diffuse_share * dot(ambient.clear_sky_light, luminance);
     return moon / max(sun + moon + clear_sky, 1e-9);
 }
 

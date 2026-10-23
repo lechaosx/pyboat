@@ -1,5 +1,6 @@
 struct RegionalCanopyConditions {
     sky_fraction: f32,
+    // Cloud optical depth in visible light.
     mean_optical_thickness: f32,
 }
 
@@ -21,13 +22,24 @@ fn regional_canopy_conditions_from_drivers(
         0.45,
         condensation * pressure_lift * instability,
     );
+    // An adiabatic cloud's optical depth grows as its depth to the 5/3 power
+    // (Brenguier et al. 2000, J. Atmos. Sci. 57). Weak forcing leaves veils
+    // below the ISCCP thin-cloud limit of 3.6 (Rossow and Schiffer 1999, Bull.
+    // Am. Meteorol. Soc. 80), and Kasten and Czeplak (1980, Solar Energy 24)
+    // measured a quarter of clear-sky light under eight oktas, the overcast
+    // these depths are set against.
+    // Compromise: no cloud-water or deck-depth model. The stratiform index,
+    // with its weights carried over from the driver blend, stands in for deck
+    // depth, so the 5/3 power assumes the index grows in proportion to it; 30,
+    // in ISCCP's thick class with nimbostratus and stratus, stands in for the
+    // depth of full stratiform forcing, and 70 for the water of deep
+    // convection.
+    let stratiform = 0.30 * condensation
+        + 0.42 * pressure_lift
+        + 0.28 * condensation * instability;
     return RegionalCanopyConditions(
         sky_fraction,
-        0.18
-            + 0.50 * condensation
-            + 0.70 * pressure_lift
-            + 0.45 * condensation * instability
-            + 3.6 * storm_depth,
+        30.0 * pow(max(stratiform, 1e-6), 5.0 / 3.0) + 70.0 * storm_depth,
     );
 }
 
@@ -223,7 +235,7 @@ fn cumulus_cover(weather: CloudWeatherSample) -> f32 {
     let canopy = regional_canopy_conditions(weather);
     let canopy_sunlight = mix(
         1.0,
-        exp(-0.5 * canopy.mean_optical_thickness),
+        1.0 - two_stream_reflectance((1.0 - CLOUD_ASYMMETRY) * canopy.mean_optical_thickness),
         canopy.sky_fraction,
     );
     let surface_heating = mix(
@@ -288,7 +300,7 @@ fn deck_drivers(weather: CloudWeatherSample) -> vec4<f32> {
     let canopy = regional_canopy_conditions(weather);
     return vec4<f32>(
         canopy.sky_fraction,
-        canopy.mean_optical_thickness * (1.0 + 2.0 * weather.rain),
+        canopy.mean_optical_thickness,
         mix(0.08, 0.40, weather.stratiform),
         0.45 * smoothstep(0.25, 0.80, weather.regional.condensation),
     );
@@ -449,8 +461,8 @@ fn cumulus_shadow(
 }
 
 // Stratiform and frontal decks: the regional canopy fraction sets the share of
-// sky they cover, stable air softens their edges into overcast, and rain
-// thickens them.
+// sky they cover, stable air softens their edges into overcast, and the
+// canopy's optical depth sets their darkness.
 fn deck_transmittance(rays: CloudShadowRays, deck: vec4<f32>, grid_shortest_m: f32) -> f32 {
     let cover = deck.x;
     if cover <= 0.0 && !EVALUATE_ALL_BRANCHES {
@@ -480,17 +492,9 @@ fn deck_transmittance(rays: CloudShadowRays, deck: vec4<f32>, grid_shortest_m: f
         diameter_m,
     );
     let amount = smoothstep(threshold, threshold + softness, edge.inner_value);
-    // Thickness grows from the deck's edges toward its cores.
-    let interior = clamp(
-        (edge.inner_value - threshold) / max(1.0 - threshold, 0.05),
-        0.0,
-        1.0,
-    );
-    let thickness = deck.y;
-    let extinction = cloud_shadow_extinction(ray);
-    let detailed = 1.0 - disc_cover(edge.rim)
-        * (1.0 - exp(-extinction * amount * mix(0.4, 1.4, interior) * thickness));
-    let mean = 1.0 - cover * (1.0 - exp(-extinction * 0.9 * thickness));
+    let slant_depth = cloud_shadow_extinction(ray) * deck.y;
+    let detailed = 1.0 - disc_cover(edge.rim) * (1.0 - exp(-amount * slant_depth));
+    let mean = 1.0 - cover * (1.0 - exp(-slant_depth));
     let resolved = clamp(log2(DECK_WAVELENGTH_M / shortest_m), 0.0, 1.0);
     return select(1.0, mix(mean, detailed, resolved), cover > 0.0);
 }
