@@ -2505,7 +2505,7 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
             count as usize > snow_and_ice.len() / 2,
             "{label}: too little snow over partial land ice",
         );
-        // Snow and lighting approximations of the bake leave about 3% of the
+        // Snow and lighting approximations of the bake leave about 1% of the
         // share; ice colour taken from autumn colour or left premultiplied
         // leaves 6-10%.
         assert!(
@@ -2515,6 +2515,43 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
             share / f64::from(count),
         );
     }
+}
+
+#[test]
+fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
+    // A glacier about 350 m up under a low Moon, at a boat-zoom view whose
+    // baked texels are finer than the elevation's half-precision steps.
+    let render = |label, diagnostic| {
+        render_capture(
+            label,
+            &[
+                "--width",
+                "480",
+                "--height",
+                "270",
+                "--camera-x",
+                "1850",
+                "--camera-y",
+                "39215",
+                "--view-height",
+                "60",
+                "--world-time",
+                "31320000",
+                "--diagnostic",
+                diagnostic,
+                "--cloud-shadows",
+                "0,0,0.85,0",
+                "--light-balance",
+                "1,1,0,0",
+            ],
+        )
+    };
+    let direct = mean_linear_luminance(&render("high-relief-direct", "scene_direct"));
+    let baked = mean_linear_luminance(&render("high-relief-baked", "scene"));
+    assert!(
+        (baked / direct - 1.0).abs() < 0.03,
+        "baked direct light {baked} against direct evaluation {direct}",
+    );
 }
 
 #[test]

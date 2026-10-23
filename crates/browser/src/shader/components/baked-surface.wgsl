@@ -92,19 +92,11 @@ fn baked_height_at(cell: BakedSurfaceCell) -> BakedHeight {
         cell.spacing_m,
     );
     let interpolated = baked_bilinear(height, cell.fraction);
-    // Land ice thickens only bedrock above sea level, so a cell across an ice
-    // shore spans a cliff that no pixel shows; its slopes light the land.
-    let lowest = min(
-        min(height.lower_left.x, height.lower_right.x),
-        min(height.upper_left.x, height.upper_right.x),
-    );
-    let highest = max(
-        max(height.lower_left.x, height.lower_right.x),
-        max(height.upper_left.x, height.upper_right.x),
-    );
-    if lowest < 0.0 && highest >= 0.0 {
-        elevation.gradient = interpolated.yz;
-    }
+    // Light follows the baked slopes alone. Half-precision elevation steps
+    // reach 0.25 m above 256 m, more than a fine texel's rise on gentle land,
+    // so the Hermite derivative would draw false contours; across an ice shore
+    // a cell also spans a cliff that no pixel shows.
+    elevation.gradient = interpolated.yz;
     return BakedHeight(elevation, interpolated.w);
 }
 
