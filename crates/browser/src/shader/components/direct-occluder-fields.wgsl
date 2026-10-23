@@ -11,6 +11,17 @@ fn sampled_landform_horizon(
     return landform_horizon(position_m, light_direction, angular_radius_rad);
 }
 
+fn sampled_ground_bounce_conditions(position_m: vec2<f32>) -> GroundBounceConditions {
+    let field = cloud_weather_field_at(position_m);
+    var weather = field.weather;
+    weather.land_fraction = land_fraction_from_broad_elevation_m(
+        broad_landform_elevation_m(position_m),
+    );
+    return ground_bounce_conditions_from_field(
+        ground_bounce_field(position_m, field.atmosphere, weather),
+    );
+}
+
 fn sampled_cloud_transmittance_at(plane_position_m: vec2<f32>, source_index: u32) -> f32 {
     let rays = cloud_shadow_rays(plane_position_m, source_index);
     if rays.amount <= 0.0 && !EVALUATE_ALL_BRANCHES {

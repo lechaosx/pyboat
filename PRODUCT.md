@@ -76,7 +76,9 @@ See [README.md](README.md) for what is playable now and
 ## Readable presentation
 
 - **[Explicit]** A view adapted to clear-sky daylight retains its calibrated
-  daytime brightness and material colors.
+  daytime brightness.
+- **[Explicit]** Material colors are calibrated reflectances; rendered colors
+  follow the physical light that reaches them.
 - **[Explicit]** Modest compensation keeps night dark while boats, coastlines,
   and navigation hazards stay readable; moonlight and storm cover retain their
   visual differences.

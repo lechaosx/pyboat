@@ -1237,12 +1237,12 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
             ],
         ),
-        "lighting_receiver_atmospheric_transmittance_elevated" => diagnostic(
+        "lighting_receiver_moon_clear_sky_share" => diagnostic(
             value,
             "lighting_model_regressions",
             &[
-                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 19.0),
-                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 600.0),
+                ("LIGHTING_MODEL_REGRESSION_OUTPUT", 25.0),
+                ("LIGHTING_MODEL_SURFACE_HEIGHT_M", 0.0),
             ],
         ),
         "lighting_ambient_horizon_datum" => diagnostic(

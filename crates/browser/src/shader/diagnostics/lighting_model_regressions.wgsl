@@ -42,14 +42,14 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 3u {
         return diagnostic_receiver_ambient_share(LIGHTING_MODEL_SURFACE_HEIGHT_M);
     }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 19u {
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 25u {
         let receiver = celestial_receiver_light_at_height(LIGHTING_MODEL_SURFACE_HEIGHT_M);
-        return vec4<f32>(
-            celestial_atmospheric_transmittance(receiver, receiver.sun_direction),
-            celestial_atmospheric_transmittance(receiver, receiver.moon_direction),
-            0.0,
-            1.0,
+        let share = moon_clear_sky_share(
+            receiver,
+            calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
         );
+        // Tenfold in green resolves the small shares near the grid's threshold.
+        return vec4<f32>(share, min(10.0 * share, 1.0), 0.0, 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 5u {
         return diagnostic_landform_shadow_disc_radii(input);

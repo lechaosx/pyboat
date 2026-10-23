@@ -12,5 +12,5 @@ fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f
         canopy,
         celestial_receiver_light_at_height(0.0),
     );
-    return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
+    return vec4<f32>(ambient.clear_sky + ambient.canopy + ambient.canopy_scattered, 1.0);
 }

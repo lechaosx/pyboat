@@ -25,7 +25,17 @@ fn generate_environment_fields(
         // The land share follows shipped terrain scales, also in the lab,
         // whose environment pass has no tuning uniforms.
         tuning = production_tuning();
-        let weather = cloud_weather_with_land_at(position_m);
+        let field = cloud_weather_field_at(position_m);
+        var weather = field.weather;
+        weather.land_fraction = land_fraction_from_broad_elevation_m(
+            broad_landform_elevation_m(position_m),
+        );
+        textureStore(
+            environment_field_output,
+            invocation_id.xy,
+            GROUND_BOUNCE_FIELD,
+            ground_bounce_field(position_m, field.atmosphere, weather),
+        );
         textureStore(
             environment_field_output,
             invocation_id.xy,

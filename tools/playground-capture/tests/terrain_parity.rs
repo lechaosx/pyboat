@@ -56,19 +56,34 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
     for source in 0..2 {
         let light_at =
             |time| celestial_lighting(world_celestial_conditions(world, time, position_m));
-        let elevation = |light: game::CelestialLighting| {
-            if source == 0 {
+        // The water surface receives the light; a tide above the datum lowers
+        // its horizon.
+        let height_above_horizon = |time: f64| {
+            let light = light_at(time);
+            let water_height_m = procedural_world_environment(
+                world,
+                SEED,
+                (time * simulation::TICKS_PER_SECOND as f64) as u64,
+                position_m,
+            )
+            .water_height_m
+            .max(0.0);
+            let world_radius_m = world.width_m() / std::f32::consts::TAU;
+            let horizon_z =
+                -(1.0 - (world_radius_m / (world_radius_m + water_height_m)).powi(2)).sqrt();
+            let z = if source == 0 {
                 light.sun_direction[2]
             } else {
                 light.moon_direction[2]
-            }
+            };
+            (z - horizon_z) / (1.0 - horizon_z)
         };
         let (mut below, mut above) = (0..28 * 24)
             .map(|hour| (hour as f64 * 3_600.0, (hour + 1) as f64 * 3_600.0))
             .find(|(start, end)| {
                 let end_light = light_at(*end);
-                elevation(light_at(*start)) < 0.0
-                    && elevation(end_light) > 0.1
+                height_above_horizon(*start) < 0.0
+                    && height_above_horizon(*end) > 0.1
                     // Daylight exposure can leave moonlight below one 8-bit level.
                     && (source == 0
                         || (end_light.moon_intensity > 0.02 && end_light.sun_direction[2] < 0.0))
@@ -77,7 +92,7 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
         let visible_time = above;
         for _ in 0..40 {
             let midpoint = (below + above) / 2.0;
-            if elevation(light_at(midpoint)) < 0.0 {
+            if height_above_horizon(midpoint) < 0.0 {
                 below = midpoint;
             } else {
                 above = midpoint;
@@ -844,6 +859,95 @@ fn scene_light_contribution_gates_compose_independently() {
 }
 
 #[test]
+fn moon_cloud_shadow_grid_estimate_bounds_the_rendered_moon_share() {
+    let world = WorldGeometry::default();
+    let day_s = 86_400.0;
+    // Dry, hazy settled air and moist clean air sit near the two ends of the
+    // regional turbidity range.
+    let positions = [
+        Vector::new(-12_500.0, -14_500.0),
+        Vector::new(12_000.0, -16_000.0),
+    ];
+    let mut samples = Vec::new();
+    for position_m in positions {
+        for step in 0..(30 * 8) {
+            let world_time_seconds = 3_094_400.0 - 15.0 * day_s + f64::from(step) * 3.0 * 3_600.0;
+            let light = celestial_lighting(world_celestial_conditions(
+                world,
+                world_time_seconds,
+                position_m,
+            ));
+            if light.moon_direction[2] > 0.02 && light.sun_direction[2] < 0.25 {
+                samples.push((position_m, world_time_seconds));
+            }
+        }
+    }
+    // Partial and total lunar eclipse with the Moon high.
+    for world_time_seconds in [91.0 * day_s - 3_840.0, 91.0 * day_s - 240.0] {
+        samples.push((Vector::new(26_850.0, -18_500.0), world_time_seconds));
+    }
+    // The deepest solar eclipse at the datum.
+    let solar_eclipse_s = 105.0 * day_s;
+    let eclipse_position_m = (0..128)
+        .flat_map(|x_index| {
+            (0..64).map(move |y_index| {
+                Vector::new(
+                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
+                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                )
+            })
+        })
+        .max_by(|left, right| {
+            let eclipse = |position_m| {
+                celestial_lighting(world_celestial_conditions(
+                    world,
+                    solar_eclipse_s,
+                    position_m,
+                ))
+                .solar_eclipse_fraction
+            };
+            eclipse(*left).total_cmp(&eclipse(*right))
+        })
+        .unwrap();
+    samples.push((eclipse_position_m, solar_eclipse_s));
+    let mut worst: Option<(f64, f64, f64, Vector)> = None;
+    for (position_m, world_time_seconds) in samples {
+        let pixel = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            1.0,
+            "lighting_receiver_moon_clear_sky_share",
+            1,
+            1,
+        );
+        let rendered = f64::from(if pixel[1] < 255 {
+            srgb_channel_to_linear(pixel[1]) / 10.0
+        } else {
+            srgb_channel_to_linear(pixel[0])
+        });
+        let estimate = browser::moon_clear_sky_share(
+            world,
+            world_time_seconds,
+            [f64::from(position_m.x), f64::from(position_m.y)],
+            [0.5, 0.5],
+            0.0,
+        );
+        let margin = estimate - rendered;
+        if worst.is_none_or(|(worst_margin, ..)| margin < worst_margin) {
+            worst = Some((margin, rendered, world_time_seconds, position_m));
+        }
+    }
+    let (margin, rendered, world_time_seconds, position_m) = worst.unwrap();
+    // One 8-bit level of the encoded share near its larger values.
+    assert!(
+        margin > -0.006,
+        "estimate {} below rendered Moon share {rendered} at {world_time_seconds} s, {position_m:?}",
+        rendered + margin,
+    );
+}
+
+#[test]
 fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
     let world = WorldGeometry::default();
     let world_time_seconds = 105.0 * 86_400.0;
@@ -895,23 +999,38 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         &surface_ambient[..3],
     );
 
-    let transmitted = render_diagnostic_image_with_view_at(
+    let aerosol = render_diagnostic_image_with_view_at(
         world,
         position_m,
         world_time_seconds,
         1.0,
-        "lighting_receiver_atmospheric_transmittance_elevated",
+        "lighting_aerosol_optical_depth",
         1,
         1,
     );
+    let linke_turbidity = 2.35 + 7.79 * 0.32 * f64::from(scalar_debug_amount(&aerosol));
+    let world_radius_m = world.width_m() / std::f32::consts::TAU;
+    let horizon_z = -(1.0 - (world_radius_m / (world_radius_m + 600.0)).powi(2)).sqrt();
+    let beam_share = |direction_z: f32, angular_radius_rad: f32| {
+        f64::from(celestial_disc_visibility_at_height(
+            world,
+            600.0,
+            direction_z,
+            angular_radius_rad,
+        )) * (1.0
+            - browser::clear_sky_diffuse_fraction(
+                f64::from((direction_z - horizon_z) / (1.0 - horizon_z)),
+                linke_turbidity,
+            ))
+    };
+    let lunar = 0.85 * f64::from(surface.moon_ambient_intensity);
+    let eclipse = f64::from(surface.solar_eclipse_fraction);
+    let solar = (f64::from(surface.ambient_intensity) - 0.035 - lunar) / (1.0 - 0.85 * eclipse);
     let expected_share = (1.0
-        - 0.38
-            * surface.sun_intensity.clamp(0.0, 1.0).sqrt()
-            * srgb_channel_to_linear(transmitted[0])
-        - 0.16
-            * surface.moon_intensity.clamp(0.0, 1.0).sqrt()
-            * srgb_channel_to_linear(transmitted[1]))
-    .max(0.0);
+        - ((1.0 - eclipse) * beam_share(surface.sun_direction[2], 0.00465) * solar
+            + beam_share(surface.moon_direction[2], 0.00452) * lunar)
+            / f64::from(surface.ambient_intensity))
+    .max(0.0) as f32;
     let actual_share = render_diagnostic_image_with_view_at(
         world,
         position_m,
@@ -1970,14 +2089,34 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
         })
         .collect::<Vec<_>>();
     let mean = differences.iter().sum::<f32>() / differences.len() as f32;
-    // Away from the seam, coarsened cloud shadow grids soften small cloud edges.
+    // Away from the seam, coarsened cloud shadow grids soften small cloud
+    // edges, which costs a share of the direct light those edges receive.
+    let without_direct_light = render_direct(world_time_seconds, &[("--light-balance", "0,0,1,1")]);
+    let direct_light = direct
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(without_direct_light.as_chunks::<4>().0.iter())
+        .map(|(lit, unlit)| {
+            (0..3)
+                .map(|channel| lit[channel].abs_diff(unlit[channel]) as f32)
+                .sum::<f32>()
+                / 3.0
+        })
+        .sum::<f32>()
+        / differences.len() as f32;
     let seam_maximum = differences
         .chunks(256)
         .flat_map(|row| &row[seam_column - 8..seam_column + 8])
         .copied()
         .fold(0.0, f32::max);
 
-    assert!(mean < 0.1, "mean grid/direct byte difference: {mean}");
+    // The grids' softening measures 0.023-0.038 of direct light; a grid lookup
+    // that skips the longitude wrap measures 0.27.
+    assert!(
+        mean < 0.045 * direct_light,
+        "mean grid/direct byte difference {mean} against {direct_light} of direct light"
+    );
     assert!(
         seam_maximum < 3.0,
         "maximum grid/direct byte difference beside the seam: {seam_maximum}"

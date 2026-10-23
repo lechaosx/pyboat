@@ -4,6 +4,7 @@ fn fragment_surface_color(
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec3<f32>,
     ambient_light: AtmosphericAmbientLight,
+    bounce_conditions: GroundBounceConditions,
 ) -> vec3<f32> {
     let contribution = fragment_light_visibility();
     let cloud_transmittance = mix(
@@ -21,29 +22,37 @@ fn fragment_surface_color(
         cloud_transmittance.y,
         direct_light.moon_direction,
         direct_light.horizon_z,
-        moon_cloud_shadow_weight(direct_light),
+        moon_cloud_shadow_weight(direct_light, ambient_light),
     );
-    let ambient = ambient_contribution_share(direct_light) * (
-        contribution.z * atmospheric_ambient_color_with_visibility(
-            ambient_light,
-            vec2<f32>(1.0, 0.0),
-        )
-        + contribution.w * atmospheric_ambient_color_with_visibility(
-            ambient_light,
-            vec2<f32>(0.0, 1.0),
-        )
+    let split = ambient_light.split;
+    let ambient = split.diffuse_shares.x * (
+        contribution.z * ambient_light.clear_sky
+            + contribution.w * ambient_light.canopy
+    )
+        + contribution.w * split.diffuse_shares.y * ambient_light.canopy_scattered;
+    let sun_light = split.direct.x * sun_direct_light_color();
+    let moon_light = split.direct.y * moon_direct_light_color(direct_light);
+    let beam_transmittance = bounce_conditions.cumulus_beam_transmittance
+        * ambient_light.beam_transmittance;
+    let first_pass_light = ambient
+        + contribution.x * beam_transmittance.x * sun_light
+        + contribution.y * beam_transmittance.y * moon_light;
+    let bounce = ground_bounce_light(
+        first_pass_light,
+        bounce_conditions.sky_reflectance.x + bounce_conditions.sky_reflectance.y,
+        bounce_conditions.albedo,
     );
-    let light = landform_grade.x * ambient
+    let light = landform_grade.x * (ambient + bounce)
         + contribution.x
             * terrain_shadow_transmittance.x
             * sun_transmittance
             * landform_grade.y
-            * sun_direct_contribution_color_for_receiver(direct_light)
+            * sun_light
         + contribution.y
             * terrain_shadow_transmittance.y
             * moon_transmittance
             * landform_grade.z
-            * moon_direct_contribution_color_for_receiver(direct_light);
+            * moon_light;
     return linear_material_color(surface_color) * light;
 }
 
@@ -167,6 +176,16 @@ fn final_scene_color(
                 surface_direct_light,
             );
         }
+        // The split sets direct light on level ground; relief grades it from there.
+        let level_grade = landform_light_grade(
+            vec2<f32>(0.0),
+            surface.roughness,
+            surface_direct_light,
+        );
+        surface_light_grade = vec3<f32>(
+            surface_light_grade.x,
+            surface_light_grade.yz / level_grade.yz,
+        );
         surface_color = surface.color;
         let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
         fragment_color = fragment_surface_color(
@@ -175,7 +194,97 @@ fn final_scene_color(
             terrain_shadow_transmittance,
             surface_light_grade,
             ambient_light,
+            sampled_ground_bounce_conditions(input.world_position_m),
         );
     }
     return vec4<f32>(fragment_color, 1.0);
+}
+
+// Broadband albedos under diffuse light: open ocean 0.07 (Jin et al. 2004,
+// Geophys. Res. Lett. 31), vegetated and bare land 0.17, snow 0.8, and
+// snow-covered sea ice 0.75.
+const REGIONAL_ALBEDOS: vec4<f32> = vec4<f32>(0.07, 0.17, 0.80, 0.75);
+
+// What ground-sky exchange of light needs from a region: the ground's albedo,
+// the share of each beam the cumulus field passes, and the sky's reflectance
+// from below by its open part, cumulus included, and its canopy.
+struct GroundBounceConditions {
+    albedo: f32,
+    cumulus_beam_transmittance: f32,
+    sky_reflectance: vec2<f32>,
+};
+
+fn ground_bounce_conditions_from_field(field: vec4<f32>) -> GroundBounceConditions {
+    return GroundBounceConditions(field.x, field.y, field.zw);
+}
+
+// The conditions at a position, packed as `ground_bounce_conditions_from_field`
+// reads them, from the weather that sets the cumulus shadows there.
+fn ground_bounce_field(
+    position_m: vec2<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+    weather: CloudWeatherSample,
+) -> vec4<f32> {
+    let canopy = regional_canopy_conditions(weather);
+    let cumulus = cumulus_drivers(weather);
+    // Cumulus optical depth as `cumulus_shadow` in clouds.wgsl takes it; keep
+    // the two synchronized. At four or more, cumulus pass under 2% of the beam
+    // they cover.
+    let cumulus_reflectance = two_stream_reflectance(
+        (1.0 - CLOUD_ASYMMETRY) * mix(4.0, 25.0, cumulus.y),
+    );
+    return vec4<f32>(
+        regional_ground_albedo(
+            position_m,
+            periodic_noise_circle_position(position_m),
+            atmosphere,
+            weather.rain,
+        ),
+        1.0 - cumulus.x,
+        (1.0 - canopy.sky_fraction) * mix(
+            clear_sky_reflectance_from_below(weather.regional),
+            cumulus_reflectance,
+            cumulus.x,
+        ),
+        canopy.sky_fraction * two_stream_reflectance(
+            (1.0 - CLOUD_ASYMMETRY) * max(canopy.mean_optical_thickness, 0.0),
+        ),
+    );
+}
+
+// Ground albedo over the kilometres a cloud base overhead sees, from causes
+// that vary over that distance. Land takes the island-cluster relief, where
+// 0.78 cluster + 0.22 island exceeds 0.30 for the island noise across its
+// range; ice and snow take sea level's climate and weather.
+fn regional_ground_albedo(
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+    rain: f32,
+) -> f32 {
+    let climate = atmosphere.climate;
+    let cluster = terrain_broad_noise(TERRAIN_CLUSTER_NOISE, position_m, circle_position).value;
+    let land = smoothstep(0.10, 0.67, cluster);
+    let sea_ice = 1.0 - smoothstep(
+        -2.0,
+        0.0,
+        water_temperature_c_from_climate(climate)
+            + maritime_temperature_scale_c(climate) * cluster,
+    );
+    let land_ice = 1.0 - smoothstep(-12.0, -8.0, climate.annual_mean_air_temperature_c);
+    var snow = 0.0;
+    if land > 0.0 || EVALUATE_ALL_BRANCHES {
+        snow = seasonal_snow_cover_from_fields(
+            0.0,
+            atmosphere.temperature_anomaly.value,
+            atmosphere.water_vapor_g_kg,
+            climate,
+            rain,
+        );
+    }
+    return mix(
+        mix(REGIONAL_ALBEDOS.x, REGIONAL_ALBEDOS.w, sea_ice),
+        mix(REGIONAL_ALBEDOS.y, REGIONAL_ALBEDOS.z, max(land_ice, snow)),
+        land,
+    );
 }

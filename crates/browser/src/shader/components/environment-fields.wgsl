@@ -1,9 +1,10 @@
 // Environment noise evaluated once per frame on the lattice in
 // `scene.environment_field_grid_m`: the first texel centre relative to the
 // camera, then the texel spacing. `scene.environment_field_texels.xy` counts
-// the texels written this frame; lookups clamp to them. Two later layers hold
-// the cumulus and deck drivers on the cloud weather lattice, which
-// `scene.cloud_weather_grid_m` places the same way. Layers are rgba32float
+// the texels written this frame; lookups clamp to them. Three later layers
+// hold the cumulus and deck drivers and the ground-sky bounce conditions on
+// the cloud weather lattice, which `scene.cloud_weather_grid_m` places the
+// same way. Layers are rgba32float
 // because pressure potentials exceed half-float range and temperature-noise
 // gradients fall into half-float subnormals. WebGPU does not guarantee filtering of 32-bit float
 // textures, so reconstruction blends four loaded texels.
@@ -15,6 +16,7 @@ var environment_fields: texture_2d_array<f32>;
 const ENVIRONMENT_FIELD_LAYERS: u32 = 5u;
 const CUMULUS_DRIVER_FIELD: u32 = 5u;
 const DECK_DRIVER_FIELD: u32 = 6u;
+const GROUND_BOUNCE_FIELD: u32 = 7u;
 
 struct EnvironmentFieldSample {
     atmosphere: AtmosphereNoiseSample,

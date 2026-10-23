@@ -153,6 +153,8 @@ and verification details.
 - **[Implicit]** Cloud shadow texels read what the weather under each cloud
   sets for it from a coarser cloud weather grid, whose window covers every such
   read by construction.
+- **[Implicit]** Ground-sky exchange reads its regional conditions from the
+  cloud weather grid, whose window also covers the view.
 - **[Implicit]** The scene's environment grid stores seeded noise and the terms
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
@@ -174,8 +176,9 @@ and verification details.
 ### Celestial and cloud light
 
 - **[Explicit]** Sun and Moon are independent directional sources. Diffuse light
-  combines clear sky with regional canopy underlight and illuminates surfaces
-  and visible clouds; lower clouds do not supply ambient light.
+  combines clear sky, regional canopy underlight, and the light ground and sky
+  exchange, and illuminates surfaces and visible clouds; lower clouds do not
+  supply ambient light.
 - **[Explicit]** Ambient light is evaluated per pixel rather than read from
   field grids.
 - **[Explicit]** Regional canopy fraction and cloudy-sky optical thickness come
@@ -190,6 +193,20 @@ and verification details.
   approaches clear sky, moderate canopy scatters available celestial light, and
   thick canopy absorbs it. High ice cloud's diffuse effects belong in
   canopy/sky diffusion; its direct shadow comes from the upper field.
+- **[Implicit]** Calibrated clear-sky light splits into direct and diffuse light
+  on level ground by a physical clear-sky diffuse fraction of each light's
+  height and the regional turbidity, for the Sun and the Moon alike. Under the
+  Sun level ground keeps the calibrated total, so a full shadow leaves about
+  that fraction; direct moonlight is scaled so moonlit scenes keep their
+  calibrated mean brightness.
+- **[Implicit]** Light the canopy scatters down has its own weighting, so
+  overcast luminance does not depend on the clear-sky split.
+- **[Implicit]** Light that ground and sky exchange follows regional means, so
+  it lifts every shadow in a region alike.
+- **[Implicit]** Regional albedo comes from broad ground causes, smooth over
+  the kilometres a cloud base averages.
+- **[Implicit]** The sky's reflectance from below follows the cover and optical
+  depth of the clouds that cast shadows.
 - **[Explicit]** A single world clock drives a 24-hour day, 365-day year, and
   independent 28-day lunar phase cycle, with northern winter solstice at season
   zero. Sun/Moon geometry determines illumination, tides, and eclipses; finite
@@ -454,3 +471,4 @@ and verification details.
 | Tidal wet band | How the wet band follows flat tidal coasts |
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
+| Canopy optical depth | Whether the canopy's mean optical thickness should be read as a physical cloud optical depth, which bounds ground-sky exchange over land |

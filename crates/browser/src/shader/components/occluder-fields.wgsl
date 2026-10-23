@@ -50,6 +50,13 @@ fn sampled_landform_horizon(
     return vec2<f32>(field.x + field.y, field.z);
 }
 
+fn sampled_ground_bounce_conditions(position_m: vec2<f32>) -> GroundBounceConditions {
+    let lookup = cloud_weather_lookup(position_m);
+    return ground_bounce_conditions_from_field(
+        environment_field_layer(lookup.texel, lookup.weight, GROUND_BOUNCE_FIELD),
+    );
+}
+
 fn sampled_cloud_transmittance_at(plane_position_m: vec2<f32>, source_index: u32) -> f32 {
     return cloud_shadow_field_transmittance(
         occluder_field(plane_position_m, CLOUD_SHADOW_FIELD + source_index),

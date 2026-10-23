@@ -966,6 +966,7 @@ fn seasonal_snow_cover_from_fields(
     temperature_anomaly_c: f32,
     water_vapor_g_kg: f32,
     climate: SurfaceClimateSample,
+    rain: f32,
 ) -> f32 {
     let ground_temperature = ground_temperature_c_from_fields(
         elevation_m,
@@ -993,7 +994,7 @@ fn seasonal_snow_cover_from_fields(
             )
     );
     let snowfall_cold = 1.0 - smoothstep(-1.0, 2.0, air_temperature);
-    let fresh_snow = surface_cloud_weather.rain * snowfall_cold;
+    let fresh_snow = rain * snowfall_cold;
     let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
     let melt = smoothstep(0.0, 6.0, air_temperature);
     return snow_before_melt * (1.0 - 0.75 * melt);
@@ -1006,6 +1007,7 @@ fn seasonal_snow_cover(elevation_m: f32) -> f32 {
         surface_air_temperature_anomaly_c_from_climate(surface_position_m, climate),
         surface_water_vapor_g_kg_from_climate(surface_position_m, climate),
         climate,
+        surface_cloud_weather.rain,
     );
 }
 
@@ -1018,6 +1020,7 @@ fn local_snow_cover_from_atmosphere(
         atmosphere.temperature_anomaly.value,
         atmosphere.water_vapor_g_kg,
         atmosphere.climate,
+        surface_cloud_weather.rain,
     );
 }
 

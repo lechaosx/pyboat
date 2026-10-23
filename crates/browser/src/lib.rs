@@ -17,7 +17,7 @@ pub use exposure::{ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridHistory,
     FieldGridTuning, FieldGrids, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_TEXELS, field_grids,
+    OCCLUDER_FIELD_TEXELS, clear_sky_diffuse_fraction, field_grids, moon_clear_sky_share,
 };
 pub use graphics::{
     FramePacer, GraphicsQuality, GraphicsSettings, MINIMUM_RENDER_SCALE, ResolutionController,

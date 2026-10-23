@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use game::{
-    celestial_directions_at_height, celestial_lighting_at_height, celestial_orbit,
-    world_celestial_conditions,
+    celestial_directions_at_height, celestial_disc_visibility_at_height,
+    celestial_lighting_at_height, celestial_orbit, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -16,9 +16,10 @@ pub const ENVIRONMENT_FIELD_TEXELS: u32 = 384;
 /// deck's drivers vary over 8 km and more; what coarsens is mainly the land
 /// share across coasts, which moves cumulus cover only where it is marginal.
 const CLOUD_WEATHER_FIELD_TEXELS: u32 = 192;
-/// The scene's five layers, then the cumulus and deck drivers on the cloud
-/// weather grid. Keep synchronized with environment-fields.wgsl.
-pub const ENVIRONMENT_FIELD_LAYERS: u32 = 7;
+/// The scene's five layers, then the cumulus and deck drivers and the
+/// ground-sky bounce conditions on the cloud weather grid. Keep synchronized
+/// with environment-fields.wgsl.
+pub const ENVIRONMENT_FIELD_LAYERS: u32 = 8;
 /// The finest stored octaves are the 960 m local pressure band and 512 m water
 /// vapour. Eight or more texels per wavelength keep bilinear error below 8% of
 /// that octave's amplitude, about 0.3% of the water-vapour field.
@@ -393,6 +394,8 @@ pub fn field_grids(
         }
     }
     let wrapped_view = wrapped_region(world_width_m, view);
+    // Every receiver also reads its ground-sky bounce conditions there.
+    cloud_weather_region.include(wrapped_view);
     let environment_spacing = |region: Region, texels: u32| {
         field_spacing_m(
             world_width_m,
@@ -455,21 +458,41 @@ fn fitting_spacing_m(region: Region, axis_texels: u32, layer_texels: u32) -> f64
         .max(layer_spacing_m)
 }
 
-/// The largest share of a receiver's clear-sky light that the Moon supplies
-/// over the view, composed as `moon_cloud_shadow_weight` in lighting.wgsl
-/// composes it; keep the two synchronized. A low Sun's light there crosses
-/// extra air mass and reddens; taking the densest regional aerosol and the
-/// reddest Sun overstates the Moon's share rather than understating it.
-fn moon_clear_sky_share(
+/// An upper bound over the view on the share of a receiver's clear-sky light
+/// that the Moon supplies, as `moon_clear_sky_share` in lighting.wgsl composes
+/// it; keep the two synchronized. Each receiver takes the larger share at the
+/// two ends of the regional turbidity range, with the reddest Sun, the clear
+/// sky's darkest colour, the weakest twilight bands for sunlight and diffuse
+/// light, and the strongest for the Moon's beam.
+pub fn moon_clear_sky_share(
     world_geometry: WorldGeometry,
     world_time_seconds: f64,
     camera_m: [f64; 2],
     half_view_m: [f64; 2],
     highest_receiver_m: f64,
 ) -> f64 {
-    const DENSEST_AEROSOL_OPTICAL_DEPTH: f64 = 0.32;
+    // `regional_linke_turbidity` over the 0.007-0.32 regional aerosol optical
+    // depths of lighting.wgsl.
+    const LINKE_TURBIDITIES: [f64; 2] = [2.35 + 7.79 * 0.007, 2.35 + 7.79 * 0.32];
     const REDDEST_SUN_LUMINANCE: f64 = 0.577;
+    // The night sky's (0.42, 0.52, 0.75) tinted 35% toward an eclipsed Moon's
+    // (1.2, 0.28, 0.06), the darkest colour the clear sky's light takes.
+    const DARKEST_SKY_LUMINANCE: f64 = 0.40;
+    // Lower-twilight and upper-afterglow band weights at the least and most
+    // regional horizon scattering, from `calculate_atmospheric_ambient_light`.
+    const WEAKEST_TWILIGHT: [f64; 2] = [0.24, 0.04];
+    const STRONGEST_TWILIGHT: [f64; 2] = [0.36, 0.09];
+    const MOON_DIRECT_SCALE: f64 = 1.5;
+    // Disc radii from scene-state.wgsl.
+    const SUN_DISC_RADIUS_RAD: f32 = 0.00465;
+    const MOON_DISC_RADIUS_RAD: f32 = 0.00452;
     let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
+    let illuminated_fraction = celestial_orbit(world_celestial_conditions(
+        world_geometry,
+        world_time_seconds,
+        Vector::new(camera_m[0] as f32, camera_m[1] as f32),
+    ))
+    .illuminated_fraction;
     let mut share: f64 = 0.0;
     for row in 0..=4 {
         for column in 0..=4 {
@@ -488,26 +511,100 @@ fn moon_clear_sky_share(
                 let [red, green, blue] = light.moon_color.map(f64::from);
                 let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));
                 let horizon_z = -(1.0 - radius_ratio * radius_ratio).sqrt();
+                let height_above_horizon = |z: f32| (f64::from(z) - horizon_z) / (1.0 - horizon_z);
+                // Daylight, lower-twilight, and upper-afterglow bands as in
+                // `calculate_atmospheric_ambient_light`.
+                let banded_ambient = |direction_z: f32, twilight: [f64; 2]| {
+                    let z = f64::from(direction_z);
+                    let daylight = smoothstep(-0.034_899_5, 0.139_173_1, z);
+                    let lower_twilight = smoothstep(-0.156_434_5, 0.017_452_4, z);
+                    let upper_afterglow = smoothstep(-0.309_017, -0.139_173_1, z)
+                        * (1.0 - smoothstep(-0.139_173_1, -0.034_899_5, z));
+                    daylight
+                        * (0.45 + 0.515 * height_above_horizon(direction_z).clamp(0.0, 1.0).sqrt())
+                        + twilight[0] * (1.0 - daylight) * lower_twilight
+                        + twilight[1] * upper_afterglow
+                };
                 let sun_z = f64::from(light.sun_direction[2]);
-                let slant_cosine = ((sun_z - horizon_z) / (1.0 - horizon_z)).max(0.001);
                 let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_z);
-                let sun_direct = 0.38
-                    * f64::from(light.sun_intensity).sqrt()
-                    * (-DENSEST_AEROSOL_OPTICAL_DEPTH * (1.0 / slant_cosine - 1.0)).exp()
-                    * (1.0 - low_sun * (1.0 - REDDEST_SUN_LUMINANCE));
-                let moon_direct = 0.16
-                    * f64::from(light.moon_intensity).sqrt()
-                    * (0.2126 * red + 0.7152 * green + 0.0722 * blue);
-                let diffuse =
-                    (1.0 - sun_direct - moon_direct).max(0.0) * f64::from(light.ambient_intensity);
-                let total = sun_direct + moon_direct + diffuse;
-                if total > 0.0 {
-                    share = share.max(moon_direct / total);
+                let eclipse = f64::from(light.solar_eclipse_fraction);
+                let lunar_scale = 0.85
+                    * (1.0
+                        - 0.18 * f64::from(light.lunar_penumbra_fraction)
+                        - 0.78 * f64::from(light.lunar_umbra_fraction))
+                    .max(0.04)
+                    * 0.12
+                    * illuminated_fraction;
+                let solar = banded_ambient(light.sun_direction[2], WEAKEST_TWILIGHT);
+                let weakest_lunar =
+                    lunar_scale * banded_ambient(light.moon_direction[2], WEAKEST_TWILIGHT);
+                let strongest_lunar =
+                    lunar_scale * banded_ambient(light.moon_direction[2], STRONGEST_TWILIGHT);
+                let clear = (0.035 + (1.0 - 0.85 * eclipse) * solar + weakest_lunar).min(1.0);
+                let sun_visibility = (1.0 - eclipse)
+                    * f64::from(celestial_disc_visibility_at_height(
+                        world_geometry,
+                        height_m as f32,
+                        light.sun_direction[2],
+                        SUN_DISC_RADIUS_RAD,
+                    ));
+                let moon_visibility = f64::from(celestial_disc_visibility_at_height(
+                    world_geometry,
+                    height_m as f32,
+                    light.moon_direction[2],
+                    MOON_DISC_RADIUS_RAD,
+                ));
+                for turbidity in LINKE_TURBIDITIES {
+                    let sun_beam = sun_visibility
+                        * (1.0
+                            - clear_sky_diffuse_fraction(
+                                height_above_horizon(light.sun_direction[2]),
+                                turbidity,
+                            ))
+                        * solar;
+                    let moon_beam = moon_visibility
+                        * (1.0
+                            - clear_sky_diffuse_fraction(
+                                height_above_horizon(light.moon_direction[2]),
+                                turbidity,
+                            ))
+                        * strongest_lunar;
+                    let sun_direct = sun_beam * (1.0 - low_sun * (1.0 - REDDEST_SUN_LUMINANCE));
+                    let moon_direct = MOON_DIRECT_SCALE
+                        * moon_beam
+                        * (0.2126 * red + 0.7152 * green + 0.0722 * blue);
+                    let diffuse = (clear - sun_beam - moon_beam).max(0.0) * DARKEST_SKY_LUMINANCE;
+                    let total = sun_direct + moon_direct + diffuse;
+                    if total > 0.0 {
+                        share = share.max(moon_direct / total);
+                    }
                 }
             }
         }
     }
     share
+}
+
+/// `clear_sky_diffuse_fraction` in lighting.wgsl, which gives its provenance;
+/// keep the two synchronized.
+pub fn clear_sky_diffuse_fraction(sine_height: f64, linke_turbidity: f64) -> f64 {
+    let sine = sine_height.clamp(0.0, 1.0);
+    let air_mass = 1.0 / (sine + 0.025 * (-11.0 * sine).exp());
+    let rayleigh_optical_depth = if air_mass > 20.0 {
+        1.0 / (10.4 + 0.718 * air_mass)
+    } else {
+        1.0 / (6.6296
+            + air_mass * (1.7513 + air_mass * (-0.1202 + air_mass * (0.0065 - 0.00013 * air_mass))))
+    };
+    let beam = sine * (-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth).exp();
+    let turbidity = linke_turbidity;
+    let diffuse_transmission = -0.015843 + turbidity * (0.030543 + 0.0003797 * turbidity);
+    let a0 = (0.26463 + turbidity * (-0.061581 + 0.0031408 * turbidity))
+        .max(0.002 / diffuse_transmission);
+    let a1 = 2.04020 + turbidity * (0.018945 - 0.011161 * turbidity);
+    let a2 = -1.3025 + turbidity * (0.039231 + 0.0085079 * turbidity);
+    let diffuse = diffuse_transmission * (a0 + sine * (a1 + a2 * sine));
+    diffuse / (diffuse + beam).max(1e-6)
 }
 
 fn smoothstep(lower: f64, upper: f64, value: f64) -> f64 {
@@ -1202,6 +1299,44 @@ mod tests {
                     "{world_width_m}: {columns}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cloud_weather_grid_covers_the_view_at_every_zoom() {
+        for view_height_m in [240.0, 1_500.0, 6_000.0, 16_000.0] {
+            let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
+            for step in 0..(28 * 24) {
+                let world_time_seconds = f64::from(step) * 3_600.0;
+                let grids = production_grids(
+                    world_time_seconds,
+                    [500.0, -14_500.0],
+                    view_size_m,
+                    NO_MOTION,
+                );
+                assert_covers(
+                    &grids.cloud_weather,
+                    view_region(view_size_m),
+                    &format!("{view_size_m:?} at {world_time_seconds} s"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clear_sky_diffuse_fraction_follows_its_published_model() {
+        for (height_deg, expected) in [
+            (60.0_f64, 0.116),
+            (30.0, 0.183),
+            (10.0, 0.359),
+            (3.0, 0.667),
+            (0.0, 1.0),
+        ] {
+            let fraction = clear_sky_diffuse_fraction(height_deg.to_radians().sin(), 3.0);
+            assert!(
+                (fraction - expected).abs() < 0.001,
+                "{fraction} at {height_deg} degrees"
+            );
         }
     }
 

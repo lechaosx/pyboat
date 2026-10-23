@@ -304,7 +304,10 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
                     0.5,
                     receiver.moon_direction,
                     receiver.horizon_z,
-                    moon_cloud_shadow_weight(receiver),
+                    moon_cloud_shadow_weight(
+                        receiver,
+                        calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
+                    ),
                 )),
         0.0,
         1.0,
@@ -328,13 +331,16 @@ fn diagnostic_receiver_ambient(surface_height_m: f32) -> vec4<f32> {
         RegionalCanopyConditions(0.0, 0.0),
         receiver,
     );
-    return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
+    return vec4<f32>(ambient.clear_sky + ambient.canopy + ambient.canopy_scattered, 1.0);
 }
 
 fn diagnostic_receiver_ambient_share(surface_height_m: f32) -> vec4<f32> {
     let receiver = celestial_receiver_light_at_height(surface_height_m);
     return vec4<f32>(scalar_debug_color(
-        ambient_contribution_share(receiver),
+        calculate_atmospheric_ambient_light(
+            RegionalCanopyConditions(0.0, 0.0),
+            receiver,
+        ).split.diffuse_shares.x,
     ), 1.0);
 }
 
@@ -346,7 +352,7 @@ fn diagnostic_ambient_with_surface_horizon(surface_height_m: f32) -> vec4<f32> {
         RegionalCanopyConditions(0.0, 0.0),
         receiver,
     );
-    return vec4<f32>(ambient.clear_sky + ambient.canopy, 1.0);
+    return vec4<f32>(ambient.clear_sky + ambient.canopy + ambient.canopy_scattered, 1.0);
 }
 
 // Shadow of the cumulus (0) or the deck (1) over this position under a light
