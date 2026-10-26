@@ -63,6 +63,13 @@ and verification details.
 
 - **[Explicit]** Environment models are deterministic, stateless, locally
   plausible queries rather than global climate, fluid, storm-lifecycle, or basin solves.
+- **[Explicit]** The world's physical models follow the structure of the
+  governing physics, with its dependencies and published constants, so they
+  largely calibrate themselves. Each aims for the most realism per complexity.
+- **[Explicit]** Departures from that physics are deliberate compromises,
+  acceptable where the world lacks the physical cause or its caricatured
+  proportions make the physics read wrongly. Each is named beside its code with
+  what it stands in for.
 - **[Implicit]** `game` is authoritative for terrain, atmosphere, tides, shelter,
   and depth; native and WASM sample match seed, tick, and world position.
 - **[Explicit]** Clients receive seed and geometry as procedural-world data.

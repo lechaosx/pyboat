@@ -65,6 +65,10 @@
 - Extract shared code only when the functionality is semantically general and valuable on its own, not merely because two places currently look alike.
 - Account for the coupling introduced by shared code. Common components should represent stable concepts that are unlikely to change with any one caller.
 
+## Fix Models Physically
+
+- Fix physical-model defects by making the model more physical, simpler, or both. When neither works, flag the compromise instead of adding a correction term or tuned constant.
+
 ## Test Observable Risk
 
 - Use red-green TDD for bug fixes and for behavior or contracts that can be exercised through a stable interface at reasonable cost. Confirm that the new test fails for the intended reason before implementing the change.
