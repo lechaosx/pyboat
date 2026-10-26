@@ -718,6 +718,7 @@ fn parse_options() -> Result<Command, String> {
     let mut height = None;
     let mut bench_only_option = None;
     let mut capture_only_option = None;
+    let mut lab_only_option = None;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = |arguments: &mut std::iter::Skip<std::env::Args>| {
@@ -734,6 +735,19 @@ fn parse_options() -> Result<Command, String> {
             _ => {
                 capture_only_option.get_or_insert_with(|| argument.clone());
             }
+        }
+        if matches!(
+            argument.as_str(),
+            "--legacy-shadow-look"
+                | "--light-balance"
+                | "--cloud-shadows"
+                | "--landform-lighting"
+                | "--landscape-visibility"
+                | "--light-contributions"
+                | "--land-material-colors"
+                | "--solid-material-colors"
+        ) {
+            lab_only_option.get_or_insert_with(|| argument.clone());
         }
         match argument.as_str() {
             "--bench" => bench = true,
@@ -829,6 +843,11 @@ fn parse_options() -> Result<Command, String> {
     if let Some(option) = bench_only_option {
         return Err(format!("{option} requires --bench"));
     }
+    if let Some(option) = lab_only_option
+        && options.diagnostic.id == "scene_production"
+    {
+        return Err(format!("{option} applies only to lab compositions"));
+    }
     options.width = width.unwrap_or(options.width);
     options.height = height.unwrap_or(options.height);
     validate_capture_output_path(&options.output)?;
@@ -918,7 +937,7 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
-        "scene_direct" | "scene_occluder_coverage" => ShaderSelection {
+        "scene_direct" | "scene_occluder_coverage" | "scene_production" => ShaderSelection {
             id: value.to_owned(),
             module: None,
             constants: Vec::new(),
@@ -1399,7 +1418,9 @@ fn print_help() {
            --cloud-motion SECONDS  cloud transport an interactive view accumulates over the\n\
                                   SECONDS before --world-time at 1 s frames (default 0)\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
-                                  scene_direct evaluates every field per pixel without grids)\n\
+                                  scene_direct evaluates every field per pixel without grids;\n\
+                                  scene_production renders the game's shaders and tuning\n\
+                                  and rejects the lab's tuning and visibility options)\n\
            --quality low|medium|high  graphics tier of scene compositions (default high)\n\
            --legacy-shadow-look   scene compositions fade cloud shadows from a light height of\n\
                                   0.22, cap landform shadows at 70%, and fix their reach\n\n\
@@ -1671,7 +1692,10 @@ async fn render(options: &Options) -> Result<(), String> {
     if !grid_scene && !options.prior_views.is_empty() {
         return Err("--prior-view applies only to the scene composition".to_owned());
     }
-    let constants = if options.diagnostic.module.is_none() {
+    let production = options.diagnostic.id == "scene_production";
+    let constants = if production {
+        options.quality.scene_constants().to_vec()
+    } else if options.diagnostic.module.is_none() {
         [
             options.diagnostic.constants.as_slice(),
             options.quality.scene_constants(),
@@ -1690,7 +1714,9 @@ async fn render(options: &Options) -> Result<(), String> {
     };
     let shader_source = options.diagnostic.module.map_or_else(
         || {
-            if grid_scene {
+            if production {
+                browser::production_scene_shader_source()
+            } else if grid_scene {
                 browser::playground_scene_shader_source()
             } else {
                 browser::playground_direct_scene_shader_source()
@@ -1705,6 +1731,20 @@ async fn render(options: &Options) -> Result<(), String> {
     let scene_layout = uniform_layout(&device, "scene uniforms layout");
     let playground_layout = uniform_layout(&device, "playground uniforms layout");
     let fields = grid_scene.then(|| {
+        if production {
+            return CaptureFields::new(
+                &device,
+                &scene_layout,
+                &playground_layout,
+                browser::occluder_field_shader_source(),
+                &[],
+                browser::landform_horizon_shader_source(),
+                &[],
+                browser::baked_surface_shader_source(),
+                &[],
+                baked_surface_sizes((options.width, options.height), options.bake_memory_bytes),
+            );
+        }
         CaptureFields::new(
             &device,
             &scene_layout,
@@ -1739,7 +1779,14 @@ async fn render(options: &Options) -> Result<(), String> {
         immediate_size: 0,
     });
     let fragment_entry = options.diagnostic.module.map_or_else(
-        || "fragment_playground_scene".to_owned(),
+        || {
+            if production {
+                "fragment"
+            } else {
+                "fragment_playground_scene"
+            }
+            .to_owned()
+        },
         |name| format!("fragment_{name}"),
     );
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1777,7 +1824,7 @@ async fn render(options: &Options) -> Result<(), String> {
     });
     let playground_uniforms = PlaygroundUniforms {
         terrain_tuning: [1.0, 3.0, 0.08, 0.0],
-        water_tuning: [0.5, 1.0, 0.0, 0.0],
+        water_tuning: [0.5, 1.0, 3.0, 0.35],
         landform_lighting: options.landform_lighting,
         cloud_shadows: options.cloud_shadows,
         water_surface: [2.5, 0.2, 1.0, 1.0],

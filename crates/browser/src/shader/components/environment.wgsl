@@ -1430,8 +1430,8 @@ fn production_tuning() -> SceneTuning {
         vec4<f32>(
             WATER_ATTENUATION_LENGTH_M,
             WATER_BOTTOM_VISIBILITY,
-            0.0,
-            0.0,
+            WATER_BOTTOM_REFLECTANCE,
+            WATER_BOTTOM_VEIL,
         ),
         vec4<f32>(
             LANDFORM_RELIEF_STRENGTH,

@@ -3,7 +3,8 @@ use std::{fs, io::BufReader, process::Command};
 use game::{
     broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
     celestial_lighting_at_height, procedural_solid_surface_elevation_m,
-    procedural_terrain_elevation_m, procedural_world_environment, world_celestial_conditions,
+    procedural_terrain_elevation_m, procedural_water_depth_m, procedural_world_environment,
+    world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
@@ -2762,6 +2763,91 @@ fn baked_land_ice_share_under_snow_ignores_vegetation_colours_at_coarse_spacing(
     assert!(
         baked <= direct.max(2),
         "hiding vegetation changes the baked land-ice share by {baked}, the direct one by {direct}",
+    );
+}
+
+#[test]
+fn the_lab_default_scene_renders_like_the_game() {
+    // A rocky shore at boat zoom, and an island interior under cumulus.
+    for (camera_m, view_height_m, world_time_seconds) in [
+        ((-8_420.0, 60.0), 240.0, 37.0),
+        ((-8_950.0, 800.0), 300.0, 1_123_237.0),
+    ] {
+        let render = |label, diagnostic| {
+            render_capture(
+                label,
+                &[
+                    "--camera-x",
+                    &f32::to_string(&camera_m.0),
+                    "--camera-y",
+                    &f32::to_string(&camera_m.1),
+                    "--view-height",
+                    &f32::to_string(&view_height_m),
+                    "--world-time",
+                    &f64::to_string(&world_time_seconds),
+                    "--diagnostic",
+                    diagnostic,
+                ],
+            )
+        };
+        let lab = render("lab-default", "scene");
+        let game = render("game", "scene_production");
+        let largest = pixel_differences(&lab, &game).into_iter().max().unwrap();
+        assert!(
+            largest <= 1,
+            "at {camera_m:?} the lab's default scene differs from the game's by {largest} levels",
+        );
+    }
+}
+
+#[test]
+fn the_game_tints_shallow_water_with_its_bottom() {
+    let world = WorldGeometry::default();
+    let coast_m = rugged_coast_m(world);
+    let (width, height, view_height_m) = (256, 144, 240.0);
+    let image = render_capture(
+        "production-shallows",
+        &[
+            "--camera-x",
+            &coast_m.x.to_string(),
+            "--camera-y",
+            &coast_m.y.to_string(),
+            "--view-height",
+            &view_height_m.to_string(),
+            "--diagnostic",
+            "scene_production",
+        ],
+    );
+    let pixel_m = view_height_m / height as f32;
+    let depths_m: Vec<f32> = (0..width * height)
+        .map(|index| {
+            let (column, row) = ((index % width) as f32, (index / width) as f32);
+            let offset_m = Vector::new(
+                column + 0.5 - 0.5 * width as f32,
+                0.5 * height as f32 - row - 0.5,
+            );
+            procedural_water_depth_m(world, SEED, 37.0, coast_m + pixel_m * offset_m)
+        })
+        .collect();
+    let mean_luminance = |depths: std::ops::Range<f32>| {
+        let (sum, count) = image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(&depths_m)
+            .filter(|&(_, depth_m)| depths.contains(depth_m))
+            .fold((0.0, 0), |(sum, count), (pixel, _)| {
+                (sum + linear_luminance(pixel), count + 1)
+            });
+        assert!(count >= 100, "only {count} pixels are {depths:?} m deep");
+        sum / count as f32
+    };
+    // A bright sand or rock bed under a few decimetres of water shows through.
+    let shallow = mean_luminance(0.05..0.4);
+    let deep = mean_luminance(3.0..f32::INFINITY);
+    assert!(
+        shallow > 1.25 * deep,
+        "shallow water luminance {shallow} against deep water {deep}",
     );
 }
 
