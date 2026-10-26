@@ -907,7 +907,7 @@ fn ground_temperature_c_from_fields(
         + 0.15 * climate.diurnal_temperature_range_c
             * climate.diurnal_temperature_factor;
     return sea_level_temperature
-        + 0.35 * temperature_anomaly_c
+        + 0.25 * temperature_anomaly_c
         - 0.0065 * max(elevation_m, 0.0);
 }
 

@@ -7,7 +7,7 @@ use game::{
     world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
-use simulation::WorldGeometry;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
 
@@ -488,6 +488,60 @@ fn rendered_instability_matches_authoritative_rust_upper_air() {
     assert!(
         compared >= 4,
         "only {compared} positions had unsaturated instability"
+    );
+}
+
+#[test]
+fn rendered_snow_cover_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let world_time_seconds = world_time_for_season_phase(0.06);
+    let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+    let mut compared = Vec::new();
+    for index in 0..1024 {
+        if compared.len() == 16 {
+            break;
+        }
+        let position_m = Vector::new(
+            (index % 32) as f32 * 2_000.0 - 31_000.0,
+            (index / 32) as f32 * 2_000.0 - 31_000.0,
+        );
+        let sample = procedural_world_environment(world, SEED, tick, position_m);
+        let expected = sample.surface_climate.seasonal_snow_cover;
+        let anomaly_c = sample.weather.primary.surface_air_temperature_anomaly_c;
+        // The air-mass anomaly moves snow through ground temperature most where
+        // the anomaly is large, the ground near freezing, and cover partial.
+        if !(0.1..=0.9).contains(&expected)
+            || sample.surface_climate.ground_temperature_c.abs() > 4.0
+            || anomaly_c.abs() < 4.0
+        {
+            continue;
+        }
+        let actual = render_diagnostic_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            "climate_spatial_snow",
+            1,
+            1,
+        )[0];
+        compared.push((
+            position_m,
+            actual,
+            scalar_debug_pixel(expected)[0],
+            expected,
+        ));
+    }
+    assert!(
+        compared.len() >= 4,
+        "only {} positions had partial snow under a strong anomaly",
+        compared.len(),
+    );
+    // Within one 8-bit level of the diagnostic, Rust's cover encoded alike.
+    assert!(
+        compared
+            .iter()
+            .all(|(_, actual, expected, _)| actual.abs_diff(*expected) <= 1),
+        "rendered and Rust-encoded snow cover levels, with Rust's cover: {compared:?}",
     );
 }
 
