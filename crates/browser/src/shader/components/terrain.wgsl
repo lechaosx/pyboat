@@ -137,6 +137,7 @@ fn solid_ice_sample(
         if cover <= 0.5 {
             return surface;
         }
+        // A gameplay solid-surface height standing in for sea-ice freeboard.
         surface.elevation_m = 0.25 + 1.75 * cover;
         surface.gradient = -1.75 * open_water.gradient;
         surface.ice_amount = smoothstep(0.5, 0.65, cover);
@@ -160,12 +161,14 @@ fn solid_ice_sample(
     if annual_temperature.value >= -8.0 {
         return surface;
     }
+    // The annual-mean threshold stands in for glacier mass balance.
     let warm = terrain_smoothstep_sample(-12.0, -8.0, annual_temperature);
     var cold: TerrainNoiseSample;
     cold.value = 1.0 - warm.value;
     cold.gradient = -warm.gradient;
     let amount = cold.value;
     let amount_gradient = cold.gradient;
+    // The 20 m and 4 m heights are gameplay surfaces standing in for glacier thickness.
     let broad_surface = 20.0 * cold.value + 0.25 * positive_bedrock.value;
     let broad_gradient = 20.0 * cold.gradient + 0.25 * positive_bedrock.gradient;
     let local_surface = bedrock.value + 4.0 * cold.value;
@@ -1123,6 +1126,7 @@ fn sea_ice_surface(
     let slab_shading_hash = hash32(slab_hash);
     let slab_tone = visual_hash_unit(hash32(slab_shading_hash));
     let slab_tilt = 0.025 * (2.0 * visual_hash_unit_pair(slab_shading_hash) - 1.0);
+    // The bedrock tint under frozen water is the compromise recorded in PRODUCT.md.
     let shallow = smoothstep(-120.0, -3.0, bedrock_elevation_m);
     let shore = smoothstep(-18.0, -1.0, bedrock_elevation_m);
     let compactness = smoothstep(0.50, 0.90, cover);

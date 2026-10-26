@@ -22,6 +22,8 @@ fn precipitation_water_contact_sample_from_atmosphere(
     if !contacts_resolved && !EVALUATE_ALL_BRANCHES {
         return sample;
     }
+    // The contact rate follows the rain index; the cells, ring sizes, and heights
+    // stand in for a drop-size distribution.
     let cell_x_cycles = max(1, i32(round(scene.world_size_m.x / 1.50)));
     let cell_size_m = vec2<f32>(scene.world_size_m.x / f32(cell_x_cycles), 1.50);
     let canonical_position = canonical_world_position(position_m);
@@ -161,6 +163,7 @@ fn ocean_tide_height_sample(
             ),
         );
     }
+    // The seeded range and lag stand in for unresolved basin resonance.
     let tidal_range_m = 1.25 + 0.75 * tide.response.value;
     let tidal_range_gradient = 0.75 * tide.response.gradient;
     let tidal_phase = 0.08 * tide.lag.value;
@@ -206,8 +209,11 @@ fn ocean_forcing_from_surface(
     let surface_speed_m_s = length(surface_wind_m_s);
     let upper_speed_m_s = length(upper_wind_m_s);
     let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
+    // Swell from the upper wind stands in for swell travelling from distant storms.
     let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
     let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
+    // 0.78 is McCowan's (1894) breaker limit; the 14 m cap stands in for fetch
+    // and duration limits.
     return OceanForcingSample(
         min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
         surface_wind_m_s,
@@ -224,6 +230,8 @@ fn ocean_current_m_s_from_surface(
 ) -> vec2<f32> {
     let latitude_rad = radians(surface_latitude_degrees_at(position_m));
     let cluster = terrain_cluster;
+    // The open-water envelope and cos² of latitude stand in for basin geometry
+    // bounding the gyres.
     let transition = clamp((cluster.value - 0.02) / 0.46, 0.0, 1.0);
     let open_water = 1.0 - transition * transition * (3.0 - 2.0 * transition);
     let open_water_derivative = select(
@@ -325,6 +333,7 @@ fn physical_water_wave_sample_from_surface(
     let surface_direction = surface_wind / max(surface_speed, 0.0001);
     let upper_direction = upper_wind / max(upper_speed, 0.0001);
     let wind_sea_height_m = 0.05 + 0.016 * surface_speed * surface_speed;
+    // Swell from the upper wind stands in for swell travelling from distant storms.
     let swell_height_m = 0.006 * upper_speed * upper_speed;
     let energy_direction = wind_sea_height_m * wind_sea_height_m * surface_direction
         + swell_height_m * swell_height_m * upper_direction;
@@ -679,6 +688,7 @@ fn terrain_surface(
             4u,
         );
     }
+    // Exposure and alpine rock lines are compressed to the islands' low relief.
     let altitude_exposure = smoothstep(50.0, 200.0, material_elevation_m);
     let rock_slope_threshold = tuning.terrain_tuning.z
         * mix(3.0, 0.8, altitude_exposure)
@@ -777,6 +787,7 @@ fn terrain_surface(
         mix(0.90, 0.82, exposed_dryness),
     );
 
+    // A treeline compressed to the islands' low relief.
     let tree_line = 1.0 - smoothstep(150.0, 250.0, material_elevation_m);
     let forest_amount = smoothstep(-0.18, 0.35, vegetation)
         * tree_line

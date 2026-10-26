@@ -25,8 +25,13 @@ const CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M: f32 = 19_200.0;
 const CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION: f32 = 0.30;
 const PLANETARY_ZONAL_WIND_PEAK_M_S: f32 = 3.1;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
+// Boundary-layer friction turning wind about 7° toward low pressure; the upper
+// wind shares the surface wind's pressure flow and so turns alike.
 const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
+// Stands in for the wind's increase from the surface to the deck.
 const UPPER_WIND_SCALE: f32 = 1.15;
+// A caricature of thermal wind: the compressed world's temperature gradients
+// would give it far too much shear.
 const THERMAL_WIND_SCALE_M2_S_C: f32 = 1_600.0;
 const AIR_TEMPERATURE_500_HPA_OFFSET_C: f32 = 35.5;
 const AIR_TEMPERATURE_500_HPA_SEASONAL_RANGE_FRACTION: f32 = 0.25;
@@ -537,8 +542,12 @@ pub fn celestial_lighting_at_height(
         * (0.35 + 0.65 * sun_elevation);
     let moon_elevation = ((moon_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
     let moon_elevation = libm::sqrt(f64::from(moon_elevation)) as f32;
+    // Eclipse dimming compressed into the exposure range from a totality's 1e-4
+    // of the full Moon.
     let lunar_shadow_transmittance =
         (1.0 - 0.18 * orbit.lunar_penumbra_fraction - 0.78 * orbit.lunar_umbra_fraction).max(0.04);
+    // 0.12 stands in for the full Moon's 2.5e-6 of sunlight, compressed into the
+    // exposure range.
     let moon_intensity = lunar_shadow_transmittance
         * 0.12
         * orbit.illuminated_fraction as f32
@@ -581,6 +590,7 @@ pub fn celestial_lighting_at_height(
         + 0.30 * (1.0 - daylight) * lower_twilight
         + 0.065 * upper_afterglow;
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
+    // 0.035 is starlight and airglow, compressed from about 1e-8 of daylight.
     let ambient_intensity =
         (0.035 + solar_ambient_transmittance * solar_ambient + 0.85 * moon_ambient_intensity)
             .min(1.0);
@@ -819,6 +829,7 @@ fn procedural_tidal_sample(
         TIDE_CIRCLE_OCTAVE_COUNT,
     );
     TidalSample {
+        // The seeded range and lag stand in for unresolved basin resonance.
         conditions: TidalConditions {
             reference_range_m: 1.25 + 0.75 * response.value as f32,
             phase_offset: 0.08 * lag.value as f32,
@@ -910,6 +921,7 @@ pub fn climate_surface(
     let seasonal_snow_cover = snow_before_melt * (1.0 - 0.75 * melt);
     let annual_temperature_at_elevation_c =
         climate.annual_mean_air_temperature_c - 0.0065 * elevation_m.max(0.0);
+    // The annual-mean threshold stands in for glacier mass balance.
     let solid_ice_cover =
         1.0 - smoothstep_range(-12.0, -8.0, f64::from(annual_temperature_at_elevation_c)) as f32;
     let polar_ice_closure = water_ice_cover(elevation_m, water_temperature_c);
@@ -1409,6 +1421,8 @@ fn ocean_basin_capacity_sample(
         TERRAIN_CLUSTER_OCTAVE_COUNT,
         TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT,
     );
+    // The open-water envelope and cos² of latitude stand in for basin geometry
+    // bounding the gyres.
     let threshold_low = 0.02;
     let threshold_high = 0.48;
     let transition =
@@ -1470,8 +1484,11 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         Vector::ZERO
     };
     let wind_sea_height_m = 0.05 + 0.016 * wind_speed_m_s.powi(2);
+    // Swell from the upper wind stands in for swell travelling from distant storms.
     let swell_height_m = 0.006 * upper_wind_speed_m_s.powi(2);
     let unrestricted_height_m = libm::hypotf(wind_sea_height_m, swell_height_m);
+    // 0.78 is McCowan's (1894) breaker limit; the cap stands in for fetch and
+    // duration limits.
     let significant_wave_height_m = unrestricted_height_m
         .min(0.78 * query.water_depth_m)
         .min(MAX_SIGNIFICANT_WAVE_HEIGHT_M);
@@ -1778,11 +1795,14 @@ pub fn derive_weather(
     let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
     let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(surface_air_temperature_c);
     let relative_humidity = (primary.water_vapor_g_kg / saturation_capacity_g_kg).clamp(0.0, 1.5);
+    // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
+    // stand in for a parcel buoyancy index.
     let instability = smoothstep_range(
         28.0,
         48.0,
         f64::from(surface_air_temperature_c - primary.air_temperature_500_hpa_c),
     ) as f32;
+    // Low pressure, pressure gradient, and fronts stand in for unresolved ascent.
     let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
     let gradient_lift = smoothstep_range(
         0.0002,
@@ -2181,15 +2201,18 @@ fn solid_surface_elevation_from_bedrock_m(
 ) -> f32 {
     let annual_temperature_c =
         annual_mean_air_temperature_c - 0.0065 * bedrock_elevation_m.max(0.0);
+    // The annual-mean threshold stands in for glacier mass balance.
     let cold = 1.0 - smoothstep_range(-12.0, -8.0, f64::from(annual_temperature_c)) as f32;
     if bedrock_elevation_m < 0.0 {
         let cover = water_ice_cover(bedrock_elevation_m, effective_water_temperature_c);
         return if cover > 0.5 {
+            // A gameplay solid-surface height standing in for sea-ice freeboard.
             0.25 + 1.75 * cover
         } else {
             bedrock_elevation_m
         };
     }
+    // The 20 m and 4 m heights are gameplay surfaces standing in for glacier thickness.
     let ice_surface_m =
         (20.0 * cold + 0.25 * bedrock_elevation_m.max(0.0)).max(bedrock_elevation_m + 4.0 * cold);
     bedrock_elevation_m.max(bedrock_elevation_m + cold * (ice_surface_m - bedrock_elevation_m))

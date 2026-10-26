@@ -11,7 +11,8 @@ fn night_vision_color(linear_color: vec3<f32>, adapted_gain: f32) -> vec3<f32> {
     let rod_fraction = smoothstep(0.0, 4.0, log2(max(1.0, adapted_gain)));
     // Jacobs et al. (2015), https://www.emilyacooper.org/pubs/2015Jacobs_TOG.pdf:
     // normalized scotopic RGB weights preserve neutral reflectance while rods
-    // favor blue-green over red. Game illumination sets the rod/cone transition.
+    // favor blue-green over red. Game light has no absolute luminance, so four
+    // stops of adaptation gain stand in for the mesopic range of 0.005-5 cd/m².
     let rod_signal = dot(linear_color, vec3<f32>(0.0, 0.8451, 0.1459) / 0.991);
     return mix(linear_color, vec3<f32>(rod_signal), rod_fraction);
 }
@@ -37,10 +38,13 @@ fn adapted_view_color(linear_color: vec3<f32>, adapted_gain: f32, css_position_p
         return linear_color;
     }
     let vision_color = night_vision_color(linear_color, adapted_gain);
+    // The four-stop mesopic range of `night_vision_color`.
     let rod_fraction = smoothstep(0.0, 4.0, log2(adapted_gain));
     let signal = dot(vision_color, vec3<f32>(0.2126, 0.7152, 0.0722));
     // Relative uncertainty grows as photon signal falls. Multiplicative noise
     // preserves black and has zero mean; the cap keeps faint hazards readable.
+    // 0.002 sets the noise at unit signal in place of a photon count from
+    // absolute luminance.
     let amplitude = rod_fraction * min(0.12, 0.002 / sqrt(max(signal, 0.000001)));
     // CSS-pixel cells keep the grain's on-screen size the same at every graphics setting.
     let grid = css_position_px / 4.0;

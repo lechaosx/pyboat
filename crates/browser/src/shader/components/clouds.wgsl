@@ -28,12 +28,12 @@ fn regional_canopy_conditions_from_drivers(
     // Am. Meteorol. Soc. 80), and Kasten and Czeplak (1980, Solar Energy 24)
     // measured a quarter of clear-sky light under eight oktas, the overcast
     // these depths are set against.
-    // Compromise: no cloud-water or deck-depth model. The stratiform index,
-    // with its weights carried over from the driver blend, stands in for deck
-    // depth, so the 5/3 power assumes the index grows in proportion to it; 30,
-    // in ISCCP's thick class with nimbostratus and stratus, stands in for the
-    // depth of full stratiform forcing, and 70 for the water of deep
-    // convection.
+    // Compromise: no cloud-water or deck-depth model. The stratiform index
+    // stands in for deck depth, its weights for how much broad ascent,
+    // humidity, and moist instability each deepen a deck, so the 5/3 power
+    // assumes the index grows in proportion to it; 30, in ISCCP's thick class
+    // with nimbostratus and stratus, stands in for the depth of full
+    // stratiform forcing, and 70 for the water of deep convection.
     let stratiform = 0.30 * condensation
         + 0.42 * pressure_lift
         + 0.28 * condensation * instability;
@@ -244,6 +244,7 @@ fn cumulus_cover(weather: CloudWeatherSample) -> f32 {
         weather.land_fraction,
     );
     let storm_clearing = 1.0 - smoothstep(0.30, 0.70, weather.rain);
+    // 0.7 is the share of low cover that convection organises into cells.
     return min(
         0.7 * weather.low_coverage * convection * surface_heating * storm_clearing,
         0.5,
@@ -259,6 +260,7 @@ fn cumulus_depth_amount(weather: CloudWeatherSample) -> f32 {
 // humidity deficit, plus half a depth that grows with moist instability.
 fn cumulus_height_m(weather: CloudWeatherSample) -> f32 {
     let base_m = 2500.0 * max(1.0 - weather.relative_humidity, 0.0);
+    // The depth range stands in for depth limited by convective available energy.
     let depth_m = mix(500.0, 2500.0, cumulus_depth_amount(weather));
     return clamp(
         base_m + 0.5 * depth_m,
@@ -301,6 +303,8 @@ fn deck_drivers(weather: CloudWeatherSample) -> vec4<f32> {
     return vec4<f32>(
         canopy.sky_fraction,
         canopy.mean_optical_thickness,
+        // Edge softness and cirrus cover stand in for deck-edge processes and
+        // upper-air humidity.
         mix(0.08, 0.40, weather.stratiform),
         0.45 * smoothstep(0.25, 0.80, weather.regional.condensation),
     );
@@ -529,6 +533,8 @@ fn cirrus_transmittance(rays: CloudShadowRays, deck: vec4<f32>, grid_shortest_m:
     );
     let amount = smoothstep(rim, 1.0 - 0.6 * cover, edge.inner_value);
     let extinction = cloud_shadow_extinction(ray);
+    // The unresolved mean's 0.2 is a thin-cirrus optical depth (Sassen and Cho
+    // 1992, J. Appl. Meteorol. 31); 0.4 stands in for a resolved veil's core.
     let detailed = 1.0 - disc_cover(edge.rim) * (1.0 - exp(-extinction * 0.4 * amount));
     let mean = 1.0 - cover * (1.0 - exp(-extinction * 0.2));
     let resolved = clamp(log2(CIRRUS_WAVELENGTH_M / shortest_m), 0.0, 1.0);

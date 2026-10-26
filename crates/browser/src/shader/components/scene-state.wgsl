@@ -79,6 +79,7 @@ var<uniform> scene: SceneUniforms;
 override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
 override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
+// Compressed from clear seawater's 10-50 m so steep shelves still read.
 override WATER_ATTENUATION_LENGTH_M: f32 = 0.5;
 override WATER_BOTTOM_VISIBILITY: f32 = 1.0;
 override WATER_BOTTOM_REFLECTANCE: f32 = 3.0;

@@ -217,7 +217,7 @@ and verification details.
 - **[Implicit]** Calibrated clear-sky light reaches the canopy's level face
   split as on level ground: its direct part, which vanishes as the light
   reaches the layer's level, lights the layer from above, and the rest arrives
-  diffuse, so overcast keeps the clear sky's calibration.
+  diffuse.
 - **[Implicit]** A light below the canopy's level but above its horizon lights
   the layer's underside, which reflects it down. Its beam has crossed the
   canopy's level once already on the far side, where the regional canopy's
@@ -260,7 +260,9 @@ and verification details.
 - **[Explicit]** Under a low light above the cutoff, horizon dimming and
   reddening of direct light alone reduce shadow contrast, alike for every
   shadow type.
-- **[Explicit]** All shadow types fade out at one shared near-horizon cutoff.
+- **[Explicit]** All shadow types fade out at one shared near-horizon cutoff, a
+  compromise standing in for the unbounded reach of grazing shadows where
+  diffuse light already carries most of the light.
 - **[Implicit]** The cutoff follows the light's height above each receiver's own
   horizon, so raised land keeps its shadows after sea-level sunset. Shadow
   windows bound receivers up to the highest landform the elevation scale allows.

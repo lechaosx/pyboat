@@ -161,6 +161,7 @@ fn final_scene_color(
         );
         var surface_light_grade = vec3<f32>(1.0);
         if is_land {
+            // Relief is exaggerated threefold so top-down light reads landforms.
             surface_light_grade = landform_light_grade(
                 3.0 * scene_surface.gradient + surface.detail_gradient,
                 surface.roughness,

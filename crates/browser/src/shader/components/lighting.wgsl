@@ -303,7 +303,9 @@ fn daylight_light(height: f32) -> f32 {
     return 0.45 + 0.515 * sqrt(height);
 }
 
-// The Moon's light relative to the Sun's, through its phase and Earth's shadow.
+// The Moon's light relative to the Sun's, through its phase and Earth's shadow,
+// both compressed into the exposure range: 0.12 stands in for the full Moon's
+// 2.5e-6 of sunlight, and the eclipse dimming for a totality's 1e-4 of it.
 fn lunar_light_scale() -> f32 {
     return max(1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction, 0.04)
         * 0.12
@@ -414,6 +416,7 @@ fn calculate_atmospheric_ambient_light(
     let lunar_ambient = CLEAR_SKY_LUNAR_WEIGHT * moon_ambient_amount;
     let clear_intensity = min(
         1.0,
+        // Starlight and airglow, compressed from about 1e-8 of daylight.
         0.035
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
                 * solar_ambient
@@ -529,6 +532,8 @@ fn regional_aerosol_optical_depth_at(regional: RegionalCloudDrivers) -> f32 {
         * regional.pressure_lift
         * regional.instability;
     let unwashed = 1.0 - 0.72 * smoothstep(0.25, 0.70, storm);
+    // The depth range and weights stand in for aerosol sources, trapping under
+    // subsidence, and rain washout.
     return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
         * unwashed;
 }
@@ -537,6 +542,8 @@ fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
     let settled_air = 1.0 - weather.regional.pressure_lift;
     let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
     let unwashed = 1.0 - 0.72 * weather.rain;
+    // The depth range and weights stand in for aerosol sources, trapping under
+    // subsidence, and rain washout.
     return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
         * unwashed;
 }
@@ -619,6 +626,8 @@ fn sun_diffuse_light_color() -> vec3<f32> {
 // crosses Rozenberg's (1966) air mass, finite at the horizon and within 1% of
 // Kasten-Young above 5 degrees, with Kasten's (1996) broadband Rayleigh optical
 // depth, and diffuse light follows the model's Linke turbidity fits.
+// The air mass is Earth's: the small world's own would reach only about 2 at
+// the horizon and leave low light unreddened.
 // For turbidity 3 it is 0.116 at 60 degrees, 0.183 at 30, 0.359 at 10 and
 // 0.667 at 3, reaching 1 at the horizon as air mass extinguishes the beam.
 // field_grids.rs mirrors this, `regional_linke_turbidity` and
@@ -890,7 +899,8 @@ fn celestial_cloud_transmittance_at(direct_light: CelestialReceiverLight) -> vec
 }
 
 // Every shadow fades out as the light's height above its receiver's horizon
-// falls between these; field_grids.rs bounds shadow taps from the lower.
+// falls between these; field_grids.rs bounds shadow taps from the lower. The
+// fade is the near-horizon cutoff compromise recorded in ARCHITECTURE.md.
 const SHADOW_CUTOFF_Z: f32 = 0.04;
 const SHADOW_CUTOFF_FULL_Z: f32 = 0.06;
 

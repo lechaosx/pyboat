@@ -107,7 +107,8 @@ See [README.md](README.md) for what is playable now and
   suitable intertidal geology and vegetation starts above permanent tidal reach;
   temperate vegetation can change seasonally while tropical vegetation remains stable.
 - **[Explicit]** Frozen water is opaque, with angular plates, fine relief, and
-  bedrock-derived shallow and shore response on the authoritative solid surface.
+  a shallow and shore tint from the bedrock beneath, which stands in for
+  landfast and grounded ice and keeps shallows readable under ice.
 - **[Explicit]** Weather-shaped clouds never conceal players or affect gameplay.
 - **[Explicit]** Lower clouds are sparse fractus and scud fragments below the
   camera that add parallax and show system wind.

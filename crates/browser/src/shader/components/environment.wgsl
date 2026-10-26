@@ -1211,6 +1211,8 @@ fn regional_cloud_drivers_from_fields(
     return RegionalCloudDrivers(
         smoothstep(0.45, 0.95, relative_humidity),
         1.0 - smoothstep(1009.0, 1017.0, broad_pressure_hpa),
+        // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry
+        // adiabatic, stand in for a parcel buoyancy index.
         smoothstep(
             28.0,
             48.0,
@@ -1288,11 +1290,14 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         1.5,
     );
     let temperature_gradient = surface_anomaly.gradient;
+    // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
+    // stand in for a parcel buoyancy index.
     let instability = smoothstep(
         28.0,
         48.0,
         air_temperature_c - upper_air_temperature.value,
     );
+    // Low pressure, pressure gradient, and fronts stand in for unresolved ascent.
     let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, pressure.x);
     let gradient_lift = smoothstep(0.0002, 0.0015, length(pressure.yz));
     let frontal_lift = smoothstep(
@@ -1440,6 +1445,8 @@ fn production_tuning() -> SceneTuning {
             0.0,
         ),
         vec4<f32>(1.0, 1.0, 1.0, 0.0),
+        // Wave slopes exaggerated 2.5× for top-down reading; the decorative
+        // weight stands in for short waves the physical spectrum omits.
         vec4<f32>(2.5, 0.20, 1.0, 1.0),
         vec4<f32>(0.18, 0.32, 1.0, 1.0),
         vec4<f32>(192.0, 1.0, 1.0, 1.0),
