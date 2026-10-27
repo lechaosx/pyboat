@@ -957,7 +957,7 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     });
 
     assert!(full_moon_midnight.moon_direction[2] > 0.85);
-    assert!(full_moon_midnight.moon_intensity > 0.09);
+    assert!(full_moon_midnight.moon_intensity > 0.75 * game::FULL_MOON_SUNLIGHT_RATIO);
     assert_eq!(new_moon_midnight.moon_intensity, 0.0);
     assert!(full_moon_midnight.ambient_intensity > new_moon_midnight.ambient_intensity);
 }
@@ -981,7 +981,71 @@ fn upper_atmosphere_afterglow_outlasts_lower_twilight() {
 
     assert!(civil_twilight > nautical_twilight);
     assert!(nautical_twilight > astronomical_night);
-    assert!((astronomical_night - 0.035).abs() < 1e-6);
+    assert!(astronomical_night > 0.0);
+    assert_eq!(ambient_at_solar_depression(24.0), astronomical_night);
+}
+
+fn equinox_equator_light(
+    sun_elevation_degrees: f32,
+    lunar_longitude_phase: f32,
+) -> game::CelestialLighting {
+    celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
+        season_phase: 0.25,
+        day_phase: 0.75 - sun_elevation_degrees / 360.0,
+        lunar_longitude_phase,
+    })
+}
+
+/// Clear-sky light on level ground follows the Sun's height through the
+/// atmosphere: about 44% of the zenith Sun's at 30 degrees, and a few percent
+/// close to the horizon.
+#[test]
+fn clear_sky_daylight_follows_the_suns_path_through_the_atmosphere() {
+    let zenith = equinox_equator_light(90.0, 0.5).ambient_intensity;
+    let ratio = |degrees: f32| equinox_equator_light(degrees, 0.5).ambient_intensity / zenith;
+
+    assert!((0.35..0.55).contains(&ratio(30.0)), "{}", ratio(30.0));
+    assert!(ratio(3.0) < 0.05, "{}", ratio(3.0));
+}
+
+/// A clear moonless sky lights the ground with starlight and airglow, about
+/// 2e-3 lux against about 1.1e5 lux from a zenith Sun.
+#[test]
+fn moonless_night_keeps_the_physical_ratio_of_starlight_to_daylight() {
+    let zenith = equinox_equator_light(90.0, 0.5).ambient_intensity;
+    let night = equinox_equator_light(-30.0, 0.0).ambient_intensity / zenith;
+
+    assert!((5e-9..5e-8).contains(&night), "{night}");
+}
+
+/// The full Moon is 14 magnitudes fainter than the Sun.
+#[test]
+fn full_moonlight_keeps_its_physical_ratio_to_sunlight() {
+    let zenith_sun = equinox_equator_light(90.0, 0.5).ambient_intensity;
+    let full_moon_overhead = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
+        season_phase: 0.5,
+        day_phase: 0.0,
+        lunar_longitude_phase: 0.75,
+    });
+    let ratio = full_moon_overhead.moon_ambient_intensity / zenith_sun;
+
+    assert!((1.5e-6..4e-6).contains(&ratio), "{ratio}");
+}
+
+/// Lunar soil scatters most light back toward the Sun, so a quarter Moon gives
+/// about a tenth of the full Moon's light rather than half (Krisciunas and
+/// Schaefer 1991, Publ. Astron. Soc. Pac. 103).
+#[test]
+fn lunar_phase_brightness_follows_the_moons_phase_curve() {
+    assert!((game::lunar_phase_brightness(1.0) - 1.0).abs() < 1e-9);
+    let quarter = game::lunar_phase_brightness(0.5);
+    assert!((0.07..0.12).contains(&quarter), "{quarter}");
+    assert!(game::lunar_phase_brightness(0.0) < 1e-3);
+    assert!(game::lunar_phase_brightness(0.25) < quarter);
 }
 
 #[test]
@@ -996,7 +1060,12 @@ fn direct_sun_uses_the_finite_disc_surface_horizon() {
     });
 
     assert!(lighting.sun_direction[2] > angular_radius_rad);
-    assert!(lighting.sun_intensity > 0.35, "{}", lighting.sun_intensity);
+    let unoccluded = game::clear_sky_beam_transmittance(f64::from(lighting.sun_direction[2]));
+    assert!(
+        lighting.sun_intensity > 0.999 * unoccluded,
+        "{} of {unoccluded}",
+        lighting.sun_intensity
+    );
 }
 
 #[test]

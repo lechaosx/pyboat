@@ -659,7 +659,7 @@ fn landform_light_grade(
     let light_direction = select(
         vec3<f32>(0.0, 0.0, 1.0),
         normalize(combined_light),
-        length(combined_light) > 0.001,
+        length(combined_light) > 0.0,
     );
     let sky_direction = normalize(vec3<f32>(0.28 * light_direction.xy, 1.0));
     let sky_facing = clamp(dot(normal, sky_direction), 0.0, 1.0);

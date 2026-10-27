@@ -17,87 +17,98 @@ impl ViewExposure {
     }
 }
 
+/// Brightness of an adapted view grows as this power of the light it is
+/// adapted to: CIECAM02's brightness of an adapted white follows the fourth
+/// root of its luminance-level adaptation factor, which grows as the cube root
+/// of photopic adapting luminance (Moroney et al. 2002, Proc. IS&T/SID Color
+/// Imaging Conf. 10). Its photopic branch is kept below photopic light, where
+/// the model's own and real dim vision would leave night unreadable on a
+/// display; this compromise keeps night views readable. display.wgsl mirrors it.
+pub const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
+
+/// Exposure that shows a view adapted to clear-sky `illumination`, in scene
+/// light, at its brightness. A zenith Sun's light keeps its calibrated
+/// brightness, and adaptation stops at a clear moonless sky's light, which
+/// fully dark-adapted vision is matched to.
 pub fn exposure_target(illumination: f32) -> f32 {
-    // Linear material reflectance needs several stops at night; partial
-    // compensation retains the difference between moonlit and moonless scenes.
-    (0.45 / illumination.max(0.001)).powf(0.95).clamp(1.0, 16.0)
+    illumination
+        .clamp(game::NIGHT_SKY_LIGHT, 1.0)
+        .powf(ADAPTED_BRIGHTNESS_EXPONENT - 1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn exposure_target_is_bounded_and_preserves_night_contrast() {
-        let day = exposure_target(1.0);
-        let moonlight = exposure_target(0.12);
-        let night = exposure_target(0.035);
-        assert!(day < moonlight && moonlight < night);
-        let maximum = exposure_target(0.0);
-        assert!(maximum.is_finite());
-        for illumination in [0.0, 0.035, 0.12, 1.0, 10.0] {
-            assert!((day..=maximum).contains(&exposure_target(illumination)));
-        }
-        assert!(0.035 * night < 0.12 * moonlight);
-        assert!(0.12 * moonlight < day);
+    fn equator_light(
+        season_phase: f32,
+        day_phase: f32,
+        lunar_longitude_phase: f32,
+    ) -> game::CelestialLighting {
+        game::celestial_lighting(game::CelestialConditions {
+            geographic_latitude_degrees: 0.0,
+            celestial_latitude_degrees: 0.0,
+            season_phase,
+            day_phase,
+            lunar_longitude_phase,
+        })
+    }
+
+    fn adapted_brightness(light: game::CelestialLighting) -> f32 {
+        light.ambient_intensity * exposure_target(light.ambient_intensity)
     }
 
     #[test]
-    fn exposure_only_compensates_darkness_and_plateaus_at_the_dark_limit() {
-        for illumination in [0.45, 0.6, 0.8, 1.0, 10.0] {
-            assert_eq!(exposure_target(illumination), 1.0);
-        }
-        assert_eq!(exposure_target(0.0), exposure_target(0.0001));
+    fn a_view_adapted_to_a_high_sun_keeps_its_calibrated_brightness() {
+        let zenith = equator_light(0.25, 0.5, 0.5);
+        assert!((adapted_brightness(zenith) - 1.0).abs() < 1e-6);
+        assert_eq!(exposure_target(zenith.ambient_intensity), 1.0);
+        let afternoon = equator_light(0.25, 0.5 + 45.0 / 360.0, 0.5);
+        assert!(
+            adapted_brightness(afternoon) > 0.95,
+            "{}",
+            adapted_brightness(afternoon)
+        );
+    }
+
+    /// Full Moon overhead, first quarter Moon at 65 degrees, and a moonless
+    /// sky, each with the Sun 18 degrees below the horizon or lower.
+    #[test]
+    fn adapted_night_views_keep_the_order_of_moon_phases() {
+        let full = equator_light(0.5, 0.0, 0.75);
+        let quarter = equator_light(0.5, 0.82, 0.5);
+        let moonless = equator_light(0.5, 0.82, 0.25);
+        assert!(quarter.moon_direction[2] > 0.85 && quarter.sun_direction[2] < -0.3);
+        let [full, quarter, moonless] = [full, quarter, moonless].map(adapted_brightness);
+        // Each step is several times a just-noticeable brightness difference.
+        assert!(full > 1.1 * quarter, "full {full}, quarter {quarter}");
+        assert!(
+            quarter > 1.1 * moonless,
+            "quarter {quarter}, moonless {moonless}"
+        );
+        assert!(moonless > 0.1, "{moonless}");
+    }
+
+    #[test]
+    fn exposure_is_bounded_by_full_dark_adaptation_under_starlight() {
+        let night = equator_light(0.25, 0.0, 0.0).ambient_intensity;
+        assert!(exposure_target(night).is_finite());
+        assert_eq!(exposure_target(0.0), exposure_target(night));
+        assert_eq!(exposure_target(0.1 * night), exposure_target(night));
     }
 
     #[test]
     fn compensation_preserves_illumination_order_through_the_full_range() {
         let mut previous = 0.0;
-        for sample in 1..=512 {
-            let illumination = sample as f32 / 256.0;
+        for stop in -28..=0 {
+            let illumination = 2.0_f32.powi(stop);
             let compensated = illumination * exposure_target(illumination);
             assert!(
-                compensated > previous,
+                compensated >= previous,
                 "brightness reversed at illumination {illumination}"
             );
             previous = compensated;
         }
-    }
-
-    #[test]
-    fn moonlight_reduces_compensation_through_combined_celestial_illumination() {
-        let world = simulation::WorldGeometry::default();
-        let position = rapier2d::prelude::Vector::ZERO;
-        let night_samples: Vec<_> = (0..28 * 24)
-            .map(|hour| {
-                game::celestial_lighting(game::world_celestial_conditions(
-                    world,
-                    f64::from(hour) * 3600.0,
-                    position,
-                ))
-            })
-            .filter(|light| light.sun_direction[2] < -0.3)
-            .collect();
-        let moonless = night_samples
-            .iter()
-            .min_by(|a, b| {
-                a.moon_ambient_intensity
-                    .total_cmp(&b.moon_ambient_intensity)
-            })
-            .unwrap();
-        let moonlit = night_samples
-            .iter()
-            .max_by(|a, b| {
-                a.moon_ambient_intensity
-                    .total_cmp(&b.moon_ambient_intensity)
-            })
-            .unwrap();
-        assert!(moonlit.moon_ambient_intensity > moonless.moon_ambient_intensity);
-        assert!(moonlit.ambient_intensity > moonless.ambient_intensity);
-        assert!(
-            exposure_target(moonlit.ambient_intensity)
-                < exposure_target(moonless.ambient_intensity)
-        );
     }
 
     #[test]

@@ -213,7 +213,7 @@ fn sun_amount_at_horizon_with_eclipse_for_direction(
             sun,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         )
-        * (0.35 + 0.65 * sqrt(elevation));
+        * clear_sky_beam_transmittance(elevation);
 }
 
 fn sun_amount_at_horizon_with_eclipse(
@@ -252,7 +252,7 @@ fn celestial_receiver_light_for_directions(
             moon,
             MOON_ANGULAR_RADIUS_RAD,
         )
-        * (0.35 + 0.65 * sqrt(moon_elevation));
+        * clear_sky_beam_transmittance(moon_elevation);
     return CelestialReceiverLight(
         position_m,
         height_m,
@@ -297,52 +297,69 @@ fn celestial_receiver_light_at_position_and_height(
     );
 }
 
-// Calibrated clear-sky light on level ground in daylight, for a light at the
-// given sine of its height above the horizon.
-fn daylight_light(height: f32) -> f32 {
-    return 0.45 + 0.515 * sqrt(height);
+// Scene light is clear-sky daylight from a zenith Sun on level ground; these
+// mirror game's constants of the same names, which give their provenance.
+const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
+const LOWER_TWILIGHT_LIGHT: f32 = 3.4 / ZENITH_DAYLIGHT_LUX / 0.214;
+const UPPER_AFTERGLOW_LIGHT: f32 = (0.008 / ZENITH_DAYLIGHT_LUX - NIGHT_SKY_LIGHT) / 0.641;
+const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
+const REFERENCE_LINKE_TURBIDITY: f32 = 2.35 + 7.79 * 0.103;
+
+// Clear-sky light on level ground from a light at the given sine of its
+// height above the horizon, per unit of a zenith light's, as
+// game::clear_sky_light.
+fn clear_sky_light(sine_height: f32) -> f32 {
+    let light = clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY);
+    let zenith = clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY);
+    return (clamp(sine_height, 0.0, 1.0) * light.x + light.y) / (zenith.x + zenith.y);
+}
+
+// The beam's clear-sky transmittance along its path, per unit of a zenith
+// beam's, as game::clear_sky_beam_transmittance.
+fn clear_sky_beam_transmittance(sine_height: f32) -> f32 {
+    return clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY).x
+        / clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY).x;
 }
 
 // The Moon's light relative to the Sun's, through its phase and Earth's shadow,
-// both compressed into the exposure range: 0.12 stands in for the full Moon's
-// 2.5e-6 of sunlight, and the eclipse dimming for a totality's 1e-4 of it.
+// as game::celestial_lighting composes it. The eclipse dimming is compressed
+// from a totality's 1e-4 of the full Moon so that totality stays visible.
 fn lunar_light_scale() -> f32 {
+    let phase_angle_degrees = degrees(acos(clamp(2.0 * scene.celestial_orbit_light.x - 1.0, -1.0, 1.0)));
+    // game::lunar_phase_brightness gives this phase law's provenance.
+    let phase_magnitudes = 0.026 * phase_angle_degrees + 4e-9 * pow(phase_angle_degrees, 4.0);
     return max(1.0 - 0.18 * lunar_penumbra_fraction - 0.78 * lunar_umbra_fraction, 0.04)
-        * 0.12
-        * scene.celestial_orbit_light.x;
+        * FULL_MOON_SUNLIGHT_RATIO
+        * pow(10.0, -0.4 * phase_magnitudes);
+}
+
+// The daylight band: the share of a light's clear-sky light that reaches a
+// receiver, for the sine of the light's height above its local horizontal.
+// With the twilight bands it stands in for the planet's shadow, which on
+// Earth covers raised receivers soon after sunset. These thresholds must stay
+// synchronized with game::celestial_lighting.
+fn daylight_band(direction_z: f32) -> f32 {
+    return smoothstep(-0.0348995, 0.1391731, direction_z);
+}
+
+// A light's clear-sky light on level ground as a share of its clear-sky light
+// overhead. The daylight band takes clear-sky light along the light's height
+// above the local horizontal, as on Earth, whose horizon dips little at hill
+// and cloud heights; the small world's dip would light raised ground several
+// times more than sea level under a low light. The lower-twilight and
+// upper-afterglow bands stand in for sky light above the planet's shadow.
+fn banded_clear_sky_light(direction_z: f32) -> f32 {
+    let daylight = daylight_band(direction_z);
+    let lower_twilight = smoothstep(-0.1564345, 0.0174524, direction_z);
+    let upper_afterglow = smoothstep(-0.309017, -0.1391731, direction_z)
+        * (1.0 - smoothstep(-0.1391731, -0.0348995, direction_z));
+    return daylight * clear_sky_light(direction_z)
+        + LOWER_TWILIGHT_LIGHT * (1.0 - daylight) * lower_twilight
+        + UPPER_AFTERGLOW_LIGHT * upper_afterglow;
 }
 
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
-    // These atmospheric horizon thresholds must stay synchronized with game::celestial_lighting.
-    let daylight = smoothstep(
-        -0.0348995,
-        0.1391731,
-        receiver.moon_direction.z,
-    );
-    let lower_twilight = smoothstep(
-        -0.1564345,
-        0.0174524,
-        receiver.moon_direction.z,
-    );
-    let upper_afterglow = smoothstep(
-        -0.309017,
-        -0.1391731,
-        receiver.moon_direction.z,
-    ) * (1.0 - smoothstep(
-        -0.1391731,
-        -0.0348995,
-        receiver.moon_direction.z,
-    ));
-    let moon_elevation = clamp(
-        (receiver.moon_direction.z - receiver.horizon_z)
-            / (1.0 - receiver.horizon_z),
-        0.0,
-        1.0,
-    );
-    let lunar_ambient = daylight * daylight_light(moon_elevation)
-        + 0.30 * (1.0 - daylight) * lower_twilight
-        + 0.065 * upper_afterglow;
-    return lunar_light_scale() * lunar_ambient;
+    return lunar_light_scale() * banded_clear_sky_light(receiver.moon_direction.z);
 }
 
 // Diffuse light that a non-absorbing cloud layer of optical depth `tau` and
@@ -354,10 +371,10 @@ fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
 // on level ground, and the layer passes its slant transmittance less the
 // unscattered beam, which reaches the ground through the upper field's deck
 // shadows. A light below the level but above the canopy's horizon lights the
-// layer's underside with `normal`, its beam across its path: the calibrated
-// direct light at the zenith by the light's clear-sky beam share above the
-// canopy's horizon. The layer reflects its slant reflectance of that beam,
-// projected on it, down. The beam crossed the layer's level once already on
+// layer's underside with `normal`, its beam across its path: the light's
+// clear-sky light at the zenith by its daylight band and its clear-sky beam
+// share above the canopy's horizon. The layer reflects its slant reflectance
+// of that beam, projected on it, down. The beam crossed the layer's level once already on
 // the far side of its tangent point, at the same depth.
 fn canopy_scattered_beams(
     tau: f32,
@@ -394,26 +411,11 @@ fn calculate_atmospheric_ambient_light(
     canopy: RegionalCanopyConditions,
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
-    let sun = sun_direction();
-    let receiver_sun_z = clamp(
-        (sun.z - receiver.horizon_z) / (1.0 - receiver.horizon_z),
-        0.0,
-        1.0,
-    );
-    // These sine-of-elevation thresholds must stay synchronized with game::celestial_lighting.
-    let daylight = smoothstep(-0.0348995, 0.1391731, sun.z);
-    let lower_twilight = smoothstep(-0.1564345, 0.0174524, sun.z);
-    let upper_afterglow = smoothstep(-0.309017, -0.1391731, sun.z)
-        * (1.0 - smoothstep(-0.1391731, -0.0348995, sun.z));
-    let solar_ambient = daylight * daylight_light(receiver_sun_z)
-        + 0.30 * (1.0 - daylight) * lower_twilight
-        + 0.065 * upper_afterglow;
-    let moon_ambient_amount = moon_atmospheric_amount(receiver);
-    let lunar_ambient = CLEAR_SKY_LUNAR_WEIGHT * moon_ambient_amount;
+    let solar_ambient = banded_clear_sky_light(sun_direction().z);
+    let lunar_ambient = moon_atmospheric_amount(receiver);
     let clear_intensity = min(
         1.0,
-        // Starlight and airglow, compressed from about 1e-8 of daylight.
-        0.035
+        NIGHT_SKY_LIGHT
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
                 * solar_ambient
             + lunar_ambient,
@@ -438,13 +440,13 @@ fn calculate_atmospheric_ambient_light(
         );
     }
     let sky_color = (
-        vec3<f32>(0.035)
+        vec3<f32>(NIGHT_SKY_LIGHT)
             + solar_sky * clear_sky_light_color(
                 regional_aerosol_optical_depth,
                 receiver.sun_direction.z,
             )
             + lunar_sky
-    ) / (0.035 + solar_sky + lunar_ambient);
+    ) / (NIGHT_SKY_LIGHT + solar_sky + lunar_ambient);
     let clear_sky_light = clear_intensity * sky_color;
 
     let optical_thickness = max(canopy.mean_optical_thickness, 0.0);
@@ -468,7 +470,10 @@ fn calculate_atmospheric_ambient_light(
     // it. The canopy's own height sees each light above its much lower horizon,
     // which sets the beam that reaches the layer's underside.
     let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
-    let daylight_beams = daylight_light(1.0) * vec2<f32>(1.0, CLEAR_SKY_LUNAR_WEIGHT * lunar_light_scale());
+    let daylight_beams = vec2<f32>(
+        daylight_band(canopy_receiver.sun_direction.z),
+        lunar_light_scale() * daylight_band(canopy_receiver.moon_direction.z),
+    );
     let scattered_beams = canopy_scattered_beams(
         optical_thickness,
         canopy.sky_fraction,
@@ -630,16 +635,14 @@ fn sun_direct_light_color(receiver: CelestialReceiverLight) -> vec3<f32> {
     return beam_light_color(local_aerosol_optical_depth, receiver.sun_direction.z);
 }
 
-// Share of a clear sky's light on level ground that arrives diffuse, for a
-// light at the given sine of its height above the horizon, from the ESRA
-// clear-sky model (Rigollier, Bauer and Wald 2000, Solar Energy 68): the beam
-// crosses the relative air mass with Kasten's (1996) broadband Rayleigh optical
-// depth, and diffuse light follows the model's Linke turbidity fits.
-// For turbidity 3 it is 0.116 at 60 degrees, 0.183 at 30, 0.359 at 10 and
-// 0.667 at 3, reaching 1 at the horizon as air mass extinguishes the beam.
-// field_grids.rs mirrors this, `regional_linke_turbidity` and
-// `MOON_DIRECT_SCALE` in its Moon cloud-shadow estimate; keep them synchronized.
-fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
+// ESRA clear-sky light (Rigollier, Bauer and Wald 2000, Solar Energy 68) for a
+// light at the given sine of its height above the horizon: the beam's
+// transmittance along its path, then diffuse light on level ground, each per
+// unit of the light above the atmosphere. The beam crosses the relative air
+// mass with Kasten's (1996) broadband Rayleigh optical depth, and diffuse light
+// follows the model's Linke turbidity fits. game::clear_sky_irradiance mirrors
+// it; keep the two synchronized.
+fn clear_sky_irradiance(sine_height: f32, linke_turbidity: f32) -> vec2<f32> {
     let sine = clamp(sine_height, 0.0, 1.0);
     let air_mass = relative_air_mass(sine);
     let rayleigh_optical_depth = select(
@@ -648,7 +651,7 @@ fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
         1.0 / (10.4 + 0.718 * air_mass),
         air_mass > 20.0,
     );
-    let beam = sine * exp(-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth);
+    let beam = exp(-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth);
     let turbidity = linke_turbidity;
     let diffuse_transmission = -0.015843 + turbidity * (0.030543 + 0.0003797 * turbidity);
     let a0 = max(
@@ -657,8 +660,17 @@ fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
     );
     let a1 = 2.04020 + turbidity * (0.018945 - 0.011161 * turbidity);
     let a2 = -1.3025 + turbidity * (0.039231 + 0.0085079 * turbidity);
-    let diffuse = diffuse_transmission * (a0 + sine * (a1 + a2 * sine));
-    return diffuse / max(diffuse + beam, 1e-6);
+    return vec2<f32>(beam, diffuse_transmission * (a0 + sine * (a1 + a2 * sine)));
+}
+
+// Share of a clear sky's light on level ground that arrives diffuse, for a
+// light at the given sine of its height above the horizon. For turbidity 3 it
+// is 0.116 at 60 degrees, 0.183 at 30, 0.359 at 10 and 0.667 at 3, reaching 1
+// at the horizon as air mass extinguishes the beam.
+fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
+    let light = clear_sky_irradiance(sine_height, linke_turbidity);
+    let beam = clamp(sine_height, 0.0, 1.0) * light.x;
+    return light.y / max(light.y + beam, 1e-6);
 }
 
 // Linke turbidity of regional air from its aerosol optical depth, by Ineichen's
@@ -666,14 +678,6 @@ fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
 fn regional_linke_turbidity() -> f32 {
     return 2.35 + 7.79 * regional_aerosol_optical_depth;
 }
-
-// Direct moonlight per unit of lunar light it takes from diffuse light,
-// calibrated so full-Moon scenes keep the mean brightness night exposure and
-// colour were tuned for, within 10%.
-const MOON_DIRECT_SCALE: f32 = 1.5;
-// Weight of the Moon's atmospheric light in calibrated clear-sky light;
-// field_grids.rs mirrors it in its Moon cloud-shadow estimate.
-const CLEAR_SKY_LUNAR_WEIGHT: f32 = 0.85;
 
 // Share of a light's clear-sky light on level ground that arrives direct.
 fn celestial_beam_share(
@@ -705,11 +709,8 @@ struct CelestialLightSplit {
     diffuse_share: f32,
 };
 
-// Splits the calibrated solar and lunar parts of clear-sky light into direct
-// light on level ground and diffuse light by each light's clear-sky diffuse
-// fraction. Under the Sun every height keeps its calibrated total; the Moon's
-// direct light carries `MOON_DIRECT_SCALE` times the beam it takes from
-// diffuse light.
+// Splits the solar and lunar parts of clear-sky light into direct light on
+// level ground and diffuse light by each light's clear-sky diffuse fraction.
 fn celestial_light_split(
     receiver: CelestialReceiverLight,
     solar_ambient: f32,
@@ -734,9 +735,9 @@ fn celestial_light_split(
     );
     let beams = beam_shares * vec2<f32>(solar_ambient, lunar_ambient);
     return CelestialLightSplit(
-        beams * vec2<f32>(1.0, MOON_DIRECT_SCALE),
+        beams,
         beam_shares,
-        max(1.0 - (beams.x + beams.y) / max(clear_intensity, 1e-6), 0.0),
+        max(1.0 - (beams.x + beams.y) / max(clear_intensity, 1e-30), 0.0),
     );
 }
 
@@ -858,7 +859,7 @@ fn moon_clear_sky_share(receiver: CelestialReceiverLight, ambient: AtmosphericAm
     let sun = ambient.split.direct.x;
     let moon = ambient.split.direct.y * dot(moon_own_color(), luminance);
     let clear_sky = ambient.split.diffuse_share * dot(ambient.clear_sky_light, luminance);
-    return moon / max(sun + moon + clear_sky, 1e-9);
+    return moon / max(sun + moon + clear_sky, 1e-30);
 }
 
 fn moon_cloud_shadow_weight(

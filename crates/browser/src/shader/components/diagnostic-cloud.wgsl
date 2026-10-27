@@ -63,7 +63,7 @@ fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> 
         moon_light_color(regional_aerosol_optical_depth, canopy_receiver.moon_direction.z),
         vec3<f32>(0.2126, 0.7152, 0.0722),
     );
-    return vec4<f32>(scalar_debug_color(luminance / 0.05), 1.0);
+    return vec4<f32>(scalar_debug_color(luminance / (0.4 * FULL_MOON_SUNLIGHT_RATIO)), 1.0);
 }
 
 fn diagnostic_lighting_aerosol_optical_depth(input: VertexOutput) -> vec4<f32> {
@@ -94,10 +94,12 @@ fn diagnostic_lighting_receiver_moon(height_m: f32) -> vec4<f32> {
     );
 }
 
+// Moonlight per unit of the full Moon's ratio to sunlight, so that it spans
+// the scalar range.
 fn diagnostic_lighting_receiver_moon_ambient(height_m: f32) -> vec4<f32> {
     let receiver = celestial_receiver_light_at_height(height_m);
     return vec4<f32>(scalar_debug_color(
-        moon_atmospheric_amount(receiver),
+        moon_atmospheric_amount(receiver) / FULL_MOON_SUNLIGHT_RATIO,
     ), 1.0);
 }
 

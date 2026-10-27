@@ -7,14 +7,41 @@ fn linear_material_color(display_color: vec3<f32>) -> vec3<f32> {
     );
 }
 
-fn night_vision_color(linear_color: vec3<f32>, adapted_gain: f32) -> vec3<f32> {
-    let rod_fraction = smoothstep(0.0, 4.0, log2(max(1.0, adapted_gain)));
+// Clear-sky daylight from a zenith Sun on level ground, the unit of scene
+// light, in lux; game::ZENITH_DAYLIGHT_LUX gives its provenance.
+const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
+// Mirrors ADAPTED_BRIGHTNESS_EXPONENT in exposure.rs, which gives its
+// provenance and compromise.
+const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
+
+// Clear-sky light, in scene light, that a view shown at `adapted_gain` is
+// adapted to: the inverse of exposure.rs's `exposure_target`.
+fn adapted_view_light(adapted_gain: f32) -> f32 {
+    return pow(max(adapted_gain, 1.0), 1.0 / (ADAPTED_BRIGHTNESS_EXPONENT - 1.0));
+}
+
+// Share of vision that rods carry: one minus the photopic weight of CIE
+// 191:2010's mesopic model, 0.7670 + 0.3334 log10 L between 0.005 and 5
+// cd/m². Its adapting luminance L is the view's adapted light on a 20% grey,
+// CIECAM02's background, taken as photopic luminance without the model's
+// iteration.
+fn rod_vision_fraction(adapted_gain: f32) -> f32 {
+    let adapting_luminance = 0.2 * adapted_view_light(adapted_gain) * ZENITH_DAYLIGHT_LUX / PI;
+    return 1.0 - clamp(0.7670 + 0.3334 * log2(adapting_luminance) / log2(10.0), 0.0, 1.0);
+}
+
+fn night_vision_color(linear_color: vec3<f32>, rod_fraction: f32) -> vec3<f32> {
     // Jacobs et al. (2015), https://www.emilyacooper.org/pubs/2015Jacobs_TOG.pdf:
     // normalized scotopic RGB weights preserve neutral reflectance while rods
-    // favor blue-green over red. Game light has no absolute luminance, so four
-    // stops of adaptation gain stand in for the mesopic range of 0.005-5 cd/m².
+    // favor blue-green over red.
     let rod_signal = dot(linear_color, vec3<f32>(0.0, 0.8451, 0.1459) / 0.991);
     return mix(linear_color, vec3<f32>(rod_signal), rod_fraction);
+}
+
+// Unlit colours, such as boats and the windsock, as level ground lit by the
+// light the view is adapted to.
+fn adapted_unlit_color(linear_color: vec3<f32>) -> vec3<f32> {
+    return linear_color * adapted_view_light(scene.exposure_and_output.x);
 }
 
 fn vision_noise_sample(cell: vec2<u32>, phase: u32) -> f32 {
@@ -34,18 +61,17 @@ fn vision_noise_field(cell: vec2<u32>, blend: vec2<f32>, phase: u32) -> f32 {
 }
 
 fn adapted_view_color(linear_color: vec3<f32>, adapted_gain: f32, css_position_px: vec2<f32>, noise_phase: f32) -> vec3<f32> {
-    if adapted_gain <= 1.0 {
+    let rod_fraction = rod_vision_fraction(adapted_gain);
+    if rod_fraction <= 0.0 {
         return linear_color;
     }
-    let vision_color = night_vision_color(linear_color, adapted_gain);
-    // The four-stop mesopic range of `night_vision_color`.
-    let rod_fraction = smoothstep(0.0, 4.0, log2(adapted_gain));
+    let vision_color = night_vision_color(linear_color, rod_fraction);
     let signal = dot(vision_color, vec3<f32>(0.2126, 0.7152, 0.0722));
     // Relative uncertainty grows as photon signal falls. Multiplicative noise
     // preserves black and has zero mean; the cap keeps faint hazards readable.
-    // 0.002 sets the noise at unit signal in place of a photon count from
-    // absolute luminance.
-    let amplitude = rod_fraction * min(0.12, 0.002 / sqrt(max(signal, 0.000001)));
+    // 1.43e-6 sets the noise at unit scene light in place of a photon count:
+    // 1.07% on white under a clear moonless sky's light.
+    let amplitude = rod_fraction * min(0.12, 1.43e-6 / sqrt(max(signal, 1e-20)));
     // CSS-pixel cells keep the grain's on-screen size the same at every graphics setting.
     let grid = css_position_px / 4.0;
     let cell = vec2<u32>(floor(grid));

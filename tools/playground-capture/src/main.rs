@@ -1129,19 +1129,22 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[
                 ("LIGHTING_MODEL_REGRESSION_OUTPUT", 21.0),
-                ("LIGHTING_MODEL_EXPOSURE_GAIN", 16.0),
+                ("LIGHTING_MODEL_EXPOSURE_GAIN", 1e7),
             ],
         ),
+        // Gains of a view adapted to daylight, to about 0.3 cd/m², and to
+        // starlight; signals of dark ground under starlight and of white
+        // under a quarter Moon, in scene light.
         name if name.starts_with("vision_") => {
             let (output, gain, color, signal, phase) = match name {
-                "vision_noise_day" => (22.0, 1.0, [0.0; 3], 0.0001, 0.0),
-                "vision_noise_dark" => (22.0, 16.0, [0.0; 3], 0.0001, 0.0),
-                "vision_noise_bright" => (22.0, 16.0, [0.0; 3], 0.01, 0.0),
-                "vision_noise_later" => (22.0, 16.0, [0.0; 3], 0.0001, 0.5),
-                "vision_noise_period" => (22.0, 16.0, [0.0; 3], 0.0001, 4096.0),
-                "vision_noise_before_wrap" => (22.0, 16.0, [0.0; 3], 0.0001, 4095.999),
-                "vision_noise_after_wrap" => (22.0, 16.0, [0.0; 3], 0.0001, 0.001),
-                "vision_noise_black" => (23.0, 16.0, [0.0; 3], 0.0001, 0.0),
+                "vision_noise_day" => (22.0, 1.0, [0.0; 3], 1e-9, 0.0),
+                "vision_noise_dark" => (22.0, 1e7, [0.0; 3], 1e-9, 0.0),
+                "vision_noise_bright" => (22.0, 1e7, [0.0; 3], 1e-7, 0.0),
+                "vision_noise_later" => (22.0, 1e7, [0.0; 3], 1e-9, 0.5),
+                "vision_noise_period" => (22.0, 1e7, [0.0; 3], 1e-9, 4096.0),
+                "vision_noise_before_wrap" => (22.0, 1e7, [0.0; 3], 1e-9, 4095.999),
+                "vision_noise_after_wrap" => (22.0, 1e7, [0.0; 3], 1e-9, 0.001),
+                "vision_noise_black" => (23.0, 1e7, [0.0; 3], 1e-9, 0.0),
                 _ => {
                     let (color, response) = name[7..]
                         .split_once('_')
@@ -1155,11 +1158,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                     };
                     let gain = match response {
                         "cones" => 1.0,
-                        "mesopic" => 4.0,
-                        "rods" => 16.0,
+                        "mesopic" => 1e4,
+                        "rods" => 1e7,
                         _ => return Err(format!("unknown diagnostic: {name}")),
                     };
-                    (21.0, gain, color, 0.0001, 0.0)
+                    (21.0, gain, color, 1e-9, 0.0)
                 }
             };
             diagnostic(

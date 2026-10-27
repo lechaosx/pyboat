@@ -15,7 +15,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 21u {
         return vec4<f32>(night_vision_color(
             vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE),
-            LIGHTING_MODEL_EXPOSURE_GAIN,
+            rod_vision_fraction(LIGHTING_MODEL_EXPOSURE_GAIN),
         ), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 22u {

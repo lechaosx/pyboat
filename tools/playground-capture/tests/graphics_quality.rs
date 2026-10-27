@@ -85,7 +85,7 @@ fn moonlit(view: View) -> View {
             ));
             light.sun_direction[2] < -0.2
                 && light.moon_direction[2] > 0.7
-                && light.moon_intensity > 0.08
+                && light.moon_intensity > 0.65 * game::FULL_MOON_SUNLIGHT_RATIO
         })
         .expect("a lunar month should have a moonlit night");
     View {

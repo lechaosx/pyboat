@@ -1265,11 +1265,11 @@ function atmosphericOutputs(output: WorldCenterDiagnostics): Array<[string, stri
   return [
     ["Current air temperature", `${output.surfaceAirTemperatureC.toFixed(1)} °C`],
     ["Sun", `${angle(output.sunDirection)} · ${output.sunIntensity.toFixed(2)}`],
-    ["Moon", `${angle(output.moonDirection)} · ${output.moonIntensity.toFixed(2)}`],
+    ["Moon", `${angle(output.moonDirection)} · ${output.moonIntensity.toPrecision(2)}`],
     ["Solar eclipse", `${(output.solarEclipseFraction * 100).toFixed(0)} %`],
     ["Lunar penumbra", `${(output.lunarPenumbraFraction * 100).toFixed(0)} %`],
     ["Lunar umbra", `${(output.lunarUmbraFraction * 100).toFixed(0)} %`],
-    ["Astronomical ambient", output.ambientIntensity.toFixed(2)],
+    ["Astronomical ambient", output.ambientIntensity.toPrecision(2)],
     ["Surface wind", `${speed(output.surfaceWind).toFixed(1)} m/s · ${direction(output.surfaceWind).toFixed(0)}°`],
     ["Upper wind", `${speed(output.upperWind).toFixed(1)} m/s · ${direction(output.upperWind).toFixed(0)}°`],
     ["Vertical shear", `${speed(shear).toFixed(1)} m/s · ${direction(shear).toFixed(0)}°`],

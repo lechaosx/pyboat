@@ -275,6 +275,8 @@ pub struct CelestialLighting {
     pub moon_direction: [f32; 3],
     pub moon_intensity: f32,
     pub moon_ambient_intensity: f32,
+    /// The Sun's clear-sky light on level ground, before a solar eclipse dims it.
+    pub sun_ambient_intensity: f32,
     pub moon_color: [f32; 3],
     pub solar_eclipse_fraction: f32,
     pub lunar_penumbra_fraction: f32,
@@ -488,6 +490,122 @@ pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
     }
 }
 
+/// Clear-sky daylight from a zenith Sun on level ground, the unit of scene
+/// light, in lux: ESRA's clear-sky light at the zenith under
+/// `REFERENCE_LINKE_TURBIDITY`, 80% of the 1361 W/m² solar constant (Kopp and
+/// Lean 2011, Geophys. Res. Lett. 38), at the clear sky's luminous efficacy of
+/// about 105 lm/W (Littlefair 1985, Light. Res. Technol. 17). lighting.wgsl
+/// and display.wgsl mirror it.
+pub const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
+
+/// Light of a clear moonless sky, about 2e-3 lux of starlight, zodiacal light,
+/// and airglow (Roach and Gordon 1973, The Light of the Night Sky), in scene
+/// light. lighting.wgsl mirrors it.
+pub const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
+
+/// Weights of the lower-twilight and upper-afterglow bands, which stand in for
+/// sky light above the planet's shadow. They give about 3.4 lux at the end of
+/// civil twilight, where the lower band is at 0.214 of its weight, and 0.008
+/// lux at the end of nautical twilight, where the upper band is at 0.641
+/// (Bond and Henderson 1963, The Conquest of Darkness). lighting.wgsl mirrors
+/// them.
+pub const LOWER_TWILIGHT_LIGHT: f32 = 3.4 / ZENITH_DAYLIGHT_LUX / 0.214;
+pub const UPPER_AFTERGLOW_LIGHT: f32 = (0.008 / ZENITH_DAYLIGHT_LUX - NIGHT_SKY_LIGHT) / 0.641;
+
+/// The full Moon's light relative to the Sun's: visual magnitudes -12.74 and
+/// -26.74 (Cox 2000, Allen's Astrophysical Quantities). lighting.wgsl mirrors it.
+pub const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
+
+/// Linke turbidity of marine air at its typical 80% humidity: the aerosol
+/// optical depth of 0.103 that lighting.wgsl gives it, by Ineichen's (2008,
+/// Solar Energy 82) conversion. Clear-sky light takes it everywhere so that
+/// exposure, which has no regional weather, follows the light the scene
+/// receives; regional turbidity only splits that light into beam and diffuse.
+pub const REFERENCE_LINKE_TURBIDITY: f64 = 2.35 + 7.79 * 0.103;
+
+/// The Moon's light relative to the full Moon's for the illuminated fraction of
+/// its disc, by Krisciunas and Schaefer's (1991, Publ. Astron. Soc. Pac. 103)
+/// phase law: 0.026|α| + 4e-9 α⁴ magnitudes at phase angle α in degrees.
+/// lighting.wgsl mirrors it.
+pub fn lunar_phase_brightness(illuminated_fraction: f64) -> f64 {
+    let phase_angle_degrees = (2.0 * illuminated_fraction - 1.0)
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    let magnitudes = 0.026 * phase_angle_degrees + 4e-9 * phase_angle_degrees.powi(4);
+    10_f64.powf(-0.4 * magnitudes)
+}
+
+/// Relative air mass for a light at the given sine of its height above the
+/// horizon, as `relative_air_mass` in lighting.wgsl, which gives its provenance.
+pub fn relative_air_mass(sine_height: f64) -> f64 {
+    let sine = sine_height.clamp(0.0, 1.0);
+    1.0 / (sine + 0.025 * (-11.0 * sine).exp())
+}
+
+/// ESRA clear-sky light (Rigollier, Bauer and Wald 2000, Solar Energy 68) for a
+/// light at the given sine of its height above the horizon: the beam's
+/// transmittance along its path, then diffuse light on level ground, each per
+/// unit of the light above the atmosphere. The beam crosses the relative air
+/// mass with Kasten's (1996) broadband Rayleigh optical depth, and diffuse light
+/// follows the model's Linke turbidity fits. lighting.wgsl mirrors it.
+pub fn clear_sky_irradiance(sine_height: f64, linke_turbidity: f64) -> [f64; 2] {
+    let sine = sine_height.clamp(0.0, 1.0);
+    let air_mass = relative_air_mass(sine);
+    let rayleigh_optical_depth = if air_mass > 20.0 {
+        1.0 / (10.4 + 0.718 * air_mass)
+    } else {
+        1.0 / (6.6296
+            + air_mass * (1.7513 + air_mass * (-0.1202 + air_mass * (0.0065 - 0.00013 * air_mass))))
+    };
+    let beam_transmittance = (-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth).exp();
+    let turbidity = linke_turbidity;
+    let diffuse_transmission = -0.015843 + turbidity * (0.030543 + 0.0003797 * turbidity);
+    let a0 = (0.26463 + turbidity * (-0.061581 + 0.0031408 * turbidity))
+        .max(0.002 / diffuse_transmission);
+    let a1 = 2.04020 + turbidity * (0.018945 - 0.011161 * turbidity);
+    let a2 = -1.3025 + turbidity * (0.039231 + 0.0085079 * turbidity);
+    [
+        beam_transmittance,
+        diffuse_transmission * (a0 + sine * (a1 + a2 * sine)),
+    ]
+}
+
+/// Clear-sky light on level ground from a light at the given sine of its
+/// height above the horizon, per unit of a zenith light's.
+pub fn clear_sky_light(sine_height: f64) -> f32 {
+    let global = |sine: f64| {
+        let [beam, diffuse] = clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY);
+        sine.clamp(0.0, 1.0) * beam + diffuse
+    };
+    (global(sine_height) / global(1.0)) as f32
+}
+
+/// The beam's clear-sky transmittance along its path from a light at the
+/// given sine of its height above the horizon, per unit of a zenith beam's.
+pub fn clear_sky_beam_transmittance(sine_height: f64) -> f32 {
+    let beam = |sine: f64| clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY)[0];
+    (beam(sine_height) / beam(1.0)) as f32
+}
+
+/// For a light at the given sine of its height above the local horizontal, the
+/// daylight band, the share of its clear-sky light that reaches the receiver,
+/// then lower-twilight and upper-afterglow light. Together they stand in for
+/// the planet's shadow, as `banded_clear_sky_light` in lighting.wgsl describes.
+fn twilight_bands(direction_z: f32) -> (f32, f32) {
+    // These sine-of-elevation thresholds must stay synchronized with lighting.wgsl.
+    let z = f64::from(direction_z);
+    let daylight = smoothstep_range(-0.034_899_5, 0.139_173_1, z) as f32;
+    let lower_twilight = smoothstep_range(-0.156_434_5, 0.017_452_4, z) as f32;
+    let upper_afterglow = smoothstep_range(-0.309_017, -0.139_173_1, z) as f32
+        * (1.0 - smoothstep_range(-0.139_173_1, -0.034_899_5, z) as f32);
+    (
+        daylight,
+        LOWER_TWILIGHT_LIGHT * (1.0 - daylight) * lower_twilight
+            + UPPER_AFTERGLOW_LIGHT * upper_afterglow,
+    )
+}
+
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
     celestial_lighting_at_height(WorldGeometry::default(), conditions, 0.0)
 }
@@ -524,8 +642,7 @@ pub fn celestial_lighting_at_height(
     let (sun_direction, moon_direction) =
         celestial_directions_at_height(world_geometry, orbit, conditions, receiver_height_m);
     let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
-    let sun_elevation = ((sun_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
-    let sun_elevation = libm::sqrt(f64::from(sun_elevation)) as f32;
+    let sun_elevation = f64::from((sun_direction[2] - horizon_z) / (1.0 - horizon_z));
     let solar_separation =
         angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
     let solar_eclipse_fraction = circle_overlap_fraction(
@@ -541,40 +658,26 @@ pub fn celestial_lighting_at_height(
             sun_direction[2],
             SUN_ANGULAR_RADIUS_RAD as f32,
         )
-        * (0.35 + 0.65 * sun_elevation);
-    let moon_elevation = ((moon_direction[2] - horizon_z) / (1.0 - horizon_z)).clamp(0.0, 1.0);
-    let moon_elevation = libm::sqrt(f64::from(moon_elevation)) as f32;
+        * clear_sky_beam_transmittance(sun_elevation);
+    let moon_elevation = f64::from((moon_direction[2] - horizon_z) / (1.0 - horizon_z));
     // Eclipse dimming compressed into the exposure range from a totality's 1e-4
     // of the full Moon.
     let lunar_shadow_transmittance =
         (1.0 - 0.18 * orbit.lunar_penumbra_fraction - 0.78 * orbit.lunar_umbra_fraction).max(0.04);
-    // 0.12 stands in for the full Moon's 2.5e-6 of sunlight, compressed into the
-    // exposure range.
-    let moon_intensity = lunar_shadow_transmittance
-        * 0.12
-        * orbit.illuminated_fraction as f32
+    let lunar_light_scale = lunar_shadow_transmittance
+        * FULL_MOON_SUNLIGHT_RATIO
+        * lunar_phase_brightness(orbit.illuminated_fraction) as f32;
+    let moon_intensity = lunar_light_scale
         * celestial_disc_visibility_at_height(
             world_geometry,
             receiver_height_m,
             moon_direction[2],
             MOON_ANGULAR_RADIUS_RAD as f32,
         )
-        * (0.35 + 0.65 * moon_elevation);
-    // These atmospheric horizon thresholds must stay synchronized with lighting.wgsl.
-    let lunar_daylight =
-        smoothstep_range(-0.034_899_5, 0.139_173_1, f64::from(moon_direction[2])) as f32;
-    let lunar_lower_twilight =
-        smoothstep_range(-0.156_434_5, 0.017_452_4, f64::from(moon_direction[2])) as f32;
-    let lunar_upper_afterglow =
-        smoothstep_range(-0.309_017, -0.139_173_1, f64::from(moon_direction[2])) as f32
-            * (1.0
-                - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(moon_direction[2]))
-                    as f32);
-    let lunar_ambient = lunar_daylight * (0.45 + 0.515 * moon_elevation)
-        + 0.30 * (1.0 - lunar_daylight) * lunar_lower_twilight
-        + 0.065 * lunar_upper_afterglow;
-    let moon_ambient_intensity =
-        lunar_shadow_transmittance * 0.12 * orbit.illuminated_fraction as f32 * lunar_ambient;
+        * clear_sky_beam_transmittance(moon_elevation);
+    let (lunar_daylight, lunar_twilight) = twilight_bands(moon_direction[2]);
+    let moon_ambient_intensity = lunar_light_scale
+        * (lunar_daylight * clear_sky_light(f64::from(moon_direction[2])) + lunar_twilight);
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     // Sunlight reddened by lunar soil, as `moon_own_color` in lighting.wgsl
     // derives it; keep the two synchronized.
@@ -583,20 +686,11 @@ pub fn celestial_lighting_at_height(
         0.9855 + eclipse_warmth * (0.28 - 0.9855),
         0.8175 + eclipse_warmth * (0.06 - 0.8175),
     ];
-    // These sine-of-elevation thresholds must stay synchronized with lighting.wgsl.
-    let daylight = smoothstep_range(-0.034_899_5, 0.139_173_1, f64::from(sun_direction[2])) as f32;
-    let lower_twilight =
-        smoothstep_range(-0.156_434_5, 0.017_452_4, f64::from(sun_direction[2])) as f32;
-    let upper_afterglow = smoothstep_range(-0.309_017, -0.139_173_1, f64::from(sun_direction[2]))
-        as f32
-        * (1.0 - smoothstep_range(-0.139_173_1, -0.034_899_5, f64::from(sun_direction[2])) as f32);
-    let solar_ambient = daylight * (0.45 + 0.515 * sun_elevation)
-        + 0.30 * (1.0 - daylight) * lower_twilight
-        + 0.065 * upper_afterglow;
+    let (daylight, twilight) = twilight_bands(sun_direction[2]);
+    let solar_ambient = daylight * clear_sky_light(f64::from(sun_direction[2])) + twilight;
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
-    // 0.035 is starlight and airglow, compressed from about 1e-8 of daylight.
     let ambient_intensity =
-        (0.035 + solar_ambient_transmittance * solar_ambient + 0.85 * moon_ambient_intensity)
+        (NIGHT_SKY_LIGHT + solar_ambient_transmittance * solar_ambient + moon_ambient_intensity)
             .min(1.0);
 
     CelestialLighting {
@@ -605,6 +699,7 @@ pub fn celestial_lighting_at_height(
         moon_direction,
         moon_intensity,
         moon_ambient_intensity,
+        sun_ambient_intensity: solar_ambient,
         moon_color,
         solar_eclipse_fraction,
         lunar_penumbra_fraction: orbit.lunar_penumbra_fraction,

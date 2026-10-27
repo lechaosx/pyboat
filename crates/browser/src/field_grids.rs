@@ -473,17 +473,10 @@ pub fn moon_clear_sky_share(
     // where growth stops.
     let linke_turbidities =
         [0.046 * 0.28, 0.046 / 0.05_f64.sqrt()].map(|depth| 2.35 + 7.79 * depth);
-    const MOON_DIRECT_SCALE: f64 = 1.5;
     // Disc radii from scene-state.wgsl.
     const SUN_DISC_RADIUS_RAD: f32 = 0.00465;
     const MOON_DISC_RADIUS_RAD: f32 = 0.00452;
     let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
-    let illuminated_fraction = celestial_orbit(world_celestial_conditions(
-        world_geometry,
-        world_time_seconds,
-        Vector::new(camera_m[0] as f32, camera_m[1] as f32),
-    ))
-    .illuminated_fraction;
     let mut share: f64 = 0.0;
     for row in 0..=4 {
         for column in 0..=4 {
@@ -503,30 +496,10 @@ pub fn moon_clear_sky_share(
                 let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));
                 let horizon_z = -(1.0 - radius_ratio * radius_ratio).sqrt();
                 let height_above_horizon = |z: f32| (f64::from(z) - horizon_z) / (1.0 - horizon_z);
-                // Daylight, lower-twilight, and upper-afterglow bands as in
-                // `calculate_atmospheric_ambient_light`.
-                let banded_ambient = |direction_z: f32| {
-                    let z = f64::from(direction_z);
-                    let daylight = smoothstep(-0.034_899_5, 0.139_173_1, z);
-                    let lower_twilight = smoothstep(-0.156_434_5, 0.017_452_4, z);
-                    let upper_afterglow = smoothstep(-0.309_017, -0.139_173_1, z)
-                        * (1.0 - smoothstep(-0.139_173_1, -0.034_899_5, z));
-                    daylight
-                        * (0.45 + 0.515 * height_above_horizon(direction_z).clamp(0.0, 1.0).sqrt())
-                        + 0.30 * (1.0 - daylight) * lower_twilight
-                        + 0.065 * upper_afterglow
-                };
                 let eclipse = f64::from(light.solar_eclipse_fraction);
-                let lunar_scale = 0.85
-                    * (1.0
-                        - 0.18 * f64::from(light.lunar_penumbra_fraction)
-                        - 0.78 * f64::from(light.lunar_umbra_fraction))
-                    .max(0.04)
-                    * 0.12
-                    * illuminated_fraction;
-                let solar = banded_ambient(light.sun_direction[2]);
-                let lunar = lunar_scale * banded_ambient(light.moon_direction[2]);
-                let clear = (0.035 + (1.0 - 0.85 * eclipse) * solar + lunar).min(1.0);
+                let solar = f64::from(light.sun_ambient_intensity);
+                let lunar = f64::from(light.moon_ambient_intensity);
+                let clear = f64::from(light.ambient_intensity);
                 let moon_luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
                 let sun_visibility = (1.0 - eclipse)
                     * f64::from(celestial_disc_visibility_at_height(
@@ -556,7 +529,7 @@ pub fn moon_clear_sky_share(
                                 turbidity,
                             ))
                         * lunar;
-                    let moon_direct = MOON_DIRECT_SCALE * moon_beam * moon_luminance;
+                    let moon_direct = moon_beam * moon_luminance;
                     let diffuse = (clear - sun_beam - moon_beam).max(0.0) * moon_luminance.min(1.0);
                     let total = sun_beam + moon_direct + diffuse;
                     if total > 0.0 {
@@ -569,31 +542,10 @@ pub fn moon_clear_sky_share(
     share
 }
 
-/// `clear_sky_diffuse_fraction` in lighting.wgsl, which gives its provenance;
-/// keep the two synchronized.
+/// `clear_sky_diffuse_fraction` in lighting.wgsl.
 pub fn clear_sky_diffuse_fraction(sine_height: f64, linke_turbidity: f64) -> f64 {
-    let sine = sine_height.clamp(0.0, 1.0);
-    let air_mass = 1.0 / (sine + 0.025 * (-11.0 * sine).exp());
-    let rayleigh_optical_depth = if air_mass > 20.0 {
-        1.0 / (10.4 + 0.718 * air_mass)
-    } else {
-        1.0 / (6.6296
-            + air_mass * (1.7513 + air_mass * (-0.1202 + air_mass * (0.0065 - 0.00013 * air_mass))))
-    };
-    let beam = sine * (-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth).exp();
-    let turbidity = linke_turbidity;
-    let diffuse_transmission = -0.015843 + turbidity * (0.030543 + 0.0003797 * turbidity);
-    let a0 = (0.26463 + turbidity * (-0.061581 + 0.0031408 * turbidity))
-        .max(0.002 / diffuse_transmission);
-    let a1 = 2.04020 + turbidity * (0.018945 - 0.011161 * turbidity);
-    let a2 = -1.3025 + turbidity * (0.039231 + 0.0085079 * turbidity);
-    let diffuse = diffuse_transmission * (a0 + sine * (a1 + a2 * sine));
-    diffuse / (diffuse + beam).max(1e-6)
-}
-
-fn smoothstep(lower: f64, upper: f64, value: f64) -> f64 {
-    let fade = ((value - lower) / (upper - lower)).clamp(0.0, 1.0);
-    fade * fade * (3.0 - 2.0 * fade)
+    let [beam, diffuse] = game::clear_sky_irradiance(sine_height, linke_turbidity);
+    diffuse / (diffuse + sine_height.clamp(0.0, 1.0) * beam).max(1e-6)
 }
 
 /// Camera-relative bounds; empty while `min` exceeds `max`.
@@ -1784,7 +1736,7 @@ mod tests {
         for hours in [12.0, 17.0] {
             let world_time_seconds = MIDNIGHT_SECONDS + hours * 3_600.0;
             let mut history = FieldGridHistory::default();
-            let mut previous: Option<[f32; 2]> = None;
+            let mut previous: [Option<f32>; 2] = [None; 2];
             for step in 0..440 {
                 let view_height_m = 200.0 * 1.01_f32.powi(step);
                 let grids = field_grids(
@@ -1800,6 +1752,7 @@ mod tests {
                 for source in 0..2 {
                     let grid = &grids.occluders[source];
                     if grid.texels.iter().all(|&texels| texels <= 4) {
+                        previous[source] = None;
                         continue;
                     }
                     let spacing_m = grid.uniforms[2].max(grid.uniforms[3]);
@@ -1809,20 +1762,19 @@ mod tests {
                          {} m wavelengths on {spacing_m} m texels",
                         wavelengths_m[source],
                     );
-                    if let Some(previous) = previous {
+                    if let Some(previous) = previous[source] {
                         // Footprint cells that cross a light's horizon move the
                         // window by a few percent; a doubling would move it by half.
-                        let ratio = wavelengths_m[source] / previous[source];
+                        let ratio = wavelengths_m[source] / previous;
                         assert!(
                             (1.0 / 1.1..=1.1).contains(&ratio),
                             "{view_height_m} m view at {hours} h, source {source}: \
-                             the shortest wavelength jumped from {} m to {} m",
-                            previous[source],
+                             the shortest wavelength jumped from {previous} m to {} m",
                             wavelengths_m[source],
                         );
                     }
+                    previous[source] = Some(wavelengths_m[source]);
                 }
-                previous = Some(wavelengths_m);
             }
         }
     }
@@ -1847,7 +1799,7 @@ mod tests {
                 let light = lighting(time_seconds);
                 light.sun_intensity > 0.9
                     && light.moon_intensity > 0.0
-                    && light.moon_intensity < 0.002
+                    && light.moon_intensity < 0.02 * game::FULL_MOON_SUNLIGHT_RATIO
             })
             .expect("a thin Moon should rise by day within a lunar month");
         let day = production_grids(thin_moon_by_day, [0.0, 0.0], view_size_m, NO_MOTION);
@@ -1857,7 +1809,8 @@ mod tests {
             .clone()
             .find(|&time_seconds| {
                 let light = lighting(time_seconds);
-                light.sun_intensity == 0.0 && light.moon_intensity > 0.03
+                light.sun_direction[2] < -0.3
+                    && light.moon_intensity > 0.2 * game::FULL_MOON_SUNLIGHT_RATIO
             })
             .expect("a bright Moon should shine at night within a lunar month");
         let night = production_grids(moonlit_night, [0.0, 0.0], view_size_m, NO_MOTION);

@@ -162,6 +162,13 @@ and verification details.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
+- **[Implicit]** Scene light keeps the physical ratios of daylight, twilight,
+  moonlight, and starlight, and the eye alone compresses them: an adapted
+  view's brightness follows CIECAM02's photopic brightness law at every light
+  level. That compromise keeps moonlit and moonless views readable on a
+  display, where real dim vision would leave them nearly black.
+- **[Implicit]** Unlit overlays, such as boats and the windsock, take the
+  light the view is adapted to.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
   rendered world position and reconstructs environment fields there from a
   per-frame grid anchored to world coordinates, with spacing matched to the
@@ -212,16 +219,19 @@ and verification details.
   thick canopy reflects most of it back to space. High ice cloud's diffuse
   effects belong in canopy/sky diffusion; its direct shadow comes from the
   upper field.
-- **[Implicit]** Calibrated clear-sky light splits into direct and diffuse light
-  on level ground by a physical clear-sky diffuse fraction of each light's
-  height and the regional turbidity, for the Sun and the Moon alike. Under the
-  Sun level ground keeps the calibrated total, so a full shadow leaves about
-  that fraction; direct moonlight is scaled so moonlit scenes keep their
-  calibrated mean brightness.
-- **[Implicit]** Calibrated intensities set the brightness of light, and its
-  colour sets hue alone: each beam and the clear sky's diffuse light take the
-  colour of a spectral clear-sky model at three wavelengths, scaled to the
-  luminance of the source's own colour.
+- **[Implicit]** Clear-sky light on level ground follows a physical clear-sky
+  model of each light's height, and its split into direct and diffuse light
+  also follows the regional turbidity. Moonlight is sunlight scaled by the full
+  Moon's ratio to sunlight, the Moon's phase law, and its eclipse, and splits
+  the same way.
+- **[Implicit]** Clear-sky light's amount and colour follow the light's height
+  above the receiver's local horizontal, as on Earth, whose horizon dips little
+  at hill and cloud heights. Disc visibility and the direct share follow the
+  receiver's own horizon, so light still reaches down to it.
+- **[Implicit]** Light intensities set the brightness of light, and its colour
+  sets hue alone: each beam and the clear sky's diffuse light take the colour
+  of a spectral clear-sky model at three wavelengths, scaled to the luminance
+  of the source's own colour.
 - **[Implicit]** The canopy's mean optical thickness is a physical cloud
   optical depth, from thin decks through storm cover, and every canopy light
   term, deck shadow, and ground-sky exchange reads that one depth.
@@ -229,14 +239,14 @@ and verification details.
   clear sky's diffuse light and each beam's scattered part down and reflects
   ground light back up; each beam's unscattered part reaches the ground
   through the upper field's deck shadows alone.
-- **[Implicit]** Calibrated clear-sky light reaches the canopy's level face
-  split as on level ground: its direct part, which vanishes as the light
+- **[Implicit]** Clear-sky light reaches the canopy's level face split as on
+  level ground: its direct part, which vanishes as the light
   reaches the layer's level, lights the layer from above, and the rest arrives
   diffuse.
 - **[Implicit]** A light below the canopy's level but above its horizon lights
-  the layer's underside, which reflects it down. Its beam has crossed the
-  canopy's level once already on the far side, where the regional canopy's
-  cover and depth stop it.
+  the layer's underside, which reflects it down, as far as the daylight band
+  lets the light reach the layer. Its beam has crossed the canopy's level once
+  already on the far side, where the regional canopy's cover and depth stop it.
 - **[Implicit]** Cloud layers keep real absolute heights on the small world.
 - **[Implicit]** Light that ground and sky exchange follows regional means, so
   it lifts every shadow in a region alike.

@@ -85,9 +85,11 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
                 let end_light = light_at(*end);
                 height_above_horizon(*start) < 0.0
                     && height_above_horizon(*end) > 0.1
-                    // Daylight exposure can leave moonlight below one 8-bit level.
+                    // Exposure for daylight or twilight can leave moonlight below
+                    // one 8-bit level.
                     && (source == 0
-                        || (end_light.moon_intensity > 0.02 && end_light.sun_direction[2] < 0.0))
+                        || (end_light.moon_intensity > 0.17 * game::FULL_MOON_SUNLIGHT_RATIO
+                            && end_light.sun_direction[2] < -0.3))
             })
             .unwrap();
         let visible_time = above;
@@ -904,8 +906,8 @@ fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_transmits_as_a_two_
 }
 
 /// Light colours change hue alone, so moonless clear-sky light on level ground
-/// keeps the calibrated intensity that exposure follows, from noon through
-/// sunset and twilight into night.
+/// keeps the intensity that exposure follows, from noon through sunset and
+/// twilight into night.
 #[test]
 fn moonless_clear_sky_light_keeps_the_intensity_exposure_follows() {
     let world = WorldGeometry::default();
@@ -929,7 +931,8 @@ fn moonless_clear_sky_light_keeps_the_intensity_exposure_follows() {
             })
             .unwrap();
         let light = celestial_lighting(world_celestial_conditions(world, time_seconds, position_m));
-        // The diagnostic shows level-ground light at half scale.
+        // The diagnostic shows level-ground light as the settled view exposes
+        // it, at half scale.
         let clear = render_diagnostic_image_at(
             world,
             position_m,
@@ -938,7 +941,8 @@ fn moonless_clear_sky_light_keeps_the_intensity_exposure_follows() {
             1,
             1,
         );
-        let ratio = 2.0 * linear_luminance(&clear) / light.ambient_intensity;
+        let ratio = 2.0 * linear_luminance(&clear)
+            / (light.ambient_intensity * browser::exposure_target(light.ambient_intensity));
         let tolerance = 0.01 + green_step(&clear);
         assert!(
             (ratio - 1.0).abs() <= tolerance,
@@ -947,6 +951,8 @@ fn moonless_clear_sky_light_keeps_the_intensity_exposure_follows() {
     }
 }
 
+/// The Moon is far too faint to show beside the Sun, so its gate composes
+/// under a night sky and the Sun's under a day sky.
 #[test]
 fn scene_light_contribution_gates_compose_independently() {
     let world = WorldGeometry::default();
@@ -966,19 +972,33 @@ fn scene_light_contribution_gates_compose_independently() {
         world.width_m() * ((column as f32 + 0.5) / 64.0 - 0.5),
         world.height_m() * (0.5 - (row as f32 + 0.5) / 64.0),
     );
-    let world_time_seconds = (0..28 * 24)
-        .map(|hour| hour as f64 * 3_600.0)
-        .filter_map(|time| {
-            let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
-            (light.sun_direction[2] > 0.1
-                && light.moon_direction[2] > 0.1
-                && light.sun_intensity > 0.1
-                && light.moon_intensity > 0.005)
-                .then_some((time, light.sun_direction[2].min(light.moon_direction[2])))
-        })
-        .max_by(|left, right| left.1.total_cmp(&right.1))
-        .expect("Sun and Moon should share the sky during the lunar month")
-        .0;
+    let highest = |source: usize| {
+        (0..28 * 24)
+            .map(|hour| hour as f64 * 3_600.0)
+            .filter_map(|time| {
+                let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
+                let (lit, unlit) = if source == 0 {
+                    (light.sun_direction[2], light.moon_direction[2])
+                } else {
+                    (light.moon_direction[2], light.sun_direction[2])
+                };
+                (source == 0 || (unlit < -0.3 && light.moon_intensity > 0.0)).then_some((time, lit))
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .expect("the source should rise during the lunar month")
+            .0
+    };
+    for (source, world_time_seconds) in [(0, highest(0)), (1, highest(1))] {
+        scene_light_contribution_gates_compose_at(world, position_m, world_time_seconds, source);
+    }
+}
+
+fn scene_light_contribution_gates_compose_at(
+    world: WorldGeometry,
+    position_m: Vector,
+    world_time_seconds: f64,
+    source: usize,
+) {
     let off = render_controlled_image_at(
         world,
         position_m,
@@ -1009,7 +1029,7 @@ fn scene_light_contribution_gates_compose_independently() {
     );
 
     let mut isolated = Vec::new();
-    for contribution in 0..4 {
+    for contribution in [source, 2, 3] {
         let mut gates = [0; 4];
         gates[contribution] = 1;
         let gate_value = format!("{},{},{},{}", gates[0], gates[1], gates[2], gates[3]);
@@ -1234,9 +1254,9 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
                 linke_turbidity,
             ))
     };
-    let lunar = 0.85 * f64::from(surface.moon_ambient_intensity);
+    let lunar = f64::from(surface.moon_ambient_intensity);
     let eclipse = f64::from(surface.solar_eclipse_fraction);
-    let solar = (f64::from(surface.ambient_intensity) - 0.035 - lunar) / (1.0 - 0.85 * eclipse);
+    let solar = f64::from(surface.sun_ambient_intensity);
     let expected_share = (1.0
         - ((1.0 - eclipse) * beam_share(surface.sun_direction[2], 0.00465) * solar
             + beam_share(surface.moon_direction[2], 0.00452) * lunar)
@@ -1290,8 +1310,10 @@ fn atmospheric_twilight_bands_do_not_shift_with_surface_horizon() {
     assert_rgb_close(&datum, &elevated, 1);
 }
 
+/// Clear-sky light follows the light's height above the local horizontal, as
+/// on Earth, so a raised receiver's lower horizon leaves it unchanged.
 #[test]
-fn daylight_amplitude_uses_receiver_normalized_solar_elevation() {
+fn clear_sky_light_follows_the_local_horizontal_at_every_receiver_height() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let world_time_seconds = (0..24 * 60)
@@ -1322,12 +1344,8 @@ fn daylight_amplitude_uses_receiver_normalized_solar_elevation() {
         1,
         1,
     );
-    assert!(
-        linear_luminance(&elevated) > linear_luminance(&datum) + 0.02,
-        "datum {:?}, elevated {:?}",
-        &datum[..3],
-        &elevated[..3],
-    );
+    assert!(linear_luminance(&datum) > 0.02, "datum {:?}", &datum[..3]);
+    assert_rgb_close(&datum, &elevated, 1);
 }
 
 #[test]
@@ -1338,8 +1356,9 @@ fn landform_sun_grade_is_independent_of_moon_visibility() {
         .map(|hour| hour as f64 * 3_600.0)
         .filter_map(|time| {
             let light = celestial_lighting(world_celestial_conditions(world, time, position_m));
-            (light.sun_intensity > 0.1 && light.moon_intensity > 0.005)
-                .then_some((time, light.sun_intensity.min(8.0 * light.moon_intensity)))
+            let moon = light.moon_intensity / game::FULL_MOON_SUNLIGHT_RATIO;
+            (light.sun_intensity > 0.1 && moon > 0.04)
+                .then_some((time, light.sun_intensity.min(moon)))
         })
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .expect("Sun and Moon should share the sky during the lunar month")
@@ -2053,7 +2072,7 @@ fn diffuse_moon_horizon_matches_authoritative_rust() {
         .map(|quarter_hour| quarter_hour as f64 * 900.0)
         .filter_map(|time| {
             let lighting = celestial_lighting(world_celestial_conditions(world, time, position_m));
-            (lighting.moon_ambient_intensity > 0.005)
+            (lighting.moon_ambient_intensity > 0.04 * game::FULL_MOON_SUNLIGHT_RATIO)
                 .then_some((time, lighting.moon_direction[2].abs()))
         })
         .min_by(|left, right| left.1.total_cmp(&right.1))
@@ -2075,7 +2094,8 @@ fn diffuse_moon_horizon_matches_authoritative_rust() {
             1,
             1,
         );
-        let expected = scalar_debug_pixel(expected.moon_ambient_intensity);
+        let expected =
+            scalar_debug_pixel(expected.moon_ambient_intensity / game::FULL_MOON_SUNLIGHT_RATIO);
         assert_rgb_close(&actual, &expected, 3);
     }
 }
