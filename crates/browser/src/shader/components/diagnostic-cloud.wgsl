@@ -189,7 +189,7 @@ fn diagnostic_shadow_darkness(light_height: f32, cloud_depth: f32) -> vec4<f32> 
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             0u,
         ),
-        cloud_shadow_transmittance(exp(-cloud_depth), ground_light, ground_horizon_z, 1.0),
+        cloud_shadow_transmittance(exp(-cloud_depth), 1.0, ground_light, ground_horizon_z, 1.0),
         0.0,
         1.0,
     );
@@ -299,6 +299,7 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
         visibility.x * receiver.sun_amount
                 * (1.0 - cloud_shadow_transmittance(
                     0.5,
+                    1.0,
                     receiver.sun_direction,
                     receiver.horizon_z,
                     1.0,
@@ -306,6 +307,7 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
             + visibility.y * receiver.moon_amount
                 * (1.0 - cloud_shadow_transmittance(
                     0.5,
+                    1.0,
                     receiver.moon_direction,
                     receiver.horizon_z,
                     moon_cloud_shadow_weight(

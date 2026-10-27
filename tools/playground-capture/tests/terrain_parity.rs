@@ -3544,6 +3544,86 @@ fn cloud_shadows_fade_continuously_at_solar_horizon() {
     );
 }
 
+/// A grazing beam crosses more cloud, not less, so the share of direct
+/// sunlight that reaches the sea under cloud does not jump back up as the Sun
+/// sinks through the near-horizon shadow cutoff.
+#[test]
+fn sunlight_under_cloud_does_not_brighten_through_the_shadow_cutoff() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    let (size, view_height_m) = (256usize, 4_000.0_f32);
+    let cloudy_evenings = (0..80)
+        .map(|day| evening_time_at_sun_z(world, position_m, day, 0.05))
+        .filter(|&world_time_seconds| {
+            let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+            procedural_world_environment(world, SEED, tick, position_m)
+                .weather
+                .upper_cloudiness
+                > 0.5
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    assert_eq!(cloudy_evenings.len(), 2, "too few cloudy evenings");
+    for world_time_seconds in cloudy_evenings {
+        let sunlight = |cloud_shadows| {
+            render_controlled_image_at(
+                world,
+                position_m,
+                world_time_seconds,
+                view_height_m,
+                "scene",
+                size as u32,
+                size as u32,
+                &[
+                    ("--light-contributions", "1,0,0,0"),
+                    ("--cloud-shadows", cloud_shadows),
+                ],
+            )
+        };
+        let (shadowed, unshadowed) = (sunlight("1"), sunlight("0"));
+        // Share of direct sunlight that reaches sea pixels whose sea-level Sun
+        // lies between the given heights.
+        let transmittance = |low: f32, high: f32| {
+            let (mut reaching, mut arriving) = (0.0, 0.0);
+            for row in 0..size {
+                for column in 0..size {
+                    let pixel_m = position_m
+                        + view_height_m
+                            * Vector::new(
+                                (column as f32 + 0.5) / size as f32 - 0.5,
+                                0.5 - (row as f32 + 0.5) / size as f32,
+                            );
+                    let sun_z = celestial_lighting(world_celestial_conditions(
+                        world,
+                        world_time_seconds,
+                        pixel_m,
+                    ))
+                    .sun_direction[2];
+                    if (low..high).contains(&sun_z)
+                        && procedural_terrain_elevation_m(world, SEED, pixel_m) < 0.0
+                    {
+                        let offset = 4 * (row * size + column);
+                        reaching += linear_luminance(&shadowed[offset..]);
+                        arriving += linear_luminance(&unshadowed[offset..]);
+                    }
+                }
+            }
+            reaching / arriving
+        };
+        let above_cutoff = transmittance(0.06, 0.08);
+        let below_cutoff = transmittance(0.03, 0.04);
+        // Share of the sunlight that cloud removes above the cutoff which
+        // returns below it. Ending the shadows there returns all of it; the
+        // bound leaves room for the cloud pattern's sampling within each band.
+        let returned = (below_cutoff - above_cutoff) / (1.0 - above_cutoff);
+        assert!(
+            returned < 0.5,
+            "at {world_time_seconds} s, sunlight under cloud rose from {above_cutoff} above the \
+             cutoff to {below_cutoff} below it",
+        );
+    }
+}
+
 #[test]
 fn projected_clouds_can_shadow_locally_clear_ground() {
     let world = WorldGeometry::default();

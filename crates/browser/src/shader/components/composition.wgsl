@@ -7,19 +7,29 @@ fn fragment_surface_color(
     bounce_conditions: GroundBounceConditions,
 ) -> vec3<f32> {
     let contribution = fragment_light_visibility();
+    let beam_transmittance = bounce_conditions.cumulus_beam_transmittance
+        * ambient_light.beam_transmittance;
+    let cloud_shadow_visibility = fragment_layer_visibility().y;
     let cloud_transmittance = mix(
         vec2<f32>(1.0),
         celestial_cloud_transmittance_at(direct_light),
-        fragment_layer_visibility().y,
+        cloud_shadow_visibility,
+    );
+    let regional_cloud_transmittance = mix(
+        vec2<f32>(1.0),
+        beam_transmittance,
+        cloud_shadow_visibility * tuning.cloud_shadows.x,
     );
     let sun_transmittance = cloud_shadow_transmittance(
         cloud_transmittance.x,
+        regional_cloud_transmittance.x,
         direct_light.sun_direction,
         direct_light.horizon_z,
         1.0,
     );
     let moon_transmittance = cloud_shadow_transmittance(
         cloud_transmittance.y,
+        regional_cloud_transmittance.y,
         direct_light.moon_direction,
         direct_light.horizon_z,
         moon_cloud_shadow_weight(direct_light, ambient_light),
@@ -29,8 +39,6 @@ fn fragment_surface_color(
         + contribution.w * (ambient_light.canopy + ambient_light.canopy_scattered);
     let sun_light = split.direct.x * sun_direct_light_color();
     let moon_light = split.direct.y * moon_direct_light_color(direct_light);
-    let beam_transmittance = bounce_conditions.cumulus_beam_transmittance
-        * ambient_light.beam_transmittance;
     let first_pass_light = ambient
         + contribution.x * beam_transmittance.x * sun_light
         + contribution.y * beam_transmittance.y * moon_light;

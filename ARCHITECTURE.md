@@ -263,6 +263,9 @@ and verification details.
 - **[Explicit]** All shadow types fade out at one shared near-horizon cutoff, a
   compromise standing in for the unbounded reach of grazing shadows where
   diffuse light already carries most of the light.
+- **[Implicit]** Where cloud shadows fade out, direct light keeps the region's
+  mean share of each beam that cloud passes, so cover stays about as dark under a
+  grazing light as just above the cutoff.
 - **[Implicit]** The cutoff follows the light's height above each receiver's own
   horizon, so raised land keeps its shadows after sea-level sunset. Shadow
   windows bound receivers up to the highest landform the elevation scale allows.
