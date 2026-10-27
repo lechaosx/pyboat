@@ -576,10 +576,12 @@ pub fn celestial_lighting_at_height(
     let moon_ambient_intensity =
         lunar_shadow_transmittance * 0.12 * orbit.illuminated_fraction as f32 * lunar_ambient;
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
+    // Sunlight reddened by lunar soil, as `moon_own_color` in lighting.wgsl
+    // derives it; keep the two synchronized.
     let moon_color = [
-        0.48 + eclipse_warmth * (1.20 - 0.48),
-        0.62 + eclipse_warmth * (0.28 - 0.62),
-        1.00 + eclipse_warmth * (0.06 - 1.00),
+        1.1108 + eclipse_warmth * (1.20 - 1.1108),
+        0.9855 + eclipse_warmth * (0.28 - 0.9855),
+        0.8175 + eclipse_warmth * (0.06 - 0.8175),
     ];
     // These sine-of-elevation thresholds must stay synchronized with lighting.wgsl.
     let daylight = smoothstep_range(-0.034_899_5, 0.139_173_1, f64::from(sun_direction[2])) as f32;

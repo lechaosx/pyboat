@@ -1095,8 +1095,31 @@ fn lunar_orbit_tilt_limits_eclipses_to_node_crossings() {
     assert!(full_moon_at_node.lunar_umbra_fraction > 0.9);
     assert_eq!(full_moon_off_node.lunar_penumbra_fraction, 0.0);
     assert!(full_moon_at_node.moon_intensity < 0.25 * full_moon_off_node.moon_intensity);
-    assert!(full_moon_at_node.moon_color[0] > full_moon_at_node.moon_color[2]);
-    assert!(full_moon_off_node.moon_color[2] > full_moon_off_node.moon_color[0]);
+    let redness = |color: [f32; 3]| color[0] / color[2];
+    assert!(redness(full_moon_at_node.moon_color) > 2.0 * redness(full_moon_off_node.moon_color));
+}
+
+/// Moonlight is sunlight reflected by lunar soil, whose reflectance rises
+/// toward the red, so outside eclipses it is a little redder than sunlight at
+/// the same luminance.
+#[test]
+fn moonlight_is_sunlight_slightly_reddened_by_the_lunar_surface() {
+    let solar_node = 0.5104333;
+    let off_node = (solar_node + 0.25) % 1.0;
+    let full_moon = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
+        season_phase: (off_node + 0.25) % 1.0,
+        day_phase: 0.0,
+        lunar_longitude_phase: (off_node + 0.5) % 1.0,
+    });
+    let [red, green, blue] = full_moon.moon_color;
+
+    assert_eq!(full_moon.lunar_penumbra_fraction, 0.0);
+    assert!(red > green && green > blue, "{:?}", full_moon.moon_color);
+    assert!(red < 1.25 && blue > 0.75, "{:?}", full_moon.moon_color);
+    let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    assert!((luminance - 1.0).abs() < 0.01, "{luminance}");
 }
 
 #[test]

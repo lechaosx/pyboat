@@ -606,10 +606,13 @@ fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32) -> vec3<f
 }
 
 // The Moon's own colour, which game::celestial_lighting mirrors as
-// `moon_color`; Earth's umbra turns it orange-red.
+// `moon_color`: sunlight reflected by lunar soil, whose reflectance rises as
+// λ^1.11 to redden the Sun's B-V colour index of 0.65 to the full Moon's 0.92
+// (Cox 2000, Allen's Astrophysical Quantities), at unit luminance. Earth's
+// umbra turns it orange-red.
 fn moon_own_color() -> vec3<f32> {
     return mix(
-        vec3<f32>(0.48, 0.62, 1.0),
+        vec3<f32>(1.1108, 0.9855, 0.8175),
         vec3<f32>(1.20, 0.28, 0.06),
         smoothstep(0.05, 0.90, lunar_umbra_fraction),
     );
