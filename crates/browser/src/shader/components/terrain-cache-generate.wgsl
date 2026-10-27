@@ -13,8 +13,7 @@ struct TerrainCacheFillRect {
 
 struct TerrainCacheFill {
     rect_count: u32,
-    // Zero keeps the production tuning.
-    horizontal_scale: f32,
+    padding0: u32,
     padding: vec2<u32>,
     rects: array<TerrainCacheFillRect, 12>,
 };
@@ -38,10 +37,6 @@ fn generate_terrain_cache(@builtin(global_invocation_id) invocation_id: vec3<u32
     if terrain_cache_fill.rect_count == 0u || local >= rect.texels.x * rect.texels.y {
         return;
     }
-    tuning = production_tuning();
-    if terrain_cache_fill.horizontal_scale > 0.0 {
-        tuning.terrain_tuning.x = terrain_cache_fill.horizontal_scale;
-    }
     let offset = vec2<u32>(local % rect.texels.x, local / rect.texels.x);
     let column = (u32(rect.first_texel.x) + offset.x) % rect.lap_columns;
     let row = rect.first_texel.y + i32(offset.y);
@@ -51,15 +46,11 @@ fn generate_terrain_cache(@builtin(global_invocation_id) invocation_id: vec3<u32
     let size = textureDimensions(terrain_cache_output).x;
     let slot = (rect.first_slot + offset) % size;
     for (var field = 0u; field < TERRAIN_BROAD_NOISE_COUNT; field++) {
-        let octaves = terrain_cache_octaves(
-            field,
-            max(rect.spacing_m.x, rect.spacing_m.y),
-            tuning.terrain_tuning.x,
-        );
+        let octaves = terrain_cache_octaves(field, max(rect.spacing_m.x, rect.spacing_m.y));
         let persistence = TERRAIN_BROAD_NOISE_PERSISTENCE[field];
         var sum = vec4<f32>(0.0);
         var amplitude = 1.0;
-        var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field] * tuning.terrain_tuning.x;
+        var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field];
         for (var octave = 0u; octave < octaves; octave++) {
             let key = noise_key(TERRAIN_BROAD_NOISE_FIELDS[field], octave);
             sum += amplitude * terrain_cache_simplex_4d(key, circle_position, wavelength_m);

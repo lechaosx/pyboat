@@ -300,29 +300,23 @@ fn baked_land_surface(
     // Wet intertidal and beach cover is 0.08 rougher; 0.29, about the wetness
     // fraction of that cover alone, takes all of it.
     let roughness = baked.roughness + wetness * 0.08 * min(baked.wet_fraction / 0.29, 1.0);
-    if climate_visibility.w > 0.0 {
-        let autumn = autumn_vegetation_amount_from_anomaly(
-            elevation_m,
-            atmosphere.temperature_anomaly.value,
-            atmosphere.climate,
-        );
-        let dormancy = vegetation_dormancy_from_anomaly(
-            elevation_m,
-            atmosphere.temperature_anomaly.value,
-            atmosphere.climate,
-        );
-        color += autumn * baked.autumn_color + dormancy * baked.dormancy_color;
-    }
+    let autumn = autumn_vegetation_amount_from_anomaly(
+        elevation_m,
+        atmosphere.temperature_anomaly.value,
+        atmosphere.climate,
+    );
+    let dormancy = vegetation_dormancy_from_anomaly(
+        elevation_m,
+        atmosphere.temperature_anomaly.value,
+        atmosphere.climate,
+    );
+    color += autumn * baked.autumn_color + dormancy * baked.dormancy_color;
     var land = TerrainSurface(max(color, vec3<f32>(0.0)), baked.detail_gradient, roughness);
-    var snow_amount = 0.0;
-    if climate_visibility.x > 0.0 {
-        snow_amount = smoothstep(
-            0.10,
-            0.55,
-            local_snow_cover_from_atmosphere(elevation_m, atmosphere),
-        );
-        snow_amount = clamp(tuning.material_coverage.w * snow_amount, 0.0, 1.0);
-    }
+    let snow_amount = smoothstep(
+        0.10,
+        0.55,
+        local_snow_cover_from_atmosphere(elevation_m, atmosphere),
+    );
     // Snow covers only the land share of partial land ice, as in the direct
     // composition, so it blends towards snow beside the ice it leaves bare.
     let snowy = snow_amount > 0.0 && baked.land_ice_amount < 1.0;

@@ -222,7 +222,7 @@ struct CumulusShadow {
 };
 
 fn cloud_shadow_extinction(ray: CloudRay) -> f32 {
-    return tuning.cloud_shadows.x * tuning.cloud_shadows.y / ray.sine_elevation;
+    return tuning.cloud_shadows.x / ray.sine_elevation;
 }
 
 // Share of the sky that convection covers with cumulus: unstable air over

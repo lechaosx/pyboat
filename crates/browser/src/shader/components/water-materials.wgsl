@@ -138,31 +138,9 @@ struct OceanForcingSample {
 }
 
 fn ocean_tide_height_sample(
-    position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
-    surface_tide: SurfaceTideSample,
+    tide: SurfaceTideSample,
 ) -> TerrainNoiseSample {
-    var tide = surface_tide;
-    if tuning.terrain_tuning.x != 1.0 {
-        tide = SurfaceTideSample(
-            terrain_simplex_fractal_sample(
-                TIDE_RESPONSE_NOISE_FIELD,
-                position_m,
-                131072.0,
-                3u,
-                0.5,
-                3u,
-            ),
-            terrain_simplex_fractal_sample(
-                TIDE_LAG_NOISE_FIELD,
-                position_m,
-                131072.0,
-                3u,
-                0.5,
-                3u,
-            ),
-        );
-    }
     // The seeded range and lag stand in for unresolved basin resonance.
     let tidal_range_m = 1.25 + 0.75 * tide.response.value;
     let tidal_range_gradient = 0.75 * tide.response.gradient;
@@ -194,7 +172,7 @@ fn ocean_forcing_from_surface(
     atmosphere: SurfaceAtmosphereSample,
     surface_tide: SurfaceTideSample,
 ) -> OceanForcingSample {
-    let tide_height_m = ocean_tide_height_sample(position_m, atmosphere, surface_tide).value;
+    let tide_height_m = ocean_tide_height_sample(atmosphere, surface_tide).value;
     let water_depth_m = max(tide_height_m - terrain_elevation_m, 0.0);
     let surface_wind_m_s = resolved_surface_wind_m_s_from_pressure(
         position_m,
@@ -276,7 +254,7 @@ fn ocean_current_m_s_from_surface(
         * (pressure_envelope * pressure.gradient_m_s
             + pressure.potential_m2_s * pressure_envelope_gradient);
 
-    let tide = ocean_tide_height_sample(position_m, atmosphere, surface_tide);
+    let tide = ocean_tide_height_sample(atmosphere, surface_tide);
     let tidal_potential_gradient = 1200.0
         * (basin * tide.gradient + tide.value * basin_gradient);
     let current_m_s = rotate_left(base_gradient + weather_gradient) - tidal_potential_gradient;
@@ -422,6 +400,11 @@ fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     return sample;
 }
 
+// Wave slopes exaggerated 2.5× for top-down reading; the decorative weight
+// stands in for short waves the physical spectrum omits.
+const WATER_WAVE_SLOPE_SCALE: f32 = 2.5;
+const DECORATIVE_WATER_NORMAL_WEIGHT: f32 = 0.20;
+
 fn visual_water_normal_sample_from_surface(
     position_m: vec2<f32>,
     terrain_elevation_m: f32,
@@ -437,8 +420,8 @@ fn visual_water_normal_sample_from_surface(
     let decorative = decorative_water_normal_sample(position_m);
     return TerrainNoiseSample(
         physical.value,
-        tuning.water_surface.x * physical.gradient
-            + tuning.water_surface.y * decorative.gradient,
+        WATER_WAVE_SLOPE_SCALE * physical.gradient
+            + DECORATIVE_WATER_NORMAL_WEIGHT * decorative.gradient,
     );
 }
 
@@ -475,16 +458,11 @@ fn visual_water_surface(
     );
     return TerrainSurface(
         base_color,
-        undisturbed_gradient
-            + tuning.water_surface.z * precipitation_contact.gradient,
-        clamp(
-            tuning.water_surface.w * mix(
-                mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
-                0.26,
-                surface_cloud_weather.rain,
-            ),
-            0.0,
-            1.0,
+        undisturbed_gradient + precipitation_contact.gradient,
+        mix(
+            mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
+            0.26,
+            surface_cloud_weather.rain,
         ),
     );
 }
@@ -542,19 +520,14 @@ fn water_column_surface(
     );
     if effect_feature_visibility().y > 0.0 && bottom_transmittance > 0.02 {
         let bottom_water_color = water_color
-            * (1.0 + tuning.water_tuning.z * bottom_reflectance);
+            * (1.0 + WATER_BOTTOM_REFLECTANCE * bottom_reflectance);
         let water_veiled_bottom = mix(
             bottom_water_color,
             water_color,
-            tuning.water_tuning.w * (1.0 - bottom_transmittance),
-        );
-        let bottom_visibility = clamp(
-            tuning.water_tuning.y * bottom_transmittance,
-            0.0,
-            1.0,
+            WATER_BOTTOM_VEIL * (1.0 - bottom_transmittance),
         );
         let visible_water_color = water_color_gate.x * water_color
-            + water_color_gate.y * bottom_visibility
+            + water_color_gate.y * bottom_transmittance
                 * (water_veiled_bottom - water_color);
         return visual_water_surface(
             position_m,
@@ -656,24 +629,20 @@ fn terrain_surface(
         0.0,
         1.0,
     );
-    var snow_amount = 0.0;
-    if climate_visibility.x > 0.0 {
-        snow_amount = smoothstep(
-            0.10,
-            0.55,
-            local_snow_cover_from_atmosphere(
+    var snow_amount = smoothstep(
+        0.10,
+        0.55,
+        local_snow_cover_from_atmosphere(
             material_elevation_m,
             atmosphere,
-            ),
-        );
-        snow_amount = clamp(tuning.material_coverage.w * snow_amount, 0.0, 1.0);
-    }
+        ),
+    );
     if surface_baking {
         snow_amount = 0.0;
     }
     let snow_surface = TerrainSurface(
         solid_color_gate.y * snow_color(surface_grade),
-        0.22 * tuning.land_material_normals.w * micro_height.gradient,
+        0.22 * micro_height.gradient,
         SNOW_ROUGHNESS,
     );
     if snow_amount >= 1.0 && !EVALUATE_ALL_BRANCHES {
@@ -690,7 +659,7 @@ fn terrain_surface(
     }
     // Exposure and alpine rock lines are compressed to the islands' low relief.
     let altitude_exposure = smoothstep(50.0, 200.0, material_elevation_m);
-    let rock_slope_threshold = tuning.terrain_tuning.z
+    let rock_slope_threshold = TERRAIN_CLIFF_SLOPE
         * mix(3.0, 0.8, altitude_exposure)
         * mix(0.72, 1.28, smoothstep(-0.45, 0.45, surface));
     let alpine_rock_line_m = 110.0 + 45.0 * vegetation;
@@ -707,13 +676,11 @@ fn terrain_surface(
     );
     let coastal_rock = smoothstep(0.10, 0.82, coastal_rock_amount);
     let rock_cover = clamp(
-        tuning.material_coverage.y * (
-            1.0
-                - (1.0 - slope_rock)
-                    * (1.0 - outcrop_rock)
-                    * (1.0 - alpine_rock)
-                    * (1.0 - coastal_rock)
-        ),
+        1.0
+            - (1.0 - slope_rock)
+                * (1.0 - outcrop_rock)
+                * (1.0 - alpine_rock)
+                * (1.0 - coastal_rock),
         0.0,
         1.0,
     );
@@ -741,8 +708,7 @@ fn terrain_surface(
         material_elevation_m,
     ));
     let sediment_capacity = clamp(
-        tuning.material_coverage.z
-            * beach_sediment
+        beach_sediment
             * beach_elevation
             * (1.0 - smoothstep(0.10, 0.30, slope)),
         0.0,
@@ -821,20 +787,16 @@ fn terrain_surface(
         vec3<f32>(0.09, 0.27, 0.11),
         0.18 + 0.34 * canopy_cluster + 0.18 * (0.5 + 0.5 * micro_height.value),
     );
-    var autumn = 0.0;
-    var dormancy = 0.0;
-    if climate_visibility.w > 0.0 {
-        autumn = autumn_vegetation_amount_from_anomaly(
-            material_elevation_m,
-            atmosphere.temperature_anomaly.value,
-            atmosphere.climate,
-        );
-        dormancy = vegetation_dormancy_from_anomaly(
-            material_elevation_m,
-            atmosphere.temperature_anomaly.value,
-            atmosphere.climate,
-        );
-    }
+    var autumn = autumn_vegetation_amount_from_anomaly(
+        material_elevation_m,
+        atmosphere.temperature_anomaly.value,
+        atmosphere.climate,
+    );
+    var dormancy = vegetation_dormancy_from_anomaly(
+        material_elevation_m,
+        atmosphere.temperature_anomaly.value,
+        atmosphere.climate,
+    );
     if surface_baking {
         autumn = 0.0;
         dormancy = 0.0;
@@ -844,8 +806,7 @@ fn terrain_surface(
     grass_color = seasoned_grass_color(grass_color, autumn, dormancy);
     forest_color = seasoned_forest_color(forest_color, autumn, dormancy, canopy_cluster);
     let forest_visibility = clamp(
-        tuning.material_coverage.x
-            * forest_amount
+        forest_amount
             * canopy_cluster
             * landscape_visibility.y,
         0.0,
@@ -855,9 +816,8 @@ fn terrain_surface(
         land_color_gate.x * (1.0 - forest_visibility) * grass_color
             + land_color_gate.y * forest_visibility * forest_color,
         mix(
-            0.45 * tuning.land_material_normals.y * micro_height.gradient,
-            3.5 * tuning.land_material_normals.z * canopy_detail.gradient
-                + 0.24 * tuning.land_material_normals.y * micro_height.gradient,
+            0.45 * micro_height.gradient,
+            3.5 * canopy_detail.gradient + 0.24 * micro_height.gradient,
             forest_visibility,
         ),
         mix(0.88, 0.96, forest_visibility),

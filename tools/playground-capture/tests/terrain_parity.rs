@@ -102,7 +102,7 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
         let gates = if source == 0 { "1,0,0,0" } else { "0,1,0,0" };
         let controls = [
             ("--light-contributions", gates),
-            ("--cloud-shadows", "0,0,0,0"),
+            ("--cloud-shadows", "0"),
             ("--landform-lighting", "0,0,320,0"),
         ];
         let visible = render_controlled_image_at(
@@ -944,9 +944,8 @@ fn scene_light_contribution_gates_compose_independently() {
         48,
         48,
         &[
-            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", "0,0,0,0"),
-            ("--cloud-shadows", "0,0,0.85,0"),
+            ("--cloud-shadows", "0"),
         ],
     );
     assert!(
@@ -971,9 +970,8 @@ fn scene_light_contribution_gates_compose_independently() {
         gates[contribution] = 1;
         let gate_value = format!("{},{},{},{}", gates[0], gates[1], gates[2], gates[3]);
         let controls = [
-            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", gate_value.as_str()),
-            ("--cloud-shadows", "0,0,0.85,0"),
+            ("--cloud-shadows", "0"),
         ];
         let image = render_controlled_image_at(
             world,
@@ -1001,9 +999,8 @@ fn scene_light_contribution_gates_compose_independently() {
         48,
         48,
         &[
-            ("--light-balance", "1,1,1,1"),
             ("--light-contributions", "1,1,1,1"),
-            ("--cloud-shadows", "0,0,0.85,0"),
+            ("--cloud-shadows", "0"),
         ],
     );
     let mean_error = all
@@ -1420,7 +1417,7 @@ fn landform_occlusion(
 ) -> Vec<Option<f32>> {
     let (width, height) = (160, 90);
     let sun_only = [
-        ("--cloud-shadows", "0,0,0.85,0"),
+        ("--cloud-shadows", "0"),
         ("--light-contributions", "1,0,0,0"),
     ];
     let render = |landform: &str| {
@@ -1726,7 +1723,7 @@ fn landform_cast_shadows_reach_open_water() {
     assert!(low_sun_times.iter().all(Option::is_some));
     for (world_time_seconds, _) in low_sun_times.into_iter().flatten() {
         let controls = [
-            ("--cloud-shadows", "0,0,0.85,0"),
+            ("--cloud-shadows", "0"),
             ("--light-contributions", "1,0,0,0"),
         ];
         let unshadowed = render_controlled_image_at(
@@ -2209,7 +2206,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
             let direct = render_direct(world_time_seconds, &[]);
             let without_occluders = render_direct(
                 world_time_seconds,
-                &[("--cloud-shadows", "0,0,0.85,0")],
+                &[("--cloud-shadows", "0")],
             );
             let occluder_maximum = direct
                 .as_chunks::<4>()
@@ -2261,7 +2258,8 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
     let mean = differences.iter().sum::<f32>() / differences.len() as f32;
     // Away from the seam, coarsened cloud shadow grids soften small cloud
     // edges, which costs a share of the direct light those edges receive.
-    let without_direct_light = render_direct(world_time_seconds, &[("--light-balance", "0,0,1,1")]);
+    let without_direct_light =
+        render_direct(world_time_seconds, &[("--light-contributions", "0,0,1,1")]);
     let direct_light = direct
         .as_chunks::<4>()
         .0
@@ -2431,7 +2429,7 @@ fn baked_scene_flips_no_more_pixels_than_a_quarter_pixel_pan_at_overview_zooms()
                         "--diagnostic",
                         diagnostic,
                         "--cloud-shadows",
-                        "0,0,0.85,0",
+                        "0",
                     ],
                 )
             };
@@ -2538,7 +2536,7 @@ fn baked_sea_ice_differs_from_direct_less_than_a_half_pixel_pan() {
                         "--diagnostic",
                         diagnostic,
                         "--cloud-shadows",
-                        "0,0,0.85,0",
+                        "0",
                     ],
                     arguments,
                 ]
@@ -2618,7 +2616,7 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
                         "--diagnostic",
                         diagnostic,
                         "--cloud-shadows",
-                        "0,0,0.85,0",
+                        "0",
                     ],
                     arguments,
                 ]
@@ -2712,8 +2710,8 @@ fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
                 "--diagnostic",
                 diagnostic,
                 "--cloud-shadows",
-                "0,0,0.85,0",
-                "--light-balance",
+                "0",
+                "--light-contributions",
                 "1,1,0,0",
             ],
         )
@@ -2755,7 +2753,7 @@ fn baked_land_ice_share_under_snow_ignores_vegetation_colours_at_coarse_spacing(
                     "--diagnostic",
                     diagnostic,
                     "--cloud-shadows",
-                    "0,0,0.85,0",
+                    "0",
                 ],
                 arguments,
             ]
@@ -2964,7 +2962,7 @@ fn assert_baked_shorelines_match_direct(
                     "--diagnostic",
                     diagnostic,
                     "--cloud-shadows",
-                    "0,0,0.85,0",
+                    "0",
                 ],
                 &WATER_ONLY[..],
                 arguments,

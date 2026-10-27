@@ -1,18 +1,9 @@
 struct PlaygroundUniforms {
-    terrain_tuning: vec4<f32>,
     water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
     cloud_shadows: vec4<f32>,
-    water_surface: vec4<f32>,
-    ice_surface: vec4<f32>,
-    ice_structure: vec4<f32>,
-    land_material_normals: vec4<f32>,
-    material_coverage: vec4<f32>,
-    light_balance: vec4<f32>,
     layer_visibility: vec4<f32>,
     landscape_visibility: vec4<f32>,
-    wind_model: vec4<f32>,
-    climate_visibility: vec4<f32>,
     light_contribution_visibility: vec4<u32>,
     land_material_color_visibility: vec4<u32>,
     solid_material_color_visibility: vec4<u32>,
@@ -28,16 +19,9 @@ var<uniform> playground: PlaygroundUniforms;
 
 fn playground_scene_tuning() -> SceneTuning {
     return SceneTuning(
-        playground.terrain_tuning,
         playground.water_tuning,
         playground.landform_lighting,
         playground.cloud_shadows,
-        playground.water_surface,
-        playground.ice_surface,
-        playground.ice_structure,
-        playground.land_material_normals,
-        playground.material_coverage,
-        playground.light_balance,
     );
 }
 
@@ -51,8 +35,6 @@ fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = playground_scene_tuning();
     landscape_visibility = playground.landscape_visibility;
-    atmosphere_model = playground.wind_model;
-    climate_visibility = playground.climate_visibility;
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
@@ -84,8 +66,7 @@ fn fragment_layer_visibility() -> vec4<f32> {
 }
 
 fn fragment_light_visibility() -> vec4<f32> {
-    return playground.light_balance
-        * vec4<f32>(playground.light_contribution_visibility);
+    return vec4<f32>(playground.light_contribution_visibility);
 }
 
 fn land_material_color_visibility() -> vec4<f32> {

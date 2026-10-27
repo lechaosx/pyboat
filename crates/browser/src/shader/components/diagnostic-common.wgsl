@@ -39,7 +39,7 @@ fn approximate_shelter(position_m: vec2<f32>, wind_m_s: vec2<f32>) -> f32 {
             smoothstep(0.0, 1.5, terrain.elevation_m) / (1.0 + distance_m / 256.0),
         );
     }
-    return 1.0 - 0.70 * clamp(playground.wind_model.w, 0.0, 1.0) * obstruction;
+    return 1.0 - 0.70 * obstruction;
 }
 
 fn wind_debug_color(wind_m_s: vec2<f32>) -> vec3<f32> {

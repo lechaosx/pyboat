@@ -183,8 +183,9 @@ See [README.md](README.md) for what is playable now and
   process. Calendar controls and eclipse presets move the world clock without
   overriding orbital state, view, playback, tuning, or diagnostics.
 - **[Explicit]** Collapsible scene controls group colors by the surface being
-  rendered, followed by meaningful appearance and motion tuning. Changes take
-  effect immediately; physical terrain, depth, and grounding remain authoritative.
+  rendered, followed by meaningful appearance tuning of named compromises.
+  Changes take effect immediately; physical terrain, depth, and grounding remain
+  authoritative.
 - **[Explicit]** Material and light switches work independently; hiding either
   removes its color contribution without changing the underlying world. Sun,
   Moon, clear-sky light, canopy light, and shadow effects stay separately

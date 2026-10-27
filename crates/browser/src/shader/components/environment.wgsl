@@ -302,7 +302,7 @@ fn wind_from_pressure_gradient(
     let hemisphere = select(1.0, -1.0, latitude_sine < 0.0);
     let along_isobar = hemisphere * rotate_left(pressure_gradient_hpa_per_m);
     let toward_low = -pressure_gradient_hpa_per_m;
-    let cross_isobar_fraction = 0.12 * atmosphere_model.y;
+    let cross_isobar_fraction = 0.12;
     let flow = geostrophic_amount * along_isobar
         + (1.0 - geostrophic_amount * (1.0 - cross_isobar_fraction)) * toward_low;
     return 6000.0 * gradient_length * normalize(flow);
@@ -312,7 +312,7 @@ fn resolved_surface_wind_m_s_from_pressure(
     position_m: vec2<f32>,
     pressure: PressureFieldSample,
 ) -> vec2<f32> {
-    return atmosphere_model.x * wind_from_pressure_gradient(
+    return wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
@@ -327,7 +327,7 @@ fn resolved_surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
 
 fn surface_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
     let pressure = procedural_pressure_sample_with_surface_gust(position_m);
-    let resolved_surface_wind_m_s = atmosphere_model.x * wind_from_pressure_gradient(
+    let resolved_surface_wind_m_s = wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
@@ -349,13 +349,12 @@ fn upper_wind_m_s_from_atmosphere(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
 ) -> vec2<f32> {
-    let pressure_wind = atmosphere_model.x * wind_from_pressure_gradient(
+    let pressure_wind = wind_from_pressure_gradient(
         atmosphere.pressure.synoptic_gradient_m_s / 6000.0,
         atmosphere.climate.latitude_degrees,
     );
     return 1.15 * pressure_wind
-        + 1600.0 * atmosphere_model.z
-            * rotate_left(atmosphere.temperature_anomaly.gradient);
+        + 1600.0 * rotate_left(atmosphere.temperature_anomaly.gradient);
 }
 
 fn upper_wind_m_s_at(position_m: vec2<f32>) -> vec2<f32> {
@@ -1093,8 +1092,7 @@ fn tide_height_m() -> f32 {
     let phase_offset = TAU * surface_tidal_phase_offset;
     let lunar_tide = cos(2.0 * (lunar_hour_angle + phase_offset));
     let solar_tide = 0.46 * cos(2.0 * (solar_hour_angle + phase_offset));
-    return climate_visibility.y
-        * 0.5 * surface_tidal_range_m * (lunar_tide + solar_tide) / 1.46;
+    return 0.5 * surface_tidal_range_m * (lunar_tide + solar_tide) / 1.46;
 }
 
 fn tide_reference_range_m() -> f32 {
@@ -1426,32 +1424,8 @@ fn wind_shear_amount() -> f32 {
 
 fn production_tuning() -> SceneTuning {
     return SceneTuning(
-        vec4<f32>(
-            TERRAIN_HORIZONTAL_SCALE,
-            TERRAIN_ELEVATION_SCALE,
-            TERRAIN_CLIFF_SLOPE,
-            0.0,
-        ),
-        vec4<f32>(
-            WATER_ATTENUATION_LENGTH_M,
-            WATER_BOTTOM_VISIBILITY,
-            WATER_BOTTOM_REFLECTANCE,
-            WATER_BOTTOM_VEIL,
-        ),
-        vec4<f32>(
-            LANDFORM_RELIEF_STRENGTH,
-            LANDFORM_SHADOW_STRENGTH,
-            LANDFORM_SHADOW_REACH_M,
-            0.0,
-        ),
-        vec4<f32>(1.0, 1.0, 1.0, 0.0),
-        // Wave slopes exaggerated 2.5× for top-down reading; the decorative
-        // weight stands in for short waves the physical spectrum omits.
-        vec4<f32>(2.5, 0.20, 1.0, 1.0),
-        vec4<f32>(0.18, 0.32, 1.0, 1.0),
-        vec4<f32>(192.0, 1.0, 1.0, 1.0),
-        vec4<f32>(1.0),
-        vec4<f32>(1.0),
-        vec4<f32>(1.0),
+        vec4<f32>(WATER_ATTENUATION_LENGTH_M, 0.0, 0.0, 0.0),
+        vec4<f32>(1.0, 1.0, LANDFORM_SHADOW_REACH_M, 0.0),
+        vec4<f32>(1.0, 0.0, 0.0, 0.0),
     );
 }

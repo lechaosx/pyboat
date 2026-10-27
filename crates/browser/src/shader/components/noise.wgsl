@@ -470,25 +470,6 @@ fn terrain_simplex_noise_4d(
     );
 }
 
-fn terrain_simplex_fractal_sample(
-    field: u32,
-    position_m: vec2<f32>,
-    initial_wavelength_m: f32,
-    octave_count: u32,
-    persistence: f32,
-    circle_octave_count: u32,
-) -> TerrainNoiseSample {
-    return terrain_simplex_fractal_sample_from_circle(
-        field,
-        position_m,
-        periodic_noise_circle_position(position_m),
-        initial_wavelength_m,
-        octave_count,
-        persistence,
-        circle_octave_count,
-    );
-}
-
 fn terrain_simplex_fractal_sample_from_circle(
     field: u32,
     position_m: vec2<f32>,
@@ -541,8 +522,7 @@ fn terrain_simplex_octave_sum_from_circle(
     sample.value = 0.0;
     sample.gradient = vec2<f32>(0.0);
     var amplitude = pow(persistence, f32(first_octave));
-    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x
-        * exp2(-f32(first_octave));
+    var wavelength_m = initial_wavelength_m * exp2(-f32(first_octave));
     for (var octave = first_octave; octave < end_octave; octave++) {
         let octave_key = noise_key(field, octave);
         var octave_sample: TerrainNoiseSample;
@@ -594,7 +574,7 @@ fn terrain_simplex_fractal_value_from_circle(
     var value = 0.0;
     var amplitude = 1.0;
     var amplitude_sum = 0.0;
-    var wavelength_m = initial_wavelength_m * tuning.terrain_tuning.x;
+    var wavelength_m = initial_wavelength_m;
     for (var octave = 0u; octave < octave_count; octave++) {
         let octave_key = noise_key(field, octave);
         var octave_value: f32;

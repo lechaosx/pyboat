@@ -6,7 +6,7 @@ fn diagnostic_resolved_surface_wind(
     position_m: vec2<f32>,
     pressure: PressureFieldSample,
 ) -> vec2<f32> {
-    return atmosphere_model.x * wind_from_pressure_gradient(
+    return wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
@@ -16,13 +16,13 @@ fn diagnostic_upper_wind(
     position_m: vec2<f32>,
     pressure: PressureFieldSample,
 ) -> vec2<f32> {
-    let pressure_wind = atmosphere_model.x * wind_from_pressure_gradient(
+    let pressure_wind = wind_from_pressure_gradient(
         pressure.synoptic_gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );
     let temperature_gradient = surface_air_temperature_anomaly_sample_at(position_m).gradient;
     return 1.15 * pressure_wind
-        + 1600.0 * atmosphere_model.z * rotate_left(temperature_gradient);
+        + 1600.0 * rotate_left(temperature_gradient);
 }
 
 fn diagnostic_surface_wind(
@@ -189,7 +189,7 @@ fn diagnostic_wind_resolved_surface(input: VertexOutput) -> vec4<f32> {
 fn diagnostic_wind_broad_synoptic(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
     let pressure = diagnostic_filtered_pressure(position_m);
-    let broad_synoptic = atmosphere_model.x * wind_from_pressure_gradient(
+    let broad_synoptic = wind_from_pressure_gradient(
         pressure.broad_synoptic_gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
     );

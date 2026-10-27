@@ -114,6 +114,8 @@ const TERRAIN_OUTER_REEF_OCTAVE_COUNT: usize = 8;
 const TERRAIN_CLUSTER_CIRCLE_OCTAVE_COUNT: usize = 3;
 const TERRAIN_ISLAND_CIRCLE_OCTAVE_COUNT: usize = 3;
 const TERRAIN_REGIONAL_CIRCLE_OCTAVE_COUNT: usize = 3;
+/// Vertical scale of the broad landform. scene-state.wgsl mirrors it.
+pub const TERRAIN_ELEVATION_SCALE: f64 = 3.0;
 const TIDE_OCTAVE_COUNT: usize = 3;
 const TIDE_CIRCLE_OCTAVE_COUNT: usize = 3;
 const FINE_TERRAIN_CIRCLE_OCTAVE_COUNT: usize = 0;
@@ -1972,7 +1974,8 @@ fn procedural_terrain_surface_causes(
     let unscaled_elevation_m = 18.0 * (local_density - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
-    let elevation_scale = 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
+    let elevation_scale =
+        TERRAIN_ELEVATION_SCALE * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     let base_elevation_m = unscaled_elevation_m * elevation_scale;
     let (reef_ruggedness, coastal_rock_amount) =
         if base_elevation_m > -32.0 && base_elevation_m < 4.0 {
@@ -2176,7 +2179,9 @@ pub fn broad_landform_elevation_m(
     let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep_range(0.32, 0.58, cluster);
     let trench_depth = smoothstep_range(0.50, 0.74, -cluster);
-    (unscaled_elevation_m * 3.0 * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth)) as f32
+    (unscaled_elevation_m
+        * TERRAIN_ELEVATION_SCALE
+        * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth)) as f32
 }
 
 pub fn procedural_solid_surface_elevation_m(

@@ -22,9 +22,6 @@ fn generate_environment_fields(
                 + scene.cloud_weather_grid_m.xy
                 + vec2<f32>(invocation_id.xy) * scene.cloud_weather_grid_m.zw,
         );
-        // The land share follows shipped terrain scales, also in the lab,
-        // whose environment pass has no tuning uniforms.
-        tuning = production_tuning();
         let field = cloud_weather_field_at(position_m);
         var weather = field.weather;
         weather.land_fraction = land_fraction_from_broad_elevation_m(

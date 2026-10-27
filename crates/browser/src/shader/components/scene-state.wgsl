@@ -37,17 +37,12 @@ struct SceneUniforms {
 const OCCLUDER_FIELD_LAYERS: u32 = 5u;
 
 struct SceneTuning {
-    terrain_tuning: vec4<f32>,
+    // Attenuation length, then padding.
     water_tuning: vec4<f32>,
+    // Relief and shadow visibility, high-light reach, then padding.
     landform_lighting: vec4<f32>,
-    // Optical depth scale, extinction, and opacity.
+    // Visibility, then padding.
     cloud_shadows: vec4<f32>,
-    water_surface: vec4<f32>,
-    ice_surface: vec4<f32>,
-    ice_structure: vec4<f32>,
-    land_material_normals: vec4<f32>,
-    material_coverage: vec4<f32>,
-    light_balance: vec4<f32>,
 };
 
 
@@ -76,16 +71,13 @@ struct CloudWeatherSample {
 var<uniform> scene: SceneUniforms;
 
 
-override TERRAIN_HORIZONTAL_SCALE: f32 = 1.0;
-override TERRAIN_ELEVATION_SCALE: f32 = 3.0;
-override TERRAIN_CLIFF_SLOPE: f32 = 0.08;
+// Keep synchronized with `TERRAIN_ELEVATION_SCALE` in crates/game/src/lib.rs.
+const TERRAIN_ELEVATION_SCALE: f32 = 3.0;
+const TERRAIN_CLIFF_SLOPE: f32 = 0.08;
 // Compressed from clear seawater's 10-50 m so steep shelves still read.
 override WATER_ATTENUATION_LENGTH_M: f32 = 0.5;
-override WATER_BOTTOM_VISIBILITY: f32 = 1.0;
-override WATER_BOTTOM_REFLECTANCE: f32 = 3.0;
-override WATER_BOTTOM_VEIL: f32 = 0.35;
-override LANDFORM_RELIEF_STRENGTH: f32 = 1.0;
-override LANDFORM_SHADOW_STRENGTH: f32 = 1.0;
+const WATER_BOTTOM_REFLECTANCE: f32 = 3.0;
+const WATER_BOTTOM_VEIL: f32 = 0.35;
 override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.
@@ -103,8 +95,6 @@ override MATERIAL_MICRO_OCTAVES: u32 = 6u;
 // either production overrides or the playground tuning uniform.
 var<private> tuning: SceneTuning;
 var<private> landscape_visibility: vec4<f32>;
-var<private> atmosphere_model: vec4<f32>;
-var<private> climate_visibility: vec4<f32>;
 var<private> sun_light_direction: vec3<f32>;
 var<private> geocentric_moon_light_direction: vec3<f32>;
 var<private> lunar_penumbra_fraction: f32;

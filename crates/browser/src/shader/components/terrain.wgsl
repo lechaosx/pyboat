@@ -47,9 +47,9 @@ const TERRAIN_BROAD_NOISE_COUNT: u32 = 4u;
 const TERRAIN_CACHE_TEXELS_PER_WAVELENGTH: f32 = 16.0;
 
 // Leading circle octaves of `field` that a cache level with this spacing holds.
-fn terrain_cache_octaves(field: u32, spacing_m: f32, horizontal_scale: f32) -> u32 {
+fn terrain_cache_octaves(field: u32, spacing_m: f32) -> u32 {
     var octaves = 0u;
-    var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field] * horizontal_scale;
+    var wavelength_m = TERRAIN_BROAD_NOISE_WAVELENGTHS_M[field];
     while octaves < TERRAIN_BROAD_NOISE_CIRCLE_OCTAVES[field]
         && wavelength_m >= TERRAIN_CACHE_TEXELS_PER_WAVELENGTH * spacing_m
     {
@@ -229,13 +229,13 @@ fn procedural_bedrock_sample_from_circle(
     negative_cluster.value = -cluster.value;
     negative_cluster.gradient = -cluster.gradient;
     let trench_depth = terrain_smoothstep_sample(0.50, 0.74, negative_cluster);
-    let elevation_scale = tuning.terrain_tuning.y
+    let elevation_scale = TERRAIN_ELEVATION_SCALE
         * (1.0 + 19.0 * island_ruggedness.value + 29.0 * trench_depth.value);
     var base: TerrainNoiseSample;
     base.value = unscaled.value * elevation_scale;
     base.gradient = unscaled.gradient * elevation_scale
         + unscaled.value
-            * tuning.terrain_tuning.y
+            * TERRAIN_ELEVATION_SCALE
             * (19.0 * island_ruggedness.gradient + 29.0 * trench_depth.gradient);
 
     var base_depth: TerrainNoiseSample;
@@ -632,7 +632,7 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     let unscaled_elevation_m = 18.0 * (0.78 * cluster + 0.22 * island - 0.30);
     let island_ruggedness = smoothstep(0.32, 0.58, cluster);
     let trench_depth = smoothstep(0.50, 0.74, -cluster);
-    let elevation_scale = tuning.terrain_tuning.y
+    let elevation_scale = TERRAIN_ELEVATION_SCALE
         * (1.0 + 19.0 * island_ruggedness + 29.0 * trench_depth);
     return unscaled_elevation_m * elevation_scale;
 }
@@ -646,7 +646,7 @@ fn landform_light_grade(
         tuning.landform_lighting.x
             * landscape_visibility.w * lighting_feature_visibility().x,
         0.0,
-        2.0,
+        1.0,
     );
     if strength <= 0.0 {
         return vec3<f32>(1.0);
@@ -948,14 +948,12 @@ fn terrain_rock_surface(
     );
     return TerrainSurface(
         color_visibility * rock_color,
-        tuning.land_material_normals.x * (
-            surface_height_m * mix(
-                surface_height.gradient,
-                plate_direction * surface_height.gradient,
-                fracture_amount,
-            )
-                + micro_height_m * micro_height.gradient
-        ),
+        surface_height_m * mix(
+            surface_height.gradient,
+            plate_direction * surface_height.gradient,
+            fracture_amount,
+        )
+            + micro_height_m * micro_height.gradient,
         mix(0.92, 0.68, rock_ruggedness),
     );
 }
@@ -999,13 +997,16 @@ fn land_ice_detail_at(
     );
 }
 
+const LAND_ICE_DETAIL_NORMAL_SCALE: f32 = 0.18;
+const LAND_ICE_ROUGHNESS: f32 = 0.32;
+
 fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
     let color_visibility = solid_material_color_visibility().z;
     if landscape_visibility.z <= 0.0 {
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            tuning.ice_surface.y,
+            LAND_ICE_ROUGHNESS,
         );
     }
     return TerrainSurface(
@@ -1014,8 +1015,8 @@ fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
             vec3<f32>(0.94, 0.97, 0.96),
             detail.grade,
         ),
-        tuning.ice_surface.x * detail.gradient,
-        tuning.ice_surface.y,
+        LAND_ICE_DETAIL_NORMAL_SCALE * detail.gradient,
+        LAND_ICE_ROUGHNESS,
     );
 }
 
@@ -1040,6 +1041,8 @@ fn sea_ice_detail_at(position_m: vec2<f32>, micro: TerrainNoiseSample) -> SeaIce
     );
 }
 
+const SEA_ICE_SLAB_SIZE_M: f32 = 192.0;
+
 fn sea_ice_surface(
     position_m: vec2<f32>,
     cover: f32,
@@ -1051,14 +1054,13 @@ fn sea_ice_surface(
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            clamp(0.42 * tuning.ice_surface.w, 0.0, 1.0),
+            0.42,
         );
     }
-    let target_slab_size_m = max(tuning.ice_structure.x, 1.0);
-    let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / target_slab_size_m)));
+    let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / SEA_ICE_SLAB_SIZE_M)));
     let slab_size_m = vec2<f32>(
         scene.world_size_m.x / f32(slab_x_cycles),
-        target_slab_size_m,
+        SEA_ICE_SLAB_SIZE_M,
     );
     let canonical_position = canonical_world_position(position_m);
     let positive_x = select(
@@ -1104,10 +1106,9 @@ fn sea_ice_surface(
         0.45 * min(slab_size_m.x, slab_size_m.y),
         visual_pixel_footprint_m,
     );
-    let fracture_width = max(tuning.ice_structure.y, 0.01);
     let fracture_geometry = 1.0 - smoothstep(
-        1.5 * fracture_width,
-        (5.0 + visual_pixel_footprint_m) * fracture_width,
+        1.5,
+        5.0 + visual_pixel_footprint_m,
         second_distance_m - nearest_distance_m,
     );
     let fracture_stress = smoothstep(
@@ -1115,14 +1116,9 @@ fn sea_ice_surface(
         0.45,
         0.72 * detail.broad + 0.28 * detail.fine,
     );
-    let fracture = clamp(
-        tuning.ice_structure.z
-            * slab_visibility
-            * fracture_geometry
-            * mix(0.22, 1.0, fracture_stress),
-        0.0,
-        1.0,
-    );
+    let fracture = slab_visibility
+        * fracture_geometry
+        * mix(0.22, 1.0, fracture_stress);
     let slab_shading_hash = hash32(slab_hash);
     let slab_tone = visual_hash_unit(hash32(slab_shading_hash));
     let slab_tilt = 0.025 * (2.0 * visual_hash_unit_pair(slab_shading_hash) - 1.0);
@@ -1150,18 +1146,12 @@ fn sea_ice_surface(
     let shallow_color = mix(
         deep_color,
         vec3<f32>(0.56, 0.82, 0.85),
-        clamp(tuning.ice_structure.w * (0.28 + 0.18 * shore), 0.0, 1.0),
+        0.28 + 0.18 * shore,
     );
     return TerrainSurface(
         color_visibility * mix(deep_color, shallow_color, shallow),
-        tuning.ice_surface.z * ((1.0 - fracture) * slab_visibility * slab_tilt + detail.gradient),
-        clamp(
-            tuning.ice_surface.w * (
-                0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow
-            ),
-            0.0,
-            1.0,
-        ),
+        (1.0 - fracture) * slab_visibility * slab_tilt + detail.gradient,
+        0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow,
     );
 }
 

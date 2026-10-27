@@ -287,7 +287,14 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
 
 #[test]
 fn lower_tiers_keep_night_and_storm_darkening() {
-    for view in [moonlit_coast(), moonlit(rocky_shore()), storm()] {
+    // Each control removes the light or shadow its view's darkening rests on.
+    let lost_moonlight = ["--light-contributions", "1,0,1,1"];
+    let lost_storm_darkening = ["--cloud-shadows", "0"];
+    for (view, control) in [
+        (moonlit_coast(), lost_moonlight),
+        (moonlit(rocky_shore()), lost_moonlight),
+        (storm(), lost_storm_darkening),
+    ] {
         let high = capture(&view, &[]);
         for quality in LOWER_TIERS {
             let comparison = compare_light(&high, &capture(&view, &["--quality", quality]));
@@ -297,13 +304,10 @@ fn lower_tiers_keep_night_and_storm_darkening() {
                 view.camera_m
             );
         }
-        let brighter = compare_light(
-            &high,
-            &capture(&view, &["--light-balance", "1.1,1.1,1.1,1.1"]),
-        );
+        let changed = compare_light(&high, &capture(&view, &control));
         assert!(
-            !brighter.matches(),
-            "control at {:?}: {brighter:?}",
+            !changed.matches(),
+            "control at {:?}: {changed:?}",
             view.camera_m
         );
     }

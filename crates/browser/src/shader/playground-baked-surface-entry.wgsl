@@ -4,7 +4,5 @@ fn initialize_baked_surface_generation(position_m: vec2<f32>, spacing_m: f32) {
     visual_pixel_footprint_m = spacing_m;
     tuning = playground_scene_tuning();
     landscape_visibility = playground.landscape_visibility;
-    atmosphere_model = playground.wind_model;
-    climate_visibility = playground.climate_visibility;
     surface_position_m = position_m;
 }

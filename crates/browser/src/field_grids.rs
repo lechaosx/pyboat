@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use game::{
-    celestial_directions_at_height, celestial_disc_visibility_at_height,
+    TERRAIN_ELEVATION_SCALE, celestial_directions_at_height, celestial_disc_visibility_at_height,
     celestial_lighting_at_height, celestial_orbit, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
@@ -189,16 +189,13 @@ fn layer_workgroups(grids: &[FieldGrid]) -> [u32; 3] {
 #[derive(Clone, Copy)]
 pub struct FieldGridTuning {
     pub landform_shadow_reach_m: f32,
-    pub terrain_elevation_scale: f32,
 }
 
 impl FieldGridTuning {
-    /// Keep synchronized with the `LANDFORM_SHADOW_REACH_M` and
-    /// `TERRAIN_ELEVATION_SCALE` overrides in scene-state.wgsl; the reach is
-    /// the one under a high light.
+    /// Keep synchronized with the `LANDFORM_SHADOW_REACH_M` override in
+    /// scene-state.wgsl; the reach is the one under a high light.
     pub const PRODUCTION: Self = Self {
         landform_shadow_reach_m: 320.0,
-        terrain_elevation_scale: 3.0,
     };
 }
 
@@ -224,7 +221,7 @@ pub fn field_grids(
         max: half_view_m,
     };
     let reach_m = f64::from(tuning.landform_shadow_reach_m.max(1.0));
-    let highest_receiver_m = highest_receiver_m(tuning.terrain_elevation_scale);
+    let highest_receiver_m = highest_receiver_m();
     let mut occluder_grid = |layer: usize, anchor: [f64; 2], region: Region, spacing_m: f64| {
         let region = wrapped_region(world_width_m, region.or_origin());
         let layer_texels = if layer >= LANDFORM_HORIZON_LAYER {
@@ -1029,8 +1026,8 @@ fn landform_shadow_reach_m(world_radius_m: f64, tuned_reach_m: f64, elevation_ra
 /// The highest surface a shadow can fall on: broad landform peaks at
 /// 18 m × (1 − 0.30) × 20 per unit of elevation scale (`broad_landform_elevation_m`
 /// in terrain.wgsl), and land detail adds less than 6 m.
-fn highest_receiver_m(terrain_elevation_scale: f32) -> f64 {
-    252.0 * f64::from(terrain_elevation_scale.max(0.0)) + 6.0
+fn highest_receiver_m() -> f64 {
+    252.0 * TERRAIN_ELEVATION_SCALE + 6.0
 }
 
 /// Elevation of the lowest light that casts shadows on any receiver up to
@@ -1505,7 +1502,7 @@ mod tests {
     fn cloud_shadow_taps_of_every_receiver_height_land_inside_their_windows() {
         let world = WorldGeometry::default();
         let world_radius_m = f64::from(world.width_m()) / TAU;
-        let highest_m = highest_receiver_m(FieldGridTuning::PRODUCTION.terrain_elevation_scale);
+        let highest_m = highest_receiver_m();
         let heights_m = [
             LOWEST_SHADOW_RECEIVER_M,
             0.0,
@@ -1633,12 +1630,7 @@ mod tests {
                             let [east, north, up] = [lights.0, lights.1][source].map(f64::from);
                             let elevation_rad = up.atan2(east.hypot(north));
                             if elevation_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD
-                                < lowest_shadow_light_rad(
-                                    world_radius_m,
-                                    highest_receiver_m(
-                                        FieldGridTuning::PRODUCTION.terrain_elevation_scale,
-                                    ),
-                                )
+                                < lowest_shadow_light_rad(world_radius_m, highest_receiver_m())
                             {
                                 continue;
                             }
@@ -1678,7 +1670,7 @@ mod tests {
     fn cloud_weather_grid_covers_every_cloud_weather_read() {
         let world = WorldGeometry::default();
         let world_radius_m = f64::from(world.width_m()) / TAU;
-        let highest_m = highest_receiver_m(FieldGridTuning::PRODUCTION.terrain_elevation_scale);
+        let highest_m = highest_receiver_m();
         let camera_m = [-23_500.0_f32, -16_500.0];
         let horizon_z = |height_m: f64| {
             let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));

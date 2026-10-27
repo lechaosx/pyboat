@@ -744,9 +744,7 @@ pub fn playground_scene_uniforms(
     view_cloud_motion_m: &[f32],
     exposure_and_output: &[f32],
     landform_shadow_reach_m: f32,
-    terrain_elevation_scale: f32,
     terrain_cache: &mut PlaygroundTerrainCache,
-    terrain_horizontal_scale: Option<f32>,
     baked_surface: &mut PlaygroundBakedSurface,
     field_grid_history: &mut PlaygroundFieldGridHistory,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
@@ -781,18 +779,14 @@ pub fn playground_scene_uniforms(
         view_cloud_motion_m,
         FieldGridTuning {
             landform_shadow_reach_m,
-            terrain_elevation_scale,
         },
         &mut field_grid_history.0,
     );
     let (occluder_field_grid_m, occluder_field_texels) = grids.occluder_uniforms();
-    let terrain_cache_frame = terrain_cache.0.frame(
-        geometry,
-        match_seed,
-        terrain_horizontal_scale,
-        [camera_x_m, camera_y_m],
-        view_size_m,
-    );
+    let terrain_cache_frame =
+        terrain_cache
+            .0
+            .frame(geometry, match_seed, [camera_x_m, camera_y_m], view_size_m);
     let pixel_footprint_m = visual_pixel_footprint_m(view_height_m, scene_height_px);
     let baked_surface_frame = baked_surface.0.frame(
         geometry,
@@ -1864,7 +1858,6 @@ impl Renderer {
         let terrain_cache_frame = self.terrain_cache.frame(
             world_geometry,
             match_seed,
-            None,
             canonical_camera_m,
             [view_width_m, view_height_m],
         );

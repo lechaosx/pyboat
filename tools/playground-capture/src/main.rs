@@ -55,8 +55,7 @@ struct Options {
     diagnostic: ShaderSelection,
     quality: GraphicsQuality,
     legacy_shadow_look: bool,
-    light_balance: [f32; 4],
-    cloud_shadows: [f32; 4],
+    cloud_shadows: f32,
     landform_lighting: [f32; 4],
     landscape_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
@@ -115,20 +114,11 @@ struct SceneUniforms {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PlaygroundUniforms {
-    terrain_tuning: [f32; 4],
     water_tuning: [f32; 4],
     landform_lighting: [f32; 4],
     cloud_shadows: [f32; 4],
-    water_surface: [f32; 4],
-    ice_surface: [f32; 4],
-    ice_structure: [f32; 4],
-    land_material_normals: [f32; 4],
-    material_coverage: [f32; 4],
-    light_balance: [f32; 4],
     layer_visibility: [f32; 4],
     landscape_visibility: [f32; 4],
-    wind_model: [f32; 4],
-    climate_visibility: [f32; 4],
     light_contribution_visibility: [u32; 4],
     land_material_color_visibility: [u32; 4],
     solid_material_color_visibility: [u32; 4],
@@ -692,8 +682,7 @@ fn default_options() -> Options {
         diagnostic: scene_selection(),
         quality: GraphicsQuality::High,
         legacy_shadow_look: false,
-        light_balance: [1.0; 4],
-        cloud_shadows: [1.0, 1.0, 1.0, 0.0],
+        cloud_shadows: 1.0,
         landform_lighting: [1.0, 1.0, 320.0, 0.0],
         landscape_visibility: [1.0; 4],
         light_contribution_visibility: [1; 4],
@@ -739,7 +728,6 @@ fn parse_options() -> Result<Command, String> {
         if matches!(
             argument.as_str(),
             "--legacy-shadow-look"
-                | "--light-balance"
                 | "--cloud-shadows"
                 | "--landform-lighting"
                 | "--landscape-visibility"
@@ -778,14 +766,22 @@ fn parse_options() -> Result<Command, String> {
                     .ok_or_else(|| format!("invalid value for --quality: {name}"))?;
             }
             "--legacy-shadow-look" => options.legacy_shadow_look = true,
-            "--light-balance" => {
-                options.light_balance = parse_f32x4(&value(&mut arguments)?, &argument)?
-            }
             "--cloud-shadows" => {
-                options.cloud_shadows = parse_f32x4(&value(&mut arguments)?, &argument)?
+                options.cloud_shadows = match value(&mut arguments)?.as_str() {
+                    "0" => 0.0,
+                    "1" => 1.0,
+                    _ => return Err(format!("{argument} must be zero or one")),
+                }
             }
             "--landform-lighting" => {
-                options.landform_lighting = parse_f32x4(&value(&mut arguments)?, &argument)?
+                let lighting = parse_f32x4(&value(&mut arguments)?, &argument)?;
+                if !lighting[..2]
+                    .iter()
+                    .all(|lane| *lane == 0.0 || *lane == 1.0)
+                {
+                    return Err(format!("{argument} relief and shadows must be zero or one"));
+                }
+                options.landform_lighting = lighting;
             }
             "--landscape-visibility" => {
                 options.landscape_visibility = parse_f32x4(&value(&mut arguments)?, &argument)?
@@ -1424,10 +1420,9 @@ fn print_help() {
            --quality low|medium|high  graphics tier of scene compositions (default high)\n\
            --legacy-shadow-look   scene compositions fade cloud shadows from a light height of\n\
                                   0.22, cap landform shadows at 70%, and fix their reach\n\n\
-           --light-balance V,V,V,V  finite Sun, Moon, clear-sky, and canopy scales\n\
            --light-contributions V,V,V,V  enable the four light contributions\n\
-           --cloud-shadows V,V,V,V  finite cloud depth scale, extinction, opacity, padding\n\
-           --landform-lighting V,V,V,V  finite relief, shadow, high-light reach, padding\n\
+           --cloud-shadows 0|1    enable cloud shadows\n\
+           --landform-lighting V,V,V,V  enable relief and shadows, finite high-light reach, padding\n\
            --land-material-colors V,V,V,V  grass, forest, intertidal, and beach color rows\n\
            --solid-material-colors V,V,V,V  rock, snow, land-ice, and sea-ice color rows\n\
            --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\
@@ -1634,7 +1629,7 @@ mod tests {
         assert!(validate_capture_spatial_inputs(0.0, f32::INFINITY, 1.0).is_err());
         assert!(validate_capture_spatial_inputs(0.0, 0.0, 0.0).is_err());
         assert!(validate_capture_spatial_inputs(0.0, 0.0, f32::INFINITY).is_err());
-        assert!(parse_f32x4("1,NaN,3,4", "--cloud-shadows").is_err());
+        assert!(parse_f32x4("1,NaN,3,4", "--landform-lighting").is_err());
     }
 
     #[test]
@@ -1823,20 +1818,11 @@ async fn render(options: &Options) -> Result<(), String> {
         usage: wgpu::BufferUsages::VERTEX,
     });
     let playground_uniforms = PlaygroundUniforms {
-        terrain_tuning: [1.0, 3.0, 0.08, 0.0],
-        water_tuning: [0.5, 1.0, 3.0, 0.35],
+        water_tuning: [0.5, 0.0, 0.0, 0.0],
         landform_lighting: options.landform_lighting,
-        cloud_shadows: options.cloud_shadows,
-        water_surface: [2.5, 0.2, 1.0, 1.0],
-        ice_surface: [0.18, 0.32, 1.0, 1.0],
-        ice_structure: [192.0, 1.0, 1.0, 1.0],
-        land_material_normals: [1.0; 4],
-        material_coverage: [1.0; 4],
-        light_balance: options.light_balance,
+        cloud_shadows: [options.cloud_shadows, 0.0, 0.0, 0.0],
         layer_visibility: [1.0; 4],
         landscape_visibility: options.landscape_visibility,
-        wind_model: [1.0; 4],
-        climate_visibility: [1.0, 1.0, 0.0, 1.0],
         light_contribution_visibility: options.light_contribution_visibility,
         land_material_color_visibility: options.land_material_color_visibility,
         solid_material_color_visibility: options.solid_material_color_visibility,
@@ -2117,7 +2103,6 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
         view_cloud_motion_m(options),
         FieldGridTuning {
             landform_shadow_reach_m: options.landform_lighting[2],
-            terrain_elevation_scale: FieldGridTuning::PRODUCTION.terrain_elevation_scale,
         },
         &mut FieldGridHistory::default(),
     ))
@@ -2169,7 +2154,6 @@ fn capture_terrain_cache_frame(
     Ok(terrain_cache.frame(
         world_geometry,
         options.seed,
-        None,
         world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]),
         [
             view_width_m(

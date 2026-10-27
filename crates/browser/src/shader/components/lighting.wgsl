@@ -919,7 +919,7 @@ fn cloud_shadow_transmittance(
     horizon_z: f32,
     weight: f32,
 ) -> f32 {
-    var strength = clamp(tuning.cloud_shadows.z, 0.0, 1.0) * weight;
+    var strength = weight;
     var shadow = cloud_transmittance;
     if LEGACY_SHADOW_LOOK {
         shadow = pow(max(cloud_transmittance, 1e-30), smoothstep(0.04, 0.22, light.z));

@@ -43,9 +43,7 @@ struct FillRect {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct TerrainCacheFill {
     rect_count: u32,
-    /// Zero keeps the shaders' production tuning.
-    horizontal_scale: f32,
-    padding: [u32; 2],
+    padding: [u32; 3],
     rects: [FillRect; MAX_FILL_RECTS],
 }
 
@@ -114,7 +112,6 @@ pub struct TerrainCache {
 struct CacheKey {
     world_size_m: [u32; 2],
     seed: u64,
-    horizontal_scale: Option<u32>,
 }
 
 /// Lattice columns and rows from `min` up to, not including, `max`.
@@ -182,12 +179,10 @@ impl Level {
 
 impl TerrainCache {
     /// Plans this frame's fills and returns scene rows that assume they run.
-    /// A lab terrain scale replaces the scale of the shaders' production tuning.
     pub fn frame(
         &mut self,
         world_geometry: WorldGeometry,
         seed: u64,
-        horizontal_scale: Option<f32>,
         camera_m: [f32; 2],
         view_size_m: [f32; 2],
     ) -> TerrainCacheFrame {
@@ -196,7 +191,6 @@ impl TerrainCache {
         let key = CacheKey {
             world_size_m: [world_geometry.width_m(), world_geometry.height_m()].map(f32::to_bits),
             seed,
-            horizontal_scale: horizontal_scale.map(f32::to_bits),
         };
         if self.key != Some(key) {
             self.key = Some(key);
@@ -229,8 +223,7 @@ impl TerrainCache {
 
         let mut fill = TerrainCacheFill {
             rect_count: 0,
-            horizontal_scale: horizontal_scale.unwrap_or(0.0),
-            padding: [0; 2],
+            padding: [0; 3],
             rects: [FillRect::default(); MAX_FILL_RECTS],
         };
         let mut fill_texels = 0;
@@ -564,7 +557,7 @@ mod tests {
         filled: &mut Filled,
     ) -> TerrainCacheFrame {
         for _ in 0..16 {
-            let frame = cache.frame(world, SEED, None, camera_m, view_m);
+            let frame = cache.frame(world, SEED, camera_m, view_m);
             cache.commit();
             record(&frame, camera_m[0], filled);
             if frame.fill_texels == 0 {
@@ -608,7 +601,7 @@ mod tests {
             let mut spacings = HashMap::new();
             for level in 0..TERRAIN_CACHE_LEVELS {
                 for _ in 0..16 {
-                    let frame = cache.frame(world, SEED, None, [0.0, 0.0], level_view_m(level));
+                    let frame = cache.frame(world, SEED, [0.0, 0.0], level_view_m(level));
                     cache.commit();
                     for rect in rects(&frame) {
                         spacings.insert(rect.level, (rect.spacing_m, rect.lap_columns));
@@ -641,7 +634,7 @@ mod tests {
         ] {
             for camera_m in [[0.0, 0.0], [-14_900.0, -5_330.0], [31_990.0, 2.0e5]] {
                 let mut cache = TerrainCache::default();
-                let frame = cache.frame(world, SEED, None, camera_m, view_m);
+                let frame = cache.frame(world, SEED, camera_m, view_m);
                 match level {
                     Some(level) => {
                         assert_eq!(frame.level[0], level, "{view_m:?}");
@@ -665,14 +658,14 @@ mod tests {
         ] {
             let mut cache = TerrainCache::default();
             let mut filled = Filled::new();
-            let first = cache.frame(world, SEED, None, camera_m, view_m);
+            let first = cache.frame(world, SEED, camera_m, view_m);
             cache.commit();
             record(&first, camera_m[0], &mut filled);
             assert_eq!(i64::from(first.fill_texels), N * N, "{view_m:?}");
             assert_eq!(first.texels[2..], [TERRAIN_CACHE_TEXELS; 2]);
             let mut frame = first;
             for _ in 0..16 {
-                frame = cache.frame(world, SEED, None, camera_m, view_m);
+                frame = cache.frame(world, SEED, camera_m, view_m);
                 cache.commit();
                 record(&frame, camera_m[0], &mut filled);
                 assert!(i64::from(frame.fill_texels) <= N * N / 4, "{view_m:?}");
@@ -691,7 +684,7 @@ mod tests {
         let world = WorldGeometry::default();
         let mut cache = TerrainCache::default();
         for _ in 0..4 {
-            let frame = cache.frame(world, SEED, None, [0.0, 0.0], [35_556.0, 20_000.0]);
+            let frame = cache.frame(world, SEED, [0.0, 0.0], [35_556.0, 20_000.0]);
             cache.commit();
             assert_eq!(frame.fill_texels, 0);
         }
@@ -704,7 +697,7 @@ mod tests {
         let mut cache = TerrainCache::default();
         settle(&mut cache, world, camera_m, BOAT_VIEW_M, &mut Filled::new());
         for level in [1, 3, 0] {
-            let frame = cache.frame(world, SEED, None, camera_m, level_view_m(level));
+            let frame = cache.frame(world, SEED, camera_m, level_view_m(level));
             cache.commit();
             assert_eq!(frame.level[0], level);
             assert_eq!(
@@ -730,7 +723,7 @@ mod tests {
             let before = settle(&mut cache, world, start_m, BOAT_VIEW_M, &mut filled);
             let previous: HashSet<_> = active_cells(&before, start_m).into_iter().collect();
             let camera_m = world.wrap_position_m([start_m[0] + step_m[0], start_m[1] + step_m[1]]);
-            let frame = cache.frame(world, SEED, None, camera_m, BOAT_VIEW_M);
+            let frame = cache.frame(world, SEED, camera_m, BOAT_VIEW_M);
             cache.commit();
             let new_cells = record(&frame, start_m[0] + step_m[0], &mut filled);
             let active: Vec<_> = active_cells(&frame, [start_m[0] + step_m[0], camera_m[1]]);
@@ -770,13 +763,13 @@ mod tests {
         for _ in 0..3 {
             camera_m[0] += 40.0;
             record(
-                &cache.frame(world, SEED, None, camera_m, BOAT_VIEW_M),
+                &cache.frame(world, SEED, camera_m, BOAT_VIEW_M),
                 camera_m[0],
                 &mut skipped,
             );
         }
         let mut filled = Filled::new();
-        let frame = cache.frame(world, SEED, None, camera_m, BOAT_VIEW_M);
+        let frame = cache.frame(world, SEED, camera_m, BOAT_VIEW_M);
         cache.commit();
         record(&frame, camera_m[0], &mut filled);
         for cell in skipped.keys() {
@@ -786,25 +779,23 @@ mod tests {
     }
 
     #[test]
-    fn seed_world_scale_and_invalidation_refill_the_active_level() {
+    fn seed_world_and_invalidation_refill_the_active_level() {
         let world = WorldGeometry::default();
         let camera_m = [800.0, 0.0];
         let full_level = (N * N) as u32;
-        let changes: [&dyn Fn(&mut TerrainCache) -> TerrainCacheFrame; 4] = [
-            &|cache| cache.frame(world, SEED + 1, None, camera_m, BOAT_VIEW_M),
+        let changes: [&dyn Fn(&mut TerrainCache) -> TerrainCacheFrame; 3] = [
+            &|cache| cache.frame(world, SEED + 1, camera_m, BOAT_VIEW_M),
             &|cache| {
                 cache.frame(
                     WorldGeometry::new(64_000.0, 32_000.0).unwrap(),
                     SEED,
-                    None,
                     camera_m,
                     BOAT_VIEW_M,
                 )
             },
-            &|cache| cache.frame(world, SEED, Some(1.5), camera_m, BOAT_VIEW_M),
             &|cache| {
                 cache.invalidate();
-                cache.frame(world, SEED, None, camera_m, BOAT_VIEW_M)
+                cache.frame(world, SEED, camera_m, BOAT_VIEW_M)
             },
         ];
         for (index, change) in changes.into_iter().enumerate() {

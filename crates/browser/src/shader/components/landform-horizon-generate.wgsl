@@ -8,7 +8,7 @@ const LANDFORM_HORIZON_COARSE_STEP_M: f32 = 16.0;
 // The highest surface a shadow can fall on. Keep synchronized with
 // `highest_receiver_m` in field_grids.rs.
 fn highest_shadow_receiver_m() -> f32 {
-    return 252.0 * max(tuning.terrain_tuning.y, 0.0) + 6.0;
+    return 252.0 * TERRAIN_ELEVATION_SCALE + 6.0;
 }
 
 // Reads the landform layer, so it runs after that layer is written. One z

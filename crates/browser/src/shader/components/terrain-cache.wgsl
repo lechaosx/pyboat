@@ -16,11 +16,7 @@ fn terrain_broad_noise(
     circle_position: vec4<f32>,
 ) -> TerrainNoiseSample {
     let grid = scene.terrain_cache_grid_m;
-    let cached_octaves = terrain_cache_octaves(
-        field,
-        max(grid.z, grid.w),
-        tuning.terrain_tuning.x,
-    );
+    let cached_octaves = terrain_cache_octaves(field, max(grid.z, grid.w));
     let texel_position = (camera_relative_position_m(position_m) - grid.xy) / grid.zw;
     let texel = floor(texel_position);
     // The texture side is a power of two, so masking wraps negative offsets too.

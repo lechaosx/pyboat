@@ -8,8 +8,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = production_tuning();
     landscape_visibility = vec4<f32>(1.0);
-    atmosphere_model = vec4<f32>(1.0);
-    climate_visibility = vec4<f32>(1.0);
     var periodic_input = input;
     periodic_input.world_position_m = canonical_world_position(input.world_position_m);
     surface_position_m = periodic_input.world_position_m;
@@ -59,7 +57,7 @@ fn fragment_layer_visibility() -> vec4<f32> {
 }
 
 fn fragment_light_visibility() -> vec4<f32> {
-    return tuning.light_balance;
+    return vec4<f32>(1.0);
 }
 
 fn land_material_color_visibility() -> vec4<f32> {
