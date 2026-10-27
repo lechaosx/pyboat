@@ -3191,6 +3191,44 @@ fn ambient_aerosol_is_lower_frequency_than_local_humidity() {
     );
 }
 
+/// Aerosol particles take up water and scatter more as the air grows humid, so
+/// across the world, away from storms that wash it out, regional aerosol
+/// optical depth rises with regional humidity.
+#[test]
+fn regional_aerosol_grows_with_regional_humidity() {
+    let world = WorldGeometry::default();
+    let render = |diagnostic| render_diagnostic_image(world, diagnostic, 128, 64);
+    let condensation = render("weather_regional_condensation");
+    let storm = render("weather_storm_potential");
+    let aerosol = render("lighting_aerosol_optical_depth");
+    let pixels = |image: &[u8]| {
+        image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| scalar_debug_amount(pixel))
+            .collect::<Vec<_>>()
+    };
+    let (condensation, aerosol): (Vec<f32>, Vec<f32>) = pixels(&condensation)
+        .into_iter()
+        .zip(pixels(&aerosol))
+        .zip(pixels(&storm))
+        .filter(|(_, storm)| *storm < 0.2)
+        .map(|(pair, _)| pair)
+        .unzip();
+    assert!(
+        condensation.len() > 1_000,
+        "{} unwashed pixels",
+        condensation.len()
+    );
+
+    let correlation = pearson_correlation(&condensation, &aerosol);
+    assert!(
+        correlation > 0.5,
+        "humidity-aerosol correlation {correlation}"
+    );
+}
+
 /// Over five 4 km-high views, the regional field keeps under half the local
 /// field's share of variance below about 1 km. The local field must keep at
 /// least 0.5% of its variance there, ten times the share that 8-bit

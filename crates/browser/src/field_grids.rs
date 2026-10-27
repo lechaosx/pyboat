@@ -468,9 +468,11 @@ pub fn moon_clear_sky_share(
     half_view_m: [f64; 2],
     highest_receiver_m: f64,
 ) -> f64 {
-    // `regional_linke_turbidity` over the 0.007-0.32 regional aerosol optical
-    // depths of lighting.wgsl.
-    const LINKE_TURBIDITIES: [f64; 2] = [2.35 + 7.79 * 0.007, 2.35 + 7.79 * 0.32];
+    // `regional_linke_turbidity` over the regional aerosol optical depths of
+    // lighting.wgsl: dry air fully washed out, then air at the 95% humidity
+    // where growth stops.
+    let linke_turbidities =
+        [0.046 * 0.28, 0.046 / 0.05_f64.sqrt()].map(|depth| 2.35 + 7.79 * depth);
     const REDDEST_SUN_LUMINANCE: f64 = 0.577;
     // The night sky's (0.42, 0.52, 0.75) tinted 35% toward an eclipsed Moon's
     // (1.2, 0.28, 0.06), the darkest colour the clear sky's light takes.
@@ -551,7 +553,7 @@ pub fn moon_clear_sky_share(
                     light.moon_direction[2],
                     MOON_DISC_RADIUS_RAD,
                 ));
-                for turbidity in LINKE_TURBIDITIES {
+                for turbidity in linke_turbidities {
                     let sun_beam = sun_visibility
                         * (1.0
                             - clear_sky_diffuse_fraction(

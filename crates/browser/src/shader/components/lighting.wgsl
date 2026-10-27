@@ -525,27 +525,33 @@ fn calculate_atmospheric_ambient_light(
     );
 }
 
+// Aerosol optical depth at 550 nm in air of the given relative humidity, before
+// washout: a dry depth grown by water uptake as (1 - RH)^-γ (Hänel 1976, Adv.
+// Geophys. 19). γ = 0.5 gives the 1.5-3 times dry scattering that marine sites
+// measure at 85% humidity (Burgos et al. 2019, Sci. Data 6). The dry depth is
+// the 0.11 mean oceanic depth at 500 nm (Smirnov et al. 2009, J. Geophys. Res.
+// 114) dried from the marine boundary layer's typical 80% humidity and taken to
+// 550 nm by its Ångström exponent of 0.6.
+// The law holds for subsaturated air, and humidified nephelometers fit it only
+// up to 95% humidity (Burgos et al. 2019). Growth is held there in nearly
+// saturated and supersaturated air, standing in for haze activating into the
+// mist and cloud droplets that the canopy carries.
+fn humid_aerosol_optical_depth(relative_humidity: f32) -> f32 {
+    return 0.046 / sqrt(1.0 - clamp(relative_humidity, 0.0, 0.95));
+}
+
+// The washout weights stand in for rain scavenging aerosol.
 fn regional_aerosol_optical_depth_at(regional: RegionalCloudDrivers) -> f32 {
-    let settled_air = 1.0 - regional.pressure_lift;
-    let dry_air = 1.0 - regional.condensation;
     let storm = regional.condensation
         * regional.pressure_lift
         * regional.instability;
-    let unwashed = 1.0 - 0.72 * smoothstep(0.25, 0.70, storm);
-    // The depth range and weights stand in for aerosol sources, trapping under
-    // subsidence, and rain washout.
-    return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
-        * unwashed;
+    return humid_aerosol_optical_depth(regional.relative_humidity)
+        * (1.0 - 0.72 * smoothstep(0.25, 0.70, storm));
 }
 
 fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
-    let settled_air = 1.0 - weather.regional.pressure_lift;
-    let dry_air = 1.0 - smoothstep(0.55, 0.95, weather.relative_humidity);
-    let unwashed = 1.0 - 0.72 * weather.rain;
-    // The depth range and weights stand in for aerosol sources, trapping under
-    // subsidence, and rain washout.
-    return mix(0.025, 0.32, clamp(0.58 * settled_air + 0.42 * dry_air, 0.0, 1.0))
-        * unwashed;
+    return humid_aerosol_optical_depth(weather.relative_humidity)
+        * (1.0 - 0.72 * weather.rain);
 }
 
 fn calculate_regional_horizon_scattering() -> f32 {

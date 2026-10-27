@@ -1207,6 +1207,7 @@ fn regional_cloud_drivers_from_fields(
     );
     let broad_pressure_hpa = 1013.25 + broad_pressure_potential_m2_s / 6000.0;
     return RegionalCloudDrivers(
+        relative_humidity,
         smoothstep(0.45, 0.95, relative_humidity),
         1.0 - smoothstep(1009.0, 1017.0, broad_pressure_hpa),
         // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry
@@ -1268,7 +1269,7 @@ fn cloud_weather_from_atmosphere_and_upper_air(
             0.0,
             0.0,
             0.0,
-            RegionalCloudDrivers(0.0, 0.0, 0.0),
+            RegionalCloudDrivers(0.0, 0.0, 0.0, 0.0),
         );
     }
     let pressure_sample = atmosphere.pressure;

@@ -47,6 +47,7 @@ struct SceneTuning {
 
 
 struct RegionalCloudDrivers {
+    relative_humidity: f32,
     condensation: f32,
     pressure_lift: f32,
     instability: f32,
