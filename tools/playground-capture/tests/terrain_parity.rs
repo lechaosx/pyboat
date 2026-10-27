@@ -1345,41 +1345,34 @@ fn landform_shadows_use_source_specific_apparent_radii() {
     );
 }
 
+/// Under a light down to a raised receiver's horizon, a landform blocking the
+/// whole disc is as dark as the densest cloud, on worlds of different sizes.
 #[test]
-fn shadow_types_share_their_darkness_and_near_horizon_cutoff() {
-    let transmittance = |light_height: f32, cloud_depth: f32| {
-        let pixel = render_diagnostic_image_at(
-            WorldGeometry::default(),
-            Vector::ZERO,
-            0.0,
-            &format!("lighting_shadow_darkness_{light_height}_{cloud_depth}"),
-            1,
-            1,
-        );
-        [0, 1].map(|channel| srgb_channel_to_linear(pixel[channel]))
-    };
-    let opaque_cloud_depth = 1_000.0;
-    for light_height in [0.02, 0.035] {
-        let shadows = transmittance(light_height, opaque_cloud_depth);
-        assert!(
-            shadows.iter().all(|&shadow| shadow > 0.99),
-            "shadows below the cutoff at light height {light_height} above the horizon: {shadows:?}",
-        );
-    }
-    for light_height in [0.045, 0.05, 0.055, 0.1, 0.3, 0.8] {
-        let [landform, cloud] = transmittance(light_height, opaque_cloud_depth);
-        assert!(
-            (landform - cloud).abs() < 0.015,
-            "blocked light differs at light height {light_height} above the horizon: landform {landform}, \
-             cloud {cloud}",
-        );
-    }
-    for light_height in [0.1, 0.8] {
-        let [landform, ..] = transmittance(light_height, opaque_cloud_depth);
-        assert!(
-            landform < 0.01,
-            "blocking landform keeps {landform} at {light_height}"
-        );
+fn shadow_types_share_their_darkness_down_to_the_receivers_horizon() {
+    for world in [
+        WorldGeometry::default(),
+        WorldGeometry::new(128_000.0, 128_000.0).unwrap(),
+    ] {
+        let transmittance = |light_height: f32, cloud_depth: f32| {
+            let pixel = render_diagnostic_image_at(
+                world,
+                Vector::ZERO,
+                0.0,
+                &format!("lighting_shadow_darkness_{light_height}_{cloud_depth}"),
+                1,
+                1,
+            );
+            [0, 1].map(|channel| srgb_channel_to_linear(pixel[channel]))
+        };
+        let opaque_cloud_depth = 1_000.0;
+        for light_height in [0.002, 0.01, 0.02, 0.035, 0.045, 0.1, 0.3, 0.8] {
+            let [landform, cloud] = transmittance(light_height, opaque_cloud_depth);
+            assert!(
+                landform < 0.01 && cloud < 0.01,
+                "{world:?}: blocked light at light height {light_height} above the horizon: \
+                 landform {landform}, cloud {cloud}",
+            );
+        }
     }
 }
 
@@ -2044,8 +2037,9 @@ fn diffuse_moon_horizon_matches_authoritative_rust() {
 }
 
 /// Times when a source at the view centre has just become or is just about to
-/// stop being bright enough for shadow taps: the Sun or Moon at the surface
-/// contrast gate, or at the cloud shadow plane's horizon. Footprints reach farthest there.
+/// stop casting shadows: the Sun or Moon at the horizon of the surface, of
+/// raised receivers, or of the cloud shadow plane. Footprints reach farthest
+/// there.
 fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
     let step_seconds = 60.0;
     let lit = |world_time_seconds: f64| {
@@ -2053,10 +2047,10 @@ fn grazing_light_times(world: WorldGeometry, position_m: Vector) -> Vec<f64> {
         let surface = celestial_lighting_at_height(world, conditions, 0.0);
         let plane = celestial_lighting_at_height(world, conditions, 900.0);
         // Raised receivers keep shadows while the light is below the
-        // sea-level cutoff.
+        // sea-level horizon.
         [
-            surface.sun_direction[2] > 0.04,
-            surface.moon_direction[2] > 0.04,
+            surface.sun_direction[2] > 0.0,
+            surface.moon_direction[2] > 0.0,
             surface.sun_direction[2] > -0.15,
             surface.sun_direction[2] > -0.3,
             surface.moon_direction[2] > -0.15,
@@ -2166,7 +2160,8 @@ fn coverage_view_marks_landform_horizon_marches_outside_the_landform_grid() {
         })
         .expect("Sun and Moon should both stand high during the lunar month");
     // Under two high lights every grid but the landform's holds the forced
-    // taps, while forced horizons march the reach at the cutoff.
+    // taps, while forced horizons march the reach at the highest receiver's
+    // horizon.
     let image = render_diagnostic_image_with_view_at(
         world,
         position_m,
@@ -3546,9 +3541,9 @@ fn cloud_shadows_fade_continuously_at_solar_horizon() {
 
 /// A grazing beam crosses more cloud, not less, so the share of direct
 /// sunlight that reaches the sea under cloud does not jump back up as the Sun
-/// sinks through the near-horizon shadow cutoff.
+/// sinks toward the horizon.
 #[test]
-fn sunlight_under_cloud_does_not_brighten_through_the_shadow_cutoff() {
+fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let (size, view_height_m) = (256usize, 4_000.0_f32);
@@ -3610,16 +3605,17 @@ fn sunlight_under_cloud_does_not_brighten_through_the_shadow_cutoff() {
             }
             reaching / arriving
         };
-        let above_cutoff = transmittance(0.06, 0.08);
-        let below_cutoff = transmittance(0.03, 0.04);
-        // Share of the sunlight that cloud removes above the cutoff which
-        // returns below it. Ending the shadows there returns all of it; the
-        // bound leaves room for the cloud pattern's sampling within each band.
-        let returned = (below_cutoff - above_cutoff) / (1.0 - above_cutoff);
+        let higher = transmittance(0.06, 0.08);
+        let lower = transmittance(0.03, 0.04);
+        // Share of the sunlight that cloud removes under the higher Sun which
+        // returns under the lower one. Ending the shadows between them returns
+        // all of it; the bound leaves room for the cloud pattern's sampling
+        // within each band.
+        let returned = (lower - higher) / (1.0 - higher);
         assert!(
             returned < 0.5,
-            "at {world_time_seconds} s, sunlight under cloud rose from {above_cutoff} above the \
-             cutoff to {below_cutoff} below it",
+            "at {world_time_seconds} s, sunlight under cloud rose from {higher} with the \
+             sea-level Sun 0.06 to 0.08 high to {lower} with it 0.03 to 0.04 high",
         );
     }
 }

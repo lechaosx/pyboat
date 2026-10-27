@@ -5,12 +5,6 @@ var landform_horizon_output: texture_storage_2d_array<rgba16float, write>;
 // kilometre-scale heights precise after f16 conversion.
 const LANDFORM_HORIZON_COARSE_STEP_M: f32 = 16.0;
 
-// The highest surface a shadow can fall on. Keep synchronized with
-// `highest_receiver_m` in field_grids.rs.
-fn highest_shadow_receiver_m() -> f32 {
-    return 252.0 * TERRAIN_ELEVATION_SCALE + 6.0;
-}
-
 // Reads the landform layer, so it runs after that layer is written. One z
 // slice per light: Sun, then Moon.
 @compute @workgroup_size(8, 8)

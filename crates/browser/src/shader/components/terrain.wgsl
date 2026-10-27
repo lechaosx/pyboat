@@ -694,7 +694,6 @@ fn landform_light_grade(
 fn landform_shadow_transmittance_for_light(
     position_m: vec2<f32>,
     elevation_m: f32,
-    horizon_z: f32,
     light_direction: vec3<f32>,
     light_amount: f32,
     angular_radius_rad: f32,
@@ -703,11 +702,6 @@ fn landform_shadow_transmittance_for_light(
     var strength = landform_shadow_strength();
     if LEGACY_SHADOW_LOOK {
         strength *= 0.7;
-    } else {
-        strength *= shadow_horizon_cutoff(light_height_above_horizon(
-            light_direction.z,
-            horizon_z,
-        ));
     }
     let unshadowed = strength <= 0.0
         || light_amount <= 0.0
@@ -734,42 +728,49 @@ fn landform_shadow_strength() -> f32 {
     );
 }
 
+// The highest surface a shadow can fall on. Keep synchronized with
+// `highest_receiver_m` in field_grids.rs.
+fn highest_shadow_receiver_m() -> f32 {
+    return 252.0 * TERRAIN_ELEVATION_SCALE + 6.0;
+}
+
 // Stored where no landform shadow can fall: the light is overhead, unseen by
 // any receiver, or landform shadows are off.
 const LANDFORM_UNSHADOWED_HEIGHT_M: f32 = -10000.0;
 // Steps start this far apart and widen to this share of their distance.
-// Production reaches take about 30 steps under a high light and about 60 at
-// the cutoff; the step bound only limits lab reach tuning. On the rugged
-// island near (-9000, 2017) m under lights 3° to 15° high, up to about 0.6% of
-// sunlit pixels in 240 m and 1.5 km views then differ by more than a quarter
-// of the disc from the largest occlusion of a per-pixel march over directly
-// evaluated landform every 4 m widening to 1%; steps widening to an eighth
-// leave twice as many in the 1.5 km view at 15°.
+// Production reaches take about 30 steps under a high light and about 80 at
+// the highest receiver's horizon; the step bound only limits lab reach
+// tuning. On the rugged island near (-9000, 2017) m under lights 3° to 15°
+// high, up to about 0.6% of sunlit pixels in 240 m and 1.5 km views then
+// differ by more than a quarter of the disc from the largest occlusion of a
+// per-pixel march over directly evaluated landform every 4 m widening to 1%;
+// steps widening to an eighth leave twice as many in the 1.5 km view at 15°.
 const LANDFORM_HORIZON_STEP_M: f32 = 8.0;
 const LANDFORM_HORIZON_STEP_RATIO: f32 = 0.0625;
 const LANDFORM_HORIZON_MAX_STEPS: u32 = 256u;
 
-// The receiver height at which the landform toward a light covers half of
-// its disc, then the receiver height over which that cover goes from none to
-// all. A ray toward the light from height h stays above a blocker of
-// elevation b at surface distance d while (R + h) / q - R > b, with
+// The receiver height midway through the landform's penumbra toward a light,
+// then the height over which its cover of the disc goes from none to all. A
+// ray toward the light from height h stays above a blocker of elevation b at
+// surface distance d while (R + h) / q - R > b, with
 // q = cos(d / R) - tan(light) sin(d / R), so the blocker covers half the disc
 // below h = (R + b) q - R. Its penumbra spans 0.6 m plus the disc's diameter
 // at that distance along the ray, and each metre of receiver height moves the
 // ray 1 / q metres there, so the receiver crosses the penumbra over q times
-// its span. Steps run from a sixteenth of the tuned reach to the march's
+// its span. Some blocker touches the disc below the highest top of the
+// blockers' penumbrae and one covers it all below the highest bottom, so the
+// cover changes continuously as blockers overtake each other. Steps run from a sixteenth of the tuned reach to the march's
 // reach. Under EVALUATE_ALL_BRANCHES every light marches the reach at the
-// cutoff and keeps only the steps within its own.
+// highest receiver's horizon and keeps only the steps within its own.
 fn landform_horizon(
     position_m: vec2<f32>,
     light_direction: vec3<f32>,
     angular_radius_rad: f32,
 ) -> vec2<f32> {
-    var horizon = vec2<f32>(LANDFORM_UNSHADOWED_HEIGHT_M, 1.0);
     let horizontal_light = length(light_direction.xy);
     let overhead = horizontal_light <= 0.001;
     if overhead && !EVALUATE_ALL_BRANCHES {
-        return horizon;
+        return vec2<f32>(LANDFORM_UNSHADOWED_HEIGHT_M, 1.0);
     }
     let toward_light = select(
         light_direction.xy / horizontal_light,
@@ -785,11 +786,11 @@ fn landform_horizon(
     );
     var march_m = reach_m;
     if EVALUATE_ALL_BRANCHES {
-        march_m = landform_shadow_reach_m(
-            SHADOW_CUTOFF_Z,
-            sqrt(1.0 - SHADOW_CUTOFF_Z * SHADOW_CUTOFF_Z),
-        );
+        let lowest_z = celestial_horizon_z_at_height(highest_shadow_receiver_m());
+        march_m = landform_shadow_reach_m(lowest_z, sqrt(1.0 - lowest_z * lowest_z));
     }
+    // Penumbra bottom and top.
+    var penumbra = vec2<f32>(LANDFORM_UNSHADOWED_HEIGHT_M) + vec2<f32>(-0.5, 0.5);
     var distance_m = min(max(tuning.landform_lighting.z, 1.0) / 16.0, march_m);
     for (var step = 0u; step < LANDFORM_HORIZON_MAX_STEPS; step++) {
         let angular_distance = distance_m / world_radius_m;
@@ -801,13 +802,14 @@ fn landform_horizon(
             );
             let half_cover_height_m = (world_radius_m + blocker_elevation_m) * ray_scale
                 - world_radius_m;
-            horizon = select(
-                horizon,
-                vec2<f32>(
-                    half_cover_height_m,
-                    (0.6 + 2.0 * angular_radius_rad * distance_m) * ray_scale,
+            let span_m = (0.6 + 2.0 * angular_radius_rad * distance_m) * ray_scale;
+            penumbra = select(
+                penumbra,
+                max(
+                    penumbra,
+                    vec2<f32>(half_cover_height_m - 0.5 * span_m, half_cover_height_m + 0.5 * span_m),
                 ),
-                counted && half_cover_height_m > horizon.x,
+                counted,
             );
         }
         if distance_m >= march_m {
@@ -819,29 +821,35 @@ fn landform_horizon(
             select(march_m, reach_m, distance_m < reach_m),
         );
     }
-    return horizon;
+    return vec2<f32>(0.5 * (penumbra.x + penumbra.y), penumbra.y - penumbra.x);
 }
 
 // A light at 45° or higher marches the tuned reach. A lower light extends it
-// to where its ray from sea level has climbed that height, taking the ray's
-// horizontal run for the surface distance, which overshoots by a few percent
-// near the cutoff. Marches then meet about the same relief heights under every
-// light. Keep synchronized with `landform_shadow_reach_m` in field_grids.rs,
-// which bounds the landform grid window with it.
+// to where the ray toward it from the lowest receiver that sees it has climbed
+// that height above sea level: from sea level, or for a light below the
+// sea-level horizon from the receiver on whose horizon it lies, whose ray
+// grazes sea level an angle of minus the light's elevation away. Marches then
+// meet about the same relief heights under every light. Keep synchronized with
+// `landform_shadow_reach_m` in field_grids.rs, which bounds the landform grid
+// window with it.
 fn landform_shadow_reach_m(light_z: f32, horizontal_light: f32) -> f32 {
     let tuned_reach_m = max(tuning.landform_lighting.z, 1.0);
     if LEGACY_SHADOW_LOOK {
         return tuned_reach_m;
     }
     let world_radius_m = scene.world_size_m.x / TAU;
-    let sine = max(light_z, SHADOW_CUTOFF_Z);
-    let along_ray_m = world_radius_m * sine;
+    let along_ray_m = world_radius_m * max(light_z, 0.0);
     let ray_m = -along_ray_m + sqrt(
         along_ray_m * along_ray_m
             + tuned_reach_m * (2.0 * world_radius_m + tuned_reach_m),
     );
-    let cosine = min(horizontal_light, sqrt(1.0 - SHADOW_CUTOFF_Z * SHADOW_CUTOFF_Z));
-    return max(tuned_reach_m, ray_m * cosine);
+    let climb_rad = select(
+        atan2(ray_m * horizontal_light, world_radius_m + ray_m * light_z),
+        acos(world_radius_m / (world_radius_m + tuned_reach_m))
+            - atan2(light_z, horizontal_light),
+        light_z < 0.0,
+    );
+    return max(tuned_reach_m, world_radius_m * climb_rad);
 }
 
 fn landform_disc_occlusion(
@@ -875,7 +883,6 @@ fn landform_shadow_transmittance(
         transmittance[source_index] = landform_shadow_transmittance_for_light(
             direct_light.position_m,
             direct_light.height_m,
-            direct_light.horizon_z,
             landform_shadow_sample_direction(direct_light, source),
             source.amount,
             source.angular_radius_rad,

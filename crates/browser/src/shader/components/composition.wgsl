@@ -24,14 +24,12 @@ fn fragment_surface_color(
         cloud_transmittance.x,
         regional_cloud_transmittance.x,
         direct_light.sun_direction,
-        direct_light.horizon_z,
         1.0,
     );
     let moon_transmittance = cloud_shadow_transmittance(
         cloud_transmittance.y,
         regional_cloud_transmittance.y,
         direct_light.moon_direction,
-        direct_light.horizon_z,
         moon_cloud_shadow_weight(direct_light, ambient_light),
     );
     let split = ambient_light.split;

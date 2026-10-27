@@ -183,13 +183,12 @@ fn diagnostic_shadow_darkness(light_height: f32, cloud_depth: f32) -> vec4<f32> 
         landform_shadow_transmittance_for_light(
             vec2<f32>(0.0),
             buried_receiver_m,
-            ground_horizon_z,
             ground_light,
             1.0,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             0u,
         ),
-        cloud_shadow_transmittance(exp(-cloud_depth), 1.0, ground_light, ground_horizon_z, 1.0),
+        cloud_shadow_transmittance(exp(-cloud_depth), 1.0, ground_light, 1.0),
         0.0,
         1.0,
     );
@@ -204,11 +203,9 @@ fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f3
     let position_m = input.world_position_m;
     let elevation_m = broad_landform_elevation_m(position_m);
     let horizontal = normalize(vec2<f32>(0.95, 0.30));
-    let horizon_z = celestial_horizon_z_at_height(elevation_m);
     let below = landform_shadow_transmittance_for_light(
         position_m,
         elevation_m,
-        horizon_z,
         normalize(vec3<f32>(horizontal, -0.000001)),
         1.0,
         MOON_ANGULAR_RADIUS_RAD,
@@ -217,7 +214,6 @@ fn diagnostic_landform_shadow_tangent_continuity(input: VertexOutput) -> vec4<f3
     let above = landform_shadow_transmittance_for_light(
         position_m,
         elevation_m,
-        horizon_z,
         normalize(vec3<f32>(horizontal, 0.000001)),
         1.0,
         MOON_ANGULAR_RADIUS_RAD,
@@ -301,7 +297,6 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
                     0.5,
                     1.0,
                     receiver.sun_direction,
-                    receiver.horizon_z,
                     1.0,
                 ))
             + visibility.y * receiver.moon_amount
@@ -309,7 +304,6 @@ fn diagnostic_cloud_shadow_receiver_light(surface_height_m: f32) -> vec4<f32> {
                     0.5,
                     1.0,
                     receiver.moon_direction,
-                    receiver.horizon_z,
                     moon_cloud_shadow_weight(
                         receiver,
                         calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),

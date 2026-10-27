@@ -242,9 +242,10 @@ and verification details.
 - **[Explicit]** Landform shadows have finite-disc penumbrae at every zoom.
 - **[Implicit]** Landform shadows read one per-frame horizon grid per light,
   covering the view, whose texels march the landform grid toward that light.
-- **[Implicit]** A horizon texel keeps the receiver height at which landform
-  covers half the disc and the height span of that blocker's penumbra; each
-  pixel compares its own height with them.
+- **[Implicit]** A horizon texel keeps the receiver heights between which the
+  landform's cover of the disc goes from none to all, across every blocker, so
+  the cover changes continuously as blockers overtake each other; each pixel
+  compares its own height with them.
 - **[Explicit]** Cloud shadows sample each light once per pixel; their softness
   comes from the cloud field.
 - **[Explicit]** Each cloud type's octaves fade out at the width of the light's
@@ -257,23 +258,22 @@ and verification details.
   negligible everywhere in view.
 - **[Explicit]** Every shadow type removes the same share of direct light for the
   same occlusion: a landform blocking the whole disc is as dark as the densest cloud.
-- **[Explicit]** Under a low light above the cutoff, horizon dimming and
-  reddening of direct light alone reduce shadow contrast, alike for every
-  shadow type.
-- **[Explicit]** All shadow types fade out at one shared near-horizon cutoff, a
-  compromise standing in for the unbounded reach of grazing shadows where
-  diffuse light already carries most of the light.
-- **[Implicit]** Where cloud shadows fade out, direct light keeps the region's
-  mean share of each beam that cloud passes, so cover stays about as dark under a
-  grazing light as just above the cutoff.
-- **[Implicit]** The cutoff follows the light's height above each receiver's own
-  horizon, so raised land keeps its shadows after sea-level sunset. Shadow
-  windows bound receivers up to the highest landform the elevation scale allows.
+- **[Explicit]** Under a low light, horizon dimming and reddening of direct
+  light alone reduce shadow contrast, alike for every shadow type.
+- **[Explicit]** All shadow types follow the light down to each receiver's own
+  horizon; their reach comes from the world's curvature, so it stays bounded on
+  any world size.
+- **[Implicit]** Where the Moon's cloud shadows fade out, its direct light keeps
+  the region's mean share of the beam that cloud passes, so cover stays about as
+  dark as where the shadows show.
+- **[Implicit]** Raised land, whose horizon lies below the sea-level one, keeps
+  its shadows after sea-level sunset. Shadow windows bound receivers up to the
+  highest landform the elevation scale allows.
 - **[Explicit]** Landform shadow reach grows as the light lowers.
-- **[Implicit]** Below 45°, the landform march reaches about where a ray from sea
-  level toward the light has climbed the high-light reach above the curved
-  surface. Each horizon texel takes the reach from its own light, so landform
-  shadows stay world-anchored while the camera pans.
+- **[Implicit]** Below 45°, the landform march reaches where the ray toward the
+  light from the lowest receiver that sees it has climbed the high-light reach
+  above sea level. Each horizon texel takes the reach from its own light, so
+  landform shadows stay world-anchored while the camera pans.
 - **[Implicit]** The march steps from a sixteenth of the high-light reach out to
   the march's reach, with steps that widen in proportion to distance beyond a
   fixed shortest step.

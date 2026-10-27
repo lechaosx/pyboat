@@ -875,13 +875,10 @@ fn celestial_cloud_transmittance_at(direct_light: CelestialReceiverLight) -> vec
     var transmittance = vec2<f32>(1.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let source = celestial_source_light(direct_light, source_index);
-        // The legacy look takes shadows only above the sea-level cutoff.
-        let cutoff_horizon_z = select(direct_light.horizon_z, 0.0, LEGACY_SHADOW_LOOK);
         let shadowed = source.amount > 0.0
             && (source_index == 0u || scene.cloud_shadow_grids.z > 0.0)
-            && shadow_horizon_cutoff(
-                light_height_above_horizon(source.direction.z, cutoff_horizon_z),
-            ) > 0.0;
+            // The legacy look takes shadows only above a sea-level cutoff.
+            && (!LEGACY_SHADOW_LOOK || source.direction.z > 0.04);
         if shadowed || EVALUATE_ALL_BRANCHES {
             let sampled = sampled_cloud_transmittance_at(
                 projected_cloud_position(
@@ -898,42 +895,27 @@ fn celestial_cloud_transmittance_at(direct_light: CelestialReceiverLight) -> vec
     return transmittance;
 }
 
-// Every shadow fades out as the light's height above its receiver's horizon
-// falls between these; field_grids.rs bounds shadow taps from the lower. The
-// fade is the near-horizon cutoff compromise recorded in ARCHITECTURE.md.
-const SHADOW_CUTOFF_Z: f32 = 0.04;
-const SHADOW_CUTOFF_FULL_Z: f32 = 0.06;
-
 fn light_height_above_horizon(light_z: f32, horizon_z: f32) -> f32 {
     return (light_z - horizon_z) / (1.0 - horizon_z);
 }
 
-fn shadow_horizon_cutoff(light_height: f32) -> f32 {
-    return smoothstep(SHADOW_CUTOFF_Z, SHADOW_CUTOFF_FULL_Z, light_height);
-}
-
-// The cloud field's shadow on the ground, or the legacy look's fade. Where the
-// near-horizon cutoff or `weight` fades the field's shadow out, the light keeps
+// The cloud field's shadow on the ground, or the legacy look's fade. Where
+// `weight` fades the field's shadow out, the light keeps
 // `regional_transmittance`, the region's mean share of the beam that cloud
-// passes, standing in for the cloud a grazing beam crosses beyond the field's
-// reach.
+// passes.
 fn cloud_shadow_transmittance(
     cloud_transmittance: f32,
     regional_transmittance: f32,
     light: vec3<f32>,
-    horizon_z: f32,
     weight: f32,
 ) -> f32 {
-    var strength = weight;
     var shadow = cloud_transmittance;
     var faded = regional_transmittance;
     if LEGACY_SHADOW_LOOK {
         shadow = pow(max(cloud_transmittance, 1e-30), smoothstep(0.04, 0.22, light.z));
         faded = 1.0;
-    } else {
-        strength *= shadow_horizon_cutoff(light_height_above_horizon(light.z, horizon_z));
     }
-    return mix(faded, shadow, strength);
+    return mix(faded, shadow, weight);
 }
 
 fn effective_cloud_shadow_amount(
@@ -948,7 +930,6 @@ fn effective_cloud_shadow_amount(
                     sun_transmittance,
                     1.0,
                     receiver.sun_direction,
-                    receiver.horizon_z,
                     1.0,
                 ))
             + visibility.y * receiver.moon_amount
@@ -956,7 +937,6 @@ fn effective_cloud_shadow_amount(
                     moon_transmittance,
                     1.0,
                     receiver.moon_direction,
-                    receiver.horizon_z,
                     moon_cloud_shadow_weight(
                         receiver,
                         calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),

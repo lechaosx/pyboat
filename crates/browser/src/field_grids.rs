@@ -11,11 +11,13 @@ use simulation::WorldGeometry;
 /// The scene's window covers the view, so 16:9 views reach this budget near
 /// 13 km tall.
 pub const ENVIRONMENT_FIELD_TEXELS: u32 = 384;
-/// The cloud weather window adds the farthest cloud weather read, about 17 km
-/// on each side of a default-world view, so its spacing starts at 256 m. The
-/// deck's drivers vary over 8 km and more; what coarsens is mainly the land
-/// share across coasts, which moves cumulus cover only where it is marginal.
-const CLOUD_WEATHER_FIELD_TEXELS: u32 = 192;
+/// The cloud weather window adds the farthest cloud weather read, about 19 km
+/// on each side of a default-world view and 41 km on a 256 km world. At this
+/// budget its spacing starts at 256 m on the default world and stays there for
+/// 16:9 views up to about 8.5 km tall. The deck's drivers vary over 8 km and
+/// more; what coarsens is mainly the land share across coasts, which moves
+/// cumulus cover only where it is marginal.
+const CLOUD_WEATHER_FIELD_TEXELS: u32 = 220;
 /// The scene's five layers, then the cumulus and deck drivers and the
 /// ground-sky bounce conditions on the cloud weather grid. Keep synchronized
 /// with environment-fields.wgsl.
@@ -26,13 +28,14 @@ pub const ENVIRONMENT_FIELD_LAYERS: u32 = 8;
 const ENVIRONMENT_FIELD_SPACING_M: f64 = 64.0;
 
 /// Texels per axis of each occluder field layer; at 8 m this spans the 4 km
-/// shadow footprint of a boat-zoom view under a light at the sea-level cutoff.
+/// shadow footprint of a boat-zoom view under a light at the sea-level horizon.
 pub const OCCLUDER_FIELD_TEXELS: u32 = 512;
 /// Texels a frame evaluates per occluder layer at most. On a Radeon 780M the
 /// occluder pass of the 16 km bench views then takes about 0.9 ms.
 const OCCLUDER_LAYER_TEXELS: u32 = OCCLUDER_FIELD_TEXELS * OCCLUDER_FIELD_TEXELS / 2;
 /// Each landform horizon texel marches about 30 landform samples per light
-/// under a high light and about 60 at the cutoff. At this budget 16:9 views up
+/// under a high light, about 65 at the sea-level horizon of the default world,
+/// and about 80 at the highest receiver's horizon. At this budget 16:9 views up
 /// to about 1 km tall keep 8 m texels, and the occluder pass of the 2.4 km polar
 /// bench view takes about 0.7 ms rather than 0.9 ms at the full layer budget
 /// on a Radeon 780M.
@@ -88,9 +91,6 @@ const CLOUD_SHADOW_PLANE_HEIGHT_M: f64 = 900.0;
 const DECK_HEIGHT_M: f64 = 3600.0;
 const LUNAR_DISTANCE_PLANET_RADII: f64 = 60.3;
 const LARGEST_DISC_ANGULAR_RADIUS_RAD: f64 = 0.00465;
-/// `shadow_horizon_cutoff` in lighting.wgsl removes every shadow at and below
-/// this light height above the receiver's horizon.
-const SHADOW_CUTOFF_Z: f64 = 0.04;
 /// Below the lowest astronomical tide, the lowest shadow receiver.
 const LOWEST_SHADOW_RECEIVER_M: f64 = -5.0;
 /// Single-precision light directions in WGSL differ from these by far less.
@@ -696,7 +696,7 @@ fn shadow_footprints(
         world_time_seconds,
         Vector::new(camera_m[0] as f32, camera_m[1] as f32),
     ));
-    let shadow_lit_rad = lowest_shadow_light_rad(world_radius_m, highest_receiver_m);
+    let shadow_lit_rad = horizon_light_rad(world_radius_m, highest_receiver_m);
     let receivers = Receivers {
         highest_m: highest_receiver_m,
     };
@@ -742,10 +742,16 @@ fn shadow_footprints(
                             .minkowski_sum(offsets_toward(
                                 direction,
                                 landform_cone_rad,
+                                // Horizon texels march lights whose disc the
+                                // highest receiver still partly sees.
                                 landform_shadow_reach_m(
                                     world_radius_m,
                                     tuned_landform_reach_m,
-                                    elevation_rad - landform_cone_rad,
+                                    (elevation_rad - landform_cone_rad).max(
+                                        shadow_lit_rad
+                                            - LARGEST_DISC_ANGULAR_RADIUS_RAD
+                                            - DIRECTION_TOLERANCE_RAD,
+                                    ),
                                 ),
                             )),
                     );
@@ -860,7 +866,7 @@ impl Receivers {
             .map(|step| {
                 let height_m = LOWEST_SHADOW_RECEIVER_M
                     + (self.highest_m - LOWEST_SHADOW_RECEIVER_M) * f64::from(step) / 32.0;
-                let tap_rad = lowest_shadow_light_rad(world_radius_m, height_m)
+                let tap_rad = horizon_light_rad(world_radius_m, height_m)
                     - LARGEST_DISC_ANGULAR_RADIUS_RAD
                     - DIRECTION_TOLERANCE_RAD;
                 projection_distance_m(
@@ -900,10 +906,10 @@ impl Receivers {
 
     /// Farthest surface distance to a layer from a receiver shadowed by a light
     /// between the two elevations. Lower taps and lower receivers project
-    /// farther. A receiver takes taps down to its own cutoff less the disc
-    /// radius, and raising it lowers that cutoff; the farthest tap then comes
-    /// from the lowest receiver or from the one whose cutoff tap meets
-    /// `lowest_rad`, because along cutoff taps reach grows with receiver height
+    /// farther. A receiver takes taps down to its own horizon less the disc
+    /// radius, and raising it lowers that horizon; the farthest tap then comes
+    /// from the lowest receiver or from the one whose horizon tap meets
+    /// `lowest_rad`, because along horizon taps reach grows with receiver height
     /// above sea level while the receiver stays below half the layer height.
     fn farthest_projection_m(
         self,
@@ -913,13 +919,12 @@ impl Receivers {
         layer_height_m: f64,
     ) -> Option<f64> {
         let highest_m = self.highest_m;
-        if highest_rad < lowest_shadow_light_rad(world_radius_m, highest_m) {
+        if highest_rad < horizon_light_rad(world_radius_m, highest_m) {
             return None;
         }
         let tap_rad = |height_m: f64| {
-            lowest_rad.max(
-                lowest_shadow_light_rad(world_radius_m, height_m) - LARGEST_DISC_ANGULAR_RADIUS_RAD,
-            )
+            lowest_rad
+                .max(horizon_light_rad(world_radius_m, height_m) - LARGEST_DISC_ANGULAR_RADIUS_RAD)
         };
         let reach_m = |height_m: f64| {
             projection_distance_m(world_radius_m, tap_rad(height_m), height_m, layer_height_m)
@@ -928,20 +933,18 @@ impl Receivers {
             return Some(projection_distance_m(
                 world_radius_m,
                 lowest_rad.max(
-                    lowest_shadow_light_rad(world_radius_m, highest_m)
-                        - LARGEST_DISC_ANGULAR_RADIUS_RAD,
+                    horizon_light_rad(world_radius_m, highest_m) - LARGEST_DISC_ANGULAR_RADIUS_RAD,
                 ),
                 LOWEST_SHADOW_RECEIVER_M,
                 layer_height_m,
             ));
         }
-        let meeting_m = receiver_height_with_cutoff_m(
+        let meeting_m = receiver_height_with_horizon_m(
             world_radius_m,
             lowest_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD,
         )
         .clamp(LOWEST_SHADOW_RECEIVER_M, highest_m);
-        let lowest_lit =
-            highest_rad >= lowest_shadow_light_rad(world_radius_m, LOWEST_SHADOW_RECEIVER_M);
+        let lowest_lit = highest_rad >= horizon_light_rad(world_radius_m, LOWEST_SHADOW_RECEIVER_M);
         Some(if lowest_lit {
             reach_m(meeting_m).max(reach_m(LOWEST_SHADOW_RECEIVER_M))
         } else {
@@ -950,11 +953,11 @@ impl Receivers {
     }
 }
 
-/// The receiver height whose shadow cutoff is `elevation_rad`, the inverse of
-/// `lowest_shadow_light_rad`: below sea level when every receiver's cutoff is at
+/// The receiver height whose horizon is `elevation_rad`, the inverse of
+/// `horizon_light_rad`: below sea level when every receiver's horizon is at
 /// most that light, infinite when none reaches it.
-fn receiver_height_with_cutoff_m(world_radius_m: f64, elevation_rad: f64) -> f64 {
-    let horizon_z = (elevation_rad.sin() - SHADOW_CUTOFF_Z) / (1.0 - SHADOW_CUTOFF_Z);
+fn receiver_height_with_horizon_m(world_radius_m: f64, elevation_rad: f64) -> f64 {
+    let horizon_z = elevation_rad.sin();
     if horizon_z >= 0.0 {
         f64::NEG_INFINITY
     } else if horizon_z <= -1.0 {
@@ -1015,12 +1018,13 @@ fn projection_distance_m(
 /// How far the landform shadow march reaches toward a light at `elevation_rad`,
 /// as `landform_shadow_reach_m` in terrain.wgsl computes it per pixel.
 fn landform_shadow_reach_m(world_radius_m: f64, tuned_reach_m: f64, elevation_rad: f64) -> f64 {
-    let (sine, cosine) = elevation_rad.max(SHADOW_CUTOFF_Z.asin()).sin_cos();
-    let along_ray_m = world_radius_m * sine;
-    let ray_m = -along_ray_m
-        + (along_ray_m * along_ray_m + tuned_reach_m * (2.0 * world_radius_m + tuned_reach_m))
-            .sqrt();
-    tuned_reach_m.max(ray_m * cosine)
+    let climb_m = if elevation_rad < 0.0 {
+        world_radius_m
+            * ((world_radius_m / (world_radius_m + tuned_reach_m)).acos() - elevation_rad)
+    } else {
+        projection_distance_m(world_radius_m, elevation_rad, 0.0, tuned_reach_m)
+    };
+    tuned_reach_m.max(climb_m)
 }
 
 /// The highest surface a shadow can fall on: broad landform peaks at
@@ -1030,12 +1034,11 @@ fn highest_receiver_m() -> f64 {
     252.0 * TERRAIN_ELEVATION_SCALE + 6.0
 }
 
-/// Elevation of the lowest light that casts shadows on any receiver up to
-/// `highest_receiver_m`: the cutoff above that receiver's lower horizon.
-fn lowest_shadow_light_rad(world_radius_m: f64, highest_receiver_m: f64) -> f64 {
-    let radius_ratio = world_radius_m / (world_radius_m + highest_receiver_m);
-    let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
-    (horizon_z + SHADOW_CUTOFF_Z * (1.0 - horizon_z)).asin()
+/// Elevation of the horizon of a receiver at `height_m`, the lowest light whose
+/// disc centre it sees; shadows reach down to it.
+fn horizon_light_rad(world_radius_m: f64, height_m: f64) -> f64 {
+    let radius_ratio = world_radius_m / (world_radius_m + height_m);
+    (-(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt()).asin()
 }
 
 /// Shader lookups wrap longitude to within half a lap of the camera, so a
@@ -1496,11 +1499,20 @@ mod tests {
         );
     }
 
-    /// Every receiver the shader shadows, from low tide to the highest peak,
-    /// takes its cloud-shadow taps inside the Sun and Moon windows.
+    /// Every receiver that sees part of a light's disc, from low tide to the
+    /// highest peak, takes its cloud-shadow taps inside the Sun and Moon
+    /// windows, on worlds of different sizes.
     #[test]
     fn cloud_shadow_taps_of_every_receiver_height_land_inside_their_windows() {
-        let world = WorldGeometry::default();
+        for world in [
+            WorldGeometry::default(),
+            WorldGeometry::new(128_000.0, 128_000.0).unwrap(),
+        ] {
+            cloud_shadow_taps_land_inside_their_windows(world);
+        }
+    }
+
+    fn cloud_shadow_taps_land_inside_their_windows(world: WorldGeometry) {
         let world_radius_m = f64::from(world.width_m()) / TAU;
         let highest_m = highest_receiver_m();
         let heights_m = [
@@ -1517,7 +1529,15 @@ mod tests {
             let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
             for step in 0..96 {
                 let world_time_seconds = MIDNIGHT_SECONDS + f64::from(step) * 900.0;
-                let grids = production_grids(world_time_seconds, camera_m, view_size_m, NO_MOTION);
+                let grids = field_grids(
+                    world,
+                    world_time_seconds,
+                    camera_m,
+                    view_size_m,
+                    NO_MOTION,
+                    FieldGridTuning::PRODUCTION,
+                    &mut FieldGridHistory::default(),
+                );
                 let orbit = celestial_orbit(world_celestial_conditions(
                     world,
                     world_time_seconds,
@@ -1549,13 +1569,14 @@ mod tests {
                             let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
                             for (source, light) in [lights.0, lights.1].into_iter().enumerate() {
                                 let [east, north, up] = light.map(f64::from);
-                                if (up - horizon_z) / (1.0 - horizon_z) <= SHADOW_CUTOFF_Z
+                                let elevation_rad = up.atan2(east.hypot(north));
+                                if elevation_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD
+                                    < horizon_z.asin()
                                     || (source == 1 && grids.cloud_shadow_grids[2] <= 0.0)
                                 {
                                     continue;
                                 }
                                 let azimuth_rad = north.atan2(east);
-                                let elevation_rad = up.atan2(east.hypot(north));
                                 let extent = grids.occluders[source].extent();
                                 let distance_m = projection_distance_m(
                                     world_radius_m,
@@ -1571,8 +1592,8 @@ mod tests {
                                     (0..2).all(|axis| {
                                         (extent.min[axis]..=extent.max[axis]).contains(&tap_m[axis])
                                     }),
-                                    "{view_height_m} m view at {world_time_seconds} s: source \
-                                     {source} from {height_m} m at {receiver_m:?} taps at \
+                                    "{world:?}, {view_height_m} m view at {world_time_seconds} s: \
+                                     source {source} from {height_m} m at {receiver_m:?} taps at \
                                      {tap_m:?} outside {extent:?}",
                                 );
                             }
@@ -1590,6 +1611,8 @@ mod tests {
         let world = WorldGeometry::default();
         let world_radius_m = f64::from(world.width_m()) / TAU;
         let tuned_reach_m = f64::from(FieldGridTuning::PRODUCTION.landform_shadow_reach_m);
+        let highest_horizon_rad =
+            -(world_radius_m / (world_radius_m + highest_receiver_m())).acos();
         let camera_m = [-23_500.0_f32, -16_500.0];
         for view_height_m in [15.0, 240.0, 1_500.0, 6_000.0, 16_000.0] {
             let view_size_m = [view_width_m(16.0 / 9.0, view_height_m), view_height_m];
@@ -1629,8 +1652,7 @@ mod tests {
                                 celestial_directions_at_height(world, orbit, conditions, 0.0);
                             let [east, north, up] = [lights.0, lights.1][source].map(f64::from);
                             let elevation_rad = up.atan2(east.hypot(north));
-                            if elevation_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD
-                                < lowest_shadow_light_rad(world_radius_m, highest_receiver_m())
+                            if elevation_rad + LARGEST_DISC_ANGULAR_RADIUS_RAD < highest_horizon_rad
                             {
                                 continue;
                             }
@@ -1718,10 +1740,9 @@ mod tests {
                         for height_m in [LOWEST_SHADOW_RECEIVER_M, 0.0, 150.0, 500.0, highest_m] {
                             let lights = lights_at(world_time_seconds, receiver_m, height_m);
                             for (source, light) in lights.into_iter().enumerate() {
-                                let up = f64::from(light[2]);
-                                let receiver_horizon_z = horizon_z(height_m);
-                                if (up - receiver_horizon_z) / (1.0 - receiver_horizon_z)
-                                    <= SHADOW_CUTOFF_Z
+                                let [east, north, up] = light.map(f64::from);
+                                if up.atan2(east.hypot(north)) + LARGEST_DISC_ANGULAR_RADIUS_RAD
+                                    < horizon_z(height_m).asin()
                                     || (source == 1 && grids.cloud_shadow_grids[2] <= 0.0)
                                 {
                                     continue;
@@ -1802,7 +1823,7 @@ mod tests {
                         wavelengths_m[source],
                     );
                     if let Some(previous) = previous {
-                        // Footprint cells that cross a light's cutoff move the
+                        // Footprint cells that cross a light's horizon move the
                         // window by a few percent; a doubling would move it by half.
                         let ratio = wavelengths_m[source] / previous[source];
                         assert!(
@@ -1945,37 +1966,39 @@ mod tests {
         );
     }
 
+    /// Below 45°, down to the horizon of the highest receiver, the march ends
+    /// where the ray toward the light from the lowest receiver that sees it
+    /// has climbed the base reach above sea level, and at most a few percent
+    /// more, on worlds of different sizes.
     #[test]
-    fn landform_shadow_reach_follows_the_light_height() {
-        let world_radius_m = f64::from(WorldGeometry::default().width_m()) / TAU;
+    fn landform_shadow_reach_follows_the_light_height_down_to_the_horizon() {
         let base_m = 320.0;
-        let reach_m = |elevation_deg: f64| {
-            landform_shadow_reach_m(world_radius_m, base_m, elevation_deg.to_radians())
-        };
-        for elevation_deg in [45.0, 60.0, 90.0] {
-            assert_eq!(reach_m(elevation_deg), base_m, "{elevation_deg}°");
-        }
-        // Below 45°, a ray from sea level toward the light has climbed the
-        // base reach above the curved surface where the march ends, and at
-        // most a few percent more.
-        let cutoff_deg = SHADOW_CUTOFF_Z.asin().to_degrees();
-        for elevation_deg in [cutoff_deg, 3.0, 5.0, 10.0, 20.0, 40.0] {
-            let elevation_rad = elevation_deg.to_radians();
-            let angle_rad = reach_m(elevation_deg) / world_radius_m;
-            let ray_height_m = world_radius_m * elevation_rad.cos()
-                / (angle_rad + elevation_rad).cos()
-                - world_radius_m;
-            assert!(
-                (base_m - 0.5..1.05 * base_m).contains(&ray_height_m),
-                "{elevation_deg}°: the ray is {ray_height_m} m up at the reach",
-            );
-        }
-        for elevation_deg in [0.0, 1.0, -3.0] {
-            assert_eq!(
-                reach_m(elevation_deg),
-                reach_m(cutoff_deg),
-                "{elevation_deg}°"
-            );
+        for world_side_m in [32_000.0_f64, 64_000.0, 128_000.0] {
+            let world_radius_m = world_side_m / TAU;
+            let reach_m =
+                |elevation_rad: f64| landform_shadow_reach_m(world_radius_m, base_m, elevation_rad);
+            for elevation_deg in [45.0_f64, 60.0, 90.0] {
+                assert_eq!(
+                    reach_m(elevation_deg.to_radians()),
+                    base_m,
+                    "{world_side_m} m world, {elevation_deg}°"
+                );
+            }
+            let horizon_rad = -(world_radius_m / (world_radius_m + highest_receiver_m())).acos();
+            for step in 0..=32 {
+                let elevation_rad =
+                    horizon_rad + (40.0_f64.to_radians() - horizon_rad) * f64::from(step) / 32.0;
+                // The lowest receiver that sees a light below the sea-level
+                // horizon sees it on its own horizon, so its ray grazes sea level.
+                let closest_m = world_radius_m * elevation_rad.max(0.0).cos();
+                let angle_rad = reach_m(elevation_rad) / world_radius_m;
+                let ray_height_m = closest_m / (angle_rad + elevation_rad).cos() - world_radius_m;
+                assert!(
+                    (base_m - 0.5..1.05 * base_m).contains(&ray_height_m),
+                    "{world_side_m} m world, {}°: the ray is {ray_height_m} m up at the reach",
+                    elevation_rad.to_degrees(),
+                );
+            }
         }
     }
 }
