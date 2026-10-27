@@ -458,9 +458,9 @@ fn fitting_spacing_m(region: Region, axis_texels: u32, layer_texels: u32) -> f64
 /// An upper bound over the view on the share of a receiver's clear-sky light
 /// that the Moon supplies, as `moon_clear_sky_share` in lighting.wgsl composes
 /// it; keep the two synchronized. Each receiver takes the larger share at the
-/// two ends of the regional turbidity range, with the reddest Sun, the clear
-/// sky's darkest colour, the weakest twilight bands for sunlight and diffuse
-/// light, and the strongest for the Moon's beam.
+/// two ends of the regional turbidity range. Light colours keep their
+/// luminance through the atmosphere, so sunlight has unit luminance and the
+/// clear sky's light is at least as bright as the Moon's own colour.
 pub fn moon_clear_sky_share(
     world_geometry: WorldGeometry,
     world_time_seconds: f64,
@@ -473,14 +473,6 @@ pub fn moon_clear_sky_share(
     // where growth stops.
     let linke_turbidities =
         [0.046 * 0.28, 0.046 / 0.05_f64.sqrt()].map(|depth| 2.35 + 7.79 * depth);
-    const REDDEST_SUN_LUMINANCE: f64 = 0.577;
-    // The night sky's (0.42, 0.52, 0.75) tinted 35% toward an eclipsed Moon's
-    // (1.2, 0.28, 0.06), the darkest colour the clear sky's light takes.
-    const DARKEST_SKY_LUMINANCE: f64 = 0.40;
-    // Lower-twilight and upper-afterglow band weights at the least and most
-    // regional horizon scattering, from `calculate_atmospheric_ambient_light`.
-    const WEAKEST_TWILIGHT: [f64; 2] = [0.24, 0.04];
-    const STRONGEST_TWILIGHT: [f64; 2] = [0.36, 0.09];
     const MOON_DIRECT_SCALE: f64 = 1.5;
     // Disc radii from scene-state.wgsl.
     const SUN_DISC_RADIUS_RAD: f32 = 0.00465;
@@ -513,7 +505,7 @@ pub fn moon_clear_sky_share(
                 let height_above_horizon = |z: f32| (f64::from(z) - horizon_z) / (1.0 - horizon_z);
                 // Daylight, lower-twilight, and upper-afterglow bands as in
                 // `calculate_atmospheric_ambient_light`.
-                let banded_ambient = |direction_z: f32, twilight: [f64; 2]| {
+                let banded_ambient = |direction_z: f32| {
                     let z = f64::from(direction_z);
                     let daylight = smoothstep(-0.034_899_5, 0.139_173_1, z);
                     let lower_twilight = smoothstep(-0.156_434_5, 0.017_452_4, z);
@@ -521,11 +513,9 @@ pub fn moon_clear_sky_share(
                         * (1.0 - smoothstep(-0.139_173_1, -0.034_899_5, z));
                     daylight
                         * (0.45 + 0.515 * height_above_horizon(direction_z).clamp(0.0, 1.0).sqrt())
-                        + twilight[0] * (1.0 - daylight) * lower_twilight
-                        + twilight[1] * upper_afterglow
+                        + 0.30 * (1.0 - daylight) * lower_twilight
+                        + 0.065 * upper_afterglow
                 };
-                let sun_z = f64::from(light.sun_direction[2]);
-                let low_sun = 1.0 - smoothstep(0.08, 0.55, sun_z);
                 let eclipse = f64::from(light.solar_eclipse_fraction);
                 let lunar_scale = 0.85
                     * (1.0
@@ -534,12 +524,10 @@ pub fn moon_clear_sky_share(
                     .max(0.04)
                     * 0.12
                     * illuminated_fraction;
-                let solar = banded_ambient(light.sun_direction[2], WEAKEST_TWILIGHT);
-                let weakest_lunar =
-                    lunar_scale * banded_ambient(light.moon_direction[2], WEAKEST_TWILIGHT);
-                let strongest_lunar =
-                    lunar_scale * banded_ambient(light.moon_direction[2], STRONGEST_TWILIGHT);
-                let clear = (0.035 + (1.0 - 0.85 * eclipse) * solar + weakest_lunar).min(1.0);
+                let solar = banded_ambient(light.sun_direction[2]);
+                let lunar = lunar_scale * banded_ambient(light.moon_direction[2]);
+                let clear = (0.035 + (1.0 - 0.85 * eclipse) * solar + lunar).min(1.0);
+                let moon_luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
                 let sun_visibility = (1.0 - eclipse)
                     * f64::from(celestial_disc_visibility_at_height(
                         world_geometry,
@@ -567,13 +555,10 @@ pub fn moon_clear_sky_share(
                                 height_above_horizon(light.moon_direction[2]),
                                 turbidity,
                             ))
-                        * strongest_lunar;
-                    let sun_direct = sun_beam * (1.0 - low_sun * (1.0 - REDDEST_SUN_LUMINANCE));
-                    let moon_direct = MOON_DIRECT_SCALE
-                        * moon_beam
-                        * (0.2126 * red + 0.7152 * green + 0.0722 * blue);
-                    let diffuse = (clear - sun_beam - moon_beam).max(0.0) * DARKEST_SKY_LUMINANCE;
-                    let total = sun_direct + moon_direct + diffuse;
+                        * lunar;
+                    let moon_direct = MOON_DIRECT_SCALE * moon_beam * moon_luminance;
+                    let diffuse = (clear - sun_beam - moon_beam).max(0.0) * moon_luminance.min(1.0);
+                    let total = sun_beam + moon_direct + diffuse;
                     if total > 0.0 {
                         share = share.max(moon_direct / total);
                     }

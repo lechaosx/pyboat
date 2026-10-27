@@ -903,6 +903,50 @@ fn canopy_transfer_preserves_clear_sky_at_zero_thickness_and_transmits_as_a_two_
     }
 }
 
+/// Light colours change hue alone, so moonless clear-sky light on level ground
+/// keeps the calibrated intensity that exposure follows, from noon through
+/// sunset and twilight into night.
+#[test]
+fn moonless_clear_sky_light_keeps_the_intensity_exposure_follows() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::ZERO;
+    for sun_degrees in [60.0_f32, 20.0, 5.0, 1.0, -4.0, -10.0, -25.0] {
+        let target_z = sun_degrees.to_radians().sin();
+        let time_seconds = (0..28 * 24 * 12)
+            .map(|step| step as f64 * 300.0)
+            .filter(|time| {
+                let light =
+                    celestial_lighting(world_celestial_conditions(world, *time, position_m));
+                light.moon_direction[2] < (-20.0_f32).to_radians().sin()
+            })
+            .min_by(|left, right| {
+                let offset = |time| {
+                    let light =
+                        celestial_lighting(world_celestial_conditions(world, time, position_m));
+                    (light.sun_direction[2] - target_z).abs()
+                };
+                offset(*left).total_cmp(&offset(*right))
+            })
+            .unwrap();
+        let light = celestial_lighting(world_celestial_conditions(world, time_seconds, position_m));
+        // The diagnostic shows level-ground light at half scale.
+        let clear = render_diagnostic_image_at(
+            world,
+            position_m,
+            time_seconds,
+            "lighting_canopy_transfer_clear",
+            1,
+            1,
+        );
+        let ratio = 2.0 * linear_luminance(&clear) / light.ambient_intensity;
+        let tolerance = 0.01 + green_step(&clear);
+        assert!(
+            (ratio - 1.0).abs() <= tolerance,
+            "luminance ratio {ratio} with the Sun at {sun_degrees} degrees; {light:?}",
+        );
+    }
+}
+
 #[test]
 fn scene_light_contribution_gates_compose_independently() {
     let world = WorldGeometry::default();

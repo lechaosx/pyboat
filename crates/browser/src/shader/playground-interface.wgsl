@@ -99,8 +99,8 @@ fn initialize_playground_celestial() {
 
 fn initialize_playground_atmospheric_lighting() {
     initialize_playground_celestial();
-    local_horizon_scattering = calculate_local_horizon_scattering();
-    regional_horizon_scattering = calculate_regional_horizon_scattering();
+    local_aerosol_optical_depth = local_aerosol_optical_depth_at(surface_cloud_weather);
+    regional_aerosol_optical_depth = regional_aerosol_optical_depth_at(surface_cloud_weather.regional);
 }
 
 fn initialize_playground_scene_from_environment_fields(

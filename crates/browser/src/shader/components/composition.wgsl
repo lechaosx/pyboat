@@ -35,7 +35,7 @@ fn fragment_surface_color(
     let split = ambient_light.split;
     let ambient = split.diffuse_share * contribution.z * ambient_light.clear_sky
         + contribution.w * (ambient_light.canopy + ambient_light.canopy_scattered);
-    let sun_light = split.direct.x * sun_direct_light_color();
+    let sun_light = split.direct.x * sun_direct_light_color(direct_light);
     let moon_light = split.direct.y * moon_direct_light_color(direct_light);
     let first_pass_light = ambient
         + contribution.x * beam_transmittance.x * sun_light

@@ -22,8 +22,8 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     surface_cloud_weather = surface_weather.weather;
     initialize_surface_tide_from_sample(fields.tide);
     initialize_celestial_lighting();
-    local_horizon_scattering = calculate_local_horizon_scattering();
-    regional_horizon_scattering = calculate_regional_horizon_scattering();
+    local_aerosol_optical_depth = local_aerosol_optical_depth_at(surface_cloud_weather);
+    regional_aerosol_optical_depth = regional_aerosol_optical_depth_at(surface_cloud_weather.regional);
     let color = final_scene_color(
         periodic_input,
         surface_weather.atmosphere,

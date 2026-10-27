@@ -207,6 +207,10 @@ and verification details.
   Sun level ground keeps the calibrated total, so a full shadow leaves about
   that fraction; direct moonlight is scaled so moonlit scenes keep their
   calibrated mean brightness.
+- **[Implicit]** Calibrated intensities set the brightness of light, and its
+  colour sets hue alone: each beam and the clear sky's diffuse light take the
+  colour of a spectral clear-sky model at three wavelengths, scaled to the
+  luminance of the source's own colour.
 - **[Implicit]** The canopy's mean optical thickness is a physical cloud
   optical depth, from thin decks through storm cover, and every canopy light
   term, deck shadow, and ground-sky exchange reads that one depth.

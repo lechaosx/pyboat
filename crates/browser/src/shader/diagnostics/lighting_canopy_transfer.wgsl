@@ -17,7 +17,7 @@ fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f
     let light = split.diffuse_share * ambient.clear_sky
         + ambient.canopy
         + ambient.canopy_scattered
-        + ambient.beam_transmittance.x * split.direct.x * sun_direct_light_color()
+        + ambient.beam_transmittance.x * split.direct.x * sun_direct_light_color(receiver)
         + ambient.beam_transmittance.y * split.direct.y * moon_direct_light_color(receiver);
     return vec4<f32>(0.5 * light, 1.0);
 }
