@@ -1,0 +1,11 @@
+**
+!Cargo.toml
+!Cargo.lock
+!crates
+!crates/**
+crates/browser/pkg*
+!tools
+!tools/playground-capture
+!tools/playground-capture/Cargo.toml
+!tools/playground-capture/src
+!tools/playground-capture/src/**

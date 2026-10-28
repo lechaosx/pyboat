@@ -23,6 +23,9 @@ npm ci
 For the procedural playground, run `npm run dev:playground`. It provides a live
 preview and controls for inspecting the world and tuning its appearance.
 
+For GitHub Pages and backend deployment, follow the
+[hosting setup](crates/server/README.md#hosting).
+
 ### Browser multiplayer
 
 1. Run `cargo run -p server`.

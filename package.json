@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build:wasm": "wasm-pack build crates/browser --target bundler --out-dir pkg-production --no-pack -- --target-dir target/wasm-production",
+    "build:wasm": "wasm-pack build crates/browser --target bundler --out-dir pkg-production --no-pack -- --target-dir target/wasm-production --locked",
     "build:wasm:dev": "wasm-pack build crates/browser --target bundler --out-dir pkg-production --no-pack --dev -- --target-dir target/wasm-production",
     "build:wasm:playground": "wasm-pack build crates/browser --target bundler --out-dir pkg-playground --no-pack -- --target-dir target/wasm-playground --features playground",
     "build:wasm:playground:dev": "wasm-pack build crates/browser --target bundler --out-dir pkg-playground --no-pack --dev -- --target-dir target/wasm-playground --features playground",

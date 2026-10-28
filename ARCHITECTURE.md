@@ -27,6 +27,17 @@ and verification details.
 - **[Implicit]** TypeScript tooling tests use Node's built-in runner and native type stripping.
 - **[Explicit]** Server and browser orchestration use asynchronous I/O wherever work may suspend.
 
+## Hosting
+
+- **[Explicit]** GitHub Pages hosts the game frontend.
+- **[Explicit]** The backend address is a configurable hostname or IPv4 address
+  covered by a matching browser-trusted certificate.
+- **[Implicit]** The backend runs as an isolated ARM64 Docker Swarm service with
+  direct UDP ingress. WebTransport terminates TLS in the game server, so its
+  trusted certificate and reachable transport port belong to that service.
+- **[Implicit]** The frontend selects its backend address at build time so
+  static hosting and game transport can use independent origins.
+
 ## Authority and coordinates
 
 - **[Explicit]** The dedicated server is authoritative; clients predict and reconcile.

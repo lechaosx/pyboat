@@ -2833,8 +2833,12 @@ fn server_url() -> Result<String, JsValue> {
     let location = web_sys::window()
         .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?
         .location();
-    webtransport_server_url(&location.hostname()?, &location.search()?)
-        .map_err(|error| JsValue::from_str(&error))
+    webtransport_server_url(
+        &location.hostname()?,
+        &location.search()?,
+        option_env!("WEBTRANSPORT_HOST"),
+    )
+    .map_err(|error| JsValue::from_str(&error))
 }
 
 fn canvas_dimensions(

@@ -97,7 +97,15 @@ pub(crate) fn requeue_failed_viewport(pending: &mut Option<Vec<u8>>, failed: Vec
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn webtransport_server_url(hostname: &str, search: &str) -> Result<String, String> {
+pub(crate) fn webtransport_server_url(
+    hostname: &str,
+    search: &str,
+    configured_hostname: Option<&str>,
+) -> Result<String, String> {
+    let hostname = configured_hostname.unwrap_or(hostname);
+    if hostname.is_empty() {
+        return Err("WebTransport hostname must not be empty".to_owned());
+    }
     let configured_port = search
         .trim_start_matches('?')
         .split('&')
@@ -1383,14 +1391,36 @@ mod tests {
     #[test]
     fn webtransport_url_uses_the_configured_server_port() {
         assert_eq!(
-            webtransport_server_url("localhost", "?webtransportPort=9000").unwrap(),
+            webtransport_server_url("localhost", "?webtransportPort=9000", None).unwrap(),
             "https://localhost:9000/game",
         );
         assert_eq!(
-            webtransport_server_url("localhost", "").unwrap(),
+            webtransport_server_url("localhost", "", None).unwrap(),
             "https://localhost:8765/game",
         );
-        assert!(webtransport_server_url("localhost", "?webtransportPort=0").is_err());
+        assert!(webtransport_server_url("localhost", "?webtransportPort=0", None).is_err());
+    }
+
+    #[test]
+    fn webtransport_url_uses_the_deployed_backend_from_pages() {
+        assert_eq!(
+            webtransport_server_url("player.github.io", "", Some("boats.example.com")).unwrap(),
+            "https://boats.example.com:8765/game",
+        );
+        assert_eq!(
+            webtransport_server_url(
+                "localhost",
+                "?webtransportPort=9000",
+                Some("boats.example.com"),
+            )
+            .unwrap(),
+            "https://boats.example.com:9000/game",
+        );
+    }
+
+    #[test]
+    fn webtransport_url_rejects_an_empty_deployment_host() {
+        assert!(webtransport_server_url("player.github.io", "", Some("")).is_err());
     }
 
     #[test]
