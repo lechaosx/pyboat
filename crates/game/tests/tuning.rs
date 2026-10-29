@@ -986,11 +986,12 @@ fn twilight_fades_continuously_into_the_night_sky() {
 /// twilight and 10^-2.09 lux at the end of nautical twilight, night sky
 /// included (Hänel et al. 2018, J. Quant. Spectrosc. Radiat. Transf. 205,
 /// Table 2), against 410 to 585 lux at sunset, the Sun's centre 0.833 degrees
-/// down (AMS Glossary of Meteorology, "civil twilight"). The sunset range sets
-/// the tolerance.
+/// down (AMS Glossary of Meteorology, "civil twilight"). The night sky is the
+/// geometric mean of Hänel's natural night, 10^-3.22 to 10^-3.05 lux. The
+/// sunset range sets the tolerance.
 #[test]
 fn twilight_falls_from_sunset_as_measured() {
-    let night_lux = 2e-3;
+    let night_lux = 10_f32.powf(-3.135);
     let sunset_lux = (410.0_f32 * 585.0).sqrt();
     let twilight = |degrees: f32| {
         equinox_equator_light(degrees, 0.0).ambient_intensity - game::NIGHT_SKY_LIGHT
@@ -1059,14 +1060,18 @@ fn clear_sky_daylight_follows_the_suns_path_through_the_atmosphere() {
     assert!(ratio(3.0) < 0.05, "{}", ratio(3.0));
 }
 
-/// A clear moonless sky lights the ground with starlight and airglow, about
-/// 2e-3 lux against about 1.1e5 lux from a zenith Sun.
+/// A clear moonless sky lights the ground as a naturally starlit night is
+/// measured, 10^-3.22 to 10^-3.05 lux (Hänel et al. 2018, J. Quant. Spectrosc.
+/// Radiat. Transf. 205, Table 2), against 1.15e5 lux from a zenith Sun.
 #[test]
 fn moonless_night_keeps_the_physical_ratio_of_starlight_to_daylight() {
     let zenith = equinox_equator_light(90.0, 0.5).ambient_intensity;
-    let night = equinox_equator_light(-30.0, 0.0).ambient_intensity / zenith;
+    let night_lux = 1.15e5 * equinox_equator_light(-30.0, 0.0).ambient_intensity / zenith;
 
-    assert!((5e-9..5e-8).contains(&night), "{night}");
+    assert!(
+        (10_f32.powf(-3.22)..10_f32.powf(-3.05)).contains(&night_lux),
+        "{night_lux} lux"
+    );
 }
 
 /// The full Moon is 14 magnitudes fainter than the Sun.

@@ -12,7 +12,7 @@ fn linear_material_color(display_color: vec3<f32>) -> vec3<f32> {
 const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
 // Light of a clear moonless sky, in scene light; game::NIGHT_SKY_LIGHT gives
 // its provenance.
-const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
+const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;
 // Mirrors ADAPTED_BRIGHTNESS_EXPONENT in exposure.rs, which gives its
 // provenance and compromise.
 const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;

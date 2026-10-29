@@ -301,8 +301,8 @@ fn celestial_receiver_light_at_position_and_height(
 // mirror game's constants of the same names, which give their provenance and
 // compromises.
 const PLANET_RADIUS_SCALE_HEIGHTS: f32 = 2.0 / (PI * 0.025 * 0.025);
-const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f32 = 324.0;
-const SCATTERED_TWILIGHT_SHARE: f32 = 0.0156;
+const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f32 = 312.5;
+const SCATTERED_TWILIGHT_SHARE: f32 = 0.0146;
 const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
 const REFERENCE_LINKE_TURBIDITY: f32 = 2.35 + 7.79 * 0.103;
 // Earth's mean radius (Moritz 2000, Geodetic Reference System 1980).

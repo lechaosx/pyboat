@@ -498,10 +498,12 @@ pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
 /// and display.wgsl mirror it.
 pub const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
 
-/// Light of a clear moonless sky, about 2e-3 lux of starlight, zodiacal light,
-/// and airglow (Roach and Gordon 1973, The Light of the Night Sky), in scene
-/// light. lighting.wgsl mirrors it.
-pub const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
+/// Light of a clear moonless sky, in scene light: starlight, zodiacal light,
+/// and airglow measured as 10^-3.22 to 10^-3.05 lux on the ground of a
+/// naturally starlit night (Hänel et al. 2018, J. Quant. Spectrosc. Radiat.
+/// Transf. 205, Table 2), whose geometric mean is taken. display.wgsl mirrors
+/// it.
+pub const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;
 
 /// The planet's radius in scale heights of an exponential atmosphere whose
 /// horizon air mass, sqrt(pi R / 2H), is `relative_air_mass`'s 1/0.025. Air
@@ -513,14 +515,14 @@ pub const PLANET_RADIUS_SCALE_HEIGHTS: f64 = 2.0 / (std::f64::consts::PI * 0.025
 /// an exponential atmosphere of these effective scale heights per planet
 /// radius, carrying this share of the sky's light at sunset. Both are fitted so
 /// that twilight falls from sunset to 10^0.53 lux at the end of civil twilight
-/// and 10^-2.09 lux at the end of nautical twilight, night sky included (Hänel
-/// et al. 2018, J. Quant. Spectrosc. Radiat. Transf. 205, Table 2), against
-/// the 410-585 lux geometric mean at sunset (AMS Glossary of Meteorology,
-/// "civil twilight"). Its effective height, about three times the air's scale
-/// height, is a semi-physical stand-in for multiple scattering, not a layer.
-/// lighting.wgsl mirrors them.
-pub const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f64 = 324.0;
-pub const SCATTERED_TWILIGHT_SHARE: f64 = 0.0156;
+/// and 10^-2.09 lux at the end of nautical twilight, which include
+/// `NIGHT_SKY_LIGHT`'s night sky (Hänel et al. 2018, J. Quant. Spectrosc.
+/// Radiat. Transf. 205, Table 2), against the 410-585 lux geometric mean at
+/// sunset (AMS Glossary of Meteorology, "civil twilight"). Its effective
+/// height, about three times the air's scale height, is a semi-physical
+/// stand-in for multiple scattering, not a layer. lighting.wgsl mirrors them.
+pub const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f64 = 312.5;
+pub const SCATTERED_TWILIGHT_SHARE: f64 = 0.0146;
 
 /// The full Moon's light relative to the Sun's: visual magnitudes -12.74 and
 /// -26.74 (Cox 2000, Allen's Astrophysical Quantities). lighting.wgsl mirrors it.
