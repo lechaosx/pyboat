@@ -5,6 +5,8 @@ import {
   PlaygroundFramePacer,
   PlaygroundResolutionController,
   PlaygroundTerrainCache,
+  adapting_field_blur_shader_source,
+  adapting_field_texels,
   baked_surface_shader_source,
   environment_field_shader_source,
   environment_field_texture_size,
@@ -853,6 +855,7 @@ function createPlaygroundPipeline(
   shader: GPUShaderModule,
   entryPoint: string,
   constants?: Record<string, number>,
+  format?: GPUTextureFormat,
 ): Promise<GPURenderPipeline> {
   return device.createRenderPipelineAsync({
     layout: "auto",
@@ -872,11 +875,11 @@ function createPlaygroundPipeline(
       module: shader,
       entryPoint,
       ...(constants ? { constants } : {}),
-      targets: [{ format: hdrSupported && (
+      targets: [{ format: format ?? (hdrSupported && (
         entryPoint === "fragment_playground_scene"
           || entryPoint === "fragment_playground_startup"
           || entryPoint === "fragment"
-      ) ? "rgba16float" : sdrViewFormat }],
+      ) ? "rgba16float" : sdrViewFormat) }],
     },
     primitive: { topology: "triangle-list" },
   });
@@ -956,6 +959,40 @@ const tuningFloats = new Float32Array(52);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
+// The scene's illumination over the view, and the eye's adapting field blurred
+// from it, which scene compositions read at binding 7.
+const [illuminationTexels, adaptingFieldTexels] = adapting_field_texels();
+const illuminationView = device.createTexture({
+  size: [illuminationTexels!, illuminationTexels!],
+  format: "r32float",
+  usage: 0x10 | 0x04,
+}).createView();
+const adaptingFieldView = device.createTexture({
+  size: [adaptingFieldTexels!, adaptingFieldTexels!],
+  format: "r32float",
+  usage: 0x10 | 0x04,
+}).createView();
+const adaptingFieldShader = device.createShaderModule({ code: adapting_field_blur_shader_source() });
+const adaptingFieldPipeline = device.createRenderPipeline({
+  layout: "auto",
+  vertex: { module: adaptingFieldShader, entryPoint: "fullscreen_vertex" },
+  fragment: {
+    module: adaptingFieldShader,
+    entryPoint: "blur_adapting_field",
+    targets: [{ format: "r32float" }],
+  },
+  primitive: { topology: "triangle-list" },
+});
+const adaptingFieldBindGroups = [
+  device.createBindGroup({
+    layout: adaptingFieldPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+  }),
+  device.createBindGroup({
+    layout: adaptingFieldPipeline.getBindGroupLayout(1),
+    entries: [{ binding: 0, resource: illuminationView }],
+  }),
+];
 const environmentFieldView = device.createTexture({
   size: [...environment_field_texture_size()],
   format: "rgba32float",
@@ -1076,11 +1113,18 @@ const startupSceneBindGroup = device.createBindGroup({
   layout: startupPipeline.getBindGroupLayout(0),
   entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
 });
+// A scene composition's illumination pass, which feeds its adapting field.
+type IlluminationPass = {
+  pipeline: GPURenderPipeline;
+  sceneBindGroup: GPUBindGroup;
+  playgroundBindGroup: GPUBindGroup;
+};
 type RenderResources = {
   pipeline: GPURenderPipeline;
   sceneBindGroup: GPUBindGroup;
   playgroundBindGroup?: GPUBindGroup;
   fields?: FieldPasses & LandformHorizonPass;
+  illumination?: IlluminationPass;
   hdr?: boolean;
 };
 let sceneRenderResources: RenderResources = {
@@ -1755,6 +1799,35 @@ function renderFrame(): Promise<void> {
     occluderPass.dispatchWorkgroups(fieldGrids[5]!, fieldGrids[6]!, fieldGrids[7]!);
     occluderPass.end();
   }
+  // The scene's timed span includes its adapting field.
+  const illumination = renderResources.illumination;
+  if (illumination) {
+    const illuminationPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: illuminationView,
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: "clear",
+        storeOp: "store",
+      }],
+      ...(timestampReadback && !fields
+        ? { timestampWrites: { querySet: timestampQuerySet!, beginningOfPassWriteIndex: 0 } }
+        : {}),
+    });
+    illuminationPass.setPipeline(illumination.pipeline);
+    illuminationPass.setBindGroup(0, illumination.sceneBindGroup);
+    illuminationPass.setBindGroup(1, illumination.playgroundBindGroup);
+    illuminationPass.setVertexBuffer(0, vertexBuffer);
+    illuminationPass.draw(6);
+    illuminationPass.end();
+    const fieldPass = encoder.beginRenderPass({
+      colorAttachments: [{ view: adaptingFieldView, loadOp: "clear", storeOp: "store" }],
+    });
+    fieldPass.setPipeline(adaptingFieldPipeline);
+    fieldPass.setBindGroup(0, adaptingFieldBindGroups[0]!);
+    fieldPass.setBindGroup(1, adaptingFieldBindGroups[1]!);
+    fieldPass.draw(3);
+    fieldPass.end();
+  }
   const canvasTexture = context.getCurrentTexture();
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
@@ -1769,7 +1842,7 @@ function renderFrame(): Promise<void> {
   if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet!,
-      ...(fields ? {} : { beginningOfPassWriteIndex: 0 }),
+      ...(fields || illumination ? {} : { beginningOfPassWriteIndex: 0 }),
       endOfPassWriteIndex: sceneEnd,
     };
   }
@@ -1895,7 +1968,9 @@ type SceneShaders = {
 };
 type ScenePipelines = {
   scene: GPURenderPipeline;
+  sceneIllumination: GPURenderPipeline;
   direct?: GPURenderPipeline;
+  directIllumination?: GPURenderPipeline;
   landformHorizon: GPUComputePipeline;
 };
 let sceneShaders: SceneShaders | undefined;
@@ -1927,8 +2002,20 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
         productionShaders ? "fragment" : "fragment_playground_scene",
         constants,
       ),
+      createPlaygroundPipeline(
+        shaders.scene,
+        productionShaders ? "fragment_illumination" : "fragment_playground_illumination",
+        constants,
+        "r32float",
+      ),
       shaders.direct
         && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
+      shaders.direct && createPlaygroundPipeline(
+        shaders.direct,
+        "fragment_playground_illumination",
+        constants,
+        "r32float",
+      ),
       device.createComputePipelineAsync({
         layout: "auto",
         compute: {
@@ -1937,10 +2024,12 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
           constants: { LEGACY_SHADOW_LOOK: legacyShadowLook! },
         },
       }),
-    ]).then(([scene, direct, landformHorizon]) => ({
+    ]).then(([scene, sceneIllumination, direct, directIllumination, landformHorizon]) => ({
       scene,
+      sceneIllumination,
       landformHorizon,
       ...(direct ? { direct } : {}),
+      ...(directIllumination ? { directIllumination } : {}),
     }));
     scenePipelinesByVariant.set(variant, pipelines);
   }
@@ -1951,6 +2040,15 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
   const playgroundEntries = productionShaders
     ? []
     : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
+  const gridSceneEntries = [
+    { binding: 0, resource: { buffer: sceneBuffer } },
+    { binding: 1, resource: environmentFieldView },
+    { binding: 2, resource: occluderFieldView },
+    { binding: 3, resource: occluderFieldSampler },
+    { binding: 4, resource: terrainCacheView },
+    { binding: 5, resource: bakedHeightView },
+    { binding: 6, resource: bakedColorView },
+  ];
   const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {
     pipeline: pipelines.scene,
@@ -1983,35 +2081,54 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     },
     sceneBindGroup: device.createBindGroup({
       layout: pipelines.scene.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: sceneBuffer } },
-        { binding: 1, resource: environmentFieldView },
-        { binding: 2, resource: occluderFieldView },
-        { binding: 3, resource: occluderFieldSampler },
-        { binding: 4, resource: terrainCacheView },
-        { binding: 5, resource: bakedHeightView },
-        { binding: 6, resource: bakedColorView },
-      ],
+      entries: [...gridSceneEntries, { binding: 7, resource: adaptingFieldView }],
     }),
     playgroundBindGroup: device.createBindGroup({
       layout: pipelines.scene.getBindGroupLayout(1),
       entries: playgroundEntries,
     }),
+    illumination: illuminationPass(pipelines.sceneIllumination, gridSceneEntries, playgroundEntries),
   };
-  if (pipelines.direct) {
+  if (pipelines.direct && pipelines.directIllumination) {
+    const directSceneEntries = [{ binding: 0, resource: { buffer: sceneBuffer } }];
+    const directPlaygroundEntries = [{ binding: 0, resource: { buffer: playgroundBuffer } }];
     directSceneRenderResources = {
       pipeline: pipelines.direct,
       hdr: hdrSupported,
       sceneBindGroup: device.createBindGroup({
         layout: pipelines.direct.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+        entries: [...directSceneEntries, { binding: 7, resource: adaptingFieldView }],
       }),
       playgroundBindGroup: device.createBindGroup({
         layout: pipelines.direct.getBindGroupLayout(1),
-        entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
+        entries: directPlaygroundEntries,
       }),
+      illumination: illuminationPass(
+        pipelines.directIllumination,
+        directSceneEntries,
+        directPlaygroundEntries,
+      ),
     };
   }
+}
+
+// The illumination pass reads what its scene does, except the adapting field.
+function illuminationPass(
+  pipeline: GPURenderPipeline,
+  sceneEntries: GPUBindGroupEntry[],
+  playgroundEntries: GPUBindGroupEntry[],
+): IlluminationPass {
+  return {
+    pipeline,
+    sceneBindGroup: device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: sceneEntries,
+    }),
+    playgroundBindGroup: device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(1),
+      entries: playgroundEntries,
+    }),
+  };
 }
 
 // Graphics tiers and lab shadow comparisons are pipeline override constants,

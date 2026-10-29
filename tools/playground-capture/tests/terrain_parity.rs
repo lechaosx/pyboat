@@ -262,75 +262,6 @@ fn night_vision_noise_is_unbiased_bounded_and_continuous() {
     );
 }
 
-/// Each part of the view adapts to the clear-sky light it receives, so the day
-/// and night sides of the world look alike whichever the view centres on, and
-/// the night side stays visible beside daylight.
-#[test]
-fn each_part_of_the_view_adapts_to_its_own_light() {
-    let world = WorldGeometry::default();
-    let size = 64usize;
-    for diagnostic in ["scene", "scene_production"] {
-        let render = |center_m| {
-            render_controlled_image_at(
-                world,
-                center_m,
-                0.0,
-                world.height_m(),
-                diagnostic,
-                size as u32,
-                size as u32,
-                &[],
-            )
-        };
-        let day_center = render(Vector::ZERO);
-        let night_center = render(Vector::new(0.5 * world.width_m(), 0.0));
-        // Mean linear channels of the day and night sides, seen from each centre.
-        let mut sides = [[[0.0_f32; 3]; 2]; 2];
-        let mut counts = [0usize; 2];
-        for row in 0..size {
-            for column in 0..size {
-                let position = Vector::new(
-                    world.width_m() * ((column as f32 + 0.5) / size as f32 - 0.5),
-                    world.height_m() * (0.5 - (row as f32 + 0.5) / size as f32),
-                );
-                let light = celestial_lighting(world_celestial_conditions(world, 0.0, position));
-                let side = if light.sun_direction[2] > 0.2 {
-                    0
-                } else if light.sun_direction[2] < -0.3 {
-                    1
-                } else {
-                    continue;
-                };
-                let day_offset = 4 * (row * size + column);
-                let night_offset = 4 * (row * size + (column + size / 2) % size);
-                for channel in 0..3 {
-                    sides[side][0][channel] +=
-                        srgb_channel_to_linear(day_center[day_offset + channel]);
-                    sides[side][1][channel] +=
-                        srgb_channel_to_linear(night_center[night_offset + channel]);
-                }
-                counts[side] += 1;
-            }
-        }
-        let luminance =
-            |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-        for (side, name) in ["day", "night"].into_iter().enumerate() {
-            assert!(counts[side] > 0);
-            let [from_day, from_night] =
-                sides[side].map(|sum| sum.map(|channel| channel / counts[side] as f32));
-            for channel in 0..3 {
-                assert!(
-                    (from_day[channel] - from_night[channel]).abs() <= 0.03 * luminance(from_day),
-                    "{diagnostic}: {name} side {from_day:?} from the day centre, {from_night:?} from the night centre",
-                );
-            }
-        }
-        let day = luminance(sides[0][0].map(|sum| sum / counts[0] as f32));
-        let night = luminance(sides[1][0].map(|sum| sum / counts[1] as f32));
-        assert!(night > 0.1 * day, "{diagnostic}: night {night}, day {day}");
-    }
-}
-
 #[test]
 fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
     for (index, world) in [
@@ -1464,9 +1395,12 @@ fn landform_occlusion(
     legacy_reach_m: Option<u32>,
 ) -> Vec<Option<f32>> {
     let (width, height) = (160, 90);
+    // The landform shadow switch changes the light the eye adapts to, so
+    // exposure is held to compare the light alone.
     let sun_only = [
         ("--cloud-shadows", "0"),
         ("--light-contributions", "1,0,0,0"),
+        ("--fixed-adaptation", ""),
     ];
     let render = |landform: &str| {
         let mut all = sun_only.to_vec();

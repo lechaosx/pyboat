@@ -637,10 +637,14 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     return unscaled_elevation_m * elevation_scale;
 }
 
+// Relief grades of the sky's and each beam's light. The beams' glint toward
+// the overhead viewer, scaled by `specular_scale`, is light the surface
+// reflects rather than receives.
 fn landform_light_grade(
     surface_gradient: vec2<f32>,
     roughness: f32,
     direct_light: CelestialReceiverLight,
+    specular_scale: f32,
 ) -> vec3<f32> {
     let strength = clamp(
         tuning.landform_lighting.x
@@ -679,7 +683,7 @@ fn landform_light_grade(
             specular = pow(
                 clamp(dot(normal, normalize(half_direction_sum)), 0.0, 1.0),
                 specular_exponent,
-            ) * mix(0.16, 0.025, clamp(roughness, 0.0, 1.0));
+            ) * mix(0.16, 0.025, clamp(roughness, 0.0, 1.0)) * specular_scale;
         }
         direct_grades[source_index] = mix(0.44, 1.30, direct_facing) + specular;
     }

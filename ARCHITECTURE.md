@@ -156,21 +156,35 @@ and verification details.
 
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
-- **[Explicit]** Each part of the view adapts to the clear-sky celestial light
-  it receives. That light stands in for the eye's local adaptation to the
-  scene's own light, so shadow, cloud, and storm darkening keep their contrast
-  and leave no halos. Full dark adaptation under a clear moonless sky bounds it.
-- **[Explicit]** Adaptation stays independent of zoom and surface color.
-- **[Implicit]** Adaptation follows a change of light at the view's center
-  gradually; the rest of the view keeps its settled offset from the center.
-- **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
-  ratios have the same response.
+- **[Explicit]** Each part of the view adapts to the light falling on the
+  scene around it, pooled over the eye's adapting field: sunlight and
+  moonlight through cloud, storm, and landform shadows at their incidence,
+  clear-sky and canopy light, and the night sky. The eye sees each surface's
+  reflectance against that light, so coasts, snow beside water, and boats
+  leave no halos; the compromise ignores the glare of bright surfaces such as
+  snow, to which real adaptation also responds. Full dark adaptation under a
+  clear moonless sky bounds it.
+- **[Explicit]** Adaptation stays independent of surface color. Its field is a
+  fixed visual angle of the view, so a wider view pools more of the world, as
+  an eye looking from higher would: small and medium cloud shadows keep their
+  contrast while storms, large decks, and the terminator partly adapt.
+- **[Implicit]** The view subtends the same visual angle on every device, that
+  of a full-HD desktop display at arm's length.
+- **[Implicit]** Gradual adaptation follows the clear-sky light at the view's
+  center; the adapting field across the view settles at once to cloud and
+  shadow, which weather moves over minutes.
+- **[Implicit]** Exposure adapts, and the adapting field pools light, in
+  logarithmic brightness so equal brightness ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
 - **[Explicit]** Scene light keeps the physical ratios of daylight, twilight,
   moonlight, and starlight, and the eye alone compresses them: an adapted
   part of the view has the brightness of CIECAM02's photopic brightness law at
   every light level. That compromise keeps moonlit and moonless views readable
   on a display, where real dim vision would leave them nearly black.
+- **[Explicit]** The display shows the brightness the eye model perceives as
+  display brightness, alike for SDR and HDR below diffuse white; HDR only adds
+  headroom above it. The viewer's own viewing conditions are unknown and stay
+  outside the model.
 - **[Explicit]** Unlit overlays, such as boats and the windsock, take the
   light the view is adapted to where they are.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
@@ -463,6 +477,9 @@ and verification details.
   Diagnostics may approximate shelter but never feed derived state into primary
   inputs or physics. Visibility gates omit composed color/shadow effects while
   retaining operands and downstream calculations.
+- **[Implicit]** The eye's adaptation is downstream of the lab's light and
+  layer gates, which leave it unchanged. Lab tuning, the cloud and landform
+  shadow switches included, changes the light the eye adapts to.
 - **[Explicit]** The lab advances all due fixed ticks and presents the newest
   state, using fractional progress when rendering faster than ticks.
 - **[Implicit]** Lab and capture clocks share terminal bounds that preserve
@@ -507,9 +524,9 @@ and verification details.
   Captures include a sidecar derived from the
   same explicit world inputs and fractional render clock; fresh one-frame
   captures have zero renderer-local cloud displacement.
-- **[Implicit]** Still captures use settled exposure and SDR output; their sidecar
-  records the exposure at the view's center so they can be compared with an
-  adapted interactive view.
+- **[Implicit]** Still captures use settled exposure and, unless asked for an
+  HDR output peak, SDR output; their sidecar records the exposure at the view's
+  center so they can be compared with an adapted interactive view.
 - **[Explicit]** Capture requires a hardware Vulkan GPU.
 - **[Explicit]** Still-view rendering cost is judged on one fixed set of
   scenarios shared by headless capture and the browser playground.

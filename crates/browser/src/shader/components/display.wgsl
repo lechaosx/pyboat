@@ -17,17 +17,16 @@ const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;
 // provenance and compromise.
 const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
 
-// Gain that shows a part of the view adapted to the clear-sky `light` it
-// receives: exposure.rs's `exposure_target`, times the lag of the view's
-// gradual adaptation. Clear-sky light varies smoothly over far more than the
-// eye's adapting field, so a pixel's own light stands for that field's mean.
+// Gain that shows a part of the view adapted to `light`, in scene light:
+// exposure.rs's `exposure_target`, times the lag of the view's gradual
+// adaptation.
 fn adapted_gain(light: f32) -> f32 {
     return scene.exposure_and_output.x
         * pow(clamp(light, NIGHT_SKY_LIGHT, 1.0), ADAPTED_BRIGHTNESS_EXPONENT - 1.0);
 }
 
-// Clear-sky light, in scene light, that a view shown at `adapted_gain` is
-// adapted to: the inverse of exposure.rs's `exposure_target`.
+// Light, in scene light, that a view shown at `adapted_gain` is adapted to:
+// the inverse of exposure.rs's `exposure_target`.
 fn adapted_view_light(adapted_gain: f32) -> f32 {
     return pow(max(adapted_gain, 1.0), 1.0 / (ADAPTED_BRIGHTNESS_EXPONENT - 1.0));
 }

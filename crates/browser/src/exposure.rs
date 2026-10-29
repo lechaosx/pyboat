@@ -26,8 +26,8 @@ impl ViewExposure {
 /// display; this compromise keeps night views readable. display.wgsl mirrors it.
 pub const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
 
-/// Exposure that shows a view adapted to clear-sky `illumination`, in scene
-/// light, at its brightness. A zenith Sun's light keeps its calibrated
+/// Exposure that shows a view adapted to `illumination`, in scene light, at
+/// its brightness. A zenith Sun's clear-sky light keeps its calibrated
 /// brightness, and adaptation stops at a clear moonless sky's light, which
 /// fully dark-adapted vision is matched to.
 pub fn exposure_target(illumination: f32) -> f32 {

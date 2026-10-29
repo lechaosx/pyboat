@@ -30,6 +30,16 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
         ), 1.0);
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 26u {
+        // The displayed light of the vision colour along a horizontal ramp
+        // from 1/64 to 64 diffuse whites, in a view adapted to daylight, at a
+        // quarter scale so an HDR peak of 4 fits the 8-bit image.
+        let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
+            * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
+        let level = exp2(mix(-6.0, 6.0, input.css_position_px.x / css_view_width_px));
+        let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
+        return vec4<f32>(0.25 * tone_map_scene_color(level * color, 1.0, input.css_position_px), 1.0);
+    }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
         return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);
     }

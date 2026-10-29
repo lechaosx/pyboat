@@ -33,13 +33,13 @@ use wgpu::CurrentSurfaceTexture;
 
 use crate::frame_queue::FrameQueue;
 use crate::{
-    BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize,
-    BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
-    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
-    FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
-    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
-    UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
+    AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
+    BakedSurfaceResize, BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M,
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory,
+    FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER,
+    LANDFORM_HORIZON_SHADER, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS,
+    OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache,
+    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
     append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
     disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
@@ -179,6 +179,19 @@ pub fn graphics_quality_scene_constants(quality: &str) -> Result<js_sys::Object,
 #[wasm_bindgen]
 pub fn upscale_shader_source() -> String {
     crate::UPSCALE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn adapting_field_blur_shader_source() -> String {
+    crate::ADAPTING_FIELD_BLUR_SHADER.to_owned()
+}
+
+/// Texels along each axis of the scene illumination and adapting field textures.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn adapting_field_texels() -> Vec<u32> {
+    vec![crate::ILLUMINATION_TEXELS, crate::ADAPTING_FIELD_TEXELS]
 }
 
 #[cfg(feature = "playground")]
@@ -1340,6 +1353,8 @@ struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    illumination_pipeline: wgpu::RenderPipeline,
+    adapting_field: AdaptingField,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     uniform_buffer: wgpu::Buffer,
@@ -1373,6 +1388,7 @@ struct Renderer {
     frame_timing: Arc<Mutex<FrameTiming>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scene_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1381,6 +1397,7 @@ fn scene_bind_group(
     occluder_fields: &OccluderFields,
     terrain_cache_pass: &TerrainCachePass,
     baked_surface_pass: &BakedSurfacePass,
+    adapting_field: &AdaptingField,
 ) -> wgpu::BindGroup {
     let baked = baked_surface_pass.textures();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1414,6 +1431,10 @@ fn scene_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: wgpu::BindingResource::TextureView(&baked.color_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&adapting_field.view),
             },
         ],
     })
@@ -1587,6 +1608,16 @@ impl Renderer {
                 unfilterable_texture_entry(4),
                 unfilterable_texture_entry(5),
                 unfilterable_texture_entry(6),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1594,30 +1625,37 @@ impl Renderer {
             bind_group_layouts: &[Some(&scene_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Scene pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex"),
-                buffers: &[Some(Vertex::layout())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment"),
-                targets: &[Some(output_format.into())],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: graphics.quality.scene_constants(),
-                    ..Default::default()
+        let scene_pipeline = |entry_point, target: wgpu::ColorTargetState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry_point),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    buffers: &[Some(Vertex::layout())],
+                    compilation_options: Default::default(),
                 },
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(target)],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: graphics.quality.scene_constants(),
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = scene_pipeline("fragment", output_format.into());
+        let illumination_pipeline = scene_pipeline(
+            "fragment_illumination",
+            AdaptingField::illumination_target(),
+        );
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic vertices"),
             size: (INITIAL_VERTEX_CAPACITY * mem::size_of::<Vertex>()) as u64,
@@ -1678,6 +1716,7 @@ impl Renderer {
             &uniform_buffer,
             &terrain_cache_pass.noise_view,
         );
+        let adapting_field = AdaptingField::new(&device, &bind_group_layout);
         let scene_bind_group = scene_bind_group(
             &device,
             &scene_layout,
@@ -1686,6 +1725,7 @@ impl Renderer {
             &occluder_fields,
             &terrain_cache_pass,
             &baked_surface_pass,
+            &adapting_field,
         );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
@@ -1702,6 +1742,8 @@ impl Renderer {
             surface,
             config,
             pipeline,
+            illumination_pipeline,
+            adapting_field,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
             uniform_buffer,
@@ -2028,6 +2070,15 @@ impl Renderer {
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
+        self.adapting_field
+            .encode(&mut encoder, &self.bind_group, None, |pass| {
+                if terrain_vertex_count > 0 {
+                    pass.set_pipeline(&self.illumination_pipeline);
+                    pass.set_bind_group(0, &self.scene_bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                    pass.draw(0..terrain_vertex_count, 0..1);
+                }
+            });
         let vertex_count = vertices.len() as u32;
         if !upscaled {
             self.upscale_targets = None;
@@ -2209,6 +2260,7 @@ impl Renderer {
             &self.occluder_fields,
             &self.terrain_cache_pass,
             &self.baked_surface_pass,
+            &self.adapting_field,
         );
         self.baked_surface = BakedSurface::new(sizes);
     }

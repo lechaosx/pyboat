@@ -134,16 +134,18 @@ fn diagnostic_landform_sun_grade_moon_coupling() -> vec4<f32> {
     sun_only_receiver.moon_amount = 0.0;
     var moon_only_receiver = receiver;
     moon_only_receiver.sun_amount = 0.0;
-    let grade = landform_light_grade(vec2<f32>(0.28, -0.21), 0.45, receiver);
+    let grade = landform_light_grade(vec2<f32>(0.28, -0.21), 0.45, receiver, 1.0);
     let sun_only_grade = landform_light_grade(
         vec2<f32>(0.28, -0.21),
         0.45,
         sun_only_receiver,
+        1.0,
     );
     let moon_only_grade = landform_light_grade(
         vec2<f32>(0.28, -0.21),
         0.45,
         moon_only_receiver,
+        1.0,
     );
     return vec4<f32>(scalar_debug_color(abs(
         grade.y - sun_only_grade.y,

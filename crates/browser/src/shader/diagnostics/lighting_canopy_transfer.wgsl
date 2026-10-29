@@ -2,8 +2,8 @@ override CANOPY_TRANSFER_OUTPUT: u32 = 0u;
 override CANOPY_TRANSFER_OPTICAL_THICKNESS: f32 = 0.0;
 
 // Light on level ground under a clear sky (0) or a full canopy (1), with each
-// beam reduced by the canopy's regional beam transmittance, as the settled
-// view exposes it and at half scale, so clear noon light stays below the 8-bit
+// beam reduced by the canopy's regional beam transmittance, as a view settled
+// on clear-sky light exposes it and at half scale, so clear noon light stays below the 8-bit
 // ceiling and night light above its floor.
 @fragment
 fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f32> {

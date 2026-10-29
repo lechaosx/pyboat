@@ -13,7 +13,7 @@ pub use baked_surface::{
 };
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use baked_surface::{BakedSurfacePass, BakedSurfaceTextures};
-pub use exposure::{ViewExposure, exposure_target};
+pub use exposure::{ADAPTED_BRIGHTNESS_EXPONENT, ViewExposure, exposure_target};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridHistory,
     FieldGridTuning, FieldGrids, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
@@ -41,6 +41,10 @@ use simulation::{
     MotionIntent, SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod adapting_field;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use adapting_field::{ADAPTING_FIELD_TEXELS, AdaptingField, ILLUMINATION_TEXELS};
 #[cfg(test)]
 mod diagnostics;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
@@ -150,6 +154,10 @@ pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
 
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const UPSCALE_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/upscale.wgsl"));
+
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub(crate) const ADAPTING_FIELD_BLUR_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/adapting-field-blur.wgsl"));
 
 #[cfg(any(feature = "playground", test))]
 pub(crate) const PLAYGROUND_SCENE_SHADER: &str =
@@ -1452,6 +1460,7 @@ mod tests {
             [
                 (naga::ShaderStage::Vertex, "vertex"),
                 (naga::ShaderStage::Fragment, "fragment"),
+                (naga::ShaderStage::Fragment, "fragment_illumination"),
             ],
         );
         assert!(module.global_variables.iter().all(|(_, variable)| {
@@ -1541,6 +1550,10 @@ mod tests {
             [
                 (naga::ShaderStage::Vertex, "vertex"),
                 (naga::ShaderStage::Fragment, "fragment_playground_scene"),
+                (
+                    naga::ShaderStage::Fragment,
+                    "fragment_playground_illumination"
+                ),
             ],
         );
 
@@ -1565,7 +1578,7 @@ mod tests {
         assert_eq!(landform_horizons.entry_points.len(), 1);
 
         let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();
-        assert_eq!(direct.entry_points.len(), 2);
+        assert_eq!(direct.entry_points.len(), 3);
 
         for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
             let source = generated_playground_diagnostic_shader(name).unwrap();

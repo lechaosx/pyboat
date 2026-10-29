@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use wgpu::util::DeviceExt;
 
 use browser::{
-    BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes, FieldGrids,
-    GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, TerrainCacheFrame, UpscaleTargets,
-    Upscaler, baked_surface_sizes, scene_render_size, visual_pixel_footprint_m,
+    AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
+    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, TerrainCacheFrame,
+    UpscaleTargets, Upscaler, baked_surface_sizes, scene_render_size, visual_pixel_footprint_m,
 };
 
 use super::{
@@ -31,7 +31,7 @@ const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
 /// Environment field, occluder field, scene, upscale, terrain cache, and baked
-/// surface begin/end pairs.
+/// surface begin/end pairs. The scene's pair spans the adapting field before it.
 const TIMESTAMP_COUNT: u32 = 12;
 /// More frames than a cold start takes to settle at the bench's sizes.
 const MAXIMUM_COLD_START_FRAMES: u32 = 64;
@@ -282,6 +282,9 @@ struct BenchReport {
 struct ModeRenderer {
     /// Indexed by `GraphicsQuality`.
     pipelines: [wgpu::RenderPipeline; 3],
+    /// Indexed by `GraphicsQuality`.
+    illumination_pipelines: [wgpu::RenderPipeline; 3],
+    adapting_field: AdaptingField,
     /// One per bake size, as the game sizes its bake for the scene.
     fields: Vec<(BakedSurfaceSizes, CaptureFields)>,
     /// The scenario the cache and surface were last filled for; another one
@@ -353,7 +356,9 @@ impl ModeRenderer {
             bind_group_layouts: &[Some(&fields[0].1.scene_layout), Some(unused_layout)],
             immediate_size: 0,
         });
-        let pipeline = |quality: GraphicsQuality| {
+        let pipeline = |quality: GraphicsQuality,
+                        entry_point: &str,
+                        target: wgpu::ColorTargetState| {
             let scene_constants = [constants(scene_source), quality.scene_constants()].concat();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("bench production scene pipeline"),
@@ -370,8 +375,8 @@ impl ModeRenderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fragment"),
-                    targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
+                    entry_point: Some(entry_point),
+                    targets: &[Some(target)],
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &scene_constants,
                         ..Default::default()
@@ -384,13 +389,27 @@ impl ModeRenderer {
                 cache: None,
             })
         };
+        let qualities = [
+            GraphicsQuality::Low,
+            GraphicsQuality::Medium,
+            GraphicsQuality::High,
+        ];
         Ok(Self {
-            pipelines: [
-                GraphicsQuality::Low,
-                GraphicsQuality::Medium,
-                GraphicsQuality::High,
-            ]
-            .map(pipeline),
+            pipelines: qualities.map(|quality| {
+                pipeline(
+                    quality,
+                    "fragment",
+                    wgpu::TextureFormat::Rgba8UnormSrgb.into(),
+                )
+            }),
+            illumination_pipelines: qualities.map(|quality| {
+                pipeline(
+                    quality,
+                    "fragment_illumination",
+                    AdaptingField::illumination_target(),
+                )
+            }),
+            adapting_field: AdaptingField::new(device, scene_layout),
             surfaces: RefCell::new((
                 String::new(),
                 TerrainCache::default(),
@@ -536,6 +555,18 @@ impl ModeRenderer {
             bindings.field_grids,
             timestamps,
         );
+        self.adapting_field.encode(
+            encoder,
+            bindings.scene,
+            timestamps.map(|query_set| (query_set, 4)),
+            |pass| {
+                pass.set_pipeline(&self.illumination_pipelines[bindings.quality as usize]);
+                pass.set_bind_group(0, &bindings.fields.scene, &[]);
+                pass.set_bind_group(1, bindings.unused, &[]);
+                pass.set_vertex_buffer(0, bindings.vertices.slice(..));
+                pass.draw(0..6, 0..1);
+            },
+        );
         let output_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bench scene pass"),
@@ -553,7 +584,7 @@ impl ModeRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: timestamps.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(4),
+                beginning_of_pass_write_index: None,
                 end_of_pass_write_index: Some(5),
             }),
             occlusion_query_set: None,
@@ -821,9 +852,11 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 baked_surface_rows: baked_surface_rows(&baked_surface_frame),
                 scene: bind_group(&device, &scene_layout, &buffer, "bench scene"),
                 fields: renderers.each_ref().map(|renderer| {
-                    renderer
-                        .fields(baked_surface_sizes)
-                        .bindings(&device, &buffer)
+                    renderer.fields(baked_surface_sizes).bindings(
+                        &device,
+                        &buffer,
+                        &renderer.adapting_field,
+                    )
                 }),
                 field_grids: capture_field_grids(&scenario_options)?,
                 options: scenario_options,
@@ -1230,9 +1263,11 @@ fn time_cold_start(
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let scene = bind_group(device, scene_layout, &buffer, "bench cold start scene");
-        let fields = renderer
-            .fields(bindings.baked_surface_sizes)
-            .bindings(device, &buffer);
+        let fields = renderer.fields(bindings.baked_surface_sizes).bindings(
+            device,
+            &buffer,
+            &renderer.adapting_field,
+        );
         let frame_bindings = FrameBindings {
             scene: &scene,
             fields: &fields,
@@ -1322,7 +1357,10 @@ fn time_sequence(
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let scene = bind_group(device, scene_layout, &buffer, "bench sequence scene");
-        let fields = renderer.fields(surface_sizes).bindings(device, &buffer);
+        let fields =
+            renderer
+                .fields(surface_sizes)
+                .bindings(device, &buffer, &renderer.adapting_field);
         let field_grids = capture_field_grids(&view_options)?;
         let bindings = FrameBindings {
             scenario_id: &view.id,

@@ -7,6 +7,7 @@ const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/scene-state.wgsl",
     "src/shader/components/vertex.wgsl",
     "src/shader/components/display.wgsl",
+    "src/shader/components/adapting-field.wgsl",
     "src/shader/components/noise.wgsl",
     "src/shader/components/environment.wgsl",
     "src/shader/components/environment-fields.wgsl",
@@ -44,8 +45,20 @@ fn main() {
     ]);
     write_shader(
         &production,
-        &["vertex", "fragment"],
+        &["vertex", "fragment", "fragment_illumination"],
         "scene-production.wgsl",
+    );
+    write_shader(
+        &compose(&[
+            &scene,
+            &direct_occluder_fields,
+            &direct_terrain_noise,
+            &direct_surface,
+            &production_entry,
+            &read_component("src/shader/adapting-field-blur.wgsl"),
+        ]),
+        &["fullscreen_vertex", "blur_adapting_field"],
+        "adapting-field-blur.wgsl",
     );
     let environment_fields = compose(&[
         &scene,
@@ -159,7 +172,11 @@ fn main() {
     ]);
     write_shader(
         &playground,
-        &["vertex", "fragment_playground_scene"],
+        &[
+            "vertex",
+            "fragment_playground_scene",
+            "fragment_playground_illumination",
+        ],
         "scene-playground.wgsl",
     );
     let playground_direct = compose(&[
@@ -172,7 +189,11 @@ fn main() {
     ]);
     write_shader(
         &playground_direct,
-        &["vertex", "fragment_playground_scene"],
+        &[
+            "vertex",
+            "fragment_playground_scene",
+            "fragment_playground_illumination",
+        ],
         "scene-playground-direct.wgsl",
     );
     let playground_occluders = compose(&[

@@ -1,13 +1,35 @@
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+    let gain = field_adapted_gain(input.css_position_px);
     if input.is_terrain <= 0.5 {
-        surface_position_m = canonical_world_position(input.world_position_m);
-        initialize_celestial_lighting();
-        let gain = adapted_gain(clear_sky_intensity(celestial_receiver_light_at_height(0.0)));
         return vec4<f32>(encode_display_color(tone_map_scene_color(
             adapted_unlit_color(linear_material_color(input.color), gain), gain, input.css_position_px,
         )), 1.0);
     }
+    let surface = initialize_production_surface(input);
+    let color = final_scene_color(surface.input, surface.atmosphere, surface.circle_position);
+    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, gain, input.css_position_px)), color.a);
+}
+
+// Stops of scene light reaching the terrain, which the adapting field pools.
+@fragment
+fn fragment_illumination(input: VertexOutput) -> @location(0) vec4<f32> {
+    let surface = initialize_production_surface(input);
+    return vec4<f32>(adapting_light_stops(scene_illumination(
+        surface.input.world_position_m,
+        surface.atmosphere,
+        surface.circle_position,
+    )), 0.0, 0.0, 1.0);
+}
+
+struct ProductionSurfaceInput {
+    input: VertexOutput,
+    atmosphere: SurfaceAtmosphereSample,
+    circle_position: vec4<f32>,
+};
+
+// Sets the per-pixel state that composing terrain at `input` reads.
+fn initialize_production_surface(input: VertexOutput) -> ProductionSurfaceInput {
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
     tuning = production_tuning();
     landscape_visibility = vec4<f32>(1.0);
@@ -27,13 +49,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_celestial_lighting();
     local_aerosol_optical_depth = local_aerosol_optical_depth_at(surface_cloud_weather);
     regional_aerosol_optical_depth = regional_aerosol_optical_depth_at(surface_cloud_weather.regional);
-    let color = final_scene_color(
-        periodic_input,
-        surface_weather.atmosphere,
-        surface_circle_position,
-    );
-    let gain = adapted_gain(clear_sky_intensity(celestial_receiver_light_at_height(0.0)));
-    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, gain, input.css_position_px)), color.a);
+    return ProductionSurfaceInput(periodic_input, surface_weather.atmosphere, surface_circle_position);
 }
 
 fn environment_feature_visibility() -> vec4<f32> {

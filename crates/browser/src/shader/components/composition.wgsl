@@ -1,15 +1,16 @@
-fn fragment_surface_color(
-    surface_color: vec3<f32>,
+// The light reaching a surface. `contribution` and `cloud_shadow_visibility`
+// gate light contributions and cloud shadows out of it.
+fn fragment_surface_light(
     direct_light: CelestialReceiverLight,
     terrain_shadow_transmittance: vec2<f32>,
     landform_grade: vec3<f32>,
     ambient_light: AtmosphericAmbientLight,
     bounce_conditions: GroundBounceConditions,
+    contribution: vec4<f32>,
+    cloud_shadow_visibility: f32,
 ) -> vec3<f32> {
-    let contribution = fragment_light_visibility();
     let beam_transmittance = bounce_conditions.cumulus_beam_transmittance
         * ambient_light.beam_transmittance;
-    let cloud_shadow_visibility = fragment_layer_visibility().y;
     let cloud_transmittance = mix(
         vec2<f32>(1.0),
         celestial_cloud_transmittance_at(direct_light),
@@ -45,7 +46,7 @@ fn fragment_surface_color(
         bounce_conditions.sky_reflectance.x + bounce_conditions.sky_reflectance.y,
         bounce_conditions.albedo,
     );
-    let light = landform_grade.x * (ambient + bounce)
+    return landform_grade.x * (ambient + bounce)
         + contribution.x
             * terrain_shadow_transmittance.x
             * sun_transmittance
@@ -56,7 +57,6 @@ fn fragment_surface_color(
             * moon_transmittance
             * landform_grade.z
             * moon_light;
-    return linear_material_color(surface_color) * light;
 }
 
 // The composed surface at a rendered position: its height, the relief
@@ -141,67 +141,116 @@ fn composed_scene_surface(
     return SceneSurface(terrain.elevation_m, terrain.gradient, is_land, surface);
 }
 
+// A rendered surface and the light reaching it.
+struct LitSceneSurface {
+    surface: TerrainSurface,
+    light: vec3<f32>,
+};
+
+// `specular_scale`, `contribution`, and `cloud_shadow_visibility` as
+// `landform_light_grade` and `fragment_surface_light` take them.
+fn lit_scene_surface(
+    position_m: vec2<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_circle_position: vec4<f32>,
+    specular_scale: f32,
+    contribution: vec4<f32>,
+    cloud_shadow_visibility: f32,
+) -> LitSceneSurface {
+    let ambient_sky = regional_canopy_conditions(surface_cloud_weather);
+    let water_height_m = tide_height_m();
+    let scene_surface = scene_surface_at(
+        position_m,
+        surface_circle_position,
+        water_height_m,
+        atmosphere,
+    );
+    let is_land = scene_surface.is_land;
+    let surface = scene_surface.surface;
+    let surface_height_m = max(scene_surface.elevation_m, water_height_m);
+    let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
+    let ambient_light = calculate_atmospheric_ambient_light(
+        ambient_sky,
+        surface_direct_light,
+    );
+    var surface_light_grade = vec3<f32>(1.0);
+    if is_land {
+        // Relief is exaggerated threefold so top-down light reads landforms.
+        surface_light_grade = landform_light_grade(
+            3.0 * scene_surface.gradient + surface.detail_gradient,
+            surface.roughness,
+            surface_direct_light,
+            specular_scale,
+        );
+    } else {
+        surface_light_grade = landform_light_grade(
+            surface.detail_gradient,
+            surface.roughness,
+            surface_direct_light,
+            specular_scale,
+        );
+    }
+    // The split sets direct light on level ground; relief grades it from there.
+    let level_grade = landform_light_grade(
+        vec2<f32>(0.0),
+        surface.roughness,
+        surface_direct_light,
+        specular_scale,
+    );
+    surface_light_grade = vec3<f32>(
+        surface_light_grade.x,
+        surface_light_grade.yz / level_grade.yz,
+    );
+    let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
+    return LitSceneSurface(surface, fragment_surface_light(
+        surface_direct_light,
+        terrain_shadow_transmittance,
+        surface_light_grade,
+        ambient_light,
+        sampled_ground_bounce_conditions(position_m),
+        contribution,
+        cloud_shadow_visibility,
+    ));
+}
+
 fn final_scene_color(
     input: VertexOutput,
     atmosphere: SurfaceAtmosphereSample,
     surface_circle_position: vec4<f32>,
 ) -> vec4<f32> {
-    var surface_color = input.color;
     var fragment_color = vec3<f32>(0.0);
     if input.is_terrain > 0.5 {
-        let ambient_sky = regional_canopy_conditions(surface_cloud_weather);
-        let water_height_m = tide_height_m();
-        let scene_surface = scene_surface_at(
+        let lit = lit_scene_surface(
             input.world_position_m,
-            surface_circle_position,
-            water_height_m,
             atmosphere,
+            surface_circle_position,
+            1.0,
+            fragment_light_visibility(),
+            fragment_layer_visibility().y,
         );
-        let is_land = scene_surface.is_land;
-        var surface = scene_surface.surface;
-        let surface_height_m = max(scene_surface.elevation_m, water_height_m);
-        let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
-        let ambient_light = calculate_atmospheric_ambient_light(
-            ambient_sky,
-            surface_direct_light,
-        );
-        var surface_light_grade = vec3<f32>(1.0);
-        if is_land {
-            // Relief is exaggerated threefold so top-down light reads landforms.
-            surface_light_grade = landform_light_grade(
-                3.0 * scene_surface.gradient + surface.detail_gradient,
-                surface.roughness,
-                surface_direct_light,
-            );
-        } else {
-            surface_light_grade = landform_light_grade(
-                surface.detail_gradient,
-                surface.roughness,
-                surface_direct_light,
-            );
-        }
-        // The split sets direct light on level ground; relief grades it from there.
-        let level_grade = landform_light_grade(
-            vec2<f32>(0.0),
-            surface.roughness,
-            surface_direct_light,
-        );
-        surface_light_grade = vec3<f32>(
-            surface_light_grade.x,
-            surface_light_grade.yz / level_grade.yz,
-        );
-        surface_color = surface.color;
-        let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
-        fragment_color = fragment_surface_color(
-            surface_color,
-            surface_direct_light,
-            terrain_shadow_transmittance,
-            surface_light_grade,
-            ambient_light,
-            sampled_ground_bounce_conditions(input.world_position_m),
-        );
+        fragment_color = linear_material_color(lit.surface.color) * lit.light;
     }
     return vec4<f32>(fragment_color, 1.0);
+}
+
+// Luminance of the light reaching the surface at a rendered position, in
+// scene light: what the eye adapts to. It leaves out the surface's
+// reflectance, glint included, and stays downstream of the lab's light and
+// cloud shadow gates, as exposure does.
+fn scene_illumination(
+    position_m: vec2<f32>,
+    atmosphere: SurfaceAtmosphereSample,
+    surface_circle_position: vec4<f32>,
+) -> f32 {
+    let lit = lit_scene_surface(
+        position_m,
+        atmosphere,
+        surface_circle_position,
+        0.0,
+        vec4<f32>(1.0),
+        1.0,
+    );
+    return dot(lit.light, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 // Broadband albedos under diffuse light: open ocean 0.07 (Jin et al. 2004,
