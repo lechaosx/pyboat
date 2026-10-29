@@ -217,12 +217,18 @@ and verification details.
   convective triggers at each cloud's own position. Ambient aerosol/scattering
   remains regional; direct Sun/Moon colors retain local humidity, rain, and
   aerosol response.
-- **[Explicit]** Diffuse solar and lunar light have daylight, lower twilight, and
-  weaker upper-afterglow bands. Lunar bands follow phase and eclipse; thin canopy
-  approaches clear sky, moderate canopy scatters available celestial light, and
-  thick canopy reflects most of it back to space. High ice cloud's diffuse
-  effects belong in canopy/sky diffusion; its direct shadow comes from the
-  upper field.
+- **[Explicit]** Clear-sky diffuse light fades continuously through twilight
+  as the planet's shadow rises through the air above each receiver, for the
+  Sun and the Moon alike. The air's scale height keeps Earth's ratio to the
+  planet's radius, so twilight spans the same depression of the light on every
+  world size.
+- **[Implicit]** Light scattered more than once into the planet's shadow keeps
+  a fainter twilight after the shadow has risen through most of the air.
+- **[Explicit]** Lunar diffuse light follows the Moon's phase and eclipse.
+- **[Explicit]** Thin canopy approaches clear sky, moderate canopy scatters
+  available celestial light, and thick canopy reflects most of it back to space.
+- **[Explicit]** High ice cloud's diffuse effects belong in canopy and sky
+  diffusion; its direct shadow comes from the upper field.
 - **[Implicit]** Clear-sky light on level ground follows a physical clear-sky
   model of each light's height, and its split into direct and diffuse light
   also follows the regional turbidity. Moonlight is sunlight scaled by the full
@@ -248,9 +254,10 @@ and verification details.
   reaches the layer's level, lights the layer from above, and the rest arrives
   diffuse.
 - **[Implicit]** A light below the canopy's level but above its horizon lights
-  the layer's underside, which reflects it down, as far as the daylight band
-  lets the light reach the layer. Its beam has crossed the canopy's level once
-  already on the far side, where the regional canopy's cover and depth stop it.
+  the layer's underside, which reflects it down, until the light sinks below
+  the horizon the layer's height has on Earth. Its beam has crossed the
+  canopy's level once already on the far side, where the regional canopy's
+  cover and depth stop it.
 - **[Implicit]** Cloud layers keep real absolute heights on the small world.
 - **[Implicit]** Light that ground and sky exchange follows regional means, so
   it lifts every shadow in a region alike.

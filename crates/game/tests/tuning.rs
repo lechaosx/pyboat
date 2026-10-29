@@ -962,27 +962,76 @@ fn full_moon_opposes_the_sun_while_new_moon_contributes_no_light() {
     assert!(full_moon_midnight.ambient_intensity > new_moon_midnight.ambient_intensity);
 }
 
+/// Sky light fades continuously from sunset into the night sky.
 #[test]
-fn upper_atmosphere_afterglow_outlasts_lower_twilight() {
-    let ambient_at_solar_depression = |degrees: f32| {
-        celestial_lighting(CelestialConditions {
+fn twilight_fades_continuously_into_the_night_sky() {
+    let light = |degrees: f32| equinox_equator_light(degrees, 0.0).ambient_intensity;
+    let sunset = light(0.0);
+    assert!((light(0.001) / sunset - 1.0).abs() < 1e-3);
+    assert!((light(-0.001) / sunset - 1.0).abs() < 1e-3);
+    let mut previous = sunset;
+    for tenth in 1..=240 {
+        let current = light(-0.1 * tenth as f32);
+        assert!(
+            current <= previous,
+            "brighter at -{} degrees",
+            0.1 * tenth as f32
+        );
+        previous = current;
+    }
+    assert!((light(-24.0) / game::NIGHT_SKY_LIGHT - 1.0).abs() < 1e-3);
+}
+
+/// Twilight falls from sunset as measured: 10^0.53 lux at the end of civil
+/// twilight and 10^-2.09 lux at the end of nautical twilight, night sky
+/// included (Hänel et al. 2018, J. Quant. Spectrosc. Radiat. Transf. 205,
+/// Table 2), against 410 to 585 lux at sunset, the Sun's centre 0.833 degrees
+/// down (AMS Glossary of Meteorology, "civil twilight"). The sunset range sets
+/// the tolerance.
+#[test]
+fn twilight_falls_from_sunset_as_measured() {
+    let night_lux = 2e-3;
+    let sunset_lux = (410.0_f32 * 585.0).sqrt();
+    let twilight = |degrees: f32| {
+        equinox_equator_light(degrees, 0.0).ambient_intensity - game::NIGHT_SKY_LIGHT
+    };
+    for (degrees, measured_lux) in [(-6.0, 10_f32.powf(0.53)), (-12.0, 10_f32.powf(-2.09))] {
+        let measured = (measured_lux - night_lux) / sunset_lux;
+        let ratio = twilight(degrees) / twilight(-0.833);
+        assert!(
+            (ratio / measured - 1.0).abs() < 0.2,
+            "{ratio} of sunset at {degrees} degrees, measured {measured}",
+        );
+    }
+}
+
+/// Twilight spans the same depression of the Sun on every world size.
+#[test]
+fn twilight_fades_over_the_same_solar_depression_on_every_world_size() {
+    for degrees in [-1.0, -3.0, -6.0, -9.0, -12.0, -15.0] {
+        let conditions = CelestialConditions {
             geographic_latitude_degrees: 0.0,
             celestial_latitude_degrees: 0.0,
             season_phase: 0.25,
-            day_phase: 0.75 + degrees / 360.0,
+            day_phase: 0.75 - degrees / 360.0,
             lunar_longitude_phase: 0.0,
-        })
-        .ambient_intensity
-    };
-
-    let civil_twilight = ambient_at_solar_depression(6.0);
-    let nautical_twilight = ambient_at_solar_depression(12.0);
-    let astronomical_night = ambient_at_solar_depression(18.0);
-
-    assert!(civil_twilight > nautical_twilight);
-    assert!(nautical_twilight > astronomical_night);
-    assert!(astronomical_night > 0.0);
-    assert_eq!(ambient_at_solar_depression(24.0), astronomical_night);
+        };
+        let light = |width_m: f32| {
+            celestial_lighting_at_height(
+                WorldGeometry::new(width_m, width_m).unwrap(),
+                conditions,
+                0.0,
+            )
+            .ambient_intensity
+        };
+        let reference = light(64_000.0);
+        for width_m in [32_000.0, 128_000.0] {
+            assert!(
+                (light(width_m) / reference - 1.0).abs() < 1e-4,
+                "{width_m} m world at {degrees} degrees",
+            );
+        }
+    }
 }
 
 fn equinox_equator_light(

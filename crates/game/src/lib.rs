@@ -503,14 +503,24 @@ pub const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
 /// light. lighting.wgsl mirrors it.
 pub const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
 
-/// Weights of the lower-twilight and upper-afterglow bands, which stand in for
-/// sky light above the planet's shadow. They give about 3.4 lux at the end of
-/// civil twilight, where the lower band is at 0.214 of its weight, and 0.008
-/// lux at the end of nautical twilight, where the upper band is at 0.641
-/// (Bond and Henderson 1963, The Conquest of Darkness). lighting.wgsl mirrors
-/// them.
-pub const LOWER_TWILIGHT_LIGHT: f32 = 3.4 / ZENITH_DAYLIGHT_LUX / 0.214;
-pub const UPPER_AFTERGLOW_LIGHT: f32 = (0.008 / ZENITH_DAYLIGHT_LUX - NIGHT_SKY_LIGHT) / 0.641;
+/// The planet's radius in scale heights of an exponential atmosphere whose
+/// horizon air mass, sqrt(pi R / 2H), is `relative_air_mass`'s 1/0.025. Air
+/// mass is Earth's, so twilight spans Earth's depression of the light on every
+/// world size. lighting.wgsl mirrors it.
+pub const PLANET_RADIUS_SCALE_HEIGHTS: f64 = 2.0 / (std::f64::consts::PI * 0.025 * 0.025);
+
+/// Light that the sunlit sky scatters into air in the planet's shadow fades as
+/// an exponential atmosphere of these effective scale heights per planet
+/// radius, carrying this share of the sky's light at sunset. Both are fitted so
+/// that twilight falls from sunset to 10^0.53 lux at the end of civil twilight
+/// and 10^-2.09 lux at the end of nautical twilight, night sky included (Hänel
+/// et al. 2018, J. Quant. Spectrosc. Radiat. Transf. 205, Table 2), against
+/// the 410-585 lux geometric mean at sunset (AMS Glossary of Meteorology,
+/// "civil twilight"). Its effective height, about three times the air's scale
+/// height, is a semi-physical stand-in for multiple scattering, not a layer.
+/// lighting.wgsl mirrors them.
+pub const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f64 = 324.0;
+pub const SCATTERED_TWILIGHT_SHARE: f64 = 0.0156;
 
 /// The full Moon's light relative to the Sun's: visual magnitudes -12.74 and
 /// -26.74 (Cox 2000, Allen's Astrophysical Quantities). lighting.wgsl mirrors it.
@@ -588,22 +598,20 @@ pub fn clear_sky_beam_transmittance(sine_height: f64) -> f32 {
     (beam(sine_height) / beam(1.0)) as f32
 }
 
-/// For a light at the given sine of its height above the local horizontal, the
-/// daylight band, the share of its clear-sky light that reaches the receiver,
-/// then lower-twilight and upper-afterglow light. Together they stand in for
-/// the planet's shadow, as `banded_clear_sky_light` in lighting.wgsl describes.
-fn twilight_bands(direction_z: f32) -> (f32, f32) {
-    // These sine-of-elevation thresholds must stay synchronized with lighting.wgsl.
-    let z = f64::from(direction_z);
-    let daylight = smoothstep_range(-0.034_899_5, 0.139_173_1, z) as f32;
-    let lower_twilight = smoothstep_range(-0.156_434_5, 0.017_452_4, z) as f32;
-    let upper_afterglow = smoothstep_range(-0.309_017, -0.139_173_1, z) as f32
-        * (1.0 - smoothstep_range(-0.139_173_1, -0.034_899_5, z) as f32);
-    (
-        daylight,
-        LOWER_TWILIGHT_LIGHT * (1.0 - daylight) * lower_twilight
-            + UPPER_AFTERGLOW_LIGHT * upper_afterglow,
-    )
+/// Clear-sky light on level ground from a light at the given sine of its
+/// height above the local horizontal, per unit of a zenith light's, through
+/// twilight, as `twilight_clear_sky_light` in lighting.wgsl. Below the horizon
+/// the sky keeps its light at sunset where the planet's shadow leaves air lit:
+/// the shadow stands R(1/cos θ - 1) above the receiver for a light θ down,
+/// and the air above it holds exp(-h/H) of the column.
+fn twilight_clear_sky_light(direction_z: f32) -> f32 {
+    let z = f64::from(direction_z).min(0.0);
+    let shadow_height_radii = 1.0 / (1.0 - z * z).max(1e-12).sqrt() - 1.0;
+    let lit_air = (1.0 - SCATTERED_TWILIGHT_SHARE)
+        * (-PLANET_RADIUS_SCALE_HEIGHTS * shadow_height_radii).exp()
+        + SCATTERED_TWILIGHT_SHARE
+            * (-SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS * shadow_height_radii).exp();
+    clear_sky_light(f64::from(direction_z)) * lit_air as f32
 }
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
@@ -675,9 +683,7 @@ pub fn celestial_lighting_at_height(
             MOON_ANGULAR_RADIUS_RAD as f32,
         )
         * clear_sky_beam_transmittance(moon_elevation);
-    let (lunar_daylight, lunar_twilight) = twilight_bands(moon_direction[2]);
-    let moon_ambient_intensity = lunar_light_scale
-        * (lunar_daylight * clear_sky_light(f64::from(moon_direction[2])) + lunar_twilight);
+    let moon_ambient_intensity = lunar_light_scale * twilight_clear_sky_light(moon_direction[2]);
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     // Sunlight reddened by lunar soil, as `moon_own_color` in lighting.wgsl
     // derives it; keep the two synchronized.
@@ -686,8 +692,7 @@ pub fn celestial_lighting_at_height(
         0.9855 + eclipse_warmth * (0.28 - 0.9855),
         0.8175 + eclipse_warmth * (0.06 - 0.8175),
     ];
-    let (daylight, twilight) = twilight_bands(sun_direction[2]);
-    let solar_ambient = daylight * clear_sky_light(f64::from(sun_direction[2])) + twilight;
+    let solar_ambient = twilight_clear_sky_light(sun_direction[2]);
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
     let ambient_intensity =
         (NIGHT_SKY_LIGHT + solar_ambient_transmittance * solar_ambient + moon_ambient_intensity)

@@ -298,11 +298,15 @@ fn celestial_receiver_light_at_position_and_height(
 }
 
 // Scene light is clear-sky daylight from a zenith Sun on level ground; these
-// mirror game's constants of the same names, which give their provenance.
-const LOWER_TWILIGHT_LIGHT: f32 = 3.4 / ZENITH_DAYLIGHT_LUX / 0.214;
-const UPPER_AFTERGLOW_LIGHT: f32 = (0.008 / ZENITH_DAYLIGHT_LUX - NIGHT_SKY_LIGHT) / 0.641;
+// mirror game's constants of the same names, which give their provenance and
+// compromises.
+const PLANET_RADIUS_SCALE_HEIGHTS: f32 = 2.0 / (PI * 0.025 * 0.025);
+const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f32 = 324.0;
+const SCATTERED_TWILIGHT_SHARE: f32 = 0.0156;
 const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
 const REFERENCE_LINKE_TURBIDITY: f32 = 2.35 + 7.79 * 0.103;
+// Earth's mean radius (Moritz 2000, Geodetic Reference System 1980).
+const EARTH_RADIUS_M: f32 = 6.371e6;
 
 // Clear-sky light on level ground from a light at the given sine of its
 // height above the horizon, per unit of a zenith light's, as
@@ -332,33 +336,33 @@ fn lunar_light_scale() -> f32 {
         * pow(10.0, -0.4 * phase_magnitudes);
 }
 
-// The daylight band: the share of a light's clear-sky light that reaches a
-// receiver, for the sine of the light's height above its local horizontal.
-// With the twilight bands it stands in for the planet's shadow, which on
-// Earth covers raised receivers soon after sunset. These thresholds must stay
-// synchronized with game::celestial_lighting.
-fn daylight_band(direction_z: f32) -> f32 {
-    return smoothstep(-0.0348995, 0.1391731, direction_z);
+// Height of the planet's shadow above a receiver, in planet radii, for a
+// light at the given sine of its height above the local horizontal: R(1/cos θ
+// - 1) for a light θ below it, and none above.
+fn planet_shadow_height_radii(direction_z: f32) -> f32 {
+    let z = min(direction_z, 0.0);
+    return inverseSqrt(max(1.0 - z * z, 1e-12)) - 1.0;
 }
 
 // A light's clear-sky light on level ground as a share of its clear-sky light
-// overhead. The daylight band takes clear-sky light along the light's height
-// above the local horizontal, as on Earth, whose horizon dips little at hill
-// and cloud heights; the small world's dip would light raised ground several
-// times more than sea level under a low light. The lower-twilight and
-// upper-afterglow bands stand in for sky light above the planet's shadow.
-fn banded_clear_sky_light(direction_z: f32) -> f32 {
-    let daylight = daylight_band(direction_z);
-    let lower_twilight = smoothstep(-0.1564345, 0.0174524, direction_z);
-    let upper_afterglow = smoothstep(-0.309017, -0.1391731, direction_z)
-        * (1.0 - smoothstep(-0.1391731, -0.0348995, direction_z));
-    return daylight * clear_sky_light(direction_z)
-        + LOWER_TWILIGHT_LIGHT * (1.0 - daylight) * lower_twilight
-        + UPPER_AFTERGLOW_LIGHT * upper_afterglow;
+// overhead, through twilight, as game::celestial_lighting composes it. It
+// follows the light's height above the local horizontal, as on Earth, whose
+// horizon dips little at hill and cloud heights; the small world's dip would
+// light raised ground several times more than sea level under a low light.
+// Below the horizon the sky keeps its light at sunset as far as the planet's
+// shadow leaves its air lit, exp(-h/H) of an exponential atmosphere's column,
+// plus light scattered more than once into the shadow.
+fn twilight_clear_sky_light(direction_z: f32) -> f32 {
+    let shadow_height_radii = planet_shadow_height_radii(direction_z);
+    return clear_sky_light(direction_z) * mix(
+        exp(-PLANET_RADIUS_SCALE_HEIGHTS * shadow_height_radii),
+        exp(-SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS * shadow_height_radii),
+        SCATTERED_TWILIGHT_SHARE,
+    );
 }
 
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
-    return lunar_light_scale() * banded_clear_sky_light(receiver.moon_direction.z);
+    return lunar_light_scale() * twilight_clear_sky_light(receiver.moon_direction.z);
 }
 
 // Clear-sky light on level ground from the night sky, the Sun, and the Moon,
@@ -368,7 +372,7 @@ fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
         1.0,
         NIGHT_SKY_LIGHT
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
-                * banded_clear_sky_light(receiver.sun_direction.z)
+                * twilight_clear_sky_light(receiver.sun_direction.z)
             + moon_atmospheric_amount(receiver),
     );
 }
@@ -383,8 +387,9 @@ fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
 // unscattered beam, which reaches the ground through the upper field's deck
 // shadows. A light below the level but above the canopy's horizon lights the
 // layer's underside with `normal`, its beam across its path: the light's
-// clear-sky light at the zenith by its daylight band and its clear-sky beam
-// share above the canopy's horizon. The layer reflects its slant reflectance
+// clear-sky light at the zenith by its disc's visibility above the horizon the
+// layer would have on Earth and its clear-sky beam share above the canopy's
+// horizon. The layer reflects its slant reflectance
 // of that beam, projected on it, down. The beam crossed the layer's level once already on
 // the far side of its tangent point, at the same depth.
 fn canopy_scattered_beams(
@@ -422,7 +427,7 @@ fn calculate_atmospheric_ambient_light(
     canopy: RegionalCanopyConditions,
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
-    let solar_ambient = banded_clear_sky_light(receiver.sun_direction.z);
+    let solar_ambient = twilight_clear_sky_light(receiver.sun_direction.z);
     let lunar_ambient = moon_atmospheric_amount(receiver);
     let clear_intensity = clear_sky_intensity(receiver);
     let split = celestial_light_split(
@@ -474,10 +479,25 @@ fn calculate_atmospheric_ambient_light(
     // direct part follows the light's height above that level and vanishes at
     // it. The canopy's own height sees each light above its much lower horizon,
     // which sets the beam that reaches the layer's underside.
+    // The planet's shadow reaches the layer when the light sinks below the
+    // horizon its height has on Earth, whose air mass clear-sky light follows;
+    // the small world's horizon would keep the layer lit until the light stood
+    // tens of degrees down.
     let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
+    let canopy_earth_horizon_z = -sqrt(
+        WEATHER_CANOPY_HEIGHT_M * (2.0 * EARTH_RADIUS_M + WEATHER_CANOPY_HEIGHT_M),
+    ) / (EARTH_RADIUS_M + WEATHER_CANOPY_HEIGHT_M);
     let daylight_beams = vec2<f32>(
-        daylight_band(canopy_receiver.sun_direction.z),
-        lunar_light_scale() * daylight_band(canopy_receiver.moon_direction.z),
+        celestial_disc_visibility_at_horizon(
+            canopy_earth_horizon_z,
+            canopy_receiver.sun_direction,
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+        ),
+        lunar_light_scale() * celestial_disc_visibility_at_horizon(
+            canopy_earth_horizon_z,
+            canopy_receiver.moon_direction,
+            MOON_ANGULAR_RADIUS_RAD,
+        ),
     );
     let scattered_beams = canopy_scattered_beams(
         optical_thickness,

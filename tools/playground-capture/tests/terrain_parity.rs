@@ -1271,7 +1271,7 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
 }
 
 #[test]
-fn atmospheric_twilight_bands_do_not_shift_with_surface_horizon() {
+fn atmospheric_twilight_does_not_shift_with_surface_horizon() {
     let world = WorldGeometry::default();
     let position_m = Vector::ZERO;
     let world_time_seconds = (0..24 * 12)
@@ -1280,7 +1280,7 @@ fn atmospheric_twilight_bands_do_not_shift_with_surface_horizon() {
             let light = celestial_lighting(world_celestial_conditions(world, *time, position_m));
             (-0.12..-0.08).contains(&light.sun_direction[2])
         })
-        .expect("the Sun should cross the lower twilight band each day");
+        .expect("the Sun should pass through twilight each day");
     let datum = render_diagnostic_image_with_view_at(
         world,
         position_m,
