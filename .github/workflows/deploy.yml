@@ -123,6 +123,7 @@ jobs:
             IdentitiesOnly yes
             StrictHostKeyChecking yes
             BatchMode yes
+            ConnectTimeout 15
           EOF
           echo 'DOCKER_HOST=ssh://pyboat-deploy' >> "$GITHUB_ENV"
       - name: Check server prerequisites
