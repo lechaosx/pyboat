@@ -1,19 +1,29 @@
+/// Seconds of adaptation that settle the eye: adapting-field-blur.wgsl's
+/// easing toward the field's target then completes.
+pub const SETTLED_ADAPTATION_SECONDS: f32 = f32::MAX;
+
+/// Seconds over which the eye adapts in the next rendered frame: the time
+/// since the last rendered frame, or until one is rendered, long enough to
+/// settle.
 #[derive(Default)]
-pub struct ViewExposure {
-    stops: Option<f64>,
+pub struct AdaptationClock {
+    seconds_since_rendered: Option<f64>,
 }
 
-impl ViewExposure {
-    pub fn advance(&mut self, target: f32, elapsed_seconds: f64) -> f32 {
-        let target = f64::from(target).log2();
-        let stops = self.stops.get_or_insert(target);
-        // Adapt in stops so equal brightness ratios take equal time. Darkness
-        // takes longer to adapt to than bright light. Gameplay time constants
-        // make adaptation perceptible within seconds.
-        let time_constant_seconds = if target > *stops { 3.0 } else { 1.0 };
-        let weight = -(-elapsed_seconds.max(0.0) / time_constant_seconds).exp_m1();
-        *stops += (target - *stops) * weight;
-        stops.exp2() as f32
+impl AdaptationClock {
+    pub fn advance(&mut self, elapsed_seconds: f64) {
+        if let Some(seconds) = &mut self.seconds_since_rendered {
+            *seconds += elapsed_seconds.max(0.0);
+        }
+    }
+
+    pub fn seconds(&self) -> f32 {
+        self.seconds_since_rendered
+            .map_or(SETTLED_ADAPTATION_SECONDS, |seconds| seconds as f32)
+    }
+
+    pub fn frame_rendered(&mut self) {
+        self.seconds_since_rendered = Some(0.0);
     }
 }
 
@@ -112,54 +122,24 @@ mod tests {
     }
 
     #[test]
-    fn exposure_initializes_to_the_first_scene() {
-        let mut exposure = ViewExposure::default();
-        assert_eq!(exposure.advance(4.0, 0.0), 4.0);
+    fn adaptation_settles_until_a_frame_is_rendered() {
+        let mut clock = AdaptationClock::default();
+        clock.advance(0.5);
+        assert_eq!(clock.seconds(), SETTLED_ADAPTATION_SECONDS);
+        clock.frame_rendered();
+        assert_eq!(clock.seconds(), 0.0);
     }
 
     #[test]
-    fn exposure_adapts_gradually_in_both_directions() {
-        let mut exposure = ViewExposure::default();
-        exposure.advance(1.0, 0.0);
-        let darkening = exposure.advance(4.0, 0.5);
-        assert!(darkening > 1.0 && darkening < 4.0);
-        let more_darkening = exposure.advance(4.0, 0.5);
-        assert!(more_darkening > darkening && more_darkening < 4.0);
-        let brightening = exposure.advance(1.0, 0.5);
-        assert!(brightening > 1.0 && brightening < more_darkening);
-        assert!((exposure.advance(1.0, 60.0) - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn exposure_does_not_adapt_without_elapsed_time() {
-        let mut exposure = ViewExposure::default();
-        exposure.advance(1.0, 0.0);
-        assert_eq!(exposure.advance(4.0, 0.0), 1.0);
-        assert_eq!(exposure.advance(4.0, -1.0), 1.0);
-    }
-
-    #[test]
-    fn exposure_adaptation_is_independent_of_frame_rate() {
-        let adapt = |frames: u32| {
-            let mut exposure = ViewExposure::default();
-            exposure.advance(1.0, 0.0);
-            let mut result = 1.0;
-            for _ in 0..frames {
-                result = exposure.advance(4.0, 2.0 / f64::from(frames));
-            }
-            result
-        };
-        assert!((adapt(60) - adapt(288)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn exposure_adapts_to_bright_light_faster_than_darkness() {
-        let mut darkening = ViewExposure::default();
-        let mut brightening = ViewExposure::default();
-        darkening.advance(1.0, 0.0);
-        brightening.advance(4.0, 0.0);
-        let dark_progress = darkening.advance(4.0, 1.0).log2() / 2.0;
-        let bright_progress = (2.0 - brightening.advance(1.0, 1.0).log2()) / 2.0;
-        assert!(bright_progress > dark_progress);
+    fn adaptation_spans_frames_left_unrendered() {
+        let mut clock = AdaptationClock::default();
+        clock.frame_rendered();
+        clock.advance(0.25);
+        clock.advance(-1.0);
+        clock.advance(0.5);
+        assert_eq!(clock.seconds(), 0.75);
+        clock.frame_rendered();
+        clock.advance(0.125);
+        assert_eq!(clock.seconds(), 0.125);
     }
 }

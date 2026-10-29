@@ -14,9 +14,8 @@ struct SceneUniforms {
     celestial_orbit_light: vec4<f32>,
     view_cloud_motion_m: vec4<f32>,
     cloud_time_coordinates: vec4<f32>,
-    // The view's gradual adaptation as a share of its settled exposure at
-    // the view's centre, the output peak, 1 for HDR output, then the vision
-    // noise phase.
+    // Seconds the adapting field adapts over this frame, the output peak, 1
+    // for HDR output, then the vision noise phase.
     exposure_and_output: vec4<f32>,
     environment_field_grid_m: vec4<f32>,
     environment_field_texels: vec4<u32>,

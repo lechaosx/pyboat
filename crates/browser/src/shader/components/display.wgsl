@@ -18,11 +18,9 @@ const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;
 const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
 
 // Gain that shows a part of the view adapted to `light`, in scene light:
-// exposure.rs's `exposure_target`, times the lag of the view's gradual
-// adaptation.
+// exposure.rs's `exposure_target`.
 fn adapted_gain(light: f32) -> f32 {
-    return scene.exposure_and_output.x
-        * pow(clamp(light, NIGHT_SKY_LIGHT, 1.0), ADAPTED_BRIGHTNESS_EXPONENT - 1.0);
+    return pow(clamp(light, NIGHT_SKY_LIGHT, 1.0), ADAPTED_BRIGHTNESS_EXPONENT - 1.0);
 }
 
 // Light, in scene light, that a view shown at `adapted_gain` is adapted to:

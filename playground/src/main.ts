@@ -1,6 +1,6 @@
 import {
+  PlaygroundAdaptationClock,
   PlaygroundBakedSurface,
-  PlaygroundExposure,
   PlaygroundFieldGridHistory,
   PlaygroundFramePacer,
   PlaygroundResolutionController,
@@ -250,7 +250,7 @@ sidebarResizerElement.addEventListener("keydown", (event) => {
 let renderedCameraX = 0;
 let renderedCameraY = 0;
 const cloudMotion = new CloudMotion();
-let exposure = new PlaygroundExposure();
+let adaptationClock = new PlaygroundAdaptationClock();
 
 function format(value: number, step: number): string {
   return value.toFixed(step < 0.001 ? 4 : step < 0.01 ? 3 : step < 1 ? 2 : 0);
@@ -967,11 +967,17 @@ const illuminationView = device.createTexture({
   format: "r32float",
   usage: 0x10 | 0x04,
 }).createView();
-const adaptingFieldView = device.createTexture({
+const adaptingField = device.createTexture({
   size: [adaptingFieldTexels!, adaptingFieldTexels!],
   format: "r32float",
-  usage: 0x10 | 0x04,
-}).createView();
+  usage: 0x10 | 0x04 | 0x01,
+});
+const adaptingFieldView = adaptingField.createView();
+const previousAdaptingField = device.createTexture({
+  size: [adaptingFieldTexels!, adaptingFieldTexels!],
+  format: "r32float",
+  usage: 0x04 | 0x02,
+});
 const adaptingFieldShader = device.createShaderModule({ code: adapting_field_blur_shader_source() });
 const adaptingFieldPipeline = device.createRenderPipeline({
   layout: "auto",
@@ -990,7 +996,10 @@ const adaptingFieldBindGroups = [
   }),
   device.createBindGroup({
     layout: adaptingFieldPipeline.getBindGroupLayout(1),
-    entries: [{ binding: 0, resource: illuminationView }],
+    entries: [
+      { binding: 0, resource: illuminationView },
+      { binding: 1, resource: previousAdaptingField.createView() },
+    ],
   }),
 ];
 const environmentFieldView = device.createTexture({
@@ -1472,6 +1481,7 @@ function updateUniforms(
   );
   const lowWind: [number, number] = [viewCloud[0]!, viewCloud[1]!];
   const upperWind: [number, number] = [viewCloud[2]!, viewCloud[3]!];
+  adaptationClock.advance(elapsedSeconds);
   const frame = playground_scene_uniforms(
     state.worldWidthM,
     state.worldHeightM,
@@ -1487,10 +1497,7 @@ function updateUniforms(
     bench ? previewCanvas.height : previewCanvas.clientHeight,
     new Float32Array(cloudMotion.advance(elapsedSeconds * state.worldTimeScale, lowWind, upperWind)),
     new Float32Array([
-      exposure.advance(
-        state.worldWidthM, state.worldHeightM, worldTimeSeconds,
-        renderedCameraX, renderedCameraY, elapsedSeconds,
-      ),
+      adaptationClock.seconds(),
       // The browser reports HDR capability, not numeric display headroom.
       canvasHdr && window.matchMedia("(dynamic-range: high)").matches ? 4 : 1,
       Number(canvasHdr),
@@ -1827,6 +1834,11 @@ function renderFrame(): Promise<void> {
     fieldPass.setBindGroup(1, adaptingFieldBindGroups[1]!);
     fieldPass.draw(3);
     fieldPass.end();
+    encoder.copyTextureToTexture(
+      { texture: adaptingField },
+      { texture: previousAdaptingField },
+      [adaptingFieldTexels!, adaptingFieldTexels!],
+    );
   }
   const canvasTexture = context.getCurrentTexture();
   const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -1888,6 +1900,7 @@ function renderFrame(): Promise<void> {
     timestampReadback.upscaled = Boolean(upscale);
   }
   device.queue.submit([encoder.finish()]);
+  adaptationClock.frame_rendered();
   const submittedAt = performance.now();
   framesInWindow += 1;
   latestPassTimes = Promise.resolve(undefined);
@@ -2312,8 +2325,8 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
     statusElement.textContent = timedFrames === 0
       ? `Bench warm-up ${index + 1}/${scenarios.length}`
       : `Bench ${index + 1}/${scenarios.length}: ${scenario.id}`;
-    exposure.free();
-    exposure = new PlaygroundExposure();
+    adaptationClock.free();
+    adaptationClock = new PlaygroundAdaptationClock();
     Object.assign(state, {
       seed: scenario.seed,
       cameraX: scenario.cameraM[0],
@@ -2335,8 +2348,8 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
         statusElement.textContent = `Bench stopped at ${scenario.id}: ${statusElement.textContent}`;
         return;
       }
-      // A fresh exposure starts settled, and zero elapsed time keeps it and
-      // cloud transport fixed, as in capture.
+      // A fresh adaptation clock settles the eye, and zero elapsed time keeps
+      // it and cloud transport fixed, as in capture.
       updateUniforms(state.worldTimeSeconds, 0, now);
       const startedAt = performance.now();
       await renderFrame();

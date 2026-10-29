@@ -11,20 +11,22 @@ pub const ADAPTING_FIELD_TEXELS: u32 = 32;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 /// The eye's adapting field over the view: the scene's illumination, rendered
-/// by a caller's illumination pipeline, then pooled over the field's extent.
-/// The scene reads `view` at binding 7 of its first group.
+/// by a caller's illumination pipeline, then pooled over the field's extent
+/// and adapted to over the seconds the scene uniforms give. The scene reads
+/// `view` at binding 7 of its first group.
 pub struct AdaptingField {
     illumination_view: wgpu::TextureView,
     pub view: wgpu::TextureView,
     blur_pipeline: wgpu::RenderPipeline,
     blur_input: wgpu::BindGroup,
     field: wgpu::Texture,
+    previous_field: wgpu::Texture,
 }
 
 impl AdaptingField {
     /// `uniform_layout` holds the scene uniforms alone at binding 0.
     pub fn new(device: &wgpu::Device, uniform_layout: &wgpu::BindGroupLayout) -> Self {
-        let texture = |label, texels| {
+        let texture = |label, texels, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
@@ -36,27 +38,39 @@ impl AdaptingField {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | usage,
                 view_formats: &[],
             })
         };
-        let illumination = texture("Scene illumination", ILLUMINATION_TEXELS);
-        let field = texture("Adapting field", ADAPTING_FIELD_TEXELS);
+        let illumination = texture(
+            "Scene illumination",
+            ILLUMINATION_TEXELS,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let field = texture(
+            "Adapting field",
+            ADAPTING_FIELD_TEXELS,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let previous_field = texture(
+            "Previous adapting field",
+            ADAPTING_FIELD_TEXELS,
+            wgpu::TextureUsages::COPY_DST,
+        );
         let illumination_view = illumination.create_view(&wgpu::TextureViewDescriptor::default());
+        let input_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Adapting field input layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[input_entry(0), input_entry(1)],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Adapting field shader"),
@@ -92,15 +106,24 @@ impl AdaptingField {
             blur_input: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Adapting field input"),
                 layout: &input_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&illumination_view),
-                }],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&illumination_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &previous_field.create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                ],
             }),
             illumination_view,
             view: field.create_view(&wgpu::TextureViewDescriptor::default()),
             blur_pipeline,
             field,
+            previous_field,
         }
     }
 
@@ -114,7 +137,8 @@ impl AdaptingField {
     }
 
     /// Renders the illumination that `draw` records, then blurs it into the
-    /// field. Before anything is drawn the view holds daylight's zero stops.
+    /// field's target and adapts the field toward it. Before anything is drawn
+    /// the illumination holds daylight's zero stops.
     /// Timestamps, when given as a query set and a beginning index, mark the
     /// start of the first pass.
     pub fn encode(
@@ -164,6 +188,12 @@ impl AdaptingField {
         pass.set_bind_group(0, uniforms, &[]);
         pass.set_bind_group(1, &self.blur_input, &[]);
         pass.draw(0..3, 0..1);
+        drop(pass);
+        encoder.copy_texture_to_texture(
+            self.field.as_image_copy(),
+            self.previous_field.as_image_copy(),
+            self.field.size(),
+        );
     }
 
     /// Adapts the whole view to `light`, in scene light, in place of the

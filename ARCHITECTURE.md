@@ -170,9 +170,10 @@ and verification details.
   contrast while storms, large decks, and the terminator partly adapt.
 - **[Implicit]** The view subtends the same visual angle on every device, that
   of a full-HD desktop display at arm's length.
-- **[Implicit]** Gradual adaptation follows the clear-sky light at the view's
-  center; the adapting field across the view settles at once to cloud and
-  shadow, which weather moves over minutes.
+- **[Implicit]** Adaptation is retinal: each part of the screen adapts
+  gradually to the adapting field there and keeps its state in place as the
+  view pans, so a part panned from daylight into night starts dark while a
+  part still in daylight keeps its look.
 - **[Implicit]** Exposure adapts, and the adapting field pools light, in
   logarithmic brightness so equal brightness ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.

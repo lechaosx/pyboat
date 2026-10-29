@@ -1,5 +1,15 @@
 @group(1) @binding(0)
 var illumination: texture_2d<f32>;
+// The field as the previous frame left it.
+@group(1) @binding(1)
+var previous_field: texture_2d<f32>;
+
+// Time constants of the eye's adaptation, which eases in stops so equal
+// brightness ratios take equal time. Darkness takes longer to adapt to than
+// bright light. Gameplay time constants make adaptation perceptible within
+// seconds.
+const DARKENING_ADAPTATION_SECONDS: f32 = 3.0;
+const BRIGHTENING_ADAPTATION_SECONDS: f32 = 1.0;
 
 @vertex
 fn fullscreen_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -11,7 +21,8 @@ fn fullscreen_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) ve
 // texel: a geometric mean, as the eye responds to ratios of light. CIE gives
 // the field's edge only approximately, so a Gaussian with the variance of its
 // disc pools the light, renormalized over the part of the field the view
-// covers.
+// covers. Adaptation is retinal, so each texel eases toward that target where
+// it lies on the screen, wherever the view has moved.
 @fragment
 fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let aspect = scene.camera_and_view_m.z / scene.camera_and_view_m.w;
@@ -38,5 +49,13 @@ fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) v
         weighted_stops += row_weight * row_stops;
         total_weight += row_weight * row_total;
     }
-    return vec4<f32>(weighted_stops / total_weight, 0.0, 0.0, 1.0);
+    let target_stops = weighted_stops / total_weight;
+    let previous_stops = textureLoad(previous_field, vec2<u32>(position.xy), 0).r;
+    let time_constant = select(
+        BRIGHTENING_ADAPTATION_SECONDS,
+        DARKENING_ADAPTATION_SECONDS,
+        target_stops < previous_stops,
+    );
+    let weight = 1.0 - exp(-scene.exposure_and_output.x / time_constant);
+    return vec4<f32>(previous_stops + (target_stops - previous_stops) * weight, 0.0, 0.0, 1.0);
 }

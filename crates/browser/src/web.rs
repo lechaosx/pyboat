@@ -33,13 +33,13 @@ use wgpu::CurrentSurfaceTexture;
 
 use crate::frame_queue::FrameQueue;
 use crate::{
-    AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
-    BakedSurfaceResize, BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M,
+    AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame,
+    BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory,
     FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER,
     LANDFORM_HORIZON_SHADER, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS,
     OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache,
-    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, ViewExposure, Windsock,
+    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, Windsock,
     append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
     disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
@@ -58,45 +58,29 @@ extern "C" {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
-pub struct PlaygroundExposure {
-    exposure: ViewExposure,
+#[derive(Default)]
+pub struct PlaygroundAdaptationClock {
+    clock: AdaptationClock,
 }
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
-impl PlaygroundExposure {
+impl PlaygroundAdaptationClock {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self {
-            exposure: ViewExposure::default(),
-        }
+        Self::default()
     }
 
-    pub fn advance(
-        &mut self,
-        width_m: f32,
-        height_m: f32,
-        world_time_seconds: f64,
-        camera_x_m: f32,
-        camera_y_m: f32,
-        elapsed_seconds: f64,
-    ) -> Result<f32, JsValue> {
-        let geometry = WorldGeometry::new(width_m, height_m)
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let conditions = world_celestial_conditions(
-            geometry,
-            world_time_seconds,
-            Vector::new(camera_x_m, camera_y_m),
-        );
-        let target = crate::exposure_target(celestial_lighting(conditions).ambient_intensity);
-        Ok(self.exposure.advance(target, elapsed_seconds) / target)
+    pub fn advance(&mut self, elapsed_seconds: f64) {
+        self.clock.advance(elapsed_seconds);
     }
-}
 
-#[cfg(feature = "playground")]
-impl Default for PlaygroundExposure {
-    fn default() -> Self {
-        Self::new()
+    pub fn seconds(&self) -> f32 {
+        self.clock.seconds()
+    }
+
+    pub fn frame_rendered(&mut self) {
+        self.clock.frame_rendered();
     }
 }
 
@@ -1379,7 +1363,7 @@ struct Renderer {
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
     field_grid_history: FieldGridHistory,
-    exposure: ViewExposure,
+    adaptation_clock: AdaptationClock,
     vision_noise_phase: f64,
     graphics: GraphicsSettings,
     frame_pacer: FramePacer,
@@ -1766,7 +1750,7 @@ impl Renderer {
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
             field_grid_history: FieldGridHistory::default(),
-            exposure: ViewExposure::default(),
+            adaptation_clock: AdaptationClock::default(),
             vision_noise_phase: 0.0,
             frame_pacer: FramePacer::default(),
             render_scale: graphics.render_scale,
@@ -1813,17 +1797,11 @@ impl Renderer {
                 view_cloud_state.upper_wind_velocity_m_s,
             );
         }
-        let local_celestial = world_celestial_conditions(
-            world_geometry,
-            world_time_seconds,
-            canonical_camera_m.into(),
-        );
-        let target = crate::exposure_target(celestial_lighting(local_celestial).ambient_intensity);
-        let adaptation_lag = if render_clock.is_some() {
-            self.exposure.advance(target, elapsed_seconds) / target
+        if render_clock.is_some() {
+            self.adaptation_clock.advance(elapsed_seconds);
         } else {
-            1.0
-        };
+            self.adaptation_clock = AdaptationClock::default();
+        }
         self.vision_noise_phase =
             (self.vision_noise_phase + elapsed_seconds.max(0.0) * 8.0) % 4096.0;
         if let Some(resolution) = &mut self.resolution {
@@ -2012,7 +1990,7 @@ impl Renderer {
                 cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
                 // WebGPU exposes HDR capability but no numeric display headroom.
                 exposure_and_output: [
-                    adaptation_lag,
+                    self.adaptation_clock.seconds(),
                     output_peak,
                     f32::from(hdr),
                     self.vision_noise_phase as f32,
@@ -2126,6 +2104,7 @@ impl Renderer {
             self.encode_scene_pass(&mut encoder, &view, clear, 0..vertex_count);
         }
         self.queue.submit(Some(encoder.finish()));
+        self.adaptation_clock.frame_rendered();
         let frame_timing = self
             .resolution
             .is_some()

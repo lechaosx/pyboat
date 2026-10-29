@@ -13,7 +13,9 @@ pub use baked_surface::{
 };
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use baked_surface::{BakedSurfacePass, BakedSurfaceTextures};
-pub use exposure::{ADAPTED_BRIGHTNESS_EXPONENT, ViewExposure, exposure_target};
+pub use exposure::{
+    ADAPTED_BRIGHTNESS_EXPONENT, AdaptationClock, SETTLED_ADAPTATION_SECONDS, exposure_target,
+};
 pub use field_grids::{
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS, FieldGrid, FieldGridHistory,
     FieldGridTuning, FieldGrids, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,

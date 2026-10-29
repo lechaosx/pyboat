@@ -4,9 +4,10 @@ use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
     BakedSurfaceSizes, BakedSurfaceTextures, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS,
     FieldGridHistory, FieldGridTuning, FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, TerrainCache, TerrainCacheFrame,
-    TerrainCachePass, baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
-    sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
+    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, TerrainCache,
+    TerrainCacheFrame, TerrainCachePass, baked_surface_sizes, exposure_target, field_grids,
+    ocean_wave_mode_uniforms, sample_view_cloud_state, seasonal_phase_factors, view_width_m,
+    visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -77,6 +78,10 @@ struct Options {
     /// cache fills the requested view's frame reuses.
     prior_views: Vec<[f32; 3]>,
     skip_prior_fills: bool,
+    /// Seconds between successive views, from the first prior view to the
+    /// requested one, over which the eye adapts; without them, the eye is
+    /// settled at the requested view.
+    adaptation_seconds: Option<f32>,
     /// Adapts the whole view to the clear-sky light at its centre instead of
     /// its illumination, so lab switches that change the light leave exposure
     /// alone.
@@ -620,6 +625,8 @@ struct DerivedOutput {
     /// Scene light of the adapting field at the view's centre, for scene
     /// compositions.
     adapting_light: Option<f32>,
+    /// Stops of scene light the adapting field holds, row by row from the top.
+    adapting_field_stops: Option<Vec<f32>>,
     /// Exposure at the view's centre: of its adapting light, or else of its
     /// clear-sky light.
     settled_exposure_multiplier: f32,
@@ -724,6 +731,7 @@ fn default_options() -> Options {
         solid_material_color_visibility: [1; 4],
         prior_views: Vec::new(),
         skip_prior_fills: false,
+        adaptation_seconds: None,
         fixed_adaptation: false,
         // A desktop's, without the raise for a large reported device memory.
         bake_memory_bytes: browser::baked_surface_memory_bytes(false, None),
@@ -840,6 +848,13 @@ fn parse_options() -> Result<Command, String> {
                 options.prior_views.push(view);
             }
             "--skip-prior-fills" => options.skip_prior_fills = true,
+            "--adaptation-seconds" => {
+                let seconds: f32 = parse(&value(&mut arguments)?, &argument)?;
+                if !(seconds.is_finite() && seconds >= 0.0) {
+                    return Err("--adaptation-seconds must be finite and nonnegative".to_owned());
+                }
+                options.adaptation_seconds = Some(seconds);
+            }
             "--fixed-adaptation" => options.fixed_adaptation = true,
             "--touch-budget" => {
                 options.bake_memory_bytes = browser::baked_surface_memory_bytes(true, None)
@@ -1481,6 +1496,9 @@ fn print_help() {
                                   repeat for a pan or zoom sequence ending at the capture\n\
            --skip-prior-fills     count the prior views' cache fills as done without running\n\
                                   them, a test control that reads unwritten texels\n\
+           --adaptation-seconds S  the eye, settled at the first prior view, adapts over S\n\
+                                  seconds between successive views (default: settled at\n\
+                                  the capture)\n\
            --fixed-adaptation     adapt the whole view to the clear-sky light at its centre,\n\
                                   a test control that holds exposure while switches change light\n\
            --touch-budget         bake the surface within touch devices' memory budget\n\
@@ -1742,6 +1760,9 @@ async fn render(options: &Options) -> Result<(), String> {
     if !grid_scene && !options.prior_views.is_empty() {
         return Err("--prior-view applies only to the scene composition".to_owned());
     }
+    if options.adaptation_seconds.is_some() && options.prior_views.is_empty() {
+        return Err("--adaptation-seconds requires --prior-view".to_owned());
+    }
     let production = options.diagnostic.id == "scene_production";
     let constants = if production {
         options.quality.scene_constants().to_vec()
@@ -1941,7 +1962,7 @@ async fn render(options: &Options) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
-    let (rgba, adapting_light) = render_world(
+    let (rgba, adapting_field_stops) = render_world(
         &device,
         &queue,
         &pipeline,
@@ -1953,7 +1974,7 @@ async fn render(options: &Options) -> Result<(), String> {
         options,
     )?;
     write_png(path, options.width, options.height, &rgba)?;
-    let report = capture_report(options, path, &rgba, adapting_light)?;
+    let report = capture_report(options, path, &rgba, adapting_field_stops)?;
     let report_json = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("failed to serialize report: {error}"))?;
     let sidecar_path = path.with_extension("json");
@@ -2015,7 +2036,7 @@ fn render_world(
     fields: Option<&CaptureFields>,
     adaptation: Option<&CaptureAdaptation>,
     options: &Options,
-) -> Result<(Vec<u8>, Option<f32>), String> {
+) -> Result<(Vec<u8>, Option<Vec<f32>>), String> {
     let field_bindings = |fields: &CaptureFields, buffer: &wgpu::Buffer| {
         fields.bindings(
             device,
@@ -2032,8 +2053,10 @@ fn render_world(
     ));
     let scene_bind_group = |terrain_cache_frame: &TerrainCacheFrame,
                             baked_surface_frame: &BakedSurfaceFrame,
-                            options: &Options| {
-        let uniforms = scene_uniforms(options, terrain_cache_frame, baked_surface_frame)?;
+                            options: &Options,
+                            adaptation_seconds: f32| {
+        let mut uniforms = scene_uniforms(options, terrain_cache_frame, baked_surface_frame)?;
+        uniforms.exposure_and_output[0] = adaptation_seconds;
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene uniforms"),
             contents: bytemuck::bytes_of(&uniforms),
@@ -2042,12 +2065,29 @@ fn render_world(
         let bind_group = bind_group(device, scene_layout, &buffer, "scene uniforms bind group");
         Ok::<_, String>((buffer, bind_group))
     };
-    // Earlier views run one frame each; the requested view then runs until its
-    // surface is baked.
+    let draw_illumination = |pass: &mut wgpu::RenderPass<'_>,
+                             adaptation: &CaptureAdaptation,
+                             scene: &wgpu::BindGroup| {
+        pass.set_pipeline(&adaptation.pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, playground_bind_group, &[]);
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        pass.draw(0..6, 0..1);
+    };
+    // Earlier views run one frame each, adapting the eye when asked; the
+    // requested view then runs until its surface is baked.
     let views = options
         .prior_views
         .iter()
-        .map(|&[camera_x_m, camera_y_m, view_height_m]| {
+        .enumerate()
+        .map(|(index, &[camera_x_m, camera_y_m, view_height_m])| {
+            let adaptation_seconds = options.adaptation_seconds.map(|seconds| {
+                if index == 0 {
+                    SETTLED_ADAPTATION_SECONDS
+                } else {
+                    seconds
+                }
+            });
             (
                 Options {
                     camera_x_m,
@@ -2056,11 +2096,12 @@ fn render_world(
                     ..options.clone()
                 },
                 true,
+                adaptation_seconds,
             )
         })
-        .chain(std::iter::repeat_with(|| (options.clone(), false)));
+        .chain(std::iter::repeat_with(|| (options.clone(), false, None)));
     let mut frames = None;
-    for (view, prior) in views {
+    for (view, prior, adaptation_seconds) in views {
         let terrain_cache_frame = capture_terrain_cache_frame(&view, &mut terrain_cache)?;
         terrain_cache.commit();
         let baked_surface_frame = capture_baked_surface_frame(
@@ -2077,8 +2118,12 @@ fn render_world(
         let Some(fields) = fields.filter(|_| !(prior && options.skip_prior_fills)) else {
             continue;
         };
-        let (buffer, bind_group) =
-            scene_bind_group(&terrain_cache_frame, &baked_surface_frame, &view)?;
+        let (buffer, bind_group) = scene_bind_group(
+            &terrain_cache_frame,
+            &baked_surface_frame,
+            &view,
+            adaptation_seconds.unwrap_or(SETTLED_ADAPTATION_SECONDS),
+        )?;
         let bindings = field_bindings(fields, &buffer);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("baking frame encoder"),
@@ -2092,11 +2137,32 @@ fn render_world(
             &baked_surface_frame,
             None,
         );
+        if let (Some(adaptation), Some(_)) = (adaptation, adaptation_seconds) {
+            fields.encode(
+                &mut encoder,
+                &bind_group,
+                &bindings,
+                playground_bind_group,
+                &capture_field_grids(&view)?,
+                None,
+            );
+            adaptation
+                .field
+                .encode(&mut encoder, &bind_group, None, |pass| {
+                    draw_illumination(pass, adaptation, &bindings.scene)
+                });
+        }
         queue.submit([encoder.finish()]);
     }
     let (terrain_cache_frame, baked_surface_frame) = frames.unwrap();
-    let (scene_buffer, scene_bind_group) =
-        scene_bind_group(&terrain_cache_frame, &baked_surface_frame, options)?;
+    let (scene_buffer, scene_bind_group) = scene_bind_group(
+        &terrain_cache_frame,
+        &baked_surface_frame,
+        options,
+        options
+            .adaptation_seconds
+            .unwrap_or(SETTLED_ADAPTATION_SECONDS),
+    )?;
     let texture = capture_texture(device, options.width, options.height);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("playground capture encoder"),
@@ -2156,11 +2222,7 @@ fn render_world(
             adaptation
                 .field
                 .encode(&mut encoder, &scene_bind_group, None, |pass| {
-                    pass.set_pipeline(&adaptation.pipeline);
-                    pass.set_bind_group(0, &fragment_scene_bind_group, &[]);
-                    pass.set_bind_group(1, playground_bind_group, &[]);
-                    pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                    pass.draw(0..6, 0..1);
+                    draw_illumination(pass, adaptation, &fragment_scene_bind_group)
                 });
         }
         None => {}
@@ -2215,7 +2277,7 @@ fn render_world(
         pass.draw(0..6, 0..1);
     }
     let rgba = read_texture(device, queue, encoder, &texture)?;
-    let adapting_light = adapting_field_readback
+    let adapting_field_stops = adapting_field_readback
         .map(|buffer| {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
             device
@@ -2225,21 +2287,18 @@ fn render_world(
                 .slice(..)
                 .get_mapped_range()
                 .map_err(|error| format!("failed to read the adapting field: {error}"))?;
-            let stops = |column: u32, row: u32| {
-                let offset = (row * ADAPTING_FIELD_ROW_BYTES + 4 * column) as usize;
-                f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-            };
-            // The view's centre lies between the four central texels.
-            let half = ADAPTING_FIELD_TEXELS / 2;
-            let mean = (stops(half - 1, half - 1)
-                + stops(half, half - 1)
-                + stops(half - 1, half)
-                + stops(half, half))
-                / 4.0;
-            Ok::<_, String>(mean.exp2())
+            Ok::<_, String>(
+                bytes
+                    .as_chunks::<{ ADAPTING_FIELD_ROW_BYTES as usize }>()
+                    .0
+                    .iter()
+                    .flat_map(|row| &row.as_chunks::<4>().0[..ADAPTING_FIELD_TEXELS as usize])
+                    .map(|&texel| f32::from_le_bytes(texel))
+                    .collect(),
+            )
         })
         .transpose()?;
-    Ok((rgba, adapting_light))
+    Ok((rgba, adapting_field_stops))
 }
 
 /// What a scene composition adapts with: its illumination pipeline, the
@@ -2441,7 +2500,7 @@ fn scene_uniforms(
         ],
         view_cloud_motion_m: view_cloud_motion_m(options),
         cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
-        exposure_and_output: [1.0, options.output_peak, 0.0, 0.0],
+        exposure_and_output: [SETTLED_ADAPTATION_SECONDS, options.output_peak, 0.0, 0.0],
         environment_field_grid_m: field_grids.environment.uniforms,
         environment_field_texels: field_grids.environment.texel_uniforms(),
         cloud_weather_grid_m: field_grids.cloud_weather.uniforms,
@@ -2562,8 +2621,20 @@ fn capture_report(
     options: &Options,
     path: &std::path::Path,
     rgba: &[u8],
-    adapting_light: Option<f32>,
+    adapting_field_stops: Option<Vec<f32>>,
 ) -> Result<CaptureReport, String> {
+    // The view's centre lies between the four central texels.
+    let adapting_light = adapting_field_stops.as_ref().map(|stops| {
+        let texels = ADAPTING_FIELD_TEXELS as usize;
+        let stops = |column: usize, row: usize| stops[row * texels + column];
+        let half = texels / 2;
+        let mean = (stops(half - 1, half - 1)
+            + stops(half, half - 1)
+            + stops(half - 1, half)
+            + stops(half, half))
+            / 4.0;
+        mean.exp2()
+    });
     let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
     let (world_tick, world_tick_fraction) = split_tick_seconds(options.world_time_seconds);
@@ -2601,6 +2672,7 @@ fn capture_report(
             lunar_umbra_fraction: celestial.lunar_umbra_fraction,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
             adapting_light,
+            adapting_field_stops,
             settled_exposure_multiplier: exposure_target(
                 adapting_light.unwrap_or(celestial.ambient_intensity),
             ),

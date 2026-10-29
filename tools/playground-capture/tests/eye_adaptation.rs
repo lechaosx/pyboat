@@ -392,3 +392,74 @@ fn a_view_across_the_terminator_partly_adapts_each_side() {
         "twilight {twilight_beside_night} beside night, {twilight_beside_day} beside day",
     );
 }
+
+fn adapting_field_stops(capture: &Capture) -> Vec<f32> {
+    capture.derived["adaptingFieldStops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stops| stops.as_f64().unwrap() as f32)
+        .collect()
+}
+
+/// Adaptation is retinal: each part of the view eases in stops toward its own
+/// adapting light, taking 3 s to darkening light and 1 s to brightening light,
+/// and keeps its place on the screen as the view pans. Panning from daylight
+/// to dusk leaves the part still in daylight nearly as adapted as it settles,
+/// while the part now at dusk lags.
+#[test]
+fn each_part_of_the_view_adapts_in_place_as_the_view_pans() {
+    let day = ["-400", "0", "8000"];
+    let dusk = ["6000", "0", "8000"];
+    let field = |name: &str, camera, extra: &[&str]| {
+        adapting_field_stops(&capture(
+            name,
+            &with(view("scene_production", ["320", "200"], camera, "0"), extra),
+        ))
+    };
+    let pan = |name: &str, from: [&str; 3], to, seconds| {
+        field(
+            name,
+            to,
+            &[
+                "--prior-view",
+                &from.join(","),
+                "--adaptation-seconds",
+                seconds,
+            ],
+        )
+    };
+    let settled_day = field("pan-day", day, &[]);
+    let settled_dusk = field("pan-dusk", dusk, &[]);
+    let to_dusk = pan("pan-to-dusk", day, dusk, "3");
+    let to_day = pan("pan-to-day", dusk, day, "1");
+    // Each pan lasts one time constant, leaving 1/e of each texel's change.
+    let remaining = (-1.0_f32).exp();
+    for (name, panned, from, to) in [
+        ("to dusk", &to_dusk, &settled_day, &settled_dusk),
+        ("to day", &to_day, &settled_dusk, &settled_day),
+    ] {
+        for texel in 0..panned.len() {
+            let expected = to[texel] + (from[texel] - to[texel]) * remaining;
+            assert!(
+                (panned[texel] - expected).abs() < 0.01,
+                "{name}, texel {texel}: {} stops, expected {expected}",
+                panned[texel],
+            );
+        }
+    }
+    let texels = browser::ADAPTING_FIELD_TEXELS as usize;
+    let lag = |texel: usize| (to_dusk[texel] - settled_dusk[texel]).abs();
+    let left_quarter_lag = (0..to_dusk.len())
+        .filter(|texel| texel % texels < texels / 4)
+        .map(lag)
+        .fold(0.0, f32::max);
+    let right_quarter_lag = (0..to_dusk.len())
+        .filter(|texel| texel % texels >= texels * 3 / 4)
+        .map(lag)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        left_quarter_lag < 0.3 && right_quarter_lag > 1.0,
+        "daylit quarter lags up to {left_quarter_lag} stops, dusk quarter at least {right_quarter_lag}",
+    );
+}
