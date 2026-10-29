@@ -33,10 +33,10 @@ The deployment workflow publishes the game to GitHub Pages and runs the backend
 in the existing ARM64 Docker Swarm. Configure the repository's Pages source as
 **GitHub Actions**.
 
-Set the repository Actions variable `WEBTRANSPORT_HOST` to the backend's DNS name
-or IPv4 address, for example `boats.dlabaja.eu`. It must reach the server and be
-covered by a browser-trusted certificate. The frontend embeds the address when
-building; changing it requires redeployment.
+The backend address defaults to `DEPLOY_HOST`. To use a different DNS name or
+IPv4 address, set the repository Actions variable `WEBTRANSPORT_HOST`, for example
+`boats.dlabaja.eu`. The selected address must reach the server. The frontend
+embeds the address when building; changing it requires redeployment.
 
 Local builds without `WEBTRANSPORT_HOST` use the page's hostname and retain the
 `webtransportPort` and `webtransportCertificateHash` query parameters.
@@ -51,16 +51,20 @@ Create the `production` GitHub environment with these secrets:
 | `DEPLOY_SSH_KEY` | Private deployment key authorized for that user |
 | `DEPLOY_KNOWN_HOSTS` | Verified OpenSSH known-hosts entry, including `[host]:port` for a non-default port |
 
-Set the `production` environment's Actions variable `PYBOAT_CERTIFICATE_DIR` to
-an absolute directory on the server containing `fullchain.pem` and `privkey.pem`.
-Mount a directory whose certificate files and any symlink targets are accessible
-inside that directory; Let's Encrypt's `live/` directory alone usually points
-outside itself. Keep the
-private key restricted to the server administrator and the container. Certificate
-issuance and renewal must already be configured for the selected address.
+Allow inbound **TCP 80** for Let's Encrypt validation and **UDP 8765** for game
+transport in the provider and server firewalls. TCP 80 must be available for
+Certbot's temporary HTTP listener whenever issuance or renewal is needed. The
+deployment fails if another service owns that port. A DNS name must resolve to
+this server; an IPv4 address works directly without DNS.
 
-Allow inbound **UDP 8765** in the provider and server firewalls. The workflow uses
-the `pyboat` stack and GHCR image tagged with the commit SHA. It waits for the
+The SSH user needs Docker access, `flock`, and permission to use `crontab`, with
+the host's cron daemon running. The workflow obtains the initial certificate
+before starting the backend and installs an hourly renewal job in that user's
+crontab. Certificate state and private keys stay on the server under
+`~/.local/share/pyboat`, restricted to the SSH user and Docker.
+
+The workflow uses the `pyboat` stack and GHCR image tagged with the commit SHA.
+It waits for the
 backend rollout before publishing Pages; a rollout restarts the match and
 disconnects players. On first deployment, confirm the SSH user can reach an active
 Swarm manager and that its ARM64 node can pull GHCR images. Workflow credentials
@@ -73,13 +77,19 @@ public UDP path or browser certificate validation succeeds.
 
 ### Certificate renewal
 
-The server reads certificates at startup. After each successful renewal, update
-the files in the mounted directory and run this on the Swarm manager as a renewal
-deploy hook:
+The renewal job asks Certbot whether the certificate is due, installs a renewed
+PEM pair together, and restarts `pyboat_server` to load it. Restarting ends the
+current match. A failed restart is retried on the next hourly run. IPv4
+certificates use Let's Encrypt's six-day profile, so keep TCP 80 reachable
+throughout operation.
+
+Run a renewal check manually on the server with:
 
 ```sh
-docker service update --force --detach=false pyboat_server
+~/.local/share/pyboat/certificates.sh renew
 ```
 
-Restarting ends the current match. Run the same hook after a manual certificate
-replacement, and monitor renewal failures before the current certificate expires.
+Monitor `~/.local/share/pyboat/certificates.log` for renewal failures; the ACME
+account is registered without an email address. Keep the persistent
+`~/.local/share/pyboat/letsencrypt` directory when redeploying so Certbot can reuse
+its account and certificates.

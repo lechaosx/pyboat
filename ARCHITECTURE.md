@@ -37,6 +37,9 @@ and verification details.
   trusted certificate and reachable transport port belong to that service.
 - **[Implicit]** The frontend selects its backend address at build time so
   static hosting and game transport can use independent origins.
+- **[Explicit]** Trusted certificate issuance and renewal are automatic.
+- **[Implicit]** Let's Encrypt runs on the backend host so private keys remain
+  there throughout issuance and renewal.
 
 ## Authority and coordinates
 
