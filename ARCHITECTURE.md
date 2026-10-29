@@ -156,19 +156,23 @@ and verification details.
 
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
-- **[Explicit]** Bounded exposure applies to the entire view and follows summed
-  celestial illumination at its center. Adaptation stays independent of zoom and
-  surface color.
+- **[Explicit]** Each part of the view adapts to the clear-sky celestial light
+  it receives. That light stands in for the eye's local adaptation to the
+  scene's own light, so shadow, cloud, and storm darkening keep their contrast
+  and leave no halos. Full dark adaptation under a clear moonless sky bounds it.
+- **[Explicit]** Adaptation stays independent of zoom and surface color.
+- **[Implicit]** Adaptation follows a change of light at the view's center
+  gradually; the rest of the view keeps its settled offset from the center.
 - **[Implicit]** Exposure adapts in logarithmic brightness so equal brightness
   ratios have the same response.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
-- **[Implicit]** Scene light keeps the physical ratios of daylight, twilight,
+- **[Explicit]** Scene light keeps the physical ratios of daylight, twilight,
   moonlight, and starlight, and the eye alone compresses them: an adapted
-  view's brightness follows CIECAM02's photopic brightness law at every light
-  level. That compromise keeps moonlit and moonless views readable on a
-  display, where real dim vision would leave them nearly black.
-- **[Implicit]** Unlit overlays, such as boats and the windsock, take the
-  light the view is adapted to.
+  part of the view has the brightness of CIECAM02's photopic brightness law at
+  every light level. That compromise keeps moonlit and moonless views readable
+  on a display, where real dim vision would leave them nearly black.
+- **[Explicit]** Unlit overlays, such as boats and the windsock, take the
+  light the view is adapted to where they are.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
   rendered world position and reconstructs environment fields there from a
   per-frame grid anchored to world coordinates, with spacing matched to the
@@ -497,7 +501,8 @@ and verification details.
   same explicit world inputs and fractional render clock; fresh one-frame
   captures have zero renderer-local cloud displacement.
 - **[Implicit]** Still captures use settled exposure and SDR output; their sidecar
-  records exposure so they can be compared with an adapted interactive view.
+  records the exposure at the view's center so they can be compared with an
+  adapted interactive view.
 - **[Explicit]** Capture requires a hardware Vulkan GPU.
 - **[Explicit]** Still-view rendering cost is judged on one fixed set of
   scenarios shared by headless capture and the browser playground.

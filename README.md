@@ -2,7 +2,7 @@
 
 A browser sailing game with multiplayer naval combat. The prototype supports
 steering, ramming, collision damage, and persistent wrecks in a procedural world.
-Day/night lighting uses gradual exposure adaptation, with HDR highlights on
+Day/night lighting uses gradual, local eye adaptation, with HDR highlights on
 supported browsers and displays.
 
 The intended game adds varied ships, mostly automatic weapons, and progression.

@@ -2189,12 +2189,6 @@ fn scene_uniforms(
     let vector_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
-    let local_celestial = world_celestial_conditions(
-        world_geometry,
-        options.world_time_seconds,
-        canonical_camera_m.into(),
-    );
-    let exposure = exposure_target(celestial_lighting(local_celestial).ambient_intensity);
     Ok(SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -2250,7 +2244,7 @@ fn scene_uniforms(
         ],
         view_cloud_motion_m: view_cloud_motion_m(options),
         cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
-        exposure_and_output: [exposure, 1.0, 0.0, 0.0],
+        exposure_and_output: [1.0, 1.0, 0.0, 0.0],
         environment_field_grid_m: field_grids.environment.uniforms,
         environment_field_texels: field_grids.environment.texel_uniforms(),
         cloud_weather_grid_m: field_grids.cloud_weather.uniforms,

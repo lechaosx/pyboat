@@ -89,7 +89,7 @@ impl PlaygroundExposure {
             Vector::new(camera_x_m, camera_y_m),
         );
         let target = crate::exposure_target(celestial_lighting(conditions).ambient_intensity);
-        Ok(self.exposure.advance(target, elapsed_seconds))
+        Ok(self.exposure.advance(target, elapsed_seconds) / target)
     }
 }
 
@@ -1777,8 +1777,8 @@ impl Renderer {
             canonical_camera_m.into(),
         );
         let target = crate::exposure_target(celestial_lighting(local_celestial).ambient_intensity);
-        let exposure = if render_clock.is_some() {
-            self.exposure.advance(target, elapsed_seconds)
+        let adaptation_lag = if render_clock.is_some() {
+            self.exposure.advance(target, elapsed_seconds) / target
         } else {
             1.0
         };
@@ -1970,7 +1970,7 @@ impl Renderer {
                 cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
                 // WebGPU exposes HDR capability but no numeric display headroom.
                 exposure_and_output: [
-                    exposure,
+                    adaptation_lag,
                     output_peak,
                     f32::from(hdr),
                     self.vision_noise_phase as f32,

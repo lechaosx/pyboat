@@ -10,9 +10,21 @@ fn linear_material_color(display_color: vec3<f32>) -> vec3<f32> {
 // Clear-sky daylight from a zenith Sun on level ground, the unit of scene
 // light, in lux; game::ZENITH_DAYLIGHT_LUX gives its provenance.
 const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
+// Light of a clear moonless sky, in scene light; game::NIGHT_SKY_LIGHT gives
+// its provenance.
+const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
 // Mirrors ADAPTED_BRIGHTNESS_EXPONENT in exposure.rs, which gives its
 // provenance and compromise.
 const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
+
+// Gain that shows a part of the view adapted to the clear-sky `light` it
+// receives: exposure.rs's `exposure_target`, times the lag of the view's
+// gradual adaptation. Clear-sky light varies smoothly over far more than the
+// eye's adapting field, so a pixel's own light stands for that field's mean.
+fn adapted_gain(light: f32) -> f32 {
+    return scene.exposure_and_output.x
+        * pow(clamp(light, NIGHT_SKY_LIGHT, 1.0), ADAPTED_BRIGHTNESS_EXPONENT - 1.0);
+}
 
 // Clear-sky light, in scene light, that a view shown at `adapted_gain` is
 // adapted to: the inverse of exposure.rs's `exposure_target`.
@@ -39,9 +51,9 @@ fn night_vision_color(linear_color: vec3<f32>, rod_fraction: f32) -> vec3<f32> {
 }
 
 // Unlit colours, such as boats and the windsock, as level ground lit by the
-// light the view is adapted to.
-fn adapted_unlit_color(linear_color: vec3<f32>) -> vec3<f32> {
-    return linear_color * adapted_view_light(scene.exposure_and_output.x);
+// light the view is adapted to there.
+fn adapted_unlit_color(linear_color: vec3<f32>, adapted_gain: f32) -> vec3<f32> {
+    return linear_color * adapted_view_light(adapted_gain);
 }
 
 fn vision_noise_sample(cell: vec2<u32>, phase: u32) -> f32 {
@@ -100,9 +112,9 @@ fn encode_display_color(linear_color: vec3<f32>) -> vec3<f32> {
     );
 }
 
-fn tone_map_scene_color(scene_color: vec3<f32>, css_position_px: vec2<f32>) -> vec3<f32> {
+fn tone_map_scene_color(scene_color: vec3<f32>, adapted_gain: f32, css_position_px: vec2<f32>) -> vec3<f32> {
     let exposed = max(
-        adapted_view_color(scene_color, scene.exposure_and_output.x, css_position_px, scene.exposure_and_output.w) * scene.exposure_and_output.x,
+        adapted_view_color(scene_color, adapted_gain, css_position_px, scene.exposure_and_output.w) * adapted_gain,
         vec3<f32>(0.0),
     );
     let maximum = max(exposed.r, max(exposed.g, exposed.b));

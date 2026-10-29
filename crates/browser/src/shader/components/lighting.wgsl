@@ -299,7 +299,6 @@ fn celestial_receiver_light_at_position_and_height(
 
 // Scene light is clear-sky daylight from a zenith Sun on level ground; these
 // mirror game's constants of the same names, which give their provenance.
-const NIGHT_SKY_LIGHT: f32 = 2e-3 / ZENITH_DAYLIGHT_LUX;
 const LOWER_TWILIGHT_LIGHT: f32 = 3.4 / ZENITH_DAYLIGHT_LUX / 0.214;
 const UPPER_AFTERGLOW_LIGHT: f32 = (0.008 / ZENITH_DAYLIGHT_LUX - NIGHT_SKY_LIGHT) / 0.641;
 const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
@@ -362,6 +361,18 @@ fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
     return lunar_light_scale() * banded_clear_sky_light(receiver.moon_direction.z);
 }
 
+// Clear-sky light on level ground from the night sky, the Sun, and the Moon,
+// as game::celestial_lighting's ambient intensity.
+fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
+    return min(
+        1.0,
+        NIGHT_SKY_LIGHT
+            + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
+                * banded_clear_sky_light(receiver.sun_direction.z)
+            + moon_atmospheric_amount(receiver),
+    );
+}
+
 // Diffuse light that a non-absorbing cloud layer of optical depth `tau` and
 // regional cover `cover` sends down from each beam, for lights at `z`, the sines
 // of their elevations above the layer's level, by the two-stream form along
@@ -411,15 +422,9 @@ fn calculate_atmospheric_ambient_light(
     canopy: RegionalCanopyConditions,
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
-    let solar_ambient = banded_clear_sky_light(sun_direction().z);
+    let solar_ambient = banded_clear_sky_light(receiver.sun_direction.z);
     let lunar_ambient = moon_atmospheric_amount(receiver);
-    let clear_intensity = min(
-        1.0,
-        NIGHT_SKY_LIGHT
-            + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
-                * solar_ambient
-            + lunar_ambient,
-    );
+    let clear_intensity = clear_sky_intensity(receiver);
     let split = celestial_light_split(
         receiver,
         solar_ambient,

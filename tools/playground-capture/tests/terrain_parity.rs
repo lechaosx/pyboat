@@ -262,81 +262,73 @@ fn night_vision_noise_is_unbiased_bounded_and_continuous() {
     );
 }
 
+/// Each part of the view adapts to the clear-sky light it receives, so the day
+/// and night sides of the world look alike whichever the view centres on, and
+/// the night side stays visible beside daylight.
 #[test]
-fn nighttime_eye_adaptation_brightens_daylight_elsewhere_in_the_view() {
+fn each_part_of_the_view_adapts_to_its_own_light() {
     let world = WorldGeometry::default();
     let size = 64usize;
-    let controls = [];
-    let day_center = render_controlled_image_at(
-        world,
-        Vector::ZERO,
-        0.0,
-        world.height_m(),
-        "scene",
-        size as u32,
-        size as u32,
-        &controls,
-    );
-    let night_center = render_controlled_image_at(
-        world,
-        Vector::new(0.5 * world.width_m(), 0.0),
-        0.0,
-        world.height_m(),
-        "scene",
-        size as u32,
-        size as u32,
-        &controls,
-    );
-    let mut compared_day_pixels = 0;
-    let mut brighter_night_pixels = 0;
-    let mut day_luminance_sum = 0.0;
-    let mut night_adapted_day_luminance_sum = 0.0;
-    let mut day_chroma_sum = 0.0;
-    let mut night_adapted_day_chroma_sum = 0.0;
-    let relative_chroma = |color: &[u8]| {
-        let channels: Vec<_> = color[..3]
-            .iter()
-            .copied()
-            .map(srgb_channel_to_linear)
-            .collect();
-        let maximum = channels.iter().copied().fold(0.0, f32::max);
-        let minimum = channels.iter().copied().fold(1.0, f32::min);
-        if maximum == 0.0 {
-            0.0
-        } else {
-            (maximum - minimum) / maximum
-        }
-    };
-    for row in 0..size {
-        for column in 0..size {
-            let position = Vector::new(
-                world.width_m() * ((column as f32 + 0.5) / size as f32 - 0.5),
-                world.height_m() * (0.5 - (row as f32 + 0.5) / size as f32),
-            );
-            let light = celestial_lighting(world_celestial_conditions(world, 0.0, position));
-            let day_offset = 4 * (row * size + column);
-            let night_offset = 4 * (row * size + (column + size / 2) % size);
-            if light.sun_direction[2] > 0.2 {
-                day_luminance_sum += linear_luminance(&day_center[day_offset..day_offset + 4]);
-                night_adapted_day_luminance_sum +=
-                    linear_luminance(&night_center[night_offset..night_offset + 4]);
-                day_chroma_sum += relative_chroma(&day_center[day_offset..day_offset + 4]);
-                night_adapted_day_chroma_sum +=
-                    relative_chroma(&night_center[night_offset..night_offset + 4]);
-                compared_day_pixels += 1;
-            } else if light.sun_direction[2] < -0.3 {
-                brighter_night_pixels += usize::from((0..3).any(|channel| {
-                    night_center[night_offset + channel] > day_center[day_offset + channel]
-                }));
+    for diagnostic in ["scene", "scene_production"] {
+        let render = |center_m| {
+            render_controlled_image_at(
+                world,
+                center_m,
+                0.0,
+                world.height_m(),
+                diagnostic,
+                size as u32,
+                size as u32,
+                &[],
+            )
+        };
+        let day_center = render(Vector::ZERO);
+        let night_center = render(Vector::new(0.5 * world.width_m(), 0.0));
+        // Mean linear channels of the day and night sides, seen from each centre.
+        let mut sides = [[[0.0_f32; 3]; 2]; 2];
+        let mut counts = [0usize; 2];
+        for row in 0..size {
+            for column in 0..size {
+                let position = Vector::new(
+                    world.width_m() * ((column as f32 + 0.5) / size as f32 - 0.5),
+                    world.height_m() * (0.5 - (row as f32 + 0.5) / size as f32),
+                );
+                let light = celestial_lighting(world_celestial_conditions(world, 0.0, position));
+                let side = if light.sun_direction[2] > 0.2 {
+                    0
+                } else if light.sun_direction[2] < -0.3 {
+                    1
+                } else {
+                    continue;
+                };
+                let day_offset = 4 * (row * size + column);
+                let night_offset = 4 * (row * size + (column + size / 2) % size);
+                for channel in 0..3 {
+                    sides[side][0][channel] +=
+                        srgb_channel_to_linear(day_center[day_offset + channel]);
+                    sides[side][1][channel] +=
+                        srgb_channel_to_linear(night_center[night_offset + channel]);
+                }
+                counts[side] += 1;
             }
         }
+        let luminance =
+            |[red, green, blue]: [f32; 3]| 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        for (side, name) in ["day", "night"].into_iter().enumerate() {
+            assert!(counts[side] > 0);
+            let [from_day, from_night] =
+                sides[side].map(|sum| sum.map(|channel| channel / counts[side] as f32));
+            for channel in 0..3 {
+                assert!(
+                    (from_day[channel] - from_night[channel]).abs() <= 0.03 * luminance(from_day),
+                    "{diagnostic}: {name} side {from_day:?} from the day centre, {from_night:?} from the night centre",
+                );
+            }
+        }
+        let day = luminance(sides[0][0].map(|sum| sum / counts[0] as f32));
+        let night = luminance(sides[1][0].map(|sum| sum / counts[1] as f32));
+        assert!(night > 0.1 * day, "{diagnostic}: night {night}, day {day}");
     }
-    assert!(compared_day_pixels > 0);
-    assert!(
-        night_adapted_day_luminance_sum - day_luminance_sum > compared_day_pixels as f32 / 255.0
-    );
-    assert!(night_adapted_day_chroma_sum < day_chroma_sum);
-    assert!(brighter_night_pixels > 0);
 }
 
 #[test]
