@@ -1174,6 +1174,14 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 30.0),
             ],
         ),
+        "lighting_canopy_underside_sweep" => diagnostic(
+            value,
+            "lighting_canopy_transfer",
+            &[
+                ("CANOPY_TRANSFER_OUTPUT", 2.0),
+                ("CANOPY_TRANSFER_OPTICAL_THICKNESS", 30.0),
+            ],
+        ),
         "lighting_night_vision_unadapted" => diagnostic(
             value,
             "lighting_model_regressions",

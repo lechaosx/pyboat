@@ -273,9 +273,10 @@ and verification details.
   diffuse.
 - **[Implicit]** A light below the canopy's level but above its horizon lights
   the layer's underside, which reflects it down, until the light sinks below
-  the horizon the layer's height has on Earth. Its beam has crossed the
-  canopy's level once already on the far side, where the regional canopy's
-  cover and depth stop it.
+  the horizon the layer's height has on Earth. Its beam crosses the air below
+  the layer's level along its grazing path on Earth, so it dims and reddens
+  continuously down to that horizon. It has crossed the canopy's level once
+  already on the far side, where the regional canopy's cover and depth stop it.
 - **[Implicit]** Cloud layers keep real absolute heights on the small world.
 - **[Implicit]** Light that ground and sky exchange follows regional means, so
   it lifts every shadow in a region alike.

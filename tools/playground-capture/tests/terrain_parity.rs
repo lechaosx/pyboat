@@ -700,6 +700,96 @@ fn thin_full_canopy_passes_twilight_sky_light() {
     }
 }
 
+/// After a half-covering deck's own sunset, the light its underside reflects
+/// to the ground dims and reddens as the Sun's ray grazes lower through the
+/// air, so the Sun's disc sets behind the limb on a faint trace. At the deck's
+/// level the beam keeps the colour it has from just above it.
+#[test]
+fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
+    let world = WorldGeometry::default();
+    let width = 1200;
+    // A centimetre-wide view keeps every column in the same weather.
+    let image = render_diagnostic_image_with_view_at(
+        world,
+        Vector::ZERO,
+        0.0,
+        0.01 / width as f32,
+        "lighting_canopy_underside_sweep",
+        width,
+        1,
+    );
+    // The diagnostic sweeps the Sun from 0.5 degrees above the deck's level to
+    // 2.5 degrees below it, with the light in hundredths of a zenith Sun's
+    // clear-sky light in red and its red share in green.
+    let depression_degrees = |column: usize| -0.5 + 3.0 * (column as f32 + 0.5) / width as f32;
+    let pixels = image.as_chunks::<4>().0;
+    let light: Vec<f32> = pixels
+        .iter()
+        .map(|pixel| srgb_channel_to_linear(pixel[0]))
+        .collect();
+    let red_share: Vec<f32> = pixels
+        .iter()
+        .map(|pixel| srgb_channel_to_linear(pixel[1]))
+        .collect();
+    let level = (0..width as usize)
+        .find(|column| depression_degrees(*column) > 0.0)
+        .unwrap();
+    // The deck, 3.6 km up, loses the Sun below the horizon that height has on
+    // Earth; the disc starts to set there when its centre is a radius above it.
+    let (earth_radius_m, deck_height_m) = (6.371e6_f32, 3_600.0_f32);
+    let setting_degrees = (earth_radius_m / (earth_radius_m + deck_height_m))
+        .acos()
+        .to_degrees()
+        - 0.00465_f32.to_degrees();
+    let setting = (0..width as usize)
+        .rfind(|column| depression_degrees(*column) <= setting_degrees)
+        .unwrap();
+    let peak = (level..setting)
+        .max_by(|left, right| light[*left].total_cmp(&light[*right]))
+        .unwrap();
+    for column in level..setting {
+        assert!(
+            (light[column + 1] - light[column]).abs() <= 0.1 * light[peak],
+            "light steps from {} to {} at {} degrees down",
+            light[column],
+            light[column + 1],
+            depression_degrees(column),
+        );
+    }
+    for column in peak..setting {
+        assert!(
+            light[column + 1] <= light[column],
+            "light rises at {} degrees down",
+            depression_degrees(column),
+        );
+    }
+    assert!(
+        light[setting] <= 0.01 * light[peak],
+        "{} of the peak light remains as the disc starts to set {} degrees down",
+        light[setting] / light[peak],
+        depression_degrees(setting),
+    );
+    for column in level..setting {
+        assert!(
+            red_share[column + 1] >= red_share[column],
+            "the red share falls at {} degrees down",
+            depression_degrees(column),
+        );
+    }
+    assert!(
+        red_share[setting] - red_share[level] >= 0.05,
+        "red share {} at the deck's level and {} as the disc starts to set",
+        red_share[level],
+        red_share[setting],
+    );
+    assert!(
+        pixels[level][1].abs_diff(pixels[level - 1][1]) <= 1,
+        "colour {:?} just below the deck's level and {:?} just above it",
+        pixels[level],
+        pixels[level - 1],
+    );
+}
+
 #[test]
 fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     let world = WorldGeometry::default();
