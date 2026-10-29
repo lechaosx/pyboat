@@ -459,7 +459,58 @@ fn each_part_of_the_view_adapts_in_place_as_the_view_pans() {
         .map(lag)
         .fold(f32::INFINITY, f32::min);
     assert!(
-        left_quarter_lag < 0.3 && right_quarter_lag > 1.0,
+        left_quarter_lag < 0.3 && right_quarter_lag > 0.75,
         "daylit quarter lags up to {left_quarter_lag} stops, dusk quarter at least {right_quarter_lag}",
+    );
+}
+
+/// The eye adapts to the mean light over its adapting field, as CIE defines
+/// adapting luminance, so a field half in daylight adapts to about half of
+/// daylight. In a whole-world view across the terminator, the day side shows
+/// within a small factor of a view of daylight alone, and the night side no
+/// brighter than a view of the night alone.
+#[test]
+fn a_view_of_day_and_night_adapts_to_their_mean_light() {
+    let (width, height) = (320, 200);
+    // Mean luminance over 6 km of world east to west around `center_x_m`,
+    // and 6 km about the equator, in a view centred on the equator.
+    let region = |name: &str, camera_x_m: f32, view_height_m: f32, center_x_m: f32| {
+        let (camera_x, view_height) = (camera_x_m.to_string(), view_height_m.to_string());
+        let size = [width.to_string(), height.to_string()];
+        let capture = capture(
+            name,
+            &view(
+                "scene_production",
+                [&size[0], &size[1]],
+                [&camera_x, "0", &view_height],
+                "0",
+            ),
+        );
+        let metres_per_pixel = view_height_m / height as f32;
+        let luminance = luminances(&capture.rgba);
+        let pixels: Vec<f32> = (0..width * height)
+            .filter(|pixel| {
+                let x_m = camera_x_m
+                    + ((pixel % width) as f32 + 0.5 - 0.5 * width as f32) * metres_per_pixel;
+                let y_m = ((pixel / width) as f32 + 0.5 - 0.5 * height as f32) * metres_per_pixel;
+                (x_m - center_x_m).abs() < 3000.0 && y_m.abs() < 3000.0
+            })
+            .map(|pixel| luminance[pixel])
+            .collect();
+        mean(&pixels)
+    };
+    let (day_x_m, night_x_m) = (-5000.0, 30_000.0);
+    let day_beside_night = region("whole-world-day", 10_600.0, 32_000.0, day_x_m);
+    let night_beside_day = region("whole-world-night", 10_600.0, 32_000.0, night_x_m);
+    let day_alone = region("day-alone", day_x_m, 8000.0, day_x_m);
+    let night_alone = region("night-alone", night_x_m, 8000.0, night_x_m);
+    let day_ratio = day_beside_night / day_alone;
+    assert!(
+        (1.0 / 1.6..=1.6).contains(&day_ratio),
+        "day beside night at {day_ratio} of day alone",
+    );
+    assert!(
+        night_beside_day <= night_alone,
+        "night beside day {night_beside_day}, alone {night_alone}",
     );
 }

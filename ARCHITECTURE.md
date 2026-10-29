@@ -174,8 +174,11 @@ and verification details.
   gradually to the adapting field there and keeps its state in place as the
   view pans, so a part panned from daylight into night starts dark while a
   part still in daylight keeps its look.
-- **[Implicit]** Exposure adapts, and the adapting field pools light, in
-  logarithmic brightness so equal brightness ratios have the same response.
+- **[Implicit]** The adapting field pools the mean light over its extent, as
+  CIE defines adapting luminance and as light scattered within the eye adds,
+  so a field half in daylight adapts to about half of daylight.
+- **[Implicit]** Adaptation over time runs in logarithmic brightness so equal
+  brightness ratios take the same time.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
 - **[Explicit]** Scene light keeps the physical ratios of daylight, twilight,
   moonlight, and starlight, and the eye alone compresses them: an adapted

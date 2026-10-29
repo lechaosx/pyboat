@@ -7,7 +7,7 @@
 // Texels along each axis of the illumination sampled over the view and of the
 // adapting field blurred from it; adapting_field.rs mirrors them. The field's
 // Gaussian spans 9 illumination texels vertically and 5 across a 16:9 view,
-// so a sample crossing a shadow edge moves the field by under 1% of a stop.
+// so one sample carries at most about 1% of the field's weight.
 const ILLUMINATION_TEXELS: u32 = 32u;
 const ADAPTING_FIELD_TEXELS: u32 = 32u;
 
