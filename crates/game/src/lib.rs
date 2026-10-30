@@ -491,12 +491,18 @@ pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
 }
 
 /// Clear-sky daylight from a zenith Sun on level ground, the unit of scene
-/// light, in lux: ESRA's clear-sky light at the zenith under
-/// `REFERENCE_LINKE_TURBIDITY`, 80% of the 1361 W/m² solar constant (Kopp and
-/// Lean 2011, Geophys. Res. Lett. 38), at the clear sky's luminous efficacy of
-/// about 105 lm/W (Littlefair 1985, Light. Res. Technol. 17). lighting.wgsl
-/// and display.wgsl mirror it.
-pub const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
+/// light, in lux: 0.880 of the 133.3 klx luminous solar constant (Darula,
+/// Kittler and Gueymard 2005, Solar Energy 79), the beam's luminous
+/// transmittance of 0.796 and ESRA's diffuse light of 0.084 under the
+/// reference turbidity. ESRA's diffuse light is a share of broadband power,
+/// taken as the same share of luminous power: a compromise that leaves out the
+/// blue sky's higher luminous efficacy. Clear-sky light at sunset, all
+/// diffuse, comes to about 1,030 lux, twice the 410-585 lux measured (AMS
+/// Glossary of Meteorology, "civil twilight"), because ESRA's diffuse light
+/// with the Sun at the horizon is about twice too bright; twilight, fitted as
+/// a ratio to sunset, keeps that excess. lighting.wgsl and display.wgsl mirror
+/// it.
+pub const ZENITH_DAYLIGHT_LUX: f32 = 1.173e5;
 
 /// Light of a clear moonless sky, in scene light: starlight, zodiacal light,
 /// and airglow measured as 10^-3.22 to 10^-3.05 lux on the ground of a
@@ -538,12 +544,58 @@ pub const SCATTERED_TWILIGHT_SHARE: f64 = 0.0146;
 /// -26.74 (Cox 2000, Allen's Astrophysical Quantities). lighting.wgsl mirrors it.
 pub const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
 
-/// Linke turbidity of marine air at its typical 80% humidity: the aerosol
-/// optical depth of 0.103 that lighting.wgsl gives it, by Ineichen's (2008,
-/// Solar Energy 82) conversion. Clear-sky light takes it everywhere so that
-/// exposure, which has no regional weather, follows the light the scene
-/// receives; regional turbidity only splits that light into beam and diffuse.
-pub const REFERENCE_LINKE_TURBIDITY: f64 = 2.35 + 7.79 * 0.103;
+/// Aerosol optical depth at 550 nm of marine air at its typical 80% humidity,
+/// as lighting.wgsl's `humid_aerosol_optical_depth` gives it, and its Linke
+/// turbidity by Ineichen's (2008, Solar Energy 82) conversion. Clear-sky light
+/// takes them everywhere so that exposure, which has no regional weather,
+/// follows the light the scene receives; regional turbidity only splits that
+/// light into beam and diffuse.
+pub const REFERENCE_AEROSOL_OPTICAL_DEPTH: f64 = 0.103;
+pub const REFERENCE_LINKE_TURBIDITY: f64 = 2.35 + 7.79 * REFERENCE_AEROSOL_OPTICAL_DEPTH;
+
+/// lighting.wgsl's spectral constants, which give their provenance: luminance
+/// weights of the sRGB primaries, and Rayleigh, aerosol per unit of its 550 nm
+/// depth, and ozone optical depths at their dominant wavelengths.
+pub const LUMINANCE_WEIGHTS: [f64; 3] = [0.2126, 0.7152, 0.0722];
+const RAYLEIGH_OPTICAL_DEPTHS: [f64; 3] = [0.06506, 0.10081, 0.19986];
+const AEROSOL_SPECTRAL_SCALES: [f64; 3] = [0.93857, 1.00098, 1.10698];
+const OZONE_OPTICAL_DEPTHS: [f64; 3] = [0.03542, 0.02523, 0.00219];
+
+/// Air mass through the ozone layer, as `ozone_air_mass` in lighting.wgsl.
+pub fn ozone_air_mass(sine_height: f64) -> f64 {
+    let sine = sine_height.clamp(0.0, 1.0);
+    let layer_height = 22.0 / 6370.0;
+    (1.0 + layer_height) / (sine * sine + 2.0 * layer_height).sqrt()
+}
+
+/// Spectral transmittance of a beam, as `beam_transmittance` in lighting.wgsl.
+pub fn beam_transmittance(aerosol_optical_depth: f64, air_mass: f64, ozone_mass: f64) -> [f64; 3] {
+    std::array::from_fn(|channel| {
+        (-air_mass
+            * (RAYLEIGH_OPTICAL_DEPTHS[channel]
+                + aerosol_optical_depth * AEROSOL_SPECTRAL_SCALES[channel])
+            - ozone_mass * OZONE_OPTICAL_DEPTHS[channel])
+            .exp()
+    })
+}
+
+/// Luminous transmittance of a clear sky's beam, as
+/// `clear_sky_beam_luminance` in lighting.wgsl, which gives its provenance.
+pub fn clear_sky_beam_luminance(
+    sine_height: f64,
+    aerosol_optical_depth: f64,
+    air_column: f64,
+) -> f64 {
+    let sine = sine_height.clamp(0.0, 1.0);
+    let transmittance = beam_transmittance(
+        aerosol_optical_depth,
+        relative_air_mass(sine) * air_column,
+        ozone_air_mass(sine),
+    );
+    (0..3)
+        .map(|channel| LUMINANCE_WEIGHTS[channel] * transmittance[channel])
+        .sum()
+}
 
 /// The Moon's light relative to the full Moon's for the illuminated fraction of
 /// its disc, by Krisciunas and Schaefer's (1991, Publ. Astron. Soc. Pac. 103)
@@ -565,44 +617,34 @@ pub fn relative_air_mass(sine_height: f64) -> f64 {
     1.0 / (sine + 0.025 * (-11.0 * sine).exp())
 }
 
-/// ESRA clear-sky light (Rigollier, Bauer and Wald 2000, Solar Energy 68) for a
-/// light at the given sine of its height above the horizon: the beam's
-/// transmittance along its path, then diffuse light on level ground, each per
-/// unit of the light above the atmosphere. The beam crosses the relative air
-/// mass, by the model's pressure correction `air_column` of it, with Kasten's
-/// (1996) broadband Rayleigh optical depth, and diffuse light follows the
-/// model's Linke turbidity fits. lighting.wgsl mirrors it.
-pub fn clear_sky_irradiance(sine_height: f64, linke_turbidity: f64, air_column: f64) -> [f64; 2] {
+/// ESRA's clear-sky diffuse light on level ground, as
+/// `clear_sky_diffuse_light` in lighting.wgsl, which gives its provenance.
+pub fn clear_sky_diffuse_light(sine_height: f64, linke_turbidity: f64) -> f64 {
     let sine = sine_height.clamp(0.0, 1.0);
-    let air_mass = relative_air_mass(sine) * air_column;
-    let rayleigh_optical_depth = if air_mass > 20.0 {
-        1.0 / (10.4 + 0.718 * air_mass)
-    } else {
-        1.0 / (6.6296
-            + air_mass * (1.7513 + air_mass * (-0.1202 + air_mass * (0.0065 - 0.00013 * air_mass))))
-    };
-    let beam_transmittance = (-0.8662 * linke_turbidity * air_mass * rayleigh_optical_depth).exp();
     let turbidity = linke_turbidity;
     let diffuse_transmission = -0.015843 + turbidity * (0.030543 + 0.0003797 * turbidity);
     let a0 = (0.26463 + turbidity * (-0.061581 + 0.0031408 * turbidity))
         .max(0.002 / diffuse_transmission);
     let a1 = 2.04020 + turbidity * (0.018945 - 0.011161 * turbidity);
     let a2 = -1.3025 + turbidity * (0.039231 + 0.0085079 * turbidity);
-    [
-        beam_transmittance,
-        diffuse_transmission * (a0 + sine * (a1 + a2 * sine)),
-    ]
+    diffuse_transmission * (a0 + sine * (a1 + a2 * sine))
+}
+
+/// Clear-sky light on level ground from a zenith light at sea level, per unit
+/// of the light above the atmosphere.
+pub fn zenith_clear_sky_light() -> f64 {
+    clear_sky_beam_luminance(1.0, REFERENCE_AEROSOL_OPTICAL_DEPTH, 1.0)
+        + clear_sky_diffuse_light(1.0, REFERENCE_LINKE_TURBIDITY)
 }
 
 /// Clear-sky light on level ground from a light at the given sine of its
 /// height above the horizon, under `air_column` of sea level's air, per unit of
 /// a zenith light's at sea level.
 pub fn clear_sky_light(sine_height: f64, air_column: f64) -> f32 {
-    let global = |sine: f64, air_column: f64| {
-        let [beam, diffuse] = clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY, air_column);
-        sine.clamp(0.0, 1.0) * beam + diffuse
-    };
-    (global(sine_height, air_column) / global(1.0, 1.0)) as f32
+    let beam = sine_height.clamp(0.0, 1.0)
+        * clear_sky_beam_luminance(sine_height, REFERENCE_AEROSOL_OPTICAL_DEPTH, air_column);
+    let diffuse = clear_sky_diffuse_light(sine_height, REFERENCE_LINKE_TURBIDITY);
+    ((beam + diffuse) / zenith_clear_sky_light()) as f32
 }
 
 /// The beam's clear-sky transmittance along its path from a light at the
@@ -610,7 +652,7 @@ pub fn clear_sky_light(sine_height: f64, air_column: f64) -> f32 {
 /// level's air, per unit of a zenith beam's at sea level.
 pub fn clear_sky_beam_transmittance(sine_height: f64, air_column: f64) -> f32 {
     let beam = |sine: f64, air_column: f64| {
-        clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY, air_column)[0]
+        clear_sky_beam_luminance(sine, REFERENCE_AEROSOL_OPTICAL_DEPTH, air_column)
     };
     (beam(sine_height, air_column) / beam(1.0, 1.0)) as f32
 }

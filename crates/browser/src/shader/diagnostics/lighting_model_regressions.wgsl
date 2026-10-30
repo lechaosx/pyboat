@@ -47,7 +47,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         // Sweeps the Sun, with the Moon set, from 0.5 degrees above a
         // receiver's horizontal on the left to 2.5 degrees below it on the
         // right. Under a clear sky (27), red is its direct sunlight on level
-        // ground, in fiftieths of a zenith Sun's clear-sky light, and green
+        // ground, in two-thousandths of a zenith Sun's clear-sky light, and green
         // that light's red share. Under a full storm deck (28), red is its
         // diffuse light, in hundredths of a zenith Sun's clear-sky light, and
         // green the Sun's beam share of its clear-sky light.
@@ -75,7 +75,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let direct = calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver)
             .split.direct.x * sun_direct_light_color(receiver);
         return vec4<f32>(
-            50.0 * dot(direct, LUMINANCE_WEIGHTS),
+            2000.0 * dot(direct, LUMINANCE_WEIGHTS),
             direct.r / max(direct.r + direct.g + direct.b, 1e-30),
             0.0,
             1.0,

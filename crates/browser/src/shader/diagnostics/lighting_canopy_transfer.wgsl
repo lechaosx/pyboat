@@ -7,7 +7,7 @@ override CANOPY_TRANSFER_OPTICAL_THICKNESS: f32 = 0.0;
 // ceiling and night light above its floor.
 // Output 2 sweeps the Sun, with the Moon set, from 0.5 degrees above the
 // canopy's level on the left to 2.5 degrees below it on the right, under half
-// cover: red is the light the canopy scatters down, in hundredths of a zenith
+// cover: red is the light the canopy scatters down, in ten-thousandths of a zenith
 // Sun's clear-sky light, and green its red share.
 @fragment
 fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -23,7 +23,7 @@ fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f
             celestial_receiver_light_at_height(0.0),
         ).canopy_scattered;
         return vec4<f32>(
-            100.0 * dot(scattered, LUMINANCE_WEIGHTS),
+            1.0e4 * dot(scattered, LUMINANCE_WEIGHTS),
             scattered.r / max(scattered.r + scattered.g + scattered.b, 1e-30),
             0.0,
             1.0,

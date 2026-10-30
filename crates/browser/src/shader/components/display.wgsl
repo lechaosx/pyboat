@@ -9,7 +9,7 @@ fn linear_material_color(display_color: vec3<f32>) -> vec3<f32> {
 
 // Clear-sky daylight from a zenith Sun on level ground, the unit of scene
 // light, in lux; game::ZENITH_DAYLIGHT_LUX gives its provenance.
-const ZENITH_DAYLIGHT_LUX: f32 = 1.15e5;
+const ZENITH_DAYLIGHT_LUX: f32 = 1.173e5;
 // Light of a clear moonless sky, in scene light; game::NIGHT_SKY_LIGHT gives
 // its provenance.
 const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;

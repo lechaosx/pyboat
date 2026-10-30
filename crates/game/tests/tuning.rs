@@ -1048,6 +1048,39 @@ fn equinox_equator_light(
     })
 }
 
+/// Scene light's unit is the luminous solar constant, 133.3 klx (Darula,
+/// Kittler and Gueymard 2005, Solar Energy 79), through a clear sky with the
+/// Sun at the zenith.
+#[test]
+fn zenith_daylight_is_the_luminous_solar_constant_through_a_clear_sky() {
+    let lux = 133.334e3 * game::zenith_clear_sky_light();
+    let ratio = f64::from(game::ZENITH_DAYLIGHT_LUX) / lux;
+    assert!((ratio - 1.0).abs() < 0.005, "{ratio}");
+}
+
+/// The Sun's beam dims toward the horizon by its luminous transmittance, which
+/// a low Sun's near-infrared power does not raise. These are a 10 nm
+/// integration of the beam's Rayleigh, aerosol (optical depth 0.103,
+/// Ångström exponent 0.6) and Chappuis ozone extinction over the eye's
+/// photopic sensitivity (CIE 1924) and a 5778 K solar spectrum, per unit of
+/// the zenith beam's.
+#[test]
+fn direct_sunlight_dims_by_its_luminous_transmittance() {
+    for (degrees, integrated) in [
+        (10.0, 0.3563),
+        (5.0, 0.1315),
+        (3.0, 0.0509),
+        (2.0, 0.0227),
+        (1.0, 0.0063),
+    ] {
+        let beam = equinox_equator_light(degrees, 0.5).sun_intensity;
+        assert!(
+            (beam / integrated - 1.0).abs() < 0.12,
+            "beam {beam} at {degrees} degrees, integrated {integrated}",
+        );
+    }
+}
+
 /// Clear-sky light on level ground follows the Sun's height through the
 /// atmosphere: about 44% of the zenith Sun's at 30 degrees, and a few percent
 /// close to the horizon.
@@ -1062,11 +1095,12 @@ fn clear_sky_daylight_follows_the_suns_path_through_the_atmosphere() {
 
 /// A clear moonless sky lights the ground as a naturally starlit night is
 /// measured, 10^-3.22 to 10^-3.05 lux (Hänel et al. 2018, J. Quant. Spectrosc.
-/// Radiat. Transf. 205, Table 2), against 1.15e5 lux from a zenith Sun.
+/// Radiat. Transf. 205, Table 2), against `ZENITH_DAYLIGHT_LUX` from a zenith Sun.
 #[test]
 fn moonless_night_keeps_the_physical_ratio_of_starlight_to_daylight() {
     let zenith = equinox_equator_light(90.0, 0.5).ambient_intensity;
-    let night_lux = 1.15e5 * equinox_equator_light(-30.0, 0.0).ambient_intensity / zenith;
+    let night_lux =
+        game::ZENITH_DAYLIGHT_LUX * equinox_equator_light(-30.0, 0.0).ambient_intensity / zenith;
 
     assert!(
         (10_f32.powf(-3.22)..10_f32.powf(-3.05)).contains(&night_lux),

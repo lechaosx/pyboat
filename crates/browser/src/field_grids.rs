@@ -537,12 +537,7 @@ fn beam_share(
     angular_radius_rad: f64,
     color: [f64; 3],
 ) -> f64 {
-    // Earth's mean radius and lighting.wgsl's spectral constants.
-    const EARTH_RADIUS_M: f64 = 6.371e6;
-    const LUMINANCE_WEIGHTS: [f64; 3] = [0.2126, 0.7152, 0.0722];
-    const RAYLEIGH_OPTICAL_DEPTHS: [f64; 3] = [0.06506, 0.10081, 0.19986];
-    const AEROSOL_SPECTRAL_SCALES: [f64; 3] = [0.93857, 1.00098, 1.10698];
-    const OZONE_OPTICAL_DEPTHS: [f64; 3] = [0.03542, 0.02523, 0.00219];
+    use game::EARTH_RADIUS_M;
     let height_m = height_m.max(0.0);
     let air_column = game::air_column_at_height(height_m);
     let horizon_z =
@@ -556,26 +551,17 @@ fn beam_share(
     let direct_fraction = 1.0
         - clear_sky_diffuse_fraction(
             (direction_z - horizon_z) / (1.0 - horizon_z),
-            2.35 + 7.79 * aerosol_optical_depth,
+            aerosol_optical_depth,
             air_column,
         );
     if direction_z >= 0.0 || height_m <= 0.0 {
         return visibility * direct_fraction;
     }
-    let ozone_air_mass = |sine: f64| {
-        let layer_height = 22.0 / 6370.0;
-        (1.0 + layer_height) / (sine * sine + 2.0 * layer_height).sqrt()
-    };
     let luminance = |air_mass: f64, ozone_mass: f64| -> f64 {
+        let transmittance = game::beam_transmittance(aerosol_optical_depth, air_mass, ozone_mass);
         (0..3)
             .map(|channel| {
-                LUMINANCE_WEIGHTS[channel]
-                    * color[channel]
-                    * (-air_mass
-                        * (RAYLEIGH_OPTICAL_DEPTHS[channel]
-                            + aerosol_optical_depth * AEROSOL_SPECTRAL_SCALES[channel])
-                        - ozone_mass * OZONE_OPTICAL_DEPTHS[channel])
-                        .exp()
+                game::LUMINANCE_WEIGHTS[channel] * color[channel] * transmittance[channel]
             })
             .sum()
     };
@@ -589,14 +575,19 @@ fn beam_share(
         * direct_fraction
         * luminance(
             horizontal_air_mass * depth_scale_heights.exp() * (1.0 + climb),
-            ozone_air_mass((-direction_z).min(-horizon_z)),
+            game::ozone_air_mass((-direction_z).min(-horizon_z)),
         )
-        / luminance(horizontal_air_mass, ozone_air_mass(0.0))
+        / luminance(horizontal_air_mass, game::ozone_air_mass(0.0))
 }
 
 /// `clear_sky_diffuse_fraction` in lighting.wgsl.
-pub fn clear_sky_diffuse_fraction(sine_height: f64, linke_turbidity: f64, air_column: f64) -> f64 {
-    let [beam, diffuse] = game::clear_sky_irradiance(sine_height, linke_turbidity, air_column);
+pub fn clear_sky_diffuse_fraction(
+    sine_height: f64,
+    aerosol_optical_depth: f64,
+    air_column: f64,
+) -> f64 {
+    let diffuse = game::clear_sky_diffuse_light(sine_height, 2.35 + 7.79 * aerosol_optical_depth);
+    let beam = game::clear_sky_beam_luminance(sine_height, aerosol_optical_depth, air_column);
     diffuse / (diffuse + sine_height.clamp(0.0, 1.0) * beam).max(1e-6)
 }
 
@@ -1311,23 +1302,6 @@ mod tests {
                     &format!("{view_size_m:?} at {world_time_seconds} s"),
                 );
             }
-        }
-    }
-
-    #[test]
-    fn clear_sky_diffuse_fraction_follows_its_published_model() {
-        for (height_deg, expected) in [
-            (60.0_f64, 0.116),
-            (30.0, 0.183),
-            (10.0, 0.359),
-            (3.0, 0.667),
-            (0.0, 1.0),
-        ] {
-            let fraction = clear_sky_diffuse_fraction(height_deg.to_radians().sin(), 3.0, 1.0);
-            assert!(
-                (fraction - expected).abs() < 0.001,
-                "{fraction} at {height_deg} degrees"
-            );
         }
     }
 

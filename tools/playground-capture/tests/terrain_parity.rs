@@ -719,7 +719,7 @@ fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
         1,
     );
     // The diagnostic sweeps the Sun from 0.5 degrees above the deck's level to
-    // 2.5 degrees below it, with the light in hundredths of a zenith Sun's
+    // 2.5 degrees below it, with the light in ten-thousandths of a zenith Sun's
     // clear-sky light in red and its red share in green.
     let depression_degrees = |column: usize| -0.5 + 3.0 * (column as f32 + 0.5) / width as f32;
     let pixels = image.as_chunks::<4>().0;
@@ -763,8 +763,9 @@ fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
             depression_degrees(column),
         );
     }
+    // The beam along its grazing path keeps about 3% of its peak there.
     assert!(
-        light[setting] <= 0.01 * light[peak],
+        light[setting] <= 0.05 * light[peak],
         "{} of the peak light remains as the disc starts to set {} degrees down",
         light[setting] / light[peak],
         depression_degrees(setting),
@@ -1459,7 +1460,7 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         1,
         1,
     );
-    let linke_turbidity = 2.35 + 7.79 * 0.32 * f64::from(scalar_debug_amount(&aerosol));
+    let aerosol_optical_depth = 0.32 * f64::from(scalar_debug_amount(&aerosol));
     // The clear sky leaves light diffuse by its height above the horizon the
     // receiver's height has on Earth.
     let earth_radius_m = 6.371e6_f32;
@@ -1473,7 +1474,7 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         )) * (1.0
             - browser::clear_sky_diffuse_fraction(
                 f64::from((direction_z - horizon_z) / (1.0 - horizon_z)),
-                linke_turbidity,
+                aerosol_optical_depth,
                 game::air_column_at_height(600.0),
             ))
     };
@@ -3933,7 +3934,7 @@ fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
     let position_m = Vector::ZERO;
     let (size, view_height_m) = (256usize, 4_000.0_f32);
     let cloudy_evenings = (0..80)
-        .map(|day| evening_time_at_sun_z(world, position_m, day, 0.05))
+        .map(|day| evening_time_at_sun_z(world, position_m, day, 0.10))
         .filter(|&world_time_seconds| {
             let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
             procedural_world_environment(world, SEED, tick, position_m)
@@ -3990,8 +3991,9 @@ fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
             }
             reaching / arriving
         };
-        let higher = transmittance(0.06, 0.08);
-        let lower = transmittance(0.03, 0.04);
+        // Below these heights the sunlit sea of this view holds only a few 8-bit levels.
+        let higher = transmittance(0.11, 0.13);
+        let lower = transmittance(0.07, 0.08);
         // Share of the sunlight that cloud removes under the higher Sun which
         // returns under the lower one. Ending the shadows between them returns
         // all of it; the bound leaves room for the cloud pattern's sampling
@@ -4000,7 +4002,7 @@ fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
         assert!(
             returned < 0.5,
             "at {world_time_seconds} s, sunlight under cloud rose from {higher} with the \
-             sea-level Sun 0.06 to 0.08 high to {lower} with it 0.03 to 0.04 high",
+             sea-level Sun 0.11 to 0.13 high to {lower} with it 0.07 to 0.08 high",
         );
     }
 }

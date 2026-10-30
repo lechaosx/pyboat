@@ -3,7 +3,7 @@
 
 use std::{fs, io::BufReader, process::Command};
 
-use game::{REFERENCE_LINKE_TURBIDITY, clear_sky_irradiance};
+use game::REFERENCE_AEROSOL_OPTICAL_DEPTH;
 use serde_json::Value;
 
 /// The tone curve's shoulder in linear light, as display.wgsl's.
@@ -346,8 +346,9 @@ fn small_cloud_shadows_keep_most_of_their_contrast() {
         .collect();
     let contrast = percentile(&ratios, 0.02) / percentile(&ratios, 0.98);
     let sun_height = shaded.derived["sunDirection"][2].as_f64().unwrap();
-    let [beam, diffuse] = clear_sky_irradiance(sun_height, REFERENCE_LINKE_TURBIDITY, 1.0);
-    let diffuse_share = (diffuse / (sun_height * beam + diffuse)) as f32;
+    let diffuse_share =
+        browser::clear_sky_diffuse_fraction(sun_height, REFERENCE_AEROSOL_OPTICAL_DEPTH, 1.0)
+            as f32;
     assert!(
         contrast.log2() < 0.5 * diffuse_share.log2(),
         "shadow cores at {contrast} of sunlit ground, diffuse share {diffuse_share}",
