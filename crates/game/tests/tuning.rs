@@ -1341,6 +1341,60 @@ fn world_year_has_two_paired_eclipse_seasons() {
     assert_eq!(lunar_eclipse_months, 2);
 }
 
+/// A solar eclipse dims the clear sky's light with the uncovered share of the
+/// Sun's disc, as it dims the beam.
+#[test]
+fn solar_eclipse_dims_sky_light_with_the_uncovered_sun() {
+    let solar_node = 0.5104333;
+    let light = celestial_lighting(CelestialConditions {
+        geographic_latitude_degrees: 0.0,
+        celestial_latitude_degrees: 0.0,
+        season_phase: (solar_node + 0.25) % 1.0,
+        day_phase: 0.5,
+        lunar_longitude_phase: solar_node,
+    });
+    assert!(light.solar_eclipse_fraction > 0.9);
+    let sky = light.ambient_intensity - game::NIGHT_SKY_LIGHT - light.moon_ambient_intensity;
+    let uncovered = (1.0 - light.solar_eclipse_fraction) * light.sun_ambient_intensity;
+    assert!(
+        (sky / uncovered - 1.0).abs() < 0.01,
+        "sky light {sky}, uncovered Sun's {uncovered}",
+    );
+}
+
+/// At totality the ground keeps the light measured under the 21 August 2017
+/// totality, 1/11,460 of daylight's in visible light (Bernhard and Petkov
+/// 2019, Atmos. Chem. Phys. 19), not a sizeable share of daylight.
+#[test]
+fn total_solar_eclipse_keeps_the_measured_share_of_daylight() {
+    let share = game::solar_eclipse_sky_share(1.0) * 11_460.0;
+    assert!(
+        (1.0 / 1.5..1.5).contains(&share),
+        "{share} of the measured share"
+    );
+}
+
+/// In Earth's umbra the Moon reflects sunlight refracted through Earth's limb,
+/// deeply reddened along about twice the horizontal path, at the luminance of
+/// its own colour.
+#[test]
+fn eclipsed_moon_takes_sunlight_reddened_through_earths_limb() {
+    let light = celestial_lighting(world_celestial_conditions_in_world(
+        WorldGeometry::default(),
+        90.997_222_222_222_22 * 86_400.0,
+        Vector::ZERO,
+    ));
+    assert!(light.lunar_umbra_fraction > 0.999);
+    let [red, green, blue] = light.moon_color;
+    let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    assert!((luminance - 1.0).abs() < 0.01, "{luminance}");
+    assert!(
+        green < 0.1 * red && blue < 0.01 * red,
+        "{:?}",
+        light.moon_color
+    );
+}
+
 #[test]
 fn first_lunar_eclipse_reaches_totality() {
     let conditions = world_celestial_conditions_in_world(

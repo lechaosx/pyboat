@@ -127,8 +127,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Sunrise, sunset, moonrise, and moonset change light and
   shadows gradually.
 - **[Explicit]** A tilted lunar orbit produces paired solar/lunar eclipse seasons.
-  Lunar penumbra subtly dims moonlight; totality becomes dim orange-red from
-  atmospheric refraction.
+  Lunar penumbra subtly dims moonlight; totality becomes dim deep red from
+  sunlight refracted through Earth's atmosphere.
 - **[Explicit]** Rain and snow contact open water at physical world-space scale;
   unresolved contacts filter away without enlarged drops, haze, or screen-aligned streaks.
 - **[Explicit]** One local apparent-wind windsock indicates speed through visible

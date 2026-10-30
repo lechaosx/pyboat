@@ -312,6 +312,7 @@ const PLANET_RADIUS_SCALE_HEIGHTS: f32 = 2.0 / (PI * 0.025 * 0.025);
 const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f32 = 312.5;
 const SCATTERED_TWILIGHT_SHARE: f32 = 0.0146;
 const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
+const TOTALITY_LIGHT_SHARE: f32 = 1.0 / 11460.0;
 const REFERENCE_AEROSOL_OPTICAL_DEPTH: f32 = 0.103;
 const REFERENCE_LINKE_TURBIDITY: f32 = 2.35 + 7.79 * REFERENCE_AEROSOL_OPTICAL_DEPTH;
 // Earth's mean radius (Moritz 2000, Geodetic Reference System 1980).
@@ -389,13 +390,20 @@ fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
     );
 }
 
+// Share of the Sun's clear-sky light that a solar eclipse covering
+// `eclipse_fraction` of its disc leaves, as game::solar_eclipse_sky_share,
+// which gives its provenance and compromise.
+fn solar_eclipse_sky_share(eclipse_fraction: f32) -> f32 {
+    return max(1.0 - eclipse_fraction, TOTALITY_LIGHT_SHARE);
+}
+
 // Clear-sky light on level ground from the night sky, the Sun, and the Moon,
 // as game::celestial_lighting's ambient intensity.
 fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
     return min(
         1.0,
         NIGHT_SKY_LIGHT
-            + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
+            + solar_eclipse_sky_share(receiver.solar_eclipse_fraction)
                 * twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m)
             + moon_atmospheric_amount(receiver),
     );
@@ -455,7 +463,7 @@ fn calculate_atmospheric_ambient_light(
     let split = celestial_light_split(receiver, clear_intensity);
     // Each light's sky takes that light's colour through the clear sky's
     // diffuse transfer at its height; starlight and airglow are white.
-    let solar_sky = (1.0 - 0.85 * receiver.solar_eclipse_fraction) * solar_ambient;
+    let solar_sky = solar_eclipse_sky_share(receiver.solar_eclipse_fraction) * solar_ambient;
     var lunar_sky = vec3<f32>(0.0);
     if lunar_ambient > 0.0 || EVALUATE_ALL_BRANCHES {
         let moon_color = moon_own_color();
@@ -736,14 +744,18 @@ fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32, height_m:
 // The Moon's own colour, which game::celestial_lighting mirrors as
 // `moon_color`: sunlight reflected by lunar soil, whose reflectance rises as
 // λ^1.11 to redden the Sun's B-V colour index of 0.65 to the full Moon's 0.92
-// (Cox 2000, Allen's Astrophysical Quantities), at unit luminance. Earth's
-// umbra turns it orange-red.
+// (Cox 2000, Allen's Astrophysical Quantities), at unit luminance. In Earth's
+// umbra the sunlight it reflects has been refracted through Earth's limb,
+// crossing about twice the horizontal path through the reference air, which
+// reddens it; the umbra's share of the disc mixes the two at unit luminance.
 fn moon_own_color() -> vec3<f32> {
-    return mix(
-        vec3<f32>(1.1108, 0.9855, 0.8175),
-        vec3<f32>(1.20, 0.28, 0.06),
-        smoothstep(0.05, 0.90, lunar_umbra_fraction),
-    );
+    let soil = vec3<f32>(1.1108, 0.9855, 0.8175);
+    let refracted = unit_luminance(soil * beam_transmittance(
+        REFERENCE_AEROSOL_OPTICAL_DEPTH,
+        2.0 * relative_air_mass(0.0),
+        2.0 * ozone_air_mass(0.0),
+    ));
+    return mix(soil, refracted, lunar_umbra_fraction);
 }
 
 // Moonlight's colour after the atmosphere, keeping the luminance of the

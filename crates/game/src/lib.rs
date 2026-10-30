@@ -549,6 +549,21 @@ pub fn air_column_at_height(height_m: f64) -> f64 {
 pub const SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS: f64 = 312.5;
 pub const SCATTERED_TWILIGHT_SHARE: f64 = 0.0146;
 
+/// Light that reaches the ground at a solar eclipse's totality per unit of
+/// the uneclipsed Sun's: 1/11,460, the global irradiance at 412-665 nm under
+/// totality on 21 August 2017 against before it (Bernhard and Petkov 2019,
+/// Atmos. Chem. Phys. 19). lighting.wgsl mirrors it.
+pub const TOTALITY_LIGHT_SHARE: f32 = 1.0 / 11460.0;
+
+/// Share of the Sun's clear-sky light that a solar eclipse covering
+/// `eclipse_fraction` of its disc leaves: the uncovered share, down to the
+/// sky lit outside the Moon's shadow at totality. Sky light dims with the
+/// receiver's own disc, a semi-physical compromise: the air that lights the
+/// sky spans far more than the receiver's view of the disc.
+pub fn solar_eclipse_sky_share(eclipse_fraction: f32) -> f32 {
+    (1.0 - eclipse_fraction).max(TOTALITY_LIGHT_SHARE)
+}
+
 /// The full Moon's light relative to the Sun's: visual magnitudes -12.74 and
 /// -26.74 (Cox 2000, Allen's Astrophysical Quantities). lighting.wgsl mirrors it.
 pub const FULL_MOON_SUNLIGHT_RATIO: f32 = 2.512e-6;
@@ -803,16 +818,24 @@ pub fn celestial_lighting_at_height(
         * clear_sky_beam_transmittance(moon_elevation, air_column);
     let moon_ambient_intensity =
         lunar_light_scale * twilight_clear_sky_light(moon_direction[2], air_column);
-    let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
-    // Sunlight reddened by lunar soil, as `moon_own_color` in lighting.wgsl
-    // derives it; keep the two synchronized.
-    let moon_color = [
-        1.1108 + eclipse_warmth * (1.20 - 1.1108),
-        0.9855 + eclipse_warmth * (0.28 - 0.9855),
-        0.8175 + eclipse_warmth * (0.06 - 0.8175),
-    ];
+    // Sunlight reddened by lunar soil, and in Earth's umbra by Earth's limb, as
+    // `moon_own_color` in lighting.wgsl derives it; keep the two synchronized.
+    let soil = [1.1108, 0.9855, 0.8175];
+    let limb = beam_transmittance(
+        REFERENCE_AEROSOL_OPTICAL_DEPTH,
+        2.0 * relative_air_mass(0.0),
+        2.0 * ozone_air_mass(0.0),
+    );
+    let refracted: [f64; 3] = std::array::from_fn(|channel| soil[channel] * limb[channel]);
+    let refracted_luminance: f64 = (0..3)
+        .map(|channel| LUMINANCE_WEIGHTS[channel] * refracted[channel])
+        .sum();
+    let umbra = f64::from(orbit.lunar_umbra_fraction);
+    let moon_color = std::array::from_fn(|channel| {
+        (soil[channel] + umbra * (refracted[channel] / refracted_luminance - soil[channel])) as f32
+    });
     let solar_ambient = twilight_clear_sky_light(sun_direction[2], air_column);
-    let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
+    let solar_ambient_transmittance = solar_eclipse_sky_share(solar_eclipse_fraction);
     let ambient_intensity =
         (NIGHT_SKY_LIGHT + solar_ambient_transmittance * solar_ambient + moon_ambient_intensity)
             .min(1.0);

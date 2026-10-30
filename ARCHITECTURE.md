@@ -262,6 +262,12 @@ and verification details.
 - **[Implicit]** Light scattered more than once into the planet's shadow keeps
   a fainter twilight after the shadow has risen through most of the air.
 - **[Explicit]** Lunar diffuse light follows the Moon's phase and eclipse.
+- **[Implicit]** A solar eclipse dims clear-sky light with the uncovered share
+  of the Sun's disc, as it dims the beam, down to the light measured under
+  totality.
+- **[Implicit]** The eclipsed Moon reflects sunlight that the spectral
+  clear-sky model reddens along twice the horizontal path, at the luminance
+  of the Moon's own colour.
 - **[Explicit]** Thin canopy approaches clear sky, moderate canopy scatters
   available celestial light, and thick canopy reflects most of it back to space.
 - **[Explicit]** High ice cloud's diffuse effects belong in canopy and sky
