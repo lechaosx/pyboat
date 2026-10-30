@@ -452,12 +452,7 @@ fn calculate_atmospheric_ambient_light(
     let solar_ambient = twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m);
     let lunar_ambient = moon_atmospheric_amount(receiver);
     let clear_intensity = clear_sky_intensity(receiver);
-    let split = celestial_light_split(
-        receiver,
-        solar_ambient,
-        lunar_ambient,
-        clear_intensity,
-    );
+    let split = celestial_light_split(receiver, clear_intensity);
     // Each light's sky takes that light's colour through the clear sky's
     // diffuse transfer at its height; starlight and airglow are white.
     let solar_sky = (1.0 - 0.85 * receiver.solar_eclipse_fraction) * solar_ambient;
@@ -508,8 +503,8 @@ fn calculate_atmospheric_ambient_light(
         optical_thickness,
         canopy.sky_fraction,
         vec2<f32>(canopy_receiver.sun_direction.z, canopy_receiver.moon_direction.z),
-        split.beam_shares * vec2<f32>(solar_ambient, lunar_ambient),
-        celestial_light_split(canopy_receiver, 1.0, 1.0, 1.0).normal,
+        split.direct,
+        celestial_light_split(canopy_receiver, 1.0).normal,
     );
     let transmitted_light = diffuse_transmittance * split.diffuse_share * clear_sky_light;
     let scattered_light = scattered_beams.x * beam_light_color(
@@ -785,76 +780,6 @@ fn clear_sky_diffuse_light(sine_height: f32, linke_turbidity: f32) -> f32 {
     return diffuse_transmission * (a0 + sine * (a1 + a2 * sine));
 }
 
-// Share of a clear sky's light on level ground that arrives diffuse, for a
-// light at the given sine of its height above the horizon, under `air_column`
-// of sea level's air and for the 550 nm aerosol optical depth, reaching 1 at
-// the horizon as air mass extinguishes the beam.
-fn clear_sky_diffuse_fraction(
-    sine_height: f32,
-    aerosol_optical_depth: f32,
-    air_column: f32,
-) -> f32 {
-    let diffuse = clear_sky_diffuse_light(sine_height, linke_turbidity(aerosol_optical_depth));
-    let beam = clamp(sine_height, 0.0, 1.0)
-        * clear_sky_beam_luminance(sine_height, aerosol_optical_depth, air_column);
-    return diffuse / max(diffuse + beam, 1e-6);
-}
-
-// Linke turbidity of air from its aerosol optical depth, by Ineichen's (2008,
-// Solar Energy 82) conversion at sea level with 1.5 cm of precipitable water.
-fn linke_turbidity(aerosol_optical_depth: f32) -> f32 {
-    return 2.35 + 7.79 * aerosol_optical_depth;
-}
-
-// Share of a light's clear-sky light on level ground that arrives direct, for
-// a light of `color` above the atmosphere. The beam reaches the receiver as on
-// Earth, whose air mass clear-sky light follows: the clear sky leaves light
-// diffuse by its height above the horizon the receiver's height has there,
-// its disc sets behind that horizon, and below the receiver's horizontal it
-// keeps the share of the horizontal beam's luminance that its grazing path
-// passes. The small world's horizon would keep a hill or cloud in direct light
-// until the light stood tens of degrees down, and would take that light from
-// the diffuse light the receiver shares with sea level. field_grids.rs's
-// `beam_share` mirrors it; keep them synchronized.
-fn celestial_beam_share(
-    receiver: CelestialReceiverLight,
-    direction: vec3<f32>,
-    angular_radius_rad: f32,
-    aerosol_optical_depth: f32,
-    color: vec3<f32>,
-) -> f32 {
-    let horizon_z = earth_horizon_z_at_height(receiver.height_m);
-    let air_column = air_column_at_height(receiver.height_m);
-    let visibility = celestial_disc_visibility_at_horizon(horizon_z, direction, angular_radius_rad);
-    if visibility <= 0.0 && !EVALUATE_ALL_BRANCHES {
-        return 0.0;
-    }
-    var grazing = 1.0;
-    let below_horizontal = direction.z < 0.0 && receiver.height_m > 0.0;
-    if below_horizontal || EVALUATE_ALL_BRANCHES {
-        let horizontal = color * beam_transmittance(
-            aerosol_optical_depth,
-            relative_air_mass(0.0) * air_column,
-            ozone_air_mass(0.0),
-        );
-        let beam = color * beam_transmittance_at_height(
-            aerosol_optical_depth,
-            receiver.height_m,
-            direction.z,
-        );
-        grazing = select(
-            1.0,
-            dot(beam, LUMINANCE_WEIGHTS) / dot(horizontal, LUMINANCE_WEIGHTS),
-            below_horizontal,
-        );
-    }
-    return visibility * grazing * (1.0 - clear_sky_diffuse_fraction(
-        light_height_above_horizon(direction.z, horizon_z),
-        aerosol_optical_depth,
-        air_column,
-    ));
-}
-
 // A beam's light on a surface facing it, per unit of a zenith light's
 // clear-sky light on level ground, for a light of `color` above the
 // atmosphere at that colour's luminance: the luminance that its path to the
@@ -882,42 +807,25 @@ fn celestial_beam_normal_light(
 }
 
 struct CelestialLightSplit {
-    // Sun and Moon direct light on level ground, each per unit of the
-    // light's clear-sky amount, and each beam's light on a surface facing it.
+    // Sun and Moon direct light on level ground, then each beam's light on a
+    // surface facing it.
     direct: vec2<f32>,
-    beam_shares: vec2<f32>,
     normal: vec2<f32>,
     // Share of clear-sky light left diffuse.
     diffuse_share: f32,
 };
 
-// Splits the solar and lunar parts of clear-sky light into direct light on
-// level ground and diffuse light by each light's clear-sky diffuse fraction.
+// Splits clear-sky light into each beam's direct light on level ground, its
+// light on a surface facing it projected on the receiver's horizontal, and
+// the diffuse rest. A beam from below that horizontal lights only surfaces
+// tilted toward it.
 fn celestial_light_split(
     receiver: CelestialReceiverLight,
-    solar_ambient: f32,
-    lunar_ambient: f32,
     clear_intensity: f32,
 ) -> CelestialLightSplit {
     let visibility = direct_light_visibility();
     let aerosol = regional_aerosol_optical_depth;
     let sun_share = 1.0 - receiver.solar_eclipse_fraction;
-    let beam_shares = visibility * vec2<f32>(
-        sun_share * celestial_beam_share(
-            receiver,
-            receiver.sun_direction,
-            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-            aerosol,
-            vec3<f32>(1.0),
-        ),
-        celestial_beam_share(
-            receiver,
-            receiver.moon_direction,
-            MOON_ANGULAR_RADIUS_RAD,
-            aerosol,
-            moon_own_color(),
-        ),
-    );
     let normal = visibility * vec2<f32>(
         sun_share * celestial_beam_normal_light(
             receiver,
@@ -934,12 +842,14 @@ fn celestial_light_split(
             moon_own_color(),
         ),
     );
-    let beams = beam_shares * vec2<f32>(solar_ambient, lunar_ambient);
+    let direct = normal * max(
+        vec2<f32>(receiver.sun_direction.z, receiver.moon_direction.z),
+        vec2<f32>(0.0),
+    );
     return CelestialLightSplit(
-        beams,
-        beam_shares,
+        direct,
         normal,
-        max(1.0 - (beams.x + beams.y) / max(clear_intensity, 1e-30), 0.0),
+        max(1.0 - (direct.x + direct.y) / max(clear_intensity, 1e-30), 0.0),
     );
 }
 

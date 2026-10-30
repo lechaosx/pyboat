@@ -637,10 +637,40 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     return unscaled_elevation_m * elevation_scale;
 }
 
-// Relief grades of the sky's and each beam's light. The beams' glint toward
-// the overhead viewer, scaled by `specular_scale`, is light the surface
-// reflects rather than receives.
+// Land relief's share of the sky's light, then each beam's light on the
+// surface for beams of `normal_light` on a surface facing them: an isotropic
+// sky's view factor (1 + n_z) / 2, and Lambert's max(n.l, 0). Both are
+// physical; light that surrounding ground reflects onto a slope is left out,
+// a compromise that darkens slopes facing away from the sky by at most the
+// ground's albedo of the sky light they miss.
 fn landform_light_grade(
+    surface_gradient: vec2<f32>,
+    direct_light: CelestialReceiverLight,
+    normal_light: vec2<f32>,
+) -> vec3<f32> {
+    let strength = clamp(
+        tuning.landform_lighting.x
+            * landscape_visibility.w * lighting_feature_visibility().x,
+        0.0,
+        1.0,
+    );
+    let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
+    var light = vec3<f32>(mix(1.0, 0.5 + 0.5 * normal.z, strength), 0.0, 0.0);
+    for (var source_index = 0u; source_index < 2u; source_index++) {
+        let direction = celestial_source_light(direct_light, source_index).direction;
+        light[source_index + 1u] = normal_light[source_index] * mix(
+            max(direction.z, 0.0),
+            max(dot(normal, direction), 0.0),
+            strength,
+        );
+    }
+    return light;
+}
+
+// Water relief's grades of the sky's and each beam's light. The beams' glint
+// toward the overhead viewer, scaled by `specular_scale`, is light the
+// surface reflects rather than receives.
+fn water_light_grade(
     surface_gradient: vec2<f32>,
     roughness: f32,
     direct_light: CelestialReceiverLight,

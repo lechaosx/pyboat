@@ -793,11 +793,11 @@ fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
     );
 }
 
-/// Red and green of the receiver sweep diagnostic `lighting_receiver_{sweep}_sweep`
-/// as the Sun sinks from 0.5 degrees above the horizontal of a receiver
-/// `height_m` above sea level to 2.5 degrees below it, with the depression of
-/// each column in degrees.
-fn receiver_sweep(sweep: &str, height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+/// Red, green and blue of the receiver sweep diagnostic
+/// `lighting_receiver_{sweep}_sweep` as the Sun sinks from 0.5 degrees above
+/// the horizontal of a receiver `height_m` above sea level to 2.5 degrees below
+/// it, with the depression of each column in degrees.
+fn receiver_sweep(sweep: &str, height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
     let width = 1200;
     // A centimetre-wide view keeps every column in the same weather.
     let image = render_diagnostic_image_with_view_at(
@@ -822,17 +822,21 @@ fn receiver_sweep(sweep: &str, height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) 
             .iter()
             .map(|pixel| srgb_channel_to_linear(pixel[1]))
             .collect(),
+        pixels
+            .iter()
+            .map(|pixel| srgb_channel_to_linear(pixel[2]))
+            .collect(),
     )
 }
 
 /// Once the Sun sinks below a raised receiver's horizontal, its ray grazes
-/// ever lower through the air on the way, so the direct light dims and
-/// reddens continuously until the disc sets behind the horizon the receiver's
-/// height has on Earth, a hill's as much as a cloud's.
+/// ever lower through the air on the way, so the direct light on a surface
+/// facing it dims and reddens continuously until the disc sets behind the
+/// horizon the receiver's height has on Earth, a hill's as much as a cloud's.
 #[test]
 fn direct_light_on_raised_receivers_fades_and_reddens_down_to_their_earth_horizon() {
     for height_m in [300.0_f32, 1_000.0] {
-        let (depression_degrees, light, red_share) = receiver_sweep("beam", height_m);
+        let (depression_degrees, light, red_share, _) = receiver_sweep("beam", height_m);
         let level = depression_degrees
             .iter()
             .position(|depression| *depression > 0.0)
@@ -918,8 +922,8 @@ fn raised_receivers_light_crosses_only_the_air_above_them() {
         }
     }
     let equivalent_degrees = low.asin().to_degrees() as f32;
-    let (depression_degrees, _, raised_red_share) = receiver_sweep("beam", height_m);
-    let (_, _, sea_level_red_share) = receiver_sweep("beam", 0.0);
+    let (depression_degrees, _, raised_red_share, _) = receiver_sweep("beam", height_m);
+    let (_, _, sea_level_red_share, _) = receiver_sweep("beam", 0.0);
     let column_at = |degrees: f32| {
         (0..depression_degrees.len())
             .min_by(|left, right| {
@@ -945,7 +949,7 @@ fn raised_receivers_light_crosses_only_the_air_above_them() {
 #[test]
 fn diffuse_light_under_a_deck_stays_continuous_where_a_raised_receivers_beam_ends() {
     for height_m in [100.0_f32, 300.0, 1_000.0] {
-        let (depression_degrees, diffuse, beam_share) = receiver_sweep("deck", height_m);
+        let (depression_degrees, diffuse, beam_share, _) = receiver_sweep("deck", height_m);
         let level = depression_degrees
             .iter()
             .position(|depression| *depression > 0.0)
@@ -982,11 +986,11 @@ fn diffuse_light_under_a_deck_stays_continuous_where_a_raised_receivers_beam_end
     }
 }
 
-/// At sea level the clear sky's light is all diffuse by the time a light
-/// reaches the horizon, so direct light ends at the horizontal.
+/// At sea level direct light on level ground ends at the horizontal, where
+/// the beam stands edge-on to the ground.
 #[test]
 fn direct_light_at_sea_level_ends_at_the_horizontal() {
-    let (depression_degrees, light, _) = receiver_sweep("beam", 0.0);
+    let (depression_degrees, _, _, light) = receiver_sweep("beam", 0.0);
     assert!(
         light[0] > 0.0,
         "no light {} degrees up",
@@ -1463,29 +1467,23 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         1,
     );
     let aerosol_optical_depth = 0.32 * f64::from(scalar_debug_amount(&aerosol));
-    // The clear sky leaves light diffuse by its height above the horizon the
-    // receiver's height has on Earth.
-    let earth_radius_m = 6.371e6_f32;
-    let horizon_z = -(1.0 - (earth_radius_m / (earth_radius_m + 600.0)).powi(2)).sqrt();
-    let beam_share = |direction_z: f32, angular_radius_rad: f32| {
-        f64::from(celestial_disc_visibility_at_height(
-            world,
+    // Each beam's light on level ground is its light on a surface facing it,
+    // projected on the horizontal.
+    let direct = |direction_z: f32, angular_radius_rad: f64, color: [f32; 3]| {
+        let direction_z = f64::from(direction_z);
+        game::beam_normal_light(
+            aerosol_optical_depth,
             600.0,
             direction_z,
             angular_radius_rad,
-        )) * (1.0
-            - browser::clear_sky_diffuse_fraction(
-                f64::from((direction_z - horizon_z) / (1.0 - horizon_z)),
-                aerosol_optical_depth,
-                game::air_column_at_height(600.0),
-            ))
+            color.map(f64::from),
+        ) * direction_z.max(0.0)
     };
-    let lunar = f64::from(surface.moon_ambient_intensity);
     let eclipse = f64::from(surface.solar_eclipse_fraction);
-    let solar = f64::from(surface.sun_ambient_intensity);
     let expected_share = (1.0
-        - ((1.0 - eclipse) * beam_share(surface.sun_direction[2], 0.00465) * solar
-            + beam_share(surface.moon_direction[2], 0.00452) * lunar)
+        - ((1.0 - eclipse) * direct(surface.sun_direction[2], 0.00465, [1.0; 3])
+            + f64::from(surface.lunar_light_scale)
+                * direct(surface.moon_direction[2], 0.00452, surface.moon_color))
             / f64::from(surface.ambient_intensity))
     .max(0.0) as f32;
     let actual_share = render_diagnostic_image_with_view_at(
@@ -1572,6 +1570,44 @@ fn clear_sky_light_follows_the_local_horizontal_at_every_receiver_height() {
     );
     assert!(linear_luminance(&datum) > 0.02, "datum {:?}", &datum[..3]);
     assert_rgb_close(&datum, &elevated, 1);
+}
+
+/// Land relief takes each beam by Lambert's law and the sky's light by an
+/// isotropic sky's view factor: a slope 30 degrees steep facing a Sun 30
+/// degrees high gets sin 60 / sin 30 of level ground's direct light, under a
+/// Sun 10 degrees high sin 40 / sin 10, one facing away gets none, and the
+/// slope keeps (1 + cos 30) / 2 of the sky's light.
+#[test]
+fn relief_takes_beams_by_lambert_and_the_sky_by_its_view_factor() {
+    let slope = 30.0_f32.to_radians();
+    for sun_degrees in [30.0_f32, 10.0] {
+        let image = render_diagnostic_image_with_view_at(
+            WorldGeometry::default(),
+            Vector::ZERO,
+            0.0,
+            1.0,
+            &format!("lighting_relief_30_{sun_degrees}"),
+            1,
+            1,
+        );
+        let sun = sun_degrees.to_radians();
+        let toward = 4.0 * srgb_channel_to_linear(image[0]);
+        let sky = 2.0 * srgb_channel_to_linear(image[2]);
+        let lambert = (sun + slope).sin() / sun.sin();
+        let view_factor = 0.5 * (1.0 + slope.cos());
+        assert!(
+            (toward / lambert - 1.0).abs() < 0.03,
+            "facing a Sun {sun_degrees} degrees high: {toward} of level light, Lambert {lambert}",
+        );
+        assert_eq!(
+            image[1], 0,
+            "facing away from a Sun {sun_degrees} degrees high"
+        );
+        assert!(
+            (sky / view_factor - 1.0).abs() < 0.03,
+            "sky light {sky} of level ground's, view factor {view_factor}",
+        );
+    }
 }
 
 #[test]
@@ -1689,7 +1725,8 @@ fn evening_time_at_sun_z(world: WorldGeometry, position_m: Vector, day: u32, sun
 
 /// Per-pixel share of direct sunlight that landform shadows remove, over pixels
 /// the Sun lights, at full shadow strength; with a reach, from the legacy look's
-/// fixed march of that length.
+/// fixed march of that length. Without relief the Sun lights level ground;
+/// with it, below a raised receiver's horizontal, only slopes tilted toward it.
 fn landform_occlusion(
     world: WorldGeometry,
     seed: u64,
@@ -1697,6 +1734,7 @@ fn landform_occlusion(
     world_time_seconds: f64,
     view_height_m: f32,
     legacy_reach_m: Option<u32>,
+    relief: bool,
 ) -> Vec<Option<f32>> {
     let (width, height) = (160, 90);
     // The landform shadow switch changes the light the eye adapts to, so
@@ -1728,8 +1766,9 @@ fn landform_occlusion(
     let reach = legacy_reach_m.unwrap_or(320);
     // The legacy look holds landform shadows to 70% of their strength.
     let strength = if legacy_reach_m.is_some() { 0.7 } else { 1.0 };
-    let unshadowed = render(&format!("0,0,{reach},0"));
-    let shadowed = render(&format!("0,1,{reach},0"));
+    let relief = u32::from(relief);
+    let unshadowed = render(&format!("{relief},0,{reach},0"));
+    let shadowed = render(&format!("{relief},1,{reach},0"));
     unshadowed
         .as_chunks::<4>()
         .0
@@ -1757,6 +1796,7 @@ fn low_sun_landform_shadows_keep_near_blockers_of_a_dense_march() {
             world_time_seconds,
             view_height_m,
             legacy_reach_m,
+            false,
         )
     };
     let shipped = occlusion(None);
@@ -1813,6 +1853,7 @@ fn low_light_landform_shadows_keep_every_blocker_within_their_reach() {
         world_time_seconds,
         view_height_m,
         None,
+        false,
     );
     // Fixed marches from the high-light reach to 960 m together sample from
     // 20 m to 960 m, all within the shipped march.
@@ -1825,6 +1866,7 @@ fn low_light_landform_shadows_keep_every_blocker_within_their_reach() {
             world_time_seconds,
             view_height_m,
             Some(reach_m),
+            false,
         );
         for (union, sample) in reference.iter_mut().zip(&march) {
             *union = sample.map(|sample| union.map_or(sample, |union| union.max(sample)));
@@ -1869,6 +1911,7 @@ fn landform_shadows_stay_on_the_ground_while_the_camera_pans() {
                 world_time_seconds,
                 view_height_m,
                 legacy_reach_m,
+                false,
             )
         });
         let mut largest = 0.0_f32;
@@ -1928,6 +1971,7 @@ fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
             world_time_seconds,
             view_height_m,
             None,
+            true,
         );
         for (index, share) in occlusion.iter().enumerate() {
             let (column, row) = ((index % width) as f32, (index / width) as f32);

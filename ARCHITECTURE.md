@@ -273,12 +273,16 @@ and verification details.
   the same way.
 - **[Implicit]** Clear-sky light's amount and colour follow the light's height
   above the receiver's local horizontal, as on Earth, whose horizon dips little
-  at hill and cloud heights. The share of it that arrives direct follows the
-  light's height above the horizon the receiver's height has on Earth.
+  at hill and cloud heights. Its direct part on level ground is each beam's
+  light on a surface facing it, projected on that horizontal; the rest
+  arrives diffuse.
 - **[Implicit]** Each beam reaches a receiver as on Earth. Below the receiver's
   local horizontal it crosses the air along its grazing path, so it dims and
   reddens continuously until its disc sets behind the horizon the receiver's
-  height has on Earth.
+  height has on Earth, lighting only surfaces tilted toward it.
+- **[Implicit]** Land relief takes each beam by Lambert's law and the sky's
+  light by an isotropic sky's view factor, on relief exaggerated threefold;
+  water keeps its own relief grade and glint.
 - **[Implicit]** A receiver has one horizon for its atmosphere, the one its
   height has on Earth: each light's attenuation and visibility, its shadows'
   sampled direction, and the canopy's interception of its beam follow it. The

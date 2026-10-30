@@ -8,6 +8,8 @@ override LIGHTING_MODEL_SIGNAL: f32 = 0.0001;
 override LIGHTING_MODEL_NOISE_PHASE: f32 = 0.0;
 override LIGHTING_MODEL_LIGHT_HEIGHT: f32 = 0.5;
 override LIGHTING_MODEL_CLOUD_DEPTH: f32 = 1.0;
+override LIGHTING_MODEL_SLOPE_DEGREES: f32 = 30.0;
+override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
 
 @fragment
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -46,11 +48,12 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 27u || LIGHTING_MODEL_REGRESSION_OUTPUT == 28u {
         // Sweeps the Sun, with the Moon set, from 0.5 degrees above a
         // receiver's horizontal on the left to 2.5 degrees below it on the
-        // right. Under a clear sky (27), red is its direct sunlight on level
-        // ground, in two-thousandths of a zenith Sun's clear-sky light, and green
-        // that light's red share. Under a full storm deck (28), red is its
-        // diffuse light, in hundredths of a zenith Sun's clear-sky light, and
-        // green the Sun's beam share of its clear-sky light.
+        // right. Under a clear sky (27), red is its direct sunlight on a surface
+        // facing it, in hundredths of a zenith Sun's clear-sky light, green that
+        // light's red share, and blue its direct sunlight on level ground, in
+        // two-thousandths. Under a full storm deck (28), red is its diffuse
+        // light, in hundredths of a zenith Sun's clear-sky light, and green the
+        // Sun's beam share of its clear-sky light on level ground.
         let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let depression = radians(mix(-0.5, 2.5, input.css_position_px.x / css_view_width_px));
@@ -67,17 +70,43 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
                 + ambient.canopy_scattered;
             return vec4<f32>(
                 100.0 * dot(diffuse, LUMINANCE_WEIGHTS),
-                ambient.split.beam_shares.x,
+                ambient.split.direct.x / max(
+                    twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m),
+                    1e-30,
+                ),
                 0.0,
                 1.0,
             );
         }
-        let direct = calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver)
-            .split.direct.x * sun_direct_light_color(receiver);
+        let split = calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver)
+            .split;
+        let color = sun_direct_light_color(receiver);
         return vec4<f32>(
-            2000.0 * dot(direct, LUMINANCE_WEIGHTS),
-            direct.r / max(direct.r + direct.g + direct.b, 1e-30),
-            0.0,
+            100.0 * split.normal.x,
+            color.r / (color.r + color.g + color.b),
+            2000.0 * split.direct.x,
+            1.0,
+        );
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 29u {
+        // Land relief under a Sun LIGHTING_MODEL_SUN_DEGREES high: red is the
+        // direct light on a slope LIGHTING_MODEL_SLOPE_DEGREES steep facing the
+        // Sun and green on one facing away, in quarters of level ground's, and
+        // blue the sky's light on the slope facing it, in halves of level
+        // ground's.
+        let sun = radians(LIGHTING_MODEL_SUN_DEGREES);
+        var receiver = celestial_receiver_light_at_height(0.0);
+        receiver.sun_direction = vec3<f32>(cos(sun), 0.0, sin(sun));
+        receiver.moon_direction = vec3<f32>(0.0, 0.0, -1.0);
+        let gradient = vec2<f32>(tan(radians(LIGHTING_MODEL_SLOPE_DEGREES)), 0.0);
+        let beams = vec2<f32>(1.0, 0.0);
+        let level = landform_light_grade(vec2<f32>(0.0), receiver, beams);
+        let toward = landform_light_grade(-gradient, receiver, beams);
+        let away = landform_light_grade(gradient, receiver, beams);
+        return vec4<f32>(
+            0.25 * toward.y / level.y,
+            0.25 * away.y / level.y,
+            0.5 * toward.x / level.x,
             1.0,
         );
     }

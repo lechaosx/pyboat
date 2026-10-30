@@ -1278,6 +1278,21 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ],
             )
         }
+        name if name.starts_with("lighting_relief_") => {
+            let (slope_degrees, sun_degrees) = name["lighting_relief_".len()..]
+                .split_once('_')
+                .and_then(|(slope, sun)| Some((slope.parse().ok()?, sun.parse().ok()?)))
+                .ok_or_else(|| format!("unknown diagnostic: {name}"))?;
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 29.0),
+                    ("LIGHTING_MODEL_SLOPE_DEGREES", slope_degrees),
+                    ("LIGHTING_MODEL_SUN_DEGREES", sun_degrees),
+                ],
+            )
+        }
         name if name.starts_with("lighting_receiver_deck_sweep_") => {
             let height_m = name["lighting_receiver_deck_sweep_".len()..]
                 .parse()

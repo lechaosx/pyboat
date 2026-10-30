@@ -278,6 +278,8 @@ pub struct CelestialLighting {
     /// The Sun's clear-sky light on level ground, before a solar eclipse dims it.
     pub sun_ambient_intensity: f32,
     pub moon_color: [f32; 3],
+    /// The Moon's light relative to the Sun's, through its phase and eclipse.
+    pub lunar_light_scale: f32,
     pub solar_eclipse_fraction: f32,
     pub lunar_penumbra_fraction: f32,
     pub lunar_umbra_fraction: f32,
@@ -586,6 +588,65 @@ pub fn beam_transmittance(aerosol_optical_depth: f64, air_mass: f64, ozone_mass:
     })
 }
 
+/// Spectral transmittance of the beam that reaches a receiver `height_m` above
+/// sea level from a light at the given sine of its height above the
+/// receiver's horizontal, as `beam_transmittance_at_height` in lighting.wgsl,
+/// which gives its provenance.
+pub fn beam_transmittance_at_height(
+    aerosol_optical_depth: f64,
+    height_m: f64,
+    sine_height: f64,
+) -> [f64; 3] {
+    let height_m = height_m.max(0.0);
+    let z = sine_height.min(0.0);
+    let depth_scale_heights = PLANET_RADIUS_SCALE_HEIGHTS
+        * ((1.0 + height_m / EARTH_RADIUS_M) * z * z / (1.0 + (1.0 - z * z).sqrt()))
+            .min(height_m / EARTH_RADIUS_M);
+    let climb = (1.0 - (-4.0 / std::f64::consts::PI * depth_scale_heights).exp()).sqrt();
+    let ozone_sine = if sine_height < 0.0 {
+        (-sine_height).min(-earth_horizon_z_at_height(height_m))
+    } else {
+        sine_height
+    };
+    beam_transmittance(
+        aerosol_optical_depth,
+        relative_air_mass(sine_height)
+            * depth_scale_heights.exp()
+            * (1.0 + climb)
+            * air_column_at_height(height_m),
+        ozone_air_mass(ozone_sine),
+    )
+}
+
+/// A beam's light on a surface facing it at a receiver `height_m` above sea
+/// level, per unit of a zenith light's clear-sky light on level ground, for a
+/// light of `color` above the atmosphere, as `celestial_beam_normal_light` in
+/// lighting.wgsl.
+pub fn beam_normal_light(
+    aerosol_optical_depth: f64,
+    height_m: f64,
+    direction_z: f64,
+    angular_radius_rad: f64,
+    color: [f64; 3],
+) -> f64 {
+    let visibility = disc_visibility_at_horizon(
+        earth_horizon_z_at_height(height_m) as f32,
+        direction_z as f32,
+        angular_radius_rad as f32,
+    );
+    let transmittance = beam_transmittance_at_height(aerosol_optical_depth, height_m, direction_z);
+    let luminance = |light: [f64; 3]| -> f64 {
+        (0..3)
+            .map(|channel| LUMINANCE_WEIGHTS[channel] * light[channel])
+            .sum()
+    };
+    f64::from(visibility)
+        * luminance(std::array::from_fn(|channel| {
+            color[channel] * transmittance[channel]
+        }))
+        / (luminance(color) * zenith_clear_sky_light())
+}
+
 /// Luminous transmittance of a clear sky's beam, as
 /// `clear_sky_beam_luminance` in lighting.wgsl, which gives its provenance.
 pub fn clear_sky_beam_luminance(
@@ -764,6 +825,7 @@ pub fn celestial_lighting_at_height(
         moon_ambient_intensity,
         sun_ambient_intensity: solar_ambient,
         moon_color,
+        lunar_light_scale,
         solar_eclipse_fraction,
         lunar_penumbra_fraction: orbit.lunar_penumbra_fraction,
         lunar_umbra_fraction: orbit.lunar_umbra_fraction,
