@@ -1,3 +1,8 @@
+// Directions are geometric. Atmospheric refraction, which lifts a light at
+// the horizon by about 0.57 degrees (Saemundsson 1986, Sky Telesc. 72) and
+// delays sea-level sunset by about two minutes at the equator, is left out:
+// a compromise that keeps one direction for light, shadow geometry and its
+// grid windows, tides and eclipses. game::celestial_direction mirrors it.
 fn celestial_direction_at_position(
     position_m: vec2<f32>,
     declination: f32,
@@ -158,11 +163,14 @@ fn celestial_disc_visibility_at_horizon(
     let horizon_cosine = sqrt(max(1.0 - horizon_z * horizon_z, 0.0));
     let disc_sine = sin(angular_radius_rad);
     let disc_cosine = cos(angular_radius_rad);
-    return smoothstep(
-        horizon_z * disc_cosine - horizon_cosine * disc_sine,
-        horizon_z * disc_cosine + horizon_cosine * disc_sine,
-        light.z,
+    // The disc's centre stands `centre` radii above the horizon, which hides
+    // the circular segment below it.
+    let centre = clamp(
+        (light.z - horizon_z * disc_cosine) / (horizon_cosine * disc_sine),
+        -1.0,
+        1.0,
     );
+    return select(disc_cover(centre), select(0.0, 1.0, centre > 0.0), abs(centre) >= 1.0);
 }
 
 fn celestial_visible_disc_sample_direction_at_horizon(

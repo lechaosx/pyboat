@@ -1136,6 +1136,26 @@ fn lunar_phase_brightness_follows_the_moons_phase_curve() {
     assert!(game::lunar_phase_brightness(0.25) < quarter);
 }
 
+/// A disc crossing the horizon shows the circular segment above it: with its
+/// centre a quarter of its radius up, 0.659 of the disc.
+#[test]
+fn disc_on_the_horizon_shows_its_circular_segment() {
+    let radius_rad = 0.00465_f32;
+    let centre: f64 = 0.25;
+    let segment =
+        0.5 + (centre * (1.0 - centre * centre).sqrt() + centre.asin()) / std::f64::consts::PI;
+    let visible = game::celestial_disc_visibility_at_height(
+        WorldGeometry::default(),
+        0.0,
+        centre as f32 * radius_rad.sin(),
+        radius_rad,
+    );
+    assert!(
+        (f64::from(visible) - segment).abs() < 0.002,
+        "{visible} of the disc visible, segment {segment}",
+    );
+}
+
 #[test]
 fn direct_sun_uses_the_finite_disc_surface_horizon() {
     let angular_radius_rad = 0.00465_f32;

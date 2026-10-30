@@ -109,18 +109,24 @@ fn encode_display_color(linear_color: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Exposed light up to this share of diffuse white shows unchanged, so the eye
+// model's brightness holds for all but the brightest surfaces; above it an
+// exponential shoulder of matching slope approaches the output's peak. A
+// presentation choice of the display layer.
+const TONE_MAP_SHOULDER: f32 = 0.8;
+
 fn tone_map_scene_color(scene_color: vec3<f32>, adapted_gain: f32, css_position_px: vec2<f32>) -> vec3<f32> {
     let exposed = max(
         adapted_view_color(scene_color, adapted_gain, css_position_px, scene.exposure_and_output.w) * adapted_gain,
         vec3<f32>(0.0),
     );
     let maximum = max(exposed.r, max(exposed.g, exposed.b));
-    let shoulder = 0.8;
-    if maximum <= shoulder {
+    if maximum <= TONE_MAP_SHOULDER {
         return exposed;
     }
-    let range = scene.exposure_and_output.y - shoulder;
-    let compressed = shoulder + range * (1.0 - exp(-(maximum - shoulder) / range));
+    let range = scene.exposure_and_output.y - TONE_MAP_SHOULDER;
+    let compressed = TONE_MAP_SHOULDER
+        + range * (1.0 - exp(-(maximum - TONE_MAP_SHOULDER) / range));
     // One scale for all channels preserves the hue of bright material colors.
     return exposed * (compressed / maximum);
 }

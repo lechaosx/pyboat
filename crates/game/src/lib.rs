@@ -872,14 +872,16 @@ pub fn celestial_disc_visibility_at_height(
 /// Share of a light's disc above the horizon at `horizon_z`, as
 /// `celestial_disc_visibility_at_horizon` in lighting.wgsl.
 fn disc_visibility_at_horizon(horizon_z: f32, direction_z: f32, angular_radius_rad: f32) -> f32 {
+    let horizon_z = f64::from(horizon_z);
+    let angular_radius_rad = f64::from(angular_radius_rad);
     let horizon_cosine = (1.0 - horizon_z * horizon_z).max(0.0).sqrt();
-    let disc_sine = angular_radius_rad.sin();
-    let disc_cosine = angular_radius_rad.cos();
-    smoothstep_range(
-        f64::from(horizon_z * disc_cosine - horizon_cosine * disc_sine),
-        f64::from(horizon_z * disc_cosine + horizon_cosine * disc_sine),
-        f64::from(direction_z),
-    ) as f32
+    let centre = ((f64::from(direction_z) - horizon_z * angular_radius_rad.cos())
+        / (horizon_cosine * angular_radius_rad.sin()))
+    .clamp(-1.0, 1.0);
+    if centre.abs() >= 1.0 {
+        return if centre > 0.0 { 1.0 } else { 0.0 };
+    }
+    (0.5 + (centre * (1.0 - centre * centre).sqrt() + centre.asin()) / std::f64::consts::PI) as f32
 }
 
 fn celestial_horizon_z_at_height(world_geometry: WorldGeometry, height_m: f32) -> f32 {
@@ -1309,6 +1311,8 @@ fn circle_overlap_fraction(separation: f64, target_radius: f64, occluder_radius:
         / (std::f64::consts::PI * target_radius * target_radius)
 }
 
+/// A light's geometric direction, as `celestial_direction_at_position` in
+/// lighting.wgsl, which names the compromise of leaving out refraction.
 fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32; 3] {
     let east = -libm::cos(declination) * libm::sin(hour_angle);
     let north = libm::sin(declination) * libm::cos(latitude)

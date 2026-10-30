@@ -771,6 +771,11 @@ fn highest_shadow_receiver_m() -> f32 {
 // Stored where no landform shadow can fall: the light is overhead, unseen by
 // any receiver, or landform shadows are off.
 const LANDFORM_UNSHADOWED_HEIGHT_M: f32 = -10000.0;
+// Every landform penumbra spans at least the landform grid's bilinear height
+// error, 0.4 m at the 99th percentile and 0.7 m at most over rugged land
+// (`LANDFORM_FIELD_SPACING_M` in field_grids.rs), so that error softens shadow
+// edges rather than stepping them.
+const LANDFORM_PENUMBRA_MINIMUM_M: f32 = 0.6;
 // Steps start this far apart and widen to this share of their distance.
 // Production reaches take about 30 steps under a high light and about 80 at
 // the highest receiver's horizon; the step bound only limits lab reach
@@ -788,7 +793,7 @@ const LANDFORM_HORIZON_MAX_STEPS: u32 = 256u;
 // ray toward the light from height h stays above a blocker of elevation b at
 // surface distance d while (R + h) / q - R > b, with
 // q = cos(d / R) - tan(light) sin(d / R), so the blocker covers half the disc
-// below h = (R + b) q - R. Its penumbra spans 0.6 m plus the disc's diameter
+// below h = (R + b) q - R. Its penumbra spans its minimum plus the disc's diameter
 // at that distance along the ray, and each metre of receiver height moves the
 // ray 1 / q metres there, so the receiver crosses the penumbra over q times
 // its span. Some blocker touches the disc below the highest top of the
@@ -836,7 +841,8 @@ fn landform_horizon(
             );
             let half_cover_height_m = (world_radius_m + blocker_elevation_m) * ray_scale
                 - world_radius_m;
-            let span_m = (0.6 + 2.0 * angular_radius_rad * distance_m) * ray_scale;
+            let span_m = (LANDFORM_PENUMBRA_MINIMUM_M + 2.0 * angular_radius_rad * distance_m)
+                * ray_scale;
             penumbra = select(
                 penumbra,
                 max(
