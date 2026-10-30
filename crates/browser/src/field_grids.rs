@@ -503,7 +503,7 @@ pub fn moon_clear_sky_share(
                             height_m,
                             sun_z,
                             SUN_DISC_RADIUS_RAD,
-                            [1.0; 3],
+                            game::SUN_COLOR,
                         )
                         * sun_z.max(0.0);
                     let moon_beam = lunar_scale

@@ -579,9 +579,11 @@ pub const REFERENCE_AEROSOL_OPTICAL_DEPTH: f64 = 0.103;
 pub const REFERENCE_LINKE_TURBIDITY: f64 = 2.35 + 7.79 * REFERENCE_AEROSOL_OPTICAL_DEPTH;
 
 /// lighting.wgsl's spectral constants, which give their provenance: luminance
-/// weights of the sRGB primaries, and Rayleigh, aerosol per unit of its 550 nm
-/// depth, and ozone optical depths at their dominant wavelengths.
+/// weights of the sRGB primaries, sunlight's colour above the atmosphere, and
+/// Rayleigh, aerosol per unit of its 550 nm depth, and ozone optical depths at
+/// their dominant wavelengths.
 pub const LUMINANCE_WEIGHTS: [f64; 3] = [0.2126, 0.7152, 0.0722];
+pub const SUN_COLOR: [f64; 3] = [1.11193, 0.97543, 0.91383];
 const RAYLEIGH_OPTICAL_DEPTHS: [f64; 3] = [0.06506, 0.10081, 0.19986];
 const AEROSOL_SPECTRAL_SCALES: [f64; 3] = [0.93857, 1.00098, 1.10698];
 const OZONE_OPTICAL_DEPTHS: [f64; 3] = [0.03542, 0.02523, 0.00219];
@@ -677,7 +679,7 @@ pub fn clear_sky_beam_luminance(
         ozone_air_mass(sine),
     );
     (0..3)
-        .map(|channel| LUMINANCE_WEIGHTS[channel] * transmittance[channel])
+        .map(|channel| LUMINANCE_WEIGHTS[channel] * SUN_COLOR[channel] * transmittance[channel])
         .sum()
 }
 
@@ -821,19 +823,28 @@ pub fn celestial_lighting_at_height(
         lunar_light_scale * twilight_clear_sky_light(moon_direction[2], air_column);
     // Sunlight reddened by lunar soil, and in Earth's umbra by Earth's limb, as
     // `moon_own_color` in lighting.wgsl derives it; keep the two synchronized.
-    let soil = [1.1108, 0.9855, 0.8175];
+    let luminance = |color: [f64; 3]| -> f64 {
+        (0..3)
+            .map(|channel| LUMINANCE_WEIGHTS[channel] * color[channel])
+            .sum()
+    };
+    let reflected: [f64; 3] =
+        std::array::from_fn(|channel| SUN_COLOR[channel] * [1.1108, 0.9855, 0.8175][channel]);
+    let reflected_luminance = luminance(reflected);
+    let sunlit_soil: [f64; 3] =
+        std::array::from_fn(|channel| reflected[channel] / reflected_luminance);
     let limb = beam_transmittance(
         REFERENCE_AEROSOL_OPTICAL_DEPTH,
         2.0 * relative_air_mass(0.0),
         2.0 * ozone_air_mass(0.0),
     );
-    let refracted: [f64; 3] = std::array::from_fn(|channel| soil[channel] * limb[channel]);
-    let refracted_luminance: f64 = (0..3)
-        .map(|channel| LUMINANCE_WEIGHTS[channel] * refracted[channel])
-        .sum();
+    let refracted: [f64; 3] = std::array::from_fn(|channel| sunlit_soil[channel] * limb[channel]);
+    let refracted_luminance = luminance(refracted);
     let umbra = f64::from(orbit.lunar_umbra_fraction);
     let moon_color = std::array::from_fn(|channel| {
-        (soil[channel] + umbra * (refracted[channel] / refracted_luminance - soil[channel])) as f32
+        (sunlit_soil[channel]
+            + umbra * (refracted[channel] / refracted_luminance - sunlit_soil[channel]))
+            as f32
     });
     let solar_ambient = twilight_clear_sky_light(sun_direction[2], air_column);
     let solar_ambient_transmittance = solar_eclipse_sky_share(solar_eclipse_fraction);

@@ -301,6 +301,9 @@ and verification details.
   height has on Earth: each light's attenuation and visibility, its shadows'
   sampled direction, and the canopy's interception of its beam follow it. The
   small world's lower horizon bounds only shadow reach and grid windows.
+- **[Implicit]** Sunlight above the atmosphere has the Sun's physical colour,
+  a 5778 K blackbody's, and moonlight and the night sky take their colours from
+  it.
 - **[Implicit]** A spectral clear-sky model at three wavelengths gives each
   beam both its brightness and its colour: the luminance it passes sets the
   brightness, so a low light's invisible near-infrared power does not count,

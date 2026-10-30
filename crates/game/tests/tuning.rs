@@ -1314,10 +1314,21 @@ fn moonlight_is_sunlight_slightly_reddened_by_the_lunar_surface() {
         lunar_longitude_phase: (off_node + 0.5) % 1.0,
     });
     let [red, green, blue] = full_moon.moon_color;
+    let [red_share, green_share, blue_share] = std::array::from_fn(|channel| {
+        f64::from(full_moon.moon_color[channel]) / game::SUN_COLOR[channel]
+    });
 
     assert_eq!(full_moon.lunar_penumbra_fraction, 0.0);
-    assert!(red > green && green > blue, "{:?}", full_moon.moon_color);
-    assert!(red < 1.25 && blue > 0.75, "{:?}", full_moon.moon_color);
+    assert!(
+        red_share > green_share && green_share > blue_share,
+        "{:?}",
+        full_moon.moon_color
+    );
+    assert!(
+        red_share < 1.25 && blue_share > 0.75,
+        "{:?}",
+        full_moon.moon_color
+    );
     let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
     assert!((luminance - 1.0).abs() < 0.01, "{luminance}");
 }

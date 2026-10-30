@@ -1481,7 +1481,12 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
     };
     let eclipse = f64::from(surface.solar_eclipse_fraction);
     let expected_share = (1.0
-        - ((1.0 - eclipse) * direct(surface.sun_direction[2], 0.00465, [1.0; 3])
+        - ((1.0 - eclipse)
+            * direct(
+                surface.sun_direction[2],
+                0.00465,
+                game::SUN_COLOR.map(|channel| channel as f32),
+            )
             + f64::from(surface.lunar_light_scale)
                 * direct(surface.moon_direction[2], 0.00452, surface.moon_color))
             / f64::from(surface.ambient_intensity))

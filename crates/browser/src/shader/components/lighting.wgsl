@@ -470,7 +470,9 @@ fn calculate_atmospheric_ambient_light(
     let clear_intensity = clear_sky_intensity(receiver);
     let split = celestial_light_split(receiver, clear_intensity);
     // Each light's sky takes that light's colour through the clear sky's
-    // diffuse transfer at its height; starlight and airglow are white.
+    // diffuse transfer at its height. Starlight, zodiacal light, and airglow
+    // take sunlight's colour, a compromise: airglow's emission lines are
+    // greener and redder.
     let solar_sky = solar_eclipse_sky_share(receiver.solar_eclipse_fraction) * solar_ambient;
     var lunar_sky = vec3<f32>(0.0);
     if lunar_ambient > 0.0 || EVALUATE_ALL_BRANCHES {
@@ -484,12 +486,12 @@ fn calculate_atmospheric_ambient_light(
         );
     }
     let sky_color = (
-        vec3<f32>(NIGHT_SKY_LIGHT)
-            + solar_sky * clear_sky_light_color(
+        NIGHT_SKY_LIGHT * SUN_COLOR
+            + solar_sky * unit_luminance(SUN_COLOR * clear_sky_light_color(
                 regional_aerosol_optical_depth,
                 receiver.sun_direction.z,
                 receiver.height_m,
-            )
+            ))
             + lunar_sky
     ) / (NIGHT_SKY_LIGHT + solar_sky + lunar_ambient);
     let clear_sky_light = clear_intensity * sky_color;
@@ -523,11 +525,11 @@ fn calculate_atmospheric_ambient_light(
         celestial_light_split(canopy_receiver, 1.0).normal,
     );
     let transmitted_light = diffuse_transmittance * split.diffuse_share * clear_sky_light;
-    let scattered_light = scattered_beams.x * beam_light_color(
+    let scattered_light = scattered_beams.x * unit_luminance(SUN_COLOR * beam_light_color(
             regional_aerosol_optical_depth,
             WEATHER_CANOPY_HEIGHT_M,
             canopy_receiver.sun_direction.z,
-        )
+        ))
         + scattered_beams.y * moon_light_color(
             regional_aerosol_optical_depth,
             WEATHER_CANOPY_HEIGHT_M,
@@ -583,11 +585,13 @@ fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
         * (1.0 - 0.72 * weather.rain);
 }
 
-// Light colours are relative to sunlight above the atmosphere, which stands in
-// for the display's D65 white, and each channel follows the dominant
+// Light colours are linear sRGB, and each channel follows the dominant
 // wavelength of its sRGB primary: 611, 549 and 464 nm. game copies these
 // spectral constants.
 const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+// Sunlight above the atmosphere at unit luminance: a 5778 K blackbody through
+// the CIE 1931 2-degree colour-matching functions (CIE 018:2019, 360-830 nm).
+const SUN_COLOR: vec3<f32> = vec3<f32>(1.11193, 0.97543, 0.91383);
 // Rayleigh optical depth at sea level, 0.008735 λ^-4.08 with λ in micrometres
 // (Leckner 1978, Solar Energy 20).
 const RAYLEIGH_OPTICAL_DEPTHS: vec3<f32> = vec3<f32>(0.06506, 0.10081, 0.19986);
@@ -656,9 +660,9 @@ fn earth_horizon_z_at_height(height_m: f32) -> f32 {
 // sunlight above the atmosphere. Luminance rather than broadband power sets
 // the beam's brightness, since a low light's beam keeps mostly near-infrared
 // power, which the eye does not see. Under the reference aerosol it stays
-// within 5% of a 10 nm integration of the same extinction over the eye's
+// within 3% of a 10 nm integration of the same extinction over the eye's
 // photopic sensitivity (CIE 1924) and a 5778 K solar spectrum from the zenith
-// down to 2 degrees, and within 10% at 1 degree.
+// down to 2 degrees, and within 6% at 1 degree.
 fn clear_sky_beam_luminance(
     sine_height: f32,
     aerosol_optical_depth: f32,
@@ -666,7 +670,7 @@ fn clear_sky_beam_luminance(
 ) -> f32 {
     let sine = clamp(sine_height, 0.0, 1.0);
     return dot(
-        beam_transmittance(
+        SUN_COLOR * beam_transmittance(
             aerosol_optical_depth,
             relative_air_mass(sine) * air_column,
             ozone_air_mass(sine),
@@ -718,7 +722,7 @@ fn beam_transmittance_at_height(
 
 // Colour of a beam that reaches a receiver `height_m` above sea level, for the
 // 550 nm aerosol optical depth and the sine of the light's height above the
-// receiver's horizontal.
+// receiver's horizontal, from a light whose own colour is white.
 fn beam_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32) -> vec3<f32> {
     return unit_luminance(beam_transmittance_at_height(
         aerosol_optical_depth,
@@ -729,18 +733,17 @@ fn beam_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32)
 
 // Colour of the clear sky's light on level ground `height_m` above sea level
 // from a light at the given sine of its height above the local horizontal,
-// through the air above the receiver, by Bird and Riordan's (1986) diffuse
+// whose own colour is white, through the air above the receiver, by Bird and Riordan's (1986) diffuse
 // irradiance: half of what Rayleigh scattering takes from the beam, with their
 // exponent of 0.95 for multiple scattering, and the forward share of what
 // aerosol scatters after 1.5 air masses of Rayleigh extinction, both under
 // the ozone the beam crosses. Marine aerosol scatters nearly all it
 // extinguishes, and its asymmetry parameter is 0.7.
-// A compromise: below the horizon the colour holds its sunset value. On the
-// display's basis, where sunlight above the atmosphere is D65 white,
-// level-ground light with the Sun 10 degrees up is redder than every session
-// Spitschan et al. (2016, Sci. Rep. 6) measured at a rural and a city site:
-// x 0.3238 against at most 0.3178. Below the horizon it stays at sunset's
-// 9,410 K while measured light turns bluer: a 12,300 K mean from the horizon
+// A compromise: below the horizon the colour holds its sunset value. For
+// sunlight's colour, level-ground light with the Sun 10 degrees up is redder
+// than every session Spitschan et al. (2016, Sci. Rep. 6) measured at a rural
+// and a city site: x 0.3378 against at most 0.3178. Below the horizon it
+// stays at sunset's 8,050 K while measured light turns bluer: a 12,300 K mean from the horizon
 // to 5 degrees down (Hernández-Andrés et al. 2001, J. Opt. Soc. Am. A 18),
 // and rural medians of 14,600 K 1 degree down and x 0.215 6 degrees down.
 // Single scattering alone does not reproduce that blue.
@@ -766,13 +769,13 @@ fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32, height_m:
 // crossing about twice the horizontal path through the reference air, which
 // reddens it; the umbra's share of the disc mixes the two at unit luminance.
 fn moon_own_color() -> vec3<f32> {
-    let soil = vec3<f32>(1.1108, 0.9855, 0.8175);
-    let refracted = unit_luminance(soil * beam_transmittance(
+    let sunlit_soil = unit_luminance(SUN_COLOR * vec3<f32>(1.1108, 0.9855, 0.8175));
+    let refracted = unit_luminance(sunlit_soil * beam_transmittance(
         REFERENCE_AEROSOL_OPTICAL_DEPTH,
         2.0 * relative_air_mass(0.0),
         2.0 * ozone_air_mass(0.0),
     ));
-    return mix(soil, refracted, lunar_umbra_fraction);
+    return mix(sunlit_soil, refracted, lunar_umbra_fraction);
 }
 
 // Moonlight's colour after the atmosphere, keeping the luminance of the
@@ -784,11 +787,11 @@ fn moon_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32)
 }
 
 fn sun_direct_light_color(receiver: CelestialReceiverLight) -> vec3<f32> {
-    return beam_light_color(
+    return unit_luminance(SUN_COLOR * beam_light_color(
         local_aerosol_optical_depth,
         receiver.height_m,
         receiver.sun_direction.z,
-    );
+    ));
 }
 
 // ESRA's clear-sky diffuse light on level ground (Rigollier, Bauer and Wald
@@ -861,7 +864,7 @@ fn celestial_light_split(
             receiver.sun_direction,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             aerosol,
-            vec3<f32>(1.0),
+            SUN_COLOR,
         ),
         lunar_light_scale() * celestial_beam_normal_light(
             receiver,
