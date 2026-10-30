@@ -585,8 +585,8 @@ fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
 
 // Light colours are relative to sunlight above the atmosphere, which stands in
 // for the display's D65 white, and each channel follows the dominant
-// wavelength of its sRGB primary: 611, 549 and 464 nm. field_grids.rs's
-// `beam_share` copies these spectral constants.
+// wavelength of its sRGB primary: 611, 549 and 464 nm. game copies these
+// spectral constants.
 const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // Rayleigh optical depth at sea level, 0.008735 λ^-4.08 with λ in micrometres
 // (Leckner 1978, Solar Energy 20).
