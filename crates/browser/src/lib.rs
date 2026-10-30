@@ -1571,6 +1571,10 @@ mod tests {
                 (naga::ShaderStage::Fragment, "fragment_playground_scene"),
                 (
                     naga::ShaderStage::Fragment,
+                    "fragment_playground_neutral_scene"
+                ),
+                (
+                    naga::ShaderStage::Fragment,
                     "fragment_playground_illumination"
                 ),
             ],

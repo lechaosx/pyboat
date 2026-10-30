@@ -175,6 +175,7 @@ fn main() {
         &[
             "vertex",
             "fragment_playground_scene",
+            "fragment_playground_neutral_scene",
             "fragment_playground_illumination",
         ],
         "scene-playground.wgsl",

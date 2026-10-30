@@ -32,6 +32,17 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
         ), 1.0);
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 31u {
+        // A 50% grey lit by the vision colour as an illuminant at unit
+        // luminance, as the cones of an eye adapted to that illuminant at
+        // LIGHTING_MODEL_EXPOSURE_GAIN see it.
+        let illuminant = unit_luminance(vec3<f32>(
+            LIGHTING_MODEL_VISION_RED,
+            LIGHTING_MODEL_VISION_GREEN,
+            LIGHTING_MODEL_VISION_BLUE,
+        ));
+        return vec4<f32>(0.5 * illuminant, 1.0);
+    }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 26u {
         // The displayed light of the vision colour along a horizontal ramp
         // from 1/64 to 64 diffuse whites, in a view adapted to daylight, at a

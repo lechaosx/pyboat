@@ -991,11 +991,13 @@ fn diagnostic(
 fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
     let selection = match value {
         "scene" => scene_selection(),
-        "scene_direct" | "scene_occluder_coverage" | "scene_production" => ShaderSelection {
-            id: value.to_owned(),
-            module: None,
-            constants: Vec::new(),
-        },
+        "scene_direct" | "scene_neutral" | "scene_occluder_coverage" | "scene_production" => {
+            ShaderSelection {
+                id: value.to_owned(),
+                module: None,
+                constants: Vec::new(),
+            }
+        }
         "scene_occluder_coverage_all_branches" => ShaderSelection {
             id: value.to_owned(),
             module: None,
@@ -1242,6 +1244,25 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                     ("LIGHTING_MODEL_VISION_BLUE", color[2]),
                     ("LIGHTING_MODEL_SIGNAL", signal),
                     ("LIGHTING_MODEL_NOISE_PHASE", phase),
+                ],
+            )
+        }
+        // A 50% grey under CIE illuminant A (a 2856 K blackbody, in linear
+        // sRGB at unit luminance) as the cones of an eye adapted to it at the
+        // given exposure gain see it.
+        name if name.starts_with("chromatic_adaptation_") => {
+            let gain: f64 = name["chromatic_adaptation_".len()..]
+                .parse()
+                .map_err(|_| format!("unknown diagnostic: {name}"))?;
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 31.0),
+                    ("LIGHTING_MODEL_EXPOSURE_GAIN", gain),
+                    ("LIGHTING_MODEL_VISION_RED", 1.84492),
+                    ("LIGHTING_MODEL_VISION_GREEN", 0.82622),
+                    ("LIGHTING_MODEL_VISION_BLUE", 0.23344),
                 ],
             )
         }
@@ -1544,7 +1565,8 @@ fn print_help() {
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids;\n\
                                   scene_production renders the game's shaders and tuning\n\
-                                  and rejects the lab's tuning and visibility options)\n\
+                                  and rejects the lab's tuning and visibility options;\n\
+                                  scene_neutral shows every surface as a matte 50% grey)\n\
            --quality low|medium|high  graphics tier of scene compositions (default high)\n\
            --legacy-shadow-look   scene compositions fade cloud shadows from a light height of\n\
                                   0.22, cap landform shadows at 70%, and fix their reach\n\n\
@@ -1962,6 +1984,8 @@ async fn render(options: &Options) -> Result<(), String> {
         || {
             if production {
                 "fragment"
+            } else if options.diagnostic.id == "scene_neutral" {
+                "fragment_playground_neutral_scene"
             } else {
                 "fragment_playground_scene"
             }

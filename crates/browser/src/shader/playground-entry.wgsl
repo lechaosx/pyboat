@@ -17,6 +17,23 @@ fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(encode_display_color(displayed), color.a);
 }
 
+// The composition with every surface a matte 50% grey under the light the
+// eye adapts to there, shown through the eye.
+@fragment
+fn fragment_playground_neutral_scene(input: VertexOutput) -> @location(0) vec4<f32> {
+    let initialized = initialize_playground_scene_from_environment_fields(input);
+    let light = lit_scene_surface(
+        initialized.input.world_position_m,
+        initialized.atmosphere,
+        initialized.surface_circle_position,
+        0.0,
+        vec4<f32>(1.0),
+        1.0,
+    ).light;
+    let gain = field_adapted_gain(input.css_position_px);
+    return vec4<f32>(encode_display_color(tone_map_scene_color(0.5 * light, gain, input.css_position_px)), 1.0);
+}
+
 @fragment
 fn fragment_playground_illumination(input: VertexOutput) -> @location(0) vec4<f32> {
     let initialized = initialize_playground_scene_from_environment_fields(input);
