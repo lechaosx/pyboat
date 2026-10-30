@@ -23,15 +23,21 @@ const VIEW_HEIGHT_DEGREES: f32 = 23.0;
 @group(0) @binding(7)
 var adapting_field: texture_2d<f32>;
 
-// Light in stops of scene light, as the adapting field holds it. The eye
+// Light as the illumination and the adapting field hold it: stops of its
+// luminance, in scene light, then its colour at unit luminance. The eye
 // adapts no further than full dark adaptation, so darker light counts as
-// that bound.
-fn adapting_light_stops(light: f32) -> f32 {
-    return log2(max(light, NIGHT_SKY_LIGHT));
+// that bound. Light without luminance, as when the lab hides every light,
+// takes the display's white.
+fn adapting_light(light: vec3<f32>) -> vec4<f32> {
+    let luminance = dot(light, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return vec4<f32>(
+        log2(max(luminance, NIGHT_SKY_LIGHT)),
+        select(vec3<f32>(1.0), light / luminance, luminance > 0.0),
+    );
 }
 
-// Gain of the part of the view at `css_position_px`, adapted to the field there.
-fn field_adapted_gain(css_position_px: vec2<f32>) -> f32 {
+// The eye's adaptation at `css_position_px`, to the field there.
+fn field_adaptation(css_position_px: vec2<f32>) -> EyeAdaptation {
     let css_view_height_px = scene.precipitation_phase_and_css_view_height_px.y;
     let css_view_px = vec2<f32>(
         css_view_height_px * scene.camera_and_view_m.z / scene.camera_and_view_m.w,
@@ -46,18 +52,18 @@ fn field_adapted_gain(css_position_px: vec2<f32>) -> f32 {
     let origin = vec2<u32>(texel);
     let next = min(origin + 1u, vec2<u32>(last));
     let blend = texel - vec2<f32>(origin);
-    let stops = mix(
+    let field = mix(
         mix(
-            textureLoad(adapting_field, origin, 0).r,
-            textureLoad(adapting_field, vec2<u32>(next.x, origin.y), 0).r,
+            textureLoad(adapting_field, origin, 0),
+            textureLoad(adapting_field, vec2<u32>(next.x, origin.y), 0),
             blend.x,
         ),
         mix(
-            textureLoad(adapting_field, vec2<u32>(origin.x, next.y), 0).r,
-            textureLoad(adapting_field, next, 0).r,
+            textureLoad(adapting_field, vec2<u32>(origin.x, next.y), 0),
+            textureLoad(adapting_field, next, 0),
             blend.x,
         ),
         blend.y,
     );
-    return adapted_gain(exp2(stops));
+    return EyeAdaptation(adapted_gain(exp2(field.r)), field.gba);
 }

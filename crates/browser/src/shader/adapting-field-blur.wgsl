@@ -10,6 +10,12 @@ var previous_field: texture_2d<f32>;
 // seconds.
 const DARKENING_ADAPTATION_SECONDS: f32 = 3.0;
 const BRIGHTENING_ADAPTATION_SECONDS: f32 = 1.0;
+// Time constant of chromatic adaptation, with which the adapting white eases
+// toward the field's colour: 26 s completes 90% of it in about 60 s, as
+// Fairchild and Reniff (1995, J. Opt. Soc. Am. A 12) measured at constant
+// luminance. A compromise: one exponential stands in for their sum of two,
+// whose fast phase of about a second completes much of the change at once.
+const CHROMATIC_ADAPTATION_SECONDS: f32 = 26.0;
 
 @vertex
 fn fullscreen_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -18,12 +24,13 @@ fn fullscreen_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) ve
 }
 
 // Stops of the view's mean illumination over the adapting field around each
-// texel: an arithmetic mean of light, as CIE 159:2004 defines the adapting
-// luminance as the field's mean luminance, and as light scattered within the
-// eye adds. CIE gives the field's edge only approximately, so a Gaussian with
-// the variance of its disc pools the light, renormalized over the part of the
-// field the view covers. Adaptation is retinal, so each texel eases toward
-// that target where it lies on the screen, wherever the view has moved.
+// texel, and that mean's colour, the adapting white: an arithmetic mean of
+// light, as CIE 159:2004 defines the adapting luminance as the field's mean
+// luminance, and as light scattered within the eye adds. CIE gives the
+// field's edge only approximately, so a Gaussian with the variance of its
+// disc pools the light, renormalized over the part of the field the view
+// covers. Adaptation is retinal, so each texel eases toward that target where
+// it lies on the screen, wherever the view has moved.
 @fragment
 fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let aspect = scene.camera_and_view_m.z / scene.camera_and_view_m.w;
@@ -36,27 +43,32 @@ fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) v
         let offset = aspect * (uv.x - (f32(column) + 0.5) / f32(ILLUMINATION_TEXELS));
         column_weights[column] = exp(exponent_scale * offset * offset);
     }
-    var weighted_light = 0.0;
+    var weighted_light = vec3<f32>(0.0);
     var total_weight = 0.0;
     for (var row = 0u; row < ILLUMINATION_TEXELS; row++) {
         let offset = uv.y - (f32(row) + 0.5) / f32(ILLUMINATION_TEXELS);
         let row_weight = exp(exponent_scale * offset * offset);
-        var row_light = 0.0;
+        var row_light = vec3<f32>(0.0);
         var row_total = 0.0;
         for (var column = 0u; column < ILLUMINATION_TEXELS; column++) {
-            row_light += column_weights[column] * exp2(textureLoad(illumination, vec2<u32>(column, row), 0).r);
+            let light = textureLoad(illumination, vec2<u32>(column, row), 0);
+            row_light += column_weights[column] * exp2(light.r) * light.gba;
             row_total += column_weights[column];
         }
         weighted_light += row_weight * row_light;
         total_weight += row_weight * row_total;
     }
-    let target_stops = log2(weighted_light / total_weight);
-    let previous_stops = textureLoad(previous_field, vec2<u32>(position.xy), 0).r;
+    let target_light = adapting_light(weighted_light / total_weight);
+    let previous = textureLoad(previous_field, vec2<u32>(position.xy), 0);
     let time_constant = select(
         BRIGHTENING_ADAPTATION_SECONDS,
         DARKENING_ADAPTATION_SECONDS,
-        target_stops < previous_stops,
+        target_light.r < previous.r,
     );
-    let weight = 1.0 - exp(-scene.exposure_and_output.x / time_constant);
-    return vec4<f32>(previous_stops + (target_stops - previous_stops) * weight, 0.0, 0.0, 1.0);
+    let seconds = scene.exposure_and_output.x;
+    let weight = vec4<f32>(
+        1.0 - exp(-seconds / time_constant),
+        vec3<f32>(1.0 - exp(-seconds / CHROMATIC_ADAPTATION_SECONDS)),
+    );
+    return previous + (target_light - previous) * weight;
 }

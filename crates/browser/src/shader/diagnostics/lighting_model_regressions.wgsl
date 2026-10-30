@@ -15,20 +15,22 @@ override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_playground_scene(input);
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 21u {
+        let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
         return vec4<f32>(night_vision_color(
-            vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE),
+            color,
+            color,
             rod_vision_fraction(LIGHTING_MODEL_EXPOSURE_GAIN),
         ), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 22u {
         return vec4<f32>(adapted_view_color(
-            vec3<f32>(LIGHTING_MODEL_SIGNAL), LIGHTING_MODEL_EXPOSURE_GAIN,
+            vec3<f32>(LIGHTING_MODEL_SIGNAL), EyeAdaptation(LIGHTING_MODEL_EXPOSURE_GAIN, vec3<f32>(1.0)),
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
         ) * (0.5 / LIGHTING_MODEL_SIGNAL), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 23u {
         return vec4<f32>(adapted_view_color(
-            vec3<f32>(0.0), LIGHTING_MODEL_EXPOSURE_GAIN,
+            vec3<f32>(0.0), EyeAdaptation(LIGHTING_MODEL_EXPOSURE_GAIN, vec3<f32>(1.0)),
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
         ), 1.0);
     }
@@ -41,7 +43,10 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             LIGHTING_MODEL_VISION_GREEN,
             LIGHTING_MODEL_VISION_BLUE,
         ));
-        return vec4<f32>(0.5 * illuminant, 1.0);
+        return vec4<f32>(0.5 * chromatically_adapted_color(
+            illuminant,
+            EyeAdaptation(LIGHTING_MODEL_EXPOSURE_GAIN, illuminant),
+        ), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 26u {
         // The displayed light of the vision colour along a horizontal ramp
@@ -51,7 +56,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let level = exp2(mix(-6.0, 6.0, input.css_position_px.x / css_view_width_px));
         let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
-        return vec4<f32>(0.25 * tone_map_scene_color(level * color, 1.0, input.css_position_px), 1.0);
+        return vec4<f32>(0.25 * tone_map_scene_color(level * color, EyeAdaptation(1.0, vec3<f32>(1.0)), input.css_position_px), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
         return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);

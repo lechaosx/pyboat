@@ -202,14 +202,23 @@ and verification details.
 - **[Implicit]** Adaptation over time runs in logarithmic brightness so equal
   brightness ratios take the same time.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
+- **[Implicit]** The eye adapts to the color of the light falling on the scene,
+  pooled over the same adapting field as its brightness, and never to surface
+  colors.
+- **[Implicit]** Chromatic adaptation follows CIECAM16: its cone gains carry
+  the adapting light's color toward the display's white by the degree of
+  adaptation that the adapting luminance sets.
+- **[Implicit]** Chromatic adaptation takes about a minute, as measured for
+  color appearance, rather than the seconds of brightness adaptation.
 - **[Explicit]** Scene light keeps the physical ratios of daylight, twilight,
   moonlight, and starlight, and the eye alone compresses them: an adapted
   part of the view has the brightness of CIECAM02's photopic brightness law at
   every light level. That compromise keeps moonlit and moonless views readable
   on a display, where real dim vision would leave them nearly black.
-- **[Explicit]** The display shows the brightness the eye model perceives as
-  display brightness, alike for SDR and HDR below diffuse white; HDR only adds
-  headroom above it. The viewer's own viewing conditions are unknown and stay
+- **[Explicit]** The display shows the brightness and color the eye model
+  perceives as display brightness and color, so what the adapted eye sees as
+  neutral shows as the display's white, alike for SDR and HDR below diffuse
+  white; HDR only adds headroom above it. The viewer's own viewing conditions are unknown and stay
   outside the model.
 - **[Explicit]** Unlit overlays, such as boats and the windsock, take the
   light the view is adapted to where they are.

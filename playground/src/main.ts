@@ -964,18 +964,18 @@ const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, us
 const [illuminationTexels, adaptingFieldTexels] = adapting_field_texels();
 const illuminationView = device.createTexture({
   size: [illuminationTexels!, illuminationTexels!],
-  format: "r32float",
+  format: "rgba32float",
   usage: 0x10 | 0x04,
 }).createView();
 const adaptingField = device.createTexture({
   size: [adaptingFieldTexels!, adaptingFieldTexels!],
-  format: "r32float",
+  format: "rgba32float",
   usage: 0x10 | 0x04 | 0x01,
 });
 const adaptingFieldView = adaptingField.createView();
 const previousAdaptingField = device.createTexture({
   size: [adaptingFieldTexels!, adaptingFieldTexels!],
-  format: "r32float",
+  format: "rgba32float",
   usage: 0x04 | 0x02,
 });
 const adaptingFieldShader = device.createShaderModule({ code: adapting_field_blur_shader_source() });
@@ -985,7 +985,7 @@ const adaptingFieldPipeline = device.createRenderPipeline({
   fragment: {
     module: adaptingFieldShader,
     entryPoint: "blur_adapting_field",
-    targets: [{ format: "r32float" }],
+    targets: [{ format: "rgba32float" }],
   },
   primitive: { topology: "triangle-list" },
 });
@@ -1812,7 +1812,7 @@ function renderFrame(): Promise<void> {
     const illuminationPass = encoder.beginRenderPass({
       colorAttachments: [{
         view: illuminationView,
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        clearValue: { r: 0, g: 1, b: 1, a: 1 },
         loadOp: "clear",
         storeOp: "store",
       }],
@@ -2019,7 +2019,7 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
         shaders.scene,
         productionShaders ? "fragment_illumination" : "fragment_playground_illumination",
         constants,
-        "r32float",
+        "rgba32float",
       ),
       shaders.direct
         && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
@@ -2027,7 +2027,7 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
         shaders.direct,
         "fragment_playground_illumination",
         constants,
-        "r32float",
+        "rgba32float",
       ),
       device.createComputePipelineAsync({
         layout: "auto",

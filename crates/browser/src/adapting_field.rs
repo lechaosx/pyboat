@@ -7,8 +7,9 @@ use crate::ADAPTING_FIELD_BLUR_SHADER;
 pub const ILLUMINATION_TEXELS: u32 = 32;
 pub const ADAPTING_FIELD_TEXELS: u32 = 32;
 
-/// Format of both textures, which hold stops of scene light.
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// Format of both textures, which hold stops of scene light and its colour at
+/// unit luminance.
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// The eye's adapting field over the view: the scene's illumination, rendered
 /// by a caller's illumination pipeline, then pooled over the field's extent
@@ -138,7 +139,7 @@ impl AdaptingField {
 
     /// Renders the illumination that `draw` records, then blurs it into the
     /// field's target and adapts the field toward it. Before anything is drawn
-    /// the illumination holds daylight's zero stops.
+    /// the illumination holds daylight's zero stops in the display's white.
     /// Timestamps, when given as a query set and a beginning index, mark the
     /// start of the first pass.
     pub fn encode(
@@ -154,7 +155,12 @@ impl AdaptingField {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })
@@ -196,9 +202,9 @@ impl AdaptingField {
         );
     }
 
-    /// Adapts the whole view to `light`, in scene light, in place of the
-    /// field `encode` pools.
-    pub fn encode_uniform(&self, encoder: &mut wgpu::CommandEncoder, light: f32) {
+    /// Adapts the whole view to `light`, in scene light, of the colour `white`
+    /// at unit luminance, in place of the field `encode` pools.
+    pub fn encode_uniform(&self, encoder: &mut wgpu::CommandEncoder, light: f32, white: [f32; 3]) {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Uniform adapting field pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -208,9 +214,9 @@ impl AdaptingField {
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: f64::from(light.max(game::NIGHT_SKY_LIGHT).log2()),
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.0,
+                        g: f64::from(white[0]),
+                        b: f64::from(white[1]),
+                        a: f64::from(white[2]),
                     }),
                     store: wgpu::StoreOp::Store,
                 },

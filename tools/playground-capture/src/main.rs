@@ -625,8 +625,13 @@ struct DerivedOutput {
     /// Scene light of the adapting field at the view's centre, for scene
     /// compositions.
     adapting_light: Option<f32>,
+    /// The colour of the light the view's centre is adapted to, at unit
+    /// luminance, for scene compositions.
+    adapting_white: Option<[f32; 3]>,
     /// Stops of scene light the adapting field holds, row by row from the top.
     adapting_field_stops: Option<Vec<f32>>,
+    /// The adapting field's white, as `adapting_white`, row by row from the top.
+    adapting_field_white: Option<Vec<[f32; 3]>>,
     /// Exposure at the view's centre: of its adapting light, or else of its
     /// clear-sky light.
     settled_exposure_multiplier: f32,
@@ -1583,8 +1588,9 @@ fn print_help() {
            --adaptation-seconds S  the eye, settled at the first prior view, adapts over S\n\
                                   seconds between successive views (default: settled at\n\
                                   the capture)\n\
-           --fixed-adaptation     adapt the whole view to the clear-sky light at its centre,\n\
-                                  a test control that holds exposure while switches change light\n\
+           --fixed-adaptation     adapt the whole view to the clear-sky light at its centre in\n\
+                                  the display's white, a test control that holds exposure while\n\
+                                  switches change light and shows the light's colour unadapted\n\
            --touch-budget         bake the surface within touch devices' memory budget\n\
            --output-peak PEAK     tone-curve peak in diffuse whites, 4 for the game's HDR\n\
                                   output (default 1, SDR); the 8-bit image clips above 1\n\n\
@@ -2048,7 +2054,7 @@ async fn render(options: &Options) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
-    let (rgba, adapting_field_stops) = render_world(
+    let (rgba, adapting_field) = render_world(
         &device,
         &queue,
         &pipeline,
@@ -2060,7 +2066,7 @@ async fn render(options: &Options) -> Result<(), String> {
         options,
     )?;
     write_png(path, options.width, options.height, &rgba)?;
-    let report = capture_report(options, path, &rgba, adapting_field_stops)?;
+    let report = capture_report(options, path, &rgba, adapting_field)?;
     let report_json = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("failed to serialize report: {error}"))?;
     let sidecar_path = path.with_extension("json");
@@ -2122,7 +2128,7 @@ fn render_world(
     fields: Option<&CaptureFields>,
     adaptation: Option<&CaptureAdaptation>,
     options: &Options,
-) -> Result<(Vec<u8>, Option<Vec<f32>>), String> {
+) -> Result<(Vec<u8>, Option<AdaptingFieldTexels>), String> {
     let field_bindings = |fields: &CaptureFields, buffer: &wgpu::Buffer| {
         fields.bindings(
             device,
@@ -2300,9 +2306,11 @@ fn render_world(
                 options.world_time_seconds,
                 [options.camera_x_m, options.camera_y_m].into(),
             );
-            adaptation
-                .field
-                .encode_uniform(&mut encoder, celestial_lighting(center).ambient_intensity);
+            adaptation.field.encode_uniform(
+                &mut encoder,
+                celestial_lighting(center).ambient_intensity,
+                [1.0; 3],
+            );
         }
         Some(adaptation) => {
             adaptation
@@ -2363,7 +2371,7 @@ fn render_world(
         pass.draw(0..6, 0..1);
     }
     let rgba = read_texture(device, queue, encoder, &texture)?;
-    let adapting_field_stops = adapting_field_readback
+    let adapting_field = adapting_field_readback
         .map(|buffer| {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
             device
@@ -2378,13 +2386,16 @@ fn render_world(
                     .as_chunks::<{ ADAPTING_FIELD_ROW_BYTES as usize }>()
                     .0
                     .iter()
-                    .flat_map(|row| &row.as_chunks::<4>().0[..ADAPTING_FIELD_TEXELS as usize])
-                    .map(|&texel| f32::from_le_bytes(texel))
+                    .flat_map(|row| &row.as_chunks::<16>().0[..ADAPTING_FIELD_TEXELS as usize])
+                    .map(|texel| {
+                        let channels = texel.as_chunks::<4>().0;
+                        std::array::from_fn(|channel| f32::from_le_bytes(channels[channel]))
+                    })
                     .collect(),
             )
         })
         .transpose()?;
-    Ok((rgba, adapting_field_stops))
+    Ok((rgba, adapting_field))
 }
 
 /// What a scene composition adapts with: its illumination pipeline, the
@@ -2395,7 +2406,11 @@ struct CaptureAdaptation<'a> {
     direct_layout: &'a wgpu::BindGroupLayout,
 }
 
-const ADAPTING_FIELD_ROW_BYTES: u32 = 256;
+const ADAPTING_FIELD_ROW_BYTES: u32 = 512;
+
+/// The adapting field's texels, row by row from the top: stops of scene light,
+/// then the light's colour at unit luminance.
+type AdaptingFieldTexels = Vec<[f32; 4]>;
 
 /// Low-wind then upper-wind cloud offsets that a view held at the camera since
 /// `cloud_motion_seconds` before the capture has integrated from view-centre wind.
@@ -2707,19 +2722,37 @@ fn capture_report(
     options: &Options,
     path: &std::path::Path,
     rgba: &[u8],
-    adapting_field_stops: Option<Vec<f32>>,
+    adapting_field: Option<AdaptingFieldTexels>,
 ) -> Result<CaptureReport, String> {
     // The view's centre lies between the four central texels.
-    let adapting_light = adapting_field_stops.as_ref().map(|stops| {
-        let texels = ADAPTING_FIELD_TEXELS as usize;
-        let stops = |column: usize, row: usize| stops[row * texels + column];
-        let half = texels / 2;
-        let mean = (stops(half - 1, half - 1)
-            + stops(half, half - 1)
-            + stops(half - 1, half)
-            + stops(half, half))
-            / 4.0;
-        mean.exp2()
+    let central_mean = |channel: usize| {
+        adapting_field.as_ref().map(|field| {
+            let texels = ADAPTING_FIELD_TEXELS as usize;
+            let half = texels / 2;
+            [
+                (half - 1, half - 1),
+                (half, half - 1),
+                (half - 1, half),
+                (half, half),
+            ]
+            .into_iter()
+            .map(|(column, row)| field[row * texels + column][channel])
+            .sum::<f32>()
+                / 4.0
+        })
+    };
+    let adapting_light = central_mean(0).map(f32::exp2);
+    let adapting_white = adapting_field
+        .is_some()
+        .then(|| [1, 2, 3].map(|channel| central_mean(channel).unwrap()));
+    let adapting_field_stops = adapting_field
+        .as_ref()
+        .map(|field| field.iter().map(|texel| texel[0]).collect());
+    let adapting_field_white = adapting_field.as_ref().map(|field| {
+        field
+            .iter()
+            .map(|texel| [texel[1], texel[2], texel[3]])
+            .collect()
     });
     let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
@@ -2758,7 +2791,9 @@ fn capture_report(
             lunar_umbra_fraction: celestial.lunar_umbra_fraction,
             clear_sky_ambient_intensity: celestial.ambient_intensity,
             adapting_light,
+            adapting_white,
             adapting_field_stops,
+            adapting_field_white,
             settled_exposure_multiplier: exposure_target(
                 adapting_light.unwrap_or(celestial.ambient_intensity),
             ),

@@ -282,7 +282,7 @@ fn a_view_under_a_deck_adapts_to_its_light_by_the_brightness_law() {
 
 /// Adaptation follows the light falling on the view, not what its surfaces
 /// reflect: hiding every land and ice colour leaves the rest of a coastal
-/// view, and the light it is adapted to, unchanged.
+/// view, and the light it is adapted to in brightness and colour, unchanged.
 #[test]
 fn surface_colors_leave_adaptation_unchanged() {
     let arguments = view(
@@ -307,6 +307,10 @@ fn surface_colors_leave_adaptation_unchanged() {
     assert_eq!(
         colored.derived["settledExposureMultiplier"],
         hidden.derived["settledExposureMultiplier"],
+    );
+    assert_eq!(
+        adapting_field_whites(&colored),
+        adapting_field_whites(&hidden),
     );
     let mut hidden_pixels = 0;
     for (colored, hidden) in colored
@@ -514,4 +518,199 @@ fn a_view_of_day_and_night_adapts_to_their_mean_light() {
         night_beside_day <= night_alone,
         "night beside day {night_beside_day}, alone {night_alone}",
     );
+}
+
+/// Linear light of an 8-bit sRGB pixel.
+fn linear_rgb(pixel: &[u8]) -> [f32; 3] {
+    [0, 1, 2].map(|channel| srgb_channel_to_linear(pixel[channel]))
+}
+
+/// Mean linear light over the middle third of a view along each axis, where
+/// the adapting field differs least from its value at the view's centre.
+fn central_mean_light(rgba: &[u8], width: usize) -> [f32; 3] {
+    let pixels = rgba.as_chunks::<4>().0;
+    let height = pixels.len() / width;
+    let mut sum = [0.0; 3];
+    let mut count = 0.0;
+    for row in height / 3..height * 2 / 3 {
+        for column in width / 3..width * 2 / 3 {
+            let light = linear_rgb(&pixels[row * width + column]);
+            for channel in 0..3 {
+                sum[channel] += light[channel];
+            }
+            count += 1.0;
+        }
+    }
+    sum.map(|channel| channel / count)
+}
+
+/// Departure of a light's colour from the display's white: its linear
+/// channels at unit luminance, less one.
+fn tint(light: [f32; 3]) -> [f32; 3] {
+    let luminance = 0.2126 * light[0] + 0.7152 * light[1] + 0.0722 * light[2];
+    light.map(|channel| channel / luminance - 1.0)
+}
+
+/// Share of an unadapted light's tint that a displayed light keeps, along the
+/// unadapted tint, and the size of the unadapted tint.
+fn remaining_tint(displayed: [f32; 3], unadapted: [f32; 3]) -> (f32, f32) {
+    let (displayed, unadapted) = (tint(displayed), tint(unadapted));
+    let dot = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).map(|(a, b)| a * b).sum::<f32>();
+    (
+        dot(displayed, unadapted) / dot(unadapted, unadapted),
+        dot(unadapted, unadapted).sqrt(),
+    )
+}
+
+/// CIECAM16's degree of chromatic adaptation for an average surround at the
+/// adapting luminance `adapting_luminance`, in cd/m² (CIE 248:2022).
+fn degree_of_adaptation(adapting_luminance: f32) -> f32 {
+    1.0 - ((-adapting_luminance - 42.0) / 92.0).exp() / 3.6
+}
+
+/// CIECAM's adapting luminance, in cd/m², of a view adapted to `light`, in
+/// scene light: that light on a 20% grey.
+fn adapting_luminance(light: f32) -> f32 {
+    0.2 * light * game::ZENITH_DAYLIGHT_LUX / std::f32::consts::PI
+}
+
+/// Open sea west of the island at (-8950, 800), at a 3 km view, where the
+/// light falls alike across the view's centre.
+const OPEN_SEA: [&str; 3] = ["-15000", "800", "3000"];
+
+/// The adapting white of each adapting-field texel, row by row from the top.
+fn adapting_field_whites(capture: &Capture) -> Vec<[f32; 3]> {
+    capture.derived["adaptingFieldWhite"]
+        .as_array()
+        .expect("the sidecar should record the adapting field's white")
+        .iter()
+        .map(|white| std::array::from_fn(|channel| white[channel].as_f64().unwrap() as f32))
+        .collect()
+}
+
+/// An eye adapted to clear noon daylight sees a neutral surface neutral,
+/// though sunlight through the clear sky is visibly warmer than the display's
+/// white. The light's colour has three channels, so a neutral surface under
+/// the adapting white maps to the display's white exactly; what remains is
+/// 8-bit output quantization, under one level at mid grey.
+#[test]
+fn a_neutral_surface_shows_neutral_under_clear_noon_daylight() {
+    let arguments = view("scene_neutral", ["160", "100"], OPEN_SEA, "1309200");
+    let adapted = capture("noon-neutral", &arguments);
+    let unadapted = capture(
+        "noon-unadapted",
+        &with(arguments.clone(), &["--fixed-adaptation"]),
+    );
+    let (remaining, unadapted_tint) = remaining_tint(
+        central_mean_light(&adapted.rgba, 160),
+        central_mean_light(&unadapted.rgba, 160),
+    );
+    assert!(unadapted_tint > 0.1, "noon light's tint {unadapted_tint}");
+    assert!(
+        remaining.abs() < 0.03,
+        "a neutral surface keeps {remaining} of noon light's tint",
+    );
+}
+
+/// The cones adapt to a 2856 K illuminant by CIECAM16's degree of adaptation
+/// for their adapting luminance: a grey under it keeps the share of its tint
+/// that adaptation leaves incomplete, nearly none in daylight and about a
+/// sixth in moonlight, where the degree settles at its lower limit.
+#[test]
+fn cones_adapt_to_a_coloured_illuminant_by_their_degree_of_adaptation() {
+    let illuminant = [1.844_92, 0.826_22, 0.233_44];
+    let mut remaining_by_gain = Vec::new();
+    for gain in ["1", "150", "160000"] {
+        let image = capture(
+            &format!("illuminant-a-{gain}"),
+            &[
+                "--diagnostic",
+                &format!("chromatic_adaptation_{gain}"),
+                "--width",
+                "1",
+                "--height",
+                "1",
+            ],
+        )
+        .rgba;
+        let (remaining, _) = remaining_tint(linear_rgb(&image), illuminant);
+        let light = gain
+            .parse::<f32>()
+            .unwrap()
+            .powf(1.0 / (browser::ADAPTED_BRIGHTNESS_EXPONENT - 1.0));
+        let expected = 1.0 - degree_of_adaptation(adapting_luminance(light));
+        assert!(
+            (remaining - expected).abs() < 0.01,
+            "gain {gain}: keeps {remaining} of the tint, expected {expected}",
+        );
+        remaining_by_gain.push(remaining);
+    }
+    assert!(
+        remaining_by_gain[2] > remaining_by_gain[0] + 0.1,
+        "{remaining_by_gain:?}"
+    );
+}
+
+/// Two degrees after sunset, open sea takes only the clear sky's light, whose
+/// colour the eye adapts to incompletely: a neutral surface keeps the share
+/// of that light's tint that CIECAM16's degree of adaptation for the view's
+/// adapting luminance leaves. The narrow view keeps the Sun's depression
+/// within a degree across it on the small world.
+#[test]
+fn a_neutral_surface_after_sunset_keeps_the_tint_incomplete_adaptation_leaves() {
+    let camera = ["-15000", "800", "300"];
+    let arguments = view("scene_neutral", ["160", "100"], camera, "1330949");
+    let adapted = capture("twilight-neutral", &arguments);
+    let unadapted = capture(
+        "twilight-unadapted",
+        &with(arguments.clone(), &["--fixed-adaptation"]),
+    );
+    let (remaining, unadapted_tint) = remaining_tint(
+        central_mean_light(&adapted.rgba, 160),
+        central_mean_light(&unadapted.rgba, 160),
+    );
+    let degree = degree_of_adaptation(adapting_luminance(adapting_light(&adapted)));
+    assert!(unadapted_tint > 0.1, "twilight's tint {unadapted_tint}");
+    assert!(degree < 0.95, "degree of adaptation {degree}");
+    assert!(
+        (remaining - (1.0 - degree)).abs() < 0.02,
+        "keeps {remaining} of the tint, degree of adaptation {degree}",
+    );
+}
+
+/// After the view pans from daylight to dusk, each texel's adapting white
+/// eases toward the dusk light's colour with chromatic adaptation's 26 s time
+/// constant (Fairchild and Reniff 1995), far slower than brightness.
+#[test]
+fn the_adapting_white_follows_chromatic_adaptations_time_course() {
+    let day = ["-400", "0", "8000"];
+    let dusk = ["6000", "0", "8000"];
+    let field = |name: &str, camera, extra: &[&str]| {
+        adapting_field_whites(&capture(
+            name,
+            &with(view("scene_production", ["320", "200"], camera, "0"), extra),
+        ))
+    };
+    let settled_day = field("white-day", day, &[]);
+    let settled_dusk = field("white-dusk", dusk, &[]);
+    let panned = field(
+        "white-to-dusk",
+        dusk,
+        &["--prior-view", &day.join(","), "--adaptation-seconds", "26"],
+    );
+    let remaining = (-1.0_f32).exp();
+    let mut largest_change = 0.0_f32;
+    for texel in 0..panned.len() {
+        for channel in 0..3 {
+            let (from, to) = (settled_day[texel][channel], settled_dusk[texel][channel]);
+            let expected = to + (from - to) * remaining;
+            largest_change = largest_change.max((from - to).abs());
+            assert!(
+                (panned[texel][channel] - expected).abs() < 0.002,
+                "texel {texel} channel {channel}: {}, expected {expected}",
+                panned[texel][channel],
+            );
+        }
+    }
+    assert!(largest_change > 0.05, "whites change by {largest_change}");
 }

@@ -269,24 +269,23 @@ fn final_scene_color(
     return vec4<f32>(fragment_color, 1.0);
 }
 
-// Luminance of the light reaching the surface at a rendered position, in
-// scene light: what the eye adapts to. It leaves out the surface's
-// reflectance, glint included, and stays downstream of the lab's light and
-// cloud shadow gates, as exposure does.
+// The light reaching the surface at a rendered position, in scene light:
+// what the eye adapts to, in brightness and in colour. It leaves out the
+// surface's reflectance, glint included, and stays downstream of the lab's
+// light and cloud shadow gates, as exposure does.
 fn scene_illumination(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
     surface_circle_position: vec4<f32>,
-) -> f32 {
-    let lit = lit_scene_surface(
+) -> vec3<f32> {
+    return lit_scene_surface(
         position_m,
         atmosphere,
         surface_circle_position,
         0.0,
         vec4<f32>(1.0),
         1.0,
-    );
-    return dot(lit.light, vec3<f32>(0.2126, 0.7152, 0.0722));
+    ).light;
 }
 
 // Broadband albedos under diffuse light: open ocean 0.07 (Jin et al. 2004,

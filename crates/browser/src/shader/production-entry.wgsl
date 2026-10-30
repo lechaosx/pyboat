@@ -1,25 +1,25 @@
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
-    let gain = field_adapted_gain(input.css_position_px);
+    let adaptation = field_adaptation(input.css_position_px);
     if input.is_terrain <= 0.5 {
         return vec4<f32>(encode_display_color(tone_map_scene_color(
-            adapted_unlit_color(linear_material_color(input.color), gain), gain, input.css_position_px,
+            adapted_unlit_color(linear_material_color(input.color), adaptation), adaptation, input.css_position_px,
         )), 1.0);
     }
     let surface = initialize_production_surface(input);
     let color = final_scene_color(surface.input, surface.atmosphere, surface.circle_position);
-    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, gain, input.css_position_px)), color.a);
+    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, adaptation, input.css_position_px)), color.a);
 }
 
-// Stops of scene light reaching the terrain, which the adapting field pools.
+// Scene light reaching the terrain, which the adapting field pools.
 @fragment
 fn fragment_illumination(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface = initialize_production_surface(input);
-    return vec4<f32>(adapting_light_stops(scene_illumination(
+    return adapting_light(scene_illumination(
         surface.input.world_position_m,
         surface.atmosphere,
         surface.circle_position,
-    )), 0.0, 0.0, 1.0);
+    ));
 }
 
 struct ProductionSurfaceInput {
