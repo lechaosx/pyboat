@@ -474,7 +474,6 @@ pub fn moon_clear_sky_share(
     // Disc radii from scene-state.wgsl.
     const SUN_DISC_RADIUS_RAD: f64 = 0.00465;
     const MOON_DISC_RADIUS_RAD: f64 = 0.00452;
-    let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
     let mut share: f64 = 0.0;
     for row in 0..=4 {
         for column in 0..=4 {
@@ -491,42 +490,28 @@ pub fn moon_clear_sky_share(
                 let light =
                     celestial_lighting_at_height(world_geometry, conditions, height_m as f32);
                 let [red, green, blue] = light.moon_color.map(f64::from);
-                let radius_ratio = world_radius_m / (world_radius_m + height_m.max(0.0));
-                let horizon_z = -(1.0 - radius_ratio * radius_ratio).sqrt();
-                let height_above_horizon = |z: f32| (f64::from(z) - horizon_z) / (1.0 - horizon_z);
                 let eclipse = f64::from(light.solar_eclipse_fraction);
                 let solar = f64::from(light.sun_ambient_intensity);
                 let lunar = f64::from(light.moon_ambient_intensity);
                 let clear = f64::from(light.ambient_intensity);
                 let moon_luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
                 for aerosol_optical_depth in aerosol_optical_depths {
-                    let turbidity = 2.35 + 7.79 * aerosol_optical_depth;
                     let sun_beam = (1.0 - eclipse)
-                        * earth_beam(
+                        * beam_share(
                             aerosol_optical_depth,
                             height_m,
                             f64::from(light.sun_direction[2]),
                             SUN_DISC_RADIUS_RAD,
                             [1.0; 3],
                         )
-                        * (1.0
-                            - clear_sky_diffuse_fraction(
-                                height_above_horizon(light.sun_direction[2]),
-                                turbidity,
-                            ))
                         * solar;
-                    let moon_beam = earth_beam(
+                    let moon_beam = beam_share(
                         aerosol_optical_depth,
                         height_m,
                         f64::from(light.moon_direction[2]),
                         MOON_DISC_RADIUS_RAD,
                         [red, green, blue],
-                    ) * (1.0
-                        - clear_sky_diffuse_fraction(
-                            height_above_horizon(light.moon_direction[2]),
-                            turbidity,
-                        ))
-                        * lunar;
+                    ) * lunar;
                     let moon_direct = moon_beam * moon_luminance;
                     let diffuse = (clear - sun_beam - moon_beam).max(0.0) * moon_luminance.min(1.0);
                     let total = sun_beam + moon_direct + diffuse;
@@ -540,14 +525,12 @@ pub fn moon_clear_sky_share(
     share
 }
 
-/// The part of a light of `color` whose beam reaches a receiver `height_m`
-/// above sea level, in air of the given 550 nm aerosol optical depth: its
-/// disc's visibility above the horizon the receiver's height has on Earth and,
-/// below the receiver's horizontal, the share of the horizontal beam's
-/// luminance that its grazing path passes, as `celestial_beam_share` and
-/// `beam_transmittance_at_height` in lighting.wgsl take them, which give their
+/// The share of a light's clear-sky light on level ground that arrives direct
+/// at a receiver `height_m` above sea level, for a light of `color` and air of
+/// the given 550 nm aerosol optical depth, as `celestial_beam_share` and
+/// `beam_transmittance_at_height` in lighting.wgsl take it, which give its
 /// provenance; keep them synchronized.
-fn earth_beam(
+fn beam_share(
     aerosol_optical_depth: f64,
     height_m: f64,
     direction_z: f64,
@@ -569,8 +552,13 @@ fn earth_beam(
     let upper = horizon_z * disc_cosine + horizon_cosine * disc_sine;
     let rise = ((direction_z - lower) / (upper - lower)).clamp(0.0, 1.0);
     let visibility = rise * rise * (3.0 - 2.0 * rise);
+    let direct_fraction = 1.0
+        - clear_sky_diffuse_fraction(
+            (direction_z - horizon_z) / (1.0 - horizon_z),
+            2.35 + 7.79 * aerosol_optical_depth,
+        );
     if direction_z >= 0.0 || height_m <= 0.0 {
-        return visibility;
+        return visibility * direct_fraction;
     }
     let ozone_air_mass = |sine: f64| {
         let layer_height = 22.0 / 6370.0;
@@ -596,6 +584,7 @@ fn earth_beam(
     let climb = (1.0 - (-4.0 / PI * depth_scale_heights).exp()).sqrt();
     let horizontal_air_mass = game::relative_air_mass(0.0);
     visibility
+        * direct_fraction
         * luminance(
             horizontal_air_mass * depth_scale_heights.exp() * (1.0 + climb),
             ozone_air_mass((-direction_z).min(-horizon_z)),

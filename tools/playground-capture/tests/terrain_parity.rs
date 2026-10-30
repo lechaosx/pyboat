@@ -790,10 +790,11 @@ fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
     );
 }
 
-/// Direct sunlight on level ground, then its red share, as the Sun sinks from
-/// 0.5 degrees above the horizontal of a receiver `height_m` above sea level to
-/// 2.5 degrees below it, with the depression of each column in degrees.
-fn receiver_beam_sweep(height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+/// Red and green of the receiver sweep diagnostic `lighting_receiver_{sweep}_sweep`
+/// as the Sun sinks from 0.5 degrees above the horizontal of a receiver
+/// `height_m` above sea level to 2.5 degrees below it, with the depression of
+/// each column in degrees.
+fn receiver_sweep(sweep: &str, height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let width = 1200;
     // A centimetre-wide view keeps every column in the same weather.
     let image = render_diagnostic_image_with_view_at(
@@ -801,7 +802,7 @@ fn receiver_beam_sweep(height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
         Vector::ZERO,
         0.0,
         0.01 / width as f32,
-        &format!("lighting_receiver_beam_sweep_{height_m}"),
+        &format!("lighting_receiver_{sweep}_sweep_{height_m}"),
         width,
         1,
     );
@@ -828,7 +829,7 @@ fn receiver_beam_sweep(height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
 #[test]
 fn direct_light_on_raised_receivers_fades_and_reddens_down_to_their_earth_horizon() {
     for height_m in [300.0_f32, 1_000.0] {
-        let (depression_degrees, light, red_share) = receiver_beam_sweep(height_m);
+        let (depression_degrees, light, red_share) = receiver_sweep("beam", height_m);
         let level = depression_degrees
             .iter()
             .position(|depression| *depression > 0.0)
@@ -894,11 +895,55 @@ fn direct_light_on_raised_receivers_fades_and_reddens_down_to_their_earth_horizo
     }
 }
 
+/// Under a full deck, which stops the beam, raised land keeps the diffuse
+/// light of the sky above it as the Sun's beam ends behind its horizon: as the
+/// light sinks, that light never gains more than the beam's share of clear-sky
+/// light at the receiver's horizontal, which the sky leaves faint there.
+#[test]
+fn diffuse_light_under_a_deck_stays_continuous_where_a_raised_receivers_beam_ends() {
+    for height_m in [100.0_f32, 300.0, 1_000.0] {
+        let (depression_degrees, diffuse, beam_share) = receiver_sweep("deck", height_m);
+        let level = depression_degrees
+            .iter()
+            .position(|depression| *depression > 0.0)
+            .unwrap();
+        // One 8-bit level of the encoded light.
+        let tolerance = 0.01;
+        let lowest_before = (level..diffuse.len())
+            .map(|column| {
+                (
+                    column,
+                    diffuse[level..=column]
+                        .iter()
+                        .copied()
+                        .fold(f32::INFINITY, f32::min),
+                )
+            })
+            .max_by(|(left, left_min), (right, right_min)| {
+                (diffuse[*left] / left_min).total_cmp(&(diffuse[*right] / right_min))
+            })
+            .unwrap();
+        let (column, lowest) = lowest_before;
+        let gain = diffuse[column] / lowest - 1.0;
+        assert!(
+            diffuse[level] > 0.0,
+            "{height_m} m: no light at its horizontal"
+        );
+        assert!(
+            gain <= beam_share[level] + tolerance,
+            "{height_m} m: diffuse light gains {gain} by {} degrees down, more than the beam's \
+             share {} at its horizontal",
+            depression_degrees[column],
+            beam_share[level],
+        );
+    }
+}
+
 /// At sea level the clear sky's light is all diffuse by the time a light
 /// reaches the horizon, so direct light ends at the horizontal.
 #[test]
 fn direct_light_at_sea_level_ends_at_the_horizontal() {
-    let (depression_degrees, light, _) = receiver_beam_sweep(0.0);
+    let (depression_degrees, light, _) = receiver_sweep("beam", 0.0);
     assert!(
         light[0] > 0.0,
         "no light {} degrees up",
@@ -1375,8 +1420,10 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         1,
     );
     let linke_turbidity = 2.35 + 7.79 * 0.32 * f64::from(scalar_debug_amount(&aerosol));
-    let world_radius_m = world.width_m() / std::f32::consts::TAU;
-    let horizon_z = -(1.0 - (world_radius_m / (world_radius_m + 600.0)).powi(2)).sqrt();
+    // The clear sky leaves light diffuse by its height above the horizon the
+    // receiver's height has on Earth.
+    let earth_radius_m = 6.371e6_f32;
+    let horizon_z = -(1.0 - (earth_radius_m / (earth_radius_m + 600.0)).powi(2)).sqrt();
     let beam_share = |direction_z: f32, angular_radius_rad: f32| {
         f64::from(celestial_disc_visibility_at_height(
             world,
@@ -1601,6 +1648,7 @@ fn evening_time_at_sun_z(world: WorldGeometry, position_m: Vector, day: u32, sun
 /// fixed march of that length.
 fn landform_occlusion(
     world: WorldGeometry,
+    seed: u64,
     position_m: Vector,
     world_time_seconds: f64,
     view_height_m: f32,
@@ -1614,8 +1662,10 @@ fn landform_occlusion(
         ("--light-contributions", "1,0,0,0"),
         ("--fixed-adaptation", ""),
     ];
+    let seed = seed.to_string();
     let render = |landform: &str| {
         let mut all = sun_only.to_vec();
+        all.push(("--seed", &seed));
         if legacy_reach_m.is_some() {
             all.push(("--legacy-shadow-look", ""));
         }
@@ -1658,6 +1708,7 @@ fn low_sun_landform_shadows_keep_near_blockers_of_a_dense_march() {
     let occlusion = |legacy_reach_m| {
         landform_occlusion(
             world,
+            SEED,
             position_m,
             world_time_seconds,
             view_height_m,
@@ -1711,13 +1762,21 @@ fn low_light_landform_shadows_keep_every_blocker_within_their_reach() {
     // Across this view the march reaches over 1 km.
     let world_time_seconds =
         evening_time_at_sun_z(world, position_m, 3, 15.0_f32.to_radians().sin());
-    let shipped = landform_occlusion(world, position_m, world_time_seconds, view_height_m, None);
+    let shipped = landform_occlusion(
+        world,
+        SEED,
+        position_m,
+        world_time_seconds,
+        view_height_m,
+        None,
+    );
     // Fixed marches from the high-light reach to 960 m together sample from
     // 20 m to 960 m, all within the shipped march.
     let mut reference = vec![None::<f32>; shipped.len()];
     for reach_m in [320, 480, 640, 800, 960] {
         let march = landform_occlusion(
             world,
+            SEED,
             position_m,
             world_time_seconds,
             view_height_m,
@@ -1761,6 +1820,7 @@ fn landform_shadows_stay_on_the_ground_while_the_camera_pans() {
         let [before, after] = [start_m, start_m + Vector::new(100.0, 0.0)].map(|camera_m| {
             landform_occlusion(
                 world,
+                SEED,
                 camera_m,
                 world_time_seconds,
                 view_height_m,
@@ -1788,20 +1848,44 @@ fn landform_shadows_stay_on_the_ground_while_the_camera_pans() {
     );
 }
 
+/// Raised land that still sees the Sun after sea-level sunset keeps its
+/// landform shadows there. Each of several worlds contributes the view around
+/// its highest hill, with the Sun a quarter of a degree below that hill's
+/// horizontal, and the shadows are judged over all their sunlit pixels past
+/// sea-level sunset.
 #[test]
 fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(-10_000.0, 2_000.0);
-    let world_time_seconds =
-        evening_time_at_sun_z(world, position_m, 3, (-0.5_f32).to_radians().sin());
-    let view_height_m = 2_000.0;
-    let occlusion = landform_occlusion(world, position_m, world_time_seconds, view_height_m, None);
+    let view_height_m = 1_000.0;
     // landform_occlusion's image size.
     let (width, height) = (160, 90);
-    let after_sea_level_sunset: Vec<f32> = occlusion
-        .iter()
-        .enumerate()
-        .filter_map(|(index, share)| {
+    let (mut lit, mut shadowed) = (0, 0);
+    for seed in SEED..SEED + 8 {
+        let position_m = (0..64)
+            .flat_map(|y_index| {
+                (0..64).map(move |x_index| {
+                    Vector::new(
+                        world.width_m() * (x_index as f32 / 64.0 - 0.5),
+                        world.height_m() * (y_index as f32 / 128.0 - 0.25),
+                    )
+                })
+            })
+            .max_by(|left, right| {
+                procedural_terrain_elevation_m(world, seed, *left)
+                    .total_cmp(&procedural_terrain_elevation_m(world, seed, *right))
+            })
+            .unwrap();
+        let world_time_seconds =
+            evening_time_at_sun_z(world, position_m, 3, (-0.25_f32).to_radians().sin());
+        let occlusion = landform_occlusion(
+            world,
+            seed,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            None,
+        );
+        for (index, share) in occlusion.iter().enumerate() {
             let (column, row) = ((index % width) as f32, (index / width) as f32);
             let pixel_m = position_m
                 + Vector::new(
@@ -1815,14 +1899,12 @@ fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
                 pixel_m,
             ))
             .sun_direction[2];
-            (sun_z < 0.0).then_some(*share).flatten()
-        })
-        .collect();
-    let lit = after_sea_level_sunset.len();
-    let shadowed = after_sea_level_sunset
-        .iter()
-        .filter(|&&share| share > 0.3)
-        .count();
+            if let Some(share) = share.filter(|_| sun_z < 0.0) {
+                lit += 1;
+                shadowed += usize::from(share > 0.3);
+            }
+        }
+    }
     assert!(lit > 100, "only {lit} pixels are sunlit");
     assert!(
         shadowed * 50 > lit,

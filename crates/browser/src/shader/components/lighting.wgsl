@@ -551,7 +551,7 @@ fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
 // Light colours are relative to sunlight above the atmosphere, which stands in
 // for the display's D65 white, and each channel follows the dominant
 // wavelength of its sRGB primary: 611, 549 and 464 nm. field_grids.rs's
-// `earth_beam` copies these spectral constants.
+// `beam_share` copies these spectral constants.
 const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // Rayleigh optical depth at sea level, 0.008735 λ^-4.08 with λ in micrometres
 // (Leckner 1978, Solar Energy 20).
@@ -749,15 +749,15 @@ fn regional_linke_turbidity() -> f32 {
 }
 
 // Share of a light's clear-sky light on level ground that arrives direct, for
-// a light of `color` above the atmosphere. The receiver's own horizon sets how
-// much of that light the clear sky leaves diffuse. The beam reaches the
-// receiver as on Earth, whose air mass clear-sky light follows: its disc sets
-// behind the horizon the receiver's height has there, and below the
-// receiver's horizontal it keeps the share of the horizontal beam's luminance
-// that its grazing path passes. The small world's horizon would keep a hill
-// or cloud in direct light until the light stood tens of degrees down.
-// field_grids.rs's `earth_beam` mirrors the beam's part; keep them
-// synchronized.
+// a light of `color` above the atmosphere. The beam reaches the receiver as on
+// Earth, whose air mass clear-sky light follows: the clear sky leaves light
+// diffuse by its height above the horizon the receiver's height has there,
+// its disc sets behind that horizon, and below the receiver's horizontal it
+// keeps the share of the horizontal beam's luminance that its grazing path
+// passes. The small world's horizon would keep a hill or cloud in direct light
+// until the light stood tens of degrees down, and would take that light from
+// the diffuse light the receiver shares with sea level. field_grids.rs's
+// `beam_share` mirrors it; keep them synchronized.
 fn celestial_beam_share(
     receiver: CelestialReceiverLight,
     direction: vec3<f32>,
@@ -765,11 +765,8 @@ fn celestial_beam_share(
     linke_turbidity: f32,
     color: vec3<f32>,
 ) -> f32 {
-    let visibility = celestial_disc_visibility_at_horizon(
-        earth_horizon_z_at_height(receiver.height_m),
-        direction,
-        angular_radius_rad,
-    );
+    let horizon_z = earth_horizon_z_at_height(receiver.height_m);
+    let visibility = celestial_disc_visibility_at_horizon(horizon_z, direction, angular_radius_rad);
     if visibility <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return 0.0;
     }
@@ -793,7 +790,7 @@ fn celestial_beam_share(
         );
     }
     return visibility * grazing * (1.0 - clear_sky_diffuse_fraction(
-        light_height_above_horizon(direction.z, receiver.horizon_z),
+        light_height_above_horizon(direction.z, horizon_z),
         linke_turbidity,
     ));
 }

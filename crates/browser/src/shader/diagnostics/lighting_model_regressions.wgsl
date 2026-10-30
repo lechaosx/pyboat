@@ -43,17 +43,35 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 24u {
         return diagnostic_shadow_darkness(LIGHTING_MODEL_LIGHT_HEIGHT, LIGHTING_MODEL_CLOUD_DEPTH);
     }
-    if LIGHTING_MODEL_REGRESSION_OUTPUT == 27u {
-        // Sweeps the Sun, with the Moon set, from 0.5 degrees above a clear-sky
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 27u || LIGHTING_MODEL_REGRESSION_OUTPUT == 28u {
+        // Sweeps the Sun, with the Moon set, from 0.5 degrees above a
         // receiver's horizontal on the left to 2.5 degrees below it on the
-        // right: red is its direct sunlight on level ground, in fiftieths of a
-        // zenith Sun's clear-sky light, and green that light's red share.
+        // right. Under a clear sky (27), red is its direct sunlight on level
+        // ground, in fiftieths of a zenith Sun's clear-sky light, and green
+        // that light's red share. Under a full storm deck (28), red is its
+        // diffuse light, in hundredths of a zenith Sun's clear-sky light, and
+        // green the Sun's beam share of its clear-sky light.
         let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let depression = radians(mix(-0.5, 2.5, input.css_position_px.x / css_view_width_px));
         sun_light_direction = vec3<f32>(cos(depression), 0.0, -sin(depression));
         geocentric_moon_light_direction = vec3<f32>(0.0, 0.0, -1.0);
         let receiver = celestial_receiver_light_at_height(LIGHTING_MODEL_SURFACE_HEIGHT_M);
+        if LIGHTING_MODEL_REGRESSION_OUTPUT == 28u {
+            let ambient = calculate_atmospheric_ambient_light(
+                RegionalCanopyConditions(1.0, 30.0),
+                receiver,
+            );
+            let diffuse = ambient.split.diffuse_share * ambient.clear_sky
+                + ambient.canopy
+                + ambient.canopy_scattered;
+            return vec4<f32>(
+                100.0 * dot(diffuse, LUMINANCE_WEIGHTS),
+                ambient.split.beam_shares.x,
+                0.0,
+                1.0,
+            );
+        }
         let direct = calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver)
             .split.direct.x * sun_direct_light_color(receiver);
         return vec4<f32>(

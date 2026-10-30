@@ -258,7 +258,7 @@ and verification details.
 - **[Implicit]** Clear-sky light's amount and colour follow the light's height
   above the receiver's local horizontal, as on Earth, whose horizon dips little
   at hill and cloud heights. The share of it that arrives direct follows the
-  receiver's own horizon.
+  light's height above the horizon the receiver's height has on Earth.
 - **[Implicit]** Each beam reaches a receiver as on Earth. Below the receiver's
   local horizontal it crosses the air along its grazing path, so it dims and
   reddens continuously until its disc sets behind the horizon the receiver's
@@ -320,9 +320,9 @@ and verification details.
   same occlusion: a landform blocking the whole disc is as dark as the densest cloud.
 - **[Explicit]** Under a low light, horizon dimming and reddening of direct
   light alone reduce shadow contrast, alike for every shadow type.
-- **[Explicit]** All shadow types follow the light down to each receiver's own
-  horizon; their reach comes from the world's curvature, so it stays bounded on
-  any world size.
+- **[Explicit]** All shadow types follow the light as far down as it reaches
+  each receiver; their reach comes from the world's curvature, so it stays
+  bounded on any world size.
 - **[Implicit]** Where the Moon's cloud shadows fade out, its direct light keeps
   the region's mean share of the beam that cloud passes, so cover stays about as
   dark as where the shadows show.
