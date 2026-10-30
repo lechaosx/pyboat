@@ -45,19 +45,21 @@ is set at build time or `webtransportPort` is supplied in the browser URL.
 
 The backend runs with socketless `podman-compose` in rootless Podman on NixOS.
 The **Deploy backend (discard
-current match)** workflow is manual: select a ref and check
-`discard_current_match` before running it. It tests and publishes an ARM64
+current match)** workflow is manual: run it from `master`, set `revision` to
+the game commit, tag, or branch, and check `discard_current_match`.
+It tests and publishes an ARM64
 image to GHCR, pulls that exact digest on the Pi, and restarts the user service.
 **Deployment permanently loses the game in progress and disconnects all players.**
 
 On the first run, change the GHCR package's visibility to **Public** after the
 image is published, then rerun the failed deployment job. The Pi pulls images
-anonymously. Its local `localhost/pyboat:deployed` tag changes only during manual
-deployment; service starts never pull an image.
-Deployment retains the previous image as `localhost/pyboat:previous` and removes
-unused, untagged images after a successful restart. To deliberately roll back,
-log in as `github`, run `podman tag localhost/pyboat:previous localhost/pyboat:deployed`,
-then `systemctl --user restart pyboat-compose.service`; this also discards the match.
+anonymously. Deployment saves the exact image digest in `.env`; service starts
+never pull an image. Deployment prunes unused, untagged images after restarting.
+To roll back, keep the workflow on `master` and set `revision` to an earlier
+commit. Current deployment files package the selected game source; the selected
+commit does not need to contain a deployment workflow. It must support the
+current server arguments and browser protocol. Revisions predating certificate
+polling do not reload renewed certificates automatically.
 
 Frontend releases proceed independently. A frontend protocol change can require
 a deliberate backend deployment before multiplayer works again.
@@ -82,7 +84,7 @@ The Pi's NixOS configuration lives in
 [nixos-config](https://github.com/lechaosx/nixos-config/tree/main/hosts/raspberrypi).
 That configuration provides Podman, `podman-compose`, a lingering `github`
 deployment account, and a firewall for unprivileged web ports. This repository's
-[Compose manifest](../../compose.yaml) owns the game and certificate renewal.
+[Compose manifest](../../deploy/compose.yaml) owns the game and certificate renewal.
 A user service starts these containers at boot. The game stays stopped after a
 crash; starting it again is a deliberate action.
 
@@ -116,7 +118,7 @@ mkdir -p ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls
 chmod 700 ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls
 ```
 
-Copy `compose.yaml` into `~/.local/share/pyboat/`, then obtain and export the
+Copy `deploy/compose.yaml` into `~/.local/share/pyboat/`, then obtain and export the
 certificate for the public backend address:
 
 ```sh

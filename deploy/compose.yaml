@@ -15,7 +15,7 @@ services:
     command: daemon
 
   game:
-    image: localhost/pyboat:deployed
+    image: ${GAME_IMAGE}
     pull_policy: never
     container_name: pyboat
     network_mode: host
