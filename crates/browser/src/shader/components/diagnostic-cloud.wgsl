@@ -348,9 +348,10 @@ fn diagnostic_receiver_ambient_share(surface_height_m: f32) -> vec4<f32> {
     ), 1.0);
 }
 
+// Clear-sky light on level ground 600 m up, under the world's horizon at
+// `surface_height_m`.
 fn diagnostic_ambient_with_surface_horizon(surface_height_m: f32) -> vec4<f32> {
-    var receiver = celestial_receiver_light_at_height(0.0);
-    receiver.height_m = surface_height_m;
+    var receiver = celestial_receiver_light_at_height(600.0);
     receiver.horizon_z = celestial_horizon_z_at_height(surface_height_m);
     let ambient = calculate_atmospheric_ambient_light(
         RegionalCanopyConditions(0.0, 0.0),

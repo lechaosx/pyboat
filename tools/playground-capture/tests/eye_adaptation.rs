@@ -346,7 +346,7 @@ fn small_cloud_shadows_keep_most_of_their_contrast() {
         .collect();
     let contrast = percentile(&ratios, 0.02) / percentile(&ratios, 0.98);
     let sun_height = shaded.derived["sunDirection"][2].as_f64().unwrap();
-    let [beam, diffuse] = clear_sky_irradiance(sun_height, REFERENCE_LINKE_TURBIDITY);
+    let [beam, diffuse] = clear_sky_irradiance(sun_height, REFERENCE_LINKE_TURBIDITY, 1.0);
     let diffuse_share = (diffuse / (sun_height * beam + diffuse)) as f32;
     assert!(
         contrast.log2() < 0.5 * diffuse_share.log2(),

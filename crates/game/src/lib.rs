@@ -511,6 +511,16 @@ pub const NIGHT_SKY_LIGHT: f32 = 7.3e-4 / ZENITH_DAYLIGHT_LUX;
 /// world size. lighting.wgsl mirrors it.
 pub const PLANET_RADIUS_SCALE_HEIGHTS: f64 = 2.0 / (std::f64::consts::PI * 0.025 * 0.025);
 
+/// Earth's mean radius (Moritz 2000, Geodetic Reference System 1980).
+pub const EARTH_RADIUS_M: f64 = 6.371e6;
+
+/// Share of sea level's air above a receiver `height_m` up, as
+/// `air_column_at_height` in lighting.wgsl, which gives its provenance and
+/// compromise.
+pub fn air_column_at_height(height_m: f64) -> f64 {
+    (-PLANET_RADIUS_SCALE_HEIGHTS * height_m.max(0.0) / EARTH_RADIUS_M).exp()
+}
+
 /// Light that the sunlit sky scatters into air in the planet's shadow fades as
 /// an exponential atmosphere of these effective scale heights per planet
 /// radius, carrying this share of the sky's light at sunset. Both are fitted so
@@ -559,11 +569,12 @@ pub fn relative_air_mass(sine_height: f64) -> f64 {
 /// light at the given sine of its height above the horizon: the beam's
 /// transmittance along its path, then diffuse light on level ground, each per
 /// unit of the light above the atmosphere. The beam crosses the relative air
-/// mass with Kasten's (1996) broadband Rayleigh optical depth, and diffuse light
-/// follows the model's Linke turbidity fits. lighting.wgsl mirrors it.
-pub fn clear_sky_irradiance(sine_height: f64, linke_turbidity: f64) -> [f64; 2] {
+/// mass, by the model's pressure correction `air_column` of it, with Kasten's
+/// (1996) broadband Rayleigh optical depth, and diffuse light follows the
+/// model's Linke turbidity fits. lighting.wgsl mirrors it.
+pub fn clear_sky_irradiance(sine_height: f64, linke_turbidity: f64, air_column: f64) -> [f64; 2] {
     let sine = sine_height.clamp(0.0, 1.0);
-    let air_mass = relative_air_mass(sine);
+    let air_mass = relative_air_mass(sine) * air_column;
     let rayleigh_optical_depth = if air_mass > 20.0 {
         1.0 / (10.4 + 0.718 * air_mass)
     } else {
@@ -584,20 +595,24 @@ pub fn clear_sky_irradiance(sine_height: f64, linke_turbidity: f64) -> [f64; 2] 
 }
 
 /// Clear-sky light on level ground from a light at the given sine of its
-/// height above the horizon, per unit of a zenith light's.
-pub fn clear_sky_light(sine_height: f64) -> f32 {
-    let global = |sine: f64| {
-        let [beam, diffuse] = clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY);
+/// height above the horizon, under `air_column` of sea level's air, per unit of
+/// a zenith light's at sea level.
+pub fn clear_sky_light(sine_height: f64, air_column: f64) -> f32 {
+    let global = |sine: f64, air_column: f64| {
+        let [beam, diffuse] = clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY, air_column);
         sine.clamp(0.0, 1.0) * beam + diffuse
     };
-    (global(sine_height) / global(1.0)) as f32
+    (global(sine_height, air_column) / global(1.0, 1.0)) as f32
 }
 
 /// The beam's clear-sky transmittance along its path from a light at the
-/// given sine of its height above the horizon, per unit of a zenith beam's.
-pub fn clear_sky_beam_transmittance(sine_height: f64) -> f32 {
-    let beam = |sine: f64| clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY)[0];
-    (beam(sine_height) / beam(1.0)) as f32
+/// given sine of its height above the horizon, under `air_column` of sea
+/// level's air, per unit of a zenith beam's at sea level.
+pub fn clear_sky_beam_transmittance(sine_height: f64, air_column: f64) -> f32 {
+    let beam = |sine: f64, air_column: f64| {
+        clear_sky_irradiance(sine, REFERENCE_LINKE_TURBIDITY, air_column)[0]
+    };
+    (beam(sine_height, air_column) / beam(1.0, 1.0)) as f32
 }
 
 /// Clear-sky light on level ground from a light at the given sine of its
@@ -606,14 +621,14 @@ pub fn clear_sky_beam_transmittance(sine_height: f64) -> f32 {
 /// the sky keeps its light at sunset where the planet's shadow leaves air lit:
 /// the shadow stands R(1/cos θ - 1) above the receiver for a light θ down,
 /// and the air above it holds exp(-h/H) of the column.
-fn twilight_clear_sky_light(direction_z: f32) -> f32 {
+fn twilight_clear_sky_light(direction_z: f32, air_column: f64) -> f32 {
     let z = f64::from(direction_z).min(0.0);
     let shadow_height_radii = 1.0 / (1.0 - z * z).max(1e-12).sqrt() - 1.0;
     let lit_air = (1.0 - SCATTERED_TWILIGHT_SHARE)
         * (-PLANET_RADIUS_SCALE_HEIGHTS * shadow_height_radii).exp()
         + SCATTERED_TWILIGHT_SHARE
             * (-SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS * shadow_height_radii).exp();
-    clear_sky_light(f64::from(direction_z)) * lit_air as f32
+    clear_sky_light(f64::from(direction_z), air_column) * lit_air as f32
 }
 
 pub fn celestial_lighting(conditions: CelestialConditions) -> CelestialLighting {
@@ -652,6 +667,7 @@ pub fn celestial_lighting_at_height(
     let (sun_direction, moon_direction) =
         celestial_directions_at_height(world_geometry, orbit, conditions, receiver_height_m);
     let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
+    let air_column = air_column_at_height(f64::from(receiver_height_m));
     let sun_elevation = f64::from((sun_direction[2] - horizon_z) / (1.0 - horizon_z));
     let solar_separation =
         angular_separation(array3_f64(sun_direction), array3_f64(moon_direction));
@@ -668,7 +684,7 @@ pub fn celestial_lighting_at_height(
             sun_direction[2],
             SUN_ANGULAR_RADIUS_RAD as f32,
         )
-        * clear_sky_beam_transmittance(sun_elevation);
+        * clear_sky_beam_transmittance(sun_elevation, air_column);
     let moon_elevation = f64::from((moon_direction[2] - horizon_z) / (1.0 - horizon_z));
     // Eclipse dimming compressed into the exposure range from a totality's 1e-4
     // of the full Moon.
@@ -684,8 +700,9 @@ pub fn celestial_lighting_at_height(
             moon_direction[2],
             MOON_ANGULAR_RADIUS_RAD as f32,
         )
-        * clear_sky_beam_transmittance(moon_elevation);
-    let moon_ambient_intensity = lunar_light_scale * twilight_clear_sky_light(moon_direction[2]);
+        * clear_sky_beam_transmittance(moon_elevation, air_column);
+    let moon_ambient_intensity =
+        lunar_light_scale * twilight_clear_sky_light(moon_direction[2], air_column);
     let eclipse_warmth = smoothstep_range(0.05, 0.90, f64::from(orbit.lunar_umbra_fraction)) as f32;
     // Sunlight reddened by lunar soil, as `moon_own_color` in lighting.wgsl
     // derives it; keep the two synchronized.
@@ -694,7 +711,7 @@ pub fn celestial_lighting_at_height(
         0.9855 + eclipse_warmth * (0.28 - 0.9855),
         0.8175 + eclipse_warmth * (0.06 - 0.8175),
     ];
-    let solar_ambient = twilight_clear_sky_light(sun_direction[2]);
+    let solar_ambient = twilight_clear_sky_light(sun_direction[2], air_column);
     let solar_ambient_transmittance = 1.0 - 0.85 * solar_eclipse_fraction;
     let ambient_intensity =
         (NIGHT_SKY_LIGHT + solar_ambient_transmittance * solar_ambient + moon_ambient_intensity)

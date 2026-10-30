@@ -1114,7 +1114,7 @@ fn direct_sun_uses_the_finite_disc_surface_horizon() {
     });
 
     assert!(lighting.sun_direction[2] > angular_radius_rad);
-    let unoccluded = game::clear_sky_beam_transmittance(f64::from(lighting.sun_direction[2]));
+    let unoccluded = game::clear_sky_beam_transmittance(f64::from(lighting.sun_direction[2]), 1.0);
     assert!(
         lighting.sun_intensity > 0.999 * unoccluded,
         "{} of {unoccluded}",

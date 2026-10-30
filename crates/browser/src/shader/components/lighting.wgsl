@@ -199,6 +199,7 @@ fn solar_eclipse_fraction_for_directions(sun: vec3<f32>, moon: vec3<f32>) -> f32
 
 fn sun_amount_at_horizon_with_eclipse_for_direction(
     horizon_z: f32,
+    air_column: f32,
     eclipse_fraction: f32,
     sun: vec3<f32>,
 ) -> f32 {
@@ -213,15 +214,17 @@ fn sun_amount_at_horizon_with_eclipse_for_direction(
             sun,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         )
-        * clear_sky_beam_transmittance(elevation);
+        * clear_sky_beam_transmittance(elevation, air_column);
 }
 
 fn sun_amount_at_horizon_with_eclipse(
     horizon_z: f32,
+    air_column: f32,
     eclipse_fraction: f32,
 ) -> f32 {
     return sun_amount_at_horizon_with_eclipse_for_direction(
         horizon_z,
+        air_column,
         eclipse_fraction,
         sun_direction(),
     );
@@ -236,8 +239,10 @@ fn celestial_receiver_light_for_directions(
     let horizon_z = celestial_horizon_z_at_height(height_m);
     let moon = topocentric_moon_direction_for_geocentric(height_m, geocentric_moon);
     let eclipse_fraction = solar_eclipse_fraction_for_directions(sun, moon);
+    let air_column = air_column_at_height(height_m);
     let sun_amount = sun_amount_at_horizon_with_eclipse_for_direction(
         horizon_z,
+        air_column,
         eclipse_fraction,
         sun,
     );
@@ -252,7 +257,7 @@ fn celestial_receiver_light_for_directions(
             moon,
             MOON_ANGULAR_RADIUS_RAD,
         )
-        * clear_sky_beam_transmittance(moon_elevation);
+        * clear_sky_beam_transmittance(moon_elevation, air_column);
     return CelestialReceiverLight(
         position_m,
         height_m,
@@ -309,19 +314,20 @@ const REFERENCE_LINKE_TURBIDITY: f32 = 2.35 + 7.79 * 0.103;
 const EARTH_RADIUS_M: f32 = 6.371e6;
 
 // Clear-sky light on level ground from a light at the given sine of its
-// height above the horizon, per unit of a zenith light's, as
-// game::clear_sky_light.
-fn clear_sky_light(sine_height: f32) -> f32 {
-    let light = clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY);
-    let zenith = clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY);
+// height above the horizon, under `air_column` of sea level's air, per unit of
+// a zenith light's at sea level, as game::clear_sky_light.
+fn clear_sky_light(sine_height: f32, air_column: f32) -> f32 {
+    let light = clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY, air_column);
+    let zenith = clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY, 1.0);
     return (clamp(sine_height, 0.0, 1.0) * light.x + light.y) / (zenith.x + zenith.y);
 }
 
-// The beam's clear-sky transmittance along its path, per unit of a zenith
-// beam's, as game::clear_sky_beam_transmittance.
-fn clear_sky_beam_transmittance(sine_height: f32) -> f32 {
-    return clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY).x
-        / clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY).x;
+// The beam's clear-sky transmittance along its path under `air_column` of sea
+// level's air, per unit of a zenith beam's at sea level, as
+// game::clear_sky_beam_transmittance.
+fn clear_sky_beam_transmittance(sine_height: f32, air_column: f32) -> f32 {
+    return clear_sky_irradiance(sine_height, REFERENCE_LINKE_TURBIDITY, air_column).x
+        / clear_sky_irradiance(1.0, REFERENCE_LINKE_TURBIDITY, 1.0).x;
 }
 
 // The Moon's light relative to the Sun's, through its phase and Earth's shadow,
@@ -352,9 +358,9 @@ fn planet_shadow_height_radii(direction_z: f32) -> f32 {
 // Below the horizon the sky keeps its light at sunset as far as the planet's
 // shadow leaves its air lit, exp(-h/H) of an exponential atmosphere's column,
 // plus light scattered more than once into the shadow.
-fn twilight_clear_sky_light(direction_z: f32) -> f32 {
+fn twilight_clear_sky_light(direction_z: f32, height_m: f32) -> f32 {
     let shadow_height_radii = planet_shadow_height_radii(direction_z);
-    return clear_sky_light(direction_z) * mix(
+    return clear_sky_light(direction_z, air_column_at_height(height_m)) * mix(
         exp(-PLANET_RADIUS_SCALE_HEIGHTS * shadow_height_radii),
         exp(-SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS * shadow_height_radii),
         SCATTERED_TWILIGHT_SHARE,
@@ -362,7 +368,10 @@ fn twilight_clear_sky_light(direction_z: f32) -> f32 {
 }
 
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
-    return lunar_light_scale() * twilight_clear_sky_light(receiver.moon_direction.z);
+    return lunar_light_scale() * twilight_clear_sky_light(
+        receiver.moon_direction.z,
+        receiver.height_m,
+    );
 }
 
 // Clear-sky light on level ground from the night sky, the Sun, and the Moon,
@@ -372,7 +381,7 @@ fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
         1.0,
         NIGHT_SKY_LIGHT
             + (1.0 - 0.85 * receiver.solar_eclipse_fraction)
-                * twilight_clear_sky_light(receiver.sun_direction.z)
+                * twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m)
             + moon_atmospheric_amount(receiver),
     );
 }
@@ -426,7 +435,7 @@ fn calculate_atmospheric_ambient_light(
     canopy: RegionalCanopyConditions,
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
-    let solar_ambient = twilight_clear_sky_light(receiver.sun_direction.z);
+    let solar_ambient = twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m);
     let lunar_ambient = moon_atmospheric_amount(receiver);
     let clear_intensity = clear_sky_intensity(receiver);
     let split = celestial_light_split(
@@ -445,6 +454,7 @@ fn calculate_atmospheric_ambient_light(
             moon_color * clear_sky_light_color(
                 regional_aerosol_optical_depth,
                 receiver.moon_direction.z,
+                receiver.height_m,
             ),
         );
     }
@@ -453,6 +463,7 @@ fn calculate_atmospheric_ambient_light(
             + solar_sky * clear_sky_light_color(
                 regional_aerosol_optical_depth,
                 receiver.sun_direction.z,
+                receiver.height_m,
             )
             + lunar_sky
     ) / (NIGHT_SKY_LIGHT + solar_sky + lunar_ambient);
@@ -597,6 +608,17 @@ fn beam_transmittance(aerosol_optical_depth: f32, air_mass: f32, ozone_mass: f32
     );
 }
 
+// Share of sea level's air that lies above a receiver `height_m` up, in an
+// exponential atmosphere of PLANET_RADIUS_SCALE_HEIGHTS' scale height: the
+// Rayleigh and aerosol air mass of every path from the receiver scales by it.
+// Aerosol shares the air's scale height so that one path serves both, a
+// semi-physical compromise: marine aerosol mostly lies within the lowest
+// kilometre, so a raised receiver's aerosol path is somewhat overstated.
+// Ozone lies above every receiver and keeps its whole column.
+fn air_column_at_height(height_m: f32) -> f32 {
+    return exp(-PLANET_RADIUS_SCALE_HEIGHTS * max(height_m, 0.0) / EARTH_RADIUS_M);
+}
+
 // Sine of the elevation of the horizon that a receiver `height_m` above sea
 // level would have on Earth.
 fn earth_horizon_z_at_height(height_m: f32) -> f32 {
@@ -613,7 +635,8 @@ fn earth_horizon_z_at_height(height_m: f32) -> f32 {
 // planet, and climbs back up to it. In an exponential atmosphere of scale
 // height H that path holds e^(d/H) (1 + erf √(d/H)) times the air of the
 // horizontal path (Chapman's grazing incidence function for R/H >> 1), so the
-// air mass is continuous at the horizontal. H keeps
+// air mass is continuous at the horizontal. Either way the path holds
+// `air_column_at_height` of the air of the same path from sea level. H keeps
 // PLANET_RADIUS_SCALE_HEIGHTS' ratio to Earth's radius: 6.25 km rather than
 // Earth's 8 km. erf takes Bürmann's series to first order, within 0.007. The
 // lowest point stops at sea level, where the part of the disc still above the
@@ -634,7 +657,8 @@ fn beam_transmittance_at_height(
     let climb = sqrt(1.0 - exp(-4.0 / PI * depth_scale_heights));
     return beam_transmittance(
         aerosol_optical_depth,
-        relative_air_mass(sine_height) * exp(depth_scale_heights) * (1.0 + climb),
+        relative_air_mass(sine_height) * exp(depth_scale_heights) * (1.0 + climb)
+            * air_column_at_height(height),
         ozone_air_mass(select(
             sine_height,
             min(-sine_height, -earth_horizon_z_at_height(height)),
@@ -654,16 +678,17 @@ fn beam_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32)
     ));
 }
 
-// Colour of the clear sky's light on level ground from a light at the given
-// sine of its height above the local horizontal, by Bird and Riordan's (1986) diffuse
+// Colour of the clear sky's light on level ground `height_m` above sea level
+// from a light at the given sine of its height above the local horizontal,
+// through the air above the receiver, by Bird and Riordan's (1986) diffuse
 // irradiance: half of what Rayleigh scattering takes from the beam, with their
 // exponent of 0.95 for multiple scattering, and the forward share of what
 // aerosol scatters after 1.5 air masses of Rayleigh extinction, both under
 // the ozone the beam crosses. Marine aerosol scatters nearly all it
 // extinguishes, and its asymmetry parameter is 0.7.
-fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32) -> vec3<f32> {
+fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32, height_m: f32) -> vec3<f32> {
     let sine = clamp(sine_height, 0.0, 1.0);
-    let air_mass = relative_air_mass(sine);
+    let air_mass = relative_air_mass(sine) * air_column_at_height(height_m);
     let rayleigh = air_mass * RAYLEIGH_OPTICAL_DEPTHS;
     let aerosol = exp(-air_mass * aerosol_optical_depth * AEROSOL_SPECTRAL_SCALES);
     // Bird and Riordan's Eqs. 3-11 to 3-14 for asymmetry 0.7.
@@ -708,12 +733,13 @@ fn sun_direct_light_color(receiver: CelestialReceiverLight) -> vec3<f32> {
 // light at the given sine of its height above the horizon: the beam's
 // transmittance along its path, then diffuse light on level ground, each per
 // unit of the light above the atmosphere. The beam crosses the relative air
-// mass with Kasten's (1996) broadband Rayleigh optical depth, and diffuse light
-// follows the model's Linke turbidity fits. game::clear_sky_irradiance mirrors
-// it; keep the two synchronized.
-fn clear_sky_irradiance(sine_height: f32, linke_turbidity: f32) -> vec2<f32> {
+// mass, by the model's pressure correction `air_column` of it, with Kasten's
+// (1996) broadband Rayleigh optical depth, and diffuse light follows the
+// model's Linke turbidity fits. game::clear_sky_irradiance mirrors it; keep
+// the two synchronized.
+fn clear_sky_irradiance(sine_height: f32, linke_turbidity: f32, air_column: f32) -> vec2<f32> {
     let sine = clamp(sine_height, 0.0, 1.0);
-    let air_mass = relative_air_mass(sine);
+    let air_mass = relative_air_mass(sine) * air_column;
     let rayleigh_optical_depth = select(
         1.0 / (6.6296 + air_mass * (1.7513 + air_mass
             * (-0.1202 + air_mass * (0.0065 - 0.00013 * air_mass)))),
@@ -733,11 +759,12 @@ fn clear_sky_irradiance(sine_height: f32, linke_turbidity: f32) -> vec2<f32> {
 }
 
 // Share of a clear sky's light on level ground that arrives diffuse, for a
-// light at the given sine of its height above the horizon. For turbidity 3 it
-// is 0.116 at 60 degrees, 0.183 at 30, 0.359 at 10 and 0.667 at 3, reaching 1
-// at the horizon as air mass extinguishes the beam.
-fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32) -> f32 {
-    let light = clear_sky_irradiance(sine_height, linke_turbidity);
+// light at the given sine of its height above the horizon, under `air_column`
+// of sea level's air. At sea level and turbidity 3 it is 0.116 at 60 degrees,
+// 0.183 at 30, 0.359 at 10 and 0.667 at 3, reaching 1 at the horizon as air
+// mass extinguishes the beam.
+fn clear_sky_diffuse_fraction(sine_height: f32, linke_turbidity: f32, air_column: f32) -> f32 {
+    let light = clear_sky_irradiance(sine_height, linke_turbidity, air_column);
     let beam = clamp(sine_height, 0.0, 1.0) * light.x;
     return light.y / max(light.y + beam, 1e-6);
 }
@@ -766,6 +793,7 @@ fn celestial_beam_share(
     color: vec3<f32>,
 ) -> f32 {
     let horizon_z = earth_horizon_z_at_height(receiver.height_m);
+    let air_column = air_column_at_height(receiver.height_m);
     let visibility = celestial_disc_visibility_at_horizon(horizon_z, direction, angular_radius_rad);
     if visibility <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return 0.0;
@@ -775,7 +803,7 @@ fn celestial_beam_share(
     if below_horizontal || EVALUATE_ALL_BRANCHES {
         let horizontal = color * beam_transmittance(
             regional_aerosol_optical_depth,
-            relative_air_mass(0.0),
+            relative_air_mass(0.0) * air_column,
             ozone_air_mass(0.0),
         );
         let beam = color * beam_transmittance_at_height(
@@ -792,6 +820,7 @@ fn celestial_beam_share(
     return visibility * grazing * (1.0 - clear_sky_diffuse_fraction(
         light_height_above_horizon(direction.z, horizon_z),
         linke_turbidity,
+        air_column,
     ));
 }
 

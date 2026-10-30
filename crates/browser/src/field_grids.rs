@@ -544,6 +544,7 @@ fn beam_share(
     const AEROSOL_SPECTRAL_SCALES: [f64; 3] = [0.93857, 1.00098, 1.10698];
     const OZONE_OPTICAL_DEPTHS: [f64; 3] = [0.03542, 0.02523, 0.00219];
     let height_m = height_m.max(0.0);
+    let air_column = game::air_column_at_height(height_m);
     let horizon_z =
         -(height_m * (2.0 * EARTH_RADIUS_M + height_m)).sqrt() / (EARTH_RADIUS_M + height_m);
     let horizon_cosine = (1.0 - horizon_z * horizon_z).max(0.0).sqrt();
@@ -556,6 +557,7 @@ fn beam_share(
         - clear_sky_diffuse_fraction(
             (direction_z - horizon_z) / (1.0 - horizon_z),
             2.35 + 7.79 * aerosol_optical_depth,
+            air_column,
         );
     if direction_z >= 0.0 || height_m <= 0.0 {
         return visibility * direct_fraction;
@@ -582,7 +584,7 @@ fn beam_share(
             / (1.0 + (1.0 - direction_z * direction_z).sqrt()))
         .min(height_m / EARTH_RADIUS_M);
     let climb = (1.0 - (-4.0 / PI * depth_scale_heights).exp()).sqrt();
-    let horizontal_air_mass = game::relative_air_mass(0.0);
+    let horizontal_air_mass = game::relative_air_mass(0.0) * air_column;
     visibility
         * direct_fraction
         * luminance(
@@ -593,8 +595,8 @@ fn beam_share(
 }
 
 /// `clear_sky_diffuse_fraction` in lighting.wgsl.
-pub fn clear_sky_diffuse_fraction(sine_height: f64, linke_turbidity: f64) -> f64 {
-    let [beam, diffuse] = game::clear_sky_irradiance(sine_height, linke_turbidity);
+pub fn clear_sky_diffuse_fraction(sine_height: f64, linke_turbidity: f64, air_column: f64) -> f64 {
+    let [beam, diffuse] = game::clear_sky_irradiance(sine_height, linke_turbidity, air_column);
     diffuse / (diffuse + sine_height.clamp(0.0, 1.0) * beam).max(1e-6)
 }
 
@@ -1321,7 +1323,7 @@ mod tests {
             (3.0, 0.667),
             (0.0, 1.0),
         ] {
-            let fraction = clear_sky_diffuse_fraction(height_deg.to_radians().sin(), 3.0);
+            let fraction = clear_sky_diffuse_fraction(height_deg.to_radians().sin(), 3.0, 1.0);
             assert!(
                 (fraction - expected).abs() < 0.001,
                 "{fraction} at {height_deg} degrees"

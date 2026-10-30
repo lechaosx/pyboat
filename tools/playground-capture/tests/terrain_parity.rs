@@ -895,6 +895,46 @@ fn direct_light_on_raised_receivers_fades_and_reddens_down_to_their_earth_horizo
     }
 }
 
+/// A raised receiver's light crosses only the air above it, e^(-h/H) of sea
+/// level's in an atmosphere of scale height H, which keeps Earth's ratio to
+/// Earth's radius. A light at the horizontal of a receiver 1 km up takes the
+/// colour that sea level gives a light whose air mass is that share of the
+/// horizontal one.
+#[test]
+fn raised_receivers_light_crosses_only_the_air_above_them() {
+    let height_m = 1_000.0_f32;
+    let scale_height_m = 6.371e6 / game::PLANET_RADIUS_SCALE_HEIGHTS;
+    let air_mass = game::relative_air_mass(0.0) * (-f64::from(height_m) / scale_height_m).exp();
+    let (mut low, mut high) = (0.0_f64, 0.1_f64);
+    for _ in 0..60 {
+        let sine = 0.5 * (low + high);
+        if game::relative_air_mass(sine) > air_mass {
+            low = sine;
+        } else {
+            high = sine;
+        }
+    }
+    let equivalent_degrees = low.asin().to_degrees() as f32;
+    let (depression_degrees, _, raised_red_share) = receiver_sweep("beam", height_m);
+    let (_, _, sea_level_red_share) = receiver_sweep("beam", 0.0);
+    let column_at = |degrees: f32| {
+        (0..depression_degrees.len())
+            .min_by(|left, right| {
+                (depression_degrees[*left] - degrees)
+                    .abs()
+                    .total_cmp(&(depression_degrees[*right] - degrees).abs())
+            })
+            .unwrap()
+    };
+    let raised = raised_red_share[column_at(0.0)];
+    let sea_level = sea_level_red_share[column_at(-equivalent_degrees)];
+    assert!(
+        (raised - sea_level).abs() <= 0.01,
+        "red share {raised} at the horizontal {height_m} m up, {sea_level} at sea level \
+         {equivalent_degrees} degrees up",
+    );
+}
+
 /// Under a full deck, which stops the beam, raised land keeps the diffuse
 /// light of the sky above it as the Sun's beam ends behind its horizon: as the
 /// light sinks, that light never gains more than the beam's share of clear-sky
@@ -1434,6 +1474,7 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
             - browser::clear_sky_diffuse_fraction(
                 f64::from((direction_z - horizon_z) / (1.0 - horizon_z)),
                 linke_turbidity,
+                game::air_column_at_height(600.0),
             ))
     };
     let lunar = f64::from(surface.moon_ambient_intensity);
