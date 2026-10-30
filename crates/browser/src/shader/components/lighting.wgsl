@@ -735,6 +735,15 @@ fn beam_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32)
 // aerosol scatters after 1.5 air masses of Rayleigh extinction, both under
 // the ozone the beam crosses. Marine aerosol scatters nearly all it
 // extinguishes, and its asymmetry parameter is 0.7.
+// A compromise: below the horizon the colour holds its sunset value. On the
+// display's basis, where sunlight above the atmosphere is D65 white,
+// level-ground light with the Sun 10 degrees up is redder than every session
+// Spitschan et al. (2016, Sci. Rep. 6) measured at a rural and a city site:
+// x 0.3238 against at most 0.3178. Below the horizon it stays at sunset's
+// 9,410 K while measured light turns bluer: a 12,300 K mean from the horizon
+// to 5 degrees down (Hernández-Andrés et al. 2001, J. Opt. Soc. Am. A 18),
+// and rural medians of 14,600 K 1 degree down and x 0.215 6 degrees down.
+// Single scattering alone does not reproduce that blue.
 fn clear_sky_light_color(aerosol_optical_depth: f32, sine_height: f32, height_m: f32) -> vec3<f32> {
     let sine = clamp(sine_height, 0.0, 1.0);
     let air_mass = relative_air_mass(sine) * air_column_at_height(height_m);
