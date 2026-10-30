@@ -1,16 +1,13 @@
-use std::{env, error::Error, io};
+use std::{env, error::Error, io, path::Path, time::Duration};
 
 use wtransport::{Identity, tls::Sha256DigestFmt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     #[cfg(unix)]
-    let (mut reload, mut terminate) = {
+    let mut terminate = {
         use tokio::signal::unix::{SignalKind, signal};
-        (
-            signal(SignalKind::hangup())?,
-            signal(SignalKind::terminate())?,
-        )
+        signal(SignalKind::terminate())?
     };
     let mut arguments = env::args().skip(1);
     let address = arguments
@@ -44,33 +41,78 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         endpoint.local_addr()?
     );
     println!("Browser certificate hash: {certificate_hash}");
-    #[cfg(unix)]
-    {
-        let shutdown = async {
-            loop {
-                tokio::select! {
-                    result = tokio::signal::ctrl_c() => return result,
-                    _ = terminate.recv() => return Ok(()),
-                    _ = reload.recv() => {
-                        if let (Some(certificate), Some(key)) = (&certificate_path, &private_key_path) {
-                            let result: server::ServerResult<()> = async {
-                                let identity = Identity::load_pemfiles(certificate, key).await?;
-                                let config = server::tls_config(endpoint.local_addr()?, identity)?;
-                                endpoint.reload_config(config, false)?;
-                                Ok(())
-                            }.await;
-                            match result {
-                                Ok(()) => eprintln!("TLS certificate reloaded"),
-                                Err(error) => eprintln!("TLS certificate reload failed: {error}"),
-                            }
-                        }
-                    }
-                }
+    let shutdown = async {
+        let reload = async {
+            if let (Some(certificate), Some(key)) = (&certificate_path, &private_key_path) {
+                poll_certificates(
+                    &endpoint,
+                    Path::new(certificate),
+                    Path::new(key),
+                    Duration::from_secs(60),
+                )
+                .await;
             }
+            std::future::pending::<()>().await;
         };
-        server::serve_until(&endpoint, shutdown).await?;
-    }
-    #[cfg(not(unix))]
-    server::serve_until(&endpoint, tokio::signal::ctrl_c()).await?;
+        #[cfg(unix)]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+            _ = reload => unreachable!(),
+        }
+        #[cfg(not(unix))]
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = reload => unreachable!(),
+        }
+    };
+    server::serve_until(&endpoint, shutdown).await?;
     Ok(())
 }
+
+async fn poll_certificates(
+    endpoint: &wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>,
+    certificate: &Path,
+    key: &Path,
+    period: Duration,
+) {
+    use wtransport::tls::{
+        Certificate, CertificateChain, PrivateKey,
+        rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    };
+
+    let mut loaded = None;
+    let mut ticker = tokio::time::interval(period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let result: server::ServerResult<()> = async {
+            let files = (
+                tokio::fs::read(certificate).await?,
+                tokio::fs::read(key).await?,
+            );
+            if loaded.as_ref() == Some(&files) {
+                return Ok(());
+            }
+            let certificates = CertificateDer::pem_slice_iter(&files.0)
+                .map(|certificate| Ok(Certificate::from_der(certificate?.to_vec())?))
+                .collect::<server::ServerResult<Vec<_>>>()?;
+            let key = PrivateKeyDer::from_pem_slice(&files.1)?;
+            let identity = Identity::new(
+                CertificateChain::new(certificates),
+                PrivateKey::from_der_pkcs8(key.secret_der().to_vec()),
+            );
+            endpoint.reload_config(server::tls_config(endpoint.local_addr()?, identity)?, false)?;
+            loaded = Some(files);
+            eprintln!("TLS certificate reloaded");
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            eprintln!("TLS certificate reload failed: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

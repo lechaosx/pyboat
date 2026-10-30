@@ -681,7 +681,7 @@ async fn shutdown_flushes_close_before_server_runtime_stops() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn certificate_reload_preserves_match_and_rejects_invalid_replacements() {
+async fn sigterm_gracefully_stops_the_server_process() {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
@@ -726,100 +726,15 @@ async fn certificate_reload_preserves_match_and_rejects_invalid_replacements() {
     let first_endpoint = client_endpoint(identity.certificate_chain().as_slice()[0].hash());
     let connection = first_endpoint.connect(url).await.unwrap();
     let first_welcome = decode_server_message(&receive_reliable(&connection).await).unwrap();
-    let ServerMessage::Welcome {
-        player_id,
-        match_seed,
-        ..
-    } = first_welcome
-    else {
+    let ServerMessage::Welcome { player_id, .. } = first_welcome else {
         panic!("expected welcome");
     };
+    assert_eq!(player_id, "player-1");
     let client = TestClient {
         _endpoint: first_endpoint,
         connection,
     };
-    let (before_tick, _, _) = next_snapshot(&client).await;
-    let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
-
-    let renewed = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
-    renewed
-        .certificate_chain()
-        .store_pemfile(&certificate)
-        .await
-        .unwrap();
-    renewed
-        .private_key()
-        .store_secret_pemfile(&key)
-        .await
-        .unwrap();
-    assert!(
-        Command::new("kill")
-            .arg("-HUP")
-            .arg(child.id().unwrap().to_string())
-            .status()
-            .await
-            .unwrap()
-            .success()
-    );
-    let result = timeout(Duration::from_secs(2), stderr.next_line())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(result.as_deref(), Some("TLS certificate reloaded"));
-    let renewed_endpoint = client_endpoint(renewed.certificate_chain().as_slice()[0].hash());
-    let renewed_connection = renewed_endpoint.connect(url).await.unwrap();
-    let welcome = decode_server_message(&receive_reliable(&renewed_connection).await).unwrap();
-    assert!(
-        matches!(welcome, ServerMessage::Welcome { player_id, match_seed: seed, .. } if player_id == "player-2" && seed == match_seed)
-    );
-
-    for invalid_key in [
-        "not a PEM key".to_owned(),
-        identity.private_key().to_secret_pem(),
-    ] {
-        tokio::fs::write(&key, invalid_key).await.unwrap();
-        assert!(
-            Command::new("kill")
-                .arg("-HUP")
-                .arg(child.id().unwrap().to_string())
-                .status()
-                .await
-                .unwrap()
-                .success()
-        );
-        let result = timeout(Duration::from_secs(2), async {
-            loop {
-                let line = stderr.next_line().await.unwrap().unwrap();
-                if line.starts_with("TLS certificate") {
-                    break line;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert!(
-            result.starts_with("TLS certificate reload failed:"),
-            "{result}"
-        );
-        let endpoint = client_endpoint(renewed.certificate_chain().as_slice()[0].hash());
-        let connection = endpoint.connect(url).await.unwrap();
-        let welcome = decode_server_message(&receive_reliable(&connection).await).unwrap();
-        assert!(
-            matches!(welcome, ServerMessage::Welcome { match_seed: seed, .. } if seed == match_seed)
-        );
-        connection.close(0_u32.into(), b"test complete");
-    }
-
-    timeout(Duration::from_secs(2), async {
-        loop {
-            let (tick, boats, _) = next_snapshot(&client).await;
-            if tick > before_tick && boats.iter().any(|boat| boat.id == player_id) {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    let _snapshot = next_snapshot(&client).await;
     assert!(child.try_wait().unwrap().is_none());
     assert!(
         Command::new("kill")

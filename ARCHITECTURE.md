@@ -35,6 +35,8 @@ and verification details.
 - **[Explicit]** A minimal NixOS host supplies generic rootless Podman and SSH
   deployment access. Application services and certificate renewal belong to
   this repository and deploy independently of the host configuration.
+- **[Explicit]** Podman Compose invokes Podman directly through `podman-compose`,
+  without a container API socket.
 - **[Implicit]** Deployment selects an image by digest from GHCR and retains it
   locally for subsequent starts, so booting never selects a newer release.
 - **[Implicit]** The ARM64 container shares host networking for direct UDP
@@ -42,6 +44,9 @@ and verification details.
 - **[Implicit]** The frontend selects its backend address at build time so
   static hosting and game transport can use independent origins.
 - **[Explicit]** Trusted certificate issuance and renewal are automatic.
+- **[Explicit]** acme.sh manages certificates in a separate container. The game
+  polls exported certificate contents and adopts valid replacements without
+  restarting.
 - **[Implicit]** Let's Encrypt runs on the backend host so private keys remain
   there throughout issuance and renewal.
 - **[Explicit]** Frontend pushes to `master` deploy automatically and independently

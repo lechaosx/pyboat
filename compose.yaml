@@ -1,0 +1,34 @@
+name: pyboat
+
+services:
+  certificates:
+    image: ghcr.io/acmesh-official/acme.sh@sha256:778ac2bcc77397ef631b060de0d5ad1e5460cf1a2d1b83ed5d47918158f1eff4
+    container_name: pyboat-certificates
+    pull_policy: never
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      AUTO_UPGRADE: "0"
+      WEBTRANSPORT_HOST: ${WEBTRANSPORT_HOST:?Set WEBTRANSPORT_HOST}
+    volumes:
+      - ./acme:/acme.sh
+      - ./tls:/certificates
+    command: daemon
+
+  game:
+    image: localhost/pyboat:deployed
+    pull_policy: never
+    container_name: pyboat
+    network_mode: host
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - ./tls:/certificates:ro
+    command:
+      - 0.0.0.0:8443
+      - /certificates/fullchain.pem
+      - /certificates/key.pem

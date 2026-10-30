@@ -27,9 +27,11 @@ certificate and private key after the address:
 cargo run -p server -- 0.0.0.0:8765 cert.pem key.pem
 ```
 
-On Unix, SIGHUP reloads these files for new connections while preserving the
-current match and existing connections. Invalid replacements leave the loaded
-certificate in use and report an error on stderr. SIGTERM stops the match.
+The server checks the contents of both files every minute. Valid replacements
+apply to new connections while preserving the current match and existing
+connections. Invalid or incomplete replacements leave the loaded certificate
+in use and are retried on the next check, with errors reported on stderr.
+On Unix, SIGTERM stops the match.
 
 ## Hosting
 
@@ -41,7 +43,8 @@ It is embedded during the frontend build; changing it requires redeployment.
 Production uses UDP 443; local builds retain UDP 8765 unless `WEBTRANSPORT_PORT`
 is set at build time or `webtransportPort` is supplied in the browser URL.
 
-The backend runs in rootless Podman on NixOS. The **Deploy backend (discard
+The backend runs with socketless `podman-compose` in rootless Podman on NixOS.
+The **Deploy backend (discard
 current match)** workflow is manual: select a ref and check
 `discard_current_match` before running it. It tests and publishes an ARM64
 image to GHCR, pulls that exact digest on the Pi, and restarts the user service.
@@ -54,7 +57,7 @@ deployment; service starts never pull an image.
 Deployment retains the previous image as `localhost/pyboat:previous` and removes
 unused, untagged images after a successful restart. To deliberately roll back,
 log in as `github`, run `podman tag localhost/pyboat:previous localhost/pyboat:deployed`,
-then `systemctl --user restart pyboat.service`; this also discards the match.
+then `systemctl --user restart pyboat-compose.service`; this also discards the match.
 
 Frontend releases proceed independently. A frontend protocol change can require
 a deliberate backend deployment before multiplayer works again.
@@ -77,10 +80,11 @@ Local builds without `WEBTRANSPORT_HOST` use the page's hostname and retain the
 
 The Pi's NixOS configuration lives in
 [nixos-config](https://github.com/lechaosx/nixos-config/tree/main/hosts/raspberrypi).
-That configuration provides Podman, a lingering `github` deployment account,
-and a firewall for unprivileged web ports. This
-repository's [deployment files](../../deploy) own the game and certificate
-renewal. The backend workflow installs them as user services without sudo.
+That configuration provides Podman, `podman-compose`, a lingering `github`
+deployment account, and a firewall for unprivileged web ports. This repository's
+[Compose manifest](../../compose.yaml) owns the game and certificate renewal.
+A user service starts these containers at boot. The game stays stopped after a
+crash; starting it again is a deliberate action.
 
 Forward these router ports to the Pi's reserved LAN address:
 
@@ -96,15 +100,56 @@ does not need TCP 443.
 
 After installing NixOS, verify the Pi's new SSH host key locally and update
 `DEPLOY_KNOWN_HOSTS` before deploying. The configured deployment user's public
-key must match `DEPLOY_SSH_KEY`. The deployment requests a certificate before
-starting the game, so DNS and HTTP forwarding must already work. Certificates
+key must match `DEPLOY_SSH_KEY`. Bootstrap requests a certificate before the
+first deployment, so DNS and HTTP forwarding must already work. Certificates
 use Let's Encrypt's short-lived profile and an ACME account without an email
-address; monitor renewal failures through the user journal.
+address. acme.sh's daemon schedules renewal independently of game deployments.
+Its persistent account state stays in `~/.local/share/pyboat/acme`; only exported
+certificates in `tls` are mounted read-only into the game.
+
+### Host bootstrap
+
+Log in as `github` and prepare persistent storage:
+
+```sh
+mkdir -p ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls ~/.config/systemd/user
+chmod 700 ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls
+```
+
+Copy `compose.yaml` into `~/.local/share/pyboat/` and
+`deploy/pyboat-compose.service` into `~/.config/systemd/user/`. Set the public
+backend address, obtain its certificate, and enable startup:
+
+```sh
+cd ~/.local/share/pyboat
+host=boats.dlabaja.eu
+printf 'WEBTRANSPORT_HOST=%s\n' "$host" > .env
+podman-compose pull certificates
+podman-compose run --rm -T --name pyboat-certificate-setup certificates \
+  --issue --standalone --httpport 8080 \
+  --server letsencrypt --certificate-profile shortlived -d "$host" </dev/null
+podman-compose run --rm -T --name pyboat-certificate-setup certificates \
+  --install-cert -d "$host" \
+  --key-file /certificates/key.pem --fullchain-file /certificates/fullchain.pem </dev/null
+systemctl --user daemon-reload
+systemctl --user enable pyboat-compose.service
+```
+
+Run the manual backend workflow to publish the first game image and start both
+containers. When changing the public backend address, obtain and export its
+matching certificate before deploying the changed address.
+Stop only the certificate service with `podman-compose stop certificates`
+before issuing for a changed address and start it afterward with
+`podman-compose up -d certificates` so validation commands share port 8080
+without overlapping.
+
+### Operation
 
 Renewal reloads the running server's TLS certificate without discarding the
-match. Logged in as `github`, inspect
-`journalctl --user -u pyboat-certificate.service` for issuance or renewal errors
-and `journalctl --user -u pyboat.service` for game startup or reload errors.
+match. Logged in as `github`, run `cd ~/.local/share/pyboat`, then inspect
+`podman-compose logs certificates` for issuance or renewal errors and
+`podman-compose logs game` for game startup or reload errors.
+`journalctl --user -u pyboat-compose.service` reports container startup errors.
 
 After deployment, open Pages in a browser supporting WebGPU and WebTransport
 and verify multiplayer connects. An active service does not prove that router

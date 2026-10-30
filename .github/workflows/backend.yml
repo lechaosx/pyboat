@@ -107,21 +107,13 @@ jobs:
         shell: bash
         run: |
           [[ "$DEPLOY_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
-          ssh pyboat-deploy 'test "$(uname -m)" = aarch64 && mkdir -p ~/.cache/pyboat-deploy'
-          scp deploy/* pyboat-deploy:.cache/pyboat-deploy/
+          ssh pyboat-deploy 'test "$(uname -m)" = aarch64'
+          scp compose.yaml pyboat-deploy:.local/share/pyboat/compose.yaml
           # shellcheck disable=SC2029
-          ssh pyboat-deploy "sh -se -- '$DEPLOY_IMAGE' '$WEBTRANSPORT_HOST'" <<'EOF_DEPLOY'
-          mkdir -p ~/.config/containers/systemd ~/.config/systemd/user ~/.config/pyboat ~/.local/lib/pyboat
-          install -m 644 ~/.cache/pyboat-deploy/pyboat.container ~/.config/containers/systemd/
-          install -m 644 ~/.cache/pyboat-deploy/pyboat-certificate.service ~/.cache/pyboat-deploy/pyboat-certificate.timer ~/.config/systemd/user/
-          install -m 755 ~/.cache/pyboat-deploy/renew-certificate ~/.local/lib/pyboat/renew-certificate.next
-          mv ~/.local/lib/pyboat/renew-certificate.next ~/.local/lib/pyboat/renew-certificate
-          printf 'WEBTRANSPORT_HOST=%s\n' "$2" > ~/.config/pyboat/environment.next
-          mv ~/.config/pyboat/environment.next ~/.config/pyboat/environment
-          systemctl --user daemon-reload
-          systemctl --user cat pyboat.service >/dev/null
-          systemctl --user enable --now pyboat-certificate.timer
-          systemctl --user start pyboat-certificate.service
+          ssh pyboat-deploy "bash -se -- '$DEPLOY_IMAGE' '$WEBTRANSPORT_HOST'" <<'EOF_DEPLOY'
+          cd ~/.local/share/pyboat
+          printf 'WEBTRANSPORT_HOST=%s\n' "$2" > .env
+          podman-compose pull certificates
           podman pull "$1"
           current=$(podman image inspect localhost/pyboat:deployed --format '{{.Id}}' 2>/dev/null || true)
           next=$(podman image inspect "$1" --format '{{.Id}}')
@@ -129,8 +121,9 @@ jobs:
             podman tag "$current" localhost/pyboat:previous
           fi
           podman tag "$1" localhost/pyboat:deployed
-          systemctl --user restart pyboat.service
+          systemctl --user restart pyboat-compose.service
           sleep 3
-          systemctl --user is-active --quiet pyboat.service
+          test "$(podman inspect pyboat --format '{{.State.Running}}')" = true
+          test "$(podman inspect pyboat-certificates --format '{{.State.Running}}')" = true
           podman image prune --force
           EOF_DEPLOY

@@ -1,8 +1,0 @@
-[Unit]
-Description=Issue or renew the Pyboat TLS certificate
-
-[Service]
-Type=oneshot
-Environment=PATH=/run/current-system/sw/bin:/run/wrappers/bin
-EnvironmentFile=%h/.config/pyboat/environment
-ExecStart=%h/.local/lib/pyboat/renew-certificate
