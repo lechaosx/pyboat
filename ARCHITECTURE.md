@@ -30,6 +30,8 @@ and verification details.
 ## Hosting
 
 - **[Explicit]** GitHub Pages hosts the game frontend.
+- **[Explicit]** This repository deploys one backend on the Raspberry Pi.
+  Other people may independently host servers and optional frontends.
 - **[Explicit]** The backend address is a configurable hostname or IPv4 address
   covered by a matching browser-trusted certificate.
 - **[Explicit]** A minimal NixOS host supplies generic rootless Podman and SSH
@@ -50,11 +52,12 @@ and verification details.
 - **[Implicit]** Let's Encrypt runs on the backend host so private keys remain
   there throughout issuance and renewal.
 - **[Explicit]** Frontend pushes to `master` deploy automatically and independently
-  of backend releases.
+  of backend releases. Graphics and UI updates preserve multiplayer
+  compatibility with supported servers.
 - **[Explicit]** Backend deployment requires a manual pipeline action that
   acknowledges discarding the game in progress.
 - **[Explicit]** Certificate renewal preserves the running match and connections.
-- **[Explicit]** Application updates, host configuration updates, service
+- **[Explicit]** Backend updates, host configuration updates, service
   restarts, and reboots remain deliberate.
 
 ## Authority and coordinates
@@ -534,6 +537,11 @@ and verification details.
 
 ## Transport and prediction
 
+- **[Explicit]** The target multiplayer compatibility rule is
+  `server.major == frontend.major && server.minor <= frontend.minor`, ignoring
+  patch versions, including for major version zero. Frontend releases preserve
+  compatible message decoding, world generation, and prediction for every
+  supported server minor.
 - **[Explicit]** Versioned Postcard binary messages travel over encrypted
   WebTransport. Development pins a short-lived certificate hash; deployment
   uses a browser-trusted certificate.
