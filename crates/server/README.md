@@ -59,15 +59,15 @@ then `systemctl --user restart pyboat.service`; this also discards the match.
 Frontend releases proceed independently. A frontend protocol change can require
 a deliberate backend deployment before multiplayer works again.
 
-Create the `production` GitHub environment with these secrets:
+Create these variables and secret in the `production` GitHub environment:
 
-| Secret | Value |
-| --- | --- |
-| `DEPLOY_HOST` | Server's externally reachable SSH hostname or IPv4 address |
-| `DEPLOY_USER` | `github` |
-| `DEPLOY_PORT` | Externally reachable SSH port |
-| `DEPLOY_SSH_KEY` | Private deployment key authorized for that user |
-| `DEPLOY_KNOWN_HOSTS` | Verified OpenSSH host key recorded under the alias `raspberrypi` |
+| Setting | Type | Value |
+| --- | --- | --- |
+| `DEPLOY_HOST` | Variable | Server's externally reachable SSH hostname or IPv4 address |
+| `DEPLOY_USER` | Variable | `github` |
+| `DEPLOY_PORT` | Variable | Externally reachable SSH port |
+| `DEPLOY_KNOWN_HOSTS` | Variable | Verified OpenSSH host key recorded under the alias `raspberrypi` |
+| `DEPLOY_SSH_KEY` | Secret | Private deployment key authorized for that user |
 
 `DEPLOY_HOST` serves SSH access; `WEBTRANSPORT_HOST` serves browser traffic.
 Local builds without `WEBTRANSPORT_HOST` use the page's hostname and retain the
