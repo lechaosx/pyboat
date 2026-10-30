@@ -46,7 +46,7 @@ is set at build time or `webtransportPort` is supplied in the browser URL.
 The backend runs with socketless `podman-compose` in rootless Podman on NixOS.
 The **Deploy backend (discard
 current match)** workflow is manual: run it from `master`, set `revision` to
-the game commit, tag, or branch, and check `discard_current_match`.
+the game branch, tag, or full commit SHA, and check `discard_current_match`.
 It tests and publishes an ARM64
 image to GHCR, pulls that exact digest on the Pi, and restarts the user service.
 **Deployment permanently loses the game in progress and disconnects all players.**
@@ -56,8 +56,8 @@ image is published, then rerun the failed deployment job. The Pi pulls images
 anonymously. Deployment saves the exact image digest in `.env`; service starts
 never pull an image. Deployment prunes unused, untagged images after restarting.
 To roll back, keep the workflow on `master` and set `revision` to an earlier
-commit. Current deployment files package the selected game source; the selected
-commit does not need to contain a deployment workflow. It must support the
+full commit SHA. Current deployment files package the selected game source;
+the selected commit does not need to contain a deployment workflow. It must support the
 current server arguments and browser protocol. Revisions predating certificate
 polling do not reload renewed certificates automatically.
 

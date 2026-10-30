@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       revision:
-        description: Game commit, tag, or branch to deploy
+        description: Game branch, tag, or full commit SHA to deploy
         required: true
         default: master
         type: string
