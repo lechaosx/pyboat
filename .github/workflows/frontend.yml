@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       WEBTRANSPORT_HOST: ${{ vars.WEBTRANSPORT_HOST }}
+      WEBTRANSPORT_PORT: "443"
     steps:
       - uses: actions/checkout@v7
       - name: Validate backend address

@@ -32,10 +32,13 @@ and verification details.
 - **[Explicit]** GitHub Pages hosts the game frontend.
 - **[Explicit]** The backend address is a configurable hostname or IPv4 address
   covered by a matching browser-trusted certificate.
-- **[Explicit]** A minimal NixOS host runs the backend as an ordinary binary
-  deployed independently of the host configuration.
-- **[Implicit]** The backend runs as a dedicated systemd user on the ARM64 host
-  with direct UDP ingress. WebTransport terminates TLS in the game server.
+- **[Explicit]** A minimal NixOS host supplies generic rootless Podman and SSH
+  deployment access. Application services and certificate renewal belong to
+  this repository and deploy independently of the host configuration.
+- **[Implicit]** Deployment selects an image by digest from GHCR and retains it
+  locally for subsequent starts, so booting never selects a newer release.
+- **[Implicit]** The ARM64 container shares host networking for direct UDP
+  ingress. WebTransport terminates TLS in the game server.
 - **[Implicit]** The frontend selects its backend address at build time so
   static hosting and game transport can use independent origins.
 - **[Explicit]** Trusted certificate issuance and renewal are automatic.

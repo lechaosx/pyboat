@@ -107,6 +107,7 @@ pub(crate) fn webtransport_server_url(
     hostname: &str,
     search: &str,
     configured_hostname: Option<&str>,
+    deployment_port: Option<&str>,
 ) -> Result<String, String> {
     let hostname = configured_hostname.unwrap_or(hostname);
     if hostname.is_empty() {
@@ -117,13 +118,17 @@ pub(crate) fn webtransport_server_url(
         .split('&')
         .filter_map(|parameter| parameter.split_once('='))
         .find_map(|(key, value)| (key == "webtransportPort").then_some(value));
-    let port = configured_port.map_or(Ok(8765), |value| {
-        value
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port > 0)
-            .ok_or_else(|| "WebTransport port must be an integer from 1 through 65535".to_owned())
-    })?;
+    let port = configured_port
+        .or(deployment_port)
+        .map_or(Ok(8765), |value| {
+            value
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port > 0)
+                .ok_or_else(|| {
+                    "WebTransport port must be an integer from 1 through 65535".to_owned()
+                })
+        })?;
     Ok(format!("https://{hostname}:{port}/game"))
 }
 
@@ -1401,20 +1406,31 @@ mod tests {
     #[test]
     fn webtransport_url_uses_the_configured_server_port() {
         assert_eq!(
-            webtransport_server_url("localhost", "?webtransportPort=9000", None).unwrap(),
+            webtransport_server_url("localhost", "?webtransportPort=9000", None, None).unwrap(),
             "https://localhost:9000/game",
         );
         assert_eq!(
-            webtransport_server_url("localhost", "", None).unwrap(),
+            webtransport_server_url("localhost", "", None, None).unwrap(),
             "https://localhost:8765/game",
         );
-        assert!(webtransport_server_url("localhost", "?webtransportPort=0", None).is_err());
+        assert!(webtransport_server_url("localhost", "?webtransportPort=0", None, None).is_err());
     }
 
     #[test]
     fn webtransport_url_uses_the_deployed_backend_from_pages() {
         assert_eq!(
-            webtransport_server_url("player.github.io", "", Some("boats.example.com")).unwrap(),
+            webtransport_server_url(
+                "player.github.io",
+                "",
+                Some("boats.example.com"),
+                Some("443")
+            )
+            .unwrap(),
+            "https://boats.example.com:443/game",
+        );
+        assert_eq!(
+            webtransport_server_url("player.github.io", "", Some("boats.example.com"), None)
+                .unwrap(),
             "https://boats.example.com:8765/game",
         );
         assert_eq!(
@@ -1422,6 +1438,7 @@ mod tests {
                 "localhost",
                 "?webtransportPort=9000",
                 Some("boats.example.com"),
+                Some("443"),
             )
             .unwrap(),
             "https://boats.example.com:9000/game",
@@ -1430,7 +1447,7 @@ mod tests {
 
     #[test]
     fn webtransport_url_rejects_an_empty_deployment_host() {
-        assert!(webtransport_server_url("player.github.io", "", Some("")).is_err());
+        assert!(webtransport_server_url("player.github.io", "", Some(""), None).is_err());
     }
 
     #[test]

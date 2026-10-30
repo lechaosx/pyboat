@@ -2868,6 +2868,7 @@ fn server_url() -> Result<String, JsValue> {
         &location.hostname()?,
         &location.search()?,
         option_env!("WEBTRANSPORT_HOST"),
+        option_env!("WEBTRANSPORT_PORT"),
     )
     .map_err(|error| JsValue::from_str(&error))
 }

@@ -20,6 +20,11 @@ jobs:
   build:
     if: ${{ inputs.discard_current_match }}
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}@${{ steps.publish.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust and static build tools
@@ -35,11 +40,25 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
           RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --locked --release -p server --target aarch64-unknown-linux-musl
-      - uses: actions/upload-artifact@v6
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v4
         with:
-          name: backend
-          path: target/aarch64-unknown-linux-musl/release/server
-          retention-days: 7
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Publish ARM64 image
+        id: publish
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
   deploy:
     needs: build
@@ -51,10 +70,10 @@ jobs:
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_IMAGE: ${{ needs.build.outputs.image }}
+      WEBTRANSPORT_HOST: ${{ vars.WEBTRANSPORT_HOST }}
     steps:
-      - uses: actions/download-artifact@v7
-        with:
-          name: backend
+      - uses: actions/checkout@v7
       - name: Configure verified SSH connection
         shell: bash
         run: |
@@ -65,6 +84,7 @@ jobs:
             fi
           done
           [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$WEBTRANSPORT_HOST" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]
           [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
           [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$DEPLOY_PORT > 0 && 10#$DEPLOY_PORT <= 65535))
           umask 077
@@ -74,6 +94,7 @@ jobs:
           cat > ~/.ssh/config <<EOF_SSH
           Host pyboat-deploy
             HostName $DEPLOY_HOST
+            HostKeyAlias raspberrypi
             User $DEPLOY_USER
             Port $DEPLOY_PORT
             IdentityFile ~/.ssh/pyboat
@@ -85,19 +106,31 @@ jobs:
       - name: Deploy and discard current match
         shell: bash
         run: |
-          ssh pyboat-deploy 'sh -se' <<'EOF_PREFLIGHT'
-          test "$(uname -m)" = aarch64
-          sudo -n test -f /var/lib/acme/pyboat/acme-success
-          sudo -n -u pyboat test -r /var/lib/acme/pyboat/fullchain.pem
-          sudo -n -u pyboat test -r /var/lib/acme/pyboat/key.pem
-          systemctl cat pyboat.service >/dev/null
-          EOF_PREFLIGHT
-          scp server pyboat-deploy:pyboat-server.next
-          ssh pyboat-deploy 'sh -se' <<'EOF_DEPLOY'
-          sudo -n install -o root -g root -m 755 pyboat-server.next /var/lib/pyboat/server.next
-          rm pyboat-server.next
-          sudo -n mv /var/lib/pyboat/server.next /var/lib/pyboat/server
-          sudo -n systemctl restart pyboat.service
+          [[ "$DEPLOY_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+          ssh pyboat-deploy 'test "$(uname -m)" = aarch64 && mkdir -p ~/.cache/pyboat-deploy'
+          scp deploy/* pyboat-deploy:.cache/pyboat-deploy/
+          # shellcheck disable=SC2029
+          ssh pyboat-deploy "sh -se -- '$DEPLOY_IMAGE' '$WEBTRANSPORT_HOST'" <<'EOF_DEPLOY'
+          mkdir -p ~/.config/containers/systemd ~/.config/systemd/user ~/.config/pyboat ~/.local/lib/pyboat
+          install -m 644 ~/.cache/pyboat-deploy/pyboat.container ~/.config/containers/systemd/
+          install -m 644 ~/.cache/pyboat-deploy/pyboat-certificate.service ~/.cache/pyboat-deploy/pyboat-certificate.timer ~/.config/systemd/user/
+          install -m 755 ~/.cache/pyboat-deploy/renew-certificate ~/.local/lib/pyboat/renew-certificate.next
+          mv ~/.local/lib/pyboat/renew-certificate.next ~/.local/lib/pyboat/renew-certificate
+          printf 'WEBTRANSPORT_HOST=%s\n' "$2" > ~/.config/pyboat/environment.next
+          mv ~/.config/pyboat/environment.next ~/.config/pyboat/environment
+          systemctl --user daemon-reload
+          systemctl --user cat pyboat.service >/dev/null
+          systemctl --user enable --now pyboat-certificate.timer
+          systemctl --user start pyboat-certificate.service
+          podman pull "$1"
+          current=$(podman image inspect localhost/pyboat:deployed --format '{{.Id}}' 2>/dev/null || true)
+          next=$(podman image inspect "$1" --format '{{.Id}}')
+          if [ -n "$current" ] && [ "$current" != "$next" ]; then
+            podman tag "$current" localhost/pyboat:previous
+          fi
+          podman tag "$1" localhost/pyboat:deployed
+          systemctl --user restart pyboat.service
           sleep 3
-          systemctl is-active --quiet pyboat.service
+          systemctl --user is-active --quiet pyboat.service
+          podman image prune --force
           EOF_DEPLOY
