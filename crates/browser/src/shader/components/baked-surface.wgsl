@@ -1,14 +1,14 @@
 // The static surface kept between frames in a toroidal clipmap on
 // world-anchored lattices. Each level holds, per texel, a half-precision layer
-// of elevation with land ice, the gradient a texel resolves, and bed
-// reflectance, then
+// of elevation with land ice, its gradient, and bed reflectance, then
 // eight-bit layers of the dry, snowless, unseasoned land colour and unresolved
 // detail slope;
 // the land detail gradient, wetness fraction, and surface grade; the autumn
 // colour change, or on texels with land ice its colour grade and relief, and
 // the snow detail scale; the dormancy colour
-// change and land ice amount; and the sea-ice plate noises with their relief
-// gradient, wherever the coldest season freezes the water. The scene applies
+// change and land ice amount; the sea-ice plate noises with their relief
+// gradient, wherever the coldest season freezes the water; and the terrain
+// slope that lights the surface, less the elevation's. The scene applies
 // tide, sea-ice cover, slabs, and fractures, snow, seasons, water, and
 // lighting per pixel.
 //
@@ -247,11 +247,24 @@ fn scene_surface_at(
         let cover = 1.0 - open_water.value;
         if submerged && cover > 0.5 {
             water_ice_amount = cover;
-            elevation = TerrainNoiseSample(0.25 + 1.75 * cover, -1.75 * open_water.gradient);
+            elevation = TerrainNoiseSample(
+                0.25 + 1.75 * cover,
+                -1.75 * RELIEF_EXAGGERATION * open_water.gradient,
+            );
         }
     }
     let sea_ice = water_ice_amount > 0.0;
     let is_land = sea_ice || elevation.value >= water_height_m;
+    var lit_gradient = elevation.gradient;
+    if (is_land && !sea_ice) || EVALUATE_ALL_BRANCHES {
+        let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x + 5u;
+        let lighting = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
+        lit_gradient = select(
+            lit_gradient,
+            lit_gradient + decode_detail_gradient(lighting.xy, BAKED_LIGHTING_GRADIENT_RANGE),
+            is_land && !sea_ice,
+        );
+    }
     var surface: TerrainSurface;
     if sea_ice || EVALUATE_ALL_BRANCHES {
         surface = sea_ice_surface(
@@ -286,7 +299,7 @@ fn scene_surface_at(
             is_land && !sea_ice,
         );
     }
-    return SceneSurface(elevation.value, elevation.gradient, is_land, surface);
+    return SceneSurface(elevation.value, lit_gradient, is_land, surface);
 }
 
 // The baked land composition with the live tide, seasons, and snow.

@@ -1674,7 +1674,9 @@ fn coarse_pixels_take_the_mean_relief_light_of_the_land_they_cover() {
             / (coarse * coarse) as f32;
         // The bounds leave room for the footprint average's compromises: one
         // sample per pixel, normal sub-pixel slopes over bimodal ridged relief,
-        // and masks that vary within the pixel.
+        // and masks that vary within the pixel. Light is in units of level
+        // ground's under the same Sun, the scene's light scale, so the bounds
+        // do not change with how much the patch faces the Sun.
         assert!(
             variance(&coarse_light) <= 1.3 * variance(&block_means),
             "Sun {sun_degrees} degrees: coarse variance {} against the block means' {}",
@@ -1682,16 +1684,15 @@ fn coarse_pixels_take_the_mean_relief_light_of_the_land_they_cover() {
             variance(&block_means),
         );
         assert!(
-            (mean(&coarse_light) - mean(&block_means)).abs() <= 0.15 * mean(&block_means),
-            "Sun {sun_degrees} degrees: coarse mean {} against the blocks' {}",
+            (mean(&coarse_light) - mean(&block_means)).abs() <= 0.1,
+            "Sun {sun_degrees} degrees: coarse mean {} against the blocks' {} of level light",
             mean(&coarse_light),
             mean(&block_means),
         );
         assert!(
-            error <= 0.3 * mean(&block_means),
+            error <= 0.2,
             "Sun {sun_degrees} degrees: coarse pixels differ from their blocks' mean light by \
-             {error} on average, against a mean of {}",
-            mean(&block_means),
+             {error} of level light on average",
         );
     }
 }

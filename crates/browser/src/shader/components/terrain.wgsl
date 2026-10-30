@@ -61,9 +61,13 @@ fn terrain_cache_octaves(field: u32, spacing_m: f32) -> u32 {
 
 // Eight-bit colour layers per baked surface level. Keep synchronized with
 // `BAKED_SURFACE_COLOR_LAYERS` in baked_surface.rs.
-const BAKED_SURFACE_COLOR_LAYERS: u32 = 5u;
+const BAKED_SURFACE_COLOR_LAYERS: u32 = 6u;
 // The largest land and land-ice detail gradient the baked surface encodes.
 const BAKED_DETAIL_GRADIENT_RANGE: f32 = 4.0;
+// The largest difference between the terrain slope that lights the surface and
+// the elevation's that the baked surface encodes: twice landform slopes up to
+// 8, within about 3% near a slope of 1.
+const BAKED_LIGHTING_GRADIENT_RANGE: f32 = 16.0;
 // The largest sea-ice relief gradient the baked surface encodes. Ranges of
 // 0.25 and 1.0 render boat-zoom floes within two 8-bit levels of each other.
 const BAKED_SEA_ICE_GRADIENT_RANGE: f32 = 0.5;
@@ -142,6 +146,8 @@ fn solid_ice_sample(
         surface.gradient = -1.75 * open_water.gradient;
         surface.unresolved_gradient = vec2<f32>(0.0);
         surface.unresolved_slope_variance = 0.0;
+        surface.micro_relief_gradient = vec2<f32>(0.0);
+        surface.micro_relief_slope_variance = 0.0;
         surface.ice_amount = smoothstep(0.5, 0.65, cover);
         surface.water_ice_amount = cover;
         surface.bedrock_elevation_m = bedrock.value;
@@ -200,6 +206,9 @@ fn solid_ice_sample(
     surface.unresolved_gradient = bedrock_slope_share * terrain.unresolved_gradient;
     surface.unresolved_slope_variance = bedrock_slope_share * bedrock_slope_share
         * terrain.unresolved_slope_variance;
+    surface.micro_relief_gradient = bedrock_slope_share * terrain.micro_relief_gradient;
+    surface.micro_relief_slope_variance = bedrock_slope_share * bedrock_slope_share
+        * terrain.micro_relief_slope_variance;
     surface.ice_amount = smoothstep(0.1, 2.0, thickness);
     return surface;
 }
@@ -419,7 +428,7 @@ fn procedural_bedrock_sample_from_circle(
                 * land_detail_mask.value
                 * land_micro_relief_amount.value
                 * shaped_micro_relief.value;
-            terrain.gradient += 0.35 * landscape_visibility.x * (
+            let micro_relief_gradient = 0.35 * landscape_visibility.x * (
                 land_detail_mask.gradient
                     * land_micro_relief_amount.value * shaped_micro_relief.value
                     + land_micro_relief_amount.gradient
@@ -427,6 +436,7 @@ fn procedural_bedrock_sample_from_circle(
                     + shaped_micro_relief.gradient
                         * land_detail_mask.value * land_micro_relief_amount.value
             );
+            terrain.gradient += micro_relief_gradient;
             let micro_relief_split = ridged_footprint_split(
                 micro_relief_footprint,
                 ridge_blend.value,
@@ -435,6 +445,8 @@ fn procedural_bedrock_sample_from_circle(
             );
             terrain.unresolved_gradient += micro_relief_split.xy;
             terrain.unresolved_slope_variance += micro_relief_split.z;
+            terrain.micro_relief_gradient = micro_relief_gradient - micro_relief_split.xy;
+            terrain.micro_relief_slope_variance = micro_relief_split.z;
         }
     }
     var shaped_bed: TerrainNoiseSample;

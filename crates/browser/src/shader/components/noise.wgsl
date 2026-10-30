@@ -123,6 +123,10 @@ struct TerrainSample {
     // in place of it.
     unresolved_gradient: vec2<f32>,
     unresolved_slope_variance: f32,
+    // The metre-scale micro relief's resolved part of `gradient`, then its
+    // share of the unresolved mean squared slope.
+    micro_relief_gradient: vec2<f32>,
+    micro_relief_slope_variance: f32,
 };
 
 struct TerrainSurface {

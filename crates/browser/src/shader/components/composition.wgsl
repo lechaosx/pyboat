@@ -62,7 +62,7 @@ fn fragment_surface_light(
 }
 
 // The composed surface at a rendered position: its height, the relief
-// gradient the pixel resolves, which lights it, and whether it lies above the
+// gradient the pixel resolves, as it lights it, and whether it lies above the
 // water. Its surface's unresolved slope includes the terrain's, as lit.
 struct SceneSurface {
     elevation_m: f32,
@@ -142,27 +142,31 @@ fn composed_scene_surface(
             mix(surface.unresolved_slope, ice.unresolved_slope, terrain.ice_amount),
         ), partial_land_ice);
     }
-    surface.unresolved_slope = lit_unresolved_slope(
-        terrain.unresolved_slope_variance,
-        surface.unresolved_slope,
-    );
-    return SceneSurface(
-        terrain.elevation_m,
-        terrain.gradient - terrain.unresolved_gradient,
-        is_land,
-        surface,
-    );
+    surface.unresolved_slope = lit_unresolved_slope(terrain, surface.unresolved_slope);
+    return SceneSurface(terrain.elevation_m, lit_terrain_gradient(terrain), is_land, surface);
 }
 
-// Relief is exaggerated threefold so top-down light reads landforms, a
-// presentation compromise.
+// Landform relief is exaggerated threefold, a presentation compromise that
+// stands in for the depth cues a flat top-down view lacks at landform scale.
+// The metre-scale micro relief, already about one in slope at true scale,
+// stays true.
 const RELIEF_EXAGGERATION: f32 = 3.0;
 
-// Root-mean-square unresolved slope that lights a surface: the terrain's,
-// exaggerated as its relief is, and the surface detail's, independent of it.
-fn lit_unresolved_slope(terrain_variance: f32, surface_slope: f32) -> f32 {
+// The terrain slope a pixel resolves, as it lights the surface.
+fn lit_terrain_gradient(terrain: TerrainSample) -> vec2<f32> {
+    return RELIEF_EXAGGERATION
+        * (terrain.gradient - terrain.unresolved_gradient - terrain.micro_relief_gradient)
+        + terrain.micro_relief_gradient;
+}
+
+// Root-mean-square unresolved slope that lights a surface: the terrain's, its
+// landform relief exaggerated as `lit_terrain_gradient` takes it, and the
+// surface detail's, independent of it.
+fn lit_unresolved_slope(terrain: TerrainSample, surface_slope: f32) -> f32 {
     return sqrt(
-        RELIEF_EXAGGERATION * RELIEF_EXAGGERATION * terrain_variance
+        RELIEF_EXAGGERATION * RELIEF_EXAGGERATION
+            * (terrain.unresolved_slope_variance - terrain.micro_relief_slope_variance)
+            + terrain.micro_relief_slope_variance
             + surface_slope * surface_slope,
     );
 }
@@ -174,7 +178,7 @@ fn land_relief_light(
     normal_light: vec2<f32>,
 ) -> vec3<f32> {
     return landform_light_grade(
-        RELIEF_EXAGGERATION * scene_surface.gradient + scene_surface.surface.detail_gradient,
+        scene_surface.gradient + scene_surface.surface.detail_gradient,
         scene_surface.surface.unresolved_slope,
         receiver,
         normal_light,

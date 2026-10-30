@@ -287,8 +287,9 @@ and verification details.
   reddens continuously until its disc sets behind the horizon the receiver's
   height has on Earth, lighting only surfaces tilted toward it.
 - **[Implicit]** Land relief takes each beam by Lambert's law and the sky's
-  light by an isotropic sky's view factor, on relief exaggerated threefold;
-  water keeps its own relief grade and glint.
+  light by an isotropic sky's view factor. Landform-scale relief is
+  exaggerated threefold for the depth cues a top-down view lacks; metre-scale
+  micro relief stays at true scale. Water keeps its own relief grade and glint.
 - **[Implicit]** A pixel takes the mean relief light of the land it covers:
   the relief its footprint resolves sets the mean slope, and finer terrain and
   material relief spreads slopes around it. Authoritative elevation and its

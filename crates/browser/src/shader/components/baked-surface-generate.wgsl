@@ -59,6 +59,8 @@ struct BakedSurfaceValues {
     height: vec4<f32>,
     color: vec3<f32>,
     unresolved_slope: f32,
+    // The terrain slope that lights the surface, less the elevation's.
+    lighting_gradient: vec2<f32>,
     detail_gradient: vec2<f32>,
     wet_fraction: f32,
     surface_grade: f32,
@@ -100,7 +102,7 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
     var values: BakedSurfaceValues;
     values.height = vec4<f32>(
         terrain.elevation_m,
-        terrain.gradient - terrain.unresolved_gradient,
+        terrain.gradient,
         bottom_reflectance(
             terrain.coastal_rock_amount,
             terrain.coastal_outcrop_amount,
@@ -108,6 +110,7 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
         ),
     );
     values.unresolved_slope = 0.0;
+    values.lighting_gradient = lit_terrain_gradient(terrain) - terrain.gradient;
     // Sea ice follows the season per pixel and shows where water is below
     // -1 °C, so texels hold its detail where the coldest season brings water
     // below that anywhere within the bilinear stencil's reach. Coldest water,
@@ -180,10 +183,7 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
             / max(length(surface.detail_gradient), 1e-4);
     }
     values.color = surface.color;
-    values.unresolved_slope = lit_unresolved_slope(
-        terrain.unresolved_slope_variance,
-        surface.unresolved_slope,
-    );
+    values.unresolved_slope = lit_unresolved_slope(terrain, surface.unresolved_slope);
     values.detail_gradient = surface.detail_gradient;
     values.land_ice_amount = ice_amount;
     return values;
@@ -252,6 +252,16 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
         vec4<f32>(
             0.5 + 0.5 * vec2<f32>(values.sea_ice.broad, values.sea_ice.fine),
             encode_detail_gradient(values.sea_ice.gradient, BAKED_SEA_ICE_GRADIENT_RANGE),
+        ),
+    );
+    textureStore(
+        baked_color_output,
+        texel.slot,
+        layer + 5u,
+        vec4<f32>(
+            encode_detail_gradient(values.lighting_gradient, BAKED_LIGHTING_GRADIENT_RANGE),
+            0.5,
+            0.5,
         ),
     );
 }
