@@ -27,69 +27,70 @@ certificate and private key after the address:
 cargo run -p server -- 0.0.0.0:8765 cert.pem key.pem
 ```
 
+On Unix, SIGHUP reloads these files for new connections while preserving the
+current match and existing connections. Invalid replacements leave the loaded
+certificate in use and report an error on stderr. SIGTERM stops the match.
+
 ## Hosting
 
-The deployment workflow publishes the game to GitHub Pages and runs the backend
-in the existing ARM64 Docker Swarm. Configure the repository's Pages source as
-**GitHub Actions**.
+The frontend deploys to GitHub Pages on every push to `master`. Set the
+repository's Pages source to **GitHub Actions** and its Actions variable
+`WEBTRANSPORT_HOST` to the backend's public hostname or IPv4 address, for example
+`boats.dlabaja.eu`. That address needs a matching browser-trusted certificate.
+It is embedded during the frontend build; changing it requires redeployment.
 
-The backend address defaults to `DEPLOY_HOST`. To use a different DNS name or
-IPv4 address, set the repository Actions variable `WEBTRANSPORT_HOST`, for example
-`boats.dlabaja.eu`. The selected address must reach the server. The frontend
-embeds the address when building; changing it requires redeployment.
+The backend runs as a static ARM64 binary on NixOS under systemd. The **Deploy
+backend (discard current match)** workflow is manual: select a ref and check
+`discard_current_match` before running it. It tests and builds a static ARM64
+executable, uploads it, and restarts the service. **Deployment permanently
+loses the game in progress and disconnects all players.**
 
-Local builds without `WEBTRANSPORT_HOST` use the page's hostname and retain the
-`webtransportPort` and `webtransportCertificateHash` query parameters.
+Frontend releases proceed independently. A frontend protocol change can require
+a deliberate backend deployment before multiplayer works again.
 
 Create the `production` GitHub environment with these secrets:
 
 | Secret | Value |
 | --- | --- |
-| `DEPLOY_HOST` | Server's SSH hostname or IPv4 address |
-| `DEPLOY_USER` | SSH user permitted to manage its Docker Swarm |
-| `DEPLOY_PORT` | SSH port |
+| `DEPLOY_HOST` | Server's externally reachable SSH hostname or IPv4 address |
+| `DEPLOY_USER` | SSH user with passwordless sudo for installation and systemd |
+| `DEPLOY_PORT` | Externally reachable SSH port |
 | `DEPLOY_SSH_KEY` | Private deployment key authorized for that user |
 | `DEPLOY_KNOWN_HOSTS` | Verified OpenSSH known-hosts entry, including `[host]:port` for a non-default port |
 
-Allow inbound **TCP 80** for Let's Encrypt validation and **UDP 8765** for game
-transport in the provider and server firewalls. TCP 80 must be available for
-Certbot's temporary HTTP listener whenever issuance or renewal is needed. The
-deployment fails if another service owns that port. A DNS name must resolve to
-this server; an IPv4 address works directly without DNS.
+`DEPLOY_HOST` serves SSH access; `WEBTRANSPORT_HOST` serves browser traffic.
+Local builds without `WEBTRANSPORT_HOST` use the page's hostname and retain the
+`webtransportPort` and `webtransportCertificateHash` query parameters.
 
-The SSH user needs Docker access, `flock`, and permission to use `crontab`, with
-the host's cron daemon running. The workflow obtains the initial certificate
-before starting the backend and installs an hourly renewal job in that user's
-crontab. Certificate state and private keys stay on the server under
-`~/.local/share/pyboat`, restricted to the SSH user and Docker.
+### Host and router setup
 
-The workflow uses the `pyboat` stack and GHCR image tagged with the commit SHA.
-It waits for the
-backend rollout before publishing Pages; a rollout restarts the match and
-disconnects players. On first deployment, confirm the SSH user can reach an active
-Swarm manager and that its ARM64 node can pull GHCR images. Workflow credentials
-authorize the image pull even when the package is private.
+The Pi's NixOS configuration lives in
+[nixos-config](https://github.com/lechaosx/nixos-config/tree/main/hosts/raspberrypi).
+That configuration owns the service, certificate issuance and renewal, and host
+firewall. The game binary is deployed separately by this repository's backend
+workflow.
 
-Push to `master` or run the **Deploy** workflow manually. Check the Actions result,
-then open the Pages URL in a browser supporting WebGPU and WebTransport and verify
-that multiplayer connects. Running-container convergence does not prove that the
-public UDP path or browser certificate validation succeeds.
+Forward these router ports to the Pi's reserved LAN address:
 
-### Certificate renewal
+| Traffic | Public port | Pi port |
+| --- | --- | --- |
+| Let's Encrypt HTTP validation | TCP 80 | TCP 80 |
+| WebTransport game | UDP 8765 | UDP 8765 |
+| GitHub Actions deployment | TCP `DEPLOY_PORT` | TCP 22 |
 
-The renewal job asks Certbot whether the certificate is due, installs a renewed
-PEM pair together, and restarts `pyboat_server` to load it. Restarting ends the
-current match. A failed restart is retried on the next hourly run. IPv4
-certificates use Let's Encrypt's six-day profile, so keep TCP 80 reachable
-throughout operation.
+The public backend address must lead to the Pi. Keep TCP 80 forwarded for
+certificate renewal. GitHub Pages serves the frontend; the Pi's game transport
+does not need TCP 443.
 
-Run a renewal check manually on the server with:
+After installing NixOS, verify the Pi's new SSH host key locally and update
+`DEPLOY_KNOWN_HOSTS` before deploying. The configured deployment user's public
+key must match `DEPLOY_SSH_KEY`. Certificate issuance must succeed before the
+first backend deployment.
 
-```sh
-~/.local/share/pyboat/certificates.sh renew
-```
+Renewal reloads the running server's TLS certificate without discarding the
+match. Inspect `journalctl -u acme-order-renew-pyboat.service` for issuance or renewal errors
+and `journalctl -u pyboat.service` for game startup or reload errors.
 
-Monitor `~/.local/share/pyboat/certificates.log` for renewal failures; the ACME
-account is registered without an email address. Keep the persistent
-`~/.local/share/pyboat/letsencrypt` directory when redeploying so Certbot can reuse
-its account and certificates.
+After deployment, open Pages in a browser supporting WebGPU and WebTransport
+and verify multiplayer connects. An active service does not prove that router
+forwarding or browser certificate validation works.

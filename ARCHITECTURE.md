@@ -32,14 +32,22 @@ and verification details.
 - **[Explicit]** GitHub Pages hosts the game frontend.
 - **[Explicit]** The backend address is a configurable hostname or IPv4 address
   covered by a matching browser-trusted certificate.
-- **[Implicit]** The backend runs as an isolated ARM64 Docker Swarm service with
-  direct UDP ingress. WebTransport terminates TLS in the game server, so its
-  trusted certificate and reachable transport port belong to that service.
+- **[Explicit]** A minimal NixOS host runs the backend as an ordinary binary
+  deployed independently of the host configuration.
+- **[Implicit]** The backend runs as a dedicated systemd user on the ARM64 host
+  with direct UDP ingress. WebTransport terminates TLS in the game server.
 - **[Implicit]** The frontend selects its backend address at build time so
   static hosting and game transport can use independent origins.
 - **[Explicit]** Trusted certificate issuance and renewal are automatic.
 - **[Implicit]** Let's Encrypt runs on the backend host so private keys remain
   there throughout issuance and renewal.
+- **[Explicit]** Frontend pushes to `master` deploy automatically and independently
+  of backend releases.
+- **[Explicit]** Backend deployment requires a manual pipeline action that
+  acknowledges discarding the game in progress.
+- **[Explicit]** Certificate renewal preserves the running match and connections.
+- **[Explicit]** Application updates, host configuration updates, service
+  restarts, and reboots remain deliberate.
 
 ## Authority and coordinates
 

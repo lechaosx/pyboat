@@ -1,0 +1,103 @@
+name: Deploy backend (discard current match)
+
+on:
+  workflow_dispatch:
+    inputs:
+      discard_current_match:
+        description: Restart the backend and permanently discard the game in progress
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-backend
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ inputs.discard_current_match }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust and static build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          rustup toolchain install 1.98.1 --profile minimal --target aarch64-unknown-linux-musl
+          rustup default 1.98.1
+      - run: cargo test --locked -p server
+      - name: Build static ARM64 executable
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p server --target aarch64-unknown-linux-musl
+      - uses: actions/upload-artifact@v6
+        with:
+          name: backend
+          path: target/aarch64-unknown-linux-musl/release/server
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: backend
+      - name: Configure verified SSH connection
+        shell: bash
+        run: |
+          for setting in DEPLOY_HOST DEPLOY_USER DEPLOY_PORT DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!setting}" ]]; then
+              echo "Missing production setting: $setting" >&2
+              exit 1
+            fi
+          done
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$DEPLOY_PORT > 0 && 10#$DEPLOY_PORT <= 65535))
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/pyboat
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF_SSH
+          Host pyboat-deploy
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $DEPLOY_PORT
+            IdentityFile ~/.ssh/pyboat
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 15
+          EOF_SSH
+      - name: Deploy and discard current match
+        shell: bash
+        run: |
+          ssh pyboat-deploy 'sh -se' <<'EOF_PREFLIGHT'
+          test "$(uname -m)" = aarch64
+          sudo -n test -f /var/lib/acme/pyboat/acme-success
+          sudo -n -u pyboat test -r /var/lib/acme/pyboat/fullchain.pem
+          sudo -n -u pyboat test -r /var/lib/acme/pyboat/key.pem
+          systemctl cat pyboat.service >/dev/null
+          EOF_PREFLIGHT
+          scp server pyboat-deploy:pyboat-server.next
+          ssh pyboat-deploy 'sh -se' <<'EOF_DEPLOY'
+          sudo -n install -o root -g root -m 755 pyboat-server.next /var/lib/pyboat/server.next
+          rm pyboat-server.next
+          sudo -n mv /var/lib/pyboat/server.next /var/lib/pyboat/server
+          sudo -n systemctl restart pyboat.service
+          sleep 3
+          systemctl is-active --quiet pyboat.service
+          EOF_DEPLOY

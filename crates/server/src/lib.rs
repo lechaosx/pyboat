@@ -435,12 +435,31 @@ impl GameMatch {
 }
 
 pub fn endpoint(address: SocketAddr, identity: Identity) -> ServerResult<Endpoint<Server>> {
-    let config = ServerConfig::builder()
+    Ok(Endpoint::server(tls_config(address, identity)?)?)
+}
+
+pub fn tls_config(address: SocketAddr, identity: Identity) -> ServerResult<ServerConfig> {
+    use wtransport::tls::rustls::{ServerConfig as TlsConfig, crypto::ring, pki_types};
+
+    // wtransport's identity builder panics on mismatched keys. Renewal must
+    // retain the working certificate when replacement files are invalid.
+    let certificates = identity
+        .certificate_chain()
+        .as_slice()
+        .iter()
+        .map(|certificate| pki_types::CertificateDer::from(certificate.der().to_vec()))
+        .collect();
+    let key = pki_types::PrivateKeyDer::try_from(identity.private_key().secret_der().to_vec())?;
+    let mut tls = TlsConfig::builder_with_provider(std::sync::Arc::new(ring::default_provider()))
+        .with_protocol_versions(&[&wtransport::tls::rustls::version::TLS13])?
+        .with_no_client_auth()
+        .with_single_cert(certificates, key)?;
+    tls.alpn_protocols = vec![wtransport::tls::WEBTRANSPORT_ALPN.to_vec()];
+    Ok(ServerConfig::builder()
         .with_bind_address(address)
-        .with_identity(identity)
+        .with_custom_tls(tls)
         .keep_alive_interval(Some(Duration::from_secs(3)))
-        .build();
-    Ok(Endpoint::server(config)?)
+        .build())
 }
 
 pub async fn serve(endpoint: Endpoint<Server>) -> ServerResult<()> {
@@ -451,11 +470,15 @@ pub async fn serve_with_world_geometry(
     endpoint: Endpoint<Server>,
     world_geometry: WorldGeometry,
 ) -> ServerResult<()> {
-    serve_with_world_geometry_until(endpoint, world_geometry, pending::<Result<(), io::Error>>())
-        .await
+    serve_with_world_geometry_until(
+        &endpoint,
+        world_geometry,
+        pending::<Result<(), io::Error>>(),
+    )
+    .await
 }
 
-pub async fn serve_until<F, E>(endpoint: Endpoint<Server>, shutdown: F) -> ServerResult<()>
+pub async fn serve_until<F, E>(endpoint: &Endpoint<Server>, shutdown: F) -> ServerResult<()>
 where
     F: Future<Output = Result<(), E>>,
     E: Error + Send + Sync + 'static,
@@ -464,7 +487,7 @@ where
 }
 
 pub async fn serve_with_world_geometry_until<F, E>(
-    endpoint: Endpoint<Server>,
+    endpoint: &Endpoint<Server>,
     world_geometry: WorldGeometry,
     shutdown: F,
 ) -> ServerResult<()>

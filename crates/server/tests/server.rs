@@ -617,7 +617,7 @@ async fn shutdown_signal_stops_server_and_closes_connections() {
     let (endpoint, certificate_hash) = server_endpoint();
     let address = endpoint.local_addr().unwrap();
     let (shutdown, shutdown_signal) = oneshot::channel();
-    let task = tokio::spawn(server::serve_until(endpoint, shutdown_signal));
+    let task = tokio::spawn(async move { server::serve_until(&endpoint, shutdown_signal).await });
     let server = TestServer {
         address,
         certificate_hash,
@@ -655,7 +655,7 @@ async fn shutdown_flushes_close_before_server_runtime_stops() {
                 address_sender
                     .send((endpoint.local_addr().unwrap(), certificate_hash))
                     .unwrap();
-                server::serve_until(endpoint, shutdown_signal).await
+                server::serve_until(&endpoint, shutdown_signal).await
             })
     });
     let (address, certificate_hash) = address_receiver.recv().unwrap();
@@ -677,4 +677,165 @@ async fn shutdown_flushes_close_before_server_runtime_stops() {
     };
     assert_eq!(close.code(), 1_u32.into());
     assert_eq!(close.reason(), b"Server shutting down");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn certificate_reload_preserves_match_and_rejects_invalid_replacements() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command;
+
+    let directory = std::env::temp_dir().join(format!(
+        "pyboat-reload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    tokio::fs::create_dir(&directory).await.unwrap();
+    let certificate = directory.join("cert.pem");
+    let key = directory.join("key.pem");
+    let identity = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
+    identity
+        .certificate_chain()
+        .store_pemfile(&certificate)
+        .await
+        .unwrap();
+    identity
+        .private_key()
+        .store_secret_pemfile(&key)
+        .await
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_server"))
+        .arg("127.0.0.1:0")
+        .arg(&certificate)
+        .arg(&key)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+    let ready = timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let url = ready.strip_prefix("Server listening on ").unwrap();
+    let first_endpoint = client_endpoint(identity.certificate_chain().as_slice()[0].hash());
+    let connection = first_endpoint.connect(url).await.unwrap();
+    let first_welcome = decode_server_message(&receive_reliable(&connection).await).unwrap();
+    let ServerMessage::Welcome {
+        player_id,
+        match_seed,
+        ..
+    } = first_welcome
+    else {
+        panic!("expected welcome");
+    };
+    let client = TestClient {
+        _endpoint: first_endpoint,
+        connection,
+    };
+    let (before_tick, _, _) = next_snapshot(&client).await;
+    let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+
+    let renewed = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
+    renewed
+        .certificate_chain()
+        .store_pemfile(&certificate)
+        .await
+        .unwrap();
+    renewed
+        .private_key()
+        .store_secret_pemfile(&key)
+        .await
+        .unwrap();
+    assert!(
+        Command::new("kill")
+            .arg("-HUP")
+            .arg(child.id().unwrap().to_string())
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let result = timeout(Duration::from_secs(2), stderr.next_line())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.as_deref(), Some("TLS certificate reloaded"));
+    let renewed_endpoint = client_endpoint(renewed.certificate_chain().as_slice()[0].hash());
+    let renewed_connection = renewed_endpoint.connect(url).await.unwrap();
+    let welcome = decode_server_message(&receive_reliable(&renewed_connection).await).unwrap();
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { player_id, match_seed: seed, .. } if player_id == "player-2" && seed == match_seed)
+    );
+
+    for invalid_key in [
+        "not a PEM key".to_owned(),
+        identity.private_key().to_secret_pem(),
+    ] {
+        tokio::fs::write(&key, invalid_key).await.unwrap();
+        assert!(
+            Command::new("kill")
+                .arg("-HUP")
+                .arg(child.id().unwrap().to_string())
+                .status()
+                .await
+                .unwrap()
+                .success()
+        );
+        let result = timeout(Duration::from_secs(2), async {
+            loop {
+                let line = stderr.next_line().await.unwrap().unwrap();
+                if line.starts_with("TLS certificate") {
+                    break line;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            result.starts_with("TLS certificate reload failed:"),
+            "{result}"
+        );
+        let endpoint = client_endpoint(renewed.certificate_chain().as_slice()[0].hash());
+        let connection = endpoint.connect(url).await.unwrap();
+        let welcome = decode_server_message(&receive_reliable(&connection).await).unwrap();
+        assert!(
+            matches!(welcome, ServerMessage::Welcome { match_seed: seed, .. } if seed == match_seed)
+        );
+        connection.close(0_u32.into(), b"test complete");
+    }
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let (tick, boats, _) = next_snapshot(&client).await;
+            if tick > before_tick && boats.iter().any(|boat| boat.id == player_id) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(
+        Command::new("kill")
+            .arg("-TERM")
+            .arg(child.id().unwrap().to_string())
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    assert!(
+        timeout(Duration::from_secs(3), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    tokio::fs::remove_dir_all(directory).await.unwrap();
 }
