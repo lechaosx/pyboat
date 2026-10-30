@@ -498,12 +498,13 @@ pub fn celestial_orbit(conditions: CelestialConditions) -> CelestialOrbit {
 /// transmittance of 0.796 and ESRA's diffuse light of 0.084 under the
 /// reference turbidity. ESRA's diffuse light is a share of broadband power,
 /// taken as the same share of luminous power: a compromise that leaves out the
-/// blue sky's higher luminous efficacy. Clear-sky light at sunset, all
-/// diffuse, comes to about 1,030 lux, twice the 410-585 lux measured (AMS
-/// Glossary of Meteorology, "civil twilight"), because ESRA's diffuse light
-/// with the Sun at the horizon is about twice too bright; twilight, fitted as
-/// a ratio to sunset, keeps that excess. lighting.wgsl and display.wgsl mirror
-/// it.
+/// blue sky's higher luminous efficacy. Clear-sky light, all diffuse once the
+/// Sun's centre reaches the horizon, comes to about 1,140 lux there and 980
+/// lux a degree lower. Medians measured there are 1,290 and 877 lux at a rural
+/// site and 520 and 297 lux in a city (Spitschan et al. 2016, Sci. Rep. 6),
+/// and 410-585 lux is given at sunset, the Sun's centre 0.833 degrees down
+/// (AMS Glossary of Meteorology, "civil twilight"). lighting.wgsl and
+/// display.wgsl mirror it.
 pub const ZENITH_DAYLIGHT_LUX: f32 = 1.173e5;
 
 /// Light of a clear moonless sky, in scene light: starlight, zodiacal light,
