@@ -1610,6 +1610,92 @@ fn relief_takes_beams_by_lambert_and_the_sky_by_its_view_factor() {
     }
 }
 
+/// A pixel shows the mean light over the land it covers. Under a low Sun, the
+/// coarse pixels of a 16 m patch keep the mean relief light of their blocks of
+/// fine pixels without aliasing speckle: they vary about as much as those
+/// block means do, with no gross bias.
+#[test]
+fn coarse_pixels_take_the_mean_relief_light_of_the_land_they_cover() {
+    let world = WorldGeometry::default();
+    let position_m = Vector::new(-8_950.0, 800.0);
+    let view_height_m = 16.0;
+    let (fine, coarse) = (256_usize, 8_usize);
+    let block = fine / coarse;
+    for sun_degrees in [10.0_f32, 5.0] {
+        let render = |size: usize| {
+            let image = render_diagnostic_image_with_view_at(
+                world,
+                position_m,
+                0.0,
+                view_height_m,
+                &format!("lighting_land_relief_{sun_degrees}"),
+                size as u32,
+                size as u32,
+            );
+            let pixels = image.as_chunks::<4>().0;
+            assert!(
+                pixels.iter().all(|pixel| pixel[1] == 255),
+                "the patch leaves land"
+            );
+            pixels
+                .iter()
+                .map(|pixel| 8.0 * srgb_channel_to_linear(pixel[0]))
+                .collect::<Vec<f32>>()
+        };
+        let fine_light = render(fine);
+        let coarse_light = render(coarse);
+        let block_means: Vec<f32> = (0..coarse * coarse)
+            .map(|index| {
+                let (row, column) = (index / coarse, index % coarse);
+                (0..block * block)
+                    .map(|offset| {
+                        fine_light[(row * block + offset / block) * fine
+                            + column * block
+                            + offset % block]
+                    })
+                    .sum::<f32>()
+                    / (block * block) as f32
+            })
+            .collect();
+        let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+        let variance = |values: &[f32]| {
+            let centre = mean(values);
+            values
+                .iter()
+                .map(|value| (value - centre).powi(2))
+                .sum::<f32>()
+                / values.len() as f32
+        };
+        let error = coarse_light
+            .iter()
+            .zip(&block_means)
+            .map(|(coarse, fine)| (coarse - fine).abs())
+            .sum::<f32>()
+            / (coarse * coarse) as f32;
+        // The bounds leave room for the footprint average's compromises: one
+        // sample per pixel, normal sub-pixel slopes over bimodal ridged relief,
+        // and masks that vary within the pixel.
+        assert!(
+            variance(&coarse_light) <= 1.3 * variance(&block_means),
+            "Sun {sun_degrees} degrees: coarse variance {} against the block means' {}",
+            variance(&coarse_light),
+            variance(&block_means),
+        );
+        assert!(
+            (mean(&coarse_light) - mean(&block_means)).abs() <= 0.15 * mean(&block_means),
+            "Sun {sun_degrees} degrees: coarse mean {} against the blocks' {}",
+            mean(&coarse_light),
+            mean(&block_means),
+        );
+        assert!(
+            error <= 0.3 * mean(&block_means),
+            "Sun {sun_degrees} degrees: coarse pixels differ from their blocks' mean light by \
+             {error} on average, against a mean of {}",
+            mean(&block_means),
+        );
+    }
+}
+
 #[test]
 fn landform_sun_grade_is_independent_of_moon_visibility() {
     let world = WorldGeometry::default();

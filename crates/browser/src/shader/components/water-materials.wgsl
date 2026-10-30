@@ -464,6 +464,7 @@ fn visual_water_surface(
             0.26,
             surface_cloud_weather.rain,
         ),
+        0.0,
     );
 }
 
@@ -549,6 +550,8 @@ const INTERTIDAL_WET_SHADE: f32 = 0.70;
 const BEACH_WET_SHADE: f32 = 0.72;
 
 const SNOW_ROUGHNESS: f32 = 0.70;
+// Snow's relief per unit of the micro-relief field's.
+const SNOW_MICRO_RELIEF: f32 = 0.22;
 
 fn snow_color(surface_grade: f32) -> vec3<f32> {
     return mix(
@@ -597,6 +600,7 @@ fn terrain_surface(
             select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
             vec2<f32>(0.0),
             1.0,
+            0.0,
         );
     }
     let slope = length(material_gradient);
@@ -620,8 +624,10 @@ fn terrain_surface(
     }
 
     var micro_height = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var micro_unresolved = 0.0;
     if landscape_visibility.z > 0.0 {
         micro_height = material_micro_relief_sample(position_m, 2.5);
+        micro_unresolved = material_micro_relief_unresolved_slope(2.5);
     }
     let surface_grade = clamp(
         0.5 + landscape_visibility.z
@@ -642,8 +648,9 @@ fn terrain_surface(
     }
     let snow_surface = TerrainSurface(
         solid_color_gate.y * snow_color(surface_grade),
-        0.22 * micro_height.gradient,
+        SNOW_MICRO_RELIEF * micro_height.gradient,
         SNOW_ROUGHNESS,
+        SNOW_MICRO_RELIEF * micro_unresolved,
     );
     if snow_amount >= 1.0 && !EVALUATE_ALL_BRANCHES {
         return snow_surface;
@@ -746,11 +753,13 @@ fn terrain_surface(
         ),
         mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
         mix(0.96, 0.88, exposed_dryness),
+        mix(0.12, 0.28, coastal_rock_amount) * micro_unresolved,
     );
     let beach_surface = TerrainSurface(
         land_color_gate.w * mix(BEACH_WET_SHADE * beach_color, beach_color, exposed_dryness),
         beach_micro_height_m * micro_height.gradient,
         mix(0.90, 0.82, exposed_dryness),
+        beach_micro_height_m * micro_unresolved,
     );
 
     // A treeline compressed to the islands' low relief.
@@ -759,6 +768,7 @@ fn terrain_surface(
         * tree_line
         * (1.0 - smoothstep(0.04, 0.08, slope));
     var canopy_detail = TerrainNoiseSample(0.0, vec2<f32>(0.0));
+    var canopy_unresolved = 0.0;
     var canopy_cluster = 0.0;
     let canopy_visible = forest_amount > 0.0 && landscape_visibility.y > 0.0;
     if canopy_visible || EVALUATE_ALL_BRANCHES {
@@ -768,6 +778,11 @@ fn terrain_surface(
             56.0,
             3u,
         ), canopy_visible);
+        canopy_unresolved = select(
+            0.0,
+            sqrt(material_fractal_unresolved_slope_variance(56.0, 3u, 3u)),
+            canopy_visible,
+        );
         canopy_cluster = select(0.0, smoothstep(
             -0.22,
             0.38,
@@ -821,6 +836,11 @@ fn terrain_surface(
             forest_visibility,
         ),
         mix(0.88, 0.96, forest_visibility),
+        mix(
+            0.45 * micro_unresolved,
+            length(vec2<f32>(3.5 * canopy_unresolved, 0.24 * micro_unresolved)),
+            forest_visibility,
+        ),
     );
     let non_rock_cover = 1.0 - rock_cover;
     let sediment_cover = non_rock_cover * sediment_capacity;
@@ -849,6 +869,10 @@ fn terrain_surface(
             + intertidal_cover * intertidal_surface.roughness
             + sediment_cover * beach_surface.roughness
             + rock_cover * rock_surface.roughness,
+        vegetation_cover * vegetation_surface.unresolved_slope
+            + intertidal_cover * intertidal_surface.unresolved_slope
+            + sediment_cover * beach_surface.unresolved_slope
+            + rock_cover * rock_surface.unresolved_slope,
     );
     if surface_baking {
         // Linear in each amount, so their cross term is dropped.

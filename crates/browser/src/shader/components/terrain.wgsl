@@ -140,6 +140,8 @@ fn solid_ice_sample(
         // A gameplay solid-surface height standing in for sea-ice freeboard.
         surface.elevation_m = 0.25 + 1.75 * cover;
         surface.gradient = -1.75 * open_water.gradient;
+        surface.unresolved_gradient = vec2<f32>(0.0);
+        surface.unresolved_slope_variance = 0.0;
         surface.ice_amount = smoothstep(0.5, 0.65, cover);
         surface.water_ice_amount = cover;
         surface.bedrock_elevation_m = bedrock.value;
@@ -189,6 +191,15 @@ fn solid_ice_sample(
         candidate_gradient,
         candidate_elevation > bedrock.value,
     );
+    // The share of the bedrock's slope that the ice surface keeps.
+    let bedrock_slope_share = select(
+        1.0,
+        mix(1.0, select(1.0, 0.25, broad_surface >= local_surface), amount),
+        candidate_elevation > bedrock.value,
+    );
+    surface.unresolved_gradient = bedrock_slope_share * terrain.unresolved_gradient;
+    surface.unresolved_slope_variance = bedrock_slope_share * bedrock_slope_share
+        * terrain.unresolved_slope_variance;
     surface.ice_amount = smoothstep(0.1, 2.0, thickness);
     return surface;
 }
@@ -324,7 +335,7 @@ fn procedural_bedrock_sample_from_circle(
             0.25,
             land_ruggedness_noise,
         );
-        let land_detail = terrain_simplex_fractal_sample_from_circle(
+        let land_detail_footprint = terrain_simplex_fractal_footprint_sample_from_circle(
             TERRAIN_LAND_RELIEF_NOISE_FIELD,
             terrain_position_m,
             terrain_circle_position,
@@ -333,6 +344,7 @@ fn procedural_bedrock_sample_from_circle(
             0.65,
             FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
+        let land_detail = land_detail_footprint.sample;
         var ridged_detail: TerrainNoiseSample;
         ridged_detail.value = 1.0 - 2.0 * abs(land_detail.value);
         ridged_detail.gradient = -2.0
@@ -360,6 +372,13 @@ fn procedural_bedrock_sample_from_circle(
                 + shaped_land_detail.gradient
                     * land_detail_mask.value * land_detail_amount
         );
+        let land_detail_split = ridged_footprint_split(
+            land_detail_footprint,
+            ridge_blend.value,
+            5.0 * landscape_visibility.x * land_detail_mask.value * land_detail_amount,
+        );
+        terrain.unresolved_gradient += land_detail_split.xy;
+        terrain.unresolved_slope_variance += land_detail_split.z;
         // Cover needs hill-scale variation without metre-scale aliased speckle.
         terrain.material_elevation_m = terrain.elevation_m;
         terrain.material_gradient = terrain.gradient;
@@ -369,7 +388,7 @@ fn procedural_bedrock_sample_from_circle(
             land_ruggedness,
         );
         if land_micro_relief_amount.value > 0.0 || EVALUATE_ALL_BRANCHES {
-            let land_micro_relief = terrain_simplex_fractal_sample_from_circle(
+            let micro_relief_footprint = terrain_simplex_fractal_footprint_sample_from_circle(
                 TERRAIN_LAND_MICRO_RELIEF_NOISE_FIELD,
                 terrain_position_m,
                 terrain_circle_position,
@@ -378,6 +397,7 @@ fn procedural_bedrock_sample_from_circle(
                 0.6,
                 FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
             );
+            let land_micro_relief = micro_relief_footprint.sample;
             var ridged_micro_relief: TerrainNoiseSample;
             ridged_micro_relief.value = 1.0 - 2.0 * abs(land_micro_relief.value);
             ridged_micro_relief.gradient = -2.0
@@ -407,6 +427,14 @@ fn procedural_bedrock_sample_from_circle(
                     + shaped_micro_relief.gradient
                         * land_detail_mask.value * land_micro_relief_amount.value
             );
+            let micro_relief_split = ridged_footprint_split(
+                micro_relief_footprint,
+                ridge_blend.value,
+                0.35 * landscape_visibility.x
+                    * land_detail_mask.value * land_micro_relief_amount.value,
+            );
+            terrain.unresolved_gradient += micro_relief_split.xy;
+            terrain.unresolved_slope_variance += micro_relief_split.z;
         }
     }
     var shaped_bed: TerrainNoiseSample;
@@ -466,12 +494,13 @@ fn procedural_bedrock_sample_from_circle(
     var reef: TerrainNoiseSample;
     reef.value = 0.0;
     reef.gradient = vec2<f32>(0.0);
+    var reef_footprint: FootprintNoiseSample;
     if (landscape_visibility.x > 0.0
         && coastal_detail_mask_value > 0.0
         && coastal_rock_relief.value > 0.0)
         || EVALUATE_ALL_BRANCHES
     {
-        reef = terrain_simplex_fractal_sample_from_circle(
+        reef_footprint = terrain_simplex_fractal_footprint_sample_from_circle(
             TERRAIN_REEF_NOISE_FIELD,
             terrain_position_m,
             terrain_circle_position,
@@ -480,6 +509,7 @@ fn procedural_bedrock_sample_from_circle(
             0.55,
             FINE_TERRAIN_CIRCLE_OCTAVE_COUNT,
         );
+        reef = reef_footprint.sample;
     }
     let reef_peak = terrain_smoothstep_sample(0.72, 0.90, reef);
     var outer_reef: TerrainNoiseSample;
@@ -559,6 +589,16 @@ fn procedural_bedrock_sample_from_circle(
             + shaped_outer_reef.gradient
                 * outer_reef_mask_value * outer_reef_detail_amount
     );
+    // The reef's slopes reach the gradient through its own relief and its peaks.
+    let reef_peak_amount = clamp((reef.value - 0.72) / (0.90 - 0.72), 0.0, 1.0);
+    let reef_scale = landscape_visibility.x * (
+        1.6 * coastal_detail_mask_value * reef_detail_amount
+            + 2.0 * rock_mask_value * coastal_rock_relief.value
+                * 6.0 * reef_peak_amount * (1.0 - reef_peak_amount) / (0.90 - 0.72)
+    );
+    terrain.unresolved_gradient += reef_scale * reef_footprint.unresolved_gradient;
+    terrain.unresolved_slope_variance += reef_scale * reef_scale
+        * reef_footprint.unresolved_variance;
     var visible_coastal_mask_value = coastal_detail_mask_value;
     if outer_reef_mask_value > visible_coastal_mask_value {
         visible_coastal_mask_value = outer_reef_mask_value;
@@ -580,6 +620,32 @@ fn procedural_bedrock_sample_from_circle(
 }
 
 const OCEAN_FLOOR_DEPTH_M: f32 = 3000.0;
+
+// The unresolved part of the slope `scale` times a fractal blended by `blend`
+// toward its ridged fold 1 - 2|n| adds, then the mean square of the slopes
+// the pixel does not resolve. Across the footprint the fold's sign keeps its
+// box mean m, from n changing at its gradient across the footprint's width,
+// and spreads the resolved slope by 1 - m² of its square.
+fn ridged_footprint_split(fractal: FootprintNoiseSample, blend: f32, scale: f32) -> vec3<f32> {
+    let value = fractal.sample.value;
+    let gradient = fractal.sample.gradient;
+    let resolved = gradient - fractal.unresolved_gradient;
+    let mean_sign = clamp(
+        2.0 * value / max(length(gradient) * visual_pixel_footprint_m, 1e-12),
+        -1.0,
+        1.0,
+    );
+    let fold = mix(1.0, -2.0 * select(-1.0, 1.0, value >= 0.0), blend);
+    let mean_fold = mix(1.0, -2.0 * mean_sign, blend);
+    let fold_spread_squared = 4.0 * blend * blend * (1.0 - mean_sign * mean_sign);
+    return vec3<f32>(
+        scale * (fold * gradient - mean_fold * resolved),
+        scale * scale * (
+            (mean_fold * mean_fold + fold_spread_squared) * fractal.unresolved_variance
+                + fold_spread_squared * dot(resolved, resolved)
+        ),
+    );
+}
 
 // Bed depth below sea level from the broad depth, deepening offshore.
 fn shaped_bed_depth_m(broad_depth_m: f32) -> f32 {
@@ -638,13 +704,19 @@ fn broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
 }
 
 // Land relief's share of the sky's light, then each beam's light on the
-// surface for beams of `normal_light` on a surface facing them: an isotropic
-// sky's view factor (1 + n_z) / 2, and Lambert's max(n.l, 0). Both are
-// physical; light that surrounding ground reflects onto a slope is left out,
-// a compromise that darkens slopes facing away from the sky by at most the
-// ground's albedo of the sky light they miss.
+// surface for beams of `normal_light` on a surface facing them, averaged over
+// the slopes a pixel covers: those of `surface_gradient`, the pixel's mean,
+// and unresolved slopes of root-mean-square `unresolved_slope` around it.
+// Each slope takes an isotropic sky's view factor (1 + n_z) / 2 and Lambert's
+// max(n.l, 0), so the pixel takes their means: n_z of the mean squared slope,
+// and the clamped cosine's expectation over the unresolved slopes taken as
+// normal. These are physical; compromises leave out light that surrounding
+// ground reflects onto a slope, which darkens slopes facing away from the sky
+// by at most the ground's albedo of the sky light they miss, and the
+// unresolved slopes' shadowing and masking of each other.
 fn landform_light_grade(
     surface_gradient: vec2<f32>,
+    unresolved_slope: f32,
     direct_light: CelestialReceiverLight,
     normal_light: vec2<f32>,
 ) -> vec3<f32> {
@@ -654,17 +726,41 @@ fn landform_light_grade(
         0.0,
         1.0,
     );
-    let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    var light = vec3<f32>(mix(1.0, 0.5 + 0.5 * normal.z, strength), 0.0, 0.0);
+    let normal_z = inverseSqrt(
+        1.0 + dot(surface_gradient, surface_gradient) + unresolved_slope * unresolved_slope,
+    );
+    var light = vec3<f32>(mix(1.0, 0.5 + 0.5 * normal_z, strength), 0.0, 0.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let direction = celestial_source_light(direct_light, source_index).direction;
-        light[source_index + 1u] = normal_light[source_index] * mix(
-            max(direction.z, 0.0),
-            max(dot(normal, direction), 0.0),
-            strength,
+        // The unresolved slopes spread n.l along the light's horizontal
+        // direction, by half their mean square on each axis.
+        let facing = expected_clamped_normal(
+            (direction.z - dot(surface_gradient, direction.xy)) * normal_z,
+            unresolved_slope * length(direction.xy) * normal_z * inverseSqrt(2.0),
         );
+        light[source_index + 1u] = normal_light[source_index]
+            * mix(max(direction.z, 0.0), facing, strength);
     }
     return light;
+}
+
+// E[max(x, 0)] for x normal of this mean and deviation: m Φ(m/s) + s φ(m/s).
+fn expected_clamped_normal(mean: f32, deviation: f32) -> f32 {
+    if deviation <= 1e-6 {
+        return max(mean, 0.0);
+    }
+    let t = mean / deviation;
+    let density = 0.39894228 * exp(-0.5 * t * t);
+    return mean * standard_normal_cdf(t) + deviation * density;
+}
+
+// Φ(t) through erf by Abramowitz and Stegun's 7.1.26, within 1.5e-7.
+fn standard_normal_cdf(t: f32) -> f32 {
+    let x = abs(t) * 0.70710678;
+    let k = 1.0 / (1.0 + 0.3275911 * x);
+    let erf = 1.0 - k * (0.254829592 + k * (-0.284496736 + k * (1.421413741
+        + k * (-1.453152027 + k * 1.061405429)))) * exp(-x * x);
+    return 0.5 + 0.5 * sign(t) * erf;
 }
 
 // Water relief's grades of the sky's and each beam's light. The beams' glint
@@ -944,6 +1040,7 @@ fn terrain_rock_surface(
             color_visibility * vec3<f32>(0.36, 0.34, 0.30),
             vec2<f32>(0.0),
             0.8,
+            0.0,
         );
     }
     let rock_geology = material_fractal_value(
@@ -993,6 +1090,8 @@ fn terrain_rock_surface(
         vec3<f32>(0.49, 0.46, 0.40),
         0.18 * smoothstep(20.0, 240.0, elevation_m) + 0.82 * geology_grade,
     );
+    let plate_slope_scale = surface_height_m * abs(mix(1.0, plate_direction, fracture_amount));
+    let micro_unresolved = micro_height_m * material_micro_relief_unresolved_slope(5.0);
     return TerrainSurface(
         color_visibility * rock_color,
         surface_height_m * mix(
@@ -1002,6 +1101,11 @@ fn terrain_rock_surface(
         )
             + micro_height_m * micro_height.gradient,
         mix(0.92, 0.68, rock_ruggedness),
+        sqrt(
+            plate_slope_scale * plate_slope_scale
+                * material_fractal_unresolved_slope_variance(28.0, 4u, 4u)
+                + micro_unresolved * micro_unresolved,
+        ),
     );
 }
 
@@ -1054,6 +1158,7 @@ fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
             LAND_ICE_ROUGHNESS,
+            0.0,
         );
     }
     return TerrainSurface(
@@ -1064,6 +1169,7 @@ fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
         ),
         LAND_ICE_DETAIL_NORMAL_SCALE * detail.gradient,
         LAND_ICE_ROUGHNESS,
+        LAND_ICE_DETAIL_NORMAL_SCALE * material_micro_relief_unresolved_slope(4.0),
     );
 }
 
@@ -1084,10 +1190,12 @@ fn sea_ice_detail_at(position_m: vec2<f32>, micro: TerrainNoiseSample) -> SeaIce
     return SeaIceDetail(
         material_fractal_value(SEA_ICE_BROAD_NOISE_FIELD, position_m, 768.0, 4u),
         fine.value,
-        0.20 * fine.gradient + 0.16 * micro.gradient,
+        0.20 * fine.gradient + SEA_ICE_MICRO_RELIEF * micro.gradient,
     );
 }
 
+// Sea ice's relief per unit of the micro-relief field's.
+const SEA_ICE_MICRO_RELIEF: f32 = 0.16;
 const SEA_ICE_SLAB_SIZE_M: f32 = 192.0;
 
 fn sea_ice_surface(
@@ -1102,6 +1210,7 @@ fn sea_ice_surface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
             0.42,
+            0.0,
         );
     }
     let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / SEA_ICE_SLAB_SIZE_M)));
@@ -1199,6 +1308,7 @@ fn sea_ice_surface(
         color_visibility * mix(deep_color, shallow_color, shallow),
         (1.0 - fracture) * slab_visibility * slab_tilt + detail.gradient,
         0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow,
+        SEA_ICE_MICRO_RELIEF * material_micro_relief_unresolved_slope(4.0),
     );
 }
 
@@ -1212,5 +1322,6 @@ fn blend_terrain_surface(
         mix(first.color, second.color, blend),
         mix(first.detail_gradient, second.detail_gradient, blend),
         mix(first.roughness, second.roughness, blend),
+        mix(first.unresolved_slope, second.unresolved_slope, blend),
     );
 }

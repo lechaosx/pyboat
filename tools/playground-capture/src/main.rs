@@ -1278,6 +1278,19 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ],
             )
         }
+        name if name.starts_with("lighting_land_relief_") => {
+            let sun_degrees = name["lighting_land_relief_".len()..]
+                .parse()
+                .map_err(|_| format!("unknown diagnostic: {name}"))?;
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 30.0),
+                    ("LIGHTING_MODEL_SUN_DEGREES", sun_degrees),
+                ],
+            )
+        }
         name if name.starts_with("lighting_relief_") => {
             let (slope_degrees, sun_degrees) = name["lighting_relief_".len()..]
                 .split_once('_')

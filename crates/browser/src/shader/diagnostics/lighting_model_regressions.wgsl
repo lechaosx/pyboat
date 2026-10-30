@@ -100,13 +100,36 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         receiver.moon_direction = vec3<f32>(0.0, 0.0, -1.0);
         let gradient = vec2<f32>(tan(radians(LIGHTING_MODEL_SLOPE_DEGREES)), 0.0);
         let beams = vec2<f32>(1.0, 0.0);
-        let level = landform_light_grade(vec2<f32>(0.0), receiver, beams);
-        let toward = landform_light_grade(-gradient, receiver, beams);
-        let away = landform_light_grade(gradient, receiver, beams);
+        let level = landform_light_grade(vec2<f32>(0.0), 0.0, receiver, beams);
+        let toward = landform_light_grade(-gradient, 0.0, receiver, beams);
+        let away = landform_light_grade(gradient, 0.0, receiver, beams);
         return vec4<f32>(
             0.25 * toward.y / level.y,
             0.25 * away.y / level.y,
             0.5 * toward.x / level.x,
+            1.0,
+        );
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 30u {
+        // The Sun's direct light on land relief under a Sun
+        // LIGHTING_MODEL_SUN_DEGREES high, per unit of level ground's, in
+        // eighths, and green the land.
+        let initialized = initialize_playground_scene(input);
+        let surface = scene_surface_at(
+            initialized.input.world_position_m,
+            initialized.surface_circle_position,
+            tide_height_m(),
+            initialized.atmosphere,
+        );
+        let sun = radians(LIGHTING_MODEL_SUN_DEGREES);
+        var receiver = celestial_receiver_light_at_height(max(surface.elevation_m, 0.0));
+        receiver.sun_direction = vec3<f32>(cos(sun), 0.0, sin(sun));
+        receiver.moon_direction = vec3<f32>(0.0, 0.0, -1.0);
+        let light = land_relief_light(surface, receiver, vec2<f32>(1.0, 0.0));
+        return vec4<f32>(
+            select(0.0, 0.125 * light.y / sin(sun), surface.is_land),
+            select(0.0, 1.0, surface.is_land),
+            0.0,
             1.0,
         );
     }

@@ -289,6 +289,10 @@ and verification details.
 - **[Implicit]** Land relief takes each beam by Lambert's law and the sky's
   light by an isotropic sky's view factor, on relief exaggerated threefold;
   water keeps its own relief grade and glint.
+- **[Implicit]** A pixel takes the mean relief light of the land it covers:
+  the relief its footprint resolves sets the mean slope, and finer terrain and
+  material relief spreads slopes around it. Authoritative elevation and its
+  gradient stay unfiltered; only lighting takes the split.
 - **[Implicit]** A receiver has one horizon for its atmosphere, the one its
   height has on Earth: each light's attenuation and visibility, its shadows'
   sampled direction, and the canopy's interception of its beam follow it. The

@@ -58,7 +58,7 @@ struct BakedSurfaceValues {
     // Elevation, its gradient, and bed reflectance.
     height: vec4<f32>,
     color: vec3<f32>,
-    roughness: f32,
+    unresolved_slope: f32,
     detail_gradient: vec2<f32>,
     wet_fraction: f32,
     surface_grade: f32,
@@ -100,14 +100,14 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
     var values: BakedSurfaceValues;
     values.height = vec4<f32>(
         terrain.elevation_m,
-        terrain.gradient,
+        terrain.gradient - terrain.unresolved_gradient,
         bottom_reflectance(
             terrain.coastal_rock_amount,
             terrain.coastal_outcrop_amount,
             terrain.coastal_sediment_amount,
         ),
     );
-    values.roughness = 1.0;
+    values.unresolved_slope = 0.0;
     // Sea ice follows the season per pixel and shows where water is below
     // -1 °C, so texels hold its detail where the coldest season brings water
     // below that anywhere within the bilinear stencil's reach. Coldest water,
@@ -180,7 +180,10 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
             / max(length(surface.detail_gradient), 1e-4);
     }
     values.color = surface.color;
-    values.roughness = surface.roughness;
+    values.unresolved_slope = lit_unresolved_slope(
+        terrain.unresolved_slope_variance,
+        surface.unresolved_slope,
+    );
     values.detail_gradient = surface.detail_gradient;
     values.land_ice_amount = ice_amount;
     return values;
@@ -202,7 +205,12 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
     let values = baked_surface_values_at(texel.position_m, texel.spacing_m);
     textureStore(baked_height_output, texel.slot, texel.level, values.height);
     let layer = BAKED_SURFACE_COLOR_LAYERS * texel.level;
-    textureStore(baked_color_output, texel.slot, layer, vec4<f32>(values.color, values.roughness));
+    textureStore(
+        baked_color_output,
+        texel.slot,
+        layer,
+        vec4<f32>(values.color, sqrt(clamp(values.unresolved_slope / BAKED_DETAIL_GRADIENT_RANGE, 0.0, 1.0))),
+    );
     // Wetness removes at most a third of the luminance, so its fraction
     // takes the whole eight-bit range.
     textureStore(

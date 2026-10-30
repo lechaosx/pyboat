@@ -62,7 +62,8 @@ fn fragment_surface_light(
 }
 
 // The composed surface at a rendered position: its height, the relief
-// gradient that lights it, and whether it lies above the water.
+// gradient the pixel resolves, which lights it, and whether it lies above the
+// water. Its surface's unresolved slope includes the terrain's, as lit.
 struct SceneSurface {
     elevation_m: f32,
     gradient: vec2<f32>,
@@ -138,9 +139,46 @@ fn composed_scene_surface(
             mix(surface.color, ice.color, terrain.ice_amount),
             mix(surface.detail_gradient, ice.detail_gradient, terrain.ice_amount),
             mix(surface.roughness, ice.roughness, terrain.ice_amount),
+            mix(surface.unresolved_slope, ice.unresolved_slope, terrain.ice_amount),
         ), partial_land_ice);
     }
-    return SceneSurface(terrain.elevation_m, terrain.gradient, is_land, surface);
+    surface.unresolved_slope = lit_unresolved_slope(
+        terrain.unresolved_slope_variance,
+        surface.unresolved_slope,
+    );
+    return SceneSurface(
+        terrain.elevation_m,
+        terrain.gradient - terrain.unresolved_gradient,
+        is_land,
+        surface,
+    );
+}
+
+// Relief is exaggerated threefold so top-down light reads landforms, a
+// presentation compromise.
+const RELIEF_EXAGGERATION: f32 = 3.0;
+
+// Root-mean-square unresolved slope that lights a surface: the terrain's,
+// exaggerated as its relief is, and the surface detail's, independent of it.
+fn lit_unresolved_slope(terrain_variance: f32, surface_slope: f32) -> f32 {
+    return sqrt(
+        RELIEF_EXAGGERATION * RELIEF_EXAGGERATION * terrain_variance
+            + surface_slope * surface_slope,
+    );
+}
+
+// `landform_light_grade` of a land surface.
+fn land_relief_light(
+    scene_surface: SceneSurface,
+    receiver: CelestialReceiverLight,
+    normal_light: vec2<f32>,
+) -> vec3<f32> {
+    return landform_light_grade(
+        RELIEF_EXAGGERATION * scene_surface.gradient + scene_surface.surface.detail_gradient,
+        scene_surface.surface.unresolved_slope,
+        receiver,
+        normal_light,
+    );
 }
 
 // A rendered surface and the light reaching it.
@@ -178,13 +216,7 @@ fn lit_scene_surface(
     let split = ambient_light.split;
     var surface_light = vec3<f32>(1.0, split.direct);
     if is_land {
-        // Relief is exaggerated threefold so top-down light reads landforms,
-        // a presentation compromise.
-        surface_light = landform_light_grade(
-            3.0 * scene_surface.gradient + surface.detail_gradient,
-            surface_direct_light,
-            split.normal,
-        );
+        surface_light = land_relief_light(scene_surface, surface_direct_light, split.normal);
     } else {
         // Water keeps its own relief grade of the split's level light.
         let grade = water_light_grade(

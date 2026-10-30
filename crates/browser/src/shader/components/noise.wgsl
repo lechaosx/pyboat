@@ -118,12 +118,22 @@ struct TerrainSample {
     coastal_rock_amount: f32,
     coastal_outcrop_amount: f32,
     coastal_sediment_amount: f32,
+    // The part of `gradient` from relief finer than the pixel footprint
+    // resolves, and that relief's mean squared slope, which lighting takes
+    // in place of it.
+    unresolved_gradient: vec2<f32>,
+    unresolved_slope_variance: f32,
 };
 
 struct TerrainSurface {
     color: vec3<f32>,
+    // The detail slope a pixel resolves, then the root-mean-square slope of
+    // the detail too fine for it, which the pixel averages over. Blended
+    // surfaces mix that slope linearly, as for detail of one shared field; for
+    // independent fields it overstates it by up to √2, a compromise.
     detail_gradient: vec2<f32>,
     roughness: f32,
+    unresolved_slope: f32,
 };
 
 fn noise_sample_or_zero(sample: TerrainNoiseSample, keep: bool) -> TerrainNoiseSample {
@@ -142,6 +152,7 @@ fn select_terrain_surface(
         select(otherwise.color, chosen.color, condition),
         select(otherwise.detail_gradient, chosen.detail_gradient, condition),
         select(otherwise.roughness, chosen.roughness, condition),
+        select(otherwise.unresolved_slope, chosen.unresolved_slope, condition),
     );
 }
 
@@ -543,6 +554,64 @@ fn terrain_simplex_octave_sum_from_circle(
     return sample;
 }
 
+// `terrain_simplex_fractal_sample_from_circle`, with the part of its gradient
+// that the pixel footprint does not resolve and those slopes' mean square.
+// The pixel keeps of each octave the mean of a wave of its wavelength across
+// the footprint's width, sinc(footprint / wavelength), and leaves 1 - sinc² of
+// its slope variance within itself.
+struct FootprintNoiseSample {
+    sample: TerrainNoiseSample,
+    unresolved_gradient: vec2<f32>,
+    unresolved_variance: f32,
+};
+
+fn terrain_simplex_fractal_footprint_sample_from_circle(
+    field: u32,
+    position_m: vec2<f32>,
+    circle_position: vec4<f32>,
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    persistence: f32,
+    circle_octave_count: u32,
+) -> FootprintNoiseSample {
+    var sample: TerrainNoiseSample;
+    sample.value = 0.0;
+    sample.gradient = vec2<f32>(0.0);
+    var unresolved_gradient = vec2<f32>(0.0);
+    var unresolved_variance = 0.0;
+    var amplitude = pow(persistence, f32(0u));
+    var wavelength_m = initial_wavelength_m * exp2(-f32(0u));
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_key = noise_key(field, octave);
+        var octave_sample: TerrainNoiseSample;
+        if octave < circle_octave_count {
+            octave_sample = terrain_simplex_noise_4d_from_circle(
+                octave_key,
+                circle_position,
+                wavelength_m,
+            );
+        } else {
+            octave_sample = terrain_simplex_noise(octave_key, position_m, wavelength_m);
+        }
+        sample.value += amplitude * octave_sample.value;
+        sample.gradient += amplitude * octave_sample.gradient;
+        let cycles = PI * visual_pixel_footprint_m / wavelength_m;
+        let octave_visibility = select(0.0, sin(cycles) / max(cycles, 1e-6), cycles < PI);
+        unresolved_gradient += amplitude * (1.0 - octave_visibility) * octave_sample.gradient;
+        unresolved_variance += amplitude * amplitude
+            * (1.0 - octave_visibility * octave_visibility)
+            * SIMPLEX_SQUARED_GRADIENT / (wavelength_m * wavelength_m);
+        amplitude *= persistence;
+        wavelength_m *= 0.5;
+    }
+    let amplitude_sum = fractal_amplitude_sum(octave_count, persistence);
+    return FootprintNoiseSample(
+        TerrainNoiseSample(sample.value / amplitude_sum, sample.gradient / amplitude_sum),
+        unresolved_gradient / amplitude_sum,
+        unresolved_variance / (amplitude_sum * amplitude_sum),
+    );
+}
+
 fn terrain_simplex_fractal_value(
     field: u32,
     position_m: vec2<f32>,
@@ -862,6 +931,50 @@ fn material_fractal_sample_first_octaves(
     sample.value /= amplitude_sum;
     sample.gradient /= amplitude_sum;
     return sample;
+}
+
+// Mean squared gradient of `terrain_simplex_noise` times its wavelength
+// squared, a property of the noise: a Monte Carlo average of 4 million
+// positions over its lattice and gradient directions.
+const SIMPLEX_SQUARED_GRADIENT: f32 = 6.61;
+
+// Mean squared slope of the material fractal field that the pixel footprint
+// leaves unresolved. An octave that the footprint fades to v keeps v of its
+// slope in the resolved gradient, the footprint's mean, and so leaves
+// 1 - v² of its slope variance within the pixel; octaves a graphics tier
+// leaves out keep all of theirs.
+fn material_fractal_unresolved_slope_variance(
+    initial_wavelength_m: f32,
+    octave_count: u32,
+    evaluated_octave_count: u32,
+) -> f32 {
+    var variance = 0.0;
+    var amplitude = 1.0;
+    var amplitude_sum = 0.0;
+    var wavelength_m = initial_wavelength_m;
+    for (var octave = 0u; octave < octave_count; octave++) {
+        let octave_visibility = select(
+            0.0,
+            smoothstep(visual_pixel_footprint_m, 2.0 * visual_pixel_footprint_m, wavelength_m),
+            octave < evaluated_octave_count,
+        );
+        variance += amplitude * amplitude * (1.0 - octave_visibility * octave_visibility)
+            * SIMPLEX_SQUARED_GRADIENT / (wavelength_m * wavelength_m);
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        wavelength_m *= 0.53;
+    }
+    return variance / (amplitude_sum * amplitude_sum);
+}
+
+// Root-mean-square unresolved slope of the micro-relief field, as
+// `material_micro_relief_sample` evaluates it.
+fn material_micro_relief_unresolved_slope(initial_wavelength_m: f32) -> f32 {
+    return sqrt(material_fractal_unresolved_slope_variance(
+        initial_wavelength_m,
+        6u,
+        MATERIAL_MICRO_OCTAVES,
+    ));
 }
 
 // The metre-scale micro-relief material field, of which a graphics tier

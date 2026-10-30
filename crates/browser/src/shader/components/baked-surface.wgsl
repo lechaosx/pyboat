@@ -1,7 +1,9 @@
 // The static surface kept between frames in a toroidal clipmap on
 // world-anchored lattices. Each level holds, per texel, a half-precision layer
-// of elevation with land ice, its gradient, and bed reflectance, then
-// eight-bit layers of the dry, snowless, unseasoned land colour and roughness;
+// of elevation with land ice, the gradient a texel resolves, and bed
+// reflectance, then
+// eight-bit layers of the dry, snowless, unseasoned land colour and unresolved
+// detail slope;
 // the land detail gradient, wetness fraction, and surface grade; the autumn
 // colour change, or on texels with land ice its colour grade and relief, and
 // the snow detail scale; the dormancy colour
@@ -102,7 +104,7 @@ fn baked_height_at(cell: BakedSurfaceCell) -> BakedHeight {
 
 struct BakedLand {
     color: vec3<f32>,
-    roughness: f32,
+    unresolved_slope: f32,
     detail_gradient: vec2<f32>,
     wet_fraction: f32,
     surface_grade: f32,
@@ -152,7 +154,7 @@ fn baked_land_at(cell: BakedSurfaceCell) -> BakedLand {
     let ice_share = 1.0 / max(dormancy.a, 1e-3);
     return BakedLand(
         color.rgb,
-        color.a,
+        BAKED_DETAIL_GRADIENT_RANGE * color.a * color.a,
         decode_detail_gradient(detail.xy, BAKED_DETAIL_GRADIENT_RANGE),
         detail.z / 3.0,
         detail.w,
@@ -297,9 +299,6 @@ fn baked_land_surface(
     // One minus the exposed dryness of `terrain_surface`.
     let wetness = 1.0 - smoothstep(0.05, 0.8, elevation_m - water_height_m);
     var color = baked.color * (1.0 - wetness * baked.wet_fraction);
-    // Wet intertidal and beach cover is 0.08 rougher; 0.29, about the wetness
-    // fraction of that cover alone, takes all of it.
-    let roughness = baked.roughness + wetness * 0.08 * min(baked.wet_fraction / 0.29, 1.0);
     let autumn = autumn_vegetation_amount_from_anomaly(
         elevation_m,
         atmosphere.temperature_anomaly.value,
@@ -311,7 +310,13 @@ fn baked_land_surface(
         atmosphere.climate,
     );
     color += autumn * baked.autumn_color + dormancy * baked.dormancy_color;
-    var land = TerrainSurface(max(color, vec3<f32>(0.0)), baked.detail_gradient, roughness);
+    // Only water's relief grade reads roughness.
+    var land = TerrainSurface(
+        max(color, vec3<f32>(0.0)),
+        baked.detail_gradient,
+        1.0,
+        baked.unresolved_slope,
+    );
     let snow_amount = smoothstep(
         0.10,
         0.55,
@@ -325,6 +330,8 @@ fn baked_land_surface(
             solid_material_color_visibility().y * snow_color(baked.surface_grade),
             baked.snow_detail_scale * baked.detail_gradient,
             SNOW_ROUGHNESS,
+            // Snow keeps the land's unresolved slope, mostly the terrain's.
+            baked.unresolved_slope,
         );
         let partial_ice = baked.land_ice_amount > 0.0;
         if partial_ice || EVALUATE_ALL_BRANCHES {
