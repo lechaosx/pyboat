@@ -5,7 +5,7 @@ Description=Pyboat containers
 Type=oneshot
 RemainAfterExit=true
 WorkingDirectory=%h/.local/share/pyboat
-ExecStart=/run/current-system/sw/bin/podman-compose up -d --force-recreate
+ExecStart=/run/current-system/sw/bin/podman-compose up -d
 ExecStop=/run/current-system/sw/bin/podman-compose stop
 
 [Install]

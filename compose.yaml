@@ -9,7 +9,6 @@ services:
     restart: unless-stopped
     environment:
       AUTO_UPGRADE: "0"
-      WEBTRANSPORT_HOST: ${WEBTRANSPORT_HOST:?Set WEBTRANSPORT_HOST}
     volumes:
       - ./acme:/acme.sh
       - ./tls:/certificates

@@ -71,22 +71,11 @@ jobs:
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
       DEPLOY_IMAGE: ${{ needs.build.outputs.image }}
-      WEBTRANSPORT_HOST: ${{ vars.WEBTRANSPORT_HOST }}
     steps:
       - uses: actions/checkout@v7
       - name: Configure verified SSH connection
         shell: bash
         run: |
-          for setting in DEPLOY_HOST DEPLOY_USER DEPLOY_PORT DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
-            if [[ -z "${!setting}" ]]; then
-              echo "Missing production setting: $setting" >&2
-              exit 1
-            fi
-          done
-          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          [[ "$WEBTRANSPORT_HOST" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]
-          [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
-          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$DEPLOY_PORT > 0 && 10#$DEPLOY_PORT <= 65535))
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/pyboat
@@ -106,13 +95,10 @@ jobs:
       - name: Deploy and discard current match
         shell: bash
         run: |
-          [[ "$DEPLOY_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
-          ssh pyboat-deploy 'test "$(uname -m)" = aarch64'
-          scp compose.yaml pyboat-deploy:.local/share/pyboat/compose.yaml
+          scp compose.yaml deploy/pyboat-compose.service pyboat-deploy:.local/share/pyboat/
           # shellcheck disable=SC2029
-          ssh pyboat-deploy "bash -se -- '$DEPLOY_IMAGE' '$WEBTRANSPORT_HOST'" <<'EOF_DEPLOY'
+          ssh pyboat-deploy "bash -se -- '$DEPLOY_IMAGE'" <<'EOF_DEPLOY'
           cd ~/.local/share/pyboat
-          printf 'WEBTRANSPORT_HOST=%s\n' "$2" > .env
           podman-compose pull certificates
           podman pull "$1"
           current=$(podman image inspect localhost/pyboat:deployed --format '{{.Id}}' 2>/dev/null || true)
@@ -121,6 +107,9 @@ jobs:
             podman tag "$current" localhost/pyboat:previous
           fi
           podman tag "$1" localhost/pyboat:deployed
+          install -Dm644 pyboat-compose.service ~/.config/systemd/user/pyboat-compose.service
+          systemctl --user daemon-reload
+          systemctl --user enable pyboat-compose.service
           systemctl --user restart pyboat-compose.service
           sleep 3
           test "$(podman inspect pyboat --format '{{.State.Running}}')" = true

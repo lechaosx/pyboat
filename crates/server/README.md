@@ -112,18 +112,16 @@ certificates in `tls` are mounted read-only into the game.
 Log in as `github` and prepare persistent storage:
 
 ```sh
-mkdir -p ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls ~/.config/systemd/user
+mkdir -p ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls
 chmod 700 ~/.local/share/pyboat/acme ~/.local/share/pyboat/tls
 ```
 
-Copy `compose.yaml` into `~/.local/share/pyboat/` and
-`deploy/pyboat-compose.service` into `~/.config/systemd/user/`. Set the public
-backend address, obtain its certificate, and enable startup:
+Copy `compose.yaml` into `~/.local/share/pyboat/`, then obtain and export the
+certificate for the public backend address:
 
 ```sh
 cd ~/.local/share/pyboat
 host=boats.dlabaja.eu
-printf 'WEBTRANSPORT_HOST=%s\n' "$host" > .env
 podman-compose pull certificates
 podman-compose run --rm -T --name pyboat-certificate-setup certificates \
   --issue --standalone --httpport 8080 \
@@ -131,17 +129,14 @@ podman-compose run --rm -T --name pyboat-certificate-setup certificates \
 podman-compose run --rm -T --name pyboat-certificate-setup certificates \
   --install-cert -d "$host" \
   --key-file /certificates/key.pem --fullchain-file /certificates/fullchain.pem </dev/null
-systemctl --user daemon-reload
-systemctl --user enable pyboat-compose.service
 ```
 
-Run the manual backend workflow to publish the first game image and start both
-containers. When changing the public backend address, obtain and export its
-matching certificate before deploying the changed address.
-Stop only the certificate service with `podman-compose stop certificates`
-before issuing for a changed address and start it afterward with
+Run the manual backend workflow to install the boot service and start both
+containers. When changing the public backend address, stop the certificate
+service with `podman-compose stop certificates`, repeat issuance and export for
+the new address, then start it with
 `podman-compose up -d certificates` so validation commands share port 8080
-without overlapping.
+without overlapping. Update `WEBTRANSPORT_HOST` and deploy the frontend.
 
 ### Operation
 
