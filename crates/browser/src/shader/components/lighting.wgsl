@@ -387,10 +387,8 @@ fn clear_sky_intensity(receiver: CelestialReceiverLight) -> f32 {
 // unscattered beam, which reaches the ground through the upper field's deck
 // shadows. A light below the level but above the canopy's horizon lights the
 // layer's underside with `normal`, its beam across its path: the light's
-// clear-sky light at the zenith by its disc's visibility above the horizon the
-// layer would have on Earth, its clear-sky beam share above the canopy's
-// horizon, and the share of the beam at the layer's level that the air below
-// that level passes. The layer reflects its slant reflectance
+// clear-sky light at the zenith by its beam share at the layer's height. The
+// layer reflects its slant reflectance
 // of that beam, projected on it, down. The beam crossed the layer's level once already on
 // the far side of its tangent point, at the same depth.
 fn canopy_scattered_beams(
@@ -478,60 +476,28 @@ fn calculate_atmospheric_ambient_light(
     );
     // The canopy's level face takes the ground's split of clear-sky light: the
     // direct part follows the light's height above that level and vanishes at
-    // it. The canopy's own height sees each light above its much lower horizon,
-    // which sets the beam that reaches the layer's underside.
-    // The planet's shadow reaches the layer when the light sinks below the
-    // horizon its height has on Earth, whose air mass clear-sky light follows;
-    // the small world's horizon would keep the layer lit until the light stood
-    // tens of degrees down.
+    // it. Below that level the layer's underside takes the beam a receiver at
+    // its height does.
     let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
-    let canopy_earth_horizon_z = -sqrt(
-        WEATHER_CANOPY_HEIGHT_M * (2.0 * EARTH_RADIUS_M + WEATHER_CANOPY_HEIGHT_M),
-    ) / (EARTH_RADIUS_M + WEATHER_CANOPY_HEIGHT_M);
-    let daylight_beams = vec2<f32>(
-        celestial_disc_visibility_at_horizon(
-            canopy_earth_horizon_z,
-            canopy_receiver.sun_direction,
-            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
-        ),
-        lunar_light_scale() * celestial_disc_visibility_at_horizon(
-            canopy_earth_horizon_z,
-            canopy_receiver.moon_direction,
-            MOON_ANGULAR_RADIUS_RAD,
-        ),
-    );
-    let moon_color = moon_own_color();
-    let sun_beam = layer_beam_transmittance(
-        regional_aerosol_optical_depth,
-        WEATHER_CANOPY_HEIGHT_M,
-        canopy_receiver.sun_direction.z,
-    );
-    let moon_beam = moon_color * layer_beam_transmittance(
-        regional_aerosol_optical_depth,
-        WEATHER_CANOPY_HEIGHT_M,
-        canopy_receiver.moon_direction.z,
-    );
-    let level_beam = beam_transmittance(
-        regional_aerosol_optical_depth,
-        relative_air_mass(0.0),
-        ozone_air_mass(0.0),
-    );
-    let below_level_transmittance = vec2<f32>(
-        dot(sun_beam, LUMINANCE_WEIGHTS) / dot(level_beam, LUMINANCE_WEIGHTS),
-        dot(moon_beam, LUMINANCE_WEIGHTS) / dot(moon_color * level_beam, LUMINANCE_WEIGHTS),
-    );
     let scattered_beams = canopy_scattered_beams(
         optical_thickness,
         canopy.sky_fraction,
         vec2<f32>(canopy_receiver.sun_direction.z, canopy_receiver.moon_direction.z),
         split.beam_shares * vec2<f32>(solar_ambient, lunar_ambient),
         celestial_light_split(canopy_receiver, 1.0, 1.0, 1.0).beam_shares
-            * daylight_beams
-            * below_level_transmittance,
+            * vec2<f32>(1.0, lunar_light_scale()),
     );
     let transmitted_light = diffuse_transmittance * split.diffuse_share * clear_sky_light;
-    let scattered_light = scattered_beams.x * unit_luminance(sun_beam)
-        + scattered_beams.y * dot(moon_color, LUMINANCE_WEIGHTS) * unit_luminance(moon_beam);
+    let scattered_light = scattered_beams.x * beam_light_color(
+            regional_aerosol_optical_depth,
+            WEATHER_CANOPY_HEIGHT_M,
+            canopy_receiver.sun_direction.z,
+        )
+        + scattered_beams.y * moon_light_color(
+            regional_aerosol_optical_depth,
+            WEATHER_CANOPY_HEIGHT_M,
+            canopy_receiver.moon_direction.z,
+        );
     let ground_heights = max(
         vec2<f32>(
             light_height_above_horizon(receiver.sun_direction.z, receiver.horizon_z),
@@ -584,7 +550,8 @@ fn local_aerosol_optical_depth_at(weather: CloudWeatherSample) -> f32 {
 
 // Light colours are relative to sunlight above the atmosphere, which stands in
 // for the display's D65 white, and each channel follows the dominant
-// wavelength of its sRGB primary: 611, 549 and 464 nm.
+// wavelength of its sRGB primary: 611, 549 and 464 nm. field_grids.rs's
+// `earth_beam` copies these spectral constants.
 const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // Rayleigh optical depth at sea level, 0.008735 λ^-4.08 with λ in micrometres
 // (Leckner 1978, Solar Energy 20).
@@ -606,8 +573,7 @@ fn unit_luminance(color: vec3<f32>) -> vec3<f32> {
 // reach only about 2 at the horizon and leave low light unreddened.
 // Light colours take it along the light's height above the receiver's local
 // horizontal, as on Earth, whose horizon dips little at cloud and hill
-// heights: light that reaches raised receivers and clouds after sea-level
-// sunset grazes the surface and arrives fully reddened.
+// heights.
 fn relative_air_mass(sine_height: f32) -> f32 {
     let sine = clamp(sine_height, 0.0, 1.0);
     return 1.0 / (sine + 0.025 * exp(-11.0 * sine));
@@ -631,47 +597,61 @@ fn beam_transmittance(aerosol_optical_depth: f32, air_mass: f32, ozone_mass: f32
     );
 }
 
-// Colour of a beam that reaches the ground, for the 550 nm aerosol optical
-// depth and the sine of the light's height above the local horizontal.
-fn beam_light_color(aerosol_optical_depth: f32, sine_height: f32) -> vec3<f32> {
-    return unit_luminance(beam_transmittance(
-        aerosol_optical_depth,
-        relative_air_mass(sine_height),
-        ozone_air_mass(sine_height),
-    ));
+// Sine of the elevation of the horizon that a receiver `height_m` above sea
+// level would have on Earth.
+fn earth_horizon_z_at_height(height_m: f32) -> f32 {
+    let height = max(height_m, 0.0);
+    return -sqrt(height * (2.0 * EARTH_RADIUS_M + height)) / (EARTH_RADIUS_M + height);
 }
 
-// Spectral transmittance of the beam that reaches a layer `height_m` above sea
-// level from a light at the given sine of its height above the layer's
+// Spectral transmittance of the beam that reaches a receiver `height_m` above
+// sea level from a light at the given sine of its height above the receiver's
 // horizontal. Above that horizontal the beam takes `relative_air_mass`, whose
-// horizon value stands for the horizontal path from the layer. Below it, the
-// ray passes its lowest point a depth d = r(1 - cos θ) under the layer, for a
-// light θ down and the layer r from the centre of an Earth-sized planet, and
-// climbs back up to the layer. In an exponential atmosphere of scale height H
-// that path holds e^(d/H) (1 + erf √(d/H)) times the air of the horizontal
-// path (Chapman's grazing incidence function for R/H >> 1), so the air mass is
-// continuous at the horizontal. H keeps PLANET_RADIUS_SCALE_HEIGHTS' ratio to
-// Earth's radius: 6.25 km rather than Earth's 8 km. erf takes Bürmann's series
-// to first order, within 0.007. The lowest point stops at sea level, where the
-// part of the disc still above the layer's horizon grazes. The ray crosses the
-// ozone layer once, on the light's side, as steeply as a ray as far above the
-// horizontal.
-fn layer_beam_transmittance(
+// horizon value stands for the horizontal path from the receiver. Below it,
+// the ray passes its lowest point a depth d = r(1 - cos θ) under the receiver,
+// for a light θ down and the receiver r from the centre of an Earth-sized
+// planet, and climbs back up to it. In an exponential atmosphere of scale
+// height H that path holds e^(d/H) (1 + erf √(d/H)) times the air of the
+// horizontal path (Chapman's grazing incidence function for R/H >> 1), so the
+// air mass is continuous at the horizontal. H keeps
+// PLANET_RADIUS_SCALE_HEIGHTS' ratio to Earth's radius: 6.25 km rather than
+// Earth's 8 km. erf takes Bürmann's series to first order, within 0.007. The
+// lowest point stops at sea level, where the part of the disc still above the
+// receiver's Earth horizon grazes. The ray crosses the ozone layer once, on
+// the light's side, as steeply as a ray as far above the horizontal as the
+// grazing ray is below it.
+fn beam_transmittance_at_height(
     aerosol_optical_depth: f32,
     height_m: f32,
     sine_height: f32,
 ) -> vec3<f32> {
+    let height = max(height_m, 0.0);
     let z = min(sine_height, 0.0);
     let depth_scale_heights = PLANET_RADIUS_SCALE_HEIGHTS * min(
-        (1.0 + height_m / EARTH_RADIUS_M) * z * z / (1.0 + sqrt(1.0 - z * z)),
-        height_m / EARTH_RADIUS_M,
+        (1.0 + height / EARTH_RADIUS_M) * z * z / (1.0 + sqrt(1.0 - z * z)),
+        height / EARTH_RADIUS_M,
     );
     let climb = sqrt(1.0 - exp(-4.0 / PI * depth_scale_heights));
     return beam_transmittance(
         aerosol_optical_depth,
         relative_air_mass(sine_height) * exp(depth_scale_heights) * (1.0 + climb),
-        ozone_air_mass(abs(sine_height)),
+        ozone_air_mass(select(
+            sine_height,
+            min(-sine_height, -earth_horizon_z_at_height(height)),
+            sine_height < 0.0,
+        )),
     );
+}
+
+// Colour of a beam that reaches a receiver `height_m` above sea level, for the
+// 550 nm aerosol optical depth and the sine of the light's height above the
+// receiver's horizontal.
+fn beam_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32) -> vec3<f32> {
+    return unit_luminance(beam_transmittance_at_height(
+        aerosol_optical_depth,
+        height_m,
+        sine_height,
+    ));
 }
 
 // Colour of the clear sky's light on level ground from a light at the given
@@ -710,14 +690,18 @@ fn moon_own_color() -> vec3<f32> {
 
 // Moonlight's colour after the atmosphere, keeping the luminance of the
 // Moon's own colour.
-fn moon_light_color(aerosol_optical_depth: f32, sine_height: f32) -> vec3<f32> {
+fn moon_light_color(aerosol_optical_depth: f32, height_m: f32, sine_height: f32) -> vec3<f32> {
     let own = moon_own_color();
     return dot(own, LUMINANCE_WEIGHTS)
-        * unit_luminance(own * beam_light_color(aerosol_optical_depth, sine_height));
+        * unit_luminance(own * beam_light_color(aerosol_optical_depth, height_m, sine_height));
 }
 
 fn sun_direct_light_color(receiver: CelestialReceiverLight) -> vec3<f32> {
-    return beam_light_color(local_aerosol_optical_depth, receiver.sun_direction.z);
+    return beam_light_color(
+        local_aerosol_optical_depth,
+        receiver.height_m,
+        receiver.sun_direction.z,
+    );
 }
 
 // ESRA clear-sky light (Rigollier, Bauer and Wald 2000, Solar Energy 68) for a
@@ -764,22 +748,51 @@ fn regional_linke_turbidity() -> f32 {
     return 2.35 + 7.79 * regional_aerosol_optical_depth;
 }
 
-// Share of a light's clear-sky light on level ground that arrives direct.
+// Share of a light's clear-sky light on level ground that arrives direct, for
+// a light of `color` above the atmosphere. The receiver's own horizon sets how
+// much of that light the clear sky leaves diffuse. The beam reaches the
+// receiver as on Earth, whose air mass clear-sky light follows: its disc sets
+// behind the horizon the receiver's height has there, and below the
+// receiver's horizontal it keeps the share of the horizontal beam's luminance
+// that its grazing path passes. The small world's horizon would keep a hill
+// or cloud in direct light until the light stood tens of degrees down.
+// field_grids.rs's `earth_beam` mirrors the beam's part; keep them
+// synchronized.
 fn celestial_beam_share(
     receiver: CelestialReceiverLight,
     direction: vec3<f32>,
     angular_radius_rad: f32,
     linke_turbidity: f32,
+    color: vec3<f32>,
 ) -> f32 {
     let visibility = celestial_disc_visibility_at_horizon(
-        receiver.horizon_z,
+        earth_horizon_z_at_height(receiver.height_m),
         direction,
         angular_radius_rad,
     );
     if visibility <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return 0.0;
     }
-    return visibility * (1.0 - clear_sky_diffuse_fraction(
+    var grazing = 1.0;
+    let below_horizontal = direction.z < 0.0 && receiver.height_m > 0.0;
+    if below_horizontal || EVALUATE_ALL_BRANCHES {
+        let horizontal = color * beam_transmittance(
+            regional_aerosol_optical_depth,
+            relative_air_mass(0.0),
+            ozone_air_mass(0.0),
+        );
+        let beam = color * beam_transmittance_at_height(
+            regional_aerosol_optical_depth,
+            receiver.height_m,
+            direction.z,
+        );
+        grazing = select(
+            1.0,
+            dot(beam, LUMINANCE_WEIGHTS) / dot(horizontal, LUMINANCE_WEIGHTS),
+            below_horizontal,
+        );
+    }
+    return visibility * grazing * (1.0 - clear_sky_diffuse_fraction(
         light_height_above_horizon(direction.z, receiver.horizon_z),
         linke_turbidity,
     ));
@@ -810,12 +823,14 @@ fn celestial_light_split(
             receiver.sun_direction,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
             turbidity,
+            vec3<f32>(1.0),
         ),
         celestial_beam_share(
             receiver,
             receiver.moon_direction,
             MOON_ANGULAR_RADIUS_RAD,
             turbidity,
+            moon_own_color(),
         ),
     );
     let beams = beam_shares * vec2<f32>(solar_ambient, lunar_ambient);
@@ -859,7 +874,11 @@ fn ground_bounce_light(
 }
 
 fn moon_direct_light_color(receiver: CelestialReceiverLight) -> vec3<f32> {
-    return moon_light_color(local_aerosol_optical_depth, receiver.moon_direction.z);
+    return moon_light_color(
+        local_aerosol_optical_depth,
+        receiver.height_m,
+        receiver.moon_direction.z,
+    );
 }
 
 struct CloudRay {

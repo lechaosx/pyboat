@@ -119,8 +119,9 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Diffuse light from cloud stays regional. Thin cloud approaches
   clear sky, moderate cover can glow at sunset or under moonlight, and thick
   storm cover darkens the scene while gray overcast can remain softly luminous.
-- **[Explicit]** Celestial lighting follows world curvature, allowing lower
-  clouds to retain filtered edge and internal sunlight after ground sunset.
+- **[Explicit]** Raised ground and lower clouds keep a fading, reddening
+  sunlight after ground sunset, until the light sinks below the horizon their
+  height has on Earth.
 - **[Explicit]** Finite Sun and Moon discs keep landform shadows physically soft.
 - **[Explicit]** Cloud shadows take their softness from the cloud field.
 - **[Explicit]** Sunrise, sunset, moonrise, and moonset change light and

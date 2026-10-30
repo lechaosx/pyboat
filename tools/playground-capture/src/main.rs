@@ -1265,6 +1265,19 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ],
             )
         }
+        name if name.starts_with("lighting_receiver_beam_sweep_") => {
+            let height_m = name["lighting_receiver_beam_sweep_".len()..]
+                .parse()
+                .map_err(|_| format!("unknown diagnostic: {name}"))?;
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 27.0),
+                    ("LIGHTING_MODEL_SURFACE_HEIGHT_M", height_m),
+                ],
+            )
+        }
         "lighting_landform_sun_grade_moon_coupling" => diagnostic(
             value,
             "lighting_model_regressions",

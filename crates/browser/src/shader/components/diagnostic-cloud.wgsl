@@ -60,7 +60,11 @@ fn diagnostic_lighting_canopy_moon_scattering(input: VertexOutput) -> vec4<f32> 
     );
     let canopy_receiver = celestial_receiver_light_at_height(WEATHER_CANOPY_HEIGHT_M);
     let luminance = ambient.canopy_scattered_beams.y * dot(
-        moon_light_color(regional_aerosol_optical_depth, canopy_receiver.moon_direction.z),
+        moon_light_color(
+            regional_aerosol_optical_depth,
+            WEATHER_CANOPY_HEIGHT_M,
+            canopy_receiver.moon_direction.z,
+        ),
         vec3<f32>(0.2126, 0.7152, 0.0722),
     );
     return vec4<f32>(scalar_debug_color(luminance / (0.4 * FULL_MOON_SUNLIGHT_RATIO)), 1.0);

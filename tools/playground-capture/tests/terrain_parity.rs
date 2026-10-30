@@ -790,6 +790,128 @@ fn deck_underside_light_fades_and_reddens_as_the_suns_ray_grazes_lower() {
     );
 }
 
+/// Direct sunlight on level ground, then its red share, as the Sun sinks from
+/// 0.5 degrees above the horizontal of a receiver `height_m` above sea level to
+/// 2.5 degrees below it, with the depression of each column in degrees.
+fn receiver_beam_sweep(height_m: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let width = 1200;
+    // A centimetre-wide view keeps every column in the same weather.
+    let image = render_diagnostic_image_with_view_at(
+        WorldGeometry::default(),
+        Vector::ZERO,
+        0.0,
+        0.01 / width as f32,
+        &format!("lighting_receiver_beam_sweep_{height_m}"),
+        width,
+        1,
+    );
+    let pixels = image.as_chunks::<4>().0;
+    (
+        (0..width)
+            .map(|column| -0.5 + 3.0 * (column as f32 + 0.5) / width as f32)
+            .collect(),
+        pixels
+            .iter()
+            .map(|pixel| srgb_channel_to_linear(pixel[0]))
+            .collect(),
+        pixels
+            .iter()
+            .map(|pixel| srgb_channel_to_linear(pixel[1]))
+            .collect(),
+    )
+}
+
+/// Once the Sun sinks below a raised receiver's horizontal, its ray grazes
+/// ever lower through the air on the way, so the direct light dims and
+/// reddens continuously until the disc sets behind the horizon the receiver's
+/// height has on Earth, a hill's as much as a cloud's.
+#[test]
+fn direct_light_on_raised_receivers_fades_and_reddens_down_to_their_earth_horizon() {
+    for height_m in [300.0_f32, 1_000.0] {
+        let (depression_degrees, light, red_share) = receiver_beam_sweep(height_m);
+        let level = depression_degrees
+            .iter()
+            .position(|depression| *depression > 0.0)
+            .unwrap();
+        let earth_radius_m = 6.371e6_f32;
+        let horizon_degrees = (earth_radius_m / (earth_radius_m + height_m))
+            .acos()
+            .to_degrees();
+        let disc_degrees = 0.00465_f32.to_degrees();
+        let set = depression_degrees
+            .iter()
+            .position(|depression| *depression > horizon_degrees + disc_degrees)
+            .unwrap();
+        let setting = depression_degrees
+            .iter()
+            .rposition(|depression| *depression <= horizon_degrees - disc_degrees)
+            .unwrap();
+        assert!(
+            light[level] > 0.0,
+            "{height_m} m: no light at its horizontal"
+        );
+        for column in level - 1..set {
+            assert!(
+                (light[column + 1] - light[column]).abs() <= 0.1 * light[level],
+                "{height_m} m: light steps from {} to {} at {} degrees down",
+                light[column],
+                light[column + 1],
+                depression_degrees[column],
+            );
+        }
+        for column in level..set {
+            assert!(
+                light[column + 1] <= light[column],
+                "{height_m} m: light rises at {} degrees down",
+                depression_degrees[column],
+            );
+        }
+        for column in level..setting {
+            assert!(
+                red_share[column + 1] >= red_share[column],
+                "{height_m} m: the red share falls at {} degrees down",
+                depression_degrees[column],
+            );
+        }
+        assert!(
+            red_share[setting] - red_share[level] >= 0.02,
+            "{height_m} m: red share {} at its horizontal and {} as the disc starts to set",
+            red_share[level],
+            red_share[setting],
+        );
+        assert!(
+            (red_share[level] - red_share[level - 1]).abs() <= 0.01,
+            "{height_m} m: red share {} just below its horizontal and {} just above it",
+            red_share[level],
+            red_share[level - 1],
+        );
+        assert!(
+            light[set..].iter().all(|light| *light == 0.0),
+            "{height_m} m: light remains {} degrees down, after the disc has set behind \
+             the {horizon_degrees} degree horizon",
+            depression_degrees[set],
+        );
+    }
+}
+
+/// At sea level the clear sky's light is all diffuse by the time a light
+/// reaches the horizon, so direct light ends at the horizontal.
+#[test]
+fn direct_light_at_sea_level_ends_at_the_horizontal() {
+    let (depression_degrees, light, _) = receiver_beam_sweep(0.0);
+    assert!(
+        light[0] > 0.0,
+        "no light {} degrees up",
+        -depression_degrees[0]
+    );
+    for (depression, light) in depression_degrees.iter().zip(&light) {
+        assert!(
+            *depression <= 0.0 || *light == 0.0,
+            "light {light} remains {depression} degrees down",
+        );
+    }
+}
+
 #[test]
 fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     let world = WorldGeometry::default();
@@ -1671,12 +1793,34 @@ fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
     let world = WorldGeometry::default();
     let position_m = Vector::new(-10_000.0, 2_000.0);
     let world_time_seconds =
-        evening_time_at_sun_z(world, position_m, 3, (-3.0_f32).to_radians().sin());
-    let occlusion = landform_occlusion(world, position_m, world_time_seconds, 2_000.0, None);
-    let lit = occlusion.iter().flatten().count();
-    let shadowed = occlusion
+        evening_time_at_sun_z(world, position_m, 3, (-0.5_f32).to_radians().sin());
+    let view_height_m = 2_000.0;
+    let occlusion = landform_occlusion(world, position_m, world_time_seconds, view_height_m, None);
+    // landform_occlusion's image size.
+    let (width, height) = (160, 90);
+    let after_sea_level_sunset: Vec<f32> = occlusion
         .iter()
-        .flatten()
+        .enumerate()
+        .filter_map(|(index, share)| {
+            let (column, row) = ((index % width) as f32, (index / width) as f32);
+            let pixel_m = position_m
+                + Vector::new(
+                    ((column + 0.5) / width as f32 - 0.5) * view_height_m * width as f32
+                        / height as f32,
+                    (0.5 - (row + 0.5) / height as f32) * view_height_m,
+                );
+            let sun_z = celestial_lighting(world_celestial_conditions(
+                world,
+                world_time_seconds,
+                pixel_m,
+            ))
+            .sun_direction[2];
+            (sun_z < 0.0).then_some(*share).flatten()
+        })
+        .collect();
+    let lit = after_sea_level_sunset.len();
+    let shadowed = after_sea_level_sunset
+        .iter()
         .filter(|&&share| share > 0.3)
         .count();
     assert!(lit > 100, "only {lit} pixels are sunlit");

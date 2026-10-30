@@ -257,8 +257,12 @@ and verification details.
   the same way.
 - **[Implicit]** Clear-sky light's amount and colour follow the light's height
   above the receiver's local horizontal, as on Earth, whose horizon dips little
-  at hill and cloud heights. Disc visibility and the direct share follow the
-  receiver's own horizon, so light still reaches down to it.
+  at hill and cloud heights. The share of it that arrives direct follows the
+  receiver's own horizon.
+- **[Implicit]** Each beam reaches a receiver as on Earth. Below the receiver's
+  local horizontal it crosses the air along its grazing path, so it dims and
+  reddens continuously until its disc sets behind the horizon the receiver's
+  height has on Earth.
 - **[Implicit]** Light intensities set the brightness of light, and its colour
   sets hue alone: each beam and the clear sky's diffuse light take the colour
   of a spectral clear-sky model at three wavelengths, scaled to the luminance
@@ -274,12 +278,10 @@ and verification details.
   level ground: its direct part, which vanishes as the light
   reaches the layer's level, lights the layer from above, and the rest arrives
   diffuse.
-- **[Implicit]** A light below the canopy's level but above its horizon lights
-  the layer's underside, which reflects it down, until the light sinks below
-  the horizon the layer's height has on Earth. Its beam crosses the air below
-  the layer's level along its grazing path on Earth, so it dims and reddens
-  continuously down to that horizon. It has crossed the canopy's level once
-  already on the far side, where the regional canopy's cover and depth stop it.
+- **[Implicit]** A light below the canopy's level lights the layer's underside
+  with the beam that reaches the layer's height, which the layer reflects down.
+  That beam has crossed the canopy's level once already on the far side, where
+  the regional canopy's cover and depth stop it.
 - **[Implicit]** Cloud layers keep real absolute heights on the small world.
 - **[Implicit]** Light that ground and sky exchange follows regional means, so
   it lifts every shadow in a region alike.
