@@ -1156,6 +1156,29 @@ fn direct_sun_uses_the_finite_disc_surface_horizon() {
     );
 }
 
+/// A raised receiver's direct light crosses the air below the horizon its
+/// height has on Earth, 0.79 degrees down at 600 m, and ends where the Sun's
+/// disc sets behind it, far above the small world's own horizon.
+#[test]
+fn raised_receivers_lose_the_sun_behind_their_earth_horizon() {
+    let light = |degrees: f32| {
+        celestial_lighting_at_height(
+            WorldGeometry::default(),
+            CelestialConditions {
+                geographic_latitude_degrees: 0.0,
+                celestial_latitude_degrees: 0.0,
+                season_phase: 0.25,
+                day_phase: 0.75 - degrees / 360.0,
+                lunar_longitude_phase: 0.5,
+            },
+            600.0,
+        )
+        .sun_intensity
+    };
+    assert!(light(-0.4) > 0.0, "{}", light(-0.4));
+    assert_eq!(light(-1.2), 0.0);
+}
+
 #[test]
 fn receiver_height_changes_lunar_parallax_and_solar_overlap() {
     let world = WorldGeometry::default();

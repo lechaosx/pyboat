@@ -546,10 +546,12 @@ fn rendered_surface_sun_amount_uses_receiver_elevation() {
             let conditions = world_celestial_conditions(world, world_time_seconds, position_m);
             let datum = celestial_lighting(conditions);
             let elevated = celestial_lighting_at_height(world, conditions, elevation_m);
-            (datum.sun_intensity == 0.0 && elevated.sun_intensity > 0.10)
+            // A low Sun stands higher above the raised receiver's lower Earth
+            // horizon and crosses less air there.
+            (datum.sun_intensity > 0.0 && elevated.sun_intensity > datum.sun_intensity + 0.04)
                 .then_some((world_time_seconds, elevated.sun_intensity))
         })
-        .expect("elevated terrain should see the Sun beyond the datum horizon");
+        .expect("elevated terrain should see more of a low Sun than the datum");
 
     let actual = render_diagnostic_image_with_view_at(
         world,

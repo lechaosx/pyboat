@@ -97,6 +97,9 @@ fn sun_direction() -> vec3<f32> {
 struct CelestialReceiverLight {
     position_m: vec2<f32>,
     height_m: f32,
+    // The horizon the receiver's height has on Earth, whose air sets each
+    // light's attenuation and visibility. The small world's lower horizon
+    // bounds only shadow reach and grid windows.
     horizon_z: f32,
     sun_direction: vec3<f32>,
     moon_direction: vec3<f32>,
@@ -236,7 +239,7 @@ fn celestial_receiver_light_for_directions(
     sun: vec3<f32>,
     geocentric_moon: vec3<f32>,
 ) -> CelestialReceiverLight {
-    let horizon_z = celestial_horizon_z_at_height(height_m);
+    let horizon_z = earth_horizon_z_at_height(height_m);
     let moon = topocentric_moon_direction_for_geocentric(height_m, geocentric_moon);
     let eclipse_fraction = solar_eclipse_fraction_for_directions(sun, moon);
     let air_column = air_column_at_height(height_m);

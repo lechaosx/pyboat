@@ -520,6 +520,13 @@ pub const PLANET_RADIUS_SCALE_HEIGHTS: f64 = 2.0 / (std::f64::consts::PI * 0.025
 /// Earth's mean radius (Moritz 2000, Geodetic Reference System 1980).
 pub const EARTH_RADIUS_M: f64 = 6.371e6;
 
+/// Sine of the elevation of the horizon that a receiver `height_m` above sea
+/// level would have on Earth, as `earth_horizon_z_at_height` in lighting.wgsl.
+pub fn earth_horizon_z_at_height(height_m: f64) -> f64 {
+    let height_m = height_m.max(0.0);
+    -(height_m * (2.0 * EARTH_RADIUS_M + height_m)).sqrt() / (EARTH_RADIUS_M + height_m)
+}
+
 /// Share of sea level's air above a receiver `height_m` up, as
 /// `air_column_at_height` in lighting.wgsl, which gives its provenance and
 /// compromise.
@@ -708,7 +715,7 @@ pub fn celestial_lighting_at_height(
     let orbit = celestial_orbit(conditions);
     let (sun_direction, moon_direction) =
         celestial_directions_at_height(world_geometry, orbit, conditions, receiver_height_m);
-    let horizon_z = celestial_horizon_z_at_height(world_geometry, receiver_height_m);
+    let horizon_z = earth_horizon_z_at_height(f64::from(receiver_height_m)) as f32;
     let air_column = air_column_at_height(f64::from(receiver_height_m));
     let sun_elevation = f64::from((sun_direction[2] - horizon_z) / (1.0 - horizon_z));
     let solar_separation =
@@ -720,12 +727,7 @@ pub fn celestial_lighting_at_height(
     ) as f32;
 
     let sun_intensity = (1.0 - solar_eclipse_fraction)
-        * celestial_disc_visibility_at_height(
-            world_geometry,
-            receiver_height_m,
-            sun_direction[2],
-            SUN_ANGULAR_RADIUS_RAD as f32,
-        )
+        * disc_visibility_at_horizon(horizon_z, sun_direction[2], SUN_ANGULAR_RADIUS_RAD as f32)
         * clear_sky_beam_transmittance(sun_elevation, air_column);
     let moon_elevation = f64::from((moon_direction[2] - horizon_z) / (1.0 - horizon_z));
     // Eclipse dimming compressed into the exposure range from a totality's 1e-4
@@ -736,12 +738,7 @@ pub fn celestial_lighting_at_height(
         * FULL_MOON_SUNLIGHT_RATIO
         * lunar_phase_brightness(orbit.illuminated_fraction) as f32;
     let moon_intensity = lunar_light_scale
-        * celestial_disc_visibility_at_height(
-            world_geometry,
-            receiver_height_m,
-            moon_direction[2],
-            MOON_ANGULAR_RADIUS_RAD as f32,
-        )
+        * disc_visibility_at_horizon(horizon_z, moon_direction[2], MOON_ANGULAR_RADIUS_RAD as f32)
         * clear_sky_beam_transmittance(moon_elevation, air_column);
     let moon_ambient_intensity =
         lunar_light_scale * twilight_clear_sky_light(moon_direction[2], air_column);
@@ -780,7 +777,16 @@ pub fn celestial_disc_visibility_at_height(
     direction_z: f32,
     angular_radius_rad: f32,
 ) -> f32 {
-    let horizon_z = celestial_horizon_z_at_height(world_geometry, height_m);
+    disc_visibility_at_horizon(
+        celestial_horizon_z_at_height(world_geometry, height_m),
+        direction_z,
+        angular_radius_rad,
+    )
+}
+
+/// Share of a light's disc above the horizon at `horizon_z`, as
+/// `celestial_disc_visibility_at_horizon` in lighting.wgsl.
+fn disc_visibility_at_horizon(horizon_z: f32, direction_z: f32, angular_radius_rad: f32) -> f32 {
     let horizon_cosine = (1.0 - horizon_z * horizon_z).max(0.0).sqrt();
     let disc_sine = angular_radius_rad.sin();
     let disc_cosine = angular_radius_rad.cos();
