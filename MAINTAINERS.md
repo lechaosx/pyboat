@@ -43,15 +43,15 @@ regression in [bug 2078553](https://bugzilla.mozilla.org/show_bug.cgi?id=2078553
 its [fix](https://github.com/mozilla-firefox/firefox/commit/99709e1e8633)
 disables cached DMA-BUF texture hosts.
 
-To try the game's experimental workaround, restore that preference to `true`,
-restart Firefox, and add `freshSurface=1` to the game URL (`?freshSurface=1`, or
-`&freshSurface=1` after existing parameters). It reconfigures the canvas before
-each submitted frame, replacing Firefox's swapchain and its recycled surfaces
-without copying pixels to the CPU. New surface allocation and compositor setup
-may still cost time; compare flicker and steering responsiveness with the same
-scene and window size. This path needs affected-hardware validation and stays
-off by default. Remove it once the supported Firefox builds carry the upstream
-fix and the same hardware comparison passes without it.
+For the game's opt-in workaround, keep that preference at `true`, restart
+Firefox, and add `freshSurface=1` to the game URL (`?freshSurface=1`, or
+`&freshSurface=1` after existing parameters). It removed the flicker on the
+tested Linux/NVIDIA setup. It reconfigures the canvas before each submitted
+frame, replacing recycled surfaces without copying pixels to the CPU. Surface
+allocation and compositor setup may still cost time. Once supported Firefox
+builds carry the upstream fix, compare flicker and steering responsiveness with
+and without the parameter on the same hardware, scene, and window size. Remove
+the workaround once that comparison passes without it.
 
 ## Rendering performance
 
