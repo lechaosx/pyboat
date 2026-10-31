@@ -8,7 +8,14 @@ pub const HULL_IMAGE: &[u8] = include_bytes!("../assets/wooden-dinghy-painted.pn
 pub const RIG_IMAGE: &[u8] = include_bytes!("../assets/boat-rig-painted.png");
 const BOOM_IMAGE: &[u8] = include_bytes!("../assets/boat-boom-painted.png");
 const STEERING_IMAGE: &[u8] = include_bytes!("../assets/boat-steering-painted.png");
-pub const BOAT_IMAGES: [&[u8]; 4] = [HULL_IMAGE, RIG_IMAGE, BOOM_IMAGE, STEERING_IMAGE];
+const RUDDER_IMAGE: &[u8] = include_bytes!("../assets/boat-rudder-painted.png");
+pub const BOAT_IMAGES: [&[u8]; 5] = [
+    HULL_IMAGE,
+    RIG_IMAGE,
+    BOOM_IMAGE,
+    STEERING_IMAGE,
+    RUDDER_IMAGE,
+];
 
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
@@ -193,26 +200,31 @@ pub fn boat_mesh_with_cloth(
     let wind = scene.apparent_wind_velocity_m_s;
 
     let rudder_axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
-    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / (1549.0 - 81.0);
+    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / (1980.0 - 79.0);
     let tiller_scale = (scene.tiller_end_m - scene.rudder_m[0]).length() / (1662.0 - 128.0);
-    let steering_start = vertices.len();
+    let blade_start = vertices.len();
     stamp(
         &mut vertices,
         scene.rudder_m[0],
         rudder_axis,
         [blade_scale; 2],
-        [76.0, 170.0, 1663.0, 328.0],
-        [1549.0, 249.0],
+        [65.0, 5.0, 2005.0, 490.0],
+        [1980.0, 255.0],
     );
-    // Only the gudgeon's short bearing projects aft; its screws sit on transom timber.
     stamp(
         &mut vertices,
         scene.rudder_m[0],
         forward,
-        [0.07 / 122.0; 2],
-        [702.0, 721.0, 1030.0, 857.0],
-        [769.0, 790.0],
+        [0.14 / 400.0; 2],
+        [835.0, 490.0, 1265.0, 735.0],
+        [970.0, 612.0],
     );
+    for vertex in &mut vertices[blade_start..] {
+        vertex.image = 4;
+        vertex.uv[0] *= 1024.0 / 2100.0;
+        vertex.uv[1] *= 1536.0 / 749.0;
+    }
+    let steering_start = vertices.len();
     stamp(
         &mut vertices,
         scene.rudder_m[0],
