@@ -1,21 +1,21 @@
 use std::f32::consts::{PI, TAU};
 
-use rapier2d::prelude::Vector;
+use rapier2d::prelude::{Rotation, Vector};
 
 use crate::{BoatScene, Windsock, windsock_extension};
 
 pub const HULL_IMAGE: &[u8] = include_bytes!("../assets/wooden-dinghy-painted.png");
 pub const RIG_IMAGE: &[u8] = include_bytes!("../assets/boat-rig-painted.png");
-pub const BOAT_IMAGES: [&[u8]; 2] = [HULL_IMAGE, RIG_IMAGE];
+const BOOM_IMAGE: &[u8] = include_bytes!("../assets/boat-boom-painted.png");
+pub const BOAT_IMAGES: [&[u8]; 3] = [HULL_IMAGE, RIG_IMAGE, BOOM_IMAGE];
 
 const RUDDER: [f32; 4] = [16.0, 192.0, 627.0, 335.0];
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
-const BOOM: [f32; 4] = [10.0, 829.0, 566.0, 910.0];
 const ROPE: [f32; 4] = [530.0, 691.0, 982.0, 795.0];
 // Matches the bow coil's roughly 10-pixel strands on the 1565-pixel, 4.05 m hull.
 const ROPE_RADIUS_M: f32 = 0.014;
-const CLOTH: [f32; 4] = [30.0, 962.0, 489.0, 1419.0];
+const CLOTH: [f32; 4] = [48.0, 985.0, 473.0, 1404.0];
 const SOCK: [f32; 4] = [509.0, 1085.0, 1017.0, 1338.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,30 +89,39 @@ pub fn sail_mesh(scene: &BoatScene, time: f64) -> Vec<BoatSpriteVertex> {
     let (load, flutter) = sail_load(scene);
     let mut vertices = Vec::new();
     const LENGTH_STEPS: usize = 24;
-    const WIDTH_STEPS: usize = 6;
-    for x in 0..LENGTH_STEPS {
-        for y in 0..WIDTH_STEPS {
+    const HEIGHT_STEPS: usize = 12;
+    // A triangular main has a vertical luff at the mast and a foot on the boom.
+    // Only camber and twist give its upright surface width in overhead projection.
+    for y in 0..HEIGHT_STEPS {
+        for x in 0..LENGTH_STEPS {
             let a = x as f32 / LENGTH_STEPS as f32;
             let b = (x + 1) as f32 / LENGTH_STEPS as f32;
-            let c = y as f32 / WIDTH_STEPS as f32;
-            let d = (y + 1) as f32 / WIDTH_STEPS as f32;
-            for (along, across) in [(a, c), (b, c), (b, d), (a, c), (b, d), (a, d)] {
-                // A forward draft with a flatter exit is a projected cloth approximation.
+            let c = y as f32 / HEIGHT_STEPS as f32;
+            let d = (y + 1) as f32 / HEIGHT_STEPS as f32;
+            for (section, height) in [(a, c), (b, c), (b, d), (a, c), (b, d), (a, d)] {
                 let draft = 0.4;
-                let envelope = if along <= draft {
-                    1.0 - ((along - draft) / draft).powi(2)
+                let envelope = if section <= draft {
+                    1.0 - ((section - draft) / draft).powi(2)
                 } else {
-                    1.0 - ((along - draft) / (1.0 - draft)).powi(2)
+                    1.0 - ((section - draft) / (1.0 - draft)).powi(2)
                 };
+                let chord = 1.0 - height;
+                let along = section * chord;
                 let ripple = (time * 13.0 - f64::from(along * TAU * 1.7)).sin() as f32;
+                let twist = (0.25 * load + flutter * ripple) * height;
                 let point = scene.sail_m[0]
-                    + boom * along
+                    + Rotation::new(twist) * boom * along
                     + normal
-                        * (length * envelope * across * (0.30 * load + flutter * ripple * across));
-                let mut vertex = textured(point, CLOTH, along, 1.0 - across);
+                        * (length
+                            * chord
+                            * envelope
+                            * (PI * height).sin()
+                            * (0.18 * load + flutter * ripple * height));
+                // UVs use material distance, so sewn panels narrow with the triangle.
+                let mut vertex = textured(point, CLOTH, along, 1.0 - height);
                 vertex.shade = (0.76
-                    + 0.24 * (PI * across * 0.8).sin()
-                    + (along * TAU * 3.0 + across * 2.0).cos() * flutter)
+                    + 0.24 * (PI * height * 0.8).sin()
+                    + (along * TAU * 3.0 + height * 2.0).cos() * flutter)
                     .clamp(0.0, 1.0);
                 if scene.wreck {
                     vertex.shade *= 0.65;
@@ -250,14 +259,21 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
         [357.0, 589.0],
     );
 
+    let boom_start = vertices.len();
+    let scale = boom.length() / (2139.0 - 64.0);
     stamp(
         &mut vertices,
         mast,
         boom.normalize(),
-        [boom.length() / 490.0, 0.0009],
-        BOOM,
-        [48.0, 869.0],
+        [scale; 2],
+        [28.0, 310.0, 2143.0, 398.0],
+        [64.0, 354.0],
     );
+    for vertex in &mut vertices[boom_start..] {
+        vertex.image = 2;
+        vertex.uv[0] *= 1024.0 / 2172.0;
+        vertex.uv[1] *= 1536.0 / 724.0;
+    }
     stamp(
         &mut vertices,
         sheet_boom,

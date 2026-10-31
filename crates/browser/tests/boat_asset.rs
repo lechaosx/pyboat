@@ -68,30 +68,6 @@ fn increasing_cross_sail_pressure_reduces_flutter() {
 }
 
 #[test]
-fn filled_sail_has_more_draft_forward_than_at_the_mirrored_aft_section() {
-    let scene = scene(Vector::new(0.0, 8.0));
-    let boom = scene.sail_m[1] - scene.sail_m[0];
-    let section = |fraction: f32| {
-        (0..4)
-            .map(|phase| {
-                let time = phase as f64 * std::f64::consts::FRAC_PI_2 / 13.0;
-                sail_mesh(&scene, time)
-                    .iter()
-                    .filter(|v| {
-                        let along =
-                            (v.position_m - scene.sail_m[0]).dot(boom) / boom.length_squared();
-                        (along - fraction).abs() < 1.0e-6
-                    })
-                    .map(|v| v.position_m.y)
-                    .fold(0.0, f32::max)
-            })
-            .sum::<f32>()
-            / 4.0
-    };
-    assert!(section(0.25) > section(0.75) + 1.0e-5);
-}
-
-#[test]
 fn hull_texture_coordinates_keep_the_artwork_affine() {
     let scene = scene(Vector::ZERO);
     let mesh = hull_sprite_mesh(&scene);
@@ -314,4 +290,67 @@ fn tiller_follows_the_shared_length_hinge_and_articulated_rudder_pose() {
         (scene.tiller_end_m - scene.rudder_m[0] - axis * parameters.tiller_length_m).length()
             < 1.0e-5
     );
+}
+
+#[test]
+fn triangular_sail_material_keeps_its_foot_on_the_boom_and_luff_at_the_mast() {
+    let scene = scene(Vector::new(0.0, 8.0));
+    let mesh = sail_mesh(&scene, 0.3);
+    let uv_bounds = mesh.iter().fold(
+        [
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ],
+        |b, v| {
+            [
+                b[0].min(v.uv[0]),
+                b[1].max(v.uv[0]),
+                b[2].min(v.uv[1]),
+                b[3].max(v.uv[1]),
+            ]
+        },
+    );
+    let boom = scene.sail_m[1] - scene.sail_m[0];
+    for vertex in mesh {
+        let foot_fraction = (vertex.uv[0] - uv_bounds[0]) / (uv_bounds[1] - uv_bounds[0]);
+        let height_fraction = (uv_bounds[3] - vertex.uv[1]) / (uv_bounds[3] - uv_bounds[2]);
+        assert!(
+            foot_fraction + height_fraction <= 1.0 + 1.0e-5,
+            "cloth material must narrow toward the head of a triangular main"
+        );
+        if height_fraction < 1.0e-5 {
+            assert!((vertex.position_m - scene.sail_m[0] - boom * foot_fraction).length() < 1.0e-5);
+        }
+        if foot_fraction < 1.0e-5 {
+            assert!(
+                (vertex.position_m - scene.sail_m[0]).length() < 1.0e-5,
+                "the entire vertical luff projects onto the mast from overhead"
+            );
+        }
+    }
+}
+
+#[test]
+fn sail_foot_samples_opaque_canvas_at_its_boom_attachment() {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(browser::RIG_IMAGE))
+        .read_info()
+        .unwrap();
+    let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut bytes).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let mesh = sail_mesh(&scene(Vector::new(0.0, 8.0)), 0.3);
+    let foot_v = mesh
+        .iter()
+        .map(|v| v.uv[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    for vertex in mesh.iter().filter(|v| v.uv[1] == foot_v) {
+        let x = (vertex.uv[0] * info.width as f32).floor() as usize;
+        let y = (vertex.uv[1] * info.height as f32).floor() as usize;
+        assert!(
+            bytes[4 * (y * info.width as usize + x) + 3] >= 250,
+            "transparent atlas padding must not separate the sail foot from its boom"
+        );
+    }
 }

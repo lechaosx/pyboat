@@ -1,0 +1,9 @@
+{
+  "tool": "built-in image_gen",
+  "source": "/home/dlabaja/.codex/generated_images/01a190c0-198d-7f93-a265-b1b5ecdc1c8f/exec-5866d8ca-fedf-4ccf-8b79-dedd35bd5fca.png",
+  "prompt": "Use case: stylized-concept. Asset type: single transparent game sprite component. Input image 1 is reference only for painted honey-oak wood style; input image 2 is reference only for painted material finish, NOT a shape to copy. Generate ONLY one traditional wooden sailing-dinghy BOOM spar, strict orthographic overhead, horizontally left to right, isolated transparent background. It represents a straight 2 metre long, 5 centimetre diameter timber boom: wood length-to-thickness ratio FORTY TO ONE. On a 1536px wide landscape canvas the wood should span about 1400px and be only about 35px thick. Keep generous transparent margins above and below. Paint the component genuinely slender at this aspect ratio; do not make a short chunky rod. Warm golden honey oak grain, subtly weathered brush-painted edges and restrained contour shading matching the approved boat references. Small simple dull bronze gooseneck pin at the left end, fitting no wider than roughly 1.5 times wood diameter; left is pivot, right is subtly tapered rounded wood end. No enormous ring, ball or finial, no ornate fantasy hardware, no labels, no text, no ropes, no sails, no boat, no cast shadow or opaque backdrop. Single straight component with physically consistent detail along entire length. Preserve actual alpha transparency.",
+  "references": [
+    "wooden-dinghy-painted.png",
+    "boat-rig-painted.png"
+  ]
+}
