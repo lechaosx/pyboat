@@ -158,7 +158,9 @@ fn demo_advances_the_real_simulation_at_fixed_ticks() {
 #[test]
 fn demo_clamps_and_applies_player_motion_intent() {
     let mut idle = Demo::new();
+    let mut straight = Demo::new();
     let mut controlled = Demo::new();
+    straight.set_motion_intent(1.0, 0.0);
     controlled.set_motion_intent(2.0, -2.0);
 
     assert_eq!(
@@ -170,13 +172,14 @@ fn demo_clamps_and_applies_player_motion_intent() {
     );
     for _ in 0..360 {
         idle.advance(DT_SECONDS);
+        straight.advance(DT_SECONDS);
         controlled.advance(DT_SECONDS);
     }
 
     let idle = idle.motion();
     let controlled = controlled.motion();
     assert!((controlled.position_m - idle.position_m).length() > 0.5);
-    assert!((controlled.angle_rad - idle.angle_rad).abs() > 0.1);
+    assert!((controlled.angle_rad - straight.motion().angle_rad).abs() > 0.1);
 }
 
 #[test]

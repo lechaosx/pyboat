@@ -1172,9 +1172,16 @@ fn damped_control_torque(
 ) -> f32 {
     let stiffness_n_m_rad = maximum_torque_n_m / (maximum_angle_rad / 10.0);
     let critical_damping_n_m_s_rad = 2.0 * (stiffness_n_m_rad * moment_of_inertia_kg_m2).sqrt();
-    (stiffness_n_m_rad * (target_angle_rad - angle_rad)
-        - critical_damping_n_m_s_rad * angular_velocity_rad_s)
-        .clamp(-maximum_torque_n_m, maximum_torque_n_m)
+    // The torque is held for a full tick. Solve feedback at its end using
+    // ω₁ = ω₀ + τΔt/I and θ₁ = θ₀ + ω₁Δt; explicit critical damping
+    // can inject energy when the hinge response is faster than the tick.
+    let numerator = stiffness_n_m_rad
+        * (target_angle_rad - angle_rad - DT_SECONDS * angular_velocity_rad_s)
+        - critical_damping_n_m_s_rad * angular_velocity_rad_s;
+    let denominator = 1.0
+        + (critical_damping_n_m_s_rad * DT_SECONDS + stiffness_n_m_rad * DT_SECONDS.powi(2))
+            / moment_of_inertia_kg_m2;
+    (numerator / denominator).clamp(-maximum_torque_n_m, maximum_torque_n_m)
 }
 
 pub fn target_control_torques(

@@ -2,6 +2,52 @@ use game::dinghy_parameters;
 use rapier2d::prelude::Vector;
 
 #[test]
+fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
+    let mut parameters = dinghy_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    parameters.water_density_kg_m3 = 0.0;
+    let motion = simulation::BoatMotion {
+        position_m: Vector::ZERO,
+        velocity_m_s: Vector::ZERO,
+        angle_rad: 0.0,
+        angular_velocity_rad_s: 0.0,
+        sail_angle_rad: 0.0,
+        sail_angular_velocity_rad_s: 0.0,
+        rudder_angle_rad: 0.01,
+        rudder_angular_velocity_rad_s: 0.0,
+    };
+    let mut simulation = simulation::Simulation::new(parameters, motion);
+    let environment = simulation::Environment {
+        true_wind_velocity_m_s: Vector::ZERO,
+        true_water_velocity_m_s: Vector::ZERO,
+        water_depth_m: f32::INFINITY,
+    };
+    let stiffness =
+        parameters.max_rudder_actuator_torque_n_m / (parameters.max_rudder_angle_rad / 10.0);
+    let energy = |simulation: &simulation::Simulation| {
+        simulation
+            .world
+            .bodies
+            .iter()
+            .map(|(_, b)| b.kinetic_energy())
+            .sum::<f32>()
+            + 0.5 * stiffness * simulation.motion().rudder_angle_rad.powi(2)
+    };
+    let mut previous_energy = energy(&simulation);
+    for tick in 0..60 {
+        let torques = simulation::target_control_torques(parameters, simulation.motion(), 0.0, 0.0);
+        simulation.advance(environment, torques);
+        let current_energy = energy(&simulation);
+        assert!(
+            current_energy <= previous_energy + 1.0e-6,
+            "tick {tick}: centering energy grew from {previous_energy} to {current_energy}"
+        );
+        previous_energy = current_energy;
+    }
+    assert!(simulation.motion().rudder_angle_rad.abs() < 1.0e-4);
+}
+
+#[test]
 fn transom_hung_rudder_pivots_on_the_hull_centerline_at_the_stern() {
     let parameters = dinghy_parameters();
     assert_eq!(

@@ -750,39 +750,24 @@ fn target_control_torques_reach_and_respect_actuator_limits() {
 }
 
 #[test]
-fn target_control_torques_critically_damp_motion_at_the_target() {
-    let parameters = reference_parameters();
+fn target_control_torques_reduce_hinge_motion_at_the_target() {
+    let parameters = vacuum_parameters();
     let mut current = motion();
     current.sail_angle_rad = 0.25;
     current.sail_angular_velocity_rad_s = 0.1;
     current.rudder_angle_rad = -0.1;
     current.rudder_angular_velocity_rad_s = -0.1;
-    let sail_hinge_inertia_kg_m2 = (parameters.sail_mass_kg + parameters.boom_mass_kg)
-        * parameters.boom_length_m.powi(2)
-        / 3.0;
-    let rudder_hinge_inertia_kg_m2 =
-        parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
-            + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0;
-    let sail_stiffness_n_m_rad =
-        parameters.max_sail_actuator_torque_n_m / (parameters.max_sail_angle_rad / 10.0);
-    let rudder_stiffness_n_m_rad =
-        parameters.max_rudder_actuator_torque_n_m / (parameters.max_rudder_angle_rad / 10.0);
-
     let torques = target_control_torques(
         parameters,
         current,
         current.sail_angle_rad,
         current.rudder_angle_rad,
     );
-
-    assert_close(
-        torques.sail_n_m,
-        -2.0 * (sail_stiffness_n_m_rad * sail_hinge_inertia_kg_m2).sqrt() * 0.1,
-    );
-    assert_close(
-        torques.rudder_n_m,
-        2.0 * (rudder_stiffness_n_m_rad * rudder_hinge_inertia_kg_m2).sqrt() * 0.1,
-    );
+    let mut simulation = Simulation::new(parameters, current);
+    simulation.advance(Environment::default(), torques);
+    let next = simulation.motion();
+    assert!(next.sail_angular_velocity_rad_s.abs() < current.sail_angular_velocity_rad_s.abs());
+    assert!(next.rudder_angular_velocity_rad_s.abs() < current.rudder_angular_velocity_rad_s.abs());
 }
 
 #[test]
