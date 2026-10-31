@@ -109,15 +109,16 @@ pub fn sail_mesh_with_cloth(
                 let chord = 1.0 - height;
                 let along = section * chord;
                 let ripple = (time * 13.0 - f64::from(along * TAU * 1.7)).sin() as f32;
-                let twist = (twist_angle + flutter * ripple) * height;
+                let twist = twist_angle * height;
+                // Ruled flutter keeps each luffing flap facing one way through
+                // its height; foot and vertical luff remain fixed.
+                let flutter_offset = 1.5 * along * height * flutter * ripple;
                 let point = scene.sail_m[0]
                     + Rotation::new(twist) * boom * along
                     + normal
                         * (length
-                            * chord
-                            * envelope
-                            * (PI * height).sin()
-                            * (0.18 * load + flutter * ripple * height));
+                            * (chord * envelope * (PI * height).sin() * 0.18 * load
+                                + flutter_offset));
                 // UVs use material distance, so sewn panels narrow with the triangle.
                 let mut vertex = textured(point, CLOTH, along, 1.0 - height);
                 vertex.shade = (0.76

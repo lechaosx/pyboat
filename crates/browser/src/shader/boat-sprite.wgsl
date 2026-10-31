@@ -15,8 +15,12 @@ fn fragment_boat_sprite(
         let sail_uv = input.color.xy * vec2<f32>(1024.0, 1536.0);
         let is_sail = all(sail_uv >= vec2<f32>(48.0, 985.0))
             && all(sail_uv <= vec2<f32>(473.0, 1404.0));
-        if is_sail && !front_facing {
-            color *= vec3<f32>(0.8, 0.12, 0.08);
+        if is_sail {
+            let height = clamp((1404.0 - sail_uv.y) / (1404.0 - 985.0), 0.0, 1.0);
+            color *= mix(0.3, 1.0, height);
+            if !front_facing {
+                color *= vec3<f32>(0.8, 0.12, 0.08);
+            }
         }
     } else if input.color.z > 1.5 {
         color = mix(color, vec3<f32>(0.8, 0.12, 0.05), 0.65);
