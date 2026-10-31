@@ -282,8 +282,8 @@ pub fn windsock_mesh(windsock: Windsock, time: f64) -> Vec<BoatSpriteVertex> {
     let normal = Vector::new(-direction.y, direction.x);
     let extension = windsock_extension(speed);
     let response = speed / (speed + 2.0);
-    // Keep the exposed cloth at its authored scale; the remaining texture bends
-    // back into one compressed fold instead of ending at the reveal boundary.
+    // Approximate downward sag with one tenth of the remaining axial length;
+    // exposed stripes retain their authored scale and width.
     for (start, end) in [(0.0, extension), (extension, 1.0)] {
         if end - start <= f32::EPSILON {
             continue;
@@ -304,20 +304,10 @@ pub fn windsock_mesh(windsock: Windsock, time: f64) -> Vec<BoatSpriteVertex> {
                 let sway = flutter * phase.sin() as f32;
                 let axial = flutter * phase.cos() as f32;
                 let folded = (u - extension).max(0.0) / (1.0 - extension).max(f32::EPSILON);
-                let remaining = 1.0 - extension;
-                let (along, down, width) = if u <= extension {
-                    (1.2 * u, 0.0, 0.125)
-                } else {
-                    let turn = PI * folded;
-                    (
-                        1.2 * extension + remaining * 0.22 * turn.sin(),
-                        -remaining * 0.32 * (1.0 - turn.cos()) * 0.5,
-                        0.125 * (1.0 - 0.75 * folded),
-                    )
-                };
+                let along = 1.2 * u.min(extension) + 0.12 * (u - extension).max(0.0);
                 let point = windsock.anchor_m
                     + direction * (along + axial)
-                    + normal * (down + sway + side * width);
+                    + normal * (sway + side * 0.125);
                 let mut vertex = textured(point, SOCK, u, (1.0 - side) * 0.5);
                 vertex.shade = 1.0 - 0.3 * (PI * folded).sin();
                 vertices.push(vertex);
