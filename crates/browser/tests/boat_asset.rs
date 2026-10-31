@@ -30,11 +30,47 @@ fn scene(wind: Vector) -> BoatScene {
 }
 
 #[test]
+fn wind_step_cannot_teleport_cloth_before_any_time_has_elapsed() {
+    let mut scene = scene(Vector::new(0.0, 8.0));
+    let mut motion = browser::ClothMotion::new(&scene);
+    let before = browser::sail_mesh_with_cloth(&scene, 0.4, motion.pose());
+    let sock_before = browser::windsock_mesh_with_cloth(
+        browser::Windsock {
+            anchor_m: scene.hull_m[0],
+            apparent_wind_velocity_m_s: scene.apparent_wind_velocity_m_s,
+        },
+        0.4,
+        motion.pose(),
+    );
+    scene.apparent_wind_velocity_m_s = Vector::new(0.0, -8.0);
+    motion.advance(&scene, 0.0);
+    let after = browser::sail_mesh_with_cloth(&scene, 0.4, motion.pose());
+    let jump = before
+        .iter()
+        .zip(after)
+        .map(|(a, b)| (a.position_m - b.position_m).length())
+        .fold(0.0, f32::max);
+    assert!(
+        jump < 1.0e-6,
+        "wind step moved cloth {jump} m without elapsed time"
+    );
+    let sock_after = browser::windsock_mesh_with_cloth(
+        browser::Windsock {
+            anchor_m: scene.hull_m[0],
+            apparent_wind_velocity_m_s: scene.apparent_wind_velocity_m_s,
+        },
+        0.4,
+        motion.pose(),
+    );
+    assert_eq!(sock_before, sock_after);
+}
+
+#[test]
 fn hull_sprite_follows_the_boat_without_changing_its_texture_coordinates() {
     let original = scene(Vector::ZERO);
     let rotation = Rotation::new(1.2);
     let translation = Vector::new(25.0, -13.0);
-    let mut transformed = original;
+    let mut transformed = original.clone();
     transformed.hull_m = original.hull_m.map(|p| rotation * p + translation);
     for (before, after) in hull_sprite_mesh(&original)
         .iter()
@@ -258,7 +294,7 @@ fn cloth_follows_the_boat_pose_and_wind_in_world_coordinates() {
     let original = scene(Vector::new(0.0, 8.0));
     let rotation = Rotation::new(1.2);
     let translation = Vector::new(25.0, -13.0);
-    let mut transformed = original;
+    let mut transformed = original.clone();
     transformed.sail_m = original.sail_m.map(|p| rotation * p + translation);
     transformed.apparent_wind_velocity_m_s = rotation * original.apparent_wind_velocity_m_s;
     for (before, after) in sail_mesh(&original, 0.7)

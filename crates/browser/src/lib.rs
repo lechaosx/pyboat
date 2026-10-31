@@ -3,11 +3,14 @@ use std::collections::HashMap;
 mod baked_surface;
 mod boat_asset;
 mod boat_texture;
+mod cloth;
 pub use boat_asset::{
-    BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, hull_sprite_mesh, rope_curve,
-    sail_mesh, windsock_mesh,
+    BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, boat_mesh_with_cloth,
+    hull_sprite_mesh, rope_curve, sail_mesh, sail_mesh_with_cloth, windsock_mesh,
+    windsock_mesh_with_cloth,
 };
 pub use boat_texture::{SpriteMip, sprite_mip_chain};
+pub use cloth::{ClothMotion, ClothPose, ClothPresentation};
 mod exposure;
 mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -402,8 +405,9 @@ pub fn sample_view_cloud_state(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BoatScene {
+    pub id: Option<String>,
     pub hull_m: [Vector; 15],
     pub sail_m: [Vector; 2],
     pub rudder_m: [Vector; 2],
@@ -791,6 +795,7 @@ impl MultiplayerClient {
                             ));
                     }
                     let mut scene = boat_scene(dinghy_parameters(), motion);
+                    scene.id = Some(boat.snapshot.id.clone());
                     scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
                     scene.apparent_wind_velocity_m_s =
                         self.match_seed.map_or(Vector::ZERO, |match_seed| {
@@ -1238,9 +1243,11 @@ impl Demo {
 
     pub fn scenes(&self) -> [BoatScene; 2] {
         let mut player = boat_scene(self.parameters, self.motion());
+        player.id = Some("demo-player".into());
         player.is_local = true;
         let practice_motion = self.simulation.motion(self.practice_boat);
         let mut practice = boat_scene(self.parameters, practice_motion);
+        practice.id = Some("demo-practice".into());
         player.apparent_wind_velocity_m_s = apparent_flow(
             match_environment().true_wind_velocity_m_s,
             self.motion().velocity_m_s,
@@ -1287,6 +1294,7 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
         + Rotation::new(motion.angle_rad + motion.rudder_angle_rad)
             .transform_vector(Vector::new(-parameters.rudder_draw_length_m, 0.0));
     BoatScene {
+        id: None,
         hull_m,
         sail_m: [mast_m, sail_end_m],
         rudder_m: [rudder_hinge_m, rudder_end_m],

@@ -2,7 +2,7 @@ use std::f32::consts::{PI, TAU};
 
 use rapier2d::prelude::{Rotation, Vector};
 
-use crate::{BoatScene, Windsock, windsock_extension};
+use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};
 
 pub const HULL_IMAGE: &[u8] = include_bytes!("../assets/wooden-dinghy-painted.png");
 pub const RIG_IMAGE: &[u8] = include_bytes!("../assets/boat-rig-painted.png");
@@ -71,22 +71,23 @@ pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {
         .to_vec()
 }
 
-fn sail_load(scene: &BoatScene) -> (f32, f32) {
-    let boom = scene.sail_m[1] - scene.sail_m[0];
-    let normal = Vector::new(-boom.y, boom.x).normalize();
-    let across = scene.apparent_wind_velocity_m_s.dot(normal);
-    let load = across / (across * across + 4.0).sqrt();
-    let speed = scene.apparent_wind_velocity_m_s.length();
-    // Pressure takes up membrane slack; a flutter floor would keep loaded cloth waving.
-    let flutter = 0.12 * speed / (speed + 2.0) * (1.0 - load * load).powi(2);
-    (load, flutter)
+pub fn sail_mesh(scene: &BoatScene, time: f64) -> Vec<BoatSpriteVertex> {
+    sail_mesh_with_cloth(scene, time, ClothMotion::new(scene).pose())
 }
 
-pub fn sail_mesh(scene: &BoatScene, time: f64) -> Vec<BoatSpriteVertex> {
+pub fn sail_mesh_with_cloth(
+    scene: &BoatScene,
+    time: f64,
+    cloth: ClothPose,
+) -> Vec<BoatSpriteVertex> {
     let boom = scene.sail_m[1] - scene.sail_m[0];
     let length = boom.length();
     let normal = Vector::new(-boom.y, boom.x) / length;
-    let (load, flutter) = sail_load(scene);
+    let load = cloth.sail_load;
+    // Pressure takes up membrane slack; a flutter floor would keep loaded cloth waving.
+    let flutter = 0.12 * cloth.flutter_response * (1.0 - load * load).powi(2);
+    let boom_angle = boom.y.atan2(boom.x);
+    let twist_angle = (cloth.sail_angle_rad - boom_angle + PI).rem_euclid(TAU) - PI;
     let mut vertices = Vec::new();
     const LENGTH_STEPS: usize = 24;
     const HEIGHT_STEPS: usize = 12;
@@ -108,7 +109,7 @@ pub fn sail_mesh(scene: &BoatScene, time: f64) -> Vec<BoatSpriteVertex> {
                 let chord = 1.0 - height;
                 let along = section * chord;
                 let ripple = (time * 13.0 - f64::from(along * TAU * 1.7)).sin() as f32;
-                let twist = (0.25 * load + flutter * ripple) * height;
+                let twist = (twist_angle + flutter * ripple) * height;
                 let point = scene.sail_m[0]
                     + Rotation::new(twist) * boom * along
                     + normal
@@ -158,6 +159,20 @@ pub fn rope_curve(
 }
 
 pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<BoatSpriteVertex> {
+    boat_mesh_with_cloth(
+        scene,
+        time,
+        pixel_footprint_m,
+        ClothMotion::new(scene).pose(),
+    )
+}
+
+pub fn boat_mesh_with_cloth(
+    scene: &BoatScene,
+    time: f64,
+    pixel_footprint_m: f32,
+    cloth: ClothPose,
+) -> Vec<BoatSpriteVertex> {
     let mut vertices = Vec::new();
     let stern = (scene.hull_m[7] + scene.hull_m[8]) * 0.5;
     let forward = (scene.hull_m[0] - stern).normalize();
@@ -165,7 +180,7 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
     let mast = scene.sail_m[0];
     let boom = scene.sail_m[1] - mast;
     let center = (scene.hull_m[0] + stern) * 0.5;
-    let (load, _) = sail_load(scene);
+    let load = cloth.sail_load;
     let wind = scene.apparent_wind_velocity_m_s;
 
     let rudder_axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
@@ -282,22 +297,49 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
         BLOCK,
         [357.0, 589.0],
     );
-    vertices.extend(sail_mesh(scene, time));
+    vertices.extend(sail_mesh_with_cloth(scene, time, cloth));
     stamp(&mut vertices, mast, port, [0.0004; 2], MAST, [783.0, 260.0]);
     vertices
 }
 
 pub fn windsock_mesh(windsock: Windsock, time: f64) -> Vec<BoatSpriteVertex> {
-    let mut vertices = Vec::new();
     let speed = windsock.apparent_wind_velocity_m_s.length();
-    let direction = if speed > f32::EPSILON {
-        windsock.apparent_wind_velocity_m_s / speed
-    } else {
-        Vector::X
-    };
+    windsock_mesh_parameters(
+        windsock,
+        time,
+        windsock
+            .apparent_wind_velocity_m_s
+            .y
+            .atan2(windsock.apparent_wind_velocity_m_s.x),
+        windsock_extension(speed),
+        speed / (speed + 2.0),
+    )
+}
+
+pub fn windsock_mesh_with_cloth(
+    windsock: Windsock,
+    time: f64,
+    cloth: ClothPose,
+) -> Vec<BoatSpriteVertex> {
+    windsock_mesh_parameters(
+        windsock,
+        time,
+        cloth.sock_angle_rad,
+        cloth.sock_extension,
+        cloth.flutter_response,
+    )
+}
+
+fn windsock_mesh_parameters(
+    windsock: Windsock,
+    time: f64,
+    angle: f32,
+    extension: f32,
+    response: f32,
+) -> Vec<BoatSpriteVertex> {
+    let mut vertices = Vec::new();
+    let direction = Rotation::new(angle) * Vector::X;
     let normal = Vector::new(-direction.y, direction.x);
-    let extension = windsock_extension(speed);
-    let response = speed / (speed + 2.0);
     // Approximate downward sag with thirty percent of the remaining axial length;
     // exposed stripes retain their authored scale and width.
     for band in 0..6 {

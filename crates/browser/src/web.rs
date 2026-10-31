@@ -35,17 +35,18 @@ use crate::frame_queue::FrameQueue;
 use crate::{
     AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BOAT_IMAGES, BakedSurface,
     BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene,
-    DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
-    ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning, FieldGrids, FramePacer,
-    GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER, MAX_SERVER_MESSAGE_BYTES,
-    MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS,
-    ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass, UpscaleTargets, Upscaler,
-    ViewCloudMotion, append_reliable_server_message_chunk, baked_surface_sizes, boat_mesh,
-    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
-    hull_sprite_mesh, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
-    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
-    scale_bar, scene_render_size, seasonal_phase_factors, sprite_mip_chain, view_width_m,
-    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url, windsock_mesh,
+    ClothPose, ClothPresentation, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
+    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
+    FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
+    MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
+    UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
+    baked_surface_sizes, boat_mesh_with_cloth, bounded_canvas_dimensions,
+    disconnect_and_clear_pending_snapshot, field_grids, hull_sprite_mesh, ocean_wave_mode_uniforms,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
+    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
+    seasonal_phase_factors, sprite_mip_chain, view_width_m, viewport_interest_radius_m,
+    visual_pixel_footprint_m, webtransport_server_url, windsock_mesh_with_cloth,
     zoom_view_height_m,
 };
 
@@ -1501,6 +1502,8 @@ struct Renderer {
     upscale_targets: Option<UpscaleTargets>,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
+    cloth: ClothPresentation,
+    cloth_match_seed: Option<u64>,
     field_grid_history: FieldGridHistory,
     adaptation_clock: AdaptationClock,
     vision_noise_phase: f64,
@@ -1892,6 +1895,8 @@ impl Renderer {
             upscale_targets: None,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
+            cloth: ClothPresentation::default(),
+            cloth_match_seed: None,
             field_grid_history: FieldGridHistory::default(),
             adaptation_clock: AdaptationClock::default(),
             vision_noise_phase: 0.0,
@@ -1920,6 +1925,11 @@ impl Renderer {
             return Err(JsValue::from_str("WebGPU device was lost"));
         }
         self.resize();
+        if self.cloth_match_seed != match_seed {
+            self.cloth = ClothPresentation::default();
+            self.cloth_match_seed = match_seed;
+        }
+        let cloth = self.cloth.advance(scenes, elapsed_seconds);
         self.follow_baked_surface_size(elapsed_seconds);
         let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
@@ -2032,6 +2042,7 @@ impl Renderer {
         };
         let (vertices, terrain_vertex_count, sprite_vertices) = scene_vertices(
             scenes,
+            &cloth,
             has_match,
             camera_m,
             (self.config.width, self.config.height),
@@ -3062,6 +3073,7 @@ struct SpriteBatch {
 
 fn scene_vertices(
     scenes: &[BoatScene],
+    cloth: &[ClothPose],
     render_terrain: bool,
     camera_m: Vector,
     output_size: (u32, u32),
@@ -3092,7 +3104,7 @@ fn scene_vertices(
     let terrain_vertex_count = vertices.len() as u32;
 
     let mut batches: Vec<SpriteBatch> = Vec::new();
-    for scene in scenes {
+    for (scene, &cloth) in scenes.iter().zip(cloth) {
         let state = if scene.wreck {
             1.0
         } else if scene.recently_damaged {
@@ -3102,14 +3114,15 @@ fn scene_vertices(
         };
         let sock = scene
             .windsock
-            .map(|sock| windsock_mesh(sock, time_seconds))
+            .map(|sock| windsock_mesh_with_cloth(sock, time_seconds, cloth))
             .unwrap_or_default();
         for sprite in hull_sprite_mesh(scene)
             .into_iter()
-            .chain(boat_mesh(
+            .chain(boat_mesh_with_cloth(
                 scene,
                 time_seconds,
                 view_height_m / height as f32,
+                cloth,
             ))
             .chain(sock)
         {
