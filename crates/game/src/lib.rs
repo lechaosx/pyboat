@@ -1400,17 +1400,21 @@ pub fn dinghy_parameters() -> BoatParameters {
     let length_m = 4.05;
     let boom_length_m = 2.0;
     let sail_luff_m = 4.5;
-    // Mass distribution, board-down draft and foil areas remain prototype
-    // estimates; the illustration cannot establish them.
+    // Loaded displacement is estimated at 250 kg, including crew and gear.
+    // Timber at 500 kg/m³ gives a 2 kg boom (2 m × 5 cm diameter); a
+    // 0.12 m² × 25 mm hardwood blade at 650 kg/m³ is about 2 kg.
+    // Canvas plus seams/ropes is estimated at 3 kg and the slim tiller at
+    // 0.5 kg. These are construction estimates, not image measurements.
+    // Board-down draft and foil areas remain operating estimates.
     BoatParameters {
         hull: HullParameters {
-            mass_kg: 222.0,
+            mass_kg: 242.5,
             length_m,
             beam_m: length_m * 580.0 / 1565.0,
             bow_length_m: 0.7,
         },
-        sail_mass_kg: 12.0,
-        boom_mass_kg: 10.0,
+        sail_mass_kg: 3.0,
+        boom_mass_kg: 2.0,
         boom_length_m,
         mast_position_m: Vector::new(0.4, 0.0),
         max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
@@ -1427,8 +1431,8 @@ pub fn dinghy_parameters() -> BoatParameters {
         hull_reference_area_m2: 0.3,
         hull_drag_coefficient: 0.08,
         hull_lateral_drag_coefficient: 0.02,
-        rudder_mass_kg: 4.0,
-        tiller_mass_kg: 2.0,
+        rudder_mass_kg: 2.0,
+        tiller_mass_kg: 0.5,
         rudder_draw_length_m: 0.45,
         tiller_length_m: 0.8,
         rudder_position_m: Vector::new(-length_m / 2.0, 0.0),

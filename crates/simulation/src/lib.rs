@@ -633,12 +633,30 @@ pub fn grounding_friction_force(
     supported_mass_kg: f32,
     kinetic_friction_coefficient: f32,
 ) -> Vector {
+    grounding_friction_force_at_step(
+        point_velocity_m_s,
+        water_depth_m,
+        draft_m,
+        supported_mass_kg,
+        kinetic_friction_coefficient,
+        DT_SECONDS,
+    )
+}
+
+fn grounding_friction_force_at_step(
+    point_velocity_m_s: Vector,
+    water_depth_m: f32,
+    draft_m: f32,
+    supported_mass_kg: f32,
+    kinetic_friction_coefficient: f32,
+    step_seconds: f32,
+) -> Vector {
     let support_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
     let maximum_force_n = kinetic_friction_coefficient
         * supported_mass_kg
         * GRAVITY_ACCELERATION_M_S2
         * support_fraction;
-    let stopping_force_n = -point_velocity_m_s * supported_mass_kg / DT_SECONDS;
+    let stopping_force_n = -point_velocity_m_s * supported_mass_kg / step_seconds;
     if stopping_force_n.length() <= maximum_force_n {
         return stopping_force_n;
     }
@@ -662,6 +680,7 @@ fn apply_grounding_friction(
     parameters: BoatParameters,
     boat: Boat,
     water_depth_m: f32,
+    step_seconds: f32,
 ) {
     let support_fraction =
         ((parameters.draft_m - water_depth_m) / parameters.draft_m).clamp(0.0, 1.0);
@@ -700,8 +719,9 @@ fn apply_grounding_friction(
                     )
                 },
             );
-        let required_force_n = -external_force_n - hull.linvel() * total_mass_kg / DT_SECONDS;
-        let required_torque_n_m = -external_torque_n_m - hull.angvel() * inertia_kg_m2 / DT_SECONDS;
+        let required_force_n = -external_force_n - hull.linvel() * total_mass_kg / step_seconds;
+        let required_torque_n_m =
+            -external_torque_n_m - hull.angvel() * inertia_kg_m2 / step_seconds;
         let static_force_limit_n = parameters.ground_static_friction_coefficient
             * total_mass_kg
             * GRAVITY_ACCELERATION_M_S2
@@ -724,12 +744,13 @@ fn apply_grounding_friction(
         (bow_position_m, bow_velocity_m_s),
         (stern_position_m, stern_velocity_m_s),
     ] {
-        let friction_force_n = grounding_friction_force(
+        let friction_force_n = grounding_friction_force_at_step(
             velocity_m_s,
             water_depth_m,
             parameters.draft_m,
             total_mass_kg / 2.0,
             parameters.ground_kinetic_friction_coefficient,
+            step_seconds,
         );
         world.bodies[boat.hull.body].add_force_at_point(friction_force_n, position_m, true);
     }
@@ -1386,6 +1407,47 @@ fn physics_world() -> PhysicsWorld {
     }
 }
 
+fn fluid_maximum_step_seconds(
+    world: &PhysicsWorld,
+    parameters: BoatParameters,
+    boat: Boat,
+    environment: Environment,
+) -> f32 {
+    let rudder = &world.bodies[boat.rudder];
+    let lever_m = parameters.rudder_draw_length_m / 2.0;
+    let point = rudder.translation()
+        + rotated(
+            Vector::new(-lever_m, 0.0) - rudder_center_from_hinge_m(parameters),
+            rudder.rotation().angle(),
+        );
+    let speed = apparent_flow(
+        environment.true_water_velocity_m_s,
+        rudder.velocity_at_point(point),
+    )
+    .length();
+    // F = ½ρAv² Rθ(D,-L). Radial and angular columns of dF/dv are
+    // bounded by 2a and a+b, where a bounds coefficient magnitude and b
+    // its angular derivative. Their Frobenius norm bounds the force Jacobian.
+    let lift_slope = (parameters.rudder_stall_lift_coefficient / parameters.rudder_stall_angle_rad)
+        .max(
+            parameters.rudder_stall_lift_coefficient
+                / (std::f32::consts::FRAC_PI_2 - parameters.rudder_stall_angle_rad),
+        )
+        .max(2.0);
+    let a = (parameters.rudder_base_drag_coefficient + 2.0)
+        .hypot(parameters.rudder_stall_lift_coefficient.max(1.0));
+    let b = 2.0_f32.hypot(lift_slope);
+    let force_slope = 0.5
+        * parameters.water_density_kg_m3
+        * parameters.rudder_area_m2
+        * speed
+        * (2.0 * a).hypot(a + b);
+    let response_rate =
+        force_slope * lever_m.powi(2) / rudder_hinge_moment_of_inertia_kg_m2(parameters);
+    // Bound the local explicit angular response, and re-evaluate as flow changes.
+    DT_SECONDS.min(response_rate.recip())
+}
+
 fn apply_boat_forces(
     world: &mut PhysicsWorld,
     parameters: BoatParameters,
@@ -1489,7 +1551,13 @@ fn apply_boat_forces(
         -actuator_torques.sail_n_m - actuator_torques.rudder_n_m,
         true,
     );
-    apply_grounding_friction(world, parameters, boat, environment.water_depth_m);
+    apply_grounding_friction(
+        world,
+        parameters,
+        boat,
+        environment.water_depth_m,
+        world.integration_parameters.dt,
+    );
 }
 
 impl Simulation {
@@ -1510,14 +1578,26 @@ impl Simulation {
     }
 
     pub fn advance(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
-        apply_boat_forces(
-            &mut self.world,
-            self.parameters,
-            self.boat,
-            environment,
-            actuator_torques,
-        );
-        self.world.step();
+        let mut remaining_seconds = f64::from(DT_SECONDS);
+        while remaining_seconds > 0.0 {
+            let step_seconds = (remaining_seconds as f32).min(fluid_maximum_step_seconds(
+                &self.world,
+                self.parameters,
+                self.boat,
+                environment,
+            ));
+            self.world.integration_parameters.dt = step_seconds;
+            apply_boat_forces(
+                &mut self.world,
+                self.parameters,
+                self.boat,
+                environment,
+                actuator_torques,
+            );
+            self.world.step();
+            remaining_seconds = (remaining_seconds - f64::from(step_seconds)).max(0.0);
+        }
+        self.world.integration_parameters.dt = DT_SECONDS;
     }
 
     pub fn advance_controlled(
@@ -1646,18 +1726,7 @@ impl SharedSimulation {
         environment: Environment,
         actuator_torques: &[ActuatorTorques],
     ) -> Vec<HullContact> {
-        assert_eq!(actuator_torques.len(), self.boats.len());
-        let substeps = self.prepare_contact_charts();
-        for (boat, actuator_torques) in self.boats.iter().zip(actuator_torques) {
-            apply_boat_forces(
-                &mut self.world,
-                boat.parameters,
-                boat.boat,
-                environment,
-                *actuator_torques,
-            );
-        }
-        self.step_and_collect_contacts(substeps)
+        self.advance_with_environments(&vec![environment; self.boats.len()], actuator_torques)
     }
 
     pub fn advance_with_environments(
@@ -1668,18 +1737,7 @@ impl SharedSimulation {
         assert_eq!(environments.len(), self.boats.len());
         assert_eq!(actuator_torques.len(), self.boats.len());
         let substeps = self.prepare_contact_charts();
-        for ((boat, environment), actuator_torques) in
-            self.boats.iter().zip(environments).zip(actuator_torques)
-        {
-            apply_boat_forces(
-                &mut self.world,
-                boat.parameters,
-                boat.boat,
-                *environment,
-                *actuator_torques,
-            );
-        }
-        self.step_and_collect_contacts(substeps)
+        self.step_and_collect_contacts(substeps, environments, actuator_torques)
     }
 
     pub fn motion(&self, boat: usize) -> BoatMotion {
@@ -1826,10 +1884,37 @@ impl SharedSimulation {
         substeps
     }
 
-    fn step_and_collect_contacts(&mut self, substeps: usize) -> Vec<HullContact> {
-        self.world.integration_parameters.dt = DT_SECONDS / substeps as f32;
+    fn step_and_collect_contacts(
+        &mut self,
+        substeps: usize,
+        environments: &[Environment],
+        actuator_torques: &[ActuatorTorques],
+    ) -> Vec<HullContact> {
+        let collision_maximum_step_seconds = DT_SECONDS / substeps as f32;
+        let mut remaining_seconds = f64::from(DT_SECONDS);
         let mut contacts_by_pair = HashMap::<(usize, usize), HullContact>::new();
-        for _ in 0..substeps {
+        while remaining_seconds > 0.0 {
+            let mut step_seconds = (remaining_seconds as f32).min(collision_maximum_step_seconds);
+            for (boat, environment) in self.boats.iter().zip(environments) {
+                step_seconds = step_seconds.min(fluid_maximum_step_seconds(
+                    &self.world,
+                    boat.parameters,
+                    boat.boat,
+                    *environment,
+                ));
+            }
+            self.world.integration_parameters.dt = step_seconds;
+            for ((boat, environment), torques) in
+                self.boats.iter().zip(environments).zip(actuator_torques)
+            {
+                apply_boat_forces(
+                    &mut self.world,
+                    boat.parameters,
+                    boat.boat,
+                    *environment,
+                    *torques,
+                );
+            }
             self.world.step();
             for mut contact in self.hull_contacts() {
                 if contact.first_boat > contact.second_boat {
@@ -1847,6 +1932,7 @@ impl SharedSimulation {
                     .or_insert(contact);
             }
             self.enforce_supported_motion();
+            remaining_seconds = (remaining_seconds - f64::from(step_seconds)).max(0.0);
         }
         self.world.integration_parameters.dt = DT_SECONDS;
         self.refresh_spatial_index();

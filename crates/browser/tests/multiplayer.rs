@@ -515,7 +515,8 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
         match_seed: 42,
         world_geometry: WorldGeometry::default(),
     });
-    let mut local = boat("player-1", -3.0);
+    let center_distance_m = game::dinghy_parameters().hull.length_m / 2.0 + 0.175;
+    let mut local = boat("player-1", -center_distance_m);
     local.y = 0.0;
     local.vx = 5.0;
     local.vy = 0.0;
@@ -528,7 +529,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     local.forward = Some(0.0);
     local.turn = Some(0.0);
     local.acknowledged_input = Some(0);
-    let mut other = boat("player-2", 3.0);
+    let mut other = boat("player-2", center_distance_m);
     other.y = 0.0;
     other.vx = -5.0;
     other.vy = 0.0;
@@ -541,6 +542,17 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     other.forward = Some(0.0);
     other.turn = Some(0.0);
     other.acknowledged_input = None;
+    let mut solo = MultiplayerClient::new();
+    solo.accept(ServerMessage::Welcome {
+        player_id: "player-1".to_owned(),
+        match_seed: 42,
+        world_geometry: WorldGeometry::default(),
+    });
+    solo.accept(ServerMessage::Snapshot {
+        tick: 1,
+        boats: vec![local.clone()],
+        removed_player_ids: Vec::new(),
+    });
     client.accept(ServerMessage::Snapshot {
         tick: 1,
         boats: vec![local, other],
@@ -550,7 +562,10 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     client.take_inputs(0.25);
     client.take_inputs(0.25);
 
-    assert!(client.view().unwrap().speed_m_s < 3.0);
+    solo.take_inputs(0.25);
+    solo.take_inputs(0.25);
+    assert!(client.camera_m().unwrap().x < solo.camera_m().unwrap().x);
+    assert!(client.view().unwrap().speed_m_s < solo.view().unwrap().speed_m_s);
 }
 
 #[test]
