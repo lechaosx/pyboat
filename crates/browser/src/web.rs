@@ -1084,14 +1084,18 @@ fn boat_sprite_resources(
         bind_group_layouts: &[Some(scene_layout), Some(&sprite_layout)],
         immediate_size: 0,
     });
-    let pipeline = |entry_point, write_mask, depth_stencil| {
+    let pipeline = |entry_point, sail, write_mask, depth_stencil| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(entry_point),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vertex_boat_sprite"),
-                buffers: &[Some(Vertex::boat_layout())],
+                entry_point: Some(if sail { "vertex_boat_sprite" } else { "vertex" }),
+                buffers: &[Some(if sail {
+                    Vertex::boat_layout()
+                } else {
+                    Vertex::layout()
+                })],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1121,14 +1125,16 @@ fn boat_sprite_resources(
         })
     };
     Ok((
-        pipeline("fragment_boat_sprite", wgpu::ColorWrites::ALL, None),
+        pipeline("fragment_boat_sprite", false, wgpu::ColorWrites::ALL, None),
         pipeline(
             "fragment_sail_depth",
+            true,
             wgpu::ColorWrites::empty(),
             depth(true, wgpu::CompareFunction::LessEqual),
         ),
         pipeline(
             "fragment_boat_sprite",
+            true,
             wgpu::ColorWrites::ALL,
             depth(false, wgpu::CompareFunction::Equal),
         ),
@@ -3189,7 +3195,8 @@ fn scene_vertices(
     view_height_m: f32,
     time_seconds: f64,
 ) -> (Vec<Vertex>, u32, Vec<SpriteBatch>) {
-    let (_, height) = output_size;
+    let (width, height) = output_size;
+    let view_width_m = view_width_m(width as f32 / height as f32, view_height_m);
     let mut vertices = Vec::new();
 
     if render_terrain {
@@ -3248,7 +3255,15 @@ fn scene_vertices(
             }
             let relative_m = sprite.position_m - camera_m;
             vertices.push(Vertex {
-                position: [relative_m.x, relative_m.y, sprite.height_m.unwrap_or(0.0)],
+                position: if let Some(height_m) = sprite.height_m {
+                    [relative_m.x, relative_m.y, height_m]
+                } else {
+                    [
+                        2.0 * (relative_m.x / view_width_m),
+                        2.0 * (relative_m.y / view_height_m),
+                        0.0,
+                    ]
+                },
                 color: [
                     sprite.uv[0],
                     sprite.uv[1],

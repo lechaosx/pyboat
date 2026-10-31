@@ -5,7 +5,8 @@ struct VertexInput {
 };
 
 struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
+    // Equal-depth passes require the same clip positions across pipelines.
+    @invariant @builtin(position) position: vec4<f32>,
     @location(0) color: vec3<f32>,
     @location(1) world_position_m: vec2<f32>,
     @location(2) @interpolate(flat) is_terrain: f32,
