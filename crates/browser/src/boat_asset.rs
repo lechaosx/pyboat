@@ -282,35 +282,46 @@ pub fn windsock_mesh(windsock: Windsock, time: f64) -> Vec<BoatSpriteVertex> {
     let normal = Vector::new(-direction.y, direction.x);
     let extension = windsock_extension(speed);
     let response = speed / (speed + 2.0);
-    // Approximate downward sag with one tenth of the remaining axial length;
+    // Approximate downward sag with thirty percent of the remaining axial length;
     // exposed stripes retain their authored scale and width.
-    for (start, end) in [(0.0, extension), (extension, 1.0)] {
-        if end - start <= f32::EPSILON {
-            continue;
-        }
-        for step in 0..24 {
-            let a = start + (end - start) * step as f32 / 24.0;
-            let b = start + (end - start) * (step + 1) as f32 / 24.0;
-            for (u, side) in [
-                (a, -1.0),
-                (b, -1.0),
-                (b, 1.0),
-                (a, -1.0),
-                (b, 1.0),
-                (a, 1.0),
-            ] {
-                let phase = time * 4.5 - f64::from(u) * 6.0;
-                let flutter = 0.025 * response * u * u;
-                let sway = flutter * phase.sin() as f32;
-                let axial = flutter * phase.cos() as f32;
-                let folded = (u - extension).max(0.0) / (1.0 - extension).max(f32::EPSILON);
-                let along = 1.2 * u.min(extension) + 0.12 * (u - extension).max(0.0);
-                let point = windsock.anchor_m
-                    + direction * (along + axial)
-                    + normal * (sway + side * 0.125);
-                let mut vertex = textured(point, SOCK, u, (1.0 - side) * 0.5);
-                vertex.shade = 1.0 - 0.3 * (PI * folded).sin();
-                vertices.push(vertex);
+    for band in 0..6 {
+        let left = -1.0 + 2.0 * band as f32 / 6.0;
+        let right = -1.0 + 2.0 * (band + 1) as f32 / 6.0;
+        for tail in [false, true] {
+            if (!tail && extension <= f32::EPSILON) || (tail && 1.0 - extension <= f32::EPSILON) {
+                continue;
+            }
+            for step in 0..24 {
+                let a = step as f32 / 24.0;
+                let b = (step + 1) as f32 / 24.0;
+                for (t, side) in [
+                    (a, left),
+                    (b, left),
+                    (b, right),
+                    (a, left),
+                    (b, right),
+                    (a, right),
+                ] {
+                    let crease =
+                        extension + 0.24 * extension * (1.0 - extension) * (1.0 - side * side);
+                    let u = if tail {
+                        crease + (1.0 - crease) * t
+                    } else {
+                        crease * t
+                    };
+                    let phase = time * 4.5 - f64::from(u) * 6.0;
+                    let flutter = 0.025 * response * u * u;
+                    let sway = flutter * phase.sin() as f32;
+                    let axial = flutter * phase.cos() as f32;
+                    let folded = (u - crease).max(0.0) / (1.0 - crease).max(f32::EPSILON);
+                    let along = 1.2 * u.min(crease) + 0.36 * (u - crease).max(0.0);
+                    let point = windsock.anchor_m
+                        + direction * (along + axial)
+                        + normal * (sway + side * 0.125);
+                    let mut vertex = textured(point, SOCK, u, (1.0 - side) * 0.5);
+                    vertex.shade = 1.0 - 0.3 * (PI * folded).sin();
+                    vertices.push(vertex);
+                }
             }
         }
     }

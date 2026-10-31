@@ -237,9 +237,16 @@ fn calm_windsock_keeps_finite_folded_cloth_at_the_anchor() {
         .fold(f32::INFINITY, f32::min);
     assert!(mouth.iter().all(|v| v.position_m.x == anchor.x));
     assert!(((top + bottom) * 0.5 - anchor.y).abs() < 1.0e-6);
+    let bottom_v = mesh
+        .iter()
+        .map(|v| v.uv[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let top_v = mesh.iter().map(|v| v.uv[1]).fold(f32::INFINITY, f32::min);
     assert!(
-        mesh.iter()
-            .all(|v| ((v.position_m.y - anchor.y).abs() - (top - bottom) * 0.5).abs() < 1.0e-6),
+        mesh.iter().all(|v| {
+            let across = (bottom_v - v.uv[1]) / (bottom_v - top_v);
+            (v.position_m.y - (bottom + across * (top - bottom))).abs() < 1.0e-6
+        }),
         "downward sag projects along the sock axis without narrowing its cross-section"
     );
     let tip_u = mesh
