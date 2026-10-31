@@ -7,9 +7,9 @@ use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};
 pub const HULL_IMAGE: &[u8] = include_bytes!("../assets/wooden-dinghy-painted.png");
 pub const RIG_IMAGE: &[u8] = include_bytes!("../assets/boat-rig-painted.png");
 const BOOM_IMAGE: &[u8] = include_bytes!("../assets/boat-boom-painted.png");
-pub const BOAT_IMAGES: [&[u8]; 3] = [HULL_IMAGE, RIG_IMAGE, BOOM_IMAGE];
+const STEERING_IMAGE: &[u8] = include_bytes!("../assets/boat-steering-painted.png");
+pub const BOAT_IMAGES: [&[u8]; 4] = [HULL_IMAGE, RIG_IMAGE, BOOM_IMAGE, STEERING_IMAGE];
 
-const RUDDER: [f32; 4] = [16.0, 192.0, 627.0, 335.0];
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
 const ROPE: [f32; 4] = [530.0, 691.0, 982.0, 795.0];
@@ -193,38 +193,47 @@ pub fn boat_mesh_with_cloth(
     let wind = scene.apparent_wind_velocity_m_s;
 
     let rudder_axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
-    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / 205.0;
-    let tiller_scale = (scene.tiller_end_m - scene.rudder_m[0]).length() / 387.0;
-    // The transom strap stays with the hull while the central collar turns.
+    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / (1549.0 - 81.0);
+    let tiller_scale = (scene.tiller_end_m - scene.rudder_m[0]).length() / (1662.0 - 128.0);
+    let steering_start = vertices.len();
+    stamp(
+        &mut vertices,
+        scene.rudder_m[0],
+        rudder_axis,
+        [blade_scale; 2],
+        [76.0, 170.0, 1663.0, 328.0],
+        [1549.0, 249.0],
+    );
+    // Only the gudgeon's short bearing projects aft; its screws sit on transom timber.
     stamp(
         &mut vertices,
         scene.rudder_m[0],
         forward,
-        [blade_scale, 0.0011],
-        [210.0, RUDDER[1], 253.0, RUDDER[3]],
-        [230.0, 263.0],
+        [0.07 / 122.0; 2],
+        [702.0, 721.0, 1030.0, 857.0],
+        [769.0, 790.0],
     );
-    for (rect, scale) in [
-        (
-            [RUDDER[0], RUDDER[1], 194.0, RUDDER[3]],
-            [blade_scale, 0.0011],
-        ),
-        ([194.0, 239.0, 230.0, 287.0], [blade_scale, 0.0011]),
-        ([230.0, 239.0, 273.0, 287.0], [tiller_scale, 0.0011]),
-        (
-            [273.0, RUDDER[1], RUDDER[2], RUDDER[3]],
-            [tiller_scale, 0.0011],
-        ),
-    ] {
-        stamp(
-            &mut vertices,
-            scene.rudder_m[0],
-            rudder_axis,
-            scale,
-            rect,
-            [230.0, 263.0],
-        );
+    stamp(
+        &mut vertices,
+        scene.rudder_m[0],
+        rudder_axis,
+        [tiller_scale; 2],
+        [62.0, 472.0, 1670.0, 617.0],
+        [128.0, 548.0],
+    );
+    for vertex in &mut vertices[steering_start..] {
+        vertex.image = 3;
+        vertex.uv[0] *= 1024.0 / 1731.0;
+        vertex.uv[1] *= 1536.0 / 909.0;
     }
+    stamp(
+        &mut vertices,
+        scene.rudder_m[0],
+        rudder_axis,
+        [0.028 / 33.0; 2],
+        [214.0, 247.0, 247.0, 280.0],
+        [230.5, 263.5],
+    );
 
     let length = (scene.hull_m[0] - stern).length();
     let pixel_m = length / 1565.0;

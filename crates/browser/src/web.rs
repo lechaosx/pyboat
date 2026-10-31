@@ -1106,7 +1106,10 @@ fn boat_sprite_resources(
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("IS_SAIL", if sail { 1.0 } else { 0.0 })],
+                    ..Default::default()
+                },
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil,
