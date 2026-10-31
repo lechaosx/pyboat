@@ -568,9 +568,9 @@ and verification details.
 - **[Implicit]** Failed viewport sends remain retryable until superseded.
 - **[Implicit]** Individual stream resets leave later streams usable.
 - **[Implicit]** Protocol/version failure closes the session and discards queued replicated state.
-- **[Implicit]** The protocol version also changes when the world generated
-  from a match seed changes, so a client cannot predict a different world than
-  its server.
+- **[Implicit]** The protocol version also gates shared simulation compatibility,
+  including the world generated from a match seed and collision geometry, so
+  clients predict the same physical world as their server.
 - **[Implicit]** Match boat and session capacity is bounded, including wrecks,
   to bound simulation, complete snapshots, and rendering without a distance cap.
   Excess sessions close before registration.

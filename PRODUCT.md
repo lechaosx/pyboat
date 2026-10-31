@@ -206,6 +206,7 @@ See [README.md](README.md) for what is playable now and
 
 | Area | Unresolved choice |
 | --- | --- |
+| Boat artwork | Whether to adopt semi-stylized hull sprites with animated cloth sails |
 | Wreck lifecycle | Cleanup timing and whether time, distance, capacity, or salvage governs it |
 | Progression | Progression, matchmaking, ship-class, weapon, and custom-action rules |
 | Grounding | Recovery, rock damage, draft, spawn clearance, and friction tuning |

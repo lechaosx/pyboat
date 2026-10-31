@@ -49,6 +49,11 @@ fn main() {
         "scene-production.wgsl",
     );
     write_shader(
+        &compose(&[&production, &read_component("src/shader/boat-sprite.wgsl")]),
+        &["vertex", "fragment_boat_sprite"],
+        "boat-sprite.wgsl",
+    );
+    write_shader(
         &compose(&[
             &scene,
             &direct_occluder_fields,

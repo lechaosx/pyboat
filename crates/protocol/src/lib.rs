@@ -6,8 +6,9 @@ pub use simulation::WorldGeometry;
 // Postcard encodes these enums and structs positionally. Reordering or changing
 // fields is a wire-contract change and requires a new version. So is changing
 // the world `game` generates from a match seed, because clients predict and
-// render that world from the seed in Welcome.
-pub const PROTOCOL_VERSION: u8 = 5;
+// render that world from the seed in Welcome. Predicted boat geometry must also
+// agree between clients and servers.
+pub const PROTOCOL_VERSION: u8 = 6;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {

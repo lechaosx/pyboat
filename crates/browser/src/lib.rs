@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 
 mod baked_surface;
+mod boat_asset;
+mod boat_texture;
+pub use boat_asset::{
+    BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, hull_sprite_mesh, rope_curve,
+    sail_mesh, windsock_mesh,
+};
+pub use boat_texture::{SpriteMip, sprite_mip_chain};
 mod exposure;
 mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -397,9 +404,10 @@ pub fn sample_view_cloud_state(
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatScene {
-    pub hull_m: [Vector; 5],
+    pub hull_m: [Vector; 15],
     pub sail_m: [Vector; 2],
     pub rudder_m: [Vector; 2],
+    pub apparent_wind_velocity_m_s: Vector,
     pub windsock: Option<Windsock>,
     pub is_local: bool,
     pub recently_damaged: bool,
@@ -783,10 +791,9 @@ impl MultiplayerClient {
                     }
                     let mut scene = boat_scene(dinghy_parameters(), motion);
                     scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
-                    if scene.is_local {
-                        scene.windsock = self.match_seed.map(|match_seed| Windsock {
-                            anchor_m: scene.hull_m[0],
-                            apparent_wind_velocity_m_s: apparent_flow(
+                    scene.apparent_wind_velocity_m_s =
+                        self.match_seed.map_or(Vector::ZERO, |match_seed| {
+                            apparent_flow(
                                 procedural_match_environment(
                                     self.world_geometry.unwrap_or_default(),
                                     match_seed,
@@ -795,7 +802,12 @@ impl MultiplayerClient {
                                 )
                                 .true_wind_velocity_m_s,
                                 motion.velocity_m_s,
-                            ),
+                            )
+                        });
+                    if scene.is_local {
+                        scene.windsock = self.match_seed.map(|_| Windsock {
+                            anchor_m: scene.hull_m[0],
+                            apparent_wind_velocity_m_s: scene.apparent_wind_velocity_m_s,
                         });
                     }
                     scene.recently_damaged = !boat.snapshot.wreck
@@ -1226,10 +1238,17 @@ impl Demo {
     pub fn scenes(&self) -> [BoatScene; 2] {
         let mut player = boat_scene(self.parameters, self.motion());
         player.is_local = true;
-        [
-            player,
-            boat_scene(self.parameters, self.simulation.motion(self.practice_boat)),
-        ]
+        let practice_motion = self.simulation.motion(self.practice_boat);
+        let mut practice = boat_scene(self.parameters, practice_motion);
+        player.apparent_wind_velocity_m_s = apparent_flow(
+            match_environment().true_wind_velocity_m_s,
+            self.motion().velocity_m_s,
+        );
+        practice.apparent_wind_velocity_m_s = apparent_flow(
+            match_environment().true_wind_velocity_m_s,
+            practice_motion.velocity_m_s,
+        );
+        [player, practice]
     }
 
     pub fn contacts(&self) -> &[HullContact] {
@@ -1270,6 +1289,7 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
         hull_m,
         sail_m: [mast_m, sail_end_m],
         rudder_m: [rudder_hinge_m, rudder_end_m],
+        apparent_wind_velocity_m_s: Vector::ZERO,
         windsock: None,
         is_local: false,
         recently_damaged: false,

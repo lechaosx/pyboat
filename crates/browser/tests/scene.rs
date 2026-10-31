@@ -116,6 +116,18 @@ fn scene_shader_satisfies_webgpu_validation() {
 }
 
 #[test]
+fn boat_sprite_shader_satisfies_webgpu_validation() {
+    let shader = include_str!(concat!(env!("OUT_DIR"), "/boat-sprite.wgsl"));
+    let module = naga::front::wgsl::parse_str(shader).unwrap();
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .unwrap();
+}
+
+#[test]
 fn demo_advances_the_real_simulation_at_fixed_ticks() {
     let mut demo = Demo::new();
     let initial = demo.motion();
@@ -225,9 +237,11 @@ fn demo_contains_a_distinct_practice_boat() {
 #[test]
 fn demo_reports_a_collision_with_the_practice_boat() {
     let mut demo = Demo::new();
-    demo.set_motion_intent(1.0, 0.0);
 
     let collided = (0..30 * 60).any(|_| {
+        let scenes = demo.scenes();
+        let toward_practice = (scenes[1].sail_m[0] - scenes[0].sail_m[0]).normalize();
+        demo.set_player_input(0.0, 0.0, toward_practice.x, toward_practice.y);
         demo.advance(DT_SECONDS);
         !demo.contacts().is_empty()
     });

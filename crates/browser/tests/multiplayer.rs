@@ -521,6 +521,10 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     local.vy = 0.0;
     local.angle = 0.0;
     local.angular_velocity = 0.0;
+    local.sail = 0.0;
+    local.sail_angular_velocity = 0.0;
+    local.rudder = 0.0;
+    local.rudder_angular_velocity = 0.0;
     local.forward = Some(0.0);
     local.turn = Some(0.0);
     local.acknowledged_input = Some(0);
@@ -530,6 +534,10 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     other.vy = 0.0;
     other.angle = std::f32::consts::PI;
     other.angular_velocity = 0.0;
+    other.sail = 0.0;
+    other.sail_angular_velocity = 0.0;
+    other.rudder = 0.0;
+    other.rudder_angular_velocity = 0.0;
     other.forward = Some(0.0);
     other.turn = Some(0.0);
     other.acknowledged_input = None;
@@ -554,21 +562,29 @@ fn multiplayer_prediction_matches_authoritative_cylinder_collision_rules() {
         match_seed: 42,
         world_geometry: world,
     });
-    let mut local = boat("player-1", 3_997.0);
+    let mut local = boat("player-1", 3_997.95);
     local.y = 0.0;
     local.vx = 5.0;
     local.vy = 0.0;
     local.angle = 0.0;
     local.angular_velocity = 0.0;
+    local.sail = 0.0;
+    local.sail_angular_velocity = 0.0;
+    local.rudder = 0.0;
+    local.rudder_angular_velocity = 0.0;
     local.forward = Some(0.0);
     local.turn = Some(0.0);
     local.acknowledged_input = Some(0);
-    let mut other = boat("player-2", -3_997.0);
+    let mut other = boat("player-2", -3_997.95);
     other.y = 0.0;
     other.vx = -5.0;
     other.vy = 0.0;
     other.angle = std::f32::consts::PI;
     other.angular_velocity = 0.0;
+    other.sail = 0.0;
+    other.sail_angular_velocity = 0.0;
+    other.rudder = 0.0;
+    other.rudder_angular_velocity = 0.0;
     other.forward = Some(0.0);
     other.turn = Some(0.0);
     other.acknowledged_input = None;

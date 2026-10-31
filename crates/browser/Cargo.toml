@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
+png = "0.18"
 game = { path = "../game" }
 protocol = { path = "../protocol" }
 simulation = { path = "../simulation" }

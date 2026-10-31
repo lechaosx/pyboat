@@ -89,12 +89,6 @@ canvas {
   font-size: 0.72rem;
 }
 
-.overlay .practice {
-  margin-top: 0.2rem;
-  color: #e26b58;
-  font-size: 0.68rem;
-}
-
 .scale-bar {
   position: fixed;
   bottom: 2rem;

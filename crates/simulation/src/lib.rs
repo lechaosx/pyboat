@@ -1031,16 +1031,32 @@ pub fn yaw_rate_move_control(
     }
 }
 
-pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 5] {
+pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 15] {
     let half_length_m = parameters.length_m / 2.0;
     let half_beam_m = parameters.beam_m / 2.0;
     let bow_base_m = half_length_m - parameters.bow_length_m;
     [
         Vector::new(half_length_m, 0.0),
-        Vector::new(bow_base_m, -half_beam_m),
-        Vector::new(-half_length_m, -half_beam_m),
-        Vector::new(-half_length_m, half_beam_m),
-        Vector::new(bow_base_m, half_beam_m),
+        Vector::new(
+            half_length_m - 0.35 * parameters.bow_length_m,
+            -0.20 * half_beam_m,
+        ),
+        Vector::new(bow_base_m, -0.52 * half_beam_m),
+        Vector::new(0.435 * bow_base_m, -0.87 * half_beam_m),
+        Vector::new(-0.107 * half_length_m, -half_beam_m),
+        Vector::new(-0.504 * half_length_m, -0.91 * half_beam_m),
+        Vector::new(-0.826 * half_length_m, -0.68 * half_beam_m),
+        Vector::new(-half_length_m, -0.52 * half_beam_m),
+        Vector::new(-half_length_m, 0.52 * half_beam_m),
+        Vector::new(-0.826 * half_length_m, 0.68 * half_beam_m),
+        Vector::new(-0.504 * half_length_m, 0.91 * half_beam_m),
+        Vector::new(-0.107 * half_length_m, half_beam_m),
+        Vector::new(0.435 * bow_base_m, 0.87 * half_beam_m),
+        Vector::new(bow_base_m, 0.52 * half_beam_m),
+        Vector::new(
+            half_length_m - 0.35 * parameters.bow_length_m,
+            0.20 * half_beam_m,
+        ),
     ]
 }
 

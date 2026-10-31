@@ -2,8 +2,10 @@
 
 A browser sailing game with multiplayer naval combat. The prototype supports
 steering, ramming, collision damage, and persistent wrecks in a procedural world.
+Wooden hull sprites carry cloth sails that fill or luff with apparent wind.
 Day/night lighting uses gradual eye adaptation to the brightness and color
-of the light falling on each part of the view, with HDR highlights on supported browsers and displays.
+of the light falling on each part of the view, with HDR highlights on supported
+browsers and displays.
 
 The intended game adds varied ships, mostly automatic weapons, and progression.
 [Product decisions](PRODUCT.md) describe that scope.

@@ -1,0 +1,6 @@
+{
+  "generator": "Built-in image_gen",
+  "generated": "2026-10-31",
+  "transparent_background": true,
+  "prompt": "Use case: precise-object-edit. Edit target: attached painted wooden dinghy HULL sprite. Correct its bilateral STRUCTURAL SYMMETRY while preserving the lovely existing painted honey wood, weathered teal inset gunwale, bronze fittings and original narrow bow and flat transom. Strict orthographic top-down, horizontal bow RIGHT transom LEFT, long centerline perfectly horizontal through image center. Port and starboard OUTER SILHOUETTES must be exact mirror images, as must both rails, both transverse benches and their mounting points, side ribs, symmetric pairs of bronze rail screws. Straight benches exactly perpendicular to centerline. Bow tip and center of transom precisely on centerline. Floor planks straight. Preserve overall 4m by 1.5m dinghy hull proportions, size/framing and roughly current outline. Small rope coil may stay in forward floor as loose cargo, but no external ropes. HULL ONLY: no mast socket, no sail, no rudder, no boom or other separate rig. Fully TRANSPARENT background, no cast shadow, no water, no text. Keep material lighting subtle with no perspective distortion. This is a symmetry correction to the existing painted style, not a style variation."
+}

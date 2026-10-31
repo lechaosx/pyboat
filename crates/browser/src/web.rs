@@ -33,19 +33,20 @@ use wgpu::CurrentSurfaceTexture;
 
 use crate::frame_queue::FrameQueue;
 use crate::{
-    AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame,
-    BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene, DEFAULT_VIEW_HEIGHT_M,
-    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory,
-    FieldGridTuning, FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER,
-    LANDFORM_HORIZON_SHADER, MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache,
-    TerrainCachePass, UpscaleTargets, Upscaler, ViewCloudMotion, Windsock,
-    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
-    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
-    seasonal_phase_factors, view_width_m, viewport_interest_radius_m, visual_pixel_footprint_m,
-    webtransport_server_url, windsock_extension, zoom_view_height_m,
+    AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BOAT_IMAGES, BakedSurface,
+    BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene,
+    DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_SHADER,
+    ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning, FieldGrids, FramePacer,
+    GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER, MAX_SERVER_MESSAGE_BYTES,
+    MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER, OCCLUDER_FIELD_TEXELS,
+    ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass, UpscaleTargets, Upscaler,
+    ViewCloudMotion, append_reliable_server_message_chunk, baked_surface_sizes, boat_mesh,
+    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
+    hull_sprite_mesh, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
+    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
+    scale_bar, scene_render_size, seasonal_phase_factors, sprite_mip_chain, view_width_m,
+    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url, windsock_mesh,
+    zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -950,6 +951,142 @@ impl Vertex {
     }
 }
 
+fn boat_sprite_resources(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene_layout: &wgpu::BindGroupLayout,
+    output_format: wgpu::TextureFormat,
+) -> Result<(wgpu::RenderPipeline, Vec<wgpu::BindGroup>), JsValue> {
+    let sprite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Boat sprite layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("Boat sprite sampler"),
+        anisotropy_clamp: 8,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let mut bind_groups = Vec::new();
+    for image in BOAT_IMAGES {
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(image));
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut reader = decoder.read_info().map_err(js_error)?;
+        let mut pixels = vec![
+            0;
+            reader
+                .output_buffer_size()
+                .ok_or_else(|| js_error("boat sprite is too large"))?
+        ];
+        let info = reader.next_frame(&mut pixels).map_err(js_error)?;
+        let mips = sprite_mip_chain(info.width, info.height, &pixels[..info.buffer_size()]);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Wooden dinghy sprite"),
+            size: wgpu::Extent3d {
+                width: info.width,
+                height: info.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mips.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (level, mip) in mips.iter().enumerate() {
+            let mut destination = texture.as_image_copy();
+            destination.mip_level = level as u32;
+            queue.write_texture(
+                destination,
+                &mip.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(mip.width * 4),
+                    rows_per_image: Some(mip.height),
+                },
+                wgpu::Extent3d {
+                    width: mip.width,
+                    height: mip.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let view = texture.create_view(&Default::default());
+        bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Boat sprite bind group"),
+            layout: &sprite_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        }));
+    }
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Boat sprite shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/boat-sprite.wgsl"
+        )))),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Boat sprite pipeline layout"),
+        bind_group_layouts: &[Some(scene_layout), Some(&sprite_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Boat sprite pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vertex"),
+            buffers: &[Some(Vertex::layout())],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fragment_boat_sprite"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: output_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    Ok((pipeline, bind_groups))
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
@@ -1338,6 +1475,8 @@ struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     illumination_pipeline: wgpu::RenderPipeline,
+    boat_sprite_pipeline: wgpu::RenderPipeline,
+    boat_sprite_bind_groups: Vec<wgpu::BindGroup>,
     adapting_field: AdaptingField,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
@@ -1640,6 +1779,8 @@ impl Renderer {
             "fragment_illumination",
             AdaptingField::illumination_target(),
         );
+        let (boat_sprite_pipeline, boat_sprite_bind_groups) =
+            boat_sprite_resources(&device, &queue, &scene_layout, output_format)?;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic vertices"),
             size: (INITIAL_VERTEX_CAPACITY * mem::size_of::<Vertex>()) as u64,
@@ -1727,6 +1868,8 @@ impl Renderer {
             config,
             pipeline,
             illumination_pipeline,
+            boat_sprite_pipeline,
+            boat_sprite_bind_groups,
             adapting_field,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
@@ -1887,13 +2030,13 @@ impl Renderer {
         } else {
             1.0
         };
-        let (vertices, terrain_vertex_count) = scene_vertices(
+        let (vertices, terrain_vertex_count, sprite_vertices) = scene_vertices(
             scenes,
             has_match,
             camera_m,
-            self.config.width,
-            self.config.height,
+            (self.config.width, self.config.height),
             view_height_m,
+            world_time_seconds,
         );
         let output_size = (self.config.width, self.config.height);
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
@@ -2083,6 +2226,7 @@ impl Renderer {
                 &targets.scene_view,
                 clear,
                 0..terrain_vertex_count,
+                &sprite_vertices,
             );
             self.upscaler.encode(
                 &mut encoder,
@@ -2098,10 +2242,17 @@ impl Renderer {
                     &view,
                     wgpu::LoadOp::Load,
                     terrain_vertex_count..vertex_count,
+                    &sprite_vertices,
                 );
             }
         } else {
-            self.encode_scene_pass(&mut encoder, &view, clear, 0..vertex_count);
+            self.encode_scene_pass(
+                &mut encoder,
+                &view,
+                clear,
+                0..vertex_count,
+                &sprite_vertices,
+            );
         }
         self.queue.submit(Some(encoder.finish()));
         self.adaptation_clock.frame_rendered();
@@ -2136,6 +2287,7 @@ impl Renderer {
         view: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
         vertices: std::ops::Range<u32>,
+        sprites: &[SpriteBatch],
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Scene pass"),
@@ -2159,7 +2311,20 @@ impl Renderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(vertices, 0..1);
+        let sprite_start = sprites.first().map_or(vertices.end, |batch| {
+            batch.vertices.start.clamp(vertices.start, vertices.end)
+        });
+        pass.draw(vertices.start..sprite_start, 0..1);
+        pass.set_pipeline(&self.boat_sprite_pipeline);
+        for batch in sprites {
+            let range = &batch.vertices;
+            let start = range.start.clamp(vertices.start, vertices.end);
+            let end = range.end.clamp(vertices.start, vertices.end);
+            if start < end {
+                pass.set_bind_group(1, &self.boat_sprite_bind_groups[batch.image], &[]);
+                pass.draw(start..end, 0..1);
+            }
+        }
     }
 
     fn resize(&mut self) {
@@ -2890,14 +3055,20 @@ fn canvas_dimensions(
     )
 }
 
+struct SpriteBatch {
+    image: usize,
+    vertices: std::ops::Range<u32>,
+}
+
 fn scene_vertices(
     scenes: &[BoatScene],
     render_terrain: bool,
     camera_m: Vector,
-    width: u32,
-    height: u32,
+    output_size: (u32, u32),
     view_height_m: f32,
-) -> (Vec<Vertex>, u32) {
+    time_seconds: f64,
+) -> (Vec<Vertex>, u32, Vec<SpriteBatch>) {
+    let (width, height) = output_size;
     let aspect = width as f32 / height as f32;
     let view_width_m = view_width_m(aspect, view_height_m);
     let mut vertices = Vec::new();
@@ -2920,140 +3091,60 @@ fn scene_vertices(
     }
     let terrain_vertex_count = vertices.len() as u32;
 
+    let mut batches: Vec<SpriteBatch> = Vec::new();
     for scene in scenes {
-        let hull_color = if scene.wreck {
-            [0.43, 0.37, 0.29]
+        let state = if scene.wreck {
+            1.0
         } else if scene.recently_damaged {
-            [1.0, 0.43, 0.35]
-        } else if scene.is_local {
-            [0.42, 0.82, 0.69]
+            2.0
         } else {
-            [0.91, 0.42, 0.32]
+            0.0
         };
-        for [first, second, third] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
-            for point in [
-                scene.hull_m[first],
-                scene.hull_m[second],
-                scene.hull_m[third],
-            ] {
-                vertices.push(vertex(
-                    point,
-                    hull_color,
-                    camera_m,
-                    view_width_m,
-                    view_height_m,
-                ));
+        let sock = scene
+            .windsock
+            .map(|sock| windsock_mesh(sock, time_seconds))
+            .unwrap_or_default();
+        for sprite in hull_sprite_mesh(scene)
+            .into_iter()
+            .chain(boat_mesh(
+                scene,
+                time_seconds,
+                view_height_m / height as f32,
+            ))
+            .chain(sock)
+        {
+            let index = vertices.len() as u32;
+            if let Some(batch) = batches
+                .last_mut()
+                .filter(|batch| batch.image == sprite.image)
+            {
+                batch.vertices.end = index + 1;
+            } else {
+                batches.push(SpriteBatch {
+                    image: sprite.image,
+                    vertices: index..index + 1,
+                });
             }
-        }
-        push_quad(
-            &mut vertices,
-            scene.sail_m[0],
-            scene.sail_m[1],
-            0.07,
-            [0.96, 0.76, 0.25],
-            camera_m,
-            view_width_m,
-            view_height_m,
-        );
-        push_quad(
-            &mut vertices,
-            scene.rudder_m[0],
-            scene.rudder_m[1],
-            0.08,
-            [0.86, 0.91, 0.91],
-            camera_m,
-            view_width_m,
-            view_height_m,
-        );
-        if let Some(windsock) = scene.windsock {
-            push_windsock(
-                &mut vertices,
-                windsock,
+            let mut overlay = vertex(
+                sprite.position_m,
+                [
+                    sprite.uv[0],
+                    sprite.uv[1],
+                    if sprite.image == 0 {
+                        state
+                    } else {
+                        -sprite.shade
+                    },
+                ],
                 camera_m,
                 view_width_m,
                 view_height_m,
             );
+            overlay.is_terrain = sprite.opacity - 1.0;
+            vertices.push(overlay);
         }
     }
-    (vertices, terrain_vertex_count)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_quad(
-    vertices: &mut Vec<Vertex>,
-    start_m: Vector,
-    end_m: Vector,
-    half_width_m: f32,
-    color: [f32; 3],
-    camera_m: Vector,
-    view_width_m: f32,
-    view_height_m: f32,
-) {
-    let direction = end_m - start_m;
-    let normal = Vector::new(-direction.y, direction.x).normalize() * half_width_m;
-    let corners = [
-        start_m + normal,
-        start_m - normal,
-        end_m - normal,
-        end_m + normal,
-    ];
-    for index in [0, 1, 2, 0, 2, 3] {
-        vertices.push(vertex(
-            corners[index],
-            color,
-            camera_m,
-            view_width_m,
-            view_height_m,
-        ));
-    }
-}
-
-fn push_windsock(
-    vertices: &mut Vec<Vertex>,
-    windsock: Windsock,
-    camera_m: Vector,
-    view_width_m: f32,
-    view_height_m: f32,
-) {
-    let speed_m_s = windsock.apparent_wind_velocity_m_s.length();
-    if speed_m_s <= f32::EPSILON {
-        return;
-    }
-    let direction = windsock.apparent_wind_velocity_m_s / speed_m_s;
-    let normal = Vector::new(-direction.y, direction.x);
-    let extension = windsock_extension(speed_m_s);
-    let length_m = 1.2;
-    for segment in 0..5 {
-        let start = segment as f32 / 5.0;
-        if start >= extension {
-            break;
-        }
-        let end = ((segment + 1) as f32 / 5.0).min(extension);
-        let start_m = windsock.anchor_m + direction * length_m * start;
-        let end_m = windsock.anchor_m + direction * length_m * end;
-        let start_half_width_m = 0.1 - 0.075 * start;
-        let end_half_width_m = 0.1 - 0.075 * end;
-        let corners = [
-            start_m + normal * start_half_width_m,
-            start_m - normal * start_half_width_m,
-            end_m - normal * end_half_width_m,
-            end_m + normal * end_half_width_m,
-        ];
-        let color = if segment % 2 == 0 {
-            [0.94, 0.18, 0.12]
-        } else {
-            [0.96, 0.94, 0.84]
-        };
-        for index in [0, 1, 2, 0, 2, 3] {
-            vertices.push(vertex(
-                corners[index],
-                color,
-                camera_m,
-                view_width_m,
-                view_height_m,
-            ));
-        }
-    }
+    (vertices, terrain_vertex_count, batches)
 }
 
 fn vertex(
