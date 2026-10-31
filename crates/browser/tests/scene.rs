@@ -30,13 +30,26 @@ fn boat_scene_follows_hull_and_surface_motion() {
         rudder_angular_velocity_rad_s: 0.0,
     };
 
-    let scene = boat_scene(dinghy_parameters(), motion);
+    let parameters = dinghy_parameters();
+    let scene = boat_scene(parameters, motion);
 
-    assert_vector_close(scene.hull_m[0], Vector::new(3.0, 6.0));
+    assert_vector_close(
+        scene.hull_m[0],
+        Vector::new(3.0, 4.0 + parameters.hull.length_m / 2.0),
+    );
     assert_vector_close(scene.sail_m[0], Vector::new(3.0, 4.4));
     assert_vector_close(scene.sail_m[1], Vector::new(5.0, 4.4));
-    assert_vector_close(scene.rudder_m[0], Vector::new(3.0, 2.2));
-    assert_vector_close(scene.rudder_m[1], Vector::new(3.0, 1.7));
+    assert_vector_close(
+        scene.rudder_m[0],
+        Vector::new(3.0, 4.0 + parameters.rudder_position_m.x),
+    );
+    assert_vector_close(
+        scene.rudder_m[1],
+        Vector::new(
+            3.0,
+            4.0 + parameters.rudder_position_m.x - parameters.rudder_draw_length_m,
+        ),
+    );
 }
 
 #[test]

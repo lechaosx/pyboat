@@ -11,10 +11,9 @@ pub const BOAT_IMAGES: [&[u8]; 2] = [HULL_IMAGE, RIG_IMAGE];
 const RUDDER: [f32; 4] = [16.0, 192.0, 627.0, 335.0];
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
-const CLEAT: [f32; 4] = [76.0, 681.0, 441.0, 810.0];
 const BOOM: [f32; 4] = [10.0, 829.0, 566.0, 910.0];
 const ROPE: [f32; 4] = [530.0, 691.0, 982.0, 795.0];
-// Matches the bow coil's roughly 10-pixel strands on the 1565-pixel, 4 m hull.
+// Matches the bow coil's roughly 10-pixel strands on the 1565-pixel, 4.05 m hull.
 const ROPE_RADIUS_M: f32 = 0.014;
 const CLOTH: [f32; 4] = [30.0, 962.0, 489.0, 1419.0];
 const SOCK: [f32; 4] = [509.0, 1085.0, 1017.0, 1338.0];
@@ -171,7 +170,10 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
         ),
         (
             [230.0, RUDDER[1], RUDDER[2], RUDDER[3]],
-            [0.55 / 387.0, 0.0011],
+            [
+                (scene.tiller_end_m - scene.rudder_m[0]).length() / 387.0,
+                0.0011,
+            ],
         ),
     ] {
         stamp(
@@ -184,10 +186,15 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
         );
     }
 
+    let length = (scene.hull_m[0] - stern).length();
+    let pixel_m = length / 1565.0;
+    // Rail bolts at source (930,211)/(930,729), and the bow's bronze eye.
+    // Mirror the fittings around the structural centerline rather than the
+    // slightly asymmetric painted highlights.
     for anchor in [
-        scene.hull_m[0] - forward * 0.12,
-        mast - forward * 0.35 + port * 0.67,
-        mast - forward * 0.35 - port * 0.67,
+        center + forward * (770.5 * pixel_m),
+        center + forward * (82.5 * pixel_m) + port * (259.0 * pixel_m),
+        center + forward * (82.5 * pixel_m) - port * (259.0 * pixel_m),
     ] {
         rope(
             &mut vertices,
@@ -199,25 +206,17 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
             ROPE_RADIUS_M,
             pixel_footprint_m,
         );
-        stamp(
-            &mut vertices,
-            anchor,
-            forward,
-            [0.00044; 2],
-            CLEAT,
-            [258.0, 746.0],
-        );
     }
 
     // The bridle and sheet lie ahead of the tiller's entire sweep. All rope
     // geometry is below the cloth in this top-down projection.
-    let sheet_deck = center - forward * 0.35;
+    let sheet_deck = center - forward * (327.5 * pixel_m);
     let sheet_boom = mast + boom * 0.45;
     let sheet_direction = (sheet_boom - sheet_deck).normalize();
     let lower_sheave = sheet_deck + sheet_direction * 0.056;
     let upper_sheave = sheet_boom - sheet_direction * 0.056;
     for side in [-1.0, 1.0] {
-        let bridle = sheet_deck + port * (side * 0.67);
+        let bridle = sheet_deck + port * (side * 259.0 * pixel_m);
         rope(
             &mut vertices,
             bridle,
@@ -227,14 +226,6 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
             time,
             ROPE_RADIUS_M,
             pixel_footprint_m,
-        );
-        stamp(
-            &mut vertices,
-            bridle,
-            forward,
-            [0.00044; 2],
-            CLEAT,
-            [258.0, 746.0],
         );
     }
     for side in [-1.0, 1.0] {
@@ -276,14 +267,7 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
         [357.0, 589.0],
     );
     vertices.extend(sail_mesh(scene, time));
-    stamp(
-        &mut vertices,
-        mast,
-        port,
-        [0.00068; 2],
-        MAST,
-        [783.0, 260.0],
-    );
+    stamp(&mut vertices, mast, port, [0.0004; 2], MAST, [783.0, 260.0]);
     vertices
 }
 

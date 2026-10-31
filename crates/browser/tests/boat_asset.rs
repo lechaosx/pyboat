@@ -229,3 +229,25 @@ fn cloth_follows_the_boat_pose_and_wind_in_world_coordinates() {
         assert!(after.shade.is_finite() && (0.0..=1.0).contains(&after.shade));
     }
 }
+
+#[test]
+fn tiller_follows_the_shared_length_hinge_and_articulated_rudder_pose() {
+    let mut parameters = dinghy_parameters();
+    parameters.tiller_length_m = 0.93;
+    let motion = BoatMotion {
+        position_m: Vector::new(17.0, -8.0),
+        velocity_m_s: Vector::ZERO,
+        angle_rad: 0.8,
+        angular_velocity_rad_s: 0.0,
+        sail_angle_rad: 0.0,
+        sail_angular_velocity_rad_s: 0.0,
+        rudder_angle_rad: -0.4,
+        rudder_angular_velocity_rad_s: 0.0,
+    };
+    let scene = boat_scene(parameters, motion);
+    let axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
+    assert!(
+        (scene.tiller_end_m - scene.rudder_m[0] - axis * parameters.tiller_length_m).length()
+            < 1.0e-5
+    );
+}

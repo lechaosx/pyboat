@@ -1394,20 +1394,28 @@ const WIND_BANDS: [WindBand; 4] = [
 ];
 
 pub fn dinghy_parameters() -> BoatParameters {
+    // The painted hull spans 1565 × 580 pixels. A provisional 4.05 m length
+    // preserves its aspect ratio while keeping beam above the shared 1.5 m
+    // collision-domain minimum; the picture supplies no absolute scale.
+    let length_m = 4.05;
+    let boom_length_m = 2.0;
+    let sail_luff_m = 4.5;
+    // Mass distribution, board-down draft and foil areas remain prototype
+    // estimates; the illustration cannot establish them.
     BoatParameters {
         hull: HullParameters {
             mass_kg: 222.0,
-            length_m: 4.0,
-            beam_m: 1.5,
+            length_m,
+            beam_m: length_m * 580.0 / 1565.0,
             bow_length_m: 0.7,
         },
         sail_mass_kg: 12.0,
         boom_mass_kg: 10.0,
-        boom_length_m: 2.0,
+        boom_length_m,
         mast_position_m: Vector::new(0.4, 0.0),
         max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
         air_density_kg_m3: 1.225,
-        sail_area_m2: 8.0,
+        sail_area_m2: boom_length_m * sail_luff_m / 2.0,
         sail_center_of_effort_from_mast_m: 0.7,
         sail_base_drag_coefficient: 0.02,
         water_density_kg_m3: 1025.0,
@@ -1421,9 +1429,9 @@ pub fn dinghy_parameters() -> BoatParameters {
         hull_lateral_drag_coefficient: 0.02,
         rudder_mass_kg: 4.0,
         tiller_mass_kg: 2.0,
-        rudder_draw_length_m: 0.5,
-        tiller_length_m: 1.0,
-        rudder_position_m: Vector::new(-1.8, 0.0),
+        rudder_draw_length_m: 0.45,
+        tiller_length_m: 0.8,
+        rudder_position_m: Vector::new(-length_m / 2.0, 0.0),
         max_rudder_angle_rad: 30.0_f32.to_radians(),
         rudder_area_m2: 0.12,
         rudder_base_drag_coefficient: 0.02,
