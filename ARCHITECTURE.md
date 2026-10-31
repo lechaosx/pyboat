@@ -177,6 +177,8 @@ and verification details.
 
 ### Surface rendering
 
+- **[Explicit]** Sail presentation uses a three-dimensional surface under an
+  overhead orthographic view; gameplay dynamics remain planar.
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
 - **[Explicit]** Each part of the view adapts to the light falling on the

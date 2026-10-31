@@ -410,6 +410,7 @@ pub struct BoatScene {
     pub id: Option<String>,
     pub hull_m: [Vector; 15],
     pub sail_m: [Vector; 2],
+    pub sail_luff_m: f32,
     pub rudder_m: [Vector; 2],
     pub tiller_end_m: Vector,
     pub apparent_wind_velocity_m_s: Vector,
@@ -1300,6 +1301,7 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
         id: None,
         hull_m,
         sail_m: [mast_m, sail_end_m],
+        sail_luff_m: 2.0 * parameters.sail_area_m2 / parameters.boom_length_m,
         rudder_m: [rudder_hinge_m, rudder_end_m],
         tiller_end_m: rudder_hinge_m
             + Rotation::new(motion.angle_rad + motion.rudder_angle_rad)

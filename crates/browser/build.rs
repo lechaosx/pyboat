@@ -50,7 +50,11 @@ fn main() {
     );
     write_shader(
         &compose(&[&production, &read_component("src/shader/boat-sprite.wgsl")]),
-        &["vertex", "fragment_boat_sprite"],
+        &[
+            "vertex_boat_sprite",
+            "fragment_boat_sprite",
+            "fragment_sail_depth",
+        ],
         "boat-sprite.wgsl",
     );
     write_shader(

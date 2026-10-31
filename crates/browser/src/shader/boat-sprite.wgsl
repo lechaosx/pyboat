@@ -1,6 +1,39 @@
 @group(1) @binding(0) var boat_texture: texture_2d<f32>;
 @group(1) @binding(1) var boat_sampler: sampler;
 
+struct BoatVertexInput {
+    @location(0) position_m: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) coverage: f32,
+    @location(3) depth_span_m: f32,
+};
+
+@vertex
+fn vertex_boat_sprite(input: BoatVertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    let clip_xy = (input.position_m.xy / scene.camera_and_view_m.zw) * 2.0;
+    output.position = vec4<f32>(clip_xy,
+        1.0 - input.position_m.z / input.depth_span_m, 1.0);
+    output.color = input.color;
+    output.world_position_m = scene.camera_and_view_m.xy + input.position_m.xy;
+    output.is_terrain = input.coverage;
+    output.coverage = clamp(1.0 + input.coverage, 0.0, 1.0);
+    let css_view_height_px = scene.precipitation_phase_and_css_view_height_px.y;
+    output.css_position_px = (vec2<f32>(0.5, -0.5) * clip_xy + 0.5) * vec2<f32>(
+        css_view_height_px * scene.camera_and_view_m.z / scene.camera_and_view_m.w,
+        css_view_height_px,
+    );
+    return output;
+}
+
+@fragment
+fn fragment_sail_depth(input: VertexOutput) -> @location(0) vec4<f32> {
+    if textureSample(boat_texture, boat_sampler, input.color.xy).a * input.coverage <= 0.0 {
+        discard;
+    }
+    return vec4<f32>(0.0);
+}
+
 @fragment
 fn fragment_boat_sprite(
     input: VertexOutput,

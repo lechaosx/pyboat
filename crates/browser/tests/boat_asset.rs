@@ -90,6 +90,37 @@ fn cloth_moves_in_wind_and_is_still_in_calm_air() {
 }
 
 #[test]
+fn sail_material_height_keeps_a_vertical_luff_and_a_foot_on_the_boom() {
+    let scene = scene(Vector::new(0.0, 8.0));
+    let parameters = dinghy_parameters();
+    let luff_m = 2.0 * parameters.sail_area_m2 / parameters.boom_length_m;
+    let mesh = sail_mesh(&scene, 0.3);
+    assert!(mesh.iter().all(|v| v.height_m.is_some()));
+    let mast = scene.sail_m[0];
+    let clew = scene.sail_m[1];
+    let head = mesh.iter().find(|v| v.height_m == Some(luff_m)).unwrap();
+    assert!((head.position_m - mast).length() < 1.0e-6);
+    assert!(
+        mesh.iter()
+            .any(|v| v.height_m == Some(0.0) && (v.position_m - clew).length() < 1.0e-6)
+    );
+    let lowest_uv = mesh
+        .iter()
+        .map(|v| v.uv[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let highest_uv = mesh.iter().map(|v| v.uv[1]).fold(f32::INFINITY, f32::min);
+    for vertex in mesh {
+        let material_height = (lowest_uv - vertex.uv[1]) / (lowest_uv - highest_uv);
+        assert!((vertex.height_m.unwrap() - material_height * luff_m).abs() < 1.0e-5);
+    }
+    assert!(
+        hull_sprite_mesh(&scene)
+            .iter()
+            .all(|v| v.height_m.is_none())
+    );
+}
+
+#[test]
 fn increasing_cross_sail_pressure_reduces_flutter() {
     let motion = |wind_speed| {
         let scene = scene(Vector::new(0.0, wind_speed));

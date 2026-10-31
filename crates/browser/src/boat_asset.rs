@@ -22,6 +22,8 @@ const SOCK: [f32; 4] = [509.0, 1085.0, 1017.0, 1338.0];
 pub struct BoatSpriteVertex {
     pub image: usize,
     pub position_m: Vector,
+    /// Height above the boom plane, in metres.
+    pub height_m: Option<f32>,
     pub uv: [f32; 2],
     pub shade: f32,
     pub opacity: f32,
@@ -31,6 +33,7 @@ fn textured(position_m: Vector, rect: [f32; 4], u: f32, v: f32) -> BoatSpriteVer
     BoatSpriteVertex {
         image: 1,
         position_m,
+        height_m: None,
         uv: [
             (rect[0] + (rect[2] - rect[0]) * u) / 1024.0,
             (rect[1] + (rect[3] - rect[1]) * v) / 1536.0,
@@ -63,6 +66,7 @@ pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {
             BoatSpriteVertex {
                 image: 0,
                 position_m: center + forward * (x * length) + port * (y * beam),
+                height_m: None,
                 uv,
                 shade: 1.0,
                 opacity: 1.0,
@@ -121,6 +125,7 @@ pub fn sail_mesh_with_cloth(
                                 + flutter_offset));
                 // UVs use material distance, so sewn panels narrow with the triangle.
                 let mut vertex = textured(point, CLOTH, along, 1.0 - height);
+                vertex.height_m = Some(scene.sail_luff_m * height);
                 vertex.shade = (0.76
                     + 0.24 * (PI * height * 0.8).sin()
                     + (along * TAU * 3.0 + height * 2.0).cos() * flutter)
