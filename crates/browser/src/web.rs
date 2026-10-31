@@ -1521,42 +1521,12 @@ impl OccluderFields {
     }
 }
 
-struct CompletedFrame {
-    texture: wgpu::Texture,
-    blitter: wgpu::util::TextureBlitter,
-    ready: Option<Arc<AtomicBool>>,
-}
-
-impl CompletedFrame {
-    fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
-        Self {
-            texture: device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Completed frame"),
-                size: wgpu::Extent3d {
-                    width: config.width,
-                    height: config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &config.view_formats,
-            }),
-            blitter: wgpu::util::TextureBlitter::new(device, config.format),
-            ready: None,
-        }
-    }
-}
-
 struct Renderer {
     canvas: HtmlCanvasElement,
     device: wgpu::Device,
     queue: wgpu::Queue,
     frame_queue: FrameQueue,
-    completed_frame: Option<CompletedFrame>,
+    fresh_surface: bool,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
@@ -1680,7 +1650,7 @@ impl Renderer {
         canvas: HtmlCanvasElement,
         graphics: GraphicsSettings,
         bake_memory_bytes: u64,
-        completed_frame: bool,
+        fresh_surface: bool,
     ) -> Result<Self, JsValue> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
@@ -1950,14 +1920,13 @@ impl Renderer {
             entries: &[],
         });
         let upscaler = Upscaler::new(&device, config.format);
-        let completed_frame = completed_frame.then(|| CompletedFrame::new(&device, &config));
 
         Ok(Self {
             canvas,
             device,
             queue,
             frame_queue: FrameQueue::default(),
-            completed_frame,
+            fresh_surface,
             surface,
             config,
             pipeline,
@@ -2060,50 +2029,38 @@ impl Renderer {
                 );
             }
         }
-        let frame_due = self
+        if !self
             .frame_pacer
-            .frame_due(elapsed_seconds, self.graphics.frame_rate_cap);
-        if let Some(ready) = self
-            .completed_frame
-            .as_ref()
-            .and_then(|frame| frame.ready.as_ref())
+            .frame_due(elapsed_seconds, self.graphics.frame_rate_cap)
         {
-            if !ready.load(Ordering::Acquire) {
-                return Ok(());
-            }
-            let Some(frame) = self.acquire_surface_frame()? else {
-                return Ok(());
-            };
-            let completed = self.completed_frame.as_mut().unwrap();
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Completed frame presentation"),
-                });
-            // Both views use the raw format: display encoding is already in the pixels.
-            completed.blitter.copy(
-                &self.device,
-                &mut encoder,
-                &completed.texture.create_view(&Default::default()),
-                &frame.texture.create_view(&Default::default()),
-            );
-            self.queue.submit(Some(encoder.finish()));
-            self.queue.present(frame);
-            completed.ready = None;
-        }
-        if !frame_due {
             return Ok(());
         }
         let Some(frame_permit) = self.frame_queue.try_acquire() else {
             return Ok(());
         };
-        let frame = if self.completed_frame.is_none() {
-            let Some(frame) = self.acquire_surface_frame()? else {
+        if self.fresh_surface {
+            // A new Firefox swapchain avoids recycled DMA-BUF hosts with stale
+            // fences: https://bugzilla.mozilla.org/show_bug.cgi?id=2078553.
+            self.surface.configure(&self.device, &self.config);
+        }
+        let frame = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) => frame,
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(()),
+            CurrentSurfaceTexture::Suboptimal(frame) => {
+                drop(frame);
+                self.surface.configure(&self.device, &self.config);
                 return Ok(());
-            };
-            Some(frame)
-        } else {
-            None
+            }
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            CurrentSurfaceTexture::Validation => {
+                self.terminal_error.store(true, Ordering::Release);
+                return Err(JsValue::from_str(
+                    "WebGPU rejected the current surface texture",
+                ));
+            }
         };
         self.frame_pacer
             .frame_rendered(self.graphics.frame_rate_cap);
@@ -2305,11 +2262,7 @@ impl Renderer {
         );
 
         let output_format = self.config.format.add_srgb_suffix();
-        let output = self.completed_frame.as_ref().map_or_else(
-            || &frame.as_ref().unwrap().texture,
-            |completed| &completed.texture,
-        );
-        let view = output.create_view(&wgpu::TextureViewDescriptor {
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(output_format),
             ..Default::default()
         });
@@ -2379,7 +2332,9 @@ impl Renderer {
             self.upscaler.encode(
                 &mut encoder,
                 targets,
-                &output.create_view(&wgpu::TextureViewDescriptor::default()),
+                &frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
                 None,
             );
             if vertex_count > terrain_vertex_count {
@@ -2407,11 +2362,6 @@ impl Renderer {
             .is_some()
             .then(|| Arc::clone(&self.frame_timing));
         let submitted_ms = now_ms();
-        let completed_frame_ready = self.completed_frame.as_mut().map(|frame| {
-            let ready = Arc::new(AtomicBool::new(false));
-            frame.ready = Some(Arc::clone(&ready));
-            ready
-        });
         self.queue.on_submitted_work_done(move || {
             if let Some(frame_timing) = frame_timing {
                 let completed_ms = now_ms();
@@ -2426,37 +2376,10 @@ impl Renderer {
                 }
                 frame_timing.last_completion_ms = completed_ms;
             }
-            if let Some(ready) = completed_frame_ready {
-                ready.store(true, Ordering::Release);
-            }
             drop(frame_permit);
         });
-        if let Some(frame) = frame {
-            self.queue.present(frame);
-        }
+        self.queue.present(frame);
         Ok(())
-    }
-
-    fn acquire_surface_frame(&mut self) -> Result<Option<wgpu::SurfaceTexture>, JsValue> {
-        match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame) => Ok(Some(frame)),
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => Ok(None),
-            CurrentSurfaceTexture::Suboptimal(frame) => {
-                drop(frame);
-                self.surface.configure(&self.device, &self.config);
-                Ok(None)
-            }
-            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                Ok(None)
-            }
-            CurrentSurfaceTexture::Validation => {
-                self.terminal_error.store(true, Ordering::Release);
-                Err(JsValue::from_str(
-                    "WebGPU rejected the current surface texture",
-                ))
-            }
-        }
     }
 
     fn encode_scene_pass(
@@ -2551,9 +2474,6 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        if self.completed_frame.is_some() {
-            self.completed_frame = Some(CompletedFrame::new(&self.device, &self.config));
-        }
     }
 
     /// Reallocates the bake once the canvas size it needs has settled; until
@@ -2670,10 +2590,10 @@ impl BrowserGame {
             .is_some_and(|query| query.matches());
         let search = window.location().search()?;
         let graphics = GraphicsSettings::from_query(&search, touch_screen);
-        let completed_frame = search
+        let fresh_surface = search
             .trim_start_matches('?')
             .split('&')
-            .any(|parameter| parameter == "completedFrame=1");
+            .any(|parameter| parameter == "freshSurface=1");
         let navigator = js_sys::Reflect::get(&window, &JsValue::from_str("navigator"))?;
         let device_memory_gb =
             js_sys::Reflect::get(&navigator, &JsValue::from_str("deviceMemory"))?.as_f64();
@@ -2681,7 +2601,7 @@ impl BrowserGame {
             canvas,
             graphics,
             crate::baked_surface_memory_bytes(touch_screen, device_memory_gb),
-            completed_frame,
+            fresh_surface,
         )
         .await?;
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
