@@ -33,6 +33,26 @@ transport unless `--cloud-motion` supplies it, so matching its clock alone does
 not reproduce a long-running interactive cloud view. Capture requires a hardware
 Vulkan GPU.
 
+### Firefox presentation flicker
+
+On Linux with NVIDIA, Firefox's hardware WebGPU presentation can show stale or
+mixed frames. In this game, disabling
+`dom.webgpu.allow-present-without-readback` and restarting Firefox removed the
+flicker but reduced responsiveness. Mozilla tracks the DMA-BUF recycling
+regression in [bug 2078553](https://bugzilla.mozilla.org/show_bug.cgi?id=2078553);
+its [fix](https://github.com/mozilla-firefox/firefox/commit/99709e1e8633)
+disables cached DMA-BUF texture hosts.
+
+To try the game's experimental workaround, restore that preference to `true`,
+restart Firefox, and add `freshSurface=1` to the game URL (`?freshSurface=1`, or
+`&freshSurface=1` after existing parameters). It reconfigures the canvas before
+each submitted frame, replacing Firefox's swapchain and its recycled surfaces
+without copying pixels to the CPU. New surface allocation and compositor setup
+may still cost time; compare flicker and steering responsiveness with the same
+scene and window size. This path needs affected-hardware validation and stays
+off by default. Remove it once the supported Firefox builds carry the upstream
+fix and the same hardware comparison passes without it.
+
 ## Rendering performance
 
 The scenario bench times the production terrain-cache, surface-bake,

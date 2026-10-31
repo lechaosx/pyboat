@@ -1526,6 +1526,7 @@ struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     frame_queue: FrameQueue,
+    fresh_surface: bool,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
@@ -1649,6 +1650,7 @@ impl Renderer {
         canvas: HtmlCanvasElement,
         graphics: GraphicsSettings,
         bake_memory_bytes: u64,
+        fresh_surface: bool,
     ) -> Result<Self, JsValue> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
@@ -1924,6 +1926,7 @@ impl Renderer {
             device,
             queue,
             frame_queue: FrameQueue::default(),
+            fresh_surface,
             surface,
             config,
             pipeline,
@@ -2035,6 +2038,11 @@ impl Renderer {
         let Some(frame_permit) = self.frame_queue.try_acquire() else {
             return Ok(());
         };
+        if self.fresh_surface {
+            // A new Firefox swapchain avoids recycled DMA-BUF hosts with stale
+            // fences: https://bugzilla.mozilla.org/show_bug.cgi?id=2078553.
+            self.surface.configure(&self.device, &self.config);
+        }
         let frame = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => frame,
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(()),
@@ -2580,7 +2588,12 @@ impl BrowserGame {
         let touch_screen = window
             .match_media("(pointer: coarse)")?
             .is_some_and(|query| query.matches());
-        let graphics = GraphicsSettings::from_query(&window.location().search()?, touch_screen);
+        let search = window.location().search()?;
+        let graphics = GraphicsSettings::from_query(&search, touch_screen);
+        let fresh_surface = search
+            .trim_start_matches('?')
+            .split('&')
+            .any(|parameter| parameter == "freshSurface=1");
         let navigator = js_sys::Reflect::get(&window, &JsValue::from_str("navigator"))?;
         let device_memory_gb =
             js_sys::Reflect::get(&navigator, &JsValue::from_str("deviceMemory"))?.as_f64();
@@ -2588,6 +2601,7 @@ impl BrowserGame {
             canvas,
             graphics,
             crate::baked_surface_memory_bytes(touch_screen, device_memory_gb),
+            fresh_surface,
         )
         .await?;
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
