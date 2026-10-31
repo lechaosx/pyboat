@@ -103,15 +103,18 @@ pub fn sail_mesh_with_cloth(
             let b = (x + 1) as f32 / LENGTH_STEPS as f32;
             let c = y as f32 / HEIGHT_STEPS as f32;
             let d = (y + 1) as f32 / HEIGHT_STEPS as f32;
-            for (section, height) in [(a, c), (b, c), (b, d), (a, c), (b, d), (a, d)] {
+            // Columns follow flutter's constant-along rulings so triangles do
+            // not cut across a fold and expose false opposite-facing slivers.
+            for (along, span) in [(a, c), (b, c), (b, d), (a, c), (b, d), (a, d)] {
+                let height = span * (1.0 - along);
+                let chord = 1.0 - height;
+                let section = if chord > 0.0 { along / chord } else { 0.0 };
                 let draft = 0.4;
                 let envelope = if section <= draft {
                     1.0 - ((section - draft) / draft).powi(2)
                 } else {
                     1.0 - ((section - draft) / (1.0 - draft)).powi(2)
                 };
-                let chord = 1.0 - height;
-                let along = section * chord;
                 let ripple = (time * 13.0 - f64::from(along * TAU * 1.7)).sin() as f32;
                 let twist = twist_angle * height;
                 // Ruled flutter keeps each luffing flap facing one way through
