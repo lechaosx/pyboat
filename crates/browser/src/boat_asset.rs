@@ -274,31 +274,54 @@ pub fn boat_mesh(scene: &BoatScene, time: f64, pixel_footprint_m: f32) -> Vec<Bo
 pub fn windsock_mesh(windsock: Windsock, time: f64) -> Vec<BoatSpriteVertex> {
     let mut vertices = Vec::new();
     let speed = windsock.apparent_wind_velocity_m_s.length();
-    if speed <= f32::EPSILON {
-        return vertices;
-    }
-    let direction = windsock.apparent_wind_velocity_m_s / speed;
+    let direction = if speed > f32::EPSILON {
+        windsock.apparent_wind_velocity_m_s / speed
+    } else {
+        Vector::X
+    };
     let normal = Vector::new(-direction.y, direction.x);
     let extension = windsock_extension(speed);
     let response = speed / (speed + 2.0);
-    for step in 0..24 {
-        let a = extension * step as f32 / 24.0;
-        let b = extension * (step + 1) as f32 / 24.0;
-        for (u, side) in [
-            (a, -1.0),
-            (b, -1.0),
-            (b, 1.0),
-            (a, -1.0),
-            (b, 1.0),
-            (a, 1.0),
-        ] {
-            let phase = time * 7.0 - f64::from(u) * 6.0;
-            let flutter = 0.025 * response * u * u;
-            let sway = flutter * phase.sin() as f32;
-            let axial = flutter * phase.cos() as f32;
-            let point =
-                windsock.anchor_m + direction * (1.2 * u + axial) + normal * (sway + side * 0.125);
-            vertices.push(textured(point, SOCK, u, (1.0 - side) * 0.5));
+    // Keep the exposed cloth at its authored scale; the remaining texture bends
+    // back into one compressed fold instead of ending at the reveal boundary.
+    for (start, end) in [(0.0, extension), (extension, 1.0)] {
+        if end - start <= f32::EPSILON {
+            continue;
+        }
+        for step in 0..24 {
+            let a = start + (end - start) * step as f32 / 24.0;
+            let b = start + (end - start) * (step + 1) as f32 / 24.0;
+            for (u, side) in [
+                (a, -1.0),
+                (b, -1.0),
+                (b, 1.0),
+                (a, -1.0),
+                (b, 1.0),
+                (a, 1.0),
+            ] {
+                let phase = time * 4.5 - f64::from(u) * 6.0;
+                let flutter = 0.025 * response * u * u;
+                let sway = flutter * phase.sin() as f32;
+                let axial = flutter * phase.cos() as f32;
+                let folded = (u - extension).max(0.0) / (1.0 - extension).max(f32::EPSILON);
+                let remaining = 1.0 - extension;
+                let (along, down, width) = if u <= extension {
+                    (1.2 * u, 0.0, 0.125)
+                } else {
+                    let turn = PI * folded;
+                    (
+                        1.2 * extension + remaining * 0.22 * turn.sin(),
+                        -remaining * 0.32 * (1.0 - turn.cos()) * 0.5,
+                        0.125 * (1.0 - 0.75 * folded),
+                    )
+                };
+                let point = windsock.anchor_m
+                    + direction * (along + axial)
+                    + normal * (down + sway + side * width);
+                let mut vertex = textured(point, SOCK, u, (1.0 - side) * 0.5);
+                vertex.shade = 1.0 - 0.3 * (PI * folded).sin();
+                vertices.push(vertex);
+            }
         }
     }
 

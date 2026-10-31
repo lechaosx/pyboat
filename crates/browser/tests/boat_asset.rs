@@ -174,7 +174,7 @@ fn filled_windsock_flutters_along_and_across_the_wind() {
 }
 
 #[test]
-fn partial_windsock_crops_the_texture_instead_of_rescaling_all_stripes() {
+fn partial_windsock_keeps_all_cloth_and_the_exposed_stripe_scale() {
     let mesh = |speed| {
         browser::windsock_mesh(
             browser::Windsock {
@@ -184,17 +184,59 @@ fn partial_windsock_crops_the_texture_instead_of_rescaling_all_stripes() {
             0.0,
         )
     };
-    let uv_span = |vertices: &[browser::BoatSpriteVertex]| {
-        let bounds = vertices
+    let bounds = |vertices: &[browser::BoatSpriteVertex]| {
+        vertices
             .iter()
             .fold([f32::INFINITY, f32::NEG_INFINITY], |b, v| {
                 [b[0].min(v.uv[0]), b[1].max(v.uv[0])]
-            });
-        bounds[1] - bounds[0]
+            })
     };
     let partial = mesh(3.0);
     let full = mesh(8.0);
-    assert!((uv_span(&partial) / uv_span(&full) - browser::windsock_extension(3.0)).abs() < 1.0e-6);
+    assert_eq!(
+        bounds(&partial),
+        bounds(&full),
+        "folded cloth must remain in the mesh"
+    );
+    let [start, end] = bounds(&full);
+    for vertices in [&partial, &full] {
+        for vertex in vertices
+            .iter()
+            .filter(|v| (v.uv[0] - start) / (end - start) < browser::windsock_extension(3.0))
+        {
+            let u = (vertex.uv[0] - start) / (end - start);
+            assert!((vertex.position_m.x - 1.2 * u).abs() <= 0.025 * u * u + 1.0e-6);
+        }
+    }
+}
+
+#[test]
+fn calm_windsock_keeps_finite_folded_cloth_at_the_anchor() {
+    let anchor = Vector::new(2.0, -1.0);
+    let mesh = browser::windsock_mesh(
+        browser::Windsock {
+            anchor_m: anchor,
+            apparent_wind_velocity_m_s: Vector::ZERO,
+        },
+        1.0,
+    );
+    assert!(!mesh.is_empty());
+    assert!(
+        mesh.iter()
+            .all(|v| v.position_m.x.is_finite() && v.position_m.y.is_finite())
+    );
+    let mouth_u = mesh.iter().map(|v| v.uv[0]).fold(f32::INFINITY, f32::min);
+    let mouth: Vec<_> = mesh.iter().filter(|v| v.uv[0] == mouth_u).collect();
+    let top = mouth
+        .iter()
+        .map(|v| v.position_m.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let bottom = mouth
+        .iter()
+        .map(|v| v.position_m.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(mouth.iter().all(|v| v.position_m.x == anchor.x));
+    assert!(((top + bottom) * 0.5 - anchor.y).abs() < 1.0e-6);
 }
 
 #[test]
