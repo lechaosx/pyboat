@@ -23,7 +23,7 @@ fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
         water_depth_m: f32::INFINITY,
     };
     let stiffness =
-        parameters.max_rudder_actuator_torque_n_m / (parameters.max_rudder_angle_rad / 10.0);
+        parameters.max_rudder_actuator_torque_n_m() / (parameters.max_rudder_angle_rad / 10.0);
     let energy = |simulation: &simulation::Simulation| {
         simulation
             .world
@@ -35,8 +35,14 @@ fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
     };
     let mut previous_energy = energy(&simulation);
     for tick in 0..60 {
-        let torques = simulation::target_control_torques(parameters, simulation.motion(), 0.0, 0.0);
-        simulation.advance(environment, torques);
+        simulation.advance_targets(
+            environment,
+            simulation::SurfaceTargets {
+                sail_target_angle_rad: Some(0.0),
+                sheet_target_angle_rad: 0.0,
+                rudder_target_angle_rad: 0.0,
+            },
+        );
         let current_energy = energy(&simulation);
         assert!(
             current_energy <= previous_energy + 1.0e-6,
@@ -120,7 +126,7 @@ fn rudder_actuator_startup_cannot_leave_a_passive_boat_gaining_energy() {
     };
     let torques = simulation::ActuatorTorques {
         sail_n_m: 0.0,
-        rudder_n_m: parameters.max_rudder_actuator_torque_n_m,
+        rudder_n_m: parameters.max_rudder_actuator_torque_n_m(),
     };
     let mut isolated = simulation::Simulation::new(parameters, motion);
     let mut shared = simulation::SharedSimulation::new();

@@ -8,15 +8,14 @@ use std::{
 };
 
 use game::{
-    computed_yaw_rate_torques_in_environment, dinghy_parameters, procedural_match_environment,
+    computed_yaw_rate_targets_in_environment, dinghy_parameters, procedural_match_environment,
 };
 use protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
 use rapier2d::prelude::Vector;
 use simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation,
-    WorldGeometry,
+    BoatMotion, BoatParameters, HullContact, MotionIntent, SharedSimulation, WorldGeometry,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{interval, timeout};
@@ -282,7 +281,7 @@ impl GameMatch {
 
     fn advance(&mut self) {
         let mut environments = Vec::with_capacity(self.players.len());
-        let mut actuator_torques = Vec::with_capacity(self.players.len());
+        let mut targets = Vec::with_capacity(self.players.len());
         for (boat, player) in self.players.iter_mut().enumerate() {
             let motion = self.simulation.motion(boat);
             let environment = procedural_match_environment(
@@ -293,22 +292,22 @@ impl GameMatch {
             );
             environments.push(environment);
             if player.wreck {
-                actuator_torques.push(ActuatorTorques::default());
+                targets.push(None);
                 continue;
             }
             if let Some((sequence, intent)) = player.pending_inputs.pop_front() {
                 player.intent = intent;
                 player.acknowledged_input = sequence;
             }
-            actuator_torques.push(computed_yaw_rate_torques_in_environment(
+            targets.push(Some(computed_yaw_rate_targets_in_environment(
                 motion,
                 player.intent,
                 environment,
-            ));
+            )));
         }
         let contacts = self
             .simulation
-            .advance_with_environments(&environments, &actuator_torques);
+            .advance_controlled_with_environments(&environments, &targets);
         self.apply_hull_contacts(&contacts);
         self.tick += 1;
     }
@@ -929,7 +928,10 @@ mod tests {
         for _ in 0..30 {
             let contacts = game_match.simulation.advance(
                 simulation::Environment::default(),
-                &[ActuatorTorques::default(), ActuatorTorques::default()],
+                &[
+                    simulation::ActuatorTorques::default(),
+                    simulation::ActuatorTorques::default(),
+                ],
             );
             maximum_impulse_n_s = contacts
                 .iter()

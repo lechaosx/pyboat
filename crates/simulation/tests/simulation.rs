@@ -5,8 +5,7 @@ use simulation::{
     ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
     DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
     SurfaceControlCommand, SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s,
-    flat_plate_force, hull_resistance_force, sheet_control_torques, streamlined_foil_force,
-    surface_control_input, surface_target_control_torques, target_control_torques,
+    flat_plate_force, hull_resistance_force, streamlined_foil_force, surface_control_input,
     yaw_rate_move_control,
 };
 
@@ -44,7 +43,7 @@ fn reference_parameters() -> BoatParameters {
         rudder_stall_angle_rad: 15.0_f32.to_radians(),
         rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
-        max_rudder_actuator_torque_n_m: 60.0,
+        max_tiller_hand_force_n: 60.0,
         tiller_length_m: 1.0,
         rudder_position_m: Vector::new(-1.8, 0.0),
         max_rudder_angle_rad: PI / 6.0,
@@ -61,6 +60,157 @@ fn vacuum_parameters() -> BoatParameters {
     parameters.air_density_kg_m3 = 0.0;
     parameters.water_density_kg_m3 = 0.0;
     parameters
+}
+
+#[test]
+fn gripping_at_the_rudder_hinge_cannot_turn_it() {
+    let mut parameters = vacuum_parameters();
+    parameters.tiller_length_m = 0.0;
+    let initial = BoatMotion {
+        velocity_m_s: Vector::ZERO,
+        angle_rad: 0.0,
+        ..motion()
+    };
+    let mut simulation = Simulation::new(parameters, initial);
+    for _ in 0..30 {
+        simulation.advance_controlled(
+            Environment::default(),
+            SurfaceControlCommand::AutoSheet(AutoSheetIntent {
+                power: 0.0,
+                rudder: 1.0,
+            }),
+            ControlSettings {
+                angle_resolution_deg: 1,
+                sail_side_hysteresis_angle_rad: 0.0,
+            },
+        );
+    }
+    assert!(simulation.motion().rudder_angle_rad.abs() < 1.0e-6);
+}
+
+fn rudder_targets(angle_rad: f32) -> simulation::SurfaceTargets {
+    simulation::SurfaceTargets {
+        sheet_target_angle_rad: 0.0,
+        sail_target_angle_rad: Some(0.0),
+        rudder_target_angle_rad: angle_rad,
+    }
+}
+
+#[test]
+fn tiller_force_and_leverage_bound_the_delivered_angular_impulse() {
+    for (force_n, length_m) in [(60.0, 1.0), (30.0, 1.0), (60.0, 0.5)] {
+        let mut parameters = vacuum_parameters();
+        parameters.max_tiller_hand_force_n = force_n;
+        parameters.tiller_length_m = length_m;
+        let initial = BoatMotion {
+            velocity_m_s: Vector::ZERO,
+            angle_rad: 0.0,
+            ..motion()
+        };
+        let mut simulation = Simulation::new(parameters, initial);
+        simulation.advance_targets(
+            Environment::default(),
+            rudder_targets(parameters.max_rudder_angle_rad),
+        );
+        let rudder = &simulation.world.bodies[simulation.boat.rudder];
+        let angular_impulse = rudder.mass_properties().local_mprops.principal_inertia()
+            * rudder.angvel()
+            + (rudder.translation() - parameters.rudder_position_m)
+                .perp_dot(rudder.linvel() * rudder.mass());
+        let limit = force_n * length_m * DT_SECONDS;
+        assert!(
+            angular_impulse > limit * 0.95,
+            "{force_n}/{length_m}: {angular_impulse} vs {limit}"
+        );
+        assert!(
+            angular_impulse <= limit * 1.001,
+            "{force_n}/{length_m}: {angular_impulse} vs {limit}"
+        );
+        assert!(angular_momentum(&simulation).abs() < 1.0e-4);
+        assert!(linear_momentum(&simulation).length() < 1.0e-4);
+    }
+}
+
+#[test]
+fn zero_hand_force_leaves_the_rudder_passive() {
+    let mut parameters = vacuum_parameters();
+    parameters.max_tiller_hand_force_n = 0.0;
+    let initial = BoatMotion {
+        rudder_angle_rad: 0.1,
+        rudder_angular_velocity_rad_s: 0.2,
+        ..motion()
+    };
+    let mut controlled = Simulation::new(parameters, initial);
+    let mut passive = Simulation::new(parameters, initial);
+    for _ in 0..60 {
+        controlled.advance_targets(Environment::default(), rudder_targets(-0.3));
+        passive.advance(Environment::default(), ActuatorTorques::default());
+        assert_close(
+            controlled.motion().rudder_angle_rad,
+            passive.motion().rudder_angle_rad,
+        );
+        assert_close(
+            controlled.motion().rudder_angular_velocity_rad_s,
+            passive.motion().rudder_angular_velocity_rad_s,
+        );
+    }
+}
+
+#[test]
+fn shared_target_actuation_matches_single_boat_physics_and_disables_for_wrecks() {
+    let parameters = vacuum_parameters();
+    let initial = BoatMotion {
+        velocity_m_s: Vector::ZERO,
+        angle_rad: 0.0,
+        ..motion()
+    };
+    let mut single = Simulation::new(parameters, initial);
+    let mut shared = SharedSimulation::new();
+    shared.add_boat(parameters, initial);
+    for _ in 0..3 {
+        single.advance_targets(Environment::default(), rudder_targets(0.3));
+        shared.advance_controlled_with_environments(
+            &[Environment::default()],
+            &[Some(rudder_targets(0.3))],
+        );
+        assert_close(
+            single.motion().rudder_angle_rad,
+            shared.motion(0).rudder_angle_rad,
+        );
+        assert_close(
+            single.motion().rudder_angular_velocity_rad_s,
+            shared.motion(0).rudder_angular_velocity_rad_s,
+        );
+    }
+    let mut passive = Simulation::new(parameters, single.motion());
+    let mut raw = Simulation::new(parameters, single.motion());
+    for _ in 0..30 {
+        let torque = ActuatorTorques {
+            sail_n_m: 0.0,
+            rudder_n_m: -15.0,
+        };
+        single.advance(Environment::default(), torque);
+        raw.advance(Environment::default(), torque);
+        shared.advance_controlled_with_environments(&[Environment::default()], &[None]);
+        passive.advance(Environment::default(), ActuatorTorques::default());
+        assert_close(
+            single.motion().rudder_angle_rad,
+            raw.motion().rudder_angle_rad,
+        );
+        assert_close(
+            single.motion().rudder_angular_velocity_rad_s,
+            raw.motion().rudder_angular_velocity_rad_s,
+        );
+        assert_close(
+            shared.motion(0).rudder_angle_rad,
+            passive.motion().rudder_angle_rad,
+        );
+        assert_close(
+            shared.motion(0).rudder_angular_velocity_rad_s,
+            passive.motion().rudder_angular_velocity_rad_s,
+        );
+    }
+    assert!(single.motion().rudder_angle_rad < passive.motion().rudder_angle_rad);
 }
 
 fn motion() -> BoatMotion {
@@ -170,7 +320,6 @@ fn shared_simulation_advances_multiple_boats_in_one_world() {
 
     assert_eq!(simulation.world.bodies.len(), 6);
     assert_eq!(simulation.world.colliders.len(), 2);
-    assert_eq!(simulation.world.impulse_joints.len(), 4);
     for _ in 0..60 {
         simulation.advance(
             Environment::default(),
@@ -320,13 +469,15 @@ fn shared_simulation_removes_an_articulated_boat_and_compacts_indices() {
 
     assert_eq!(simulation.world.bodies.len(), 6);
     assert_eq!(simulation.world.colliders.len(), 2);
-    assert_eq!(simulation.world.impulse_joints.len(), 4);
     assert_vector_close(simulation.motion(0).position_m, first.position_m);
     assert_vector_close(simulation.motion(1).position_m, third.position_m);
     simulation.advance(
         Environment::default(),
         &[ActuatorTorques::default(), ActuatorTorques::default()],
     );
+    simulation.remove_boat(1);
+    simulation.remove_boat(0);
+    assert!(simulation.world.impulse_joints.is_empty());
 }
 
 #[test]
@@ -725,46 +876,40 @@ fn bow_and_stern_hull_resistance_apply_the_expected_force_and_yaw_torque() {
 }
 
 #[test]
-fn target_control_torques_reach_and_respect_actuator_limits() {
-    let parameters = reference_parameters();
-    let mut current = motion();
-    current.sail_angle_rad = 0.0;
-    current.sail_angular_velocity_rad_s = 0.0;
-    current.rudder_angle_rad = 0.0;
-    current.rudder_angular_velocity_rad_s = 0.0;
-
-    let torques = target_control_torques(
-        parameters,
-        current,
-        parameters.max_sail_angle_rad,
-        -parameters.max_rudder_angle_rad,
+fn sail_actuation_reaches_its_torque_limit() {
+    let parameters = vacuum_parameters();
+    let mut simulation = Simulation::new(parameters, motion());
+    simulation.advance_targets(
+        Environment::default(),
+        simulation::SurfaceTargets {
+            sail_target_angle_rad: Some(parameters.max_sail_angle_rad),
+            sheet_target_angle_rad: 0.0,
+            rudder_target_angle_rad: 0.0,
+        },
     );
-
     assert_eq!(
-        torques,
-        ActuatorTorques {
-            sail_n_m: parameters.max_sail_actuator_torque_n_m,
-            rudder_n_m: -parameters.max_rudder_actuator_torque_n_m,
-        }
+        simulation.world.bodies[simulation.boat.sail].user_torque(),
+        parameters.max_sail_actuator_torque_n_m
     );
 }
 
 #[test]
-fn target_control_torques_reduce_hinge_motion_at_the_target() {
+fn target_actuation_reduces_hinge_motion_at_the_target() {
     let parameters = vacuum_parameters();
     let mut current = motion();
     current.sail_angle_rad = 0.25;
     current.sail_angular_velocity_rad_s = 0.1;
     current.rudder_angle_rad = -0.1;
     current.rudder_angular_velocity_rad_s = -0.1;
-    let torques = target_control_torques(
-        parameters,
-        current,
-        current.sail_angle_rad,
-        current.rudder_angle_rad,
-    );
     let mut simulation = Simulation::new(parameters, current);
-    simulation.advance(Environment::default(), torques);
+    simulation.advance_targets(
+        Environment::default(),
+        simulation::SurfaceTargets {
+            sail_target_angle_rad: Some(current.sail_angle_rad),
+            sheet_target_angle_rad: 0.0,
+            rudder_target_angle_rad: current.rudder_angle_rad,
+        },
+    );
     let next = simulation.motion();
     assert!(next.sail_angular_velocity_rad_s.abs() < current.sail_angular_velocity_rad_s.abs());
     assert!(next.rudder_angular_velocity_rad_s.abs() < current.rudder_angular_velocity_rad_s.abs());
@@ -772,22 +917,30 @@ fn target_control_torques_reduce_hinge_motion_at_the_target() {
 
 #[test]
 fn sheet_control_never_pushes_the_sail_outward() {
-    let parameters = reference_parameters();
-    for (angle_rad, outward_target_rad) in [(0.25, 0.5), (-0.25, -0.5), (0.0, 0.5)] {
+    let parameters = vacuum_parameters();
+    for (angle_rad, outward_target_rad) in [(0.25, 0.5), (-0.25, -0.5), (0.0, 0.5), (0.5, 0.25)] {
         let mut current = motion();
         current.sail_angle_rad = angle_rad;
-        current.sail_angular_velocity_rad_s = 0.0;
-
-        let torques = sheet_control_torques(parameters, current, outward_target_rad, 0.2);
-
-        assert_eq!(torques.sail_n_m, 0.0);
-        assert_ne!(torques.rudder_n_m, 0.0);
+        let mut simulation = Simulation::new(parameters, current);
+        simulation.advance_targets(
+            Environment::default(),
+            simulation::SurfaceTargets {
+                sail_target_angle_rad: None,
+                sheet_target_angle_rad: outward_target_rad,
+                rudder_target_angle_rad: 0.2,
+            },
+        );
+        let torque = simulation.world.bodies[simulation.boat.sail].user_torque();
+        if angle_rad == 0.5 {
+            assert!(torque < 0.0);
+        } else {
+            assert_eq!(torque, 0.0);
+        }
+        assert_ne!(
+            simulation.motion().rudder_angle_rad,
+            current.rudder_angle_rad
+        );
     }
-
-    let mut current = motion();
-    current.sail_angle_rad = 0.5;
-    current.sail_angular_velocity_rad_s = 0.0;
-    assert!(sheet_control_torques(parameters, current, 0.25, 0.0).sail_n_m < 0.0);
 }
 
 fn controller_input() -> ControlInput {
@@ -1031,7 +1184,7 @@ fn yaw_rate_control_preserves_analog_turn_and_backing_behavior() {
 
 #[test]
 fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
-    let parameters = reference_parameters();
+    let parameters = vacuum_parameters();
     let mut current = motion();
     current.sail_angle_rad = 0.25;
     current.sail_angular_velocity_rad_s = 0.0;
@@ -1045,12 +1198,14 @@ fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
         ..sheet_targets
     };
 
-    let sheet_torques = surface_target_control_torques(parameters, current, sheet_targets);
-    let explicit_torques = surface_target_control_torques(parameters, current, explicit_targets);
-
-    assert_eq!(sheet_torques.sail_n_m, 0.0);
-    assert!(explicit_torques.sail_n_m > 0.0);
-    assert_eq!(sheet_torques.rudder_n_m, explicit_torques.rudder_n_m);
+    let mut sheet = Simulation::new(parameters, current);
+    let mut explicit = Simulation::new(parameters, current);
+    sheet.advance_targets(Environment::default(), sheet_targets);
+    explicit.advance_targets(Environment::default(), explicit_targets);
+    assert_eq!(sheet.world.bodies[sheet.boat.sail].user_torque(), 0.0);
+    assert!(explicit.world.bodies[explicit.boat.sail].user_torque() > 0.0);
+    assert!(sheet.motion().rudder_angle_rad > current.rudder_angle_rad);
+    assert!(explicit.motion().rudder_angle_rad > current.rudder_angle_rad);
 }
 
 #[test]
@@ -1112,8 +1267,7 @@ fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
                 Some(maximum_yaw_rate_rad_s),
             ),
         };
-        let torques = surface_target_control_torques(parameters, manual.motion(), expected_targets);
-        manual.advance(environment, torques);
+        manual.advance_targets(environment, expected_targets);
 
         let telemetry = controlled.advance_controlled(environment, command, settings);
 

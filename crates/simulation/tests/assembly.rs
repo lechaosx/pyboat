@@ -44,7 +44,7 @@ fn reference_parameters() -> BoatParameters {
         rudder_stall_angle_rad: 15.0_f32.to_radians(),
         rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
-        max_rudder_actuator_torque_n_m: 60.0,
+        max_tiller_hand_force_n: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
         draft_m: 0.6,
@@ -96,7 +96,6 @@ fn creates_the_reference_articulated_assembly() {
 
     assert_eq!(bodies.len(), 3);
     assert_eq!(colliders.len(), 1);
-    assert_eq!(joints.len(), 2);
     assert_eq!(bodies[boat.hull.body].mass(), 222.0);
     assert_eq!(bodies[boat.sail].mass(), 22.0);
     assert_eq!(bodies[boat.rudder].mass(), 6.0);

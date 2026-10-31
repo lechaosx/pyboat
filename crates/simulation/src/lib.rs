@@ -6,9 +6,10 @@ use std::{
 };
 
 use rapier2d::prelude::{
-    ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointHandle, ImpulseJointSet,
-    IntegrationParameters, MassProperties, MotorModel, PhysicsWorld, RevoluteJointBuilder,
-    RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType, Rotation, Vector,
+    ColliderBuilder, ColliderHandle, ColliderSet, GenericJoint, ImpulseJointHandle,
+    ImpulseJointSet, IntegrationParameters, JointAxesMask, JointAxis, MassProperties, MotorModel,
+    PhysicsWorld, RevoluteJointBuilder, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+    RigidBodyType, Rotation, Vector,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -227,12 +228,19 @@ pub struct BoatParameters {
     pub rudder_stall_angle_rad: f32,
     pub rudder_stall_lift_coefficient: f32,
     pub max_sail_actuator_torque_n_m: f32,
-    pub max_rudder_actuator_torque_n_m: f32,
+    pub max_tiller_hand_force_n: f32,
     pub sail_bearing_damping_n_m_s_rad: f32,
     pub rudder_bearing_damping_n_m_s_rad: f32,
     pub draft_m: f32,
     pub ground_static_friction_coefficient: f32,
     pub ground_kinetic_friction_coefficient: f32,
+}
+
+impl BoatParameters {
+    pub fn max_rudder_actuator_torque_n_m(self) -> f32 {
+        // An ideal sailor pushes perpendicular to the tiller at its tip.
+        self.max_tiller_hand_force_n * self.tiller_length_m
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -337,6 +345,7 @@ pub struct Boat {
     pub rudder: RigidBodyHandle,
     pub sail_joint: ImpulseJointHandle,
     pub rudder_joint: ImpulseJointHandle,
+    pub rudder_actuator: ImpulseJointHandle,
 }
 
 pub struct Simulation {
@@ -1184,78 +1193,57 @@ fn damped_control_torque(
     (numerator / denominator).clamp(-maximum_torque_n_m, maximum_torque_n_m)
 }
 
-pub fn target_control_torques(
-    parameters: BoatParameters,
-    motion: BoatMotion,
-    target_sail_angle_rad: f32,
-    target_rudder_angle_rad: f32,
-) -> ActuatorTorques {
-    ActuatorTorques {
-        sail_n_m: damped_control_torque(
-            motion.sail_angle_rad,
-            motion.sail_angular_velocity_rad_s,
-            sail_hinge_moment_of_inertia_kg_m2(parameters),
-            parameters.max_sail_actuator_torque_n_m,
-            parameters.max_sail_angle_rad,
-            target_sail_angle_rad,
-        ),
-        rudder_n_m: damped_control_torque(
-            motion.rudder_angle_rad,
-            motion.rudder_angular_velocity_rad_s,
-            rudder_hinge_moment_of_inertia_kg_m2(parameters),
-            parameters.max_rudder_actuator_torque_n_m,
-            parameters.max_rudder_angle_rad,
-            target_rudder_angle_rad,
-        ),
-    }
-}
-
-pub fn sheet_control_torques(
-    parameters: BoatParameters,
-    motion: BoatMotion,
-    target_sail_angle_rad: f32,
-    target_rudder_angle_rad: f32,
-) -> ActuatorTorques {
-    let torques = target_control_torques(
-        parameters,
-        motion,
-        target_sail_angle_rad,
-        target_rudder_angle_rad,
-    );
-    let outward_direction = if motion.sail_angle_rad == 0.0 {
-        target_sail_angle_rad
-    } else {
-        motion.sail_angle_rad
-    };
-    if torques.sail_n_m * outward_direction > 0.0 {
-        ActuatorTorques {
-            sail_n_m: 0.0,
-            ..torques
-        }
-    } else {
-        torques
-    }
-}
-
-pub fn surface_target_control_torques(
+fn sail_target_control_torque(
     parameters: BoatParameters,
     motion: BoatMotion,
     targets: SurfaceTargets,
-) -> ActuatorTorques {
-    match targets.sail_target_angle_rad {
-        Some(target_sail_angle_rad) => target_control_torques(
-            parameters,
-            motion,
-            target_sail_angle_rad,
-            targets.rudder_target_angle_rad,
-        ),
-        None => sheet_control_torques(
-            parameters,
-            motion,
-            targets.sheet_target_angle_rad,
-            targets.rudder_target_angle_rad,
-        ),
+) -> f32 {
+    let target = targets
+        .sail_target_angle_rad
+        .unwrap_or(targets.sheet_target_angle_rad);
+    let torque = damped_control_torque(
+        motion.sail_angle_rad,
+        motion.sail_angular_velocity_rad_s,
+        sail_hinge_moment_of_inertia_kg_m2(parameters),
+        parameters.max_sail_actuator_torque_n_m,
+        parameters.max_sail_angle_rad,
+        target,
+    );
+    let outward_direction = if motion.sail_angle_rad == 0.0 {
+        target
+    } else {
+        motion.sail_angle_rad
+    };
+    if targets.sail_target_angle_rad.is_none() && torque * outward_direction > 0.0 {
+        0.0
+    } else {
+        torque
     }
+}
+
+fn set_rudder_target(
+    world: &mut PhysicsWorld,
+    boat: Boat,
+    parameters: BoatParameters,
+    target: Option<f32>,
+) {
+    let actuator = &mut world
+        .impulse_joints
+        .get_mut(boat.rudder_actuator, true)
+        .unwrap()
+        .data;
+    let maximum_torque = parameters.max_rudder_actuator_torque_n_m();
+    let stiffness = maximum_torque / (parameters.max_rudder_angle_rad / 10.0);
+    let damping = 2.0 * (stiffness * rudder_hinge_moment_of_inertia_kg_m2(parameters)).sqrt();
+    actuator.set_motor_position(JointAxis::AngX, target.unwrap_or(0.0), stiffness, damping);
+    actuator.set_motor_max_force(
+        JointAxis::AngX,
+        if target.is_some() {
+            maximum_torque
+        } else {
+            0.0
+        },
+    );
 }
 
 pub fn create_boat(
@@ -1304,12 +1292,19 @@ pub fn create_boat(
             .motor_velocity(0.0, parameters.rudder_bearing_damping_n_m_s_rad),
         true,
     );
+    // Keep uncapped passive bearing friction independent of bounded sailor effort;
+    // this joint supplies only angular actuation, without duplicate hinge constraints.
+    let mut actuator = GenericJoint::new(JointAxesMask::empty());
+    actuator.set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
+    actuator.set_motor_max_force(JointAxis::AngX, 0.0);
+    let rudder_actuator = joints.insert(hull.body, rudder, actuator, true);
     let boat = Boat {
         hull,
         sail,
         rudder,
         sail_joint,
         rudder_joint,
+        rudder_actuator,
     };
     restore_motion(&boat, parameters, motion, bodies);
     boat
@@ -1585,6 +1580,28 @@ impl Simulation {
     }
 
     pub fn advance(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
+        set_rudder_target(&mut self.world, self.boat, self.parameters, None);
+        self.advance_actuators(environment, actuator_torques);
+    }
+
+    pub fn advance_targets(&mut self, environment: Environment, targets: SurfaceTargets) {
+        let sail_n_m = sail_target_control_torque(self.parameters, self.motion(), targets);
+        set_rudder_target(
+            &mut self.world,
+            self.boat,
+            self.parameters,
+            Some(targets.rudder_target_angle_rad),
+        );
+        self.advance_actuators(
+            environment,
+            ActuatorTorques {
+                sail_n_m,
+                rudder_n_m: 0.0,
+            },
+        );
+    }
+
+    fn advance_actuators(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
         let mut remaining_seconds = f64::from(DT_SECONDS);
         while remaining_seconds > 0.0 {
             let step_seconds = (remaining_seconds as f32).min(fluid_maximum_step_seconds(
@@ -1639,8 +1656,7 @@ impl Simulation {
                 Some(maximum_yaw_rate_rad_s),
             ),
         };
-        let actuator_torques = surface_target_control_torques(self.parameters, motion, targets);
-        self.advance(environment, actuator_torques);
+        self.advance_targets(environment, targets);
         ControlTelemetry {
             targets,
             maximum_yaw_rate_rad_s,
@@ -1743,8 +1759,42 @@ impl SharedSimulation {
     ) -> Vec<HullContact> {
         assert_eq!(environments.len(), self.boats.len());
         assert_eq!(actuator_torques.len(), self.boats.len());
+        for boat in &self.boats {
+            set_rudder_target(&mut self.world, boat.boat, boat.parameters, None);
+        }
         let substeps = self.prepare_contact_charts();
         self.step_and_collect_contacts(substeps, environments, actuator_torques)
+    }
+
+    pub fn advance_controlled_with_environments(
+        &mut self,
+        environments: &[Environment],
+        targets: &[Option<SurfaceTargets>],
+    ) -> Vec<HullContact> {
+        assert_eq!(environments.len(), self.boats.len());
+        assert_eq!(targets.len(), self.boats.len());
+        let mut torques = Vec::with_capacity(self.boats.len());
+        for (boat, targets) in self.boats.iter().zip(targets) {
+            let sail_n_m = targets.map_or(0.0, |targets| {
+                sail_target_control_torque(
+                    boat.parameters,
+                    read_motion(&boat.boat, &self.world.bodies),
+                    targets,
+                )
+            });
+            set_rudder_target(
+                &mut self.world,
+                boat.boat,
+                boat.parameters,
+                targets.map(|t| t.rudder_target_angle_rad),
+            );
+            torques.push(ActuatorTorques {
+                sail_n_m,
+                rudder_n_m: 0.0,
+            });
+        }
+        let substeps = self.prepare_contact_charts();
+        self.step_and_collect_contacts(substeps, environments, &torques)
     }
 
     pub fn motion(&self, boat: usize) -> BoatMotion {

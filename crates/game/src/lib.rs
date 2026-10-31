@@ -3,9 +3,8 @@
 
 use rapier2d::prelude::Vector;
 use simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent,
-    TICKS_PER_SECOND, WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input,
-    surface_target_control_torques, yaw_rate_move_control,
+    BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent, TICKS_PER_SECOND,
+    WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input, yaw_rate_move_control,
 };
 
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
@@ -1442,7 +1441,8 @@ pub fn dinghy_parameters() -> BoatParameters {
         rudder_stall_angle_rad: 15.0_f32.to_radians(),
         rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
-        max_rudder_actuator_torque_n_m: 60.0,
+        // Nominal ideal-sailor effort, applied perpendicular to the tiller at its tip.
+        max_tiller_hand_force_n: 75.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
         rudder_bearing_damping_n_m_s_rad: 2.0,
         draft_m: 0.6,
@@ -3448,20 +3448,22 @@ fn wind_hash(mut value: u64) -> u64 {
     value
 }
 
-pub fn computed_yaw_rate_torques(motion: BoatMotion, intent: MotionIntent) -> ActuatorTorques {
-    computed_yaw_rate_torques_in_environment(motion, intent, match_environment())
+pub fn computed_yaw_rate_targets(
+    motion: BoatMotion,
+    intent: MotionIntent,
+) -> simulation::SurfaceTargets {
+    computed_yaw_rate_targets_in_environment(motion, intent, match_environment())
 }
 
-pub fn computed_yaw_rate_torques_in_environment(
+pub fn computed_yaw_rate_targets_in_environment(
     motion: BoatMotion,
     intent: MotionIntent,
     environment: Environment,
-) -> ActuatorTorques {
+) -> simulation::SurfaceTargets {
     let parameters = dinghy_parameters();
     let input = surface_control_input(parameters, motion, environment, 1, 10.0_f32.to_radians());
     let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
-    let targets = yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s);
-    surface_target_control_torques(parameters, motion, targets)
+    yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s)
 }
 
 #[cfg(test)]

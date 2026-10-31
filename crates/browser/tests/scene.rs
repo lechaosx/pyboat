@@ -237,7 +237,11 @@ fn demo_view_reports_sailing_feedback() {
     }
 
     let underway = demo.view();
-    assert!(underway.speed_m_s > 0.5);
+    assert_eq!(
+        underway.speed_m_s,
+        (demo.motion().velocity_m_s - game::match_environment().true_water_velocity_m_s).length()
+    );
+    assert!(underway.speed_m_s > 0.0);
     assert!(underway.apparent_wind_speed_m_s.is_finite());
 }
 

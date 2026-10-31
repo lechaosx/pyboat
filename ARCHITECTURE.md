@@ -86,8 +86,9 @@ and verification details.
 - **[Implicit]** One fixed-step world advances all boats and wrecks. Runtime
   adapters gather work before a synchronous tick and publish afterward;
   simulation never awaits external work.
-- **[Implicit]** Project code owns fluid loads, control, game rules, damage, and
-  wreck policy. Rapier owns integration, joints, collision response, and spatial queries.
+- **[Implicit]** Project code owns intent, actuator effort limits, fluid loads,
+  game rules, damage, and wreck policy. Rapier owns integration, joint actuation,
+  collision response, and spatial queries.
 - **[Explicit]** Rendered and collision hull geometry agree.
 - **[Explicit]** Destruction removes the controller while retaining bodies,
   momentum, fluid forces, and collisions. The owner spectates the wreck.

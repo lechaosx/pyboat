@@ -41,16 +41,16 @@ pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
     CloudFieldTimeCoordinates, OCEAN_WAVE_MODE_COUNT, WorldEnvironment,
-    cloud_field_time_coordinates_interpolated, computed_yaw_rate_torques,
-    computed_yaw_rate_torques_in_environment, dinghy_parameters, match_environment,
+    cloud_field_time_coordinates_interpolated, computed_yaw_rate_targets,
+    computed_yaw_rate_targets_in_environment, dinghy_parameters, match_environment,
     procedural_match_environment, procedural_world_environment,
     procedural_world_environment_interpolated,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d::prelude::{Rotation, Vector};
 use simulation::{
-    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact,
-    MotionIntent, SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow, hull_outline_m,
+    BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact, MotionIntent,
+    SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow, hull_outline_m,
 };
 
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
@@ -894,7 +894,7 @@ impl MultiplayerClient {
         local.intent = local_intent;
 
         let mut environments = vec![Environment::default(); self.predicted_boats.len()];
-        let mut actuator_torques = vec![ActuatorTorques::default(); self.predicted_boats.len()];
+        let mut targets = vec![None; self.predicted_boats.len()];
         for boat in self.predicted_boats.values() {
             let motion = self.prediction.motion(boat.index);
             let environment = procedural_match_environment(
@@ -905,12 +905,15 @@ impl MultiplayerClient {
             );
             environments[boat.index] = environment;
             if !boat.wreck {
-                actuator_torques[boat.index] =
-                    computed_yaw_rate_torques_in_environment(motion, boat.intent, environment);
+                targets[boat.index] = Some(computed_yaw_rate_targets_in_environment(
+                    motion,
+                    boat.intent,
+                    environment,
+                ));
             }
         }
         self.prediction
-            .advance_with_environments(&environments, &actuator_torques);
+            .advance_controlled_with_environments(&environments, &targets);
         self.prediction_tick += 1;
     }
 
@@ -1204,10 +1207,10 @@ impl Demo {
         self.accumulator_seconds += elapsed_seconds.min(0.25);
         while self.accumulator_seconds >= DT_SECONDS {
             let motion = self.motion();
-            let player_torques = computed_yaw_rate_torques(motion, self.motion_intent);
-            self.contacts = self.simulation.advance(
-                match_environment(),
-                &[player_torques, ActuatorTorques::default()],
+            let player_targets = computed_yaw_rate_targets(motion, self.motion_intent);
+            self.contacts = self.simulation.advance_controlled_with_environments(
+                &[match_environment(); 2],
+                &[Some(player_targets), None],
             );
             self.accumulator_seconds -= DT_SECONDS;
         }
