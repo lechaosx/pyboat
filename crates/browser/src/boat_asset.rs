@@ -185,20 +185,27 @@ pub fn boat_mesh_with_cloth(
     let wind = scene.apparent_wind_velocity_m_s;
 
     let rudder_axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
+    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / 205.0;
+    let tiller_scale = (scene.tiller_end_m - scene.rudder_m[0]).length() / 387.0;
+    // The transom strap stays with the hull while the central collar turns.
+    stamp(
+        &mut vertices,
+        scene.rudder_m[0],
+        forward,
+        [blade_scale, 0.0011],
+        [210.0, RUDDER[1], 253.0, RUDDER[3]],
+        [230.0, 263.0],
+    );
     for (rect, scale) in [
         (
-            [RUDDER[0], RUDDER[1], 230.0, RUDDER[3]],
-            [
-                (scene.rudder_m[1] - scene.rudder_m[0]).length() / 205.0,
-                0.0011,
-            ],
+            [RUDDER[0], RUDDER[1], 194.0, RUDDER[3]],
+            [blade_scale, 0.0011],
         ),
+        ([194.0, 239.0, 230.0, 287.0], [blade_scale, 0.0011]),
+        ([230.0, 239.0, 273.0, 287.0], [tiller_scale, 0.0011]),
         (
-            [230.0, RUDDER[1], RUDDER[2], RUDDER[3]],
-            [
-                (scene.tiller_end_m - scene.rudder_m[0]).length() / 387.0,
-                0.0011,
-            ],
+            [273.0, RUDDER[1], RUDDER[2], RUDDER[3]],
+            [tiller_scale, 0.0011],
         ),
     ] {
         stamp(
