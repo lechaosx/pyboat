@@ -22,7 +22,6 @@ fn reference_parameters() -> BoatParameters {
         max_sail_angle_rad: PI / 2.0,
         air_density_kg_m3: 1.225,
         sail_area_m2: 8.0,
-        sail_center_of_effort_from_mast_m: 0.7,
         sail_base_drag_coefficient: 0.02,
         water_density_kg_m3: 1025.0,
         keel_area_m2: 0.6,
@@ -122,7 +121,7 @@ fn creates_the_reference_articulated_assembly() {
         .as_revolute()
         .unwrap();
     assert_eq!(sail_joint.local_anchor1(), Vector::new(0.4, 0.0));
-    assert_eq!(sail_joint.local_anchor2(), Vector::new(1.0, 0.0));
+    assert_vector_close(sail_joint.local_anchor2(), Vector::new(9.0 / 11.0, 0.0));
     let sail_limits = sail_joint.limits().unwrap();
     assert_close(sail_limits.min, -PI / 2.0);
     assert_close(sail_limits.max, PI / 2.0);
@@ -148,6 +147,37 @@ fn creates_the_reference_articulated_assembly() {
     assert_eq!(rudder_motor.target_vel, 0.0);
     assert_eq!(rudder_motor.stiffness, 0.0);
     assert_eq!(rudder_motor.damping, 2.0);
+}
+
+#[test]
+fn sail_mass_tracks_triangular_canvas_and_a_uniform_boom() {
+    for (cloth, boom, center_x, hinge_inertia) in [
+        (12.0, 0.0, -2.0 / 3.0, 8.0),
+        (0.0, 10.0, -1.0, 40.0 / 3.0),
+        (12.0, 10.0, -9.0 / 11.0, 64.0 / 3.0),
+    ] {
+        let mut parameters = reference_parameters();
+        parameters.sail_mass_kg = cloth;
+        parameters.boom_mass_kg = boom;
+        let mut bodies = RigidBodySet::new();
+        let mut colliders = ColliderSet::new();
+        let mut joints = ImpulseJointSet::new();
+        let boat = create_boat(
+            parameters,
+            zero_motion(),
+            &mut bodies,
+            &mut colliders,
+            &mut joints,
+        );
+        let sail = &bodies[boat.sail];
+        let center = sail.center_of_mass() - parameters.mast_position_m;
+        assert_close(center.x, center_x);
+        assert_close(
+            sail.mass_properties().local_mprops.principal_inertia()
+                + sail.mass() * center.length_squared(),
+            hinge_inertia,
+        );
+    }
 }
 
 #[test]
@@ -200,7 +230,10 @@ fn authoritative_motion_round_trips_and_keeps_hinges_connected() {
     let rudder = &bodies[boat.rudder];
     assert_vector_close(
         hull.translation() + hull.rotation().transform_vector(parameters.mast_position_m),
-        sail.translation() + sail.rotation().transform_vector(Vector::new(1.0, 0.0)),
+        sail.translation()
+            + sail
+                .rotation()
+                .transform_vector(Vector::new(9.0 / 11.0, 0.0)),
     );
     assert_vector_close(
         hull.translation()
@@ -211,7 +244,7 @@ fn authoritative_motion_round_trips_and_keeps_hinges_connected() {
     );
     assert_vector_close(
         velocity_at_local_point(hull, parameters.mast_position_m),
-        velocity_at_local_point(sail, Vector::new(1.0, 0.0)),
+        velocity_at_local_point(sail, Vector::new(9.0 / 11.0, 0.0)),
     );
     assert_vector_close(
         velocity_at_local_point(hull, parameters.rudder_position_m),

@@ -69,14 +69,21 @@ fn passive_boats_cannot_gain_kinetic_energy_in_still_water() {
         true_water_velocity_m_s: Vector::ZERO,
         water_depth_m: f32::INFINITY,
     };
-    for (speed_m_s, rudder_speed_rad_s) in [(5.0, 0.0), (20.0, 0.0), (700.0, 0.0), (0.0, 20.0)] {
+    for (speed_m_s, yaw_speed, sail_speed, rudder_speed_rad_s) in [
+        (5.0, 0.0, 0.0, 0.0),
+        (20.0, 0.0, 0.0, 0.0),
+        (700.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 20.0),
+        (0.0, 20.0, 0.0, 0.0),
+        (0.0, 0.0, 20.0, 0.0),
+    ] {
         let motion = simulation::BoatMotion {
             position_m: Vector::ZERO,
             velocity_m_s: Vector::new(speed_m_s, 0.0),
             angle_rad: 0.0,
-            angular_velocity_rad_s: 0.0,
+            angular_velocity_rad_s: yaw_speed,
             sail_angle_rad: 0.0,
-            sail_angular_velocity_rad_s: 0.0,
+            sail_angular_velocity_rad_s: sail_speed,
             rudder_angle_rad: 0.03,
             rudder_angular_velocity_rad_s: rudder_speed_rad_s,
         };

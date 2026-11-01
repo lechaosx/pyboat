@@ -21,7 +21,6 @@ fn parameters() -> BoatParameters {
         max_sail_angle_rad: PI / 2.0,
         air_density_kg_m3: 0.0,
         sail_area_m2: 8.0,
-        sail_center_of_effort_from_mast_m: 0.7,
         sail_base_drag_coefficient: 0.02,
         water_density_kg_m3: 0.0,
         keel_area_m2: 0.6,

@@ -1419,7 +1419,6 @@ pub fn dinghy_parameters() -> BoatParameters {
         max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
         air_density_kg_m3: 1.225,
         sail_area_m2: boom_length_m * sail_luff_m / 2.0,
-        sail_center_of_effort_from_mast_m: 0.7,
         sail_base_drag_coefficient: 0.02,
         water_density_kg_m3: 1025.0,
         keel_area_m2: 0.6,

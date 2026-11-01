@@ -24,7 +24,6 @@ fn reference_parameters() -> BoatParameters {
         max_sail_angle_rad: PI / 2.0,
         air_density_kg_m3: 1.225,
         sail_area_m2: 8.0,
-        sail_center_of_effort_from_mast_m: 0.7,
         sail_base_drag_coefficient: 0.02,
         water_density_kg_m3: 1025.0,
         keel_area_m2: 0.6,
@@ -298,7 +297,7 @@ fn fixed_ticks_preserve_uniform_motion_and_connected_hinges() {
     let rudder = &simulation.world.bodies[simulation.boat.rudder];
     assert_vector_close(
         world_point(hull, parameters.mast_position_m),
-        world_point(sail, Vector::new(1.0, 0.0)),
+        world_point(sail, Vector::new(9.0 / 11.0, 0.0)),
     );
     assert_vector_close(
         world_point(hull, parameters.rudder_position_m),
@@ -710,10 +709,8 @@ fn sail_load_applies_the_expected_linear_and_angular_impulse() {
     let mast_position_m = initial.position_m
         + Rotation::new(initial.angle_rad).transform_vector(parameters.mast_position_m);
     let center_of_effort_m = mast_position_m
-        + Rotation::new(initial.angle_rad + initial.sail_angle_rad).transform_vector(Vector::new(
-            -parameters.sail_center_of_effort_from_mast_m,
-            0.0,
-        ));
+        + Rotation::new(initial.angle_rad + initial.sail_angle_rad)
+            .transform_vector(Vector::new(-(parameters.boom_length_m / 3.0), 0.0));
     let mut simulation = Simulation::new(parameters, initial);
 
     simulation.advance(environment, ActuatorTorques::default());
@@ -723,6 +720,75 @@ fn sail_load_applies_the_expected_linear_and_angular_impulse() {
         angular_momentum(&simulation),
         center_of_effort_m.perp_dot(expected_force_n) * DT_SECONDS,
     );
+}
+
+#[test]
+fn rotating_foils_resist_still_fluid_with_their_integrated_area_moments() {
+    for foil in ["rudder", "sail", "keel"] {
+        let mut parameters = vacuum_parameters();
+        parameters.sail_bearing_damping_n_m_s_rad = 0.0;
+        parameters.rudder_bearing_damping_n_m_s_rad = 0.0;
+        parameters.hull_reference_area_m2 = 0.0;
+        let mut initial = motion();
+        initial.position_m = Vector::ZERO;
+        initial.velocity_m_s = Vector::ZERO;
+        initial.angle_rad = 0.0;
+        initial.sail_angle_rad = 0.0;
+        initial.rudder_angle_rad = 0.0;
+        let omega = 0.001_f32;
+        let (area, third_area_moment, hinge, body_index) = match foil {
+            "rudder" => {
+                parameters.water_density_kg_m3 = 1.0;
+                parameters.keel_area_m2 = 0.0;
+                initial.rudder_angular_velocity_rad_s = omega;
+                (
+                    parameters.rudder_area_m2,
+                    parameters.rudder_draw_length_m.powi(3) / 4.0,
+                    parameters.rudder_position_m,
+                    2,
+                )
+            }
+            "sail" => {
+                parameters.air_density_kg_m3 = 1.0;
+                initial.sail_angular_velocity_rad_s = omega;
+                (
+                    parameters.sail_area_m2,
+                    parameters.boom_length_m.powi(3) / 10.0,
+                    parameters.mast_position_m,
+                    1,
+                )
+            }
+            _ => {
+                parameters.water_density_kg_m3 = 1.0;
+                parameters.rudder_area_m2 = 0.0;
+                initial.angular_velocity_rad_s = omega;
+                let chord = parameters.keel_area_m2 / parameters.draft_m;
+                (
+                    parameters.keel_area_m2,
+                    chord.powi(3) / 32.0,
+                    parameters.keel_position_m,
+                    0,
+                )
+            }
+        };
+        let mut simulation = Simulation::new(parameters, initial);
+        let handle = [
+            simulation.boat.hull.body,
+            simulation.boat.sail,
+            simulation.boat.rudder,
+        ][body_index];
+        let lever = simulation.world.bodies[handle].center_of_mass() - hinge;
+        simulation.advance(Environment::default(), ActuatorTorques::default());
+        let body = &simulation.world.bodies[handle];
+        let torque = body.user_torque() + lever.perp_dot(body.user_force());
+        // Broadside rotation has C_D = 2 + base drag. Integrating r|r|r
+        // over each planform gives the analytic resisting hinge moment.
+        let expected = -0.5 * 2.02 * area * omega.powi(2) * third_area_moment;
+        assert!(
+            (torque - expected).abs() < expected.abs() * 0.002,
+            "{foil}: torque {torque}, integrated moment {expected}"
+        );
+    }
 }
 
 #[test]
@@ -756,6 +822,9 @@ fn tick_torques_replace_previous_tick_loads() {
 fn rudder_load_applies_the_expected_linear_and_angular_impulse() {
     let mut parameters = reference_parameters();
     parameters.air_density_kg_m3 = 0.0;
+    // Weak loading makes the uniform-flow, first-order impulse measurable
+    // before rotation and translation appreciably change the sampled flow.
+    parameters.water_density_kg_m3 = 1.0;
     parameters.keel_area_m2 = 0.0;
     parameters.hull_reference_area_m2 = 0.0;
     let mut initial = motion();
@@ -784,10 +853,15 @@ fn rudder_load_applies_the_expected_linear_and_angular_impulse() {
 
     simulation.advance(environment, ActuatorTorques::default());
 
-    assert_vector_close(linear_momentum(&simulation), expected_force_n * DT_SECONDS);
-    assert_close(
-        angular_momentum(&simulation),
-        center_of_effort_m.perp_dot(expected_force_n) * DT_SECONDS,
+    let expected_impulse = expected_force_n * DT_SECONDS;
+    assert!(
+        (linear_momentum(&simulation) - expected_impulse).length()
+            < expected_impulse.length() * 0.001
+    );
+    let expected_angular_impulse = center_of_effort_m.perp_dot(expected_impulse);
+    assert!(
+        (angular_momentum(&simulation) - expected_angular_impulse).abs()
+            < expected_angular_impulse.abs() * 0.001
     );
 }
 
@@ -1009,79 +1083,51 @@ fn controller_input() -> ControlInput {
 }
 
 #[test]
-fn surface_control_input_samples_quasi_static_sail_and_rudder_effects() {
-    let parameters = reference_parameters();
+fn quasi_static_control_predictions_match_distributed_fluid_loads() {
+    let mut parameters = reference_parameters();
+    parameters.air_density_kg_m3 = 0.0001;
+    parameters.water_density_kg_m3 = 0.0001;
     let mut current = motion();
     current.velocity_m_s = Vector::new(1.0, -0.5);
     current.angle_rad = 0.4;
     current.angular_velocity_rad_s = 0.2;
+    current.sail_angle_rad = 0.0;
+    current.rudder_angle_rad = 0.0;
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 1.0),
         true_water_velocity_m_s: Vector::new(0.5, -0.25),
         ..Default::default()
     };
-
     let input = surface_control_input(parameters, current, environment, 30, 10.0_f32.to_radians());
-
     assert_eq!(input.sail_effects.len(), 7);
     assert_eq!(input.rudder_effects.len(), 3);
-    let sail_effect = input
-        .sail_effects
-        .iter()
-        .find(|effect| effect.angle_rad == 0.0)
-        .unwrap();
-    let sail_center_local_m = parameters.mast_position_m
-        + Vector::new(-parameters.sail_center_of_effort_from_mast_m, 0.0);
-    let sail_center_world_m =
-        Rotation::new(current.angle_rad).transform_vector(sail_center_local_m);
-    let sail_apparent_wind_m_s = environment.true_wind_velocity_m_s
-        - current.velocity_m_s
-        - Vector::new(-sail_center_world_m.y, sail_center_world_m.x)
-            * current.angular_velocity_rad_s;
-    let sail_force_n = flat_plate_force(
-        sail_apparent_wind_m_s,
-        current.angle_rad,
-        parameters.air_density_kg_m3,
-        parameters.sail_area_m2,
-        parameters.sail_base_drag_coefficient,
-    );
+    let mut simulation = Simulation::new(parameters, current);
+    let initial_centers = [simulation.boat.sail, simulation.boat.rudder]
+        .map(|handle| simulation.world.bodies[handle].center_of_mass() - current.position_m);
+    simulation.advance(environment, ActuatorTorques::default());
     let boat_forward = Rotation::new(current.angle_rad).transform_vector(Vector::new(1.0, 0.0));
-    assert_close(sail_effect.drive_force_n, sail_force_n.dot(boat_forward));
-    assert_close(
-        sail_effect.yaw_moment_n_m,
-        sail_center_world_m.perp_dot(sail_force_n),
-    );
-
-    let rudder_effect = input
-        .rudder_effects
-        .iter()
-        .find(|effect| effect.angle_rad == 0.0)
-        .unwrap();
-    let rudder_center_local_m =
-        parameters.rudder_position_m + Vector::new(-parameters.rudder_draw_length_m / 2.0, 0.0);
-    let rudder_center_world_m =
-        Rotation::new(current.angle_rad).transform_vector(rudder_center_local_m);
-    let rudder_apparent_water_m_s = environment.true_water_velocity_m_s
-        - current.velocity_m_s
-        - Vector::new(-rudder_center_world_m.y, rudder_center_world_m.x)
-            * current.angular_velocity_rad_s;
-    let rudder_force_n = streamlined_foil_force(
-        rudder_apparent_water_m_s,
-        current.angle_rad,
-        parameters.water_density_kg_m3,
-        parameters.rudder_area_m2,
-        parameters.rudder_base_drag_coefficient,
-        parameters.rudder_stall_angle_rad,
-        parameters.rudder_stall_lift_coefficient,
-    );
-    assert_close(
-        rudder_effect.drive_force_n,
-        rudder_force_n.dot(boat_forward),
-    );
-    assert_close(
-        rudder_effect.yaw_moment_n_m,
-        rudder_center_world_m.perp_dot(rudder_force_n),
-    );
+    for (effects, handle, center) in [
+        (
+            &input.sail_effects,
+            simulation.boat.sail,
+            initial_centers[0],
+        ),
+        (
+            &input.rudder_effects,
+            simulation.boat.rudder,
+            initial_centers[1],
+        ),
+    ] {
+        let effect = effects
+            .iter()
+            .find(|effect| effect.angle_rad == 0.0)
+            .unwrap();
+        let body = &simulation.world.bodies[handle];
+        let force = body.user_force();
+        let torque = body.user_torque() + center.perp_dot(force);
+        assert!((effect.drive_force_n - force.dot(boat_forward)).abs() < 1.0e-8);
+        assert!((effect.yaw_moment_n_m - torque).abs() < 1.0e-8);
+    }
 }
 
 #[test]
@@ -1281,7 +1327,7 @@ fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
 }
 
 #[test]
-fn mirrored_computed_yaw_rate_commands_produce_mirrored_motion() {
+fn mirrored_computed_yaw_rate_steps_produce_mirrored_motion() {
     let parameters = reference_parameters();
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 0.0),
@@ -1295,12 +1341,19 @@ fn mirrored_computed_yaw_rate_commands_produce_mirrored_motion() {
     let mut port_motion = motion();
     port_motion.velocity_m_s = Vector::ZERO;
     port_motion.angle_rad = 135.0_f32.to_radians();
-    let mut starboard_motion = port_motion;
-    starboard_motion.angle_rad = -port_motion.angle_rad;
-    let mut port = Simulation::new(parameters, port_motion);
-    let mut starboard = Simulation::new(parameters, starboard_motion);
-
     for _ in 0..6 * 60 {
+        let mirrored = BoatMotion {
+            position_m: Vector::new(port_motion.position_m.x, -port_motion.position_m.y),
+            velocity_m_s: Vector::new(port_motion.velocity_m_s.x, -port_motion.velocity_m_s.y),
+            angle_rad: -port_motion.angle_rad,
+            angular_velocity_rad_s: -port_motion.angular_velocity_rad_s,
+            sail_angle_rad: -port_motion.sail_angle_rad,
+            sail_angular_velocity_rad_s: -port_motion.sail_angular_velocity_rad_s,
+            rudder_angle_rad: -port_motion.rudder_angle_rad,
+            rudder_angular_velocity_rad_s: -port_motion.rudder_angular_velocity_rad_s,
+        };
+        let mut port = Simulation::new(parameters, port_motion);
+        let mut starboard = Simulation::new(parameters, mirrored);
         port.advance_controlled(
             environment,
             SurfaceControlCommand::ComputedYawRate(MotionIntent {
@@ -1317,17 +1370,17 @@ fn mirrored_computed_yaw_rate_commands_produce_mirrored_motion() {
             }),
             settings,
         );
+        let port = port.motion();
+        let starboard = starboard.motion();
+        assert_close(port.position_m.x, starboard.position_m.x);
+        assert_close(port.position_m.y, -starboard.position_m.y);
+        assert_close(port.velocity_m_s.x, starboard.velocity_m_s.x);
+        assert_close(port.velocity_m_s.y, -starboard.velocity_m_s.y);
+        assert_close(port.angle_rad, -starboard.angle_rad);
+        assert_close(
+            port.angular_velocity_rad_s,
+            -starboard.angular_velocity_rad_s,
+        );
+        port_motion = port;
     }
-
-    let port = port.motion();
-    let starboard = starboard.motion();
-    assert_close(port.position_m.x, starboard.position_m.x);
-    assert_close(port.position_m.y, -starboard.position_m.y);
-    assert_close(port.velocity_m_s.x, starboard.velocity_m_s.x);
-    assert_close(port.velocity_m_s.y, -starboard.velocity_m_s.y);
-    assert_close(port.angle_rad, -starboard.angle_rad);
-    assert_close(
-        port.angular_velocity_rad_s,
-        -starboard.angular_velocity_rad_s,
-    );
 }

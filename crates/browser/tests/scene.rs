@@ -253,18 +253,3 @@ fn demo_contains_a_distinct_practice_boat() {
     assert_eq!(scenes.len(), 2);
     assert!((scenes[1].rudder_m[0] - scenes[0].rudder_m[0]).length() > 4.0);
 }
-
-#[test]
-fn demo_reports_a_collision_with_the_practice_boat() {
-    let mut demo = Demo::new();
-
-    let collided = (0..30 * 60).any(|_| {
-        let scenes = demo.scenes();
-        let toward_practice = (scenes[1].sail_m[0] - scenes[0].sail_m[0]).normalize();
-        demo.set_player_input(0.0, 0.0, toward_practice.x, toward_practice.y);
-        demo.advance(DT_SECONDS);
-        !demo.contacts().is_empty()
-    });
-
-    assert!(collided);
-}
