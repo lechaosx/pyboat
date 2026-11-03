@@ -103,10 +103,14 @@ and verification details.
 - **[Explicit]** The world's physical models follow the structure of the
   governing physics, with its dependencies and published constants, so they
   largely calibrate themselves. Each aims for the most realism per complexity.
+- **[Explicit]** A more physical model may replace a simpler one at equal or
+  higher cost when the added cost earns its keep, especially where the simpler
+  model falls short of gameplay needs.
 - **[Explicit]** Departures from that physics are deliberate compromises,
-  acceptable where the world lacks the physical cause or its caricatured
-  proportions make the physics read wrongly. Each is named beside its code with
-  what it stands in for.
+  acceptable where the world lacks the physical cause, its caricatured
+  proportions make the physics read wrongly, or a physical model costs more than
+  it earns, especially where its detail serves no gameplay need. Each is named
+  beside its code with what it stands in for.
 - **[Implicit]** `game` is authoritative for terrain, atmosphere, tides, shelter,
   and depth; native and WASM sample match seed, tick, and world position.
 - **[Explicit]** Clients receive seed and geometry as procedural-world data.
@@ -605,6 +609,10 @@ and verification details.
   scenarios shared by headless capture and the browser playground.
 - **[Explicit]** Rendering cost during camera motion is judged on fixed camera
   paths that only headless capture runs, as shipped.
+- **[Explicit]** Cost is judged against each graphics tier's frame and
+  simulation-tick budget, and on mobile against its battery and heat budget.
+  Every cost must earn its keep and every tier stays within its budget; a
+  smaller cost is not a goal in itself.
 - **[Explicit]** Performance measurements time the shipped production shaders.
 - **[Explicit]** The browser playground runs the scenario bench on devices that
   headless capture cannot reach, such as phones.

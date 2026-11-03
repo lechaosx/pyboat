@@ -68,6 +68,7 @@
 ## Fix Models Physically
 
 - Fix physical-model defects by making the model more physical, simpler, or both. When neither works, flag the compromise instead of adding a correction term or tuned constant.
+- When proposing a more physical or a simpler model, state its positive and negative implications for realism, cost, and gameplay, so the owner can judge the trade.
 
 ## Test Observable Risk
 
