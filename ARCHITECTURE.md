@@ -89,6 +89,9 @@ and verification details.
 - **[Implicit]** Project code owns intent, actuator effort limits, fluid loads,
   game rules, damage, and wreck policy. Rapier owns integration, joint actuation,
   collision response, and spatial queries.
+- **[Explicit]** Distributed foil forces use local motion relative to wind or water.
+- **[Explicit]** Spatial-gradient and Froude–Krylov loads are deferred until
+  further wave and current model development.
 - **[Explicit]** Rendered and collision hull geometry agree.
 - **[Explicit]** Destruction removes the controller while retaining bodies,
   momentum, fluid forces, and collisions. The owner spectates the wreck.
@@ -613,6 +616,7 @@ and verification details.
 
 | Area | Unresolved choice |
 | --- | --- |
+| Added fluid inertia | Whether its gameplay benefit justifies the engine and integration costs |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |

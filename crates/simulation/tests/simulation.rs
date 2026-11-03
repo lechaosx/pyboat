@@ -5,8 +5,8 @@ use simulation::{
     ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
     DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
     SurfaceControlCommand, SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s,
-    flat_plate_force, hull_resistance_force, streamlined_foil_force, surface_control_input,
-    yaw_rate_move_control,
+    flat_plate_force, hull_resistance_force, rudder_foil_force, streamlined_foil_force,
+    surface_control_input, yaw_rate_move_control,
 };
 
 fn reference_parameters() -> BoatParameters {
@@ -39,8 +39,6 @@ fn reference_parameters() -> BoatParameters {
         rudder_draw_length_m: 0.5,
         rudder_area_m2: 0.12,
         rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
         max_tiller_hand_force_n: 60.0,
         tiller_length_m: 1.0,
@@ -59,6 +57,31 @@ fn vacuum_parameters() -> BoatParameters {
     parameters.air_density_kg_m3 = 0.0;
     parameters.water_density_kg_m3 = 0.0;
     parameters
+}
+
+#[test]
+fn zero_bearing_friction_allows_a_free_rudder_to_accelerate() {
+    let mut parameters = vacuum_parameters();
+    parameters.rudder_bearing_damping_n_m_s_rad = 0.0;
+    let initial = BoatMotion {
+        velocity_m_s: Vector::ZERO,
+        angular_velocity_rad_s: 0.0,
+        angle_rad: 0.0,
+        sail_angle_rad: 0.0,
+        sail_angular_velocity_rad_s: 0.0,
+        rudder_angle_rad: 0.0,
+        rudder_angular_velocity_rad_s: 0.0,
+        ..motion()
+    };
+    let mut simulation = Simulation::new(parameters, initial);
+    simulation.advance(
+        Environment::default(),
+        ActuatorTorques {
+            sail_n_m: 0.0,
+            rudder_n_m: 1.0,
+        },
+    );
+    assert!(simulation.motion().rudder_angular_velocity_rad_s > 0.01);
 }
 
 #[test]
@@ -723,6 +746,56 @@ fn sail_load_applies_the_expected_linear_and_angular_impulse() {
 }
 
 #[test]
+fn rudder_steady_load_tracks_whole_blade_aspect_ratio() {
+    for (chord, area) in [(0.45_f32, 0.12_f32), (0.9, 0.48), (0.45, 0.24)] {
+        let mut parameters = reference_parameters();
+        parameters.rudder_draw_length_m = chord;
+        parameters.rudder_area_m2 = area;
+        let flow = Vector::new(2.0, 0.0);
+        let input = surface_control_input(
+            parameters,
+            BoatMotion {
+                position_m: Vector::ZERO,
+                velocity_m_s: Vector::ZERO,
+                angle_rad: 0.0,
+                angular_velocity_rad_s: 0.0,
+                sail_angle_rad: 0.0,
+                sail_angular_velocity_rad_s: 0.0,
+                rudder_angle_rad: 0.0,
+                rudder_angular_velocity_rad_s: 0.0,
+            },
+            Environment {
+                true_water_velocity_m_s: flow,
+                ..Default::default()
+            },
+            1,
+            0.0,
+        );
+        for angle_deg in [-30_i32, -15, -1, 1, 15, 30] {
+            let angle = (angle_deg as f32).to_radians();
+            let effect = input
+                .rudder_effects
+                .iter()
+                .find(|effect| (effect.angle_rad - angle).abs() < 1.0e-5)
+                .unwrap();
+            let aspect_ratio = area / chord.powi(2);
+            let slope = 6.13 * aspect_ratio / (aspect_ratio + 2.25);
+            let normal = Vector::new(-angle.sin(), angle.cos());
+            let expected_force = 0.5
+                * parameters.water_density_kg_m3
+                * area
+                * flow.length()
+                * (parameters.rudder_base_drag_coefficient * flow
+                    + slope * flow.dot(normal) * normal);
+            let center =
+                parameters.rudder_position_m - Vector::new(angle.cos(), angle.sin()) * chord / 2.0;
+            assert!((effect.drive_force_n - expected_force.x).abs() < 0.001);
+            assert!((effect.yaw_moment_n_m - center.perp_dot(expected_force)).abs() < 0.001);
+        }
+    }
+}
+
+#[test]
 fn rotating_foils_resist_still_fluid_with_their_integrated_area_moments() {
     for foil in ["rudder", "sail", "keel"] {
         let mut parameters = vacuum_parameters();
@@ -781,9 +854,14 @@ fn rotating_foils_resist_still_fluid_with_their_integrated_area_moments() {
         simulation.advance(Environment::default(), ActuatorTorques::default());
         let body = &simulation.world.bodies[handle];
         let torque = body.user_torque() + lever.perp_dot(body.user_force());
-        // Broadside rotation has C_D = 2 + base drag. Integrating r|r|r
-        // over each planform gives the analytic resisting hinge moment.
-        let expected = -0.5 * 2.02 * area * omega.powi(2) * third_area_moment;
+        let broadside_drag = if foil == "rudder" {
+            let aspect_ratio = area / parameters.rudder_draw_length_m.powi(2);
+            0.02 + 6.13 * aspect_ratio / (aspect_ratio + 2.25)
+        } else {
+            2.02
+        };
+        // Integrating r|r|r over the planform gives the resisting hinge moment.
+        let expected = -0.5 * broadside_drag * area * omega.powi(2) * third_area_moment;
         assert!(
             (torque - expected).abs() < expected.abs() * 0.002,
             "{foil}: torque {torque}, integrated moment {expected}"
@@ -835,14 +913,14 @@ fn rudder_load_applies_the_expected_linear_and_angular_impulse() {
         true_water_velocity_m_s: Vector::new(2.0, 0.0),
         ..Default::default()
     };
-    let expected_force_n = streamlined_foil_force(
+    let expected_force_n = rudder_foil_force(
         environment.true_water_velocity_m_s,
         initial.angle_rad + initial.rudder_angle_rad,
         parameters.water_density_kg_m3,
         parameters.rudder_area_m2,
+        parameters.rudder_area_m2,
+        parameters.rudder_draw_length_m,
         parameters.rudder_base_drag_coefficient,
-        parameters.rudder_stall_angle_rad,
-        parameters.rudder_stall_lift_coefficient,
     );
     let hinge_position_m = initial.position_m
         + Rotation::new(initial.angle_rad).transform_vector(parameters.rudder_position_m);

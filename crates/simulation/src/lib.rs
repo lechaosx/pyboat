@@ -224,8 +224,6 @@ pub struct BoatParameters {
     pub max_rudder_angle_rad: f32,
     pub rudder_area_m2: f32,
     pub rudder_base_drag_coefficient: f32,
-    pub rudder_stall_angle_rad: f32,
-    pub rudder_stall_lift_coefficient: f32,
     pub max_sail_actuator_torque_n_m: f32,
     pub max_tiller_hand_force_n: f32,
     pub sail_bearing_damping_n_m_s_rad: f32,
@@ -583,14 +581,11 @@ pub fn flat_plate_force(
     area_m2: f32,
     base_drag_coefficient: f32,
 ) -> Vector {
-    let flow_angle_rad = apparent_flow_m_s.y.atan2(apparent_flow_m_s.x);
-    let angle_of_attack_rad = foil_angle_rad - std::f32::consts::PI - flow_angle_rad;
-    let dynamic_pressure_area_n =
-        0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length_squared() * area_m2;
-    let lift_n = dynamic_pressure_area_n * flat_plate_lift_coefficient(angle_of_attack_rad);
-    let drag_n = dynamic_pressure_area_n
-        * flat_plate_drag_coefficient(angle_of_attack_rad, base_drag_coefficient);
-    rotated(Vector::new(drag_n, -lift_n), flow_angle_rad)
+    let normal = rotated(Vector::Y, foil_angle_rad);
+    0.5 * fluid_density_kg_m3
+        * area_m2
+        * apparent_flow_m_s.length()
+        * (base_drag_coefficient * apparent_flow_m_s + 2.0 * apparent_flow_m_s.dot(normal) * normal)
 }
 
 pub fn streamlined_foil_force(
@@ -615,6 +610,30 @@ pub fn streamlined_foil_force(
     let drag_n = dynamic_pressure_area_n
         * flat_plate_drag_coefficient(angle_of_attack_rad, base_drag_coefficient);
     rotated(Vector::new(drag_n, -lift_n), flow_angle_rad)
+}
+
+pub fn rudder_foil_force(
+    apparent_flow_m_s: Vector,
+    foil_angle_rad: f32,
+    fluid_density_kg_m3: f32,
+    sample_area_m2: f32,
+    total_area_m2: f32,
+    chord_m: f32,
+    base_drag_coefficient: f32,
+) -> Vector {
+    // MMG/Fujii normal-pressure law uses the whole rectangular blade's AR.
+    // Transom-hung free-tip geometry uses uncorrected AR. Symmetric broadside/
+    // astern continuation is a steady proxy; section, ventilation and transient
+    // effects require calibration.
+    // https://doi.org/10.1007/s00773-014-0293-y, Eq. 38.
+    let aspect_ratio = total_area_m2 / chord_m.powi(2);
+    let normal_slope = 6.13 * aspect_ratio / (aspect_ratio + 2.25);
+    let normal = rotated(Vector::Y, foil_angle_rad);
+    0.5 * fluid_density_kg_m3
+        * sample_area_m2
+        * apparent_flow_m_s.length()
+        * (base_drag_coefficient * apparent_flow_m_s
+            + normal_slope * apparent_flow_m_s.dot(normal) * normal)
 }
 
 pub fn hull_resistance_force(
@@ -884,14 +903,14 @@ pub fn surface_control_input(
                         rotated(parameters.rudder_position_m, motion.angle_rad) + surface_offset;
                     let flow =
                         apparent_water_m_s - perpendicular(point) * motion.angular_velocity_rad_s;
-                    let sample_force = streamlined_foil_force(
+                    let sample_force = rudder_foil_force(
                         flow,
                         motion.angle_rad + angle_rad,
                         parameters.water_density_kg_m3,
                         area,
+                        parameters.rudder_area_m2,
+                        parameters.rudder_draw_length_m,
                         parameters.rudder_base_drag_coefficient,
-                        parameters.rudder_stall_angle_rad,
-                        parameters.rudder_stall_lift_coefficient,
                     );
                     (force + sample_force, torque + point.perp_dot(sample_force))
                 },
@@ -1340,6 +1359,14 @@ pub fn create_boat(
             .motor_velocity(0.0, parameters.rudder_bearing_damping_n_m_s_rad),
         true,
     );
+    for (joint, damping) in [
+        (sail_joint, parameters.sail_bearing_damping_n_m_s_rad),
+        (rudder_joint, parameters.rudder_bearing_damping_n_m_s_rad),
+    ] {
+        if damping == 0.0 {
+            joints.get_mut(joint, true).unwrap().data.motor_axes = JointAxesMask::empty();
+        }
+    }
     // Keep uncapped passive bearing friction independent of bounded sailor effort;
     // this joint supplies only angular actuation, without duplicate hinge constraints.
     let mut actuator = GenericJoint::new(JointAxesMask::empty());
@@ -1506,17 +1533,16 @@ fn fluid_maximum_step_seconds(
         parameters.air_density_kg_m3,
         foil_force_slope_bound(parameters.sail_base_drag_coefficient, 1.0, 2.0),
     );
+    let rudder_aspect_ratio = parameters.rudder_area_m2 / parameters.rudder_draw_length_m.powi(2);
+    let rudder_normal_slope = 6.13 * rudder_aspect_ratio / (rudder_aspect_ratio + 2.25);
     let rudder_rate = fluid_response_rate(
         &world.bodies[boat.rudder],
         rudder_foil_samples(parameters)
             .map(|(point, area)| (point - rudder_center_from_hinge_m(parameters), area)),
         environment.true_water_velocity_m_s,
         parameters.water_density_kg_m3,
-        streamlined_force_slope_bound(
-            parameters.rudder_base_drag_coefficient,
-            parameters.rudder_stall_angle_rad,
-            parameters.rudder_stall_lift_coefficient,
-        ),
+        // F = ½ρA|u|Bu, ||B|| = Cd0 + k, hence ||dF/du|| ≤ ρA|u|(Cd0 + k).
+        2.0 * (parameters.rudder_base_drag_coefficient + rudder_normal_slope),
     );
     let keel_rate = fluid_response_rate(
         &world.bodies[boat.hull.body],
@@ -1585,7 +1611,7 @@ fn apply_boat_forces(
         let rudder = &world.bodies[boat.rudder];
         let angle = rudder.rotation().angle();
         let point = rudder.translation() + rotated(offset - rudder_center, angle);
-        let force = streamlined_foil_force(
+        let force = rudder_foil_force(
             apparent_flow(
                 environment.true_water_velocity_m_s,
                 rudder.velocity_at_point(point),
@@ -1593,9 +1619,9 @@ fn apply_boat_forces(
             angle,
             parameters.water_density_kg_m3,
             area,
+            parameters.rudder_area_m2,
+            parameters.rudder_draw_length_m,
             parameters.rudder_base_drag_coefficient,
-            parameters.rudder_stall_angle_rad,
-            parameters.rudder_stall_lift_coefficient,
         );
         world.bodies[boat.rudder].add_force_at_point(force, point, true);
     }

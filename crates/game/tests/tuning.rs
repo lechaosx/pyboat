@@ -141,7 +141,7 @@ fn shared_dinghy_and_environment_preserve_the_calibrated_tuning() {
     assert_eq!(parameters.hull.beam_m, 4.05 * 580.0 / 1565.0);
     assert_eq!(parameters.sail_area_m2, 4.5);
     assert_eq!(parameters.keel_area_m2, 0.6);
-    assert_eq!(parameters.rudder_area_m2, 0.12);
+    assert_eq!(parameters.rudder_area_m2, 0.30 * 0.45);
     assert_eq!(parameters.draft_m, 0.6);
     assert_eq!(parameters.ground_static_friction_coefficient, 1.0);
     assert_eq!(parameters.ground_kinetic_friction_coefficient, 0.6);

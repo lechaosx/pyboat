@@ -40,8 +40,6 @@ fn reference_parameters() -> BoatParameters {
         max_rudder_angle_rad: PI / 6.0,
         rudder_area_m2: 0.12,
         rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
         max_tiller_hand_force_n: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,

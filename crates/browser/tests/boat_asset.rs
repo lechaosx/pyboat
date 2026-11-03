@@ -360,6 +360,34 @@ fn tiller_follows_the_shared_length_hinge_and_articulated_rudder_pose() {
 }
 
 #[test]
+fn painted_rudder_size_is_independent_of_the_submerged_foil_chord() {
+    let parameters = dinghy_parameters();
+    let mut previous_parameters = parameters;
+    previous_parameters.rudder_draw_length_m = 0.45;
+    let motion = BoatMotion {
+        position_m: Vector::new(17.0, -8.0),
+        velocity_m_s: Vector::ZERO,
+        angle_rad: 0.8,
+        angular_velocity_rad_s: 0.0,
+        sail_angle_rad: 0.0,
+        sail_angular_velocity_rad_s: 0.0,
+        rudder_angle_rad: -0.4,
+        rudder_angular_velocity_rad_s: 0.0,
+    };
+    let current = boat_scene(parameters, motion);
+    let previous = boat_scene(previous_parameters, motion);
+    assert!((current.rudder_m[1] - previous.rudder_m[1]).length() > 0.1);
+    for (current, previous) in browser::boat_mesh(&current, 0.0, 0.001)
+        .iter()
+        .zip(browser::boat_mesh(&previous, 0.0, 0.001))
+    {
+        assert!((current.position_m - previous.position_m).length() < 1.0e-5);
+        assert_eq!(current.uv, previous.uv);
+        assert_eq!(current.image, previous.image);
+    }
+}
+
+#[test]
 fn triangular_sail_material_keeps_its_foot_on_the_boom_and_luff_at_the_mast() {
     let scene = scene(Vector::new(0.0, 8.0));
     let mesh = sail_mesh(&scene, 0.3);

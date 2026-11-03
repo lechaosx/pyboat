@@ -39,8 +39,6 @@ fn parameters() -> BoatParameters {
         max_rudder_angle_rad: PI / 6.0,
         rudder_area_m2: 0.12,
         rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
         max_tiller_hand_force_n: 60.0,
         sail_bearing_damping_n_m_s_rad: 20.0,
@@ -61,6 +59,27 @@ fn motion(position_m: Vector, velocity_m_s: Vector, angle_rad: f32) -> BoatMotio
         sail_angular_velocity_rad_s: 0.0,
         rudder_angle_rad: 0.0,
         rudder_angular_velocity_rad_s: 0.0,
+    }
+}
+
+#[test]
+fn solver_guard_preserves_sailing_motion_and_limits_extreme_speed() {
+    let solver_limit =
+        rapier2d::prelude::IntegrationParameters::default().normalized_max_linear_velocity;
+    for (speed, expected_speed) in [
+        (40.0, 40.0),
+        (MAXIMUM_SHARED_HULL_POINT_SPEED_M_S, solver_limit),
+    ] {
+        let mut simulation = SharedSimulation::new();
+        let velocity = Vector::new(speed, 0.0);
+        let expected = Vector::new(expected_speed, 0.0);
+        let boat = simulation.add_boat(parameters(), motion(Vector::ZERO, velocity, 0.0));
+        simulation.advance(Environment::default(), &[ActuatorTorques::default()]);
+        assert!((simulation.motion(boat).velocity_m_s - expected).length() < 0.001);
+        assert!(
+            (simulation.motion(boat).position_m - expected * simulation::DT_SECONDS).length()
+                < 0.001
+        );
     }
 }
 
@@ -321,6 +340,7 @@ fn fast_sweep_does_not_attribute_one_impact_to_an_unrelated_third_boat() {
         assert!(pairs.contains(&(0, 1)));
         assert!(!pairs.contains(&(0, 2)));
         assert!(!pairs.contains(&(1, 2)));
+        assert_eq!(simulation.motion(2).velocity_m_s, Vector::ZERO);
     }
 }
 

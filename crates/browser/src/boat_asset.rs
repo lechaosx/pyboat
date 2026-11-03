@@ -200,7 +200,8 @@ pub fn boat_mesh_with_cloth(
     let wind = scene.apparent_wind_velocity_m_s;
 
     let rudder_axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
-    let blade_scale = (scene.rudder_m[1] - scene.rudder_m[0]).length() / (1980.0 - 79.0);
+    // The stylized blade silhouette is larger than its submerged force-bearing chord.
+    let blade_scale = 0.45 / (1980.0 - 79.0);
     let tiller_scale = (scene.tiller_end_m - scene.rudder_m[0]).length() / (1662.0 - 128.0);
     let blade_start = vertices.len();
     stamp(

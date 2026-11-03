@@ -1399,9 +1399,15 @@ pub fn dinghy_parameters() -> BoatParameters {
     let length_m = 4.05;
     let boom_length_m = 2.0;
     let sail_luff_m = 4.5;
+    // Rounded timber-dinghy proxy, informed by the Mirror class drawing's
+    // 280±15 mm blade chord and 510±15 mm below its pivot.
+    // Wetted span estimates level loaded trim; the moving 2 kg blade/stock
+    // approximates a shaped 0.30×0.65 m, 15 mm timber blank plus fittings.
+    // https://www.sailing.org/tools/documents/MIR2010CR170910-%5B9295%5D.pdf, p. 14.
+    let rudder_chord_m = 0.30;
+    let rudder_submerged_span_m = 0.45;
     // Loaded displacement is estimated at 250 kg, including crew and gear.
-    // Timber at 500 kg/m³ gives a 2 kg boom (2 m × 5 cm diameter); a
-    // 0.12 m² × 25 mm hardwood blade at 650 kg/m³ is about 2 kg.
+    // Timber at 500 kg/m³ gives a 2 kg boom (2 m × 5 cm diameter).
     // Canvas plus seams/ropes is estimated at 3 kg and the slim tiller at
     // 0.5 kg. These are construction estimates, not image measurements.
     // Board-down draft and foil areas remain operating estimates.
@@ -1431,14 +1437,12 @@ pub fn dinghy_parameters() -> BoatParameters {
         hull_lateral_drag_coefficient: 0.02,
         rudder_mass_kg: 2.0,
         tiller_mass_kg: 0.5,
-        rudder_draw_length_m: 0.45,
+        rudder_draw_length_m: rudder_chord_m,
         tiller_length_m: 0.8,
         rudder_position_m: Vector::new(-length_m / 2.0, 0.0),
         max_rudder_angle_rad: 30.0_f32.to_radians(),
-        rudder_area_m2: 0.12,
+        rudder_area_m2: rudder_chord_m * rudder_submerged_span_m,
         rudder_base_drag_coefficient: 0.02,
-        rudder_stall_angle_rad: 15.0_f32.to_radians(),
-        rudder_stall_lift_coefficient: 0.8,
         max_sail_actuator_torque_n_m: 375.0,
         // Nominal ideal-sailor effort, applied perpendicular to the tiller at its tip.
         max_tiller_hand_force_n: 75.0,

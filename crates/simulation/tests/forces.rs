@@ -3,7 +3,7 @@ use std::f32::consts::PI;
 use rapier2d::prelude::{Rotation, Vector};
 use simulation::{
     apparent_flow, flat_plate_drag_coefficient, flat_plate_force, flat_plate_lift_coefficient,
-    grounding_friction_force, hull_resistance_force, streamlined_foil_force,
+    grounding_friction_force, hull_resistance_force, rudder_foil_force, streamlined_foil_force,
     streamlined_lift_coefficient,
 };
 
@@ -233,6 +233,27 @@ fn streamlined_foil_force_uses_the_stalled_lift_curve_and_flat_plate_drag() {
         ),
         rotation.transform_vector(force),
     );
+}
+
+#[test]
+fn rudder_force_matches_fujii_blade_geometry_and_stays_passive_in_reversed_flow() {
+    let force = |flow, angle, sample_area| {
+        rudder_foil_force(flow, angle, 1025.0, sample_area, 0.12, 0.45, 0.02)
+    };
+    // MMG Eq. 38: AR = 16/27, normal-pressure slope = 392.32/307.
+    assert_vector_close(
+        force(Vector::new(2.0, 0.0), PI / 4.0, 0.12),
+        Vector::new(162.103_58, -157.183_58),
+    );
+    assert_eq!(force(Vector::ZERO, 0.4, 0.12), Vector::ZERO);
+    for angle_deg in -180..=180 {
+        let angle = (angle_deg as f32).to_radians();
+        let flow = Vector::new(3.0, -2.0);
+        let whole = force(flow, angle, 0.12);
+        assert!(whole.dot(flow) >= 0.0);
+        assert_vector_close(force(-flow, angle, 0.12), -whole);
+        assert_vector_close(force(flow, angle, 0.03) + force(flow, angle, 0.09), whole);
+    }
 }
 
 #[test]
