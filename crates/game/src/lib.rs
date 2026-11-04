@@ -63,15 +63,15 @@ const WATER_VAPOR_NOISE_FIELD: u32 = 14;
 const OCEAN_CURRENT_NOISE_FIELD: u32 = 15;
 const PRESSURE_BAND_NOISE_FIELDS: [u32; 4] = [16, 17, 18, 19];
 // Four-dimensional slices use field-specific gains to preserve the independently
-// calibrated temperature tails. Water vapour's gain was fitted to the
-// clear/cloudy/storm occupancy of the cover and rain ramps that preceded the
+// calibrated temperature tails. The deck look's humidity keeps a gain fitted to
+// the clear/cloudy/storm occupancy of the cover and rain ramps that preceded the
 // statistical cloud scheme: 67.6% clear, 24.4% cloudy, and 8.0% raining weather
-// against a calibrated 65.9%, 25.0%, and 9.1%. Compromise: total water's spread
-// and the deck look keep that tuned gain until moisture is calibrated at the
-// cloud level.
+// against a calibrated 65.9%, 25.0%, and 9.1%. Compromise: that tuned gain stands
+// in for the upper-air humidity that decks need. Total water takes the moisture
+// noise without a gain, normalised by the noise's own spread.
 const SURFACE_AIR_TEMPERATURE_NOISE_SCALE: f64 = 0.85;
 const AIR_TEMPERATURE_500_HPA_NOISE_SCALE: f64 = 0.75;
-const WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
+const DECK_WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
 // Calibrated from 1991–2020 NASA POWER/MERRA-2 daily T2M, T2M_MIN, and T2M_MAX:
 // eight longitude-balanced, low-elevation land sites per 10° absolute-latitude
 // band, with Southern Hemisphere seasons shifted and grid elevation removed by
@@ -79,6 +79,10 @@ const WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
 // the anomaly tables match pooled daily-maximum p99 tails through the seeded
 // noise distribution. Keep these tables synchronized with
 // `crates/browser/src/shader/components/environment.wgsl`.
+// Compromise: air over the sea takes these land-calibrated anomaly tails,
+// standing in for the sea's milder ones, so total water, which follows the air
+// mass's temperature, reaches about 55 g/kg against Earth's observed surface
+// maximum of about 37 g/kg at dew points near 35 °C.
 const CLIMATE_ANNUAL_MEAN_C: [f32; 10] =
     [27.4, 27.9, 25.0, 21.9, 16.9, 8.0, -0.2, -7.9, -11.7, -15.0];
 const CLIMATE_SEASONAL_RANGE_C: [f32; 10] =
@@ -465,7 +469,7 @@ const AIR_TEMPERATURE_500_HPA_NOISE: WeatherNoiseParameters = WeatherNoiseParame
 };
 const WATER_VAPOR_NOISE: WeatherNoiseParameters = WeatherNoiseParameters {
     noise_field: WATER_VAPOR_NOISE_FIELD,
-    scale: WATER_VAPOR_NOISE_SCALE,
+    scale: 1.0,
     evolution_speed_m_s: WATER_VAPOR_EVOLUTION_SPEED_M_S,
     // Humidity organizes weather systems; the visual fields supply smaller cloud
     // bodies. Keep this spectrum synchronized with
@@ -1323,23 +1327,17 @@ struct LowCloud {
 /// the lifted air's height.
 ///
 /// Compromise: the scheme evaluates surface air lifted by `lifted_m`, standing
-/// in for the cloud level, which the model's quantities do not settle: the
+/// in for the air at the cloud level, of which the model has no profile. The
 /// boundary layer's top would cloud almost everywhere and its condensation
-/// level would cover half of every sky, while surface air undercounts.
+/// level would cover half of every sky.
 ///
 /// The rain index is the cloud cover times the share of its in-cloud water above
 /// the autoconversion threshold, Kessler's conversion rate relative to its
 /// rate for all of that water. Semi-physical: an index without rate units.
 ///
-/// Compromise: the index rains too often. Over a population of worlds, rain
-/// falls from about half of the samples with cloud cover of 0.1 or more, where
-/// CloudSat sees precipitation from under a fifth of tropical oceanic clouds
-/// (Haynes and Stephens 2007, Geophys. Res. Lett. 34), and about a fifth of
-/// that rain has an index of 0.75 or more, where heavy rain takes about a
-/// twentieth of precipitating time (Kay et al. 2018, J. Geophys. Res. Atmos.
-/// 123). Rain onset depends on cloud depth, entrainment and
-/// upper-air humidity, which the model lacks, so the cloud water is one lifted
-/// surface parcel's.
+/// Compromise: rain onset depends on cloud depth, entrainment and upper-air
+/// humidity, which the model lacks, so the cloud water is one lifted surface
+/// parcel's.
 ///
 /// `low_cloud` in `crates/browser/src/shader/components/environment.wgsl`
 /// mirrors this scheme and its constants.
@@ -2149,6 +2147,31 @@ pub fn procedural_atmosphere_primary(
     )
 }
 
+// Calibrated from 2011–2020 NASA POWER/MERRA-2 hourly RH2M and T2M at eight
+// open-ocean points per 10° absolute-latitude band: total water's ratio to
+// saturation takes the observed ratio of water vapour to saturation, by this
+// model's saturation curve, at the day's mean temperature. The knots at 0°,
+// 10°, …, 90° take each band's mean and standard deviation, averaging the two
+// bands that meet at a knot. The seeded moisture noise has a standard deviation
+// of 0.191, within 0.006 in every 10° band, over the world population of
+// `procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans`
+// in `crates/game/tests/tuning.rs`.
+//
+// The spread is surface air's, the air that `low_cloud` lifts: the ascent
+// supplies the variability that air gains on its way to the cloud level, so a
+// spread observed at the cloud level would count it twice.
+// Compromise: islands take the ocean's ratio, standing in for the humidity of
+// air over land.
+// Keep these synchronized with
+// `crates/browser/src/shader/components/environment.wgsl`.
+const WATER_VAPOR_SATURATION_RATIO_MEAN: [f32; 10] = [
+    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.872, 0.899, 0.933, 0.951,
+];
+const WATER_VAPOR_SATURATION_RATIO_DEVIATION: [f32; 10] = [
+    0.040, 0.044, 0.056, 0.079, 0.098, 0.098, 0.100, 0.101, 0.090, 0.083,
+];
+const WATER_VAPOR_NOISE_DEVIATION: f32 = 0.191;
+
 fn procedural_atmosphere_primary_with_conditions(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -2197,8 +2220,6 @@ fn procedural_atmosphere_primary_with_conditions(
         },
         celestial,
     );
-    let climate_saturation_capacity_g_kg =
-        water_vapor_saturation_capacity_g_kg(climate_air_temperature_c);
     let [water_vapor_noise, broad_water_vapor_noise] = procedural_weather_noise(
         world_geometry,
         match_seed,
@@ -2206,9 +2227,23 @@ fn procedural_atmosphere_primary_with_conditions(
         WATER_VAPOR_NOISE,
         scalar_time.water_vapor,
     );
-    let water_vapor_g_kg = |noise: f64| {
-        (climate_saturation_capacity_g_kg * (0.72 + 0.65 * noise as f32)).clamp(0.5, 25.0)
-    };
+    // Air masses carry their total water with their temperature, so it scales
+    // with saturation at the air mass's temperature without its daily cycle.
+    let latitude_degrees = celestial.geographic_latitude_degrees;
+    let water_vapor_saturation_ratio =
+        latitude_curve_value(WATER_VAPOR_SATURATION_RATIO_MEAN, latitude_degrees)
+            + latitude_curve_value(WATER_VAPOR_SATURATION_RATIO_DEVIATION, latitude_degrees)
+                / WATER_VAPOR_NOISE_DEVIATION
+                * water_vapor_noise as f32;
+    let water_vapor_g_kg = water_vapor_saturation_ratio
+        * water_vapor_saturation_capacity_g_kg(
+            climate_air_temperature_c + surface_air_temperature_anomaly_c,
+        );
+    // The deck look's tuned humidity, from the climate's saturation.
+    let regional_water_vapor_g_kg =
+        (water_vapor_saturation_capacity_g_kg(climate_air_temperature_c)
+            * (0.72 + 0.65 * (DECK_WATER_VAPOR_NOISE_SCALE * broad_water_vapor_noise) as f32))
+            .clamp(0.5, 25.0);
 
     AtmospherePrimary {
         pressure_hpa: 1013.25
@@ -2220,7 +2255,7 @@ fn procedural_atmosphere_primary_with_conditions(
         surface_air_temperature_anomaly_c,
         air_temperature_500_hpa_c,
         local_temperature_gradient_c_per_m: surface_temperature.gradient_per_m,
-        water_vapor_g_kg: water_vapor_g_kg(water_vapor_noise),
+        water_vapor_g_kg,
         surface_wind_convergence_per_s: wind_gradient.convergence_per_s,
         surface_wind_strain_per_s: wind_gradient.strain_per_s,
         climate_air_temperature_gradient_c_per_m: climate_air_temperature_gradient_c_per_m(
@@ -2232,7 +2267,7 @@ fn procedural_atmosphere_primary_with_conditions(
             pressure_hpa: 1013.25
                 + pressure.climate_potential_m2_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
             air_temperature_anomaly_c: surface_temperature.broad_value,
-            water_vapor_g_kg: water_vapor_g_kg(broad_water_vapor_noise),
+            water_vapor_g_kg: regional_water_vapor_g_kg,
             air_temperature_500_hpa_c: climate_500_hpa_temperature_c
                 + SURFACE_AIR_MASS_COUPLING_500_HPA * surface_temperature.broad_value
                 + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C * broad_upper_air_noise as f32,

@@ -527,25 +527,35 @@ fn procedural_cloud_cover_is_seeded_and_continuous_in_spacetime() {
 /// precipitation over the oceans 10.9% of the time, most often under the
 /// intertropical convergence zone and the midlatitude storm tracks and least
 /// often under the subtropical highs between them (Ellis et al. 2009, Geophys.
-/// Res. Lett. 36). Low cloud, alone or under higher cloud, covers about 0.27 to
-/// 0.40 of the globe (Stubenrauch et al. 2013, Bull. Am. Meteorol. Soc. 94).
-/// Bands allow a factor of two on the share and on cover.
+/// Res. Lett. 36), and heavy rain takes about a twentieth of precipitating
+/// time (Kay et al. 2018, J. Geophys. Res. Atmos. 123). Low cloud, alone or
+/// under higher cloud, covers about 0.27 to 0.40 of the globe (Stubenrauch et
+/// al. 2013, Bull. Am. Meteorol. Soc. 94). Bands allow a factor of two on
+/// rain's shares; cover stays within the observed range.
+///
+/// Surface relative humidity over the oceans averages 0.75 to 0.80 (Dai 2006,
+/// J. Climate 19). In 2011–2020 MERRA-2 hourly values at open-ocean points it
+/// averages 0.85 pooled over 10° bands, with a standard deviation of 0.09, and
+/// rises from 0.79 within 30° of the equator to 0.91 poleward of 60°. Bands
+/// allow twice that spread, since the model's air over the sea keeps the daily
+/// temperature cycle observed over land, and half of that rise.
 #[test]
 fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() {
     let geometry = WorldGeometry::default();
     let (mut cover, mut raining, mut storm, mut samples) = (0.0, 0, 0, 0);
-    // Raining and total sample counts under the convergence zone, the
-    // subtropics and the midlatitudes.
-    let mut belts = [(0, 0); 3];
+    let (mut humidity, mut humidity_squared) = (0.0, 0.0);
+    // Raining count, relative humidity and sample count under the convergence
+    // zone, the subtropics, the midlatitudes and the polar latitudes.
+    let mut belts = [(0, 0.0, 0); 4];
     for case in 0..64_u64 {
         let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
         for y in 0..36 {
             let y_m = ((y as f32 + 0.5) / 36.0 - 0.5) * geometry.height_m();
             let belt = match geometry.latitude_degrees(y_m).abs() {
-                latitude if latitude < 10.0 => Some(0),
-                latitude if latitude < 30.0 => Some(1),
-                latitude if latitude < 60.0 => Some(2),
-                _ => None,
+                latitude if latitude < 10.0 => 0,
+                latitude if latitude < 30.0 => 1,
+                latitude if latitude < 60.0 => 2,
+                _ => 3,
             };
             for x in 0..16 {
                 let weather = procedural_weather_in_world(
@@ -558,32 +568,52 @@ fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() 
                 cover += weather.cloudiness;
                 raining += usize::from(rains);
                 storm += usize::from(weather.rain_intensity >= 0.75);
+                humidity += weather.relative_humidity;
+                humidity_squared += weather.relative_humidity * weather.relative_humidity;
                 samples += 1;
-                if let Some(belt) = belt {
-                    belts[belt].0 += usize::from(rains);
-                    belts[belt].1 += 1;
-                }
+                belts[belt].0 += usize::from(rains);
+                belts[belt].1 += weather.relative_humidity;
+                belts[belt].2 += 1;
             }
         }
     }
     let share = |count: usize| count as f32 / samples as f32;
     let mean_cover = cover / samples as f32;
-    let [convergence_zone, subtropics, midlatitudes] =
-        belts.map(|(raining, samples)| raining as f32 / samples as f32);
+    let heavy_share = storm as f32 / raining as f32;
+    let mean_humidity = humidity / samples as f32;
+    let humidity_deviation =
+        (humidity_squared / samples as f32 - mean_humidity * mean_humidity).sqrt();
+    let [convergence_zone, subtropics, midlatitudes, _] =
+        belts.map(|(raining, _, samples)| raining as f32 / samples as f32);
+    let tropical_humidity = (belts[0].1 + belts[1].1) / (belts[0].2 + belts[1].2) as f32;
+    let polar_humidity = belts[3].1 / belts[3].2 as f32;
 
     assert!(
         (0.055..=0.22).contains(&share(raining)),
         "raining {}",
         share(raining)
     );
+    assert!(heavy_share <= 0.1, "heavy share of rain {heavy_share}");
     assert!(
-        (0.135..=0.8).contains(&mean_cover),
+        (0.27..=0.40).contains(&mean_cover),
         "mean cover {mean_cover}"
     );
     assert!(
         subtropics < convergence_zone && subtropics < midlatitudes,
         "raining {convergence_zone} under the convergence zone, {subtropics} in the \
          subtropics and {midlatitudes} in the midlatitudes"
+    );
+    assert!(
+        (0.75..=0.95).contains(&mean_humidity),
+        "mean relative humidity {mean_humidity}"
+    );
+    assert!(
+        humidity_deviation < 0.18,
+        "relative humidity's standard deviation {humidity_deviation}"
+    );
+    assert!(
+        polar_humidity > tropical_humidity + 0.06,
+        "relative humidity {tropical_humidity} within 30° and {polar_humidity} poleward of 60°"
     );
     assert!(storm > 0, "no sampled rain reached storm strength");
 }

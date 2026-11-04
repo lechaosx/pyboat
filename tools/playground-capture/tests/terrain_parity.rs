@@ -4373,13 +4373,24 @@ fn heavily_raining_low_cloud_keeps_its_cumulus() {
 }
 
 /// A cumulus takes its cover from the weather where the cloud is, so it casts
-/// the same shadow along lights from opposite sides. Counts pool over island
-/// afternoons so the check does not hang on any one of them having cumulus.
+/// the same shadow along lights from opposite sides. Counts pool over summer
+/// afternoons on high-latitude islands, where afternoon cumulus are common, so
+/// the check does not hang on any one of them having cumulus.
 #[test]
 fn cumulus_shadows_follow_the_weather_at_the_cloud() {
     let world = WorldGeometry::default();
     let (mut both, mut either) = (0, 0);
-    for (position_m, world_time_seconds) in island_afternoons() {
+    let mut views = Vec::new();
+    for day in 2..=4 {
+        for position_m in [
+            Vector::new(-18_000.0, -26_000.0),
+            Vector::new(-6_000.0, -24_000.0),
+        ] {
+            let afternoon_offset = (0.0417 - f64::from(position_m.x) / 64_000.0).rem_euclid(1.0);
+            views.push((position_m, 86_400.0 * (f64::from(day) + afternoon_offset)));
+        }
+    }
+    for (position_m, world_time_seconds) in views {
         let image = render_diagnostic_image_with_view_at(
             world,
             position_m,
@@ -4463,7 +4474,8 @@ fn cumulus_shadows_are_independent_of_pixel_footprint() {
     assert_eq!(&near[..3], &far[..3]);
 }
 
-/// Local mid-afternoons over two cumulus-prone islands on three days.
+/// Local mid-afternoons over two islands, at about 30° and 37° south, on three
+/// days.
 fn island_afternoons() -> Vec<(Vector, f64)> {
     let mut views = Vec::new();
     for day in 2..=4 {

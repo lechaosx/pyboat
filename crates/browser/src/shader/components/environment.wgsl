@@ -788,7 +788,11 @@ fn surface_atmosphere_sample_from_noise(
     }
     var water_vapor = AtmosphereScalarField(0.0, 0.0);
     if environment_feature_visibility().z > 0.0 {
-        water_vapor = surface_water_vapor_field_from_noise(climate, noise.water_vapor);
+        water_vapor = surface_water_vapor_field_from_noise(
+            climate,
+            temperature.sample.value,
+            noise.water_vapor,
+        );
     }
     return SurfaceAtmosphereSample(
         pressure,
@@ -942,17 +946,24 @@ fn low_cloud(
 }
 
 fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
+    let climate = surface_climate_sample_at(position_m);
     return surface_water_vapor_g_kg_from_climate(
         position_m,
-        surface_climate_sample_at(position_m),
+        surface_air_temperature_anomaly_c_from_climate(position_m, climate),
+        climate,
     );
 }
 
 fn surface_water_vapor_g_kg_from_climate(
     position_m: vec2<f32>,
+    temperature_anomaly_c: f32,
     climate: SurfaceClimateSample,
 ) -> f32 {
-    return surface_water_vapor_field_from_climate(position_m, climate).value;
+    return surface_water_vapor_field_from_noise(
+        climate,
+        temperature_anomaly_c,
+        surface_water_vapor_noise_at(position_m),
+    ).value;
 }
 
 fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
@@ -966,18 +977,23 @@ fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
     );
 }
 
-fn surface_water_vapor_field_from_climate(
-    position_m: vec2<f32>,
-    climate: SurfaceClimateSample,
-) -> AtmosphereScalarField {
-    return surface_water_vapor_field_from_noise(
-        climate,
-        surface_water_vapor_noise_at(position_m),
-    );
-}
+// The ratio of total water to saturation at the air mass's temperature
+// follows the calibrated distribution of `procedural_atmosphere_primary` in
+// crates/game/src/lib.rs; keep these synchronized with it.
+const WATER_VAPOR_SATURATION_RATIO_MEAN: array<f32, 10> = array<f32, 10>(
+    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.872, 0.899, 0.933, 0.951,
+);
+const WATER_VAPOR_SATURATION_RATIO_DEVIATION: array<f32, 10> = array<f32, 10>(
+    0.040, 0.044, 0.056, 0.079, 0.098, 0.098, 0.100, 0.101, 0.090, 0.083,
+);
+const WATER_VAPOR_NOISE_DEVIATION: f32 = 0.191;
 
+// The broad value is the deck look's tuned humidity, from the climate's
+// saturation and the deck gain `DECK_WATER_VAPOR_NOISE_SCALE` in
+// crates/game/src/lib.rs.
 fn surface_water_vapor_field_from_noise(
     climate: SurfaceClimateSample,
+    temperature_anomaly_c: f32,
     raw_noise: vec2<f32>,
 ) -> AtmosphereScalarField {
     let climate_temperature_c = climate.annual_mean_air_temperature_c
@@ -985,10 +1001,19 @@ fn surface_water_vapor_field_from_noise(
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
     let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
-    let noise = 0.86 * raw_noise;
+    let ratio = latitude_curve_value(
+        WATER_VAPOR_SATURATION_RATIO_MEAN,
+        climate.latitude_degrees,
+    )
+        + latitude_curve_value(
+            WATER_VAPOR_SATURATION_RATIO_DEVIATION,
+            climate.latitude_degrees,
+        ) / WATER_VAPOR_NOISE_DEVIATION * raw_noise.x;
     return AtmosphereScalarField(
-        clamp(capacity_g_kg * (0.72 + 0.65 * noise.x), 0.5, 25.0),
-        clamp(capacity_g_kg * (0.72 + 0.65 * noise.y), 0.5, 25.0),
+        ratio * water_vapor_saturation_capacity_g_kg(
+            climate_temperature_c + temperature_anomaly_c,
+        ),
+        clamp(capacity_g_kg * (0.72 + 0.65 * 0.86 * raw_noise.y), 0.5, 25.0),
     );
 }
 
@@ -1144,10 +1169,18 @@ fn seasonal_snow_cover_from_fields(
 
 fn seasonal_snow_cover(elevation_m: f32) -> f32 {
     let climate = surface_climate_sample_at(surface_position_m);
+    let temperature_anomaly_c = surface_air_temperature_anomaly_c_from_climate(
+        surface_position_m,
+        climate,
+    );
     return seasonal_snow_cover_from_fields(
         elevation_m,
-        surface_air_temperature_anomaly_c_from_climate(surface_position_m, climate),
-        surface_water_vapor_g_kg_from_climate(surface_position_m, climate),
+        temperature_anomaly_c,
+        surface_water_vapor_g_kg_from_climate(
+            surface_position_m,
+            temperature_anomaly_c,
+            climate,
+        ),
         climate,
         surface_cloud_weather.rain,
     );

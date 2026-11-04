@@ -155,6 +155,10 @@ and verification details.
   Latitude, season, and local solar time provide the baseline; seeded fields
   supply anomalies. Derived values have no override path.
 - **[Implicit]** The primary moisture field is total water.
+- **[Implicit]** Total water scales with saturation at its air mass's
+  temperature, without the daily cycle.
+- **[Explicit]** Total water's ratio to saturation has the mean and spread of
+  observed marine surface humidity by latitude.
 - **[Implicit]** Low cloud cover and cloud water come from a statistical cloud
   scheme of total water's unresolved spread about saturation.
 - **[Implicit]** The cloud scheme evaluates surface air that ascent lifts and
@@ -657,7 +661,6 @@ and verification details.
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
 | Stratus calibration | Whether thick stratus matches measured transmittance, given how uncertain the conversion from measured cloud thickness to optical depth is |
-| Cloud level | Which level the low-cloud scheme should evaluate, which the model's quantities do not settle: surface air undercounts low cloud, while the boundary layer's top would cloud almost everywhere |
 | Subtropical low cloud | How low cloud under the subtropical highs reaches observed stratocumulus amounts, which follow the lower troposphere's stability (Klein and Hartmann 1993) that the model lacks |
 | Grazing deck light | Whether decks need sunlight entering through their breaks and edges while the Sun is near the canopy's level, where a plane-parallel layer passes almost none |
 | Vertical cloud structure | How the model gains cloud depth, entrainment and upper-air humidity, which rain onset and optical depth need |
