@@ -352,7 +352,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
         });
         let mut local = boat("player-1", position_m.x);
         local.y = position_m.y;
-        local.vx = 2.0;
+        local.vx = 0.0;
         local.vy = 0.0;
         local.angle = 0.0;
         local.forward = Some(0.0);
@@ -372,7 +372,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
         .flat_map(|x| (-128..=128).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
         .find(|&position_m| depth_m(match_seed, position_m) == 0.0)
         .expect("the representative terrain should contain land");
-    // Open water beside the grounded position shares its wind and current.
+    // Grounding holds a boat at rest, while wind and water start one afloat beside it moving.
     let deep_position_m = (1..=128)
         .flat_map(|step| {
             [-16.0, 16.0].map(|step_m| grounded_position_m + Vector::new(step_m * step as f32, 0.0))

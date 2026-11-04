@@ -154,8 +154,27 @@ and verification details.
 - **[Explicit]** Primary climate/atmosphere is separate from derived weather.
   Latitude, season, and local solar time provide the baseline; seeded fields
   supply anomalies. Derived values have no override path.
+- **[Implicit]** The primary moisture field is total water.
+- **[Implicit]** Low cloud cover and cloud water come from a statistical cloud
+  scheme of total water's unresolved spread about saturation.
+- **[Implicit]** The cloud scheme evaluates surface air that ascent lifts and
+  that cannot sink below the ground.
+- **[Implicit]** Rain comes from the autoconversion of that cloud water.
+- **[Implicit]** Surface air rises and sinks with the convergence of the
+  resolved surface wind through the boundary layer, as mass continuity
+  requires, for one e-folding of the convergence, strain, and pattern evolution
+  that carry it out of the zone or dissolve it, so its displacement stays
+  within the layer's depth and cyclone centres lift most.
+- **[Explicit]** Air advancing across the isotherms of the weather and the
+  climate glides up or down sloping isentropes, which stretch or squash the
+  boundary layer as convergence does.
+- **[Explicit]** Moist convection, which mixes upper wind into surface gusts,
+  needs surface air lifted toward its condensation level.
 - **[Explicit]** Wind derives from shared atmospheric causes rather than an
   independently generated vector field.
+- **[Explicit]** Pressure-driven wind keeps the pressure gradient's speed and
+  crosses the isobars toward low pressure at the angle Earth's friction-slowed
+  boundary layer has at its latitude, continuously through the equator.
 - **[Explicit]** Latitude climatology and meridional climate-pressure scale follow
   world height; zonal climate scale and synoptic/local system sizes stay fixed.
   Midlatitude variance transfer and zonal coherence preserve total transient wind energy.
@@ -276,6 +295,9 @@ and verification details.
   convective triggers at each cloud's own position. Ambient aerosol/scattering
   remains regional; direct Sun/Moon colors retain local humidity, rain, and
   aerosol response.
+- **[Explicit]** The regional deck cover keeps a tuned look of humidity,
+  pressure, and instability ramps, pending the deep ascent and upper-air
+  humidity that decks need; the authoritative upper cloudiness is that cover.
 - **[Explicit]** Clear-sky diffuse light fades continuously through twilight
   as the planet's shadow rises through the air above each receiver, for the
   Sun and the Moon alike. The air's scale height keeps Earth's ratio to the
@@ -635,4 +657,7 @@ and verification details.
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
 | Stratus calibration | Whether thick stratus matches measured transmittance, given how uncertain the conversion from measured cloud thickness to optical depth is |
+| Cloud level | Which level the low-cloud scheme should evaluate, which the model's quantities do not settle: surface air undercounts low cloud, while the boundary layer's top would cloud almost everywhere |
+| Subtropical low cloud | How low cloud under the subtropical highs reaches observed stratocumulus amounts, which follow the lower troposphere's stability (Klein and Hartmann 1993) that the model lacks |
 | Grazing deck light | Whether decks need sunlight entering through their breaks and edges while the Sun is near the canopy's level, where a plane-parallel layer passes almost none |
+| Vertical cloud structure | How the model gains cloud depth, entrainment and upper-air humidity, which rain onset and optical depth need |

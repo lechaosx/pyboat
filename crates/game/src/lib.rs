@@ -24,9 +24,16 @@ const CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M: f32 = 19_200.0;
 const CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION: f32 = 0.30;
 const PLANETARY_ZONAL_WIND_PEAK_M_S: f32 = 3.1;
 const PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M: f32 = 6000.0;
-// Boundary-layer friction turning wind about 7° toward low pressure; the upper
-// wind shares the surface wind's pressure flow and so turns alike.
-const SURFACE_CROSS_ISOBAR_FRACTION: f32 = 0.12;
+// Physical: Earth's rotation rate, for the Coriolis parameter 2Ω sin φ.
+const EARTH_ROTATION_RATE_RAD_S: f32 = 7.292e-5;
+// Physical, published: a slab boundary layer's friction rate is (E + V)/h, the
+// entrainment velocity E plus the surface exchange velocity V over its depth.
+// Steady states of a 500 m slab with E = 0.01 m/s and V of about 0.008 m/s
+// reproduce tropical surface winds (Stevens 2006, Theor. Comput. Fluid Dyn. 20,
+// eq. 82, after Stevens et al. 2002, J. Climate 15). Compromise: entrainment
+// drags the layer toward still air above it; under a geostrophic wind above,
+// V alone would leave about 4° of turning at 45° instead of 10°.
+const BOUNDARY_LAYER_FRICTION_VELOCITY_M_S: f32 = 0.018;
 // Stands in for the wind's increase from the surface to the deck.
 const UPPER_WIND_SCALE: f32 = 1.15;
 // A caricature of thermal wind: the compressed world's temperature gradients
@@ -56,15 +63,12 @@ const WATER_VAPOR_NOISE_FIELD: u32 = 14;
 const OCEAN_CURRENT_NOISE_FIELD: u32 = 15;
 const PRESSURE_BAND_NOISE_FIELDS: [u32; 4] = [16, 17, 18, 19];
 // Four-dimensional slices use field-specific gains to preserve the independently
-// calibrated temperature tails and clear/cloudy/storm occupancy. Water vapour's
-// gain gives 67.6% clear, 24.4% cloudy, and 8.0% raining weather, against the
-// calibrated 65.9%, 25.0%, and 9.1%, with a mean one-minute cloud-cover change
-// of 0.042 against 0.040. It is the gain closest to that occupancy whose cloud
-// evolution stays within about 5% of the calibrated rate; rain responds little
-// to it.
-// Cloudy means cloudiness of at least 0.1 without rain; the samples are seeds
-// 100 000 to 101 023 at four positions, at ticks 12 345 + 7 919 (seed mod 16),
-// in the default world.
+// calibrated temperature tails. Water vapour's gain was fitted to the
+// clear/cloudy/storm occupancy of the cover and rain ramps that preceded the
+// statistical cloud scheme: 67.6% clear, 24.4% cloudy, and 8.0% raining weather
+// against a calibrated 65.9%, 25.0%, and 9.1%. Compromise: total water's spread
+// and the deck look keep that tuned gain until moisture is calibrated at the
+// cloud level.
 const SURFACE_AIR_TEMPERATURE_NOISE_SCALE: f64 = 0.85;
 const AIR_TEMPERATURE_500_HPA_NOISE_SCALE: f64 = 0.75;
 const WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
@@ -245,6 +249,25 @@ pub struct AtmospherePrimary {
     pub air_temperature_500_hpa_c: f32,
     pub local_temperature_gradient_c_per_m: Vector,
     pub water_vapor_g_kg: f32,
+    /// Convergence, the negative divergence, of the resolved surface wind.
+    pub surface_wind_convergence_per_s: f32,
+    /// Magnitude of that wind's strain, the shear and stretching deformation
+    /// of its velocity gradient.
+    pub surface_wind_strain_per_s: f32,
+    /// Gradient of the climatological air temperature without its daily cycle.
+    pub climate_air_temperature_gradient_c_per_m: Vector,
+    pub regional: RegionalAtmosphere,
+}
+
+/// The broad weather that sets the regional cloud canopy: the climate pressure
+/// band, and the broadest octave of the air-mass temperature anomaly, water
+/// vapour, and 500 hPa temperature.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RegionalAtmosphere {
+    pub pressure_hpa: f32,
+    pub air_temperature_anomaly_c: f32,
+    pub water_vapor_g_kg: f32,
+    pub air_temperature_500_hpa_c: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -320,6 +343,8 @@ pub struct ProceduralWeather {
     pub wind_shear_m_s: Vector,
     pub relative_humidity: f32,
     pub lift: f32,
+    /// Vertical displacement of surface air by unresolved ascent.
+    pub ascent_m: f32,
     pub cloudiness: f32,
     pub instability: f32,
     pub upper_cloudiness: f32,
@@ -412,6 +437,7 @@ struct OceanQuery {
 struct TemperatureSample {
     value: f32,
     gradient_per_m: Vector,
+    broad_value: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -1167,9 +1193,8 @@ pub fn climate_surface(
     let water_temperature_c = seasonal_water_temperature_c(climate, conditions);
     let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
     let air_temperature_at_elevation_c = air_temperature_c - 0.0065 * elevation_m.max(0.0);
-    let relative_humidity = (water_vapor_g_kg
-        / water_vapor_saturation_capacity_g_kg(air_temperature_at_elevation_c))
-    .clamp(0.0, 1.5);
+    let relative_humidity =
+        water_vapor_g_kg / water_vapor_saturation_capacity_g_kg(air_temperature_at_elevation_c);
     let moisture_support = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
     let weather_standard_deviation_c = latitude_curve_value(
         TEMPERATURE_ANOMALY_P99_C,
@@ -1235,7 +1260,126 @@ fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
 }
 
 fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
-    3.5 * libm::exp(0.055 * f64::from(air_temperature_c + 5.0)) as f32
+    3.5 * libm::exp(SATURATION_GROWTH_PER_C * f64::from(air_temperature_c + 5.0)) as f32
+}
+
+// Saturation capacity's fractional growth per degree; the latent-heating
+// factor also takes the saturation slope from it.
+const SATURATION_GROWTH_PER_C: f64 = 0.055;
+// Physical: g/c_p for dry air.
+const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
+// Physical: R_d/g, 287.05 J/(kg K) over 9.81 m/s², the hypsometric scale
+// height per kelvin of the column's mean temperature.
+const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
+// Physical: L_v/c_p, 2.501 MJ/kg over 1004 J/(kg K), per g/kg of condensate.
+const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
+// Physical, published: the boundary layer's depth, through which unresolved
+// ascent lifts surface air and over which friction acts on the surface wind.
+// Garratt (1994, Earth-Sci. Rev. 37) puts the capping inversion of a convective
+// boundary layer generally below 2–3 km, at about 1.2 km in a typical profile
+// and about 0.5 km under marine stratocumulus.
+const BOUNDARY_LAYER_DEPTH_M: f32 = 1000.0;
+// Physical, published: the lifting condensation level rises about 125 m per
+// kelvin of dew-point depression (Lawrence 2005, Bull. Am. Meteorol. Soc. 86).
+const CONDENSATION_LEVEL_M_PER_C: f32 = 125.0;
+// Physical, published: the Smith scheme's critical relative humidity on the
+// 1.5 km grid of the Met Office's regional configuration, 0.96 at the surface
+// falling monotonically to 0.80 at 850 m and fixed above (Bush et al. 2020,
+// Geosci. Model Dev. 13; the profile is stated in its discussion paper,
+// gmd-2019-130). The moisture field resolves down to about 500 m at fixed
+// metre wavelengths on every world size, so its unresolved spread is a
+// kilometre-scale grid's on any world. Compromise: linear between.
+const SURFACE_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.96;
+const CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.80;
+const CLOUD_LEVEL_HEIGHT_M: f32 = 850.0;
+// Physical, published: Kessler's (1969, Meteorol. Monogr. 32) autoconversion
+// threshold of 0.5 g/m³, as used by Schultz (1995, Mon. Weather Rev. 123),
+// taken per kilogram of the roughly 1 kg/m³ air of low cloud.
+const AUTOCONVERSION_THRESHOLD_G_KG: f32 = 0.5;
+// Physical, published: the Bergeron–Findeisen factor of Sundqvist, Berge and
+// Kristjánsson (1989, Mon. Weather Rev. 117), 1 + 0.5√(268 K − T) over the 20 K
+// below its onset, as NOAA's Zhao–Carr scheme implements it (zhaocarr_precpd.f
+// in NCAR/ccpp-physics), by which ice growing at the droplets' expense lowers
+// the cloud water that precipitation needs. Compromise: borrowed onto
+// Kessler's threshold, without that scheme's scaling of the conversion rate,
+// its collection factor, or its own 0.3 g/kg critical water.
+const BERGERON_ONSET_C: f32 = -5.0;
+const BERGERON_RANGE_C: f32 = 20.0;
+const BERGERON_GAIN_PER_SQRT_C: f32 = 0.5;
+
+struct LowCloud {
+    cover: f32,
+    rain_index: f32,
+}
+
+/// Low cloud from Smith's (1990, Q. J. R. Meteorol. Soc. 116) statistical
+/// scheme after Sommeria and Deardorff (1977, J. Atmos. Sci. 34): unresolved
+/// total water spreads over a symmetric triangular distribution, half-width
+/// `(1 - RH_crit)` of saturation, about the local value, and the share above
+/// saturation is cloud. Physical, with two inputs from other layers: total
+/// water is the faked moisture field, standing in for moisture transport, and
+/// the surface air's temperature, lifted dry-adiabatically, stands in for the
+/// cloud's liquid-water temperature. The spread is the critical humidity's at
+/// the lifted air's height.
+///
+/// Compromise: the scheme evaluates surface air lifted by `lifted_m`, standing
+/// in for the cloud level, which the model's quantities do not settle: the
+/// boundary layer's top would cloud almost everywhere and its condensation
+/// level would cover half of every sky, while surface air undercounts.
+///
+/// The rain index is the cloud cover times the share of its in-cloud water above
+/// the autoconversion threshold, Kessler's conversion rate relative to its
+/// rate for all of that water. Semi-physical: an index without rate units.
+///
+/// Compromise: the index rains too often. Over a population of worlds, rain
+/// falls from about half of the samples with cloud cover of 0.1 or more, where
+/// CloudSat sees precipitation from under a fifth of tropical oceanic clouds
+/// (Haynes and Stephens 2007, Geophys. Res. Lett. 34), and about a fifth of
+/// that rain has an index of 0.75 or more, where heavy rain takes about a
+/// twentieth of precipitating time (Kay et al. 2018, J. Geophys. Res. Atmos.
+/// 123). Rain onset depends on cloud depth, entrainment and
+/// upper-air humidity, which the model lacks, so the cloud water is one lifted
+/// surface parcel's.
+///
+/// `low_cloud` in `crates/browser/src/shader/components/environment.wgsl`
+/// mirrors this scheme and its constants.
+fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f32) -> LowCloud {
+    let parcel_temperature_c =
+        surface_air_temperature_c - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
+    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(parcel_temperature_c);
+    let critical_relative_humidity = SURFACE_CRITICAL_RELATIVE_HUMIDITY
+        + (CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY - SURFACE_CRITICAL_RELATIVE_HUMIDITY)
+            * (lifted_m / CLOUD_LEVEL_HEIGHT_M).min(1.0);
+    let spread_g_kg = (1.0 - critical_relative_humidity) * saturation_g_kg;
+    let excess = (total_water_g_kg - saturation_g_kg) / spread_g_kg;
+    let (cover, condensate_per_spread) = if excess <= -1.0 {
+        (0.0, 0.0)
+    } else if excess <= 0.0 {
+        let rise = 1.0 + excess;
+        (0.5 * rise * rise, rise * rise * rise / 6.0)
+    } else if excess < 1.0 {
+        let fall = 1.0 - excess;
+        (1.0 - 0.5 * fall * fall, excess + fall * fall * fall / 6.0)
+    } else {
+        (1.0, excess)
+    };
+    // Condensing warms the air and so raises its saturation, which keeps this
+    // share of the excess as cloud water.
+    let latent_heating_factor =
+        1.0 / (1.0 + LATENT_WARMING_C_PER_G_KG * SATURATION_GROWTH_PER_C as f32 * saturation_g_kg);
+    let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
+    let bergeron_factor = 1.0
+        + BERGERON_GAIN_PER_SQRT_C
+            * (BERGERON_ONSET_C - parcel_temperature_c)
+                .clamp(0.0, BERGERON_RANGE_C)
+                .sqrt();
+    let threshold_g_kg = AUTOCONVERSION_THRESHOLD_G_KG / bergeron_factor;
+    let rain_index = if cloud_water_g_kg > 0.0 {
+        (cover * (1.0 - cover * threshold_g_kg / cloud_water_g_kg)).max(0.0)
+    } else {
+        0.0
+    };
+    LowCloud { cover, rain_index }
 }
 
 fn ecliptic_direction(longitude: f64, latitude: f64, obliquity: f64) -> [f64; 3] {
@@ -1336,6 +1480,8 @@ fn celestial_direction(latitude: f64, declination: f64, hour_angle: f64) -> [f32
 #[derive(Clone, Copy)]
 struct PressureSample {
     potential_m2_s: f64,
+    /// The climate band's and zonal belts' potential.
+    climate_potential_m2_s: f32,
     gradient_m_s: Vector,
     synoptic_gradient_m_s: Vector,
     surface_gust_signal: f32,
@@ -1611,7 +1757,8 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         query.current_time_coordinate,
         OCEAN_CURRENT_OCTAVE_COUNT,
         0.5,
-    );
+    )
+    .0;
     let basin_squared = (basin.value * basin.value) as f32;
     let basin_squared_gradient = Vector::new(
         (2.0 * basin.value * basin.gradient_x_per_m) as f32,
@@ -1665,8 +1812,9 @@ fn spatiotemporal_fractal_noise_sample(
     mut time_coordinate: f32,
     octave_count: usize,
     persistence: f32,
-) -> ScalarNoiseSample {
+) -> (ScalarNoiseSample, f64) {
     let mut value = 0.0;
+    let mut broad_value = 0.0;
     let mut gradient = Vector::ZERO;
     let mut amplitude = 1.0;
     let mut amplitude_sum = 0.0;
@@ -1678,6 +1826,9 @@ fn spatiotemporal_fractal_noise_sample(
             wavelength_m,
             time_coordinate,
         );
+        if octave == 0 {
+            broad_value = octave_sample.0;
+        }
         value += amplitude * octave_sample.0;
         gradient += amplitude * octave_sample.1;
         amplitude_sum += amplitude;
@@ -1685,11 +1836,14 @@ fn spatiotemporal_fractal_noise_sample(
         wavelength_m *= 0.5;
         time_coordinate *= 2.0;
     }
-    ScalarNoiseSample {
-        value: f64::from(value / amplitude_sum),
-        gradient_x_per_m: f64::from(gradient.x / amplitude_sum),
-        gradient_y_per_m: f64::from(gradient.y / amplitude_sum),
-    }
+    (
+        ScalarNoiseSample {
+            value: f64::from(value / amplitude_sum),
+            gradient_x_per_m: f64::from(gradient.x / amplitude_sum),
+            gradient_y_per_m: f64::from(gradient.y / amplitude_sum),
+        },
+        f64::from(broad_value),
+    )
 }
 
 fn ocean_basin_capacity_sample(
@@ -2004,8 +2158,20 @@ fn procedural_atmosphere_primary_with_conditions(
     scalar_time: ScalarFieldTimeCoordinates,
     vector_time: VectorFieldTimeCoordinates,
 ) -> AtmospherePrimary {
-    let pressure =
-        procedural_pressure_sample_at_time(world_geometry, match_seed, vector_time, position_m);
+    let pressure = procedural_pressure_sample_at_time(
+        world_geometry,
+        match_seed,
+        vector_time,
+        position_m,
+        WIND_BANDS.len(),
+    );
+    let wind_gradient = resolved_surface_wind_gradient(
+        world_geometry,
+        match_seed,
+        vector_time,
+        position_m,
+        pressure.gradient_m_s,
+    );
     let surface_temperature = sample_surface_air_temperature_anomaly_c(
         world_geometry,
         match_seed,
@@ -2013,16 +2179,17 @@ fn procedural_atmosphere_primary_with_conditions(
         position_m,
     );
     let surface_air_temperature_anomaly_c = surface_temperature.value;
-    let air_temperature_500_hpa_c = current_500_hpa_air_temperature_c(climate, celestial)
+    let climate_500_hpa_temperature_c = current_500_hpa_air_temperature_c(climate, celestial);
+    let [upper_air_noise, broad_upper_air_noise] = procedural_weather_noise(
+        world_geometry,
+        match_seed,
+        position_m,
+        AIR_TEMPERATURE_500_HPA_NOISE,
+        scalar_time.upper_air_temperature,
+    );
+    let air_temperature_500_hpa_c = climate_500_hpa_temperature_c
         + SURFACE_AIR_MASS_COUPLING_500_HPA * surface_air_temperature_anomaly_c
-        + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C
-            * procedural_weather_noise(
-                world_geometry,
-                match_seed,
-                position_m,
-                AIR_TEMPERATURE_500_HPA_NOISE,
-                scalar_time.upper_air_temperature,
-            ) as f32;
+        + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C * upper_air_noise as f32;
     let climate_air_temperature_c = current_air_temperature_c(
         ClimateConditions {
             diurnal_temperature_range_c: 0.0,
@@ -2032,17 +2199,16 @@ fn procedural_atmosphere_primary_with_conditions(
     );
     let climate_saturation_capacity_g_kg =
         water_vapor_saturation_capacity_g_kg(climate_air_temperature_c);
-    let water_vapor_fraction = 0.72
-        + 0.65
-            * procedural_weather_noise(
-                world_geometry,
-                match_seed,
-                position_m,
-                WATER_VAPOR_NOISE,
-                scalar_time.water_vapor,
-            ) as f32;
-    let water_vapor_g_kg =
-        (climate_saturation_capacity_g_kg * water_vapor_fraction).clamp(0.5, 25.0);
+    let [water_vapor_noise, broad_water_vapor_noise] = procedural_weather_noise(
+        world_geometry,
+        match_seed,
+        position_m,
+        WATER_VAPOR_NOISE,
+        scalar_time.water_vapor,
+    );
+    let water_vapor_g_kg = |noise: f64| {
+        (climate_saturation_capacity_g_kg * (0.72 + 0.65 * noise as f32)).clamp(0.5, 25.0)
+    };
 
     AtmospherePrimary {
         pressure_hpa: 1013.25
@@ -2054,7 +2220,109 @@ fn procedural_atmosphere_primary_with_conditions(
         surface_air_temperature_anomaly_c,
         air_temperature_500_hpa_c,
         local_temperature_gradient_c_per_m: surface_temperature.gradient_per_m,
-        water_vapor_g_kg,
+        water_vapor_g_kg: water_vapor_g_kg(water_vapor_noise),
+        surface_wind_convergence_per_s: wind_gradient.convergence_per_s,
+        surface_wind_strain_per_s: wind_gradient.strain_per_s,
+        climate_air_temperature_gradient_c_per_m: climate_air_temperature_gradient_c_per_m(
+            world_geometry,
+            celestial,
+            position_m,
+        ),
+        regional: RegionalAtmosphere {
+            pressure_hpa: 1013.25
+                + pressure.climate_potential_m2_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+            air_temperature_anomaly_c: surface_temperature.broad_value,
+            water_vapor_g_kg: water_vapor_g_kg(broad_water_vapor_noise),
+            air_temperature_500_hpa_c: climate_500_hpa_temperature_c
+                + SURFACE_AIR_MASS_COUPLING_500_HPA * surface_temperature.broad_value
+                + INDEPENDENT_AIR_TEMPERATURE_500_HPA_RANGE_C * broad_upper_air_noise as f32,
+        },
+    }
+}
+
+// Central differences over this step resolve the 10° climate knots.
+const CLIMATE_GRADIENT_STEP_M: f32 = 30.0;
+
+/// The meridional gradient of the climatological air temperature without its
+/// daily cycle. `climate_air_temperature_gradient_at` in
+/// `crates/browser/src/shader/components/environment.wgsl` mirrors it.
+fn climate_air_temperature_gradient_c_per_m(
+    world_geometry: WorldGeometry,
+    celestial: CelestialConditions,
+    position_m: Vector,
+) -> Vector {
+    let temperature_c = |offset_m: f32| {
+        let latitude_degrees = world_geometry.latitude_degrees(position_m.y + offset_m);
+        current_air_temperature_c(
+            ClimateConditions {
+                diurnal_temperature_range_c: 0.0,
+                ..world_climate_conditions(latitude_degrees)
+            },
+            CelestialConditions {
+                geographic_latitude_degrees: latitude_degrees,
+                ..celestial
+            },
+        )
+    };
+    Vector::new(
+        0.0,
+        (temperature_c(CLIMATE_GRADIENT_STEP_M) - temperature_c(-CLIMATE_GRADIENT_STEP_M))
+            / (2.0 * CLIMATE_GRADIENT_STEP_M),
+    )
+}
+
+// Forward differences over this step resolve the wind gradient of the 960 m
+// local pressure band within 2% truncation error.
+const WIND_GRADIENT_STEP_M: f32 = 5.0;
+// The last pressure band supplies only gust timing.
+const RESOLVED_PRESSURE_BAND_COUNT: usize = WIND_BANDS.len() - 1;
+// The rate at which the converging pattern dissolves: its noise time advances
+// one unit at this rate. Compromise: the finest resolved band's, which
+// dominates the convergence.
+const RESOLVED_PRESSURE_EVOLUTION_PER_S: f32 =
+    PRESSURE_EVOLUTION_SPEED_M_S / WIND_BANDS[RESOLVED_PRESSURE_BAND_COUNT - 1].wavelength_m;
+
+struct WindGradient {
+    convergence_per_s: f32,
+    strain_per_s: f32,
+}
+
+/// The resolved surface wind's velocity gradient by forward differences from
+/// `gradient_m_s`, the resolved pressure gradient at `position_m`.
+/// `resolved_surface_wind_gradient_at` in
+/// `crates/browser/src/shader/components/environment.wgsl` mirrors it.
+fn resolved_surface_wind_gradient(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    time: VectorFieldTimeCoordinates,
+    position_m: Vector,
+    gradient_m_s: Vector,
+) -> WindGradient {
+    let wind_m_s = |sample_position_m: Vector, sample_gradient_m_s: Vector| {
+        wind_from_pressure_gradient(
+            sample_gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
+            world_geometry.latitude_degrees(sample_position_m.y),
+        )
+    };
+    let offset_wind_m_s = |offset_m: Vector| {
+        let sample_position_m = position_m + offset_m;
+        let pressure = procedural_pressure_sample_at_time(
+            world_geometry,
+            match_seed,
+            time,
+            sample_position_m,
+            RESOLVED_PRESSURE_BAND_COUNT,
+        );
+        wind_m_s(sample_position_m, pressure.gradient_m_s)
+    };
+    let centre_m_s = wind_m_s(position_m, gradient_m_s);
+    let along_x = (offset_wind_m_s(Vector::new(WIND_GRADIENT_STEP_M, 0.0)) - centre_m_s)
+        / WIND_GRADIENT_STEP_M;
+    let along_y = (offset_wind_m_s(Vector::new(0.0, WIND_GRADIENT_STEP_M)) - centre_m_s)
+        / WIND_GRADIENT_STEP_M;
+    WindGradient {
+        convergence_per_s: -(along_x.x + along_y.y),
+        strain_per_s: libm::hypotf(along_x.x - along_y.y, along_y.x + along_x.y),
     }
 }
 
@@ -2081,7 +2349,7 @@ pub fn derive_weather(
         );
     let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
     let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(surface_air_temperature_c);
-    let relative_humidity = (primary.water_vapor_g_kg / saturation_capacity_g_kg).clamp(0.0, 1.5);
+    let relative_humidity = primary.water_vapor_g_kg / saturation_capacity_g_kg;
     // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
     // stand in for a parcel buoyancy index.
     let instability = smoothstep_range(
@@ -2089,7 +2357,9 @@ pub fn derive_weather(
         48.0,
         f64::from(surface_air_temperature_c - primary.air_temperature_500_hpa_c),
     ) as f32;
-    // Low pressure, pressure gradient, and fronts stand in for unresolved ascent.
+    // Low pressure, pressure gradient, and fronts stand in for the deep ascent
+    // of stratiform decks. The rendered stratiform index reads it; the
+    // authoritative weather only reports it.
     let pressure_lift = smoothstep_range(1012.0, 990.0, f64::from(primary.pressure_hpa)) as f32;
     let gradient_lift = smoothstep_range(
         0.0002,
@@ -2102,19 +2372,77 @@ pub fn derive_weather(
         f64::from(primary.local_temperature_gradient_c_per_m.length()),
     ) as f32;
     let lift = (0.25 * pressure_lift + 0.55 * gradient_lift + 0.20 * frontal_lift).clamp(0.0, 1.0);
-    let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
+    // By mass continuity, wind converging uniformly through the boundary layer
+    // lifts its top at w = −h∇·u. Air advancing across the isotherms also
+    // glides up or down isentropic surfaces sloping by the horizontal
+    // temperature gradient over the static stability Γd − Γ, at
+    // w = −u·∇T / (Γd − Γ); Γ is the lapse rate to 500 hPa, whose height the
+    // hypsometric equation gives from the column's mean temperature. Together
+    // they stretch the layer at S = −∇·u + w/h for glide w. The air stays until
+    // that stretching or the strain E carries it out of the zone, or the
+    // pattern dissolves at its evolution rate ν; rotation keeps it circulating
+    // there, so cyclone centres lift most, as Ekman pumping lifts them.
+    // Compromise: it rises for 1/√(S² + E² + ν²), one e-folding of what removes
+    // it, an O(1) residence time under which pure, lasting stretching lifts it
+    // by the layer's depth. Compromise: surface air exchanges heat with the sea
+    // and so does not conserve θ; its glide stands in for that of the air above
+    // it in the layer. Compromise: the climatological meridional gradient
+    // dominates the weather's, so poleward flow rises and equatorward flow
+    // sinks by about as much. Where the lapse rate exceeds the dry adiabat, any
+    // glide carries the air through the layer.
+    let column_temperature_k =
+        0.5 * (surface_air_temperature_c + primary.air_temperature_500_hpa_c) + 273.15;
+    let height_500_hpa_m = DRY_AIR_SCALE_HEIGHT_M_PER_K
+        * column_temperature_k
+        * libm::logf(primary.pressure_hpa / 500.0);
+    let static_stability_c_per_m = DRY_ADIABATIC_LAPSE_RATE_C_PER_M
+        - (surface_air_temperature_c - primary.air_temperature_500_hpa_c) / height_500_hpa_m;
+    let warm_advection_c_per_s = -resolved_surface_wind_m_s.dot(
+        primary.local_temperature_gradient_c_per_m
+            + primary.climate_air_temperature_gradient_c_per_m,
+    );
+    let removal_per_s = |stretching_per_s: f32| {
+        libm::sqrtf(
+            stretching_per_s * stretching_per_s
+                + primary.surface_wind_strain_per_s * primary.surface_wind_strain_per_s
+                + RESOLVED_PRESSURE_EVOLUTION_PER_S * RESOLVED_PRESSURE_EVOLUTION_PER_S,
+        )
+    };
+    let ascent_m = if static_stability_c_per_m > 0.0 {
+        let stretching_per_s = primary.surface_wind_convergence_per_s
+            + warm_advection_c_per_s / (static_stability_c_per_m * BOUNDARY_LAYER_DEPTH_M);
+        BOUNDARY_LAYER_DEPTH_M * stretching_per_s / removal_per_s(stretching_per_s)
+    } else if warm_advection_c_per_s != 0.0 {
+        BOUNDARY_LAYER_DEPTH_M * warm_advection_c_per_s.signum()
+    } else {
+        BOUNDARY_LAYER_DEPTH_M * primary.surface_wind_convergence_per_s
+            / removal_per_s(primary.surface_wind_convergence_per_s)
+    };
     // ECMWF diagnoses peak 10 m gust speed from a surface-stress/stability term
     // plus 0.6 of positive low-level speed shear when deep convection is active.
     // This model lacks friction velocity, boundary-layer stability, 850/950 hPa
     // winds, and a convection scheme, so sustained wind, column instability,
-    // condensation, and lift are their deterministic local proxies.
+    // and the ascent's reach toward the condensation level are their
+    // deterministic local proxies.
     let mechanical_stability_factor = 1.0 + 0.35 * instability;
     let mechanical_gust_speed_m_s = SURFACE_GUST_DRAG_INCREMENT
         * mechanical_stability_factor
         * resolved_surface_wind_m_s.length();
-    let convective_activity = instability
-        * smoothstep_range(0.65, 0.95, f64::from(relative_humidity)) as f32
-        * smoothstep_range(0.35, 0.80, f64::from(lift)) as f32;
+    // Moist convection needs surface air lifted to its condensation level; by
+    // this model's saturation curve the dew-point depression is −ln(RH)/0.055 K.
+    // Compromise: partial lift gives partial activity, standing in for the
+    // share of thermals that reach the level.
+    let condensation_level_m = CONDENSATION_LEVEL_M_PER_C
+        * (-libm::logf(relative_humidity)).max(0.0)
+        / SATURATION_GROWTH_PER_C as f32;
+    let condensation_level_reach = if ascent_m <= 0.0 {
+        0.0
+    } else if ascent_m >= condensation_level_m {
+        1.0
+    } else {
+        ascent_m / condensation_level_m
+    };
+    let convective_activity = instability * condensation_level_reach;
     let convective_gust_speed_m_s = CONVECTIVE_GUST_SHEAR_FRACTION
         * convective_activity
         * (upper_wind_velocity_m_s.length() - resolved_surface_wind_m_s.length()).max(0.0);
@@ -2131,13 +2459,16 @@ pub fn derive_weather(
     let surface_gust_velocity_m_s =
         primary.surface_gust_signal * (mechanical_gust_velocity_m_s + convective_gust_velocity_m_s);
     let wind_velocity_m_s = resolved_surface_wind_m_s + surface_gust_velocity_m_s;
-    let cloud_signal = 0.68 * condensation + 0.22 * lift + 0.10 * instability * condensation;
-    let cloudiness = smoothstep_range(0.50, 1.01, f64::from(cloud_signal)) as f32;
-    let upper_cloud_signal = 0.55 * condensation + 0.30 * lift + 0.15 * frontal_lift;
-    let upper_cloudiness = smoothstep_range(0.68, 0.90, f64::from(upper_cloud_signal)) as f32;
-    let rain_signal = smoothstep_range(0.65, 0.75, f64::from(cloudiness)) as f32
-        * cloudiness
-        * (0.45 + 0.20 * instability + 0.45 * lift);
+    // Sinking air above the boundary layer warms the free troposphere, not the
+    // surface air, which cannot sink below the ground. Compromise: the
+    // climatological gradient's glide lifts poleward flow and lowers
+    // equatorward flow by about as much, so this clamp turns it into net lift.
+    let low_cloud = low_cloud(
+        primary.water_vapor_g_kg,
+        surface_air_temperature_c,
+        ascent_m.max(0.0),
+    );
+    let upper_cloudiness = regional_deck_cover(primary.regional, climate, conditions);
 
     ProceduralWeather {
         primary,
@@ -2148,11 +2479,48 @@ pub fn derive_weather(
         wind_shear_m_s: upper_wind_velocity_m_s - wind_velocity_m_s,
         relative_humidity,
         lift,
-        cloudiness,
+        ascent_m,
+        cloudiness: low_cloud.cover,
         instability,
         upper_cloudiness,
-        rain_intensity: smoothstep_range(0.55, 0.90, f64::from(rain_signal)) as f32,
+        rain_intensity: low_cloud.rain_index,
     }
+}
+
+/// The regional canopy's deck cover, as `regional_canopy_conditions_from_drivers`
+/// in `crates/browser/src/shader/components/clouds.wgsl` renders it from
+/// `regional_cloud_drivers_from_fields` in `environment.wgsl`. Compromise: the
+/// tuned deck look of humidity, pressure, and instability ramps, standing in
+/// for the deep ascent and upper-air humidity that decks need and the world
+/// lacks.
+fn regional_deck_cover(
+    regional: RegionalAtmosphere,
+    climate: ClimateConditions,
+    conditions: CelestialConditions,
+) -> f32 {
+    let climate_air_temperature_c = current_air_temperature_c(
+        ClimateConditions {
+            diurnal_temperature_range_c: 0.0,
+            ..climate
+        },
+        conditions,
+    );
+    let regional_air_temperature_c = climate_air_temperature_c + regional.air_temperature_anomaly_c;
+    let climate_water_vapor_g_kg =
+        0.72 * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c);
+    let relative_humidity = (0.8 * climate_water_vapor_g_kg + 0.2 * regional.water_vapor_g_kg)
+        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c);
+    let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
+    let pressure_lift =
+        1.0 - smoothstep_range(1009.0, 1017.0, f64::from(regional.pressure_hpa)) as f32;
+    let instability = smoothstep_range(
+        28.0,
+        48.0,
+        f64::from(regional_air_temperature_c - regional.air_temperature_500_hpa_c),
+    ) as f32;
+    let cloud_potential =
+        0.55 * condensation + 0.25 * pressure_lift + 0.20 * condensation * instability;
+    smoothstep_range(0.30, 0.88, f64::from(cloud_potential)) as f32
 }
 
 fn sample_surface_air_temperature_anomaly_c(
@@ -2161,7 +2529,7 @@ fn sample_surface_air_temperature_anomaly_c(
     time_coordinate: f32,
     position_m: Vector,
 ) -> TemperatureSample {
-    let noise = procedural_weather_noise_sample(
+    let (noise, broad_noise) = procedural_weather_noise_sample(
         world_geometry,
         match_seed,
         position_m,
@@ -2178,6 +2546,7 @@ fn sample_surface_air_temperature_anomaly_c(
             (f64::from(scale_c) * noise.gradient_x_per_m) as f32,
             (f64::from(scale_c) * noise.gradient_y_per_m) as f32,
         ),
+        broad_value: scale_c * broad_noise as f32,
     }
 }
 
@@ -2189,20 +2558,22 @@ fn wind_from_pressure_gradient(
     if gradient_length == 0.0 {
         return Vector::ZERO;
     }
-    let latitude_sine = latitude_degrees.to_radians().sin();
-    // This bounded fade avoids the equatorial singularity of a geostrophic
-    // solve. Its latitude width is gameplay tuning, not a physical Coriolis rate.
-    let normalized_coriolis = ((latitude_sine.abs() - 0.02) / 0.23).clamp(0.0, 1.0);
-    let geostrophic_amount = normalized_coriolis.powi(2) * (3.0 - 2.0 * normalized_coriolis);
-    let hemisphere = if latitude_sine < 0.0 { -1.0 } else { 1.0 };
-    let along_isobar = hemisphere
-        * Vector::new(
-            -pressure_gradient_hpa_per_m.y,
-            pressure_gradient_hpa_per_m.x,
-        );
+    // A slab boundary layer balancing the pressure gradient, Coriolis, and
+    // friction r crosses the isobars toward low pressure at atan(r / |f|),
+    // continuously through the equator, where its flow runs down the gradient.
+    // Compromise: a turning law, not a balance. Speed stays the gradient's,
+    // which keeps the calibrated wind distribution, and the angle is Earth's at
+    // this latitude for the Earth system each pressure band stands for under
+    // the world's 1:625 reduction. The upper wind turns alike, though the
+    // frictionless air aloft would be nearly geostrophic.
+    let coriolis_per_s = 2.0 * EARTH_ROTATION_RATE_RAD_S * latitude_degrees.to_radians().sin();
+    let friction_per_s = BOUNDARY_LAYER_FRICTION_VELOCITY_M_S / BOUNDARY_LAYER_DEPTH_M;
     let toward_low = -pressure_gradient_hpa_per_m;
-    let flow = geostrophic_amount * along_isobar
-        + (1.0 - geostrophic_amount * (1.0 - SURFACE_CROSS_ISOBAR_FRACTION)) * toward_low;
+    let along_isobar = Vector::new(
+        -pressure_gradient_hpa_per_m.y,
+        pressure_gradient_hpa_per_m.x,
+    );
+    let flow = coriolis_per_s * along_isobar + friction_per_s * toward_low;
     PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M * gradient_length * flow.normalize()
 }
 
@@ -2622,19 +2993,21 @@ fn procedural_weather_noise(
     position_m: Vector,
     parameters: WeatherNoiseParameters,
     time: f32,
-) -> f64 {
-    parameters.scale
-        * spatiotemporal_fractal_noise_sample(
-            world_geometry,
-            match_seed,
-            parameters.noise_field,
-            position_m,
-            parameters.wavelength_m,
-            time,
-            parameters.octave_count,
-            0.5,
-        )
-        .value
+) -> [f64; 2] {
+    let (sample, broad_value) = spatiotemporal_fractal_noise_sample(
+        world_geometry,
+        match_seed,
+        parameters.noise_field,
+        position_m,
+        parameters.wavelength_m,
+        time,
+        parameters.octave_count,
+        0.5,
+    );
+    [
+        parameters.scale * sample.value,
+        parameters.scale * broad_value,
+    ]
 }
 
 fn procedural_weather_noise_sample(
@@ -2643,8 +3016,8 @@ fn procedural_weather_noise_sample(
     position_m: Vector,
     parameters: WeatherNoiseParameters,
     time: f32,
-) -> ScalarNoiseSample {
-    let mut sample = spatiotemporal_fractal_noise_sample(
+) -> (ScalarNoiseSample, f64) {
+    let (mut sample, broad_value) = spatiotemporal_fractal_noise_sample(
         world_geometry,
         match_seed,
         parameters.noise_field,
@@ -2657,7 +3030,7 @@ fn procedural_weather_noise_sample(
     sample.value *= parameters.scale;
     sample.gradient_x_per_m *= parameters.scale;
     sample.gradient_y_per_m *= parameters.scale;
-    sample
+    (sample, parameters.scale * broad_value)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3272,7 +3645,13 @@ fn procedural_pressure_sample(
     position_m: Vector,
 ) -> PressureSample {
     let time = vector_field_time_coordinates(world_geometry, tick);
-    procedural_pressure_sample_at_time(world_geometry, match_seed, time, position_m)
+    procedural_pressure_sample_at_time(
+        world_geometry,
+        match_seed,
+        time,
+        position_m,
+        WIND_BANDS.len(),
+    )
 }
 
 fn procedural_pressure_sample_at_time(
@@ -3280,6 +3659,7 @@ fn procedural_pressure_sample_at_time(
     match_seed: u64,
     time: VectorFieldTimeCoordinates,
     position_m: Vector,
+    band_count: usize,
 ) -> PressureSample {
     let latitude_rad = world_geometry.latitude_degrees(position_m.y).to_radians();
     let midlatitude_sine = libm::sinf(2.0 * latitude_rad);
@@ -3290,10 +3670,11 @@ fn procedural_pressure_sample_at_time(
     let midlatitude_gradient_per_m =
         2.0 * libm::sinf(4.0 * latitude_rad) * latitude_gradient_rad_per_m;
     let mut potential_m2_s = 0.0_f32;
+    let mut climate_potential_m2_s = 0.0_f32;
     let mut gradient_m_s = Vector::ZERO;
     let mut synoptic_gradient_m_s = Vector::ZERO;
     let mut surface_gust_signal = 0.0;
-    for (band_index, band) in WIND_BANDS.into_iter().enumerate() {
+    for (band_index, band) in WIND_BANDS.into_iter().enumerate().take(band_count) {
         let (zonal_wavelength_m, meridional_wavelength_m) = if band.wavelength_m == 0.0 {
             (
                 CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M,
@@ -3342,6 +3723,9 @@ fn procedural_pressure_sample_at_time(
         let band_gradient_m_s = potential_scale_m2_s * noise.1
             + Vector::new(0.0, potential_scale_gradient_m_s * noise.0);
         potential_m2_s += potential_scale_m2_s * noise.0;
+        if band_index == 0 {
+            climate_potential_m2_s = potential_scale_m2_s * noise.0;
+        }
         gradient_m_s += band_gradient_m_s;
         synoptic_gradient_m_s += band.synoptic_coupling * band_gradient_m_s;
     }
@@ -3356,10 +3740,12 @@ fn procedural_pressure_sample_at_time(
     let zonal_gradient_m_s =
         Vector::new(0.0, PLANETARY_ZONAL_WIND_PEAK_M_S * libm::sinf(zonal_phase));
     potential_m2_s += zonal_potential_m2_s;
+    climate_potential_m2_s += zonal_potential_m2_s;
     gradient_m_s += zonal_gradient_m_s;
     synoptic_gradient_m_s += zonal_gradient_m_s;
     PressureSample {
         potential_m2_s: f64::from(potential_m2_s),
+        climate_potential_m2_s,
         gradient_m_s,
         synoptic_gradient_m_s,
         surface_gust_signal,

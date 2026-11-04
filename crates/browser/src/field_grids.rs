@@ -13,15 +13,32 @@ use simulation::WorldGeometry;
 pub const ENVIRONMENT_FIELD_TEXELS: u32 = 384;
 /// The cloud weather window adds the farthest cloud weather read, about 19 km
 /// on each side of a default-world view and 41 km on a 256 km world. At this
-/// budget its spacing starts at 256 m on the default world and stays there for
-/// 16:9 views up to about 8.5 km tall. The deck's drivers vary over 8 km and
-/// more; what coarsens is mainly the land share across coasts, which moves
-/// cumulus cover only where it is marginal.
-const CLOUD_WEATHER_FIELD_TEXELS: u32 = 220;
-/// The scene's five layers, then the cumulus and deck drivers and the
+/// budget its spacing starts at `CLOUD_WEATHER_FIELD_SPACING_M` on the default
+/// world and stays there for 16:9 views up to about 10 km tall. The land
+/// share across coasts coarsens, which moves cumulus cover only where it is
+/// marginal.
+const CLOUD_WEATHER_FIELD_TEXELS: u32 = 512;
+/// Texels per axis of the environment field texture, which holds both grids.
+pub const ENVIRONMENT_FIELD_TEXTURE_TEXELS: u32 =
+    if ENVIRONMENT_FIELD_TEXELS > CLOUD_WEATHER_FIELD_TEXELS {
+        ENVIRONMENT_FIELD_TEXELS
+    } else {
+        CLOUD_WEATHER_FIELD_TEXELS
+    };
+/// The finest band the cloud weather lattice holds is the 960 m local pressure
+/// band, whose convergence lifts the boundary layer and so shapes low cloud and
+/// the cumulus cover that follows it. As for the environment grid, eight
+/// texels per wavelength resolve it; at five, production cumulus shadows at
+/// boat zoom differ from the direct reference by about half their dimming.
+/// Compromise: surface low cover switches from clear to overcast within about
+/// 4% of saturation, so the grids' bilinear humidity error reaches cover about
+/// fivefold amplified, which softens low cloud in dim, wide views against the
+/// direct reference.
+const CLOUD_WEATHER_FIELD_SPACING_M: f64 = 960.0 / 8.0;
+/// The scene's six layers, then the cumulus and deck drivers and the
 /// ground-sky bounce conditions on the cloud weather grid. Keep synchronized
 /// with environment-fields.wgsl.
-pub const ENVIRONMENT_FIELD_LAYERS: u32 = 8;
+pub const ENVIRONMENT_FIELD_LAYERS: u32 = 9;
 /// The finest stored octaves are the 960 m local pressure band and 512 m water
 /// vapour. Eight or more texels per wavelength keep bilinear error below 8% of
 /// that octave's amplitude, about 0.3% of the water-vapour field.
@@ -393,32 +410,32 @@ pub fn field_grids(
     let wrapped_view = wrapped_region(world_width_m, view);
     // Every receiver also reads its ground-sky bounce conditions there.
     cloud_weather_region.include(wrapped_view);
-    let environment_spacing = |region: Region, texels: u32| {
-        field_spacing_m(
-            world_width_m,
-            region,
-            ENVIRONMENT_FIELD_SPACING_M,
-            texels,
-            texels * texels,
-        )
-    };
     FieldGrids {
         environment: field_grid_with_spacing(
             camera,
             [0.0; 2],
             wrapped_view,
-            environment_spacing(wrapped_view, ENVIRONMENT_FIELD_TEXELS),
+            field_spacing_m(
+                world_width_m,
+                wrapped_view,
+                ENVIRONMENT_FIELD_SPACING_M,
+                ENVIRONMENT_FIELD_TEXELS,
+                ENVIRONMENT_FIELD_TEXELS * ENVIRONMENT_FIELD_TEXELS,
+            ),
         ),
         cloud_weather: field_grid_with_spacing(
             camera,
             [0.0; 2],
             wrapped_region(world_width_m, cloud_weather_region.or_origin()),
-            environment_spacing(
+            field_spacing_m(
+                world_width_m,
                 wrapped_region(
                     world_width_m,
                     cloud_weather_bound.expanded(2.0 * cloud_texel_reach_m),
                 ),
+                CLOUD_WEATHER_FIELD_SPACING_M,
                 CLOUD_WEATHER_FIELD_TEXELS,
+                CLOUD_WEATHER_FIELD_TEXELS * CLOUD_WEATHER_FIELD_TEXELS,
             ),
         ),
         occluders,

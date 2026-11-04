@@ -59,6 +59,7 @@ struct CloudWeatherSample {
     relative_humidity: f32,
     instability: f32,
     lift: f32,
+    ascent_m: f32,
     low_coverage: f32,
     rain: f32,
     stratiform: f32,

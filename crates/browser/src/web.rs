@@ -36,7 +36,7 @@ use crate::{
     AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BOAT_IMAGES, BakedSurface,
     BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene,
     ClothPose, ClothPresentation, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
-    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXELS, FieldGridHistory, FieldGridTuning,
+    ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
     OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
@@ -229,8 +229,8 @@ pub fn environment_field_shader_source() -> String {
 #[wasm_bindgen]
 pub fn environment_field_texture_size() -> Vec<u32> {
     vec![
-        ENVIRONMENT_FIELD_TEXELS,
-        ENVIRONMENT_FIELD_TEXELS,
+        ENVIRONMENT_FIELD_TEXTURE_TEXELS,
+        ENVIRONMENT_FIELD_TEXTURE_TEXELS,
         ENVIRONMENT_FIELD_LAYERS,
     ]
 }
@@ -1192,8 +1192,8 @@ impl EnvironmentFields {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Environment fields"),
             size: wgpu::Extent3d {
-                width: ENVIRONMENT_FIELD_TEXELS,
-                height: ENVIRONMENT_FIELD_TEXELS,
+                width: ENVIRONMENT_FIELD_TEXTURE_TEXELS,
+                height: ENVIRONMENT_FIELD_TEXTURE_TEXELS,
                 depth_or_array_layers: ENVIRONMENT_FIELD_LAYERS,
             },
             mip_level_count: 1,

@@ -218,6 +218,10 @@ fn significant_gusts_require_mean_wind_or_moist_convection() {
         air_temperature_500_hpa_c: -4.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 2.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
 
     let weather = derive_weather_at_surface_temperature(primary, 20.0);
@@ -240,6 +244,10 @@ fn mechanical_gusts_follow_and_scale_with_mean_surface_wind() {
         air_temperature_500_hpa_c: -4.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 2.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let strong = AtmospherePrimary {
         pressure_gradient_hpa_per_m: 2.0 * weak.pressure_gradient_hpa_per_m,
@@ -264,37 +272,41 @@ fn mechanical_gusts_follow_and_scale_with_mean_surface_wind() {
 
 #[test]
 fn moist_convection_mixes_faster_upper_wind_into_surface_gusts() {
-    let dry = AtmospherePrimary {
-        pressure_hpa: 1013.0,
+    // Moist, unstable air, which converging surface wind lifts to its
+    // condensation level and the same air without that ascent does not.
+    let unlifted = AtmospherePrimary {
+        pressure_hpa: 995.0,
         pressure_gradient_hpa_per_m: Vector::new(0.0005, 0.0),
         synoptic_pressure_gradient_hpa_per_m: Vector::new(0.0, -0.0015),
         surface_gust_signal: 1.0,
         surface_air_temperature_anomaly_c: 0.0,
-        air_temperature_500_hpa_c: -4.0,
-        local_temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
-        water_vapor_g_kg: 2.0,
+        air_temperature_500_hpa_c: -30.0,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 25.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let convective = AtmospherePrimary {
-        pressure_hpa: 995.0,
-        air_temperature_500_hpa_c: -30.0,
-        water_vapor_g_kg: 25.0,
-        ..dry
+        surface_wind_convergence_per_s: 0.01,
+        ..unlifted
     };
     let without_pulse = |primary: AtmospherePrimary| AtmospherePrimary {
         surface_gust_signal: 0.0,
         ..primary
     };
-    let dry_weather = derive_weather_at_surface_temperature(dry, 30.0);
-    let dry_mean = derive_weather_at_surface_temperature(without_pulse(dry), 30.0);
+    let unlifted_weather = derive_weather_at_surface_temperature(unlifted, 30.0);
+    let unlifted_mean = derive_weather_at_surface_temperature(without_pulse(unlifted), 30.0);
     let convective_weather = derive_weather_at_surface_temperature(convective, 30.0);
     let convective_mean = derive_weather_at_surface_temperature(without_pulse(convective), 30.0);
-    let dry_gust = dry_weather.wind_velocity_m_s - dry_mean.wind_velocity_m_s;
+    let unlifted_gust = unlifted_weather.wind_velocity_m_s - unlifted_mean.wind_velocity_m_s;
     let convective_gust = convective_weather.wind_velocity_m_s - convective_mean.wind_velocity_m_s;
 
-    assert!(convective_gust.length() > dry_gust.length());
+    assert!(convective_gust.length() > unlifted_gust.length());
     let upper_direction = convective_weather.upper_wind_velocity_m_s.normalize();
     assert!(
-        convective_gust.dot(upper_direction) > dry_gust.dot(upper_direction),
+        convective_gust.dot(upper_direction) > unlifted_gust.dot(upper_direction),
         "convective gust {convective_gust:?} did not add momentum from upper wind {:?}",
         convective_weather.upper_wind_velocity_m_s,
     );
@@ -510,49 +522,70 @@ fn procedural_cloud_cover_is_seeded_and_continuous_in_spacetime() {
     assert!(other_seed_change / 512.0 > 0.1);
 }
 
+/// Weather over a population of worlds, each sampled across its whole surface
+/// at a different time, judged against observed oceans. CloudSat sees
+/// precipitation over the oceans 10.9% of the time, most often under the
+/// intertropical convergence zone and the midlatitude storm tracks and least
+/// often under the subtropical highs between them (Ellis et al. 2009, Geophys.
+/// Res. Lett. 36). Low cloud, alone or under higher cloud, covers about 0.27 to
+/// 0.40 of the globe (Stubenrauch et al. 2013, Bull. Am. Meteorol. Soc. 94).
+/// Bands allow a factor of two on the share and on cover.
 #[test]
-fn procedural_cloud_cover_has_mostly_clear_skies_and_rare_storms() {
-    let mut clear_samples = 0;
-    let mut cloudy_samples = 0;
-    let mut storm_samples = 0;
-    let mut samples = 0;
-
-    for seed in [0, 1, 0x5eed, 0xdead_beef] {
-        for x in -64..=64 {
-            for y in -64..=64 {
-                let density = procedural_cloud_cover(
+fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() {
+    let geometry = WorldGeometry::default();
+    let (mut cover, mut raining, mut storm, mut samples) = (0.0, 0, 0, 0);
+    // Raining and total sample counts under the convergence zone, the
+    // subtropics and the midlatitudes.
+    let mut belts = [(0, 0); 3];
+    for case in 0..64_u64 {
+        let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
+        for y in 0..36 {
+            let y_m = ((y as f32 + 0.5) / 36.0 - 0.5) * geometry.height_m();
+            let belt = match geometry.latitude_degrees(y_m).abs() {
+                latitude if latitude < 10.0 => Some(0),
+                latitude if latitude < 30.0 => Some(1),
+                latitude if latitude < 60.0 => Some(2),
+                _ => None,
+            };
+            for x in 0..16 {
+                let weather = procedural_weather_in_world(
+                    geometry,
                     seed,
-                    12_345,
-                    Vector::new(x as f32 * 256.0, y as f32 * 256.0),
+                    case * 9_876_543,
+                    Vector::new((x as f32 / 16.0 - 0.5) * geometry.width_m(), y_m),
                 );
-                clear_samples += usize::from(density <= 0.05);
-                cloudy_samples += usize::from(density >= 0.2);
-                storm_samples += usize::from(density >= 0.85);
+                let rains = weather.rain_intensity > 0.0;
+                cover += weather.cloudiness;
+                raining += usize::from(rains);
+                storm += usize::from(weather.rain_intensity >= 0.75);
                 samples += 1;
+                if let Some(belt) = belt {
+                    belts[belt].0 += usize::from(rains);
+                    belts[belt].1 += 1;
+                }
             }
         }
     }
+    let share = |count: usize| count as f32 / samples as f32;
+    let mean_cover = cover / samples as f32;
+    let [convergence_zone, subtropics, midlatitudes] =
+        belts.map(|(raining, samples)| raining as f32 / samples as f32);
 
     assert!(
-        clear_samples * 2 > samples,
-        "only {clear_samples} of {samples} samples were clear"
+        (0.055..=0.22).contains(&share(raining)),
+        "raining {}",
+        share(raining)
     );
     assert!(
-        cloudy_samples * 10 > samples,
-        "only {cloudy_samples} of {samples} samples were cloudy"
+        (0.135..=0.8).contains(&mean_cover),
+        "mean cover {mean_cover}"
     );
     assert!(
-        cloudy_samples * 5 < samples * 2,
-        "{cloudy_samples} of {samples} samples were cloudy"
+        subtropics < convergence_zone && subtropics < midlatitudes,
+        "raining {convergence_zone} under the convergence zone, {subtropics} in the \
+         subtropics and {midlatitudes} in the midlatitudes"
     );
-    assert!(
-        storm_samples > 0,
-        "no sampled cloud density reached storm strength"
-    );
-    assert!(
-        storm_samples * 50 < samples,
-        "{storm_samples} of {samples} samples were storm density"
-    );
+    assert!(storm > 0, "no sampled rain reached storm strength");
 }
 
 #[test]
@@ -566,6 +599,10 @@ fn pressure_gradient_drives_nearly_isobaric_surface_wind() {
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
 
     let wind = derive_weather_at_surface_temperature(primary, 20.0).wind_velocity_m_s;
@@ -592,6 +629,10 @@ fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 8.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let climate = ClimateConditions {
         annual_mean_air_temperature_c: 20.0,
@@ -627,6 +668,55 @@ fn coriolis_reverses_pressure_driven_circulation_between_hemispheres() {
 }
 
 #[test]
+fn pressure_driven_turning_weakens_continuously_from_the_equator_to_the_poles() {
+    let primary = AtmospherePrimary {
+        pressure_hpa: 1000.0,
+        pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+        surface_gust_signal: 0.0,
+        surface_air_temperature_anomaly_c: 0.0,
+        air_temperature_500_hpa_c: -15.0,
+        local_temperature_gradient_c_per_m: Vector::ZERO,
+        water_vapor_g_kg: 8.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
+    };
+    let climate = ClimateConditions {
+        annual_mean_air_temperature_c: 20.0,
+        seasonal_temperature_range_c: 0.0,
+        diurnal_temperature_range_c: 0.0,
+        annual_mean_water_temperature_c: 20.0,
+        seasonal_water_temperature_range_c: 0.0,
+    };
+    // Low pressure lies to the west, so the westward component is the share of
+    // the wind that crosses the north-south isobars.
+    let cross_isobar_degrees = |latitude: f32| {
+        let wind = derive_weather(
+            primary,
+            climate,
+            CelestialConditions {
+                geographic_latitude_degrees: latitude,
+                celestial_latitude_degrees: latitude,
+                season_phase: 0.0,
+                day_phase: 0.0,
+                lunar_longitude_phase: 0.0,
+            },
+        )
+        .wind_velocity_m_s;
+        (-wind.x).atan2(wind.y.abs()).to_degrees()
+    };
+
+    let angles = [0.0, 1.0, 5.0, 10.0, 20.0, 40.0, 70.0].map(cross_isobar_degrees);
+
+    assert!(
+        angles.windows(2).all(|pair| pair[0] > pair[1]),
+        "cross-isobar angles at 0°, 1°, 5°, 10°, 20°, 40° and 70°: {angles:?}"
+    );
+}
+
+#[test]
 fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
     let calm_aloft = AtmospherePrimary {
         pressure_hpa: 1000.0,
@@ -637,6 +727,10 @@ fn horizontal_temperature_gradient_produces_vertical_wind_shear() {
         air_temperature_500_hpa_c: -15.0,
         local_temperature_gradient_c_per_m: Vector::ZERO,
         water_vapor_g_kg: 10.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let sheared = AtmospherePrimary {
         local_temperature_gradient_c_per_m: Vector::new(0.0004, 0.0),
@@ -671,6 +765,10 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
         air_temperature_500_hpa_c: -20.0,
         local_temperature_gradient_c_per_m: Vector::new(0.0003, 0.0),
         water_vapor_g_kg: 4.0,
+        surface_wind_convergence_per_s: 0.0,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let moist = AtmospherePrimary {
         water_vapor_g_kg: 28.0,
@@ -683,6 +781,421 @@ fn moisture_increases_humidity_clouds_and_rain_without_overriding_the_result() {
     assert!(moist_weather.relative_humidity > dry_weather.relative_humidity);
     assert!(moist_weather.cloudiness > dry_weather.cloudiness);
     assert!(moist_weather.rain_intensity > dry_weather.rain_intensity);
+}
+
+/// Air at 20 °C whose surface wind strongly and purely diverges (`forced` false)
+/// or converges (`forced` true), displacing it by the boundary layer's depth,
+/// holding `total_water_g_kg`.
+fn low_cloud_weather(forced: bool, total_water_g_kg: f32) -> game::ProceduralWeather {
+    let primary = if forced {
+        AtmospherePrimary {
+            pressure_hpa: 985.0,
+            pressure_gradient_hpa_per_m: Vector::new(0.002, 0.0),
+            synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+            surface_gust_signal: 0.0,
+            surface_air_temperature_anomaly_c: 0.0,
+            air_temperature_500_hpa_c: -15.0,
+            local_temperature_gradient_c_per_m: Vector::new(0.0006, 0.0),
+            water_vapor_g_kg: total_water_g_kg,
+            surface_wind_convergence_per_s: 1.0,
+            surface_wind_strain_per_s: 0.0,
+            climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+            regional: Default::default(),
+        }
+    } else {
+        AtmospherePrimary {
+            pressure_hpa: 1020.0,
+            pressure_gradient_hpa_per_m: Vector::ZERO,
+            synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
+            surface_gust_signal: 0.0,
+            surface_air_temperature_anomaly_c: 0.0,
+            air_temperature_500_hpa_c: -15.0,
+            local_temperature_gradient_c_per_m: Vector::ZERO,
+            water_vapor_g_kg: total_water_g_kg,
+            surface_wind_convergence_per_s: -1.0,
+            surface_wind_strain_per_s: 0.0,
+            climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+            regional: Default::default(),
+        }
+    };
+    let weather = derive_weather_at_surface_temperature(primary, 20.0);
+    assert!((weather.ascent_m - if forced { 1000.0 } else { -1000.0 }).abs() < 1.0);
+    weather
+}
+
+/// Total water that saturates the 20 °C surface air.
+fn surface_saturation_g_kg() -> f32 {
+    10.0 / low_cloud_weather(false, 10.0).relative_humidity
+}
+
+/// Total water at which low cloud covers half the sky.
+fn half_cover_total_water_g_kg(forced: bool) -> f32 {
+    cover_total_water_g_kg(forced, 0.5)
+}
+
+/// Total water at which low cloud covers `share` of the sky.
+fn cover_total_water_g_kg(forced: bool, share: f32) -> f32 {
+    let cover = |total_water_g_kg| low_cloud_weather(forced, total_water_g_kg).cloudiness;
+    let (mut low, mut high) = (0.1, 100.0);
+    assert!(
+        cover(low) < share && cover(high) > share,
+        "cover never crosses {share}"
+    );
+    for _ in 0..60 {
+        let middle = 0.5 * (low + high);
+        if cover(middle) < share {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    0.5 * (low + high)
+}
+
+/// Unresolved total water spreads less about saturation near the surface than
+/// at the cloud level, so surface air goes from clear to covered over a
+/// narrower range of water than air lifted to the clouds.
+#[test]
+fn unresolved_total_water_spreads_less_near_the_surface_than_at_the_cloud_level() {
+    let relative_spread = |forced: bool| {
+        (cover_total_water_g_kg(forced, 0.9) - cover_total_water_g_kg(forced, 0.1))
+            / half_cover_total_water_g_kg(forced)
+    };
+    let surface = relative_spread(false);
+    let lifted = relative_spread(true);
+
+    assert!(
+        surface < 0.5 * lifted,
+        "relative spread {surface} at the surface, {lifted} lifted"
+    );
+}
+
+#[test]
+fn low_cloud_cover_spreads_triangularly_about_the_lifted_air_saturation() {
+    for forced in [false, true] {
+        let half_g_kg = half_cover_total_water_g_kg(forced);
+        let cover = |ratio: f32| low_cloud_weather(forced, ratio * half_g_kg).cloudiness;
+
+        assert_eq!(cover(0.79), 0.0, "forced {forced}");
+        assert_eq!(cover(1.21), 1.0, "forced {forced}");
+        for excess in [0.05, 0.1, 0.15] {
+            assert!(
+                (cover(1.0 - excess) + cover(1.0 + excess) - 1.0).abs() < 1.0e-3,
+                "forced {forced}: cover {} below and {} above",
+                cover(1.0 - excess),
+                cover(1.0 + excess),
+            );
+        }
+        let mut previous = 0.0;
+        for step in 0..=50 {
+            let next = cover(0.75 + 0.01 * step as f32);
+            assert!(next >= previous, "cover fell to {next} from {previous}");
+            previous = next;
+        }
+    }
+}
+
+/// Convergence lifts surface air by the boundary layer's depth, while
+/// divergence lowers the air above the layer and leaves surface air where it
+/// is; the world's mean displacement is near zero.
+#[test]
+fn convergence_lifts_cloud_and_divergence_leaves_surface_air_cloud() {
+    let surface_g_kg = surface_saturation_g_kg();
+    let subsiding_g_kg = half_cover_total_water_g_kg(false);
+    let ascending_g_kg = half_cover_total_water_g_kg(true);
+
+    assert!(
+        (subsiding_g_kg / surface_g_kg - 1.0).abs() < 0.01,
+        "subsiding air half covered at {subsiding_g_kg} g/kg, surface air at {surface_g_kg}",
+    );
+    assert!(ascending_g_kg < surface_g_kg / 1.2, "{ascending_g_kg}");
+    assert_eq!(
+        low_cloud_weather(true, 10.0).relative_humidity,
+        low_cloud_weather(false, 10.0).relative_humidity,
+    );
+
+    let geometry = WorldGeometry::default();
+    let (mut ascent_m, mut samples) = (0.0, 0.0);
+    for case in 0..64_u64 {
+        let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
+        for y in 0..16 {
+            for x in 0..16 {
+                ascent_m += procedural_weather_in_world(
+                    geometry,
+                    seed,
+                    case * 9_876_543,
+                    Vector::new(
+                        (x as f32 / 16.0 - 0.5) * geometry.width_m(),
+                        (y as f32 / 16.0 - 0.5) * geometry.height_m(),
+                    ),
+                )
+                .ascent_m;
+                samples += 1.0;
+            }
+        }
+    }
+    assert!(
+        (ascent_m / samples).abs() < 200.0,
+        "mean ascent {} m",
+        ascent_m / samples
+    );
+}
+
+/// Air advancing from warmer toward colder air glides up the sloping
+/// isentropes and air advancing toward warmer air glides down them, whether
+/// the gradient is the weather's or the climate's.
+#[test]
+fn warm_advection_lifts_surface_air_and_cold_advection_lowers_it() {
+    // A gradient toward higher x drives the 45° N wind mostly northward.
+    let ascent_m = |anomaly_gradient_c_per_m: Vector, climate_gradient_c_per_m: Vector| {
+        derive_weather_at_surface_temperature(
+            AtmospherePrimary {
+                pressure_hpa: 1010.0,
+                pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+                synoptic_pressure_gradient_hpa_per_m: Vector::new(0.001, 0.0),
+                surface_gust_signal: 0.0,
+                surface_air_temperature_anomaly_c: 0.0,
+                air_temperature_500_hpa_c: -15.0,
+                local_temperature_gradient_c_per_m: anomaly_gradient_c_per_m,
+                water_vapor_g_kg: 8.0,
+                surface_wind_convergence_per_s: 0.0,
+                surface_wind_strain_per_s: 0.0,
+                climate_air_temperature_gradient_c_per_m: climate_gradient_c_per_m,
+                regional: Default::default(),
+            },
+            20.0,
+        )
+        .ascent_m
+    };
+    let colder_north = Vector::new(0.0, -0.001);
+
+    for (label, warm, cold) in [
+        (
+            "weather",
+            ascent_m(colder_north, Vector::ZERO),
+            ascent_m(-colder_north, Vector::ZERO),
+        ),
+        (
+            "climate",
+            ascent_m(Vector::ZERO, colder_north),
+            ascent_m(Vector::ZERO, -colder_north),
+        ),
+    ] {
+        assert!(warm > 0.0, "{label} warm advection moved air {warm} m");
+        assert!(cold < 0.0, "{label} cold advection moved air {cold} m");
+    }
+}
+
+/// Converging air rises until the converging pattern dissolves, so weak
+/// convergence lifts it less than strong convergence of the same shape.
+#[test]
+fn weak_convergence_lifts_surface_air_less_than_strong_convergence() {
+    let ascent_m = |convergence_per_s: f32| {
+        derive_weather_at_surface_temperature(
+            AtmospherePrimary {
+                pressure_hpa: 1010.0,
+                pressure_gradient_hpa_per_m: Vector::ZERO,
+                synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
+                surface_gust_signal: 0.0,
+                surface_air_temperature_anomaly_c: 0.0,
+                air_temperature_500_hpa_c: -15.0,
+                local_temperature_gradient_c_per_m: Vector::ZERO,
+                water_vapor_g_kg: 8.0,
+                surface_wind_convergence_per_s: convergence_per_s,
+                surface_wind_strain_per_s: 0.5 * convergence_per_s,
+                climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+                regional: Default::default(),
+            },
+            20.0,
+        )
+        .ascent_m
+    };
+
+    let weak_m = ascent_m(1.0e-4);
+    let strong_m = ascent_m(1.0e-2);
+    assert!(
+        weak_m < 0.5 * strong_m,
+        "weak convergence lifted air {weak_m} m, strong {strong_m} m"
+    );
+    assert!(
+        strong_m <= 1_000.0,
+        "strong convergence lifted air {strong_m} m"
+    );
+}
+
+/// Ekman pumping lifts a cyclone's centre most: its rotation keeps converging
+/// air there instead of carrying it out, so most of the centre's boundary
+/// layer rises through its top.
+#[test]
+fn low_pressure_centres_lift_most_of_the_boundary_layer_and_more_than_their_surroundings() {
+    let (mut lows, mut centre_ascent, mut ring_ascent) = (0, 0.0, 0.0);
+    let (mut centre_cover, mut ring_cover) = (0.0, 0.0);
+    for seed in 0..48_u64 {
+        let tick = 1_000 + seed * 7_654_321;
+        for start in 0..16 {
+            let mut position_m = Vector::new(
+                (start % 4) as f32 * 8_000.0 - 12_000.0,
+                (start / 4) as f32 * 8_000.0 - 12_000.0,
+            );
+            for _ in 0..200 {
+                let gradient = procedural_atmosphere_primary(seed, tick, position_m)
+                    .pressure_gradient_hpa_per_m;
+                position_m -= 2.0e5 * gradient;
+            }
+            let centre = procedural_weather(seed, tick, position_m);
+            let ring: Vec<_> = (0..8)
+                .map(|step| {
+                    let angle = step as f32 * std::f32::consts::FRAC_PI_4;
+                    procedural_weather(
+                        seed,
+                        tick,
+                        position_m + 250.0 * Vector::new(angle.cos(), angle.sin()),
+                    )
+                })
+                .collect();
+            if ring
+                .iter()
+                .any(|weather| weather.primary.pressure_hpa <= centre.primary.pressure_hpa)
+            {
+                continue;
+            }
+            lows += 1;
+            centre_ascent += centre.ascent_m;
+            centre_cover += centre.cloudiness;
+            ring_ascent += ring.iter().map(|weather| weather.ascent_m).sum::<f32>() / 8.0;
+            ring_cover += ring.iter().map(|weather| weather.cloudiness).sum::<f32>() / 8.0;
+        }
+    }
+
+    assert!(lows >= 100, "only {lows} low-pressure centres found");
+    assert!(
+        centre_ascent / lows as f32 > 500.0,
+        "mean ascent {} m at centres, not most of the 1 km boundary layer",
+        centre_ascent / lows as f32,
+    );
+    assert!(
+        centre_ascent >= ring_ascent,
+        "mean ascent {} m at centres, {} m around them",
+        centre_ascent / lows as f32,
+        ring_ascent / lows as f32,
+    );
+    assert!(
+        centre_cover >= ring_cover,
+        "mean cover {} at centres, {} around them",
+        centre_cover / lows as f32,
+        ring_cover / lows as f32,
+    );
+}
+
+/// Net inflow of the resolved surface wind per unit area, the convergence, from
+/// its flux through an eight-point circle of `radius_m`.
+fn resolved_wind_net_inflow_per_s(
+    match_seed: u64,
+    tick: u64,
+    position_m: Vector,
+    radius_m: f32,
+) -> f32 {
+    let flux_m2_s: f32 = (0..8)
+        .map(|step| {
+            let normal = Vector::from_angle(step as f32 * std::f32::consts::FRAC_PI_4);
+            let weather = procedural_weather(match_seed, tick, position_m + radius_m * normal);
+            (weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s).dot(normal)
+        })
+        .sum::<f32>()
+        * (2.0 * std::f32::consts::PI * radius_m / 8.0);
+    -flux_m2_s / (std::f32::consts::PI * radius_m * radius_m)
+}
+
+#[test]
+fn surface_air_rises_where_the_resolved_wind_converges_within_the_boundary_layer() {
+    let mut samples = Vec::new();
+    for seed in 0..256_u64 {
+        let tick = 1_000 + seed * 7_654_321;
+        for start in 0..16 {
+            let position_m = Vector::new(
+                (start % 4) as f32 * 8_000.0 - 12_000.0,
+                (start / 4) as f32 * 8_000.0 - 12_000.0,
+            );
+            let weather = procedural_weather(seed, tick, position_m);
+            assert!(
+                weather.ascent_m.abs() <= 1_000.0,
+                "ascent {} m",
+                weather.ascent_m
+            );
+            // Where the wind runs along the isotherms, no air glides across them.
+            let wind = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
+            let temperature_gradient = weather.primary.local_temperature_gradient_c_per_m
+                + weather.primary.climate_air_temperature_gradient_c_per_m;
+            if wind.normalize().dot(temperature_gradient.normalize()).abs() >= 0.05 {
+                continue;
+            }
+            let inflow_per_s = resolved_wind_net_inflow_per_s(seed, tick, position_m, 20.0);
+            samples.push((inflow_per_s, weather.ascent_m));
+        }
+    }
+    let mut inflows: Vec<f32> = samples.iter().map(|sample| sample.0.abs()).collect();
+    inflows.sort_by(f32::total_cmp);
+    let median_inflow_per_s = inflows[inflows.len() / 2];
+
+    // Where inflow is strong, its sign cannot hinge on how it is measured.
+    let strong: Vec<_> = samples
+        .iter()
+        .filter(|sample| sample.0.abs() > median_inflow_per_s)
+        .collect();
+    let disagreeing = strong
+        .iter()
+        .filter(|sample| (sample.0 > 0.0) != (sample.1 > 0.0))
+        .count();
+    assert_eq!(
+        disagreeing,
+        0,
+        "{disagreeing} of {} strongly converging or diverging samples along the isotherms moved air against the flow",
+        strong.len(),
+    );
+}
+
+#[test]
+fn rain_needs_cloud_water_beyond_a_threshold_and_stays_under_the_cloud() {
+    let surface_g_kg = surface_saturation_g_kg();
+    let half_g_kg = half_cover_total_water_g_kg(true);
+    let mut previous_rain = 0.0;
+    let mut first_rain_g_kg = None;
+    for step in 0..=150 {
+        let total_water_g_kg = (0.5 + 0.01 * step as f32) * surface_g_kg;
+        let weather = low_cloud_weather(true, total_water_g_kg);
+        assert!(
+            weather.rain_intensity <= weather.cloudiness,
+            "rain {} under cover {}",
+            weather.rain_intensity,
+            weather.cloudiness,
+        );
+        assert!(weather.rain_intensity >= previous_rain);
+        if weather.rain_intensity > 0.0 && first_rain_g_kg.is_none() {
+            first_rain_g_kg = Some(total_water_g_kg);
+        }
+        previous_rain = weather.rain_intensity;
+    }
+    let first_rain_g_kg = first_rain_g_kg.expect("lifted moist air never rained");
+    assert!(
+        first_rain_g_kg > half_g_kg,
+        "rain began at {first_rain_g_kg} g/kg, below half cover at {half_g_kg}"
+    );
+    assert!(previous_rain > 0.5, "{previous_rain}");
+}
+
+#[test]
+fn total_water_above_saturation_is_not_capped() {
+    let surface_g_kg = surface_saturation_g_kg();
+    let weather = low_cloud_weather(true, 2.0 * surface_g_kg);
+
+    assert!(
+        (weather.relative_humidity - 2.0).abs() < 1.0e-3,
+        "{}",
+        weather.relative_humidity
+    );
+    assert_eq!(weather.cloudiness, 1.0);
+    assert!(weather.rain_intensity > low_cloud_weather(true, 1.5 * surface_g_kg).rain_intensity);
+    assert!(weather.rain_intensity < 1.0);
 }
 
 #[test]
@@ -2209,6 +2722,10 @@ fn day_night_temperature_changes_precipitation() {
         air_temperature_500_hpa_c: -30.0,
         local_temperature_gradient_c_per_m: Vector::new(0.0005, 0.0),
         water_vapor_g_kg: 4.0,
+        surface_wind_convergence_per_s: 0.01,
+        surface_wind_strain_per_s: 0.0,
+        climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+        regional: Default::default(),
     };
     let night = derive_weather(primary, climate, conditions(0.125));
     let afternoon = derive_weather(primary, climate, conditions(0.625));
@@ -2442,7 +2959,7 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
             weather.cloudiness,
             procedural_cloud_cover(seed, 12_345, position_m)
         );
-        assert!((0.0..=1.5).contains(&weather.relative_humidity));
+        assert!(weather.relative_humidity >= 0.0);
         assert!((0.0..=1.0).contains(&weather.lift));
         assert!((0.0..=1.0).contains(&weather.instability));
         assert!((0.0..=1.0).contains(&weather.upper_cloudiness));
@@ -2462,7 +2979,7 @@ fn procedural_weather_composes_shared_wind_clouds_and_rain() {
     assert!(instability_range.0 < 0.25, "{instability_range:?}");
     assert!(instability_range.1 > 0.75, "{instability_range:?}");
     assert!(high_cloud_samples > 0);
-    assert!(high_cloud_samples < 512);
+    assert!(high_cloud_samples < 1_024);
     assert!(
         upper_cloud_wind_change < full_wind_change,
         "upper/full wind change ratio was {}",

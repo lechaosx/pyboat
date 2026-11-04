@@ -2,12 +2,12 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
-    BakedSurfaceSizes, BakedSurfaceTextures, ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXELS,
-    FieldGridHistory, FieldGridTuning, FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER,
-    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, TerrainCache,
-    TerrainCacheFrame, TerrainCachePass, baked_surface_sizes, exposure_target, field_grids,
-    ocean_wave_mode_uniforms, sample_view_cloud_state, seasonal_phase_factors, view_width_m,
-    visual_pixel_footprint_m,
+    BakedSurfaceSizes, BakedSurfaceTextures, ENVIRONMENT_FIELD_LAYERS,
+    ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning, FieldGrids,
+    GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS,
+    SETTLED_ADAPTATION_SECONDS, TerrainCache, TerrainCacheFrame, TerrainCachePass,
+    baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
+    sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -273,7 +273,7 @@ impl CaptureFields {
         };
         let environment_texture = field_texture(
             "capture environment fields",
-            ENVIRONMENT_FIELD_TEXELS,
+            ENVIRONMENT_FIELD_TEXTURE_TEXELS,
             ENVIRONMENT_FIELD_LAYERS,
             wgpu::TextureFormat::Rgba32Float,
         );

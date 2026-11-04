@@ -227,8 +227,8 @@ fn cloud_shadow_extinction(ray: CloudRay) -> f32 {
 
 // Share of the sky that convection covers with cumulus: unstable air over
 // land in the afternoon, under whatever sunlight the deck lets through, or
-// over water warmer than the air; heavy rain belongs to the deck. Convective
-// cumulus seldom cover more than about half of the sky.
+// over water warmer than the air. Convective cumulus seldom cover more than
+// about half of the sky.
 fn cumulus_cover(weather: CloudWeatherSample) -> f32 {
     let convection = smoothstep(0.12, 0.68, weather.instability)
         * (1.0 - 0.90 * weather.stratiform);
@@ -243,12 +243,8 @@ fn cumulus_cover(weather: CloudWeatherSample) -> f32 {
         weather.land_heating * canopy_sunlight,
         weather.land_fraction,
     );
-    let storm_clearing = 1.0 - smoothstep(0.30, 0.70, weather.rain);
     // 0.7 is the share of low cover that convection organises into cells.
-    return min(
-        0.7 * weather.low_coverage * convection * surface_heating * storm_clearing,
-        0.5,
-    );
+    return min(0.7 * weather.low_coverage * convection * surface_heating, 0.5);
 }
 
 fn cumulus_depth_amount(weather: CloudWeatherSample) -> f32 {

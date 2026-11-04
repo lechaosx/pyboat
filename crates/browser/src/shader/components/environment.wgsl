@@ -287,6 +287,11 @@ fn pressure_at(position_m: vec2<f32>) -> vec3<f32> {
     );
 }
 
+// Mirror the slab turning of `wind_from_pressure_gradient` in
+// crates/game/src/lib.rs, which records its sources.
+const EARTH_ROTATION_RATE_RAD_S: f32 = 7.292e-5;
+const BOUNDARY_LAYER_FRICTION_VELOCITY_M_S: f32 = 0.018;
+
 fn wind_from_pressure_gradient(
     pressure_gradient_hpa_per_m: vec2<f32>,
     latitude_degrees: f32,
@@ -295,16 +300,10 @@ fn wind_from_pressure_gradient(
     if gradient_length == 0.0 {
         return vec2<f32>(0.0);
     }
-    let latitude_sine = sin(radians(latitude_degrees));
-    let normalized_coriolis = clamp((abs(latitude_sine) - 0.02) / 0.23, 0.0, 1.0);
-    let geostrophic_amount = normalized_coriolis * normalized_coriolis
-        * (3.0 - 2.0 * normalized_coriolis);
-    let hemisphere = select(1.0, -1.0, latitude_sine < 0.0);
-    let along_isobar = hemisphere * rotate_left(pressure_gradient_hpa_per_m);
-    let toward_low = -pressure_gradient_hpa_per_m;
-    let cross_isobar_fraction = 0.12;
-    let flow = geostrophic_amount * along_isobar
-        + (1.0 - geostrophic_amount * (1.0 - cross_isobar_fraction)) * toward_low;
+    let coriolis_per_s = 2.0 * EARTH_ROTATION_RATE_RAD_S * sin(radians(latitude_degrees));
+    let friction_per_s = BOUNDARY_LAYER_FRICTION_VELOCITY_M_S / BOUNDARY_LAYER_DEPTH_M;
+    let flow = coriolis_per_s * rotate_left(pressure_gradient_hpa_per_m)
+        - friction_per_s * pressure_gradient_hpa_per_m;
     return 6000.0 * gradient_length * normalize(flow);
 }
 
@@ -315,6 +314,34 @@ fn resolved_surface_wind_m_s_from_pressure(
     return wind_from_pressure_gradient(
         pressure.gradient_m_s / 6000.0,
         surface_latitude_degrees_at(position_m),
+    );
+}
+
+// Mirrors `resolved_surface_wind_gradient` in crates/game/src/lib.rs, its step,
+// and the converging pattern's evolution rate: the resolved surface wind's
+// convergence, then the magnitude of its strain, from the resolved pressure
+// gradient at `position_m`.
+const WIND_GRADIENT_STEP_M: f32 = 5.0;
+const RESOLVED_PRESSURE_EVOLUTION_PER_S: f32 = 6.0 / 960.0;
+
+fn resolved_surface_wind_gradient_at(
+    position_m: vec2<f32>,
+    gradient_m_s: vec2<f32>,
+) -> vec2<f32> {
+    if environment_feature_visibility().x <= 0.0 {
+        return vec2<f32>(0.0);
+    }
+    let east_m = position_m + vec2<f32>(WIND_GRADIENT_STEP_M, 0.0);
+    let north_m = position_m + vec2<f32>(0.0, WIND_GRADIENT_STEP_M);
+    let centre = wind_from_pressure_gradient(
+        gradient_m_s / 6000.0,
+        surface_latitude_degrees_at(position_m),
+    );
+    let along_x = (resolved_surface_wind_m_s_at(east_m) - centre) / WIND_GRADIENT_STEP_M;
+    let along_y = (resolved_surface_wind_m_s_at(north_m) - centre) / WIND_GRADIENT_STEP_M;
+    return vec2<f32>(
+        -(along_x.x + along_y.y),
+        length(vec2<f32>(along_x.x - along_y.y, along_y.x + along_x.y)),
     );
 }
 
@@ -541,6 +568,66 @@ fn surface_climate_sample_at(position_m: vec2<f32>) -> SurfaceClimateSample {
         latitude_curve_value(CLIMATE_DIURNAL_RANGE_C, latitude_degrees),
         surface_local_solar_phase_at(position_m),
         surface_diurnal_temperature_factor_at(position_m),
+    );
+}
+
+// The climatological air temperature without its daily cycle, as
+// `current_air_temperature_c` in crates/game/src/lib.rs gives it without its
+// diurnal range.
+fn climate_air_temperature_c_at_latitude(latitude_degrees: f32) -> f32 {
+    let seasonal_magnitude = smoothstep(0.0, 45.0, abs(latitude_degrees));
+    let seasonal_latitude_factor = select(
+        seasonal_magnitude,
+        -seasonal_magnitude,
+        latitude_degrees < 0.0,
+    );
+    return latitude_curve_value(CLIMATE_ANNUAL_MEAN_C, latitude_degrees)
+        + 0.5 * latitude_curve_value(CLIMATE_SEASONAL_RANGE_C, latitude_degrees)
+            * seasonal_latitude_factor
+            * scene.seasonal_phase_factors.x;
+}
+
+// Mirrors `climate_air_temperature_gradient_c_per_m` in crates/game/src/lib.rs
+// and its step.
+const CLIMATE_GRADIENT_STEP_M: f32 = 30.0;
+
+fn climate_air_temperature_gradient_at(position_m: vec2<f32>) -> vec2<f32> {
+    let step = vec2<f32>(0.0, CLIMATE_GRADIENT_STEP_M);
+    return vec2<f32>(
+        0.0,
+        (climate_air_temperature_c_at_latitude(surface_latitude_degrees_at(position_m + step))
+            - climate_air_temperature_c_at_latitude(
+                surface_latitude_degrees_at(position_m - step),
+            )) / (2.0 * CLIMATE_GRADIENT_STEP_M),
+    );
+}
+
+// Warm advection and static stability of surface air, from which
+// `derive_weather` in crates/game/src/lib.rs glides it across the isotherms.
+fn surface_glide_conditions(
+    atmosphere: SurfaceAtmosphereSample,
+    upper_air_temperature_c: f32,
+    climate_temperature_gradient: vec2<f32>,
+) -> vec2<f32> {
+    let air_temperature_c = surface_current_air_temperature_c_from_atmosphere(
+        atmosphere.temperature_anomaly.value,
+        atmosphere.climate,
+    );
+    let pressure_hpa = 1013.25 + atmosphere.pressure.potential_m2_s / 6000.0;
+    let column_temperature_k = 0.5 * (air_temperature_c + upper_air_temperature_c) + 273.15;
+    let height_500_hpa_m = DRY_AIR_SCALE_HEIGHT_M_PER_K * column_temperature_k
+        * log(pressure_hpa / 500.0);
+    let resolved_wind_m_s = wind_from_pressure_gradient(
+        atmosphere.pressure.gradient_m_s / 6000.0,
+        atmosphere.climate.latitude_degrees,
+    );
+    return vec2<f32>(
+        -dot(
+            resolved_wind_m_s,
+            atmosphere.temperature_anomaly.gradient + climate_temperature_gradient,
+        ),
+        DRY_ADIABATIC_LAPSE_RATE_C_PER_M
+            - (air_temperature_c - upper_air_temperature_c) / height_500_hpa_m,
     );
 }
 
@@ -792,7 +879,66 @@ fn upper_air_temperature_500_hpa_field_from_noise(
 }
 
 fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
-    return 3.5 * exp(0.055 * (air_temperature_c + 5.0));
+    return 3.5 * exp(SATURATION_GROWTH_PER_C * (air_temperature_c + 5.0));
+}
+
+// The low cloud scheme and its constants follow `low_cloud` in
+// crates/game/src/lib.rs, which records their layers and sources; keep the two
+// synchronized.
+const SATURATION_GROWTH_PER_C: f32 = 0.055;
+const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
+const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
+const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
+const BOUNDARY_LAYER_DEPTH_M: f32 = 1000.0;
+const CONDENSATION_LEVEL_M_PER_C: f32 = 125.0;
+const SURFACE_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.96;
+const CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.80;
+const CLOUD_LEVEL_HEIGHT_M: f32 = 850.0;
+const AUTOCONVERSION_THRESHOLD_G_KG: f32 = 0.5;
+const BERGERON_ONSET_C: f32 = -5.0;
+const BERGERON_RANGE_C: f32 = 20.0;
+const BERGERON_GAIN_PER_SQRT_C: f32 = 0.5;
+
+// Low cloud cover and the rain index under it.
+fn low_cloud(
+    total_water_g_kg: f32,
+    surface_air_temperature_c: f32,
+    lifted_m: f32,
+) -> vec2<f32> {
+    let parcel_temperature_c = surface_air_temperature_c
+        - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
+    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(parcel_temperature_c);
+    let critical_relative_humidity = SURFACE_CRITICAL_RELATIVE_HUMIDITY
+        + (CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY - SURFACE_CRITICAL_RELATIVE_HUMIDITY)
+            * min(lifted_m / CLOUD_LEVEL_HEIGHT_M, 1.0);
+    let spread_g_kg = (1.0 - critical_relative_humidity) * saturation_g_kg;
+    let excess = (total_water_g_kg - saturation_g_kg) / spread_g_kg;
+    var cover = 0.0;
+    var condensate_per_spread = 0.0;
+    if excess >= 1.0 {
+        cover = 1.0;
+        condensate_per_spread = excess;
+    } else if excess > 0.0 {
+        let fall = 1.0 - excess;
+        cover = 1.0 - 0.5 * fall * fall;
+        condensate_per_spread = excess + fall * fall * fall / 6.0;
+    } else if excess > -1.0 {
+        let rise = 1.0 + excess;
+        cover = 0.5 * rise * rise;
+        condensate_per_spread = rise * rise * rise / 6.0;
+    }
+    let latent_heating_factor = 1.0
+        / (1.0 + LATENT_WARMING_C_PER_G_KG * SATURATION_GROWTH_PER_C * saturation_g_kg);
+    let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
+    let bergeron_factor = 1.0 + BERGERON_GAIN_PER_SQRT_C * sqrt(
+        clamp(BERGERON_ONSET_C - parcel_temperature_c, 0.0, BERGERON_RANGE_C),
+    );
+    let threshold_g_kg = AUTOCONVERSION_THRESHOLD_G_KG / bergeron_factor;
+    var rain_index = 0.0;
+    if cloud_water_g_kg > 0.0 {
+        rain_index = max(cover * (1.0 - cover * threshold_g_kg / cloud_water_g_kg), 0.0);
+    }
+    return vec2<f32>(cover, rain_index);
 }
 
 fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
@@ -945,11 +1091,8 @@ fn climate_moisture_support_from_water_vapor(
     air_temperature_c: f32,
     water_vapor_g_kg: f32,
 ) -> f32 {
-    let relative_humidity = clamp(
-        water_vapor_g_kg / water_vapor_saturation_capacity_g_kg(air_temperature_c),
-        0.0,
-        1.5,
-    );
+    let relative_humidity = water_vapor_g_kg
+        / water_vapor_saturation_capacity_g_kg(air_temperature_c);
     return smoothstep(0.45, 0.95, relative_humidity);
 }
 
@@ -1199,12 +1342,8 @@ fn regional_cloud_drivers_from_fields(
     );
     let regional_air_temperature_c = climate_air_temperature_c
         + broad_surface_temperature_anomaly_c;
-    let relative_humidity = clamp(
-        regional_water_vapor_g_kg
-            / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c),
-        0.0,
-        1.5,
-    );
+    let relative_humidity = regional_water_vapor_g_kg
+        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c);
     let broad_pressure_hpa = 1013.25 + broad_pressure_potential_m2_s / 6000.0;
     return RegionalCloudDrivers(
         relative_humidity,
@@ -1241,25 +1380,39 @@ fn cloud_weather_from_atmosphere(
         return cloud_weather_from_atmosphere_and_upper_air(
             atmosphere,
             AtmosphereScalarField(0.0, 0.0),
+            vec2<f32>(0.0),
+            vec2<f32>(0.0),
         );
     }
+    let upper_air_temperature = upper_air_temperature_500_hpa_field_from_atmosphere(
+        position_m,
+        atmosphere.temperature_anomaly.value,
+        atmosphere.broad_temperature_anomaly_c,
+        atmosphere.climate,
+    );
     return cloud_weather_from_atmosphere_and_upper_air(
         atmosphere,
-        upper_air_temperature_500_hpa_field_from_atmosphere(
-            position_m,
-            atmosphere.temperature_anomaly.value,
-            atmosphere.broad_temperature_anomaly_c,
-            atmosphere.climate,
+        upper_air_temperature,
+        resolved_surface_wind_gradient_at(position_m, atmosphere.pressure.gradient_m_s),
+        surface_glide_conditions(
+            atmosphere,
+            upper_air_temperature.value,
+            climate_air_temperature_gradient_at(position_m),
         ),
     );
 }
 
+// `wind_gradient` and `glide` are what `resolved_surface_wind_gradient_at` and
+// `surface_glide_conditions` return.
 fn cloud_weather_from_atmosphere_and_upper_air(
     atmosphere: SurfaceAtmosphereSample,
     upper_air_temperature: AtmosphereScalarField,
+    wind_gradient: vec2<f32>,
+    glide: vec2<f32>,
 ) -> CloudWeatherSample {
     if environment_feature_visibility().w <= 0.0 {
         return CloudWeatherSample(
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -1283,11 +1436,7 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         atmosphere.climate,
     );
     let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(air_temperature_c);
-    let relative_humidity = clamp(
-        atmosphere.water_vapor_g_kg / saturation_capacity_g_kg,
-        0.0,
-        1.5,
-    );
+    let relative_humidity = atmosphere.water_vapor_g_kg / saturation_capacity_g_kg;
     let temperature_gradient = surface_anomaly.gradient;
     // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
     // stand in for a parcel buoyancy index.
@@ -1296,7 +1445,8 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         48.0,
         air_temperature_c - upper_air_temperature.value,
     );
-    // Low pressure, pressure gradient, and fronts stand in for unresolved ascent.
+    // Low pressure, pressure gradient, and fronts stand in for the deep ascent
+    // that the deck needs.
     let pressure_lift = 1.0 - smoothstep(990.0, 1012.0, pressure.x);
     let gradient_lift = smoothstep(0.0002, 0.0015, length(pressure.yz));
     let frontal_lift = smoothstep(
@@ -1309,22 +1459,25 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         0.0,
         1.0,
     );
-    let condensation = smoothstep(0.45, 0.95, relative_humidity);
-    let signal = 0.68 * condensation
-        + 0.22 * lift
-        + 0.10 * instability * condensation;
-    let low_coverage = smoothstep(0.50, 1.01, signal);
-    let rain_signal = smoothstep(0.65, 0.75, low_coverage)
-        * low_coverage
-        * (0.45 + 0.20 * instability + 0.45 * lift);
-    let rain = smoothstep(0.55, 0.90, rain_signal);
+    // As `derive_weather` in crates/game/src/lib.rs lifts and glides surface air.
+    var stretching_per_s = wind_gradient.x;
+    if glide.y > 0.0 {
+        stretching_per_s += glide.x / (glide.y * BOUNDARY_LAYER_DEPTH_M);
+    }
+    var ascent_m = BOUNDARY_LAYER_DEPTH_M * stretching_per_s
+        / length(vec3<f32>(stretching_per_s, wind_gradient.y, RESOLVED_PRESSURE_EVOLUTION_PER_S));
+    if glide.y <= 0.0 && glide.x != 0.0 {
+        ascent_m = BOUNDARY_LAYER_DEPTH_M * sign(glide.x);
+    }
+    let low = low_cloud(atmosphere.water_vapor_g_kg, air_temperature_c, max(ascent_m, 0.0));
 
     var weather: CloudWeatherSample;
     weather.relative_humidity = relative_humidity;
     weather.instability = instability;
     weather.lift = lift;
-    weather.low_coverage = low_coverage;
-    weather.rain = rain;
+    weather.ascent_m = ascent_m;
+    weather.low_coverage = low.x;
+    weather.rain = low.y;
     weather.stratiform = clamp(
         smoothstep(0.78, 1.05, relative_humidity)
             * (1.0 - instability)
@@ -1390,9 +1543,17 @@ fn surface_gust_velocity_m_s_at(
     let mechanical_gust_speed_m_s = 0.27
         * (1.0 + 0.35 * weather.instability)
         * length(resolved_surface_wind_m_s);
-    let convective_activity = weather.instability
-        * smoothstep(0.65, 0.95, weather.relative_humidity)
-        * smoothstep(0.35, 0.80, weather.lift);
+    let condensation_level_m = CONDENSATION_LEVEL_M_PER_C
+        * max(-log(weather.relative_humidity), 0.0)
+        / SATURATION_GROWTH_PER_C;
+    var condensation_level_reach = 0.0;
+    if weather.ascent_m > 0.0 {
+        condensation_level_reach = 1.0;
+        if weather.ascent_m < condensation_level_m {
+            condensation_level_reach = weather.ascent_m / condensation_level_m;
+        }
+    }
+    let convective_activity = weather.instability * condensation_level_reach;
     let convective_gust_speed_m_s = 0.60
         * convective_activity
         * max(length(upper_wind_m_s) - length(resolved_surface_wind_m_s), 0.0);

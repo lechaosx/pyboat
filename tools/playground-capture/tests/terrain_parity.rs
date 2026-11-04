@@ -417,6 +417,132 @@ fn rendered_instability_matches_authoritative_rust_upper_air() {
 }
 
 #[test]
+fn rendered_low_cloud_and_rain_match_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let (mut compared_cover, mut compared_rain) = (0, 0);
+    for index in 0..4096 {
+        if compared_cover >= 6 && compared_rain >= 6 {
+            break;
+        }
+        let position_m = Vector::new(
+            (index % 32) as f32 * 1_900.0 - 30_000.0,
+            (index / 32 % 32) as f32 * 1_950.0 - 31_000.0,
+        );
+        let world_time_seconds = (index / 1024) as f64 * 21_600.0;
+        let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+        let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
+        for (diagnostic, expected, compared) in [
+            (
+                "weather_low_coverage",
+                weather.cloudiness,
+                &mut compared_cover,
+            ),
+            ("weather_rain", weather.rain_intensity, &mut compared_rain),
+        ] {
+            // Partial values show the whole scheme; saturated ones hide it.
+            if !(0.05..=0.95).contains(&expected) || *compared >= 6 {
+                continue;
+            }
+            let actual = scalar_debug_amount(&render_diagnostic_image_at(
+                world,
+                position_m,
+                world_time_seconds,
+                diagnostic,
+                1,
+                1,
+            ));
+            assert!(
+                (actual - expected).abs() < 0.05,
+                "{diagnostic} at {position_m:?}: rendered {actual}, Rust {expected}",
+            );
+            *compared += 1;
+        }
+    }
+    assert!(
+        compared_cover >= 6 && compared_rain >= 6,
+        "only {compared_cover} partial cover and {compared_rain} partial rain positions",
+    );
+}
+
+#[test]
+fn rendered_deck_cover_matches_authoritative_rust_upper_cloudiness() {
+    let world = WorldGeometry::default();
+    let mut compared = 0;
+    for index in 0..4096 {
+        if compared >= 8 {
+            break;
+        }
+        let position_m = Vector::new(
+            (index % 32) as f32 * 1_900.0 - 30_000.0,
+            (index / 32 % 32) as f32 * 1_950.0 - 31_000.0,
+        );
+        let world_time_seconds = (index / 1024) as f64 * 21_600.0;
+        let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+        let expected = procedural_world_environment(world, SEED, tick, position_m)
+            .weather
+            .upper_cloudiness;
+        // Partial values show the whole formula; saturated ones hide it.
+        if !(0.05..=0.95).contains(&expected) {
+            continue;
+        }
+        let actual = scalar_debug_amount(&render_diagnostic_image_at(
+            world,
+            position_m,
+            world_time_seconds,
+            "lighting_ambient_sky_occlusion",
+            1,
+            1,
+        ));
+        assert!(
+            (actual - expected).abs() < 0.05,
+            "deck cover at {position_m:?}: rendered {actual}, Rust {expected}",
+        );
+        compared += 1;
+    }
+    assert!(compared >= 8, "only {compared} partial deck covers");
+}
+
+#[test]
+fn rendered_resolved_wind_direction_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let mut tropical = 0;
+    for index in 0..24 {
+        let position_m = Vector::new(
+            index as f32 * 2_700.0 - 30_000.0,
+            (index as f32 + 0.5) / 24.0 * world.height_m() - 0.5 * world.height_m(),
+        );
+        let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
+        let expected = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
+        if expected.length() < 0.5 {
+            continue;
+        }
+        // A one-metre view leaves the diagnostic's pressure unfiltered.
+        let pixel = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            0.0,
+            1.0,
+            "wind_resolved_surface",
+            1,
+            1,
+        );
+        // The diagnostic colours direction (x, y) as (1 + x, 1 + y, 1 - x) / 2,
+        // scaled by a speed-dependent brightness.
+        let [red, green, blue] = [0, 1, 2].map(|channel| srgb_channel_to_linear(pixel[channel]));
+        let brightness = red + blue;
+        let actual = Vector::new((red - blue) / brightness, 2.0 * green / brightness - 1.0);
+        let difference_degrees = actual.angle_to(expected).to_degrees().abs();
+        assert!(
+            difference_degrees < 2.0,
+            "resolved wind at {position_m:?}, latitude {}: rendered direction {actual:?}, Rust {expected:?}",
+            world.latitude_degrees(position_m.y),
+        );
+        tropical += usize::from(world.latitude_degrees(position_m.y).abs() < 20.0);
+    }
+    assert!(tropical >= 4, "only {tropical} tropical positions compared");
+}
+
+#[test]
 fn rendered_snow_cover_matches_authoritative_rust() {
     let world = WorldGeometry::default();
     let world_time_seconds = world_time_for_season_phase(0.06);
@@ -2681,7 +2807,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
     };
     // The comparison needs a morning whose clouds or their shadows cross the seam.
     let mut best_occluder_maximum = 0;
-    let (world_time_seconds, direct) = (0..16)
+    let (world_time_seconds, direct, without_occluders) = (0..16)
         .map(|day| (day as f64 + 0.25) * 86_400.0)
         .find_map(|world_time_seconds| {
             let direct = render_direct(world_time_seconds, &[]);
@@ -2708,7 +2834,7 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
                 .max()
                 .unwrap();
             best_occluder_maximum = best_occluder_maximum.max(occluder_maximum);
-            (occluder_maximum > 3).then_some((world_time_seconds, direct))
+            (occluder_maximum > 3).then_some((world_time_seconds, direct, without_occluders))
         })
         .unwrap_or_else(|| {
             panic!(
@@ -2736,41 +2862,51 @@ fn grid_scene_matches_direct_scene_across_longitude_seam() {
                 / 3.0
         })
         .collect::<Vec<_>>();
-    let mean = differences.iter().sum::<f32>() / differences.len() as f32;
-    // Away from the seam, coarsened cloud shadow grids soften small cloud
-    // edges, which costs a share of the direct light those edges receive.
-    let without_direct_light =
-        render_direct(world_time_seconds, &[("--light-contributions", "0,0,1,1")]);
-    let direct_light = direct
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(without_direct_light.as_chunks::<4>().0.iter())
-        .map(|(lit, unlit)| {
-            (0..3)
-                .map(|channel| lit[channel].abs_diff(unlit[channel]) as f32)
-                .sum::<f32>()
-                / 3.0
-        })
-        .sum::<f32>()
-        / differences.len() as f32;
     let seam_maximum = differences
         .chunks(256)
         .flat_map(|row| &row[seam_column - 8..seam_column + 8])
         .copied()
         .fold(0.0, f32::max);
+    // The grids soften cloud shadows where their light changes across the view,
+    // so their difference is judged per unit of that change.
+    let shade = direct
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(without_occluders.as_chunks::<4>().0.iter())
+        .map(|(direct, bare)| {
+            (0..3)
+                .map(|channel| f32::from(direct[channel]) - f32::from(bare[channel]))
+                .sum::<f32>()
+                / 3.0
+        })
+        .collect::<Vec<_>>();
+    let mut shadow_edge = 0.0;
+    for y in 0..127 {
+        for x in 0..255 {
+            let index = y * 256 + x;
+            shadow_edge +=
+                (shade[index + 1] - shade[index]).abs() + (shade[index + 256] - shade[index]).abs();
+        }
+    }
+    shadow_edge /= (127 * 255) as f32;
+    let mean = differences.iter().sum::<f32>() / differences.len() as f32;
 
-    // The grids' softening measures 0.023-0.038 of direct light; a grid lookup
-    // that skips the longitude wrap measures 0.27.
-    assert!(
-        mean < 0.045 * direct_light,
-        "mean grid/direct byte difference {mean} against {direct_light} of direct light"
-    );
     // Grids soften opaque deck rims by up to about 5 bytes beside the seam and
-    // up to 10 in the columns elsewhere in this view where only cloud shadows differ.
+    // up to 10 in the columns elsewhere in this view where only cloud shadows
+    // differ. A grid lookup that skips the longitude wrap differs by 9 beside
+    // the seam.
     assert!(
         seam_maximum < 6.0,
         "maximum grid/direct byte difference beside the seam: {seam_maximum}"
+    );
+    // The grids' difference measures 0.252 of the shadow-edge content; a cloud
+    // weather lattice of 256 m instead of 120 m measures 0.36. The difference
+    // also counts deck rims, which the edge content does not, and in this 4 km
+    // view shadow texels of 8 or 16 m measure as 4 m do.
+    assert!(
+        mean < 0.3 * shadow_edge,
+        "mean grid/direct byte difference {mean} against {shadow_edge} of shadow-edge content"
     );
 }
 
@@ -4180,6 +4316,59 @@ fn projected_clouds_can_shadow_locally_clear_ground() {
     assert!(
         shadowed_clear_ground > 0,
         "no projected cloud crossed a clear-sky boundary"
+    );
+}
+
+/// Rain falls from the low cloud that convection organises into cumulus, so
+/// heavy rain over afternoon land keeps its cumulus overhead.
+#[test]
+fn heavily_raining_low_cloud_keeps_its_cumulus() {
+    let world = WorldGeometry::default();
+    let land = (0..64)
+        .flat_map(|y| {
+            (0..64).map(move |x| {
+                Vector::new(
+                    (x as f32 / 64.0 - 0.5) * world.width_m(),
+                    (y as f32 / 64.0 - 0.5) * world.height_m(),
+                )
+            })
+        })
+        .filter(|&position_m| procedural_terrain_elevation_m(world, SEED, position_m) > 0.0)
+        .collect::<Vec<_>>();
+    let (position_m, world_time_seconds, rain) = (2..=60)
+        .find_map(|day| {
+            land.iter().find_map(|&position_m| {
+                let afternoon_offset =
+                    (0.0417 - f64::from(position_m.x) / f64::from(world.width_m())).rem_euclid(1.0);
+                let world_time_seconds = 86_400.0 * (f64::from(day) + afternoon_offset);
+                let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+                let rain = procedural_world_environment(world, SEED, tick, position_m)
+                    .weather
+                    .rain_intensity;
+                (rain >= 0.7).then_some((position_m, world_time_seconds, rain))
+            })
+        })
+        .expect("no afternoon land cell rains heavily within 60 days");
+
+    let shadow = render_diagnostic_image_with_view_at(
+        world,
+        position_m,
+        world_time_seconds,
+        20.0,
+        "cloud_cumulus_shadow",
+        32,
+        32,
+    );
+    let shaded = shadow
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| scalar_debug_amount(*pixel) > 0.05)
+        .count();
+
+    assert!(
+        shaded > 0,
+        "no cumulus shadow under low cloud raining {rain}"
     );
 }
 

@@ -13,21 +13,39 @@ var environment_fields: texture_2d_array<f32>;
 
 // The scene lattice's layers, then the cloud weather lattice's; keep the total
 // synchronized with ENVIRONMENT_FIELD_LAYERS in field_grids.rs.
-const ENVIRONMENT_FIELD_LAYERS: u32 = 5u;
-const CUMULUS_DRIVER_FIELD: u32 = 5u;
-const DECK_DRIVER_FIELD: u32 = 6u;
-const GROUND_BOUNCE_FIELD: u32 = 7u;
+const ENVIRONMENT_FIELD_LAYERS: u32 = 6u;
+const CUMULUS_DRIVER_FIELD: u32 = 6u;
+const DECK_DRIVER_FIELD: u32 = 7u;
+const GROUND_BOUNCE_FIELD: u32 = 8u;
 
 struct EnvironmentFieldSample {
     atmosphere: AtmosphereNoiseSample,
+    // As `resolved_surface_wind_gradient_at` and `surface_glide_conditions`
+    // return them.
+    wind_gradient: vec2<f32>,
+    glide: vec2<f32>,
     upper_air_temperature: vec2<f32>,
     tide: SurfaceTideSample,
 }
 
 fn procedural_environment_field_sample(position_m: vec2<f32>) -> EnvironmentFieldSample {
+    let atmosphere = atmosphere_noise_sample_at(position_m);
+    let upper_air_temperature = upper_air_temperature_500_hpa_noise_at(position_m);
+    let surface = surface_atmosphere_sample_from_noise(position_m, atmosphere);
     return EnvironmentFieldSample(
-        atmosphere_noise_sample_at(position_m),
-        upper_air_temperature_500_hpa_noise_at(position_m),
+        atmosphere,
+        resolved_surface_wind_gradient_at(position_m, atmosphere.pressure.gradient_m_s),
+        surface_glide_conditions(
+            surface,
+            upper_air_temperature_500_hpa_field_from_noise(
+                surface.temperature_anomaly.value,
+                surface.broad_temperature_anomaly_c,
+                surface.climate,
+                upper_air_temperature,
+            ).value,
+            climate_air_temperature_gradient_at(position_m),
+        ),
+        upper_air_temperature,
         surface_tide_sample_at(position_m),
     );
 }
@@ -55,6 +73,7 @@ fn environment_field_layers(
             sample.tide.lag.value,
         ),
         vec4<f32>(sample.tide.response.gradient, sample.tide.lag.gradient),
+        vec4<f32>(sample.wind_gradient, sample.glide),
     );
 }
 
@@ -80,6 +99,8 @@ fn environment_field_sample_from_layers(
             layers[2].w,
             layers[3].xy,
         ),
+        layers[5].xy,
+        layers[5].zw,
         layers[1].zw,
         SurfaceTideSample(
             TerrainNoiseSample(layers[3].z, layers[4].xy),
@@ -137,6 +158,7 @@ fn environment_field_sample(position_m: vec2<f32>) -> EnvironmentFieldSample {
         environment_field_layer(lookup.texel, lookup.weight, 2u),
         environment_field_layer(lookup.texel, lookup.weight, 3u),
         environment_field_layer(lookup.texel, lookup.weight, 4u),
+        environment_field_layer(lookup.texel, lookup.weight, 5u),
     ));
 }
 
@@ -189,6 +211,8 @@ fn cloud_weather_field_from_environment_fields(
                 atmosphere.climate,
                 fields.upper_air_temperature,
             ),
+            fields.wind_gradient,
+            fields.glide,
         ),
     );
 }

@@ -151,7 +151,9 @@ fn assert_weather_seam_close(left: ProceduralWeather, right: ProceduralWeather) 
     assert_vector_close(left.wind_shear_m_s, right.wind_shear_m_s, 0.25);
     assert_close(left.relative_humidity, right.relative_humidity, 0.005);
     assert_close(left.lift, right.lift, 0.005);
-    assert_close(left.cloudiness, right.cloudiness, 0.005);
+    // Near the surface, low cover rises from clear to overcast within a few
+    // percent of saturation, so it can change by 0.006 across a half-metre gap.
+    assert_close(left.cloudiness, right.cloudiness, 0.01);
     assert_close(left.instability, right.instability, 0.005);
     assert_close(left.upper_cloudiness, right.upper_cloudiness, 0.005);
     assert_close(left.rain_intensity, right.rain_intensity, 0.01);
