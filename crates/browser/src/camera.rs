@@ -71,6 +71,21 @@ impl DroneCamera {
         })
     }
 
+    /// The scale n that the eye ray's offset takes at the highest broad
+    /// landform, the near plane of the terrain depth. A surface at elevation z
+    /// lies at depth 1 − n / (1 − z / H), and every depth from sea level's,
+    /// 1 − n, up to the cleared 1 decodes to sea level. Keep
+    /// synchronized with `vertex_terrain_depth` in terrain-depth-entry.wgsl
+    /// and `terrain_hit_scale` in terrain-depth.wgsl.
+    pub fn terrain_depth_near_scale(&self) -> f32 {
+        1.0 - BROAD_LANDFORM_HIGHEST_M as f32 / self.height_m
+    }
+
+    pub fn elevation_at_terrain_depth_m(&self, depth: f32) -> f32 {
+        let near_scale = self.terrain_depth_near_scale();
+        self.height_m * (1.0 - near_scale / (1.0 - depth).max(near_scale))
+    }
+
     /// The first broad landform or sea surface point on the eye ray through
     /// `view_point`, with its elevation. The sea surface lies at mean sea
     /// level. A camera inside terrain sees its own position.

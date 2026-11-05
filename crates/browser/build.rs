@@ -5,6 +5,7 @@ mod diagnostics;
 
 const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/scene-state.wgsl",
+    "src/shader/components/terrain-depth.wgsl",
     "src/shader/components/vertex.wgsl",
     "src/shader/components/display.wgsl",
     "src/shader/components/adapting-field.wgsl",
@@ -47,6 +48,14 @@ fn main() {
         &production,
         &["vertex", "fragment", "fragment_illumination"],
         "scene-production.wgsl",
+    );
+    write_shader(
+        &compose(&[
+            &production,
+            &read_component("src/shader/terrain-depth-entry.wgsl"),
+        ]),
+        &["vertex_terrain_depth"],
+        "terrain-depth.wgsl",
     );
     write_shader(
         &compose(&[&production, &read_component("src/shader/boat-sprite.wgsl")]),

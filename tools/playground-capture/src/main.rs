@@ -2,10 +2,10 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
-    BakedSurfaceSizes, BakedSurfaceTextures, ENVIRONMENT_FIELD_LAYERS,
+    BakedSurfaceSizes, BakedSurfaceTextures, DroneCamera, ENVIRONMENT_FIELD_LAYERS,
     ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning, FieldGrids,
     GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS,
-    SETTLED_ADAPTATION_SECONDS, TerrainCache, TerrainCacheFrame, TerrainCachePass,
+    SETTLED_ADAPTATION_SECONDS, TerrainCache, TerrainCacheFrame, TerrainCachePass, TerrainDepth,
     baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
     sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
 };
@@ -90,6 +90,11 @@ struct Options {
     /// Peak of the tone curve in diffuse whites: 1 for SDR output, the game's
     /// HDR output peak otherwise. Values above 1 clip in the 8-bit image.
     output_peak: f32,
+    /// Receives the elevation each pixel's eye ray meets on the scene's
+    /// terrain depth.
+    terrain_elevations: Option<PathBuf>,
+    /// The drone camera's height above mean sea level in place of the game's.
+    camera_height_m: Option<f32>,
 }
 
 #[repr(C)]
@@ -104,6 +109,7 @@ struct Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
+    drone_camera: [f32; 4],
     scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
     precipitation_epoch: [u32; 2],
@@ -174,6 +180,7 @@ struct CaptureFields {
 
 struct CaptureFieldBindings {
     scene: wgpu::BindGroup,
+    terrain_depth_input: wgpu::BindGroup,
     field_reading: wgpu::BindGroup,
     landform_horizon_input: wgpu::BindGroup,
     baked_surface_input: wgpu::BindGroup,
@@ -231,6 +238,7 @@ impl CaptureFields {
                 field_entry(5, wgpu::ShaderStages::FRAGMENT, false),
                 field_entry(6, wgpu::ShaderStages::FRAGMENT, false),
                 ADAPTING_FIELD_LAYOUT_ENTRY,
+                TerrainDepth::SCENE_LAYOUT_ENTRY,
             ],
         });
         let field_reading_layout =
@@ -439,6 +447,7 @@ impl CaptureFields {
         device: &wgpu::Device,
         scene_buffer: &wgpu::Buffer,
         adapting_field: &AdaptingField,
+        terrain_depth: &TerrainDepth,
     ) -> CaptureFieldBindings {
         let uniforms = wgpu::BindGroupEntry {
             binding: 0,
@@ -482,8 +491,17 @@ impl CaptureFields {
                         binding: 7,
                         resource: wgpu::BindingResource::TextureView(&adapting_field.view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
+                    },
                 ],
             }),
+            terrain_depth_input: terrain_depth.input_bind_group(
+                device,
+                scene_buffer,
+                &self.occluder_view,
+            ),
             landform_horizon_input: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("scene uniforms and landform layer"),
                 layout: &self.landform_horizon_layout,
@@ -741,6 +759,8 @@ fn default_options() -> Options {
         // A desktop's, without the raise for a large reported device memory.
         bake_memory_bytes: browser::baked_surface_memory_bytes(false, None),
         output_peak: 1.0,
+        terrain_elevations: None,
+        camera_height_m: None,
     }
 }
 
@@ -869,6 +889,18 @@ fn parse_options() -> Result<Command, String> {
                 if !(options.output_peak.is_finite() && options.output_peak >= 1.0) {
                     return Err("--output-peak must be finite and at least 1".to_owned());
                 }
+            }
+            "--camera-height" => {
+                let height_m: f32 = parse(&value(&mut arguments)?, &argument)?;
+                if !(height_m.is_finite() && height_m > game::BROAD_LANDFORM_HIGHEST_M as f32) {
+                    return Err(
+                        "--camera-height must be finite and above the highest landform".to_owned(),
+                    );
+                }
+                options.camera_height_m = Some(height_m);
+            }
+            "--terrain-elevations" => {
+                options.terrain_elevations = Some(value(&mut arguments)?.into())
             }
             "--help" | "-h" => {
                 print_help();
@@ -1593,7 +1625,12 @@ fn print_help() {
                                   switches change light and shows the light's colour unadapted\n\
            --touch-budget         bake the surface within touch devices' memory budget\n\
            --output-peak PEAK     tone-curve peak in diffuse whites, 4 for the game's HDR\n\
-                                  output (default 1, SDR); the 8-bit image clips above 1\n\n\
+                                  output (default 1, SDR); the 8-bit image clips above 1\n\
+           --camera-height M      the drone camera's height above mean sea level, above the\n\
+                                  highest landform (default the game's height)\n\
+           --terrain-elevations PATH  write the elevation each pixel's eye ray meets in the\n\
+                                  scene's terrain depth, as little-endian f32 rows from the\n\
+                                  top; grid scene compositions only\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics.\n\n\
          playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
@@ -1853,6 +1890,9 @@ async fn render(options: &Options) -> Result<(), String> {
     if options.adaptation_seconds.is_some() && options.prior_views.is_empty() {
         return Err("--adaptation-seconds requires --prior-view".to_owned());
     }
+    if !grid_scene && options.terrain_elevations.is_some() {
+        return Err("--terrain-elevations applies only to grid scene compositions".to_owned());
+    }
     let production = options.diagnostic.id == "scene_production";
     let constants = if production {
         options.quality.scene_constants().to_vec()
@@ -2054,6 +2094,7 @@ async fn render(options: &Options) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
+    let terrain_depth = TerrainDepth::new(&device, (options.width, options.height));
     let (rgba, adapting_field) = render_world(
         &device,
         &queue,
@@ -2062,9 +2103,28 @@ async fn render(options: &Options) -> Result<(), String> {
         &playground_bind_group,
         &vertex_buffer,
         fields.as_ref(),
+        &terrain_depth,
         adaptation.as_ref(),
         options,
     )?;
+    if let Some(path) = &options.terrain_elevations {
+        let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("terrain depth readback encoder"),
+        });
+        let camera = capture_camera(options)?;
+        let elevations: Vec<u8> = read_texture(&device, &queue, encoder, terrain_depth.texture())?
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|depth| {
+                camera
+                    .elevation_at_terrain_depth_m(f32::from_le_bytes(*depth))
+                    .to_le_bytes()
+            })
+            .collect();
+        fs::write(path, elevations)
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    }
     write_png(path, options.width, options.height, &rgba)?;
     let report = capture_report(options, path, &rgba, adapting_field)?;
     let report_json = serde_json::to_string_pretty(&report)
@@ -2126,6 +2186,7 @@ fn render_world(
     playground_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
     fields: Option<&CaptureFields>,
+    terrain_depth: &TerrainDepth,
     adaptation: Option<&CaptureAdaptation>,
     options: &Options,
 ) -> Result<(Vec<u8>, Option<AdaptingFieldTexels>), String> {
@@ -2136,6 +2197,7 @@ fn render_world(
             &adaptation
                 .expect("grid scenes adapt to their illumination")
                 .field,
+            terrain_depth,
         )
     };
     let mut terrain_cache = TerrainCache::default();
@@ -2230,14 +2292,16 @@ fn render_world(
             None,
         );
         if let (Some(adaptation), Some(_)) = (adaptation, adaptation_seconds) {
+            let grids = capture_field_grids(&view)?;
             fields.encode(
                 &mut encoder,
                 &bind_group,
                 &bindings,
                 playground_bind_group,
-                &capture_field_grids(&view)?,
+                &grids,
                 None,
             );
+            terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
             adaptation
                 .field
                 .encode(&mut encoder, &bind_group, None, |pass| {
@@ -2269,14 +2333,16 @@ fn render_world(
                 &terrain_cache_frame,
                 None,
             );
+            let grids = capture_field_grids(options)?;
             fields.encode(
                 &mut encoder,
                 &scene_bind_group,
                 &bindings,
                 playground_bind_group,
-                &capture_field_grids(options)?,
+                &grids,
                 None,
             );
+            terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
             bindings.scene
         }
         None => match adaptation {
@@ -2446,6 +2512,22 @@ fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
     offsets_m.map(|offset_m| offset_m as f32)
 }
 
+fn capture_camera(options: &Options) -> Result<DroneCamera, String> {
+    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
+        .map_err(|error| error.to_string())?;
+    let camera = DroneCamera::production(
+        world_geometry,
+        world_geometry
+            .wrap_position_m([options.camera_x_m, options.camera_y_m])
+            .into(),
+        options.view_height_m,
+    );
+    Ok(DroneCamera {
+        height_m: options.camera_height_m.unwrap_or(camera.height_m),
+        ..camera
+    })
+}
+
 fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
     let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
         .map_err(|error| error.to_string())?;
@@ -2546,6 +2628,7 @@ fn scene_uniforms(
     let vector_time =
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
+    let camera = capture_camera(options)?;
     Ok(SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -2556,6 +2639,7 @@ fn scene_uniforms(
             ),
             options.view_height_m,
         ],
+        drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
         scalar_field_time_coordinates: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,

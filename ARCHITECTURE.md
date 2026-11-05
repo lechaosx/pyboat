@@ -217,8 +217,22 @@ and verification details.
 
 ### Surface rendering
 
-- **[Explicit]** Sail presentation uses a three-dimensional surface under an
-  overhead orthographic view; gameplay dynamics remain planar.
+- **[Explicit]** Sail presentation uses a three-dimensional surface; the whole
+  scene, relief and sails included, is seen in perspective from one camera
+  while gameplay dynamics remain planar.
+- **[Explicit]** One camera, like a drone, looks straight down at the view
+  centre from a fixed height above mean sea level; zoom changes only its focal
+  length. The playground deliberately lets its height and field of view vary.
+- **[Explicit]** The camera's rectilinear lens images sea level as a uniformly
+  scaled chart, so boats, overlays, input and interest keep their sea-level
+  mapping.
+- **[Implicit]** The camera height is the upper field's lowest cloud height,
+  the highest that keeps every upper cloud above the camera.
+- **[Explicit]** A depth pass rasterizes the broad landform grid from the
+  camera, and the full-screen scene passes shade the point each pixel's depth
+  names.
+- **[Implicit]** Each pixel shows the first surface its eye ray meets on the
+  broad landform grid; finer relief takes the broad surface's parallax.
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
 - **[Explicit]** Each part of the view adapts to the light falling on the
@@ -231,8 +245,9 @@ and verification details.
   clear moonless sky bounds it.
 - **[Explicit]** Adaptation stays independent of surface color. Its field is a
   fixed visual angle of the view, so a wider view pools more of the world, as
-  an eye looking from higher would: small and medium cloud shadows keep their
-  contrast while storms, large decks, and the terminator partly adapt.
+  an eye looking through a wider lens would: small and medium cloud shadows
+  keep their contrast while storms, large decks, and the terminator partly
+  adapt.
 - **[Implicit]** The view subtends the same visual angle on every device, that
   of a full-HD desktop display at arm's length.
 - **[Implicit]** Adaptation is retinal: each part of the screen adapts

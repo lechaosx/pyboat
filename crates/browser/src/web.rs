@@ -35,12 +35,12 @@ use crate::frame_queue::FrameQueue;
 use crate::{
     AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BOAT_IMAGES, BakedSurface,
     BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene,
-    ClothPose, ClothPresentation, DEFAULT_VIEW_HEIGHT_M, ENVIRONMENT_FIELD_LAYERS,
+    ClothPose, ClothPresentation, DEFAULT_VIEW_HEIGHT_M, DroneCamera, ENVIRONMENT_FIELD_LAYERS,
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
     OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
-    UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
+    TerrainDepth, UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
     baked_surface_sizes, boat_mesh_with_cloth, bounded_canvas_dimensions,
     disconnect_and_clear_pending_snapshot, field_grids, hull_sprite_mesh, ocean_wave_mode_uniforms,
     periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
@@ -220,6 +220,12 @@ pub fn playground_scene_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn terrain_depth_shader_source() -> String {
+    crate::TERRAIN_DEPTH_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn environment_field_shader_source() -> String {
     ENVIRONMENT_FIELD_SHADER.to_owned()
 }
@@ -386,6 +392,7 @@ pub fn playground_occluder_field_shader_source() -> String {
 pub struct PlaygroundSceneFrame {
     uniforms: Vec<u8>,
     field_grids: Vec<f32>,
+    landform_quads: Vec<u32>,
     terrain_cache_fill: Vec<u8>,
     terrain_cache_workgroups: u32,
     baked_surface_fill: Vec<u8>,
@@ -406,6 +413,13 @@ impl PlaygroundSceneFrame {
     #[wasm_bindgen(getter)]
     pub fn field_grids(&self) -> Vec<f32> {
         self.field_grids.clone()
+    }
+
+    /// The terrain depth's first and end landform quad column, then row: draw
+    /// six vertices per column from the first column's, one instance per row.
+    #[wasm_bindgen(getter)]
+    pub fn landform_quads(&self) -> Vec<u32> {
+        self.landform_quads.clone()
     }
 
     /// The terrain cache fill table; dispatch the fill pass only when
@@ -794,8 +808,11 @@ pub fn playground_scene_uniforms(
         view_size_m,
         pixel_footprint_m,
     );
+    let camera =
+        DroneCamera::production(geometry, Vector::new(camera_x_m, camera_y_m), view_height_m);
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
+        drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
         scalar_field_time_coordinates: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
@@ -872,6 +889,11 @@ pub fn playground_scene_uniforms(
     Ok(PlaygroundSceneFrame {
         uniforms: bytemuck::bytes_of(&uniforms).to_vec(),
         field_grids: field_grid_summary,
+        landform_quads: grids
+            .landform_quads()
+            .into_iter()
+            .flat_map(|range| [range.start, range.end])
+            .collect(),
         terrain_cache_fill: terrain_cache_frame.fill_bytes().0.to_vec(),
         terrain_cache_workgroups: terrain_cache_frame.fill_bytes().1,
         baked_surface_fill: baked_surface_frame.fill_bytes().0.to_vec(),
@@ -1149,6 +1171,7 @@ fn boat_sprite_resources(
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
+    drone_camera: [f32; 4],
     scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
     precipitation_epoch: [u32; 2],
@@ -1549,6 +1572,8 @@ struct Renderer {
     empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
+    terrain_depth: TerrainDepth,
+    terrain_depth_input: wgpu::BindGroup,
     terrain_cache_pass: TerrainCachePass,
     terrain_cache: TerrainCache,
     baked_surface_pass: BakedSurfacePass,
@@ -1585,6 +1610,7 @@ fn scene_bind_group(
     terrain_cache_pass: &TerrainCachePass,
     baked_surface_pass: &BakedSurfacePass,
     adapting_field: &AdaptingField,
+    terrain_depth: &TerrainDepth,
 ) -> wgpu::BindGroup {
     let baked = baked_surface_pass.textures();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1622,6 +1648,10 @@ fn scene_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::TextureView(&adapting_field.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
             },
         ],
     })
@@ -1806,6 +1836,7 @@ impl Renderer {
                     },
                     count: None,
                 },
+                TerrainDepth::SCENE_LAYOUT_ENTRY,
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1907,6 +1938,12 @@ impl Renderer {
             &terrain_cache_pass.noise_view,
         );
         let adapting_field = AdaptingField::new(&device, &bind_group_layout);
+        let terrain_depth = TerrainDepth::new(
+            &device,
+            scene_render_size(width, height, graphics.render_scale),
+        );
+        let terrain_depth_input =
+            terrain_depth.input_bind_group(&device, &uniform_buffer, &occluder_fields.view);
         let scene_bind_group = scene_bind_group(
             &device,
             &scene_layout,
@@ -1916,6 +1953,7 @@ impl Renderer {
             &terrain_cache_pass,
             &baked_surface_pass,
             &adapting_field,
+            &terrain_depth,
         );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
@@ -1949,6 +1987,8 @@ impl Renderer {
             empty_bind_group,
             environment_fields,
             occluder_fields,
+            terrain_depth,
+            terrain_depth_input,
             terrain_cache_pass,
             terrain_cache: TerrainCache::default(),
             baked_surface: BakedSurface::new(baked_surface_pass.textures().sizes()),
@@ -2071,6 +2111,11 @@ impl Renderer {
             self.config.width as f32 / self.config.height as f32,
             view_height_m,
         );
+        let camera = DroneCamera::production(
+            world_geometry,
+            Vector::from(canonical_camera_m),
+            view_height_m,
+        );
         let celestial =
             world_celestial_conditions(world_geometry, world_time_seconds, Vector::ZERO);
         let orbit = celestial_orbit(celestial);
@@ -2144,6 +2189,9 @@ impl Renderer {
             self.sail_depth = Some((output_size, texture.create_view(&Default::default())));
         }
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
+        if self.terrain_depth.resize(&self.device, scene_size) {
+            self.rebuild_scene_bind_group();
+        }
         let upscaled = scene_size != output_size && terrain_vertex_count > 0;
         let pixel_footprint_m = visual_pixel_footprint_m(
             view_height_m,
@@ -2185,6 +2233,7 @@ impl Renderer {
                     view_width_m,
                     view_height_m,
                 ],
+                drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
                 scalar_field_time_coordinates: [
                     scalar_time.air_temperature,
                     scalar_time.upper_air_temperature,
@@ -2295,6 +2344,10 @@ impl Renderer {
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
+        if terrain_vertex_count > 0 {
+            self.terrain_depth
+                .encode(&mut encoder, &self.terrain_depth_input, &field_grids, None);
+        }
         self.adapting_field
             .encode(&mut encoder, &self.bind_group, None, |pass| {
                 if terrain_vertex_count > 0 {
@@ -2532,6 +2585,11 @@ impl Renderer {
         let sizes = textures.sizes();
         self.baked_surface_pass
             .replace_textures(&self.device, textures);
+        self.rebuild_scene_bind_group();
+        self.baked_surface = BakedSurface::new(sizes);
+    }
+
+    fn rebuild_scene_bind_group(&mut self) {
         self.scene_bind_group = scene_bind_group(
             &self.device,
             &self.scene_layout,
@@ -2541,8 +2599,8 @@ impl Renderer {
             &self.terrain_cache_pass,
             &self.baked_surface_pass,
             &self.adapting_field,
+            &self.terrain_depth,
         );
-        self.baked_surface = BakedSurface::new(sizes);
     }
 
     fn aspect_ratio(&self) -> f32 {

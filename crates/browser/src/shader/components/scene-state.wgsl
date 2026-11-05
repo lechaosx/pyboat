@@ -1,5 +1,8 @@
 struct SceneUniforms {
     camera_and_view_m: vec4<f32>,
+    // The drone camera's height above mean sea level, then its terrain
+    // depth's near-plane scale (`DroneCamera::terrain_depth_near_scale`).
+    drone_camera: vec4<f32>,
     scalar_field_time_coordinates: vec4<f32>,
     match_seed: vec2<u32>,
     precipitation_epoch: vec2<u32>,

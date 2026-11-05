@@ -62,6 +62,10 @@ pub use adapting_field::{ADAPTING_FIELD_TEXELS, AdaptingField, ILLUMINATION_TEXE
 #[cfg(test)]
 mod diagnostics;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod terrain_depth;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use terrain_depth::TerrainDepth;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
 mod upscale;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use upscale::{UpscaleTargets, Upscaler};
@@ -147,6 +151,9 @@ pub(crate) fn webtransport_server_url(
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const SCENE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub(crate) const TERRAIN_DEPTH_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/terrain-depth.wgsl"));
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const OCCLUDER_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/occluder-fields.wgsl"));

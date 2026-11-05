@@ -33,6 +33,7 @@ import {
   sample_playground_world_geometry,
   sample_playground_world_phases,
   terrain_cache_shader_source,
+  terrain_depth_shader_source,
   terrain_cache_texture_size,
   upscale_shader_source,
 } from "browser/playground";
@@ -1080,6 +1081,38 @@ let bakedSurfacePass: BakedSurfacePass | undefined;
 // Environment, occluder, and landform horizon workgroup counts, then spacing and
 // texels per occluder layer.
 let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5, 1, 1, 2]);
+// First and end landform quad column, then row, that the terrain depth draws.
+let landformQuads: Uint32Array = new Uint32Array(4);
+// The depth of the first surface each scene pixel's eye ray meets, at the
+// scene size; grid scenes read it.
+const terrainDepthShader = device.createShaderModule({ code: terrain_depth_shader_source() });
+const terrainDepthPipeline = device.createRenderPipeline({
+  layout: "auto",
+  vertex: { module: terrainDepthShader, entryPoint: "vertex_terrain_depth" },
+  primitive: { topology: "triangle-list" },
+  depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less" },
+});
+const terrainDepthBindGroup = device.createBindGroup({
+  layout: terrainDepthPipeline.getBindGroupLayout(0),
+  entries: [
+    { binding: 0, resource: { buffer: sceneBuffer } },
+    { binding: 2, resource: occluderFieldView },
+  ],
+});
+let terrainDepth: GPUTexture | undefined;
+let terrainDepthView: GPUTextureView | undefined;
+// Returns whether the depth was reallocated, so its readers need new bind groups.
+function sizeTerrainDepth(): boolean {
+  if (terrainDepth?.width === sceneSize[0] && terrainDepth?.height === sceneSize[1]) return false;
+  terrainDepth?.destroy();
+  terrainDepth = device.createTexture({
+    size: [sceneSize[0]!, sceneSize[1]!],
+    format: "depth32float",
+    usage: 0x10 | 0x04,
+  });
+  terrainDepthView = terrainDepth.createView();
+  return true;
+}
 
 type FieldPasses = {
   environmentPipeline: GPUComputePipeline;
@@ -1510,6 +1543,7 @@ function updateUniforms(
   );
   sceneUniforms = frame.uniforms;
   fieldGrids = frame.field_grids;
+  landformQuads = frame.landform_quads;
   terrainCacheFill = frame.terrain_cache_fill;
   terrainCacheWorkgroups = frame.terrain_cache_workgroups;
   bakedSurfaceFill = frame.baked_surface_fill;
@@ -1714,6 +1748,9 @@ function advanceFrame(now: number): void {
 }
 
 function renderFrame(): Promise<void> {
+  if (sizeTerrainDepth() && installedScenePipelines && sceneFields) {
+    installScenePipelines(installedScenePipelines, sceneFields);
+  }
   const renderResources = renderResourcesForFrame();
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
@@ -1805,8 +1842,22 @@ function renderFrame(): Promise<void> {
     occluderPass.setBindGroup(2, fields.landformHorizonOutputBindGroup);
     occluderPass.dispatchWorkgroups(fieldGrids[5]!, fieldGrids[6]!, fieldGrids[7]!);
     occluderPass.end();
+    const depthPass = encoder.beginRenderPass({
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: terrainDepthView!,
+        depthClearValue: 1,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+    depthPass.setPipeline(terrainDepthPipeline);
+    depthPass.setBindGroup(0, terrainDepthBindGroup);
+    const [firstColumn, endColumn, firstRow, endRow] = landformQuads;
+    depthPass.draw(6 * (endColumn! - firstColumn!), endRow! - firstRow!, 6 * firstColumn!, firstRow!);
+    depthPass.end();
   }
-  // The scene's timed span includes its adapting field.
+  // The scene's timed span includes the terrain depth and its adapting field.
   const illumination = renderResources.illumination;
   if (illumination) {
     const illuminationPass = encoder.beginRenderPass({
@@ -2049,7 +2100,10 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
   return pipelines;
 }
 
+let installedScenePipelines: ScenePipelines | undefined;
 function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): void {
+  installedScenePipelines = pipelines;
+  sizeTerrainDepth();
   const playgroundEntries = productionShaders
     ? []
     : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
@@ -2061,6 +2115,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     { binding: 4, resource: terrainCacheView },
     { binding: 5, resource: bakedHeightView },
     { binding: 6, resource: bakedColorView },
+    { binding: 8, resource: terrainDepthView! },
   ];
   const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {

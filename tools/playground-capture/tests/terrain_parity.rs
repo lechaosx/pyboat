@@ -3096,6 +3096,10 @@ fn baked_scene_flips_no_more_pixels_than_a_quarter_pixel_pan_at_overview_zooms()
                         diagnostic,
                         "--cloud-shadows",
                         "0",
+                        // The direct reference sees the ground orthographically, as the grid scene
+                        // does from a camera this high, within 0.1 px.
+                        "--camera-height",
+                        "1000000",
                     ],
                 )
             };
@@ -3283,6 +3287,10 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
                         diagnostic,
                         "--cloud-shadows",
                         "0",
+                        // The direct reference sees the ground orthographically, as the grid scene
+                        // does from a camera this high, within 0.1 px.
+                        "--camera-height",
+                        "1000000",
                     ],
                     arguments,
                 ]
@@ -3379,6 +3387,10 @@ fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
                 "0",
                 "--light-contributions",
                 "1,1,0,0",
+                // The direct reference sees the ground orthographically, as the grid scene
+                // does from a camera this high, within 0.1 px.
+                "--camera-height",
+                "1000000",
             ],
         )
     };

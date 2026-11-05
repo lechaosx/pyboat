@@ -12,7 +12,8 @@ use wgpu::util::DeviceExt;
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
     FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, TerrainCacheFrame,
-    UpscaleTargets, Upscaler, baked_surface_sizes, scene_render_size, visual_pixel_footprint_m,
+    TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes, scene_render_size,
+    visual_pixel_footprint_m,
 };
 
 use super::{
@@ -31,7 +32,8 @@ const DIFF_IMAGE_GAIN: u8 = 16;
 const CONTACT_SHEET_COLUMNS: usize = 3;
 const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
 /// Environment field, occluder field, scene, upscale, terrain cache, and baked
-/// surface begin/end pairs. The scene's pair spans the adapting field before it.
+/// surface begin/end pairs. The scene's pair spans the terrain depth and the
+/// adapting field before it.
 const TIMESTAMP_COUNT: u32 = 12;
 /// More frames than a cold start takes to settle at the bench's sizes.
 const MAXIMUM_COLD_START_FRAMES: u32 = 64;
@@ -555,18 +557,20 @@ impl ModeRenderer {
             bindings.field_grids,
             timestamps,
         );
-        self.adapting_field.encode(
+        bindings.terrain_depth.encode(
             encoder,
-            bindings.scene,
+            &bindings.fields.terrain_depth_input,
+            bindings.field_grids,
             timestamps.map(|query_set| (query_set, 4)),
-            |pass| {
+        );
+        self.adapting_field
+            .encode(encoder, bindings.scene, None, |pass| {
                 pass.set_pipeline(&self.illumination_pipelines[bindings.quality as usize]);
                 pass.set_bind_group(0, &bindings.fields.scene, &[]);
                 pass.set_bind_group(1, bindings.unused, &[]);
                 pass.set_vertex_buffer(0, bindings.vertices.slice(..));
                 pass.draw(0..6, 0..1);
-            },
-        );
+            });
         let output_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bench scene pass"),
@@ -628,6 +632,7 @@ struct FrameBindings<'a> {
     scene: &'a wgpu::BindGroup,
     fields: &'a CaptureFieldBindings,
     field_grids: &'a FieldGrids,
+    terrain_depth: &'a TerrainDepth,
     unused: &'a wgpu::BindGroup,
     vertices: &'a wgpu::Buffer,
     upscaler: &'a Upscaler,
@@ -646,6 +651,7 @@ struct ScenarioBindings {
     /// Shipped, then forced.
     fields: [CaptureFieldBindings; 2],
     field_grids: FieldGrids,
+    terrain_depth: TerrainDepth,
     upscale: Option<UpscaleTargets>,
 }
 
@@ -668,6 +674,7 @@ impl ScenarioBindings {
             scene: &self.scene,
             fields: &self.fields[mode],
             field_grids: &self.field_grids,
+            terrain_depth: &self.terrain_depth,
             unused,
             vertices,
             upscaler,
@@ -839,6 +846,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 contents: bytemuck::bytes_of(&uniforms),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
+            let terrain_depth = TerrainDepth::new(&device, scene_size);
             Ok(ScenarioBindings {
                 id: scenario.id.clone(),
                 quality: scenario.graphics_quality()?,
@@ -856,9 +864,11 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                         &device,
                         &buffer,
                         &renderer.adapting_field,
+                        &terrain_depth,
                     )
                 }),
                 field_grids: capture_field_grids(&scenario_options)?,
+                terrain_depth,
                 options: scenario_options,
                 upscale: (scene_size != output_size).then(|| {
                     upscaler.targets(
@@ -1267,6 +1277,7 @@ fn time_cold_start(
             device,
             &buffer,
             &renderer.adapting_field,
+            bindings.terrain_depth,
         );
         let frame_bindings = FrameBindings {
             scene: &scene,
@@ -1335,6 +1346,7 @@ fn time_sequence(
         )
     });
     let target = capture_texture(device, options.width, options.height);
+    let terrain_depth = TerrainDepth::new(device, scene_size);
     let mut terrain_cache = TerrainCache::default();
     let mut baked_surface = BakedSurface::new(surface_sizes);
     let mut frame = |view: &Scenario| -> Result<(FrameTimes, bool, f32), String> {
@@ -1357,10 +1369,12 @@ fn time_sequence(
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let scene = bind_group(device, scene_layout, &buffer, "bench sequence scene");
-        let fields =
-            renderer
-                .fields(surface_sizes)
-                .bindings(device, &buffer, &renderer.adapting_field);
+        let fields = renderer.fields(surface_sizes).bindings(
+            device,
+            &buffer,
+            &renderer.adapting_field,
+            &terrain_depth,
+        );
         let field_grids = capture_field_grids(&view_options)?;
         let bindings = FrameBindings {
             scenario_id: &view.id,
@@ -1373,6 +1387,7 @@ fn time_sequence(
             scene: &scene,
             fields: &fields,
             field_grids: &field_grids,
+            terrain_depth: &terrain_depth,
             unused,
             vertices,
             upscaler,

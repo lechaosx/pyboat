@@ -154,6 +154,7 @@ pub struct FieldGrids {
     /// the Sun's and the Moon's cloud shadow grids resolve, then the weight
     /// of the Moon's cloud shadows.
     pub cloud_shadow_grids: [f32; 4],
+    view_size_m: [f32; 2],
 }
 
 /// Each occluder layer's spacing doublings from the previous frame.
@@ -191,6 +192,23 @@ impl FieldGrids {
     /// One z slice per landform horizon layer, each covering the larger.
     pub fn landform_horizon_workgroups(&self) -> [u32; 3] {
         layer_workgroups(&self.occluders[LANDFORM_HORIZON_LAYER..])
+    }
+
+    /// Columns, then rows, of the landform layer's texel quads that hold the
+    /// view, indexed by their first texel. Every eye ray meets the terrain
+    /// between the view centre and its sea-level point, so these quads hold
+    /// every surface the view shows.
+    pub fn landform_quads(&self) -> [std::ops::Range<u32>; 2] {
+        let grid = &self.occluders[LANDFORM_LAYER];
+        [0, 1].map(|axis| {
+            let first_m = f64::from(grid.uniforms[axis]);
+            let spacing_m = f64::from(grid.uniforms[2 + axis]);
+            let half_view_m = 0.5 * f64::from(self.view_size_m[axis]);
+            let last_texel = f64::from(grid.texels[axis].saturating_sub(1));
+            let texel =
+                |position_m: f64| ((position_m - first_m) / spacing_m).clamp(0.0, last_texel);
+            texel(-half_view_m).floor() as u32..texel(half_view_m).ceil() as u32
+        })
     }
 }
 
@@ -440,6 +458,7 @@ pub fn field_grids(
         ),
         occluders,
         cloud_shadow_grids,
+        view_size_m,
     }
 }
 
@@ -1268,6 +1287,43 @@ mod tests {
                     view_region(view_size_m),
                     &format!("{view_size_m:?} at {world_time_seconds} s"),
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn landform_quads_cover_the_view_within_the_written_texels() {
+        let half_world_m = 0.5 * f64::from(WorldGeometry::default().width_m());
+        for view_height_m in [15.0, 300.0, 2_000.0, 20_000.0, 1.0e6] {
+            for aspect in [16.0 / 9.0, 9.0 / 16.0] {
+                let view_size_m = [view_width_m(aspect, view_height_m), view_height_m];
+                // Beside the seam, then far north.
+                for camera_m in [[31_990.0, 2.0], [500.0, 1.0e5]] {
+                    let grids = production_grids(43_200.0, camera_m, view_size_m, NO_MOTION);
+                    let grid = &grids.occluders[LANDFORM_LAYER];
+                    let quads = grids.landform_quads();
+                    let label = format!("{view_size_m:?} at {camera_m:?}");
+                    for axis in 0..2 {
+                        let first_m = f64::from(grid.uniforms[axis]);
+                        let spacing_m = f64::from(grid.uniforms[2 + axis]);
+                        let mut half_view_m = 0.5 * f64::from(view_size_m[axis]);
+                        if axis == 0 {
+                            // Lookups wrap into the half lap the layer holds.
+                            half_view_m = half_view_m.min(half_world_m);
+                        }
+                        let edge_m = |texel: u32| first_m + f64::from(texel) * spacing_m;
+                        let range = &quads[axis];
+                        assert!(range.end < grid.texels[axis], "{label} axis {axis}");
+                        assert!(edge_m(range.start) <= -half_view_m, "{label} axis {axis}");
+                        assert!(edge_m(range.end) >= half_view_m, "{label} axis {axis}");
+                        // Only quads the view touches, unless it holds the layer.
+                        assert!(
+                            f64::from(range.len() as u32) <= 2.0 * half_view_m / spacing_m + 2.0
+                                || range.len() as u32 == grid.texels[axis] - 1,
+                            "{label} axis {axis}: {range:?}",
+                        );
+                    }
+                }
             }
         }
     }
