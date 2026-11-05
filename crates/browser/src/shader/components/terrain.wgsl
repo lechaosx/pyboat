@@ -833,6 +833,43 @@ fn water_light_grade(
     );
 }
 
+// Water's linear reflectance of the diffuse light, then of each beam's light
+// on level ground.
+struct WaterReflectance {
+    diffuse: vec3<f32>,
+    sun: vec3<f32>,
+    moon: vec3<f32>,
+};
+
+// `albedo` is the water's linear colour; `specular_scale` as
+// `water_light_grade` takes it.
+fn water_reflectance(
+    albedo: vec3<f32>,
+    surface: TerrainSurface,
+    direct_light: CelestialReceiverLight,
+    specular_scale: f32,
+) -> WaterReflectance {
+    let grade = water_light_grade(
+        surface.detail_gradient,
+        surface.roughness,
+        direct_light,
+        specular_scale,
+    );
+    let level_grade = water_light_grade(
+        vec2<f32>(0.0),
+        surface.roughness,
+        direct_light,
+        specular_scale,
+    );
+    // Water keeps its own relief grade of each beam's level light.
+    let beam_grade = grade.yz / level_grade.yz;
+    return WaterReflectance(
+        albedo * grade.x,
+        albedo * beam_grade.x,
+        albedo * beam_grade.y,
+    );
+}
+
 fn landform_shadow_transmittance_for_light(
     position_m: vec2<f32>,
     elevation_m: f32,
