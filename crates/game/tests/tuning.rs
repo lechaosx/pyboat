@@ -1228,6 +1228,43 @@ fn total_water_above_saturation_is_not_capped() {
     assert!(weather.rain_intensity < 1.0);
 }
 
+/// Surface relative humidity is total water over the saturation specific
+/// humidity at standard sea-level pressure, over water at and above freezing
+/// and over ice below. References are 622 e / (p − 0.378 e) g/kg for Murphy
+/// and Koop's (2005, Q. J. R. Meteorol. Soc. 131) vapour pressures.
+#[test]
+fn surface_relative_humidity_takes_published_saturation_over_water_and_ice() {
+    for (temperature_c, saturation_g_kg) in [
+        (30.0, 26.489),
+        (15.0, 10.539),
+        (0.0, 3.7606),
+        (-20.0, 0.6341),
+        (-40.0, 0.0789),
+    ] {
+        let primary = AtmospherePrimary {
+            pressure_hpa: 1013.25,
+            pressure_gradient_hpa_per_m: Vector::ZERO,
+            synoptic_pressure_gradient_hpa_per_m: Vector::ZERO,
+            surface_gust_signal: 0.0,
+            surface_air_temperature_anomaly_c: 0.0,
+            air_temperature_500_hpa_c: temperature_c - 30.0,
+            local_temperature_gradient_c_per_m: Vector::ZERO,
+            water_vapor_g_kg: 0.05,
+            surface_wind_convergence_per_s: 0.0,
+            surface_wind_strain_per_s: 0.0,
+            climate_air_temperature_gradient_c_per_m: Vector::ZERO,
+            regional: Default::default(),
+        };
+        let weather = derive_weather_at_surface_temperature(primary, temperature_c);
+        let model_g_kg = primary.water_vapor_g_kg / weather.relative_humidity;
+
+        assert!(
+            (model_g_kg / saturation_g_kg - 1.0).abs() < 0.01,
+            "saturation at {temperature_c} °C: {model_g_kg} g/kg, published {saturation_g_kg} g/kg",
+        );
+    }
+}
+
 #[test]
 fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
     let seed = 0x5eed;
@@ -2772,7 +2809,8 @@ fn evolving_moisture_does_not_breathe_with_the_daily_temperature_cycle() {
     let mut night_temperature_c = 0.0;
     let mut afternoon_water_vapor_g_kg = 0.0;
     let mut night_water_vapor_g_kg = 0.0;
-    let sample_count = 128;
+    // Enough seeds that the means' sampling error stays well below the bound.
+    let sample_count = 1024;
 
     for seed in 0..sample_count {
         let afternoon = procedural_weather(seed, 0, position_m);

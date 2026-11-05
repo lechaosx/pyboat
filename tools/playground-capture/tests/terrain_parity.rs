@@ -421,6 +421,48 @@ fn rendered_instability_matches_authoritative_rust_upper_air() {
     );
 }
 
+/// Relative humidity divides total water, a ratio to saturation at the air
+/// mass's temperature, by saturation at the current temperature, so the
+/// curve's base coefficient cancels. It checks the curve's slope and phase
+/// across the daily departure, on both sides of freezing.
+#[test]
+fn rendered_relative_humidity_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let (mut freezing, mut thawed) = (0, 0);
+    for index in 0..64 {
+        let position_m = Vector::new(
+            (index % 8) as f32 * 3_700.0 - 13_000.0,
+            ((index / 8) as f32 + 0.5) / 8.0 * world.height_m() - 0.5 * world.height_m(),
+        );
+        let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
+        let expected = weather.relative_humidity;
+        // The diagnostic saturates at 1.5.
+        if !(0.2..=1.4).contains(&expected) {
+            continue;
+        }
+        let actual = 1.5
+            * scalar_debug_amount(&render_diagnostic_pixel(
+                world,
+                position_m,
+                "weather_relative_humidity",
+            ));
+        assert!(
+            (actual - expected).abs() < 0.015,
+            "relative humidity at {position_m:?}, {} °C: rendered {actual}, Rust {expected}",
+            weather.surface_air_temperature_c,
+        );
+        if weather.surface_air_temperature_c < 0.0 {
+            freezing += 1;
+        } else {
+            thawed += 1;
+        }
+    }
+    assert!(
+        freezing >= 4 && thawed >= 4,
+        "only {freezing} freezing and {thawed} thawed positions compared"
+    );
+}
+
 #[test]
 fn rendered_low_cloud_and_rain_match_authoritative_rust() {
     let world = WorldGeometry::default();
@@ -1175,7 +1217,9 @@ fn full_moon_canopy_scattering_tracks_canopy_coverage() {
     {
         let coverage = scalar_debug_amount(coverage);
         let scattering = scalar_debug_amount(scattering);
-        if coverage <= 0.002 {
+        // The diagnostic's zero level; one 8-bit level up, partial cover
+        // already scatters in proportion to it.
+        if coverage <= 0.001 {
             clear_pixels += 1;
             assert!(scattering <= 0.002, "clear canopy scattered {scattering}");
         }
@@ -4324,8 +4368,12 @@ fn projected_clouds_can_shadow_locally_clear_ground() {
     );
 }
 
-/// Rain falls from the low cloud that convection organises into cumulus, so
-/// heavy rain over afternoon land keeps its cumulus overhead.
+/// Over unstable air, convection organises the low cloud that rain falls
+/// from into cumulus, so heavy rain over unstable afternoon land keeps its
+/// cumulus. The check pools two months of heavy-rain cells, since the pole
+/// has no afternoon heating, and in each it counts cumulus shadow only where
+/// the rendered rain is as heavy as the selection's, over a view one cumulus
+/// wavelength wide so that the gaps between cumulus average out.
 #[test]
 fn heavily_raining_low_cloud_keeps_its_cumulus() {
     let world = WorldGeometry::default();
@@ -4340,40 +4388,59 @@ fn heavily_raining_low_cloud_keeps_its_cumulus() {
         })
         .filter(|&position_m| procedural_terrain_elevation_m(world, SEED, position_m) > 0.0)
         .collect::<Vec<_>>();
-    let (position_m, world_time_seconds, rain) = (2..=60)
-        .find_map(|day| {
-            land.iter().find_map(|&position_m| {
+    let raining = (2..=60)
+        .flat_map(|day| {
+            land.iter().filter_map(move |&position_m| {
                 let afternoon_offset =
                     (0.0417 - f64::from(position_m.x) / f64::from(world.width_m())).rem_euclid(1.0);
                 let world_time_seconds = 86_400.0 * (f64::from(day) + afternoon_offset);
                 let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
-                let rain = procedural_world_environment(world, SEED, tick, position_m)
-                    .weather
-                    .rain_intensity;
-                (rain >= 0.7).then_some((position_m, world_time_seconds, rain))
+                let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
+                (weather.rain_intensity >= 0.7 && weather.instability >= 0.9)
+                    .then_some((position_m, world_time_seconds))
             })
         })
-        .expect("no afternoon land cell rains heavily within 60 days");
-
-    let shadow = render_diagnostic_image_with_view_at(
-        world,
-        position_m,
-        world_time_seconds,
-        20.0,
-        "cloud_cumulus_shadow",
-        32,
-        32,
+        .collect::<Vec<_>>();
+    assert!(
+        !raining.is_empty(),
+        "no unstable afternoon land cell rains heavily within 60 days"
     );
-    let shaded = shadow
-        .as_chunks::<4>()
-        .0
+
+    let render = |position_m, world_time_seconds, diagnostic| {
+        render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            1_200.0,
+            diagnostic,
+            32,
+            32,
+        )
+    };
+    let shaded_shares = raining
         .iter()
-        .filter(|pixel| scalar_debug_amount(*pixel) > 0.05)
-        .count();
+        .filter_map(|&(position_m, world_time_seconds)| {
+            let shadow = render(position_m, world_time_seconds, "cloud_cumulus_shadow");
+            let rain = render(position_m, world_time_seconds, "weather_rain");
+            let (mut heavy, mut shaded) = (0, 0);
+            for (shadow, rain) in shadow
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rain.as_chunks::<4>().0.iter())
+            {
+                if scalar_debug_amount(rain) >= 0.7 {
+                    heavy += 1;
+                    shaded += usize::from(scalar_debug_amount(shadow) > 0.05);
+                }
+            }
+            (heavy >= 64).then(|| shaded as f32 / heavy as f32)
+        })
+        .collect::<Vec<_>>();
 
     assert!(
-        shaded > 0,
-        "no cumulus shadow under low cloud raining {rain}"
+        shaded_shares.iter().any(|share| *share > 0.1),
+        "cumulus shadow shares under heavy rain: {shaded_shares:?}"
     );
 }
 

@@ -202,7 +202,7 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
   weather: [
     { label: "Primary world fields", options: [
       ["surface_air_temperature", "Surface air temperature"],
-      ["atmosphere_water_vapor", "Total water · 0–60 g/kg"],
+      ["atmosphere_water_vapor", "Total water · 0–80 g/kg"],
       ["temperature_gradient", "Temperature-gradient vector · RGB"],
       ["pressure_broad_anomaly", "Broad pressure anomaly · ±8 hPa"],
       ["pressure_synoptic_anomaly", "Synoptic pressure anomaly · ±3 hPa"],

@@ -81,8 +81,8 @@ const DECK_WATER_VAPOR_NOISE_SCALE: f64 = 0.86;
 // `crates/browser/src/shader/components/environment.wgsl`.
 // Compromise: air over the sea takes these land-calibrated anomaly tails,
 // standing in for the sea's milder ones, so total water, which follows the air
-// mass's temperature, reaches about 55 g/kg against Earth's observed surface
-// maximum of about 37 g/kg at dew points near 35 °C.
+// mass's temperature, reaches far beyond Earth's observed surface maximum of
+// about 37 g/kg at dew points near 35 °C.
 const CLIMATE_ANNUAL_MEAN_C: [f32; 10] =
     [27.4, 27.9, 25.0, 21.9, 16.9, 8.0, -0.2, -7.9, -11.7, -15.0];
 const CLIMATE_SEASONAL_RANGE_C: [f32; 10] =
@@ -1197,8 +1197,14 @@ pub fn climate_surface(
     let water_temperature_c = seasonal_water_temperature_c(climate, conditions);
     let ground_temperature_at_elevation_c = ground_temperature_c - 0.0065 * elevation_m.max(0.0);
     let air_temperature_at_elevation_c = air_temperature_c - 0.0065 * elevation_m.max(0.0);
-    let relative_humidity =
-        water_vapor_g_kg / water_vapor_saturation_capacity_g_kg(air_temperature_at_elevation_c);
+    let relative_humidity = water_vapor_g_kg
+        / water_vapor_saturation_capacity_g_kg(
+            air_temperature_at_elevation_c,
+            pressure_at_height_hpa(
+                elevation_m.max(0.0),
+                0.5 * (air_temperature_c + air_temperature_at_elevation_c),
+            ),
+        );
     let moisture_support = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
     let weather_standard_deviation_c = latitude_curve_value(
         TEMPERATURE_ANOMALY_P99_C,
@@ -1263,20 +1269,71 @@ fn water_freezing_potential(effective_water_temperature_c: f32) -> f32 {
     1.0 - smoothstep_range(-2.0, 0.0, f64::from(effective_water_temperature_c)) as f32
 }
 
-fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
-    3.5 * libm::exp(SATURATION_GROWTH_PER_C * f64::from(air_temperature_c + 5.0)) as f32
+/// Saturation vapour pressure's Magnus coefficients (Alduchov and Eskridge
+/// 1996, J. Appl. Meteorol. 35): e_s = c·exp(a·T / (b + T)) hPa, over water at
+/// and above freezing and over ice below, within 0.3% of Murphy and Koop's
+/// (2005, Q. J. R. Meteorol. Soc. 131) reference from −40 to 40 °C. MERRA-2's
+/// surface relative humidity, which calibrates total water, takes the same
+/// phases. Compromise: cloud below freezing condenses at ice saturation,
+/// standing in for the supercooled water mixed with ice down to about −23 °C,
+/// whose saturation ECMWF's IFS blends between the two (up to 3.4% higher).
+fn saturation_vapor_pressure_coefficients(air_temperature_c: f32) -> (f32, f32, f32) {
+    if air_temperature_c >= 0.0 {
+        (6.1094, 17.625, 243.04)
+    } else {
+        (6.1121, 22.587, 273.86)
+    }
 }
 
-// Saturation capacity's fractional growth per degree; the latent-heating
-// factor also takes the saturation slope from it.
-const SATURATION_GROWTH_PER_C: f64 = 0.055;
+/// Saturation specific humidity, ε·e_s / (p − (1 − ε)·e_s) with ε = 0.622.
+fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
+    let (base_hpa, growth, offset_c) = saturation_vapor_pressure_coefficients(air_temperature_c);
+    let vapor_pressure_hpa =
+        base_hpa * libm::expf(growth * air_temperature_c / (offset_c + air_temperature_c));
+    622.0 * vapor_pressure_hpa / (pressure_hpa - 0.378 * vapor_pressure_hpa)
+}
+
+/// Saturation's fractional growth per degree, d ln e_s / dT.
+fn saturation_growth_per_c(air_temperature_c: f32) -> f32 {
+    let (_, growth, offset_c) = saturation_vapor_pressure_coefficients(air_temperature_c);
+    growth * offset_c / ((offset_c + air_temperature_c) * (offset_c + air_temperature_c))
+}
+
+/// The temperature at which air holding `relative_humidity` of saturation
+/// saturates, inverting the Magnus form (Lawrence 2005, Bull. Am. Meteorol.
+/// Soc. 86).
+fn dew_point_c(air_temperature_c: f32, relative_humidity: f32) -> f32 {
+    let (_, growth, offset_c) = saturation_vapor_pressure_coefficients(air_temperature_c);
+    let saturation_exponent =
+        libm::logf(relative_humidity) + growth * air_temperature_c / (offset_c + air_temperature_c);
+    offset_c * saturation_exponent / (growth - saturation_exponent)
+}
+
+/// Hydrostatic pressure at `height_m` above sea level, falling e-fold per
+/// R_d·T̄/g for the column's mean temperature T̄.
+fn pressure_at_height_hpa(height_m: f32, column_mean_temperature_c: f32) -> f32 {
+    SEA_LEVEL_PRESSURE_HPA
+        * libm::expf(
+            -height_m / (DRY_AIR_SCALE_HEIGHT_M_PER_K * (column_mean_temperature_c + 273.15)),
+        )
+}
+
+// Physical: the standard sea-level pressure. Compromise: surface air
+// saturates at it rather than at the weather's local pressure, a few percent
+// away. Total water is a ratio to this same saturation, so relative humidity
+// keeps its calibration and only the absolute water, which latent heating and
+// rain onset read, is off by as much.
+const SEA_LEVEL_PRESSURE_HPA: f32 = 1013.25;
 // Physical: g/c_p for dry air.
 const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
 // Physical: R_d/g, 287.05 J/(kg K) over 9.81 m/s², the hypsometric scale
 // height per kelvin of the column's mean temperature.
 const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
-// Physical: L_v/c_p, 2.501 MJ/kg over 1004 J/(kg K), per g/kg of condensate.
+// Physical: L_v/c_p, 2.501 MJ/kg over 1004 J/(kg K), per g/kg of condensate,
+// and L_s/c_p, 2.834 MJ/kg, per g/kg deposited as ice below freezing, where
+// saturation is over ice.
 const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
+const SUBLIMATION_WARMING_C_PER_G_KG: f32 = 2.82;
 // Physical, published: the boundary layer's depth, through which unresolved
 // ascent lifts surface air and over which friction acts on the surface wind.
 // Garratt (1994, Earth-Sci. Rev. 37) puts the capping inversion of a convective
@@ -1344,7 +1401,13 @@ struct LowCloud {
 fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f32) -> LowCloud {
     let parcel_temperature_c =
         surface_air_temperature_c - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
-    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(parcel_temperature_c);
+    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(
+        parcel_temperature_c,
+        pressure_at_height_hpa(
+            lifted_m,
+            0.5 * (surface_air_temperature_c + parcel_temperature_c),
+        ),
+    );
     let critical_relative_humidity = SURFACE_CRITICAL_RELATIVE_HUMIDITY
         + (CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY - SURFACE_CRITICAL_RELATIVE_HUMIDITY)
             * (lifted_m / CLOUD_LEVEL_HEIGHT_M).min(1.0);
@@ -1363,8 +1426,16 @@ fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f3
     };
     // Condensing warms the air and so raises its saturation, which keeps this
     // share of the excess as cloud water.
-    let latent_heating_factor =
-        1.0 / (1.0 + LATENT_WARMING_C_PER_G_KG * SATURATION_GROWTH_PER_C as f32 * saturation_g_kg);
+    let latent_warming_c_per_g_kg = if parcel_temperature_c >= 0.0 {
+        LATENT_WARMING_C_PER_G_KG
+    } else {
+        SUBLIMATION_WARMING_C_PER_G_KG
+    };
+    let latent_heating_factor = 1.0
+        / (1.0
+            + latent_warming_c_per_g_kg
+                * saturation_growth_per_c(parcel_temperature_c)
+                * saturation_g_kg);
     let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
     let bergeron_factor = 1.0
         + BERGERON_GAIN_PER_SQRT_C
@@ -2149,10 +2220,12 @@ pub fn procedural_atmosphere_primary(
 
 // Calibrated from 2011–2020 NASA POWER/MERRA-2 hourly RH2M and T2M at eight
 // open-ocean points per 10° absolute-latitude band: total water's ratio to
-// saturation takes the observed ratio of water vapour to saturation, by this
-// model's saturation curve, at the day's mean temperature. The knots at 0°,
-// 10°, …, 90° take each band's mean and standard deviation, averaging the two
-// bands that meet at a knot. The seeded moisture noise has a standard deviation
+// saturation takes the observed ratio of each day's mean water vapour to
+// saturation, by this model's saturation curve, at the day's mean temperature.
+// The knots at 0°, 10°, …, 90° take each band's mean and standard deviation,
+// averaging the two bands that meet at a knot. Hourly ratios would add the
+// day's temperature swing to the spread, which the model's own daily cycle
+// adds again. The seeded moisture noise has a standard deviation
 // of 0.191, within 0.006 in every 10° band, over the world population of
 // `procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans`
 // in `crates/game/tests/tuning.rs`.
@@ -2165,10 +2238,10 @@ pub fn procedural_atmosphere_primary(
 // Keep these synchronized with
 // `crates/browser/src/shader/components/environment.wgsl`.
 const WATER_VAPOR_SATURATION_RATIO_MEAN: [f32; 10] = [
-    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.872, 0.899, 0.933, 0.951,
+    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.873, 0.902, 0.936, 0.955,
 ];
 const WATER_VAPOR_SATURATION_RATIO_DEVIATION: [f32; 10] = [
-    0.040, 0.044, 0.056, 0.079, 0.098, 0.098, 0.100, 0.101, 0.090, 0.083,
+    0.037, 0.041, 0.052, 0.068, 0.077, 0.074, 0.074, 0.074, 0.057, 0.041,
 ];
 const WATER_VAPOR_NOISE_DEVIATION: f32 = 0.191;
 
@@ -2238,12 +2311,13 @@ fn procedural_atmosphere_primary_with_conditions(
     let water_vapor_g_kg = water_vapor_saturation_ratio
         * water_vapor_saturation_capacity_g_kg(
             climate_air_temperature_c + surface_air_temperature_anomaly_c,
+            SEA_LEVEL_PRESSURE_HPA,
         );
     // The deck look's tuned humidity, from the climate's saturation.
     let regional_water_vapor_g_kg =
-        (water_vapor_saturation_capacity_g_kg(climate_air_temperature_c)
+        (water_vapor_saturation_capacity_g_kg(climate_air_temperature_c, SEA_LEVEL_PRESSURE_HPA)
             * (0.72 + 0.65 * (DECK_WATER_VAPOR_NOISE_SCALE * broad_water_vapor_noise) as f32))
-            .clamp(0.5, 25.0);
+            .max(0.0);
 
     AtmospherePrimary {
         pressure_hpa: 1013.25
@@ -2383,7 +2457,8 @@ pub fn derive_weather(
             primary.local_temperature_gradient_c_per_m.x,
         );
     let upper_wind_velocity_m_s = upper_pressure_wind_m_s + thermal_wind_m_s;
-    let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(surface_air_temperature_c);
+    let saturation_capacity_g_kg =
+        water_vapor_saturation_capacity_g_kg(surface_air_temperature_c, SEA_LEVEL_PRESSURE_HPA);
     let relative_humidity = primary.water_vapor_g_kg / saturation_capacity_g_kg;
     // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
     // stand in for a parcel buoyancy index.
@@ -2463,13 +2538,12 @@ pub fn derive_weather(
     let mechanical_gust_speed_m_s = SURFACE_GUST_DRAG_INCREMENT
         * mechanical_stability_factor
         * resolved_surface_wind_m_s.length();
-    // Moist convection needs surface air lifted to its condensation level; by
-    // this model's saturation curve the dew-point depression is −ln(RH)/0.055 K.
+    // Moist convection needs surface air lifted to its condensation level.
     // Compromise: partial lift gives partial activity, standing in for the
     // share of thermals that reach the level.
     let condensation_level_m = CONDENSATION_LEVEL_M_PER_C
-        * (-libm::logf(relative_humidity)).max(0.0)
-        / SATURATION_GROWTH_PER_C as f32;
+        * (surface_air_temperature_c - dew_point_c(surface_air_temperature_c, relative_humidity))
+            .max(0.0);
     let condensation_level_reach = if ascent_m <= 0.0 {
         0.0
     } else if ascent_m >= condensation_level_m {
@@ -2541,10 +2615,10 @@ fn regional_deck_cover(
         conditions,
     );
     let regional_air_temperature_c = climate_air_temperature_c + regional.air_temperature_anomaly_c;
-    let climate_water_vapor_g_kg =
-        0.72 * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c);
+    let climate_water_vapor_g_kg = 0.72
+        * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c, SEA_LEVEL_PRESSURE_HPA);
     let relative_humidity = (0.8 * climate_water_vapor_g_kg + 0.2 * regional.water_vapor_g_kg)
-        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c);
+        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c, SEA_LEVEL_PRESSURE_HPA);
     let condensation = smoothstep_range(0.45, 0.95, f64::from(relative_humidity)) as f32;
     let pressure_lift =
         1.0 - smoothstep_range(1009.0, 1017.0, f64::from(regional.pressure_hpa)) as f32;

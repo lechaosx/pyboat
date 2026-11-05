@@ -882,17 +882,51 @@ fn upper_air_temperature_500_hpa_field_from_noise(
     );
 }
 
-fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32) -> f32 {
-    return 3.5 * exp(SATURATION_GROWTH_PER_C * (air_temperature_c + 5.0));
+// The saturation curve, its inversion and the hydrostatic pressure follow
+// `water_vapor_saturation_capacity_g_kg` and its neighbours in
+// crates/game/src/lib.rs, which records their sources and compromises; keep
+// the two synchronized.
+fn saturation_vapor_pressure_coefficients(air_temperature_c: f32) -> vec3<f32> {
+    if air_temperature_c >= 0.0 {
+        return vec3<f32>(6.1094, 17.625, 243.04);
+    }
+    return vec3<f32>(6.1121, 22.587, 273.86);
+}
+
+fn water_vapor_saturation_capacity_g_kg(air_temperature_c: f32, pressure_hpa: f32) -> f32 {
+    let coefficients = saturation_vapor_pressure_coefficients(air_temperature_c);
+    let vapor_pressure_hpa = coefficients.x
+        * exp(coefficients.y * air_temperature_c / (coefficients.z + air_temperature_c));
+    return 622.0 * vapor_pressure_hpa / (pressure_hpa - 0.378 * vapor_pressure_hpa);
+}
+
+fn saturation_growth_per_c(air_temperature_c: f32) -> f32 {
+    let coefficients = saturation_vapor_pressure_coefficients(air_temperature_c);
+    let offset_c = coefficients.z + air_temperature_c;
+    return coefficients.y * coefficients.z / (offset_c * offset_c);
+}
+
+fn dew_point_c(air_temperature_c: f32, relative_humidity: f32) -> f32 {
+    let coefficients = saturation_vapor_pressure_coefficients(air_temperature_c);
+    let saturation_exponent = log(relative_humidity)
+        + coefficients.y * air_temperature_c / (coefficients.z + air_temperature_c);
+    return coefficients.z * saturation_exponent / (coefficients.y - saturation_exponent);
+}
+
+fn pressure_at_height_hpa(height_m: f32, column_mean_temperature_c: f32) -> f32 {
+    return SEA_LEVEL_PRESSURE_HPA * exp(
+        -height_m / (DRY_AIR_SCALE_HEIGHT_M_PER_K * (column_mean_temperature_c + 273.15)),
+    );
 }
 
 // The low cloud scheme and its constants follow `low_cloud` in
 // crates/game/src/lib.rs, which records their layers and sources; keep the two
 // synchronized.
-const SATURATION_GROWTH_PER_C: f32 = 0.055;
+const SEA_LEVEL_PRESSURE_HPA: f32 = 1013.25;
 const DRY_ADIABATIC_LAPSE_RATE_C_PER_M: f32 = 0.0098;
 const DRY_AIR_SCALE_HEIGHT_M_PER_K: f32 = 29.26;
 const LATENT_WARMING_C_PER_G_KG: f32 = 2.49;
+const SUBLIMATION_WARMING_C_PER_G_KG: f32 = 2.82;
 const BOUNDARY_LAYER_DEPTH_M: f32 = 1000.0;
 const CONDENSATION_LEVEL_M_PER_C: f32 = 125.0;
 const SURFACE_CRITICAL_RELATIVE_HUMIDITY: f32 = 0.96;
@@ -911,7 +945,13 @@ fn low_cloud(
 ) -> vec2<f32> {
     let parcel_temperature_c = surface_air_temperature_c
         - DRY_ADIABATIC_LAPSE_RATE_C_PER_M * lifted_m;
-    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(parcel_temperature_c);
+    let saturation_g_kg = water_vapor_saturation_capacity_g_kg(
+        parcel_temperature_c,
+        pressure_at_height_hpa(
+            lifted_m,
+            0.5 * (surface_air_temperature_c + parcel_temperature_c),
+        ),
+    );
     let critical_relative_humidity = SURFACE_CRITICAL_RELATIVE_HUMIDITY
         + (CLOUD_LEVEL_CRITICAL_RELATIVE_HUMIDITY - SURFACE_CRITICAL_RELATIVE_HUMIDITY)
             * min(lifted_m / CLOUD_LEVEL_HEIGHT_M, 1.0);
@@ -931,8 +971,16 @@ fn low_cloud(
         cover = 0.5 * rise * rise;
         condensate_per_spread = rise * rise * rise / 6.0;
     }
-    let latent_heating_factor = 1.0
-        / (1.0 + LATENT_WARMING_C_PER_G_KG * SATURATION_GROWTH_PER_C * saturation_g_kg);
+    let latent_warming_c_per_g_kg = select(
+        SUBLIMATION_WARMING_C_PER_G_KG,
+        LATENT_WARMING_C_PER_G_KG,
+        parcel_temperature_c >= 0.0,
+    );
+    let latent_heating_factor = 1.0 / (
+        1.0 + latent_warming_c_per_g_kg
+            * saturation_growth_per_c(parcel_temperature_c)
+            * saturation_g_kg
+    );
     let cloud_water_g_kg = latent_heating_factor * spread_g_kg * condensate_per_spread;
     let bergeron_factor = 1.0 + BERGERON_GAIN_PER_SQRT_C * sqrt(
         clamp(BERGERON_ONSET_C - parcel_temperature_c, 0.0, BERGERON_RANGE_C),
@@ -981,10 +1029,10 @@ fn surface_water_vapor_noise_at(position_m: vec2<f32>) -> vec2<f32> {
 // follows the calibrated distribution of `procedural_atmosphere_primary` in
 // crates/game/src/lib.rs; keep these synchronized with it.
 const WATER_VAPOR_SATURATION_RATIO_MEAN: array<f32, 10> = array<f32, 10>(
-    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.872, 0.899, 0.933, 0.951,
+    0.803, 0.797, 0.783, 0.790, 0.826, 0.854, 0.873, 0.902, 0.936, 0.955,
 );
 const WATER_VAPOR_SATURATION_RATIO_DEVIATION: array<f32, 10> = array<f32, 10>(
-    0.040, 0.044, 0.056, 0.079, 0.098, 0.098, 0.100, 0.101, 0.090, 0.083,
+    0.037, 0.041, 0.052, 0.068, 0.077, 0.074, 0.074, 0.074, 0.057, 0.041,
 );
 const WATER_VAPOR_NOISE_DEVIATION: f32 = 0.191;
 
@@ -1000,7 +1048,6 @@ fn surface_water_vapor_field_from_noise(
         + 0.5 * climate.seasonal_temperature_range_c
             * climate.seasonal_latitude_factor
             * scene.seasonal_phase_factors.x;
-    let capacity_g_kg = water_vapor_saturation_capacity_g_kg(climate_temperature_c);
     let ratio = latitude_curve_value(
         WATER_VAPOR_SATURATION_RATIO_MEAN,
         climate.latitude_degrees,
@@ -1012,8 +1059,13 @@ fn surface_water_vapor_field_from_noise(
     return AtmosphereScalarField(
         ratio * water_vapor_saturation_capacity_g_kg(
             climate_temperature_c + temperature_anomaly_c,
+            SEA_LEVEL_PRESSURE_HPA,
         ),
-        clamp(capacity_g_kg * (0.72 + 0.65 * 0.86 * raw_noise.y), 0.5, 25.0),
+        max(
+            water_vapor_saturation_capacity_g_kg(climate_temperature_c, SEA_LEVEL_PRESSURE_HPA)
+                * (0.72 + 0.65 * 0.86 * raw_noise.y),
+            0.0,
+        ),
     );
 }
 
@@ -1114,16 +1166,18 @@ fn water_temperature_c_at_season(climate: SurfaceClimateSample, water_season: f3
 
 fn climate_moisture_support_from_water_vapor(
     air_temperature_c: f32,
+    pressure_hpa: f32,
     water_vapor_g_kg: f32,
 ) -> f32 {
     let relative_humidity = water_vapor_g_kg
-        / water_vapor_saturation_capacity_g_kg(air_temperature_c);
+        / water_vapor_saturation_capacity_g_kg(air_temperature_c, pressure_hpa);
     return smoothstep(0.45, 0.95, relative_humidity);
 }
 
 fn climate_moisture_support(air_temperature_c: f32) -> f32 {
     return climate_moisture_support_from_water_vapor(
         air_temperature_c,
+        SEA_LEVEL_PRESSURE_HPA,
         surface_water_vapor_g_kg(),
     );
 }
@@ -1140,11 +1194,11 @@ fn seasonal_snow_cover_from_fields(
         temperature_anomaly_c,
         climate,
     );
-    let air_temperature = surface_current_air_temperature_c_from_atmosphere(
+    let surface_air_temperature = surface_current_air_temperature_c_from_atmosphere(
         temperature_anomaly_c,
         climate,
-    )
-        - 0.0065 * max(elevation_m, 0.0);
+    );
+    let air_temperature = surface_air_temperature - 0.0065 * max(elevation_m, 0.0);
     let weather_standard_deviation_c = latitude_curve_value(
         TEMPERATURE_ANOMALY_P99_C,
         climate.latitude_degrees,
@@ -1157,6 +1211,10 @@ fn seasonal_snow_cover_from_fields(
         0.35
             + 0.65 * climate_moisture_support_from_water_vapor(
                 air_temperature,
+                pressure_at_height_hpa(
+                    max(elevation_m, 0.0),
+                    0.5 * (surface_air_temperature + air_temperature),
+                ),
                 water_vapor_g_kg,
             )
     );
@@ -1365,7 +1423,10 @@ fn regional_cloud_drivers_from_fields(
             * scene.seasonal_phase_factors.x;
     let climate_water_vapor_g_kg = select(
         0.0,
-        0.72 * water_vapor_saturation_capacity_g_kg(climate_air_temperature_c),
+        0.72 * water_vapor_saturation_capacity_g_kg(
+            climate_air_temperature_c,
+            SEA_LEVEL_PRESSURE_HPA,
+        ),
         environment_feature_visibility().z > 0.0,
     );
     let regional_water_vapor_g_kg = mix(
@@ -1376,7 +1437,7 @@ fn regional_cloud_drivers_from_fields(
     let regional_air_temperature_c = climate_air_temperature_c
         + broad_surface_temperature_anomaly_c;
     let relative_humidity = regional_water_vapor_g_kg
-        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c);
+        / water_vapor_saturation_capacity_g_kg(regional_air_temperature_c, SEA_LEVEL_PRESSURE_HPA);
     let broad_pressure_hpa = 1013.25 + broad_pressure_potential_m2_s / 6000.0;
     return RegionalCloudDrivers(
         relative_humidity,
@@ -1473,7 +1534,10 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         surface_anomaly.value,
         atmosphere.climate,
     );
-    let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(air_temperature_c);
+    let saturation_capacity_g_kg = water_vapor_saturation_capacity_g_kg(
+        air_temperature_c,
+        SEA_LEVEL_PRESSURE_HPA,
+    );
     let relative_humidity = atmosphere.water_vapor_g_kg / saturation_capacity_g_kg;
     let temperature_gradient = surface_anomaly.gradient;
     // Lapse rates of 5.1–8.7 K/km to 500 hPa, between moist and dry adiabatic,
@@ -1601,23 +1665,25 @@ fn cloud_weather_at(position_m: vec2<f32>) -> CloudWeatherSample {
     return cloud_weather_field_at(position_m).weather;
 }
 
-fn cloud_weather_conditions_at(position_m: vec2<f32>) -> CloudWeatherSample {
-    return cloud_weather_at(position_m);
-}
-
 fn surface_gust_velocity_m_s_at(
     position_m: vec2<f32>,
     pressure: PressureFieldSample,
     resolved_surface_wind_m_s: vec2<f32>,
     upper_wind_m_s: vec2<f32>,
 ) -> vec2<f32> {
-    let weather = cloud_weather_conditions_at(position_m);
+    let field = cloud_weather_field_at(position_m);
+    let weather = field.weather;
+    let air_temperature_c = surface_current_air_temperature_c_from_atmosphere(
+        field.atmosphere.temperature_anomaly.value,
+        field.atmosphere.climate,
+    );
     let mechanical_gust_speed_m_s = 0.27
         * (1.0 + 0.35 * weather.instability)
         * length(resolved_surface_wind_m_s);
-    let condensation_level_m = CONDENSATION_LEVEL_M_PER_C
-        * max(-log(weather.relative_humidity), 0.0)
-        / SATURATION_GROWTH_PER_C;
+    let condensation_level_m = CONDENSATION_LEVEL_M_PER_C * max(
+        air_temperature_c - dew_point_c(air_temperature_c, weather.relative_humidity),
+        0.0,
+    );
     var condensation_level_reach = 0.0;
     if weather.ascent_m > 0.0 {
         condensation_level_reach = 1.0;

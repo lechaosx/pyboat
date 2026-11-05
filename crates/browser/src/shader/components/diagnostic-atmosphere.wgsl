@@ -53,7 +53,7 @@ fn diagnostic_atmosphere_condition(input: VertexOutput, output: u32) -> vec4<f32
     let position_m = input.world_position_m;
     let atmosphere = surface_atmosphere_sample_at(position_m);
     if output == 0u {
-        return vec4<f32>(scalar_debug_color(atmosphere.water_vapor_g_kg / 60.0), 1.0);
+        return vec4<f32>(scalar_debug_color(atmosphere.water_vapor_g_kg / 80.0), 1.0);
     }
     let weather = cloud_weather_from_atmosphere(position_m, atmosphere);
     if output == 1u {
