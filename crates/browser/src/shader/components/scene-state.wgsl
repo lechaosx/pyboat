@@ -40,6 +40,12 @@ struct SceneUniforms {
 
 // Keep synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
 const OCCLUDER_FIELD_LAYERS: u32 = 5u;
+// Keep the layer order synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
+// Cloud shadow texels on their plane along the Sun, then the Moon.
+const CLOUD_SHADOW_FIELD: u32 = 0u;
+const LANDFORM_FIELD: u32 = 2u;
+// Sun, then Moon.
+const LANDFORM_HORIZON_FIELD: u32 = 3u;
 
 struct SceneTuning {
     // Attenuation length, then padding.

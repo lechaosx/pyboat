@@ -154,6 +154,11 @@ pub(crate) const SCENE_SHADER: &str =
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const TERRAIN_DEPTH_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/terrain-depth.wgsl"));
+#[cfg(feature = "playground")]
+pub(crate) const PLAYGROUND_DIRECT_TERRAIN_DEPTH_SHADER: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/terrain-depth-playground-direct.wgsl"
+));
 #[cfg(any(target_arch = "wasm32", feature = "playground", test))]
 pub(crate) const OCCLUDER_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/occluder-fields.wgsl"));

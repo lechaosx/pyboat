@@ -10,13 +10,6 @@ var occluder_fields: texture_2d_array<f32>;
 @group(0) @binding(3)
 var occluder_field_sampler: sampler;
 
-// Keep the layer order synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
-// Cloud shadow texels on their plane along the Sun, then the Moon.
-const CLOUD_SHADOW_FIELD: u32 = 0u;
-const LANDFORM_FIELD: u32 = 2u;
-// Sun, then Moon.
-const LANDFORM_HORIZON_FIELD: u32 = 3u;
-
 fn occluder_field(position_m: vec2<f32>, layer: u32) -> vec4<f32> {
     let grid = scene.occluder_field_grid_m[layer];
     let texel_position = (camera_relative_position_m(position_m) - grid.xy) / grid.zw;
@@ -37,6 +30,14 @@ fn occluder_field(position_m: vec2<f32>, layer: u32) -> vec4<f32> {
 fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     let field = occluder_field(position_m, LANDFORM_FIELD);
     return field.x + field.y;
+}
+
+// The landform layer texel's sea-level offset from the camera, then its
+// elevation.
+fn landform_texel_m(texel: vec2<u32>) -> vec3<f32> {
+    let grid = scene.occluder_field_grid_m[LANDFORM_FIELD];
+    let field = textureLoad(occluder_fields, texel, LANDFORM_FIELD, 0);
+    return vec3<f32>(grid.xy + vec2<f32>(texel) * grid.zw, field.x + field.y);
 }
 
 fn sampled_landform_horizon(

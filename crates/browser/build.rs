@@ -216,6 +216,18 @@ fn main() {
         ],
         "scene-playground-direct.wgsl",
     );
+    write_shader(
+        &compose(&[
+            &scene,
+            &direct_occluder_fields,
+            &direct_terrain_noise,
+            &direct_surface,
+            &playground_interface,
+            &read_component("src/shader/terrain-depth-entry.wgsl"),
+        ]),
+        &["vertex_terrain_depth"],
+        "terrain-depth-playground-direct.wgsl",
+    );
     let playground_occluders = compose(&[
         &scene,
         &direct_occluder_fields,

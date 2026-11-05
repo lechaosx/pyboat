@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+#[cfg(feature = "playground")]
+use crate::PLAYGROUND_DIRECT_TERRAIN_DEPTH_SHADER;
 use crate::{FieldGrids, TERRAIN_DEPTH_SHADER};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -27,36 +29,53 @@ impl TerrainDepth {
         count: None,
     };
 
-    /// `size` is the scene's render size.
+    /// Reads the landform layer of the occluder fields. `size` is the scene's
+    /// render size.
     pub fn new(device: &wgpu::Device, size: (u32, u32)) -> Self {
+        Self::with_shader(device, size, TERRAIN_DEPTH_SHADER, true)
+    }
+
+    /// Evaluates the broad landform at the landform layer's texels, for the
+    /// lab's compositions that read no field grids.
+    #[cfg(feature = "playground")]
+    pub fn direct(device: &wgpu::Device, size: (u32, u32)) -> Self {
+        Self::with_shader(device, size, PLAYGROUND_DIRECT_TERRAIN_DEPTH_SHADER, false)
+    }
+
+    fn with_shader(
+        device: &wgpu::Device,
+        size: (u32, u32),
+        source: &'static str,
+        reads_occluder_fields: bool,
+    ) -> Self {
+        let uniforms = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let occluder_fields = wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let entries = [uniforms, occluder_fields];
         let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Terrain depth input layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &entries[..1 + usize::from(reads_occluder_fields)],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Terrain depth shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TERRAIN_DEPTH_SHADER)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Terrain depth pipeline layout"),
@@ -111,26 +130,32 @@ impl TerrainDepth {
         true
     }
 
-    /// The scene uniforms and the occluder field layers the pass reads.
+    /// The scene uniforms, and the occluder field layers unless the pass is
+    /// `direct`.
     pub fn input_bind_group(
         &self,
         device: &wgpu::Device,
         uniform_buffer: &wgpu::Buffer,
-        occluder_fields: &wgpu::TextureView,
+        occluder_fields: Option<&wgpu::TextureView>,
     ) -> wgpu::BindGroup {
+        let uniforms = wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform_buffer.as_entire_binding(),
+        };
+        let entries = match occluder_fields {
+            Some(view) => vec![
+                uniforms,
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+            ],
+            None => vec![uniforms],
+        };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Terrain depth input"),
             layout: &self.input_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(occluder_fields),
-                },
-            ],
+            entries: &entries,
         })
     }
 

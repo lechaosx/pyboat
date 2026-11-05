@@ -12,13 +12,12 @@ fn vertex_terrain_depth(
         vertex_index / 6u + u32(corner == 1u || corner == 4u || corner == 5u),
         row + u32(corner == 2u || corner == 3u || corner == 5u),
     );
-    let grid = scene.occluder_field_grid_m[LANDFORM_FIELD];
-    let landform = textureLoad(occluder_fields, texel, LANDFORM_FIELD, 0);
+    let landform_m = landform_texel_m(texel);
     // The eye ray through a sea-level offset s passes elevation z at s scaled
     // by 1 − z / H, which clip w divides out; depth is 1 − n / w.
-    let scale = 1.0 - max(landform.x + landform.y, 0.0) / scene.drone_camera.x;
+    let scale = 1.0 - max(landform_m.z, 0.0) / scene.drone_camera.x;
     return vec4<f32>(
-        2.0 * (grid.xy + vec2<f32>(texel) * grid.zw) / scene.camera_and_view_m.zw,
+        2.0 * landform_m.xy / scene.camera_and_view_m.zw,
         scale - scene.drone_camera.y,
         scale,
     );

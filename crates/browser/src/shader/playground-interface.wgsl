@@ -31,12 +31,19 @@ struct InitializedPlaygroundScene {
     surface_circle_position: vec4<f32>,
 }
 
+// The terrain the drone camera sees through `input`'s sea-level point.
 fn initialize_playground_base(input: VertexOutput) -> VertexOutput {
-    visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w;
+    // Compromise: offsets wrap to the nearest copy of the world, so a view wider
+    // than the world repeats and cuts leaning land at half a lap from its centre.
+    let view_offset_m = camera_relative_position_m(input.world_position_m);
+    let hit_scale = terrain_hit_scale(view_offset_m);
+    visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w * hit_scale;
     tuning = playground_scene_tuning();
     landscape_visibility = playground.landscape_visibility;
     var periodic_input = input;
-    periodic_input.world_position_m = canonical_world_position(input.world_position_m);
+    periodic_input.world_position_m = canonical_world_position(
+        scene.camera_and_view_m.xy + view_offset_m * hit_scale,
+    );
     surface_position_m = periodic_input.world_position_m;
     return periodic_input;
 }
@@ -103,18 +110,10 @@ fn initialize_playground_atmospheric_lighting() {
     regional_aerosol_optical_depth = regional_aerosol_optical_depth_at(surface_cloud_weather.regional);
 }
 
-// The terrain the drone camera sees through `input`'s sea-level point.
 fn initialize_playground_scene_from_environment_fields(
     input: VertexOutput,
 ) -> InitializedPlaygroundScene {
-    // Compromise: offsets wrap to the nearest copy of the world, so a view wider
-    // than the world repeats and cuts leaning land at half a lap from its centre.
-    let view_offset_m = camera_relative_position_m(input.world_position_m);
-    let hit_scale = terrain_hit_scale(view_offset_m);
-    var viewed_input = input;
-    viewed_input.world_position_m = scene.camera_and_view_m.xy + view_offset_m * hit_scale;
-    let periodic_input = initialize_playground_base(viewed_input);
-    visual_pixel_footprint_m *= hit_scale;
+    let periodic_input = initialize_playground_base(input);
     let surface_circle_position = periodic_noise_circle_position_from_canonical(
         surface_position_m,
     );

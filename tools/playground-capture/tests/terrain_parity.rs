@@ -3096,10 +3096,6 @@ fn baked_scene_flips_no_more_pixels_than_a_quarter_pixel_pan_at_overview_zooms()
                         diagnostic,
                         "--cloud-shadows",
                         "0",
-                        // The direct reference sees the ground orthographically, as the grid scene
-                        // does from a camera this high, within 0.1 px.
-                        "--camera-height",
-                        "1000000",
                     ],
                 )
             };
@@ -3287,10 +3283,6 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
                         diagnostic,
                         "--cloud-shadows",
                         "0",
-                        // The direct reference sees the ground orthographically, as the grid scene
-                        // does from a camera this high, within 0.1 px.
-                        "--camera-height",
-                        "1000000",
                     ],
                     arguments,
                 ]
@@ -3387,10 +3379,6 @@ fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
                 "0",
                 "--light-contributions",
                 "1,1,0,0",
-                // The direct reference sees the ground orthographically, as the grid scene
-                // does from a camera this high, within 0.1 px.
-                "--camera-height",
-                "1000000",
             ],
         )
     };
@@ -4056,24 +4044,22 @@ fn visual_cloud_fields_are_independent_of_view_center_weather() {
     let height = 16usize;
     let mut differences = Vec::new();
     for diagnostic in ["cloud_cumulus_shadow", "cloud_deck_shadow"] {
-        let storm_centered = render_diagnostic_image_with_view_at(
-            world,
-            Vector::new(-4_000.0, 0.0),
-            0.0,
-            8_000.0,
-            diagnostic,
-            width as u32,
-            height as u32,
-        );
-        let clear_centered = render_diagnostic_image_with_view_at(
-            world,
-            Vector::ZERO,
-            0.0,
-            8_000.0,
-            diagnostic,
-            width as u32,
-            height as u32,
-        );
+        // Pixels show their sea-level positions, to within 0.1 m, from a camera
+        // this high, so the overlapping columns show the same sharp shadow rims.
+        let render = |center_m| {
+            render_controlled_image_at(
+                world,
+                center_m,
+                0.0,
+                8_000.0,
+                diagnostic,
+                width as u32,
+                height as u32,
+                &[("--camera-height", "100000000")],
+            )
+        };
+        let storm_centered = render(Vector::new(-4_000.0, 0.0));
+        let clear_centered = render(Vector::ZERO);
         let mut maximum_difference = 0u8;
         for row in 0..height {
             for storm_column in 8..width {
@@ -4508,7 +4494,9 @@ fn cumulus_shadows_are_independent_of_pixel_footprint() {
     let partial = island_afternoons()
         .into_iter()
         .find_map(|(position_m, world_time_seconds)| {
-            let image = render_diagnostic_image_with_view_at(
+            // Pixels show their sea-level positions, to within 0.1 m, from a
+            // camera this high.
+            let image = render_controlled_image_at(
                 world,
                 position_m,
                 world_time_seconds,
@@ -4516,6 +4504,7 @@ fn cumulus_shadows_are_independent_of_pixel_footprint() {
                 "cloud_cumulus_shadow",
                 size,
                 size,
+                &[("--camera-height", "100000000")],
             );
             let (index, pixel) = image
                 .as_chunks::<4>()

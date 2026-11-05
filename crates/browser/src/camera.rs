@@ -2,10 +2,10 @@ use game::{BROAD_LANDFORM_HIGHEST_M, broad_landform_elevation_m};
 use rapier2d::prelude::Vector;
 use simulation::WorldGeometry;
 
-// The upper cloud field's lowest height, the highest that keeps every upper
-// cloud above the camera. Keep synchronized with `CUMULUS_LOWEST_HEIGHT_M` in
-// clouds.wgsl.
-const PRODUCTION_HEIGHT_M: f32 = 1000.0;
+// The terrain depth's near plane lies at least this share of the camera's
+// height below it, where f32 depths still resolve 1 − depth to a relative 1e-4;
+// a camera at or below the highest landform clips the terrain above the plane.
+const LEAST_TERRAIN_DEPTH_NEAR_SCALE: f32 = 1e-3;
 // Over the default world's tall island, archipelago and rugged island in 300 m
 // to 20 km views, a march with 64 m steps lands within a 1080p pixel of a 1 m
 // march on a 96 × 54 grid of view points, and 128 m steps miss some crests;
@@ -30,11 +30,16 @@ pub struct DroneCamera {
 }
 
 impl DroneCamera {
+    /// The upper cloud field's lowest height, the highest that keeps every
+    /// upper cloud above the camera. Keep synchronized with
+    /// `CUMULUS_LOWEST_HEIGHT_M` in clouds.wgsl.
+    pub const PRODUCTION_HEIGHT_M: f32 = 1000.0;
+
     pub fn production(world_geometry: WorldGeometry, center_m: Vector, view_height_m: f32) -> Self {
         Self {
             world_geometry,
             center_m,
-            height_m: PRODUCTION_HEIGHT_M,
+            height_m: Self::PRODUCTION_HEIGHT_M,
             view_height_m,
         }
     }
@@ -71,14 +76,14 @@ impl DroneCamera {
         })
     }
 
-    /// The scale n that the eye ray's offset takes at the highest broad
-    /// landform, the near plane of the terrain depth. A surface at elevation z
-    /// lies at depth 1 − n / (1 − z / H), and every depth from sea level's,
-    /// 1 − n, up to the cleared 1 decodes to sea level. Keep
-    /// synchronized with `vertex_terrain_depth` in terrain-depth-entry.wgsl
-    /// and `terrain_hit_scale` in terrain-depth.wgsl.
+    /// The scale n that the eye ray's offset takes at the near plane of the
+    /// terrain depth, the highest broad landform for a camera above it. A
+    /// surface at elevation z lies at depth 1 − n / (1 − z / H), and every
+    /// depth from sea level's, 1 − n, up to the cleared 1 decodes to sea
+    /// level. Keep synchronized with `vertex_terrain_depth` in
+    /// terrain-depth-entry.wgsl and `terrain_hit_scale` in terrain-depth.wgsl.
     pub fn terrain_depth_near_scale(&self) -> f32 {
-        1.0 - BROAD_LANDFORM_HIGHEST_M as f32 / self.height_m
+        (1.0 - BROAD_LANDFORM_HIGHEST_M as f32 / self.height_m).max(LEAST_TERRAIN_DEPTH_NEAR_SCALE)
     }
 
     pub fn elevation_at_terrain_depth_m(&self, depth: f32) -> f32 {
@@ -327,6 +332,25 @@ mod tests {
         }
         assert_eq!(camera.view_point(TALL_ISLAND_PEAK_M, 400.0), None);
         assert_eq!(camera.view_point(TALL_ISLAND_PEAK_M, 450.0), None);
+    }
+
+    #[test]
+    fn a_camera_at_or_below_the_peak_decodes_every_terrain_depth_below_itself() {
+        for height_m in [60.0, 300.0, BROAD_LANDFORM_HIGHEST_M as f32] {
+            let camera = DroneCamera {
+                height_m,
+                ..DroneCamera::production(WorldGeometry::default(), TALL_ISLAND_PEAK_M, 200.0)
+            };
+            assert!(camera.terrain_depth_near_scale() > 0.0);
+            assert_eq!(camera.elevation_at_terrain_depth_m(1.0), 0.0);
+            for step in 0..=100 {
+                let elevation_m = camera.elevation_at_terrain_depth_m(step as f32 / 100.0);
+                assert!(
+                    (0.0..height_m).contains(&elevation_m),
+                    "{height_m} m camera: {elevation_m} m",
+                );
+            }
+        }
     }
 
     #[test]

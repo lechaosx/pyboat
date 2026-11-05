@@ -2,6 +2,15 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     return broad_landform_elevation_m(position_m);
 }
 
+// The landform layer texel's sea-level offset from the camera, then the broad
+// landform's elevation there, which the layer would hold.
+fn landform_texel_m(texel: vec2<u32>) -> vec3<f32> {
+    let grid = scene.occluder_field_grid_m[LANDFORM_FIELD];
+    let offset_m = grid.xy + vec2<f32>(texel) * grid.zw;
+    let position_m = canonical_world_position(scene.camera_and_view_m.xy + offset_m);
+    return vec3<f32>(offset_m, broad_landform_elevation_m(position_m));
+}
+
 fn sampled_landform_horizon(
     position_m: vec2<f32>,
     light_direction: vec3<f32>,

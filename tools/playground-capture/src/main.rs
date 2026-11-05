@@ -500,7 +500,7 @@ impl CaptureFields {
             terrain_depth_input: terrain_depth.input_bind_group(
                 device,
                 scene_buffer,
-                &self.occluder_view,
+                Some(&self.occluder_view),
             ),
             landform_horizon_input: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("scene uniforms and landform layer"),
@@ -892,10 +892,8 @@ fn parse_options() -> Result<Command, String> {
             }
             "--camera-height" => {
                 let height_m: f32 = parse(&value(&mut arguments)?, &argument)?;
-                if !(height_m.is_finite() && height_m > game::BROAD_LANDFORM_HIGHEST_M as f32) {
-                    return Err(
-                        "--camera-height must be finite and above the highest landform".to_owned(),
-                    );
+                if !(height_m.is_finite() && height_m > 0.0) {
+                    return Err("--camera-height must be positive and finite".to_owned());
                 }
                 options.camera_height_m = Some(height_m);
             }
@@ -1626,8 +1624,9 @@ fn print_help() {
            --touch-budget         bake the surface within touch devices' memory budget\n\
            --output-peak PEAK     tone-curve peak in diffuse whites, 4 for the game's HDR\n\
                                   output (default 1, SDR); the 8-bit image clips above 1\n\
-           --camera-height M      the drone camera's height above mean sea level, above the\n\
-                                  highest landform (default the game's height)\n\
+           --camera-height M      the drone camera's positive height above mean sea level\n\
+                                  (default the game's height); one at or below the highest\n\
+                                  landform clips the land just below it\n\
            --terrain-elevations PATH  write the elevation each pixel's eye ray meets in the\n\
                                   scene's terrain depth, as little-endian f32 rows from the\n\
                                   top; grid scene compositions only\n\n\
@@ -1967,27 +1966,31 @@ async fn render(options: &Options) -> Result<(), String> {
         )
     });
     let scene_composition = options.diagnostic.module.is_none();
-    let direct_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scene uniforms and adapting field layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            ADAPTING_FIELD_LAYOUT_ENTRY,
-        ],
+    let uniform_entry = wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    // Compositions without field grids read the scene uniforms, the terrain
+    // depth, and the adapting field when they adapt.
+    let fieldless_entries = [
+        uniform_entry,
+        TerrainDepth::SCENE_LAYOUT_ENTRY,
+        ADAPTING_FIELD_LAYOUT_ENTRY,
+    ];
+    let fieldless_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("scene uniforms and terrain depth layout"),
+        entries: &fieldless_entries[..2 + usize::from(scene_composition)],
     });
     let bind_group_layouts = [
         Some(match &fields {
             Some(fields) => &fields.scene_layout,
-            None if scene_composition => &direct_layout,
-            None => &scene_layout,
+            None => &fieldless_layout,
         }),
         Some(&playground_layout),
     ];
@@ -2050,7 +2053,6 @@ async fn render(options: &Options) -> Result<(), String> {
             AdaptingField::illumination_target(),
         ),
         field: AdaptingField::new(&device, &scene_layout),
-        direct_layout: &direct_layout,
     });
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("fullscreen terrain vertices"),
@@ -2094,12 +2096,17 @@ async fn render(options: &Options) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
-    let terrain_depth = TerrainDepth::new(&device, (options.width, options.height));
+    let terrain_depth = if grid_scene {
+        TerrainDepth::new(&device, (options.width, options.height))
+    } else {
+        TerrainDepth::direct(&device, (options.width, options.height))
+    };
     let (rgba, adapting_field) = render_world(
         &device,
         &queue,
         &pipeline,
         &scene_layout,
+        &fieldless_layout,
         &playground_bind_group,
         &vertex_buffer,
         fields.as_ref(),
@@ -2183,6 +2190,7 @@ fn render_world(
     queue: &wgpu::Queue,
     pipeline: &wgpu::RenderPipeline,
     scene_layout: &wgpu::BindGroupLayout,
+    fieldless_layout: &wgpu::BindGroupLayout,
     playground_bind_group: &wgpu::BindGroup,
     vertex_buffer: &wgpu::Buffer,
     fields: Option<&CaptureFields>,
@@ -2345,23 +2353,31 @@ fn render_world(
             terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
             bindings.scene
         }
-        None => match adaptation {
-            Some(adaptation) => device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("scene uniforms and adapting field"),
-                layout: adaptation.direct_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: scene_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: wgpu::BindingResource::TextureView(&adaptation.field.view),
-                    },
-                ],
-            }),
-            None => scene_bind_group.clone(),
-        },
+        None => {
+            let input = terrain_depth.input_bind_group(device, &scene_buffer, None);
+            terrain_depth.encode(&mut encoder, &input, &capture_field_grids(options)?, None);
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: scene_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
+                },
+            ];
+            if let Some(adaptation) = adaptation {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&adaptation.field.view),
+                });
+            }
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("scene uniforms and terrain depth"),
+                layout: fieldless_layout,
+                entries: &entries,
+            })
+        }
     };
     match adaptation {
         Some(adaptation) if options.fixed_adaptation => {
@@ -2464,12 +2480,11 @@ fn render_world(
     Ok((rgba, adapting_field))
 }
 
-/// What a scene composition adapts with: its illumination pipeline, the
-/// field, and the layout a direct composition reads the field through.
-struct CaptureAdaptation<'a> {
+/// What a scene composition adapts with: its illumination pipeline and the
+/// field.
+struct CaptureAdaptation {
     pipeline: wgpu::RenderPipeline,
     field: AdaptingField,
-    direct_layout: &'a wgpu::BindGroupLayout,
 }
 
 const ADAPTING_FIELD_ROW_BYTES: u32 = 512;

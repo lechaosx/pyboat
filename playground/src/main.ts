@@ -19,6 +19,7 @@ import {
   playground_baked_surface_shader_source,
   playground_diagnostic_shader_source,
   playground_direct_scene_shader_source,
+  playground_direct_terrain_depth_shader_source,
   playground_landform_horizon_shader_source,
   playground_occluder_field_shader_source,
   playground_scene_render_size,
@@ -27,6 +28,7 @@ import {
   playground_scene_uniforms,
   playground_startup_shader_source,
   playground_terrain_cache_fill_bytes,
+  production_camera_height_m,
   production_scene_shader_source,
   sample_playground_environment,
   sample_playground_view_cloud_state,
@@ -47,6 +49,14 @@ import {
 import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
+import {
+  droneCameraAtHeight,
+  droneFieldOfViewDegrees,
+  droneFieldOfViewLimitsDegrees,
+  droneViewHeightM,
+  wheeledDroneCamera,
+  type DroneCamera,
+} from "./drone-camera";
 import { startRenderLoop } from "./render-loop";
 import {
   advanceProceduralTimeSeconds,
@@ -93,7 +103,8 @@ type State = {
   cameraY: number;
   worldWidthM: number;
   worldHeightM: number;
-  viewHeight: number;
+  cameraHeightM: number;
+  fieldOfViewDegrees: number;
   worldTimeScale: number;
   worldTimeSeconds: number;
   sunLightVisible: number;
@@ -134,7 +145,8 @@ const defaults: State = {
   cameraY: 0,
   worldWidthM: 64_000,
   worldHeightM: 64_000,
-  viewHeight: 480,
+  cameraHeightM: production_camera_height_m(),
+  fieldOfViewDegrees: droneFieldOfViewDegrees(480, production_camera_height_m()),
   worldTimeScale: 1,
   worldTimeSeconds: 37,
   sunLightVisible: 1,
@@ -379,6 +391,9 @@ type TuningControl =
       min: number;
       max: number;
       step: number;
+      log?: boolean;
+      // Replaces restoring the default value; `restored` holds once it has run.
+      reset?: { restore: () => void; restored: () => boolean };
     };
 
 type TuningGroup = {
@@ -387,7 +402,44 @@ type TuningGroup = {
   controls: readonly TuningControl[];
 };
 
+// The game's camera height at the current sea-level view, which neither moves
+// nor zooms the view.
+const productionCameraReset = {
+  restore: () => {
+    const camera = droneCameraAtHeight(droneCamera(), production_camera_height_m());
+    state.cameraHeightM = camera.heightM;
+    state.fieldOfViewDegrees = camera.fieldOfViewDegrees;
+    for (const sync of tuningControlSyncs) sync();
+  },
+  restored: () => state.cameraHeightM === production_camera_height_m(),
+};
 const tuningGroups: readonly TuningGroup[] = [
+  {
+    // The wheel moves the camera beyond the height slider's range.
+    label: "Camera",
+    open: true,
+    controls: [
+      {
+        type: "range",
+        key: "cameraHeightM",
+        label: "Height · m",
+        min: 1,
+        max: 100_000,
+        step: 0.01,
+        log: true,
+        reset: productionCameraReset,
+      },
+      {
+        type: "range",
+        key: "fieldOfViewDegrees",
+        label: "Field of view · °",
+        ...droneFieldOfViewLimitsDegrees,
+        step: 0.01,
+        log: true,
+        reset: productionCameraReset,
+      },
+    ],
+  },
   {
     label: "Lighting",
     open: true,
@@ -448,6 +500,17 @@ const tuningGroups: readonly TuningGroup[] = [
 
 const tuningControlSyncs: Array<() => void> = [];
 
+function tuningControlAtDefault(control: TuningControl): boolean {
+  return control.type === "range" && control.reset
+    ? control.reset.restored()
+    : state[control.key] === defaults[control.key];
+}
+
+function resetTuningControl(control: TuningControl): void {
+  if (control.type === "range" && control.reset) control.reset.restore();
+  else state[control.key] = defaults[control.key];
+}
+
 function renderTuningControls(): void {
   const note = document.createElement("p");
   note.className = "composition-note";
@@ -469,7 +532,7 @@ function renderTuningControls(): void {
       reset.title = `Reset ${control.label}`;
       reset.setAttribute("aria-label", reset.title);
       const syncReset = () => {
-        const atDefault = state[control.key] === defaults[control.key];
+        const atDefault = tuningControlAtDefault(control);
         reset.classList.toggle("reset-value-hidden", atDefault);
         reset.disabled = atDefault;
       };
@@ -493,7 +556,7 @@ function renderTuningControls(): void {
           syncReset();
         });
         reset.addEventListener("click", () => {
-          state[control.key] = defaults[control.key];
+          resetTuningControl(control);
           sync();
         });
         sync();
@@ -510,19 +573,20 @@ function renderTuningControls(): void {
       const rangeInput = document.createElement("input");
       rangeInput.type = "range";
       rangeInput.id = `tuning-${control.key}`;
-      rangeInput.min = String(control.min);
-      rangeInput.max = String(control.max);
-      rangeInput.step = String(control.step);
+      const toSlider = (value: number) => control.log ? Math.log10(value) : value;
+      rangeInput.min = String(toSlider(control.min));
+      rangeInput.max = String(toSlider(control.max));
+      rangeInput.step = control.log ? "any" : String(control.step);
       label.htmlFor = rangeInput.id;
       label.textContent = control.label;
       const valueInput = document.createElement("input");
       valueInput.type = "number";
       valueInput.className = "range-value";
-      valueInput.min = rangeInput.min;
-      valueInput.max = rangeInput.max;
-      valueInput.step = rangeInput.step;
+      valueInput.min = String(control.min);
+      valueInput.max = String(control.max);
+      valueInput.step = String(control.step);
       const sync = () => {
-        rangeInput.value = String(state[control.key]);
+        rangeInput.value = String(toSlider(state[control.key]));
         valueInput.value = format(state[control.key], control.step);
         syncReset();
       };
@@ -530,13 +594,15 @@ function renderTuningControls(): void {
         state[control.key] = Math.min(control.max, Math.max(control.min, value));
         sync();
       };
-      rangeInput.addEventListener("input", () => setValue(rangeInput.valueAsNumber));
+      rangeInput.addEventListener("input", () => setValue(
+        control.log ? 10 ** rangeInput.valueAsNumber : rangeInput.valueAsNumber,
+      ));
       valueInput.addEventListener("input", () => {
         if (Number.isFinite(valueInput.valueAsNumber)) setValue(valueInput.valueAsNumber);
       });
       valueInput.addEventListener("change", sync);
       reset.addEventListener("click", () => {
-        state[control.key] = defaults[control.key];
+        resetTuningControl(control);
         sync();
       });
       sync();
@@ -553,7 +619,7 @@ function renderTuningControls(): void {
 renderTuningControls();
 resetTuningButtonElement.addEventListener("click", () => {
   for (const group of tuningGroups) {
-    for (const control of group.controls) state[control.key] = defaults[control.key];
+    for (const control of group.controls) resetTuningControl(control);
   }
   for (const sync of tuningControlSyncs) sync();
 });
@@ -756,8 +822,9 @@ previewCanvas.addEventListener("pointermove", (event) => {
     previewCanvas.getBoundingClientRect(),
   );
   const aspect = previewCanvas.clientWidth / previewCanvas.clientHeight;
-  state.cameraX -= (viewX - dragX) * state.viewHeight * aspect;
-  state.cameraY -= (viewY - dragY) * state.viewHeight;
+  const viewHeight = viewHeightM();
+  state.cameraX -= (viewX - dragX) * viewHeight * aspect;
+  state.cameraY -= (viewY - dragY) * viewHeight;
   dragX = viewX;
   dragY = viewY;
 });
@@ -772,15 +839,29 @@ previewCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   const rect = previewCanvas.getBoundingClientRect();
   const [pointerX, pointerY] = canvasViewPoint(event.clientX, event.clientY, rect);
-  const oldHeight = state.viewHeight;
+  const oldHeight = viewHeightM();
   const oldWidth = oldHeight * rect.width / rect.height;
   const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
-  const newHeight = Math.min(10000000, Math.max(0.1, oldHeight * Math.exp(event.deltaY * deltaScale * 0.001)));
+  // Browsers turn Shift+wheel into horizontal scrolling.
+  const delta = event.shiftKey ? event.deltaY || event.deltaX : event.deltaY;
+  const camera = wheeledDroneCamera(droneCamera(), Math.exp(delta * deltaScale * 0.001), event);
+  const newHeight = droneViewHeightM(camera);
+  if (!(newHeight >= 0.1 && newHeight <= 10000000)) return;
   const newWidth = newHeight * rect.width / rect.height;
   state.cameraX += pointerX * (oldWidth - newWidth);
   state.cameraY += pointerY * (oldHeight - newHeight);
-  state.viewHeight = newHeight;
+  state.cameraHeightM = camera.heightM;
+  state.fieldOfViewDegrees = camera.fieldOfViewDegrees;
+  for (const sync of tuningControlSyncs) sync();
 }, { passive: false });
+
+function droneCamera(): DroneCamera {
+  return { heightM: state.cameraHeightM, fieldOfViewDegrees: state.fieldOfViewDegrees };
+}
+
+function viewHeightM(): number {
+  return droneViewHeightM(droneCamera());
+}
 
 async function showStartupPhase(message: string): Promise<void> {
   statusElement.textContent = message;
@@ -1084,20 +1165,30 @@ let fieldGrids: Float32Array = new Float32Array([1, 1, 1, 1, 5, 1, 1, 2]);
 // First and end landform quad column, then row, that the terrain depth draws.
 let landformQuads: Uint32Array = new Uint32Array(4);
 // The depth of the first surface each scene pixel's eye ray meets, at the
-// scene size; grid scenes read it.
-const terrainDepthShader = device.createShaderModule({ code: terrain_depth_shader_source() });
-const terrainDepthPipeline = device.createRenderPipeline({
-  layout: "auto",
-  vertex: { module: terrainDepthShader, entryPoint: "vertex_terrain_depth" },
-  primitive: { topology: "triangle-list" },
-  depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less" },
-});
-const terrainDepthBindGroup = device.createBindGroup({
-  layout: terrainDepthPipeline.getBindGroupLayout(0),
+// scene size. Grid scenes rasterize it from the landform layer; views without
+// field grids evaluate the broad landform at the layer's texels.
+function terrainDepthPipeline(code: string): GPURenderPipeline {
+  return device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: device.createShaderModule({ code }), entryPoint: "vertex_terrain_depth" },
+    primitive: { topology: "triangle-list" },
+    depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less" },
+  });
+}
+const gridTerrainDepthPipeline = terrainDepthPipeline(terrain_depth_shader_source());
+const gridTerrainDepthBindGroup = device.createBindGroup({
+  layout: gridTerrainDepthPipeline.getBindGroupLayout(0),
   entries: [
     { binding: 0, resource: { buffer: sceneBuffer } },
     { binding: 2, resource: occluderFieldView },
   ],
+});
+const directTerrainDepthPipeline = terrainDepthPipeline(
+  playground_direct_terrain_depth_shader_source(),
+);
+const directTerrainDepthBindGroup = device.createBindGroup({
+  layout: directTerrainDepthPipeline.getBindGroupLayout(0),
+  entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
 });
 let terrainDepth: GPUTexture | undefined;
 let terrainDepthView: GPUTextureView | undefined;
@@ -1194,6 +1285,16 @@ function updateOccluderFieldInfo(resources: RenderResources): void {
   if (occluderFieldInfoElement.innerHTML !== html) occluderFieldInfoElement.innerHTML = html;
 }
 
+function diagnosticSceneBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
+  return device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: sceneBuffer } },
+      { binding: 8, resource: terrainDepthView! },
+    ],
+  });
+}
+
 function renderResourcesForFrame(): RenderResources {
   const selection = state.diagnostic;
   if (selection === "scene") {
@@ -1219,10 +1320,7 @@ function renderResourcesForFrame(): RenderResources {
     ).then((diagnosticPipeline) => {
       diagnosticRenderResources.set(selection, {
         pipeline: diagnosticPipeline,
-        sceneBindGroup: device.createBindGroup({
-          layout: diagnosticPipeline.getBindGroupLayout(0),
-          entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
-        }),
+        sceneBindGroup: diagnosticSceneBindGroup(diagnosticPipeline),
         playgroundBindGroup: device.createBindGroup({
           layout: diagnosticPipeline.getBindGroupLayout(1),
           entries: [{ binding: 0, resource: { buffer: playgroundBuffer } }],
@@ -1523,7 +1621,8 @@ function updateUniforms(
     worldTickFraction,
     renderedCameraX,
     renderedCameraY,
-    state.viewHeight,
+    viewHeightM(),
+    state.cameraHeightM,
     previewCanvas.width,
     previewCanvas.height,
     sceneSize[1]!,
@@ -1619,12 +1718,13 @@ function resize(): void {
 // Keep the 1-2-5 selection synchronized with `scale_bar` in
 // `crates/browser/src/lib.rs`; gameplay and the lab share one physical-scale convention.
 function updateScaleBar(): void {
-  const targetDistance = state.viewHeight * 120 / previewCanvas.clientHeight;
+  const viewHeight = viewHeightM();
+  const targetDistance = viewHeight * 120 / previewCanvas.clientHeight;
   const magnitude = 10 ** Math.floor(Math.log10(targetDistance));
   const normalized = targetDistance / magnitude;
   const multiplier = normalized < 1.5 ? 1 : normalized < 3.5 ? 2 : normalized < 7.5 ? 5 : 10;
   const distance = multiplier * magnitude;
-  const width = `${distance / state.viewHeight * previewCanvas.clientHeight}px`;
+  const width = `${distance / viewHeight * previewCanvas.clientHeight}px`;
   const label = formatDistance(distance);
   if (scaleBarElement.style.width !== width) scaleBarElement.style.width = width;
   if (scaleLabelElement.textContent !== label) scaleLabelElement.textContent = label;
@@ -1748,8 +1848,13 @@ function advanceFrame(now: number): void {
 }
 
 function renderFrame(): Promise<void> {
-  if (sizeTerrainDepth() && installedScenePipelines && sceneFields) {
-    installScenePipelines(installedScenePipelines, sceneFields);
+  if (sizeTerrainDepth()) {
+    if (installedScenePipelines && sceneFields) {
+      installScenePipelines(installedScenePipelines, sceneFields);
+    }
+    for (const resources of diagnosticRenderResources.values()) {
+      resources.sceneBindGroup = diagnosticSceneBindGroup(resources.pipeline);
+    }
   }
   const renderResources = renderResourcesForFrame();
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
@@ -1842,22 +1947,25 @@ function renderFrame(): Promise<void> {
     occluderPass.setBindGroup(2, fields.landformHorizonOutputBindGroup);
     occluderPass.dispatchWorkgroups(fieldGrids[5]!, fieldGrids[6]!, fieldGrids[7]!);
     occluderPass.end();
-    const depthPass = encoder.beginRenderPass({
-      colorAttachments: [],
-      depthStencilAttachment: {
-        view: terrainDepthView!,
-        depthClearValue: 1,
-        depthLoadOp: "clear",
-        depthStoreOp: "store",
-      },
-    });
-    depthPass.setPipeline(terrainDepthPipeline);
-    depthPass.setBindGroup(0, terrainDepthBindGroup);
-    const [firstColumn, endColumn, firstRow, endRow] = landformQuads;
-    depthPass.draw(6 * (endColumn! - firstColumn!), endRow! - firstRow!, 6 * firstColumn!, firstRow!);
-    depthPass.end();
   }
   // The scene's timed span includes the terrain depth and its adapting field.
+  const depthPass = encoder.beginRenderPass({
+    colorAttachments: [],
+    depthStencilAttachment: {
+      view: terrainDepthView!,
+      depthClearValue: 1,
+      depthLoadOp: "clear",
+      depthStoreOp: "store",
+    },
+    ...(timestampReadback && !fields
+      ? { timestampWrites: { querySet: timestampQuerySet!, beginningOfPassWriteIndex: 0 } }
+      : {}),
+  });
+  depthPass.setPipeline(fields ? gridTerrainDepthPipeline : directTerrainDepthPipeline);
+  depthPass.setBindGroup(0, fields ? gridTerrainDepthBindGroup : directTerrainDepthBindGroup);
+  const [firstColumn, endColumn, firstRow, endRow] = landformQuads;
+  depthPass.draw(6 * (endColumn! - firstColumn!), endRow! - firstRow!, 6 * firstColumn!, firstRow!);
+  depthPass.end();
   const illumination = renderResources.illumination;
   if (illumination) {
     const illuminationPass = encoder.beginRenderPass({
@@ -1867,9 +1975,6 @@ function renderFrame(): Promise<void> {
         loadOp: "clear",
         storeOp: "store",
       }],
-      ...(timestampReadback && !fields
-        ? { timestampWrites: { querySet: timestampQuerySet!, beginningOfPassWriteIndex: 0 } }
-        : {}),
     });
     illuminationPass.setPipeline(illumination.pipeline);
     illuminationPass.setBindGroup(0, illumination.sceneBindGroup);
@@ -1905,7 +2010,6 @@ function renderFrame(): Promise<void> {
   if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
       querySet: timestampQuerySet!,
-      ...(fields || illumination ? {} : { beginningOfPassWriteIndex: 0 }),
       endOfPassWriteIndex: sceneEnd,
     };
   }
@@ -2158,7 +2262,10 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     illumination: illuminationPass(pipelines.sceneIllumination, gridSceneEntries, playgroundEntries),
   };
   if (pipelines.direct && pipelines.directIllumination) {
-    const directSceneEntries = [{ binding: 0, resource: { buffer: sceneBuffer } }];
+    const directSceneEntries = [
+      { binding: 0, resource: { buffer: sceneBuffer } },
+      { binding: 8, resource: terrainDepthView! },
+    ];
     const directPlaygroundEntries = [{ binding: 0, resource: { buffer: playgroundBuffer } }];
     directSceneRenderResources = {
       pipeline: pipelines.direct,
@@ -2386,7 +2493,8 @@ async function runBench(settings: NonNullable<typeof bench>): Promise<void> {
       seed: scenario.seed,
       cameraX: scenario.cameraM[0],
       cameraY: scenario.cameraM[1],
-      viewHeight: scenario.viewHeightM,
+      cameraHeightM: production_camera_height_m(),
+      fieldOfViewDegrees: droneFieldOfViewDegrees(scenario.viewHeightM, production_camera_height_m()),
       worldTimeSeconds: scenario.worldTimeSeconds,
       renderScale: scenario.renderScale ?? 1,
       graphicsQuality: graphicsQualities.indexOf(scenario.quality ?? "high"),

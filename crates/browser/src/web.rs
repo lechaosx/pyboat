@@ -226,6 +226,18 @@ pub fn terrain_depth_shader_source() -> String {
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
+pub fn playground_direct_terrain_depth_shader_source() -> String {
+    crate::PLAYGROUND_DIRECT_TERRAIN_DEPTH_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn production_camera_height_m() -> f32 {
+    DroneCamera::PRODUCTION_HEIGHT_M
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
 pub fn environment_field_shader_source() -> String {
     ENVIRONMENT_FIELD_SHADER.to_owned()
 }
@@ -750,6 +762,7 @@ pub fn playground_scene_uniforms(
     camera_x_m: f32,
     camera_y_m: f32,
     view_height_m: f32,
+    camera_height_m: f32,
     render_width_px: u32,
     render_height_px: u32,
     scene_height_px: u32,
@@ -808,8 +821,10 @@ pub fn playground_scene_uniforms(
         view_size_m,
         pixel_footprint_m,
     );
-    let camera =
-        DroneCamera::production(geometry, Vector::new(camera_x_m, camera_y_m), view_height_m);
+    let camera = DroneCamera {
+        height_m: camera_height_m,
+        ..DroneCamera::production(geometry, Vector::new(camera_x_m, camera_y_m), view_height_m)
+    };
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
@@ -1943,7 +1958,7 @@ impl Renderer {
             scene_render_size(width, height, graphics.render_scale),
         );
         let terrain_depth_input =
-            terrain_depth.input_bind_group(&device, &uniform_buffer, &occluder_fields.view);
+            terrain_depth.input_bind_group(&device, &uniform_buffer, Some(&occluder_fields.view));
         let scene_bind_group = scene_bind_group(
             &device,
             &scene_layout,
