@@ -2912,6 +2912,11 @@ fn procedural_terrain_surface_causes(
     }
 }
 
+/// `broad_landform_elevation_m` peaks at 18 m × (1 − 0.30) × 20 per unit of
+/// elevation scale. Keep synchronized with `highest_shadow_receiver_m` in
+/// `crates/browser/src/shader/components/terrain.wgsl`.
+pub const BROAD_LANDFORM_HIGHEST_M: f64 = 252.0 * TERRAIN_ELEVATION_SCALE;
+
 pub fn broad_landform_elevation_m(
     world_geometry: WorldGeometry,
     match_seed: u64,

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 mod baked_surface;
 mod boat_asset;
 mod boat_texture;
+mod camera;
 mod cloth;
 pub use boat_asset::{
     BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, boat_mesh_with_cloth,
@@ -10,6 +11,7 @@ pub use boat_asset::{
     windsock_mesh_with_cloth,
 };
 pub use boat_texture::{SpriteMip, sprite_mip_chain};
+pub use camera::DroneCamera;
 pub use cloth::{ClothMotion, ClothPose, ClothPresentation};
 mod exposure;
 mod field_grids;

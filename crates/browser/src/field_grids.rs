@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use game::{
-    TERRAIN_ELEVATION_SCALE, celestial_directions_at_height, celestial_lighting_at_height,
+    BROAD_LANDFORM_HIGHEST_M, celestial_directions_at_height, celestial_lighting_at_height,
     celestial_orbit, world_celestial_conditions,
 };
 use rapier2d::prelude::Vector;
@@ -977,11 +977,10 @@ fn landform_shadow_reach_m(world_radius_m: f64, tuned_reach_m: f64, elevation_ra
     tuned_reach_m.max(climb_m)
 }
 
-/// The highest surface a shadow can fall on: broad landform peaks at
-/// 18 m × (1 − 0.30) × 20 per unit of elevation scale (`broad_landform_elevation_m`
-/// in terrain.wgsl), and land detail adds less than 6 m.
+/// The highest surface a shadow can fall on: land detail adds less than 6 m
+/// to the broad landform.
 fn highest_receiver_m() -> f64 {
-    252.0 * TERRAIN_ELEVATION_SCALE + 6.0
+    BROAD_LANDFORM_HIGHEST_M + 6.0
 }
 
 /// Elevation of the horizon of a receiver at `height_m`, the lowest light whose
