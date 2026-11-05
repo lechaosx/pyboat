@@ -53,7 +53,9 @@ fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyCond
 // transmittance along each light from a plane above every shadow receiver, so
 // one tap per light reads every cloud type.
 const CUMULUS_LOWEST_HEIGHT_M: f32 = 1000.0;
-const CUMULUS_HIGHEST_HEIGHT_M: f32 = 3000.0;
+// Compromise: cloud shadow windows bound clouds up to the deck's height,
+// which caps taller cumulus there.
+const CUMULUS_HIGHEST_HEIGHT_M: f32 = WEATHER_CANOPY_HEIGHT_M;
 // A cell scale that followed the weather would warp the noise domain far from
 // the origin, so each type's is fixed.
 const CUMULUS_WAVELENGTH_M: f32 = 1200.0;
@@ -243,8 +245,15 @@ fn cumulus_cover(weather: CloudWeatherSample) -> f32 {
         weather.land_heating * canopy_sunlight,
         weather.land_fraction,
     );
+    // Over the sea, cumulus venting holds the mixed layer near its
+    // condensation level, so the resolved ascent lifts its air.
+    let low_coverage = mix(weather.low_coverage, weather.thermal_coverage, weather.land_fraction);
     // 0.7 is the share of low cover that convection organises into cells.
-    return min(0.7 * weather.low_coverage * convection * surface_heating, 0.5);
+    // Compromise: in the current climate thermals lift heated land air past
+    // its condensation level, so land heating, this share, and the cap set the
+    // onset and amount there, standing in for the cumulus fraction that the
+    // cloud layer's mass flux would set.
+    return min(0.7 * low_coverage * convection * surface_heating, 0.5);
 }
 
 fn cumulus_depth_amount(weather: CloudWeatherSample) -> f32 {
@@ -431,7 +440,10 @@ fn cumulus_shadow(
         diameter_m,
     );
     // Humilis liquid water paths of 20–50 g/m² give optical depths near 3–8;
-    // congestus exceeds 30.
+    // congestus exceeds 30. Compromise: a tuned range stands in for the
+    // optical depth of the cloud scheme's water, whose adiabatic water path
+    // puts clouds a kilometre or more deep at optical depths in the hundreds,
+    // as the model has no entrainment or rain sink to deplete it.
     let depth = mix(4.0, 25.0, cumulus.drivers.y);
     // Thickness follows the cells' excess over the threshold, so the small
     // cells of sparse cover stay thin rather than reaching full depth.

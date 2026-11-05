@@ -1,4 +1,9 @@
-use std::{fs, io::BufReader, process::Command};
+use std::{
+    fs,
+    io::BufReader,
+    process::Command,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use game::{
     broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
@@ -4474,6 +4479,43 @@ fn cumulus_shadows_are_independent_of_pixel_footprint() {
     assert_eq!(&near[..3], &far[..3]);
 }
 
+/// Afternoon cumulus shade island land. The floor of a tenth is a regression
+/// bound far below the share these views have with afternoon cumulus, about
+/// 0.46, and far above the 0.010 left when the day's warming dries the land
+/// air out of them.
+#[test]
+fn afternoon_cumulus_shade_island_land() {
+    let world = WorldGeometry::default();
+    let (view_height_m, size) = (8_000.0_f32, 64usize);
+    let (mut shaded, mut land) = (0, 0);
+    for (position_m, world_time_seconds) in island_afternoons() {
+        let image = render_diagnostic_image_with_view_at(
+            world,
+            position_m,
+            world_time_seconds,
+            view_height_m,
+            "cloud_cumulus_shadow",
+            size as u32,
+            size as u32,
+        );
+        for (index, pixel) in image.as_chunks::<4>().0.iter().enumerate() {
+            let pixel_m = position_m
+                + view_height_m
+                    * Vector::new(
+                        ((index % size) as f32 + 0.5) / size as f32 - 0.5,
+                        0.5 - ((index / size) as f32 + 0.5) / size as f32,
+                    );
+            if procedural_terrain_elevation_m(world, SEED, pixel_m) > 0.0 {
+                land += 1;
+                shaded += usize::from(scalar_debug_amount(pixel) > 0.05);
+            }
+        }
+    }
+    assert!(land > 1_000, "the views hold little land: {land} px");
+    let share = shaded as f64 / land as f64;
+    assert!(share > 0.1, "cumulus shade {share} of the islands' land");
+}
+
 /// Local mid-afternoons over two islands, at about 30° and 37° south, on three
 /// days.
 fn island_afternoons() -> Vec<(Vector, f64)> {
@@ -4624,12 +4666,12 @@ fn render_diagnostic_image_with_seed(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
+    // Tests running in parallel may request the same capture.
+    static CAPTURES: AtomicUsize = AtomicUsize::new(0);
     let output = std::env::temp_dir().join(format!(
-        "pyboat-spatial-surface-{}-{seed:016x}-{:016x}-{:08x}-{:08x}-{diagnostic}-{width}x{height}.png",
+        "pyboat-spatial-surface-{}-{}.png",
         std::process::id(),
-        world_time_seconds.to_bits(),
-        position_m.x.to_bits(),
-        position_m.y.to_bits(),
+        CAPTURES.fetch_add(1, Ordering::Relaxed),
     ));
     let capture = Command::new(env!("CARGO_BIN_EXE_playground-capture"))
         .args([

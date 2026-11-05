@@ -61,6 +61,8 @@ struct CloudWeatherSample {
     lift: f32,
     ascent_m: f32,
     low_coverage: f32,
+    // Low cover of surface air that afternoon thermals over land lift.
+    thermal_coverage: f32,
     rain: f32,
     stratiform: f32,
     // Afternoon heating of land and warming of the air by warmer water, each

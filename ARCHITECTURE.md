@@ -174,6 +174,14 @@ and verification details.
   boundary layer as convergence does.
 - **[Explicit]** Moist convection, which mixes upper wind into surface gusts,
   needs surface air lifted toward its condensation level.
+- **[Implicit]** Over land, afternoon thermals lift surface air to the top of a
+  mixed layer that the day's warming grows against the free troposphere's
+  stability, and rendered cumulus take their low cover from that air.
+- **[Explicit]** Convective gusts use the resolved ascent, not the afternoon
+  thermals, so gameplay wind does not depend on them.
+- **[Implicit]** Authoritative low cloud and rain use the resolved ascent; the
+  thermals' lift would overcast almost every afternoon island and rain heavily
+  on it.
 - **[Explicit]** Wind derives from shared atmospheric causes rather than an
   independently generated vector field.
 - **[Explicit]** Pressure-driven wind keeps the pressure gradient's speed and

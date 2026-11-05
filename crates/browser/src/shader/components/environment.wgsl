@@ -1435,6 +1435,10 @@ fn cloud_weather_from_atmosphere(
     );
 }
 
+// Physical, published: the ratio of entrainment heat flux at a convective
+// mixed layer's top to the surface heat flux (Tennekes 1973, J. Atmos. Sci. 30).
+const MIXED_LAYER_ENTRAINMENT_FLUX_RATIO: f32 = 0.2;
+
 // `wind_gradient` and `glide` are what `resolved_surface_wind_gradient_at` and
 // `surface_glide_conditions` return.
 fn cloud_weather_from_atmosphere_and_upper_air(
@@ -1445,6 +1449,7 @@ fn cloud_weather_from_atmosphere_and_upper_air(
 ) -> CloudWeatherSample {
     if environment_feature_visibility().w <= 0.0 {
         return CloudWeatherSample(
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -1503,6 +1508,35 @@ fn cloud_weather_from_atmosphere_and_upper_air(
         ascent_m = BOUNDARY_LAYER_DEPTH_M * sign(glide.x);
     }
     let low = low_cloud(atmosphere.water_vapor_g_kg, air_temperature_c, max(ascent_m, 0.0));
+    // Over land, the day's warming grows a convective mixed layer into the
+    // free troposphere, and thermals lift surface air to its top. By
+    // Tennekes's (1973) zero-order-jump model with entrainment flux ratio A,
+    // the top stands (1 + 2A) / (1 + A) times the warming since the daily
+    // minimum over the potential-temperature lapse γθ = Γd − Γ above it, with
+    // Γ the daily-mean lapse rate to 500 hPa, beyond which that γθ no longer
+    // holds. Compromise: the warming is taken from the full half range below
+    // the daily mean, which overstates it where polar night's margins damp the
+    // daily cycle. Compromise: only rendered cumulus take this lift, so
+    // afternoon land has no thermal low cloud or showers; ARCHITECTURE.md
+    // records why.
+    let diurnal_departure_c = 0.5 * atmosphere.climate.diurnal_temperature_range_c
+        * atmosphere.climate.diurnal_temperature_factor;
+    let daily_mean_air_temperature_c = air_temperature_c - diurnal_departure_c;
+    let height_500_hpa_m = DRY_AIR_SCALE_HEIGHT_M_PER_K
+        * (0.5 * (daily_mean_air_temperature_c + upper_air_temperature.value) + 273.15)
+        * log(pressure.x / 500.0);
+    let free_stability_c_per_m = DRY_ADIABATIC_LAPSE_RATE_C_PER_M
+        - (daily_mean_air_temperature_c - upper_air_temperature.value) / height_500_hpa_m;
+    var mixed_layer_top_m = height_500_hpa_m;
+    if free_stability_c_per_m > 0.0 {
+        mixed_layer_top_m = min(
+            (1.0 + 2.0 * MIXED_LAYER_ENTRAINMENT_FLUX_RATIO)
+                / (1.0 + MIXED_LAYER_ENTRAINMENT_FLUX_RATIO)
+                * (diurnal_departure_c + 0.5 * atmosphere.climate.diurnal_temperature_range_c)
+                / free_stability_c_per_m,
+            height_500_hpa_m,
+        );
+    }
 
     var weather: CloudWeatherSample;
     weather.relative_humidity = relative_humidity;
@@ -1510,6 +1544,11 @@ fn cloud_weather_from_atmosphere_and_upper_air(
     weather.lift = lift;
     weather.ascent_m = ascent_m;
     weather.low_coverage = low.x;
+    weather.thermal_coverage = low_cloud(
+        atmosphere.water_vapor_g_kg,
+        air_temperature_c,
+        max(ascent_m, mixed_layer_top_m),
+    ).x;
     weather.rain = low.y;
     weather.stratiform = clamp(
         smoothstep(0.78, 1.05, relative_humidity)
