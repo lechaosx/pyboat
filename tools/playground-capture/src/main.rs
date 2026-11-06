@@ -5,9 +5,9 @@ use browser::{
     BakedSurfaceSizes, BakedSurfaceTextures, BoatSprites, ClothMotion, DroneCamera,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, SURFACE_HEIGHT_FORMAT, TerrainCache,
-    TerrainCacheFrame, TerrainCachePass, TerrainDepth, baked_surface_sizes, boat_scene,
-    exposure_target, field_grids, ocean_wave_mode_uniforms, sample_view_cloud_state,
+    OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
+    TerrainCache, TerrainCacheFrame, TerrainCachePass, TerrainDepth, baked_surface_sizes,
+    boat_scene, exposure_target, field_grids, ocean_wave_mode_uniforms, sample_view_cloud_state,
     seasonal_phase_factors, surface_height_texture, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
@@ -2467,10 +2467,7 @@ fn render_world(
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: -65504.0,
-                            ..wgpu::Color::TRANSPARENT
-                        }),
+                        load: wgpu::LoadOp::Clear(SURFACE_HEIGHT_CLEAR),
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -2727,7 +2724,7 @@ fn scene_uniforms(
             ),
             options.view_height_m,
         ],
-        drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
+        drone_camera: camera.scene_uniform_row(),
         scalar_field_time_coordinates: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,

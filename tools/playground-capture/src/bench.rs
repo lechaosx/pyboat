@@ -11,8 +11,8 @@ use wgpu::util::DeviceExt;
 
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
-    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_FORMAT, TerrainCache,
-    TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes,
+    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
+    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes,
     scene_render_size, surface_height_texture, visual_pixel_footprint_m,
 };
 
@@ -594,10 +594,7 @@ impl ModeRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: -65504.0,
-                            ..wgpu::Color::TRANSPARENT
-                        }),
+                        load: wgpu::LoadOp::Clear(SURFACE_HEIGHT_CLEAR),
                         store: wgpu::StoreOp::Store,
                     },
                 }),

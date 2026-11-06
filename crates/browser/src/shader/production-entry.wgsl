@@ -7,11 +7,6 @@ struct SceneFragment {
 @fragment
 fn fragment(input: VertexOutput) -> SceneFragment {
     let adaptation = field_adaptation(input.css_position_px);
-    if input.is_terrain <= 0.5 {
-        return SceneFragment(vec4<f32>(encode_display_color(tone_map_scene_color(
-            adapted_unlit_color(linear_material_color(input.color), adaptation), adaptation, input.css_position_px,
-        )), input.coverage), drawn_surface_height_m);
-    }
     let surface = initialize_production_surface(input);
     let color = final_scene_color(surface.input, surface.atmosphere, surface.circle_position);
     return SceneFragment(

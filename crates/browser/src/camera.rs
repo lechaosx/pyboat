@@ -44,15 +44,6 @@ impl DroneCamera {
         }
     }
 
-    pub fn vertical_field_of_view_rad(&self) -> f32 {
-        2.0 * (self.view_height_m / (2.0 * self.height_m)).atan()
-    }
-
-    /// Keeps the height and changes the sea-level view height.
-    pub fn set_vertical_field_of_view_rad(&mut self, field_of_view_rad: f32) {
-        self.view_height_m = 2.0 * self.height_m * (field_of_view_rad / 2.0).tan();
-    }
-
     /// Where the eye ray through `view_point` passes `elevation_m`, wrapped to
     /// the world's canonical longitude.
     pub fn world_point_m(&self, view_point: Vector, elevation_m: f32) -> Vector {
@@ -63,19 +54,6 @@ impl DroneCamera {
         )
     }
 
-    /// The view point that sees `world_point_m` at `elevation_m`, or `None` at
-    /// or above the camera. In a view wider than the world, it sees the copy
-    /// of the point nearest the image centre.
-    pub fn view_point(&self, world_point_m: Vector, elevation_m: f32) -> Option<Vector> {
-        let scale_m = self.view_height_m * (1.0 - elevation_m / self.height_m);
-        (scale_m > 0.0).then(|| {
-            Vector::from(
-                self.world_geometry
-                    .minimum_image_displacement_m((world_point_m - self.center_m).into()),
-            ) / scale_m
-        })
-    }
-
     /// The scale n that the eye ray's offset takes at the near plane of the
     /// terrain depth, the highest broad landform for a camera above it. A
     /// surface at elevation z lies at depth 1 − n / (1 − z / H), and every
@@ -84,6 +62,11 @@ impl DroneCamera {
     /// terrain-depth-entry.wgsl and `terrain_hit_scale` in terrain-depth.wgsl.
     pub fn terrain_depth_near_scale(&self) -> f32 {
         (1.0 - BROAD_LANDFORM_HIGHEST_M as f32 / self.height_m).max(LEAST_TERRAIN_DEPTH_NEAR_SCALE)
+    }
+
+    /// The scene uniforms' `drone_camera` row, laid out in scene-state.wgsl.
+    pub fn scene_uniform_row(&self) -> [f32; 4] {
+        [self.height_m, self.terrain_depth_near_scale(), 0.0, 0.0]
     }
 
     pub fn elevation_at_terrain_depth_m(&self, depth: f32) -> f32 {
@@ -159,6 +142,24 @@ mod tests {
         })
     }
 
+    /// The view point that sees `world_point_m` at `elevation_m`, or `None` at
+    /// or above the camera. In a view wider than the world, it sees the copy
+    /// of the point nearest the image centre.
+    fn view_point_seeing(
+        camera: DroneCamera,
+        world_point_m: Vector,
+        elevation_m: f32,
+    ) -> Option<Vector> {
+        let scale_m = camera.view_height_m * (1.0 - elevation_m / camera.height_m);
+        (scale_m > 0.0).then(|| {
+            Vector::from(
+                camera
+                    .world_geometry
+                    .minimum_image_displacement_m((world_point_m - camera.center_m).into()),
+            ) / scale_m
+        })
+    }
+
     fn landform_m(position_m: Vector) -> f32 {
         broad_landform_elevation_m(WorldGeometry::default(), SEED, position_m).max(0.0)
     }
@@ -193,7 +194,7 @@ mod tests {
                 assert!(world_point_m.x.abs() <= world.width_m() / 2.0);
                 assert_near_across_seam(world_point_m, center_m + view_point * 2000.0, 0.01);
                 assert_near(
-                    camera.view_point(world_point_m, 0.0).unwrap(),
+                    view_point_seeing(camera, world_point_m, 0.0).unwrap(),
                     view_point,
                     1e-5,
                 );
@@ -216,7 +217,7 @@ mod tests {
                     camera.terrain_point(SEED, view_point, IMAGE_HEIGHT_PX);
                 assert!((elevation_m - landform_m(position_m)).abs() < 0.05);
                 assert_near(
-                    camera.view_point(position_m, elevation_m).unwrap(),
+                    view_point_seeing(camera, position_m, elevation_m).unwrap(),
                     view_point,
                     1e-5,
                 );
@@ -311,7 +312,7 @@ mod tests {
             assert!((elevation_m - landform_m(position_m)).abs() < 0.05);
             // f32 positions resolve about a 1080p pixel this close to the camera.
             assert_near(
-                camera.view_point(position_m, elevation_m).unwrap(),
+                view_point_seeing(camera, position_m, elevation_m).unwrap(),
                 view_point,
                 1e-3,
             );
@@ -330,8 +331,8 @@ mod tests {
                 (TALL_ISLAND_PEAK_M, 400.0)
             );
         }
-        assert_eq!(camera.view_point(TALL_ISLAND_PEAK_M, 400.0), None);
-        assert_eq!(camera.view_point(TALL_ISLAND_PEAK_M, 450.0), None);
+        assert_eq!(view_point_seeing(camera, TALL_ISLAND_PEAK_M, 400.0), None);
+        assert_eq!(view_point_seeing(camera, TALL_ISLAND_PEAK_M, 450.0), None);
     }
 
     #[test]
@@ -351,24 +352,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn production_zoom_changes_only_the_focal_length() {
-        let world = WorldGeometry::default();
-        // 35 mm-equivalent focal length: half the 24 mm frame height over
-        // the tangent of half the vertical field of view.
-        let focal_length_mm =
-            |camera: DroneCamera| 12.0 / (camera.vertical_field_of_view_rad() / 2.0).tan();
-        let boat = DroneCamera::production(world, Vector::ZERO, 15.0);
-        let wide = DroneCamera::production(world, Vector::ZERO, 2000.0);
-        assert_eq!((boat.height_m, wide.height_m), (1000.0, 1000.0));
-        assert!((focal_length_mm(boat) - 1600.0).abs() < 0.1);
-        assert!((wide.vertical_field_of_view_rad().to_degrees() - 90.0).abs() < 1e-4);
-
-        let mut camera = boat;
-        camera.set_vertical_field_of_view_rad(90.0_f32.to_radians());
-        assert_eq!(camera.height_m, 1000.0);
-        assert!((camera.view_height_m - 2000.0).abs() < 0.01);
     }
 }

@@ -125,6 +125,7 @@ var<private> surface_cloud_weather: CloudWeatherSample;
 // or the water over it. Compromise: the ground is the detailed terrain where
 // the eye ray meets the broad landform, the parallax the picture takes. A
 // pixel showing no surface keeps the lowest height, which hides nothing.
+// Keep synchronized with `SURFACE_HEIGHT_CLEAR` in boat_sprites.rs.
 var<private> drawn_surface_height_m: f32 = -65504.0;
 
 const PI: f32 = 3.141592653589793;

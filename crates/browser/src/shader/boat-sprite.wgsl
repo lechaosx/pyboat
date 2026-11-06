@@ -32,7 +32,7 @@ fn vertex_boat_sprite(input: BoatVertexInput) -> BoatSpriteOutput {
     let clip_xy = (input.position_m.xy / scene.camera_and_view_m.zw) * 2.0;
     output.position = vec4<f32>(clip_xy, scale - scene.drone_camera.y, scale);
     output.color = input.color;
-    output.coverage = clamp(1.0 + input.coverage, 0.0, 1.0);
+    output.coverage = input.coverage;
     output.view_offset_m = input.position_m.xy / scale;
     let css_view_height_px = scene.precipitation_phase_and_css_view_height_px.y;
     output.css_position_px = (vec2<f32>(0.5, -0.5) * clip_xy / scale + 0.5) * vec2<f32>(

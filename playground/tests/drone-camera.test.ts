@@ -60,16 +60,9 @@ describe("playground drone camera", () => {
     assertClose(droneViewHeightM(moved), droneViewHeightM(camera));
   });
 
-  test("a drag keeps the grabbed terrain point under the cursor", () => {
-    for (const elevationM of [0, 300, 990]) {
-      // The camera moves against the cursor by this much per image height.
-      const shiftM = droneViewScaleM(camera, elevationM);
-
-      assertClose(shiftM * 0.3, rayOffsetM(camera, 0.3, elevationM));
-    }
-  });
-
   test("every wheel step keeps the terrain point under the cursor there", () => {
+    // A 90° lens's image edge ray reaches as far sideways as it has descended.
+    assertClose(0.5 * droneViewScaleM({ heightM: 1000, fieldOfViewDegrees: 90 }, 300), 700);
     const u = 0.37;
     for (const elevationM of [0, 300]) {
       for (const scale of [0.5, 2]) {

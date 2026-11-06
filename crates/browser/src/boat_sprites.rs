@@ -15,6 +15,14 @@ use crate::{
 /// meet the water and shore, near sea level, and coarsens only on high land.
 pub const SURFACE_HEIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
+/// Clears a surface height target to the lowest half-precision height, which
+/// hides nothing. Keep synchronized with `drawn_surface_height_m` in
+/// scene-state.wgsl.
+pub const SURFACE_HEIGHT_CLEAR: wgpu::Color = wgpu::Color {
+    r: -65504.0,
+    ..wgpu::Color::TRANSPARENT
+};
+
 /// A surface height target for a scene of `size`.
 pub fn surface_height_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
@@ -37,36 +45,21 @@ const INITIAL_VERTEX_CAPACITY: usize = 32768;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-pub(crate) struct Vertex {
-    pub(crate) position: [f32; 3],
-    pub(crate) color: [f32; 3],
-    pub(crate) is_terrain: f32,
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+    coverage: f32,
 }
 
 impl Vertex {
     const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
-    const SCENE_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
-        wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x2,
-            ..Self::ATTRIBUTES[0]
-        },
-        Self::ATTRIBUTES[1],
-        Self::ATTRIBUTES[2],
-    ];
 
-    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::SCENE_ATTRIBUTES,
-        }
-    }
-
-    fn boat_layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
             attributes: &Self::ATTRIBUTES,
-            ..Self::layout()
         }
     }
 }
@@ -229,7 +222,7 @@ impl BoatSprites {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vertex_boat_sprite"),
-                    buffers: &[Some(Vertex::boat_layout())],
+                    buffers: &[Some(Vertex::layout())],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -471,7 +464,7 @@ fn sprite_vertices(
                         -sprite.shade
                     },
                 ],
-                is_terrain: sprite.opacity - 1.0,
+                coverage: sprite.opacity,
             });
         }
     }

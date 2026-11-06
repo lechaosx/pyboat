@@ -31,7 +31,6 @@ use web_sys::HtmlCanvasElement;
 use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
 
-use crate::boat_sprites::Vertex;
 use crate::frame_queue::FrameQueue;
 use crate::{
     AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame,
@@ -40,14 +39,15 @@ use crate::{
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, SURFACE_HEIGHT_FORMAT, TerrainCache,
-    TerrainCachePass, TerrainDepth, UpscaleTargets, Upscaler, ViewCloudMotion,
-    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
-    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
-    seasonal_phase_factors, surface_height_texture, view_width_m, viewport_interest_radius_m,
-    visual_pixel_footprint_m, webtransport_server_url, zoom_view_height_m,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, SURFACE_HEIGHT_CLEAR,
+    SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth, UpscaleTargets, Upscaler,
+    ViewCloudMotion, append_reliable_server_message_chunk, baked_surface_sizes,
+    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
+    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
+    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
+    scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
+    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
+    zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -856,7 +856,7 @@ pub fn playground_scene_uniforms(
     };
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
-        drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
+        drone_camera: camera.scene_uniform_row(),
         scalar_field_time_coordinates: [
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
@@ -995,6 +995,14 @@ pub fn sample_playground_world_geometry(
         normalized_x: sample.normalized_world[0],
         normalized_y: sample.normalized_world[1],
     })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SceneVertex {
+    position: [f32; 2],
+    color: [f32; 3],
+    is_terrain: f32,
 }
 
 #[repr(C)]
@@ -1677,7 +1685,11 @@ impl Renderer {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vertex"),
-                    buffers: &[Some(Vertex::layout())],
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: mem::size_of::<SceneVertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32],
+                    })],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1717,8 +1729,8 @@ impl Renderer {
             [1.0, 1.0],
             [-1.0, 1.0],
         ]
-        .map(|position| Vertex {
-            position: [position[0], position[1], 0.0],
+        .map(|position| SceneVertex {
+            position,
             color: [0.0; 3],
             is_terrain: 1.0,
         });
@@ -2042,7 +2054,7 @@ impl Renderer {
                     view_width_m,
                     view_height_m,
                 ],
-                drone_camera: [camera.height_m, camera.terrain_depth_near_scale(), 0.0, 0.0],
+                drone_camera: camera.scene_uniform_row(),
                 scalar_field_time_coordinates: [
                     scalar_time.air_temperature,
                     scalar_time.upper_air_temperature,
@@ -2280,10 +2292,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: -65504.0,
-                            ..wgpu::Color::TRANSPARENT
-                        }),
+                        load: wgpu::LoadOp::Clear(SURFACE_HEIGHT_CLEAR),
                         store: wgpu::StoreOp::Store,
                     },
                 }),
