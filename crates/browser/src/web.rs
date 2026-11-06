@@ -31,23 +31,22 @@ use web_sys::HtmlCanvasElement;
 use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
 
+use crate::boat_sprites::Vertex;
 use crate::frame_queue::FrameQueue;
 use crate::{
-    AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BOAT_IMAGES, BakedSurface,
-    BakedSurfaceFrame, BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene,
-    ClothPose, ClothPresentation, DEFAULT_VIEW_HEIGHT_M, DroneCamera, ENVIRONMENT_FIELD_LAYERS,
+    AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame,
+    BakedSurfacePass, BakedSurfaceResize, BakedSurfaceTextures, BoatScene, BoatSprites,
+    ClothPresentation, DEFAULT_VIEW_HEIGHT_M, DroneCamera, ENVIRONMENT_FIELD_LAYERS,
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
     OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
     TerrainDepth, UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
-    baked_surface_sizes, boat_mesh_with_cloth, bounded_canvas_dimensions,
-    disconnect_and_clear_pending_snapshot, field_grids, hull_sprite_mesh, ocean_wave_mode_uniforms,
-    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
-    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
-    seasonal_phase_factors, sprite_mip_chain, view_width_m, viewport_interest_radius_m,
-    visual_pixel_footprint_m, webtransport_server_url, windsock_mesh_with_cloth,
-    zoom_view_height_m,
+    baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
+    field_grids, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
+    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
+    scale_bar, scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
+    visual_pixel_footprint_m, webtransport_server_url, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -183,7 +182,6 @@ pub fn adapting_field_texels() -> Vec<u32> {
 #[cfg(feature = "playground")]
 use crate::PLAYGROUND_STARTUP_SHADER;
 
-const INITIAL_VERTEX_CAPACITY: usize = 32768;
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
 const MAXIMUM_CONCURRENT_RELIABLE_RECEIVES: usize = 8;
 const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
@@ -970,220 +968,6 @@ pub fn sample_playground_world_geometry(
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-    is_terrain: f32,
-    depth_span_m: f32,
-}
-
-impl Vertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32];
-    const SCENE_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
-        wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x2,
-            ..Self::ATTRIBUTES[0]
-        },
-        Self::ATTRIBUTES[1],
-        Self::ATTRIBUTES[2],
-    ];
-
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::SCENE_ATTRIBUTES,
-        }
-    }
-
-    fn boat_layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            attributes: &Self::ATTRIBUTES,
-            ..Self::layout()
-        }
-    }
-}
-
-fn boat_sprite_resources(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    scene_layout: &wgpu::BindGroupLayout,
-    output_format: wgpu::TextureFormat,
-) -> Result<
-    (
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-        Vec<wgpu::BindGroup>,
-    ),
-    JsValue,
-> {
-    let sprite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Boat sprite layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("Boat sprite sampler"),
-        anisotropy_clamp: 8,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Linear,
-        ..Default::default()
-    });
-    let mut bind_groups = Vec::new();
-    for image in BOAT_IMAGES {
-        let mut decoder = png::Decoder::new(std::io::Cursor::new(image));
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        let mut reader = decoder.read_info().map_err(js_error)?;
-        let mut pixels = vec![
-            0;
-            reader
-                .output_buffer_size()
-                .ok_or_else(|| js_error("boat sprite is too large"))?
-        ];
-        let info = reader.next_frame(&mut pixels).map_err(js_error)?;
-        let mips = sprite_mip_chain(info.width, info.height, &pixels[..info.buffer_size()]);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Wooden dinghy sprite"),
-            size: wgpu::Extent3d {
-                width: info.width,
-                height: info.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: mips.len() as u32,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        for (level, mip) in mips.iter().enumerate() {
-            let mut destination = texture.as_image_copy();
-            destination.mip_level = level as u32;
-            queue.write_texture(
-                destination,
-                &mip.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(mip.width * 4),
-                    rows_per_image: Some(mip.height),
-                },
-                wgpu::Extent3d {
-                    width: mip.width,
-                    height: mip.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        let view = texture.create_view(&Default::default());
-        bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Boat sprite bind group"),
-            layout: &sprite_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        }));
-    }
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Boat sprite shader"),
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(concat!(
-            env!("OUT_DIR"),
-            "/boat-sprite.wgsl"
-        )))),
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Boat sprite pipeline layout"),
-        bind_group_layouts: &[Some(scene_layout), Some(&sprite_layout)],
-        immediate_size: 0,
-    });
-    let pipeline = |entry_point, sail, write_mask, depth_stencil| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(entry_point),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some(if sail { "vertex_boat_sprite" } else { "vertex" }),
-                buffers: &[Some(if sail {
-                    Vertex::boat_layout()
-                } else {
-                    Vertex::layout()
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry_point),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("IS_SAIL", if sail { 1.0 } else { 0.0 })],
-                    ..Default::default()
-                },
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        })
-    };
-    let depth = |write, compare| {
-        Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(write),
-            depth_compare: Some(compare),
-            stencil: Default::default(),
-            bias: Default::default(),
-        })
-    };
-    Ok((
-        pipeline("fragment_boat_sprite", false, wgpu::ColorWrites::ALL, None),
-        pipeline(
-            "fragment_sail_depth",
-            true,
-            wgpu::ColorWrites::empty(),
-            depth(true, wgpu::CompareFunction::LessEqual),
-        ),
-        pipeline(
-            "fragment_boat_sprite",
-            true,
-            wgpu::ColorWrites::ALL,
-            depth(false, wgpu::CompareFunction::Equal),
-        ),
-        bind_groups,
-    ))
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
 struct SceneUniforms {
     camera_and_view_m: [f32; 4],
     drone_camera: [f32; 4],
@@ -1572,14 +1356,9 @@ struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     illumination_pipeline: wgpu::RenderPipeline,
-    boat_sprite_pipeline: wgpu::RenderPipeline,
-    sail_depth_pipeline: wgpu::RenderPipeline,
-    sail_pipeline: wgpu::RenderPipeline,
-    boat_sprite_bind_groups: Vec<wgpu::BindGroup>,
-    sail_depth: Option<((u32, u32), wgpu::TextureView)>,
+    boat_sprites: BoatSprites,
     adapting_field: AdaptingField,
-    vertex_buffer: wgpu::Buffer,
-    vertex_capacity: usize,
+    terrain_quad: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     scene_layout: wgpu::BindGroupLayout,
@@ -1890,14 +1669,33 @@ impl Renderer {
             "fragment_illumination",
             AdaptingField::illumination_target(),
         );
-        let (boat_sprite_pipeline, sail_depth_pipeline, sail_pipeline, boat_sprite_bind_groups) =
-            boat_sprite_resources(&device, &queue, &scene_layout, output_format)?;
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Dynamic vertices"),
-            size: (INITIAL_VERTEX_CAPACITY * mem::size_of::<Vertex>()) as u64,
+        let boat_sprites =
+            BoatSprites::new(&device, &queue, &scene_layout, output_format).map_err(js_error)?;
+        let terrain_quad_vertices = [
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ]
+        .map(|position| Vertex {
+            position: [position[0], position[1], 0.0],
+            color: [0.0; 3],
+            is_terrain: 1.0,
+            depth_span_m: 1.0,
+        });
+        let terrain_quad = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Terrain quad"),
+            size: mem::size_of_val(&terrain_quad_vertices) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        queue.write_buffer(
+            &terrain_quad,
+            0,
+            bytemuck::cast_slice(&terrain_quad_vertices),
+        );
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scene uniforms"),
             size: mem::size_of::<SceneUniforms>() as u64,
@@ -1987,14 +1785,9 @@ impl Renderer {
             config,
             pipeline,
             illumination_pipeline,
-            boat_sprite_pipeline,
-            sail_depth_pipeline,
-            sail_pipeline,
-            boat_sprite_bind_groups,
-            sail_depth: None,
+            boat_sprites,
             adapting_field,
-            vertex_buffer,
-            vertex_capacity: INITIAL_VERTEX_CAPACITY,
+            terrain_quad,
             uniform_buffer,
             bind_group,
             scene_layout,
@@ -2171,38 +1964,8 @@ impl Renderer {
         } else {
             1.0
         };
-        let (vertices, terrain_vertex_count, sprite_vertices) = scene_vertices(
-            scenes,
-            &cloth,
-            has_match,
-            camera_m,
-            (self.config.width, self.config.height),
-            view_height_m,
-            world_time_seconds,
-        );
+        let terrain_vertex_count = if has_match { 6 } else { 0 };
         let output_size = (self.config.width, self.config.height);
-        if sprite_vertices.iter().any(|batch| batch.sail)
-            && self
-                .sail_depth
-                .as_ref()
-                .is_none_or(|(size, _)| *size != output_size)
-        {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Sail depth"),
-                size: wgpu::Extent3d {
-                    width: output_size.0,
-                    height: output_size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            self.sail_depth = Some((output_size, texture.create_view(&Default::default())));
-        }
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
         if self.terrain_depth.resize(&self.device, scene_size) {
             self.rebuild_scene_bind_group();
@@ -2227,17 +1990,6 @@ impl Renderer {
         } else {
             BakedSurfaceFrame::direct()
         };
-        if vertices.len() > self.vertex_capacity {
-            self.vertex_capacity = vertices.len().next_power_of_two();
-            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Dynamic vertices"),
-                size: (self.vertex_capacity * mem::size_of::<Vertex>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        self.queue
-            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -2368,11 +2120,10 @@ impl Renderer {
                 if terrain_vertex_count > 0 {
                     pass.set_pipeline(&self.illumination_pipeline);
                     pass.set_bind_group(0, &self.scene_bind_group, &[]);
-                    pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                    pass.set_vertex_buffer(0, self.terrain_quad.slice(..));
                     pass.draw(0..terrain_vertex_count, 0..1);
                 }
             });
-        let vertex_count = vertices.len() as u32;
         if !upscaled {
             self.upscale_targets = None;
         } else if self.upscale_targets.as_ref().is_none_or(|targets| {
@@ -2391,14 +2142,11 @@ impl Renderer {
             a: 1.0,
         });
         if let Some(targets) = &self.upscale_targets {
-            // Boats and other overlays follow the terrain quad and draw at backing
-            // resolution after the upscale, so a reduced scene scale never hides them.
             self.encode_scene_pass(
                 &mut encoder,
                 &targets.scene_view,
                 clear,
-                0..terrain_vertex_count,
-                &sprite_vertices,
+                terrain_vertex_count,
             );
             self.upscaler.encode(
                 &mut encoder,
@@ -2408,24 +2156,24 @@ impl Renderer {
                     .create_view(&wgpu::TextureViewDescriptor::default()),
                 None,
             );
-            if vertex_count > terrain_vertex_count {
-                self.encode_scene_pass(
-                    &mut encoder,
-                    &view,
-                    wgpu::LoadOp::Load,
-                    terrain_vertex_count..vertex_count,
-                    &sprite_vertices,
-                );
-            }
         } else {
-            self.encode_scene_pass(
-                &mut encoder,
-                &view,
-                clear,
-                0..vertex_count,
-                &sprite_vertices,
-            );
+            self.encode_scene_pass(&mut encoder, &view, clear, terrain_vertex_count);
         }
+        // Boats and other overlays follow the terrain quad and draw at backing
+        // resolution after the upscale, so a reduced scene scale never hides them.
+        self.boat_sprites.encode(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            output_size,
+            &self.scene_bind_group,
+            scenes,
+            &cloth,
+            camera_m,
+            view_height_m,
+            world_time_seconds,
+        );
         self.queue.submit(Some(encoder.finish()));
         self.adaptation_clock.frame_rendered();
         let frame_timing = self
@@ -2458,77 +2206,28 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
-        vertices: std::ops::Range<u32>,
-        sprites: &[SpriteBatch],
+        terrain_vertex_count: u32,
     ) {
-        let sprite_start = sprites.first().map_or(vertices.end, |batch| {
-            batch.vertices.start.clamp(vertices.start, vertices.end)
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Scene pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
         });
-        let mut batches = sprites
-            .iter()
-            .filter(|batch| {
-                batch.vertices.end > vertices.start && batch.vertices.start < vertices.end
-            })
-            .peekable();
-        let mut first = true;
-        let mut color_load = load;
-        while first || batches.peek().is_some() {
-            let sail = !first && batches.peek().is_some_and(|batch| batch.sail);
-            let depth = sail.then(|| wgpu::RenderPassDepthStencilAttachment {
-                view: &self.sail_depth.as_ref().unwrap().1,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
-                }),
-                stencil_ops: None,
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(if sail { "Sail pass" } else { "Scene pass" }),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: color_load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: depth,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            color_load = wgpu::LoadOp::Load;
-            pass.set_bind_group(0, &self.scene_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            if first {
-                pass.set_pipeline(&self.pipeline);
-                pass.draw(vertices.start..sprite_start, 0..1);
-                first = false;
-            }
-            if sail {
-                let batch = batches.next().unwrap();
-                let range =
-                    batch.vertices.start.max(vertices.start)..batch.vertices.end.min(vertices.end);
-                pass.set_bind_group(1, &self.boat_sprite_bind_groups[batch.image], &[]);
-                // Resolve the nearest fold before alpha blending its filtered edge.
-                pass.set_pipeline(&self.sail_depth_pipeline);
-                pass.draw(range.clone(), 0..1);
-                pass.set_pipeline(&self.sail_pipeline);
-                pass.draw(range, 0..1);
-            } else {
-                pass.set_pipeline(&self.boat_sprite_pipeline);
-                while batches.peek().is_some_and(|batch| !batch.sail) {
-                    let batch = batches.next().unwrap();
-                    pass.set_bind_group(1, &self.boat_sprite_bind_groups[batch.image], &[]);
-                    pass.draw(
-                        batch.vertices.start.max(vertices.start)
-                            ..batch.vertices.end.min(vertices.end),
-                        0..1,
-                    );
-                }
-            }
-        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.scene_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.terrain_quad.slice(..));
+        pass.draw(0..terrain_vertex_count, 0..1);
     }
 
     fn resize(&mut self) {
@@ -3268,107 +2967,6 @@ fn canvas_dimensions(
         scale,
         maximum_dimension,
     )
-}
-
-struct SpriteBatch {
-    image: usize,
-    sail: bool,
-    vertices: std::ops::Range<u32>,
-}
-
-fn scene_vertices(
-    scenes: &[BoatScene],
-    cloth: &[ClothPose],
-    render_terrain: bool,
-    camera_m: Vector,
-    output_size: (u32, u32),
-    view_height_m: f32,
-    time_seconds: f64,
-) -> (Vec<Vertex>, u32, Vec<SpriteBatch>) {
-    let (width, height) = output_size;
-    let view_width_m = view_width_m(width as f32 / height as f32, view_height_m);
-    let mut vertices = Vec::new();
-
-    if render_terrain {
-        for position in [
-            [-1.0, -1.0],
-            [1.0, -1.0],
-            [1.0, 1.0],
-            [-1.0, -1.0],
-            [1.0, 1.0],
-            [-1.0, 1.0],
-        ] {
-            vertices.push(Vertex {
-                position: [position[0], position[1], 0.0],
-                color: [0.0; 3],
-                is_terrain: 1.0,
-                depth_span_m: 1.0,
-            });
-        }
-    }
-    let terrain_vertex_count = vertices.len() as u32;
-
-    let mut batches: Vec<SpriteBatch> = Vec::new();
-    for (scene, &cloth) in scenes.iter().zip(cloth) {
-        let state = if scene.wreck {
-            1.0
-        } else if scene.recently_damaged {
-            2.0
-        } else {
-            0.0
-        };
-        let sock = scene
-            .windsock
-            .map(|sock| windsock_mesh_with_cloth(sock, time_seconds, cloth))
-            .unwrap_or_default();
-        for sprite in hull_sprite_mesh(scene)
-            .into_iter()
-            .chain(boat_mesh_with_cloth(
-                scene,
-                time_seconds,
-                view_height_m / height as f32,
-                cloth,
-            ))
-            .chain(sock)
-        {
-            let index = vertices.len() as u32;
-            if let Some(batch) = batches.last_mut().filter(|batch| {
-                batch.image == sprite.image && batch.sail == sprite.height_m.is_some()
-            }) {
-                batch.vertices.end = index + 1;
-            } else {
-                batches.push(SpriteBatch {
-                    image: sprite.image,
-                    sail: sprite.height_m.is_some(),
-                    vertices: index..index + 1,
-                });
-            }
-            let relative_m = sprite.position_m - camera_m;
-            vertices.push(Vertex {
-                position: if let Some(height_m) = sprite.height_m {
-                    [relative_m.x, relative_m.y, height_m]
-                } else {
-                    [
-                        2.0 * (relative_m.x / view_width_m),
-                        2.0 * (relative_m.y / view_height_m),
-                        0.0,
-                    ]
-                },
-                color: [
-                    sprite.uv[0],
-                    sprite.uv[1],
-                    if sprite.image == 0 {
-                        state
-                    } else {
-                        -sprite.shade
-                    },
-                ],
-                is_terrain: sprite.opacity - 1.0,
-                depth_span_m: 2.0 * scene.sail_luff_m,
-            });
-        }
-    }
-    (vertices, terrain_vertex_count, batches)
 }
 
 fn now_ms() -> f64 {

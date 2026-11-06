@@ -58,7 +58,11 @@ use simulation::{
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 mod adapting_field;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod boat_sprites;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use adapting_field::{ADAPTING_FIELD_TEXELS, AdaptingField, ILLUMINATION_TEXELS};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use boat_sprites::BoatSprites;
 #[cfg(test)]
 mod diagnostics;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
