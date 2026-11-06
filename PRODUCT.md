@@ -143,7 +143,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** No graphics setting, whether detail, resolution, or frame rate,
   gives any player an advantage or affects physics or gameplay.
 - **[Implicit]** Night and storm darkening, shallow-water hazards, shorelines,
-  the ice edge, and boats stay visible and legible at every graphics setting.
+  the ice edge, and boats stay visible and legible at every graphics setting,
+  except where terrain leaning toward the camera hides them.
 - **[Explicit]** Graphics quality tiers trade visual detail for rendering cost,
   from battery-friendly mobile through richer mobile to the best desktop graphics.
 - **[Implicit]** Touch screens default to battery-friendly frame rate,

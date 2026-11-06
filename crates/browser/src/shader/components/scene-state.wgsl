@@ -121,6 +121,11 @@ var<private> surface_position_m: vec2<f32>;
 var<private> surface_tidal_range_m: f32;
 var<private> surface_tidal_phase_offset: f32;
 var<private> surface_cloud_weather: CloudWeatherSample;
+// The height above mean sea level of the surface a pixel shows: its ground,
+// or the water over it. Compromise: the ground is the detailed terrain where
+// the eye ray meets the broad landform, the parallax the picture takes. A
+// pixel showing no surface keeps the lowest height, which hides nothing.
+var<private> drawn_surface_height_m: f32 = -65504.0;
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;

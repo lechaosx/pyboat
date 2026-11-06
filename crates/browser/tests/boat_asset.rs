@@ -1,7 +1,40 @@
-use browser::{BoatScene, boat_scene, hull_sprite_mesh, sail_mesh};
-use game::dinghy_parameters;
+use browser::{BoatScene, boat_scene, boat_sheer_height_m, hull_sprite_mesh, sail_mesh};
+use game::{dinghy_parameters, procedural_ground_elevation_m, procedural_water_height_m};
 use rapier2d::prelude::{Rotation, Vector};
-use simulation::BoatMotion;
+use simulation::{BoatMotion, WorldGeometry};
+
+#[test]
+fn a_boat_floats_its_draft_below_the_tide_and_grounds_its_keel_on_dry_land() {
+    let world = WorldGeometry::default();
+    let seed = 0x5eed;
+    // Open water and a dry beach of the default world, at high and low water.
+    let sea_m = Vector::new(-32_330.0, 9_730.0);
+    let beach_m = Vector::new(-31_746.0, 10_160.0);
+    let times = [10_800.0, 32_400.0];
+    let water_m = times.map(|time| procedural_water_height_m(world, seed, time, sea_m));
+    assert!((water_m[0] - water_m[1]).abs() > 0.2, "{water_m:?}");
+    let freeboard_m =
+        [0, 1].map(|i| boat_sheer_height_m(world, seed, times[i], sea_m) - water_m[i]);
+    let above_ground_m = times.map(|time| {
+        boat_sheer_height_m(world, seed, time, beach_m)
+            - procedural_ground_elevation_m(world, seed, time, beach_m)
+    });
+    // The sheer rides a fixed freeboard on the tide; aground, the keel that
+    // floats below the water rests on the ground, so the sheer stands higher.
+    assert!(
+        (freeboard_m[0] - freeboard_m[1]).abs() < 1.0e-4,
+        "{freeboard_m:?}"
+    );
+    assert!(freeboard_m[0] > 0.0, "{freeboard_m:?}");
+    assert!(
+        (above_ground_m[0] - above_ground_m[1]).abs() < 1.0e-4,
+        "{above_ground_m:?}"
+    );
+    assert!(
+        above_ground_m[0] > freeboard_m[0],
+        "{above_ground_m:?} {freeboard_m:?}"
+    );
+}
 
 #[test]
 fn odd_sized_sprite_minification_preserves_coverage() {
@@ -95,14 +128,18 @@ fn sail_material_height_keeps_a_vertical_luff_and_a_foot_on_the_boom() {
     let parameters = dinghy_parameters();
     let luff_m = 2.0 * parameters.sail_area_m2 / parameters.boom_length_m;
     let mesh = sail_mesh(&scene, 0.3);
-    assert!(mesh.iter().all(|v| v.height_m.is_some()));
+    assert!(mesh.iter().all(|v| v.sail));
+    let foot_m = mesh
+        .iter()
+        .map(|v| v.height_m)
+        .fold(f32::INFINITY, f32::min);
     let mast = scene.sail_m[0];
     let clew = scene.sail_m[1];
-    let head = mesh.iter().find(|v| v.height_m == Some(luff_m)).unwrap();
+    let head = mesh.iter().find(|v| v.height_m == foot_m + luff_m).unwrap();
     assert!((head.position_m - mast).length() < 1.0e-6);
     assert!(
         mesh.iter()
-            .any(|v| v.height_m == Some(0.0) && (v.position_m - clew).length() < 1.0e-6)
+            .any(|v| v.height_m == foot_m && (v.position_m - clew).length() < 1.0e-6)
     );
     let lowest_uv = mesh
         .iter()
@@ -111,12 +148,12 @@ fn sail_material_height_keeps_a_vertical_luff_and_a_foot_on_the_boom() {
     let highest_uv = mesh.iter().map(|v| v.uv[1]).fold(f32::INFINITY, f32::min);
     for vertex in mesh {
         let material_height = (lowest_uv - vertex.uv[1]) / (lowest_uv - highest_uv);
-        assert!((vertex.height_m.unwrap() - material_height * luff_m).abs() < 1.0e-5);
+        assert!((vertex.height_m - foot_m - material_height * luff_m).abs() < 1.0e-5);
     }
     assert!(
         hull_sprite_mesh(&scene)
             .iter()
-            .all(|v| v.height_m.is_none())
+            .all(|v| !v.sail && v.height_m == 0.0)
     );
 }
 

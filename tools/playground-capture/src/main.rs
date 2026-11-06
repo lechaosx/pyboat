@@ -2,22 +2,24 @@ use std::{env, fs, path::PathBuf};
 
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
-    BakedSurfaceSizes, BakedSurfaceTextures, DroneCamera, ENVIRONMENT_FIELD_LAYERS,
-    ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning, FieldGrids,
-    GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS,
-    SETTLED_ADAPTATION_SECONDS, TerrainCache, TerrainCacheFrame, TerrainCachePass, TerrainDepth,
-    baked_surface_sizes, exposure_target, field_grids, ocean_wave_mode_uniforms,
-    sample_view_cloud_state, seasonal_phase_factors, view_width_m, visual_pixel_footprint_m,
+    BakedSurfaceSizes, BakedSurfaceTextures, BoatSprites, ClothMotion, DroneCamera,
+    ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
+    FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
+    OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, SURFACE_HEIGHT_FORMAT, TerrainCache,
+    TerrainCacheFrame, TerrainCachePass, TerrainDepth, baked_surface_sizes, boat_scene,
+    exposure_target, field_grids, ocean_wave_mode_uniforms, sample_view_cloud_state,
+    seasonal_phase_factors, surface_height_texture, view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
     OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit,
-    cloud_field_time_coordinates_interpolated, procedural_world_environment_interpolated,
-    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
-    world_celestial_conditions,
+    cloud_field_time_coordinates_interpolated, dinghy_parameters,
+    procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
+    vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
+use rapier2d::prelude::Vector;
 use serde::Serialize;
-use simulation::{TICKS_PER_SECOND, WorldGeometry};
+use simulation::{BoatMotion, TICKS_PER_SECOND, WorldGeometry};
 use wgpu::util::DeviceExt;
 
 mod bench;
@@ -95,6 +97,8 @@ struct Options {
     terrain_elevations: Option<PathBuf>,
     /// The drone camera's height above mean sea level in place of the game's.
     camera_height_m: Option<f32>,
+    /// A boat's x and y in metres and its heading in degrees from world x.
+    boat: Option<[f32; 3]>,
 }
 
 #[repr(C)]
@@ -761,6 +765,7 @@ fn default_options() -> Options {
         output_peak: 1.0,
         terrain_elevations: None,
         camera_height_m: None,
+        boat: None,
     }
 }
 
@@ -900,6 +905,7 @@ fn parse_options() -> Result<Command, String> {
             "--terrain-elevations" => {
                 options.terrain_elevations = Some(value(&mut arguments)?.into())
             }
+            "--boat" => options.boat = Some(parse_f32x3(&value(&mut arguments)?, &argument)?),
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -1629,7 +1635,9 @@ fn print_help() {
                                   landform clips the land just below it\n\
            --terrain-elevations PATH  write the elevation each pixel's eye ray meets in the\n\
                                   scene's terrain depth, as little-endian f32 rows from the\n\
-                                  top; grid scene compositions only\n\n\
+                                  top; grid scene compositions only\n\
+           --boat X,Y,HEADING     draw the game's boat at rest at X,Y metres, heading HEADING\n\
+                                  degrees from world x; scene_production only\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics.\n\n\
          playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
@@ -1893,6 +1901,9 @@ async fn render(options: &Options) -> Result<(), String> {
         return Err("--terrain-elevations applies only to grid scene compositions".to_owned());
     }
     let production = options.diagnostic.id == "scene_production";
+    if !production && options.boat.is_some() {
+        return Err("--boat applies only to scene_production".to_owned());
+    }
     let constants = if production {
         options.quality.scene_constants().to_vec()
     } else if options.diagnostic.module.is_none() {
@@ -1999,7 +2010,7 @@ async fn render(options: &Options) -> Result<(), String> {
         bind_group_layouts: &bind_group_layouts,
         immediate_size: 0,
     });
-    let scene_pipeline = |entry_point: &str, target: wgpu::ColorTargetState| {
+    let scene_pipeline = |entry_point: &str, targets: &[Option<wgpu::ColorTargetState>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("playground capture pipeline"),
             layout: Some(&pipeline_layout),
@@ -2016,7 +2027,7 @@ async fn render(options: &Options) -> Result<(), String> {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some(entry_point),
-                targets: &[Some(target)],
+                targets,
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &constants,
                     ..Default::default()
@@ -2042,7 +2053,13 @@ async fn render(options: &Options) -> Result<(), String> {
         },
         |name| format!("fragment_{name}"),
     );
-    let pipeline = scene_pipeline(&fragment_entry, wgpu::TextureFormat::Rgba8UnormSrgb.into());
+    let pipeline = scene_pipeline(
+        &fragment_entry,
+        &[
+            Some(wgpu::TextureFormat::Rgba8UnormSrgb.into()),
+            production.then(|| SURFACE_HEIGHT_FORMAT.into()),
+        ],
+    );
     let adaptation = scene_composition.then(|| CaptureAdaptation {
         pipeline: scene_pipeline(
             if production {
@@ -2050,7 +2067,7 @@ async fn render(options: &Options) -> Result<(), String> {
             } else {
                 "fragment_playground_illumination"
             },
-            AdaptingField::illumination_target(),
+            &[Some(AdaptingField::illumination_target())],
         ),
         field: AdaptingField::new(&device, &scene_layout),
     });
@@ -2428,19 +2445,36 @@ fn render_world(
         );
         buffer
     });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let production = options.diagnostic.id == "scene_production";
+    let surface_height = surface_height_texture(device, (options.width, options.height))
+        .create_view(&Default::default());
     {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("playground capture pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                production.then_some(wgpu::RenderPassColorAttachment {
+                    view: &surface_height,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: -65504.0,
+                            ..wgpu::Color::TRANSPARENT
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -2451,6 +2485,45 @@ fn render_world(
         pass.set_bind_group(1, playground_bind_group, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
+    }
+    if let (Some([x_m, y_m, heading_degrees]), Some(fields)) = (options.boat, fields) {
+        let mut sprites = BoatSprites::new(
+            device,
+            queue,
+            &fields.scene_layout,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        )?;
+        let scene = boat_scene(
+            dinghy_parameters(),
+            BoatMotion {
+                position_m: Vector::new(x_m, y_m),
+                velocity_m_s: Vector::ZERO,
+                angle_rad: heading_degrees.to_radians(),
+                angular_velocity_rad_s: 0.0,
+                sail_angle_rad: 0.0,
+                sail_angular_velocity_rad_s: 0.0,
+                rudder_angle_rad: 0.0,
+                rudder_angular_velocity_rad_s: 0.0,
+            },
+        );
+        let cloth = ClothMotion::new(&scene).pose();
+        sprites.encode(
+            device,
+            queue,
+            &mut encoder,
+            &view,
+            (options.width, options.height),
+            &fragment_scene_bind_group,
+            &surface_height,
+            &[scene],
+            &[cloth],
+            WorldGeometry::new(options.world_width_m, options.world_height_m)
+                .map_err(|error| error.to_string())?,
+            options.seed,
+            Vector::new(options.camera_x_m, options.camera_y_m),
+            options.view_height_m,
+            options.world_time_seconds,
+        );
     }
     let rgba = read_texture(device, queue, encoder, &texture)?;
     let adapting_field = adapting_field_readback

@@ -1,14 +1,23 @@
+struct SceneFragment {
+    @location(0) color: vec4<f32>,
+    // What boats hide behind: `drawn_surface_height_m`.
+    @location(1) surface_height_m: f32,
+};
+
 @fragment
-fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(input: VertexOutput) -> SceneFragment {
     let adaptation = field_adaptation(input.css_position_px);
     if input.is_terrain <= 0.5 {
-        return vec4<f32>(encode_display_color(tone_map_scene_color(
+        return SceneFragment(vec4<f32>(encode_display_color(tone_map_scene_color(
             adapted_unlit_color(linear_material_color(input.color), adaptation), adaptation, input.css_position_px,
-        )), input.coverage);
+        )), input.coverage), drawn_surface_height_m);
     }
     let surface = initialize_production_surface(input);
     let color = final_scene_color(surface.input, surface.atmosphere, surface.circle_position);
-    return vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, adaptation, input.css_position_px)), color.a);
+    return SceneFragment(
+        vec4<f32>(encode_display_color(tone_map_scene_color(color.rgb, adaptation, input.css_position_px)), color.a),
+        drawn_surface_height_m,
+    );
 }
 
 // Scene light reaching the terrain, which the adapting field pools.

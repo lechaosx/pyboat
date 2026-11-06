@@ -216,6 +216,7 @@ fn lit_scene_surface(
     let is_land = scene_surface.is_land;
     let surface = scene_surface.surface;
     let surface_height_m = max(scene_surface.elevation_m, water_height_m);
+    drawn_surface_height_m = surface_height_m;
     let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
     let ambient_light = calculate_atmospheric_ambient_light(
         ambient_sky,

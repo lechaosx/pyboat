@@ -40,12 +40,13 @@ use crate::{
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, TerrainCache, TerrainCachePass,
-    TerrainDepth, UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
-    baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
-    field_grids, ocean_wave_mode_uniforms, periodic_effect_time_interpolated,
-    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
-    scale_bar, scene_render_size, seasonal_phase_factors, view_width_m, viewport_interest_radius_m,
+    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, SURFACE_HEIGHT_FORMAT, TerrainCache,
+    TerrainCachePass, TerrainDepth, UpscaleTargets, Upscaler, ViewCloudMotion,
+    append_reliable_server_message_chunk, baked_surface_sizes, bounded_canvas_dimensions,
+    disconnect_and_clear_pending_snapshot, field_grids, ocean_wave_mode_uniforms,
+    periodic_effect_time_interpolated, queue_latest_snapshot, requeue_failed_viewport,
+    sample_view_cloud_state, sample_world_geometry, scale_bar, scene_render_size,
+    seasonal_phase_factors, surface_height_texture, view_width_m, viewport_interest_radius_m,
     visual_pixel_footprint_m, webtransport_server_url, zoom_view_height_m,
 };
 
@@ -1359,6 +1360,7 @@ struct Renderer {
     boat_sprites: BoatSprites,
     adapting_field: AdaptingField,
     terrain_quad: wgpu::Buffer,
+    surface_height: ((u32, u32), wgpu::TextureView),
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     scene_layout: wgpu::BindGroupLayout,
@@ -1638,7 +1640,7 @@ impl Renderer {
             bind_group_layouts: &[Some(&scene_layout)],
             immediate_size: 0,
         });
-        let scene_pipeline = |entry_point, target: wgpu::ColorTargetState| {
+        let scene_pipeline = |entry_point, targets: &[Option<wgpu::ColorTargetState>]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry_point),
                 layout: Some(&pipeline_layout),
@@ -1651,7 +1653,7 @@ impl Renderer {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(entry_point),
-                    targets: &[Some(target)],
+                    targets,
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: graphics.quality.scene_constants(),
                         ..Default::default()
@@ -1664,10 +1666,16 @@ impl Renderer {
                 cache: None,
             })
         };
-        let pipeline = scene_pipeline("fragment", output_format.into());
+        let pipeline = scene_pipeline(
+            "fragment",
+            &[
+                Some(output_format.into()),
+                Some(SURFACE_HEIGHT_FORMAT.into()),
+            ],
+        );
         let illumination_pipeline = scene_pipeline(
             "fragment_illumination",
-            AdaptingField::illumination_target(),
+            &[Some(AdaptingField::illumination_target())],
         );
         let boat_sprites =
             BoatSprites::new(&device, &queue, &scene_layout, output_format).map_err(js_error)?;
@@ -1683,7 +1691,6 @@ impl Renderer {
             position: [position[0], position[1], 0.0],
             color: [0.0; 3],
             is_terrain: 1.0,
-            depth_span_m: 1.0,
         });
         let terrain_quad = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Terrain quad"),
@@ -1695,6 +1702,10 @@ impl Renderer {
             &terrain_quad,
             0,
             bytemuck::cast_slice(&terrain_quad_vertices),
+        );
+        let surface_height = (
+            (1, 1),
+            surface_height_texture(&device, (1, 1)).create_view(&Default::default()),
         );
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scene uniforms"),
@@ -1788,6 +1799,7 @@ impl Renderer {
             boat_sprites,
             adapting_field,
             terrain_quad,
+            surface_height,
             uniform_buffer,
             bind_group,
             scene_layout,
@@ -2135,6 +2147,14 @@ impl Renderer {
                         .targets(&self.device, scene_size, output_size, output_format),
                 );
         }
+        let scene_pass_size = if upscaled { scene_size } else { output_size };
+        if self.surface_height.0 != scene_pass_size {
+            self.surface_height = (
+                scene_pass_size,
+                surface_height_texture(&self.device, scene_pass_size)
+                    .create_view(&Default::default()),
+            );
+        }
         let clear = wgpu::LoadOp::Clear(wgpu::Color {
             r: 0.025,
             g: 0.11,
@@ -2159,8 +2179,10 @@ impl Renderer {
         } else {
             self.encode_scene_pass(&mut encoder, &view, clear, terrain_vertex_count);
         }
-        // Boats and other overlays follow the terrain quad and draw at backing
-        // resolution after the upscale, so a reduced scene scale never hides them.
+        // Boats draw at backing resolution over the finished view, so a reduced
+        // scene scale never loses them. They hide behind the scene's surface
+        // height at its resolution, so their occlusion edge moves by up to a
+        // scene texel and still follows the land drawn there.
         self.boat_sprites.encode(
             &self.device,
             &self.queue,
@@ -2168,8 +2190,11 @@ impl Renderer {
             &view,
             output_size,
             &self.scene_bind_group,
+            &self.surface_height.1,
             scenes,
             &cloth,
+            world_geometry,
+            match_seed,
             camera_m,
             view_height_m,
             world_time_seconds,
@@ -2210,15 +2235,29 @@ impl Renderer {
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Scene pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &self.surface_height.1,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: -65504.0,
+                            ..wgpu::Color::TRANSPARENT
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,

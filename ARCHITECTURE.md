@@ -224,8 +224,8 @@ and verification details.
   centre from a fixed height above mean sea level; zoom changes only its focal
   length. The playground deliberately lets its height and field of view vary.
 - **[Explicit]** The camera's rectilinear lens images sea level as a uniformly
-  scaled chart, so boats, overlays, input and interest keep their sea-level
-  mapping.
+  scaled chart, so overlays, input and interest keep their sea-level mapping;
+  boats project from their height.
 - **[Implicit]** The camera height is the upper field's lowest cloud height,
   the highest that keeps every upper cloud above the camera.
 - **[Explicit]** A depth pass rasterizes the broad landform grid from the
@@ -233,6 +233,10 @@ and verification details.
   names.
 - **[Implicit]** Each pixel shows the first surface its eye ray meets on the
   broad landform grid; finer relief takes the broad surface's parallax.
+- **[Explicit]** Boats stand at their real height, afloat on the tide or
+  resting on the ground beneath them.
+- **[Explicit]** A boat hides where the surface the scene shows through a
+  pixel stands higher than it.
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,
   tone mapping, and display encoding shared by gameplay and the playground.
 - **[Explicit]** Each part of the view adapts to the light falling on the

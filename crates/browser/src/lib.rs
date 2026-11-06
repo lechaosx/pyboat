@@ -7,8 +7,8 @@ mod camera;
 mod cloth;
 pub use boat_asset::{
     BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, boat_mesh_with_cloth,
-    hull_sprite_mesh, rope_curve, sail_mesh, sail_mesh_with_cloth, windsock_mesh,
-    windsock_mesh_with_cloth,
+    boat_sheer_height_m, hull_sprite_mesh, rope_curve, sail_mesh, sail_mesh_with_cloth,
+    windsock_mesh, windsock_mesh_with_cloth,
 };
 pub use boat_texture::{SpriteMip, sprite_mip_chain};
 pub use camera::DroneCamera;
@@ -62,7 +62,7 @@ mod boat_sprites;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use adapting_field::{ADAPTING_FIELD_TEXELS, AdaptingField, ILLUMINATION_TEXELS};
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
-pub use boat_sprites::BoatSprites;
+pub use boat_sprites::{BoatSprites, SURFACE_HEIGHT_FORMAT, surface_height_texture};
 #[cfg(test)]
 mod diagnostics;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]

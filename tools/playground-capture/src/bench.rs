@@ -11,9 +11,9 @@ use wgpu::util::DeviceExt;
 
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
-    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, TerrainCache, TerrainCacheFrame,
-    TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes, scene_render_size,
-    visual_pixel_footprint_m,
+    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_FORMAT, TerrainCache,
+    TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes,
+    scene_render_size, surface_height_texture, visual_pixel_footprint_m,
 };
 
 use super::{
@@ -360,7 +360,7 @@ impl ModeRenderer {
         });
         let pipeline = |quality: GraphicsQuality,
                         entry_point: &str,
-                        target: wgpu::ColorTargetState| {
+                        targets: &[Option<wgpu::ColorTargetState>]| {
             let scene_constants = [constants(scene_source), quality.scene_constants()].concat();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("bench production scene pipeline"),
@@ -378,7 +378,7 @@ impl ModeRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(entry_point),
-                    targets: &[Some(target)],
+                    targets,
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &scene_constants,
                         ..Default::default()
@@ -401,14 +401,17 @@ impl ModeRenderer {
                 pipeline(
                     quality,
                     "fragment",
-                    wgpu::TextureFormat::Rgba8UnormSrgb.into(),
+                    &[
+                        Some(wgpu::TextureFormat::Rgba8UnormSrgb.into()),
+                        Some(SURFACE_HEIGHT_FORMAT.into()),
+                    ],
                 )
             }),
             illumination_pipelines: qualities.map(|quality| {
                 pipeline(
                     quality,
                     "fragment_illumination",
-                    AdaptingField::illumination_target(),
+                    &[Some(AdaptingField::illumination_target())],
                 )
             }),
             adapting_field: AdaptingField::new(device, scene_layout),
@@ -574,17 +577,31 @@ impl ModeRenderer {
         let output_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bench scene pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: bindings
-                    .upscale
-                    .map_or(&output_view, |upscale| &upscale.scene_view),
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: bindings
+                        .upscale
+                        .map_or(&output_view, |upscale| &upscale.scene_view),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: bindings.surface_height,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: -65504.0,
+                            ..wgpu::Color::TRANSPARENT
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ],
             depth_stencil_attachment: None,
             timestamp_writes: timestamps.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
@@ -637,6 +654,7 @@ struct FrameBindings<'a> {
     vertices: &'a wgpu::Buffer,
     upscaler: &'a Upscaler,
     upscale: Option<&'a UpscaleTargets>,
+    surface_height: &'a wgpu::TextureView,
 }
 
 struct ScenarioBindings {
@@ -653,6 +671,7 @@ struct ScenarioBindings {
     field_grids: FieldGrids,
     terrain_depth: TerrainDepth,
     upscale: Option<UpscaleTargets>,
+    surface_height: wgpu::TextureView,
 }
 
 impl ScenarioBindings {
@@ -679,6 +698,7 @@ impl ScenarioBindings {
             vertices,
             upscaler,
             upscale: self.upscale.as_ref(),
+            surface_height: &self.surface_height,
         }
     }
 }
@@ -878,6 +898,8 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                         wgpu::TextureFormat::Rgba8UnormSrgb,
                     )
                 }),
+                surface_height: surface_height_texture(&device, scene_size)
+                    .create_view(&Default::default()),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1346,6 +1368,8 @@ fn time_sequence(
         )
     });
     let target = capture_texture(device, options.width, options.height);
+    let surface_height =
+        surface_height_texture(device, scene_size).create_view(&Default::default());
     let terrain_depth = TerrainDepth::new(device, scene_size);
     let mut terrain_cache = TerrainCache::default();
     let mut baked_surface = BakedSurface::new(surface_sizes);
@@ -1392,6 +1416,7 @@ fn time_sequence(
             vertices,
             upscaler,
             upscale: upscale.as_ref(),
+            surface_height: &surface_height,
         };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench sequence encoder"),

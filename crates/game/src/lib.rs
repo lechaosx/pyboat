@@ -1162,17 +1162,27 @@ pub fn procedural_water_depth_m(
     world_time_seconds: f64,
     position_m: Vector,
 ) -> f32 {
+    (procedural_water_height_m(world_geometry, match_seed, world_time_seconds, position_m)
+        - procedural_ground_elevation_m(world_geometry, match_seed, world_time_seconds, position_m))
+    .max(0.0)
+}
+
+/// The solid surface, bedrock or ice, that water stands on and boats ground on.
+pub fn procedural_ground_elevation_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_time_seconds: f64,
+    position_m: Vector,
+) -> f32 {
     let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
-    (procedural_water_height_m(world_geometry, match_seed, world_time_seconds, position_m)
-        - procedural_solid_surface_elevation_m(
-            world_geometry,
-            match_seed,
-            position_m,
-            climate.annual_mean_air_temperature_c,
-            seasonal_water_temperature_c(climate, celestial),
-        ))
-    .max(0.0)
+    procedural_solid_surface_elevation_m(
+        world_geometry,
+        match_seed,
+        position_m,
+        climate.annual_mean_air_temperature_c,
+        seasonal_water_temperature_c(climate, celestial),
+    )
 }
 
 pub fn climate_surface(

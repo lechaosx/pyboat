@@ -60,7 +60,6 @@ fn main() {
     write_shader(
         &compose(&[&production, &read_component("src/shader/boat-sprite.wgsl")]),
         &[
-            "vertex",
             "vertex_boat_sprite",
             "fragment_boat_sprite",
             "fragment_sail_depth",

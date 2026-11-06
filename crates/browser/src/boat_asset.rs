@@ -1,6 +1,8 @@
 use std::f32::consts::{PI, TAU};
 
+use game::{procedural_ground_elevation_m, procedural_water_height_m};
 use rapier2d::prelude::{Rotation, Vector};
+use simulation::WorldGeometry;
 
 use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};
 
@@ -17,6 +19,21 @@ pub const BOAT_IMAGES: [&[u8]; 5] = [
     RUDDER_IMAGE,
 ];
 
+// Heights from the International Mirror Class Rules 2010/01 (the class
+// drawing `dinghy_parameters` cites), unscaled. Compromises: a Mirror's
+// heights on the longer, narrower painted hull; one midship sheer height on
+// a level hull, ignoring keel rocker.
+/// The gunwale above the lowest keel point amidships: the keel's offset from
+/// the base line plus D, less 38 mm (rules 1.4.1 and 1.4.3).
+const BOAT_SHEER_ABOVE_KEEL_M: f32 = 0.50;
+/// The crewed hull's draft with the board up, an estimate from integrating
+/// the rule 1.4.3 sections to the 250 kg loaded displacement; the class
+/// association's 0.09 m is unladen.
+const BOAT_HULL_DRAFT_M: f32 = 0.19;
+/// The boom 0.66 m above the mast heel (rules 5.1.6 and 5.5), whose heel
+/// stands on the deck 0.10 to 0.13 m below the sheer.
+const BOOM_ABOVE_SHEER_M: f32 = 0.55;
+
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
 const ROPE: [f32; 4] = [530.0, 691.0, 982.0, 795.0];
@@ -29,8 +46,10 @@ const SOCK: [f32; 4] = [509.0, 1085.0, 1017.0, 1338.0];
 pub struct BoatSpriteVertex {
     pub image: usize,
     pub position_m: Vector,
-    /// Height above the boom plane, in metres.
-    pub height_m: Option<f32>,
+    /// Height above the sheer, in metres.
+    pub height_m: f32,
+    /// Sail cloth, whose nearest fold hides the folds behind it.
+    pub sail: bool,
     pub uv: [f32; 2],
     pub shade: f32,
     pub opacity: f32,
@@ -40,7 +59,8 @@ fn textured(position_m: Vector, rect: [f32; 4], u: f32, v: f32) -> BoatSpriteVer
     BoatSpriteVertex {
         image: 1,
         position_m,
-        height_m: None,
+        height_m: 0.0,
+        sail: false,
         uv: [
             (rect[0] + (rect[2] - rect[0]) * u) / 1024.0,
             (rect[1] + (rect[3] - rect[1]) * v) / 1536.0,
@@ -48,6 +68,22 @@ fn textured(position_m: Vector, rect: [f32; 4], u: f32, v: f32) -> BoatSpriteVer
         shade: 1.0,
         opacity: 1.0,
     }
+}
+
+/// The height above mean sea level of the sheer of a boat centred at
+/// `center_m`. Afloat, its hull draws its draft below the water; grounded, its
+/// keel rests on the ground.
+pub fn boat_sheer_height_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_time_seconds: f64,
+    center_m: Vector,
+) -> f32 {
+    let water_m =
+        procedural_water_height_m(world_geometry, match_seed, world_time_seconds, center_m);
+    let ground_m =
+        procedural_ground_elevation_m(world_geometry, match_seed, world_time_seconds, center_m);
+    (water_m - BOAT_HULL_DRAFT_M).max(ground_m) + BOAT_SHEER_ABOVE_KEEL_M
 }
 
 pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {
@@ -73,7 +109,8 @@ pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {
             BoatSpriteVertex {
                 image: 0,
                 position_m: center + forward * (x * length) + port * (y * beam),
-                height_m: None,
+                height_m: 0.0,
+                sail: false,
                 uv,
                 shade: 1.0,
                 opacity: 1.0,
@@ -135,7 +172,8 @@ pub fn sail_mesh_with_cloth(
                                 + flutter_offset));
                 // UVs use material distance, so sewn panels narrow with the triangle.
                 let mut vertex = textured(point, CLOTH, along, 1.0 - height);
-                vertex.height_m = Some(scene.sail_luff_m * height);
+                vertex.height_m = BOOM_ABOVE_SHEER_M + scene.sail_luff_m * height;
+                vertex.sail = true;
                 vertex.shade = (0.76
                     + 0.24 * (PI * height * 0.8).sin()
                     + (along * TAU * 3.0 + height * 2.0).cos() * flutter)
@@ -262,6 +300,7 @@ pub fn boat_mesh_with_cloth(
             &mut vertices,
             mast,
             anchor,
+            [BOOM_ABOVE_SHEER_M + scene.sail_luff_m, 0.0],
             0.0,
             wind,
             time,
@@ -283,6 +322,7 @@ pub fn boat_mesh_with_cloth(
             &mut vertices,
             bridle,
             sheet_deck,
+            [0.0; 2],
             0.0,
             wind,
             time,
@@ -296,6 +336,7 @@ pub fn boat_mesh_with_cloth(
             &mut vertices,
             lower_sheave + offset,
             upper_sheave + offset,
+            [0.0, BOOM_ABOVE_SHEER_M],
             0.04 * (1.0 - load * load),
             wind,
             time,
@@ -324,9 +365,11 @@ pub fn boat_mesh_with_cloth(
     );
     for vertex in &mut vertices[boom_start..] {
         vertex.image = 2;
+        vertex.height_m = BOOM_ABOVE_SHEER_M;
         vertex.uv[0] *= 1024.0 / 2172.0;
         vertex.uv[1] *= 1536.0 / 724.0;
     }
+    let boom_block_start = vertices.len();
     stamp(
         &mut vertices,
         sheet_boom,
@@ -335,8 +378,16 @@ pub fn boat_mesh_with_cloth(
         BLOCK,
         [357.0, 589.0],
     );
+    for vertex in &mut vertices[boom_block_start..] {
+        vertex.height_m = BOOM_ABOVE_SHEER_M;
+    }
     vertices.extend(sail_mesh_with_cloth(scene, time, cloth));
+    // The top-down mast shows its head, where the sail's head is.
+    let mast_start = vertices.len();
     stamp(&mut vertices, mast, port, [0.0004; 2], MAST, [783.0, 260.0]);
+    for vertex in &mut vertices[mast_start..] {
+        vertex.height_m = BOOM_ABOVE_SHEER_M + scene.sail_luff_m;
+    }
     vertices
 }
 
@@ -458,6 +509,7 @@ fn rope(
     vertices: &mut Vec<BoatSpriteVertex>,
     start: Vector,
     end: Vector,
+    heights_m: [f32; 2],
     slack: f32,
     wind: Vector,
     time: f64,
@@ -465,6 +517,10 @@ fn rope(
     pixel: f32,
 ) {
     let points = rope_curve(start, end, slack, wind, time);
+    let total_m: f32 = points
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).length())
+        .sum();
     let mut distance = 0.0;
     for pair in points.windows(2) {
         let delta = pair[1] - pair[0];
@@ -511,6 +567,8 @@ fn rope(
                         v,
                     );
                     vertex.opacity = opacity;
+                    vertex.height_m = heights_m[0]
+                        + (heights_m[1] - heights_m[0]) * ((distance + along) / total_m).min(1.0);
                     vertices.push(vertex);
                 }
             }
