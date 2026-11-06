@@ -39,6 +39,9 @@ fn initialize_production_surface(input: VertexOutput) -> ProductionSurfaceInput 
     // than the world repeats and cuts leaning land at half a lap from its centre.
     let view_offset_m = camera_relative_position_m(input.world_position_m);
     let hit_scale = terrain_hit_scale(view_offset_m);
+    // Compromise: the footprint narrows with the hit's height but ignores its
+    // slope, which spreads a pixel over more ground, so steep land is
+    // filtered as if level.
     visual_pixel_footprint_m = scene.world_phases_and_pixel_footprint_m.w * hit_scale;
     tuning = production_tuning();
     landscape_visibility = vec4<f32>(1.0);

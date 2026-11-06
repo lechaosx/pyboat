@@ -503,7 +503,7 @@ and verification details.
 - **[Explicit]** A spatial upscale fills the canvas from the scene.
 - **[Implicit]** The upscale uses neither temporal accumulation nor optional GPU
   features, so it runs on mobile WebGPU without history artifacts.
-- **[Implicit]** Boats and other gameplay overlays draw at canvas backing
+- **[Implicit]** Boats and gameplay overlays draw at canvas backing
   resolution after the upscale.
 - **[Implicit]** A graphics quality tier is a set of override constants on the
   scene pipeline, so lower tiers carry no runtime branches and changing tier
@@ -693,3 +693,4 @@ and verification details.
 | Subtropical low cloud | How low cloud under the subtropical highs reaches observed stratocumulus amounts, which follow the lower troposphere's stability (Klein and Hartmann 1993) that the model lacks |
 | Grazing deck light | Whether decks need sunlight entering through their breaks and edges while the Sun is near the canopy's level, where a plane-parallel layer passes almost none |
 | Vertical cloud structure | How the model gains cloud depth, entrainment and upper-air humidity, which rain onset and optical depth need |
+| Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |

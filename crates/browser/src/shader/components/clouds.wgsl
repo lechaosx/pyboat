@@ -52,6 +52,7 @@ fn regional_canopy_conditions(weather: CloudWeatherSample) -> RegionalCanopyCond
 // under it, and rides its own wind. Cloud shadow grids hold the field's
 // transmittance along each light from a plane above every shadow receiver, so
 // one tap per light reads every cloud type.
+// Keep synchronized with `DroneCamera::PRODUCTION_HEIGHT_M` in camera.rs.
 const CUMULUS_LOWEST_HEIGHT_M: f32 = 1000.0;
 // Compromise: cloud shadow windows bound clouds up to the deck's height,
 // which caps taller cumulus there.

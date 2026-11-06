@@ -518,8 +518,8 @@ function renderTuningControls(): void {
   const note = document.createElement("p");
   note.className = "composition-note";
   note.innerHTML = "<strong>Color layers × lighting</strong><span>These switches are orthogonal: enabled rows render through every enabled light.</span>";
-  tuningControlsElement.append(note);
   for (const group of tuningGroups) {
+    if (group.label === "Lighting") tuningControlsElement.append(note);
     const details = document.createElement("details");
     details.open = group.open ?? false;
     const summary = document.createElement("summary");
