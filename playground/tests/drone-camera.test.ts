@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { droneCameraAtHeight, droneViewHeightM, wheeledDroneCamera } from "../src/drone-camera.ts";
+import {
+  droneAnchorShiftM,
+  droneCameraAtHeight,
+  droneViewHeightM,
+  droneViewScaleM,
+  wheeledDroneCamera,
+  type DroneCamera,
+} from "../src/drone-camera.ts";
 
 const camera = { heightM: 1000, fieldOfViewDegrees: 30 };
 
 function assertClose(actual: number, expected: number): void {
   assert.ok(Math.abs(actual - expected) <= 1e-9 * Math.abs(expected), `${actual} != ${expected}`);
+}
+
+// Where the eye ray through view point `u`, in image heights from the image
+// centre, passes `elevationM`, as an offset from the point below the camera.
+function rayOffsetM(camera: DroneCamera, u: number, elevationM: number): number {
+  return u * 2 * Math.tan(camera.fieldOfViewDegrees * Math.PI / 360) * (camera.heightM - elevationM);
 }
 
 describe("playground drone camera", () => {
@@ -45,5 +58,42 @@ describe("playground drone camera", () => {
 
     assert.equal(moved.heightM, 250);
     assertClose(droneViewHeightM(moved), droneViewHeightM(camera));
+  });
+
+  test("a drag keeps the grabbed terrain point under the cursor", () => {
+    for (const elevationM of [0, 300, 990]) {
+      // The camera moves against the cursor by this much per image height.
+      const shiftM = droneViewScaleM(camera, elevationM);
+
+      assertClose(shiftM * 0.3, rayOffsetM(camera, 0.3, elevationM));
+    }
+  });
+
+  test("every wheel step keeps the terrain point under the cursor there", () => {
+    const u = 0.37;
+    for (const elevationM of [0, 300]) {
+      for (const scale of [0.5, 2]) {
+        for (const [ctrlKey, shiftKey] of [[false, false], [true, false], [false, true]]) {
+          const next = wheeledDroneCamera(camera, scale, { ctrlKey, shiftKey });
+          const centerShiftM = u * droneAnchorShiftM(camera, next, elevationM);
+
+          assertClose(
+            rayOffsetM(camera, u, elevationM) - centerShiftM,
+            rayOffsetM(next, u, elevationM),
+          );
+        }
+      }
+    }
+  });
+
+  test("a point not below the camera anchors input at sea level", () => {
+    assertClose(droneViewScaleM(camera, camera.heightM), droneViewHeightM(camera));
+    const below = droneCameraAtHeight(camera, 200);
+    for (const [from, to] of [[camera, below], [below, camera]]) {
+      assertClose(
+        droneAnchorShiftM(from, to, 300),
+        droneViewHeightM(from) - droneViewHeightM(to),
+      );
+    }
   });
 });

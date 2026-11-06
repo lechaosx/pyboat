@@ -224,8 +224,8 @@ and verification details.
   centre from a fixed height above mean sea level; zoom changes only its focal
   length. The playground deliberately lets its height and field of view vary.
 - **[Explicit]** The camera's rectilinear lens images sea level as a uniformly
-  scaled chart, so overlays, input and interest keep their sea-level mapping;
-  boats project from their height.
+  scaled chart, so gameplay overlays, input and interest keep their sea-level
+  mapping; boats project from their height.
 - **[Implicit]** The camera height is the upper field's lowest cloud height,
   the highest that keeps every upper cloud above the camera.
 - **[Explicit]** A depth pass rasterizes the broad landform grid from the

@@ -40,3 +40,19 @@ export function wheeledDroneCamera(
 export function droneCameraAtHeight(camera: DroneCamera, heightM: number): DroneCamera {
   return { heightM, fieldOfViewDegrees: droneFieldOfViewDegrees(droneViewHeightM(camera), heightM) };
 }
+
+// Metres per image height between the point below the camera and where the eye
+// ray through a view point passes `elevationM`. A point not below the camera
+// cannot be seen, so sea level stands in for it.
+export function droneViewScaleM(camera: DroneCamera, elevationM: number): number {
+  const anchorM = elevationM < camera.heightM ? elevationM : 0;
+  return droneViewHeightM(camera) * (1 - anchorM / camera.heightM);
+}
+
+// How far the camera moves, in metres per image height of the cursor's offset
+// from the image centre, to keep the point at `elevationM` under the cursor
+// as `camera` becomes `next`. Sea level stands in for a point not below both.
+export function droneAnchorShiftM(camera: DroneCamera, next: DroneCamera, elevationM: number): number {
+  const anchorM = elevationM < Math.min(camera.heightM, next.heightM) ? elevationM : 0;
+  return droneViewScaleM(camera, anchorM) - droneViewScaleM(next, anchorM);
+}

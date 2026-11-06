@@ -236,6 +236,36 @@ pub fn production_camera_height_m() -> f32 {
 }
 
 #[cfg(feature = "playground")]
+/// The elevation of the first landform or sea surface point on the camera's
+/// eye ray through the view point (`view_x`, `view_y`), offset from the image
+/// centre in image heights. A camera inside terrain gets its own height.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn playground_terrain_elevation_m(
+    world_width_m: f32,
+    world_height_m: f32,
+    match_seed: u64,
+    camera_x_m: f32,
+    camera_y_m: f32,
+    camera_height_m: f32,
+    view_height_m: f32,
+    view_x: f32,
+    view_y: f32,
+    image_height_px: u32,
+) -> Result<f32, JsValue> {
+    let camera = DroneCamera {
+        world_geometry: WorldGeometry::new(world_width_m, world_height_m)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?,
+        center_m: Vector::new(camera_x_m, camera_y_m),
+        height_m: camera_height_m,
+        view_height_m,
+    };
+    Ok(camera
+        .terrain_point(match_seed, Vector::new(view_x, view_y), image_height_px)
+        .1)
+}
+
+#[cfg(feature = "playground")]
 #[wasm_bindgen]
 pub fn environment_field_shader_source() -> String {
     ENVIRONMENT_FIELD_SHADER.to_owned()

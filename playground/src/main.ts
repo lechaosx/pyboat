@@ -28,6 +28,7 @@ import {
   playground_scene_uniforms,
   playground_startup_shader_source,
   playground_terrain_cache_fill_bytes,
+  playground_terrain_elevation_m,
   production_camera_height_m,
   production_scene_shader_source,
   sample_playground_environment,
@@ -50,10 +51,12 @@ import { deriveIntermediateVisibility } from "./feature-visibility";
 import { CloudMotion } from "./cloud-motion";
 import { boundedCanvasDimensions } from "./canvas-dimensions";
 import {
+  droneAnchorShiftM,
   droneCameraAtHeight,
   droneFieldOfViewDegrees,
   droneFieldOfViewLimitsDegrees,
   droneViewHeightM,
+  droneViewScaleM,
   wheeledDroneCamera,
   type DroneCamera,
 } from "./drone-camera";
@@ -795,12 +798,29 @@ renderControls();
 let dragPointer: number | undefined;
 let dragX = 0;
 let dragY = 0;
+let dragElevationM = 0;
 
 function canvasViewPoint(clientX: number, clientY: number, rect: DOMRect): [number, number] {
   return [
     (clientX - rect.left) / rect.width - 0.5,
     0.5 - (clientY - rect.top) / rect.height,
   ];
+}
+
+// Canvas view x arrives in image widths; the pick takes image heights.
+function viewPointElevationM(viewX: number, viewY: number, aspect: number): number {
+  return playground_terrain_elevation_m(
+    state.worldWidthM,
+    state.worldHeightM,
+    parsedSeed(),
+    state.cameraX,
+    state.cameraY,
+    state.cameraHeightM,
+    viewHeightM(),
+    viewX * aspect,
+    viewY,
+    previewCanvas.height,
+  );
 }
 
 previewCanvas.addEventListener("pointerdown", (event) => {
@@ -810,6 +830,11 @@ previewCanvas.addEventListener("pointerdown", (event) => {
     event.clientX,
     event.clientY,
     previewCanvas.getBoundingClientRect(),
+  );
+  dragElevationM = viewPointElevationM(
+    dragX,
+    dragY,
+    previewCanvas.clientWidth / previewCanvas.clientHeight,
   );
   previewCanvas.setPointerCapture(event.pointerId);
   previewCanvas.classList.add("dragging");
@@ -822,9 +847,9 @@ previewCanvas.addEventListener("pointermove", (event) => {
     previewCanvas.getBoundingClientRect(),
   );
   const aspect = previewCanvas.clientWidth / previewCanvas.clientHeight;
-  const viewHeight = viewHeightM();
-  state.cameraX -= (viewX - dragX) * viewHeight * aspect;
-  state.cameraY -= (viewY - dragY) * viewHeight;
+  const scaleM = droneViewScaleM(droneCamera(), dragElevationM);
+  state.cameraX -= (viewX - dragX) * scaleM * aspect;
+  state.cameraY -= (viewY - dragY) * scaleM;
   dragX = viewX;
   dragY = viewY;
 });
@@ -839,17 +864,20 @@ previewCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   const rect = previewCanvas.getBoundingClientRect();
   const [pointerX, pointerY] = canvasViewPoint(event.clientX, event.clientY, rect);
-  const oldHeight = viewHeightM();
-  const oldWidth = oldHeight * rect.width / rect.height;
   const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
   // Browsers turn Shift+wheel into horizontal scrolling.
   const delta = event.shiftKey ? event.deltaY || event.deltaX : event.deltaY;
   const camera = wheeledDroneCamera(droneCamera(), Math.exp(delta * deltaScale * 0.001), event);
   const newHeight = droneViewHeightM(camera);
   if (!(newHeight >= 0.1 && newHeight <= 10000000)) return;
-  const newWidth = newHeight * rect.width / rect.height;
-  state.cameraX += pointerX * (oldWidth - newWidth);
-  state.cameraY += pointerY * (oldHeight - newHeight);
+  const aspect = rect.width / rect.height;
+  const shiftM = droneAnchorShiftM(
+    droneCamera(),
+    camera,
+    viewPointElevationM(pointerX, pointerY, aspect),
+  );
+  state.cameraX += pointerX * aspect * shiftM;
+  state.cameraY += pointerY * shiftM;
   state.cameraHeightM = camera.heightM;
   state.fieldOfViewDegrees = camera.fieldOfViewDegrees;
   for (const sync of tuningControlSyncs) sync();
