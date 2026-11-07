@@ -76,6 +76,7 @@ struct Options {
     light_contribution_visibility: [u32; 4],
     land_material_color_visibility: [u32; 4],
     solid_material_color_visibility: [u32; 4],
+    water_material_color_visibility: [u32; 4],
     /// Camera x, camera y, and view height of earlier frames whose terrain
     /// cache fills the requested view's frame reuses.
     prior_views: Vec<[f32; 3]>,
@@ -756,6 +757,7 @@ fn default_options() -> Options {
         light_contribution_visibility: [1; 4],
         land_material_color_visibility: [1; 4],
         solid_material_color_visibility: [1; 4],
+        water_material_color_visibility: [1; 4],
         prior_views: Vec::new(),
         skip_prior_fills: false,
         adaptation_seconds: None,
@@ -808,6 +810,7 @@ fn parse_options() -> Result<Command, String> {
                 | "--light-contributions"
                 | "--land-material-colors"
                 | "--solid-material-colors"
+                | "--water-material-colors"
         ) {
             lab_only_option.get_or_insert_with(|| argument.clone());
         }
@@ -870,6 +873,10 @@ fn parse_options() -> Result<Command, String> {
             }
             "--solid-material-colors" => {
                 options.solid_material_color_visibility =
+                    parse_u32x4(&value(&mut arguments)?, &argument)?
+            }
+            "--water-material-colors" => {
+                options.water_material_color_visibility =
                     parse_u32x4(&value(&mut arguments)?, &argument)?
             }
             "--prior-view" => {
@@ -1368,6 +1375,56 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 ],
             )
         }
+        // lighting_water_glint_<Sun degrees>[_<graphics tier>], by default at
+        // the high tier.
+        name if name.starts_with("lighting_water_glint_") => {
+            let suffix = &name["lighting_water_glint_".len()..];
+            let (sun_degrees, quality) = suffix.split_once('_').unwrap_or((suffix, "high"));
+            let unknown = || format!("unknown diagnostic: {name}");
+            let sun_degrees: f64 = sun_degrees.parse().map_err(|_| unknown())?;
+            let quality = GraphicsQuality::parse(quality).ok_or_else(unknown)?;
+            let mut selection = diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 32.0),
+                    ("LIGHTING_MODEL_SUN_DEGREES", sun_degrees),
+                ],
+            );
+            selection
+                .constants
+                .extend_from_slice(quality.scene_constants());
+            selection
+        }
+        // lighting_water_resolved_slope_<graphics tier>.
+        name if name.starts_with("lighting_water_resolved_slope_") => {
+            let quality = GraphicsQuality::parse(&name["lighting_water_resolved_slope_".len()..])
+                .ok_or_else(|| format!("unknown diagnostic: {name}"))?;
+            let mut selection = diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 35.0)],
+            );
+            selection
+                .constants
+                .extend_from_slice(quality.scene_constants());
+            selection
+        }
+        "lighting_view_direction" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 37.0)],
+        ),
+        "lighting_water_sky_through_sunset" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 34.0)],
+        ),
+        "lighting_clear_sky_radiance_integral" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 33.0)],
+        ),
         name if name.starts_with("lighting_receiver_deck_sweep_") => {
             let height_m = name["lighting_receiver_deck_sweep_".len()..]
                 .parse()
@@ -1616,6 +1673,8 @@ fn print_help() {
            --landform-lighting V,V,V,V  enable relief and shadows, finite high-light reach, padding\n\
            --land-material-colors V,V,V,V  grass, forest, intertidal, and beach color rows\n\
            --solid-material-colors V,V,V,V  rock, snow, land-ice, and sea-ice color rows\n\
+           --water-material-colors V,V,V,V  water body, visible bottom, and surface reflection\n\
+                                  rows, then padding\n\
            --landscape-visibility V,V,V,V  finite landscape mechanism visibility\n\
            --prior-view X,Y,HEIGHT  render an earlier frame's terrain cache fills first;\n\
                                   repeat for a pan or zoom sequence ending at the capture\n\
@@ -2085,7 +2144,7 @@ async fn render(options: &Options) -> Result<(), String> {
         light_contribution_visibility: options.light_contribution_visibility,
         land_material_color_visibility: options.land_material_color_visibility,
         solid_material_color_visibility: options.solid_material_color_visibility,
-        water_material_color_visibility: [1; 4],
+        water_material_color_visibility: options.water_material_color_visibility,
         environment_features: [1.0; 4],
         material_features: [1.0; 4],
         effect_features: [1.0; 4],

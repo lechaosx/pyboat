@@ -146,8 +146,8 @@ and verification details.
   geological causes across the shoreline and into inland terrain.
 - **[Explicit]** Terrain materials compete as continuous physical cover
   capacities rather than categorical IDs or inferred boundary distances.
-  Vegetation starts above the astronomical intertidal band; snow overlays color,
-  detail, and roughness.
+  Vegetation starts above the astronomical intertidal band; snow overlays color
+  and detail.
 
 ### Atmosphere and climate
 
@@ -245,8 +245,8 @@ and verification details.
   clear-sky and canopy light, and the night sky. The eye sees each surface's
   reflectance against that light, so coasts, snow beside water, and boats
   leave no halos; the compromise ignores the glare of bright surfaces such as
-  snow, to which real adaptation also responds. Full dark adaptation under a
-  clear moonless sky bounds it.
+  snow and Sun glint, to which real adaptation also responds. Full dark
+  adaptation under a clear moonless sky bounds it.
 - **[Explicit]** Adaptation stays independent of surface color. Its field is a
   fixed visual angle of the view, so a wider view pools more of the world, as
   an eye looking through a wider lens would: small and medium cloud shadows
@@ -366,7 +366,36 @@ and verification details.
 - **[Implicit]** Land relief takes each beam by Lambert's law and the sky's
   light by an isotropic sky's view factor. Landform-scale relief is
   exaggerated threefold for the depth cues a top-down view lacks; metre-scale
-  micro relief stays at true scale. Water keeps its own relief grade and glint.
+  micro relief stays at true scale.
+- **[Explicit]** Water's surface reflects toward the drone camera by Fresnel's
+  law from facets whose slopes follow Cox and Munk's clean-sea statistics at
+  the surface wind: it mirrors the sky, and each beam glints through the
+  shadows that beam casts.
+- **[Explicit]** Water's slopes keep their physical scale.
+- **[Explicit]** Short waves that the wave modes leave out hold equal slope
+  variance per octave below the spectrum's peak, as in Phillips' saturation
+  range. Waves shorter than any octave always keep their share; the octaves
+  share what those and the resolved modes leave of Cox and Munk's total.
+- **[Implicit]** The spectrum's peak is the wind sea's, and never shorter than
+  the octaves' longest wavelength, a compromise: the octave layout stands in
+  for gravity waves that outlast a calm of the local wind, where a real
+  spectrum falls off above its peak.
+- **[Explicit]** A pixel's unresolved facets carry the slope variance that its
+  resolved waves leave of Cox and Munk's, and at least the shortest waves'
+  share, so water's mean glint is the same at every zoom and graphics tier
+  while the resolved modes hold no more slope variance than Cox and Munk's
+  total less that share.
+- **[Explicit]** Water mirrors the clear sky with the CIE standard clear sky's
+  radiance and the canopy with an overcast sky's, each carrying its diffuse
+  light.
+- **[Explicit]** A light's reflected clear sky keeps that shape through
+  twilight.
+- **[Implicit]** Below the horizon the shape is the one for a light at the
+  horizon, and it carries the glow of the air the light still reaches
+  directly; the light scattered more than once into the planet's shadow is
+  isotropic. That stand-in loses the broad glow such light keeps toward the
+  set light, so water brightens against land where the directly lit glow
+  gives way to it.
 - **[Implicit]** A pixel takes the mean relief light of the land it covers:
   the relief its footprint resolves sets the mean slope, and finer terrain and
   material relief spreads slopes around it. Authoritative elevation and its
@@ -693,4 +722,5 @@ and verification details.
 | Subtropical low cloud | How low cloud under the subtropical highs reaches observed stratocumulus amounts, which follow the lower troposphere's stability (Klein and Hartmann 1993) that the model lacks |
 | Grazing deck light | Whether decks need sunlight entering through their breaks and edges while the Sun is near the canopy's level, where a plane-parallel layer passes almost none |
 | Vertical cloud structure | How the model gains cloud depth, entrainment and upper-air humidity, which rain onset and optical depth need |
+| Glare | Whether intraocular scatter, CIE 180:2010's glare spread function pooled on the adapting field's grid, should veil the view around glint and snow, and whether adaptation should respond to their luminance |
 | Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |

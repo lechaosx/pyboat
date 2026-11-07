@@ -149,6 +149,111 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             1.0,
         );
     }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 32u {
+        // Water's Sun glint at its rendered position under a Sun
+        // LIGHTING_MODEL_SUN_DEGREES high toward +x, per unit of the beam's
+        // light on level ground, as g / (g + 0.1) in red; the resolved surface
+        // wind's speed U as U / (U + 10) in green and its axis from +x in half
+        // turns in blue. Alpha is 1 over water and 0 elsewhere.
+        let initialized = initialize_playground_scene(input);
+        let position_m = initialized.input.world_position_m;
+        let water_height_m = tide_height_m();
+        let surface = scene_surface_at(
+            position_m,
+            initialized.surface_circle_position,
+            water_height_m,
+            initialized.atmosphere,
+        );
+        if surface.is_land {
+            return vec4<f32>(0.0);
+        }
+        let sun = radians(LIGHTING_MODEL_SUN_DEGREES);
+        let glint = water_glint(
+            camera_view_direction(water_height_m),
+            vec3<f32>(cos(sun), 0.0, sin(sun)),
+            surface.surface.detail_gradient,
+            unresolved_slope_covariance(surface.surface),
+            CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
+        ) / sin(sun);
+        let wind = ocean_forcing_from_surface(
+            position_m,
+            surface.elevation_m,
+            initialized.atmosphere,
+            surface_tide_sample,
+        ).surface_wind_m_s;
+        let speed = length(wind);
+        return vec4<f32>(
+            glint / (glint + 0.1),
+            speed / (speed + 10.0),
+            fract(atan2(wind.y, wind.x) / PI + 1.0),
+            1.0,
+        );
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 34u {
+        // The clear sky level water mirrors toward a camera overhead, per
+        // unit of an isotropic sky's, in halves, under a clear sky with the
+        // Moon set: in the left column with the Sun's disc fully up, two
+        // radii above the horizon, and in the right fully set, two below.
+        let height = select(2.0, -2.0, input.position.x >= 1.0) * CELESTIAL_DISC_ANGULAR_RADIUS_RAD;
+        sun_light_direction = vec3<f32>(cos(height), 0.0, sin(height));
+        geocentric_moon_light_direction = vec3<f32>(0.0, 0.0, -1.0);
+        let receiver = celestial_receiver_light_at_height(0.0);
+        let response = water_light_response(
+            vec3<f32>(0.0),
+            TerrainSurface(vec3<f32>(0.0), vec2<f32>(0.0), 0.0, vec2<f32>(0.0)),
+            vec3<f32>(0.0, 0.0, 1.0),
+            receiver,
+            calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
+            1.0,
+        );
+        return vec4<f32>(0.5 * response.clear_sky.x / water_fresnel_reflectance(1.0), 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 35u {
+        // The squared slope water's surface resolves at its rendered position,
+        // s², as s² / (s² + 0.001) in red. Alpha is 1 over water and 0
+        // elsewhere.
+        let initialized = initialize_playground_scene(input);
+        let surface = scene_surface_at(
+            initialized.input.world_position_m,
+            initialized.surface_circle_position,
+            tide_height_m(),
+            initialized.atmosphere,
+        );
+        if surface.is_land {
+            return vec4<f32>(0.0);
+        }
+        let slope_squared = dot(surface.surface.detail_gradient, surface.surface.detail_gradient);
+        return vec4<f32>(slope_squared / (slope_squared + 0.001), 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 37u {
+        // The x component of `camera_view_direction` from the point the
+        // pixel's eye ray meets, taken at sea level, as 0.5 + 0.5 x in red.
+        _ = initialize_playground_scene(input);
+        let view = camera_view_direction(0.0);
+        return vec4<f32>(0.5 + 0.5 * view.x, 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 33u {
+        // The clear sky's radiance factor integrated over the sky, cosine
+        // weighted, per π, in halves: 1 where its radiance carries exactly its
+        // diffuse light. The light stands 5 degrees higher in each column,
+        // from the horizon.
+        let height = radians(5.0 * floor(input.position.x));
+        let light = vec3<f32>(cos(height), 0.0, sin(height));
+        var total = 0.0;
+        for (var zenith_step = 0u; zenith_step < 64u; zenith_step++) {
+            let zenith = (f32(zenith_step) + 0.5) * 0.5 * PI / 64.0;
+            for (var azimuth_step = 0u; azimuth_step < 256u; azimuth_step++) {
+                let azimuth = (f32(azimuth_step) + 0.5) * TAU / 256.0;
+                let direction = vec3<f32>(
+                    sin(zenith) * cos(azimuth),
+                    sin(zenith) * sin(azimuth),
+                    cos(zenith),
+                );
+                total += clear_sky_radiance_factor(direction, light) * cos(zenith) * sin(zenith);
+            }
+        }
+        return vec4<f32>(0.5 * total * (0.5 * PI / 64.0) * (TAU / 256.0) / PI, 0.0, 0.0, 1.0);
+    }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 1u {
         return diagnostic_landform_sun_grade_moon_coupling();
     }

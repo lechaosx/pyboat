@@ -7,7 +7,7 @@ fn diagnostic_water_ocean_current(input: VertexOutput) -> vec4<f32> {
 }
 
 fn diagnostic_water_visual_normals(input: VertexOutput) -> vec4<f32> {
-    let detail = visual_water_normal_sample(input.world_position_m);
+    let detail = visual_water_slopes(input.world_position_m);
     let normal = normalize(vec3<f32>(-detail.gradient, 1.0));
     return vec4<f32>(0.5 + 0.5 * normal, 1.0);
 }

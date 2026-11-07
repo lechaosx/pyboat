@@ -24,13 +24,18 @@ const MAXIMUM_MEAN_LUMINANCE_CHANGE: f64 = 0.01;
 /// 99th percentile of relative 16×16-pixel mean luminance changes.
 const MAXIMUM_REGIONAL_LUMINANCE_CHANGE: f64 = 0.05;
 
-/// Removes every material color except water and the shallow-water bottom
-/// tint, leaving land and ice black.
-const WATER_ONLY: [&str; 4] = [
+/// Hides the water surface's reflection, whose glint sparkles where a tier's
+/// resolved waves put them; their mean reflection is tier-independent.
+const WITHOUT_SURFACE_REFLECTION: [&str; 2] = ["--water-material-colors", "1,1,0,0"];
+/// Removes every material color except the water body and the shallow-water
+/// bottom tint, leaving land and ice black.
+const WATER_ONLY: [&str; 6] = [
     "--land-material-colors",
     "0,0,0,0",
     "--solid-material-colors",
     "0,0,0,0",
+    WITHOUT_SURFACE_REFLECTION[0],
+    WITHOUT_SURFACE_REFLECTION[1],
 ];
 
 #[derive(Clone, Copy)]
@@ -288,23 +293,37 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
 #[test]
 fn lower_tiers_keep_night_and_storm_darkening() {
     // Each control removes the light or shadow its view's darkening rests on.
+    // Moonlight darkens every surface alike, so the moonlit views leave out the
+    // moonglade's sparkle; the storm's darkening of open water shows in the
+    // glint and sky reflection its clouds remove.
     let lost_moonlight = ["--light-contributions", "1,0,1,1"];
     let lost_storm_darkening = ["--cloud-shadows", "0"];
-    for (view, control) in [
-        (moonlit_coast(), lost_moonlight),
-        (moonlit(rocky_shore()), lost_moonlight),
-        (storm(), lost_storm_darkening),
+    for (view, shown, control) in [
+        (
+            moonlit_coast(),
+            &WITHOUT_SURFACE_REFLECTION[..],
+            lost_moonlight,
+        ),
+        (
+            moonlit(rocky_shore()),
+            &WITHOUT_SURFACE_REFLECTION[..],
+            lost_moonlight,
+        ),
+        (storm(), &[][..], lost_storm_darkening),
     ] {
-        let high = capture(&view, &[]);
+        let high = capture(&view, shown);
         for quality in LOWER_TIERS {
-            let comparison = compare_light(&high, &capture(&view, &["--quality", quality]));
+            let comparison = compare_light(
+                &high,
+                &capture(&view, &[shown, &["--quality", quality]].concat()),
+            );
             assert!(
                 comparison.matches(),
                 "{quality} at {:?}: {comparison:?}",
                 view.camera_m
             );
         }
-        let changed = compare_light(&high, &capture(&view, &control));
+        let changed = compare_light(&high, &capture(&view, &[shown, &control].concat()));
         assert!(
             !changed.matches(),
             "control at {:?}: {changed:?}",

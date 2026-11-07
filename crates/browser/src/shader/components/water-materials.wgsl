@@ -278,25 +278,36 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     );
 }
 
+// The resolved wave modes at a position, with the forcing that sets them.
+struct WaterWaveSample {
+    significant_height_m: f32,
+    // The slope the pixel resolves, then the mean squares of that slope along
+    // x and y and their covariance over the modes' phases.
+    gradient: vec2<f32>,
+    slope_covariance: vec3<f32>,
+    surface_wind_m_s: vec2<f32>,
+};
+
 fn physical_water_wave_sample_from_surface(
     position_m: vec2<f32>,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
     tide: SurfaceTideSample,
-) -> TerrainNoiseSample {
-    if material_feature_visibility().y <= 0.0 {
-        return TerrainNoiseSample(0.0, vec2<f32>(0.0));
-    }
+) -> WaterWaveSample {
+    var sample = WaterWaveSample(0.0, vec2<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0));
     let forcing = ocean_forcing_from_surface(
         position_m,
         terrain_elevation_m,
         atmosphere,
         tide,
     );
+    // The wind sets the slope statistics of waves too fine to show.
+    sample.surface_wind_m_s = forcing.surface_wind_m_s;
+    if material_feature_visibility().y <= 0.0 {
+        return sample;
+    }
     let significant_height_m = forcing.significant_height_m;
-    var sample: TerrainNoiseSample;
-    sample.value = significant_height_m;
-    sample.gradient = vec2<f32>(0.0);
+    sample.significant_height_m = significant_height_m;
     if significant_height_m <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return sample;
     }
@@ -340,9 +351,12 @@ fn physical_water_wave_sample_from_surface(
             -0.5 * pow(wave_number * visual_pixel_footprint_m, 2.0),
         );
         displacement_m += footprint_attenuation * amplitude_m * cos(phase);
-        let first_slope = -footprint_attenuation * amplitude_m * sin(phase) * wave_number;
-        sample.gradient += first_slope * direction;
+        let slope_amplitude = footprint_attenuation * amplitude_m * wave_number;
+        sample.gradient -= slope_amplitude * sin(phase) * direction;
+        sample.slope_covariance += 0.5 * slope_amplitude * slope_amplitude
+            * vec3<f32>(direction * direction, direction.x * direction.y);
     }
+    // Compromise: the mean squared slope leaves out this steepening of crests.
     let nonlinear_strength = 0.5 * smoothstep(1.5, 3.0, significant_height_m);
     sample.gradient *= 1.0
         + 2.0 * nonlinear_strength * displacement_m / significant_height_m;
@@ -350,7 +364,7 @@ fn physical_water_wave_sample_from_surface(
     return sample;
 }
 
-fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+fn physical_water_wave_sample(position_m: vec2<f32>) -> WaterWaveSample {
     let terrain = procedural_terrain_sample(position_m);
     return physical_water_wave_sample_from_surface(
         position_m,
@@ -360,74 +374,168 @@ fn physical_water_wave_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
     );
 }
 
-fn decorative_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
-    var sample = TerrainNoiseSample(0.0, vec2<f32>(0.0));
-    if material_feature_visibility().w <= 0.0 {
-        return sample;
-    }
-    var amplitude = 1.0;
-    var amplitude_sum = 0.0;
+// Cox and Munk's (1954, J. Opt. Soc. Am. 44) mean squared slopes of a clean
+// sea surface along and across the wind. Their fit puts its 0.003 intercept
+// across the wind; it is shared equally here, within the fit's scatter, so the
+// slopes lose their wind axis as the wind that sets it calms. Compromise: they
+// took the wind at 12.5 m, for which the resolved surface wind stands in.
+fn cox_munk_slope_variance(wind_speed_m_s: f32) -> vec2<f32> {
+    return vec2<f32>(0.0015 + 3.16e-3 * wind_speed_m_s, 0.0015 + 1.92e-3 * wind_speed_m_s);
+}
+
+// Mean squared gradient of `spatiotemporal_noise_sample` times its wavelength
+// squared, a property of the noise: a Monte Carlo average over 400 000
+// positions, longitudes, and independent lattice gradients.
+const SPATIOTEMPORAL_SIMPLEX_SQUARED_GRADIENT: f32 = 4.24;
+// The shortest gravity wave, at the gravity-capillary minimum of phase speed.
+const GRAVITY_CAPILLARY_WAVELENGTH_M: f32 = 0.017;
+
+// The decorative octaves' slope a pixel resolves and its mean square, then
+// the mean squared slope of the waves shorter than the octaves, which nothing
+// resolves.
+struct DecorativeWaterSample {
+    gradient: vec2<f32>,
+    slope_variance: f32,
+    short_wave_slope_variance: f32,
+};
+
+// Short waves the wave modes leave out. In Phillips' (1958) saturation range
+// each octave of wavelength holds equal slope variance, so each octave
+// carries an equal share of Cox and Munk's total over the octaves from the
+// spectrum's peak to the shortest gravity wave. The peak is Pierson and
+// Moskowitz's (1964), 2πU²/(0.769 g). The waves shorter than the last
+// octave, down to the shortest gravity wave, always keep their share. Cox and
+// Munk measured the slopes of all waves, so the octaves share only what those
+// and the resolved wave modes leave of that total, their `slope_budget`,
+// scaled alike. Compromises: the octaves are alike in every direction; the
+// resolved surface wind stands in for the wind at 19.5 m; and the peak is no
+// shorter than the octaves' longest wavelength, so the octave layout stands
+// in for gravity waves that outlast a calm of the local wind, where a real
+// spectrum falls off above its peak. Below about 5.5 m/s every octave thus
+// carries a full share, an 18 m octave included.
+fn decorative_water_normal_sample(
+    position_m: vec2<f32>,
+    wind_speed_m_s: f32,
+    slope_budget: f32,
+) -> DecorativeWaterSample {
+    var sample = DecorativeWaterSample(vec2<f32>(0.0), 0.0, 0.0);
+    let shown = material_feature_visibility().w > 0.0;
     var wavelength_m = 18.0;
+    // The octaves reach half an octave above the first and below the last,
+    // which is eight times shorter.
+    let octave_range_m = vec2<f32>(1.4142135, 0.0883883) * wavelength_m;
+    let peak_wavelength_m = max(
+        TAU * wind_speed_m_s * wind_speed_m_s / (0.769 * 9.81),
+        octave_range_m.x,
+    );
+    let total = cox_munk_slope_variance(wind_speed_m_s);
+    let phillips_octave_variance = (total.x + total.y)
+        / log2(peak_wavelength_m / GRAVITY_CAPILLARY_WAVELENGTH_M);
+    sample.short_wave_slope_variance = phillips_octave_variance
+        * log2(octave_range_m.y / GRAVITY_CAPILLARY_WAVELENGTH_M);
+    let band_variance = phillips_octave_variance * log2(octave_range_m.x / octave_range_m.y);
+    let octave_variance = phillips_octave_variance
+        * clamp((slope_budget - sample.short_wave_slope_variance) / band_variance, 0.0, 1.0);
     var time_coordinate = scene.scalar_field_time_coordinates.w;
-    // Normalized over all four octaves, so a graphics tier that leaves out
-    // finer ones keeps the coarser octaves' amplitudes.
     for (var octave = 0u; octave < 4u; octave++) {
-        let octave_visibility = smoothstep(
-            visual_pixel_footprint_m,
-            2.0 * visual_pixel_footprint_m,
-            wavelength_m,
+        let evaluated = shown && octave < DECORATIVE_WATER_OCTAVES;
+        let octave_visibility = select(
+            0.0,
+            smoothstep(visual_pixel_footprint_m, 2.0 * visual_pixel_footprint_m, wavelength_m),
+            evaluated,
         );
-        if octave < DECORATIVE_WATER_OCTAVES
-            && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES)
-        {
+        if evaluated && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES) {
             let octave_sample = spatiotemporal_noise_sample(
                 noise_key(DECORATIVE_WATER_NOISE_FIELD, octave),
                 position_m,
                 wavelength_m,
                 time_coordinate,
             );
-            sample.value += amplitude * octave_visibility * octave_sample.value;
-            sample.gradient += amplitude * octave_visibility * octave_sample.gradient;
+            let amplitude_m = wavelength_m
+                * sqrt(octave_variance / SPATIOTEMPORAL_SIMPLEX_SQUARED_GRADIENT);
+            sample.gradient += amplitude_m * octave_visibility * octave_sample.gradient;
         }
-        amplitude_sum += amplitude;
-        amplitude *= 0.58;
+        sample.slope_variance += octave_visibility * octave_visibility * octave_variance;
         wavelength_m *= 0.5;
         time_coordinate *= 2.0;
     }
-    sample.value /= amplitude_sum;
-    sample.gradient /= amplitude_sum;
-    sample.gradient *= 1.6;
     return sample;
 }
 
-// Wave slopes exaggerated 2.5× for top-down reading; the decorative weight
-// stands in for short waves the physical spectrum omits.
-const WATER_WAVE_SLOPE_SCALE: f32 = 2.5;
-const DECORATIVE_WATER_NORMAL_WEIGHT: f32 = 0.20;
+// The water surface's slope a pixel resolves, from the wave modes and the
+// decorative octaves, then the mean squares along x and y and the covariance
+// of the slopes too fine for it. Those carry what Cox and Munk's mean squared
+// slope leaves beyond the resolved slopes', and always at least the short
+// waves' share. While the resolved modes hold no more slope variance than Cox
+// and Munk's total less that share, the mean squared slope is theirs at every
+// zoom and graphics tier. Compromises: beyond that, the surface is rougher
+// than theirs by the modes' excess, alike on every tier; the unresolved
+// slopes split between the axes along and across the wind as the positive
+// part of the remainder does, so where resolved slopes overfill one axis
+// while leaving the short waves' share, that axis keeps no unresolved slopes;
+// and the resolved slopes' covariance between those axes is left out.
+struct WaterSurfaceSlopes {
+    gradient: vec2<f32>,
+    unresolved_covariance: vec3<f32>,
+};
 
-fn visual_water_normal_sample_from_surface(
+fn visual_water_slopes_from_surface(
     position_m: vec2<f32>,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
     tide: SurfaceTideSample,
-) -> TerrainNoiseSample {
-    let physical = physical_water_wave_sample_from_surface(
+) -> WaterSurfaceSlopes {
+    let waves = physical_water_wave_sample_from_surface(
         position_m,
         terrain_elevation_m,
         atmosphere,
         tide,
     );
-    let decorative = decorative_water_normal_sample(position_m);
-    return TerrainNoiseSample(
-        physical.value,
-        WATER_WAVE_SLOPE_SCALE * physical.gradient
-            + DECORATIVE_WATER_NORMAL_WEIGHT * decorative.gradient,
+    let wind_speed_m_s = length(waves.surface_wind_m_s);
+    let total = cox_munk_slope_variance(wind_speed_m_s);
+    let modes = waves.slope_covariance;
+    let decorative = decorative_water_normal_sample(
+        position_m,
+        wind_speed_m_s,
+        total.x + total.y - modes.x - modes.y,
+    );
+    let upwind = select(
+        vec2<f32>(1.0, 0.0),
+        waves.surface_wind_m_s / wind_speed_m_s,
+        wind_speed_m_s > 0.0,
+    );
+    let squares = vec2<f32>(upwind.x * upwind.x, upwind.y * upwind.y);
+    let cross_term = upwind.x * upwind.y;
+    let resolved = vec2<f32>(
+        dot(modes.xy, squares) + 2.0 * modes.z * cross_term,
+        dot(modes.xy, squares.yx) - 2.0 * modes.z * cross_term,
+    ) + 0.5 * decorative.slope_variance;
+    // The unresolved slopes hold what the resolved slopes leave of the total,
+    // shaped along and across the wind as that remainder is where positive;
+    // isotropic octaves leave Cox and Munk's anisotropy to it. Where that
+    // falls short of the short waves, the shortfall takes Cox and Munk's
+    // proportions, so both axes keep slopes.
+    let remainder = total - resolved;
+    let shape = max(remainder, vec2<f32>(0.0));
+    let left = max(remainder.x + remainder.y, 0.0);
+    let unresolved = left * select(
+        vec2<f32>(0.5),
+        shape / (shape.x + shape.y),
+        shape.x + shape.y > 0.0,
+    ) + max(decorative.short_wave_slope_variance - left, 0.0) * total / (total.x + total.y);
+    return WaterSurfaceSlopes(
+        waves.gradient + decorative.gradient,
+        vec3<f32>(
+            dot(unresolved, squares),
+            dot(unresolved, squares.yx),
+            (unresolved.x - unresolved.y) * cross_term,
+        ),
     );
 }
 
-fn visual_water_normal_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
+fn visual_water_slopes(position_m: vec2<f32>) -> WaterSurfaceSlopes {
     let terrain = procedural_terrain_sample(position_m);
-    return visual_water_normal_sample_from_surface(
+    return visual_water_slopes_from_surface(
         position_m,
         terrain.elevation_m,
         surface_atmosphere_sample_at(position_m),
@@ -441,7 +549,7 @@ fn visual_water_surface(
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
-    let normal_detail = visual_water_normal_sample_from_surface(
+    let slopes = visual_water_slopes_from_surface(
         position_m,
         terrain_elevation_m,
         atmosphere,
@@ -451,20 +559,19 @@ fn visual_water_surface(
         position_m,
         atmosphere,
     );
+    // Compromise: rain's damping of the resolved slopes and its rings' slopes
+    // stand outside the Cox and Munk budget the unresolved slopes complete.
     let undisturbed_gradient = mix(
-        normal_detail.gradient,
-        0.35 * normal_detail.gradient,
+        slopes.gradient,
+        0.35 * slopes.gradient,
         clamp(2.0 * precipitation_contact.value, 0.0, 1.0),
     );
+    let covariance = slopes.unresolved_covariance;
     return TerrainSurface(
         base_color,
         undisturbed_gradient + precipitation_contact.gradient,
-        mix(
-            mix(0.08, 0.20, smoothstep(0.10, 4.0, normal_detail.value)),
-            0.26,
-            surface_cloud_weather.rain,
-        ),
-        0.0,
+        sqrt(covariance.x + covariance.y),
+        vec2<f32>(0.5 * (covariance.x - covariance.y), covariance.z),
     );
 }
 
@@ -549,7 +656,6 @@ fn water_column_surface(
 const INTERTIDAL_WET_SHADE: f32 = 0.70;
 const BEACH_WET_SHADE: f32 = 0.72;
 
-const SNOW_ROUGHNESS: f32 = 0.70;
 // Snow's relief per unit of the micro-relief field's.
 const SNOW_MICRO_RELIEF: f32 = 0.22;
 
@@ -599,8 +705,8 @@ fn terrain_surface(
         return TerrainSurface(
             select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
             vec2<f32>(0.0),
-            1.0,
             0.0,
+            vec2<f32>(0.0),
         );
     }
     let slope = length(material_gradient);
@@ -649,8 +755,8 @@ fn terrain_surface(
     let snow_surface = TerrainSurface(
         solid_color_gate.y * snow_color(surface_grade),
         SNOW_MICRO_RELIEF * micro_height.gradient,
-        SNOW_ROUGHNESS,
         SNOW_MICRO_RELIEF * micro_unresolved,
+        vec2<f32>(0.0),
     );
     if snow_amount >= 1.0 && !EVALUATE_ALL_BRANCHES {
         return snow_surface;
@@ -752,14 +858,14 @@ fn terrain_surface(
             exposed_dryness,
         ),
         mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
-        mix(0.96, 0.88, exposed_dryness),
         mix(0.12, 0.28, coastal_rock_amount) * micro_unresolved,
+        vec2<f32>(0.0),
     );
     let beach_surface = TerrainSurface(
         land_color_gate.w * mix(BEACH_WET_SHADE * beach_color, beach_color, exposed_dryness),
         beach_micro_height_m * micro_height.gradient,
-        mix(0.90, 0.82, exposed_dryness),
         beach_micro_height_m * micro_unresolved,
+        vec2<f32>(0.0),
     );
 
     // A treeline compressed to the islands' low relief.
@@ -835,12 +941,12 @@ fn terrain_surface(
             3.5 * canopy_detail.gradient + 0.24 * micro_height.gradient,
             forest_visibility,
         ),
-        mix(0.88, 0.96, forest_visibility),
         mix(
             0.45 * micro_unresolved,
             length(vec2<f32>(3.5 * canopy_unresolved, 0.24 * micro_unresolved)),
             forest_visibility,
         ),
+        vec2<f32>(0.0),
     );
     let non_rock_cover = 1.0 - rock_cover;
     let sediment_cover = non_rock_cover * sediment_capacity;
@@ -865,14 +971,11 @@ fn terrain_surface(
             + intertidal_cover * intertidal_surface.detail_gradient
             + sediment_cover * beach_surface.detail_gradient
             + rock_cover * rock_surface.detail_gradient,
-        vegetation_cover * vegetation_surface.roughness
-            + intertidal_cover * intertidal_surface.roughness
-            + sediment_cover * beach_surface.roughness
-            + rock_cover * rock_surface.roughness,
         vegetation_cover * vegetation_surface.unresolved_slope
             + intertidal_cover * intertidal_surface.unresolved_slope
             + sediment_cover * beach_surface.unresolved_slope
             + rock_cover * rock_surface.unresolved_slope,
+        vec2<f32>(0.0),
     );
     if surface_baking {
         // Linear in each amount, so their cross term is dropped.

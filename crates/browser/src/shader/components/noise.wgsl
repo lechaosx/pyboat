@@ -136,8 +136,10 @@ struct TerrainSurface {
     // surfaces mix that slope linearly, as for detail of one shared field; for
     // independent fields it overstates it by up to √2, a compromise.
     detail_gradient: vec2<f32>,
-    roughness: f32,
     unresolved_slope: f32,
+    // Half the difference of the unresolved detail's mean squared slopes along
+    // x and y, then their covariance: zero for detail alike in every direction.
+    unresolved_slope_anisotropy: vec2<f32>,
 };
 
 fn noise_sample_or_zero(sample: TerrainNoiseSample, keep: bool) -> TerrainNoiseSample {
@@ -155,8 +157,12 @@ fn select_terrain_surface(
     return TerrainSurface(
         select(otherwise.color, chosen.color, condition),
         select(otherwise.detail_gradient, chosen.detail_gradient, condition),
-        select(otherwise.roughness, chosen.roughness, condition),
         select(otherwise.unresolved_slope, chosen.unresolved_slope, condition),
+        select(
+            otherwise.unresolved_slope_anisotropy,
+            chosen.unresolved_slope_anisotropy,
+            condition,
+        ),
     );
 }
 

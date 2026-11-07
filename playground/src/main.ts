@@ -123,6 +123,7 @@ type State = {
   landIceColorVisible: number;
   waterColorVisible: number;
   bottomColorVisible: number;
+  waterSurfaceVisible: number;
   seaIceColorVisible: number;
   cloudShadowsVisible: number;
   legacyShadowLook: number;
@@ -165,6 +166,7 @@ const defaults: State = {
   landIceColorVisible: 1,
   waterColorVisible: 1,
   bottomColorVisible: 1,
+  waterSurfaceVisible: 1,
   seaIceColorVisible: 1,
   cloudShadowsVisible: 1,
   legacyShadowLook: 0,
@@ -473,6 +475,7 @@ const tuningGroups: readonly TuningGroup[] = [
     controls: [
       { type: "toggle", key: "waterColorVisible", label: "Water body" },
       { type: "toggle", key: "bottomColorVisible", label: "Visible bottom" },
+      { type: "toggle", key: "waterSurfaceVisible", label: "Surface reflection" },
       { type: "range", key: "waterAttenuationLength", label: "Bottom attenuation · m", min: 0.1, max: 4, step: 0.05 },
     ],
   },
@@ -1610,7 +1613,7 @@ function updateUniforms(
   const waterMaterial = [
     enabled("waterColorVisible"),
     enabled("bottomColorVisible"),
-    0,
+    enabled("waterSurfaceVisible"),
     0,
   ] as const;
   const surfaceColorLayer = landMaterial.some(Boolean)

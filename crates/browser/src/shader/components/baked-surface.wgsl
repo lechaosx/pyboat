@@ -323,12 +323,11 @@ fn baked_land_surface(
         atmosphere.climate,
     );
     color += autumn * baked.autumn_color + dormancy * baked.dormancy_color;
-    // Only water's relief grade reads roughness.
     var land = TerrainSurface(
         max(color, vec3<f32>(0.0)),
         baked.detail_gradient,
-        1.0,
         baked.unresolved_slope,
+        vec2<f32>(0.0),
     );
     let snow_amount = smoothstep(
         0.10,
@@ -342,9 +341,9 @@ fn baked_land_surface(
         var cover = TerrainSurface(
             solid_material_color_visibility().y * snow_color(baked.surface_grade),
             baked.snow_detail_scale * baked.detail_gradient,
-            SNOW_ROUGHNESS,
             // Snow keeps the land's unresolved slope, mostly the terrain's.
             baked.unresolved_slope,
+            vec2<f32>(0.0),
         );
         let partial_ice = baked.land_ice_amount > 0.0;
         if partial_ice || EVALUATE_ALL_BRANCHES {

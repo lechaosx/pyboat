@@ -35,10 +35,12 @@ struct ProductionSurfaceInput {
 // Sets the per-pixel state that composing terrain at `input` reads: the
 // terrain the drone camera sees through its sea-level point.
 fn initialize_production_surface(input: VertexOutput) -> ProductionSurfaceInput {
-    // Compromise: offsets wrap to the nearest copy of the world, so a view wider
-    // than the world repeats and cuts leaning land at half a lap from its centre.
+    // Compromise: the terrain depth holds one copy of the world, so its lookup
+    // wraps offsets to the nearest copy, and a view wider than the world
+    // repeats and cuts leaning land at half a lap from its centre.
     let view_offset_m = camera_relative_position_m(input.world_position_m);
     let hit_scale = terrain_hit_scale(view_offset_m);
+    surface_view_offset_m = (input.world_position_m - scene.camera_and_view_m.xy) * hit_scale;
     // Compromise: the footprint narrows with the hit's height but ignores its
     // slope, which spreads a pixel over more ground, so steep land is
     // filtered as if level.
@@ -102,6 +104,6 @@ fn solid_material_color_visibility() -> vec4<f32> {
     return vec4<f32>(1.0);
 }
 
-fn water_material_color_visibility() -> vec2<f32> {
-    return vec2<f32>(1.0);
+fn water_material_color_visibility() -> vec3<f32> {
+    return vec3<f32>(1.0);
 }

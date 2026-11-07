@@ -118,6 +118,10 @@ var<private> local_aerosol_optical_depth: f32;
 var<private> regional_aerosol_optical_depth: f32;
 var<private> visual_pixel_footprint_m: f32;
 var<private> surface_position_m: vec2<f32>;
+// The offset from the view centre at which the pixel's eye ray meets the
+// surface, unwrapped, so a copy of the world a wide view repeats is seen from
+// where it lies on screen.
+var<private> surface_view_offset_m: vec2<f32>;
 var<private> surface_tidal_range_m: f32;
 var<private> surface_tidal_phase_offset: f32;
 var<private> surface_cloud_weather: CloudWeatherSample;

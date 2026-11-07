@@ -256,12 +256,17 @@ fn display_response_is_monotone_hue_preserving_and_shares_sdr_below_the_shoulder
 
 /// A deck filling the view darkens the light falling on it about sixfold, and
 /// the eye adapts to that light. The lab's cloud-shadow switch clears the
-/// deck's shadows from the field grids the eye adapts through, so the view
-/// with them shows CIECAM02's brightness of the deck's light beside the view
-/// without: a little dimmer, not sixfold dimmer.
+/// deck's shadows from the field grids the eye adapts through, so a matte grey
+/// view with them shows CIECAM02's brightness of the deck's light beside the
+/// view without: a little dimmer, not sixfold dimmer.
 #[test]
 fn a_view_under_a_deck_adapts_to_its_light_by_the_brightness_law() {
-    let arguments = view("scene", ["160", "100"], ["13500", "-14800", "480"], "63037");
+    let arguments = view(
+        "scene_neutral",
+        ["160", "100"],
+        ["13500", "-14800", "480"],
+        "63037",
+    );
     let shaded = capture("deck-shaded", &arguments);
     let unshaded = capture(
         "deck-unshaded",
@@ -471,9 +476,9 @@ fn each_part_of_the_view_adapts_in_place_as_the_view_pans() {
 
 /// The eye adapts to the mean light over its adapting field, as CIE defines
 /// adapting luminance, so a field half in daylight adapts to about half of
-/// daylight. In a whole-world view across the terminator, the day side shows
-/// within a small factor of a view of daylight alone, and the night side no
-/// brighter than a view of the night alone.
+/// daylight. In a matte grey whole-world view across the terminator, the day
+/// side shows within a small factor of a view of daylight alone, and the night
+/// side no brighter than a view of the night alone.
 #[test]
 fn a_view_of_day_and_night_adapts_to_their_mean_light() {
     let (width, height) = (320, 200);
@@ -485,7 +490,7 @@ fn a_view_of_day_and_night_adapts_to_their_mean_light() {
         let capture = capture(
             name,
             &view(
-                "scene_production",
+                "scene_neutral",
                 [&size[0], &size[1]],
                 [&camera_x, "0", &view_height],
                 "0",

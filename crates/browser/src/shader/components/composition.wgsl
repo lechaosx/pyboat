@@ -1,9 +1,12 @@
 // How a surface weights each light, per colour channel: a factor of the
-// diffuse light, then of each beam's colour, the latter including the beam's
-// light on the surface. Water's response includes its reflectance; land's
-// leaves out its albedo, which multiplies the composed light.
+// clear sky's diffuse light, of the canopy's, and of the light ground and sky
+// exchange, then of each beam's colour, the latter including the beam's light
+// on the surface. Water's response includes its reflectance; land's leaves
+// out its albedo, which multiplies the composed light.
 struct SurfaceLightResponse {
-    diffuse: vec3<f32>,
+    clear_sky: vec3<f32>,
+    canopy: vec3<f32>,
+    bounce: vec3<f32>,
     sun: vec3<f32>,
     moon: vec3<f32>,
 };
@@ -45,8 +48,9 @@ fn fragment_surface_light(
         moon_cloud_shadow_weight(direct_light, ambient_light),
     );
     let split = ambient_light.split;
-    let ambient = split.diffuse_share * contribution.z * ambient_light.clear_sky
-        + contribution.w * (ambient_light.canopy + ambient_light.canopy_scattered);
+    let clear_sky = split.diffuse_share * contribution.z * ambient_light.clear_sky;
+    let canopy = contribution.w * (ambient_light.canopy + ambient_light.canopy_scattered);
+    let ambient = clear_sky + canopy;
     let sun_color = sun_direct_light_color(direct_light);
     let moon_color = moon_direct_light_color(direct_light);
     let first_pass_light = ambient
@@ -57,7 +61,9 @@ fn fragment_surface_light(
         bounce_conditions.sky_reflectance.x + bounce_conditions.sky_reflectance.y,
         bounce_conditions.albedo,
     );
-    return response.diffuse * (ambient + bounce)
+    return response.clear_sky * clear_sky
+        + response.canopy * canopy
+        + response.bounce * bounce
         + contribution.x
             * terrain_shadow_transmittance.x
             * sun_transmittance
@@ -147,11 +153,20 @@ fn composed_scene_surface(
         surface = select_terrain_surface(surface, TerrainSurface(
             mix(surface.color, ice.color, terrain.ice_amount),
             mix(surface.detail_gradient, ice.detail_gradient, terrain.ice_amount),
-            mix(surface.roughness, ice.roughness, terrain.ice_amount),
             mix(surface.unresolved_slope, ice.unresolved_slope, terrain.ice_amount),
+            mix(
+                surface.unresolved_slope_anisotropy,
+                ice.unresolved_slope_anisotropy,
+                terrain.ice_amount,
+            ),
         ), partial_land_ice);
     }
-    surface.unresolved_slope = lit_unresolved_slope(terrain, surface.unresolved_slope);
+    // Water's slopes are its own, independent of the bed beneath.
+    surface.unresolved_slope = select(
+        surface.unresolved_slope,
+        lit_unresolved_slope(terrain, surface.unresolved_slope),
+        is_land,
+    );
     return SceneSurface(terrain.elevation_m, lit_terrain_gradient(terrain), is_land, surface);
 }
 
@@ -194,9 +209,15 @@ fn land_relief_light(
     );
 }
 
+// The unit vector from the rendered point, at `height_m`, to the drone camera.
+fn camera_view_direction(height_m: f32) -> vec3<f32> {
+    return normalize(vec3<f32>(-surface_view_offset_m, scene.drone_camera.x - height_m));
+}
+
 // The colour of a rendered surface, or with `illumination` the light reaching
-// it: its colour were it white and without glint. `contribution` and
-// `cloud_shadow_visibility` as `fragment_surface_light` takes them.
+// it: its colour were it white and without water's surface reflection.
+// `contribution` and `cloud_shadow_visibility` as `fragment_surface_light`
+// takes them.
 fn lit_scene_surface(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
@@ -225,24 +246,34 @@ fn lit_scene_surface(
     let split = ambient_light.split;
     let albedo = select(linear_material_color(surface.color), vec3<f32>(1.0), illumination);
     // Land returns the light on it times its albedo; water returns its
-    // reflectance of each light.
+    // reflectance of each light. The light reaching water is that on level
+    // ground.
     var land_albedo = vec3<f32>(1.0);
-    var response: SurfaceLightResponse;
+    var response = SurfaceLightResponse(
+        vec3<f32>(1.0),
+        vec3<f32>(1.0),
+        vec3<f32>(1.0),
+        vec3<f32>(split.direct.x),
+        vec3<f32>(split.direct.y),
+    );
     if is_land {
         let relief = land_relief_light(scene_surface, surface_direct_light, split.normal);
         land_albedo = albedo;
-        response = SurfaceLightResponse(vec3<f32>(relief.x), vec3<f32>(relief.y), vec3<f32>(relief.z));
-    } else {
-        let water = water_reflectance(
+        response = SurfaceLightResponse(
+            vec3<f32>(relief.x),
+            vec3<f32>(relief.x),
+            vec3<f32>(relief.x),
+            vec3<f32>(relief.y),
+            vec3<f32>(relief.z),
+        );
+    } else if !illumination {
+        response = water_light_response(
             albedo,
             surface,
+            camera_view_direction(surface_height_m),
             surface_direct_light,
-            select(1.0, 0.0, illumination),
-        );
-        response = SurfaceLightResponse(
-            water.diffuse,
-            split.direct.x * water.sun,
-            split.direct.y * water.moon,
+            ambient_light,
+            water_material_color_visibility().z,
         );
     }
     let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);

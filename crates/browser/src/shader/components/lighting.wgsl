@@ -391,6 +391,24 @@ fn twilight_clear_sky_light(direction_z: f32, height_m: f32) -> f32 {
     );
 }
 
+// The weight of the twilight glow toward a light, from air the light still
+// reaches directly: the lit fraction exp(-h/H) of that air over the mixed
+// fraction `twilight_clear_sky_light` applies. The clear sky's shape already
+// describes the whole diffuse sky while the light is up, so the weight is 1
+// then and leaves the horizon at 1, staying continuous; it falls as the
+// planet's shadow rises through the air until only light scattered more than
+// once into the shadow is left.
+fn directly_lit_twilight_share(direction_z: f32) -> f32 {
+    let shadow_height_radii = planet_shadow_height_radii(direction_z);
+    let directly_lit = exp(-PLANET_RADIUS_SCALE_HEIGHTS * shadow_height_radii);
+    let lit = mix(
+        directly_lit,
+        exp(-SCATTERED_TWILIGHT_RADIUS_SCALE_HEIGHTS * shadow_height_radii),
+        SCATTERED_TWILIGHT_SHARE,
+    );
+    return select(0.0, directly_lit / lit, lit > 0.0);
+}
+
 fn moon_atmospheric_amount(receiver: CelestialReceiverLight) -> f32 {
     return lunar_light_scale() * twilight_clear_sky_light(
         receiver.moon_direction.z,
@@ -450,6 +468,9 @@ struct AtmosphericAmbientLight {
     // Clear-sky light over the whole sky, then its part where no canopy covers it.
     clear_sky_light: vec3<f32>,
     clear_sky: vec3<f32>,
+    // The Sun's and the Moon's shares of clear-sky light; the night sky has
+    // the rest.
+    clear_sky_source_shares: vec2<f32>,
     // Diffuse light the canopy passes down from the clear sky above it, then
     // from the beams it scatters, in total and per light.
     canopy: vec3<f32>,
@@ -485,6 +506,7 @@ fn calculate_atmospheric_ambient_light(
             ),
         );
     }
+    let sky_light = NIGHT_SKY_LIGHT + solar_sky + lunar_ambient;
     let sky_color = (
         NIGHT_SKY_LIGHT * SUN_COLOR
             + solar_sky * unit_luminance(SUN_COLOR * clear_sky_light_color(
@@ -493,7 +515,8 @@ fn calculate_atmospheric_ambient_light(
                 receiver.height_m,
             ))
             + lunar_sky
-    ) / (NIGHT_SKY_LIGHT + solar_sky + lunar_ambient);
+    ) / sky_light;
+    let source_shares = vec2<f32>(solar_sky, lunar_ambient) / sky_light;
     let clear_sky_light = clear_intensity * sky_color;
 
     let optical_thickness = max(canopy.mean_optical_thickness, 0.0);
@@ -502,6 +525,7 @@ fn calculate_atmospheric_ambient_light(
         return AtmosphericAmbientLight(
             clear_sky_light,
             clear_contribution,
+            source_shares,
             vec3<f32>(0.0),
             vec3<f32>(0.0),
             vec2<f32>(0.0),
@@ -548,6 +572,7 @@ fn calculate_atmospheric_ambient_light(
     return AtmosphericAmbientLight(
         clear_sky_light,
         clear_contribution,
+        source_shares,
         select(canopy.sky_fraction * transmitted_light, vec3<f32>(0.0), absent),
         select(canopy.sky_fraction * scattered_light, vec3<f32>(0.0), absent),
         select(canopy.sky_fraction * scattered_beams, vec2<f32>(0.0), absent),
@@ -883,6 +908,36 @@ fn celestial_light_split(
         normal,
         max(1.0 - (direct.x + direct.y) / max(clear_intensity, 1e-30), 0.0),
     );
+}
+
+// π over the cosine-weighted integral of the CIE clear sky's relative
+// radiance over the sky, for a light 0°, 10°, ..., 90° high, by midpoint
+// quadrature; linear interpolation between them errs by under 0.4%.
+const CLEAR_SKY_RADIANCE_NORMALIZATION = array<f32, 10>(
+    1.6492, 1.4756, 1.3347, 1.2332, 1.1625, 1.1138, 1.0809, 1.0597, 1.0477, 1.0439,
+);
+
+// π times the clear sky's diffuse radiance toward `direction`, per unit of its
+// diffuse light on level ground, for a light at `light`. Its shape is the CIE
+// standard clear sky (type 12 of CIE S 011/E:2003), normalized at each light
+// height so it carries exactly the diffuse light. Compromises: the shape
+// ignores the regional turbidity, and the sky's colour stays the same in every
+// direction. A light below the horizon takes the normalization at the
+// horizon.
+fn clear_sky_radiance_factor(direction: vec3<f32>, light: vec3<f32>) -> f32 {
+    let cos_scattering = clamp(dot(direction, light), -1.0, 1.0);
+    let indicatrix = 1.0
+        + 10.0 * (exp(-3.0 * acos(cos_scattering)) - exp(-1.5 * PI))
+        + 0.45 * cos_scattering * cos_scattering;
+    let gradation = 1.0 - exp(-0.32 / max(direction.z, 1e-4));
+    let node = min(degrees(asin(clamp(light.z, 0.0, 1.0))) / 10.0, 8.999);
+    let index = u32(node);
+    let normalization = mix(
+        CLEAR_SKY_RADIANCE_NORMALIZATION[index],
+        CLEAR_SKY_RADIANCE_NORMALIZATION[index + 1u],
+        fract(node),
+    );
+    return normalization * indicatrix * gradation;
 }
 
 // Reflectance of a non-absorbing layer by the two-stream approximation

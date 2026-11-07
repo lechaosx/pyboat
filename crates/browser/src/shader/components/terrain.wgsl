@@ -775,98 +775,132 @@ fn standard_normal_cdf(t: f32) -> f32 {
     return 0.5 + 0.5 * sign(t) * erf;
 }
 
-// Water relief's grades of the sky's and each beam's light. The beams' glint
-// toward the overhead viewer, scaled by `specular_scale`, is light the
-// surface reflects rather than receives.
-fn water_light_grade(
-    surface_gradient: vec2<f32>,
-    roughness: f32,
-    direct_light: CelestialReceiverLight,
-    specular_scale: f32,
-) -> vec3<f32> {
-    let strength = clamp(
-        tuning.landform_lighting.x
-            * landscape_visibility.w * lighting_feature_visibility().x,
-        0.0,
-        1.0,
-    );
-    if strength <= 0.0 {
-        return vec3<f32>(1.0);
-    }
-    let normal = normalize(vec3<f32>(-surface_gradient, 1.0));
-    let sun = celestial_source_light(direct_light, 0u);
-    let moon = celestial_source_light(direct_light, 1u);
-    let combined_light = sun.amount * sun.direction
-        + moon.amount * moon.direction;
-    let light_direction = select(
-        vec3<f32>(0.0, 0.0, 1.0),
-        normalize(combined_light),
-        length(combined_light) > 0.0,
-    );
-    let sky_direction = normalize(vec3<f32>(0.28 * light_direction.xy, 1.0));
-    let sky_facing = clamp(dot(normal, sky_direction), 0.0, 1.0);
-    let sky_grade = mix(0.70, 1.08, smoothstep(0.20, 1.0, sky_facing));
-    let specular_exponent = mix(56.0, 7.0, clamp(roughness, 0.0, 1.0));
-    var direct_grades = vec2<f32>(1.0);
-    for (var source_index = 0u; source_index < 2u; source_index++) {
-        let source = celestial_source_light(direct_light, source_index);
-        let direct_facing = smoothstep(
-            -0.12,
-            1.0,
-            dot(normal, source.direction),
-        );
-        let half_direction_sum = source.direction + vec3<f32>(0.0, 0.0, 1.0);
-        var specular = 0.0;
-        if length(half_direction_sum) > 0.001 {
-            specular = pow(
-                clamp(dot(normal, normalize(half_direction_sum)), 0.0, 1.0),
-                specular_exponent,
-            ) * mix(0.16, 0.025, clamp(roughness, 0.0, 1.0)) * specular_scale;
-        }
-        direct_grades[source_index] = mix(0.44, 1.30, direct_facing) + specular;
-    }
-    return clamp(
-        vec3<f32>(1.0)
-            + strength * (vec3<f32>(sky_grade, direct_grades) - 1.0),
-        vec3<f32>(0.50),
-        vec3<f32>(1.40),
-    );
+// Water's refractive index in visible light.
+const WATER_REFRACTIVE_INDEX: f32 = 1.34;
+
+// Unpolarised Fresnel reflectance of light from air meeting water at
+// `cos_incidence` to the surface normal.
+fn water_fresnel_reflectance(cos_incidence: f32) -> f32 {
+    let n = WATER_REFRACTIVE_INDEX;
+    let cos_i = clamp(cos_incidence, 0.0, 1.0);
+    let cos_t = sqrt(1.0 - (1.0 - cos_i * cos_i) / (n * n));
+    let s = (cos_i - n * cos_t) / (cos_i + n * cos_t);
+    let p = (n * cos_i - cos_t) / (n * cos_i + cos_t);
+    return 0.5 * (s * s + p * p);
 }
 
-// Water's linear reflectance of the diffuse light, then of each beam's light
-// on level ground.
-struct WaterReflectance {
-    diffuse: vec3<f32>,
-    sun: vec3<f32>,
-    moon: vec3<f32>,
-};
+// A surface's unresolved slopes' mean squares along x and y, then their
+// covariance.
+fn unresolved_slope_covariance(surface: TerrainSurface) -> vec3<f32> {
+    let half_variance = 0.5 * surface.unresolved_slope * surface.unresolved_slope;
+    let anisotropy = surface.unresolved_slope_anisotropy;
+    return vec3<f32>(half_variance + anisotropy.x, half_variance - anisotropy.x, anisotropy.y);
+}
 
-// `albedo` is the water's linear colour; `specular_scale` as
-// `water_light_grade` takes it.
-fn water_reflectance(
+// π times the radiance water reflects from a beam toward `view`, per unit of
+// the beam's light on a surface facing it: π R p / (4 cos θ_v cos⁴ β), with
+// R the Fresnel reflectance and p the density of the facet slope that mirrors
+// the beam toward the view, tilted β from level. Facet slopes spread
+// normally about the resolved `gradient` with the unresolved `covariance`,
+// widened by the source's disc of `angular_radius_rad`: the disc spreads its
+// direction by r²/4 per axis, and the mirroring facet turns half as far.
+// Compromises: the slopes are Gaussian, without Cox and Munk's skewness and
+// peakedness, and facets neither shadow nor mask one another.
+fn water_glint(
+    view: vec3<f32>,
+    light: vec3<f32>,
+    gradient: vec2<f32>,
+    covariance: vec3<f32>,
+    angular_radius_rad: f32,
+) -> f32 {
+    let halfway = view + light;
+    if halfway.z <= 0.0 {
+        return 0.0;
+    }
+    let facet = normalize(halfway);
+    let deviation = -facet.xy / facet.z - gradient;
+    let disc_spread = angular_radius_rad * angular_radius_rad / 16.0;
+    let spread = covariance + vec3<f32>(disc_spread, disc_spread, 0.0);
+    let determinant = spread.x * spread.y - spread.z * spread.z;
+    let exponent = (spread.y * deviation.x * deviation.x
+        - 2.0 * spread.z * deviation.x * deviation.y
+        + spread.x * deviation.y * deviation.y) / determinant;
+    let density = exp(-0.5 * exponent) / (TAU * sqrt(determinant));
+    // A facet too steep for any density to reach would divide zero by zero.
+    if density <= 0.0 {
+        return 0.0;
+    }
+    let facet_z_squared = facet.z * facet.z;
+    return PI * water_fresnel_reflectance(dot(view, facet)) * density
+        / (4.0 * max(view.z, 1e-4) * facet_z_squared * facet_z_squared);
+}
+
+// How water returns each light toward `view`. Its body is a Lambertian
+// albedo seen through the surface's Fresnel transmittance toward the view.
+// The surface mirrors the sky and glints with each beam; `reflection` scales
+// both. The reflected sky is the clear sky's radiance, that of an overcast
+// canopy, and for the light ground and sky exchange and the night sky an
+// isotropic one, in the direction the resolved surface mirrors the view.
+// Below the horizon a light's sky keeps that shape for the twilight glow of
+// the air it still lights directly, and the light scattered more than once
+// into the planet's shadow is isotropic. Compromises: the glow takes the
+// clear sky's shape for a light at the horizon; the multiply scattered light
+// keeps a broad glow toward the set light that its isotropic stand-in loses,
+// so water brightens against land where the directly lit glow gives way to
+// it; light enters the body without Fresnel loss; and the unresolved slopes
+// neither blur the reflected sky nor spread its Fresnel reflectance.
+fn water_light_response(
     albedo: vec3<f32>,
     surface: TerrainSurface,
+    view: vec3<f32>,
     direct_light: CelestialReceiverLight,
-    specular_scale: f32,
-) -> WaterReflectance {
-    let grade = water_light_grade(
-        surface.detail_gradient,
-        surface.roughness,
-        direct_light,
-        specular_scale,
-    );
-    let level_grade = water_light_grade(
-        vec2<f32>(0.0),
-        surface.roughness,
-        direct_light,
-        specular_scale,
-    );
-    // Water keeps its own relief grade of each beam's level light.
-    let beam_grade = grade.yz / level_grade.yz;
-    return WaterReflectance(
-        albedo * grade.x,
-        albedo * beam_grade.x,
-        albedo * beam_grade.y,
+    ambient_light: AtmosphericAmbientLight,
+    reflection: f32,
+) -> SurfaceLightResponse {
+    let normal = normalize(vec3<f32>(-surface.detail_gradient, 1.0));
+    let surface_reflectance = water_fresnel_reflectance(dot(view, normal));
+    let body = albedo * (1.0 - surface_reflectance);
+    let mirrored = reflect(-view, normal);
+    let sky_direction = normalize(vec3<f32>(mirrored.xy, max(mirrored.z, 0.0)));
+    var clear_sky = 1.0;
+    for (var source_index = 0u; source_index < 2u; source_index++) {
+        let direction = celestial_source_light(direct_light, source_index).direction;
+        let horizontal = length(direction.xy);
+        let shaping_direction = select(
+            vec3<f32>(0.0, 0.0, 1.0),
+            vec3<f32>(direction.xy / horizontal, 0.0),
+            horizontal > 0.0,
+        );
+        clear_sky += ambient_light.clear_sky_source_shares[source_index]
+            * directly_lit_twilight_share(direction.z)
+            * (clear_sky_radiance_factor(
+                sky_direction,
+                select(shaping_direction, direction, direction.z > 0.0),
+            ) - 1.0);
+    }
+    // Moon and Spencer's (1942) overcast sky, of radiance in proportion to
+    // 1 + 2 cos Z, carrying the canopy's diffuse light.
+    let canopy = 3.0 * (1.0 + 2.0 * sky_direction.z) / 7.0;
+    let sky = reflection * surface_reflectance;
+    let covariance = unresolved_slope_covariance(surface);
+    let split = ambient_light.split;
+    var glint = vec2<f32>(0.0);
+    for (var source_index = 0u; source_index < 2u; source_index++) {
+        let source = celestial_source_light(direct_light, source_index);
+        glint[source_index] = reflection * split.normal[source_index] * water_glint(
+            view,
+            source.direction,
+            surface.detail_gradient,
+            covariance,
+            source.angular_radius_rad,
+        );
+    }
+    return SurfaceLightResponse(
+        body + sky * clear_sky,
+        body + sky * canopy,
+        body + sky,
+        body * split.direct.x + glint.x,
+        body * split.direct.y + glint.y,
     );
 }
 
@@ -1088,8 +1122,8 @@ fn terrain_rock_surface(
         return TerrainSurface(
             color_visibility * vec3<f32>(0.36, 0.34, 0.30),
             vec2<f32>(0.0),
-            0.8,
             0.0,
+            vec2<f32>(0.0),
         );
     }
     let rock_geology = material_fractal_value(
@@ -1149,12 +1183,12 @@ fn terrain_rock_surface(
             fracture_amount,
         )
             + micro_height_m * micro_height.gradient,
-        mix(0.92, 0.68, rock_ruggedness),
         sqrt(
             plate_slope_scale * plate_slope_scale
                 * material_fractal_unresolved_slope_variance(28.0, 4u, 4u)
                 + micro_unresolved * micro_unresolved,
         ),
+        vec2<f32>(0.0),
     );
 }
 
@@ -1198,7 +1232,6 @@ fn land_ice_detail_at(
 }
 
 const LAND_ICE_DETAIL_NORMAL_SCALE: f32 = 0.18;
-const LAND_ICE_ROUGHNESS: f32 = 0.32;
 
 fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
     let color_visibility = solid_material_color_visibility().z;
@@ -1206,8 +1239,8 @@ fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            LAND_ICE_ROUGHNESS,
             0.0,
+            vec2<f32>(0.0),
         );
     }
     return TerrainSurface(
@@ -1217,8 +1250,8 @@ fn land_ice_surface(detail: LandIceDetail) -> TerrainSurface {
             detail.grade,
         ),
         LAND_ICE_DETAIL_NORMAL_SCALE * detail.gradient,
-        LAND_ICE_ROUGHNESS,
         LAND_ICE_DETAIL_NORMAL_SCALE * material_micro_relief_unresolved_slope(4.0),
+        vec2<f32>(0.0),
     );
 }
 
@@ -1258,8 +1291,8 @@ fn sea_ice_surface(
         return TerrainSurface(
             color_visibility * vec3<f32>(0.78, 0.86, 0.88),
             vec2<f32>(0.0),
-            0.42,
             0.0,
+            vec2<f32>(0.0),
         );
     }
     let slab_x_cycles = max(1, i32(round(scene.world_size_m.x / SEA_ICE_SLAB_SIZE_M)));
@@ -1356,8 +1389,8 @@ fn sea_ice_surface(
     return TerrainSurface(
         color_visibility * mix(deep_color, shallow_color, shallow),
         (1.0 - fracture) * slab_visibility * slab_tilt + detail.gradient,
-        0.24 + 0.28 * fracture + 0.16 * plate_boundary + 0.10 * shallow,
         SEA_ICE_MICRO_RELIEF * material_micro_relief_unresolved_slope(4.0),
+        vec2<f32>(0.0),
     );
 }
 
@@ -1370,7 +1403,7 @@ fn blend_terrain_surface(
     return TerrainSurface(
         mix(first.color, second.color, blend),
         mix(first.detail_gradient, second.detail_gradient, blend),
-        mix(first.roughness, second.roughness, blend),
         mix(first.unresolved_slope, second.unresolved_slope, blend),
+        mix(first.unresolved_slope_anisotropy, second.unresolved_slope_anisotropy, blend),
     );
 }
