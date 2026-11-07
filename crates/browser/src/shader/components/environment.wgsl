@@ -1371,6 +1371,35 @@ fn surface_tide_sample_at(position_m: vec2<f32>) -> SurfaceTideSample {
     );
 }
 
+fn ocean_tide_height_sample(
+    atmosphere: SurfaceAtmosphereSample,
+    tide: SurfaceTideSample,
+) -> TerrainNoiseSample {
+    // The seeded range and lag stand in for unresolved basin resonance.
+    let tidal_range_m = 1.25 + 0.75 * tide.response.value;
+    let tidal_range_gradient = 0.75 * tide.response.gradient;
+    let tidal_phase = 0.08 * tide.lag.value;
+    let tidal_phase_gradient = 0.08 * tide.lag.gradient;
+    let solar_hour_angle = TAU * (atmosphere.climate.local_solar_phase - 0.5);
+    let solar_longitude_phase = scene.world_phases_and_pixel_footprint_m.y - 0.25;
+    let lunar_phase = scene.world_phases_and_pixel_footprint_m.z - solar_longitude_phase;
+    let lunar_hour_angle = solar_hour_angle + TAU * lunar_phase;
+    let lunar_angle = 2.0 * (lunar_hour_angle + TAU * tidal_phase);
+    let solar_angle = 2.0 * (solar_hour_angle + TAU * tidal_phase);
+    let tide_sum = cos(lunar_angle) + 0.46 * cos(solar_angle);
+    let angle_gradient = vec2<f32>(
+        TAU * scene.inverse_world_size_m.x,
+        0.0,
+    )
+        + TAU * tidal_phase_gradient;
+    let tide_sum_gradient = (-2.0 * sin(lunar_angle) - 0.92 * sin(solar_angle))
+        * angle_gradient;
+    let tide_height_m = 0.5 * tidal_range_m * tide_sum / 1.46;
+    let tide_gradient = 0.5 / 1.46
+        * (tide_sum * tidal_range_gradient + tidal_range_m * tide_sum_gradient);
+    return TerrainNoiseSample(tide_height_m, tide_gradient);
+}
+
 fn initialize_surface_tide_from_circle(circle_position: vec4<f32>) {
     initialize_surface_tide_from_sample(surface_tide_sample_from_circle(
         surface_position_m,
