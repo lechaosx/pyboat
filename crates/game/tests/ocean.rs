@@ -1,4 +1,4 @@
-use game::procedural_world_environment;
+use game::{procedural_world_environment, procedural_world_environment_interpolated};
 use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
@@ -45,6 +45,31 @@ fn ocean_state_is_deterministic_and_joins_across_longitude() {
     assert!(late.significant_wave_height_m.is_finite());
     assert!(late.surface_displacement_m.is_finite());
     assert!(late.surface_slope.is_finite());
+}
+
+#[test]
+fn samples_do_not_depend_on_earlier_samples_on_the_same_thread() {
+    let position_m = Vector::new(-14_900.0, -5_330.0);
+    // Each call differs from the one before in one input: the tick fraction,
+    // then the seed, then the world. Waves at the position show that each
+    // sample reads the wave mode table.
+    let calls = [
+        (geometry(), SEED, 0.0),
+        (geometry(), SEED, 0.5),
+        (geometry(), SEED + 1, 0.5),
+        (WorldGeometry::default(), SEED + 1, 0.5),
+    ];
+    for (world, seed, fraction) in calls {
+        let sample =
+            procedural_world_environment_interpolated(world, seed, TICK, fraction, position_m);
+        let fresh = std::thread::spawn(move || {
+            procedural_world_environment_interpolated(world, seed, TICK, fraction, position_m)
+        })
+        .join()
+        .unwrap();
+        assert!(sample.ocean.surface_displacement_m != 0.0);
+        assert_eq!(sample, fresh);
+    }
 }
 
 #[test]

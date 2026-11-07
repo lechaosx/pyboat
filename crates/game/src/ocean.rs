@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
@@ -47,7 +49,7 @@ pub(crate) fn procedural_wave_state(query: OceanQuery) -> OceanState {
         0.0
     };
 
-    let wave_modes = ocean_wave_modes(
+    let wave_modes = cached_ocean_wave_modes(
         query.world_geometry,
         query.match_seed,
         query.world_tick,
@@ -197,6 +199,39 @@ pub fn ocean_wave_modes(
                 - tick_phase_radians(world_tick, angular_frequency_rad_s * TICK_SECONDS)
                 - f64::from(world_tick_fraction) * angular_frequency_rad_s * TICK_SECONDS,
         }
+    })
+}
+
+type WaveModeInputs = (WorldGeometry, u64, u64, u32);
+
+thread_local! {
+    static LATEST_WAVE_MODES: Cell<Option<(WaveModeInputs, [OceanWaveMode; OCEAN_WAVE_MODE_COUNT])>> =
+        const { Cell::new(None) };
+}
+
+// Keyed on every input of `ocean_wave_modes`, which depends on world, seed,
+// and clock alone, so all samples at one clock share one table.
+fn cached_ocean_wave_modes(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+) -> [OceanWaveMode; OCEAN_WAVE_MODE_COUNT] {
+    let inputs = (
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction.to_bits(),
+    );
+    LATEST_WAVE_MODES.with(|latest| {
+        if let Some((latest_inputs, modes)) = latest.get()
+            && latest_inputs == inputs
+        {
+            return modes;
+        }
+        let modes = ocean_wave_modes(world_geometry, match_seed, world_tick, world_tick_fraction);
+        latest.set(Some((inputs, modes)));
+        modes
     })
 }
 
