@@ -1,5 +1,5 @@
 use game::procedural_world_environment;
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 const SEED: u64 = 0x5eed_cafe;
@@ -13,7 +13,7 @@ fn geometry() -> WorldGeometry {
 fn ocean_state_is_deterministic_and_joins_across_longitude() {
     let world = geometry();
     let position_m = Vector::new(-39_999.75, 6_250.0);
-    let repeated_m = position_m + Vector::new(world.width_m(), 0.0);
+    let repeated_m = position_m + Vector::new(world.width_m() as f32, 0.0);
 
     let world_sample = procedural_world_environment(world, SEED, TICK, position_m);
     let sample = world_sample.ocean;
@@ -23,7 +23,7 @@ fn ocean_state_is_deterministic_and_joins_across_longitude() {
     );
     assert_eq!(
         world_sample.environment.true_water_velocity_m_s,
-        sample.current_velocity_m_s + sample.wave_orbital_velocity_m_s,
+        (sample.current_velocity_m_s + sample.wave_orbital_velocity_m_s).as_dvec2(),
     );
     assert_ne!(
         sample,
@@ -60,8 +60,10 @@ fn currents_have_no_worldwide_prevailing_transport() {
     for y_index in 0..32 {
         for x_index in 0..64 {
             let position_m = Vector::new(
-                -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 64.0,
-                -0.5 * world.height_m() + (y_index as f32 + 0.5) * world.height_m() / 32.0,
+                -0.5 * (world.width_m() as f32)
+                    + (x_index as f32 + 0.5) * (world.width_m() as f32) / 64.0,
+                -0.5 * (world.height_m() as f32)
+                    + (y_index as f32 + 0.5) * (world.height_m() as f32) / 32.0,
             );
             let current = procedural_world_environment(world, SEED, TICK, position_m)
                 .ocean
@@ -92,7 +94,8 @@ fn coriolis_suppresses_rotating_currents_at_the_equator() {
 
     for seed in 0..32 {
         for x_index in 0..32 {
-            let x_m = -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 32.0;
+            let x_m = -0.5 * (world.width_m() as f32)
+                + (x_index as f32 + 0.5) * (world.width_m() as f32) / 32.0;
             equatorial_energy +=
                 procedural_world_environment(world, seed, TICK, Vector::new(x_m, 0.0))
                     .ocean
@@ -102,7 +105,7 @@ fn coriolis_suppresses_rotating_currents_at_the_equator() {
                 world,
                 seed,
                 TICK,
-                Vector::new(x_m, 0.25 * world.height_m()),
+                Vector::new(x_m, 0.25 * (world.height_m() as f32)),
             )
             .ocean
             .current_velocity_m_s
@@ -135,12 +138,14 @@ fn wind_sea_gains_energy_in_strong_wind_and_is_depth_limited() {
     for y_index in 0..32 {
         for x_index in 0..64 {
             let position_m = Vector::new(
-                -0.5 * world.width_m() + (x_index as f32 + 0.37) * world.width_m() / 64.0,
-                -0.5 * world.height_m() + (y_index as f32 + 0.61) * world.height_m() / 32.0,
+                -0.5 * (world.width_m() as f32)
+                    + (x_index as f32 + 0.37) * (world.width_m() as f32) / 64.0,
+                -0.5 * (world.height_m() as f32)
+                    + (y_index as f32 + 0.61) * (world.height_m() as f32) / 32.0,
             );
             let sample = procedural_world_environment(world, SEED, TICK, position_m);
-            let depth_m = sample.environment.water_depth_m;
-            let wind_speed_m_s = sample.environment.true_wind_velocity_m_s.length();
+            let depth_m = sample.environment.water_depth_m as f32;
+            let wind_speed_m_s = sample.environment.true_wind_velocity_m_s.length() as f32;
             maximum_surface_wind_speed = maximum_surface_wind_speed.max(wind_speed_m_s);
             maximum_upper_wind_speed =
                 maximum_upper_wind_speed.max(sample.weather.upper_wind_velocity_m_s.length());
@@ -195,8 +200,10 @@ fn wave_motion_has_no_persistent_drift_and_constructively_interferes() {
     for y_index in 0..16 {
         for x_index in 0..32 {
             let candidate_m = Vector::new(
-                -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 32.0,
-                -0.5 * world.height_m() + (y_index as f32 + 0.5) * world.height_m() / 16.0,
+                -0.5 * (world.width_m() as f32)
+                    + (x_index as f32 + 0.5) * (world.width_m() as f32) / 32.0,
+                -0.5 * (world.height_m() as f32)
+                    + (y_index as f32 + 0.5) * (world.height_m() as f32) / 16.0,
             );
             let height_m = procedural_world_environment(world, SEED, TICK, candidate_m)
                 .ocean
@@ -238,8 +245,10 @@ fn wave_motion_has_no_persistent_drift_and_constructively_interferes() {
             for y_index in 0..16 {
                 for x_index in 0..32 {
                     let candidate_m = Vector::new(
-                        -0.5 * world.width_m() + (x_index as f32 + 0.5) * world.width_m() / 32.0,
-                        -0.5 * world.height_m() + (y_index as f32 + 0.5) * world.height_m() / 16.0,
+                        -0.5 * (world.width_m() as f32)
+                            + (x_index as f32 + 0.5) * (world.width_m() as f32) / 32.0,
+                        -0.5 * (world.height_m() as f32)
+                            + (y_index as f32 + 0.5) * (world.height_m() as f32) / 16.0,
                     );
                     let ocean = procedural_world_environment(world, seed, tick, candidate_m).ocean;
                     if ocean.significant_wave_height_m > 0.5 {

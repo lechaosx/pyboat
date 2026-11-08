@@ -14,55 +14,55 @@ use rapier2d::prelude::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub const TICKS_PER_SECOND: u64 = 60;
-pub const DT_SECONDS: f32 = 1.0 / TICKS_PER_SECOND as f32;
+pub const DT_SECONDS: f64 = (1.0_f32 / TICKS_PER_SECOND as f32) as f64;
 // Opposing hull extrema at this speed remain below half the minimum supported beam per 1/32 tick.
-pub const MAXIMUM_SHARED_HULL_POINT_SPEED_M_S: f32 = 700.0;
-const CONTROL_SELECTION_TIE_TOLERANCE: f32 = 1.0e-6;
-const GRAVITY_ACCELERATION_M_S2: f32 = 9.81;
-const STATIC_GROUND_SPEED_THRESHOLD_M_S: f32 = 0.02;
-const CONTACT_CHART_HYSTERESIS_M: f32 = 0.5;
-const SPATIAL_CELL_M: f32 = 16.0;
+pub const MAXIMUM_SHARED_HULL_POINT_SPEED_M_S: f64 = 700.0;
+const CONTROL_SELECTION_TIE_TOLERANCE: f64 = 1.0e-6_f32 as f64;
+const GRAVITY_ACCELERATION_M_S2: f64 = 9.81_f32 as f64;
+const STATIC_GROUND_SPEED_THRESHOLD_M_S: f64 = 0.02_f32 as f64;
+const CONTACT_CHART_HYSTERESIS_M: f64 = 0.5;
+const SPATIAL_CELL_M: f64 = 16.0;
 const MAXIMUM_COLLISION_SUBSTEPS: usize = 32;
-const MINIMUM_SHARED_HULL_BEAM_M: f32 = 1.5;
+const MINIMUM_SHARED_HULL_BEAM_M: f64 = 1.5;
 
-const DEFAULT_WORLD_SIDE_M: f32 = 64_000.0;
-const MINIMUM_WORLD_SIDE_M: f32 = 8_000.0;
-const MAXIMUM_WORLD_SIDE_M: f32 = 256_000.0;
+const DEFAULT_WORLD_SIDE_M: f64 = 64_000.0;
+const MINIMUM_WORLD_SIDE_M: f64 = 8_000.0;
+const MAXIMUM_WORLD_SIDE_M: f64 = 256_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct WorldGeometry {
-    width_m: f32,
-    height_m: f32,
+    width_m: f64,
+    height_m: f64,
 }
 
 impl WorldGeometry {
-    pub fn new(width_m: f32, height_m: f32) -> Result<Self, WorldGeometryError> {
+    pub fn new(width_m: f64, height_m: f64) -> Result<Self, WorldGeometryError> {
         if !valid_world_dimension(width_m) || !valid_world_dimension(height_m) {
             return Err(WorldGeometryError);
         }
         Ok(Self { width_m, height_m })
     }
 
-    pub fn width_m(self) -> f32 {
+    pub fn width_m(self) -> f64 {
         self.width_m
     }
 
-    pub fn height_m(self) -> f32 {
+    pub fn height_m(self) -> f64 {
         self.height_m
     }
 
-    pub fn wrap_position_m(self, position_m: [f32; 2]) -> [f32; 2] {
+    pub fn wrap_position_m(self, position_m: [f64; 2]) -> [f64; 2] {
         [wrap_component(position_m[0], self.width_m), position_m[1]]
     }
 
-    pub fn minimum_image_displacement_m(self, displacement_m: [f32; 2]) -> [f32; 2] {
+    pub fn minimum_image_displacement_m(self, displacement_m: [f64; 2]) -> [f64; 2] {
         [
             minimum_image_component(displacement_m[0], self.width_m),
             displacement_m[1],
         ]
     }
 
-    pub fn normalized_world_coordinates(self, position_m: [f32; 2]) -> [f32; 2] {
+    pub fn normalized_world_coordinates(self, position_m: [f64; 2]) -> [f64; 2] {
         let wrapped_m = self.wrap_position_m(position_m);
         [
             normalized_component(wrapped_m[0], self.width_m),
@@ -70,7 +70,7 @@ impl WorldGeometry {
         ]
     }
 
-    pub fn latitude_degrees(self, y_m: f32) -> f32 {
+    pub fn latitude_degrees(self, y_m: f64) -> f64 {
         let degrees = self.latitude_phase_degrees(y_m);
         if degrees > 90.0 {
             180.0 - degrees
@@ -81,7 +81,7 @@ impl WorldGeometry {
         }
     }
 
-    pub fn latitude_gradient_degrees_per_m(self, y_m: f32) -> f32 {
+    pub fn latitude_gradient_degrees_per_m(self, y_m: f64) -> f64 {
         let direction = if self.latitude_phase_degrees(y_m).abs() > 90.0 {
             -1.0
         } else {
@@ -90,7 +90,7 @@ impl WorldGeometry {
         direction * 180.0 / self.height_m
     }
 
-    pub fn latitude_phase_degrees(self, y_m: f32) -> f32 {
+    pub fn latitude_phase_degrees(self, y_m: f64) -> f64 {
         let period_m = 2.0 * self.height_m;
         let cycle_y_m = y_m.rem_euclid(period_m);
         let degrees = 180.0 * cycle_y_m / self.height_m;
@@ -101,7 +101,7 @@ impl WorldGeometry {
         }
     }
 
-    pub fn local_solar_phase(self, global_day_phase: f32, x_m: f32) -> f32 {
+    pub fn local_solar_phase(self, global_day_phase: f64, x_m: f64) -> f64 {
         (global_day_phase.rem_euclid(1.0) + x_m.rem_euclid(self.width_m) / self.width_m)
             .rem_euclid(1.0)
     }
@@ -123,8 +123,8 @@ impl<'de> Deserialize<'de> for WorldGeometry {
     {
         #[derive(Deserialize)]
         struct SerializedWorldGeometry {
-            width_m: f32,
-            height_m: f32,
+            width_m: f64,
+            height_m: f64,
         }
 
         let geometry = SerializedWorldGeometry::deserialize(deserializer)?;
@@ -144,14 +144,14 @@ impl fmt::Display for WorldGeometryError {
 
 impl Error for WorldGeometryError {}
 
-fn valid_world_dimension(dimension_m: f32) -> bool {
+fn valid_world_dimension(dimension_m: f64) -> bool {
     let half_m = dimension_m / 2.0;
     dimension_m.is_finite()
         && (MINIMUM_WORLD_SIDE_M..=MAXIMUM_WORLD_SIDE_M).contains(&dimension_m)
         && half_m * 2.0 == dimension_m
 }
 
-fn minimum_image_component(displacement_m: f32, period_m: f32) -> f32 {
+fn minimum_image_component(displacement_m: f64, period_m: f64) -> f64 {
     let half_period_m = period_m / 2.0;
     if displacement_m > -half_period_m && displacement_m <= half_period_m {
         return displacement_m;
@@ -164,7 +164,7 @@ fn minimum_image_component(displacement_m: f32, period_m: f32) -> f32 {
     }
 }
 
-fn wrap_component(value: f32, period: f32) -> f32 {
+fn wrap_component(value: f64, period: f64) -> f64 {
     let half_period = period / 2.0;
     if value >= -half_period && value < half_period {
         return value;
@@ -177,17 +177,17 @@ fn wrap_component(value: f32, period: f32) -> f32 {
     }
 }
 
-fn normalized_component(wrapped: f32, period: f32) -> f32 {
-    const UNIT_UPPER_BOUND: f32 = f32::from_bits(1.0_f32.to_bits() - 1);
+fn normalized_component(wrapped: f64, period: f64) -> f64 {
+    const UNIT_UPPER_BOUND: f64 = f64::from_bits(1.0_f64.to_bits() - 1);
     (wrapped / period + 0.5).min(UNIT_UPPER_BOUND)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullParameters {
-    pub mass_kg: f32,
-    pub length_m: f32,
-    pub beam_m: f32,
-    pub bow_length_m: f32,
+    pub mass_kg: f64,
+    pub length_m: f64,
+    pub beam_m: f64,
+    pub bow_length_m: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,42 +199,42 @@ pub struct Hull {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoatParameters {
     pub hull: HullParameters,
-    pub sail_mass_kg: f32,
-    pub boom_mass_kg: f32,
-    pub boom_length_m: f32,
+    pub sail_mass_kg: f64,
+    pub boom_mass_kg: f64,
+    pub boom_length_m: f64,
     pub mast_position_m: Vector,
-    pub max_sail_angle_rad: f32,
-    pub air_density_kg_m3: f32,
-    pub sail_area_m2: f32,
-    pub sail_base_drag_coefficient: f32,
-    pub water_density_kg_m3: f32,
-    pub keel_area_m2: f32,
+    pub max_sail_angle_rad: f64,
+    pub air_density_kg_m3: f64,
+    pub sail_area_m2: f64,
+    pub sail_base_drag_coefficient: f64,
+    pub water_density_kg_m3: f64,
+    pub keel_area_m2: f64,
     pub keel_position_m: Vector,
-    pub keel_base_drag_coefficient: f32,
-    pub keel_stall_angle_rad: f32,
-    pub keel_stall_lift_coefficient: f32,
-    pub hull_reference_area_m2: f32,
-    pub hull_drag_coefficient: f32,
-    pub hull_lateral_drag_coefficient: f32,
-    pub rudder_mass_kg: f32,
-    pub tiller_mass_kg: f32,
-    pub rudder_draw_length_m: f32,
-    pub tiller_length_m: f32,
+    pub keel_base_drag_coefficient: f64,
+    pub keel_stall_angle_rad: f64,
+    pub keel_stall_lift_coefficient: f64,
+    pub hull_reference_area_m2: f64,
+    pub hull_drag_coefficient: f64,
+    pub hull_lateral_drag_coefficient: f64,
+    pub rudder_mass_kg: f64,
+    pub tiller_mass_kg: f64,
+    pub rudder_draw_length_m: f64,
+    pub tiller_length_m: f64,
     pub rudder_position_m: Vector,
-    pub max_rudder_angle_rad: f32,
-    pub rudder_area_m2: f32,
-    pub rudder_base_drag_coefficient: f32,
-    pub max_sail_actuator_torque_n_m: f32,
-    pub max_tiller_hand_force_n: f32,
-    pub sail_bearing_damping_n_m_s_rad: f32,
-    pub rudder_bearing_damping_n_m_s_rad: f32,
-    pub draft_m: f32,
-    pub ground_static_friction_coefficient: f32,
-    pub ground_kinetic_friction_coefficient: f32,
+    pub max_rudder_angle_rad: f64,
+    pub rudder_area_m2: f64,
+    pub rudder_base_drag_coefficient: f64,
+    pub max_sail_actuator_torque_n_m: f64,
+    pub max_tiller_hand_force_n: f64,
+    pub sail_bearing_damping_n_m_s_rad: f64,
+    pub rudder_bearing_damping_n_m_s_rad: f64,
+    pub draft_m: f64,
+    pub ground_static_friction_coefficient: f64,
+    pub ground_kinetic_friction_coefficient: f64,
 }
 
 impl BoatParameters {
-    pub fn max_rudder_actuator_torque_n_m(self) -> f32 {
+    pub fn max_rudder_actuator_torque_n_m(self) -> f64 {
         // An ideal sailor pushes perpendicular to the tiller at its tip.
         self.max_tiller_hand_force_n * self.tiller_length_m
     }
@@ -244,62 +244,62 @@ impl BoatParameters {
 pub struct BoatMotion {
     pub position_m: Vector,
     pub velocity_m_s: Vector,
-    pub angle_rad: f32,
-    pub angular_velocity_rad_s: f32,
-    pub sail_angle_rad: f32,
-    pub sail_angular_velocity_rad_s: f32,
-    pub rudder_angle_rad: f32,
-    pub rudder_angular_velocity_rad_s: f32,
+    pub angle_rad: f64,
+    pub angular_velocity_rad_s: f64,
+    pub sail_angle_rad: f64,
+    pub sail_angular_velocity_rad_s: f64,
+    pub rudder_angle_rad: f64,
+    pub rudder_angular_velocity_rad_s: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ActuatorTorques {
-    pub sail_n_m: f32,
-    pub rudder_n_m: f32,
+    pub sail_n_m: f64,
+    pub rudder_n_m: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MotionIntent {
-    pub forward: f32,
-    pub turn: f32,
+    pub forward: f64,
+    pub turn: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AutoSheetIntent {
-    pub power: f32,
-    pub rudder: f32,
+    pub power: f64,
+    pub rudder: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceEffect {
-    pub angle_rad: f32,
-    pub drive_force_n: f32,
-    pub yaw_moment_n_m: f32,
+    pub angle_rad: f64,
+    pub drive_force_n: f64,
+    pub yaw_moment_n_m: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControlInput {
-    pub boat_angular_velocity_rad_s: f32,
-    pub free_sail_angle_rad: f32,
-    pub sail_angle_rad: f32,
-    pub apparent_wind_angle_from_boat_forward_rad: f32,
-    pub sail_side_hysteresis_angle_rad: f32,
-    pub max_rudder_angle_rad: f32,
+    pub boat_angular_velocity_rad_s: f64,
+    pub free_sail_angle_rad: f64,
+    pub sail_angle_rad: f64,
+    pub apparent_wind_angle_from_boat_forward_rad: f64,
+    pub sail_side_hysteresis_angle_rad: f64,
+    pub max_rudder_angle_rad: f64,
     pub sail_effects: Vec<SurfaceEffect>,
     pub rudder_effects: Vec<SurfaceEffect>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceTargets {
-    pub sheet_target_angle_rad: f32,
-    pub rudder_target_angle_rad: f32,
-    pub sail_target_angle_rad: Option<f32>,
+    pub sheet_target_angle_rad: f64,
+    pub rudder_target_angle_rad: f64,
+    pub sail_target_angle_rad: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ControlSettings {
     pub angle_resolution_deg: u32,
-    pub sail_side_hysteresis_angle_rad: f32,
+    pub sail_side_hysteresis_angle_rad: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -308,21 +308,21 @@ pub enum SurfaceControlCommand {
     ComputedYawRate(MotionIntent),
     FixedYawRate {
         intent: MotionIntent,
-        maximum_yaw_rate_rad_s: f32,
+        maximum_yaw_rate_rad_s: f64,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ControlTelemetry {
     pub targets: SurfaceTargets,
-    pub maximum_yaw_rate_rad_s: Option<f32>,
+    pub maximum_yaw_rate_rad_s: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Environment {
     pub true_wind_velocity_m_s: Vector,
     pub true_water_velocity_m_s: Vector,
-    pub water_depth_m: f32,
+    pub water_depth_m: f64,
 }
 
 impl Default for Environment {
@@ -330,7 +330,7 @@ impl Default for Environment {
         Self {
             true_wind_velocity_m_s: Vector::ZERO,
             true_water_velocity_m_s: Vector::ZERO,
-            water_depth_m: f32::INFINITY,
+            water_depth_m: f64::INFINITY,
         }
     }
 }
@@ -355,7 +355,7 @@ pub struct Simulation {
 pub struct HullContact {
     pub first_boat: usize,
     pub second_boat: usize,
-    pub impulse_magnitude_n_s: f32,
+    pub impulse_magnitude_n_s: f64,
     pub first_contact_local_m: Vector,
     pub second_contact_local_m: Vector,
 }
@@ -369,7 +369,7 @@ struct SharedBoat {
 struct CylindricalSpatialIndex {
     world_geometry: WorldGeometry,
     columns: i32,
-    cell_width_m: f32,
+    cell_width_m: f64,
     cells: HashMap<(i32, i32), Vec<usize>>,
 }
 
@@ -381,11 +381,11 @@ impl CylindricalSpatialIndex {
     fn new_with_extents(
         world_geometry: WorldGeometry,
         positions_m: &[Vector],
-        extents_m: &[f32],
+        extents_m: &[f64],
     ) -> Self {
         assert_eq!(positions_m.len(), extents_m.len());
         let columns = (world_geometry.width_m() / SPATIAL_CELL_M).floor() as i32;
-        let cell_width_m = world_geometry.width_m() / columns as f32;
+        let cell_width_m = world_geometry.width_m() / columns as f64;
         let mut cells = HashMap::<_, Vec<_>>::new();
         for (index, (position_m, extent_m)) in positions_m
             .iter()
@@ -409,7 +409,7 @@ impl CylindricalSpatialIndex {
         }
     }
 
-    fn query(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
+    fn query(&self, center_m: Vector, radius_m: f64) -> Vec<usize> {
         let wrapped_m = Vector::from(self.world_geometry.wrap_position_m(center_m.into()));
         let center_x_m = wrapped_m.x + self.world_geometry.width_m() / 2.0;
         let columns = wrapped_cell_indices(center_x_m, radius_m, self.cell_width_m, self.columns);
@@ -437,20 +437,20 @@ impl CylindricalSpatialIndex {
     }
 }
 
-fn linear_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32) -> RangeInclusive<i32> {
+fn linear_cell_indices(center_m: f64, extent_m: f64, cell_size_m: f64) -> RangeInclusive<i32> {
     let (minimum, maximum) = linear_cell_bounds(center_m, extent_m, cell_size_m);
     minimum..=maximum
 }
 
-fn linear_cell_bounds(center_m: f32, extent_m: f32, cell_size_m: f32) -> (i32, i32) {
+fn linear_cell_bounds(center_m: f64, extent_m: f64, cell_size_m: f64) -> (i32, i32) {
     (
         ((center_m - extent_m) / cell_size_m).floor() as i32,
         ((center_m + extent_m) / cell_size_m).floor() as i32,
     )
 }
 
-fn wrapped_cell_indices(center_m: f32, extent_m: f32, cell_size_m: f32, count: i32) -> Vec<i32> {
-    if extent_m * 2.0 >= cell_size_m * count as f32 {
+fn wrapped_cell_indices(center_m: f64, extent_m: f64, cell_size_m: f64, count: i32) -> Vec<i32> {
+    if extent_m * 2.0 >= cell_size_m * count as f64 {
         return (0..count).collect();
     }
     let minimum = ((center_m - extent_m) / cell_size_m).floor() as i32;
@@ -471,7 +471,7 @@ struct CandidateSearch {
 fn cylindrical_candidate_pairs(
     world_geometry: WorldGeometry,
     positions_m: &[Vector],
-    search_radii_m: &[f32],
+    search_radii_m: &[f64],
 ) -> CandidateSearch {
     let index =
         CylindricalSpatialIndex::new_with_extents(world_geometry, positions_m, search_radii_m);
@@ -504,7 +504,7 @@ fn cylindrical_candidate_pairs(
     }
 }
 
-fn collision_substep_policy(swept_distance_m: f32, collision_resolution_m: f32) -> usize {
+fn collision_substep_policy(swept_distance_m: f64, collision_resolution_m: f64) -> usize {
     let required_substeps = (swept_distance_m / collision_resolution_m).ceil().max(1.0) as usize;
     required_substeps.min(MAXIMUM_COLLISION_SUBSTEPS)
 }
@@ -545,30 +545,31 @@ pub fn apparent_flow(medium_velocity_m_s: Vector, point_velocity_m_s: Vector) ->
     medium_velocity_m_s - point_velocity_m_s
 }
 
-pub fn flat_plate_lift_coefficient(angle_of_attack_rad: f32) -> f32 {
-    (2.0 * angle_of_attack_rad).sin()
+// Portable transcendental calls keep native and WebAssembly replay arithmetic aligned.
+pub fn flat_plate_lift_coefficient(angle_of_attack_rad: f64) -> f64 {
+    libm::sin(2.0 * angle_of_attack_rad)
 }
 
-pub fn flat_plate_drag_coefficient(angle_of_attack_rad: f32, base_drag_coefficient: f32) -> f32 {
-    base_drag_coefficient + 1.0 - (2.0 * angle_of_attack_rad).cos()
+pub fn flat_plate_drag_coefficient(angle_of_attack_rad: f64, base_drag_coefficient: f64) -> f64 {
+    base_drag_coefficient + 1.0 - libm::cos(2.0 * angle_of_attack_rad)
 }
 
 pub fn streamlined_lift_coefficient(
-    angle_of_attack_rad: f32,
-    stall_angle_rad: f32,
-    stall_lift_coefficient: f32,
-) -> f32 {
-    let angle_of_attack_rad = (angle_of_attack_rad + std::f32::consts::FRAC_PI_2)
-        .rem_euclid(std::f32::consts::PI)
-        - std::f32::consts::FRAC_PI_2;
+    angle_of_attack_rad: f64,
+    stall_angle_rad: f64,
+    stall_lift_coefficient: f64,
+) -> f64 {
+    let angle_of_attack_rad = (angle_of_attack_rad + std::f64::consts::FRAC_PI_2)
+        .rem_euclid(std::f64::consts::PI)
+        - std::f64::consts::FRAC_PI_2;
     let absolute_angle_rad = angle_of_attack_rad.abs();
     if absolute_angle_rad <= stall_angle_rad {
         return stall_lift_coefficient * angle_of_attack_rad / stall_angle_rad;
     }
 
     let separated_lift = stall_lift_coefficient
-        * ((std::f32::consts::FRAC_PI_2 - absolute_angle_rad)
-            / (std::f32::consts::FRAC_PI_2 - stall_angle_rad));
+        * ((std::f64::consts::FRAC_PI_2 - absolute_angle_rad)
+            / (std::f64::consts::FRAC_PI_2 - stall_angle_rad));
     separated_lift
         .max(flat_plate_lift_coefficient(angle_of_attack_rad).abs())
         .copysign(angle_of_attack_rad)
@@ -576,10 +577,10 @@ pub fn streamlined_lift_coefficient(
 
 pub fn flat_plate_force(
     apparent_flow_m_s: Vector,
-    foil_angle_rad: f32,
-    fluid_density_kg_m3: f32,
-    area_m2: f32,
-    base_drag_coefficient: f32,
+    foil_angle_rad: f64,
+    fluid_density_kg_m3: f64,
+    area_m2: f64,
+    base_drag_coefficient: f64,
 ) -> Vector {
     let normal = rotated(Vector::Y, foil_angle_rad);
     0.5 * fluid_density_kg_m3
@@ -590,15 +591,15 @@ pub fn flat_plate_force(
 
 pub fn streamlined_foil_force(
     apparent_flow_m_s: Vector,
-    foil_angle_rad: f32,
-    fluid_density_kg_m3: f32,
-    area_m2: f32,
-    base_drag_coefficient: f32,
-    stall_angle_rad: f32,
-    stall_lift_coefficient: f32,
+    foil_angle_rad: f64,
+    fluid_density_kg_m3: f64,
+    area_m2: f64,
+    base_drag_coefficient: f64,
+    stall_angle_rad: f64,
+    stall_lift_coefficient: f64,
 ) -> Vector {
-    let flow_angle_rad = apparent_flow_m_s.y.atan2(apparent_flow_m_s.x);
-    let angle_of_attack_rad = foil_angle_rad - std::f32::consts::PI - flow_angle_rad;
+    let flow_angle_rad = libm::atan2(apparent_flow_m_s.y, apparent_flow_m_s.x);
+    let angle_of_attack_rad = foil_angle_rad - std::f64::consts::PI - flow_angle_rad;
     let dynamic_pressure_area_n =
         0.5 * fluid_density_kg_m3 * apparent_flow_m_s.length_squared() * area_m2;
     let lift_n = dynamic_pressure_area_n
@@ -614,12 +615,12 @@ pub fn streamlined_foil_force(
 
 pub fn rudder_foil_force(
     apparent_flow_m_s: Vector,
-    foil_angle_rad: f32,
-    fluid_density_kg_m3: f32,
-    sample_area_m2: f32,
-    total_area_m2: f32,
-    chord_m: f32,
-    base_drag_coefficient: f32,
+    foil_angle_rad: f64,
+    fluid_density_kg_m3: f64,
+    sample_area_m2: f64,
+    total_area_m2: f64,
+    chord_m: f64,
+    base_drag_coefficient: f64,
 ) -> Vector {
     // MMG/Fujii normal-pressure law uses the whole rectangular blade's AR.
     // Transom-hung free-tip geometry uses uncorrected AR. Symmetric broadside/
@@ -638,11 +639,11 @@ pub fn rudder_foil_force(
 
 pub fn hull_resistance_force(
     apparent_water_m_s: Vector,
-    hull_angle_rad: f32,
-    fluid_density_kg_m3: f32,
-    reference_area_m2: f32,
-    longitudinal_coefficient: f32,
-    lateral_coefficient: f32,
+    hull_angle_rad: f64,
+    fluid_density_kg_m3: f64,
+    reference_area_m2: f64,
+    longitudinal_coefficient: f64,
+    lateral_coefficient: f64,
 ) -> Vector {
     let local_flow_m_s = rotated(apparent_water_m_s, -hull_angle_rad);
     let pressure_area = 0.5 * fluid_density_kg_m3 * reference_area_m2;
@@ -655,10 +656,10 @@ pub fn hull_resistance_force(
 
 pub fn grounding_friction_force(
     point_velocity_m_s: Vector,
-    water_depth_m: f32,
-    draft_m: f32,
-    supported_mass_kg: f32,
-    kinetic_friction_coefficient: f32,
+    water_depth_m: f64,
+    draft_m: f64,
+    supported_mass_kg: f64,
+    kinetic_friction_coefficient: f64,
 ) -> Vector {
     grounding_friction_force_at_step(
         point_velocity_m_s,
@@ -672,11 +673,11 @@ pub fn grounding_friction_force(
 
 fn grounding_friction_force_at_step(
     point_velocity_m_s: Vector,
-    water_depth_m: f32,
-    draft_m: f32,
-    supported_mass_kg: f32,
-    kinetic_friction_coefficient: f32,
-    step_seconds: f32,
+    water_depth_m: f64,
+    draft_m: f64,
+    supported_mass_kg: f64,
+    kinetic_friction_coefficient: f64,
+    step_seconds: f64,
 ) -> Vector {
     let support_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
     let maximum_force_n = kinetic_friction_coefficient
@@ -694,7 +695,7 @@ fn grounding_friction_force_at_step(
     }
 }
 
-fn total_mass_kg(parameters: BoatParameters) -> f32 {
+fn total_mass_kg(parameters: BoatParameters) -> f64 {
     parameters.hull.mass_kg
         + parameters.sail_mass_kg
         + parameters.boom_mass_kg
@@ -706,8 +707,8 @@ fn apply_grounding_friction(
     world: &mut PhysicsWorld,
     parameters: BoatParameters,
     boat: Boat,
-    water_depth_m: f32,
-    step_seconds: f32,
+    water_depth_m: f64,
+    step_seconds: f64,
 ) {
     let support_fraction =
         ((parameters.draft_m - water_depth_m) / parameters.draft_m).clamp(0.0, 1.0);
@@ -783,35 +784,37 @@ fn apply_grounding_friction(
     }
 }
 
-fn wrapped_angle(angle_rad: f32) -> f32 {
-    (angle_rad + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI) - std::f32::consts::PI
+fn wrapped_angle(angle_rad: f64) -> f64 {
+    (angle_rad + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI
 }
 
-fn free_sail_angle(hull_angle_rad: f32, apparent_wind_m_s: Vector, max_sail_angle_rad: f32) -> f32 {
+fn free_sail_angle(hull_angle_rad: f64, apparent_wind_m_s: Vector, max_sail_angle_rad: f64) -> f64 {
     if apparent_wind_m_s == Vector::ZERO {
         return 0.0;
     }
     wrapped_angle(
-        apparent_wind_m_s.y.atan2(apparent_wind_m_s.x) - hull_angle_rad - std::f32::consts::PI,
+        libm::atan2(apparent_wind_m_s.y, apparent_wind_m_s.x)
+            - hull_angle_rad
+            - std::f64::consts::PI,
     )
     .clamp(-max_sail_angle_rad, max_sail_angle_rad)
 }
 
 fn sample_surface_effects(
-    max_angle_rad: f32,
+    max_angle_rad: f64,
     angle_resolution_deg: u32,
-    effect_at: impl Fn(f32) -> SurfaceEffect,
+    effect_at: impl Fn(f64) -> SurfaceEffect,
 ) -> Vec<SurfaceEffect> {
     let max_angle_deg = max_angle_rad.to_degrees().round() as i32;
     (-max_angle_deg..=max_angle_deg)
         .step_by(angle_resolution_deg as usize)
-        .map(|angle_deg| effect_at((angle_deg as f32).to_radians()))
+        .map(|angle_deg| effect_at((angle_deg as f64).to_radians()))
         .collect()
 }
 
-fn rudder_foil_samples(parameters: BoatParameters) -> [(Vector, f32); 2] {
+fn rudder_foil_samples(parameters: BoatParameters) -> [(Vector, f64); 2] {
     // Two-point Gauss integrates the cubic resisting moment of a rotating plate.
-    let offset = 1.0 / (2.0 * 3.0_f32.sqrt());
+    let offset = 1.0 / (2.0 * 3.0_f64.sqrt());
     [0.5 - offset, 0.5 + offset].map(|fraction| {
         (
             Vector::new(-parameters.rudder_draw_length_m * fraction, 0.0),
@@ -820,10 +823,10 @@ fn rudder_foil_samples(parameters: BoatParameters) -> [(Vector, f32); 2] {
     })
 }
 
-fn sail_foil_samples(parameters: BoatParameters) -> [(Vector, f32); 2] {
+fn sail_foil_samples(parameters: BoatParameters) -> [(Vector, f64); 2] {
     // The triangular span decreases linearly from mast to clew. Gauss-Jacobi
     // weights integrate its area moments through degree three, including drag torque.
-    let root = 6.0_f32.sqrt();
+    let root = 6.0_f64.sqrt();
     [
         ((4.0 - root) / 10.0, (9.0 + root) / 18.0),
         ((4.0 + root) / 10.0, (9.0 - root) / 18.0),
@@ -836,10 +839,10 @@ fn sail_foil_samples(parameters: BoatParameters) -> [(Vector, f32); 2] {
     })
 }
 
-fn keel_foil_samples(parameters: BoatParameters) -> [(Vector, f32); 4] {
+fn keel_foil_samples(parameters: BoatParameters) -> [(Vector, f64); 4] {
     // Draft approximates the rectangular board's effective span, giving chord A/span.
     let half_chord = parameters.keel_area_m2 / parameters.draft_m / 2.0;
-    let offset = 1.0 / (2.0 * 3.0_f32.sqrt());
+    let offset = 1.0 / (2.0 * 3.0_f64.sqrt());
     // Split at the centre so pure yaw's |x|³ moment is integrated on both sides.
     [-0.5 - offset, -0.5 + offset, 0.5 - offset, 0.5 + offset].map(|fraction| {
         (
@@ -854,7 +857,7 @@ pub fn surface_control_input(
     motion: BoatMotion,
     environment: Environment,
     angle_resolution_deg: u32,
-    sail_side_hysteresis_angle_rad: f32,
+    sail_side_hysteresis_angle_rad: f64,
 ) -> ControlInput {
     let apparent_wind_m_s = apparent_flow(environment.true_wind_velocity_m_s, motion.velocity_m_s);
     let apparent_water_m_s =
@@ -931,7 +934,7 @@ pub fn surface_control_input(
         ),
         sail_angle_rad: motion.sail_angle_rad,
         apparent_wind_angle_from_boat_forward_rad: wrapped_angle(
-            apparent_wind_m_s.y.atan2(apparent_wind_m_s.x) - motion.angle_rad,
+            libm::atan2(apparent_wind_m_s.y, apparent_wind_m_s.x) - motion.angle_rad,
         ),
         sail_side_hysteresis_angle_rad,
         max_rudder_angle_rad: parameters.max_rudder_angle_rad,
@@ -944,7 +947,7 @@ pub fn computed_maximum_yaw_rate_rad_s(
     parameters: BoatParameters,
     motion: BoatMotion,
     environment: Environment,
-) -> f32 {
+) -> f64 {
     let rudder_position_world_m = rotated(parameters.rudder_position_m, motion.angle_rad);
     let rudder_apparent_water_m_s = apparent_flow(
         environment.true_water_velocity_m_s,
@@ -955,8 +958,8 @@ pub fn computed_maximum_yaw_rate_rad_s(
     rudder_apparent_water_m_s.length() * parameters.max_rudder_angle_rad.tan() / steering_baseline_m
 }
 
-fn controlled_free_sail_angle(input: &ControlInput) -> f32 {
-    if input.apparent_wind_angle_from_boat_forward_rad.abs() < std::f32::consts::FRAC_PI_2
+fn controlled_free_sail_angle(input: &ControlInput) -> f64 {
+    if input.apparent_wind_angle_from_boat_forward_rad.abs() < std::f64::consts::FRAC_PI_2
         && input.apparent_wind_angle_from_boat_forward_rad.abs()
             < input.sail_side_hysteresis_angle_rad
         && input.sail_angle_rad * input.free_sail_angle_rad < 0.0
@@ -970,7 +973,7 @@ fn controlled_free_sail_angle(input: &ControlInput) -> f32 {
     }
 }
 
-fn trimmed_sail_effect(input: &ControlInput, free_sail_angle_rad: f32) -> SurfaceEffect {
+fn trimmed_sail_effect(input: &ControlInput, free_sail_angle_rad: f64) -> SurfaceEffect {
     input
         .sail_effects
         .iter()
@@ -997,7 +1000,7 @@ fn trimmed_sail_effect(input: &ControlInput, free_sail_angle_rad: f32) -> Surfac
         .unwrap()
 }
 
-fn nearest_sail_effect(input: &ControlInput, target_angle_rad: f32) -> SurfaceEffect {
+fn nearest_sail_effect(input: &ControlInput, target_angle_rad: f64) -> SurfaceEffect {
     input
         .sail_effects
         .iter()
@@ -1016,10 +1019,10 @@ fn nearest_sail_effect(input: &ControlInput, target_angle_rad: f32) -> SurfaceEf
 
 fn sail_target(
     input: &ControlInput,
-    power: f32,
+    power: f64,
     allow_sternway: bool,
     gradual_sternway: bool,
-) -> (f32, SurfaceEffect, Option<f32>) {
+) -> (f64, SurfaceEffect, Option<f64>) {
     if power < 0.0 && allow_sternway {
         let backed = input
             .sail_effects
@@ -1073,7 +1076,7 @@ pub fn auto_sheet_control(input: &ControlInput, intent: AutoSheetIntent) -> Surf
 pub fn yaw_rate_move_control(
     input: &ControlInput,
     intent: MotionIntent,
-    maximum_yaw_rate_rad_s: f32,
+    maximum_yaw_rate_rad_s: f64,
 ) -> SurfaceTargets {
     let (sheet_target_angle_rad, sail_effect, sail_target_angle_rad) =
         sail_target(input, intent.forward.clamp(-1.0, 1.0), true, true);
@@ -1086,12 +1089,12 @@ pub fn yaw_rate_move_control(
         .rudder_effects
         .iter()
         .map(|rudder| sail_effect.yaw_moment_n_m + rudder.yaw_moment_n_m)
-        .fold(f32::INFINITY, f32::min);
+        .fold(f64::INFINITY, f64::min);
     let maximum_moment_n_m = input
         .rudder_effects
         .iter()
         .map(|rudder| sail_effect.yaw_moment_n_m + rudder.yaw_moment_n_m)
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f64::NEG_INFINITY, f64::max);
     let target_moment_n_m = if rate_error_fraction < 0.0 {
         -rate_error_fraction * minimum_moment_n_m.min(0.0)
     } else {
@@ -1152,7 +1155,7 @@ pub fn hull_outline_m(parameters: HullParameters) -> [Vector; 15] {
     ]
 }
 
-fn polygon_moment_of_inertia(mass_kg: f32, points: &[Vector]) -> f32 {
+fn polygon_moment_of_inertia(mass_kg: f64, points: &[Vector]) -> f64 {
     let mut weighted_radius = 0.0;
     let mut twice_area = 0.0;
     for index in 0..points.len() {
@@ -1196,7 +1199,7 @@ fn sail_center_from_mast_m(parameters: BoatParameters) -> Vector {
     )
 }
 
-fn sail_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f32 {
+fn sail_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f64 {
     (parameters.sail_mass_kg / 6.0 + parameters.boom_mass_kg / 3.0)
         * parameters.boom_length_m.powi(2)
 }
@@ -1222,7 +1225,7 @@ fn rudder_center_from_hinge_m(parameters: BoatParameters) -> Vector {
     )
 }
 
-fn rudder_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f32 {
+fn rudder_hinge_moment_of_inertia_kg_m2(parameters: BoatParameters) -> f64 {
     parameters.rudder_mass_kg * parameters.rudder_draw_length_m.powi(2) / 3.0
         + parameters.tiller_mass_kg * parameters.tiller_length_m.powi(2) / 3.0
 }
@@ -1239,13 +1242,13 @@ fn rudder_mass_properties(parameters: BoatParameters) -> MassProperties {
 }
 
 fn damped_control_torque(
-    angle_rad: f32,
-    angular_velocity_rad_s: f32,
-    moment_of_inertia_kg_m2: f32,
-    maximum_torque_n_m: f32,
-    maximum_angle_rad: f32,
-    target_angle_rad: f32,
-) -> f32 {
+    angle_rad: f64,
+    angular_velocity_rad_s: f64,
+    moment_of_inertia_kg_m2: f64,
+    maximum_torque_n_m: f64,
+    maximum_angle_rad: f64,
+    target_angle_rad: f64,
+) -> f64 {
     let stiffness_n_m_rad = maximum_torque_n_m / (maximum_angle_rad / 10.0);
     let critical_damping_n_m_s_rad = 2.0 * (stiffness_n_m_rad * moment_of_inertia_kg_m2).sqrt();
     // The torque is held for a full tick. Solve feedback at its end using
@@ -1264,7 +1267,7 @@ fn sail_target_control_torque(
     parameters: BoatParameters,
     motion: BoatMotion,
     targets: SurfaceTargets,
-) -> f32 {
+) -> f64 {
     let target = targets
         .sail_target_angle_rad
         .unwrap_or(targets.sheet_target_angle_rad);
@@ -1292,7 +1295,7 @@ fn set_rudder_target(
     world: &mut PhysicsWorld,
     boat: Boat,
     parameters: BoatParameters,
-    target: Option<f32>,
+    target: Option<f64>,
 ) {
     let actuator = &mut world
         .impulse_joints
@@ -1385,7 +1388,7 @@ pub fn create_boat(
     boat
 }
 
-fn rotated(vector: Vector, angle_rad: f32) -> Vector {
+fn rotated(vector: Vector, angle_rad: f64) -> Vector {
     Rotation::new(angle_rad).transform_vector(vector)
 }
 
@@ -1397,8 +1400,8 @@ fn restore_surface_motion(
     body: RigidBodyHandle,
     hinge_position_m: Vector,
     center_from_hinge_m: Vector,
-    relative_angle_rad: f32,
-    relative_angular_velocity_rad_s: f32,
+    relative_angle_rad: f64,
+    relative_angular_velocity_rad_s: f64,
     motion: BoatMotion,
     bodies: &mut RigidBodySet,
 ) {
@@ -1450,9 +1453,9 @@ pub fn restore_motion(
     );
 }
 
-fn relative_angle(angle_rad: f32, hull_angle_rad: f32) -> f32 {
-    (angle_rad - hull_angle_rad + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
-        - std::f32::consts::PI
+fn relative_angle(angle_rad: f64, hull_angle_rad: f64) -> f64 {
+    (angle_rad - hull_angle_rad + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+        - std::f64::consts::PI
 }
 
 pub fn read_motion(boat: &Boat, bodies: &RigidBodySet) -> BoatMotion {
@@ -1484,28 +1487,28 @@ fn physics_world() -> PhysicsWorld {
     }
 }
 
-fn foil_force_slope_bound(base_drag: f32, lift: f32, lift_slope: f32) -> f32 {
+fn foil_force_slope_bound(base_drag: f64, lift: f64, lift_slope: f64) -> f64 {
     // For F = ½ρAv² Rθ(D,-L), radial and angular Jacobian columns are
     // bounded by 2a and a+b. Their Frobenius norm bounds the force derivative.
     let a = (base_drag + 2.0).hypot(lift);
-    let b = 2.0_f32.hypot(lift_slope);
+    let b = 2.0_f64.hypot(lift_slope);
     (2.0 * a).hypot(a + b)
 }
 
-fn streamlined_force_slope_bound(base_drag: f32, stall_angle: f32, stall_lift: f32) -> f32 {
+fn streamlined_force_slope_bound(base_drag: f64, stall_angle: f64, stall_lift: f64) -> f64 {
     let slope = (stall_lift / stall_angle)
-        .max(stall_lift / (std::f32::consts::FRAC_PI_2 - stall_angle))
+        .max(stall_lift / (std::f64::consts::FRAC_PI_2 - stall_angle))
         .max(2.0);
     foil_force_slope_bound(base_drag, stall_lift.max(1.0), slope)
 }
 
 fn fluid_response_rate(
     body: &RigidBody,
-    samples: impl IntoIterator<Item = (Vector, f32)>,
+    samples: impl IntoIterator<Item = (Vector, f64)>,
     fluid_velocity: Vector,
-    density: f32,
-    coefficient_slope: f32,
-) -> f32 {
+    density: f64,
+    coefficient_slope: f64,
+) -> f64 {
     let inertia = body.mass_properties().local_mprops.principal_inertia();
     samples
         .into_iter()
@@ -1524,7 +1527,7 @@ fn fluid_maximum_step_seconds(
     parameters: BoatParameters,
     boat: Boat,
     environment: Environment,
-) -> f32 {
+) -> f64 {
     let sail_rate = fluid_response_rate(
         &world.bodies[boat.sail],
         sail_foil_samples(parameters)
@@ -1720,9 +1723,9 @@ impl Simulation {
     }
 
     fn advance_actuators(&mut self, environment: Environment, actuator_torques: ActuatorTorques) {
-        let mut remaining_seconds = f64::from(DT_SECONDS);
+        let mut remaining_seconds = DT_SECONDS;
         while remaining_seconds > 0.0 {
-            let step_seconds = (remaining_seconds as f32).min(fluid_maximum_step_seconds(
+            let step_seconds = remaining_seconds.min(fluid_maximum_step_seconds(
                 &self.world,
                 self.parameters,
                 self.boat,
@@ -1737,7 +1740,7 @@ impl Simulation {
                 actuator_torques,
             );
             self.world.step();
-            remaining_seconds = (remaining_seconds - f64::from(step_seconds)).max(0.0);
+            remaining_seconds = (remaining_seconds - step_seconds).max(0.0);
         }
         self.world.integration_parameters.dt = DT_SECONDS;
     }
@@ -1848,7 +1851,7 @@ impl SharedSimulation {
         self.refresh_spatial_index();
     }
 
-    pub fn boats_within_radius(&self, center_m: Vector, radius_m: f32) -> Vec<usize> {
+    pub fn boats_within_radius(&self, center_m: Vector, radius_m: f64) -> Vec<usize> {
         let radius_squared_m2 = radius_m * radius_m;
         self.spatial_index
             .query(center_m, radius_m)
@@ -2065,11 +2068,11 @@ impl SharedSimulation {
         environments: &[Environment],
         actuator_torques: &[ActuatorTorques],
     ) -> Vec<HullContact> {
-        let collision_maximum_step_seconds = DT_SECONDS / substeps as f32;
-        let mut remaining_seconds = f64::from(DT_SECONDS);
+        let collision_maximum_step_seconds = DT_SECONDS / substeps as f64;
+        let mut remaining_seconds = DT_SECONDS;
         let mut contacts_by_pair = HashMap::<(usize, usize), HullContact>::new();
         while remaining_seconds > 0.0 {
-            let mut step_seconds = (remaining_seconds as f32).min(collision_maximum_step_seconds);
+            let mut step_seconds = remaining_seconds.min(collision_maximum_step_seconds);
             for (boat, environment) in self.boats.iter().zip(environments) {
                 step_seconds = step_seconds.min(fluid_maximum_step_seconds(
                     &self.world,
@@ -2107,7 +2110,7 @@ impl SharedSimulation {
                     .or_insert(contact);
             }
             self.enforce_supported_motion();
-            remaining_seconds = (remaining_seconds - f64::from(step_seconds)).max(0.0);
+            remaining_seconds = (remaining_seconds - step_seconds).max(0.0);
         }
         self.world.integration_parameters.dt = DT_SECONDS;
         self.refresh_spatial_index();
@@ -2145,8 +2148,8 @@ impl SharedSimulation {
                     first_boat,
                     second_boat,
                     impulse_magnitude_n_s: pair.total_impulse_magnitude(),
-                    first_contact_local_m: first_contact_local_m / contact_count as f32,
-                    second_contact_local_m: second_contact_local_m / contact_count as f32,
+                    first_contact_local_m: first_contact_local_m / contact_count as f64,
+                    second_contact_local_m: second_contact_local_m / contact_count as f64,
                 })
             })
             .collect::<Vec<_>>();
@@ -2170,8 +2173,8 @@ mod cylinder_spatial_tests {
         let mut positions_m = (0..1_000)
             .map(|index| {
                 Vector::new(
-                    -3_000.0 + (index % 100) as f32 * 40.0,
-                    -3_000.0 + (index / 100) as f32 * 40.0,
+                    -3_000.0 + (index % 100) as f64 * 40.0,
+                    -3_000.0 + (index / 100) as f64 * 40.0,
                 )
             })
             .collect::<Vec<_>>();
@@ -2195,8 +2198,8 @@ mod cylinder_spatial_tests {
         let mut positions_m = (0..1_000)
             .map(|index| {
                 Vector::new(
-                    -3_000.0 + (index % 100) as f32 * 40.0,
-                    -3_000.0 + (index / 100) as f32 * 40.0,
+                    -3_000.0 + (index % 100) as f64 * 40.0,
+                    -3_000.0 + (index / 100) as f64 * 40.0,
                 )
             })
             .collect::<Vec<_>>();
@@ -2221,13 +2224,13 @@ mod cylinder_spatial_tests {
             ],
         );
 
-        assert_eq!(index.query(Vector::ZERO, f32::MAX), vec![0, 1]);
+        assert_eq!(index.query(Vector::ZERO, f64::MAX), vec![0, 1]);
     }
 
     #[test]
     fn collision_substeps_cover_maximum_supported_opposing_motion() {
         let swept_distance_m = 2.0 * MAXIMUM_SHARED_HULL_POINT_SPEED_M_S * DT_SECONDS;
         assert_eq!(collision_substep_policy(swept_distance_m, 0.75), 32);
-        assert!(swept_distance_m / (MAXIMUM_COLLISION_SUBSTEPS as f32) < 0.75);
+        assert!(swept_distance_m / (MAXIMUM_COLLISION_SUBSTEPS as f64) < 0.75);
     }
 }

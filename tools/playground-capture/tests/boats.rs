@@ -1,7 +1,7 @@
 use std::{fs, io::BufReader, process::Command};
 
 use game::{dinghy_parameters, procedural_water_depth_m};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 const SEED: u64 = 0x5eed;
@@ -75,14 +75,14 @@ fn boat_pixels(view: &View, boat_m: Vector) -> usize {
 fn hull_pixels(view: &View) -> f32 {
     let hull = dinghy_parameters().hull;
     let pixel_m = view.view_height_m / view.size.1 as f32;
-    hull.length_m * hull.beam_m / (pixel_m * pixel_m)
+    (hull.length_m * hull.beam_m) as f32 / (pixel_m * pixel_m)
 }
 
 fn assert_afloat(boat_m: Vector) {
     let depth_m =
         procedural_water_depth_m(WorldGeometry::default(), SEED, WORLD_TIME_SECONDS, boat_m);
     assert!(
-        depth_m > dinghy_parameters().draft_m,
+        f64::from(depth_m) > dinghy_parameters().draft_m,
         "water {depth_m} m deep at {boat_m:?}"
     );
 }

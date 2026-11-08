@@ -5,7 +5,7 @@ use game::{
     procedural_tidal_conditions, procedural_unsheltered_wind_velocity_m_s,
     procedural_water_depth_m, procedural_water_height_m, procedural_weather,
 };
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 const SEED: u64 = 0x5eed_cafe;
@@ -175,7 +175,7 @@ fn terrain_repeats_across_longitude_and_continues_north_south() {
             procedural_terrain_elevation_m(
                 world,
                 SEED,
-                position + Vector::new(world.width_m(), 0.0),
+                position + Vector::new(world.width_m() as f32, 0.0),
             ),
             0.02,
         );
@@ -186,7 +186,7 @@ fn terrain_repeats_across_longitude_and_continues_north_south() {
         let north = procedural_terrain_elevation_m(
             world,
             SEED,
-            position + Vector::new(0.0, world.height_m()),
+            position + Vector::new(0.0, world.height_m() as f32),
         );
         (elevation - north).abs() > 0.02
     }));
@@ -239,10 +239,10 @@ fn terrain_one_sided_values_and_derivatives_meet_at_longitude_seam() {
         (geometry(), 0x1234_5678_9abc_def0),
         (WorldGeometry::new(256_000.0, 8_000.0).unwrap(), u64::MAX),
     ] {
-        let half_width = world.width_m() / 2.0;
+        let half_width = (world.width_m() as f32) / 2.0;
         for sample_index in 0..32 {
-            let y = -1.5 * world.height_m()
-                + (sample_index as f32 + 0.5) * 3.0 * world.height_m() / 32.0;
+            let y = -1.5 * (world.height_m() as f32)
+                + (sample_index as f32 + 0.5) * 3.0 * (world.height_m() as f32) / 32.0;
             let edge = procedural_terrain_elevation_m(world, seed, Vector::new(-half_width, y));
             if edge.abs() <= 100.0 {
                 checked_x_seam += 1;
@@ -303,10 +303,10 @@ fn authoritative_fields_approach_each_seam_from_both_sides() {
             u64::MAX,
         ),
     ] {
-        let half_width = world.width_m() / 2.0;
+        let half_width = (world.width_m() as f32) / 2.0;
         for sample_index in 0..8 {
             let tangent_phase = (sample_index as f32 + 0.5) / 8.0;
-            let y = -0.5 * world.height_m() + tangent_phase * world.height_m();
+            let y = -0.5 * (world.height_m() as f32) + tangent_phase * (world.height_m() as f32);
             let x_sides = (
                 Vector::new(-half_width + epsilon, y),
                 Vector::new(half_width - epsilon, y),
@@ -336,8 +336,8 @@ fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vec
         procedural_unsheltered_wind_velocity_m_s(world, seed, tick, high),
         0.25,
     );
-    let low_environment = procedural_match_environment(world, seed, tick, low);
-    let high_environment = procedural_match_environment(world, seed, tick, high);
+    let low_environment = procedural_match_environment(world, seed, tick, low.as_dvec2());
+    let high_environment = procedural_match_environment(world, seed, tick, high.as_dvec2());
     assert!(
         (low_environment.true_wind_velocity_m_s - high_environment.true_wind_velocity_m_s).length()
             <= 0.3,
@@ -366,7 +366,11 @@ fn fields_repeat_across_longitude_and_tide_continues_north_south() {
     );
     assert_ne!(
         procedural_tidal_conditions(world, SEED, position),
-        procedural_tidal_conditions(world, SEED, position + Vector::new(0.0, world.height_m()),),
+        procedural_tidal_conditions(
+            world,
+            SEED,
+            position + Vector::new(0.0, world.height_m() as f32),
+        ),
     );
     assert_close(
         procedural_water_height_m(world, SEED, time_seconds, position),
@@ -416,10 +420,14 @@ fn pressure_does_not_loop_between_the_poles() {
         world,
         SEED,
         TICK,
-        Vector::new(7.25, -0.5 * world.height_m()),
+        Vector::new(7.25, -0.5 * (world.height_m() as f32)),
     );
-    let north =
-        procedural_atmosphere_primary(world, SEED, TICK, Vector::new(7.25, 0.5 * world.height_m()));
+    let north = procedural_atmosphere_primary(
+        world,
+        SEED,
+        TICK,
+        Vector::new(7.25, 0.5 * (world.height_m() as f32)),
+    );
 
     assert!(
         (south.pressure_hpa - north.pressure_hpa).abs() > 0.01,

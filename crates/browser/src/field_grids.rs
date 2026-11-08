@@ -5,7 +5,7 @@ use game::{
     BROAD_LANDFORM_HIGHEST_M, celestial_directions_at_height, celestial_lighting_at_height,
     celestial_orbit, world_celestial_conditions,
 };
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 /// The scene's window covers the view, so 16:9 views reach this budget near
@@ -248,7 +248,7 @@ pub fn field_grids(
     tuning: FieldGridTuning,
     history: &mut FieldGridHistory,
 ) -> FieldGrids {
-    let world_width_m = f64::from(world_geometry.width_m());
+    let world_width_m = world_geometry.width_m();
     let camera = camera_m.map(f64::from);
     let half_view_m = view_size_m.map(|size| 0.5 * f64::from(size));
     let view = Region {
@@ -656,8 +656,8 @@ fn shadow_footprints(
     highest_receiver_m: f64,
     landform_receiver_margin_m: f64,
 ) -> ShadowFootprints {
-    let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
-    let latitude_rad_per_m = PI / f64::from(world_geometry.height_m());
+    let world_radius_m = world_geometry.width_m() / TAU;
+    let latitude_rad_per_m = PI / world_geometry.height_m();
     let cell_half_m = half_view_m.map(|half| half / FOOTPRINT_CELLS as f64);
     let cell_rotation_rad = cell_half_m[0] / world_radius_m + cell_half_m[1] * latitude_rad_per_m;
     let orbit = celestial_orbit(world_celestial_conditions(
@@ -755,8 +755,8 @@ fn deck_footprint(
     plane_footprint: Region,
     source: usize,
 ) -> Region {
-    let world_radius_m = f64::from(world_geometry.width_m()) / TAU;
-    let latitude_rad_per_m = PI / f64::from(world_geometry.height_m());
+    let world_radius_m = world_geometry.width_m() / TAU;
+    let latitude_rad_per_m = PI / world_geometry.height_m();
     let mut footprint = Region::EMPTY;
     if plane_footprint.min[0] > plane_footprint.max[0] {
         return footprint;
@@ -1196,7 +1196,7 @@ mod tests {
     /// clipped in longitude to the half lap that shader lookups wrap into.
     fn assert_covers(grid: &FieldGrid, region: Region, label: &str) {
         let extent = grid.extent();
-        let half_world_m = 0.5 * f64::from(WorldGeometry::default().width_m());
+        let half_world_m = 0.5 * WorldGeometry::default().width_m();
         for axis in 0..2 {
             let spacing_m = f64::from(grid.uniforms[2 + axis]);
             let (mut min_m, mut max_m) = (region.min[axis], region.max[axis]);
@@ -1261,7 +1261,7 @@ mod tests {
                 .into_iter()
                 .chain(&grids.occluders)
             {
-                let columns = f64::from(world_width_m) / f64::from(grid.uniforms[2]);
+                let columns = world_width_m / f64::from(grid.uniforms[2]);
                 assert!(
                     (columns - columns.round()).abs() < 1.0e-3,
                     "{world_width_m}: {columns}"
@@ -1293,7 +1293,7 @@ mod tests {
 
     #[test]
     fn landform_quads_cover_the_view_within_the_written_texels() {
-        let half_world_m = 0.5 * f64::from(WorldGeometry::default().width_m());
+        let half_world_m = 0.5 * WorldGeometry::default().width_m();
         for view_height_m in [15.0, 300.0, 2_000.0, 20_000.0, 1.0e6] {
             for aspect in [16.0 / 9.0, 9.0 / 16.0] {
                 let view_size_m = [view_width_m(aspect, view_height_m), view_height_m];
@@ -1398,7 +1398,7 @@ mod tests {
 
     fn occluder_doublings_for(width_m: f64, height_m: f64) -> [i32; 2] {
         field_doublings(
-            f64::from(WorldGeometry::default().width_m()),
+            WorldGeometry::default().width_m(),
             Region {
                 min: [0.0; 2],
                 max: [width_m, height_m],
@@ -1430,7 +1430,7 @@ mod tests {
 
     #[test]
     fn an_occluder_layer_keeps_its_spacing_until_a_finer_one_fits_comfortably() {
-        let world_width_m = f64::from(WorldGeometry::default().width_m());
+        let world_width_m = WorldGeometry::default().width_m();
         let region = |width_m: f64| Region {
             min: [0.0; 2],
             max: [width_m, 1_000.0],
@@ -1501,7 +1501,7 @@ mod tests {
     }
 
     fn cloud_shadow_taps_land_inside_their_windows(world: WorldGeometry) {
-        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let world_radius_m = world.width_m() / TAU;
         let highest_m = highest_receiver_m();
         let heights_m = [
             LOWEST_SHADOW_RECEIVER_M,
@@ -1597,7 +1597,7 @@ mod tests {
     #[test]
     fn landform_horizon_marches_land_inside_the_landform_window() {
         let world = WorldGeometry::default();
-        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let world_radius_m = world.width_m() / TAU;
         let tuned_reach_m = f64::from(FieldGridTuning::PRODUCTION.landform_shadow_reach_m);
         let highest_horizon_rad =
             -(world_radius_m / (world_radius_m + highest_receiver_m())).acos();
@@ -1679,7 +1679,7 @@ mod tests {
     #[test]
     fn cloud_weather_grid_covers_every_cloud_weather_read() {
         let world = WorldGeometry::default();
-        let world_radius_m = f64::from(world.width_m()) / TAU;
+        let world_radius_m = world.width_m() / TAU;
         let highest_m = highest_receiver_m();
         let camera_m = [-23_500.0_f32, -16_500.0];
         let horizon_z = |height_m: f64| {

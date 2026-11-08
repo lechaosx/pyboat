@@ -30,8 +30,8 @@ type ConnectionResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const PHYSICS_BUBBLE_RADIUS_M: f32 = 8.0;
-const DEFAULT_VISIBILITY_RADIUS_M: f32 = 24.0;
+const PHYSICS_BUBBLE_RADIUS_M: f64 = 8.0;
+const DEFAULT_VISIBILITY_RADIUS_M: f64 = 24.0;
 const MAX_PENDING_INPUT_COMMANDS: usize = 15;
 const MAX_PENDING_CONNECTION_EVENTS: usize = 256;
 const MAX_MATCH_BOATS: usize = 64;
@@ -41,15 +41,15 @@ const MAX_CLIENT_MESSAGE_BYTES: usize = 1024;
 const WEBTRANSPORT_PATH: &str = "/game";
 const WEBTRANSPORT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
-const SPAWN_CLEARANCE_M: f32 = 8.0;
-const MINIMUM_SPAWN_WATER_DEPTH_M: f32 = 1.5;
+const SPAWN_CLEARANCE_M: f64 = 8.0;
+const MINIMUM_SPAWN_WATER_DEPTH_M: f64 = 1.5;
 const SPAWN_BEARING_CANDIDATES: u32 = 32;
 const BOAT_MAX_HEALTH: f32 = 100.0;
-const SAFE_COLLISION_IMPULSE_N_S: f32 = 100.0;
-const COLLISION_IMPULSE_PER_DAMAGE_N_S: f32 = 8.0;
-const BOW_STRENGTH_MULTIPLIER: f32 = 2.0;
-const SIDE_STRENGTH_MULTIPLIER: f32 = 1.0;
-const STERN_STRENGTH_MULTIPLIER: f32 = 0.6;
+const SAFE_COLLISION_IMPULSE_N_S: f64 = 100.0;
+const COLLISION_IMPULSE_PER_DAMAGE_N_S: f64 = 8.0;
+const BOW_STRENGTH_MULTIPLIER: f64 = 2.0;
+const SIDE_STRENGTH_MULTIPLIER: f64 = 1.0;
+const STERN_STRENGTH_MULTIPLIER: f64 = 0.6;
 
 enum ConnectionEvent {
     Upgraded {
@@ -94,7 +94,7 @@ struct Player {
     last_received_input: i64,
     pending_inputs: VecDeque<(i64, MotionIntent)>,
     last_received_viewport: Option<i64>,
-    visibility_radius_m: f32,
+    visibility_radius_m: f64,
     health: f32,
     last_hit_tick: Option<u64>,
     wreck: bool,
@@ -143,7 +143,7 @@ impl GameMatch {
                 ))
                 .length()
             })
-            .fold(0.0_f32, f32::max);
+            .fold(0.0_f64, f64::max);
         let minimum_radius_m = if self.players.is_empty() {
             0.0
         } else {
@@ -154,12 +154,12 @@ impl GameMatch {
         random_bits = (random_bits ^ (random_bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         random_bits ^= random_bits >> 31;
         let initial_bearing_rad =
-            std::f32::consts::TAU * ((random_bits >> 40) as f32 / (1_u32 << 24) as f32);
+            std::f64::consts::TAU * ((random_bits >> 40) as f64 / (1_u32 << 24) as f64);
         let mut radius_m = minimum_radius_m;
         let position_m = 'spawn: loop {
             for candidate in 0..SPAWN_BEARING_CANDIDATES {
                 let bearing_rad = initial_bearing_rad
-                    + std::f32::consts::TAU * candidate as f32 / SPAWN_BEARING_CANDIDATES as f32;
+                    + std::f64::consts::TAU * candidate as f64 / SPAWN_BEARING_CANDIDATES as f64;
                 let candidate_m =
                     spawn_origin_m + Vector::new(bearing_rad.cos(), bearing_rad.sin()) * radius_m;
                 let candidate_m =
@@ -276,7 +276,7 @@ impl GameMatch {
             return;
         }
         player.last_received_viewport = Some(sequence);
-        player.visibility_radius_m = radius_m.max(PHYSICS_BUBBLE_RADIUS_M);
+        player.visibility_radius_m = f64::from(radius_m).max(PHYSICS_BUBBLE_RADIUS_M);
     }
 
     fn advance(&mut self) {
@@ -312,7 +312,7 @@ impl GameMatch {
         self.tick += 1;
     }
 
-    fn apply_collision_damage(&mut self, player_id: &str, impulse_n_s: f32, contact_x_m: f32) {
+    fn apply_collision_damage(&mut self, player_id: &str, impulse_n_s: f64, contact_x_m: f64) {
         let Some(player) = self
             .players
             .iter_mut()
@@ -336,7 +336,7 @@ impl GameMatch {
         if damage == 0.0 {
             return;
         }
-        player.health = (player.health - damage).max(0.0);
+        player.health = (player.health - damage as f32).max(0.0);
         player.last_hit_tick = Some(self.tick);
         if player.health == 0.0 {
             player.wreck = true;
@@ -418,8 +418,8 @@ impl GameMatch {
                     sail_angular_velocity: motion.sail_angular_velocity_rad_s,
                     rudder: motion.rudder_angle_rad,
                     rudder_angular_velocity: motion.rudder_angular_velocity_rad_s,
-                    forward: include_intent.then_some(player.intent.forward),
-                    turn: include_intent.then_some(player.intent.turn),
+                    forward: include_intent.then_some(player.intent.forward as f32),
+                    turn: include_intent.then_some(player.intent.turn as f32),
                     acknowledged_input: (player.id == player_id)
                         .then_some(player.acknowledged_input),
                 }
@@ -662,7 +662,7 @@ async fn handle_connection(
                         if events.send(ConnectionEvent::Input {
                             player_id: player_id.clone(),
                             sequence,
-                            intent: MotionIntent { forward, turn },
+                            intent: MotionIntent { forward: f64::from(forward), turn: f64::from(turn) },
                         }).await.is_err() {
                             break Ok(());
                         }
@@ -869,9 +869,9 @@ mod tests {
 
     fn ram_result(
         offset_m: Vector,
-        speed_m_s: f32,
-        half_separation_m: f32,
-    ) -> (f32, [f32; 2], [bool; 2]) {
+        speed_m_s: f64,
+        half_separation_m: f64,
+    ) -> (f64, [f32; 2], [bool; 2]) {
         let world_geometry = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
         let mut parameters = dinghy_parameters();
         parameters.air_density_kg_m3 = 0.0;
@@ -924,7 +924,7 @@ mod tests {
             spawn_origin_m: None,
             tick: 0,
         };
-        let mut maximum_impulse_n_s = 0.0_f32;
+        let mut maximum_impulse_n_s = 0.0_f64;
         for _ in 0..30 {
             let contacts = game_match.simulation.advance(
                 simulation::Environment::default(),
@@ -965,7 +965,7 @@ mod tests {
                 .map(|boat| {
                     (game_match.simulation.motion(boat).position_m - spawn_origin_m).length()
                 })
-                .fold(0.0_f32, f32::max);
+                .fold(0.0_f64, f64::max);
             game_match.add_player(format!("player-{player_number}"), player_number);
 
             let spawned = game_match.simulation.motion(player_number as usize - 1);

@@ -14,7 +14,7 @@ use game::{
     procedural_weather as procedural_weather_in_world, tide_height_m,
     world_celestial_conditions as world_celestial_conditions_in_world, world_climate_conditions,
 };
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 /// Seeds of a terrain population. Terrain statistics vary strongly between
@@ -47,7 +47,12 @@ fn procedural_match_environment(
     tick: u64,
     position_m: Vector,
 ) -> simulation::Environment {
-    procedural_match_environment_in_world(WorldGeometry::default(), match_seed, tick, position_m)
+    procedural_match_environment_in_world(
+        WorldGeometry::default(),
+        match_seed,
+        tick,
+        position_m.as_dvec2(),
+    )
 }
 
 fn procedural_solid_surface_elevation_m(
@@ -137,20 +142,26 @@ fn shared_dinghy_and_environment_preserve_the_calibrated_tuning() {
         + parameters.tiller_mass_kg;
 
     assert_eq!(total_mass_kg, 250.0);
-    assert_eq!(parameters.hull.length_m, 4.05);
-    assert_eq!(parameters.hull.beam_m, 4.05 * 580.0 / 1565.0);
+    assert_eq!(parameters.hull.length_m, f64::from(4.05_f32));
+    assert_eq!(parameters.hull.beam_m, f64::from(4.05_f32 * 580.0 / 1565.0));
     assert_eq!(parameters.sail_area_m2, 4.5);
-    assert_eq!(parameters.keel_area_m2, 0.6);
-    assert_eq!(parameters.rudder_area_m2, 0.30 * 0.45);
-    assert_eq!(parameters.draft_m, 0.6);
+    assert_eq!(parameters.keel_area_m2, f64::from(0.6_f32));
+    assert_eq!(parameters.rudder_area_m2, f64::from(0.30_f32 * 0.45));
+    assert_eq!(parameters.draft_m, f64::from(0.6_f32));
     assert_eq!(parameters.ground_static_friction_coefficient, 1.0);
-    assert_eq!(parameters.ground_kinetic_friction_coefficient, 0.6);
+    assert_eq!(
+        parameters.ground_kinetic_friction_coefficient,
+        f64::from(0.6_f32)
+    );
     assert_eq!(
         match_environment().true_wind_velocity_m_s,
-        Vector::new(6.0, 0.0)
+        physics::prelude::Vector::new(6.0, 0.0)
     );
-    assert_eq!(match_environment().true_water_velocity_m_s, Vector::ZERO);
-    assert_eq!(match_environment().water_depth_m, f32::INFINITY);
+    assert_eq!(
+        match_environment().true_water_velocity_m_s,
+        physics::prelude::Vector::ZERO
+    );
+    assert_eq!(match_environment().water_depth_m, f64::INFINITY);
 }
 
 #[test]
@@ -195,8 +206,8 @@ fn procedural_wind_is_spatially_and_temporally_coherent() {
     assert!(one_second_change_sum / 512.0 < 1.25);
 
     let seed = 0x5eed_u64;
-    let mut minimum_speed = f32::MAX;
-    let mut maximum_speed: f32 = 0.0;
+    let mut minimum_speed = f64::MAX;
+    let mut maximum_speed: f64 = 0.0;
     for tick in (0..=120 * 60).step_by(60) {
         let speed = procedural_match_environment(seed, tick, position_m)
             .true_wind_velocity_m_s
@@ -321,8 +332,8 @@ fn surface_gust_activity_varies_between_weather_regions() {
     for region_y in 0..4 {
         for region_x in 0..8 {
             let center = Vector::new(
-                (region_x as f32 / 8.0 - 0.4375) * world.width_m(),
-                (region_y as f32 / 4.0 - 0.375) * world.height_m(),
+                (region_x as f32 / 8.0 - 0.4375) * (world.width_m() as f32),
+                (region_y as f32 / 4.0 - 0.375) * (world.height_m() as f32),
             );
             let mut square_speed_sum = 0.0;
             for sample_y in 0..16 {
@@ -351,7 +362,7 @@ fn surface_gust_activity_varies_between_weather_regions() {
 #[test]
 fn resolved_pressure_is_dominated_by_broad_structure() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(12.0, 0.25 * world.height_m());
+    let position_m = Vector::new(12.0, 0.25 * (world.height_m() as f32));
     let mut anomaly_square_sum = 0.0;
     let mut local_difference_square_sum = 0.0;
 
@@ -431,8 +442,8 @@ fn one_world_contains_distinct_coherent_wind_systems() {
     for y in 0..16 {
         for x in 0..16 {
             let position_m = Vector::new(
-                (x as f32 / 16.0 - 0.5) * world.width_m(),
-                (y as f32 / 16.0 - 0.5) * world.height_m(),
+                (x as f32 / 16.0 - 0.5) * (world.width_m() as f32),
+                (y as f32 / 16.0 - 0.5) * (world.height_m() as f32),
             );
             let wind = procedural_unsheltered_wind_velocity_m_s_in_world(
                 world, 0x5eed, 12_345, position_m,
@@ -550,8 +561,8 @@ fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() 
     for case in 0..64_u64 {
         let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
         for y in 0..36 {
-            let y_m = ((y as f32 + 0.5) / 36.0 - 0.5) * geometry.height_m();
-            let belt = match geometry.latitude_degrees(y_m).abs() {
+            let y_m = ((y as f32 + 0.5) / 36.0 - 0.5) * (geometry.height_m() as f32);
+            let belt = match geometry.latitude_degrees(f64::from(y_m)).abs() {
                 latitude if latitude < 10.0 => 0,
                 latitude if latitude < 30.0 => 1,
                 latitude if latitude < 60.0 => 2,
@@ -562,7 +573,7 @@ fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() 
                     geometry,
                     seed,
                     case * 9_876_543,
-                    Vector::new((x as f32 / 16.0 - 0.5) * geometry.width_m(), y_m),
+                    Vector::new((x as f32 / 16.0 - 0.5) * (geometry.width_m() as f32), y_m),
                 );
                 let rains = weather.rain_intensity > 0.0;
                 cover += weather.cloudiness;
@@ -955,8 +966,8 @@ fn convergence_lifts_cloud_and_divergence_leaves_surface_air_cloud() {
                     seed,
                     case * 9_876_543,
                     Vector::new(
-                        (x as f32 / 16.0 - 0.5) * geometry.width_m(),
-                        (y as f32 / 16.0 - 0.5) * geometry.height_m(),
+                        (x as f32 / 16.0 - 0.5) * (geometry.width_m() as f32),
+                        (y as f32 / 16.0 - 0.5) * (geometry.height_m() as f32),
                     ),
                 )
                 .ascent_m;
@@ -1295,7 +1306,7 @@ fn procedural_primary_atmosphere_is_seeded_and_locally_continuous() {
 fn temperature_anomaly_probabilities_follow_observed_latitude_bands() {
     let world = WorldGeometry::default();
     let percentile = |latitude: f32, probability: f32| {
-        let position_m = Vector::new(0.0, latitude / 180.0 * world.height_m());
+        let position_m = Vector::new(0.0, latitude / 180.0 * (world.height_m() as f32));
         let mut samples = (0..2_048)
             .map(|seed| {
                 procedural_atmosphere_primary_in_world(world, seed, 0, position_m)
@@ -1318,7 +1329,7 @@ fn temperature_anomaly_probabilities_follow_observed_latitude_bands() {
 fn temperate_temperature_extremes_have_observed_probabilities() {
     let world = WorldGeometry::default();
     let latitude = 50.0;
-    let position_m = Vector::new(0.0, latitude / 180.0 * world.height_m());
+    let position_m = Vector::new(0.0, latitude / 180.0 * (world.height_m() as f32));
     let climate = world_climate_conditions(latitude);
     // The 40 °C tail holds about 0.4% of summer days, so it needs enough seeds
     // to be measured well inside its band.
@@ -1599,7 +1610,7 @@ fn twilight_fades_over_the_same_solar_depression_on_every_world_size() {
         };
         let light = |width_m: f32| {
             celestial_lighting_at_height(
-                WorldGeometry::new(width_m, width_m).unwrap(),
+                WorldGeometry::new(f64::from(width_m), f64::from(width_m)).unwrap(),
                 conditions,
                 0.0,
             )
@@ -1925,8 +1936,8 @@ fn world_year_has_two_paired_eclipse_seasons() {
         for latitude_index in -45..=45 {
             for longitude_index in 0..48 {
                 let position_m = Vector::new(
-                    world.width_m() * (longitude_index as f32 / 48.0 - 0.5),
-                    world.height_m() * latitude_index as f32 / 90.0,
+                    (world.width_m() as f32) * (longitude_index as f32 / 48.0 - 0.5),
+                    (world.height_m() as f32) * latitude_index as f32 / 90.0,
                 );
                 let lighting = celestial_lighting(world_celestial_conditions_in_world(
                     world,
@@ -2027,10 +2038,10 @@ fn first_lunar_eclipse_reaches_totality() {
 fn celestial_lighting_uses_the_connected_hemisphere_after_a_pole() {
     let world = WorldGeometry::default();
     let world_time_seconds = (0.25 - 0.0021) * 365.0 * 86_400.0;
-    let ascending_y_m = 0.25 * world.height_m();
-    let descending_y_m = 0.75 * world.height_m();
+    let ascending_y_m = 0.25 * (world.height_m() as f32);
+    let descending_y_m = 0.75 * (world.height_m() as f32);
     let longitude_m = (0..360)
-        .map(|index| world.width_m() * (index as f32 / 360.0 - 0.5))
+        .map(|index| (world.width_m() as f32) * (index as f32 / 360.0 - 0.5))
         .max_by(|left, right| {
             let sun_z = |longitude_m| {
                 celestial_lighting(world_celestial_conditions_in_world(
@@ -2890,8 +2901,8 @@ fn normal_polar_climate_closes_water_across_the_pole() {
 
     for longitude_index in 0..512 {
         let position = Vector::new(
-            world.width_m() * (longitude_index as f32 / 512.0 - 0.5),
-            -0.5 * world.height_m(),
+            (world.width_m() as f32) * (longitude_index as f32 / 512.0 - 0.5),
+            -0.5 * (world.height_m() as f32),
         );
         if procedural_terrain_elevation_m_in_world(world, seed, position) >= 0.0 {
             continue;
@@ -2960,8 +2971,8 @@ fn polar_ice_front_has_frozen_and_open_deep_water_at_one_latitude() {
 
         for longitude_index in 0..512 {
             let position = Vector::new(
-                world.width_m() * (longitude_index as f32 / 512.0 - 0.5),
-                world.height_m() * latitude / 180.0,
+                (world.width_m() as f32) * (longitude_index as f32 / 512.0 - 0.5),
+                (world.height_m() as f32) * latitude / 180.0,
             );
             let bedrock = procedural_terrain_elevation_m_in_world(world, seed, position);
             if bedrock > -1_000.0 {
@@ -3149,7 +3160,7 @@ fn procedural_terrain_is_seeded_and_continuous() {
     assert!((procedural_terrain_elevation_m(seed + 1, position_m) - elevation_m).abs() > 0.01);
     assert_eq!(
         procedural_match_environment(seed, 600, position_m).water_depth_m,
-        procedural_water_depth_m(seed, 10.0, position_m)
+        f64::from(procedural_water_depth_m(seed, 10.0, position_m))
     );
 }
 

@@ -153,7 +153,7 @@ dependencies = [
  "naga",
  "png",
  "protocol",
- "rapier2d",
+ "rapier2d-f64",
  "server",
  "simulation",
  "tokio",
@@ -514,7 +514,7 @@ name = "game"
 version = "0.1.0"
 dependencies = [
  "libm",
- "rapier2d",
+ "rapier2d-f64",
  "simulation",
 ]
 
@@ -1182,10 +1182,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry2d"
+name = "parry2d-f64"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1ba500175e957aaa27ddc92290ec8ff503d73331365443660816d6302e2a31"
+checksum = "4f0d7c5731bcbff3cefdca822e64693f9654598377475030f25946a3417be856"
 dependencies = [
  "approx",
  "arrayvec",
@@ -1239,7 +1239,7 @@ dependencies = [
  "game",
  "png",
  "pollster",
- "rapier2d",
+ "rapier2d-f64",
  "serde",
  "serde_json",
  "simulation",
@@ -1449,10 +1449,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rapier2d"
+name = "rapier2d-f64"
 version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6708b492a19e936d66ba45fd0749ea8e20275f9a8e9891050944c35b8305349"
+checksum = "c71e462d8ffd7f96bd7499b20c486af0c698b293c2e51a4c5131014523831db5"
 dependencies = [
  "approx",
  "arrayvec",
@@ -1461,13 +1461,12 @@ dependencies = [
  "log",
  "nalgebra",
  "num-traits",
- "parry2d",
+ "parry2d-f64",
  "profiling",
  "serde",
  "simba",
  "static_assertions",
  "thiserror",
- "wide",
 ]
 
 [[package]]
@@ -1727,7 +1726,7 @@ version = "0.1.0"
 dependencies = [
  "game",
  "protocol",
- "rapier2d",
+ "rapier2d-f64",
  "simulation",
  "tokio",
  "wtransport",
@@ -1783,7 +1782,8 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 name = "simulation"
 version = "0.1.0"
 dependencies = [
- "rapier2d",
+ "libm",
+ "rapier2d-f64",
  "serde",
 ]
 

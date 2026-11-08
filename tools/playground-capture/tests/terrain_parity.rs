@@ -11,7 +11,7 @@ use game::{
     procedural_terrain_elevation_m, procedural_water_depth_m, procedural_world_environment,
     world_celestial_conditions,
 };
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
@@ -23,8 +23,8 @@ fn physical_waves_advance_with_fractional_world_ticks() {
         .flat_map(|y_index| {
             (0..64).map(move |x_index| {
                 Vector::new(
-                    world.width_m() * (x_index as f32 / 64.0 - 0.5),
-                    0.5 * world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                    (world.width_m() as f32) * (x_index as f32 / 64.0 - 0.5),
+                    0.5 * (world.height_m() as f32) * (y_index as f32 / 64.0 - 0.5),
                 )
             })
         })
@@ -74,7 +74,7 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
             )
             .water_height_m
             .max(0.0);
-            let world_radius_m = world.width_m() / std::f32::consts::TAU;
+            let world_radius_m = (world.width_m() as f32) / std::f32::consts::TAU;
             let horizon_z =
                 -(1.0 - (world_radius_m / (world_radius_m + water_height_m)).powi(2)).sqrt();
             let z = if source == 0 {
@@ -144,7 +144,10 @@ fn direct_sun_and_moon_light_extinguish_at_the_geometric_horizon() {
 fn adapted_view_vision_reduces_chroma_everywhere() {
     let world = WorldGeometry::default();
     let mut images = Vec::new();
-    for position in [Vector::ZERO, Vector::new(0.5 * world.width_m(), 0.0)] {
+    for position in [
+        Vector::ZERO,
+        Vector::new(0.5 * (world.width_m() as f32), 0.0),
+    ] {
         for diagnostic in [
             "lighting_night_vision_unadapted",
             "lighting_night_vision_adapted",
@@ -289,9 +292,9 @@ fn rendered_terrain_matches_authoritative_rust_across_rectangles() {
                 "--height",
                 "1",
                 "--world-width",
-                &world.width_m().to_string(),
+                &(world.width_m() as f32).to_string(),
                 "--world-height",
-                &world.height_m().to_string(),
+                &(world.height_m() as f32).to_string(),
                 "--camera-x",
                 &position_m.x.to_string(),
                 "--camera-y",
@@ -334,7 +337,7 @@ fn rendered_surface_conditions_match_authoritative_rust_at_world_positions() {
     let tick = 0;
     for position_m in [
         Vector::new(1_234.5, -6_789.25),
-        Vector::new(1_234.5, 0.75 * world.height_m()),
+        Vector::new(1_234.5, 0.75 * (world.height_m() as f32)),
     ] {
         let sample = procedural_world_environment(world, SEED, tick, position_m);
         for (diagnostic, expected) in [
@@ -432,7 +435,8 @@ fn rendered_relative_humidity_matches_authoritative_rust() {
     for index in 0..64 {
         let position_m = Vector::new(
             (index % 8) as f32 * 3_700.0 - 13_000.0,
-            ((index / 8) as f32 + 0.5) / 8.0 * world.height_m() - 0.5 * world.height_m(),
+            ((index / 8) as f32 + 0.5) / 8.0 * (world.height_m() as f32)
+                - 0.5 * (world.height_m() as f32),
         );
         let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
         let expected = weather.relative_humidity;
@@ -556,7 +560,8 @@ fn rendered_resolved_wind_direction_matches_authoritative_rust() {
     for index in 0..24 {
         let position_m = Vector::new(
             index as f32 * 2_700.0 - 30_000.0,
-            (index as f32 + 0.5) / 24.0 * world.height_m() - 0.5 * world.height_m(),
+            (index as f32 + 0.5) / 24.0 * (world.height_m() as f32)
+                - 0.5 * (world.height_m() as f32),
         );
         let weather = procedural_world_environment(world, SEED, 0, position_m).weather;
         let expected = weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s;
@@ -582,9 +587,9 @@ fn rendered_resolved_wind_direction_matches_authoritative_rust() {
         assert!(
             difference_degrees < 2.0,
             "resolved wind at {position_m:?}, latitude {}: rendered direction {actual:?}, Rust {expected:?}",
-            world.latitude_degrees(position_m.y),
+            world.latitude_degrees(f64::from(position_m.y)),
         );
-        tropical += usize::from(world.latitude_degrees(position_m.y).abs() < 20.0);
+        tropical += usize::from(world.latitude_degrees(f64::from(position_m.y)).abs() < 20.0);
     }
     assert!(tropical >= 4, "only {tropical} tropical positions compared");
 }
@@ -646,15 +651,15 @@ fn rendered_snow_cover_matches_authoritative_rust() {
 #[test]
 fn rendered_surface_temperature_is_continuous_across_a_pole() {
     let world = WorldGeometry::default();
-    let pole_y_m = 0.5 * world.height_m();
+    let pole_y_m = 0.5 * (world.height_m() as f32);
     let before = render_diagnostic_pixel(
         world,
-        Vector::new(0.0, pole_y_m - 0.000001 * world.height_m()),
+        Vector::new(0.0, pole_y_m - 0.000001 * (world.height_m() as f32)),
         "surface_air_temperature",
     );
     let after = render_diagnostic_pixel(
         world,
-        Vector::new(0.0, pole_y_m + 0.000001 * world.height_m()),
+        Vector::new(0.0, pole_y_m + 0.000001 * (world.height_m() as f32)),
         "surface_air_temperature",
     );
 
@@ -701,8 +706,8 @@ fn rendered_surface_sun_amount_uses_receiver_elevation() {
         .flat_map(|y_index| {
             (0..64).map(move |x_index| {
                 Vector::new(
-                    world.width_m() * (x_index as f32 / 64.0 - 0.5),
-                    world.height_m() * (y_index as f32 / 128.0 - 0.25),
+                    (world.width_m() as f32) * (x_index as f32 / 64.0 - 0.5),
+                    (world.height_m() as f32) * (y_index as f32 / 128.0 - 0.25),
                 )
             })
         })
@@ -749,7 +754,12 @@ fn rendered_cloud_layer_sun_visibility_uses_the_world_horizon() {
     let world = WorldGeometry::default();
     let world_time_seconds = 0.0;
     let position_m = (0..4_096)
-        .map(|index| Vector::new(world.width_m() * (index as f32 / 4_096.0 - 0.5), 0.0))
+        .map(|index| {
+            Vector::new(
+                (world.width_m() as f32) * (index as f32 / 4_096.0 - 0.5),
+                0.0,
+            )
+        })
         .find(|position_m| {
             let sun_z = celestial_lighting(world_celestial_conditions(
                 world,
@@ -1371,8 +1381,8 @@ fn scene_light_contribution_gates_compose_independently() {
     let row = mixed_canopy_pixel / 64;
     let column = mixed_canopy_pixel % 64;
     let position_m = Vector::new(
-        world.width_m() * ((column as f32 + 0.5) / 64.0 - 0.5),
-        world.height_m() * (0.5 - (row as f32 + 0.5) / 64.0),
+        (world.width_m() as f32) * ((column as f32 + 0.5) / 64.0 - 0.5),
+        (world.height_m() as f32) * (0.5 - (row as f32 + 0.5) / 64.0),
     );
     let highest = |source: usize| {
         (0..28 * 24)
@@ -1525,8 +1535,8 @@ fn moon_cloud_shadow_grid_estimate_bounds_the_rendered_moon_share() {
         .flat_map(|x_index| {
             (0..64).map(move |y_index| {
                 Vector::new(
-                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
-                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                    (world.width_m() as f32) * (x_index as f32 / 128.0 - 0.5),
+                    (world.height_m() as f32) * (y_index as f32 / 64.0 - 0.5),
                 )
             })
         })
@@ -1588,8 +1598,8 @@ fn ambient_uses_rendered_receiver_eclipse_and_direct_partition() {
         .flat_map(|x_index| {
             (0..64).map(move |y_index| {
                 Vector::new(
-                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
-                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                    (world.width_m() as f32) * (x_index as f32 / 128.0 - 0.5),
+                    (world.height_m() as f32) * (y_index as f32 / 64.0 - 0.5),
                 )
             })
         })
@@ -2219,8 +2229,8 @@ fn landform_shadows_stay_on_lit_hilltops_after_sea_level_sunset() {
             .flat_map(|y_index| {
                 (0..64).map(move |x_index| {
                     Vector::new(
-                        world.width_m() * (x_index as f32 / 64.0 - 0.5),
-                        world.height_m() * (y_index as f32 / 128.0 - 0.25),
+                        (world.width_m() as f32) * (x_index as f32 / 64.0 - 0.5),
+                        (world.height_m() as f32) * (y_index as f32 / 128.0 - 0.25),
                     )
                 })
             })
@@ -2444,8 +2454,8 @@ fn cloud_projection_stays_continuous_across_mirrored_latitude_boundaries() {
             srgb_channel_to_linear(pixel[1]) - 0.5,
         ]
     };
-    let before_pole = projected_offset(0.499 * world.height_m());
-    let after_pole = projected_offset(0.501 * world.height_m());
+    let before_pole = projected_offset(0.499 * (world.height_m() as f32));
+    let after_pole = projected_offset(0.501 * (world.height_m() as f32));
 
     assert!(
         (before_pole[0] - after_pole[0]).abs() < 0.01
@@ -2510,8 +2520,8 @@ fn cloud_shadow_diagnostics_use_receiver_local_light() {
         .flat_map(|x_index| {
             (0..64).map(move |y_index| {
                 Vector::new(
-                    world.width_m() * (x_index as f32 / 128.0 - 0.5),
-                    world.height_m() * (y_index as f32 / 64.0 - 0.5),
+                    (world.width_m() as f32) * (x_index as f32 / 128.0 - 0.5),
+                    (world.height_m() as f32) * (y_index as f32 / 64.0 - 0.5),
                 )
             })
         })
@@ -2562,8 +2572,8 @@ fn world_light_direction_stays_continuous_across_the_pole() {
             srgb_channel_to_linear(pixel[2]),
         ]
     };
-    let before_pole = sample(0.499 * world.height_m());
-    let after_pole = sample(0.501 * world.height_m());
+    let before_pole = sample(0.499 * (world.height_m() as f32));
+    let after_pole = sample(0.501 * (world.height_m() as f32));
 
     for channel in 0..3 {
         assert!(
@@ -2577,10 +2587,10 @@ fn world_light_direction_stays_continuous_across_the_pole() {
 fn rendered_lighting_uses_the_connected_hemisphere_after_a_pole() {
     let world = WorldGeometry::default();
     let world_time_seconds = (0.25 - 0.0021) * 365.0 * 86_400.0;
-    let ascending_y_m = 0.25 * world.height_m();
-    let descending_y_m = 0.75 * world.height_m();
+    let ascending_y_m = 0.25 * (world.height_m() as f32);
+    let descending_y_m = 0.75 * (world.height_m() as f32);
     let longitude_m = (0..360)
-        .map(|index| world.width_m() * (index as f32 / 360.0 - 0.5))
+        .map(|index| (world.width_m() as f32) * (index as f32 / 360.0 - 0.5))
         .max_by(|left, right| {
             let sun_z = |longitude_m| {
                 celestial_lighting(world_celestial_conditions(
@@ -2664,7 +2674,7 @@ fn receiver_height_moon_geometry_matches_authoritative_rust() {
 #[test]
 fn diffuse_moon_horizon_matches_authoritative_rust() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(0.0, 0.42 * world.height_m());
+    let position_m = Vector::new(0.0, 0.42 * (world.height_m() as f32));
     let world_time_seconds = (0..28 * 24 * 4)
         .map(|quarter_hour| quarter_hour as f64 * 900.0)
         .filter_map(|time| {
@@ -2756,8 +2766,11 @@ fn occluder_field_lookups_stay_inside_their_grids() {
         (Vector::new(2_400.0, 2_000.0), 1_500.0),
         (Vector::new(-3_700.0, -13_400.0), 2_400.0),
         (Vector::new(-4_000.0, 0.0), 20_000.0),
-        (Vector::new(0.5 * world.width_m() - 200.0, 0.0), 4_000.0),
-        (Vector::new(0.0, 0.46 * world.height_m()), 2_400.0),
+        (
+            Vector::new(0.5 * (world.width_m() as f32) - 200.0, 0.0),
+            4_000.0,
+        ),
+        (Vector::new(0.0, 0.46 * (world.height_m() as f32)), 2_400.0),
         (Vector::new(800.0, 0.0), 300.0),
     ];
     for (position_m, view_height_m) in views {
@@ -2839,8 +2852,9 @@ fn coverage_view_marks_landform_horizon_marches_outside_the_landform_grid() {
 #[test]
 fn grid_scene_matches_direct_scene_across_longitude_seam() {
     let world = WorldGeometry::default();
-    let position_m = Vector::new(0.5 * world.width_m() - 200.0, 0.0);
-    let seam_column = ((0.5 * world.width_m() - position_m.x) / (4_000.0 * 256.0 / 128.0) * 256.0
+    let position_m = Vector::new(0.5 * (world.width_m() as f32) - 200.0, 0.0);
+    let seam_column = ((0.5 * (world.width_m() as f32) - position_m.x) / (4_000.0 * 256.0 / 128.0)
+        * 256.0
         + 128.0) as usize;
     let render_direct = |world_time_seconds, arguments: &[(&str, &str)]| {
         render_controlled_image_at(
@@ -3144,7 +3158,7 @@ fn assert_flips_within_a_quarter_pixel_pan(
 
 /// A point on the longitude seam where a shoreline crosses it.
 fn seam_shore_m(world: WorldGeometry) -> (f32, f32) {
-    let seam_x_m = 0.5 * world.width_m() - 1.0;
+    let seam_x_m = 0.5 * (world.width_m() as f32) - 1.0;
     let seam_shore_y_m = (0..60_000)
         .map(|step| 10.0 * step as f32)
         .find(|&y_m| {
@@ -3751,8 +3765,8 @@ fn rendered_sea_ice_matches_the_authoritative_solid_surface() {
     let position_m = (0..512)
         .map(|index| {
             Vector::new(
-                world.width_m() * (index as f32 / 512.0 - 0.5),
-                0.4 * world.height_m(),
+                (world.width_m() as f32) * (index as f32 / 512.0 - 0.5),
+                0.4 * (world.height_m() as f32),
             )
         })
         .find(|position_m| {
@@ -4005,7 +4019,7 @@ fn ambient_sky_occlusion_follows_existing_weather_conditions() {
             seed,
             Vector::ZERO,
             0.0,
-            world.height_m(),
+            world.height_m() as f32,
             "lighting_ambient_sky_occlusion",
             width as u32,
             height as u32,
@@ -4020,8 +4034,9 @@ fn ambient_sky_occlusion_follows_existing_weather_conditions() {
                         / (3.0 * 255.0),
                 );
                 let position_m = Vector::new(
-                    (column as f32 + 0.5) / width as f32 * world.width_m() - 0.5 * world.width_m(),
-                    (0.5 - (row as f32 + 0.5) / height as f32) * world.height_m(),
+                    (column as f32 + 0.5) / width as f32 * (world.width_m() as f32)
+                        - 0.5 * (world.width_m() as f32),
+                    (0.5 - (row as f32 + 0.5) / height as f32) * (world.height_m() as f32),
                 );
                 let weather = procedural_world_environment(world, seed, 0, position_m).weather;
                 cloud_condition.push(
@@ -4149,7 +4164,7 @@ fn deck_coverage_tracks_ambient_sky_fraction() {
             seed,
             Vector::ZERO,
             world_time_seconds,
-            world.height_m(),
+            world.height_m() as f32,
             "cloud_deck_shadow",
             width as u32,
             height as u32,
@@ -4159,7 +4174,7 @@ fn deck_coverage_tracks_ambient_sky_fraction() {
             seed,
             Vector::ZERO,
             world_time_seconds,
-            world.height_m(),
+            world.height_m() as f32,
             "lighting_ambient_sky_occlusion",
             width as u32,
             height as u32,
@@ -4379,8 +4394,8 @@ fn heavily_raining_low_cloud_keeps_its_cumulus() {
         .flat_map(|y| {
             (0..64).map(move |x| {
                 Vector::new(
-                    (x as f32 / 64.0 - 0.5) * world.width_m(),
-                    (y as f32 / 64.0 - 0.5) * world.height_m(),
+                    (x as f32 / 64.0 - 0.5) * (world.width_m() as f32),
+                    (y as f32 / 64.0 - 0.5) * (world.height_m() as f32),
                 )
             })
         })
@@ -4390,7 +4405,7 @@ fn heavily_raining_low_cloud_keeps_its_cumulus() {
         .flat_map(|day| {
             land.iter().filter_map(move |&position_m| {
                 let afternoon_offset =
-                    (0.0417 - f64::from(position_m.x) / f64::from(world.width_m())).rem_euclid(1.0);
+                    (0.0417 - f64::from(position_m.x) / world.width_m()).rem_euclid(1.0);
                 let world_time_seconds = 86_400.0 * (f64::from(day) + afternoon_offset);
                 let tick = (world_time_seconds * TICKS_PER_SECOND as f64) as u64;
                 let weather = procedural_world_environment(world, SEED, tick, position_m).weather;
@@ -4642,8 +4657,8 @@ fn representative_shore(world: WorldGeometry) -> Vector {
     for x_index in -32..=32 {
         for y_index in -32..=32 {
             let position_m = Vector::new(
-                x_index as f32 * world.width_m() / 128.0,
-                y_index as f32 * world.height_m() / 128.0,
+                x_index as f32 * (world.width_m() as f32) / 128.0,
+                y_index as f32 * (world.height_m() as f32) / 128.0,
             );
             let elevation_m = procedural_terrain_elevation_m(world, SEED, position_m);
             if (-8.0..=8.0).contains(&elevation_m) {
@@ -4695,7 +4710,7 @@ fn render_diagnostic_image_at(
         world,
         position_m,
         world_time_seconds,
-        world.height_m(),
+        world.height_m() as f32,
         diagnostic,
         width,
         height,
@@ -4748,9 +4763,9 @@ fn render_diagnostic_image_with_seed(
             "--height",
             &height.to_string(),
             "--world-width",
-            &world.width_m().to_string(),
+            &(world.width_m() as f32).to_string(),
             "--world-height",
-            &world.height_m().to_string(),
+            &(world.height_m() as f32).to_string(),
             "--camera-x",
             &position_m.x.to_string(),
             "--camera-y",
@@ -4804,9 +4819,9 @@ fn render_controlled_image_at(
         "--height",
         &height.to_string(),
         "--world-width",
-        &world.width_m().to_string(),
+        &(world.width_m() as f32).to_string(),
         "--world-height",
-        &world.height_m().to_string(),
+        &(world.height_m() as f32).to_string(),
         "--camera-x",
         &position_m.x.to_string(),
         "--camera-y",

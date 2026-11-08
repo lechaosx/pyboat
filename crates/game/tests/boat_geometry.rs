@@ -1,5 +1,5 @@
 use game::dinghy_parameters;
-use rapier2d::prelude::Vector;
+use physics::prelude::Vector;
 
 #[test]
 fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
@@ -20,7 +20,7 @@ fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
     let environment = simulation::Environment {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: f32::INFINITY,
+        water_depth_m: f64::INFINITY,
     };
     let stiffness =
         parameters.max_rudder_actuator_torque_n_m() / (parameters.max_rudder_angle_rad / 10.0);
@@ -30,7 +30,7 @@ fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
             .bodies
             .iter()
             .map(|(_, b)| b.kinetic_energy())
-            .sum::<f32>()
+            .sum::<f64>()
             + 0.5 * stiffness * simulation.motion().rudder_angle_rad.powi(2)
     };
     let mut previous_energy = energy(&simulation);
@@ -67,7 +67,7 @@ fn passive_boats_cannot_gain_kinetic_energy_in_still_water() {
     let environment = simulation::Environment {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: f32::INFINITY,
+        water_depth_m: f64::INFINITY,
     };
     for (speed_m_s, yaw_speed, sail_speed, rudder_speed_rad_s) in [
         (5.0, 0.0, 0.0, 0.0),
@@ -90,12 +90,12 @@ fn passive_boats_cannot_gain_kinetic_energy_in_still_water() {
         let mut isolated = simulation::Simulation::new(dinghy_parameters(), motion);
         let mut shared = simulation::SharedSimulation::new();
         shared.add_boat(dinghy_parameters(), motion);
-        let energy = |world: &rapier2d::prelude::PhysicsWorld| {
+        let energy = |world: &physics::prelude::PhysicsWorld| {
             world
                 .bodies
                 .iter()
                 .map(|(_, body)| body.kinetic_energy())
-                .sum::<f32>()
+                .sum::<f64>()
         };
         let initial_energy = energy(&isolated.world);
         for _ in 0..120 {
@@ -129,7 +129,7 @@ fn rudder_actuator_startup_cannot_leave_a_passive_boat_gaining_energy() {
     let environment = simulation::Environment {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: f32::INFINITY,
+        water_depth_m: f64::INFINITY,
     };
     let torques = simulation::ActuatorTorques {
         sail_n_m: 0.0,
@@ -140,12 +140,12 @@ fn rudder_actuator_startup_cannot_leave_a_passive_boat_gaining_energy() {
     shared.add_boat(parameters, motion);
     isolated.advance(environment, torques);
     shared.advance(environment, &[torques]);
-    let energy = |world: &rapier2d::prelude::PhysicsWorld| {
+    let energy = |world: &physics::prelude::PhysicsWorld| {
         world
             .bodies
             .iter()
             .map(|(_, body)| body.kinetic_energy())
-            .sum::<f32>()
+            .sum::<f64>()
     };
     let isolated_energy = energy(&isolated.world);
     let shared_energy = energy(&shared.world);

@@ -27,8 +27,8 @@ fn welcome_message_carries_match_seed_and_world_geometry() {
 fn welcome_message_rejects_invalid_world_geometry_from_the_wire() {
     #[derive(Serialize)]
     struct RawWorldGeometry {
-        width_m: f32,
-        height_m: f32,
+        width_m: f64,
+        height_m: f64,
     }
 
     #[derive(Serialize)]
@@ -147,7 +147,7 @@ fn boat_damage_state_is_compact_and_round_trips() {
     let encoded = encode_server_message(&message).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert!(encoded.len() < 80);
+    assert!(encoded.len() < 120);
     assert_eq!(decoded, message);
 }
 
@@ -157,4 +157,61 @@ fn protocol_rejects_an_unsupported_version() {
         decode_client_message(&[1, 0]),
         Err(ProtocolError::UnsupportedVersion(1))
     );
+}
+
+#[test]
+fn snapshot_preserves_sub_float_motion_precision() {
+    let expected = [
+        4_100.000_001_f64,
+        -32_000.000_001,
+        2.000_000_001,
+        -3.000_000_001,
+        0.500_000_001,
+        0.100_000_001,
+        0.200_000_001,
+        -0.100_000_001,
+        -0.300_000_001,
+        0.200_000_001,
+    ];
+    let message = ServerMessage::Snapshot {
+        tick: 12,
+        boats: vec![BoatSnapshot {
+            id: "player-2".to_owned(),
+            health: 75.0,
+            last_hit_tick: None,
+            wreck: false,
+            x: expected[0],
+            y: expected[1],
+            vx: expected[2],
+            vy: expected[3],
+            angle: expected[4],
+            angular_velocity: expected[5],
+            sail: expected[6],
+            sail_angular_velocity: expected[7],
+            rudder: expected[8],
+            rudder_angular_velocity: expected[9],
+            forward: None,
+            turn: None,
+            acknowledged_input: None,
+        }],
+        removed_player_ids: Vec::new(),
+    };
+    let encoded = encode_server_message(&message).unwrap();
+    let ServerMessage::Snapshot { boats, .. } = decode_server_message(&encoded).unwrap() else {
+        panic!("expected snapshot");
+    };
+    let boat = &boats[0];
+    let actual = [
+        boat.x,
+        boat.y,
+        boat.vx,
+        boat.vy,
+        boat.angle,
+        boat.angular_velocity,
+        boat.sail,
+        boat.sail_angular_velocity,
+        boat.rudder,
+        boat.rudder_angular_velocity,
+    ];
+    assert_eq!(actual, expected);
 }

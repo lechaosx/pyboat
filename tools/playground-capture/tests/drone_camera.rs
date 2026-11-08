@@ -1,7 +1,7 @@
 use std::{fs, process::Command};
 
 use browser::DroneCamera;
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 const SEED: u64 = 0x5eed;

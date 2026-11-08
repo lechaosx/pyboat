@@ -5,7 +5,8 @@ use browser::{
     view_width_m, viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
 };
 use game::dinghy_parameters;
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
+use rapier2d_f64::prelude::Vector as PhysicsVector;
 use simulation::{BoatMotion, DT_SECONDS, MotionIntent};
 
 const SCENE_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/scene-production.wgsl"));
@@ -20,11 +21,11 @@ fn assert_vector_close(actual: Vector, expected: Vector) {
 #[test]
 fn boat_scene_follows_hull_and_surface_motion() {
     let motion = BoatMotion {
-        position_m: Vector::new(3.0, 4.0),
-        velocity_m_s: Vector::ZERO,
-        angle_rad: PI / 2.0,
+        position_m: PhysicsVector::new(3.0, 4.0),
+        velocity_m_s: PhysicsVector::ZERO,
+        angle_rad: std::f64::consts::PI / 2.0,
         angular_velocity_rad_s: 0.0,
-        sail_angle_rad: PI / 2.0,
+        sail_angle_rad: std::f64::consts::PI / 2.0,
         sail_angular_velocity_rad_s: 0.0,
         rudder_angle_rad: 0.0,
         rudder_angular_velocity_rad_s: 0.0,
@@ -35,19 +36,19 @@ fn boat_scene_follows_hull_and_surface_motion() {
 
     assert_vector_close(
         scene.hull_m[0],
-        Vector::new(3.0, 4.0 + parameters.hull.length_m / 2.0),
+        Vector::new(3.0, 4.0 + parameters.hull.length_m as f32 / 2.0),
     );
     assert_vector_close(scene.sail_m[0], Vector::new(3.0, 4.4));
     assert_vector_close(scene.sail_m[1], Vector::new(5.0, 4.4));
     assert_vector_close(
         scene.rudder_m[0],
-        Vector::new(3.0, 4.0 + parameters.rudder_position_m.x),
+        Vector::new(3.0, 4.0 + parameters.rudder_position_m.x as f32),
     );
     assert_vector_close(
         scene.rudder_m[1],
         Vector::new(
             3.0,
-            4.0 + parameters.rudder_position_m.x - parameters.rudder_draw_length_m,
+            4.0 + parameters.rudder_position_m.x as f32 - parameters.rudder_draw_length_m as f32,
         ),
     );
 }
@@ -147,7 +148,7 @@ fn demo_advances_the_real_simulation_at_fixed_ticks() {
     demo.set_motion_intent(1.0, 0.0);
 
     for _ in 0..360 {
-        demo.advance(DT_SECONDS);
+        demo.advance(DT_SECONDS as f32);
     }
 
     let advanced = demo.motion();
@@ -171,9 +172,9 @@ fn demo_clamps_and_applies_player_motion_intent() {
         }
     );
     for _ in 0..360 {
-        idle.advance(DT_SECONDS);
-        straight.advance(DT_SECONDS);
-        controlled.advance(DT_SECONDS);
+        idle.advance(DT_SECONDS as f32);
+        straight.advance(DT_SECONDS as f32);
+        controlled.advance(DT_SECONDS as f32);
     }
 
     let idle = idle.motion();
@@ -203,7 +204,7 @@ fn demo_maps_keyboard_and_world_relative_motion() {
     demo.set_player_input(1.0, -1.0, 0.1, 0.1);
     let small_gamepad = demo.motion_intent();
     let mapped_magnitude = small_gamepad.forward.abs().max(small_gamepad.turn.abs());
-    assert!((mapped_magnitude - 0.02_f32.sqrt()).abs() < 1.0e-5);
+    assert!((mapped_magnitude - 0.02_f64.sqrt()).abs() < 1.0e-5);
 }
 
 #[test]
@@ -233,13 +234,14 @@ fn demo_view_reports_sailing_feedback() {
 
     demo.set_motion_intent(1.0, 0.0);
     for _ in 0..360 {
-        demo.advance(DT_SECONDS);
+        demo.advance(DT_SECONDS as f32);
     }
 
     let underway = demo.view();
     assert_eq!(
         underway.speed_m_s,
         (demo.motion().velocity_m_s - game::match_environment().true_water_velocity_m_s).length()
+            as f32
     );
     assert!(underway.speed_m_s > 0.0);
     assert!(underway.apparent_wind_speed_m_s.is_finite());

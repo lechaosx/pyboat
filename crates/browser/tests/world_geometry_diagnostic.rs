@@ -3,7 +3,7 @@ use browser::{
     sample_world_geometry,
 };
 use game::{procedural_match_environment, procedural_world_environment};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 #[test]
@@ -55,7 +55,7 @@ fn server_browser_and_playground_center_use_the_production_environment_sampler()
     assert_eq!(browser, production);
     assert_eq!(
         browser.environment,
-        procedural_match_environment(geometry, 0x5eed, 12_345, center_m)
+        procedural_match_environment(geometry, 0x5eed, 12_345, center_m.as_dvec2())
     );
     assert_eq!(browser.celestial.geographic_latitude_degrees, 45.0);
     assert_eq!(browser.celestial.day_phase, production.celestial.day_phase);

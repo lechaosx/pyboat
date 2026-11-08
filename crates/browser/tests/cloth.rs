@@ -3,15 +3,16 @@ use browser::{
     sail_mesh_with_cloth, windsock_mesh_with_cloth,
 };
 use game::dinghy_parameters;
-use rapier2d::prelude::{Rotation, Vector};
+use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
+use rapier2d_f64::prelude::Vector as PhysicsVector;
 use simulation::BoatMotion;
 
 fn scene(wind: Vector) -> BoatScene {
     let mut scene = boat_scene(
         dinghy_parameters(),
         BoatMotion {
-            position_m: Vector::ZERO,
-            velocity_m_s: Vector::ZERO,
+            position_m: PhysicsVector::ZERO,
+            velocity_m_s: PhysicsVector::ZERO,
             angle_rad: 0.0,
             angular_velocity_rad_s: 0.0,
             sail_angle_rad: 0.0,

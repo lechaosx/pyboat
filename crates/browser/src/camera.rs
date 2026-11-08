@@ -1,5 +1,5 @@
 use game::{BROAD_LANDFORM_HIGHEST_M, broad_landform_elevation_m};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 // The terrain depth's near plane lies at least this share of the camera's
@@ -50,7 +50,8 @@ impl DroneCamera {
         let offset_m = view_point * (self.view_height_m * (1.0 - elevation_m / self.height_m));
         Vector::from(
             self.world_geometry
-                .wrap_position_m((self.center_m + offset_m).into()),
+                .wrap_position_m((self.center_m + offset_m).as_dvec2().into())
+                .map(|v| v as f32),
         )
     }
 
@@ -155,7 +156,10 @@ mod tests {
             Vector::from(
                 camera
                     .world_geometry
-                    .minimum_image_displacement_m((world_point_m - camera.center_m).into()),
+                    .minimum_image_displacement_m(
+                        (world_point_m - camera.center_m).as_dvec2().into(),
+                    )
+                    .map(|v| v as f32),
             ) / scale_m
         })
     }
@@ -173,7 +177,9 @@ mod tests {
 
     fn assert_near_across_seam(actual: Vector, expected: Vector, tolerance_m: f32) {
         let displacement_m = Vector::from(
-            WorldGeometry::default().minimum_image_displacement_m((actual - expected).into()),
+            WorldGeometry::default()
+                .minimum_image_displacement_m((actual - expected).as_dvec2().into())
+                .map(|v| v as f32),
         );
         assert!(
             displacement_m.length() <= tolerance_m,
@@ -186,12 +192,12 @@ mod tests {
         let world = WorldGeometry::default();
         for center_m in [
             Vector::new(-8420.0, 60.0),
-            Vector::new(world.width_m() / 2.0, 0.0),
+            Vector::new(world.width_m() as f32 / 2.0, 0.0),
         ] {
             let camera = DroneCamera::production(world, center_m, 2000.0);
             for view_point in view_points() {
                 let world_point_m = camera.world_point_m(view_point, 0.0);
-                assert!(world_point_m.x.abs() <= world.width_m() / 2.0);
+                assert!(world_point_m.x.abs() <= world.width_m() as f32 / 2.0);
                 assert_near_across_seam(world_point_m, center_m + view_point * 2000.0, 0.01);
                 assert_near(
                     view_point_seeing(camera, world_point_m, 0.0).unwrap(),
@@ -243,10 +249,14 @@ mod tests {
         let world = WorldGeometry::default();
         // Seed 4 puts land about 260 m high across the seam there.
         let seed = 4;
-        let center_m = Vector::new(world.width_m() / 2.0, 6750.0);
+        let center_m = Vector::new(world.width_m() as f32 / 2.0, 6750.0);
         let camera = DroneCamera::production(world, center_m, 3000.0);
         let canonical = DroneCamera {
-            center_m: Vector::from(world.wrap_position_m(center_m.into())),
+            center_m: Vector::from(
+                world
+                    .wrap_position_m(center_m.as_dvec2().into())
+                    .map(|v| v as f32),
+            ),
             ..camera
         };
         let terrain_m = |position_m| broad_landform_elevation_m(world, seed, position_m);

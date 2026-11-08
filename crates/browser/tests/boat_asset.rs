@@ -1,6 +1,7 @@
 use browser::{BoatScene, boat_scene, boat_sheer_height_m, hull_sprite_mesh, sail_mesh};
 use game::{dinghy_parameters, procedural_ground_elevation_m, procedural_water_height_m};
-use rapier2d::prelude::{Rotation, Vector};
+use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
+use rapier2d_f64::prelude::Vector as PhysicsVector;
 use simulation::{BoatMotion, WorldGeometry};
 
 #[test]
@@ -48,8 +49,8 @@ fn scene(wind: Vector) -> BoatScene {
     let mut scene = boat_scene(
         dinghy_parameters(),
         BoatMotion {
-            position_m: Vector::ZERO,
-            velocity_m_s: Vector::ZERO,
+            position_m: PhysicsVector::ZERO,
+            velocity_m_s: PhysicsVector::ZERO,
             angle_rad: 0.0,
             angular_velocity_rad_s: 0.0,
             sail_angle_rad: 0.0,
@@ -126,7 +127,7 @@ fn cloth_moves_in_wind_and_is_still_in_calm_air() {
 fn sail_material_height_keeps_a_vertical_luff_and_a_foot_on_the_boom() {
     let scene = scene(Vector::new(0.0, 8.0));
     let parameters = dinghy_parameters();
-    let luff_m = 2.0 * parameters.sail_area_m2 / parameters.boom_length_m;
+    let luff_m = (2.0 * parameters.sail_area_m2 / parameters.boom_length_m) as f32;
     let mesh = sail_mesh(&scene, 0.3);
     assert!(mesh.iter().all(|v| v.sail));
     let foot_m = mesh
@@ -379,8 +380,8 @@ fn tiller_follows_the_shared_length_hinge_and_articulated_rudder_pose() {
     let mut parameters = dinghy_parameters();
     parameters.tiller_length_m = 0.93;
     let motion = BoatMotion {
-        position_m: Vector::new(17.0, -8.0),
-        velocity_m_s: Vector::ZERO,
+        position_m: PhysicsVector::new(17.0, -8.0),
+        velocity_m_s: PhysicsVector::ZERO,
         angle_rad: 0.8,
         angular_velocity_rad_s: 0.0,
         sail_angle_rad: 0.0,
@@ -391,7 +392,8 @@ fn tiller_follows_the_shared_length_hinge_and_articulated_rudder_pose() {
     let scene = boat_scene(parameters, motion);
     let axis = (scene.rudder_m[0] - scene.rudder_m[1]).normalize();
     assert!(
-        (scene.tiller_end_m - scene.rudder_m[0] - axis * parameters.tiller_length_m).length()
+        (scene.tiller_end_m - scene.rudder_m[0] - axis * parameters.tiller_length_m as f32)
+            .length()
             < 1.0e-5
     );
 }
@@ -402,8 +404,8 @@ fn painted_rudder_size_is_independent_of_the_submerged_foil_chord() {
     let mut previous_parameters = parameters;
     previous_parameters.rudder_draw_length_m = 0.45;
     let motion = BoatMotion {
-        position_m: Vector::new(17.0, -8.0),
-        velocity_m_s: Vector::ZERO,
+        position_m: PhysicsVector::new(17.0, -8.0),
+        velocity_m_s: PhysicsVector::ZERO,
         angle_rad: 0.8,
         angular_velocity_rad_s: 0.0,
         sail_angle_rad: 0.0,

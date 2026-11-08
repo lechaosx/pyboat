@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
 use rapier2d::prelude::{Rotation, Vector};
 use simulation::{
@@ -7,7 +7,7 @@ use simulation::{
     streamlined_lift_coefficient,
 };
 
-fn assert_close(actual: f32, expected: f32) {
+fn assert_close(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1.0e-5 * expected.abs().max(1.0),
         "{actual} != {expected}"
@@ -74,10 +74,10 @@ fn kinetic_grounding_friction_scales_with_support_and_does_not_overshoot_rest() 
 fn flat_plate_coefficients_are_symmetric_and_include_profile_drag() {
     let angle_rad = PI / 6.0;
 
-    assert_close(flat_plate_lift_coefficient(angle_rad), 3.0_f32.sqrt() / 2.0);
+    assert_close(flat_plate_lift_coefficient(angle_rad), 3.0_f64.sqrt() / 2.0);
     assert_close(
         flat_plate_lift_coefficient(-angle_rad),
-        -3.0_f32.sqrt() / 2.0,
+        -3.0_f64.sqrt() / 2.0,
     );
     assert_close(flat_plate_drag_coefficient(angle_rad, 0.02), 0.52);
     assert_close(flat_plate_drag_coefficient(-angle_rad, 0.02), 0.52);
@@ -102,11 +102,11 @@ fn flat_plate_force_matches_dynamic_pressure_and_never_adds_flow_energy() {
         force,
         Vector::new(
             dynamic_pressure_area_n * 0.52,
-            -dynamic_pressure_area_n * 3.0_f32.sqrt() / 2.0,
+            -dynamic_pressure_area_n * 3.0_f64.sqrt() / 2.0,
         ),
     );
     for angle_deg in -180..=180 {
-        let angle_rad = (angle_deg as f32).to_radians();
+        let angle_rad = (angle_deg as f64).to_radians();
         let force = flat_plate_force(
             Vector::new(3.0, -2.0),
             angle_rad,
@@ -142,10 +142,10 @@ fn flat_plate_force_is_zero_without_flow_and_rotates_with_the_world() {
 
 #[test]
 fn streamlined_lift_is_linear_to_stall_and_then_falls_to_side_on() {
-    let stall_angle_rad = 15.0_f32.to_radians();
+    let stall_angle_rad = 15.0_f64.to_radians();
     let stall_lift_coefficient = 0.8;
-    let small_angle_rad = 5.0_f32.to_radians();
-    let past_stall_angle_rad = 20.0_f32.to_radians();
+    let small_angle_rad = 5.0_f64.to_radians();
+    let past_stall_angle_rad = 20.0_f64.to_radians();
 
     assert_close(
         streamlined_lift_coefficient(small_angle_rad, stall_angle_rad, stall_lift_coefficient),
@@ -174,10 +174,10 @@ fn streamlined_lift_is_linear_to_stall_and_then_falls_to_side_on() {
 
 #[test]
 fn streamlined_lift_is_odd_and_repeats_for_a_reversed_foil() {
-    let stall_angle_rad = 15.0_f32.to_radians();
+    let stall_angle_rad = 15.0_f64.to_radians();
     let stall_lift_coefficient = 0.8;
     for angle_deg in 0..=180 {
-        let angle_rad = (angle_deg as f32).to_radians();
+        let angle_rad = (angle_deg as f64).to_radians();
         let lift = streamlined_lift_coefficient(angle_rad, stall_angle_rad, stall_lift_coefficient);
         assert_close(
             streamlined_lift_coefficient(-angle_rad, stall_angle_rad, stall_lift_coefficient),
@@ -195,8 +195,8 @@ fn streamlined_foil_force_uses_the_stalled_lift_curve_and_flat_plate_drag() {
     let flow = Vector::new(2.0, 0.0);
     let density_kg_m3 = 1025.0;
     let area_m2 = 0.12;
-    let angle_of_attack_rad = 5.0_f32.to_radians();
-    let stall_angle_rad = 15.0_f32.to_radians();
+    let angle_of_attack_rad = 5.0_f64.to_radians();
+    let stall_angle_rad = 15.0_f64.to_radians();
     let stall_lift_coefficient = 0.8;
     let base_drag_coefficient = 0.02;
     let force = streamlined_foil_force(
@@ -247,7 +247,7 @@ fn rudder_force_matches_fujii_blade_geometry_and_stays_passive_in_reversed_flow(
     );
     assert_eq!(force(Vector::ZERO, 0.4, 0.12), Vector::ZERO);
     for angle_deg in -180..=180 {
-        let angle = (angle_deg as f32).to_radians();
+        let angle = (angle_deg as f64).to_radians();
         let flow = Vector::new(3.0, -2.0);
         let whole = force(flow, angle, 0.12);
         assert!(whole.dot(flow) >= 0.0);

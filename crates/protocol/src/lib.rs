@@ -8,7 +8,7 @@ pub use simulation::WorldGeometry;
 // the world `game` generates from a match seed, because clients predict and
 // render that world from the seed in Welcome. Predicted boat geometry must also
 // agree between clients and servers.
-pub const PROTOCOL_VERSION: u8 = 10;
+pub const PROTOCOL_VERSION: u8 = 11;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -43,16 +43,16 @@ pub struct BoatSnapshot {
     pub health: f32,
     pub last_hit_tick: Option<u64>,
     pub wreck: bool,
-    pub x: f32,
-    pub y: f32,
-    pub vx: f32,
-    pub vy: f32,
-    pub angle: f32,
-    pub angular_velocity: f32,
-    pub sail: f32,
-    pub sail_angular_velocity: f32,
-    pub rudder: f32,
-    pub rudder_angular_velocity: f32,
+    pub x: f64,
+    pub y: f64,
+    pub vx: f64,
+    pub vy: f64,
+    pub angle: f64,
+    pub angular_velocity: f64,
+    pub sail: f64,
+    pub sail_angular_velocity: f64,
+    pub rudder: f64,
+    pub rudder_angular_velocity: f64,
     pub forward: Option<f32>,
     pub turn: Option<f32>,
     pub acknowledged_input: Option<i64>,

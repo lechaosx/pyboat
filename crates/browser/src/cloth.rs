@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 
 use crate::{BoatScene, windsock_extension};
 

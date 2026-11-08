@@ -1,12 +1,13 @@
 use browser::MultiplayerClient;
 use game::{procedural_match_environment, procedural_water_depth_m};
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
+use rapier2d_f64::prelude::Vector as PhysicsVector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry, apparent_flow};
 
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
-fn boat(id: &str, x: f32) -> BoatSnapshot {
+fn boat(id: &str, x: f64) -> BoatSnapshot {
     BoatSnapshot {
         id: id.to_owned(),
         health: 100.0,
@@ -208,18 +209,27 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
     let environment =
-        procedural_match_environment(world_geometry, 42, 9, client.camera_m().unwrap());
+        procedural_match_environment(world_geometry, 42, 9, client.camera_m().unwrap().as_dvec2());
     assert_eq!(
         client.view().unwrap().speed_m_s,
-        (Vector::new(3.0, 4.0) - environment.true_water_velocity_m_s).length(),
+        (PhysicsVector::new(3.0, 4.0) - environment.true_water_velocity_m_s).length() as f32,
     );
     assert_ne!(
         environment,
-        procedural_match_environment(WorldGeometry::default(), 42, 9, client.camera_m().unwrap(),)
+        procedural_match_environment(
+            WorldGeometry::default(),
+            42,
+            9,
+            client.camera_m().unwrap().as_dvec2(),
+        )
     );
     assert_eq!(
         client.view().unwrap().apparent_wind_speed_m_s,
-        apparent_flow(environment.true_wind_velocity_m_s, Vector::new(3.0, 4.0)).length(),
+        apparent_flow(
+            environment.true_wind_velocity_m_s,
+            PhysicsVector::new(3.0, 4.0)
+        )
+        .length() as f32,
     );
     assert_eq!(client.scenes().len(), 2);
 }
@@ -264,8 +274,8 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
         match_seed,
         world_geometry: WorldGeometry::default(),
     });
-    let mut local = boat("player-1", position_m.x);
-    local.y = position_m.y;
+    let mut local = boat("player-1", f64::from(position_m.x));
+    local.y = f64::from(position_m.y);
     client.accept(ServerMessage::Snapshot {
         tick: 9,
         boats: vec![local],
@@ -273,12 +283,20 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
     });
 
     let view = client.view().unwrap();
-    let expected_depth_m =
-        procedural_match_environment(WorldGeometry::default(), match_seed, 9, position_m)
-            .water_depth_m;
-    assert_eq!(view.water_depth_m, expected_depth_m);
-    assert_eq!(view.bottom_clearance_m, expected_depth_m - 0.6);
-    assert_eq!(view.bottom_contact_fraction, (0.6 - expected_depth_m) / 0.6);
+    let expected_depth_m = procedural_match_environment(
+        WorldGeometry::default(),
+        match_seed,
+        9,
+        position_m.as_dvec2(),
+    )
+    .water_depth_m;
+    let draft_m = game::dinghy_parameters().draft_m;
+    assert_eq!(view.water_depth_m, expected_depth_m as f32);
+    assert_eq!(view.bottom_clearance_m, (expected_depth_m - draft_m) as f32);
+    assert_eq!(
+        view.bottom_contact_fraction,
+        ((draft_m - expected_depth_m) / draft_m) as f32
+    );
 }
 
 #[test]
@@ -307,15 +325,16 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     );
     let local_scene = scenes.iter().find(|scene| scene.is_local).unwrap();
     let windsock = local_scene.windsock.unwrap();
-    let position_m = Vector::new(local.x, local.y);
+    let position_m = PhysicsVector::new(local.x, local.y);
     assert_eq!(windsock.anchor_m, local_scene.hull_m[0]);
     assert_eq!(
         windsock.apparent_wind_velocity_m_s,
         apparent_flow(
             procedural_match_environment(WorldGeometry::default(), 42, 9, position_m)
                 .true_wind_velocity_m_s,
-            Vector::new(local.vx, local.vy),
+            PhysicsVector::new(local.vx, local.vy),
         )
+        .as_vec2()
     );
 }
 
@@ -338,9 +357,14 @@ fn multiplayer_client_exposes_the_match_configuration() {
 
 #[test]
 fn multiplayer_prediction_applies_seeded_grounding_resistance() {
-    fn depth_m(match_seed: u64, position_m: Vector) -> f32 {
-        procedural_match_environment(WorldGeometry::default(), match_seed, 9, position_m)
-            .water_depth_m
+    fn depth_m(match_seed: u64, position_m: Vector) -> f64 {
+        procedural_match_environment(
+            WorldGeometry::default(),
+            match_seed,
+            9,
+            position_m.as_dvec2(),
+        )
+        .water_depth_m
     }
 
     fn predicted_speed_m_s(match_seed: u64, position_m: Vector) -> f32 {
@@ -350,8 +374,8 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
             match_seed,
             world_geometry: WorldGeometry::default(),
         });
-        let mut local = boat("player-1", position_m.x);
-        local.y = position_m.y;
+        let mut local = boat("player-1", f64::from(position_m.x));
+        local.y = f64::from(position_m.y);
         local.vx = 0.0;
         local.vy = 0.0;
         local.angle = 0.0;
@@ -533,7 +557,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
     other.y = 0.0;
     other.vx = -5.0;
     other.vy = 0.0;
-    other.angle = std::f32::consts::PI;
+    other.angle = std::f64::consts::PI;
     other.angular_velocity = 0.0;
     other.sail = 0.0;
     other.sail_angular_velocity = 0.0;
@@ -594,7 +618,7 @@ fn multiplayer_prediction_matches_authoritative_cylinder_collision_rules() {
     other.y = 0.0;
     other.vx = -5.0;
     other.vy = 0.0;
-    other.angle = std::f32::consts::PI;
+    other.angle = std::f64::consts::PI;
     other.angular_velocity = 0.0;
     other.sail = 0.0;
     other.sail_angular_velocity = 0.0;
@@ -697,7 +721,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
     local.y = 0.0;
     local.vx = 0.0;
     local.vy = 0.0;
-    local.angle = std::f32::consts::PI - 0.05;
+    local.angle = std::f64::consts::PI - 0.05;
     local.angular_velocity = 0.0;
     local.acknowledged_input = Some(0);
     client.accept(ServerMessage::Snapshot {
@@ -705,7 +729,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
         boats: vec![local.clone()],
         removed_player_ids: Vec::new(),
     });
-    local.angle = -std::f32::consts::PI + 0.05;
+    local.angle = -std::f64::consts::PI + 0.05;
     client.accept(ServerMessage::Snapshot {
         tick: 2,
         boats: vec![local],
@@ -848,7 +872,11 @@ fn multiplayer_correction_stays_local_when_authority_crosses_a_seam() {
 
     let position_m = client.camera_m().unwrap();
     let displacement_m = Vector::from(
-        world.minimum_image_displacement_m((position_m - Vector::new(3_999.9, 0.0)).into()),
+        world
+            .minimum_image_displacement_m(
+                (position_m - Vector::new(3_999.9, 0.0)).as_dvec2().into(),
+            )
+            .map(|v| v as f32),
     );
     assert!(displacement_m.length() < 0.2);
 }

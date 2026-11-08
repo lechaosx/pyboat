@@ -102,8 +102,8 @@ fn normalized_world_coordinates_wrap_longitude_and_clamp_at_the_poles() {
 fn geometry_rejects_non_finite_and_non_positive_dimensions() {
     assert!(WorldGeometry::new(0.0, 40_000.0).is_err());
     assert!(WorldGeometry::new(80_000.0, -1.0).is_err());
-    assert!(WorldGeometry::new(f32::INFINITY, 40_000.0).is_err());
-    assert!(WorldGeometry::new(80_000.0, f32::NAN).is_err());
+    assert!(WorldGeometry::new(f64::INFINITY, 40_000.0).is_err());
+    assert!(WorldGeometry::new(80_000.0, f64::NAN).is_err());
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn default_geometry_is_a_64_kilometre_square() {
 #[test]
 fn upper_adjacent_coordinate_remains_on_the_upper_branch() {
     let world = WorldGeometry::default();
-    let upper_adjacent_m = f32::from_bits((world.width_m() / 2.0).to_bits() - 1);
+    let upper_adjacent_m = f64::from_bits((world.width_m() / 2.0).to_bits() - 1);
 
     assert_eq!(
         world.wrap_position_m([upper_adjacent_m, upper_adjacent_m]),
@@ -151,9 +151,9 @@ fn upper_adjacent_coordinate_remains_on_the_upper_branch() {
 #[test]
 fn extreme_finite_coordinates_produce_finite_results() {
     let default = WorldGeometry::default();
-    for coordinate_m in [f32::MIN, f32::MAX] {
+    for coordinate_m in [f64::MIN, f64::MAX] {
         let wrapped = default.wrap_position_m([coordinate_m; 2]);
-        assert!(wrapped.into_iter().all(f32::is_finite));
+        assert!(wrapped.into_iter().all(f64::is_finite));
         assert_eq!(default.wrap_position_m(wrapped), wrapped);
         assert!(default.latitude_degrees(coordinate_m).is_finite());
     }
@@ -161,8 +161,8 @@ fn extreme_finite_coordinates_produce_finite_results() {
 
 #[test]
 fn dimensions_outside_the_playable_range_are_rejected() {
-    let smallest_f32 = f32::from_bits(1);
-    assert!(WorldGeometry::new(smallest_f32, 1.0).is_err());
-    assert!(WorldGeometry::new(f32::from_bits(3), 1.0).is_err());
-    assert!(WorldGeometry::new(f32::MAX, f32::MAX).is_err());
+    let smallest_f64 = f64::from_bits(1);
+    assert!(WorldGeometry::new(smallest_f64, 1.0).is_err());
+    assert!(WorldGeometry::new(f64::from_bits(3), 1.0).is_err());
+    assert!(WorldGeometry::new(f64::MAX, f64::MAX).is_err());
 }

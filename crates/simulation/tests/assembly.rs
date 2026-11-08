@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
 use rapier2d::prelude::{
     ColliderSet, ImpulseJointSet, MotorModel, RigidBody, RigidBodySet, Vector,
@@ -27,7 +27,7 @@ fn reference_parameters() -> BoatParameters {
         keel_area_m2: 0.6,
         keel_position_m: Vector::ZERO,
         keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
+        keel_stall_angle_rad: 15.0_f64.to_radians(),
         keel_stall_lift_coefficient: 0.8,
         hull_reference_area_m2: 0.3,
         hull_drag_coefficient: 0.08,
@@ -63,7 +63,7 @@ fn zero_motion() -> BoatMotion {
     }
 }
 
-fn assert_close(actual: f32, expected: f32) {
+fn assert_close(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1.0e-5, "{actual} != {expected}");
 }
 
@@ -97,7 +97,7 @@ fn creates_the_reference_articulated_assembly() {
     assert_eq!(bodies[boat.sail].mass(), 22.0);
     assert_eq!(bodies[boat.rudder].mass(), 6.0);
     assert_eq!(
-        bodies.iter().map(|(_, body)| body.mass()).sum::<f32>(),
+        bodies.iter().map(|(_, body)| body.mass()).sum::<f64>(),
         250.0
     );
 

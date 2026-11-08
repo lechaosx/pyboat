@@ -186,10 +186,11 @@ impl TerrainCache {
         camera_m: [f32; 2],
         view_size_m: [f32; 2],
     ) -> TerrainCacheFrame {
-        let world_width_m = f64::from(world_geometry.width_m());
-        let canonical_camera_m = world_geometry.wrap_position_m(camera_m).map(f64::from);
+        let world_width_m = world_geometry.width_m();
+        let canonical_camera_m = world_geometry.wrap_position_m(camera_m.map(f64::from));
         let key = CacheKey {
-            world_size_m: [world_geometry.width_m(), world_geometry.height_m()].map(f32::to_bits),
+            world_size_m: [world_geometry.width_m(), world_geometry.height_m()]
+                .map(|v| (v as f32).to_bits()),
             seed,
         };
         if self.key != Some(key) {
@@ -570,7 +571,7 @@ mod tests {
     /// Asserts that every view corner's bicubic stencil lies inside the valid extent.
     fn assert_view_cached(frame: &TerrainCacheFrame, world: WorldGeometry, view_m: [f32; 2]) {
         let half_m = [
-            (0.5 * view_m[0]).min(0.5 * world.width_m()),
+            (0.5 * view_m[0]).min(0.5 * world.width_m() as f32),
             0.5 * view_m[1],
         ];
         for corner in [[-1.0, -1.0], [1.0, 1.0], [-1.0, 1.0], [1.0, -1.0]] {
@@ -612,10 +613,7 @@ mod tests {
             for (level, (spacing_m, lap_columns)) in spacings {
                 assert_eq!(spacing_m[1], 8.0 * 2.0_f32.powi(level as i32));
                 let lap_m = f64::from(spacing_m[0]) * f64::from(lap_columns);
-                assert!(
-                    (lap_m - f64::from(width_m)).abs() < 0.01,
-                    "{width_m}: {lap_m}"
-                );
+                assert!((lap_m - width_m).abs() < 0.01, "{width_m}: {lap_m}");
             }
         }
     }
@@ -722,7 +720,9 @@ mod tests {
             let mut filled = Filled::new();
             let before = settle(&mut cache, world, start_m, BOAT_VIEW_M, &mut filled);
             let previous: HashSet<_> = active_cells(&before, start_m).into_iter().collect();
-            let camera_m = world.wrap_position_m([start_m[0] + step_m[0], start_m[1] + step_m[1]]);
+            let camera_m = world
+                .wrap_position_m([start_m[0] + step_m[0], start_m[1] + step_m[1]].map(f64::from))
+                .map(|v| v as f32);
             let frame = cache.frame(world, SEED, camera_m, BOAT_VIEW_M);
             cache.commit();
             let new_cells = record(&frame, start_m[0] + step_m[0], &mut filled);

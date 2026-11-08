@@ -1,7 +1,7 @@
 use std::{borrow::Cow, mem};
 
 use bytemuck::{Pod, Zeroable};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 use crate::{

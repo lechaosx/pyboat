@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
 use rapier2d::prelude::{RigidBody, Rotation, Vector};
 use simulation::{
@@ -29,7 +29,7 @@ fn reference_parameters() -> BoatParameters {
         keel_area_m2: 0.6,
         keel_position_m: Vector::ZERO,
         keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
+        keel_stall_angle_rad: 15.0_f64.to_radians(),
         keel_stall_lift_coefficient: 0.8,
         hull_reference_area_m2: 0.3,
         hull_drag_coefficient: 0.08,
@@ -110,7 +110,7 @@ fn gripping_at_the_rudder_hinge_cannot_turn_it() {
     assert!(simulation.motion().rudder_angle_rad.abs() < 1.0e-6);
 }
 
-fn rudder_targets(angle_rad: f32) -> simulation::SurfaceTargets {
+fn rudder_targets(angle_rad: f64) -> simulation::SurfaceTargets {
     simulation::SurfaceTargets {
         sheet_target_angle_rad: 0.0,
         sail_target_angle_rad: Some(0.0),
@@ -248,7 +248,7 @@ fn motion() -> BoatMotion {
     }
 }
 
-fn assert_close(actual: f32, expected: f32) {
+fn assert_close(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1.0e-4, "{actual} != {expected}");
 }
 
@@ -261,7 +261,7 @@ fn world_point(body: &RigidBody, local_point: Vector) -> Vector {
     body.translation() + body.rotation().transform_vector(local_point)
 }
 
-fn angular_momentum(simulation: &Simulation) -> f32 {
+fn angular_momentum(simulation: &Simulation) -> f64 {
     simulation
         .world
         .bodies
@@ -282,7 +282,7 @@ fn linear_momentum(simulation: &Simulation) -> Vector {
         .sum()
 }
 
-fn kinetic_energy(simulation: &Simulation) -> f32 {
+fn kinetic_energy(simulation: &Simulation) -> f64 {
     simulation
         .world
         .bodies
@@ -392,7 +392,7 @@ fn shared_simulation_applies_a_distinct_environment_to_each_boat() {
 
 #[test]
 fn lost_bottom_clearance_slows_the_boat_and_exposed_ground_stops_it() {
-    fn speed_after_tick(water_depth_m: f32) -> f32 {
+    fn speed_after_tick(water_depth_m: f64) -> f64 {
         let parameters = vacuum_parameters();
         let mut initial = motion();
         initial.velocity_m_s = Vector::new(2.0, 0.0);
@@ -747,7 +747,7 @@ fn sail_load_applies_the_expected_linear_and_angular_impulse() {
 
 #[test]
 fn rudder_steady_load_tracks_whole_blade_aspect_ratio() {
-    for (chord, area) in [(0.45_f32, 0.12_f32), (0.9, 0.48), (0.45, 0.24)] {
+    for (chord, area) in [(0.45_f64, 0.12_f64), (0.9, 0.48), (0.45, 0.24)] {
         let mut parameters = reference_parameters();
         parameters.rudder_draw_length_m = chord;
         parameters.rudder_area_m2 = area;
@@ -772,7 +772,7 @@ fn rudder_steady_load_tracks_whole_blade_aspect_ratio() {
             0.0,
         );
         for angle_deg in [-30_i32, -15, -1, 1, 15, 30] {
-            let angle = (angle_deg as f32).to_radians();
+            let angle = (angle_deg as f64).to_radians();
             let effect = input
                 .rudder_effects
                 .iter()
@@ -808,7 +808,7 @@ fn rotating_foils_resist_still_fluid_with_their_integrated_area_moments() {
         initial.angle_rad = 0.0;
         initial.sail_angle_rad = 0.0;
         initial.rudder_angle_rad = 0.0;
-        let omega = 0.001_f32;
+        let omega = 0.001_f64;
         let (area, third_area_moment, hinge, body_index) = match foil {
             "rudder" => {
                 parameters.water_density_kg_m3 = 1.0;
@@ -908,7 +908,7 @@ fn rudder_load_applies_the_expected_linear_and_angular_impulse() {
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
     initial.angle_rad = 0.0;
-    initial.rudder_angle_rad = 5.0_f32.to_radians();
+    initial.rudder_angle_rad = 5.0_f64.to_radians();
     let environment = Environment {
         true_water_velocity_m_s: Vector::new(2.0, 0.0),
         ..Default::default()
@@ -952,7 +952,7 @@ fn keel_load_applies_the_expected_linear_and_angular_impulse() {
     parameters.keel_position_m = Vector::new(-1.0, 0.0);
     let mut initial = motion();
     initial.velocity_m_s = Vector::ZERO;
-    initial.angle_rad = 5.0_f32.to_radians();
+    initial.angle_rad = 5.0_f64.to_radians();
     let environment = Environment {
         true_water_velocity_m_s: Vector::new(2.0, 0.0),
         ..Default::default()
@@ -1101,7 +1101,7 @@ fn controller_input() -> ControlInput {
         free_sail_angle_rad: -PI / 2.0,
         sail_angle_rad: -PI / 4.0,
         apparent_wind_angle_from_boat_forward_rad: 0.0,
-        sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
+        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
         max_rudder_angle_rad: PI / 6.0,
         sail_effects: vec![
             SurfaceEffect {
@@ -1176,7 +1176,7 @@ fn quasi_static_control_predictions_match_distributed_fluid_loads() {
         true_water_velocity_m_s: Vector::new(0.5, -0.25),
         ..Default::default()
     };
-    let input = surface_control_input(parameters, current, environment, 30, 10.0_f32.to_radians());
+    let input = surface_control_input(parameters, current, environment, 30, 10.0_f64.to_radians());
     assert_eq!(input.sail_effects.len(), 7);
     assert_eq!(input.rudder_effects.len(), 3);
     let mut simulation = Simulation::new(parameters, current);
@@ -1264,7 +1264,7 @@ fn auto_sheet_selects_drive_and_maps_rudder_position() {
 fn auto_sheet_retains_the_sail_side_only_inside_downwind_hysteresis() {
     let mut input = controller_input();
     input.sail_angle_rad = PI / 4.0;
-    input.apparent_wind_angle_from_boat_forward_rad = 5.0_f32.to_radians();
+    input.apparent_wind_angle_from_boat_forward_rad = 5.0_f64.to_radians();
     let retained = auto_sheet_control(
         &input,
         AutoSheetIntent {
@@ -1274,7 +1274,7 @@ fn auto_sheet_retains_the_sail_side_only_inside_downwind_hysteresis() {
     );
     assert_close(retained.sheet_target_angle_rad, PI / 4.0);
 
-    input.apparent_wind_angle_from_boat_forward_rad = 11.0_f32.to_radians();
+    input.apparent_wind_angle_from_boat_forward_rad = 11.0_f64.to_radians();
     let switched = auto_sheet_control(
         &input,
         AutoSheetIntent {
@@ -1343,7 +1343,7 @@ fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
     };
     let settings = ControlSettings {
         angle_resolution_deg: 30,
-        sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
+        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
     };
     let commands = [
         SurfaceControlCommand::AutoSheet(AutoSheetIntent {
@@ -1414,11 +1414,11 @@ fn mirrored_computed_yaw_rate_steps_produce_mirrored_motion() {
     };
     let settings = ControlSettings {
         angle_resolution_deg: 1,
-        sail_side_hysteresis_angle_rad: 10.0_f32.to_radians(),
+        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
     };
     let mut port_motion = motion();
     port_motion.velocity_m_s = Vector::ZERO;
-    port_motion.angle_rad = 135.0_f32.to_radians();
+    port_motion.angle_rad = 135.0_f64.to_radians();
     for _ in 0..6 * 60 {
         let mirrored = BoatMotion {
             position_m: Vector::new(port_motion.position_m.x, -port_motion.position_m.y),

@@ -17,7 +17,8 @@ use game::{
     procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
+use rapier2d_f64::prelude::Vector as PhysicsVector;
 use serde::Serialize;
 use simulation::{BoatMotion, TICKS_PER_SECOND, WorldGeometry};
 use wgpu::util::DeviceExt;
@@ -2457,8 +2458,11 @@ fn render_world(
     };
     match adaptation {
         Some(adaptation) if options.fixed_adaptation => {
-            let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
-                .map_err(|error| error.to_string())?;
+            let world = WorldGeometry::new(
+                f64::from(options.world_width_m),
+                f64::from(options.world_height_m),
+            )
+            .map_err(|error| error.to_string())?;
             let center = world_celestial_conditions(
                 world,
                 options.world_time_seconds,
@@ -2552,9 +2556,9 @@ fn render_world(
         let scene = boat_scene(
             dinghy_parameters(),
             BoatMotion {
-                position_m: Vector::new(x_m, y_m),
-                velocity_m_s: Vector::ZERO,
-                angle_rad: heading_degrees.to_radians(),
+                position_m: PhysicsVector::new(f64::from(x_m), f64::from(y_m)),
+                velocity_m_s: PhysicsVector::ZERO,
+                angle_rad: f64::from(heading_degrees).to_radians(),
                 angular_velocity_rad_s: 0.0,
                 sail_angle_rad: 0.0,
                 sail_angular_velocity_rad_s: 0.0,
@@ -2573,8 +2577,11 @@ fn render_world(
             &surface_height,
             &[scene],
             &[cloth],
-            WorldGeometry::new(options.world_width_m, options.world_height_m)
-                .map_err(|error| error.to_string())?,
+            WorldGeometry::new(
+                f64::from(options.world_width_m),
+                f64::from(options.world_height_m),
+            )
+            .map_err(|error| error.to_string())?,
             options.seed,
             Vector::new(options.camera_x_m, options.camera_y_m),
             options.view_height_m,
@@ -2625,9 +2632,14 @@ type AdaptingFieldTexels = Vec<[f32; 4]>;
 /// Low-wind then upper-wind cloud offsets that a view held at the camera since
 /// `cloud_motion_seconds` before the capture has integrated from view-centre wind.
 fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .expect("parsed options hold a valid world geometry");
-    let camera_m = world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .expect("parsed options hold a valid world geometry");
+    let camera_m = world_geometry
+        .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+        .map(|v| v as f32);
     let mut offsets_m = [0.0_f64; 4];
     let mut elapsed_seconds = 0.0;
     while elapsed_seconds < options.cloud_motion_seconds {
@@ -2657,12 +2669,16 @@ fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
 }
 
 fn capture_camera(options: &Options) -> Result<DroneCamera, String> {
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
     let camera = DroneCamera::production(
         world_geometry,
         world_geometry
-            .wrap_position_m([options.camera_x_m, options.camera_y_m])
+            .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+            .map(|v| v as f32)
             .into(),
         options.view_height_m,
     );
@@ -2673,12 +2689,17 @@ fn capture_camera(options: &Options) -> Result<DroneCamera, String> {
 }
 
 fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(field_grids(
         world_geometry,
         options.world_time_seconds,
-        world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]),
+        world_geometry
+            .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+            .map(|v| v as f32),
         [
             view_width_m(
                 options.width as f32 / options.height as f32,
@@ -2702,9 +2723,14 @@ fn capture_baked_surface_frame(
     baked_surface: &mut BakedSurface,
     rebake: bool,
 ) -> Result<BakedSurfaceFrame, String> {
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
-    let camera_m = world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
+    let camera_m = world_geometry
+        .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+        .map(|v| v as f32);
     let view_size_m = [
         view_width_m(
             options.width as f32 / options.height as f32,
@@ -2735,12 +2761,17 @@ fn capture_terrain_cache_frame(
     options: &Options,
     terrain_cache: &mut TerrainCache,
 ) -> Result<TerrainCacheFrame, String> {
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(terrain_cache.frame(
         world_geometry,
         options.seed,
-        world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]),
+        world_geometry
+            .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+            .map(|v| v as f32),
         [
             view_width_m(
                 options.width as f32 / options.height as f32,
@@ -2758,10 +2789,14 @@ fn scene_uniforms(
 ) -> Result<SceneUniforms, String> {
     let field_grids = capture_field_grids(options)?;
     let (occluder_field_grid_m, occluder_field_texels) = field_grids.occluder_uniforms();
-    let world_geometry = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
-    let canonical_camera_m =
-        world_geometry.wrap_position_m([options.camera_x_m, options.camera_y_m]);
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
+    let canonical_camera_m = world_geometry
+        .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+        .map(|v| v as f32);
     let precipitation_epoch = (options.world_time_seconds / 1800.0).floor() as u64;
     let precipitation_phase = (options.world_time_seconds.rem_euclid(1800.0) / 1800.0) as f32;
     let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
@@ -2982,8 +3017,11 @@ fn capture_report(
             .map(|texel| [texel[1], texel[2], texel[3]])
             .collect()
     });
-    let world = WorldGeometry::new(options.world_width_m, options.world_height_m)
-        .map_err(|error| error.to_string())?;
+    let world = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
     let (world_tick, world_tick_fraction) = split_tick_seconds(options.world_time_seconds);
     let sample = procedural_world_environment_interpolated(
         world,

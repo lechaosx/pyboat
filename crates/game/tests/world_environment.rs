@@ -5,7 +5,7 @@ use game::{
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
     world_climate_conditions,
 };
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
@@ -79,7 +79,7 @@ fn longitude_sets_local_solar_time_without_changing_global_cycles() {
 #[test]
 fn northern_midyear_is_summer_and_year_boundary_is_winter() {
     let world = geometry();
-    let northern_position_m = Vector::new(0.0, world.height_m() / 3.0);
+    let northern_position_m = Vector::new(0.0, (world.height_m() as f32) / 3.0);
     let summer = world_celestial_conditions(world, 182.5 * WORLD_DAY_SECONDS, northern_position_m);
     let winter = world_celestial_conditions(world, 0.0, northern_position_m);
 
@@ -143,7 +143,7 @@ fn hemispheres_have_opposite_seasons_while_global_phases_match() {
 #[test]
 fn latitude_mirror_repeats_between_successive_poles() {
     let world = geometry();
-    let half_height = world.height_m() / 2.0;
+    let half_height = (world.height_m() as f32) / 2.0;
     for (y_m, expected_latitude, expected_celestial_latitude) in [
         (-2.0 * half_height, 0.0, -180.0),
         (-half_height, -90.0, -90.0),
@@ -165,13 +165,17 @@ fn latitude_mirror_repeats_between_successive_poles() {
 #[test]
 fn repeated_latitude_mirrors_climate_without_repeating_seeded_fields() {
     let world = geometry();
-    let sixty_degrees =
-        procedural_world_environment(world, SEED, TICK, Vector::new(0.0, world.height_m() / 3.0));
+    let sixty_degrees = procedural_world_environment(
+        world,
+        SEED,
+        TICK,
+        Vector::new(0.0, (world.height_m() as f32) / 3.0),
+    );
     let mirrored_120_degrees = procedural_world_environment(
         world,
         SEED,
         TICK,
-        Vector::new(0.0, 2.0 * world.height_m() / 3.0),
+        Vector::new(0.0, 2.0 * (world.height_m() as f32) / 3.0),
     );
 
     assert_eq!(sixty_degrees.climate, mirrored_120_degrees.climate);
@@ -193,16 +197,16 @@ fn mirrored_northern_bands_share_a_season_but_have_opposite_solar_days() {
     let world = geometry();
     let world_time_seconds = (0.25 - 0.0021) * 365.0 * WORLD_DAY_SECONDS;
     let reference = world_celestial_conditions(world, world_time_seconds, Vector::new(0.0, 0.0));
-    let peak_x_m = (0.625 - reference.day_phase).rem_euclid(1.0) * world.width_m();
+    let peak_x_m = (0.625 - reference.day_phase).rem_euclid(1.0) * (world.width_m() as f32);
     let ascending = world_celestial_conditions(
         world,
         world_time_seconds,
-        Vector::new(peak_x_m, world.height_m() / 3.0),
+        Vector::new(peak_x_m, (world.height_m() as f32) / 3.0),
     );
     let descending = world_celestial_conditions(
         world,
         world_time_seconds,
-        Vector::new(peak_x_m, 2.0 * world.height_m() / 3.0),
+        Vector::new(peak_x_m, 2.0 * (world.height_m() as f32) / 3.0),
     );
     let climate = world_climate_conditions(ascending.geographic_latitude_degrees);
 
@@ -219,10 +223,13 @@ fn mirrored_northern_bands_share_a_season_but_have_opposite_solar_days() {
 #[test]
 fn pole_has_no_deterministic_diurnal_temperature_cycle() {
     let world = geometry();
-    let pole_y_m = 0.5 * world.height_m();
+    let pole_y_m = 0.5 * (world.height_m() as f32);
     let reference = world_celestial_conditions(world, 0.0, Vector::new(0.0, pole_y_m));
-    let opposite =
-        world_celestial_conditions(world, 0.0, Vector::new(0.5 * world.width_m(), pole_y_m));
+    let opposite = world_celestial_conditions(
+        world,
+        0.0,
+        Vector::new(0.5 * (world.width_m() as f32), pole_y_m),
+    );
     let climate = world_climate_conditions(reference.geographic_latitude_degrees);
 
     assert!(
@@ -236,16 +243,16 @@ fn pole_has_no_deterministic_diurnal_temperature_cycle() {
 #[test]
 fn diurnal_temperature_is_continuous_across_a_pole() {
     let world = geometry();
-    let pole_y_m = 0.5 * world.height_m();
+    let pole_y_m = 0.5 * (world.height_m() as f32);
     let before = world_celestial_conditions(
         world,
         0.0,
-        Vector::new(0.0, pole_y_m - 0.000001 * world.height_m()),
+        Vector::new(0.0, pole_y_m - 0.000001 * (world.height_m() as f32)),
     );
     let after = world_celestial_conditions(
         world,
         0.0,
-        Vector::new(0.0, pole_y_m + 0.000001 * world.height_m()),
+        Vector::new(0.0, pole_y_m + 0.000001 * (world.height_m() as f32)),
     );
     let before_temperature = current_air_temperature_c(
         world_climate_conditions(before.geographic_latitude_degrees),

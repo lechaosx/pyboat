@@ -1,7 +1,7 @@
 use std::f32::consts::{PI, TAU};
 
 use game::{procedural_ground_elevation_m, procedural_water_height_m};
-use rapier2d::prelude::{Rotation, Vector};
+use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
 use simulation::WorldGeometry;
 
 use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};

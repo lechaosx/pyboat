@@ -76,9 +76,11 @@ and verification details.
   solar phase adds longitude to global day phase; season and lunar longitude stay global.
 - **[Implicit]** Positive X is east/right and positive Y is north/up; input
   adapters convert down-positive device coordinates at their boundaries.
-- **[Explicit]** Runtime spatial coordinates remain single precision. Quantized
-  boat-scale detail millions of metres from the origin is an accepted limit of
-  unbounded travel.
+- **[Explicit]** Rigid-body state, integration, and collision coordinates use
+  double precision to preserve small integration steps throughout world travel.
+  Rendering precision is a separate interface choice.
+- **[Explicit]** Replicated boat motion retains double precision so snapshot
+  restoration preserves the public physics state without extra rounding.
 - **[Explicit]** Cylindrical collision handling puts complete articulated boats
   in common planar contact charts selected by deterministic swept proximity.
   Chart changes preserve logical positions; solver contacts alone cause damage.
@@ -90,6 +92,10 @@ and verification details.
   game rules, damage, and wreck policy. Rapier owns integration, joint actuation,
   collision response, and spatial queries.
 - **[Explicit]** Distributed foil forces use local motion relative to wind or water.
+- **[Explicit]** If added fluid inertia is adopted, its ambient-acceleration
+  input uses wave-phase derivatives with amplitude and direction held fixed;
+  wind and current acceleration are omitted. This approximation retains the
+  dominant tested wave response at low computation and maintenance cost.
 - **[Explicit]** Spatial-gradient and Froude–Krylov loads are deferred until
   further wave and current model development.
 - **[Explicit]** Rendered and collision hull geometry agree.
@@ -708,7 +714,7 @@ and verification details.
 
 | Area | Unresolved choice |
 | --- | --- |
-| Added fluid inertia | Whether its gameplay benefit justifies the engine and integration costs |
+| Added fluid inertia | Engine representation and numerical accuracy/cost before adoption |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |

@@ -22,7 +22,7 @@ use game::{
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use url::Url;
 use wasm_bindgen::prelude::*;
@@ -254,7 +254,7 @@ pub fn playground_terrain_elevation_m(
     image_height_px: u32,
 ) -> Result<f32, JsValue> {
     let camera = DroneCamera {
-        world_geometry: WorldGeometry::new(world_width_m, world_height_m)
+        world_geometry: WorldGeometry::new(f64::from(world_width_m), f64::from(world_height_m))
             .map_err(|error| JsValue::from_str(&error.to_string()))?,
         center_m: Vector::new(camera_x_m, camera_y_m),
         height_m: camera_height_m,
@@ -661,7 +661,8 @@ pub fn sample_playground_environment(
     center_x_m: f32,
     center_y_m: f32,
 ) -> Result<PlaygroundEnvironmentSample, JsValue> {
-    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let geometry = WorldGeometry::new(f64::from(width_m), f64::from(height_m))
+        .map_err(|error| error.to_string())?;
     let sample = procedural_world_environment_interpolated(
         geometry,
         match_seed,
@@ -720,7 +721,7 @@ pub fn sample_playground_environment(
         polar_ice_closure: sample.surface_climate.polar_ice_closure,
         solid_ice_cover: sample.surface_climate.solid_ice_cover,
         water_height_m: sample.water_height_m,
-        water_depth_m: sample.environment.water_depth_m,
+        water_depth_m: sample.environment.water_depth_m as f32,
         current_x_m_s: sample.ocean.current_velocity_m_s.x,
         current_y_m_s: sample.ocean.current_velocity_m_s.y,
         wave_orbital_x_m_s: sample.ocean.wave_orbital_velocity_m_s.x,
@@ -741,7 +742,7 @@ pub fn sample_playground_view_cloud_state(
     camera_x_m: f32,
     camera_y_m: f32,
 ) -> Result<Vec<f32>, JsValue> {
-    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+    let geometry = WorldGeometry::new(f64::from(world_width_m), f64::from(world_height_m))
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let state = sample_view_cloud_state(
         geometry,
@@ -803,7 +804,7 @@ pub fn playground_scene_uniforms(
     baked_surface: &mut PlaygroundBakedSurface,
     field_grid_history: &mut PlaygroundFieldGridHistory,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
-    let geometry = WorldGeometry::new(world_width_m, world_height_m)
+    let geometry = WorldGeometry::new(f64::from(world_width_m), f64::from(world_height_m))
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let row = |values: &[f32]| -> Result<[f32; 4], JsValue> {
         values
@@ -985,7 +986,8 @@ pub fn sample_playground_world_geometry(
     raw_x_m: f32,
     raw_y_m: f32,
 ) -> Result<PlaygroundWorldGeometrySample, JsValue> {
-    let geometry = WorldGeometry::new(width_m, height_m).map_err(|error| error.to_string())?;
+    let geometry = WorldGeometry::new(f64::from(width_m), f64::from(height_m))
+        .map_err(|error| error.to_string())?;
     let sample = sample_world_geometry(geometry, [raw_x_m, raw_y_m], 0.0);
     Ok(PlaygroundWorldGeometrySample {
         raw_x_m: sample.raw_center_m[0],
@@ -1899,7 +1901,9 @@ impl Renderer {
         }
         let cloth = self.cloth.advance(scenes, elapsed_seconds);
         self.follow_baked_surface_size(elapsed_seconds);
-        let canonical_camera_m = world_geometry.wrap_position_m(camera_m.into());
+        let canonical_camera_m = world_geometry
+            .wrap_position_m(camera_m.as_dvec2().into())
+            .map(|v| v as f32);
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
         let has_match = match_seed.is_some();
@@ -2066,10 +2070,13 @@ impl Renderer {
                     precipitation_time.epoch as u32,
                     (precipitation_time.epoch >> 32) as u32,
                 ],
-                world_size_m: [world_geometry.width_m(), world_geometry.height_m()],
+                world_size_m: [
+                    world_geometry.width_m() as f32,
+                    world_geometry.height_m() as f32,
+                ],
                 inverse_world_size_m: [
-                    world_geometry.width_m().recip(),
-                    world_geometry.height_m().recip(),
+                    (world_geometry.width_m() as f32).recip(),
+                    (world_geometry.height_m() as f32).recip(),
                 ],
                 precipitation_phase_and_css_view_height_px: [
                     precipitation_time.phase,

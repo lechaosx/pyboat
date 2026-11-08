@@ -1,5 +1,5 @@
 use game::procedural_world_environment;
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 #[test]
@@ -14,8 +14,8 @@ fn default_world_usually_contains_active_severe_weather() {
         for y in 0..32 {
             for x in 0..32 {
                 let position_m = Vector::new(
-                    (x as f32 / 32.0 - 0.5) * geometry.width_m(),
-                    (y as f32 / 32.0 - 0.5) * geometry.height_m(),
+                    (x as f32 / 32.0 - 0.5) * (geometry.width_m() as f32),
+                    (y as f32 / 32.0 - 0.5) * (geometry.height_m() as f32),
                 );
                 maximum_rain = maximum_rain.max(
                     procedural_world_environment(geometry, seed, tick, position_m)

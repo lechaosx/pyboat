@@ -1,7 +1,8 @@
 //! Procedural transcendental functions use `libm` so native and WebAssembly
 //! builds do not silently diverge through platform math implementations.
 
-use rapier2d::prelude::Vector;
+use physics::glamx::Vec2 as Vector;
+use physics::prelude::Vector as PhysicsVector;
 use simulation::{
     BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent, TICKS_PER_SECOND,
     WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input, yaw_rate_move_control,
@@ -233,12 +234,12 @@ fn periodic_simplex_effective_wavelengths(
     world_geometry: WorldGeometry,
     requested_wavelength_m: f32,
 ) -> (f32, f32) {
-    let horizontal_modes = (world_geometry.width_m()
+    let horizontal_modes = ((world_geometry.width_m() as f32)
         / (std::f32::consts::SQRT_2 * requested_wavelength_m))
         .round()
         .max(1.0);
     (
-        world_geometry.width_m() / (std::f32::consts::SQRT_2 * horizontal_modes),
+        (world_geometry.width_m() as f32) / (std::f32::consts::SQRT_2 * horizontal_modes),
         requested_wavelength_m,
     )
 }
@@ -808,7 +809,7 @@ pub fn celestial_directions_at_height(
         solar_hour_angle + orbit.solar_right_ascension_rad - orbit.lunar_right_ascension_rad;
     let geocentric_moon_direction =
         celestial_direction(latitude, orbit.lunar_declination_rad, lunar_hour_angle);
-    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let world_radius_m = (world_geometry.width_m() as f32) / std::f32::consts::TAU;
     let observer_radius_planet_radii = (world_radius_m + receiver_height_m) / world_radius_m;
     let moon_direction =
         topocentric_moon_direction(geocentric_moon_direction, observer_radius_planet_radii);
@@ -926,7 +927,7 @@ fn disc_visibility_at_horizon(horizon_z: f32, direction_z: f32, angular_radius_r
 }
 
 fn celestial_horizon_z_at_height(world_geometry: WorldGeometry, height_m: f32) -> f32 {
-    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let world_radius_m = (world_geometry.width_m() as f32) / std::f32::consts::TAU;
     let observer_radius_m = world_radius_m + height_m.max(0.0);
     let radius_ratio = world_radius_m / observer_radius_m;
     -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt()
@@ -938,7 +939,7 @@ pub fn celestial_visible_disc_sample_direction_z_at_height(
     direction_z: f32,
     angular_radius_rad: f32,
 ) -> f32 {
-    let world_radius_m = world_geometry.width_m() / std::f32::consts::TAU;
+    let world_radius_m = (world_geometry.width_m() as f32) / std::f32::consts::TAU;
     let observer_radius_m = world_radius_m + height_m.max(0.0);
     let radius_ratio = world_radius_m / observer_radius_m;
     let horizon_z = -(1.0 - radius_ratio * radius_ratio).max(0.0).sqrt();
@@ -1045,6 +1046,58 @@ pub fn tide_height_m(tide: TidalConditions, conditions: CelestialConditions) -> 
     0.5 * tide.reference_range_m * ((lunar_tide + solar_tide) / 1.46) as f32
 }
 
+// Procedural fields share single-precision coordinate arithmetic with WGSL.
+fn field_latitude_degrees(world_geometry: WorldGeometry, y_m: f32) -> f32 {
+    let degrees = field_latitude_phase_degrees(world_geometry, y_m);
+    if degrees > 90.0 {
+        180.0 - degrees
+    } else if degrees < -90.0 {
+        -180.0 - degrees
+    } else {
+        degrees
+    }
+}
+
+fn field_latitude_phase_degrees(world_geometry: WorldGeometry, y_m: f32) -> f32 {
+    let period_m = 2.0 * (world_geometry.height_m() as f32);
+    let cycle_y_m = y_m.rem_euclid(period_m);
+    let degrees = 180.0 * cycle_y_m / (world_geometry.height_m() as f32);
+    if degrees >= 180.0 {
+        degrees - 360.0
+    } else {
+        degrees
+    }
+}
+
+fn field_latitude_gradient_degrees_per_m(world_geometry: WorldGeometry, y_m: f32) -> f32 {
+    let direction = if field_latitude_phase_degrees(world_geometry, y_m).abs() > 90.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    direction * 180.0 / (world_geometry.height_m() as f32)
+}
+
+fn field_local_solar_phase(world_geometry: WorldGeometry, global_day_phase: f32, x_m: f32) -> f32 {
+    (global_day_phase.rem_euclid(1.0)
+        + x_m.rem_euclid(world_geometry.width_m() as f32) / (world_geometry.width_m() as f32))
+        .rem_euclid(1.0)
+}
+
+fn field_wrapped_x_m(world_geometry: WorldGeometry, value: f32) -> f32 {
+    let period = world_geometry.width_m() as f32;
+    let half_period = period / 2.0;
+    if value >= -half_period && value < half_period {
+        return value;
+    }
+    let wrapped = value.rem_euclid(period);
+    if wrapped >= half_period {
+        wrapped - period
+    } else {
+        wrapped
+    }
+}
+
 pub fn world_celestial_conditions(
     world_geometry: WorldGeometry,
     world_time_seconds: f64,
@@ -1052,12 +1105,12 @@ pub fn world_celestial_conditions(
 ) -> CelestialConditions {
     let global_day_phase = (0.5833 + world_time_seconds / WORLD_DAY_SECONDS).rem_euclid(1.0) as f32;
     CelestialConditions {
-        geographic_latitude_degrees: world_geometry.latitude_degrees(position_m.y),
-        celestial_latitude_degrees: world_geometry.latitude_phase_degrees(position_m.y),
+        geographic_latitude_degrees: field_latitude_degrees(world_geometry, position_m.y),
+        celestial_latitude_degrees: field_latitude_phase_degrees(world_geometry, position_m.y),
         season_phase: (WORLD_ORBIT_EPOCH_PHASE
             + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_YEAR_DAYS))
             .rem_euclid(1.0) as f32,
-        day_phase: world_geometry.local_solar_phase(global_day_phase, position_m.x),
+        day_phase: field_local_solar_phase(world_geometry, global_day_phase, position_m.x),
         lunar_longitude_phase: (WORLD_ORBIT_EPOCH_PHASE
             + world_time_seconds / (WORLD_DAY_SECONDS * WORLD_LUNAR_ORBIT_DAYS))
             .rem_euclid(1.0) as f32,
@@ -1621,16 +1674,16 @@ pub fn dinghy_parameters() -> BoatParameters {
     // The painted hull spans 1565 × 580 pixels. A provisional 4.05 m length
     // preserves its aspect ratio while keeping beam above the shared 1.5 m
     // collision-domain minimum; the picture supplies no absolute scale.
-    let length_m = 4.05;
-    let boom_length_m = 2.0;
-    let sail_luff_m = 4.5;
+    let length_m = 4.05_f32;
+    let boom_length_m = 2.0_f32;
+    let sail_luff_m = 4.5_f32;
     // Rounded timber-dinghy proxy, informed by the Mirror class drawing's
     // 280±15 mm blade chord and 510±15 mm below its pivot.
     // Wetted span estimates level loaded trim; the moving 2 kg blade/stock
     // approximates a shaped 0.30×0.65 m, 15 mm timber blank plus fittings.
     // https://www.sailing.org/tools/documents/MIR2010CR170910-%5B9295%5D.pdf, p. 14.
-    let rudder_chord_m = 0.30;
-    let rudder_submerged_span_m = 0.45;
+    let rudder_chord_m = 0.30_f32;
+    let rudder_submerged_span_m = 0.45_f32;
     // Loaded displacement is estimated at 250 kg, including crew and gear.
     // Timber at 500 kg/m³ gives a 2 kg boom (2 m × 5 cm diameter).
     // Canvas plus seams/ropes is estimated at 3 kg and the slim tiller at
@@ -1638,52 +1691,52 @@ pub fn dinghy_parameters() -> BoatParameters {
     // Board-down draft and foil areas remain operating estimates.
     BoatParameters {
         hull: HullParameters {
-            mass_kg: 242.5,
-            length_m,
-            beam_m: length_m * 580.0 / 1565.0,
-            bow_length_m: 0.7,
+            mass_kg: f64::from(242.5_f32),
+            length_m: f64::from(length_m),
+            beam_m: f64::from(length_m * 580.0_f32 / 1565.0_f32),
+            bow_length_m: f64::from(0.7_f32),
         },
-        sail_mass_kg: 3.0,
-        boom_mass_kg: 2.0,
-        boom_length_m,
-        mast_position_m: Vector::new(0.4, 0.0),
-        max_sail_angle_rad: std::f32::consts::FRAC_PI_2,
-        air_density_kg_m3: 1.225,
-        sail_area_m2: boom_length_m * sail_luff_m / 2.0,
-        sail_base_drag_coefficient: 0.02,
-        water_density_kg_m3: 1025.0,
-        keel_area_m2: 0.6,
-        keel_position_m: Vector::ZERO,
-        keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
-        keel_stall_lift_coefficient: 0.8,
-        hull_reference_area_m2: 0.3,
-        hull_drag_coefficient: 0.08,
-        hull_lateral_drag_coefficient: 0.02,
-        rudder_mass_kg: 2.0,
-        tiller_mass_kg: 0.5,
-        rudder_draw_length_m: rudder_chord_m,
-        tiller_length_m: 0.8,
-        rudder_position_m: Vector::new(-length_m / 2.0, 0.0),
-        max_rudder_angle_rad: 30.0_f32.to_radians(),
-        rudder_area_m2: rudder_chord_m * rudder_submerged_span_m,
-        rudder_base_drag_coefficient: 0.02,
-        max_sail_actuator_torque_n_m: 375.0,
+        sail_mass_kg: f64::from(3.0_f32),
+        boom_mass_kg: f64::from(2.0_f32),
+        boom_length_m: f64::from(boom_length_m),
+        mast_position_m: PhysicsVector::new(f64::from(0.4_f32), 0.0),
+        max_sail_angle_rad: f64::from(std::f32::consts::FRAC_PI_2),
+        air_density_kg_m3: f64::from(1.225_f32),
+        sail_area_m2: f64::from(boom_length_m * sail_luff_m / 2.0_f32),
+        sail_base_drag_coefficient: f64::from(0.02_f32),
+        water_density_kg_m3: f64::from(1025.0_f32),
+        keel_area_m2: f64::from(0.6_f32),
+        keel_position_m: PhysicsVector::ZERO,
+        keel_base_drag_coefficient: f64::from(0.02_f32),
+        keel_stall_angle_rad: f64::from(15.0_f32.to_radians()),
+        keel_stall_lift_coefficient: f64::from(0.8_f32),
+        hull_reference_area_m2: f64::from(0.3_f32),
+        hull_drag_coefficient: f64::from(0.08_f32),
+        hull_lateral_drag_coefficient: f64::from(0.02_f32),
+        rudder_mass_kg: f64::from(2.0_f32),
+        tiller_mass_kg: f64::from(0.5_f32),
+        rudder_draw_length_m: f64::from(rudder_chord_m),
+        tiller_length_m: f64::from(0.8_f32),
+        rudder_position_m: PhysicsVector::new(f64::from(-length_m / 2.0_f32), 0.0),
+        max_rudder_angle_rad: f64::from(30.0_f32.to_radians()),
+        rudder_area_m2: f64::from(rudder_chord_m * rudder_submerged_span_m),
+        rudder_base_drag_coefficient: f64::from(0.02_f32),
+        max_sail_actuator_torque_n_m: f64::from(375.0_f32),
         // Nominal ideal-sailor effort, applied perpendicular to the tiller at its tip.
-        max_tiller_hand_force_n: 75.0,
-        sail_bearing_damping_n_m_s_rad: 20.0,
-        rudder_bearing_damping_n_m_s_rad: 2.0,
-        draft_m: 0.6,
-        ground_static_friction_coefficient: 1.0,
-        ground_kinetic_friction_coefficient: 0.6,
+        max_tiller_hand_force_n: f64::from(75.0_f32),
+        sail_bearing_damping_n_m_s_rad: f64::from(20.0_f32),
+        rudder_bearing_damping_n_m_s_rad: f64::from(2.0_f32),
+        draft_m: f64::from(0.6_f32),
+        ground_static_friction_coefficient: f64::from(1.0_f32),
+        ground_kinetic_friction_coefficient: f64::from(0.6_f32),
     }
 }
 
 pub fn match_environment() -> Environment {
     Environment {
-        true_wind_velocity_m_s: Vector::new(6.0, 0.0),
-        true_water_velocity_m_s: Vector::ZERO,
-        water_depth_m: f32::INFINITY,
+        true_wind_velocity_m_s: PhysicsVector::new(6.0, 0.0),
+        true_water_velocity_m_s: PhysicsVector::ZERO,
+        water_depth_m: f64::INFINITY,
     }
 }
 
@@ -1691,9 +1744,15 @@ pub fn procedural_match_environment(
     world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
-    position_m: Vector,
+    position_m: PhysicsVector,
 ) -> Environment {
-    procedural_world_environment(world_geometry, match_seed, tick, position_m).environment
+    procedural_world_environment(
+        world_geometry,
+        match_seed,
+        tick,
+        Vector::new(position_m.x as f32, position_m.y as f32),
+    )
+    .environment
 }
 
 pub fn procedural_world_environment(
@@ -1784,9 +1843,15 @@ pub fn procedural_world_environment_interpolated(
         wave_forcing_wind_velocity_m_s,
     });
     let environment = Environment {
-        true_wind_velocity_m_s,
-        true_water_velocity_m_s: ocean.current_velocity_m_s + ocean.wave_orbital_velocity_m_s,
-        water_depth_m,
+        true_wind_velocity_m_s: PhysicsVector::new(
+            f64::from(true_wind_velocity_m_s.x),
+            f64::from(true_wind_velocity_m_s.y),
+        ),
+        true_water_velocity_m_s: {
+            let velocity = ocean.current_velocity_m_s + ocean.wave_orbital_velocity_m_s;
+            PhysicsVector::new(f64::from(velocity.x), f64::from(velocity.y))
+        },
+        water_depth_m: f64::from(water_depth_m),
     };
 
     WorldEnvironment {
@@ -1832,7 +1897,7 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
         query.match_seed,
         OCEAN_CURRENT_NOISE_FIELD,
         query.position_m,
-        query.world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
+        (query.world_geometry.width_m() as f32) * OCEAN_CURRENT_WORLD_FRACTION as f32,
         query.current_time_coordinate,
         OCEAN_CURRENT_OCTAVE_COUNT,
         0.5,
@@ -1847,11 +1912,10 @@ fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
     let latitude_rad = f64::from(query.celestial.geographic_latitude_degrees).to_radians();
     let hemisphere = libm::sin(latitude_rad) as f32;
     let hemisphere_gradient_y_per_m = (libm::cos(latitude_rad)
-        * f64::from(
-            query
-                .world_geometry
-                .latitude_gradient_degrees_per_m(query.position_m.y),
-        )
+        * f64::from(field_latitude_gradient_degrees_per_m(
+            query.world_geometry,
+            query.position_m.y,
+        ))
         .to_radians()) as f32;
     let base_gradient = OCEAN_CURRENT_STREAMFUNCTION_SCALE_M2_S as f32
         * (hemisphere
@@ -1956,7 +2020,11 @@ fn ocean_basin_capacity_sample(
     let latitude_rad = f64::from(celestial.geographic_latitude_degrees).to_radians();
     let polar_capacity = libm::cos(latitude_rad).powi(2);
     let polar_gradient_y_per_m = -libm::sin(2.0 * latitude_rad)
-        * f64::from(world_geometry.latitude_gradient_degrees_per_m(position_m.y)).to_radians();
+        * f64::from(field_latitude_gradient_degrees_per_m(
+            world_geometry,
+            position_m.y,
+        ))
+        .to_radians();
     ScalarNoiseSample {
         value: open_water * polar_capacity,
         gradient_x_per_m: open_water_derivative * cluster.gradient_x_per_m * polar_capacity,
@@ -1978,7 +2046,7 @@ fn tide_height_gradient_per_m(
     let solar_angle = 2.0 * (solar_hour_angle + phase_offset);
     let tide_sum = libm::cos(lunar_angle) + 0.46 * libm::cos(solar_angle);
     let local_hour_gradient = Vector::new(
-        (std::f64::consts::TAU / f64::from(world_geometry.width_m())) as f32,
+        (std::f64::consts::TAU / f64::from(world_geometry.width_m() as f32)) as f32,
         0.0,
     );
     let angle_gradient =
@@ -2045,7 +2113,7 @@ fn procedural_wave_state(query: OceanQuery) -> OceanState {
         } else {
             swell_weight_square_sum += weight * weight;
         }
-        let width_m = f64::from(query.world_geometry.width_m());
+        let width_m = f64::from(query.world_geometry.width_m() as f32);
         let phase = wave_mode.wave_number_x_per_m
             * f64::from(query.position_m.x).rem_euclid(width_m)
             + wave_mode.wave_number_y_per_m * f64::from(query.position_m.y)
@@ -2131,7 +2199,7 @@ pub fn ocean_wave_modes(
     world_tick_fraction: f32,
 ) -> [OceanWaveMode; OCEAN_WAVE_MODE_COUNT] {
     let rotation = std::f64::consts::TAU * hash_unit(match_seed ^ 0x3c6e_f372_fe94_f82b);
-    let width_m = f64::from(world_geometry.width_m());
+    let width_m = f64::from(world_geometry.width_m() as f32);
     std::array::from_fn(|mode_index| {
         let mode_key = match_seed
             ^ 0xa409_3822_299f_31d0
@@ -2371,7 +2439,7 @@ fn climate_air_temperature_gradient_c_per_m(
     position_m: Vector,
 ) -> Vector {
     let temperature_c = |offset_m: f32| {
-        let latitude_degrees = world_geometry.latitude_degrees(position_m.y + offset_m);
+        let latitude_degrees = field_latitude_degrees(world_geometry, position_m.y + offset_m);
         current_air_temperature_c(
             ClimateConditions {
                 diurnal_temperature_range_c: 0.0,
@@ -2420,7 +2488,7 @@ fn resolved_surface_wind_gradient(
     let wind_m_s = |sample_position_m: Vector, sample_gradient_m_s: Vector| {
         wind_from_pressure_gradient(
             sample_gradient_m_s / PRESSURE_WIND_SCALE_M_S_PER_HPA_PER_M,
-            world_geometry.latitude_degrees(sample_position_m.y),
+            field_latitude_degrees(world_geometry, sample_position_m.y),
         )
     };
     let offset_wind_m_s = |offset_m: Vector| {
@@ -2655,7 +2723,7 @@ fn sample_surface_air_temperature_anomaly_c(
         SURFACE_AIR_TEMPERATURE_NOISE,
         time_coordinate,
     );
-    let latitude = world_geometry.latitude_degrees(position_m.y);
+    let latitude = field_latitude_degrees(world_geometry, position_m.y);
     let scale_c = latitude_curve_value(TEMPERATURE_ANOMALY_SCALE_C, latitude);
     // The latitude amplitude envelope is statistical calibration, not a physical
     // front; only the local anomaly gradient drives thermal wind and frontal lift.
@@ -2743,7 +2811,7 @@ fn procedural_terrain_surface_causes(
         - smoothstep_range(
             75.0,
             90.0,
-            f64::from(world_geometry.latitude_degrees(position_m.y).abs()),
+            f64::from(field_latitude_degrees(world_geometry, position_m.y).abs()),
         );
     let maritime_temperature_anomaly_c = (16.0 * polar_taper * cluster) as f32;
     let unscaled_elevation_m = 18.0 * (local_density - 0.30);
@@ -3090,7 +3158,7 @@ pub fn vector_field_time_coordinates_interpolated(
                 libm::sqrtf(
                     CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M
                         * CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION
-                        * world_geometry.height_m(),
+                        * (world_geometry.height_m() as f32),
                 )
             } else {
                 band.wavelength_m
@@ -3106,7 +3174,7 @@ pub fn vector_field_time_coordinates_interpolated(
             tick,
             tick_fraction,
             OCEAN_CURRENT_EVOLUTION_SPEED_M_S,
-            world_geometry.width_m() * OCEAN_CURRENT_WORLD_FRACTION as f32,
+            (world_geometry.width_m() as f32) * OCEAN_CURRENT_WORLD_FRACTION as f32,
         ),
     }
 }
@@ -3219,14 +3287,14 @@ fn terrain_simplex_noise_2d(
     const UNSKEW: f32 = 0.211_324_87;
     const NORMALIZATION: f32 = 70.0;
 
-    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
-    let horizontal_modes = ((f64::from(world_geometry.width_m())
+    let wrapped_x_m = field_wrapped_x_m(world_geometry, position_m.x);
+    let horizontal_modes = ((f64::from(world_geometry.width_m() as f32)
         / (f64::from(wavelength_m) * std::f64::consts::SQRT_2))
         .round()
         .clamp(1.0, f64::from(i32::MAX / 4))) as i32;
-    let horizontal_phase = wrapped_x_m.rem_euclid(world_geometry.width_m())
+    let horizontal_phase = wrapped_x_m.rem_euclid(world_geometry.width_m() as f32)
         * horizontal_modes as f32
-        / world_geometry.width_m();
+        / (world_geometry.width_m() as f32);
     let vertical_phase = position_m.y / (std::f32::consts::SQRT_2 * wavelength_m);
     let scaled = Vector::new(
         horizontal_phase + vertical_phase,
@@ -3276,10 +3344,10 @@ fn terrain_simplex_noise_4d(
     position_m: Vector,
     wavelength_m: f32,
 ) -> (f32, Vector) {
-    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
-    let angle_x = std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m();
+    let wrapped_x_m = field_wrapped_x_m(world_geometry, position_m.x);
+    let angle_x = std::f32::consts::TAU * wrapped_x_m / (world_geometry.width_m() as f32);
     let (sin_x, cos_x) = (libm::sinf(angle_x), libm::cosf(angle_x));
-    let circle_x = world_geometry.width_m() / (std::f32::consts::TAU * wavelength_m);
+    let circle_x = (world_geometry.width_m() as f32) / (std::f32::consts::TAU * wavelength_m);
     let linear_y = position_m.y / (std::f32::consts::SQRT_2 * wavelength_m);
     let point = [circle_x * cos_x, circle_x * sin_x, linear_y, linear_y + 0.5];
     let (value, input_gradient) = simplex_noise_sample_4d(key, point);
@@ -3307,7 +3375,7 @@ fn spatiotemporal_simplex_noise_4d(
     wavelength_m: f32,
     time_coordinate: f32,
 ) -> (f32, Vector) {
-    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
+    let wrapped_x_m = field_wrapped_x_m(world_geometry, position_m.x);
     // A key is itself a uniform hash, so its bits orient the slice.
     let orientation = key;
     let longitude_offset = std::f32::consts::TAU * (orientation & 0xff) as f32 / 256.0;
@@ -3316,9 +3384,9 @@ fn spatiotemporal_simplex_noise_4d(
     // Independent phase keeps the ensemble stationary as the shared clock advances.
     let time_offset = ((orientation >> 17) & 0x7fff) as f32 / 64.0;
     let longitude =
-        std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m() + longitude_offset;
+        std::f32::consts::TAU * wrapped_x_m / (world_geometry.width_m() as f32) + longitude_offset;
     let (sin_longitude, cos_longitude) = (libm::sinf(longitude), libm::cosf(longitude));
-    let circle_radius = world_geometry.width_m() / (std::f32::consts::TAU * wavelength_m);
+    let circle_radius = (world_geometry.width_m() as f32) / (std::f32::consts::TAU * wavelength_m);
     let point = [
         circle_radius * cos_longitude,
         circle_radius * sin_longitude,
@@ -3346,17 +3414,17 @@ fn spatiotemporal_pressure_noise_4d(
     zonal_aspect: f32,
     zonal_aspect_gradient_per_m: f32,
 ) -> (f32, Vector) {
-    let wrapped_x_m = world_geometry.wrap_position_m([position_m.x, position_m.y])[0];
+    let wrapped_x_m = field_wrapped_x_m(world_geometry, position_m.x);
     let orientation = key;
     let longitude_offset = std::f32::consts::TAU * (orientation & 0xff) as f32 / 256.0;
     let latitude_sign = if orientation & 0x100 == 0 { 1.0 } else { -1.0 };
     let latitude_offset = ((orientation >> 9) & 0xff) as f32 / 16.0;
     let time_offset = ((orientation >> 17) & 0x7fff) as f32 / 64.0;
     let longitude =
-        std::f32::consts::TAU * wrapped_x_m / world_geometry.width_m() + longitude_offset;
+        std::f32::consts::TAU * wrapped_x_m / (world_geometry.width_m() as f32) + longitude_offset;
     let (sin_longitude, cos_longitude) = (libm::sinf(longitude), libm::cosf(longitude));
-    let circle_radius =
-        world_geometry.width_m() / (std::f32::consts::TAU * zonal_wavelength_m * zonal_aspect);
+    let circle_radius = (world_geometry.width_m() as f32)
+        / (std::f32::consts::TAU * zonal_wavelength_m * zonal_aspect);
     let circle_radius_gradient_per_m = -circle_radius * zonal_aspect_gradient_per_m / zonal_aspect;
     let point = [
         circle_radius * cos_longitude,
@@ -3561,7 +3629,7 @@ fn cylindrical_simplex_noise_sample_f64(
     // Keep synchronized with the cylindrical scale in `terrain_simplex_noise_4d`.
     const NORMALIZATION: f64 = 114.3;
 
-    let width_m = f64::from(world_geometry.width_m());
+    let width_m = f64::from(world_geometry.width_m() as f32);
     let angle_x = std::f64::consts::TAU * position_x_m.rem_euclid(width_m) / width_m;
     let (sin_x, cos_x) = (libm::sin(angle_x), libm::cos(angle_x));
     let circle_x = width_m / (std::f64::consts::TAU * wavelength_m);
@@ -3656,7 +3724,7 @@ fn periodic_simplex_noise_sample_f64(
     const UNSKEW: f64 = 0.211_324_865_405_187_13;
     const NORMALIZATION: f64 = 70.0;
 
-    let width_m = f64::from(world_geometry.width_m());
+    let width_m = f64::from(world_geometry.width_m() as f32);
     let horizontal_modes = (width_m / (std::f64::consts::SQRT_2 * wavelength_m))
         .round()
         .clamp(1.0, i64::MAX as f64 / 4.0) as i64;
@@ -3785,12 +3853,11 @@ fn procedural_pressure_sample_at_time(
     position_m: Vector,
     band_count: usize,
 ) -> PressureSample {
-    let latitude_rad = world_geometry.latitude_degrees(position_m.y).to_radians();
+    let latitude_rad = field_latitude_degrees(world_geometry, position_m.y).to_radians();
     let midlatitude_sine = libm::sinf(2.0 * latitude_rad);
     let midlatitude = midlatitude_sine * midlatitude_sine;
-    let latitude_gradient_rad_per_m = world_geometry
-        .latitude_gradient_degrees_per_m(position_m.y)
-        .to_radians();
+    let latitude_gradient_rad_per_m =
+        field_latitude_gradient_degrees_per_m(world_geometry, position_m.y).to_radians();
     let midlatitude_gradient_per_m =
         2.0 * libm::sinf(4.0 * latitude_rad) * latitude_gradient_rad_per_m;
     let mut potential_m2_s = 0.0_f32;
@@ -3802,7 +3869,7 @@ fn procedural_pressure_sample_at_time(
         let (zonal_wavelength_m, meridional_wavelength_m) = if band.wavelength_m == 0.0 {
             (
                 CLIMATE_PRESSURE_ZONAL_WAVELENGTH_M,
-                CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION * world_geometry.height_m(),
+                CLIMATE_PRESSURE_MERIDIONAL_WORLD_FRACTION * (world_geometry.height_m() as f32),
             )
         } else {
             (band.wavelength_m, band.wavelength_m)
@@ -3858,8 +3925,9 @@ fn procedural_pressure_sample_at_time(
     // with world height keeps the climatological wind gradient fixed as geometry
     // changes; evolving seeded noise breaks up the belts.
     let zonal_phase = 6.0 * latitude_rad;
-    let zonal_potential_scale_m2_s =
-        PLANETARY_ZONAL_WIND_PEAK_M_S * world_geometry.height_m() / (6.0 * std::f32::consts::PI);
+    let zonal_potential_scale_m2_s = PLANETARY_ZONAL_WIND_PEAK_M_S
+        * (world_geometry.height_m() as f32)
+        / (6.0 * std::f32::consts::PI);
     let zonal_potential_m2_s = -zonal_potential_scale_m2_s * libm::cosf(zonal_phase);
     let zonal_gradient_m_s =
         Vector::new(0.0, PLANETARY_ZONAL_WIND_PEAK_M_S * libm::sinf(zonal_phase));
@@ -3974,7 +4042,13 @@ pub fn computed_yaw_rate_targets_in_environment(
     environment: Environment,
 ) -> simulation::SurfaceTargets {
     let parameters = dinghy_parameters();
-    let input = surface_control_input(parameters, motion, environment, 1, 10.0_f32.to_radians());
+    let input = surface_control_input(
+        parameters,
+        motion,
+        environment,
+        1,
+        f64::from(10.0_f32.to_radians()),
+    );
     let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
     yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s)
 }
@@ -4014,7 +4088,7 @@ mod tests {
     fn partial_solar_disc_uses_a_ray_that_clears_the_planet() {
         let world = WorldGeometry::default();
         let height_m = 900.0;
-        let world_radius_m = world.width_m() / std::f32::consts::TAU;
+        let world_radius_m = (world.width_m() as f32) / std::f32::consts::TAU;
         let observer_radius_m = world_radius_m + height_m;
         let horizon_z = -(1.0 - (world_radius_m / observer_radius_m).powi(2)).sqrt();
         let center_z = horizon_z - 0.5 * SUN_ANGULAR_RADIUS_RAD as f32;
@@ -4032,7 +4106,12 @@ mod tests {
     }
 
     fn procedural_match_environment(match_seed: u64, tick: u64, position_m: Vector) -> Environment {
-        super::procedural_match_environment(WorldGeometry::default(), match_seed, tick, position_m)
+        super::procedural_match_environment(
+            WorldGeometry::default(),
+            match_seed,
+            tick,
+            position_m.as_dvec2(),
+        )
     }
 
     fn procedural_terrain_elevation_m(match_seed: u64, position_m: Vector) -> f32 {
@@ -4113,7 +4192,7 @@ mod tests {
     #[test]
     fn midlatitude_pressure_systems_are_zonally_elongated() {
         let world = WorldGeometry::default();
-        let center = Vector::new(1_234.0, 0.25 * world.height_m());
+        let center = Vector::new(1_234.0, 0.25 * (world.height_m() as f32));
         let separation_m = 2_400.0;
         let offsets = [
             Vector::ZERO,
@@ -4158,7 +4237,7 @@ mod tests {
     #[test]
     fn midlatitude_pressure_shape_preserves_transient_gradient_energy() {
         let world = WorldGeometry::default();
-        let position_m = Vector::new(1_234.0, 0.25 * world.height_m());
+        let position_m = Vector::new(1_234.0, 0.25 * (world.height_m() as f32));
         let sample_count = 32_768;
         let mut gradient_sum = Vector::ZERO;
         let mut gradient_square_sum = 0.0;
@@ -4360,8 +4439,8 @@ mod tests {
             WorldGeometry::new(80_000.0, 40_000.0).unwrap(),
             WorldGeometry::new(256_000.0, 8_000.0).unwrap(),
         ] {
-            let half_width = f64::from(world.width_m()) / 2.0;
-            let half_height = f64::from(world.height_m()) / 2.0;
+            let half_width = f64::from(world.width_m() as f32) / 2.0;
+            let half_height = f64::from(world.height_m() as f32) / 2.0;
             for (x, y) in [
                 (-half_width, 0.173 * half_height),
                 (0.291 * half_width, -half_height),
@@ -4480,8 +4559,8 @@ mod tests {
             let mut square_sum = 0.0;
             for x_index in 0..16 {
                 for y_index in 0..16 {
-                    let x = f64::from(world.width_m()) * (x_index as f64 + 0.37) / 16.0;
-                    let y = f64::from(world.height_m()) * (y_index as f64 + 0.61) / 16.0;
+                    let x = f64::from(world.width_m() as f32) * (x_index as f64 + 0.37) / 16.0;
+                    let y = f64::from(world.height_m() as f32) * (y_index as f64 + 0.61) / 16.0;
                     let sample = cylindrical_simplex_noise_sample_f64(
                         world,
                         0x5eed_cafe ^ (x_index * 16 + y_index) as u32,
@@ -4509,7 +4588,10 @@ mod tests {
         ] {
             for position_m in [
                 Vector::new(13.25, -7.5),
-                Vector::new(0.173 * world.width_m(), -0.291 * world.height_m()),
+                Vector::new(
+                    0.173 * (world.width_m() as f32),
+                    -0.291 * (world.height_m() as f32),
+                ),
             ] {
                 let portable = terrain_simplex_noise_4d(world, 0x5eed_cafe, position_m, 8192.0);
                 let reference = cylindrical_simplex_noise_sample_f64(
@@ -4624,7 +4706,7 @@ mod tests {
                     .true_wind_velocity_m_s
                     .length();
                 strongest_reduction =
-                    strongest_reduction.max(1.0 - local_speed_m_s / open_speed_m_s);
+                    strongest_reduction.max(1.0 - local_speed_m_s as f32 / open_speed_m_s);
             }
         }
 

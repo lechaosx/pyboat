@@ -100,7 +100,7 @@ async fn browser_client_predicts_and_reconciles_against_the_real_server() {
         Some(30)
     );
     assert!(authoritative.x.is_finite() && authoritative.y.is_finite());
-    let predicted = client.camera_m().unwrap();
+    let predicted = client.camera_m().unwrap().as_dvec2();
     assert!(predicted.x.is_finite() && predicted.y.is_finite());
     assert!((predicted.x - authoritative.x).hypot(predicted.y - authoritative.y) < 1.0);
 

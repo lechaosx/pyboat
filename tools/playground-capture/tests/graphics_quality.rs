@@ -8,7 +8,7 @@ use game::{
     celestial_lighting, procedural_terrain_elevation_m, procedural_world_environment,
     world_celestial_conditions,
 };
-use rapier2d::prelude::Vector;
+use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed;
@@ -115,9 +115,9 @@ fn summer_ice_edge() -> View {
     let (half_width_m, half_height_m) = (2_133.0, 1_200.0);
     let camera_m = (0..128)
         .filter_map(|meridian| {
-            let x_m = 500.0 * meridian as f32 - 0.5 * world().width_m();
+            let x_m = 500.0 * meridian as f32 - 0.5 * world().width_m() as f32;
             let edge_y_m = (0..128)
-                .map(|step| 0.3 * world().height_m() + 100.0 * step as f32)
+                .map(|step| 0.3 * world().height_m() as f32 + 100.0 * step as f32)
                 .find(|&y_m| is_sea_ice(Vector::new(x_m, y_m)))?;
             Some(Vector::new(x_m, edge_y_m - 0.6 * half_height_m))
         })

@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
 use rapier2d::prelude::Vector;
 use simulation::{
@@ -26,7 +26,7 @@ fn parameters() -> BoatParameters {
         keel_area_m2: 0.6,
         keel_position_m: Vector::ZERO,
         keel_base_drag_coefficient: 0.02,
-        keel_stall_angle_rad: 15.0_f32.to_radians(),
+        keel_stall_angle_rad: 15.0_f64.to_radians(),
         keel_stall_lift_coefficient: 0.8,
         hull_reference_area_m2: 0.3,
         hull_drag_coefficient: 0.08,
@@ -49,7 +49,7 @@ fn parameters() -> BoatParameters {
     }
 }
 
-fn motion(position_m: Vector, velocity_m_s: Vector, angle_rad: f32) -> BoatMotion {
+fn motion(position_m: Vector, velocity_m_s: Vector, angle_rad: f64) -> BoatMotion {
     BoatMotion {
         position_m,
         velocity_m_s,
@@ -152,7 +152,7 @@ fn wrapped_radius_query_finds_longitude_neighbors_but_not_north_south_images() {
     );
 }
 
-fn ram(offset_m: Vector) -> (f32, [Vector; 2], usize) {
+fn ram(offset_m: Vector) -> (f64, [Vector; 2], usize) {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let direction = Vector::new(1.0, 1.0).normalize();
     let mut simulation = SharedSimulation::new_with_world_geometry(world);
@@ -164,7 +164,7 @@ fn ram(offset_m: Vector) -> (f32, [Vector; 2], usize) {
         parameters(),
         motion(offset_m + direction * 2.5, -direction * 6.0, PI / 4.0),
     );
-    let mut maximum_impulse = 0.0_f32;
+    let mut maximum_impulse = 0.0_f64;
     let mut contact_ticks = 0;
     let mut contact_ended = false;
     for _ in 0..30 {
@@ -239,7 +239,7 @@ fn fast_swept_hulls_collide_across_a_seam() {
     assert!(simulation.motion(1).velocity_m_s.x > -600.0);
 }
 
-fn over_limit_dynamic_ram(offset_x_m: f32) -> (f32, [Vector; 2]) {
+fn over_limit_dynamic_ram(offset_x_m: f64) -> (f64, [Vector; 2]) {
     let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
     let mut simulation = SharedSimulation::new_with_world_geometry(world);
     simulation.add_boat(
@@ -294,8 +294,8 @@ fn out_of_domain_dynamic_ram_is_bounded_and_matches_across_the_x_seam() {
 #[test]
 fn shared_simulation_replaces_nonfinite_hull_velocity_state() {
     let mut simulation = SharedSimulation::new();
-    let mut invalid_motion = motion(Vector::ZERO, Vector::new(f32::NAN, 1.0), 0.0);
-    invalid_motion.angular_velocity_rad_s = f32::INFINITY;
+    let mut invalid_motion = motion(Vector::ZERO, Vector::new(f64::NAN, 1.0), 0.0);
+    invalid_motion.angular_velocity_rad_s = f64::INFINITY;
 
     simulation.add_boat(parameters(), invalid_motion);
 

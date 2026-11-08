@@ -49,7 +49,8 @@ use game::{
     procedural_world_environment_interpolated,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
-use rapier2d::prelude::{Rotation, Vector};
+use rapier2d_f64::glamx::Vec2 as Vector;
+use rapier2d_f64::prelude::{Rotation as PhysicsRotation, Vector as PhysicsVector};
 use simulation::{
     BoatMotion, BoatParameters, DT_SECONDS, Environment, HullContact, MotionIntent,
     SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow, hull_outline_m,
@@ -284,7 +285,7 @@ const VIEWPORT_INTEREST_MARGIN_M: f32 = 2.5;
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 const MAXIMUM_PREDICTION_SECONDS: f64 = 0.25;
 const MAXIMUM_REPLAY_COMMANDS: usize = 15;
-const CORRECTION_SECONDS: f32 = 0.1;
+const CORRECTION_SECONDS: f64 = 0.1;
 const WINDSOCK_FULL_EXTENSION_SPEED_M_S: f32 = 7.716_666_7;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -380,10 +381,16 @@ pub fn sample_world_geometry(
 ) -> WorldGeometrySample {
     WorldGeometrySample {
         raw_center_m,
-        canonical_center_m: geometry.wrap_position_m(raw_center_m),
-        normalized_world: geometry.normalized_world_coordinates(raw_center_m),
-        latitude_degrees: geometry.latitude_degrees(raw_center_m[1]),
-        local_solar_phase: geometry.local_solar_phase(global_day_phase, raw_center_m[0]),
+        canonical_center_m: geometry
+            .wrap_position_m(raw_center_m.map(f64::from))
+            .map(|v| v as f32),
+        normalized_world: geometry
+            .normalized_world_coordinates(raw_center_m.map(f64::from))
+            .map(|v| v as f32),
+        latitude_degrees: geometry.latitude_degrees(f64::from(raw_center_m[1])) as f32,
+        local_solar_phase: geometry
+            .local_solar_phase(f64::from(global_day_phase), f64::from(raw_center_m[0]))
+            as f32,
     }
 }
 
@@ -497,14 +504,14 @@ struct PredictedBoat {
 
 #[derive(Clone, Copy)]
 struct MotionCorrection {
-    position_m: Vector,
-    velocity_m_s: Vector,
-    angle_rad: f32,
-    angular_velocity_rad_s: f32,
-    sail_angle_rad: f32,
-    sail_angular_velocity_rad_s: f32,
-    rudder_angle_rad: f32,
-    rudder_angular_velocity_rad_s: f32,
+    position_m: PhysicsVector,
+    velocity_m_s: PhysicsVector,
+    angle_rad: f64,
+    angular_velocity_rad_s: f64,
+    sail_angle_rad: f64,
+    sail_angular_velocity_rad_s: f64,
+    rudder_angle_rad: f64,
+    rudder_angular_velocity_rad_s: f64,
 }
 
 pub struct MultiplayerClient {
@@ -665,8 +672,8 @@ impl MultiplayerClient {
 
     pub fn set_motion_intent(&mut self, forward: f32, turn: f32) {
         self.motion_intent = MotionIntent {
-            forward: forward.clamp(-1.0, 1.0),
-            turn: turn.clamp(-1.0, 1.0),
+            forward: f64::from(forward.clamp(-1.0, 1.0)),
+            turn: f64::from(turn.clamp(-1.0, 1.0)),
         };
     }
 
@@ -691,7 +698,7 @@ impl MultiplayerClient {
         world_y: f32,
     ) {
         self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = Vector::new(world_x, world_y);
+        let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
         let length = world_motion.length();
         let magnitude = length.min(1.0);
         if magnitude == 0.0 {
@@ -702,12 +709,12 @@ impl MultiplayerClient {
         };
 
         let local_direction =
-            Rotation::new(-local_motion.angle_rad).transform_vector(world_motion / length);
+            PhysicsRotation::new(-local_motion.angle_rad).transform_vector(world_motion / length);
         let square_scale = local_direction.x.abs().max(local_direction.y.abs());
-        self.motion_intent = MotionIntent {
-            forward: local_direction.x / square_scale * magnitude,
-            turn: local_direction.y / square_scale * magnitude,
-        };
+        self.set_motion_intent(
+            (local_direction.x / square_scale * magnitude) as f32,
+            (local_direction.y / square_scale * magnitude) as f32,
+        );
     }
 
     pub fn take_inputs(&mut self, elapsed_seconds: f64) -> Vec<ClientMessage> {
@@ -732,8 +739,8 @@ impl MultiplayerClient {
                 self.input_history.push(command);
                 inputs.push(ClientMessage::Input {
                     sequence: command.sequence,
-                    forward: command.intent.forward,
-                    turn: command.intent.turn,
+                    forward: command.intent.forward as f32,
+                    turn: command.intent.turn as f32,
                 });
                 self.next_input_sequence += 1;
             }
@@ -745,9 +752,7 @@ impl MultiplayerClient {
 
     pub fn camera_m(&self) -> Option<Vector> {
         let position_m = self.local_motion()?.position_m;
-        Some(Vector::from(
-            self.world_geometry?.wrap_position_m(position_m.into()),
-        ))
+        Some(PhysicsVector::from(self.world_geometry?.wrap_position_m(position_m.into())).as_vec2())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -772,19 +777,19 @@ impl MultiplayerClient {
             .true_wind_velocity_m_s
             .y
             .atan2(environment.true_wind_velocity_m_s.x)
-            + std::f32::consts::PI;
+            + std::f64::consts::PI;
         Some(DemoView {
-            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length(),
+            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length() as f32,
             apparent_wind_speed_m_s: apparent_flow(
                 environment.true_wind_velocity_m_s,
                 motion.velocity_m_s,
             )
-            .length(),
-            point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
-            water_depth_m: environment.water_depth_m,
-            bottom_clearance_m: environment.water_depth_m - draft_m,
+            .length() as f32,
+            point_of_sail: point_of_sail((motion.angle_rad - upwind_angle_rad) as f32),
+            water_depth_m: environment.water_depth_m as f32,
+            bottom_clearance_m: (environment.water_depth_m - draft_m) as f32,
             bottom_contact_fraction: ((draft_m - environment.water_depth_m) / draft_m)
-                .clamp(0.0, 1.0),
+                .clamp(0.0, 1.0) as f32,
         })
     }
 
@@ -811,7 +816,7 @@ impl MultiplayerClient {
                         (self.world_geometry, local_position_m)
                     {
                         motion.position_m = local_position_m
-                            + Vector::from(world_geometry.minimum_image_displacement_m(
+                            + PhysicsVector::from(world_geometry.minimum_image_displacement_m(
                                 (motion.position_m - local_position_m).into(),
                             ));
                     }
@@ -830,6 +835,7 @@ impl MultiplayerClient {
                                 .true_wind_velocity_m_s,
                                 motion.velocity_m_s,
                             )
+                            .as_vec2()
                         });
                     if scene.is_local {
                         scene.windsock = self.match_seed.map(|_| Windsock {
@@ -878,7 +884,10 @@ impl MultiplayerClient {
                 player_id.clone(),
                 PredictedBoat {
                     index,
-                    intent: MotionIntent { forward, turn },
+                    intent: MotionIntent {
+                        forward: f64::from(forward),
+                        turn: f64::from(turn),
+                    },
                     wreck: boat.snapshot.wreck,
                 },
             );
@@ -955,7 +964,7 @@ impl MultiplayerClient {
             self.corrections.insert(
                 player_id.clone(),
                 MotionCorrection {
-                    position_m: Vector::from(
+                    position_m: PhysicsVector::from(
                         self.world_geometry
                             .unwrap_or_default()
                             .minimum_image_displacement_m(
@@ -988,10 +997,9 @@ impl MultiplayerClient {
         let boat = self.boats.get(player_id)?;
         let mut motion = snapshot_motion(&boat.snapshot);
         let received_at = self.snapshot_received_at_seconds[player_id];
-        let seconds =
-            (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS) as f32;
+        let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
         motion.position_m += motion.velocity_m_s * seconds;
-        motion.position_m = Vector::from(
+        motion.position_m = PhysicsVector::from(
             self.world_geometry
                 .unwrap_or_default()
                 .wrap_position_m(motion.position_m.into()),
@@ -1005,7 +1013,7 @@ impl MultiplayerClient {
     fn render_motion(&self, player_id: &str) -> Option<BoatMotion> {
         let mut motion = self.predicted_motion(player_id)?;
         if let Some(correction) = self.corrections.get(player_id) {
-            let elapsed_seconds = (self.time_seconds - self.correction_started_at_seconds) as f32;
+            let elapsed_seconds = self.time_seconds - self.correction_started_at_seconds;
             let (position_m, velocity_m_s) = cubic_vector_correction(
                 correction.position_m,
                 correction.velocity_m_s,
@@ -1035,7 +1043,7 @@ impl MultiplayerClient {
             motion.rudder_angle_rad += rudder_angle_rad;
             motion.rudder_angular_velocity_rad_s += rudder_angular_velocity_rad_s;
         }
-        motion.position_m = Vector::from(
+        motion.position_m = PhysicsVector::from(
             self.world_geometry
                 .unwrap_or_default()
                 .wrap_position_m(motion.position_m.into()),
@@ -1149,7 +1157,7 @@ pub struct Demo {
     practice_boat: usize,
     motion_intent: MotionIntent,
     contacts: Vec<HullContact>,
-    accumulator_seconds: f32,
+    accumulator_seconds: f64,
 }
 
 impl Default for Demo {
@@ -1162,9 +1170,9 @@ impl Demo {
     pub fn new() -> Self {
         let parameters = dinghy_parameters();
         let player_motion = BoatMotion {
-            position_m: Vector::ZERO,
-            velocity_m_s: Vector::ZERO,
-            angle_rad: 135.0_f32.to_radians(),
+            position_m: PhysicsVector::ZERO,
+            velocity_m_s: PhysicsVector::ZERO,
+            angle_rad: 135.0_f64.to_radians(),
             angular_velocity_rad_s: 0.0,
             sail_angle_rad: 0.0,
             sail_angular_velocity_rad_s: 0.0,
@@ -1172,9 +1180,9 @@ impl Demo {
             rudder_angular_velocity_rad_s: 0.0,
         };
         let mut practice_motion = player_motion;
-        practice_motion.position_m =
-            Rotation::new(player_motion.angle_rad).transform_vector(Vector::new(6.0, 0.0));
-        practice_motion.angle_rad += std::f32::consts::PI;
+        practice_motion.position_m = PhysicsRotation::new(player_motion.angle_rad)
+            .transform_vector(PhysicsVector::new(6.0, 0.0));
+        practice_motion.angle_rad += std::f64::consts::PI;
         let mut simulation = SharedSimulation::new();
         let player_boat = simulation.add_boat(parameters, player_motion);
         let practice_boat = simulation.add_boat(parameters, practice_motion);
@@ -1191,8 +1199,8 @@ impl Demo {
 
     pub fn set_motion_intent(&mut self, forward: f32, turn: f32) {
         self.motion_intent = MotionIntent {
-            forward: forward.clamp(-1.0, 1.0),
-            turn: turn.clamp(-1.0, 1.0),
+            forward: f64::from(forward.clamp(-1.0, 1.0)),
+            turn: f64::from(turn.clamp(-1.0, 1.0)),
         };
     }
 
@@ -1204,7 +1212,7 @@ impl Demo {
         world_y: f32,
     ) {
         self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = Vector::new(world_x, world_y);
+        let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
         let length = world_motion.length();
         let magnitude = length.min(1.0);
         if magnitude == 0.0 {
@@ -1212,12 +1220,12 @@ impl Demo {
         }
 
         let local_direction =
-            Rotation::new(-self.motion().angle_rad).transform_vector(world_motion / length);
+            PhysicsRotation::new(-self.motion().angle_rad).transform_vector(world_motion / length);
         let square_scale = local_direction.x.abs().max(local_direction.y.abs());
-        self.motion_intent = MotionIntent {
-            forward: local_direction.x / square_scale * magnitude,
-            turn: local_direction.y / square_scale * magnitude,
-        };
+        self.set_motion_intent(
+            (local_direction.x / square_scale * magnitude) as f32,
+            (local_direction.y / square_scale * magnitude) as f32,
+        );
     }
 
     pub fn motion_intent(&self) -> MotionIntent {
@@ -1225,7 +1233,7 @@ impl Demo {
     }
 
     pub fn advance(&mut self, elapsed_seconds: f32) {
-        self.accumulator_seconds += elapsed_seconds.min(0.25);
+        self.accumulator_seconds += f64::from(elapsed_seconds.min(0.25));
         while self.accumulator_seconds >= DT_SECONDS {
             let motion = self.motion();
             let player_targets = computed_yaw_rate_targets(motion, self.motion_intent);
@@ -1248,20 +1256,20 @@ impl Demo {
             .true_wind_velocity_m_s
             .y
             .atan2(environment.true_wind_velocity_m_s.x)
-            + std::f32::consts::PI;
+            + std::f64::consts::PI;
         DemoView {
-            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length(),
+            speed_m_s: (motion.velocity_m_s - environment.true_water_velocity_m_s).length() as f32,
             apparent_wind_speed_m_s: apparent_flow(
                 environment.true_wind_velocity_m_s,
                 motion.velocity_m_s,
             )
-            .length(),
-            point_of_sail: point_of_sail(motion.angle_rad - upwind_angle_rad),
-            water_depth_m: environment.water_depth_m,
-            bottom_clearance_m: environment.water_depth_m - self.parameters.draft_m,
+            .length() as f32,
+            point_of_sail: point_of_sail((motion.angle_rad - upwind_angle_rad) as f32),
+            water_depth_m: environment.water_depth_m as f32,
+            bottom_clearance_m: (environment.water_depth_m - self.parameters.draft_m) as f32,
             bottom_contact_fraction: ((self.parameters.draft_m - environment.water_depth_m)
                 / self.parameters.draft_m)
-                .clamp(0.0, 1.0),
+                .clamp(0.0, 1.0) as f32,
         }
     }
 
@@ -1275,11 +1283,13 @@ impl Demo {
         player.apparent_wind_velocity_m_s = apparent_flow(
             match_environment().true_wind_velocity_m_s,
             self.motion().velocity_m_s,
-        );
+        )
+        .as_vec2();
         practice.apparent_wind_velocity_m_s = apparent_flow(
             match_environment().true_wind_velocity_m_s,
             practice_motion.velocity_m_s,
-        );
+        )
+        .as_vec2();
         [player, practice]
     }
 
@@ -1305,27 +1315,28 @@ pub fn point_of_sail(angle_from_upwind_rad: f32) -> PointOfSail {
 }
 
 pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
-    let hull_rotation = Rotation::new(motion.angle_rad);
+    let hull_rotation = PhysicsRotation::new(motion.angle_rad);
     let hull_m = hull_outline_m(parameters.hull)
         .map(|point| motion.position_m + hull_rotation.transform_vector(point));
     let mast_m = motion.position_m + hull_rotation.transform_vector(parameters.mast_position_m);
     let sail_end_m = mast_m
-        + Rotation::new(motion.angle_rad + motion.sail_angle_rad)
-            .transform_vector(Vector::new(-parameters.boom_length_m, 0.0));
+        + PhysicsRotation::new(motion.angle_rad + motion.sail_angle_rad)
+            .transform_vector(PhysicsVector::new(-parameters.boom_length_m, 0.0));
     let rudder_hinge_m =
         motion.position_m + hull_rotation.transform_vector(parameters.rudder_position_m);
     let rudder_end_m = rudder_hinge_m
-        + Rotation::new(motion.angle_rad + motion.rudder_angle_rad)
-            .transform_vector(Vector::new(-parameters.rudder_draw_length_m, 0.0));
+        + PhysicsRotation::new(motion.angle_rad + motion.rudder_angle_rad)
+            .transform_vector(PhysicsVector::new(-parameters.rudder_draw_length_m, 0.0));
     BoatScene {
         id: None,
-        hull_m,
-        sail_m: [mast_m, sail_end_m],
-        sail_luff_m: 2.0 * parameters.sail_area_m2 / parameters.boom_length_m,
-        rudder_m: [rudder_hinge_m, rudder_end_m],
-        tiller_end_m: rudder_hinge_m
-            + Rotation::new(motion.angle_rad + motion.rudder_angle_rad)
-                .transform_vector(Vector::new(parameters.tiller_length_m, 0.0)),
+        hull_m: hull_m.map(|point| point.as_vec2()),
+        sail_m: [mast_m.as_vec2(), sail_end_m.as_vec2()],
+        sail_luff_m: (2.0 * parameters.sail_area_m2 / parameters.boom_length_m) as f32,
+        rudder_m: [rudder_hinge_m.as_vec2(), rudder_end_m.as_vec2()],
+        tiller_end_m: (rudder_hinge_m
+            + PhysicsRotation::new(motion.angle_rad + motion.rudder_angle_rad)
+                .transform_vector(PhysicsVector::new(parameters.tiller_length_m, 0.0)))
+        .as_vec2(),
         apparent_wind_velocity_m_s: Vector::ZERO,
         windsock: None,
         is_local: false,
@@ -1336,8 +1347,8 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
 
 fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
     BoatMotion {
-        position_m: Vector::new(snapshot.x, snapshot.y),
-        velocity_m_s: Vector::new(snapshot.vx, snapshot.vy),
+        position_m: PhysicsVector::new(snapshot.x, snapshot.y),
+        velocity_m_s: PhysicsVector::new(snapshot.vx, snapshot.vy),
         angle_rad: snapshot.angle,
         angular_velocity_rad_s: snapshot.angular_velocity,
         sail_angle_rad: snapshot.sail,
@@ -1347,15 +1358,15 @@ fn snapshot_motion(snapshot: &BoatSnapshot) -> BoatMotion {
     }
 }
 
-fn shortest_angle(angle_rad: f32) -> f32 {
-    (angle_rad + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+fn shortest_angle(angle_rad: f64) -> f64 {
+    (angle_rad + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
 
 fn cubic_correction(
-    displacement: f32,
-    velocity_difference: f32,
-    elapsed_seconds: f32,
-) -> (f32, f32) {
+    displacement: f64,
+    velocity_difference: f64,
+    elapsed_seconds: f64,
+) -> (f64, f64) {
     let progress = (elapsed_seconds / CORRECTION_SECONDS).clamp(0.0, 1.0);
     let progress_squared = progress * progress;
     let progress_cubed = progress_squared * progress;
@@ -1371,18 +1382,123 @@ fn cubic_correction(
 }
 
 fn cubic_vector_correction(
-    displacement: Vector,
-    velocity_difference: Vector,
-    elapsed_seconds: f32,
-) -> (Vector, Vector) {
+    displacement: PhysicsVector,
+    velocity_difference: PhysicsVector,
+    elapsed_seconds: f64,
+) -> (PhysicsVector, PhysicsVector) {
     let (x, vx) = cubic_correction(displacement.x, velocity_difference.x, elapsed_seconds);
     let (y, vy) = cubic_correction(displacement.y, velocity_difference.y, elapsed_seconds);
-    (Vector::new(x, y), Vector::new(vx, vy))
+    (PhysicsVector::new(x, y), PhysicsVector::new(vx, vy))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_input_predicts_the_same_intent_sent_to_the_server() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player".into(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        client.accept(ServerMessage::Snapshot {
+            tick: 1,
+            boats: vec![BoatSnapshot {
+                id: "player".into(),
+                health: 100.0,
+                last_hit_tick: None,
+                wreck: false,
+                x: 0.0,
+                y: 0.0,
+                vx: 0.0,
+                vy: 0.0,
+                angle: 0.37,
+                angular_velocity: 0.0,
+                sail: 0.0,
+                sail_angular_velocity: 0.0,
+                rudder: 0.0,
+                rudder_angular_velocity: 0.0,
+                forward: Some(0.0),
+                turn: Some(0.0),
+                acknowledged_input: Some(0),
+            }],
+            removed_player_ids: Vec::new(),
+        });
+        client.set_player_input(0.0, 0.0, 0.31, -0.47);
+        let messages = client.take_inputs(TICK_SECONDS);
+        let [ClientMessage::Input { forward, turn, .. }] = messages.as_slice() else {
+            panic!("one fixed tick must emit one input");
+        };
+        let expected = MotionIntent {
+            forward: f64::from(*forward),
+            turn: f64::from(*turn),
+        };
+        assert_eq!(client.motion_intent, expected);
+        assert_eq!(client.input_history.last().unwrap().intent, expected);
+    }
+
+    #[test]
+    fn authoritative_motion_retains_sub_float_precision_in_prediction() {
+        let expected = [
+            16_384.000_123_456_f64,
+            2_048.000_012_345,
+            3.000_000_123,
+            -4.000_000_321,
+            0.500_000_012_3,
+            0.100_000_001_23,
+            0.200_000_012_3,
+            -0.100_000_001_23,
+            -0.300_000_012_3,
+            0.200_000_001_23,
+        ];
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "player".into(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        client.accept(ServerMessage::Snapshot {
+            tick: 1,
+            boats: vec![BoatSnapshot {
+                id: "player".into(),
+                health: 100.0,
+                last_hit_tick: None,
+                wreck: false,
+                x: expected[0],
+                y: expected[1],
+                vx: expected[2],
+                vy: expected[3],
+                angle: expected[4],
+                angular_velocity: expected[5],
+                sail: expected[6],
+                sail_angular_velocity: expected[7],
+                rudder: expected[8],
+                rudder_angular_velocity: expected[9],
+                forward: Some(0.0),
+                turn: Some(0.0),
+                acknowledged_input: Some(0),
+            }],
+            removed_player_ids: Vec::new(),
+        });
+        let motion = client.predicted_motion("player").unwrap();
+        let actual = [
+            motion.position_m.x,
+            motion.position_m.y,
+            motion.velocity_m_s.x,
+            motion.velocity_m_s.y,
+            motion.angle_rad,
+            motion.angular_velocity_rad_s,
+            motion.sail_angle_rad,
+            motion.sail_angular_velocity_rad_s,
+            motion.rudder_angle_rad,
+            motion.rudder_angular_velocity_rad_s,
+        ];
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+    }
 
     fn snapshot(tick: u64) -> ServerMessage {
         ServerMessage::Snapshot {
@@ -1736,16 +1852,16 @@ mod tests {
             health: 100.0,
             last_hit_tick: Some(u64::MAX),
             wreck: true,
-            x: f32::MAX,
-            y: f32::MAX,
-            vx: f32::MAX,
-            vy: f32::MAX,
-            angle: f32::MAX,
-            angular_velocity: f32::MAX,
-            sail: f32::MAX,
-            sail_angular_velocity: f32::MAX,
-            rudder: f32::MAX,
-            rudder_angular_velocity: f32::MAX,
+            x: f64::MAX,
+            y: f64::MAX,
+            vx: f64::MAX,
+            vy: f64::MAX,
+            angle: f64::MAX,
+            angular_velocity: f64::MAX,
+            sail: f64::MAX,
+            sail_angular_velocity: f64::MAX,
+            rudder: f64::MAX,
+            rudder_angular_velocity: f64::MAX,
             forward: Some(1.0),
             turn: Some(1.0),
             acknowledged_input: Some(i64::MAX),
