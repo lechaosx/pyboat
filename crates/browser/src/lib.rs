@@ -737,23 +737,12 @@ impl MultiplayerClient {
         world_x: f32,
         world_y: f32,
     ) {
-        self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
-        let length = world_motion.length();
-        let magnitude = length.min(1.0);
-        if magnitude == 0.0 {
-            return;
-        }
-        let Some(local_motion) = self.local_motion() else {
-            return;
-        };
-
-        let local_direction =
-            PhysicsRotation::new(-local_motion.angle_rad).transform_vector(world_motion / length);
-        let square_scale = local_direction.x.abs().max(local_direction.y.abs());
-        self.set_motion_intent(
-            (local_direction.x / square_scale * magnitude) as f32,
-            (local_direction.y / square_scale * magnitude) as f32,
+        self.motion_intent = player_motion_intent(
+            self.local_motion().map(|motion| motion.angle_rad),
+            keyboard_forward,
+            keyboard_turn,
+            world_x,
+            world_y,
         );
     }
 
@@ -1190,6 +1179,34 @@ pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
     (apparent_wind_speed_m_s.max(0.0) / WINDSOCK_FULL_EXTENSION_SPEED_M_S).min(1.0)
 }
 
+pub(crate) fn player_motion_intent(
+    angle_rad: Option<f64>,
+    keyboard_forward: f32,
+    keyboard_turn: f32,
+    world_x: f32,
+    world_y: f32,
+) -> MotionIntent {
+    let mut intent = MotionIntent {
+        forward: f64::from(keyboard_forward.clamp(-1.0, 1.0)),
+        turn: f64::from(keyboard_turn.clamp(-1.0, 1.0)),
+    };
+    let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
+    let length = world_motion.length();
+    let magnitude = length.min(1.0);
+    if magnitude != 0.0
+        && let Some(angle_rad) = angle_rad
+    {
+        let local_direction =
+            PhysicsRotation::new(-angle_rad).transform_vector(world_motion / length);
+        let square_scale = local_direction.x.abs().max(local_direction.y.abs());
+        intent.forward = f64::from((local_direction.x / square_scale * magnitude) as f32);
+        intent.turn = f64::from((local_direction.y / square_scale * magnitude) as f32);
+        intent.forward = intent.forward.clamp(-1.0, 1.0);
+        intent.turn = intent.turn.clamp(-1.0, 1.0);
+    }
+    intent
+}
+
 pub struct Demo {
     parameters: BoatParameters,
     simulation: SharedSimulation,
@@ -1251,20 +1268,12 @@ impl Demo {
         world_x: f32,
         world_y: f32,
     ) {
-        self.set_motion_intent(keyboard_forward, keyboard_turn);
-        let world_motion = PhysicsVector::new(f64::from(world_x), f64::from(world_y));
-        let length = world_motion.length();
-        let magnitude = length.min(1.0);
-        if magnitude == 0.0 {
-            return;
-        }
-
-        let local_direction =
-            PhysicsRotation::new(-self.motion().angle_rad).transform_vector(world_motion / length);
-        let square_scale = local_direction.x.abs().max(local_direction.y.abs());
-        self.set_motion_intent(
-            (local_direction.x / square_scale * magnitude) as f32,
-            (local_direction.y / square_scale * magnitude) as f32,
+        self.motion_intent = player_motion_intent(
+            Some(self.motion().angle_rad),
+            keyboard_forward,
+            keyboard_turn,
+            world_x,
+            world_y,
         );
     }
 
