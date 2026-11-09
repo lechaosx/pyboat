@@ -157,6 +157,7 @@ fn sail_mass_tracks_triangular_canvas_and_a_uniform_boom() {
         let mut parameters = reference_parameters();
         parameters.sail_mass_kg = cloth;
         parameters.boom_mass_kg = boom;
+        parameters.air_density_kg_m3 = 0.0;
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = ImpulseJointSet::new();
@@ -175,6 +176,77 @@ fn sail_mass_tracks_triangular_canvas_and_a_uniform_boom() {
                 + sail.mass() * center.length_squared(),
             hinge_inertia,
         );
+    }
+}
+
+#[test]
+fn intrinsic_fluid_spin_inertia_changes_rotation_without_changing_translation() {
+    for radius in [0.3_f64, 0.6] {
+        for density in [2.0, 8.0] {
+            let mut parameters = reference_parameters();
+            parameters.boom_length_m = 2.0 * radius;
+            parameters.rudder_draw_length_m = 2.0 * radius;
+            parameters.sail_area_m2 = PI * radius.powi(2);
+            parameters.rudder_area_m2 = parameters.sail_area_m2;
+            parameters.keel_area_m2 = parameters.sail_area_m2;
+            parameters.draft_m = PI * radius / 2.0;
+            parameters.air_density_kg_m3 = 0.0;
+            parameters.water_density_kg_m3 = 0.0;
+            let mut bodies = RigidBodySet::new();
+            let mut colliders = ColliderSet::new();
+            let mut joints = ImpulseJointSet::new();
+            let dry = create_boat(
+                parameters,
+                zero_motion(),
+                &mut bodies,
+                &mut colliders,
+                &mut joints,
+            );
+            parameters.air_density_kg_m3 = density;
+            parameters.water_density_kg_m3 = 3.0 * density;
+            let wet = create_boat(
+                parameters,
+                zero_motion(),
+                &mut bodies,
+                &mut colliders,
+                &mut joints,
+            );
+            let motion = BoatMotion {
+                position_m: Vector::new(4100.0, -20.0),
+                angle_rad: 0.7,
+                angular_velocity_rad_s: 0.3,
+                sail_angular_velocity_rad_s: -0.2,
+                rudder_angular_velocity_rad_s: 0.4,
+                ..zero_motion()
+            };
+            restore_motion(&wet, parameters, motion, &mut bodies);
+            restore_motion(&wet, parameters, motion, &mut bodies);
+            // A circular plate's potential-flow centroid spin inertia has this
+            // closed form, independent of the ellipse quadrature implementation.
+            for (dry_handle, wet_handle, fluid_density) in [
+                (dry.hull.body, wet.hull.body, parameters.water_density_kg_m3),
+                (dry.sail, wet.sail, parameters.air_density_kg_m3),
+                (dry.rudder, wet.rudder, parameters.water_density_kg_m3),
+            ] {
+                let added_inertia = 16.0 * fluid_density * radius.powi(5) / 45.0;
+                let dry_body = &bodies[dry_handle];
+                let mass = dry_body.mass();
+                let inertia = dry_body.mass_properties().local_mprops.principal_inertia();
+                let body = &mut bodies[wet_handle];
+                assert_eq!(body.mass(), mass);
+                assert_eq!(body.local_center_of_mass(), Vector::ZERO);
+                let angular_velocity = body.angvel();
+                let velocity = body.linvel();
+                body.apply_torque_impulse(1.0, true);
+                body.apply_impulse(Vector::Y, true);
+                assert!(
+                    ((body.angvel() - angular_velocity) * (inertia + added_inertia) - 1.0).abs()
+                        < 1.0e-12,
+                    "radius {radius}, density {density}"
+                );
+                assert_vector_close(body.linvel() - velocity, Vector::Y / mass);
+            }
+        }
     }
 }
 

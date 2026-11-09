@@ -1169,6 +1169,40 @@ fn polygon_moment_of_inertia(mass_kg: f64, points: &[Vector]) -> f64 {
     mass_kg * weighted_radius / (6.0 * twice_area)
 }
 
+fn foil_spin_inertia_kg_m2(chord_m: f64, area_m2: f64, density_kg_m3: f64) -> f64 {
+    if area_m2 == 0.0 || density_kg_m3 == 0.0 {
+        return 0.0;
+    }
+    // Thin-ellipsoid potential flow, with an equal-area ellipse of this chord:
+    // https://mujoco.readthedocs.io/en/stable/computation/fluid.html#added-mass
+    // Compromise: retain only centroid-spin energy ½Jω², omitting normal added
+    // mass and translation/rotation coupling. Elliptical edges approximate the
+    // rectangular rudder/keel and triangular sail; this is not measured boat data.
+    let a = chord_m / 2.0;
+    let c = area_m2 / (std::f64::consts::PI * a);
+    let h = std::f64::consts::FRAC_PI_2 / 128.0;
+    let mut kx = 0.0;
+    let mut kz = 0.0;
+    for i in 0..=128 {
+        let angle = h * f64::from(i);
+        let q = libm::cos(angle);
+        let s = libm::sin(angle);
+        let d = c * c * q * q + a * a * s * s;
+        let weight = if i == 0 || i == 128 {
+            1.0
+        } else if i % 2 == 0 {
+            2.0
+        } else {
+            4.0
+        };
+        kx += weight * 2.0 * c / a * q * q / d.sqrt();
+        kz += weight * 2.0 * c * a * q * q / (d * d.sqrt());
+    }
+    kx *= h / 3.0;
+    kz *= h / 3.0;
+    8.0 * std::f64::consts::PI * density_kg_m3 * a.powi(3) * c / (15.0 * (2.0 * kx + kz))
+}
+
 pub fn create_hull(
     parameters: HullParameters,
     bodies: &mut RigidBodySet,
@@ -1211,7 +1245,12 @@ fn sail_mass_properties(parameters: BoatParameters) -> MassProperties {
     MassProperties::new(
         Vector::ZERO,
         mass_kg,
-        hinge_inertia - mass_kg * center.length_squared(),
+        hinge_inertia - mass_kg * center.length_squared()
+            + foil_spin_inertia_kg_m2(
+                parameters.boom_length_m,
+                parameters.sail_area_m2,
+                parameters.air_density_kg_m3,
+            ),
     )
 }
 
@@ -1237,7 +1276,12 @@ fn rudder_mass_properties(parameters: BoatParameters) -> MassProperties {
     MassProperties::new(
         Vector::ZERO,
         mass_kg,
-        hinge_inertia - mass_kg * center.length_squared(),
+        hinge_inertia - mass_kg * center.length_squared()
+            + foil_spin_inertia_kg_m2(
+                parameters.rudder_draw_length_m,
+                parameters.rudder_area_m2,
+                parameters.water_density_kg_m3,
+            ),
     )
 }
 
@@ -1324,6 +1368,21 @@ pub fn create_boat(
     joints: &mut ImpulseJointSet,
 ) -> Boat {
     let hull = create_hull(parameters.hull, bodies, colliders);
+    let hull_body = &mut bodies[hull.body];
+    hull_body.set_additional_mass_properties(
+        MassProperties::new(
+            Vector::ZERO,
+            parameters.hull.mass_kg,
+            hull_body.mass_properties().local_mprops.principal_inertia()
+                + foil_spin_inertia_kg_m2(
+                    parameters.keel_area_m2 / parameters.draft_m,
+                    parameters.keel_area_m2,
+                    parameters.water_density_kg_m3,
+                ),
+        ),
+        true,
+    );
+    hull_body.recompute_mass_properties_from_colliders(colliders);
     let sail = bodies.insert(
         RigidBodyBuilder::dynamic().additional_mass_properties(sail_mass_properties(parameters)),
     );

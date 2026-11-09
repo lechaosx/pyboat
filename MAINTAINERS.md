@@ -15,6 +15,31 @@ Use the [root setup](README.md#start-here) before running checks.
 WebTransport integration tests need loopback UDP access. Headless rendering tests
 need a hardware Vulkan GPU; software adapters are rejected.
 
+## Added-inertia investigation
+
+The November 2026 investigation compared constraint-based added inertia,
+full directional tensors on ordinary and articulated bodies, a hinge-matched
+yaw shortcut, and intrinsic centroid-spin inertia. The reference was
+thin-elliptical-foil potential flow, not real-boat measurements. Full tensors
+required engine changes and more global stepping; the hinge shortcut could
+over-resist motion whose foil-centre normal velocity cancelled. Intrinsic spin
+improved some responses and worsened others against that approximate reference;
+collision impulses stayed near the model without added inertia and peak rudder
+speed barely changed.
+
+Matched tests based on `3e59d33` used 64 boats, eight internal partitions,
+unchanged controller gains, and native/Node 24.21 WebAssembly on an i5-13600KF.
+With one pair colliding at 40 m/s each, ordinary full tensors averaged 39.95
+versus 4.60 ms per WASM tick without added inertia. In a separate procedural
+workload, intrinsic spin averaged 5.59 versus 5.86 ms, accompanied by fewer
+adaptive updates. These comparisons include trajectory changes and exclude
+rendering, networking, and spawning; they do not isolate matrix arithmetic.
+The tensor timing prototypes omitted ambient-flow acceleration.
+Timestep refinement and physical-model disagreement were measured separately;
+real-boat calibration remains unverified.
+The accepted compromise is in [ARCHITECTURE.md](ARCHITECTURE.md#authority-and-coordinates);
+its coefficient and source are beside `foil_spin_inertia_kg_m2`.
+
 ## Visual checks
 
 A build cannot validate appearance. Use `npm run dev:playground` to inspect the

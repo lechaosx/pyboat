@@ -92,10 +92,14 @@ and verification details.
   game rules, damage, and wreck policy. Rapier owns integration, joint actuation,
   collision response, and spatial queries.
 - **[Explicit]** Distributed foil forces use local motion relative to wind or water.
-- **[Explicit]** If added fluid inertia is adopted, its ambient-acceleration
-  input uses wave-phase derivatives with amplitude and direction held fixed;
-  wind and current acceleration are omitted. This approximation retains the
-  dominant tested wave response at low computation and maintenance cost.
+- **[Explicit]** Foils retain intrinsic centroid-spin added inertia through
+  stock rigid-body yaw inertia. Omitting normal added mass and its coupling
+  to rotation is a deliberate cost compromise, including in collisions;
+  retaining this energy term does not guarantee closer complete trajectories.
+- **[Explicit]** A future normal added-mass model's ambient-acceleration input
+  uses wave-phase derivatives with amplitude and direction held fixed; wind
+  and current acceleration are omitted. This approximation retains the dominant
+  tested wave response at low computation and maintenance cost.
 - **[Explicit]** Spatial-gradient and Froude–Krylov loads are deferred until
   further wave and current model development.
 - **[Explicit]** Rendered and collision hull geometry agree.
@@ -714,7 +718,7 @@ and verification details.
 
 | Area | Unresolved choice |
 | --- | --- |
-| Added fluid inertia | Engine representation and numerical accuracy/cost before adoption |
+| Added fluid inertia | Whether normal added mass and translation/rotation coupling earn their solver and maintenance costs |
 | Snapshot format | Whether measured scale justifies batching or application-level deltas |
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |
