@@ -2433,6 +2433,117 @@ impl Renderer {
 }
 
 #[wasm_bindgen]
+pub struct BrowserControllerComparison {
+    comparison: crate::ControllerComparison,
+    renderer: Renderer,
+    view_height_m: f32,
+}
+
+#[wasm_bindgen]
+impl BrowserControllerComparison {
+    pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserControllerComparison, JsValue> {
+        console_error_panic_hook::set_once();
+        let window = web_sys::window().unwrap();
+        let search = window.location().search()?;
+        let touch_screen = window
+            .match_media("(pointer: coarse)")?
+            .is_some_and(|query| query.matches());
+        let graphics = GraphicsSettings::from_query(&search, touch_screen);
+        let fresh_surface = search
+            .trim_start_matches('?')
+            .split('&')
+            .any(|parameter| parameter == "freshSurface=1");
+        let renderer =
+            Renderer::new(canvas, graphics, MINIMUM_BAKE_MEMORY_BYTES, fresh_surface).await?;
+        Ok(Self {
+            comparison: crate::ControllerComparison::new(0),
+            renderer,
+            view_height_m: DEFAULT_VIEW_HEIGHT_M,
+        })
+    }
+
+    pub fn reset(&mut self, preset: u32) {
+        self.comparison = crate::ControllerComparison::new(preset);
+        self.renderer.cloth = ClothPresentation::default();
+    }
+
+    pub fn set_player_input(
+        &mut self,
+        keyboard_forward: f32,
+        keyboard_turn: f32,
+        world_x: f32,
+        world_y: f32,
+        control_mask: u32,
+    ) {
+        self.comparison.set_player_input(
+            [keyboard_forward, keyboard_turn, world_x, world_y],
+            control_mask,
+        );
+    }
+
+    pub fn frame(&mut self, elapsed_seconds: f64, playing: bool) -> Result<(), JsValue> {
+        self.comparison.advance(elapsed_seconds, playing);
+        let renderer = &mut self.renderer;
+        if !playing {
+            // Paused cloth keeps scene time still; presentation still needs
+            // wall time so capped views can redraw after zoom or reset.
+            renderer.frame_pacer.frame_due(
+                elapsed_seconds.clamp(0.0, 0.25),
+                renderer.graphics.frame_rate_cap,
+            );
+        }
+        let offset_m = view_width_m(renderer.aspect_ratio(), self.view_height_m) / 4.0;
+        renderer.render(
+            &[
+                self.comparison.scene(0, Vector::new(-offset_m, 0.0)),
+                self.comparison.scene(1, Vector::new(offset_m, 0.0)),
+            ],
+            None,
+            WorldGeometry::default(),
+            Some((self.comparison.tick(), 0.0)),
+            if playing {
+                elapsed_seconds.clamp(0.0, 0.25)
+            } else {
+                0.0
+            },
+            Vector::ZERO,
+            self.view_height_m,
+        )?;
+        Ok(())
+    }
+
+    pub fn zoom(&mut self, delta: f32) {
+        self.view_height_m = zoom_view_height_m(self.view_height_m, delta);
+    }
+
+    pub fn stats(&self, side: usize) -> Vec<f64> {
+        let side = side.min(1);
+        let motion = self.comparison.motion(side);
+        let intent = self.comparison.intent(side);
+        let environment = self.comparison.environment();
+        vec![
+            self.comparison.tick() as f64 / TICKS_PER_SECOND as f64,
+            intent.forward,
+            intent.turn,
+            (motion.velocity_m_s - environment.true_water_velocity_m_s).length(),
+            motion.angular_velocity_rad_s.to_degrees(),
+            motion.rudder_angle_rad.to_degrees(),
+            self.comparison
+                .targets(side)
+                .rudder_target_angle_rad
+                .to_degrees(),
+            motion.angle_rad.to_degrees(),
+            motion.position_m.x,
+            motion.position_m.y,
+            environment.true_wind_velocity_m_s.x,
+            environment.true_wind_velocity_m_s.y,
+            environment.true_water_velocity_m_s.x,
+            environment.true_water_velocity_m_s.y,
+        ]
+    }
+}
+
+#[wasm_bindgen]
 pub struct BrowserGame {
     client: Rc<RefCell<MultiplayerClient>>,
     pending_snapshot: Rc<RefCell<Option<ServerMessage>>>,

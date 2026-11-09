@@ -157,6 +157,9 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
   movement is boat-relative; the first gamepad's left stick is world-relative
   with no added software deadzone.
+- **[Explicit]** Preserve how device input becomes separate forward and turn
+  intentions, including fractional input. Changes downstream of those intentions
+  are evaluated against the existing controller through side-by-side playtesting.
 - **[Explicit]** Nearby boats appear without intentional interpolation delay.
   Prediction, reconciliation, and entry/exit from physical interaction stay smooth.
   Accepted steering and latency compensation remain the responsiveness baseline

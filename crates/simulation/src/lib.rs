@@ -1073,10 +1073,27 @@ pub fn auto_sheet_control(input: &ControlInput, intent: AutoSheetIntent) -> Surf
     }
 }
 
+pub fn continuous_yaw_rate_move_control(
+    input: &ControlInput,
+    intent: MotionIntent,
+    maximum_yaw_rate_rad_s: f64,
+) -> SurfaceTargets {
+    yaw_rate_move_control_with_selection(input, intent, maximum_yaw_rate_rad_s, true)
+}
+
 pub fn yaw_rate_move_control(
     input: &ControlInput,
     intent: MotionIntent,
     maximum_yaw_rate_rad_s: f64,
+) -> SurfaceTargets {
+    yaw_rate_move_control_with_selection(input, intent, maximum_yaw_rate_rad_s, false)
+}
+
+fn yaw_rate_move_control_with_selection(
+    input: &ControlInput,
+    intent: MotionIntent,
+    maximum_yaw_rate_rad_s: f64,
+    continuous: bool,
 ) -> SurfaceTargets {
     let (sheet_target_angle_rad, sail_effect, sail_target_angle_rad) =
         sail_target(input, intent.forward.clamp(-1.0, 1.0), true, true);
@@ -1119,9 +1136,39 @@ pub fn yaw_rate_move_control(
             }
         })
         .unwrap();
+    let mut rudder_target_angle_rad = rudder_effect.angle_rad;
+    if continuous {
+        let requested_rudder_moment = target_moment_n_m - sail_effect.yaw_moment_n_m;
+        let mut selected_error = (rudder_effect.yaw_moment_n_m - requested_rudder_moment).abs();
+        for segment in input.rudder_effects.windows(2) {
+            let [left, right] = [segment[0], segment[1]];
+            let delta = right.yaw_moment_n_m - left.yaw_moment_n_m;
+            let angle = if delta == 0.0 {
+                0.0_f64.clamp(left.angle_rad, right.angle_rad)
+            } else {
+                let fraction = (requested_rudder_moment - left.yaw_moment_n_m) / delta;
+                if !(0.0..=1.0).contains(&fraction) {
+                    continue;
+                }
+                left.angle_rad + fraction * (right.angle_rad - left.angle_rad)
+            };
+            let error = if delta == 0.0 {
+                (left.yaw_moment_n_m - requested_rudder_moment).abs()
+            } else {
+                0.0
+            };
+            if error + CONTROL_SELECTION_TIE_TOLERANCE < selected_error
+                || ((error - selected_error).abs() <= CONTROL_SELECTION_TIE_TOLERANCE
+                    && angle.abs() < rudder_target_angle_rad.abs())
+            {
+                selected_error = error;
+                rudder_target_angle_rad = angle;
+            }
+        }
+    }
     SurfaceTargets {
         sheet_target_angle_rad,
-        rudder_target_angle_rad: rudder_effect.angle_rad,
+        rudder_target_angle_rad,
         sail_target_angle_rad,
     }
 }

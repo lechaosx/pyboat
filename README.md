@@ -29,6 +29,12 @@ npm ci
 For the procedural playground, run `npm run dev:playground`. It provides a live
 preview and controls for inspecting the world and tuning its appearance.
 
+For local controller comparison, run `npm run dev` and open `/controller.html`.
+It needs no backend. The two independent boats compare the current controller
+with intermediate rudder targets; reset gives both the same starting conditions.
+Keyboard, gamepad, and the draggable stick work on either or both boats. The
+multiplayer game keeps its current controller.
+
 For GitHub Pages and backend deployment, follow the
 [hosting setup](crates/server/README.md#hosting).
 

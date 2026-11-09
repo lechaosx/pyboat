@@ -1,3 +1,5 @@
+mod controller_comparison;
+pub use controller_comparison::ControllerComparison;
 use std::collections::HashMap;
 
 mod baked_surface;
