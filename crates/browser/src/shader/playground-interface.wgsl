@@ -1,5 +1,4 @@
 struct PlaygroundUniforms {
-    water_tuning: vec4<f32>,
     landform_lighting: vec4<f32>,
     cloud_shadows: vec4<f32>,
     layer_visibility: vec4<f32>,
@@ -19,7 +18,6 @@ var<uniform> playground: PlaygroundUniforms;
 
 fn playground_scene_tuning() -> SceneTuning {
     return SceneTuning(
-        playground.water_tuning,
         playground.landform_lighting,
         playground.cloud_shadows,
     );

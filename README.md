@@ -6,7 +6,8 @@ world, whose islands a drone-like camera shows in perspective. Wooden hull
 sprites carry cloth sails that fill or luff with apparent wind. Day/night
 lighting uses gradual eye adaptation to the brightness and color of the light
 falling on each part of the view, with HDR highlights on supported browsers and
-displays. Water mirrors the sky and glints in sunlight and moonlight.
+displays. Water mirrors the sky and glints in sunlight and moonlight; its depth
+and its bed set its color.
 
 The intended game adds varied ships, mostly automatic weapons, and progression.
 [Product decisions](PRODUCT.md) describe that scope.

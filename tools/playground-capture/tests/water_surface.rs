@@ -1,6 +1,7 @@
 //! Water reflects each beam by Fresnel's law from facets whose slopes follow
 //! Cox and Munk's statistics, seen from the drone camera, and reflects the
-//! clear sky by a radiance that carries its diffuse light.
+//! clear sky by a radiance that carries its diffuse light. Its body returns
+//! light by its spectral optics over the bed beneath.
 
 use std::{
     f64::consts::PI,
@@ -461,4 +462,168 @@ fn repeated_copies_of_the_world_face_the_camera_from_where_they_lie() {
     for (column, pair) in row.windows(2).enumerate() {
         assert!(pair[1][0] <= pair[0][0], "turns back after column {column}");
     }
+}
+
+/// Water's body by `lighting_water_body_*`, per unit of the Sun's light on
+/// level ground, in linear sRGB: a row over a black bed, then one over a grey
+/// bed of albedo 0.12, each 0, 1, 2, 5, 20 and 10 000 m deep.
+fn water_body(sun_degrees: u32, view_degrees: u32, sediment: &str) -> [[[f64; 3]; 6]; 2] {
+    let diagnostic = format!("lighting_water_body_{sun_degrees}_{view_degrees}_{sediment}");
+    let rgba = capture_rgba(
+        &diagnostic,
+        &["--diagnostic", &diagnostic, "--width", "6", "--height", "2"],
+    );
+    let pixels = rgba.as_chunks::<4>().0;
+    std::array::from_fn(|row| {
+        std::array::from_fn(|column| {
+            [0, 1, 2].map(|channel| {
+                let encoded = srgb_channel_to_linear(pixels[row * 6 + column][channel]);
+                0.05 * encoded / (1.0 - encoded)
+            })
+        })
+    })
+}
+
+/// The columns of `water_body` 5 m and 10 000 m deep.
+const FIVE_METRES: usize = 3;
+const DEEP: usize = 5;
+
+/// CIELAB of a linear sRGB colour against white.
+fn lab(rgb: [f64; 3]) -> [f64; 3] {
+    let xyz = [
+        [0.412_456_4, 0.357_576_1, 0.180_437_5],
+        [0.212_672_9, 0.715_152_2, 0.072_175_0],
+        [0.019_333_9, 0.119_192_0, 0.950_304_1],
+    ]
+    .map(|row| {
+        (0..3)
+            .map(|channel| row[channel] * rgb[channel])
+            .sum::<f64>()
+    });
+    let white = [0.950_47, 1.0, 1.088_83];
+    let [x, y, z] = [0, 1, 2].map(|axis| {
+        let t = xyz[axis] / white[axis];
+        if t > 216.0 / 24_389.0 {
+            t.cbrt()
+        } else {
+            (24_389.0 / 27.0 * t + 16.0) / 116.0
+        }
+    });
+    [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
+}
+
+fn delta_e(left: [f64; 3], right: [f64; 3]) -> f64 {
+    let (left, right) = (lab(left), lab(right));
+    (0..3)
+        .map(|axis| (left[axis] - right[axis]).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// From a bare bed to deep water, clear and turbid, water's body matches a
+/// 1 nm integration of the same optics within the eight bands' ΔE*ab 2.1 of
+/// white. The references integrate Maritorena, Morel and Gentili's shallow
+/// water on Gordon's deep reflectance, through Lee's relation above water,
+/// with Pope and Fry's and Smith and Baker's absorption plus the faked
+/// background, Morel's seawater backscattering, and Babin's sediment, over the
+/// CIE 1931 colour-matching functions under a 5778 K blackbody, with the Sun
+/// and view at the zenith; negative channels clip at zero.
+#[test]
+fn water_body_follows_its_spectral_optics_from_bare_bed_to_deep_water() {
+    let clear = water_body(90, 0, "0");
+    let turbid = water_body(90, 0, "5");
+    for (label, rendered, reference) in [
+        (
+            "grey bed bare",
+            clear[1][0],
+            [0.068_485, 0.068_485, 0.068_485],
+        ),
+        (
+            "grey bed 2 m deep",
+            clear[1][2],
+            [0.018_870, 0.055_001, 0.064_105],
+        ),
+        ("deep", clear[0][DEEP], [0.0, 0.002_863, 0.015_000]),
+        (
+            "grey bed 5 m deep, 5 g/m³",
+            turbid[1][FIVE_METRES],
+            [0.024_514, 0.066_977, 0.042_804],
+        ),
+        (
+            "deep, 5 g/m³",
+            turbid[0][DEEP],
+            [0.022_870, 0.066_078, 0.041_171],
+        ),
+    ] {
+        let difference = delta_e(rendered, reference);
+        assert!(
+            difference <= 2.1,
+            "{label}: rendered {rendered:?}, reference {reference:?}, ΔE {difference}",
+        );
+    }
+}
+
+/// Fresnel transmittance into level water at `degrees` off the vertical.
+fn transmittance(degrees: f64) -> f64 {
+    1.0 - fresnel_reflectance(degrees.to_radians().cos())
+}
+
+/// Deep water hides its bed, so its body differs only by the Fresnel
+/// transmittances its light passes: the view's out of the water, and the
+/// Sun's into it. The 3% bound is twice the diagnostic's eight-bit
+/// resolution of each value.
+#[test]
+fn deep_water_passes_light_by_fresnel_transmittance_both_ways() {
+    let blue = |sun_degrees, view_degrees| water_body(sun_degrees, view_degrees, "0")[0][DEEP][2];
+    let overhead = blue(90, 0);
+    for (label, rendered, expected) in [
+        (
+            "view 80° off the vertical",
+            blue(90, 80) / overhead,
+            transmittance(80.0) / transmittance(0.0),
+        ),
+        (
+            "Sun 20° high",
+            blue(20, 0) / overhead,
+            transmittance(70.0) / transmittance(0.0),
+        ),
+    ] {
+        assert!(
+            (rendered / expected - 1.0).abs() < 0.03,
+            "{label}: rendered {rendered}, Fresnel {expected}",
+        );
+    }
+}
+
+/// The luminance a grey bed adds to water's body at 5 m.
+fn bed_share(body: &[[[f64; 3]; 6]; 2]) -> f64 {
+    let luminance = |rgb: [f64; 3]| 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    luminance(body[1][FIVE_METRES]) - luminance(body[0][FIVE_METRES])
+}
+
+/// A low Sun's light refracts along a longer path down to the bed, so the bed
+/// adds less to the body even per unit of the light that enters: about 9%
+/// less under a Sun 20° high than 70° high, here beyond the diagnostic's
+/// eight-bit resolution of the bed's share, under 3%.
+#[test]
+fn a_low_sun_shows_less_of_the_bed() {
+    let entering_bed_share = |sun_degrees: u32| {
+        bed_share(&water_body(sun_degrees, 0, "0")) / transmittance(f64::from(90 - sun_degrees))
+    };
+    let (low, high) = (entering_bed_share(20), entering_bed_share(70));
+    assert!(
+        low < 0.95 * high,
+        "bed share per unit of entering light under a Sun 20° high {low}, 70° high {high}",
+    );
+}
+
+/// Sediment veils the bed.
+#[test]
+fn sediment_veils_the_bed() {
+    let clear = bed_share(&water_body(90, 0, "0"));
+    let turbid = bed_share(&water_body(90, 0, "5"));
+    assert!(
+        turbid < clear,
+        "bed share clear {clear}, with 5 g/m³ {turbid}"
+    );
 }

@@ -1753,7 +1753,6 @@ fn wind_shear_amount() -> f32 {
 
 fn production_tuning() -> SceneTuning {
     return SceneTuning(
-        vec4<f32>(WATER_ATTENUATION_LENGTH_M, 0.0, 0.0, 0.0),
         vec4<f32>(1.0, 1.0, LANDFORM_SHADOW_REACH_M, 0.0),
         vec4<f32>(1.0, 0.0, 0.0, 0.0),
     );

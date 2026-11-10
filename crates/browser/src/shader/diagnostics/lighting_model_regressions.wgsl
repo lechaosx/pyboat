@@ -10,6 +10,8 @@ override LIGHTING_MODEL_LIGHT_HEIGHT: f32 = 0.5;
 override LIGHTING_MODEL_CLOUD_DEPTH: f32 = 1.0;
 override LIGHTING_MODEL_SLOPE_DEGREES: f32 = 30.0;
 override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
+override LIGHTING_MODEL_VIEW_DEGREES: f32 = 0.0;
+override LIGHTING_MODEL_SEDIMENT: f32 = 0.0;
 
 @fragment
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -200,11 +202,13 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let receiver = celestial_receiver_light_at_height(0.0);
         let response = water_light_response(
             vec3<f32>(0.0),
+            0.0,
+            0.0,
             TerrainSurface(vec3<f32>(0.0), vec2<f32>(0.0), 0.0, vec2<f32>(0.0)),
             vec3<f32>(0.0, 0.0, 1.0),
             receiver,
             calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
-            1.0,
+            vec3<f32>(0.0, 0.0, 1.0),
         );
         return vec4<f32>(0.5 * response.clear_sky.x / water_fresnel_reflectance(1.0), 0.0, 0.0, 1.0);
     }
@@ -224,6 +228,44 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         }
         let slope_squared = dot(surface.surface.detail_gradient, surface.surface.detail_gradient);
         return vec4<f32>(slope_squared / (slope_squared + 0.001), 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 38u {
+        // Water's body per unit of the Sun's light on level ground, under a
+        // Sun LIGHTING_MODEL_SUN_DEGREES high with the Moon set, seen
+        // LIGHTING_MODEL_VIEW_DEGREES off the vertical through level water,
+        // as b / (b + 0.05) in each channel. The columns lie 0, 1, 2, 5, 20
+        // and 10 000 m deep, the top row over a black bed and the bottom over
+        // a grey one of albedo 0.12. They hold LIGHTING_MODEL_SEDIMENT g/m³ of
+        // sediment.
+        var depths_m = array<f32, 6>(0.0, 1.0, 2.0, 5.0, 20.0, 10000.0);
+        let depth_m = depths_m[min(u32(input.position.x), 5u)];
+        let view = radians(LIGHTING_MODEL_VIEW_DEGREES);
+        let body = water_body_response(
+            vec3<f32>(select(0.0, 0.12, input.position.y >= 1.0)),
+            depth_m,
+            LIGHTING_MODEL_SEDIMENT,
+            1.0 - water_fresnel_reflectance(cos(view)),
+            cos(view),
+            vec2<f32>(sin(radians(LIGHTING_MODEL_SUN_DEGREES)), -1.0),
+            vec2<f32>(1.0),
+        ).sun;
+        return vec4<f32>(body / (body + 0.05), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 39u {
+        // The Sun's light reaching the surface at the rendered position,
+        // through the scene's cloud and landform shadows, on a white surface,
+        // in scene light, as l / (l + 0.01) of its luminance in red.
+        let initialized = initialize_playground_scene(input);
+        let light = lit_scene_surface(
+            initialized.input.world_position_m,
+            initialized.atmosphere,
+            initialized.surface_circle_position,
+            true,
+            vec4<f32>(1.0, 0.0, 0.0, 0.0),
+            fragment_layer_visibility().y,
+        );
+        let luminance = dot(light, LUMINANCE_WEIGHTS);
+        return vec4<f32>(luminance / (luminance + 0.01), 0.0, 0.0, 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 37u {
         // The x component of `camera_view_direction` from the point the

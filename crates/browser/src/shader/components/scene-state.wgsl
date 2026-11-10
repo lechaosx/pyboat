@@ -48,8 +48,6 @@ const LANDFORM_FIELD: u32 = 2u;
 const LANDFORM_HORIZON_FIELD: u32 = 3u;
 
 struct SceneTuning {
-    // Attenuation length, then padding.
-    water_tuning: vec4<f32>,
     // Relief and shadow visibility, high-light reach, then padding.
     landform_lighting: vec4<f32>,
     // Visibility, then padding.
@@ -89,10 +87,6 @@ var<uniform> scene: SceneUniforms;
 // Keep synchronized with `TERRAIN_ELEVATION_SCALE` in crates/game/src/lib.rs.
 const TERRAIN_ELEVATION_SCALE: f32 = 3.0;
 const TERRAIN_CLIFF_SLOPE: f32 = 0.08;
-// Compressed from clear seawater's 10-50 m so steep shelves still read.
-override WATER_ATTENUATION_LENGTH_M: f32 = 0.5;
-const WATER_BOTTOM_REFLECTANCE: f32 = 3.0;
-const WATER_BOTTOM_VEIL: f32 = 0.35;
 override LANDFORM_SHADOW_REACH_M: f32 = 320.0;
 // Lab-only worst-case timing: evaluate work that conditions normally skip, then
 // select the same result. False folds away when pipelines are compiled.

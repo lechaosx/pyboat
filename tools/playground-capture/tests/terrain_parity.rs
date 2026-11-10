@@ -3583,6 +3583,87 @@ fn the_game_tints_shallow_water_with_its_bottom() {
     );
 }
 
+/// The bake holds the bed's composition as deep as water shows it, so baked
+/// water over beds deeper than any tide exposes keeps directly evaluated
+/// water's mean brightness: at the bench's reef coast, and at its polar ice
+/// edge, whose submerged beds keep their ground rather than the shore's land
+/// ice. The 5% bound lies well beyond the 1% the bake's filtering and the
+/// field grids leave at the reef coast, and well within the 18% its bed adds.
+/// Sea ice, whose colour is hidden, is left out.
+#[test]
+fn baked_water_shows_the_bed_direct_evaluation_shows() {
+    let world = WorldGeometry::default();
+    let (width, height) = (256, 144);
+    for (view_m, view_height_m, world_time_seconds) in [
+        (Vector::new(-8_500.0, 0.0), 240.0_f32, 37.0),
+        (Vector::new(7_100.0, 29_000.0), 2_400.0, 15_595_200.0),
+    ] {
+        let render = |label, diagnostic| {
+            render_capture(
+                label,
+                &[
+                    "--camera-x",
+                    &view_m.x.to_string(),
+                    "--camera-y",
+                    &view_m.y.to_string(),
+                    "--view-height",
+                    &view_height_m.to_string(),
+                    "--world-time",
+                    &world_time_seconds.to_string(),
+                    "--diagnostic",
+                    diagnostic,
+                    "--cloud-shadows",
+                    "0",
+                    "--solid-material-colors",
+                    "1,1,1,0",
+                ],
+            )
+        };
+        let baked = render("bed-baked", "scene");
+        let direct = render("bed-direct", "scene_direct");
+        let pixel_m = view_height_m / height as f32;
+        let submerged: Vec<bool> = (0..width * height)
+            .map(|index| {
+                let (column, row) = ((index % width) as f32, (index / width) as f32);
+                let offset_m = Vector::new(
+                    column + 0.5 - 0.5 * width as f32,
+                    0.5 * height as f32 - row - 0.5,
+                );
+                let shown = |image: &[u8]| image[4 * index..4 * index + 3] != [0, 0, 0];
+                (4.0..30.0).contains(&procedural_water_depth_m(
+                    world,
+                    SEED,
+                    world_time_seconds,
+                    view_m + pixel_m * offset_m,
+                )) && shown(&baked)
+                    && shown(&direct)
+            })
+            .collect();
+        let count = submerged.iter().filter(|&&selected| selected).count();
+        assert!(
+            count >= 100,
+            "at {view_m:?} only {count} pixels lie 4 to 30 m deep"
+        );
+        let mean_luminance = |image: &[u8]| {
+            image
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(&submerged)
+                .filter(|&(_, &selected)| selected)
+                .map(|(pixel, _)| linear_luminance(pixel))
+                .sum::<f32>()
+                / count as f32
+        };
+        let (baked, direct) = (mean_luminance(&baked), mean_luminance(&direct));
+        assert!(
+            (baked / direct - 1.0).abs() < 0.05,
+            "at {view_m:?}, over {count} pixels 4 to 30 m deep, baked water's mean luminance \
+             {baked}, direct {direct}",
+        );
+    }
+}
+
 /// The mean over `selected` pixels of each one's largest RGB channel difference.
 fn mean_difference(left: &[u8], right: &[u8], selected: &[bool]) -> f64 {
     let (sum, count) = pixel_differences(left, right)
@@ -4288,14 +4369,15 @@ fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
                 position_m,
                 world_time_seconds,
                 view_height_m,
-                "scene",
+                "lighting_surface_sunlight",
                 size as u32,
                 size as u32,
-                &[
-                    ("--light-contributions", "1,0,0,0"),
-                    ("--cloud-shadows", cloud_shadows),
-                ],
+                &[("--cloud-shadows", cloud_shadows)],
             )
+        };
+        let light = |image: &[u8], offset: usize| {
+            let encoded = srgb_channel_to_linear(image[offset]);
+            encoded / (1.0 - encoded)
         };
         let (shadowed, unshadowed) = (sunlight("1"), sunlight("0"));
         // Share of direct sunlight that reaches sea pixels whose sea-level Sun
@@ -4320,14 +4402,13 @@ fn sunlight_under_cloud_does_not_brighten_as_the_sun_sinks() {
                         && procedural_terrain_elevation_m(world, SEED, pixel_m) < 0.0
                     {
                         let offset = 4 * (row * size + column);
-                        reaching += linear_luminance(&shadowed[offset..]);
-                        arriving += linear_luminance(&unshadowed[offset..]);
+                        reaching += light(&shadowed, offset);
+                        arriving += light(&unshadowed, offset);
                     }
                 }
             }
             reaching / arriving
         };
-        // Below these heights the sunlit sea of this view holds only a few 8-bit levels.
         let higher = transmittance(0.11, 0.13);
         let lower = transmittance(0.07, 0.08);
         // Share of the sunlight that cloud removes under the higher Sun which

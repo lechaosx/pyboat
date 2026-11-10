@@ -127,7 +127,6 @@ type State = {
   seaIceColorVisible: number;
   cloudShadowsVisible: number;
   legacyShadowLook: number;
-  waterAttenuationLength: number;
   landformReliefVisible: number;
   landformShadowsVisible: number;
   landformShadowReach: number;
@@ -170,7 +169,6 @@ const defaults: State = {
   seaIceColorVisible: 1,
   cloudShadowsVisible: 1,
   legacyShadowLook: 0,
-  waterAttenuationLength: 0.5,
   landformReliefVisible: 1,
   landformShadowsVisible: 1,
   landformShadowReach: 320,
@@ -476,7 +474,6 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "toggle", key: "waterColorVisible", label: "Water body" },
       { type: "toggle", key: "bottomColorVisible", label: "Visible bottom" },
       { type: "toggle", key: "waterSurfaceVisible", label: "Surface reflection" },
-      { type: "range", key: "waterAttenuationLength", label: "Bottom attenuation · m", min: 0.1, max: 4, step: 0.05 },
     ],
   },
   {
@@ -1068,7 +1065,7 @@ function frameRateCap(): number | undefined {
   return state.frameRateCap > 0 ? state.frameRateCap : undefined;
 }
 let sceneUniforms: Uint8Array = new Uint8Array(playground_scene_uniform_bytes());
-const tuningFloats = new Float32Array(52);
+const tuningFloats = new Float32Array(48);
 const tuningUints = new Uint32Array(tuningFloats.buffer);
 const sceneBuffer = device.createBuffer({ size: sceneUniforms.byteLength, usage: 0x40 | 0x08 });
 const playgroundBuffer = device.createBuffer({ size: tuningFloats.byteLength, usage: 0x40 | 0x08 });
@@ -1680,49 +1677,48 @@ function updateUniforms(
   bakedSurfaceWorkgroups = frame.baked_surface_workgroups;
   frame.free();
 
-  tuningFloats.set([state.waterAttenuationLength, 0, 0, 0], 0);
   tuningFloats.set([
     state.landformReliefVisible,
     state.landformShadowsVisible,
     state.landformShadowReach,
     0,
-  ], 4);
-  tuningFloats.set([state.cloudShadowsVisible, 0, 0, 0], 8);
+  ], 0);
+  tuningFloats.set([state.cloudShadowsVisible, 0, 0, 0], 4);
   tuningFloats.set([
     0,
     Number(surfaceDirectContribution),
     0,
     0,
-  ], 12);
+  ], 8);
   tuningFloats.set([
     1,
     1,
     1,
     1,
-  ], 16);
-  tuningUints.set(light, 20);
-  tuningUints.set(landMaterial, 24);
-  tuningUints.set(solidMaterial, 28);
-  tuningUints.set(waterMaterial, 32);
+  ], 12);
+  tuningUints.set(light, 16);
+  tuningUints.set(landMaterial, 20);
+  tuningUints.set(solidMaterial, 24);
+  tuningUints.set(waterMaterial, 28);
   tuningFloats.set([
     visible(intermediate.pressure),
     visible(intermediate.temperature),
     visible(intermediate.moisture),
     visible(intermediate.weather),
-  ], 36);
+  ], 32);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.oceanForcing),
     visible(intermediate.waveSpectrum),
     visible(intermediate.materials),
-  ], 40);
+  ], 36);
   tuningFloats.set([
     visible(intermediate.materials),
     visible(intermediate.materials),
     0,
     0,
-  ], 44);
-  tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 48);
+  ], 40);
+  tuningUints.set([occluderFieldInspection, sceneSize[0]!, sceneSize[1]!, 0], 44);
   const tuning = new Uint8Array(tuningFloats.buffer);
   if (!productionShaders && tuning.some((byte, index) => byte !== bakedTuning[index])) {
     bakedSurface.invalidate();

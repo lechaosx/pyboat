@@ -1,8 +1,8 @@
 // The static surface kept between frames in a toroidal clipmap on
 // world-anchored lattices. Each level holds, per texel, a half-precision layer
-// of elevation with land ice, its gradient, and bed reflectance, then
-// eight-bit layers of the dry, snowless, unseasoned land colour and unresolved
-// detail slope;
+// of elevation with land ice and its gradient, then eight-bit layers of the
+// dry, snowless, unseasoned land colour, which also colours the bed beneath
+// water, and unresolved detail slope;
 // the land detail gradient, wetness fraction, and surface grade; the autumn
 // colour change, or on texels with land ice its colour grade and relief, and
 // the snow detail scale; the dormancy colour
@@ -70,14 +70,9 @@ fn baked_bilinear(corners: BakedCorners, fraction: vec2<f32>) -> vec4<f32> {
     );
 }
 
-struct BakedHeight {
-    elevation: TerrainNoiseSample,
-    bottom_reflectance: f32,
-};
-
 // Elevation by bicubic Hermite reconstruction from the baked slopes, with the
 // cross derivative estimated from their differences across the cell.
-fn baked_height_at(cell: BakedSurfaceCell) -> BakedHeight {
+fn baked_height_at(cell: BakedSurfaceCell) -> TerrainNoiseSample {
     let height = baked_corners(baked_height, cell, scene.baked_surface_level.x);
     let cross = 0.25 * (
         (height.upper_left.y - height.lower_left.y + height.upper_right.y - height.lower_right.y)
@@ -99,7 +94,7 @@ fn baked_height_at(cell: BakedSurfaceCell) -> BakedHeight {
     // so the Hermite derivative would draw false contours; across an ice shore
     // a cell also spans a cliff that no pixel shows.
     elevation.gradient = interpolated.yz;
-    return BakedHeight(elevation, interpolated.w);
+    return elevation;
 }
 
 struct BakedLand {
@@ -120,9 +115,8 @@ fn decode_detail_gradient(encoded: vec2<f32>, range: f32) -> vec2<f32> {
     return range * sign(signed_gradient) * signed_gradient * signed_gradient;
 }
 
-fn baked_land_at(cell: BakedSurfaceCell) -> BakedLand {
+fn baked_land_at(cell: BakedSurfaceCell, color: vec4<f32>) -> BakedLand {
     let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x;
-    let color = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
     let detail = baked_bilinear(baked_corners(baked_color, cell, layer + 1u), cell.fraction);
     let seasonal_corners = baked_corners(baked_color, cell, layer + 2u);
     let seasonal = baked_bilinear(seasonal_corners, cell.fraction);
@@ -179,12 +173,6 @@ fn baked_sea_ice_detail_at(cell: BakedSurfaceCell) -> SeaIceDetail {
     );
 }
 
-// The depth beyond which open water reads nothing of the bed: the vanishing of
-// coastal detail, which lies beyond depth-limited waves, and bottom tint.
-fn bed_unseen_depth_m() -> f32 {
-    return max(32.0, 2.0 + 2.0 * tuning.water_tuning.x);
-}
-
 fn scene_surface_at(
     position_m: vec2<f32>,
     circle_position: vec4<f32>,
@@ -205,7 +193,7 @@ fn scene_surface_at(
         cluster = terrain_broad_noise(TERRAIN_CLUSTER_NOISE, position_m, circle_position);
         open_water = sea_ice_open_water(climate, cluster);
     }
-    if offshore && bed_depth_m > bed_unseen_depth_m() && 1.0 - open_water.value <= 0.5 {
+    if offshore && bed_depth_m > baked_bed_reach_m() && 1.0 - open_water.value <= 0.5 {
         var bed: TerrainSample;
         bed.elevation_m = -bed_depth_m;
         bed.material_elevation_m = -bed_depth_m;
@@ -234,8 +222,8 @@ fn scene_surface_at(
             atmosphere,
         );
     }
-    let baked = baked_height_at(cell);
-    var elevation = baked.elevation;
+    let baked_elevation = baked_height_at(cell);
+    var elevation = baked_elevation;
     // Sea ice forms on submerged bedrock, as in `solid_ice_sample`.
     var water_ice_amount = 0.0;
     let submerged = elevation.value < 0.0;
@@ -270,20 +258,23 @@ fn scene_surface_at(
         surface = sea_ice_surface(
             position_m,
             water_ice_amount,
-            baked.elevation.value,
+            baked_elevation.value,
             baked_sea_ice_detail_at(cell),
         );
+    }
+    // Land and the bed beneath water share the colour layer, which water reads
+    // only where its bed shows.
+    let bed_shows = !is_land
+        && water_shows_bed(water_height_m - baked_elevation.value, OPEN_WATER_SEDIMENT_G_M3);
+    var color = vec4<f32>(0.0);
+    if (is_land && !sea_ice) || bed_shows || EVALUATE_ALL_BRANCHES {
+        let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x;
+        color = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
     }
     if !is_land || EVALUATE_ALL_BRANCHES {
         surface = select_terrain_surface(
             surface,
-            water_column_surface(
-                position_m,
-                baked.elevation.value,
-                water_height_m,
-                baked.bottom_reflectance,
-                atmosphere,
-            ),
+            visual_water_surface(position_m, color.rgb, baked_elevation.value, atmosphere),
             !is_land,
         );
     }
@@ -291,7 +282,7 @@ fn scene_surface_at(
         surface = select_terrain_surface(
             surface,
             baked_land_surface(
-                baked_land_at(cell),
+                baked_land_at(cell, color),
                 elevation.value,
                 water_height_m,
                 atmosphere,

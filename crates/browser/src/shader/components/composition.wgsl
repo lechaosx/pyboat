@@ -246,8 +246,8 @@ fn lit_scene_surface(
     let split = ambient_light.split;
     let albedo = select(linear_material_color(surface.color), vec3<f32>(1.0), illumination);
     // Land returns the light on it times its albedo; water returns its
-    // reflectance of each light. The light reaching water is that on level
-    // ground.
+    // reflectance of each light, its albedo the bed's. The light reaching
+    // water is that on level ground.
     var land_albedo = vec3<f32>(1.0);
     var response = SurfaceLightResponse(
         vec3<f32>(1.0),
@@ -267,13 +267,16 @@ fn lit_scene_surface(
             vec3<f32>(relief.z),
         );
     } else if !illumination {
+        let depth_m = water_height_m - scene_surface.elevation_m;
         response = water_light_response(
             albedo,
+            depth_m,
+            OPEN_WATER_SEDIMENT_G_M3,
             surface,
             camera_view_direction(surface_height_m),
             surface_direct_light,
             ambient_light,
-            water_material_color_visibility().z,
+            water_material_color_visibility() * vec3<f32>(1.0, effect_feature_visibility().y, 1.0),
         );
     }
     let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);

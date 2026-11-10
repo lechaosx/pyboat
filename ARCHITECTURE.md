@@ -322,6 +322,8 @@ and verification details.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
   from shared local causes. Fine surface breakup changes appearance alone, evolves
   without field-wide velocity, and has fixed cost independent of world size.
+- **[Implicit]** The bed beneath water takes the shore's dry composition, so
+  ground keeps its material as the tide covers it.
 
 ### Celestial and cloud light
 
@@ -406,6 +408,12 @@ and verification details.
   isotropic. That stand-in loses the broad glow such light keeps toward the
   set light, so water brightens against land where the directly lit glow
   gives way to it.
+- **[Implicit]** Water's body returns each light by its inherent optics,
+  resolved spectrally, through Fresnel transmittance into and out of the
+  surface along refracted paths; seawater and an absorbing background set
+  those optics.
+- **[Explicit]** Water's clarity is pure seawater with one absorbing
+  background.
 - **[Implicit]** A pixel takes the mean relief light of the land it covers:
   the relief its footprint resolves sets the mean slope, and finer terrain and
   material relief spreads slopes around it. Authoritative elevation and its

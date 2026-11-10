@@ -55,7 +55,7 @@ fn baked_surface_texel(invocation: u32) -> BakedSurfaceTexel {
 }
 
 struct BakedSurfaceValues {
-    // Elevation, its gradient, and bed reflectance.
+    // Elevation and its gradient, then padding.
     height: vec4<f32>,
     color: vec3<f32>,
     unresolved_slope: f32,
@@ -80,35 +80,26 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
     let circle_position = periodic_noise_circle_position_from_canonical(position_m);
     let bedrock = procedural_bedrock_sample_from_circle(position_m, circle_position);
     let climate = surface_climate_sample_at(position_m);
-    // No tide exposes land 3 m below sea level, so the scene reads no land
-    // composition there, including through a neighbouring texel's bilinear
-    // stencil.
+    // The scene reads the composition on land and on the bed beneath water
+    // shallow enough to show it. No tide falls 3 m below sea level, so it
+    // reads none deeper than that past `baked_bed_reach_m`, including through
+    // a neighbouring texel's bilinear stencil.
     let reach_m = 2.0 * length(bedrock.gradient) * spacing_m;
-    let composed = bedrock.elevation_m + reach_m > -3.0;
+    let composed = bedrock.elevation_m + reach_m > -3.0 - baked_bed_reach_m();
     // Land ice follows annual climate; sea ice follows the season, per pixel.
-    // Submerged texels take the land ice of their bedrock raised to sea level,
-    // so colour and ice amount stay continuous across an ice shore while their
-    // elevation stays the bedrock's.
+    // Land ice covers ground above sea level; the tidal strip and the bed
+    // beneath water keep their ground.
+    let above_sea = bedrock.elevation_m >= 0.0;
     var iced = bedrock;
-    if composed || EVALUATE_ALL_BRANCHES {
-        var shore = bedrock;
-        shore.elevation_m = max(bedrock.elevation_m, 0.0);
-        iced = solid_ice_sample(shore, bedrock.cluster, climate, position_m);
+    if above_sea || EVALUATE_ALL_BRANCHES {
+        iced = solid_ice_sample(bedrock, bedrock.cluster, climate, position_m);
     }
     var terrain = bedrock;
-    if bedrock.elevation_m >= 0.0 {
+    if above_sea {
         terrain = iced;
     }
     var values: BakedSurfaceValues;
-    values.height = vec4<f32>(
-        terrain.elevation_m,
-        terrain.gradient,
-        bottom_reflectance(
-            terrain.coastal_rock_amount,
-            terrain.coastal_outcrop_amount,
-            terrain.coastal_sediment_amount,
-        ),
-    );
+    values.height = vec4<f32>(terrain.elevation_m, terrain.gradient, 0.0);
     values.unresolved_slope = 0.0;
     values.lighting_gradient = lit_terrain_gradient(terrain) - terrain.gradient;
     // Sea ice follows the season per pixel and shows where water is below
@@ -128,7 +119,7 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
             + 3.2 * 180.0 * scene.inverse_world_size_m.y
     );
     let holds_sea_ice = coldest_water_c - reach_c < -1.0 || EVALUATE_ALL_BRANCHES;
-    let ice_amount = clamp(iced.ice_amount, 0.0, 1.0);
+    let ice_amount = select(0.0, clamp(iced.ice_amount, 0.0, 1.0), above_sea);
     let holds_land_ice = (ice_amount > 0.0 || EVALUATE_ALL_BRANCHES) && landscape_visibility.z > 0.0;
     var ice_micro = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     if holds_sea_ice || holds_land_ice {

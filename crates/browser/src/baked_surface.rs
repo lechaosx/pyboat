@@ -659,10 +659,11 @@ fn bake_cells(
 pub struct BakedSurfaceTextures {
     sizes: BakedSurfaceSizes,
     textures: [wgpu::Texture; 2],
-    /// The scene's binding 5: rgba16float elevation, gradient, and bed
-    /// reflectance, one layer per level.
+    /// The scene's binding 5: rgba16float elevation and gradient, one layer
+    /// per level.
     pub height_view: wgpu::TextureView,
-    /// The scene's binding 6: rgba8unorm land layers.
+    /// The scene's binding 6: rgba8unorm layers of the land composition,
+    /// whose colour also colours the bed beneath water.
     pub color_view: wgpu::TextureView,
 }
 

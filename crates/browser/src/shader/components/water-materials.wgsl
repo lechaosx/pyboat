@@ -210,9 +210,10 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     );
 }
 
+// Water's surface over a bed of `bed_color`, which its body shows.
 fn visual_water_surface(
     position_m: vec2<f32>,
-    base_color: vec3<f32>,
+    bed_color: vec3<f32>,
     terrain_elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
@@ -235,7 +236,7 @@ fn visual_water_surface(
     );
     let covariance = slopes.unresolved_covariance;
     return TerrainSurface(
-        base_color,
+        bed_color,
         undisturbed_gradient + precipitation_contact.gradient,
         sqrt(covariance.x + covariance.y),
         vec2<f32>(0.5 * (covariance.x - covariance.y), covariance.z),
@@ -257,67 +258,6 @@ struct SurfaceBakeFactors {
 
 var<private> surface_baking: bool = false;
 var<private> surface_bake_factors: SurfaceBakeFactors;
-
-fn bottom_reflectance(
-    coastal_rock_amount: f32,
-    coastal_outcrop_amount: f32,
-    coastal_sediment_amount: f32,
-) -> f32 {
-    let rock_amount = smoothstep(
-        0.25,
-        0.75,
-        max(coastal_rock_amount, coastal_outcrop_amount),
-    );
-    let sediment_amount = smoothstep(0.08, 0.60, coastal_sediment_amount)
-        * (1.0 - rock_amount);
-    let sediment_reflectance = 0.84;
-    let rock_reflectance = mix(
-        0.56,
-        0.72,
-        coastal_outcrop_amount,
-    );
-    let reflectance = mix(0.32, sediment_reflectance, sediment_amount);
-    return mix(reflectance, rock_reflectance, rock_amount);
-}
-
-fn water_column_surface(
-    position_m: vec2<f32>,
-    elevation_m: f32,
-    water_height_m: f32,
-    bottom_reflectance: f32,
-    atmosphere: SurfaceAtmosphereSample,
-) -> TerrainSurface {
-    let water_color_gate = water_material_color_visibility();
-    let depth_m = water_height_m - elevation_m;
-    let water_color = vec3<f32>(0.025, 0.11, 0.15);
-    let bottom_transmittance = exp(
-        -2.0 * depth_m / max(tuning.water_tuning.x, 0.01),
-    );
-    if effect_feature_visibility().y > 0.0 && bottom_transmittance > 0.02 {
-        let bottom_water_color = water_color
-            * (1.0 + WATER_BOTTOM_REFLECTANCE * bottom_reflectance);
-        let water_veiled_bottom = mix(
-            bottom_water_color,
-            water_color,
-            WATER_BOTTOM_VEIL * (1.0 - bottom_transmittance),
-        );
-        let visible_water_color = water_color_gate.x * water_color
-            + water_color_gate.y * bottom_transmittance
-                * (water_veiled_bottom - water_color);
-        return visual_water_surface(
-            position_m,
-            visible_water_color,
-            elevation_m,
-            atmosphere,
-        );
-    }
-    return visual_water_surface(
-        position_m,
-        water_color_gate.x * water_color,
-        elevation_m,
-        atmosphere,
-    );
-}
 
 // Wet intertidal and beach colours as fractions of their dry colours.
 const INTERTIDAL_WET_SHADE: f32 = 0.70;
@@ -370,7 +310,7 @@ fn terrain_surface(
     let solid_color_gate = solid_material_color_visibility();
     if material_feature_visibility().x <= 0.0 {
         return TerrainSurface(
-            select(vec3<f32>(0.16, 0.24, 0.12), vec3<f32>(0.025, 0.11, 0.15), elevation_m < water_height_m),
+            vec3<f32>(0.16, 0.24, 0.12),
             vec2<f32>(0.0),
             0.0,
             vec2<f32>(0.0),
@@ -378,23 +318,14 @@ fn terrain_surface(
     }
     let slope = length(material_gradient);
     let is_water = elevation_m < water_height_m;
-    var water_surface: TerrainSurface;
-    if (is_water || EVALUATE_ALL_BRANCHES) && !surface_baking {
-        water_surface = water_column_surface(
-            position_m,
-            elevation_m,
-            water_height_m,
-            bottom_reflectance(
-                coastal_rock_amount,
-                coastal_outcrop_amount,
-                coastal_sediment_amount,
-            ),
-            atmosphere,
-        );
+    let bed_unseen = is_water
+        && !water_shows_bed(water_height_m - elevation_m, OPEN_WATER_SEDIMENT_G_M3);
+    if bed_unseen && !EVALUATE_ALL_BRANCHES {
+        return visual_water_surface(position_m, vec3<f32>(0.0), elevation_m, atmosphere);
     }
-    if is_water && !EVALUATE_ALL_BRANCHES {
-        return water_surface;
-    }
+    // Ground beneath water keeps the composition it has dry, as the bake
+    // holds it, without snow or seasons.
+    let dry = surface_baking || is_water;
 
     var micro_height = TerrainNoiseSample(0.0, vec2<f32>(0.0));
     var micro_unresolved = 0.0;
@@ -416,7 +347,7 @@ fn terrain_surface(
             atmosphere,
         ),
     );
-    if surface_baking {
+    if dry {
         snow_amount = 0.0;
     }
     let snow_surface = TerrainSurface(
@@ -505,7 +436,7 @@ fn terrain_surface(
         0.8,
         material_elevation_m - water_height_m,
     );
-    if surface_baking {
+    if dry {
         exposed_dryness = 1.0;
     }
     let intertidal_grade = clamp(
@@ -585,7 +516,7 @@ fn terrain_surface(
         atmosphere.temperature_anomaly.value,
         atmosphere.climate,
     );
-    if surface_baking {
+    if dry {
         autumn = 0.0;
         dormancy = 0.0;
     }
@@ -674,5 +605,14 @@ fn terrain_surface(
         snow_surface,
         snow_amount >= 1.0,
     );
+    var water_surface: TerrainSurface;
+    if (is_water || EVALUATE_ALL_BRANCHES) && !surface_baking {
+        water_surface = visual_water_surface(
+            position_m,
+            select(composed_surface.color, vec3<f32>(0.0), bed_unseen),
+            elevation_m,
+            atmosphere,
+        );
+    }
     return select_terrain_surface(land_surface, water_surface, is_water);
 }

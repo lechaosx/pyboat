@@ -150,7 +150,6 @@ struct SceneUniforms {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PlaygroundUniforms {
-    water_tuning: [f32; 4],
     landform_lighting: [f32; 4],
     cloud_shadows: [f32; 4],
     layer_visibility: [f32; 4],
@@ -1411,6 +1410,39 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 .extend_from_slice(quality.scene_constants());
             selection
         }
+        // lighting_water_body_<Sun degrees>_<view degrees off the vertical>_<sediment
+        // g/m³>.
+        name if name.starts_with("lighting_water_body_") => {
+            let unknown = || format!("unknown diagnostic: {name}");
+            let parts: Vec<&str> = name["lighting_water_body_".len()..].split('_').collect();
+            let [sun, view, sediment] = parts[..] else {
+                return Err(unknown());
+            };
+            diagnostic(
+                value,
+                "lighting_model_regressions",
+                &[
+                    ("LIGHTING_MODEL_REGRESSION_OUTPUT", 38.0),
+                    (
+                        "LIGHTING_MODEL_SUN_DEGREES",
+                        sun.parse().map_err(|_| unknown())?,
+                    ),
+                    (
+                        "LIGHTING_MODEL_VIEW_DEGREES",
+                        view.parse().map_err(|_| unknown())?,
+                    ),
+                    (
+                        "LIGHTING_MODEL_SEDIMENT",
+                        sediment.parse().map_err(|_| unknown())?,
+                    ),
+                ],
+            )
+        }
+        "lighting_surface_sunlight" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 39.0)],
+        ),
         "lighting_view_direction" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -2137,7 +2169,6 @@ async fn render(options: &Options) -> Result<(), String> {
         usage: wgpu::BufferUsages::VERTEX,
     });
     let playground_uniforms = PlaygroundUniforms {
-        water_tuning: [0.5, 0.0, 0.0, 0.0],
         landform_lighting: options.landform_lighting,
         cloud_shadows: [options.cloud_shadows, 0.0, 0.0, 0.0],
         layer_visibility: [1.0; 4],

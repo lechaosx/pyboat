@@ -789,6 +789,164 @@ fn water_fresnel_reflectance(cos_incidence: f32) -> f32 {
     return 0.5 * (s * s + p * p);
 }
 
+// The cosine of a ray's angle to the vertical after it crosses level water at
+// `cos_incidence`, by Snell's law.
+fn water_refracted_cosine(cos_incidence: f32) -> f32 {
+    let n = WATER_REFRACTIVE_INDEX;
+    let cos_i = clamp(cos_incidence, 0.0, 1.0);
+    return sqrt(1.0 - (1.0 - cos_i * cos_i) / (n * n));
+}
+
+// Light from an isotropic sky refracts into a cone out to the critical angle
+// θ_c, of mean cosine (1 + cos θ_c)/2, and passes the cosine-weighted mean of
+// Fresnel's transmittance.
+const WATER_DIFFUSE_COSINE: f32 = 0.83282;
+const WATER_DIFFUSE_TRANSMITTANCE: f32 = 0.93249;
+
+// Water's optics in eight spectral bands, the first four then the last four.
+// The bands split the visible at equal steps of the logarithm of pure water's
+// absorption between 430 and 700 nm: at 450, 493.5, 509, 549.5, 583.5, 597
+// and 650.5 nm. Each takes its optics at its centre weighted by sunlight's
+// luminance: 437.8, 478.0, 501.8, 531.2, 565.9, 589.8, 615.8 and 665.3 nm.
+// Against a 1 nm integration of the same optics, the bands stay within
+// ΔE*ab 2.1 of white, 1.0 on average, from no water to deep water, clear to
+// 20 g/m³ of sediment, over sand and grey beds, overhead and oblique.
+struct WaterBands {
+    low: vec4<f32>,
+    high: vec4<f32>,
+};
+
+// Pure water's absorption by Pope and Fry (1997, Appl. Opt. 36), Smith and
+// Baker's (1981, Appl. Opt. 20) beyond 727.5 nm, plus a faked absorbing
+// background of 0.02 /m at 440 nm with Bricaud et al.'s (1981, Limnol.
+// Oceanogr. 26) slope of 0.014 /nm, in /m. The background stands in for the
+// dissolved and particulate matter that keeps the clearest ocean from being
+// pure water.
+const WATER_ABSORPTION = WaterBands(
+    vec4<f32>(0.02649, 0.023966, 0.03058, 0.049588),
+    vec4<f32>(0.068739, 0.13629, 0.27038, 0.43075),
+);
+// Seawater's backscattering, half its scattering 0.00288 (λ/500 nm)^-4.32 /m
+// (Morel 1974).
+const WATER_BACKSCATTERING = WaterBands(
+    vec4<f32>(0.0025557, 0.0017495, 0.0014173, 0.001109),
+    vec4<f32>(0.00084333, 0.00070567, 0.0005857, 0.0004192),
+);
+// Mineral sediment open water holds: none, as Babin et al. (2003, Limnol.
+// Oceanogr. 48) find oceanic particles organic and of low density. The faked
+// absorbing background stands in for their absorption. Compromises: their
+// backscattering, which brightens the clearest ocean a little, is left out;
+// and coastal water holds no more, though waves stir sediment from a bed in
+// proportion to their stress on it where sediment supply and grain size
+// allow.
+const OPEN_WATER_SEDIMENT_G_M3: f32 = 0.0;
+// Mineral sediment's absorption per g/m³, 0.041 e^(-0.0123 (λ - 443 nm))
+// m²/g (Babin et al. 2003, J. Geophys. Res. 108, 3211).
+const SEDIMENT_ABSORPTION = WaterBands(
+    vec4<f32>(0.043697, 0.026667, 0.019883, 0.013861),
+    vec4<f32>(0.0090395, 0.0067426, 0.0048973, 0.0026619),
+);
+// Mineral sediment's backscattering per g/m³, 0.010 (555 nm/λ)^0.5 m²/g:
+// within the 0.005-0.02 m²/g of Woźniak and Stramski (2004, Appl. Opt. 43)
+// and the 0.0137 ± 0.01 m²/g of Reynolds et al. (2016, Limnol. Oceanogr. 61),
+// with the spectral slope Babin, Morel et al. (2003, Limnol. Oceanogr. 48)
+// assume.
+const SEDIMENT_BACKSCATTERING = WaterBands(
+    vec4<f32>(0.011259, 0.010776, 0.010516, 0.010222),
+    vec4<f32>(0.009903, 0.0097008, 0.0094939, 0.0091334),
+);
+// Each band's share of each linear sRGB channel's response to a 5778 K
+// blackbody through the CIE 1931 2-degree colour-matching functions
+// (CIE 018:2019, 360-830 nm), the outer bands reaching their ends. Band
+// reflectances so become a reflectance under the Sun's white, which light
+// colours multiply as any other.
+const WATER_BANDS_TO_RGB_LOW = mat4x3<f32>(
+    vec3<f32>(0.055157, -0.06083, 0.52409),
+    vec3<f32>(-0.065016, 0.036054, 0.56508),
+    vec3<f32>(-0.084185, 0.097563, 0.033629),
+    vec3<f32>(-0.25332, 0.54754, -0.040186),
+);
+const WATER_BANDS_TO_RGB_HIGH = mat4x3<f32>(
+    vec3<f32>(0.22982, 0.36321, -0.053045),
+    vec3<f32>(0.22981, 0.052383, -0.012541),
+    vec3<f32>(0.79738, -0.02527, -0.016221),
+    vec3<f32>(0.090358, -0.010659, -0.00080973),
+);
+// Band reflectances of a linear sRGB albedo: of the spectra that project
+// back to it exactly, the one with the least squared second differences
+// across bands, plus 10⁻³ of its own square. Grey stays flat.
+const RGB_TO_WATER_BANDS_LOW = mat3x4<f32>(
+    vec4<f32>(0.086158, -0.025608, -0.094766, -0.053177),
+    vec4<f32>(-0.21064, 0.31831, 0.76387, 0.99217),
+    vec4<f32>(1.1248, 0.7071, 0.33043, 0.060854),
+);
+const RGB_TO_WATER_BANDS_HIGH = mat3x4<f32>(
+    vec4<f32>(0.15201, 0.48777, 0.8881, 1.2943),
+    vec4<f32>(0.89874, 0.5474, 0.067748, -0.42505),
+    vec4<f32>(-0.050431, -0.034836, 0.043988, 0.12936),
+);
+
+// Water's attenuation a + b_b and its backscattered share u = b_b/(a + b_b),
+// in each band, holding `sediment_g_m3` of suspended mineral sediment.
+struct WaterOptics {
+    attenuation: WaterBands,
+    backscattered: WaterBands,
+};
+
+fn water_optics(sediment_g_m3: f32) -> WaterOptics {
+    let backscattering = WaterBands(
+        WATER_BACKSCATTERING.low + sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
+        WATER_BACKSCATTERING.high + sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
+    );
+    let attenuation = WaterBands(
+        WATER_ABSORPTION.low + sediment_g_m3 * SEDIMENT_ABSORPTION.low + backscattering.low,
+        WATER_ABSORPTION.high + sediment_g_m3 * SEDIMENT_ABSORPTION.high + backscattering.high,
+    );
+    return WaterOptics(
+        attenuation,
+        WaterBands(backscattering.low / attenuation.low, backscattering.high / attenuation.high),
+    );
+}
+
+// Gordon et al.'s (1988, J. Geophys. Res. 93) reflectance below the surface
+// of deep water, per steradian, from its backscattered share.
+fn deep_water_reflectance(backscattered: vec4<f32>) -> vec4<f32> {
+    return (0.0949 + 0.0794 * backscattered) * backscattered;
+}
+
+// Whether a bed `depth_m` below the surface adds at least 1% to the body of
+// water holding `sediment_g_m3` of sediment in some band, for a bed of albedo
+// one under a light and view at the zenith, where it shows most. Sediment only
+// hides the bed sooner, so no bed deeper than clear water's shows.
+fn water_shows_bed(depth_m: f32, sediment_g_m3: f32) -> bool {
+    var shows = false;
+    if depth_m < bed_unseen_depth_m(0.0) || EVALUATE_ALL_BRANCHES {
+        shows = depth_m < bed_unseen_depth_m(0.0) && depth_m < bed_unseen_depth_m(sediment_g_m3);
+    }
+    return shows;
+}
+
+// The depth below the surface beyond which the bed adds less than 1% to the
+// body of water holding `sediment_g_m3` of sediment in every band, for a bed
+// of albedo one under a light and view at the zenith, where it shows most.
+fn bed_unseen_depth_m(sediment_g_m3: f32) -> f32 {
+    let optics = water_optics(sediment_g_m3);
+    let u = optics.backscattered;
+    let depth = max(
+        -log(vec4<f32>(0.01 * PI) * deep_water_reflectance(u.low)) / (2.0 * optics.attenuation.low),
+        -log(vec4<f32>(0.01 * PI) * deep_water_reflectance(u.high))
+            / (2.0 * optics.attenuation.high),
+    );
+    return max(max(depth.x, depth.y), max(depth.z, depth.w));
+}
+
+// The depth below the surface beyond which water reads nothing from the
+// bake: clear water hides its bed there, and coastal detail and depth-limited
+// waves end within 32 m of the surface.
+fn baked_bed_reach_m() -> f32 {
+    return max(32.0, bed_unseen_depth_m(0.0));
+}
+
 // A surface's unresolved slopes' mean squares along x and y, then their
 // covariance.
 fn unresolved_slope_covariance(surface: TerrainSurface) -> vec3<f32> {
@@ -835,31 +993,186 @@ fn water_glint(
         / (4.0 * max(view.z, 1e-4) * facet_z_squared * facet_z_squared);
 }
 
-// How water returns each light toward `view`. Its body is a Lambertian
-// albedo seen through the surface's Fresnel transmittance toward the view.
-// The surface mirrors the sky and glints with each beam; `reflection` scales
-// both. The reflected sky is the clear sky's radiance, that of an overcast
-// canopy, and for the light ground and sky exchange and the night sky an
-// isotropic one, in the direction the resolved surface mirrors the view.
-// Below the horizon a light's sky keeps that shape for the twilight glow of
-// the air it still lights directly, and the light scattered more than once
-// into the planet's shadow is isotropic. Compromises: the glow takes the
-// clear sky's shape for a light at the horizon; the multiply scattered light
-// keeps a broad glow toward the set light that its isotropic stand-in loses,
-// so water brightens against land where the directly lit glow gives way to
-// it; light enters the body without Fresnel loss; and the unresolved slopes
-// neither blur the reflected sky nor spread its Fresnel reflectance.
+// Linear sRGB above the surface from band reflectances `r` below it, per unit
+// of the transmittances into and out of the water: r / (n² (1 - 1.7 r)),
+// Lee et al.'s (2002, Appl. Opt. 41) relation, whose 1.7 r is the share of
+// the light that the surface reflects back down from below. Times π, as
+// reflectances are taken.
+fn water_body_rgb(r: WaterBands) -> vec3<f32> {
+    let n = WATER_REFRACTIVE_INDEX;
+    return PI / (n * n) * (
+        WATER_BANDS_TO_RGB_LOW * (r.low / (1.0 - 1.7 * r.low))
+            + WATER_BANDS_TO_RGB_HIGH * (r.high / (1.0 - 1.7 * r.high))
+    );
+}
+
+// `water_body_rgb` of deep open water.
+fn open_deep_water_rgb() -> vec3<f32> {
+    let backscattered = water_optics(OPEN_WATER_SEDIMENT_G_M3).backscattered;
+    return water_body_rgb(WaterBands(
+        deep_water_reflectance(backscattered.low),
+        deep_water_reflectance(backscattered.high),
+    ));
+}
+
+// What water's body returns toward the view per unit of each light: diffuse
+// light, then each beam's light on level ground.
+struct WaterBodyResponse {
+    diffuse: vec3<f32>,
+    sun: vec3<f32>,
+    moon: vec3<f32>,
+};
+
+// The body of water `depth_m` deep over a bed of linear `bed_albedo`, holding
+// `sediment_g_m3` of suspended mineral sediment. Below the surface it
+// reflects deep water's r∞ and the bed's A/π as Maritorena, Morel and
+// Gentili (1994, Limnol. Oceanogr. 39) model shallow water,
+// r∞ (1 - e) + e A/π with e = exp(-(a + b_b)(1/μ_d + 1/μ_u) H), for the mean
+// cosines of each light and of the view refracted through the level surface.
+// Each light enters through the level surface's Fresnel transmittance, and
+// the body leaves toward the view through `view_transmittance`; `view_z` and
+// `light_z` are the view's and each beam's cosines to the vertical.
+// `visibility` scales deep water's reflectance, then the bed's. Compromises:
+// r∞ keeps Gordon's nadir form for every path; light scattered up takes the
+// refracted view's path, which Lee et al. (1998, Appl. Opt. 37) find
+// lengthened by 1.04 (1 + 5.4 u)^0.5 from the bed and 1.03 (1 + 2.4 u)^0.5
+// from the column, about 1.2 times from the bed in clear water's clearest
+// band, so the bed shows a little deeper than it should, where separate
+// paths for the column and the bed would take two exponentials per light
+// rather than one; the bed is the one beneath the surface point, not where
+// the refracted view meets it, H tan θ_w away;
+// bands take their reflectance under the Sun's white; and clear shallow
+// water, which lies outside sRGB, clips at zero, as do bands of saturated bed
+// colours.
+fn water_body_response(
+    bed_albedo: vec3<f32>,
+    depth_m: f32,
+    sediment_g_m3: f32,
+    view_transmittance: f32,
+    view_z: f32,
+    light_z: vec2<f32>,
+    visibility: vec2<f32>,
+) -> WaterBodyResponse {
+    let optics = water_optics(sediment_g_m3);
+    let u = optics.backscattered;
+    let deep = WaterBands(
+        visibility.x * deep_water_reflectance(u.low),
+        visibility.x * deep_water_reflectance(u.high),
+    );
+    let light_transmittance = vec3<f32>(
+        WATER_DIFFUSE_TRANSMITTANCE,
+        1.0 - water_fresnel_reflectance(light_z.x),
+        1.0 - water_fresnel_reflectance(light_z.y),
+    ) * view_transmittance;
+    // Water holding open water's sediment takes its deep reflectance from
+    // constant optics; the visibility gate is zero or one, which commutes with
+    // `water_body_rgb`.
+    var deep_rgb = visibility.x * open_deep_water_rgb();
+    let turbid = sediment_g_m3 != OPEN_WATER_SEDIMENT_G_M3;
+    if turbid || EVALUATE_ALL_BRANCHES {
+        deep_rgb = select(deep_rgb, water_body_rgb(deep), turbid);
+    }
+    var body = WaterBodyResponse(
+        light_transmittance.x * deep_rgb,
+        light_transmittance.y * deep_rgb,
+        light_transmittance.z * deep_rgb,
+    );
+    let bed_shows = water_shows_bed(depth_m, sediment_g_m3);
+    if bed_shows || EVALUATE_ALL_BRANCHES {
+        let column = ShallowWater(
+            deep,
+            WaterBands(
+                visibility.y / PI * max(RGB_TO_WATER_BANDS_LOW * bed_albedo, vec4<f32>(0.0)),
+                visibility.y / PI * max(RGB_TO_WATER_BANDS_HIGH * bed_albedo, vec4<f32>(0.0)),
+            ),
+            optics.attenuation,
+            depth_m / water_refracted_cosine(view_z),
+        );
+        body.diffuse = select(
+            body.diffuse,
+            light_transmittance.x * shallow_water_rgb(column, depth_m / WATER_DIFFUSE_COSINE),
+            bed_shows,
+        );
+        // A light below the horizon passes none of its beam into the water.
+        if (bed_shows && light_transmittance.y > 0.0) || EVALUATE_ALL_BRANCHES {
+            body.sun = select(
+                body.sun,
+                light_transmittance.y
+                    * shallow_water_rgb(column, depth_m / water_refracted_cosine(light_z.x)),
+                bed_shows && light_transmittance.y > 0.0,
+            );
+        }
+        if (bed_shows && light_transmittance.z > 0.0) || EVALUATE_ALL_BRANCHES {
+            body.moon = select(
+                body.moon,
+                light_transmittance.z
+                    * shallow_water_rgb(column, depth_m / water_refracted_cosine(light_z.y)),
+                bed_shows && light_transmittance.z > 0.0,
+            );
+        }
+    }
+    return WaterBodyResponse(
+        max(body.diffuse, vec3<f32>(0.0)),
+        max(body.sun, vec3<f32>(0.0)),
+        max(body.moon, vec3<f32>(0.0)),
+    );
+}
+
+// Shallow water's deep and bed reflectances below the surface, its
+// attenuation, and the refracted view's path from the bed up to the surface.
+struct ShallowWater {
+    deep: WaterBands,
+    bed: WaterBands,
+    attenuation: WaterBands,
+    upward_m: f32,
+};
+
+// `water_body_rgb` of shallow water for light that takes `downward_m` down
+// to the bed.
+fn shallow_water_rgb(water: ShallowWater, downward_m: f32) -> vec3<f32> {
+    let path_m = downward_m + water.upward_m;
+    return water_body_rgb(WaterBands(
+        mix(water.deep.low, water.bed.low, exp(-water.attenuation.low * path_m)),
+        mix(water.deep.high, water.bed.high, exp(-water.attenuation.high * path_m)),
+    ));
+}
+
+// How water returns each light toward `view`: its body, by
+// `water_body_response` with the resolved surface's Fresnel transmittance
+// toward the view, and its surface, which mirrors the sky and glints with
+// each beam. `visibility` scales the body's deep reflectance, its bed, and
+// the surface's reflection. The reflected sky is the clear sky's radiance,
+// that of an overcast canopy, and for the light ground and sky exchange and
+// the night sky an isotropic one, in the direction the resolved surface
+// mirrors the view. Below the horizon a light's sky keeps that shape for the
+// twilight glow of the air it still lights directly, and the light scattered
+// more than once into the planet's shadow is isotropic. Compromises: the glow
+// takes the clear sky's shape for a light at the horizon; the multiply
+// scattered light keeps a broad glow toward the set light that its isotropic
+// stand-in loses, so water brightens against land where the directly lit
+// glow gives way to it; and the unresolved slopes neither blur the reflected
+// sky nor spread its Fresnel reflectance.
 fn water_light_response(
-    albedo: vec3<f32>,
+    bed_albedo: vec3<f32>,
+    depth_m: f32,
+    sediment_g_m3: f32,
     surface: TerrainSurface,
     view: vec3<f32>,
     direct_light: CelestialReceiverLight,
     ambient_light: AtmosphericAmbientLight,
-    reflection: f32,
+    visibility: vec3<f32>,
 ) -> SurfaceLightResponse {
     let normal = normalize(vec3<f32>(-surface.detail_gradient, 1.0));
     let surface_reflectance = water_fresnel_reflectance(dot(view, normal));
-    let body = albedo * (1.0 - surface_reflectance);
+    let body = water_body_response(
+        bed_albedo,
+        depth_m,
+        sediment_g_m3,
+        1.0 - surface_reflectance,
+        view.z,
+        vec2<f32>(direct_light.sun_direction.z, direct_light.moon_direction.z),
+        visibility.xy,
+    );
     let mirrored = reflect(-view, normal);
     let sky_direction = normalize(vec3<f32>(mirrored.xy, max(mirrored.z, 0.0)));
     var clear_sky = 1.0;
@@ -881,13 +1194,13 @@ fn water_light_response(
     // Moon and Spencer's (1942) overcast sky, of radiance in proportion to
     // 1 + 2 cos Z, carrying the canopy's diffuse light.
     let canopy = 3.0 * (1.0 + 2.0 * sky_direction.z) / 7.0;
-    let sky = reflection * surface_reflectance;
+    let sky = visibility.z * surface_reflectance;
     let covariance = unresolved_slope_covariance(surface);
     let split = ambient_light.split;
     var glint = vec2<f32>(0.0);
     for (var source_index = 0u; source_index < 2u; source_index++) {
         let source = celestial_source_light(direct_light, source_index);
-        glint[source_index] = reflection * split.normal[source_index] * water_glint(
+        glint[source_index] = visibility.z * split.normal[source_index] * water_glint(
             view,
             source.direction,
             surface.detail_gradient,
@@ -896,11 +1209,11 @@ fn water_light_response(
         );
     }
     return SurfaceLightResponse(
-        body + sky * clear_sky,
-        body + sky * canopy,
-        body + sky,
-        body * split.direct.x + glint.x,
-        body * split.direct.y + glint.y,
+        body.diffuse + sky * clear_sky,
+        body.diffuse + sky * canopy,
+        body.diffuse + sky,
+        body.sun * split.direct.x + glint.x,
+        body.moon * split.direct.y + glint.y,
     );
 }
 

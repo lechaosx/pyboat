@@ -27,8 +27,8 @@ const MAXIMUM_REGIONAL_LUMINANCE_CHANGE: f64 = 0.05;
 /// Hides the water surface's reflection, whose glint sparkles where a tier's
 /// resolved waves put them; their mean reflection is tier-independent.
 const WITHOUT_SURFACE_REFLECTION: [&str; 2] = ["--water-material-colors", "1,1,0,0"];
-/// Removes every material color except the water body and the shallow-water
-/// bottom tint, leaving land and ice black.
+/// Removes every material color except the water body, leaving land, ice, and
+/// the bed beneath water, which takes the land's colors, black.
 const WATER_ONLY: [&str; 6] = [
     "--land-material-colors",
     "0,0,0,0",
@@ -251,12 +251,9 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
         summer_ice_edge,
         moonlit_coast(),
     ] {
-        let high = capture(&view, &WATER_ONLY);
+        let high = capture_water(&view, &[]);
         for quality in LOWER_TIERS {
-            let comparison = compare_water(
-                &high,
-                &capture(&view, &[&WATER_ONLY[..], &["--quality", quality]].concat()),
-            );
+            let comparison = compare_water(&high, &capture_water(&view, &["--quality", quality]));
             assert!(
                 comparison.matches(),
                 "{quality} at {:?}: {comparison:?}",
@@ -267,10 +264,7 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
         // terrain octaves would remove them.
         let without_coastal_relief = compare_water(
             &high,
-            &capture(
-                &view,
-                &[&WATER_ONLY[..], &["--landscape-visibility", "0,1,1,1"]].concat(),
-            ),
+            &capture_water(&view, &["--landscape-visibility", "0,1,1,1"]),
         );
         assert!(
             !without_coastal_relief.matches(),
@@ -284,8 +278,8 @@ fn lower_tiers_keep_shorelines_shallow_water_and_the_sea_ice_edge() {
         ..summer_ice_edge
     };
     let moved_ice_edge = compare_water(
-        &capture(&summer_ice_edge, &WATER_ONLY),
-        &capture(&a_week_later, &WATER_ONLY),
+        &capture_water(&summer_ice_edge, &[]),
+        &capture_water(&a_week_later, &[]),
     );
     assert!(!moved_ice_edge.matches(), "{moved_ice_edge:?}");
 }
@@ -417,6 +411,24 @@ fn block_means(values: &[f64], block: usize) -> Vec<f64> {
 fn percentile_99(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
     values[(values.len() - 1) * 99 / 100]
+}
+
+/// Water's body over the bed beneath it, its surface reflection hidden, with
+/// every pixel that `WATER_ONLY` leaves black, land and ice, black.
+fn capture_water(view: &View, arguments: &[&str]) -> Vec<u8> {
+    let water = capture(view, &[&WATER_ONLY[..], arguments].concat());
+    let mut shown = capture(view, &[&WITHOUT_SURFACE_REFLECTION[..], arguments].concat());
+    for (pixel, mask) in shown
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(water.as_chunks::<4>().0)
+    {
+        if mask[..3] == [0, 0, 0] {
+            pixel[..3].fill(0);
+        }
+    }
+    shown
 }
 
 fn capture(view: &View, arguments: &[&str]) -> Vec<u8> {
