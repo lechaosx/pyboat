@@ -3,12 +3,13 @@
 // of elevation with land ice and its gradient, then eight-bit layers of the
 // dry, snowless, unseasoned land colour, which also colours the bed beneath
 // water, and unresolved detail slope;
-// the land detail gradient, wetness fraction, and surface grade; the autumn
+// the land detail gradient, wettable share, and surface grade; the autumn
 // colour change, or on texels with land ice its colour grade and relief, and
 // the snow detail scale; the dormancy colour
 // change and land ice amount; the sea-ice plate noises with their relief
 // gradient, wherever the coldest season freezes the water; and the terrain
-// slope that lights the surface, less the elevation's. The scene applies
+// slope that lights the surface, less the elevation's, with the share of the
+// wettable ground that is sand or intertidal ground. The scene applies
 // tide, sea-ice cover, slabs, and fractures, snow, seasons, water, and
 // lighting per pixel.
 //
@@ -101,7 +102,7 @@ struct BakedLand {
     color: vec3<f32>,
     unresolved_slope: f32,
     detail_gradient: vec2<f32>,
-    wet_fraction: f32,
+    wettable_share: f32,
     surface_grade: f32,
     autumn_color: vec3<f32>,
     snow_detail_scale: f32,
@@ -150,7 +151,7 @@ fn baked_land_at(cell: BakedSurfaceCell, color: vec4<f32>) -> BakedLand {
         color.rgb,
         BAKED_DETAIL_GRADIENT_RANGE * color.a * color.a,
         decode_detail_gradient(detail.xy, BAKED_DETAIL_GRADIENT_RANGE),
-        detail.z / 3.0,
+        detail.z,
         detail.w,
         seasonal.rgb - ice_payload - 0.5 * seasonal_weight,
         2.0 * seasonal.a,
@@ -243,14 +244,20 @@ fn scene_surface_at(
     }
     let sea_ice = water_ice_amount > 0.0;
     let is_land = sea_ice || elevation.value >= water_height_m;
+    let bare_land = is_land && !sea_ice;
+    // Land and the bed beneath water share the colour and lighting layers,
+    // which water reads only where its bed shows.
+    let bed_shows = !is_land
+        && water_shows_bed(water_height_m - baked_elevation.value, OPEN_WATER_SEDIMENT_G_M3);
     var lit_gradient = elevation.gradient;
-    if (is_land && !sea_ice) || EVALUATE_ALL_BRANCHES {
+    var lighting = vec4<f32>(0.0);
+    if bare_land || bed_shows || EVALUATE_ALL_BRANCHES {
         let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x + 5u;
-        let lighting = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
+        lighting = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
         lit_gradient = select(
             lit_gradient,
             lit_gradient + decode_detail_gradient(lighting.xy, BAKED_LIGHTING_GRADIENT_RANGE),
-            is_land && !sea_ice,
+            bare_land || bed_shows,
         );
     }
     var surface: TerrainSurface;
@@ -262,12 +269,8 @@ fn scene_surface_at(
             baked_sea_ice_detail_at(cell),
         );
     }
-    // Land and the bed beneath water share the colour layer, which water reads
-    // only where its bed shows.
-    let bed_shows = !is_land
-        && water_shows_bed(water_height_m - baked_elevation.value, OPEN_WATER_SEDIMENT_G_M3);
     var color = vec4<f32>(0.0);
-    if (is_land && !sea_ice) || bed_shows || EVALUATE_ALL_BRANCHES {
+    if bare_land || bed_shows || EVALUATE_ALL_BRANCHES {
         let layer = BAKED_SURFACE_COLOR_LAYERS * scene.baked_surface_level.x;
         color = baked_bilinear(baked_corners(baked_color, cell, layer), cell.fraction);
     }
@@ -278,31 +281,41 @@ fn scene_surface_at(
             !is_land,
         );
     }
-    if (is_land && !sea_ice) || EVALUATE_ALL_BRANCHES {
+    var wettable = 0.0;
+    if bare_land || EVALUATE_ALL_BRANCHES {
+        let land = baked_land_at(cell, color);
+        let snow_amount = smoothstep(
+            0.10,
+            0.55,
+            local_snow_cover_from_atmosphere(elevation.value, atmosphere),
+        );
         surface = select_terrain_surface(
             surface,
-            baked_land_surface(
-                baked_land_at(cell, color),
-                elevation.value,
-                water_height_m,
-                atmosphere,
-            ),
-            is_land && !sea_ice,
+            baked_land_surface(land, elevation.value, snow_amount, atmosphere),
+            bare_land,
         );
+        wettable = select(0.0, land.wettable_share * (1.0 - snow_amount), bare_land);
     }
-    return SceneSurface(elevation.value, lit_gradient, is_land, surface);
+    return SceneSurface(
+        elevation.value,
+        lit_gradient,
+        is_land,
+        surface,
+        wettable,
+        lighting.w,
+        length(baked_elevation.gradient),
+        BAKED_DETAIL_GRADIENT_RANGE * color.a * color.a,
+    );
 }
 
-// The baked land composition with the live tide, seasons, and snow.
+// The baked land composition with the live seasons and `snow_amount` of snow.
 fn baked_land_surface(
     baked: BakedLand,
     elevation_m: f32,
-    water_height_m: f32,
+    snow_amount: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> TerrainSurface {
-    // One minus the exposed dryness of `terrain_surface`.
-    let wetness = 1.0 - smoothstep(0.05, 0.8, elevation_m - water_height_m);
-    var color = baked.color * (1.0 - wetness * baked.wet_fraction);
+    var color = baked.color;
     let autumn = autumn_vegetation_amount_from_anomaly(
         elevation_m,
         atmosphere.temperature_anomaly.value,
@@ -319,11 +332,6 @@ fn baked_land_surface(
         baked.detail_gradient,
         baked.unresolved_slope,
         vec2<f32>(0.0),
-    );
-    let snow_amount = smoothstep(
-        0.10,
-        0.55,
-        local_snow_cover_from_atmosphere(elevation_m, atmosphere),
     );
     // Snow covers only the land share of partial land ice, as in the direct
     // composition, so it blends towards snow beside the ice it leaves bare.

@@ -62,7 +62,8 @@ struct BakedSurfaceValues {
     // The terrain slope that lights the surface, less the elevation's.
     lighting_gradient: vec2<f32>,
     detail_gradient: vec2<f32>,
-    wet_fraction: f32,
+    wettable_share: f32,
+    sediment_share: f32,
     surface_grade: f32,
     autumn_color: vec3<f32>,
     snow_detail_scale: f32,
@@ -75,7 +76,7 @@ struct BakedSurfaceValues {
 
 // The static surface at one position: terrain with land ice, the dry,
 // snowless, unseasoned land composition with the factors the scene applies
-// for tide, snow, and seasons, the land-ice detail, and the sea-ice detail.
+// for wetness, snow, and seasons, the land-ice detail, and the sea-ice detail.
 fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfaceValues {
     let circle_position = periodic_noise_circle_position_from_canonical(position_m);
     let bedrock = procedural_bedrock_sample_from_circle(position_m, circle_position);
@@ -166,7 +167,8 @@ fn baked_surface_values_at(position_m: vec2<f32>, spacing_m: f32) -> BakedSurfac
             blend_terrain_surface(land, ice, ice_amount),
             land_shows,
         );
-        values.wet_fraction = kept * factors.wet_fraction;
+        values.wettable_share = kept * factors.wettable_share;
+        values.sediment_share = factors.sediment_share;
         values.surface_grade = factors.surface_grade;
         values.autumn_color = kept * factors.autumn_color;
         values.dormancy_color = kept * factors.dormancy_color;
@@ -202,15 +204,13 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
         layer,
         vec4<f32>(values.color, sqrt(clamp(values.unresolved_slope / BAKED_DETAIL_GRADIENT_RANGE, 0.0, 1.0))),
     );
-    // Wetness removes at most a third of the luminance, so its fraction
-    // takes the whole eight-bit range.
     textureStore(
         baked_color_output,
         texel.slot,
         layer + 1u,
         vec4<f32>(
             encode_detail_gradient(values.detail_gradient, BAKED_DETAIL_GRADIENT_RANGE),
-            3.0 * values.wet_fraction,
+            values.wettable_share,
             values.surface_grade,
         ),
     );
@@ -252,7 +252,7 @@ fn generate_baked_surface(@builtin(global_invocation_id) invocation_id: vec3<u32
         vec4<f32>(
             encode_detail_gradient(values.lighting_gradient, BAKED_LIGHTING_GRADIENT_RANGE),
             0.5,
-            0.5,
+            values.sediment_share,
         ),
     );
 }

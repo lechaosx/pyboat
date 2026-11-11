@@ -209,6 +209,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             receiver,
             calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
             vec3<f32>(0.0, 0.0, 1.0),
+            vec3<f32>(1.0),
         );
         return vec4<f32>(0.5 * response.clear_sky.x / water_fresnel_reflectance(1.0), 0.0, 0.0, 1.0);
     }
@@ -248,8 +249,194 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             cos(view),
             vec2<f32>(sin(radians(LIGHTING_MODEL_SUN_DEGREES)), -1.0),
             vec2<f32>(1.0),
+            vec3<f32>(1.0),
         ).sun;
         return vec4<f32>(body / (body + 0.05), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 40u || LIGHTING_MODEL_REGRESSION_OUTPUT == 41u {
+        // Wet level ground under a Sun 50° and a Moon 30° high, seen from
+        // overhead. Columns hold bright sand, rock and grey material colours.
+        // In 40, wet ground's light per unit of the body's of water 0.1 mm
+        // deep over the same ground, as 0.5 + 50 (w / b - 1) in each channel:
+        // its diffuse light in the top row, the Sun's in the middle and the
+        // Moon's at the bottom. In 41, the top row is its sunlight per unit of
+        // the beam's on level ground, as w / (w + 0.25), for linear greys of
+        // 0.182 then 0.05, 0.3, 0.5 and 0.8, and the bottom row the same for
+        // dry ground.
+        var colors = array<vec3<f32>, 3>(
+            linear_material_color(vec3<f32>(0.84, 0.76, 0.50)),
+            linear_material_color(vec3<f32>(0.36, 0.34, 0.30)),
+            vec3<f32>(0.18),
+        );
+        var greys = array<f32, 5>(0.182, 0.05, 0.3, 0.5, 0.8);
+        let column = min(u32(input.position.x), 4u);
+        let row = u32(input.position.y);
+        let light_z = vec2<f32>(sin(radians(50.0)), sin(radians(30.0)));
+        let relief = vec3<f32>(1.0, light_z);
+        if LIGHTING_MODEL_REGRESSION_OUTPUT == 41u {
+            let response = land_light_response(
+                vec3<f32>(greys[column]),
+                select(1.0, 0.0, row >= 1u),
+                relief,
+                1.0,
+            );
+            let sun = response.sun / light_z.x;
+            return vec4<f32>(sun / (sun + 0.25), 1.0);
+        }
+        let albedo = colors[min(column, 2u)];
+        let wet = land_light_response(albedo, 1.0, relief, 1.0);
+        let body = water_body_response(
+            albedo,
+            1e-4,
+            OPEN_WATER_SEDIMENT_G_M3,
+            1.0 - water_fresnel_reflectance(1.0),
+            1.0,
+            light_z,
+            vec2<f32>(1.0),
+            vec3<f32>(1.0),
+        );
+        var ratio = wet.clear_sky / body.diffuse;
+        if row == 1u {
+            ratio = wet.sun / (light_z.x * body.sun);
+        } else if row >= 2u {
+            ratio = wet.moon / (light_z.y * body.moon);
+        }
+        return vec4<f32>(0.5 + 50.0 * (ratio - 1.0), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 42u {
+        // Clear sky's sunlit seconds from `clear_sky_sunlit_seconds` less a
+        // numerical integral of max(0, μ₀) over 8192 steps, per day of zenith
+        // sunlight, as 0.5 + 200 e in red. Columns hold latitude phases,
+        // rows declinations of -23.44°, 0° and 23.44° for each of four spans
+        // of hour angle.
+        var latitudes = array<f32, 12>(
+            -120.0, -89.0, -66.0, -45.0, -20.0, 0.0, 20.0, 45.0, 66.0, 80.0, 89.0, 120.0,
+        );
+        var spans = array<vec2<f32>, 4>(
+            vec2<f32>(-1.0, 0.5),
+            vec2<f32>(1.0, TAU + 0.3),
+            vec2<f32>(-4.0, 3.5),
+            vec2<f32>(2.5, 4.0),
+        );
+        let row = min(u32(input.position.y), 11u);
+        let latitude = radians(latitudes[min(u32(input.position.x), 11u)]);
+        let declination = radians(23.44 * (f32(row / 4u) - 1.0));
+        let span = spans[row % 4u];
+        var integral = 0.0;
+        let steps = 8192u;
+        let step = (span.y - span.x) / f32(steps);
+        for (var index = 0u; index < steps; index++) {
+            let hour_angle = span.x + (f32(index) + 0.5) * step;
+            integral += max(
+                sin(latitude) * sin(declination) + cos(latitude) * cos(declination) * cos(hour_angle),
+                0.0,
+            );
+        }
+        let closed = clear_sky_sunlit_seconds(latitude, declination, span.x, span.y);
+        let error = (closed - integral * step * WORLD_DAY_SECONDS / TAU) / WORLD_DAY_SECONDS;
+        return vec4<f32>(0.5 + 200.0 * error, 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 43u {
+        // The tide's wetness of ground at the view centre: columns step its
+        // elevation by 3 cm from 2 m below mean sea level. The top row is sand,
+        // the next rock, both of luminance 0.3, and the third that sand under
+        // waves of 4 m and 11 s on a slope of 0.1. Red is its wet share, green
+        // one where water covers it.
+        let initialized = initialize_playground_scene(input);
+        let elevation_m = -2.0 + 0.03 * floor(input.position.x);
+        let covered = elevation_m < tide_height_m();
+        let row = u32(input.position.y);
+        let wet = tidal_wet_share(
+            initialized.input.world_position_m,
+            elevation_m,
+            select(1.0, 0.0, row == 1u),
+            select(0.0, wave_run_up_m(4.0, 9.81 * 11.0 * 11.0 / TAU, 0.1), row == 2u),
+            0.3,
+            ground_weather(initialized.input.world_position_m, 0.0, initialized.atmosphere)
+                .air_temperature_c,
+        );
+        return vec4<f32>(select(wet, 1.0, covered), select(0.0, 1.0, covered), 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 44u {
+        // Stockdon's run-up in whole millimetres, its high byte in red and
+        // its low in green, eight bits each: under waves of 4 m and 11 s on
+        // slopes of 0.1 and of 0.01 in the two columns.
+        let slope = select(0.1, 0.01, input.position.x >= 1.0);
+        let millimetres = u32(round(1000.0 * wave_run_up_m(4.0, 9.81 * 11.0 * 11.0 / TAU, slope)));
+        return vec4<f32>(linear_material_color(vec3<f32>(
+            f32(millimetres / 256u) / 255.0,
+            f32(millimetres % 256u) / 255.0,
+            0.0,
+        )), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 45u {
+        // The weather at each pixel that calibrates the rain-capable canopy:
+        // the regional canopy's cover in red, its optical depth τ as
+        // (ln τ + 4) / 9 in green, and one in blue where it rains.
+        let initialized = initialize_playground_scene(input);
+        let canopy = regional_canopy_conditions(surface_cloud_weather);
+        return vec4<f32>(
+            canopy.sky_fraction,
+            clamp((log(max(canopy.mean_optical_thickness, 1e-6)) + 4.0) / 9.0, 0.0, 1.0),
+            select(0.0, 1.0, surface_cloud_weather.rain > 0.0),
+            1.0,
+        );
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 46u {
+        // Weather's wet share of ground of luminance 0.3 at the view centre
+        // and clock, in red, by column: clear dry air at 20 °C and half its
+        // saturation; fog, of total water 5% beyond saturation; a thick deck
+        // of optical depth 40 over the dry air; that deck over fog at -5 °C;
+        // clear air at nine tenths of saturation; and that air under a full
+        // veil of optical depth 0.5.
+        let initialized = initialize_playground_scene(input);
+        var temperatures = array<f32, 6>(20.0, 20.0, 20.0, -5.0, 20.0, 20.0);
+        var humidities = array<f32, 6>(0.5, 1.05, 0.5, 1.05, 0.9, 0.9);
+        var canopies = array<vec2<f32>, 6>(
+            vec2<f32>(0.0),
+            vec2<f32>(0.0),
+            vec2<f32>(1.0, 40.0),
+            vec2<f32>(1.0, 40.0),
+            vec2<f32>(0.0),
+            vec2<f32>(1.0, 0.5),
+        );
+        let case_index = min(u32(input.position.x), 5u);
+        let temperature = temperatures[case_index];
+        let wet = weather_wet_share(
+            initialized.input.world_position_m,
+            humidities[case_index]
+                * water_vapor_saturation_capacity_g_kg(temperature, SEA_LEVEL_PRESSURE_HPA),
+            temperature,
+            RegionalCanopyConditions(canopies[case_index].x, canopies[case_index].y),
+            0.3,
+        );
+        return vec4<f32>(wet, 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 47u {
+        // The weather's wet share of ground of luminance 0.3 at each pixel in
+        // red, and the rain-capable share of its canopy in green.
+        let initialized = initialize_playground_scene(input);
+        let atmosphere = initialized.atmosphere;
+        let canopy = regional_canopy_conditions(surface_cloud_weather);
+        let air_temperature_c = surface_current_air_temperature_c_from_atmosphere(
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        );
+        let wet = weather_wet_share(
+            initialized.input.world_position_m,
+            atmosphere.water_vapor_g_kg,
+            air_temperature_c,
+            canopy,
+            0.3,
+        );
+        let rain_capable = weather_wet_share(
+            initialized.input.world_position_m,
+            0.0,
+            20.0,
+            canopy,
+            0.3,
+        );
+        return vec4<f32>(wet, rain_capable, 0.0, 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 39u {
         // The Sun's light reaching the surface at the rendered position,

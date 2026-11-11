@@ -1015,6 +1015,29 @@ fn open_deep_water_rgb() -> vec3<f32> {
     ));
 }
 
+// Lekner and Dorf's (1988, Appl. Opt. 27, eq. 11) ratio of the light a
+// mineral grain passes in under water to that under air, [1 - R̄(n_r/n_l)] /
+// [1 - R̄(n_r)] with Stern's mean reflectance R̄ of diffuse light: 1.07 for
+// a grain of index 1.5 under water, as they give it.
+const IMMERSED_GRAIN_TRANSMITTANCE_RATIO: f32 = 1.07;
+
+// Band reflectances below the surface of a bed of linear `albedo`, per
+// steradian. Water against the grains reflects less light back out of them
+// than air, so they absorb more: Lekner and Dorf's absorptance
+// a_w = a_d [(1 - a_d) K + a_d] for the dry absorptance a_d in each band,
+// which keeps a strong absorber's and raises a weak one's by the ratio K.
+// Compromise: every bed takes quartz's K, about 1.08 and 1.10 for minerals
+// of index 2 and 2.5.
+fn immersed_bed_bands(albedo: vec3<f32>) -> WaterBands {
+    let low = clamp(RGB_TO_WATER_BANDS_LOW * albedo, vec4<f32>(0.0), vec4<f32>(1.0));
+    let high = clamp(RGB_TO_WATER_BANDS_HIGH * albedo, vec4<f32>(0.0), vec4<f32>(1.0));
+    let k = IMMERSED_GRAIN_TRANSMITTANCE_RATIO;
+    return WaterBands(
+        (1.0 - (1.0 - low) * ((low * k) + 1.0 - low)) / PI,
+        (1.0 - (1.0 - high) * ((high * k) + 1.0 - high)) / PI,
+    );
+}
+
 // What water's body returns toward the view per unit of each light: diffuse
 // light, then each beam's light on level ground.
 struct WaterBodyResponse {
@@ -1024,9 +1047,11 @@ struct WaterBodyResponse {
 };
 
 // The body of water `depth_m` deep over a bed of linear `bed_albedo`, holding
-// `sediment_g_m3` of suspended mineral sediment. Below the surface it
-// reflects deep water's r∞ and the bed's A/π as Maritorena, Morel and
-// Gentili (1994, Limnol. Oceanogr. 39) model shallow water,
+// `sediment_g_m3` of suspended mineral sediment, whose light on the bed per
+// unit of level ground's is `bed_light`, for diffuse light, then each beam.
+// Below the surface it reflects deep water's r∞ and the immersed bed's A/π
+// as Maritorena, Morel and Gentili (1994, Limnol. Oceanogr. 39) model shallow
+// water,
 // r∞ (1 - e) + e A/π with e = exp(-(a + b_b)(1/μ_d + 1/μ_u) H), for the mean
 // cosines of each light and of the view refracted through the level surface.
 // Each light enters through the level surface's Fresnel transmittance, and
@@ -1052,6 +1077,7 @@ fn water_body_response(
     view_z: f32,
     light_z: vec2<f32>,
     visibility: vec2<f32>,
+    bed_light: vec3<f32>,
 ) -> WaterBodyResponse {
     let optics = water_optics(sediment_g_m3);
     let u = optics.backscattered;
@@ -1079,34 +1105,39 @@ fn water_body_response(
     );
     let bed_shows = water_shows_bed(depth_m, sediment_g_m3);
     if bed_shows || EVALUATE_ALL_BRANCHES {
+        let bed = immersed_bed_bands(bed_albedo);
         let column = ShallowWater(
             deep,
-            WaterBands(
-                visibility.y / PI * max(RGB_TO_WATER_BANDS_LOW * bed_albedo, vec4<f32>(0.0)),
-                visibility.y / PI * max(RGB_TO_WATER_BANDS_HIGH * bed_albedo, vec4<f32>(0.0)),
-            ),
+            WaterBands(visibility.y * bed.low, visibility.y * bed.high),
             optics.attenuation,
             depth_m / water_refracted_cosine(view_z),
         );
         body.diffuse = select(
             body.diffuse,
-            light_transmittance.x * shallow_water_rgb(column, depth_m / WATER_DIFFUSE_COSINE),
+            light_transmittance.x
+                * shallow_water_rgb(column, depth_m / WATER_DIFFUSE_COSINE, bed_light.x),
             bed_shows,
         );
         // A light below the horizon passes none of its beam into the water.
         if (bed_shows && light_transmittance.y > 0.0) || EVALUATE_ALL_BRANCHES {
             body.sun = select(
                 body.sun,
-                light_transmittance.y
-                    * shallow_water_rgb(column, depth_m / water_refracted_cosine(light_z.x)),
+                light_transmittance.y * shallow_water_rgb(
+                    column,
+                    depth_m / water_refracted_cosine(light_z.x),
+                    bed_light.y,
+                ),
                 bed_shows && light_transmittance.y > 0.0,
             );
         }
         if (bed_shows && light_transmittance.z > 0.0) || EVALUATE_ALL_BRANCHES {
             body.moon = select(
                 body.moon,
-                light_transmittance.z
-                    * shallow_water_rgb(column, depth_m / water_refracted_cosine(light_z.y)),
+                light_transmittance.z * shallow_water_rgb(
+                    column,
+                    depth_m / water_refracted_cosine(light_z.y),
+                    bed_light.z,
+                ),
                 bed_shows && light_transmittance.z > 0.0,
             );
         }
@@ -1128,18 +1159,39 @@ struct ShallowWater {
 };
 
 // `water_body_rgb` of shallow water for light that takes `downward_m` down
-// to the bed.
-fn shallow_water_rgb(water: ShallowWater, downward_m: f32) -> vec3<f32> {
+// to the bed and lights it by `bed_light` of level ground's.
+fn shallow_water_rgb(water: ShallowWater, downward_m: f32, bed_light: f32) -> vec3<f32> {
     let path_m = downward_m + water.upward_m;
     return water_body_rgb(WaterBands(
-        mix(water.deep.low, water.bed.low, exp(-water.attenuation.low * path_m)),
-        mix(water.deep.high, water.bed.high, exp(-water.attenuation.high * path_m)),
+        mix(water.deep.low, bed_light * water.bed.low, exp(-water.attenuation.low * path_m)),
+        mix(water.deep.high, bed_light * water.bed.high, exp(-water.attenuation.high * path_m)),
     ));
+}
+
+// Ground under a film of water returns each light as `water_body_response`
+// returns it from water of no depth, its view through level water of
+// `view_z`, and each beam through level water of `light_z`.
+fn immersed_ground_response(
+    albedo: vec3<f32>,
+    view_z: f32,
+    light_z: vec2<f32>,
+) -> WaterBodyResponse {
+    let ground = water_body_rgb(immersed_bed_bands(albedo));
+    let transmittance = vec3<f32>(
+        WATER_DIFFUSE_TRANSMITTANCE,
+        1.0 - water_fresnel_reflectance(light_z.x),
+        1.0 - water_fresnel_reflectance(light_z.y),
+    ) * (1.0 - water_fresnel_reflectance(view_z));
+    return WaterBodyResponse(
+        max(transmittance.x * ground, vec3<f32>(0.0)),
+        max(transmittance.y * ground, vec3<f32>(0.0)),
+        max(transmittance.z * ground, vec3<f32>(0.0)),
+    );
 }
 
 // How water returns each light toward `view`: its body, by
 // `water_body_response` with the resolved surface's Fresnel transmittance
-// toward the view, and its surface, which mirrors the sky and glints with
+// toward the view and the bed's `bed_light`, and its surface, which mirrors the sky and glints with
 // each beam. `visibility` scales the body's deep reflectance, its bed, and
 // the surface's reflection. The reflected sky is the clear sky's radiance,
 // that of an overcast canopy, and for the light ground and sky exchange and
@@ -1161,6 +1213,7 @@ fn water_light_response(
     direct_light: CelestialReceiverLight,
     ambient_light: AtmosphericAmbientLight,
     visibility: vec3<f32>,
+    bed_light: vec3<f32>,
 ) -> SurfaceLightResponse {
     let normal = normalize(vec3<f32>(-surface.detail_gradient, 1.0));
     let surface_reflectance = water_fresnel_reflectance(dot(view, normal));
@@ -1172,6 +1225,7 @@ fn water_light_response(
         view.z,
         vec2<f32>(direct_light.sun_direction.z, direct_light.moon_direction.z),
         visibility.xy,
+        bed_light,
     );
     let mirrored = reflect(-view, normal);
     let sky_direction = normalize(vec3<f32>(mirrored.xy, max(mirrored.z, 0.0)));

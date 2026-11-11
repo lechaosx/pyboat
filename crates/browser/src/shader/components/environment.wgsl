@@ -1318,15 +1318,121 @@ fn vegetation_dormancy(elevation_m: f32) -> f32 {
     );
 }
 
-fn tide_height_m() -> f32 {
+// The lunar and solar tides' angles.
+fn tide_angles() -> vec2<f32> {
     let solar_hour_angle = TAU * (surface_local_solar_phase() - 0.5);
     let solar_longitude_phase = scene.world_phases_and_pixel_footprint_m.y - 0.25;
     let lunar_phase = scene.world_phases_and_pixel_footprint_m.z - solar_longitude_phase;
     let lunar_hour_angle = solar_hour_angle + TAU * lunar_phase;
     let phase_offset = TAU * surface_tidal_phase_offset;
-    let lunar_tide = cos(2.0 * (lunar_hour_angle + phase_offset));
-    let solar_tide = 0.46 * cos(2.0 * (solar_hour_angle + phase_offset));
+    return 2.0 * (vec2<f32>(lunar_hour_angle, solar_hour_angle) + phase_offset);
+}
+
+fn tide_height_m() -> f32 {
+    let angles = tide_angles();
+    let lunar_tide = cos(angles.x);
+    let solar_tide = 0.46 * cos(angles.y);
     return 0.5 * surface_tidal_range_m * (lunar_tide + solar_tide) / 1.46;
+}
+
+// The tide as a cos φ: its amplitude a and phase φ, the modulus and argument
+// of e^(iθ_L) + 0.46 e^(iθ_S) scaled as `tide_height_m`. φ advances with
+// the lunar tide's angle while the solar tide sets a and nudges φ over the
+// spring-neap cycle.
+fn tide_amplitude_and_phase() -> vec2<f32> {
+    let angles = tide_angles();
+    let sum = vec2<f32>(cos(angles.x), sin(angles.x)) + 0.46 * vec2<f32>(cos(angles.y), sin(angles.y));
+    return vec2<f32>(0.5 * surface_tidal_range_m * length(sum) / 1.46, atan2(sum.y, sum.x));
+}
+
+// The game clock's day in seconds, and the turns the lunar tide's angle makes
+// per turn of the Sun's hour angle: twice the Moon's hour angle, which gains
+// a turn on the Sun's every 28-day phase cycle. Keep synchronized with
+// WORLD_DAY_SECONDS and WORLD_LUNAR_PHASE_CYCLE_DAYS in crates/game/src/lib.rs.
+const WORLD_DAY_SECONDS: f32 = 86400.0;
+const LUNAR_TIDE_TURNS_PER_SOLAR_TURN: f32 = 2.0 * (1.0 + 1.0 / 28.0);
+
+// The Sun's daily course at latitude φ under declination δ: μ₀ = sin φ sin δ
+// + cos φ cos δ cos H. Its mean and amplitude, the hour angle of sunset from
+// local noon, at cos H_s = -tan φ tan δ, so polar day takes the whole turn and
+// polar night none, and the hour angle of local noon, which latitude phase
+// turns half a turn past a pole.
+struct SolarDay {
+    mean: f32,
+    amplitude: f32,
+    sunset_hour_angle: f32,
+    noon_hour_angle: f32,
+};
+
+fn solar_day(latitude_rad: f32, declination_rad: f32) -> SolarDay {
+    let mean = sin(latitude_rad) * sin(declination_rad);
+    let daily = cos(latitude_rad) * cos(declination_rad);
+    let amplitude = abs(daily);
+    return SolarDay(
+        mean,
+        amplitude,
+        acos(clamp(-mean / max(amplitude, 1e-9), -1.0, 1.0)),
+        select(0.0, PI, daily < 0.0),
+    );
+}
+
+// Seconds of zenith sunlight that clear sky gives level ground between two
+// hour angles of the Sun, ∫ max(0, μ₀) dt: in closed form,
+// [sin φ sin δ H + cos φ cos δ sin H] / ω between sunrise and sunset.
+// Compromise: the declination stays the present one over the span.
+fn clear_sky_sunlit_seconds(
+    latitude_rad: f32,
+    declination_rad: f32,
+    from_hour_angle: f32,
+    to_hour_angle: f32,
+) -> f32 {
+    let sun = solar_day(latitude_rad, declination_rad);
+    let sunlit = sunlit_hour_angle_integral(sun, to_hour_angle - sun.noon_hour_angle)
+        - sunlit_hour_angle_integral(sun, from_hour_angle - sun.noon_hour_angle);
+    return sunlit * WORLD_DAY_SECONDS / TAU;
+}
+
+// The integral of max(0, μ₀) over a whole day's hour angle.
+fn daily_sunlit_hour_angle(sun: SolarDay) -> f32 {
+    let sunset = sun.sunset_hour_angle;
+    return 2.0 * (sun.mean * sunset + sun.amplitude * sin(sunset));
+}
+
+// The integral of max(0, μ₀) over the hour angle from local noon
+// `from_noon`, from a local midnight before it.
+fn sunlit_hour_angle_integral(sun: SolarDay, from_noon: f32) -> f32 {
+    let sunset = sun.sunset_hour_angle;
+    let day = daily_sunlit_hour_angle(sun);
+    let turns = floor((from_noon + PI) / TAU);
+    let lit = clamp(from_noon - TAU * turns, -sunset, sunset);
+    return turns * day + sun.mean * (lit + sunset) + sun.amplitude * (sin(lit) + sin(sunset));
+}
+
+// Priestley and Taylor's (1972, Mon. Weather Rev. 100) α of the equilibrium
+// evaporation of a wet surface, and the light above the atmosphere, 1360.8
+// W/m² (Kopp and Lean 2011, Geophys. Res. Lett. 38), with water's latent heat
+// of vaporization near 20 °C and air's heat capacity as FAO-56 (Allen et al.
+// 1998) takes them.
+const PRIESTLEY_TAYLOR_ALPHA: f32 = 1.26;
+const SOLAR_CONSTANT_W_M2: f32 = 1360.8;
+const WATER_LATENT_HEAT_J_KG: f32 = 2.45e6;
+const AIR_HEAT_CAPACITY_J_KG_K: f32 = 1013.0;
+
+// The water a wet surface of linear luminance `albedo` evaporates in clear
+// sky over `sunlit_seconds` from `clear_sky_sunlit_seconds`, in mm: α ε R_n /
+// L_v by Priestley and Taylor, with ε = s / (s + c_p/L_v) for the slope s of
+// saturation specific humidity with temperature in air at `air_temperature_c`.
+// The net radiation R_n is the sunlight the surface absorbs. Compromises:
+// zenith clear-sky transmittance stands in at every Sun height; R_n leaves
+// out longwave loss and the heat the ground takes; and the present air
+// temperature stands in for the span's.
+fn clear_sky_evaporation_mm(sunlit_seconds: f32, albedo: f32, air_temperature_c: f32) -> f32 {
+    let saturation_slope = 1e-3 * saturation_growth_per_c(air_temperature_c)
+        * water_vapor_saturation_capacity_g_kg(air_temperature_c, SEA_LEVEL_PRESSURE_HPA);
+    let equilibrium = saturation_slope
+        / (saturation_slope + AIR_HEAT_CAPACITY_J_KG_K / WATER_LATENT_HEAT_J_KG);
+    return PRIESTLEY_TAYLOR_ALPHA * equilibrium * (1.0 - albedo) * SOLAR_CONSTANT_W_M2
+        * zenith_clear_sky_light() * sunlit_seconds / WATER_LATENT_HEAT_J_KG;
 }
 
 fn tide_reference_range_m() -> f32 {

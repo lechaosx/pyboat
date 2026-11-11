@@ -1443,6 +1443,46 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 39.0)],
         ),
+        "lighting_wet_ground_waterline" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 40.0)],
+        ),
+        "lighting_wet_ground_albedo" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 41.0)],
+        ),
+        "lighting_clear_sky_sunlight" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 42.0)],
+        ),
+        "lighting_tidal_wetness" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 43.0)],
+        ),
+        "lighting_wave_run_up" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 44.0)],
+        ),
+        "lighting_weather_wetness_calibration" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 45.0)],
+        ),
+        "lighting_weather_wetness_cases" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 46.0)],
+        ),
+        "lighting_weather_wetness" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 47.0)],
+        ),
         "lighting_view_direction" => diagnostic(
             value,
             "lighting_model_regressions",

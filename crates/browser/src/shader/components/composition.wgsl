@@ -78,12 +78,19 @@ fn fragment_surface_light(
 
 // The composed surface at a rendered position: its height, the relief
 // gradient the pixel resolves, as it lights it, and whether it lies above the
-// water. Its surface's unresolved slope includes the terrain's, as lit.
+// water. On land its surface's unresolved slope includes the terrain's, as
+// lit; `wettable` is the share of the ground that wets, `sediment_share` the
+// share of that which is sand or intertidal ground, and `slope` the
+// terrain's. Beneath water, `bed_unresolved_slope` is the bed's.
 struct SceneSurface {
     elevation_m: f32,
     gradient: vec2<f32>,
     is_land: bool,
     surface: TerrainSurface,
+    wettable: f32,
+    sediment_share: f32,
+    slope: f32,
+    bed_unresolved_slope: f32,
 };
 
 fn direct_sea_ice_detail(position_m: vec2<f32>, terrain: TerrainSample) -> SeaIceDetail {
@@ -130,7 +137,8 @@ fn composed_scene_surface(
             land_ice,
         );
     }
-    if !(sea_ice || land_ice) || EVALUATE_ALL_BRANCHES {
+    let composed = !(sea_ice || land_ice);
+    if composed || EVALUATE_ALL_BRANCHES {
         surface = select_terrain_surface(surface, terrain_surface(
             position_m,
             terrain.elevation_m,
@@ -143,8 +151,9 @@ fn composed_scene_surface(
             water_height_m,
             land_surface,
             atmosphere,
-        ), !(sea_ice || land_ice));
+        ), composed);
     }
+    let factors = surface_bake_factors;
     let partial_land_ice = bare_land
         && terrain.ice_amount > 0.0
         && terrain.ice_amount < 1.0;
@@ -167,7 +176,240 @@ fn composed_scene_surface(
         lit_unresolved_slope(terrain, surface.unresolved_slope),
         is_land,
     );
-    return SceneSurface(terrain.elevation_m, lit_terrain_gradient(terrain), is_land, surface);
+    return SceneSurface(
+        terrain.elevation_m,
+        lit_terrain_gradient(terrain),
+        is_land,
+        surface,
+        select(0.0, factors.wettable_share * (1.0 - terrain.ice_amount), bare_land && composed),
+        factors.sediment_share,
+        length(terrain.gradient),
+        lit_unresolved_slope(terrain, factors.unresolved_slope),
+    );
+}
+
+// The steepest foreshore of the beaches Stockdon et al. fitted run-up on
+// (Dalinghaus et al. 2023, Nat. Hazards Earth Syst. Sci. 23, Table 1).
+const STEEPEST_FITTED_SHORE_SLOPE: f32 = 0.16;
+
+// The present weather that wets ground: the surface air's temperature and
+// total water, and the significant height and peak wavelength of the sea the
+// winds raise over deep water.
+struct GroundWeather {
+    air_temperature_c: f32,
+    total_water_g_kg: f32,
+    wave_height_m: f32,
+    wave_peak_wavelength_m: f32,
+};
+
+fn ground_weather(
+    position_m: vec2<f32>,
+    elevation_m: f32,
+    atmosphere: SurfaceAtmosphereSample,
+) -> GroundWeather {
+    let surface_speed_m_s = length(resolved_surface_wind_m_s_from_pressure(
+        position_m,
+        atmosphere.pressure,
+    ));
+    return GroundWeather(
+        // Cooled by the standard atmosphere's lapse rate with height, as the
+        // snow cover takes the air.
+        surface_current_air_temperature_c_from_atmosphere(
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        ) - 0.0065 * max(elevation_m, 0.0),
+        atmosphere.water_vapor_g_kg,
+        significant_wave_height_m(
+            surface_speed_m_s,
+            length(upper_wind_m_s_from_atmosphere(position_m, atmosphere)),
+            OCEAN_FLOOR_DEPTH_M,
+        ),
+        wave_peak_wavelength_m(surface_speed_m_s),
+    );
+}
+
+// The share of wettable ground at `elevation_m` on a terrain `slope` that is
+// wet under the present `weather`, with `sediment_share` of it sand and the
+// rest rock, of linear `color`. Waves run up it, steeper shores as the
+// steepest fitted one. Compromises: seas are fully developed, without fetch;
+// Stockdon's beach fit stands for rock too; the run-up takes the present
+// waves; the pixel's terrain slope stands in for the shore's; and the reach
+// is a level, so ground below it wets however far it lies from the water, as
+// the water itself fills ground below the tide wherever it lies.
+fn ground_wet_share(
+    position_m: vec2<f32>,
+    elevation_m: f32,
+    slope: f32,
+    sediment_share: f32,
+    color: vec3<f32>,
+    weather: GroundWeather,
+) -> f32 {
+    let run_up_m = wave_run_up_m(
+        weather.wave_height_m,
+        weather.wave_peak_wavelength_m,
+        min(slope, STEEPEST_FITTED_SHORE_SLOPE),
+    );
+    let albedo = dot(color, LUMINANCE_WEIGHTS);
+    let tidal = tidal_wet_share(
+        position_m,
+        elevation_m,
+        sediment_share,
+        run_up_m,
+        albedo,
+        weather.air_temperature_c,
+    );
+    let present = weather_wet_share(
+        position_m,
+        weather.total_water_g_kg,
+        weather.air_temperature_c,
+        regional_canopy_conditions(surface_cloud_weather),
+        albedo,
+    );
+    return 1.0 - (1.0 - tidal) * (1.0 - present);
+}
+
+// The canopy's optical depth from which the share of it that can rain grows,
+// linearly in its logarithm, to all of it at ISCCP's thick class, 23, which
+// holds nimbostratus and deep convection (Rossow and Schiffer 1999, Bull. Am.
+// Meteorol. Soc. 80). Calibrated so that the rain-capable share of the
+// weather equals the share where the cloud scheme rains, 10.1%: over the whole
+// default world at 128 by 128 points, at eight clocks 3.37 days apart from
+// 37 s, `lighting_weather_wetness_calibration` gave 8.56.
+const RAIN_CAPABLE_OPTICAL_DEPTH: f32 = 8.56;
+const THICK_CLOUD_OPTICAL_DEPTH: f32 = 23.0;
+// How far clear nights cool the ground below the air: within the 2-6 K that
+// the grass minimum falls below the screen's air on clear nights (Vieira
+// Junior et al. 2018, Semina: Ciênc. Agrár. 39, and the values they gather).
+// Compromise: one value for every clear night.
+const CLEAR_NIGHT_SURFACE_COOLING_C: f32 = 3.0;
+// Clear evening skies cool a surface by 25-100 W/m² (Beysens et al. 2006,
+// Energy 31), here mid-range.
+const CLEAR_NIGHT_COOLING_W_M2: f32 = 60.0;
+// A night's dew: grassland gathers about 0.15 mm a dew night (Jacobs et al.
+// 2006, Water Resour. Res. 42), within 0.1-0.3 mm a night in the Negev and
+// below the 0.8 mm the night's energy allows (Monteith 1957, via Jacobs et al.).
+const NIGHT_DEW_MM: f32 = 0.2;
+
+// The share of wettable ground that the present weather wets, of linear
+// luminance `albedo`, under air of `total_water_g_kg` at `air_temperature_c`
+// and the regional `canopy`: where the surface air condenses, as the cloud
+// scheme's cover at no lift; where the canopy is thick enough to rain; and
+// where dew forms, which the weather's clear-sky cooling of the ground below
+// the air allows. Each night condenses onto the dew the day left, up to a
+// night's dew, and each day's clear-sky sunlight evaporates what the night
+// left. The days and nights repeat the present one's, so at sunrise there is
+// a night's dew where nights condense more than days evaporate, and
+// otherwise what one night condenses, which the day then evaporates whole;
+// dew so changes continuously through sunrise and sunset, polar night holds
+// a night's dew and polar day none. Only liquid water darkens. Compromises:
+// the present weather stands in for the night's in dew; wind leaves the
+// ground's cooling unchanged; every night condenses toward one typical depth
+// of dew; and frost, which brightens ground, is left out.
+fn weather_wet_share(
+    position_m: vec2<f32>,
+    total_water_g_kg: f32,
+    air_temperature_c: f32,
+    canopy: RegionalCanopyConditions,
+    albedo: f32,
+) -> f32 {
+    let condensing = low_cloud(total_water_g_kg, air_temperature_c, 0.0).x;
+    let rain_capable = canopy.sky_fraction * clamp(
+        log(max(canopy.mean_optical_thickness, 1e-6) / RAIN_CAPABLE_OPTICAL_DEPTH)
+            / log(THICK_CLOUD_OPTICAL_DEPTH / RAIN_CAPABLE_OPTICAL_DEPTH),
+        0.0,
+        1.0,
+    );
+    let dewy = low_cloud(
+        total_water_g_kg,
+        air_temperature_c - CLEAR_NIGHT_SURFACE_COOLING_C * (1.0 - canopy.sky_fraction),
+        0.0,
+    ).x;
+    var dew = 0.0;
+    if dewy > 0.0 || EVALUATE_ALL_BRANCHES {
+        let latitude_rad = radians(surface_latitude_phase_degrees_at(position_m));
+        let sun = solar_day(latitude_rad, scene.celestial_orbit_angles.x);
+        let hour_angle = TAU * (surface_local_solar_phase_at(position_m) - 0.5);
+        let from_noon = hour_angle - sun.noon_hour_angle;
+        let local = from_noon - TAU * floor((from_noon + PI) / TAU);
+        let sunset = sun.sunset_hour_angle;
+        // Shares of a night's dew per second of night and per second of
+        // zenith sunlight.
+        let forming = CLEAR_NIGHT_COOLING_W_M2 / (WATER_LATENT_HEAT_J_KG * NIGHT_DEW_MM);
+        let drying = clear_sky_evaporation_mm(1.0, albedo, air_temperature_c) / NIGHT_DEW_MM;
+        let seconds_per_radian = WORLD_DAY_SECONDS / TAU;
+        let night_formed = forming * (TAU - 2.0 * sunset) * seconds_per_radian;
+        let day_dried = drying * daily_sunlit_hour_angle(sun) * seconds_per_radian;
+        let at_sunrise = select(min(night_formed, 1.0), 1.0, night_formed >= day_dried);
+        let since_sunset_s = (local - sunset + select(0.0, TAU, local < -sunset))
+            * seconds_per_radian;
+        let since_sunrise_sunlit_s = clear_sky_sunlit_seconds(
+            latitude_rad,
+            scene.celestial_orbit_angles.x,
+            hour_angle - (local + sunset),
+            hour_angle,
+        );
+        let remaining = select(
+            max(at_sunrise - drying * since_sunrise_sunlit_s, 0.0),
+            min(max(at_sunrise - day_dried, 0.0) + forming * since_sunset_s, 1.0),
+            abs(local) > sunset,
+        );
+        dew = select(0.0, dewy * remaining, dewy > 0.0);
+    }
+    // One less the cold share of precipitation that falls as snow in
+    // `seasonal_snow_cover_from_fields`; keep the two synchronized.
+    let liquid = smoothstep(-1.0, 2.0, air_temperature_c);
+    return liquid * (1.0 - (1.0 - condensing) * (1.0 - rain_capable) * (1.0 - dew));
+}
+
+// Hazen's capillary rise C / (e D₁₀), with C = 0.3 cm², mid-range of the
+// 0.1-0.5 cm² Terzaghi and Peck (1948, Soil Mechanics in Engineering
+// Practice) give, for fine beach sand of void ratio e = 0.6 and effective
+// grain size D₁₀ = 0.15 mm. Compromise: one sand, which intertidal ground
+// shares.
+const SAND_CAPILLARY_RISE_M: f32 = 0.33;
+// The water that keeps ground's surface looking wet: the pores of its
+// optically active top millimetre at a porosity of 0.4. A named estimate.
+const WET_SURFACE_WATER_MM: f32 = 0.4;
+
+// The share of wettable ground at `elevation_m`, with `sediment_share` of it
+// sand, of linear luminance `albedo` under air at `air_temperature_c`, that
+// the tide leaves wet. Ground is wet
+// where the water reaches it, sand to its capillary rise above the water, and
+// dries by first-stage evaporation at a constant rate of the clear-sky
+// sunlight it has received since the water last reached it, which the tide's
+// phase dates. Waves raise the reach by their `run_up_m`. Compromises: the
+// phase advances at the lunar tide's rate, which drifts over the spring-neap
+// cycle; a higher earlier tide is forgotten; and the beach's water table,
+// which lags the falling tide and seeps out below its level, is left out.
+fn tidal_wet_share(
+    position_m: vec2<f32>,
+    elevation_m: f32,
+    sediment_share: f32,
+    run_up_m: f32,
+    albedo: f32,
+    air_temperature_c: f32,
+) -> f32 {
+    let reach_m = elevation_m - SAND_CAPILLARY_RISE_M * sediment_share - run_up_m;
+    let tide = tide_amplitude_and_phase();
+    // The phase at which the falling tide last left the reach, and the phase
+    // since: the water stands above the reach until it turns past φ_z.
+    let left = acos(clamp(reach_m / tide.x, -1.0, 1.0));
+    let since = tide.y - TAU * floor(tide.y / TAU) - left;
+    let reached = reach_m < tide.x;
+    let exposed = reached && since >= 0.0 && since <= TAU - 2.0 * left;
+    var wet = select(0.0, 1.0, reached);
+    if exposed || EVALUATE_ALL_BRANCHES {
+        let hour_angle = TAU * (surface_local_solar_phase_at(position_m) - 0.5);
+        let sunlit_s = clear_sky_sunlit_seconds(
+            radians(surface_latitude_phase_degrees_at(position_m)),
+            scene.celestial_orbit_angles.x,
+            hour_angle - since / LUNAR_TIDE_TURNS_PER_SOLAR_TURN,
+            hour_angle,
+        );
+        let evaporated_mm = clear_sky_evaporation_mm(sunlit_s, albedo, air_temperature_c);
+        wet = select(wet, clamp(1.0 - evaporated_mm / WET_SURFACE_WATER_MM, 0.0, 1.0), exposed);
+    }
+    return wet;
 }
 
 // Landform relief is exaggerated threefold, a presentation compromise that
@@ -209,6 +451,70 @@ fn land_relief_light(
     );
 }
 
+// The light the bed beneath level water takes, per unit of level ground's,
+// as `land_relief_light` gives it for beams of unit light, each refracted
+// toward the vertical by Snell's law in its own vertical plane. Compromise:
+// the bed's material detail lights it only through its unresolved slope,
+// where on land its resolved detail gradient adds to the terrain's.
+fn bed_relief_light(
+    scene_surface: SceneSurface,
+    receiver: CelestialReceiverLight,
+) -> vec3<f32> {
+    var refracted = receiver;
+    refracted.sun_direction = refracted_beam(receiver.sun_direction);
+    refracted.moon_direction = refracted_beam(receiver.moon_direction);
+    let light = landform_light_grade(
+        scene_surface.gradient,
+        scene_surface.bed_unresolved_slope,
+        refracted,
+        vec2<f32>(1.0),
+    );
+    return vec3<f32>(
+        light.x,
+        light.y / refracted.sun_direction.z,
+        light.z / refracted.moon_direction.z,
+    );
+}
+
+fn refracted_beam(direction: vec3<f32>) -> vec3<f32> {
+    let cos_refracted = water_refracted_cosine(direction.z);
+    let horizontal = length(direction.xy);
+    let azimuth = select(vec2<f32>(1.0, 0.0), direction.xy / horizontal, horizontal > 0.0);
+    return vec3<f32>(sqrt(1.0 - cos_refracted * cos_refracted) * azimuth, cos_refracted);
+}
+
+// How land returns each light, per unit of the light on it as `relief` from
+// `land_relief_light` for beams of unit light gives it: by its albedo, and on
+// a `wetness` share as ground beneath water of no depth does, so level ground
+// keeps its brightness as the tide covers it. Compromises: wet ground takes
+// the pixel's mean colour, where each cover would darken by its own; the
+// film passes each beam at its mean incidence on the pixel's slopes and the
+// view as level water does; it leaves out the film's own surface reflection;
+// and with that and Lee et al.'s 1.7 r for the light the surface reflects
+// back down, the column at no depth puts wet ground from 26% darker than
+// Lekner and Dorf's (1988, Appl. Opt. 27) film over a diffuse surface at a
+// dry albedo of 0.1 to 10% brighter at 0.8, where ground brighter than about
+// 0.87, beyond every wettable cover, would brighten when wet.
+fn land_light_response(
+    albedo: vec3<f32>,
+    wetness: f32,
+    relief: vec3<f32>,
+    view_z: f32,
+) -> SurfaceLightResponse {
+    var wet = WaterBodyResponse(albedo, albedo, albedo);
+    if wetness > 0.0 || EVALUATE_ALL_BRANCHES {
+        wet = immersed_ground_response(albedo, view_z, relief.yz);
+    }
+    let diffuse = relief.x * mix(albedo, wet.diffuse, wetness);
+    return SurfaceLightResponse(
+        diffuse,
+        diffuse,
+        diffuse,
+        relief.y * mix(albedo, wet.sun, wetness),
+        relief.z * mix(albedo, wet.moon, wetness),
+    );
+}
+
 // The unit vector from the rendered point, at `height_m`, to the drone camera.
 fn camera_view_direction(height_m: f32) -> vec3<f32> {
     return normalize(vec3<f32>(-surface_view_offset_m, scene.drone_camera.x - height_m));
@@ -236,6 +542,7 @@ fn lit_scene_surface(
     );
     let is_land = scene_surface.is_land;
     let surface = scene_surface.surface;
+    let albedo = select(linear_material_color(surface.color), vec3<f32>(1.0), illumination);
     let surface_height_m = max(scene_surface.elevation_m, water_height_m);
     drawn_surface_height_m = surface_height_m;
     let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
@@ -244,11 +551,9 @@ fn lit_scene_surface(
         surface_direct_light,
     );
     let split = ambient_light.split;
-    let albedo = select(linear_material_color(surface.color), vec3<f32>(1.0), illumination);
-    // Land returns the light on it times its albedo; water returns its
+    // Land returns the light on it by its albedo and wetness; water returns its
     // reflectance of each light, its albedo the bed's. The light reaching
     // water is that on level ground.
-    var land_albedo = vec3<f32>(1.0);
     var response = SurfaceLightResponse(
         vec3<f32>(1.0),
         vec3<f32>(1.0),
@@ -256,31 +561,53 @@ fn lit_scene_surface(
         vec3<f32>(split.direct.x),
         vec3<f32>(split.direct.y),
     );
+    let view = camera_view_direction(surface_height_m);
     if is_land {
-        let relief = land_relief_light(scene_surface, surface_direct_light, split.normal);
-        land_albedo = albedo;
-        response = SurfaceLightResponse(
-            vec3<f32>(relief.x),
-            vec3<f32>(relief.x),
-            vec3<f32>(relief.x),
-            vec3<f32>(relief.y),
-            vec3<f32>(relief.z),
+        var wetness = 0.0;
+        let wettable = scene_surface.wettable > 0.0 && !illumination;
+        if wettable || EVALUATE_ALL_BRANCHES {
+            wetness = select(0.0, scene_surface.wettable * ground_wet_share(
+                position_m,
+                scene_surface.elevation_m,
+                scene_surface.slope,
+                scene_surface.sediment_share,
+                albedo,
+                ground_weather(position_m, scene_surface.elevation_m, atmosphere),
+            ), wettable);
+        }
+        response = land_light_response(
+            albedo,
+            wetness,
+            land_relief_light(scene_surface, surface_direct_light, vec2<f32>(1.0)),
+            view.z,
         );
+        response.sun *= split.normal.x;
+        response.moon *= split.normal.y;
     } else if !illumination {
         let depth_m = water_height_m - scene_surface.elevation_m;
+        var bed_light = vec3<f32>(1.0);
+        let bed_shows = water_shows_bed(depth_m, OPEN_WATER_SEDIMENT_G_M3);
+        if bed_shows || EVALUATE_ALL_BRANCHES {
+            bed_light = select(
+                bed_light,
+                bed_relief_light(scene_surface, surface_direct_light),
+                bed_shows,
+            );
+        }
         response = water_light_response(
             albedo,
             depth_m,
             OPEN_WATER_SEDIMENT_G_M3,
             surface,
-            camera_view_direction(surface_height_m),
+            view,
             surface_direct_light,
             ambient_light,
             water_material_color_visibility() * vec3<f32>(1.0, effect_feature_visibility().y, 1.0),
+            bed_light,
         );
     }
     let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
-    return land_albedo * fragment_surface_light(
+    return fragment_surface_light(
         surface_direct_light,
         terrain_shadow_transmittance,
         response,

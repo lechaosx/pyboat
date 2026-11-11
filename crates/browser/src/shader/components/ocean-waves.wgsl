@@ -169,6 +169,23 @@ struct DecorativeWaterSample {
     short_wave_slope_variance: f32,
 };
 
+// The height above still water that 2% of waves of significant height
+// `height_m` and deep-water peak wavelength `wavelength_m` run up a shore of
+// `slope`: Stockdon et al.'s (2006, Coastal Eng. 53) general fit, setup and
+// swash together, 1.1 (0.35 β √(H₀L₀) + √(H₀L₀ (0.563 β² + 0.004)) / 2), of
+// 0.38 m root-mean-square error. Compromise: it stands for dissipative
+// shores too, of Iribarren number β / √(H₀/L₀) below 0.3, where their own
+// fit, 0.043 √(H₀L₀), runs from 24% higher on the flattest shores to 22%
+// lower at that number for the wind sea's steepness, H₀/L₀ = 1/52, and
+// would step against the general one wherever a shore's slope crosses it.
+fn wave_run_up_m(height_m: f32, wavelength_m: f32, slope: f32) -> f32 {
+    let scale_m2 = height_m * wavelength_m;
+    return 1.1 * (
+        0.35 * slope * sqrt(scale_m2)
+            + 0.5 * sqrt(scale_m2 * (0.563 * slope * slope + 0.004))
+    );
+}
+
 // The decorative octaves' longest wavelength.
 const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
 

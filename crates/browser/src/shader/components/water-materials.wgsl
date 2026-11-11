@@ -243,12 +243,19 @@ fn visual_water_surface(
     );
 }
 
-// While `surface_baking` is set, the land composition takes the dry,
-// snowless, unseasoned state and records how its colour responds to wetness,
-// autumn, and dormancy, so the scene applies their live amounts per pixel.
+// The land composition records the share of its covers that wet: sand,
+// intertidal ground and rock, where no snow covers them; the share of those
+// that is sand or intertidal ground; and its unresolved slope, which the
+// water above hides in its own. Compromises: vegetation, whose leaves wet
+// too, never darkens; and snow, whose wetting a film over a diffuse surface
+// does not describe, is left out. While `surface_baking` is set, it takes
+// the dry, snowless, unseasoned state and also records how its colour
+// responds to autumn and dormancy, so the scene applies their live amounts
+// per pixel.
 struct SurfaceBakeFactors {
-    // Share of the dry colour's luminance that full wetness removes.
-    wet_fraction: f32,
+    wettable_share: f32,
+    sediment_share: f32,
+    unresolved_slope: f32,
     // Colour changes at full autumn and at full dormancy, each alone.
     autumn_color: vec3<f32>,
     dormancy_color: vec3<f32>,
@@ -258,10 +265,6 @@ struct SurfaceBakeFactors {
 
 var<private> surface_baking: bool = false;
 var<private> surface_bake_factors: SurfaceBakeFactors;
-
-// Wet intertidal and beach colours as fractions of their dry colours.
-const INTERTIDAL_WET_SHADE: f32 = 0.70;
-const BEACH_WET_SHADE: f32 = 0.72;
 
 // Snow's relief per unit of the micro-relief field's.
 const SNOW_MICRO_RELIEF: f32 = 0.22;
@@ -431,14 +434,6 @@ fn terrain_surface(
         intertidal_ceiling_m + 1.0,
         material_elevation_m,
     );
-    var exposed_dryness = smoothstep(
-        0.05,
-        0.8,
-        material_elevation_m - water_height_m,
-    );
-    if dry {
-        exposed_dryness = 1.0;
-    }
     let intertidal_grade = clamp(
         0.20 + 0.42 * surface_grade + 0.22 * coastal_rock_amount,
         0.0,
@@ -450,17 +445,13 @@ fn terrain_surface(
         intertidal_grade,
     );
     let intertidal_surface = TerrainSurface(
-        land_color_gate.z * mix(
-            INTERTIDAL_WET_SHADE * intertidal_color,
-            intertidal_color,
-            exposed_dryness,
-        ),
+        land_color_gate.z * intertidal_color,
         mix(0.12, 0.28, coastal_rock_amount) * micro_height.gradient,
         mix(0.12, 0.28, coastal_rock_amount) * micro_unresolved,
         vec2<f32>(0.0),
     );
     let beach_surface = TerrainSurface(
-        land_color_gate.w * mix(BEACH_WET_SHADE * beach_color, beach_color, exposed_dryness),
+        land_color_gate.w * beach_color,
         beach_micro_height_m * micro_height.gradient,
         beach_micro_height_m * micro_unresolved,
         vec2<f32>(0.0),
@@ -575,6 +566,10 @@ fn terrain_surface(
             + rock_cover * rock_surface.unresolved_slope,
         vec2<f32>(0.0),
     );
+    surface_bake_factors.wettable_share = (1.0 - vegetation_cover) * (1.0 - snow_amount);
+    surface_bake_factors.sediment_share = (sediment_cover + intertidal_cover)
+        / max(1.0 - vegetation_cover, 1e-4);
+    surface_bake_factors.unresolved_slope = composed_surface.unresolved_slope;
     if surface_baking {
         // Linear in each amount, so their cross term is dropped.
         let grass_share = land_color_gate.x * vegetation_cover * (1.0 - forest_visibility);
@@ -591,12 +586,6 @@ fn terrain_surface(
                 seasoned_forest_color(unseasoned_forest_color, 0.0, 1.0, canopy_cluster)
                     - unseasoned_forest_color
             );
-        let drying_color = intertidal_cover * land_color_gate.z
-            * (1.0 - INTERTIDAL_WET_SHADE) * intertidal_color
-            + sediment_cover * land_color_gate.w * (1.0 - BEACH_WET_SHADE) * beach_color;
-        let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
-        surface_bake_factors.wet_fraction = dot(drying_color, luminance)
-            / max(dot(composed_surface.color, luminance), 1e-4);
         surface_bake_factors.surface_grade = surface_grade;
         surface_bake_factors.snow_detail_gradient = snow_surface.detail_gradient;
     }

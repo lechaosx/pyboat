@@ -121,6 +121,10 @@ and verification details.
   proportions make the physics read wrongly, or a physical model costs more than
   it earns, especially where its detail serves no gameplay need. Each is named
   beside its code with what it stands in for.
+- **[Explicit]** Weather wets ground from its current state alone, with no
+  memory of past rain: ground is wet where surface air condenses or the
+  weather can rain, and dew lasts from nightfall until the morning's sunlight
+  evaporates it.
 - **[Implicit]** `game` is authoritative for terrain, atmosphere, tides, shelter,
   and depth; native and WASM sample match seed, tick, and world position.
 - **[Explicit]** Clients receive seed and geometry as procedural-world data.
@@ -324,6 +328,13 @@ and verification details.
   without field-wide velocity, and has fixed cost independent of world size.
 - **[Implicit]** The bed beneath water takes the shore's dry composition, so
   ground keeps its material as the tide covers it.
+- **[Implicit]** Wet ground returns light as the bed beneath water does under
+  no depth, so level ground keeps its brightness as the tide covers it.
+- **[Implicit]** The bed beneath water takes its relief light from the
+  refracted beams.
+- **[Implicit]** Ground the water uncovers stays wet, drying with the
+  clear-sky sunlight it has received since the water left it.
+- **[Implicit]** Wave run-up raises the reach that wets the shore.
 
 ### Celestial and cloud light
 
@@ -733,7 +744,7 @@ and verification details.
 | Level switches | Whether switching baked levels needs blending, judged by eye |
 | Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
 | Edge smoothing | Whether shorelines and the sea-ice edge get smoothing as a look option |
-| Tidal wet band | How the wet band follows flat tidal coasts |
+| Tidal wet band | Whether a falling tide's seepage face needs the beach water table's lag beyond drying since exposure |
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
 | Stratus calibration | Whether thick stratus matches measured transmittance, given how uncertain the conversion from measured cloud thickness to optical depth is |
