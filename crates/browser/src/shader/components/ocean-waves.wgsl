@@ -20,21 +20,32 @@ fn ocean_forcing_from_surface(
     if water_depth_m == 0.0 {
         return OceanForcingSample(0.0, surface_wind_m_s, upper_wind_m_s);
     }
-    // Wave energy responds to sustained resolved flow, not an instantaneous
-    // 256 m surface gust.
-    let surface_speed_m_s = length(surface_wind_m_s);
-    let upper_speed_m_s = length(upper_wind_m_s);
+    return OceanForcingSample(
+        significant_wave_height_m(
+            length(surface_wind_m_s),
+            length(upper_wind_m_s),
+            water_depth_m,
+        ),
+        surface_wind_m_s,
+        upper_wind_m_s,
+    );
+}
+
+// Significant wave height over water `depth_m` deep under sustained resolved
+// winds: wave energy responds to sustained resolved flow, not an
+// instantaneous 256 m surface gust.
+fn significant_wave_height_m(
+    surface_speed_m_s: f32,
+    upper_speed_m_s: f32,
+    depth_m: f32,
+) -> f32 {
     let wind_sea_height_m = 0.05 + 0.016 * surface_speed_m_s * surface_speed_m_s;
     // Swell from the upper wind stands in for swell travelling from distant storms.
     let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
     let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
     // 0.78 is McCowan's (1894) breaker limit; the 14 m cap stands in for fetch
     // and duration limits.
-    return OceanForcingSample(
-        min(unrestricted_height_m, min(0.78 * water_depth_m, 14.0)),
-        surface_wind_m_s,
-        upper_wind_m_s,
-    );
+    return min(unrestricted_height_m, min(0.78 * depth_m, 14.0));
 }
 
 // The resolved wave modes at a position, with the forcing that sets them.
@@ -158,20 +169,32 @@ struct DecorativeWaterSample {
     short_wave_slope_variance: f32,
 };
 
+// The decorative octaves' longest wavelength.
+const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
+
+// The wave spectrum's peak wavelength: the wind sea's, Pierson and
+// Moskowitz's (1964) 2πU²/(0.769 g). Compromises: the resolved surface wind
+// stands in for the wind at 19.5 m; and the peak is no shorter than the
+// decorative octaves reach, half an octave above the longest, so the octave
+// layout stands in for gravity waves that outlast a calm of the local wind,
+// where a real spectrum falls off above its peak.
+fn wave_peak_wavelength_m(wind_speed_m_s: f32) -> f32 {
+    return max(
+        TAU * wind_speed_m_s * wind_speed_m_s / (0.769 * 9.81),
+        1.4142135 * DECORATIVE_WATER_WAVELENGTH_M,
+    );
+}
+
 // Short waves the wave modes leave out. In Phillips' (1958) saturation range
 // each octave of wavelength holds equal slope variance, so each octave
 // carries an equal share of Cox and Munk's total over the octaves from the
-// spectrum's peak to the shortest gravity wave. The peak is Pierson and
-// Moskowitz's (1964), 2πU²/(0.769 g). The waves shorter than the last
-// octave, down to the shortest gravity wave, always keep their share. Cox and
-// Munk measured the slopes of all waves, so the octaves share only what those
-// and the resolved wave modes leave of that total, their `slope_budget`,
-// scaled alike. Compromises: the octaves are alike in every direction; the
-// resolved surface wind stands in for the wind at 19.5 m; and the peak is no
-// shorter than the octaves' longest wavelength, so the octave layout stands
-// in for gravity waves that outlast a calm of the local wind, where a real
-// spectrum falls off above its peak. Below about 5.5 m/s every octave thus
-// carries a full share, an 18 m octave included.
+// spectrum's peak to the shortest gravity wave. The waves shorter than the
+// last octave, down to the shortest gravity wave, always keep their share.
+// Cox and Munk measured the slopes of all waves, so the octaves share only
+// what those and the resolved wave modes leave of that total, their
+// `slope_budget`, scaled alike. Compromise: the octaves are alike in every
+// direction. Below about 5.5 m/s the peak's floor gives every octave a full
+// share, an 18 m octave included.
 fn decorative_water_normal_sample(
     position_m: vec2<f32>,
     wind_speed_m_s: f32,
@@ -179,14 +202,11 @@ fn decorative_water_normal_sample(
 ) -> DecorativeWaterSample {
     var sample = DecorativeWaterSample(vec2<f32>(0.0), 0.0, 0.0);
     let shown = material_feature_visibility().w > 0.0;
-    var wavelength_m = 18.0;
+    var wavelength_m = DECORATIVE_WATER_WAVELENGTH_M;
     // The octaves reach half an octave above the first and below the last,
     // which is eight times shorter.
     let octave_range_m = vec2<f32>(1.4142135, 0.0883883) * wavelength_m;
-    let peak_wavelength_m = max(
-        TAU * wind_speed_m_s * wind_speed_m_s / (0.769 * 9.81),
-        octave_range_m.x,
-    );
+    let peak_wavelength_m = wave_peak_wavelength_m(wind_speed_m_s);
     let total = cox_munk_slope_variance(wind_speed_m_s);
     let phillips_octave_variance = (total.x + total.y)
         / log2(peak_wavelength_m / GRAVITY_CAPILLARY_WAVELENGTH_M);
