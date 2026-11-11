@@ -28,6 +28,10 @@ npm ci
 
 For the procedural playground, run `npm run dev:playground`. It provides a live
 preview and controls for inspecting the world and tuning its appearance.
+“Drive a boat” spawns a boat in safe nearby water. Compare five controllers
+while sailing with keyboard, gamepad, or a draggable pointer stick; switching
+preserves motion and clears the new controller’s memory. Boat driving uses
+real time or pause, and removing the boat restores the clock controls.
 
 For local controller comparison, run `npm run dev` and open `/controller.html`.
 It needs no backend. The two independent boats compare the current controller

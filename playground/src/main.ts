@@ -64,6 +64,7 @@ import { startRenderLoop } from "./render-loop";
 import {
   advanceProceduralTimeSeconds,
   maximumWorldYear,
+  maximumProceduralTimeSeconds,
   worldDateTimeSeconds,
   worldDaySeconds,
   worldYearDays,
@@ -82,6 +83,7 @@ import {
   type ScenarioSummary,
 } from "./bench";
 import benchScenarios from "./bench-scenarios.json" with { type: "json" };
+import { BoatPass, DrivingBoat, type BoatWorld } from "./boat";
 import "./style.css";
 
 const bench = benchSettings(location.search);
@@ -795,6 +797,24 @@ syncWorldDateInputs();
 
 renderControls();
 
+function boatWorld(): BoatWorld {
+  return { width: state.worldWidthM, height: state.worldHeightM, seed: parsedSeed(), tick: BigInt(Math.round(state.worldTimeSeconds * fixedTicksPerSecond)) };
+}
+const drivingBoat = new DrivingBoat(previewCanvas, boatWorld, () => [state.cameraX, state.cameraY], ([x, y]) => {
+  state.cameraX = x; state.cameraY = y;
+  state.cameraHeightM = production_camera_height_m();
+  state.fieldOfViewDegrees = droneFieldOfViewDegrees(15, state.cameraHeightM);
+  const diagnostic = document.querySelector<HTMLSelectElement>("#diagnostic-output")!;
+  diagnostic.value = "scene"; diagnostic.dispatchEvent(new Event("change"));
+}, (active, paused) => {
+  setTimeScale(paused ? 0 : 1);
+  worldTimeScaleInput.disabled = active; worldTimeValueInput.disabled = active;
+});
+worldToolbarElement.closest(".panel-section")!.after(drivingBoat.element);
+let boatPass: BoatPass | undefined;
+let boatSurface: GPUTexture | undefined;
+let boatSurfaceView: GPUTextureView | undefined;
+
 let dragPointer: number | undefined;
 let dragX = 0;
 let dragY = 0;
@@ -824,7 +844,7 @@ function viewPointElevationM(viewX: number, viewY: number, aspect: number): numb
 }
 
 previewCanvas.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || drivingBoat.driving) return;
   dragPointer = event.pointerId;
   [dragX, dragY] = canvasViewPoint(
     event.clientX,
@@ -961,12 +981,14 @@ configureCanvas(hdrSupported);
 
 await showStartupPhase("Creating startup shader…");
 const startupShader = device.createShaderModule({ code: playground_startup_shader_source() });
+const surfaceHeightPipelines = new WeakSet<GPURenderPipeline>();
 function createPlaygroundPipeline(
   shader: GPUShaderModule,
   entryPoint: string,
   constants?: Record<string, number>,
   format?: GPUTextureFormat,
 ): Promise<GPURenderPipeline> {
+  const writesSurface = entryPoint === "fragment_playground_scene" || entryPoint === "fragment";
   return device.createRenderPipelineAsync({
     layout: "auto",
     vertex: {
@@ -989,9 +1011,12 @@ function createPlaygroundPipeline(
         entryPoint === "fragment_playground_scene"
           || entryPoint === "fragment_playground_startup"
           || entryPoint === "fragment"
-      ) ? "rgba16float" : sdrViewFormat) }],
+      ) ? "rgba16float" : sdrViewFormat) }, ...(writesSurface ? [{ format: "r16float" as GPUTextureFormat }] : [])],
     },
     primitive: { topology: "triangle-list" },
+  }).then((pipeline) => {
+    if (writesSurface) surfaceHeightPipelines.add(pipeline);
+    return pipeline;
   });
 }
 await showStartupPhase("Compiling startup pipeline…");
@@ -1836,13 +1861,28 @@ function advanceFrame(now: number): void {
   updateScaleBar();
   const elapsed = Math.max(0, (now - previous) / 1000);
   previous = now;
+  drivingBoat.synchronizeWorld();
   const ticks = advanceFixedClock(clock, elapsed, (elapsedTicks) => {
-    const elapsedFixedSeconds = elapsedTicks * fixedTickSeconds;
-    state.worldTimeSeconds = advanceProceduralTimeSeconds(
-      state.worldTimeSeconds,
-      elapsedFixedSeconds * state.worldTimeScale,
-    );
+    if (drivingBoat.driver) {
+      if (state.worldTimeScale > 0) {
+        for (let tick = 0; tick < elapsedTicks; tick++) {
+          if (Math.round(state.worldTimeSeconds * fixedTicksPerSecond) + tick >= maximumProceduralTimeSeconds * fixedTicksPerSecond) {
+            drivingBoat.setPaused(true);
+            drivingBoat.message.textContent = "World clock reached its limit; choose an earlier date to continue.";
+            break;
+          }
+          drivingBoat.step();
+        }
+        state.worldTimeSeconds = Number(drivingBoat.driver.state()[9]!) / fixedTicksPerSecond;
+      }
+    } else {
+      state.worldTimeSeconds = advanceProceduralTimeSeconds(state.worldTimeSeconds, elapsedTicks * fixedTickSeconds * state.worldTimeScale);
+    }
   });
+  const boatState = drivingBoat.state();
+  if (boatState && drivingBoat.follow.checked) {
+    state.cameraX = boatState[0]!; state.cameraY = boatState[1]!;
+  }
   const renderFractionSeconds = fixedClockFraction(clock) * fixedTickSeconds;
   const worldTimeSeconds = advanceProceduralTimeSeconds(
     state.worldTimeSeconds,
@@ -2023,16 +2063,21 @@ function renderFrame(): Promise<void> {
       [adaptingFieldTexels!, adaptingFieldTexels!],
     );
   }
+  if (new URLSearchParams(location.search).get("freshSurface") === "1") configureCanvas(canvasHdr);
   const canvasTexture = context.getCurrentTexture();
+  if (boatSurface?.width !== sceneSize[0] || boatSurface?.height !== sceneSize[1]) {
+    boatSurface?.destroy();
+    boatSurface = device.createTexture({ size: [sceneSize[0]!, sceneSize[1]!], format: "r16float", usage: 0x10 | 0x04 });
+    boatSurfaceView = boatSurface.createView();
+  }
+  const colorView = upscale?.sceneView ?? canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
-      view: upscale?.sceneView ?? canvasTexture.createView({
-        format: canvasHdr ? "rgba16float" : sdrViewFormat,
-      }),
+      view: colorView,
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
       loadOp: "clear",
       storeOp: "store",
-    }],
+    }, ...(surfaceHeightPipelines.has(renderResources.pipeline) ? [{ view: boatSurfaceView!, clearValue: { r: -65504, g: 0, b: 0, a: 0 }, loadOp: "clear" as GPULoadOp, storeOp: "store" as GPUStoreOp }] : [])],
   };
   if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
@@ -2065,6 +2110,11 @@ function renderFrame(): Promise<void> {
       upscalePass.draw(3);
       upscalePass.end();
     }
+  }
+  if (drivingBoat.driver && state.diagnostic === "scene" && surfaceHeightPipelines.has(renderResources.pipeline)) {
+    boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView);
+    const target = canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
+    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), outputHeight: previewCanvas.height, time: state.worldTimeSeconds });
   }
   if (timestampReadback) {
     const timestampBytes = (lastEnd + 1) * 8;

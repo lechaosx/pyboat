@@ -174,6 +174,10 @@ See [README.md](README.md) for what is playable now and
 
 ## Procedural playground
 
+- **[Explicit]** Players can spawn and drive a boat in the lab with the game’s
+  input-to-intent mapping, then switch controller experiments while preserving
+  physical motion and the world clock. Sail and rudder policies may vary.
+
 - **[Explicit]** One browser lab covers weather, landscape, and water with
   production rendering. A spacious live preview remains beside one continuous
   scrolling panel ordered as time/playback, world, scene, then outputs/diagnostics.

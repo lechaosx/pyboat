@@ -1,8 +1,13 @@
+struct PlaygroundSceneFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) surface_height_m: f32,
+};
+
 @fragment
-fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment_playground_scene(input: VertexOutput) -> PlaygroundSceneFragment {
     let initialized = initialize_playground_scene_from_environment_fields(input);
     if occluder_field_inspection_mode() == 1u {
-        return vec4<f32>(encode_display_color(occluder_field_inspection_grids(input.position.xy)), 1.0);
+        return PlaygroundSceneFragment(vec4<f32>(encode_display_color(occluder_field_inspection_grids(input.position.xy)), 1.0), drawn_surface_height_m);
     }
     let color = final_scene_color(
         initialized.input,
@@ -14,7 +19,7 @@ fn fragment_playground_scene(input: VertexOutput) -> @location(0) vec4<f32> {
     if occluder_field_inspection_mode() == 2u && occluder_field_lookups_outside {
         displayed = vec3<f32>(1.0, 0.0, 1.0);
     }
-    return vec4<f32>(encode_display_color(displayed), color.a);
+    return PlaygroundSceneFragment(vec4<f32>(encode_display_color(displayed), color.a), drawn_surface_height_m);
 }
 
 // The composition with every surface a matte 50% grey under the light the

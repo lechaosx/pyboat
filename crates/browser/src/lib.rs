@@ -1,3 +1,9 @@
+#[cfg(feature = "playground")]
+mod playground_boat;
+#[cfg(all(feature = "playground", target_arch = "wasm32"))]
+mod playground_boat_web;
+#[cfg(feature = "playground")]
+pub use playground_boat::PlaygroundBoat;
 mod controller_comparison;
 pub use controller_comparison::ControllerComparison;
 #[cfg(any(feature = "playground", test))]

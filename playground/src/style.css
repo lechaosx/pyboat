@@ -468,3 +468,10 @@ output {
   font-size: 0.72rem;
   white-space: pre;
 }
+
+.boat-controls label { display: flex; align-items: center; gap: .5rem; margin: .6rem 0; }
+.boat-controls select { min-width: 0; flex: 1; }
+.boat-controls p { color: var(--muted, #b5c4c9); font-size: .8rem; line-height: 1.4; }
+.boat-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.boat-stick { pointer-events: none; position: absolute; width: 128px; height: 128px; margin: -64px; border: 2px solid #dac394a0; border-radius: 50%; background: #1238; z-index: 3; }
+.boat-stick span { display: block; position: absolute; left: 48px; top: 48px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid #f1ddb7; background: #a37337a0; }

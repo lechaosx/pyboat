@@ -45,7 +45,7 @@ const INITIAL_VERTEX_CAPACITY: usize = 32768;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
+pub(crate) struct Vertex {
     position: [f32; 3],
     color: [f32; 3],
     coverage: f32,
@@ -64,10 +64,10 @@ impl Vertex {
     }
 }
 
-struct SpriteBatch {
-    image: usize,
-    sail: bool,
-    vertices: std::ops::Range<u32>,
+pub(crate) struct SpriteBatch {
+    pub(crate) image: usize,
+    pub(crate) sail: bool,
+    pub(crate) vertices: std::ops::Range<u32>,
 }
 
 /// Hulls, rigging, sails and windsocks, drawn over a finished view with the
@@ -403,7 +403,7 @@ fn vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sprite_vertices(
+pub(crate) fn sprite_vertices(
     scenes: &[BoatScene],
     cloth: &[ClothPose],
     world_geometry: WorldGeometry,
