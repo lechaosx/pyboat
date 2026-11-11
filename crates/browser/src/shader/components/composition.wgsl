@@ -586,7 +586,7 @@ fn lit_scene_surface(
     } else if !illumination {
         let depth_m = water_height_m - scene_surface.elevation_m;
         var bed_light = vec3<f32>(1.0);
-        let bed_shows = water_shows_bed(depth_m, OPEN_WATER_SEDIMENT_G_M3);
+        let bed_shows = water_shows_bed(depth_m, SEAWATER_OPTICS);
         if bed_shows || EVALUATE_ALL_BRANCHES {
             bed_light = select(
                 bed_light,
@@ -597,7 +597,7 @@ fn lit_scene_surface(
         response = water_light_response(
             albedo,
             depth_m,
-            OPEN_WATER_SEDIMENT_G_M3,
+            SEAWATER_OPTICS,
             surface,
             view,
             surface_direct_light,

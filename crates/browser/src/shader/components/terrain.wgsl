@@ -832,14 +832,6 @@ const WATER_BACKSCATTERING = WaterBands(
     vec4<f32>(0.0025557, 0.0017495, 0.0014173, 0.001109),
     vec4<f32>(0.00084333, 0.00070567, 0.0005857, 0.0004192),
 );
-// Mineral sediment open water holds: none, as Babin et al. (2003, Limnol.
-// Oceanogr. 48) find oceanic particles organic and of low density. The faked
-// absorbing background stands in for their absorption. Compromises: their
-// backscattering, which brightens the clearest ocean a little, is left out;
-// and coastal water holds no more, though waves stir sediment from a bed in
-// proportion to their stress on it where sediment supply and grain size
-// allow.
-const OPEN_WATER_SEDIMENT_G_M3: f32 = 0.0;
 // Mineral sediment's absorption per g/m³, 0.041 e^(-0.0123 (λ - 443 nm))
 // m²/g (Babin et al. 2003, J. Geophys. Res. 108, 3211).
 const SEDIMENT_ABSORPTION = WaterBands(
@@ -886,21 +878,48 @@ const RGB_TO_WATER_BANDS_HIGH = mat3x4<f32>(
     vec4<f32>(-0.050431, -0.034836, 0.043988, 0.12936),
 );
 
+// A body of water's absorption a, then its backscattering b_b, in each band.
+struct InherentOptics {
+    absorption: WaterBands,
+    backscattering: WaterBands,
+};
+
+// Seawater with the absorbing background and no mineral sediment, which open
+// water holds none of, as Babin et al. (2003, Limnol. Oceanogr. 48) find
+// oceanic particles organic and of low density. The faked absorbing
+// background stands in for their absorption. Compromises: their
+// backscattering, which brightens the clearest ocean a little, is left out;
+// and coastal water holds no more, though waves stir sediment from a bed in
+// proportion to their stress on it where sediment supply and grain size
+// allow.
+const SEAWATER_OPTICS = InherentOptics(WATER_ABSORPTION, WATER_BACKSCATTERING);
+
+// Seawater holding `sediment_g_m3` of suspended mineral sediment.
+fn mineral_sediment_optics(sediment_g_m3: f32) -> InherentOptics {
+    return InherentOptics(
+        WaterBands(
+            WATER_ABSORPTION.low + sediment_g_m3 * SEDIMENT_ABSORPTION.low,
+            WATER_ABSORPTION.high + sediment_g_m3 * SEDIMENT_ABSORPTION.high,
+        ),
+        WaterBands(
+            WATER_BACKSCATTERING.low + sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
+            WATER_BACKSCATTERING.high + sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
+        ),
+    );
+}
+
 // Water's attenuation a + b_b and its backscattered share u = b_b/(a + b_b),
-// in each band, holding `sediment_g_m3` of suspended mineral sediment.
+// in each band.
 struct WaterOptics {
     attenuation: WaterBands,
     backscattered: WaterBands,
 };
 
-fn water_optics(sediment_g_m3: f32) -> WaterOptics {
-    let backscattering = WaterBands(
-        WATER_BACKSCATTERING.low + sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
-        WATER_BACKSCATTERING.high + sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
-    );
+fn water_optics(inherent: InherentOptics) -> WaterOptics {
+    let backscattering = inherent.backscattering;
     let attenuation = WaterBands(
-        WATER_ABSORPTION.low + sediment_g_m3 * SEDIMENT_ABSORPTION.low + backscattering.low,
-        WATER_ABSORPTION.high + sediment_g_m3 * SEDIMENT_ABSORPTION.high + backscattering.high,
+        inherent.absorption.low + backscattering.low,
+        inherent.absorption.high + backscattering.high,
     );
     return WaterOptics(
         attenuation,
@@ -915,22 +934,23 @@ fn deep_water_reflectance(backscattered: vec4<f32>) -> vec4<f32> {
 }
 
 // Whether a bed `depth_m` below the surface adds at least 1% to the body of
-// water holding `sediment_g_m3` of sediment in some band, for a bed of albedo
-// one under a light and view at the zenith, where it shows most. Sediment only
-// hides the bed sooner, so no bed deeper than clear water's shows.
-fn water_shows_bed(depth_m: f32, sediment_g_m3: f32) -> bool {
+// water of `inherent` optics in some band, for a bed of albedo one under a
+// light and view at the zenith, where it shows most. Sediment only hides the
+// bed sooner, so no bed deeper than seawater's shows.
+fn water_shows_bed(depth_m: f32, inherent: InherentOptics) -> bool {
     var shows = false;
-    if depth_m < bed_unseen_depth_m(0.0) || EVALUATE_ALL_BRANCHES {
-        shows = depth_m < bed_unseen_depth_m(0.0) && depth_m < bed_unseen_depth_m(sediment_g_m3);
+    if depth_m < bed_unseen_depth_m(SEAWATER_OPTICS) || EVALUATE_ALL_BRANCHES {
+        shows = depth_m < bed_unseen_depth_m(SEAWATER_OPTICS)
+            && depth_m < bed_unseen_depth_m(inherent);
     }
     return shows;
 }
 
 // The depth below the surface beyond which the bed adds less than 1% to the
-// body of water holding `sediment_g_m3` of sediment in every band, for a bed
-// of albedo one under a light and view at the zenith, where it shows most.
-fn bed_unseen_depth_m(sediment_g_m3: f32) -> f32 {
-    let optics = water_optics(sediment_g_m3);
+// body of water of `inherent` optics in every band, for a bed of albedo one
+// under a light and view at the zenith, where it shows most.
+fn bed_unseen_depth_m(inherent: InherentOptics) -> f32 {
+    let optics = water_optics(inherent);
     let u = optics.backscattered;
     let depth = max(
         -log(vec4<f32>(0.01 * PI) * deep_water_reflectance(u.low)) / (2.0 * optics.attenuation.low),
@@ -944,7 +964,7 @@ fn bed_unseen_depth_m(sediment_g_m3: f32) -> f32 {
 // bake: clear water hides its bed there, and coastal detail and depth-limited
 // waves end within 32 m of the surface.
 fn baked_bed_reach_m() -> f32 {
-    return max(32.0, bed_unseen_depth_m(0.0));
+    return max(32.0, bed_unseen_depth_m(SEAWATER_OPTICS));
 }
 
 // A surface's unresolved slopes' mean squares along x and y, then their
@@ -1006,9 +1026,9 @@ fn water_body_rgb(r: WaterBands) -> vec3<f32> {
     );
 }
 
-// `water_body_rgb` of deep open water.
-fn open_deep_water_rgb() -> vec3<f32> {
-    let backscattered = water_optics(OPEN_WATER_SEDIMENT_G_M3).backscattered;
+// `water_body_rgb` of deep seawater.
+fn seawater_deep_rgb() -> vec3<f32> {
+    let backscattered = water_optics(SEAWATER_OPTICS).backscattered;
     return water_body_rgb(WaterBands(
         deep_water_reflectance(backscattered.low),
         deep_water_reflectance(backscattered.high),
@@ -1046,8 +1066,8 @@ struct WaterBodyResponse {
     moon: vec3<f32>,
 };
 
-// The body of water `depth_m` deep over a bed of linear `bed_albedo`, holding
-// `sediment_g_m3` of suspended mineral sediment, whose light on the bed per
+// The body of water `depth_m` deep over a bed of linear `bed_albedo`, of
+// `inherent` optics, whose light on the bed per
 // unit of level ground's is `bed_light`, for diffuse light, then each beam.
 // Below the surface it reflects deep water's r∞ and the immersed bed's A/π
 // as Maritorena, Morel and Gentili (1994, Limnol. Oceanogr. 39) model shallow
@@ -1072,14 +1092,14 @@ struct WaterBodyResponse {
 fn water_body_response(
     bed_albedo: vec3<f32>,
     depth_m: f32,
-    sediment_g_m3: f32,
+    inherent: InherentOptics,
     view_transmittance: f32,
     view_z: f32,
     light_z: vec2<f32>,
     visibility: vec2<f32>,
     bed_light: vec3<f32>,
 ) -> WaterBodyResponse {
-    let optics = water_optics(sediment_g_m3);
+    let optics = water_optics(inherent);
     let u = optics.backscattered;
     let deep = WaterBands(
         visibility.x * deep_water_reflectance(u.low),
@@ -1090,11 +1110,13 @@ fn water_body_response(
         1.0 - water_fresnel_reflectance(light_z.x),
         1.0 - water_fresnel_reflectance(light_z.y),
     ) * view_transmittance;
-    // Water holding open water's sediment takes its deep reflectance from
-    // constant optics; the visibility gate is zero or one, which commutes with
-    // `water_body_rgb`.
-    var deep_rgb = visibility.x * open_deep_water_rgb();
-    let turbid = sediment_g_m3 != OPEN_WATER_SEDIMENT_G_M3;
+    // Seawater takes its deep reflectance from constant optics; the
+    // visibility gate is zero or one, which commutes with `water_body_rgb`.
+    var deep_rgb = visibility.x * seawater_deep_rgb();
+    let turbid = any(inherent.absorption.low != SEAWATER_OPTICS.absorption.low)
+        || any(inherent.absorption.high != SEAWATER_OPTICS.absorption.high)
+        || any(inherent.backscattering.low != SEAWATER_OPTICS.backscattering.low)
+        || any(inherent.backscattering.high != SEAWATER_OPTICS.backscattering.high);
     if turbid || EVALUATE_ALL_BRANCHES {
         deep_rgb = select(deep_rgb, water_body_rgb(deep), turbid);
     }
@@ -1103,7 +1125,7 @@ fn water_body_response(
         light_transmittance.y * deep_rgb,
         light_transmittance.z * deep_rgb,
     );
-    let bed_shows = water_shows_bed(depth_m, sediment_g_m3);
+    let bed_shows = water_shows_bed(depth_m, inherent);
     if bed_shows || EVALUATE_ALL_BRANCHES {
         let bed = immersed_bed_bands(bed_albedo);
         let column = ShallowWater(
@@ -1207,7 +1229,7 @@ fn immersed_ground_response(
 fn water_light_response(
     bed_albedo: vec3<f32>,
     depth_m: f32,
-    sediment_g_m3: f32,
+    inherent: InherentOptics,
     surface: TerrainSurface,
     view: vec3<f32>,
     direct_light: CelestialReceiverLight,
@@ -1220,7 +1242,7 @@ fn water_light_response(
     let body = water_body_response(
         bed_albedo,
         depth_m,
-        sediment_g_m3,
+        inherent,
         1.0 - surface_reflectance,
         view.z,
         vec2<f32>(direct_light.sun_direction.z, direct_light.moon_direction.z),

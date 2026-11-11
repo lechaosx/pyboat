@@ -203,7 +203,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let response = water_light_response(
             vec3<f32>(0.0),
             0.0,
-            0.0,
+            SEAWATER_OPTICS,
             TerrainSurface(vec3<f32>(0.0), vec2<f32>(0.0), 0.0, vec2<f32>(0.0)),
             vec3<f32>(0.0, 0.0, 1.0),
             receiver,
@@ -244,7 +244,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let body = water_body_response(
             vec3<f32>(select(0.0, 0.12, input.position.y >= 1.0)),
             depth_m,
-            LIGHTING_MODEL_SEDIMENT,
+            mineral_sediment_optics(LIGHTING_MODEL_SEDIMENT),
             1.0 - water_fresnel_reflectance(cos(view)),
             cos(view),
             vec2<f32>(sin(radians(LIGHTING_MODEL_SUN_DEGREES)), -1.0),
@@ -288,7 +288,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let body = water_body_response(
             albedo,
             1e-4,
-            OPEN_WATER_SEDIMENT_G_M3,
+            SEAWATER_OPTICS,
             1.0 - water_fresnel_reflectance(1.0),
             1.0,
             light_z,

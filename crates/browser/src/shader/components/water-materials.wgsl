@@ -322,7 +322,7 @@ fn terrain_surface(
     let slope = length(material_gradient);
     let is_water = elevation_m < water_height_m;
     let bed_unseen = is_water
-        && !water_shows_bed(water_height_m - elevation_m, OPEN_WATER_SEDIMENT_G_M3);
+        && !water_shows_bed(water_height_m - elevation_m, SEAWATER_OPTICS);
     if bed_unseen && !EVALUATE_ALL_BRANCHES {
         return visual_water_surface(position_m, vec3<f32>(0.0), elevation_m, atmosphere);
     }

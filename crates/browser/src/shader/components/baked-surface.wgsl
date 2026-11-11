@@ -248,7 +248,7 @@ fn scene_surface_at(
     // Land and the bed beneath water share the colour and lighting layers,
     // which water reads only where its bed shows.
     let bed_shows = !is_land
-        && water_shows_bed(water_height_m - baked_elevation.value, OPEN_WATER_SEDIMENT_G_M3);
+        && water_shows_bed(water_height_m - baked_elevation.value, SEAWATER_OPTICS);
     var lit_gradient = elevation.gradient;
     var lighting = vec4<f32>(0.0);
     if bare_land || bed_shows || EVALUATE_ALL_BRANCHES {
