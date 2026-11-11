@@ -6,15 +6,12 @@
     "browser": "*"
   },
   "scripts": {
-    "prebuild": "npm --prefix .. run build:wasm:playground",
-    "predev": "npm --prefix .. run build:wasm:playground:dev",
-    "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
-    "preview": "vite preview"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "npm --prefix .. run dev",
+    "build": "npm --prefix .. run build",
+    "preview": "npm --prefix ../web run preview"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
-    "vite": "^8.3.2",
-    "vite-plugin-wasm": "^3.6.0"
+    "typescript": "^7.0.2"
   }
 }

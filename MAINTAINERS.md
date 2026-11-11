@@ -42,8 +42,8 @@ its coefficient and source are beside `foil_spin_inertia_kg_m2`.
 
 ## Visual checks
 
-A build cannot validate appearance. Use `npm run dev:playground` to inspect the
-world and `npm run dev` with the server to check it during play.
+A build cannot validate appearance. Run `npm run dev` and open `/playground/`
+to inspect the world, or `/` with the server to check it during play.
 
 For repeatable visual checks, capture an image outside the repository:
 
