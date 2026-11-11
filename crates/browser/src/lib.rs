@@ -1,5 +1,7 @@
 mod controller_comparison;
 pub use controller_comparison::ControllerComparison;
+#[cfg(any(feature = "playground", test))]
+pub mod controller_lab;
 use std::collections::HashMap;
 
 mod baked_surface;
@@ -1181,7 +1183,7 @@ pub fn windsock_extension(apparent_wind_speed_m_s: f32) -> f32 {
     (apparent_wind_speed_m_s.max(0.0) / WINDSOCK_FULL_EXTENSION_SPEED_M_S).min(1.0)
 }
 
-pub(crate) fn player_motion_intent(
+pub fn player_motion_intent(
     angle_rad: Option<f64>,
     keyboard_forward: f32,
     keyboard_turn: f32,
