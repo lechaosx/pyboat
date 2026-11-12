@@ -753,6 +753,7 @@ and verification details.
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |
 | Forced bench | How to bring the forced bound down: the per-frame bake budget and the cost of the forced water, sea-ice, and cloud branches |
 | Scene occupancy | How ground wetness fits the main scene shader without lowering its occupancy, which slows every view, water included where no wetness runs: whether smooth weather wetness moves onto the per-frame environment grid, or land and water take separate pipelines |
+| Unrun scene code | Why water pixels slow down for stirred-sediment code they skip, at unchanged occupancy: whether the shader's code size and layout or its branch structure costs them |
 | Bake memory | How the baked surface's colour and height textures shrink: on integrated GPUs with a small dedicated memory carve-out they spill out of video memory, so views that read the bed, such as storms over shallow water, cost more |
 | Stratus calibration | Whether thick stratus matches measured transmittance, given how uncertain the conversion from measured cloud thickness to optical depth is |
 | Subtropical low cloud | How low cloud under the subtropical highs reaches observed stratocumulus amounts, which follow the lower troposphere's stability (Klein and Hartmann 1993) that the model lacks |
