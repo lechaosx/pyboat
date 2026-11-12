@@ -4,7 +4,12 @@
 mod ocean;
 
 use ocean::procedural_wave_state;
-pub use ocean::{OCEAN_WAVE_MODE_COUNT, OceanWaveMode, ocean_wave_modes};
+pub use ocean::{
+    OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_BANDS_PER_OCTAVE,
+    OCEAN_WAVE_DIRECTIONS, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable,
+    WaveComponent, WindSea, ocean_swell_modes, ocean_wave_state, ocean_wave_table, wind_sea,
+    wind_sea_components,
+};
 use physics::glamx::Vec2 as Vector;
 use physics::prelude::Vector as PhysicsVector;
 use simulation::{
@@ -363,7 +368,6 @@ pub struct OceanState {
     pub significant_wave_height_m: f32,
     pub surface_displacement_m: f32,
     pub surface_slope: Vector,
-    pub dominant_wave_direction: Vector,
     pub rogue_crest_excess_m: f32,
 }
 
@@ -1806,15 +1810,12 @@ pub fn procedural_world_environment_interpolated(
     );
     // A 256 m gust changes boat forcing immediately but does not build a fully
     // developed wind sea. Resolved pressure flow is the stateless sustained-wind
-    // proxy used by the wave spectrum.
-    let wave_forcing_wind_velocity_m_s = land_sheltered_wind(
-        world_geometry,
-        match_seed,
-        position_m,
-        wind_from_pressure_gradient(
-            weather.primary.pressure_gradient_hpa_per_m,
-            celestial.geographic_latitude_degrees,
-        ),
+    // proxy used by the wave spectrum, unsheltered as the rendered sea takes it.
+    // Compromise: bays and island lees take the open sea's waves until fetch
+    // limits them.
+    let wave_forcing_wind_velocity_m_s = wind_from_pressure_gradient(
+        weather.primary.pressure_gradient_hpa_per_m,
+        celestial.geographic_latitude_degrees,
     );
     let water_depth_m = (water_height_m - solid_surface_elevation_m).max(0.0);
     let ocean = procedural_ocean_state(OceanQuery {
@@ -1863,7 +1864,6 @@ fn procedural_ocean_state(query: OceanQuery) -> OceanState {
             significant_wave_height_m: 0.0,
             surface_displacement_m: 0.0,
             surface_slope: Vector::ZERO,
-            dominant_wave_direction: Vector::ZERO,
             rogue_crest_excess_m: 0.0,
         };
     }

@@ -9,7 +9,7 @@ use game::{
     broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
     celestial_lighting_at_height, procedural_solid_surface_elevation_m,
     procedural_terrain_elevation_m, procedural_water_depth_m, procedural_world_environment,
-    world_celestial_conditions,
+    procedural_world_environment_interpolated, world_celestial_conditions,
 };
 use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
@@ -551,6 +551,112 @@ fn rendered_deck_cover_matches_authoritative_rust_upper_cloudiness() {
         compared += 1;
     }
     assert!(compared >= 8, "only {compared} partial deck covers");
+}
+
+/// Points of `lighting_wave_surface`: `count` of them (53, 31) m apart from
+/// `camera_m`.
+fn wave_surface_points(camera_m: Vector, count: usize) -> Vec<Vector> {
+    (0..count)
+        .map(|point| camera_m + point as f32 * Vector::new(53.0, 31.0))
+        .collect()
+}
+
+/// The water's surface the renderer draws at `wave_surface_points`, its
+/// height and slope at each. A millimetre view leaves every wave mode
+/// unfiltered by the pixel's footprint.
+fn rendered_wave_surfaces(
+    world: WorldGeometry,
+    camera_m: Vector,
+    world_time_seconds: f64,
+    count: usize,
+) -> Vec<(f32, Vector)> {
+    let pixels = render_diagnostic_image_with_view_at(
+        world,
+        camera_m,
+        world_time_seconds,
+        0.001,
+        "lighting_wave_surface",
+        3 * count as u32,
+        1,
+    );
+    let values: Vec<f32> = pixels
+        .chunks(4)
+        .map(|pixel| f32::from(pixel[0]) * 256.0 + f32::from(pixel[1]) - 32_768.0)
+        .collect();
+    values
+        .chunks(3)
+        .map(|point| (point[0] / 1000.0, Vector::new(point[1], point[2]) / 1.0e4))
+        .collect()
+}
+
+/// The renderer draws the authoritative sea: at deep open-water points in
+/// a calm, a moderate sea and the two stormiest seas a survey finds, at a
+/// whole and a fractional clock, at least 150 of the 384 points, its height
+/// agrees with Rust's within 2 mm plus 0.05% of the significant height, and
+/// its slope within 0.001, under 1% of a fully developed sea's steepness,
+/// 2π Hs / λ_p = 0.16.
+#[test]
+fn rendered_waves_match_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let deep = |time_s: f64, position_m: Vector| {
+        let tick_position = time_s * TICKS_PER_SECOND as f64;
+        let tick = tick_position.floor() as u64;
+        let sample = procedural_world_environment_interpolated(
+            world,
+            SEED,
+            tick,
+            (tick_position - tick as f64) as f32,
+            position_m,
+        );
+        (sample.environment.water_depth_m >= 100.0).then_some(sample)
+    };
+    let mut compared = 0;
+    for time_s in [0.0, 4_321.37] {
+        let mut seas: Vec<(f32, Vector)> = (0..600)
+            .map(|index| {
+                Vector::new(
+                    (index % 30) as f32 * 2_011.0 - 30_000.0,
+                    (index / 30) as f32 * 2_903.0 - 29_000.0,
+                )
+            })
+            .filter_map(|position_m| {
+                deep(time_s, position_m)
+                    .map(|sample| (sample.ocean.significant_wave_height_m, position_m))
+            })
+            .collect();
+        seas.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let cameras = [
+            seas[0],
+            seas[seas.len() / 2],
+            seas[seas.len() - 2],
+            seas[seas.len() - 1],
+        ];
+        assert!(cameras[3].0 >= 8.0, "stormiest sea {} m", cameras[3].0);
+        for (_, camera_m) in cameras {
+            let rendered = rendered_wave_surfaces(world, camera_m, time_s, 48);
+            for (position_m, (height, slope)) in
+                wave_surface_points(camera_m, 48).into_iter().zip(rendered)
+            {
+                let Some(sample) = deep(time_s, position_m) else {
+                    continue;
+                };
+                let height_m = sample.ocean.significant_wave_height_m;
+                let height_error = (height - sample.ocean.surface_displacement_m).abs();
+                assert!(
+                    height_error <= 0.002 + 0.0005 * height_m,
+                    "height at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {height} m, Rust {} m",
+                    sample.ocean.surface_displacement_m,
+                );
+                assert!(
+                    (slope - sample.ocean.surface_slope).length() <= 0.001,
+                    "slope at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {slope:?}, Rust {:?}",
+                    sample.ocean.surface_slope,
+                );
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared >= 150, "only {compared} deep points compared");
 }
 
 #[test]

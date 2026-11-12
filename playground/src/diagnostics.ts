@@ -54,6 +54,8 @@ export type DiagnosticId =
   | "water_visual_normals"
   | "water_physical_wave_normals"
   | "water_significant_wave_height"
+  | "water_wave_peak_period"
+  | "water_wave_direction"
   | "water_precipitation_contact_normals";
 
 export type DiagnosticSelection = "scene" | DiagnosticId;
@@ -193,6 +195,8 @@ export const diagnosticShaders: Record<DiagnosticId, DiagnosticShader> = {
     name: "water_ocean_forcing",
     constants: { OCEAN_FORCING_OUTPUT: 1 },
   },
+  water_wave_peak_period: { name: "water_ocean_forcing", constants: { OCEAN_FORCING_OUTPUT: 2 } },
+  water_wave_direction: { name: "water_ocean_forcing", constants: { OCEAN_FORCING_OUTPUT: 3 } },
   water_visual_normals: { name: "water_visual_normals" },
   water_physical_wave_normals: { name: "water_physical_wave_normals" },
   water_precipitation_contact_normals: { name: "water_precipitation_contact_normals" },
@@ -278,6 +282,8 @@ export const diagnosticGroups: Record<DiagnosticDomain, DiagnosticGroup[]> = {
       ["water_visual_normals", "Visual water normals"],
       ["water_physical_wave_normals", "Gameplay-driven wave normals"],
       ["water_significant_wave_height", "Authoritative significant wave height"],
+      ["water_wave_peak_period", "Wind sea peak period · 0-20 s"],
+      ["water_wave_direction", "Wind sea direction, brighter with height · RGB"],
     ] },
     { label: "Precipitation", options: [
       ["water_precipitation_contact_normals", "Precipitation contact normals"],

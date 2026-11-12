@@ -319,7 +319,7 @@ fn stirred_sediment() -> (Vec<f64>, Vec<Vec<f64>>) {
 /// no more than Cleveland Bay's fair-weather background of under 5 g/m³
 /// (Larcombe et al. 1995), as Jones et al. (2021, Front. Mar. Sci. 8, 727206)
 /// cite them. The ceiling takes a 10% margin, 5.5 g/m³: the availability
-/// calibrated at 5 m gives a bed 10 m deep 5.24 g/m³. Under 2.9 m/s they hold
+/// calibrated at 5 m gives a bed 10 m deep 4.55 g/m³. Under 2.9 m/s they hold
 /// no more than 2 g/m³.
 #[test]
 fn sandy_coasts_hold_what_clear_coasts_measure() {
@@ -359,9 +359,10 @@ fn a_muddy_bed_holds_what_shallow_bays_measure() {
 
 /// A storm stirs tens of g/m³ from a bed of fine sediment alone 20 m down, as
 /// a storm raised the Gulf of Lion's inner shelf, 26 m deep, to 70 g/m³ half
-/// a metre above the bed (Ferré et al. 2005, Cont. Shelf Res. 25); the median
-/// wind's waves leave it be. Open ocean and bare rock hold none even in a
-/// storm.
+/// a metre above the bed (Ferré et al. 2005, Cont. Shelf Res. 25). The median
+/// wind's fully developed sea moves that bed just past fine sediment's
+/// threshold, so it stirs no more than the fair-weather ceiling of clear
+/// coasts, 5.5 g/m³. Open ocean and bare rock hold none even in a storm.
 #[test]
 fn storms_stir_muddy_shelves_but_not_open_ocean_or_rock() {
     let (cases, _) = stirred_sediment();
@@ -370,9 +371,10 @@ fn storms_stir_muddy_shelves_but_not_open_ocean_or_rock() {
         "fine sediment 20 m down in a storm: {} g/m³",
         cases[11]
     );
-    assert_eq!(
-        cases[12], 0.0,
-        "fine sediment 20 m down under the median wind"
+    assert!(
+        cases[12] <= 5.5,
+        "fine sediment 20 m down under the median wind: {} g/m³",
+        cases[12]
     );
     assert_eq!(cases[13], 0.0, "sand 10 km down in a storm");
     assert_eq!(cases[14], 0.0, "bare rock 5 m down in a storm");

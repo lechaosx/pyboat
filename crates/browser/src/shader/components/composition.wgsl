@@ -206,7 +206,7 @@ fn scene_stirred_sediment_g_m3(scene_surface: SceneSurface, water_height_m: f32)
             fine_sediment_availability(scene_surface.sand_cover, -scene_surface.elevation_m),
             wave_orbital_speed_at_bed_m_s(
                 sampled_wave_forcing.significant_height_m,
-                wave_peak_wavelength_m(length(sampled_wave_forcing.surface_wind_m_s)),
+                wave_peak_wavelength_m(sampled_wave_forcing.sea),
                 depth_m,
             ),
             depth_m,
@@ -234,10 +234,10 @@ fn ground_weather(
     elevation_m: f32,
     atmosphere: SurfaceAtmosphereSample,
 ) -> GroundWeather {
-    let surface_speed_m_s = length(resolved_surface_wind_m_s_from_pressure(
+    let sea = wind_sea(length(resolved_surface_wind_m_s_from_pressure(
         position_m,
         atmosphere.pressure,
-    ));
+    )));
     return GroundWeather(
         // Cooled by the standard atmosphere's lapse rate with height, as the
         // snow cover takes the air.
@@ -247,11 +247,11 @@ fn ground_weather(
         ) - 0.0065 * max(elevation_m, 0.0),
         atmosphere.water_vapor_g_kg,
         significant_wave_height_m(
-            surface_speed_m_s,
+            sea,
             length(upper_wind_m_s_from_atmosphere(position_m, atmosphere)),
             OCEAN_FLOOR_DEPTH_M,
         ),
-        wave_peak_wavelength_m(surface_speed_m_s),
+        wave_peak_wavelength_m(sea),
     );
 }
 

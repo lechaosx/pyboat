@@ -42,7 +42,8 @@ pub use terrain_cache::TerrainCachePass;
 pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
-    CloudFieldTimeCoordinates, OCEAN_WAVE_MODE_COUNT, WorldEnvironment,
+    CloudFieldTimeCoordinates, OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT,
+    OCEAN_WAVE_DIRECTIONS, OceanWaveMode, WorldEnvironment,
     cloud_field_time_coordinates_interpolated, computed_yaw_rate_targets,
     computed_yaw_rate_targets_in_environment, dinghy_parameters, match_environment,
     procedural_match_environment, procedural_world_environment,
@@ -354,24 +355,63 @@ pub fn seasonal_phase_factors(season_phase: f32) -> [f32; 4] {
     ]
 }
 
-/// Wave-number vector, its length, and phase at the world clock in `[0, TAU)`,
-/// as the scene shader's `ocean_wave_modes` reads them.
-pub fn ocean_wave_mode_uniforms(
+pub const OCEAN_WAVE_BAND_ROTATION_ROWS: usize = OCEAN_WAVE_BAND_COUNT.div_ceil(4);
+
+/// The wave modes as the scene shader reads them, each as its wave-number
+/// vector, its length, and its phase at the view centre `camera_m` at the
+/// world clock, in `[0, TAU)`: the upper wind's swell modes, then each
+/// wind-sea band's direction rotation, four to a row, then the wind-sea table.
+#[derive(Clone, Copy)]
+pub struct OceanWaveUniforms {
+    pub swell_modes: [[f32; 4]; OCEAN_SWELL_MODE_COUNT],
+    pub band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
+    pub table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
+}
+
+// Phases fold in double precision about the view centre, so the shader adds
+// only k · (x - x_view) to them in small single-precision numbers.
+pub fn ocean_wave_uniforms(
     world_geometry: WorldGeometry,
     match_seed: u64,
     world_tick: u64,
     world_tick_fraction: f32,
-) -> [[f32; 4]; OCEAN_WAVE_MODE_COUNT] {
-    game::ocean_wave_modes(world_geometry, match_seed, world_tick, world_tick_fraction).map(
-        |mode| {
-            [
-                mode.wave_number_x_per_m as f32,
-                mode.wave_number_y_per_m as f32,
-                mode.wave_number_per_m as f32,
-                mode.phase_rad.rem_euclid(std::f64::consts::TAU) as f32,
-            ]
-        },
-    )
+    camera_m: [f32; 2],
+) -> OceanWaveUniforms {
+    let uniform = |mode: &OceanWaveMode| {
+        [
+            mode.wave_number_x_per_m as f32,
+            mode.wave_number_y_per_m as f32,
+            mode.wave_number_per_m as f32,
+            (mode.wave_number_x_per_m * f64::from(camera_m[0])
+                + mode.wave_number_y_per_m * f64::from(camera_m[1])
+                + mode.phase_rad)
+                .rem_euclid(std::f64::consts::TAU) as f32,
+        ]
+    };
+    let table = game::ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
+    OceanWaveUniforms {
+        swell_modes: game::ocean_swell_modes(
+            world_geometry,
+            match_seed,
+            world_tick,
+            world_tick_fraction,
+        )
+        .each_ref()
+        .map(uniform),
+        band_rotations: std::array::from_fn(|row| {
+            std::array::from_fn(|column| {
+                table
+                    .band_rotation_rad
+                    .get(4 * row + column)
+                    .copied()
+                    .unwrap_or(0.0) as f32
+            })
+        }),
+        table: table
+            .modes
+            .each_ref()
+            .map(|band| band.each_ref().map(uniform)),
+    }
 }
 
 pub fn sample_world_geometry(

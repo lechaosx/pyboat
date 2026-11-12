@@ -224,8 +224,15 @@ and verification details.
 - **[Implicit]** Ocean forcing remains planar: horizontal orbital motion affects
   sailing, while heave, roll, capsize, refraction, and diffraction are outside the model.
 - **[Implicit]** Rendering takes ocean wave modes and their clock phases from the
-  authoritative Rust modes, computed once per frame in double precision; shaders
-  evaluate only position-dependent wave terms.
+  authoritative Rust modes, computed once per frame in double precision relative
+  to the view centre; shaders evaluate only position-dependent terms and local
+  amplitudes.
+- **[Implicit]** The wind sea is the fully developed sea of the local unsheltered
+  pressure wind, a compromise that gives the caricatured weather systems Earth's
+  size and lifetime.
+- **[Implicit]** Wave modes are one fixed seeded table whose eastward wavenumbers
+  fit the world's width. Each point weights them by its wind sea's directional
+  spectrum, each band holding its spectral variance exactly.
 
 ## Rendering and lighting
 

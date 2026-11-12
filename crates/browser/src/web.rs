@@ -17,9 +17,10 @@ use futures_util::{
     stream::{FuturesUnordered, StreamExt},
 };
 use game::{
-    OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit, moon_phase,
-    procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
-    vector_field_time_coordinates_interpolated, world_celestial_conditions,
+    OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, celestial_lighting,
+    celestial_orbit, moon_phase, procedural_world_environment_interpolated,
+    scalar_field_time_coordinates_interpolated, vector_field_time_coordinates_interpolated,
+    world_celestial_conditions,
 };
 use protocol::{ServerMessage, decode_server_message, encode_client_message};
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -39,11 +40,11 @@ use crate::{
     ENVIRONMENT_FIELD_SHADER, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, FramePacer, GraphicsSettings, LANDFORM_HORIZON_LAYER, LANDFORM_HORIZON_SHADER,
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
-    OCCLUDER_FIELD_TEXELS, ResolutionController, SCENE_SHADER, SURFACE_HEIGHT_CLEAR,
-    SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth, UpscaleTargets, Upscaler,
-    ViewCloudMotion, append_reliable_server_message_chunk, baked_surface_sizes,
-    bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot, field_grids,
-    ocean_wave_mode_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
+    OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, ResolutionController, SCENE_SHADER,
+    SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth,
+    UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
+    baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
+    field_grids, ocean_wave_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
     requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
     scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
     viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
@@ -855,6 +856,13 @@ pub fn playground_scene_uniforms(
         height_m: camera_height_m,
         ..DroneCamera::production(geometry, Vector::new(camera_x_m, camera_y_m), view_height_m)
     };
+    let waves = ocean_wave_uniforms(
+        geometry,
+        match_seed,
+        tick,
+        tick_fraction,
+        [camera_x_m, camera_y_m],
+    );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         drone_camera: camera.scene_uniform_row(),
@@ -914,7 +922,9 @@ pub fn playground_scene_uniforms(
         baked_surface_grid_m: baked_surface_frame.grid_m,
         baked_surface_texels: baked_surface_frame.texels,
         baked_surface_level: baked_surface_frame.level,
-        ocean_wave_modes: ocean_wave_mode_uniforms(geometry, match_seed, tick, tick_fraction),
+        ocean_swell_modes: waves.swell_modes,
+        ocean_wave_band_rotations: waves.band_rotations,
+        ocean_wave_table: waves.table,
     };
     let mut field_grid_summary: Vec<f32> = grids
         .environment_workgroups()
@@ -1040,7 +1050,9 @@ struct SceneUniforms {
     baked_surface_grid_m: [f32; 4],
     baked_surface_texels: [u32; 4],
     baked_surface_level: [u32; 4],
-    ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
+    ocean_swell_modes: [[f32; 4]; OCEAN_SWELL_MODE_COUNT],
+    ocean_wave_band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
+    ocean_wave_table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
 
 struct EnvironmentFields {
@@ -2048,6 +2060,13 @@ impl Renderer {
         } else {
             BakedSurfaceFrame::direct()
         };
+        let waves = ocean_wave_uniforms(
+            world_geometry,
+            match_seed,
+            tick,
+            tick_fraction,
+            canonical_camera_m,
+        );
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -2132,12 +2151,9 @@ impl Renderer {
                 baked_surface_grid_m: baked_surface_frame.grid_m,
                 baked_surface_texels: baked_surface_frame.texels,
                 baked_surface_level: baked_surface_frame.level,
-                ocean_wave_modes: ocean_wave_mode_uniforms(
-                    world_geometry,
-                    match_seed,
-                    tick,
-                    tick_fraction,
-                ),
+                ocean_swell_modes: waves.swell_modes,
+                ocean_wave_band_rotations: waves.band_rotations,
+                ocean_wave_table: waves.table,
             }),
         );
 

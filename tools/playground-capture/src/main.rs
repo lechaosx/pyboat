@@ -5,15 +5,16 @@ use browser::{
     BakedSurfaceSizes, BakedSurfaceTextures, BoatSprites, ClothMotion, DroneCamera,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
     FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_TEXELS, SETTLED_ADAPTATION_SECONDS, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
-    TerrainCache, TerrainCacheFrame, TerrainCachePass, TerrainDepth, baked_surface_sizes,
-    boat_scene, exposure_target, field_grids, ocean_wave_mode_uniforms, sample_view_cloud_state,
-    seasonal_phase_factors, surface_height_texture, view_width_m, visual_pixel_footprint_m,
+    OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, SETTLED_ADAPTATION_SECONDS,
+    SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCacheFrame, TerrainCachePass,
+    TerrainDepth, baked_surface_sizes, boat_scene, exposure_target, field_grids,
+    ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors, surface_height_texture,
+    view_width_m, visual_pixel_footprint_m,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
-    OCEAN_WAVE_MODE_COUNT, celestial_lighting, celestial_orbit,
-    cloud_field_time_coordinates_interpolated, dinghy_parameters,
+    OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, celestial_lighting,
+    celestial_orbit, cloud_field_time_coordinates_interpolated, dinghy_parameters,
     procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
@@ -144,7 +145,9 @@ struct SceneUniforms {
     baked_surface_grid_m: [f32; 4],
     baked_surface_texels: [u32; 4],
     baked_surface_level: [u32; 4],
-    ocean_wave_modes: [[f32; 4]; OCEAN_WAVE_MODE_COUNT],
+    ocean_swell_modes: [[f32; 4]; OCEAN_SWELL_MODE_COUNT],
+    ocean_wave_band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
+    ocean_wave_table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
 
 #[repr(C)]
@@ -1513,6 +1516,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 53.0)],
         ),
+        "lighting_wave_surface" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 54.0)],
+        ),
         "lighting_view_direction" => diagnostic(
             value,
             "lighting_model_regressions",
@@ -1739,6 +1747,16 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             value,
             "water_ocean_forcing",
             &[("OCEAN_FORCING_OUTPUT", 1.0)],
+        ),
+        "water_wave_peak_period" => diagnostic(
+            value,
+            "water_ocean_forcing",
+            &[("OCEAN_FORCING_OUTPUT", 2.0)],
+        ),
+        "water_wave_direction" => diagnostic(
+            value,
+            "water_ocean_forcing",
+            &[("OCEAN_FORCING_OUTPUT", 3.0)],
         ),
         "water_visual_normals" => diagnostic(value, "water_visual_normals", &[]),
         "water_physical_wave_normals" => diagnostic(value, "water_physical_wave_normals", &[]),
@@ -2909,6 +2927,13 @@ fn scene_uniforms(
         vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
     let cloud_time = cloud_field_time_coordinates_interpolated(tick, tick_fraction);
     let camera = capture_camera(options)?;
+    let waves = ocean_wave_uniforms(
+        world_geometry,
+        options.seed,
+        tick,
+        tick_fraction,
+        canonical_camera_m,
+    );
     Ok(SceneUniforms {
         camera_and_view_m: [
             canonical_camera_m[0],
@@ -2979,12 +3004,9 @@ fn scene_uniforms(
         baked_surface_grid_m: baked_surface.grid_m,
         baked_surface_texels: baked_surface.texels,
         baked_surface_level: baked_surface.level,
-        ocean_wave_modes: ocean_wave_mode_uniforms(
-            world_geometry,
-            options.seed,
-            tick,
-            tick_fraction,
-        ),
+        ocean_swell_modes: waves.swell_modes,
+        ocean_wave_band_rotations: waves.band_rotations,
+        ocean_wave_table: waves.table,
     })
 }
 

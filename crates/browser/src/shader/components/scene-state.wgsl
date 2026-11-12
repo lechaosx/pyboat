@@ -35,8 +35,27 @@ struct SceneUniforms {
     baked_surface_grid_m: vec4<f32>,
     baked_surface_texels: vec4<u32>,
     baked_surface_level: vec4<u32>,
-    ocean_wave_modes: array<vec4<f32>, 16>,
+    // The upper wind's swell modes, then each wind-sea band's direction
+    // rotation, four to a row, then the wind-sea table by band and direction:
+    // wave-number vector, its length, and phase at the view centre.
+    ocean_swell_modes: array<vec4<f32>, OCEAN_SWELL_MODE_COUNT>,
+    ocean_wave_band_rotations: array<vec4<f32>, WAVE_BAND_ROTATION_ROWS>,
+    ocean_wave_table: array<vec4<f32>, WAVE_TABLE_MODES>,
 };
+
+// Keep synchronized with the wave table in crates/game/src/ocean.rs.
+const OCEAN_SWELL_MODE_COUNT: u32 = 4u;
+const WAVE_BANDS_PER_OCTAVE: f32 = 2.0;
+const WAVE_BAND_COUNT: i32 = 26;
+const WAVE_BAND_ROTATION_ROWS: u32 = 7u;
+const WAVE_DIRECTIONS: u32 = 16u;
+const WAVE_TABLE_MODES: u32 = 416u;
+// 2π / 4096 m.
+const WAVE_LOWEST_WAVENUMBER_PER_M: f32 = 0.0015339808;
+const WAVE_VISITED_BANDS: u32 = 8u;
+const WAVE_VISITED_DIRECTIONS: u32 = 6u;
+// The wind sea's modes span these multiples of its peak wavenumber.
+const WAVE_GAMEPLAY_WINDOW = vec2<f32>(0.36, 3.0);
 
 // Keep synchronized with OCCLUDER_FIELD_LAYERS in field_grids.rs.
 const OCCLUDER_FIELD_LAYERS: u32 = 5u;
