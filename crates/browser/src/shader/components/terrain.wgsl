@@ -468,6 +468,12 @@ fn procedural_bedrock_sample_from_circle(
     let coastal_detail = seabed_mask_value != 0.0
         || rock_mask_value != 0.0
         || outer_reef_mask_value != 0.0;
+    // Submerged ground takes the coastal geology's rock and sediment at every
+    // depth, as the coastal detail below sets them where it reaches.
+    if terrain.elevation_m < 0.0 {
+        terrain.coastal_rock_amount = landscape_visibility.x * coastal_rock.value;
+        terrain.coastal_sediment_amount = landscape_visibility.x * coastal_sediment.value;
+    }
     if !coastal_detail && !EVALUATE_ALL_BRANCHES {
         return terrain;
     }
@@ -832,12 +838,6 @@ const WATER_BACKSCATTERING = WaterBands(
     vec4<f32>(0.0025557, 0.0017495, 0.0014173, 0.001109),
     vec4<f32>(0.00084333, 0.00070567, 0.0005857, 0.0004192),
 );
-// Mineral sediment's absorption per g/m³, 0.041 e^(-0.0123 (λ - 443 nm))
-// m²/g (Babin et al. 2003, J. Geophys. Res. 108, 3211).
-const SEDIMENT_ABSORPTION = WaterBands(
-    vec4<f32>(0.043697, 0.026667, 0.019883, 0.013861),
-    vec4<f32>(0.0090395, 0.0067426, 0.0048973, 0.0026619),
-);
 // Mineral sediment's backscattering per g/m³, 0.010 (555 nm/λ)^0.5 m²/g:
 // within the 0.005-0.02 m²/g of Woźniak and Stramski (2004, Appl. Opt. 43)
 // and the 0.0137 ± 0.01 m²/g of Reynolds et al. (2016, Limnol. Oceanogr. 61),
@@ -887,23 +887,38 @@ struct InherentOptics {
 // Seawater with the absorbing background and no mineral sediment, which open
 // water holds none of, as Babin et al. (2003, Limnol. Oceanogr. 48) find
 // oceanic particles organic and of low density. The faked absorbing
-// background stands in for their absorption. Compromises: their
-// backscattering, which brightens the clearest ocean a little, is left out;
-// and coastal water holds no more, though waves stir sediment from a bed in
-// proportion to their stress on it where sediment supply and grain size
-// allow.
+// background stands in for their absorption. Compromise: their
+// backscattering, which brightens the clearest ocean a little, is left out.
 const SEAWATER_OPTICS = InherentOptics(WATER_ABSORPTION, WATER_BACKSCATTERING);
 
-// Seawater holding `sediment_g_m3` of suspended mineral sediment.
-fn mineral_sediment_optics(sediment_g_m3: f32) -> InherentOptics {
+// Seawater holding `sediment_g_m3` of sediment stirred from a bed of linear
+// `bed_albedo`. It backscatters as mineral sediment does, and absorbs as the
+// bed's colour implies: a layer of it too thick to show what lies beneath
+// takes the immersed bed's albedo w, for which Kubelka and Munk's two-flux
+// theory gives a / b_b = (1 - w)² / 2w. Babin et al.'s (2003, J. Geophys. Res.
+// 108, 3211) mineral sediment so has a red-brown bed's w, 0.11, 0.25 and
+// 0.48 at 443, 555 and 665 nm. Compromises: a bed is not a layer of its own
+// fine sediment, which may be darker or lighter than the sand it settles in,
+// as grey mud is in white carbonate sand, so the bed's colour stands in for
+// theirs; and a bed darker than 1% in a band stands in for a black one.
+fn stirred_sediment_optics(bed_albedo: vec3<f32>, sediment_g_m3: f32) -> InherentOptics {
+    let bed = immersed_bed_bands(bed_albedo);
+    let albedo_low = max(PI * bed.low, vec4<f32>(0.01));
+    let albedo_high = max(PI * bed.high, vec4<f32>(0.01));
+    let backscattering = WaterBands(
+        sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
+        sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
+    );
     return InherentOptics(
         WaterBands(
-            WATER_ABSORPTION.low + sediment_g_m3 * SEDIMENT_ABSORPTION.low,
-            WATER_ABSORPTION.high + sediment_g_m3 * SEDIMENT_ABSORPTION.high,
+            WATER_ABSORPTION.low + backscattering.low
+                * (1.0 - albedo_low) * (1.0 - albedo_low) / (2.0 * albedo_low),
+            WATER_ABSORPTION.high + backscattering.high
+                * (1.0 - albedo_high) * (1.0 - albedo_high) / (2.0 * albedo_high),
         ),
         WaterBands(
-            WATER_BACKSCATTERING.low + sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
-            WATER_BACKSCATTERING.high + sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
+            WATER_BACKSCATTERING.low + backscattering.low,
+            WATER_BACKSCATTERING.high + backscattering.high,
         ),
     );
 }
@@ -940,17 +955,43 @@ fn deep_water_reflectance(backscattered: vec4<f32>) -> vec4<f32> {
 fn water_shows_bed(depth_m: f32, inherent: InherentOptics) -> bool {
     var shows = false;
     if depth_m < bed_unseen_depth_m(SEAWATER_OPTICS) || EVALUATE_ALL_BRANCHES {
-        shows = depth_m < bed_unseen_depth_m(SEAWATER_OPTICS)
-            && depth_m < bed_unseen_depth_m(inherent);
+        var reach_m = bed_unseen_depth_m(SEAWATER_OPTICS);
+        let turbid = !is_seawater(inherent);
+        if turbid || EVALUATE_ALL_BRANCHES {
+            reach_m = select(reach_m, bed_unseen_depth_m(inherent), turbid);
+        }
+        shows = depth_m < bed_unseen_depth_m(SEAWATER_OPTICS) && depth_m < reach_m;
     }
     return shows;
+}
+
+fn is_seawater(inherent: InherentOptics) -> bool {
+    return all(inherent.absorption.low == SEAWATER_OPTICS.absorption.low)
+        && all(inherent.absorption.high == SEAWATER_OPTICS.absorption.high)
+        && all(inherent.backscattering.low == SEAWATER_OPTICS.backscattering.low)
+        && all(inherent.backscattering.high == SEAWATER_OPTICS.backscattering.high);
 }
 
 // The depth below the surface beyond which the bed adds less than 1% to the
 // body of water of `inherent` optics in every band, for a bed of albedo one
 // under a light and view at the zenith, where it shows most.
 fn bed_unseen_depth_m(inherent: InherentOptics) -> f32 {
-    let optics = water_optics(inherent);
+    // Seawater takes its optics from constants.
+    let turbid = !is_seawater(inherent);
+    var optics = water_optics(SEAWATER_OPTICS);
+    if turbid || EVALUATE_ALL_BRANCHES {
+        let turbid_optics = water_optics(inherent);
+        optics = WaterOptics(
+            WaterBands(
+                select(optics.attenuation.low, turbid_optics.attenuation.low, turbid),
+                select(optics.attenuation.high, turbid_optics.attenuation.high, turbid),
+            ),
+            WaterBands(
+                select(optics.backscattered.low, turbid_optics.backscattered.low, turbid),
+                select(optics.backscattered.high, turbid_optics.backscattered.high, turbid),
+            ),
+        );
+    }
     let u = optics.backscattered;
     let depth = max(
         -log(vec4<f32>(0.01 * PI) * deep_water_reflectance(u.low)) / (2.0 * optics.attenuation.low),
@@ -1099,7 +1140,22 @@ fn water_body_response(
     visibility: vec2<f32>,
     bed_light: vec3<f32>,
 ) -> WaterBodyResponse {
-    let optics = water_optics(inherent);
+    // Seawater takes its optics from constants.
+    let turbid = !is_seawater(inherent);
+    var optics = water_optics(SEAWATER_OPTICS);
+    if turbid || EVALUATE_ALL_BRANCHES {
+        let turbid_optics = water_optics(inherent);
+        optics = WaterOptics(
+            WaterBands(
+                select(optics.attenuation.low, turbid_optics.attenuation.low, turbid),
+                select(optics.attenuation.high, turbid_optics.attenuation.high, turbid),
+            ),
+            WaterBands(
+                select(optics.backscattered.low, turbid_optics.backscattered.low, turbid),
+                select(optics.backscattered.high, turbid_optics.backscattered.high, turbid),
+            ),
+        );
+    }
     let u = optics.backscattered;
     let deep = WaterBands(
         visibility.x * deep_water_reflectance(u.low),
@@ -1113,10 +1169,6 @@ fn water_body_response(
     // Seawater takes its deep reflectance from constant optics; the
     // visibility gate is zero or one, which commutes with `water_body_rgb`.
     var deep_rgb = visibility.x * seawater_deep_rgb();
-    let turbid = any(inherent.absorption.low != SEAWATER_OPTICS.absorption.low)
-        || any(inherent.absorption.high != SEAWATER_OPTICS.absorption.high)
-        || any(inherent.backscattering.low != SEAWATER_OPTICS.backscattering.low)
-        || any(inherent.backscattering.high != SEAWATER_OPTICS.backscattering.high);
     if turbid || EVALUATE_ALL_BRANCHES {
         deep_rgb = select(deep_rgb, water_body_rgb(deep), turbid);
     }

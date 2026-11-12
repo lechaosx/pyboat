@@ -1483,6 +1483,36 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 47.0)],
         ),
+        "lighting_seabed_mobility" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 48.0)],
+        ),
+        "lighting_seabed_sand_cover" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 49.0)],
+        ),
+        "lighting_stirred_sediment" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 50.0)],
+        ),
+        "lighting_stirred_shallows" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 51.0)],
+        ),
+        "lighting_sediment_optics" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 52.0)],
+        ),
+        "lighting_stirred_sediment_scene" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 53.0)],
+        ),
         "lighting_view_direction" => diagnostic(
             value,
             "lighting_model_regressions",

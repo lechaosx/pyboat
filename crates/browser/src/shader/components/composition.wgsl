@@ -89,6 +89,7 @@ struct SceneSurface {
     surface: TerrainSurface,
     wettable: f32,
     sediment_share: f32,
+    sand_cover: f32,
     slope: f32,
     bed_unresolved_slope: f32,
 };
@@ -183,9 +184,35 @@ fn composed_scene_surface(
         surface,
         select(0.0, factors.wettable_share * (1.0 - terrain.ice_amount), bare_land && composed),
         factors.sediment_share,
+        factors.sand_cover,
         length(terrain.gradient),
         lit_unresolved_slope(terrain, factors.unresolved_slope),
     );
+}
+
+// The fine sediment the waves the scene sampled with the water's surface
+// hold over the bed of `scene_surface` beneath water standing at
+// `water_height_m`, which they stir only from beds that hold it. It reads
+// `sampled_wave_forcing`, so `scene_surface_at` must have sampled the water's
+// surface at the same point first, as it does for every point under water.
+// Compromise: the waves' height includes the upper wind's swell, which takes
+// the local wind sea's period, as wave run-up does, while the mobility table
+// and the calibration of fine sediment's availability leave swell out.
+fn scene_stirred_sediment_g_m3(scene_surface: SceneSurface, water_height_m: f32) -> f32 {
+    let depth_m = water_height_m - scene_surface.elevation_m;
+    var sediment_g_m3 = 0.0;
+    if scene_surface.sand_cover > 0.0 || EVALUATE_ALL_BRANCHES {
+        sediment_g_m3 = stirred_fine_sediment_g_m3(
+            fine_sediment_availability(scene_surface.sand_cover, -scene_surface.elevation_m),
+            wave_orbital_speed_at_bed_m_s(
+                sampled_wave_forcing.significant_height_m,
+                wave_peak_wavelength_m(length(sampled_wave_forcing.surface_wind_m_s)),
+                depth_m,
+            ),
+            depth_m,
+        );
+    }
+    return sediment_g_m3;
 }
 
 // The steepest foreshore of the beaches Stockdon et al. fitted run-up on
@@ -585,8 +612,28 @@ fn lit_scene_surface(
         response.moon *= split.normal.y;
     } else if !illumination {
         let depth_m = water_height_m - scene_surface.elevation_m;
+        var inherent = SEAWATER_OPTICS;
+        let sediment_g_m3 = scene_stirred_sediment_g_m3(scene_surface, water_height_m);
+        let stirred = sediment_g_m3 > 0.0;
+        if stirred || EVALUATE_ALL_BRANCHES {
+            let turbid = stirred_sediment_optics(albedo, sediment_g_m3);
+            inherent = InherentOptics(
+                WaterBands(
+                    select(inherent.absorption.low, turbid.absorption.low, stirred),
+                    select(inherent.absorption.high, turbid.absorption.high, stirred),
+                ),
+                WaterBands(
+                    select(inherent.backscattering.low, turbid.backscattering.low, stirred),
+                    select(inherent.backscattering.high, turbid.backscattering.high, stirred),
+                ),
+            );
+        }
         var bed_light = vec3<f32>(1.0);
-        let bed_shows = water_shows_bed(depth_m, SEAWATER_OPTICS);
+        let bed_shows = select(
+            water_shows_bed(depth_m, SEAWATER_OPTICS),
+            water_shows_bed(depth_m, inherent),
+            stirred,
+        );
         if bed_shows || EVALUATE_ALL_BRANCHES {
             bed_light = select(
                 bed_light,
@@ -594,17 +641,35 @@ fn lit_scene_surface(
                 bed_shows,
             );
         }
-        response = water_light_response(
-            albedo,
-            depth_m,
-            SEAWATER_OPTICS,
-            surface,
-            view,
-            surface_direct_light,
-            ambient_light,
-            water_material_color_visibility() * vec3<f32>(1.0, effect_feature_visibility().y, 1.0),
-            bed_light,
-        );
+        let visibility = water_material_color_visibility()
+            * vec3<f32>(1.0, effect_feature_visibility().y, 1.0);
+        // Water holding no sediment passes seawater's optics as constants,
+        // which the compiler folds through the column.
+        if stirred || EVALUATE_ALL_BRANCHES {
+            response = water_light_response(
+                albedo,
+                depth_m,
+                inherent,
+                surface,
+                view,
+                surface_direct_light,
+                ambient_light,
+                visibility,
+                bed_light,
+            );
+        } else {
+            response = water_light_response(
+                albedo,
+                depth_m,
+                SEAWATER_OPTICS,
+                surface,
+                view,
+                surface_direct_light,
+                ambient_light,
+                visibility,
+                bed_light,
+            );
+        }
     }
     let terrain_shadow_transmittance = landform_shadow_transmittance(surface_direct_light);
     return fragment_surface_light(

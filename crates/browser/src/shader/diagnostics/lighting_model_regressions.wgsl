@@ -13,6 +13,28 @@ override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
 override LIGHTING_MODEL_VIEW_DEGREES: f32 = 0.0;
 override LIGHTING_MODEL_SEDIMENT: f32 = 0.0;
 
+// Babin et al.'s (2003, J. Geophys. Res. 108, 3211) mineral sediment's
+// absorption per g/m³, 0.041 e^(-0.0123 (λ - 443 nm)) m²/g, for which the
+// water-body tests integrate their references.
+const BABIN_SEDIMENT_ABSORPTION = WaterBands(
+    vec4<f32>(0.043697, 0.026667, 0.019883, 0.013861),
+    vec4<f32>(0.0090395, 0.0067426, 0.0048973, 0.0026619),
+);
+
+// Seawater holding `sediment_g_m3` of Babin et al.'s mineral sediment.
+fn babin_mineral_sediment_optics(sediment_g_m3: f32) -> InherentOptics {
+    return InherentOptics(
+        WaterBands(
+            WATER_ABSORPTION.low + sediment_g_m3 * BABIN_SEDIMENT_ABSORPTION.low,
+            WATER_ABSORPTION.high + sediment_g_m3 * BABIN_SEDIMENT_ABSORPTION.high,
+        ),
+        WaterBands(
+            WATER_BACKSCATTERING.low + sediment_g_m3 * SEDIMENT_BACKSCATTERING.low,
+            WATER_BACKSCATTERING.high + sediment_g_m3 * SEDIMENT_BACKSCATTERING.high,
+        ),
+    );
+}
+
 @fragment
 fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_playground_scene(input);
@@ -244,7 +266,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let body = water_body_response(
             vec3<f32>(select(0.0, 0.12, input.position.y >= 1.0)),
             depth_m,
-            mineral_sediment_optics(LIGHTING_MODEL_SEDIMENT),
+            babin_mineral_sediment_optics(LIGHTING_MODEL_SEDIMENT),
             1.0 - water_fresnel_reflectance(cos(view)),
             cos(view),
             vec2<f32>(sin(radians(LIGHTING_MODEL_SUN_DEGREES)), -1.0),
@@ -437,6 +459,239 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             0.3,
         );
         return vec4<f32>(wet, rain_capable, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 48u {
+        // The seabed's mobility, as 65535 times the share in 16 bits, its
+        // high byte in red and its low in green: sand by `seabed_mobility`,
+        // then by integrating its wind sea's motion over 4096 quantiles of
+        // the wind climate, then fine sediment alike, in the first four rows.
+        // Columns step the depth by sixteenths of an octave from 0.25 m, so
+        // even columns fall on the table's depths and odd ones between them.
+        // The fifth row holds Komar and Miller's sand threshold at 6 s in
+        // 0.1 mm/s; the orbital speed at beds 20 and 30 m down under a 4 m sea
+        // peaking at the wavelength of a 15 m/s wind, in 0.1 mm/s; and the
+        // wind climate's medians, 90th and 99th percentiles in mm/s.
+        let column = floor(input.position.x);
+        let row = u32(input.position.y);
+        var value = 0.0;
+        if row < 4u {
+            let depth_m = exp2(column / 16.0 - 2.0);
+            let fine = row >= 2u;
+            if row % 2u == 0u {
+                value = select(seabed_mobility(depth_m).x, seabed_mobility(depth_m).y, fine);
+            } else {
+                var moved = 0.0;
+                for (var index = 0u; index < 4096u; index++) {
+                    let quantile = (f32(index) + 0.5) / 4096.0;
+                    let wind_m_s = WIND_CLIMATE_WEIBULL.y
+                        * pow(-log(1.0 - quantile), 1.0 / WIND_CLIMATE_WEIBULL.x);
+                    let wavelength_m = wave_peak_wavelength_m(wind_m_s);
+                    let speed_m_s = wave_orbital_speed_at_bed_m_s(
+                        significant_wave_height_m(wind_m_s, 0.0, depth_m),
+                        wavelength_m,
+                        depth_m,
+                    );
+                    let threshold_m_s = select(
+                        sand_threshold_orbital_speed_m_s(wave_period_s(wavelength_m)),
+                        FINE_SEDIMENT_THRESHOLD_ORBITAL_SPEED_M_S,
+                        fine,
+                    );
+                    moved += select(0.0, 1.0, speed_m_s > threshold_m_s);
+                }
+                value = moved / 4096.0;
+            }
+            value *= 65535.0;
+        } else {
+            var quantiles = array<f32, 3>(0.5, 0.9, 0.99);
+            let storm_wavelength_m = wave_peak_wavelength_m(15.0);
+            if column < 1.0 {
+                value = 1e4 * sand_threshold_orbital_speed_m_s(6.0);
+            } else if column < 3.0 {
+                value = 1e4 * wave_orbital_speed_at_bed_m_s(
+                    4.0,
+                    storm_wavelength_m,
+                    select(20.0, 30.0, column >= 2.0),
+                );
+            } else {
+                value = 1e3 * WIND_CLIMATE_WEIBULL.y
+                    * pow(-log(1.0 - quantiles[min(u32(column) - 3u, 2u)]), 1.0 / WIND_CLIMATE_WEIBULL.x);
+            }
+        }
+        let units = u32(round(clamp(value, 0.0, 65535.0)));
+        return vec4<f32>(linear_material_color(vec3<f32>(
+            f32(units / 256u) / 255.0,
+            f32(units % 256u) / 255.0,
+            0.0,
+        )), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 49u {
+        // The sand cover of ground's dry composition at the view centre,
+        // without coastal rock, in red: columns step its elevation by 10 cm
+        // down from 0.1 m, and rows take coastal sediment amounts of 0.05,
+        // 0.2, 0.3 and 0.5 on level ground, then 0.3 on slopes of 0.3 and
+        // 0.75.
+        let initialized = initialize_playground_scene(input);
+        var amounts = array<f32, 6>(0.05, 0.2, 0.3, 0.5, 0.3, 0.3);
+        var slopes = array<f32, 6>(0.0, 0.0, 0.0, 0.0, 0.3, 0.75);
+        let row = min(u32(input.position.y), 5u);
+        surface_baking = true;
+        let elevation_m = 0.1 - 0.1 * floor(input.position.x);
+        let atmosphere = initialized.atmosphere;
+        _ = terrain_surface(
+            initialized.input.world_position_m,
+            elevation_m,
+            vec2<f32>(slopes[row], 0.0),
+            elevation_m,
+            vec2<f32>(slopes[row], 0.0),
+            0.0,
+            0.0,
+            amounts[row],
+            -1.0e6,
+            0.0,
+            atmosphere,
+        );
+        surface_baking = false;
+        return vec4<f32>(surface_bake_factors.sand_cover, 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 50u {
+        // Fine sediment the wind sea stirs, alone, without swell. In the top
+        // row, in 0.01 g/m³, its high byte in red and its low in green: over
+        // beds all sand 2, 3, 5, 7 and 10 m deep, under the wind climate's
+        // median wind, then under 2.9 m/s; over a bed of fine sediment alone
+        // 3 m deep under waves stressing it by 0.3 Pa; that bed 20 m deep
+        // under the climate's 99th percentile wind, then its median; a sand
+        // bed 10 km deep under the 99th percentile; and a bare rock bed 5 m
+        // deep under it. Below, in 0.1 g/m², what a bed of fine sediment alone
+        // gives the column above it, by columns 2^(i/2 - 1) m deep, under
+        // winds of 0, 3, 6, 9, 12, 15, 20 and 25 m/s by rows.
+        let column = u32(input.position.x);
+        let row = u32(input.position.y);
+        let median_m_s = WIND_CLIMATE_WEIBULL.y * pow(log(2.0), 1.0 / WIND_CLIMATE_WEIBULL.x);
+        let storm_m_s = WIND_CLIMATE_WEIBULL.y * pow(log(100.0), 1.0 / WIND_CLIMATE_WEIBULL.x);
+        var value = 0.0;
+        if row == 0u {
+            var depths_m = array<f32, 15>(
+                2.0, 3.0, 5.0, 7.0, 10.0, 2.0, 3.0, 5.0, 7.0, 10.0, 3.0, 20.0, 20.0, 10000.0, 5.0,
+            );
+            var winds_m_s = array<f32, 15>(
+                median_m_s, median_m_s, median_m_s, median_m_s, median_m_s,
+                2.9, 2.9, 2.9, 2.9, 2.9, 0.0, storm_m_s, median_m_s, storm_m_s, storm_m_s,
+            );
+            let case_index = min(column, 14u);
+            let depth_m = depths_m[case_index];
+            let wind_m_s = winds_m_s[case_index];
+            var speed_m_s = wave_orbital_speed_at_bed_m_s(
+                significant_wave_height_m(wind_m_s, 0.0, depth_m),
+                wave_peak_wavelength_m(wind_m_s),
+                depth_m,
+            );
+            var availability = fine_sediment_availability(select(1.0, 0.0, case_index == 14u), depth_m);
+            if case_index >= 10u && case_index <= 12u {
+                availability = 1.0;
+            }
+            if case_index == 10u {
+                speed_m_s = sqrt(0.3 / (0.5 * SEAWATER_DENSITY_KG_M3 * WAVE_FRICTION_FACTOR));
+            }
+            value = 100.0 * stirred_fine_sediment_g_m3(availability, speed_m_s, depth_m);
+        } else {
+            var winds_m_s = array<f32, 8>(0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 20.0, 25.0);
+            let wind_m_s = winds_m_s[min(row - 1u, 7u)];
+            let depth_m = exp2(f32(column) / 2.0 - 1.0);
+            let speed_m_s = wave_orbital_speed_at_bed_m_s(
+                significant_wave_height_m(wind_m_s, 0.0, depth_m),
+                wave_peak_wavelength_m(wind_m_s),
+                depth_m,
+            );
+            value = 10.0 * depth_m * stirred_fine_sediment_g_m3(1.0, speed_m_s, depth_m);
+        }
+        let units = u32(round(clamp(value, 0.0, 65535.0)));
+        return vec4<f32>(linear_material_color(vec3<f32>(
+            f32(units / 256u) / 255.0,
+            f32(units % 256u) / 255.0,
+            0.0,
+        )), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 51u {
+        // The light a bed of bright beach sand, all sand, adds to the body of
+        // water 2, 3 and 5 m deep by column, under the Sun and view overhead,
+        // holding the sediment the wind climate's median wind stirs from it,
+        // per unit of what it adds through clear seawater, in red. The bed
+        // adds its body's luminance over it less that over a black bed.
+        var depths_m = array<f32, 3>(2.0, 3.0, 5.0);
+        let depth_m = depths_m[min(u32(input.position.x), 2u)];
+        let median_m_s = WIND_CLIMATE_WEIBULL.y * pow(log(2.0), 1.0 / WIND_CLIMATE_WEIBULL.x);
+        let sand = linear_material_color(vec3<f32>(0.84, 0.76, 0.50));
+        let sediment_g_m3 = stirred_fine_sediment_g_m3(
+            fine_sediment_availability(1.0, depth_m),
+            wave_orbital_speed_at_bed_m_s(
+                significant_wave_height_m(median_m_s, 0.0, depth_m),
+                wave_peak_wavelength_m(median_m_s),
+                depth_m,
+            ),
+            depth_m,
+        );
+        var added = vec2<f32>(0.0);
+        for (var index = 0u; index < 2u; index++) {
+            var inherent = SEAWATER_OPTICS;
+            if index == 0u {
+                inherent = stirred_sediment_optics(sand, sediment_g_m3);
+            }
+            var luminance = vec2<f32>(0.0);
+            for (var bed_index = 0u; bed_index < 2u; bed_index++) {
+                let body = water_body_response(
+                    select(vec3<f32>(0.0), sand, bed_index == 0u),
+                    depth_m,
+                    inherent,
+                    1.0 - water_fresnel_reflectance(1.0),
+                    1.0,
+                    vec2<f32>(1.0, -1.0),
+                    vec2<f32>(1.0),
+                    vec3<f32>(1.0),
+                ).sun;
+                luminance[bed_index] = dot(body, LUMINANCE_WEIGHTS);
+            }
+            added[index] = luminance.x - luminance.y;
+        }
+        return vec4<f32>(added.x / added.y, 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 52u {
+        // Stirred sediment's absorption per unit of its backscattering, r, as
+        // r / (r + 1) in red, in each of the eight bands by column: over a
+        // bed of Babin et al.'s mineral colour, then of 30% grey.
+        let color = select(vec3<f32>(0.48, 0.25, 0.11), vec3<f32>(0.3), input.position.y >= 1.0);
+        let stirred = stirred_sediment_optics(color, 1.0);
+        let band = min(u32(input.position.x), 7u);
+        var absorption = stirred.absorption.low - WATER_ABSORPTION.low;
+        var backscattering = stirred.backscattering.low - WATER_BACKSCATTERING.low;
+        if band >= 4u {
+            absorption = stirred.absorption.high - WATER_ABSORPTION.high;
+            backscattering = stirred.backscattering.high - WATER_BACKSCATTERING.high;
+        }
+        let ratio = absorption[band % 4u] / backscattering[band % 4u];
+        return vec4<f32>(ratio / (ratio + 1.0), 0.0, 0.0, 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 53u {
+        // The fine sediment the waves hold at each pixel's rendered position
+        // beneath water, in 0.01 g/m³, its high byte in red and its low in
+        // green, with alpha 1 over water and 0 elsewhere.
+        let initialized = initialize_playground_scene(input);
+        let water_height_m = tide_height_m();
+        let surface = scene_surface_at(
+            initialized.input.world_position_m,
+            initialized.surface_circle_position,
+            water_height_m,
+            initialized.atmosphere,
+        );
+        if surface.is_land {
+            return vec4<f32>(0.0);
+        }
+        let sediment_g_m3 = scene_stirred_sediment_g_m3(surface, water_height_m);
+        let units = u32(round(clamp(100.0 * sediment_g_m3, 0.0, 65535.0)));
+        return vec4<f32>(linear_material_color(vec3<f32>(
+            f32(units / 256u) / 255.0,
+            f32(units % 256u) / 255.0,
+            0.0,
+        )), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 39u {
         // The Sun's light reaching the surface at the rendered position,

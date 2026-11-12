@@ -58,6 +58,10 @@ struct WaterWaveSample {
     surface_wind_m_s: vec2<f32>,
 };
 
+// The forcing of the waves the scene last sampled, which the sediment they
+// stir at the same point reuses rather than evaluating the winds again.
+var<private> sampled_wave_forcing: OceanForcingSample;
+
 fn physical_water_wave_sample_from_surface(
     position_m: vec2<f32>,
     terrain_elevation_m: f32,
@@ -71,6 +75,7 @@ fn physical_water_wave_sample_from_surface(
         atmosphere,
         tide,
     );
+    sampled_wave_forcing = forcing;
     // The wind sets the slope statistics of waves too fine to show.
     sample.surface_wind_m_s = forcing.surface_wind_m_s;
     if material_feature_visibility().y <= 0.0 {
@@ -199,6 +204,153 @@ fn wave_peak_wavelength_m(wind_speed_m_s: f32) -> f32 {
     return max(
         TAU * wind_speed_m_s * wind_speed_m_s / (0.769 * 9.81),
         1.4142135 * DECORATIVE_WATER_WAVELENGTH_M,
+    );
+}
+
+// The period of waves of `wavelength_m` in deep water, √(2πλ/g).
+fn wave_period_s(wavelength_m: f32) -> f32 {
+    return sqrt(TAU * wavelength_m / 9.81);
+}
+
+// The peak orbital speed at a bed `depth_m` down under waves of significant
+// height `height_m` and deep-water peak wavelength `wavelength_m`: linear
+// wave theory's π H / (T sinh kh), with kh from the peak's deep-water k₀h by
+// Eckart's (1952) explicit approximation of the dispersion relation,
+// k₀h / √tanh(k₀h), within 5%.
+fn wave_orbital_speed_at_bed_m_s(height_m: f32, wavelength_m: f32, depth_m: f32) -> f32 {
+    let deep_water_depth = TAU * max(depth_m, 0.01) / wavelength_m;
+    let wavenumber_depth = deep_water_depth / sqrt(tanh(deep_water_depth));
+    return PI * height_m / (wave_period_s(wavelength_m) * sinh(wavenumber_depth));
+}
+
+// The orbital speed at the bed that moves quartz sand of 0.25 mm under waves
+// of `period_s`: Komar and Miller's (1973) threshold for grains below 0.5 mm,
+// [0.118 g (s - 1)]^(2/3) D^(1/3) T^(1/3) with s = 2.65, as Soulsby (1997)
+// gives it; 0.176 m/s at 6 s.
+fn sand_threshold_orbital_speed_m_s(period_s: f32) -> f32 {
+    return 0.096977 * pow(period_s, 1.0 / 3.0);
+}
+
+// The orbital speed at the bed that lifts fine sediment: under a wave
+// friction factor of 0.02 it exerts the 0.06-0.1 Pa critical stress of
+// fine-sediment resuspension models (Chung et al. 2009, Water Resour. Res. 45;
+// Green and Coco 2014, Rev. Geophys. 52).
+const FINE_SEDIMENT_THRESHOLD_ORBITAL_SPEED_M_S: f32 = 0.1;
+// The wave friction factor that turns the orbital speed at the bed into its
+// stress there, as that threshold takes it.
+const WAVE_FRICTION_FACTOR: f32 = 0.02;
+const SEAWATER_DENSITY_KG_M3: f32 = 1025.0;
+
+// The wind climate's shape k and scale c: a Weibull distribution of the
+// resolved surface wind, fitted to the game's wind sampled over places and
+// seasons, so a wind U is exceeded exp(-(U/c)^k) of the time.
+const WIND_CLIMATE_WEIBULL = vec2<f32>(1.7, 9.0);
+
+// The share of time the waves at a bed `depth_m` below mean sea level move
+// sand, then fine sediment: the share of the wind climate's winds whose wind
+// sea moves each past its threshold orbital speed, at depths 2^(i/8 - 2) m,
+// from 0.25 to 256 m. Compromises: one climate stands for every place, as the
+// waves have no fetch; the upper wind's swell, which adds up to 0.03, is left
+// out; and the tide does not change the depth. Its test,
+// `the_seabed_mobility_table_follows_the_wave_climate`, prints it afresh from
+// the functions above.
+const SEABED_MOBILITY = array<vec2<f32>, 81>(
+    vec2<f32>(1.00000, 1.00000), vec2<f32>(0.99585, 1.00000), vec2<f32>(0.99194, 1.00000),
+    vec2<f32>(0.98828, 1.00000), vec2<f32>(0.98462, 1.00000), vec2<f32>(0.98120, 1.00000),
+    vec2<f32>(0.97754, 1.00000), vec2<f32>(0.97363, 1.00000), vec2<f32>(0.96997, 1.00000),
+    vec2<f32>(0.96606, 1.00000), vec2<f32>(0.96216, 0.99854), vec2<f32>(0.95801, 0.99414),
+    vec2<f32>(0.95386, 0.99023), vec2<f32>(0.94946, 0.98657), vec2<f32>(0.94482, 0.98267),
+    vec2<f32>(0.94018, 0.97876), vec2<f32>(0.93530, 0.97485), vec2<f32>(0.93017, 0.97070),
+    vec2<f32>(0.92480, 0.96655), vec2<f32>(0.91919, 0.96216), vec2<f32>(0.91333, 0.95776),
+    vec2<f32>(0.90698, 0.95288), vec2<f32>(0.90039, 0.94775), vec2<f32>(0.89331, 0.94238),
+    vec2<f32>(0.88598, 0.93677), vec2<f32>(0.87793, 0.93042), vec2<f32>(0.86914, 0.92383),
+    vec2<f32>(0.85986, 0.91675), vec2<f32>(0.84961, 0.90893), vec2<f32>(0.83838, 0.90039),
+    vec2<f32>(0.82593, 0.89087), vec2<f32>(0.81201, 0.88037), vec2<f32>(0.79663, 0.86841),
+    vec2<f32>(0.77905, 0.85498), vec2<f32>(0.75952, 0.83984), vec2<f32>(0.73681, 0.82226),
+    vec2<f32>(0.71118, 0.80200), vec2<f32>(0.68139, 0.77832), vec2<f32>(0.64697, 0.75073),
+    vec2<f32>(0.62817, 0.71826), vec2<f32>(0.60912, 0.67993), vec2<f32>(0.58959, 0.64208),
+    vec2<f32>(0.56933, 0.62426), vec2<f32>(0.54858, 0.60571), vec2<f32>(0.52758, 0.58691),
+    vec2<f32>(0.50585, 0.56738), vec2<f32>(0.48365, 0.54711), vec2<f32>(0.46119, 0.52660),
+    vec2<f32>(0.43824, 0.50561), vec2<f32>(0.41505, 0.48414), vec2<f32>(0.39185, 0.46217),
+    vec2<f32>(0.36841, 0.43995), vec2<f32>(0.34498, 0.41749), vec2<f32>(0.32178, 0.39478),
+    vec2<f32>(0.29859, 0.37183), vec2<f32>(0.27564, 0.34913), vec2<f32>(0.25318, 0.32618),
+    vec2<f32>(0.23120, 0.30347), vec2<f32>(0.20996, 0.28101), vec2<f32>(0.18946, 0.25904),
+    vec2<f32>(0.16968, 0.23731), vec2<f32>(0.15088, 0.21631), vec2<f32>(0.13306, 0.19580),
+    vec2<f32>(0.11646, 0.17603), vec2<f32>(0.10083, 0.15723), vec2<f32>(0.08667, 0.13941),
+    vec2<f32>(0.07373, 0.12256), vec2<f32>(0.06201, 0.10694), vec2<f32>(0.05151, 0.09229),
+    vec2<f32>(0.04224, 0.07910), vec2<f32>(0.03418, 0.06690), vec2<f32>(0.02734, 0.05591),
+    vec2<f32>(0.02148, 0.04639), vec2<f32>(0.01660, 0.03784), vec2<f32>(0.01245, 0.03052),
+    vec2<f32>(0.00928, 0.02417), vec2<f32>(0.00684, 0.01904), vec2<f32>(0.00488, 0.01465),
+    vec2<f32>(0.00342, 0.01099), vec2<f32>(0.00244, 0.00806), vec2<f32>(0.00146, 0.00586),
+);
+
+fn seabed_mobility(depth_m: f32) -> vec2<f32> {
+    let index = clamp(8.0 * log2(max(depth_m, 0.25)) + 16.0, 0.0, 80.0);
+    let lower = min(u32(index), 79u);
+    return mix(SEABED_MOBILITY[lower], SEABED_MOBILITY[lower + 1u], index - f32(lower));
+}
+
+// The times in a row the wind climate must leave a bed still for fine
+// sediment to settle in its sand and consolidate there. Calibrated so a bed
+// all sand 5 m deep holds 1.5 g/m³ under the climate's median wind, the
+// median background of the fringing reefs of Magnetic Island, within their
+// 1-2 mg/L (Waterhouse et al. 2021) and Cleveland Bay's background of under
+// 5 mg/L (Larcombe et al. 1995, Coral Reefs 14), as Jones et al. (2021, Front.
+// Mar. Sci. 8, 727206) cite them: there the median wind's waves lift
+// all the fine sediment it holds, 100 g/m³ over 5 m, so N = ln(1.5 / 100) /
+// ln(1 - M), with M = 0.8297 the share of time its waves move fine sediment.
+const FINE_SEDIMENT_QUIET_SPELLS: f32 = 2.372;
+
+// The share of a bed `bed_depth_m` below mean sea level, of `sand_cover`,
+// that holds fine sediment: the share of time its waves leave fine sediment
+// still, M, held for `FINE_SEDIMENT_QUIET_SPELLS` spells in a row, (1 - M)^N.
+// Compromise: fine sediment settles only among the sand, for want of rivers
+// and other sources of mud.
+fn fine_sediment_availability(sand_cover: f32, bed_depth_m: f32) -> f32 {
+    return sand_cover * pow(1.0 - seabed_mobility(bed_depth_m).y, FINE_SEDIMENT_QUIET_SPELLS);
+}
+
+// The rise in fine sediment held in suspension per unit of the excess of the
+// squared orbital speed at the bed over the threshold's: Schoellhamer (1995,
+// Estuar. Coast. Shelf Sci. 40) finds orbital speeds of 15-20 cm/s
+// resuspending Old Tampa Bay's bed 1.5 and 4 m down, and Sheng et al. (1995)
+// its water rising from about 10 to over 40 mg/L in storms, as Green and Coco
+// (2014, Rev. Geophys. 52) cite them: 10-24 g/m³ over that excess of 1.25-3.
+const FINE_SEDIMENT_RESUSPENSION_G_M3: f32 = 15.0;
+
+// The fine sediment a bed of it alone can give up to waves stressing it by
+// `stress_pa`, in g/m²: Sanford and Maa's (2001, Mar. Geol. 179) depth-limited
+// erosion, which stops where the bed's critical stress, rising with the mass
+// eroded, meets the waves'. Its profile is the York River's,
+// m = 1.43 (τ - 0.01)^1.97 kg/m² (Dickhudt et al. 2009, Mar. Geol. 267, as Ha
+// and Ha 2021, Front. Mar. Sci. 8, tabulate it), up to the 0.5 kg/m² it gives
+// at 0.6 Pa, the top of the stresses measured. Compromise: that ceiling is
+// where the measurements stop, not what a bed holds, so above 0.6 Pa, which a
+// moderate wind's waves reach over beds to about 6 m deep, a storm raises the
+// load no further, where real coasts rise to tens of mg/L in wind events.
+// Extrapolated past 0.6 Pa, the fit holds storm water over sandy beds 10-20 m
+// deep at about ten times the tens to low hundreds of mg/L measured (Sheng et
+// al. 1995; Ferré et al. 2005, Cont. Shelf Res. 25). Revisit once beds of fine
+// sediment alone exist.
+fn erodible_fine_sediment_g_m2(stress_pa: f32) -> f32 {
+    return 1000.0 * min(1.43 * pow(max(stress_pa - 0.01, 0.0), 1.97), 0.5);
+}
+
+// Fine sediment held in suspension over a bed `depth_m` deep, of which
+// `availability` holds fine sediment, under waves moving the bed at
+// `orbital_speed_m_s`: in proportion to the excess of the squared speed over
+// the threshold's where erosion by an excess-stress law balances settling,
+// up to what the bed gives up to the waves' stress, τ = ρ f_w u² / 2, mixed
+// through the column. Compromises: the load follows the present waves
+// without settling lag; and the column is mixed from bed to surface.
+fn stirred_fine_sediment_g_m3(availability: f32, orbital_speed_m_s: f32, depth_m: f32) -> f32 {
+    let squared_speed = orbital_speed_m_s * orbital_speed_m_s;
+    let threshold = FINE_SEDIMENT_THRESHOLD_ORBITAL_SPEED_M_S;
+    let excess = max(squared_speed / (threshold * threshold) - 1.0, 0.0);
+    let stress_pa = 0.5 * SEAWATER_DENSITY_KG_M3 * WAVE_FRICTION_FACTOR * squared_speed;
+    return availability * min(
+        FINE_SEDIMENT_RESUSPENSION_G_M3 * excess,
+        erodible_fine_sediment_g_m2(stress_pa) / max(depth_m, 0.01),
     );
 }
 

@@ -326,8 +326,10 @@ and verification details.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
   from shared local causes. Fine surface breakup changes appearance alone, evolves
   without field-wide velocity, and has fixed cost independent of world size.
-- **[Implicit]** The bed beneath water takes the shore's dry composition, so
-  ground keeps its material as the tide covers it.
+- **[Implicit]** Intertidal ground keeps its composition as the tide covers
+  it; below the beach the bed is rock and sand, which covers it in proportion
+  to the beach's sediment against the share of time the wave climate moves it,
+  on slopes up to sand's angle of rest.
 - **[Implicit]** Wet ground returns light as the bed beneath water does under
   no depth, so level ground keeps its brightness as the tide covers it.
 - **[Implicit]** The bed beneath water takes its relief light from the
@@ -421,10 +423,13 @@ and verification details.
   gives way to it.
 - **[Implicit]** Water's body returns each light by its inherent optics,
   resolved spectrally, through Fresnel transmittance into and out of the
-  surface along refracted paths; seawater and an absorbing background set
-  those optics.
+  surface along refracted paths; seawater, an absorbing background, and the
+  fine sediment waves stir set those optics.
 - **[Explicit]** Water's clarity is pure seawater with one absorbing
-  background.
+  background and the fine sediment that waves stir from beds that hold it, up
+  to what those beds hold.
+- **[Implicit]** Suspended sediment takes its optics from the colour of the
+  bed it came from.
 - **[Implicit]** A pixel takes the mean relief light of the land it covers:
   the relief its footprint resolves sets the mean slope, and finer terrain and
   material relief spreads slopes around it. Authoritative elevation and its
@@ -593,8 +598,8 @@ and verification details.
 
 - **[Explicit]** The static surface persists between frames in a world-anchored
   clipmap: terrain with land ice, the dry, snowless, unseasoned land
-  composition with the factors its wetness and seasons change, and the sea-ice
-  plate noises and relief.
+  composition with the factors its wetness and seasons change, the seabed's
+  sand cover, and the sea-ice plate noises and relief.
 - **[Explicit]** The scene applies per pixel only what changes with time,
   season, or weather: tide, sea ice, snow, autumn and dormancy colour, rain,
   waves, and all lighting, clouds, and shadows.

@@ -255,6 +255,7 @@ fn visual_water_surface(
 struct SurfaceBakeFactors {
     wettable_share: f32,
     sediment_share: f32,
+    sand_cover: f32,
     unresolved_slope: f32,
     // Colour changes at full autumn and at full dormancy, each alone.
     autumn_color: vec3<f32>,
@@ -389,15 +390,6 @@ fn terrain_surface(
         material_elevation_m,
     );
     let coastal_rock = smoothstep(0.10, 0.82, coastal_rock_amount);
-    let rock_cover = clamp(
-        1.0
-            - (1.0 - slope_rock)
-                * (1.0 - outcrop_rock)
-                * (1.0 - alpine_rock)
-                * (1.0 - coastal_rock),
-        0.0,
-        1.0,
-    );
 
     let beach_sediment = smoothstep(0.08, 0.42, coastal_sediment_amount);
     let beach_bottom_m = mix(-0.15, -4.0, beach_sediment);
@@ -412,26 +404,60 @@ fn terrain_surface(
         vec3<f32>(0.84, 0.76, 0.50),
         clamp(0.18 + 0.62 * beach_sediment + 0.16 * surface_grade, 0.0, 1.0),
     );
-    let beach_elevation = smoothstep(
+    let above_beach_bottom = smoothstep(
         beach_bottom_m - 0.8,
         beach_bottom_m + 0.3,
         material_elevation_m,
-    ) * (1.0 - smoothstep(
+    );
+    // Below the beach, the bed's slope bares rock only beyond sand's angle of
+    // rest, which the bed's sand cover takes, rather than by the land's cliff
+    // rule; the two meet across the beach's lower edge.
+    let rock_cover = clamp(
+        1.0
+            - (1.0 - above_beach_bottom * slope_rock)
+                * (1.0 - outcrop_rock)
+                * (1.0 - alpine_rock)
+                * (1.0 - coastal_rock),
+        0.0,
+        1.0,
+    );
+    let beach_elevation = above_beach_bottom * (1.0 - smoothstep(
         beach_top_m - 0.2,
         beach_top_m + 1.5,
         material_elevation_m,
     ));
+    // Below the beach, sand covers the bed in proportion to the beach's
+    // sediment b against the share of time M the waves move it, b / (b + M
+    // (1 - b)), where supply from the beach and export by the waves balance:
+    // the beach's share where the waves always move it, filling quiet beds,
+    // and none on bare rock. The bed takes it across the beach's lower edge.
+    // Compromises: supply and export run at equal rates; and reefs and
+    // headlands shelter no bed, as the waves have no fetch.
+    let sand_mobility = seabed_mobility(-material_elevation_m).x;
+    let bed_sand = beach_sediment
+        / max(beach_sediment + sand_mobility * (1.0 - beach_sediment), 1e-6);
+    // The bed's sand rests on slopes up to its angle of rest, which is the
+    // same under water as in air (Carrigy 1970, Sedimentology 14): 30-35° for
+    // natural sands, figures taken from the paper's body as others cite it
+    // (unverified; Kleinhans et al. 2011 cite it for 25-45° by grain shape).
     let sediment_capacity = clamp(
-        beach_sediment
-            * beach_elevation
-            * (1.0 - smoothstep(0.10, 0.30, slope)),
+        beach_sediment * beach_elevation * (1.0 - smoothstep(0.10, 0.30, slope))
+            + bed_sand * (1.0 - above_beach_bottom) * (1.0 - smoothstep(0.577, 0.700, slope)),
         0.0,
         1.0,
     );
+    // Intertidal ground spans the astronomical tide's reach; ground the tide
+    // never uncovers is bare rock where sand leaves it, taking it across the
+    // same width as the beach's lower edge.
     let intertidal_ceiling_m = 0.5 * tide_reference_range_m();
-    let intertidal_capacity = 1.0 - smoothstep(
+    let tidal_capacity = 1.0 - smoothstep(
         intertidal_ceiling_m - 0.2,
         intertidal_ceiling_m + 1.0,
+        material_elevation_m,
+    );
+    let above_intertidal_floor = smoothstep(
+        -intertidal_ceiling_m - 0.8,
+        -intertidal_ceiling_m + 0.3,
         material_elevation_m,
     );
     let intertidal_grade = clamp(
@@ -540,35 +566,38 @@ fn terrain_surface(
     let non_rock_cover = 1.0 - rock_cover;
     let sediment_cover = non_rock_cover * sediment_capacity;
     let non_rock_sediment_cover = non_rock_cover - sediment_cover;
-    let intertidal_cover = non_rock_sediment_cover * intertidal_capacity;
-    let vegetation_cover = non_rock_sediment_cover - intertidal_cover;
+    let tidal_cover = non_rock_sediment_cover * tidal_capacity;
+    let intertidal_cover = tidal_cover * above_intertidal_floor;
+    let bare_rock_cover = rock_cover + tidal_cover - intertidal_cover;
+    let vegetation_cover = non_rock_sediment_cover - tidal_cover;
     var rock_surface = vegetation_surface;
-    if rock_cover > 0.0 || EVALUATE_ALL_BRANCHES {
+    if bare_rock_cover > 0.0 || EVALUATE_ALL_BRANCHES {
         rock_surface = select_terrain_surface(rock_surface, terrain_rock_surface(
             position_m,
             terrain_gradient,
             material_gradient,
             elevation_m,
-        ), rock_cover > 0.0);
+        ), bare_rock_cover > 0.0);
     }
     let composed_surface = TerrainSurface(
         vegetation_cover * vegetation_surface.color
             + intertidal_cover * intertidal_surface.color
             + sediment_cover * beach_surface.color
-            + rock_cover * rock_surface.color,
+            + bare_rock_cover * rock_surface.color,
         vegetation_cover * vegetation_surface.detail_gradient
             + intertidal_cover * intertidal_surface.detail_gradient
             + sediment_cover * beach_surface.detail_gradient
-            + rock_cover * rock_surface.detail_gradient,
+            + bare_rock_cover * rock_surface.detail_gradient,
         vegetation_cover * vegetation_surface.unresolved_slope
             + intertidal_cover * intertidal_surface.unresolved_slope
             + sediment_cover * beach_surface.unresolved_slope
-            + rock_cover * rock_surface.unresolved_slope,
+            + bare_rock_cover * rock_surface.unresolved_slope,
         vec2<f32>(0.0),
     );
     surface_bake_factors.wettable_share = (1.0 - vegetation_cover) * (1.0 - snow_amount);
     surface_bake_factors.sediment_share = (sediment_cover + intertidal_cover)
         / max(1.0 - vegetation_cover, 1e-4);
+    surface_bake_factors.sand_cover = sediment_cover;
     surface_bake_factors.unresolved_slope = composed_surface.unresolved_slope;
     if surface_baking {
         // Linear in each amount, so their cross term is dropped.

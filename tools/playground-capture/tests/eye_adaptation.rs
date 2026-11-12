@@ -288,7 +288,8 @@ fn a_view_under_a_deck_adapts_to_its_light_by_the_brightness_law() {
 /// Adaptation follows the light falling on the view, not what its surfaces
 /// reflect: hiding every land and ice colour leaves the rest of a coastal
 /// view, and the light it is adapted to in brightness and colour, unchanged.
-/// The bed beneath water, which takes the land's colours, stays hidden.
+/// Water's body, whose bed and the sediment stirred from it take the land's
+/// colours, stays hidden.
 #[test]
 fn surface_colors_leave_adaptation_unchanged() {
     let arguments = with(
@@ -298,7 +299,7 @@ fn surface_colors_leave_adaptation_unchanged() {
             ["-8800", "1700", "1500"],
             "1473600",
         ),
-        &["--water-material-colors", "1,0,1,0"],
+        &["--water-material-colors", "0,0,1,0"],
     );
     let colored = capture("coast-colored", &arguments);
     let hidden = capture(

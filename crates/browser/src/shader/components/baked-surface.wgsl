@@ -8,8 +8,9 @@
 // the snow detail scale; the dormancy colour
 // change and land ice amount; the sea-ice plate noises with their relief
 // gradient, wherever the coldest season freezes the water; and the terrain
-// slope that lights the surface, less the elevation's, with the share of the
-// wettable ground that is sand or intertidal ground. The scene applies
+// slope that lights the surface, less the elevation's, with the sand cover
+// and the share of the wettable ground that is sand or intertidal ground.
+// The scene applies
 // tide, sea-ice cover, slabs, and fractures, snow, seasons, water, and
 // lighting per pixel.
 //
@@ -303,6 +304,7 @@ fn scene_surface_at(
         surface,
         wettable,
         lighting.w,
+        lighting.z,
         length(baked_elevation.gradient),
         BAKED_DETAIL_GRADIENT_RANGE * color.a * color.a,
     );
