@@ -13,7 +13,8 @@ fn selectable_controller_ids_preserve_neural_and_retire_predictive() {
     assert_eq!(LabControllerKind::CurrentRefined as u32, 5);
     assert_eq!(LabControllerKind::StandaloneNeural as u32, 6);
     assert_eq!(LabControllerKind::Guide as u32, 7);
-    assert_eq!(offered.len(), 7);
+    assert_eq!(LabControllerKind::Advanced as u32, 8);
+    assert_eq!(offered.len(), 8);
 }
 
 fn motion() -> BoatMotion {
@@ -199,6 +200,7 @@ fn experimental_targets_respect_exact_parameter_limits_despite_rounded_sampling_
         LabControllerKind::Learned,
         LabControllerKind::StandaloneNeural,
         LabControllerKind::Guide,
+        LabControllerKind::Advanced,
     ] {
         let mut controller = LabController::new(kind);
         let targets = controller.targets(
@@ -767,4 +769,197 @@ fn guide_targets_reflect_and_rotate_with_the_boat_and_flows() {
         target.rudder_target_angle_rad,
         turned.rudder_target_angle_rad
     );
+}
+
+#[test]
+fn advanced_sailor_coordinates_sail_with_turn_without_changing_the_plant() {
+    let p = dinghy_parameters();
+    let environment = Environment {
+        true_wind_velocity_m_s: Vector::new(0.0, 6.0),
+        ..Environment::default()
+    };
+    let mut state = motion();
+    state.angular_velocity_rad_s = 0.0;
+    let mut sim = SharedSimulation::new();
+    sim.add_boat(p, state);
+    let mut controller = LabController::new(LabControllerKind::Advanced);
+    let before = sim.motion(0);
+    let left = controller.targets(
+        &sim,
+        0,
+        p,
+        environment,
+        MotionIntent {
+            forward: 0.5,
+            turn: -1.0,
+        },
+    );
+    let right = controller.targets(
+        &sim,
+        0,
+        p,
+        environment,
+        MotionIntent {
+            forward: 0.5,
+            turn: 1.0,
+        },
+    );
+    assert_ne!(left.sheet_target_angle_rad, right.sheet_target_angle_rad);
+    assert_eq!(sim.motion(0), before);
+    for target in [left, right] {
+        assert!(target.sheet_target_angle_rad.abs() <= p.max_sail_angle_rad);
+        assert!(target.rudder_target_angle_rad.abs() <= p.max_rudder_angle_rad);
+        assert_eq!(target.sail_target_angle_rad, None);
+    }
+}
+
+#[test]
+fn advanced_sailor_returns_finite_bounded_targets_without_fluid_authority() {
+    let mut p = dinghy_parameters();
+    p.air_density_kg_m3 = 0.0;
+    p.water_density_kg_m3 = 0.0;
+    let mut sim = SharedSimulation::new();
+    sim.add_boat(p, motion());
+    let before = sim.motion(0);
+    for forward in [-1.0, -0.5, -1e-9, 0.0, 1e-9, 0.5, 1.0] {
+        for turn in [-1.0, 0.0, 1.0] {
+            let target = LabController::new(LabControllerKind::Advanced).targets(
+                &sim,
+                0,
+                p,
+                Environment::default(),
+                MotionIntent { forward, turn },
+            );
+            assert!(target.sheet_target_angle_rad.abs() <= p.max_sail_angle_rad);
+            assert!(target.rudder_target_angle_rad.abs() <= p.max_rudder_angle_rad);
+            assert_eq!(
+                target.sail_target_angle_rad,
+                (forward < 0.0).then_some(target.sheet_target_angle_rad)
+            );
+            assert_eq!(sim.motion(0), before);
+        }
+    }
+}
+
+#[test]
+fn advanced_sailor_keeps_working_boom_side_for_small_downwind_corrections() {
+    let p = dinghy_parameters();
+    for side in [-1.0, 1.0] {
+        let environment = Environment {
+            true_wind_velocity_m_s: Vector::new(6.0, 0.01 * side),
+            ..Environment::default()
+        };
+        for yaw in [-0.05, 0.0, 0.05] {
+            let state = BoatMotion {
+                velocity_m_s: Vector::new(2.0, 0.0),
+                angular_velocity_rad_s: yaw,
+                sail_angle_rad: 1.4 * side,
+                sail_angular_velocity_rad_s: 0.0,
+                ..motion()
+            };
+            let mut sim = SharedSimulation::new();
+            let boat = sim.add_boat(p, state);
+            for turn in [-0.02, 0.0, 0.02] {
+                let target = LabController::new(LabControllerKind::Advanced).targets(
+                    &sim,
+                    boat,
+                    p,
+                    environment,
+                    MotionIntent { forward: 1.0, turn },
+                );
+                assert!(
+                    target.sheet_target_angle_rad * side >= 0.0,
+                    "side={side}, yaw={yaw}, turn={turn}, target={target:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn advanced_sailor_targets_reflect_and_rotate_with_state_flow_and_intent() {
+    let p = dinghy_parameters();
+    let state = motion();
+    let environment = Environment {
+        true_wind_velocity_m_s: Vector::new(-3.0, 5.0),
+        true_water_velocity_m_s: Vector::new(0.3, -0.2),
+        ..Environment::default()
+    };
+    let target = |state, environment, forward, turn| {
+        guide_target(
+            &mut LabController::new(LabControllerKind::Advanced),
+            p,
+            state,
+            environment,
+            MotionIntent { forward, turn },
+        )
+    };
+    for (state, environment) in [
+        (state, environment),
+        (
+            BoatMotion {
+                velocity_m_s: Vector::new(0.2, 0.0),
+                angular_velocity_rad_s: 0.0,
+                sail_angle_rad: 0.4,
+                ..state
+            },
+            Environment {
+                true_wind_velocity_m_s: Vector::new(2_f64.cos(), 2_f64.sin()) * 6.0,
+                ..Environment::default()
+            },
+        ),
+    ] {
+        let reflection = |v: Vector| Vector::new(v.x, -v.y);
+        let reflected = BoatMotion {
+            position_m: reflection(state.position_m),
+            velocity_m_s: reflection(state.velocity_m_s),
+            angle_rad: -state.angle_rad,
+            angular_velocity_rad_s: -state.angular_velocity_rad_s,
+            sail_angle_rad: -state.sail_angle_rad,
+            sail_angular_velocity_rad_s: -state.sail_angular_velocity_rad_s,
+            rudder_angle_rad: -state.rudder_angle_rad,
+            rudder_angular_velocity_rad_s: -state.rudder_angular_velocity_rad_s,
+        };
+        let rotation = Rotation::new(0.734);
+        let rotated = BoatMotion {
+            position_m: rotation.transform_vector(state.position_m),
+            velocity_m_s: rotation.transform_vector(state.velocity_m_s),
+            angle_rad: state.angle_rad + 0.734,
+            ..state
+        };
+        for forward in [-1.0, -0.5, -1e-9, 0.0, 1e-9, 0.5, 1.0] {
+            for turn in [-0.5, 0.0, 0.5] {
+                let a = target(state, environment, forward, turn);
+                let b = target(
+                    reflected,
+                    Environment {
+                        true_wind_velocity_m_s: reflection(environment.true_wind_velocity_m_s),
+                        true_water_velocity_m_s: reflection(environment.true_water_velocity_m_s),
+                        ..environment
+                    },
+                    forward,
+                    -turn,
+                );
+                let c = target(
+                    rotated,
+                    Environment {
+                        true_wind_velocity_m_s: rotation
+                            .transform_vector(environment.true_wind_velocity_m_s),
+                        true_water_velocity_m_s: rotation
+                            .transform_vector(environment.true_water_velocity_m_s),
+                        ..environment
+                    },
+                    forward,
+                    turn,
+                );
+                assert!(
+                    (a.sheet_target_angle_rad + b.sheet_target_angle_rad).abs() < 1e-10,
+                    "forward={forward}, turn={turn}, a={a:?}, b={b:?}"
+                );
+                assert!((a.rudder_target_angle_rad + b.rudder_target_angle_rad).abs() < 1e-10);
+                assert!((a.sheet_target_angle_rad - c.sheet_target_angle_rad).abs() < 1e-10);
+                assert!((a.rudder_target_angle_rad - c.rudder_target_angle_rad).abs() < 1e-10);
+            }
+        }
+    }
 }

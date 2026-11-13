@@ -31,7 +31,8 @@ Run `npm run dev` to serve the game at `/` and the procedural playground at
 `/playground/`. The playground provides a live preview and controls for inspecting
 the world and tuning its appearance; it needs no backend.
 “Drive a boat” spawns a boat in safe nearby water. Compare controller experiments
-while sailing with keyboard, gamepad, or a draggable pointer stick; switching
+including simple guide rules and coordinated sail/rudder control, while sailing
+with keyboard, gamepad, or a draggable pointer stick; switching
 preserves motion and clears the new controller’s memory. Boat driving uses
 real time or pause, and removing the boat restores the clock controls.
 

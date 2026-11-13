@@ -20,10 +20,11 @@ pub enum LabControllerKind {
     CurrentRefined = 5,
     StandaloneNeural = 6,
     Guide = 7,
+    Advanced = 8,
 }
 
 impl LabControllerKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Current,
         Self::Physical,
         Self::Classical,
@@ -31,6 +32,7 @@ impl LabControllerKind {
         Self::CurrentRefined,
         Self::StandaloneNeural,
         Self::Guide,
+        Self::Advanced,
     ];
 }
 
@@ -149,6 +151,7 @@ impl LabController {
             passive_yaw_moment_n_m: dynamics.passive_yaw_moment_n_m,
         };
         let mut targets = match self.kind {
+            LabControllerKind::Advanced => advanced_targets(&observation),
             LabControllerKind::Classical => classical_targets(&observation, &mut self.classical),
             LabControllerKind::Learned => learning::learned_targets(&observation),
             LabControllerKind::Physical | LabControllerKind::CurrentRefined => {
@@ -362,6 +365,9 @@ impl JointObjective {
             let denominator = self.force_weight * force_slope.powi(2)
                 + self.moment_weight * moment_slope.powi(2)
                 + weight;
+            if denominator == 0.0 {
+                continue;
+            }
             let offset = (self.force_weight
                 * force_slope
                 * (self.drive - other.drive_force_n - left.drive_force_n)
@@ -460,6 +466,132 @@ pub(super) fn joint_targets(observation: &LabObservation, moment: f64) -> Surfac
 pub(super) fn physical_targets(observation: &LabObservation) -> SurfaceTargets {
     // The learned weights are calibrated against this joint policy.
     joint_targets(observation, requested_total_moment(observation))
+}
+
+fn advanced_targets(observation: &LabObservation) -> SurfaceTargets {
+    let input = &observation.input;
+    let power = observation.intent.forward.clamp(-1.0, 1.0);
+    let forward = legacy_sail_effect(observation, 1.0);
+    let backing = input
+        .sail_effects
+        .iter()
+        .copied()
+        .min_by(|a, b| a.drive_force_n.total_cmp(&b.drive_force_n))
+        .unwrap();
+    let free = yaw_rate_move_control(
+        input,
+        MotionIntent::default(),
+        observation.maximum_yaw_rate_rad_s,
+    )
+    .sheet_target_angle_rad;
+    let end = if power < 0.0 {
+        backing.angle_rad.signum() * observation.parameters.max_sail_angle_rad
+    } else {
+        free
+    };
+    let end = end.clamp(
+        input.sail_effects[0].angle_rad,
+        input.sail_effects.last().unwrap().angle_rad,
+    );
+    let (low, high) = (end.min(0.0), end.max(0.0));
+    // Sheet in or ease on the working side. A global trim search can demand
+    // repeated 180-degree boom crossings for nearly identical static loads.
+    let sail_effects: Vec<_> = std::iter::once(interpolated_effect(&input.sail_effects, low))
+        .chain(
+            input
+                .sail_effects
+                .iter()
+                .copied()
+                .filter(|effect| effect.angle_rad > low && effect.angle_rad < high),
+        )
+        .chain((high > low).then(|| interpolated_effect(&input.sail_effects, high)))
+        .collect();
+    let drive = power.abs()
+        * if power < 0.0 {
+            backing.drive_force_n
+        } else {
+            forward.drive_force_n
+        }
+        + interpolated_effect(&input.rudder_effects, 0.0).drive_force_n;
+    let mut error = observation.intent.turn.clamp(-1.0, 1.0);
+    if observation.motion.angular_velocity_rad_s != 0.0 {
+        error -= observation.motion.angular_velocity_rad_s / observation.maximum_yaw_rate_rad_s;
+    }
+    error = error.clamp(-1.0, 1.0);
+    let extreme = |effects: &[SurfaceEffect]| {
+        effects.iter().map(|effect| effect.yaw_moment_n_m).fold(
+            if error < 0.0 {
+                f64::INFINITY
+            } else {
+                f64::NEG_INFINITY
+            },
+            if error < 0.0 { f64::min } else { f64::max },
+        )
+    };
+    let available = extreme(&sail_effects)
+        + extreme(&input.rudder_effects)
+        + observation.passive_yaw_moment_n_m;
+    let net_moment = if error < 0.0 {
+        -error * available.min(0.0)
+    } else {
+        error * available.max(0.0)
+    };
+    // This is an acceleration-energy allocation preference, not exact articulated
+    // dynamics. Motors alone limit hand force and surface acceleration.
+    let objective = JointObjective {
+        drive,
+        moment: net_moment - observation.passive_yaw_moment_n_m,
+        force_weight: 1.0 / observation.total_mass_kg,
+        moment_weight: 1.0 / observation.locked_inertia_kg_m2,
+        movement_weights: [0.0, 0.0],
+        actual: [
+            observation.motion.sail_angle_rad.clamp(low, high),
+            observation.motion.rudder_angle_rad,
+        ],
+    };
+    let actual = interpolated_effect(&sail_effects, observation.motion.sail_angle_rad);
+    let actual_rudder =
+        interpolated_effect(&input.rudder_effects, observation.motion.rudder_angle_rad);
+    let mut best = [actual.angle_rad, actual_rudder.angle_rad];
+    let mut cost = objective.cost(actual, actual_rudder);
+    // Anchor coarse seeds at the centreline so reflected working branches get
+    // the same candidate magnitudes even when the free angle falls between samples.
+    for sail in sail_effects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, effect)| {
+            let from_center = if end < 0.0 {
+                sail_effects.len() - 1 - index
+            } else {
+                index
+            };
+            (from_center % 5 == 0).then_some(*effect)
+        })
+        .chain([
+            actual,
+            interpolated_effect(&sail_effects, forward.angle_rad),
+            interpolated_effect(&sail_effects, backing.angle_rad),
+        ])
+    {
+        let rudder_angle = objective.best_angle(&input.rudder_effects, sail, 1);
+        let rudder = interpolated_effect(&input.rudder_effects, rudder_angle);
+        let candidate_cost = objective.cost(sail, rudder);
+        if candidate_cost < cost {
+            best = [sail.angle_rad, rudder_angle];
+            cost = candidate_cost;
+        }
+    }
+    for _ in 0..2 {
+        let rudder = interpolated_effect(&input.rudder_effects, best[1]);
+        best[0] = objective.best_angle(&sail_effects, rudder, 0);
+        let sail = interpolated_effect(&sail_effects, best[0]);
+        best[1] = objective.best_angle(&input.rudder_effects, sail, 1);
+    }
+    SurfaceTargets {
+        sheet_target_angle_rad: best[0],
+        sail_target_angle_rad: (power < 0.0).then_some(best[0]),
+        rudder_target_angle_rad: best[1],
+    }
 }
 
 fn physical_rudder_targets(observation: &LabObservation) -> SurfaceTargets {
