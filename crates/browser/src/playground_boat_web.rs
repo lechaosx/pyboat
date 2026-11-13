@@ -42,8 +42,12 @@ impl PlaygroundBoatDriver {
         })
     }
     pub fn select(&mut self, kind: u32) {
-        self.boat
-            .select(LabControllerKind::ALL[kind.min(4) as usize]);
+        if let Some(kind) = LabControllerKind::ALL
+            .into_iter()
+            .find(|candidate| *candidate as u32 == kind)
+        {
+            self.boat.select(kind);
+        }
     }
     pub fn rebase(&mut self, width: f64, height: f64, seed: u64, tick: u64) -> Result<(), JsValue> {
         let geometry = WorldGeometry::new(width, height)

@@ -45,3 +45,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "webgp
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-bulk-memory"]
+
+[[example]]
+name = "controller-intent-assessment"
+path = "examples/controller-intent-assessment.rs"
+required-features = ["playground"]

@@ -15,6 +15,15 @@ Use the [root setup](README.md#start-here) before running checks.
 WebTransport integration tests need loopback UDP access. Headless rendering tests
 need a hardware Vulkan GPU; software adapters are rejected.
 
+Compare controller motion under paired initial states and prescribed inputs:
+
+```sh
+cargo run --release -p browser --features playground --example controller-intent-assessment -- /tmp/controller-assessment
+```
+
+Use `--help` for output definitions and training/held-out splits. Motion outcomes
+and runtime are separate measurements; the tool assigns no overall winner.
+
 ## Added-inertia investigation
 
 The November 2026 investigation compared constraint-based added inertia,

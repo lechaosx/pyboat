@@ -157,6 +157,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** All controller candidates pursue player movement intent as
   effectively as physical limits allow, including useful attempts when the
   requested motion cannot be achieved.
+- **[Explicit]** The player chooses maneuvers; the controller executes present
+  forward and turn intent.
 - **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
   movement is boat-relative; the first gamepad's left stick is world-relative
   with no added software deadzone.

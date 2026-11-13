@@ -294,21 +294,13 @@ pub struct BoatControlDynamics {
     pub locked_inertia_kg_m2: f64,
     pub total_mass_kg: f64,
     pub sail_hinge_inertia_kg_m2: f64,
-    pub sail_yaw_coupling_kg_m2: f64,
-    pub sail_relative_inertia_kg_m2: f64,
-    pub sail_rudder_coupling_kg_m2: f64,
     pub center_of_mass_from_hull_m: Vector,
-    pub rudder_yaw_coupling_kg_m2: f64,
-    pub rudder_relative_inertia_kg_m2: f64,
     pub rudder_hinge_inertia_kg_m2: f64,
     pub fluid_hinge_torques_n_m: [f64; 2],
-    pub fluid_generalized_torques_n_m: [f64; 2],
     pub foil_forward_force_n: f64,
     pub fluid_forward_force_n: f64,
     pub fluid_yaw_moments_n_m: [f64; 2],
     pub passive_yaw_moment_n_m: f64,
-    pub rudder_motor_stiffness_n_m_rad: f64,
-    pub rudder_motor_damping_n_m_s_rad: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2176,23 +2168,8 @@ impl SharedSimulation {
                 let arm = body.center_of_mass() - hinge;
                 let inertia = body.mass_properties().local_mprops.principal_inertia();
                 state.sail_hinge_inertia_kg_m2 = inertia + body.mass() * arm.length_squared();
-                state.sail_yaw_coupling_kg_m2 =
-                    inertia + body.mass() * (body.center_of_mass() - center).dot(arm);
-                state.sail_relative_inertia_kg_m2 =
-                    inertia + body.mass() * (1.0 - body.mass() / mass) * arm.length_squared();
-                let rudder = &self.world.bodies[boat.rudder];
-                let rudder_hinge =
-                    origin + rotated(parameters.rudder_position_m, hull.rotation().angle());
-                state.sail_rudder_coupling_kg_m2 = -body.mass() * rudder.mass() / mass
-                    * arm.dot(rudder.center_of_mass() - rudder_hinge);
             }
             if index == 1 {
-                let arm = body.center_of_mass() - hinge;
-                let inertia = body.mass_properties().local_mprops.principal_inertia();
-                state.rudder_yaw_coupling_kg_m2 =
-                    inertia + body.mass() * (body.center_of_mass() - center).dot(arm);
-                state.rudder_relative_inertia_kg_m2 =
-                    inertia + body.mass() * (1.0 - body.mass() / mass) * arm.length_squared();
                 state.rudder_hinge_inertia_kg_m2 =
                     body.mass_properties().local_mprops.principal_inertia()
                         + body.mass() * (body.center_of_mass() - hinge).length_squared();
@@ -2237,21 +2214,6 @@ impl SharedSimulation {
             state.passive_yaw_moment_n_m += (point - center).perp_dot(force);
         }
         state.fluid_forward_force_n = total_force.dot(forward);
-        for (index, handle, local_hinge) in [
-            (0, boat.sail, parameters.mast_position_m),
-            (1, boat.rudder, parameters.rudder_position_m),
-        ] {
-            let body = &self.world.bodies[handle];
-            let hinge = origin + rotated(local_hinge, hull.rotation().angle());
-            state.fluid_generalized_torques_n_m[index] = state.fluid_hinge_torques_n_m[index]
-                - body.mass() / mass * (body.center_of_mass() - hinge).perp_dot(total_force);
-        }
-        state.rudder_motor_stiffness_n_m_rad =
-            parameters.max_rudder_actuator_torque_n_m() / (parameters.max_rudder_angle_rad / 10.0);
-        state.rudder_motor_damping_n_m_s_rad = 2.0
-            * (state.rudder_motor_stiffness_n_m_rad
-                * rudder_hinge_moment_of_inertia_kg_m2(parameters))
-            .sqrt();
         state
     }
 

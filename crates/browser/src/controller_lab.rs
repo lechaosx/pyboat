@@ -1,7 +1,6 @@
 #[path = "controller_lab_learning.rs"]
 mod learning;
 
-use rapier2d_f64::prelude::Vector;
 use simulation::{
     BoatMotion, BoatParameters, ControlInput, DT_SECONDS, Environment, MotionIntent,
     SharedSimulation, SurfaceEffect, SurfaceTargets, computed_maximum_yaw_rate_rad_s,
@@ -14,16 +13,14 @@ pub enum LabControllerKind {
     Current,
     Physical,
     Classical,
-    Predictive,
-    Learned,
+    Learned = 4,
 }
 
 impl LabControllerKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Current,
         Self::Physical,
         Self::Classical,
-        Self::Predictive,
         Self::Learned,
     ];
 }
@@ -32,7 +29,6 @@ impl LabControllerKind {
 pub struct LabController {
     kind: LabControllerKind,
     classical: ClassicalState,
-    predictive: learning::PredictiveState,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -51,19 +47,11 @@ pub(super) struct LabObservation {
     pub maximum_yaw_rate_rad_s: f64,
     pub locked_inertia_kg_m2: f64,
     pub total_mass_kg: f64,
-    pub center_of_mass_from_hull_m: Vector,
     pub sail_hinge_inertia_kg_m2: f64,
-    pub sail_yaw_coupling_kg_m2: f64,
-    pub sail_relative_inertia_kg_m2: f64,
-    pub sail_rudder_coupling_kg_m2: f64,
     pub rudder_hinge_inertia_kg_m2: f64,
-    pub rudder_yaw_coupling_kg_m2: f64,
-    pub rudder_relative_inertia_kg_m2: f64,
     pub fluid_hinge_torques_n_m: [f64; 2],
     pub actual_fluid_yaw_moments_n_m: [f64; 2],
     pub passive_yaw_moment_n_m: f64,
-    pub rudder_motor_stiffness_n_m_rad: f64,
-    pub rudder_motor_damping_n_m_s_rad: f64,
 }
 
 impl LabController {
@@ -71,7 +59,6 @@ impl LabController {
         Self {
             kind,
             classical: ClassicalState::default(),
-            predictive: learning::PredictiveState::default(),
         }
     }
 
@@ -88,7 +75,6 @@ impl LabController {
 
     pub fn reset(&mut self) {
         self.classical = ClassicalState::default();
-        self.predictive = learning::PredictiveState::default();
     }
 
     pub fn targets(
@@ -126,25 +112,14 @@ impl LabController {
             maximum_yaw_rate_rad_s,
             locked_inertia_kg_m2: dynamics.locked_inertia_kg_m2,
             total_mass_kg: dynamics.total_mass_kg,
-            center_of_mass_from_hull_m: dynamics.center_of_mass_from_hull_m,
             sail_hinge_inertia_kg_m2: dynamics.sail_hinge_inertia_kg_m2,
-            sail_yaw_coupling_kg_m2: dynamics.sail_yaw_coupling_kg_m2,
-            sail_relative_inertia_kg_m2: dynamics.sail_relative_inertia_kg_m2,
-            sail_rudder_coupling_kg_m2: dynamics.sail_rudder_coupling_kg_m2,
             rudder_hinge_inertia_kg_m2: dynamics.rudder_hinge_inertia_kg_m2,
-            rudder_yaw_coupling_kg_m2: dynamics.rudder_yaw_coupling_kg_m2,
-            rudder_relative_inertia_kg_m2: dynamics.rudder_relative_inertia_kg_m2,
             fluid_hinge_torques_n_m: dynamics.fluid_hinge_torques_n_m,
             actual_fluid_yaw_moments_n_m: dynamics.fluid_yaw_moments_n_m,
             passive_yaw_moment_n_m: dynamics.passive_yaw_moment_n_m,
-            rudder_motor_stiffness_n_m_rad: dynamics.rudder_motor_stiffness_n_m_rad,
-            rudder_motor_damping_n_m_s_rad: dynamics.rudder_motor_damping_n_m_s_rad,
         };
         let mut targets = match self.kind {
             LabControllerKind::Classical => classical_targets(&observation, &mut self.classical),
-            LabControllerKind::Predictive => {
-                learning::predictive_targets(&observation, &mut self.predictive)
-            }
             LabControllerKind::Learned => learning::learned_targets(&observation),
             LabControllerKind::Physical => physical_rudder_targets(&observation),
             LabControllerKind::Current => unreachable!(),
@@ -463,6 +438,7 @@ fn allocate_moment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rapier2d_f64::prelude::Vector;
 
     #[test]
     fn allocation_balances_tracking_against_physical_movement_scale() {

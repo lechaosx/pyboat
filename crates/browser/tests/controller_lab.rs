@@ -5,6 +5,14 @@ use game::{computed_yaw_rate_targets_in_environment, dinghy_parameters};
 use rapier2d_f64::prelude::{Rotation, Vector};
 use simulation::{BoatMotion, Environment, MotionIntent, SharedSimulation};
 
+#[test]
+fn selectable_controller_ids_preserve_neural_and_retire_predictive() {
+    let offered = LabControllerKind::ALL;
+    assert!(offered.iter().all(|kind| *kind as u32 != 3));
+    assert_eq!(LabControllerKind::Learned as u32, 4);
+    assert_eq!(offered.len(), 4);
+}
+
 fn motion() -> BoatMotion {
     BoatMotion {
         position_m: Vector::ZERO,
@@ -56,7 +64,7 @@ fn switching_and_resetting_controller_never_changes_physical_state() {
         forward: 0.5,
         turn: -0.5,
     };
-    for kind in [LabControllerKind::Classical, LabControllerKind::Predictive] {
+    for kind in [LabControllerKind::Classical] {
         let mut controller = LabController::new(kind);
         for _ in 0..30 {
             controller.targets(&sim, boat, parameters, environment, intent);
@@ -144,7 +152,6 @@ fn experimental_targets_respect_exact_parameter_limits_despite_rounded_sampling_
     for kind in [
         LabControllerKind::Physical,
         LabControllerKind::Classical,
-        LabControllerKind::Predictive,
         LabControllerKind::Learned,
     ] {
         let mut controller = LabController::new(kind);
@@ -170,7 +177,7 @@ fn restored_controller_memory_replays_identical_real_fixed_ticks() {
         true_wind_velocity_m_s: Vector::new(0.0, 6.0),
         ..Environment::default()
     };
-    for kind in [LabControllerKind::Classical, LabControllerKind::Predictive] {
+    for kind in [LabControllerKind::Classical] {
         let mut first = SharedSimulation::new();
         first.add_boat(parameters, motion());
         let mut controller = LabController::new(kind);
