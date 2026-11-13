@@ -154,6 +154,9 @@ See [README.md](README.md) for what is playable now and
 
 - **[Explicit]** An ideal sailor reacts immediately with bounded hand force;
   boat inertia, friction, and fluid loads determine the resulting motion.
+- **[Explicit]** All controller candidates pursue player movement intent as
+  effectively as physical limits allow, including useful attempts when the
+  requested motion cannot be achieved.
 - **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
   movement is boat-relative; the first gamepad's left stick is world-relative
   with no added software deadzone.
