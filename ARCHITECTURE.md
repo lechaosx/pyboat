@@ -230,9 +230,18 @@ and verification details.
 - **[Implicit]** The wind sea is the fully developed sea of the local unsheltered
   pressure wind, a compromise that gives the caricatured weather systems Earth's
   size and lifetime.
+- **[Explicit]** A background swell from storms beyond the world's scale runs
+  through all water. Its height, period and direction follow a measured swell
+  climate by latitude and season and wander slowly around it.
+- **[Explicit]** Both hemispheres share one swell climate, half a year apart,
+  because the planet is symmetric.
+- **[Explicit]** Each component of the sea takes the larger of the wind sea
+  and the swell, so neither counts twice.
+- **[Explicit]** The swell shapes the sea's state and the boats' motion, but
+  the drawn surface shows only the wind sea.
 - **[Implicit]** Wave modes are one fixed seeded table whose eastward wavenumbers
-  fit the world's width. Each point weights them by its wind sea's directional
-  spectrum, each band holding its spectral variance exactly.
+  fit the world's width. Each point weights them by its wind sea's and swell's
+  directional spectra, each band holding its spectral variance exactly.
 
 ## Rendering and lighting
 
@@ -337,6 +346,9 @@ and verification details.
   it; below the beach the bed is rock and sand, which covers it in proportion
   to the beach's sediment against the share of time the wave climate moves it,
   on slopes up to sand's angle of rest.
+- **[Explicit]** Seabeds feel only the local wind sea, as if sheltered from
+  swell.
+- **[Explicit]** Wave run-up takes the wind sea and the swell together.
 - **[Implicit]** Wet ground returns light as the bed beneath water does under
   no depth, so level ground keeps its brightness as the tide covers it.
 - **[Implicit]** The bed beneath water takes its relief light from the
@@ -769,4 +781,5 @@ and verification details.
 | Glare | Whether intraocular scatter, CIE 180:2010's glare spread function pooled on the adapting field's grid, should veil the view around glint and snow, and whether adaptation should respond to their luminance |
 | Wave grid | Whether a world-anchored grid of the gameplay wave modes earns its pass if wave cost exceeds the budget: it would save about 3–3.5 ms at boat zoom, but short bands at wide views and in low wind stay per pixel, and the drawn surface departs from the server's |
 | Single-sea wave pattern | Whether, only if wave cost exceeds the budget, one FFT tile per frame of the sea state at the boat or view centre should set the waves' period, direction and phases, scaled per pixel by the local significant height: wide views would lose local period and direction, and drawn crests under other players' boats would stop matching the server's waves |
+| Drawing the swell | Whether the swell can be drawn within budget: drawing its full spectrum per pixel cost about 2.8 ms on open ocean at boat zoom, for crests visible only from about 2 km. A narrow-band swell of 2–3 components with heights from a per-frame latitude table might cost 0.5–0.8 ms (unmeasured) but risks a too-regular look; a coarse world-anchored grid (see Wave grid) is the other candidate |
 | Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |
