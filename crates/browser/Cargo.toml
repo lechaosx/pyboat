@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 bytemuck = { version = "1.25", features = ["derive"] }
 png = "0.18"
 game = { path = "../game" }
+libm = "0.2"
 protocol = { path = "../protocol" }
 simulation = { path = "../simulation" }
 rapier2d-f64 = { version = "0.36.0", features = ["enhanced-determinism"] }
