@@ -35,7 +35,7 @@ export class DrivingBoat {
     this.element.className = "panel-section boat-controls";
     this.element.innerHTML = `<h2>Drive a boat</h2>
       <div class="boat-actions"><button id="boat-spawn">Spawn / respawn</button><button id="boat-remove" disabled>Remove</button><button id="boat-pause" disabled>Pause</button></div>
-      <label>Controller <select id="boat-controller"><option value="0">Current · reference</option><option value="1">Physical rudder allocation</option><option value="5">Current refined</option><option value="2">Classical PID</option><option value="4">Neural · residual pilot</option></select></label>
+      <label>Controller <select id="boat-controller"><option value="0">Current · reference</option><option value="1">Physical rudder allocation</option><option value="5">Current refined</option><option value="2">Classical PID</option><option value="4">Neural · residual pilot</option><option value="6">Neural · standalone pilot (failed)</option></select></label>
       <label><input id="boat-follow" type="checkbox" checked> Follow boat / drive with pointer</label>
       <p>W/S power · A/D turn · gamepad or drag to steer toward a world direction. Disable follow to pan.</p>
       <p>Switching preserves boat motion and resets the new controller’s memory. Driving uses real time; pause remains available.</p>

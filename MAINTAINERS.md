@@ -24,6 +24,10 @@ cargo run --release -p browser --features playground --example controller-intent
 Use `--help` for output definitions and training/held-out splits. Motion outcomes
 and runtime are separate measurements; the tool assigns no overall winner.
 
+For the standalone neural pilot, run `cargo run --release -p browser --features
+playground --example train-standalone-controller -- --help` for the reproducible
+training command, objective, splits, and checkpoint selection.
+
 ## Added-inertia investigation
 
 The November 2026 investigation compared constraint-based added inertia,

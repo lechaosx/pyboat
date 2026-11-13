@@ -11,7 +11,8 @@ fn selectable_controller_ids_preserve_neural_and_retire_predictive() {
     assert!(offered.iter().all(|kind| *kind as u32 != 3));
     assert_eq!(LabControllerKind::Learned as u32, 4);
     assert_eq!(LabControllerKind::CurrentRefined as u32, 5);
-    assert_eq!(offered.len(), 5);
+    assert_eq!(LabControllerKind::StandaloneNeural as u32, 6);
+    assert_eq!(offered.len(), 6);
 }
 
 fn motion() -> BoatMotion {
@@ -195,6 +196,7 @@ fn experimental_targets_respect_exact_parameter_limits_despite_rounded_sampling_
         LabControllerKind::CurrentRefined,
         LabControllerKind::Classical,
         LabControllerKind::Learned,
+        LabControllerKind::StandaloneNeural,
     ] {
         let mut controller = LabController::new(kind);
         let targets = controller.targets(
@@ -454,5 +456,55 @@ fn refined_targets_reflect_with_the_boat_flow_and_intent() {
                 assert!((a + b).abs() < 1e-12);
             }
         }
+    }
+}
+
+#[test]
+fn standalone_policy_applies_known_output_biases_with_physical_angle_limits() {
+    use browser::controller_lab::standalone::{WEIGHTS, targets_with_weights};
+    let parameters = dinghy_parameters();
+    let mut sim = SharedSimulation::new();
+    let boat = sim.add_boat(parameters, motion());
+    let mut weights = [0.0; WEIGHTS];
+    weights[320] = 2.0;
+    weights[337] = -1.0;
+    let targets = targets_with_weights(
+        &sim,
+        boat,
+        parameters,
+        Environment::default(),
+        MotionIntent::default(),
+        &weights,
+    );
+    assert_eq!(
+        targets.sheet_target_angle_rad,
+        2.0 / 3.0 * parameters.max_sail_angle_rad
+    );
+    assert_eq!(
+        targets.sail_target_angle_rad,
+        Some(targets.sheet_target_angle_rad)
+    );
+    assert_eq!(
+        targets.rudder_target_angle_rad,
+        -0.5 * parameters.max_rudder_angle_rad
+    );
+    for sign in [-1.0, 1.0] {
+        weights[320] = sign * 1e100;
+        weights[337] = sign * 1e100;
+        let targets = targets_with_weights(
+            &sim,
+            boat,
+            parameters,
+            Environment::default(),
+            MotionIntent {
+                forward: 1.0,
+                turn: -1.0,
+            },
+            &weights,
+        );
+        assert!(targets.sheet_target_angle_rad.is_finite());
+        assert!(targets.rudder_target_angle_rad.is_finite());
+        assert!(targets.sheet_target_angle_rad.abs() <= parameters.max_sail_angle_rad);
+        assert!(targets.rudder_target_angle_rad.abs() <= parameters.max_rudder_angle_rad);
     }
 }

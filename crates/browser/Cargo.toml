@@ -50,3 +50,8 @@ wasm-opt = ["-Oz", "--enable-bulk-memory"]
 name = "controller-intent-assessment"
 path = "examples/controller-intent-assessment.rs"
 required-features = ["playground"]
+
+[[example]]
+name = "train-standalone-controller"
+path = "examples/train-standalone-controller.rs"
+required-features = ["playground"]

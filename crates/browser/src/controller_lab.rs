@@ -1,3 +1,6 @@
+#[path = "controller_lab_standalone.rs"]
+pub mod standalone;
+
 #[path = "controller_lab_learning.rs"]
 mod learning;
 
@@ -15,15 +18,17 @@ pub enum LabControllerKind {
     Classical,
     Learned = 4,
     CurrentRefined = 5,
+    StandaloneNeural = 6,
 }
 
 impl LabControllerKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Current,
         Self::Physical,
         Self::Classical,
         Self::Learned,
         Self::CurrentRefined,
+        Self::StandaloneNeural,
     ];
 }
 
@@ -87,6 +92,9 @@ impl LabController {
         environment: Environment,
         intent: MotionIntent,
     ) -> SurfaceTargets {
+        if self.kind == LabControllerKind::StandaloneNeural {
+            return standalone::targets(simulation, boat, parameters, environment, intent);
+        }
         let motion = simulation.motion(boat);
         let maximum_yaw_rate_rad_s =
             computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
@@ -132,7 +140,7 @@ impl LabController {
             LabControllerKind::Physical | LabControllerKind::CurrentRefined => {
                 physical_rudder_targets(&observation)
             }
-            LabControllerKind::Current => unreachable!(),
+            LabControllerKind::Current | LabControllerKind::StandaloneNeural => unreachable!(),
         };
         targets.sheet_target_angle_rad = targets.sheet_target_angle_rad.clamp(
             -parameters.max_sail_angle_rad,
