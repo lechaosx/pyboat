@@ -123,6 +123,8 @@ pub fn cases() -> Vec<Case> {
             let base = Environment {
                 true_wind_velocity_m_s: if name == "stalled_upwind" {
                     rotate(Vector::new(-6.0, 0.0))
+                } else if name == "near_zero_crossing" {
+                    rotate(Vector::new(6.0, 0.3 * sign))
                 } else {
                     wind
                 },

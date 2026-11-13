@@ -14,14 +14,16 @@ pub enum LabControllerKind {
     Physical,
     Classical,
     Learned = 4,
+    CurrentRefined = 5,
 }
 
 impl LabControllerKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Current,
         Self::Physical,
         Self::Classical,
         Self::Learned,
+        Self::CurrentRefined,
     ];
 }
 
@@ -95,7 +97,7 @@ impl LabController {
         }
         let dynamics = simulation.control_dynamics(boat, environment);
         let reference = dynamics.center_of_mass_from_hull_m;
-        let input = surface_control_input_about_point(
+        let mut input = surface_control_input_about_point(
             parameters,
             motion,
             environment,
@@ -103,6 +105,12 @@ impl LabController {
             hysteresis,
             reference,
         );
+        if self.kind == LabControllerKind::CurrentRefined && intent.forward < 0.0 {
+            // Reverse and forward power share the same side-retained zero-power origin.
+            input.free_sail_angle_rad =
+                yaw_rate_move_control(&input, MotionIntent::default(), maximum_yaw_rate_rad_s)
+                    .sheet_target_angle_rad;
+        }
         let observation = LabObservation {
             parameters,
             motion,
@@ -121,7 +129,9 @@ impl LabController {
         let mut targets = match self.kind {
             LabControllerKind::Classical => classical_targets(&observation, &mut self.classical),
             LabControllerKind::Learned => learning::learned_targets(&observation),
-            LabControllerKind::Physical => physical_rudder_targets(&observation),
+            LabControllerKind::Physical | LabControllerKind::CurrentRefined => {
+                physical_rudder_targets(&observation)
+            }
             LabControllerKind::Current => unreachable!(),
         };
         targets.sheet_target_angle_rad = targets.sheet_target_angle_rad.clamp(
