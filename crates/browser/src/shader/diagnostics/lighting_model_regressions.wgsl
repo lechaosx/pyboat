@@ -487,7 +487,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
                         * pow(-log(1.0 - quantile), 1.0 / WIND_CLIMATE_WEIBULL.x);
                     let wavelength_m = wave_peak_wavelength_m(wind_sea(wind_m_s));
                     let speed_m_s = wave_orbital_speed_at_bed_m_s(
-                        significant_wave_height_m(wind_sea(wind_m_s), 0.0, depth_m),
+                        wind_sea_height_m(wind_sea(wind_m_s), depth_m),
                         wavelength_m,
                         depth_m,
                     );
@@ -581,7 +581,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             let depth_m = depths_m[case_index];
             let wind_m_s = winds_m_s[case_index];
             var speed_m_s = wave_orbital_speed_at_bed_m_s(
-                significant_wave_height_m(wind_sea(wind_m_s), 0.0, depth_m),
+                wind_sea_height_m(wind_sea(wind_m_s), depth_m),
                 wave_peak_wavelength_m(wind_sea(wind_m_s)),
                 depth_m,
             );
@@ -598,7 +598,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             let wind_m_s = winds_m_s[min(row - 1u, 7u)];
             let depth_m = exp2(f32(column) / 2.0 - 1.0);
             let speed_m_s = wave_orbital_speed_at_bed_m_s(
-                significant_wave_height_m(wind_sea(wind_m_s), 0.0, depth_m),
+                wind_sea_height_m(wind_sea(wind_m_s), depth_m),
                 wave_peak_wavelength_m(wind_sea(wind_m_s)),
                 depth_m,
             );
@@ -624,7 +624,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let sediment_g_m3 = stirred_fine_sediment_g_m3(
             fine_sediment_availability(1.0, depth_m),
             wave_orbital_speed_at_bed_m_s(
-                significant_wave_height_m(wind_sea(median_m_s), 0.0, depth_m),
+                wind_sea_height_m(wind_sea(median_m_s), depth_m),
                 wave_peak_wavelength_m(wind_sea(median_m_s)),
                 depth_m,
             ),
@@ -687,6 +687,30 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         }
         let sediment_g_m3 = scene_stirred_sediment_g_m3(surface, water_height_m);
         let units = u32(round(clamp(100.0 * sediment_g_m3, 0.0, 65535.0)));
+        return vec4<f32>(linear_material_color(vec3<f32>(
+            f32(units / 256u) / 255.0,
+            f32(units % 256u) / 255.0,
+            0.0,
+        )), 1.0);
+    }
+    if LIGHTING_MODEL_REGRESSION_OUTPUT == 55u {
+        // The background swell at points (53, 31) m apart from the view
+        // centre, four columns to a point: its significant height in mm, its
+        // peak period in ms, then the cosine and sine of its direction in
+        // units of 10⁻⁴ offset by 32768, its high byte in red and its low in
+        // green.
+        _ = initialize_playground_scene(input);
+        let column = u32(input.position.x);
+        let swell = background_swell(
+            scene.camera_and_view_m.xy + f32(column / 4u) * vec2<f32>(53.0, 31.0),
+        );
+        var values = array<f32, 4>(
+            4000.0 * sqrt(swell.variance_m2),
+            1000.0 * TAU / sqrt(9.81 * swell.peak_wavenumber_per_m),
+            32768.0 + 1.0e4 * cos(swell.direction_rad),
+            32768.0 + 1.0e4 * sin(swell.direction_rad),
+        );
+        let units = u32(round(clamp(values[column % 4u], 0.0, 65535.0)));
         return vec4<f32>(linear_material_color(vec3<f32>(
             f32(units / 256u) / 255.0,
             f32(units % 256u) / 255.0,

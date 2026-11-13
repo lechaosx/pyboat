@@ -197,6 +197,7 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
     let terrain = procedural_terrain_sample(position_m);
     let atmosphere = surface_atmosphere_sample_at(position_m);
     let tide = surface_tide_sample_at(position_m);
+    let forcing = ocean_forcing_from_surface(position_m, terrain.elevation_m, atmosphere, tide);
     return vec3<f32>(
         ocean_current_m_s_from_surface(
             position_m,
@@ -205,8 +206,7 @@ fn ocean_forcing_at(position_m: vec2<f32>) -> vec3<f32> {
             atmosphere,
             tide,
         ),
-        ocean_forcing_from_surface(position_m, terrain.elevation_m, atmosphere, tide)
-            .significant_height_m,
+        combined_sea_height_m(forcing.sea, background_swell(position_m), forcing.water_depth_m),
     );
 }
 

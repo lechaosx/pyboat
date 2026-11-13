@@ -190,14 +190,15 @@ fn composed_scene_surface(
     );
 }
 
-// The fine sediment the waves the scene sampled with the water's surface
-// hold over the bed of `scene_surface` beneath water standing at
-// `water_height_m`, which they stir only from beds that hold it. It reads
+// The fine sediment the wind sea the scene sampled with the water's surface
+// holds over the bed of `scene_surface` beneath water standing at
+// `water_height_m`, which it stirs only from beds that hold it. It reads
 // `sampled_wave_forcing`, so `scene_surface_at` must have sampled the water's
 // surface at the same point first, as it does for every point under water.
-// Compromise: the waves' height includes the upper wind's swell, which takes
-// the local wind sea's period, as wave run-up does, while the mobility table
-// and the calibration of fine sediment's availability leave swell out.
+// Compromise: beds feel only the local wind sea, as the mobility table and
+// the calibration of fine sediment's availability do, so they act as if
+// sheltered from swell until an exposure law separates exposed coasts from
+// sheltered ones.
 fn scene_stirred_sediment_g_m3(scene_surface: SceneSurface, water_height_m: f32) -> f32 {
     let depth_m = water_height_m - scene_surface.elevation_m;
     var sediment_g_m3 = 0.0;
@@ -205,7 +206,10 @@ fn scene_stirred_sediment_g_m3(scene_surface: SceneSurface, water_height_m: f32)
         sediment_g_m3 = stirred_fine_sediment_g_m3(
             fine_sediment_availability(scene_surface.sand_cover, -scene_surface.elevation_m),
             wave_orbital_speed_at_bed_m_s(
-                sampled_wave_forcing.significant_height_m,
+                wind_sea_height_m(
+                    sampled_wave_forcing.sea,
+                    sampled_wave_forcing.water_depth_m,
+                ),
                 wave_peak_wavelength_m(sampled_wave_forcing.sea),
                 depth_m,
             ),
@@ -220,8 +224,8 @@ fn scene_stirred_sediment_g_m3(scene_surface: SceneSurface, water_height_m: f32)
 const STEEPEST_FITTED_SHORE_SLOPE: f32 = 0.16;
 
 // The present weather that wets ground: the surface air's temperature and
-// total water, and the significant height and peak wavelength of the sea the
-// winds raise over deep water.
+// total water, and the significant height and peak wavelength of the sea over
+// deep water, the wind sea and the swell together.
 struct GroundWeather {
     air_temperature_c: f32,
     total_water_g_kg: f32,
@@ -238,6 +242,7 @@ fn ground_weather(
         position_m,
         atmosphere.pressure,
     )));
+    let swell = background_swell(position_m);
     return GroundWeather(
         // Cooled by the standard atmosphere's lapse rate with height, as the
         // snow cover takes the air.
@@ -246,12 +251,8 @@ fn ground_weather(
             atmosphere.climate,
         ) - 0.0065 * max(elevation_m, 0.0),
         atmosphere.water_vapor_g_kg,
-        significant_wave_height_m(
-            sea,
-            length(upper_wind_m_s_from_atmosphere(position_m, atmosphere)),
-            OCEAN_FLOOR_DEPTH_M,
-        ),
-        wave_peak_wavelength_m(sea),
+        combined_sea_height_m(sea, swell, OCEAN_FLOOR_DEPTH_M),
+        combined_peak_wavelength_m(sea, swell),
     );
 }
 
@@ -259,10 +260,13 @@ fn ground_weather(
 // wet under the present `weather`, with `sediment_share` of it sand and the
 // rest rock, of linear `color`. Waves run up it, steeper shores as the
 // steepest fitted one. Compromises: seas are fully developed, without fetch;
-// Stockdon's beach fit stands for rock too; the run-up takes the present
-// waves; the pixel's terrain slope stands in for the shore's; and the reach
-// is a level, so ground below it wets however far it lies from the water, as
-// the water itself fills ground below the tide wherever it lies.
+// the wind sea's and the swell's variances add, so components the two share
+// count twice, up to √2 in height for one direction and period, where the
+// sea's state counts them once; Stockdon's beach fit stands for rock too; the
+// run-up takes the present waves; the pixel's terrain slope stands in for the
+// shore's; and the reach is a level, so ground below it wets however far it
+// lies from the water, as the water itself fills ground below the tide
+// wherever it lies.
 fn ground_wet_share(
     position_m: vec2<f32>,
     elevation_m: f32,

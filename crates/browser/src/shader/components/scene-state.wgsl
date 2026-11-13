@@ -35,16 +35,17 @@ struct SceneUniforms {
     baked_surface_grid_m: vec4<f32>,
     baked_surface_texels: vec4<u32>,
     baked_surface_level: vec4<u32>,
-    // The upper wind's swell modes, then each wind-sea band's direction
-    // rotation, four to a row, then the wind-sea table by band and direction:
-    // wave-number vector, its length, and phase at the view centre.
-    ocean_swell_modes: array<vec4<f32>, OCEAN_SWELL_MODE_COUNT>,
+    // The background swell's clock (`SwellClock` in crates/game/src/ocean.rs)
+    // and climate knots (`swell_climate_knots`), then each table band's
+    // direction rotation, four to a row, then the wave table by band and
+    // direction: wave-number vector, its length, and phase at the view centre.
+    ocean_swell_clock: vec4<f32>,
+    ocean_swell_knots: array<vec4<f32>, 20>,
     ocean_wave_band_rotations: array<vec4<f32>, WAVE_BAND_ROTATION_ROWS>,
     ocean_wave_table: array<vec4<f32>, WAVE_TABLE_MODES>,
 };
 
 // Keep synchronized with the wave table in crates/game/src/ocean.rs.
-const OCEAN_SWELL_MODE_COUNT: u32 = 4u;
 const WAVE_BANDS_PER_OCTAVE: f32 = 2.0;
 const WAVE_BAND_COUNT: i32 = 26;
 const WAVE_BAND_ROTATION_ROWS: u32 = 7u;

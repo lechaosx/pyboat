@@ -32,7 +32,6 @@ const VISITED_DIRECTIONS: usize = 6;
 // beyond three times the peak is left to the decorative octaves' slopes and
 // has no height.
 const GAMEPLAY_WINDOW: [f64; 2] = [0.36, 3.0];
-pub const OCEAN_SWELL_MODE_COUNT: usize = 4;
 
 /// A wave mode's spatial phase is `wave_number_x_per_m * x + wave_number_y_per_m * y`
 /// with `x` in `[0, width)`; `phase_rad` adds the mode's phase at the queried clock.
@@ -45,12 +44,13 @@ pub struct OceanWaveMode {
     pub phase_rad: f64,
 }
 
-/// The wind sea's modes at a clock: each band's direction rotation and its
-/// modes in direction order.
+/// The wave modes at a clock: each band's direction rotation and its modes in
+/// direction order, and the background swell's clock.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OceanWaveTable {
     pub band_rotation_rad: [f64; OCEAN_WAVE_BAND_COUNT],
     pub modes: [[OceanWaveMode; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
+    pub swell_clock: SwellClock,
 }
 
 /// The fully developed sea of a surface wind: Pierson and Moskowitz's (1964)
@@ -121,13 +121,13 @@ pub fn wind_sea_components(
 ) -> Vec<WaveComponent> {
     let table = ocean_wave_table(world_geometry, match_seed, 0, 0.0);
     let mut components = Vec::new();
-    for_each_wind_sea_component(
+    for_each_component(
         &table,
-        surface_wind_velocity_m_s,
-        |band, mode, amplitude_m| {
+        &SeaPartition::wind_sea(surface_wind_velocity_m_s),
+        |band, direction, amplitude_m, _| {
             components.push(WaveComponent {
                 band,
-                mode: *mode,
+                mode: table.modes[band][direction],
                 amplitude_m,
             });
         },
@@ -135,42 +135,111 @@ pub fn wind_sea_components(
     components
 }
 
-/// Calls `visit` with the band, mode and amplitude of each wind-sea mode a
-/// point under `surface_wind_velocity_m_s` visits. Each band holds the
-/// spectrum's variance over its wavenumbers inside the gameplay window, so
-/// bands enter and leave the window empty as the wind moves its peak. Within
-/// a band, amplitudes follow Mitsuyasu's cos^2s(θ/2) at the band's frequency,
-/// s = s_p (f/f_p)^5 below the peak and s_p (f/f_p)^-2.5 above, normalized
-/// so the band keeps its variance. Compromises: bands are half an octave
-/// wide throughout, as one table serves every peak; and a band visits only
-/// its `VISITED_DIRECTIONS` directions nearest the wind, under a Tukey window
-/// flat over their inner half that takes each to zero before the visited set
-/// changes, which narrows the broad spreads away from the peak. Returns the
-/// sea's mean wavenumber, each band's centre weighted by its variance.
-fn for_each_wind_sea_component(
-    table: &OceanWaveTable,
-    surface_wind_velocity_m_s: Vector,
-    mut visit: impl FnMut(usize, &OceanWaveMode, f64),
-) -> f64 {
-    let speed_m_s = f64::from(surface_wind_velocity_m_s.length());
-    if speed_m_s <= 0.0 {
-        return 0.0;
+/// How a sea's variance spreads over wavenumber.
+#[derive(Clone, Copy)]
+enum SpectralShape {
+    /// Pierson and Moskowitz's fully developed sea.
+    PiersonMoskowitz,
+    /// The swell part of Ochi and Hubble's (1976, Proc. 15th ICCE, ch. 18)
+    /// six-parameter spectrum at its most probable shape, λ = 3 (their
+    /// Table 2): S(ω) ∝ ω^-(4λ+1) exp(-(4λ+1)/4 (ω_m/ω)⁴).
+    OchiHubbleSwell,
+}
+
+impl SpectralShape {
+    /// The share of the variance at deep-water wavenumbers below `wavenumber`
+    /// of a sea peaking at `peak_wavenumber`, where (ω_p/ω)⁴ = (k_p/k)².
+    fn share_below(self, wavenumber: f64, peak_wavenumber: f64) -> f64 {
+        let ratio = (peak_wavenumber / wavenumber).powi(2);
+        match self {
+            Self::PiersonMoskowitz => libm::exp(-1.25 * ratio),
+            // The regularized upper incomplete gamma function Q(3, x).
+            Self::OchiHubbleSwell => {
+                let x = 3.25 * ratio;
+                libm::exp(-x) * (1.0 + x + 0.5 * x * x)
+            }
+        }
     }
-    let sea = wind_sea(speed_m_s);
+}
+
+/// A sea as the wave modes sample it: its spectrum, the multiples of its peak
+/// wavenumber its modes span, and how many bands and table directions about
+/// its direction a point visits.
+#[derive(Clone, Copy)]
+struct SeaPartition {
+    shape: SpectralShape,
+    variance_m2: f64,
+    peak_wavenumber_per_m: f64,
+    peak_spread: f64,
+    direction_rad: f64,
+    window: [f64; 2],
+    visited_bands: usize,
+    visited_directions: usize,
+}
+
+impl SeaPartition {
+    fn wind_sea(surface_wind_velocity_m_s: Vector) -> Self {
+        let sea = wind_sea(f64::from(surface_wind_velocity_m_s.length()));
+        Self {
+            shape: SpectralShape::PiersonMoskowitz,
+            variance_m2: sea.variance_m2,
+            peak_wavenumber_per_m: sea.peak_wavenumber_per_m,
+            peak_spread: sea.peak_spread,
+            direction_rad: libm::atan2(
+                f64::from(surface_wind_velocity_m_s.y),
+                f64::from(surface_wind_velocity_m_s.x),
+            ),
+            window: GAMEPLAY_WINDOW,
+            visited_bands: VISITED_BANDS,
+            visited_directions: VISITED_DIRECTIONS,
+        }
+    }
+
+    fn swell(swell: Swell) -> Self {
+        Self {
+            shape: SpectralShape::OchiHubbleSwell,
+            variance_m2: swell.significant_height_m * swell.significant_height_m / 16.0,
+            peak_wavenumber_per_m: swell.peak_wavenumber_per_m,
+            peak_spread: SWELL_PEAK_SPREAD,
+            direction_rad: swell.direction_rad,
+            window: SWELL_WINDOW,
+            visited_bands: SWELL_VISITED_BANDS,
+            visited_directions: SWELL_VISITED_DIRECTIONS,
+        }
+    }
+}
+
+/// Calls `visit` with the band, table direction and amplitude of each mode of
+/// `sea` a point visits, and the band's centre wavenumber within the window.
+/// Each band holds the spectrum's variance over its wavenumbers inside the
+/// sea's window, so bands enter and leave the window empty as the peak moves.
+/// Within a band, amplitudes follow Mitsuyasu's cos^2s(θ/2) at the band's
+/// frequency, s = s_p (f/f_p)^5 below the peak and s_p (f/f_p)^-2.5 above,
+/// normalized so the band keeps its variance.
+/// Compromises: bands are half an octave wide throughout, as one table serves
+/// every peak; and a band visits only its `visited_directions` directions
+/// nearest the sea's, under a Tukey window flat over their inner half that
+/// takes each to zero before the visited set changes, which narrows the broad
+/// spreads away from the peak. Returns the window's variance and its sum of
+/// each band's centre wavenumber times the band's variance.
+fn for_each_component(
+    table: &OceanWaveTable,
+    sea: &SeaPartition,
+    mut visit: impl FnMut(usize, usize, f64, f64),
+) -> (f64, f64) {
+    let (mut window_variance, mut weighted_wavenumber) = (0.0, 0.0);
+    if sea.variance_m2 <= 0.0 {
+        return (window_variance, weighted_wavenumber);
+    }
     let peak = sea.peak_wavenumber_per_m;
     let lowest_wavenumber = std::f64::consts::TAU / OCEAN_WAVE_LONGEST_M;
     let spacing = std::f64::consts::TAU / OCEAN_WAVE_DIRECTIONS as f64;
-    let window_width = 0.5 * VISITED_DIRECTIONS as f64 * spacing;
-    let wind_angle = libm::atan2(
-        f64::from(surface_wind_velocity_m_s.y),
-        f64::from(surface_wind_velocity_m_s.x),
-    );
-    let window = GAMEPLAY_WINDOW.map(|ratio| ratio * peak);
+    let window_width = 0.5 * sea.visited_directions as f64 * spacing;
+    let window = sea.window.map(|ratio| ratio * peak);
     let first_band =
         libm::floor(OCEAN_WAVE_BANDS_PER_OCTAVE as f64 * libm::log2(window[0] / lowest_wavenumber))
             as i64;
-    let (mut weighted_wavenumber, mut window_variance) = (0.0, 0.0);
-    for band in first_band..first_band + VISITED_BANDS as i64 {
+    for band in first_band..first_band + sea.visited_bands as i64 {
         let Ok(band) = usize::try_from(band) else {
             continue;
         };
@@ -185,26 +254,26 @@ fn for_each_wind_sea_component(
         if upper <= lower {
             continue;
         }
-        // In deep water (ω_p/ω)⁴ = (k_p/k)², so the variance below k is
-        // exp(-5/4 (k_p/k)²) of the whole.
         let variance = sea.variance_m2
-            * (libm::exp(-1.25 * (peak / upper).powi(2))
-                - libm::exp(-1.25 * (peak / lower).powi(2)));
-        weighted_wavenumber += variance * libm::sqrt(lower * upper);
+            * (sea.shape.share_below(upper, peak) - sea.shape.share_below(lower, peak));
+        let centre = libm::sqrt(lower * upper);
+        weighted_wavenumber += variance * centre;
         window_variance += variance;
-        let frequency_ratio = libm::sqrt(libm::sqrt(lower * upper) / peak);
+        let frequency_ratio = libm::sqrt(centre / peak);
         let spread = sea.peak_spread
             * libm::pow(
                 frequency_ratio,
                 if frequency_ratio < 1.0 { 5.0 } else { -2.5 },
             );
-        let position = (wind_angle - table.band_rotation_rad[band]) / spacing;
-        let nearest = libm::floor(position);
+        // The visited directions straddle the sea's: an even count the two
+        // table directions either side of it, an odd one the nearest.
+        let position = (sea.direction_rad - table.band_rotation_rad[band]) / spacing;
+        let nearest = libm::floor(position + 0.5 * (sea.visited_directions % 2) as f64);
         let offset = position - nearest;
+        let first_step = -((sea.visited_directions as i64 - 1) / 2);
         let mut roots = [0.0; VISITED_DIRECTIONS];
-        for (direction, root) in roots.iter_mut().enumerate() {
-            let angle =
-                (direction as f64 + 1.0 - 0.5 * VISITED_DIRECTIONS as f64 - offset) * spacing;
+        for (direction, root) in roots.iter_mut().enumerate().take(sea.visited_directions) {
+            let angle = ((direction as i64 + first_step) as f64 - offset) * spacing;
             *root = libm::pow(libm::cos(0.5 * angle), spread)
                 * libm::cos(
                     std::f64::consts::PI * (libm::fabs(angle) / window_width - 0.5).max(0.0),
@@ -212,27 +281,239 @@ fn for_each_wind_sea_component(
         }
         let weight: f64 = roots.iter().map(|root| root * root).sum();
         let scale = libm::sqrt(2.0 * variance / weight);
-        for (direction, root) in roots.into_iter().enumerate() {
-            let table_direction =
-                (nearest as i64 + direction as i64 + 1 - VISITED_DIRECTIONS as i64 / 2)
-                    .rem_euclid(OCEAN_WAVE_DIRECTIONS as i64) as usize;
-            visit(band, &table.modes[band][table_direction], scale * root);
+        for (direction, root) in roots.into_iter().enumerate().take(sea.visited_directions) {
+            let table_direction = (nearest as i64 + direction as i64 + first_step)
+                .rem_euclid(OCEAN_WAVE_DIRECTIONS as i64)
+                as usize;
+            visit(band, table_direction, scale * root, centre);
         }
     }
-    if window_variance > 0.0 {
-        weighted_wavenumber / window_variance
-    } else {
-        0.0
-    }
+    (window_variance, weighted_wavenumber)
 }
 
-/// What raises the sea at a point: the sustained surface wind, the upper wind
-/// that sets swell, and the water's depth.
+/// What raises the sea at a point: the sustained surface wind, the swell, and
+/// the water's depth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OceanWaveForcing {
     pub surface_wind_velocity_m_s: Vector,
-    pub upper_wind_velocity_m_s: Vector,
+    pub swell: Swell,
     pub water_depth_m: f32,
+}
+
+/// A swell: its significant height, its peak wavenumber, and the direction it
+/// travels toward, anticlockwise from east.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Swell {
+    pub significant_height_m: f64,
+    pub peak_wavenumber_per_m: f64,
+    pub direction_rad: f64,
+}
+
+impl Swell {
+    pub const NONE: Self = Self {
+        significant_height_m: 0.0,
+        peak_wavenumber_per_m: 1.0,
+        direction_rad: 0.0,
+    };
+}
+
+// The swell that storms beyond the world's scale send a sea, by absolute
+// latitude at 0°, 10°, … 90°: the planet is symmetric, so its hemispheres
+// share one climate, the southern half a year from the northern. The knots
+// pool both hemispheres of NOAA NCEP's operational global WAVEWATCH III
+// (swell partition: height `shgt`, peak period `sper`, direction `sdir`;
+// PacIOOS ERDDAP dataset `ww3_global`), sampled every 121 h over 2018-2024,
+// within 3° of each knot, with each Southern Hemisphere season shifted half
+// a year. Gulev et al.'s (2003, J. Geophys. Res. 108, 3236) ship-observed
+// swell heights, 1.7-2.7 m by latitude band, agree in pattern and run higher
+// in the tropics; their visually observed periods run low.
+// The root mean square of the swell's significant height.
+const SWELL_HEIGHT_M: [f32; 10] = [1.16, 1.19, 1.47, 1.93, 2.32, 2.41, 2.20, 1.41, 1.41, 1.41];
+// The relative amplitude of its square's annual cycle, rougher in winter.
+const SWELL_HEIGHT_SEASONAL_AMPLITUDE: [f32; 10] =
+    [0.0, 0.22, 0.43, 0.55, 0.45, 0.42, 0.34, 0.34, 0.34, 0.34];
+// Its mean peak period and that period's annual amplitude, longer in winter.
+const SWELL_PERIOD_S: [f32; 10] = [
+    10.75, 11.23, 11.44, 11.34, 11.32, 11.25, 10.77, 9.03, 9.03, 9.03,
+];
+const SWELL_PERIOD_SEASONAL_AMPLITUDE_S: [f32; 10] =
+    [0.0, 0.78, 0.69, 0.84, 0.85, 0.76, 0.79, 0.82, 0.82, 0.82];
+// The direction it travels toward, in degrees from east toward the equator:
+// the direction of its energy-weighted mean propagation, westward along the
+// equator, equatorward in the subtropics, eastward in the storm belts near
+// 50° and poleward beyond. Compromises: the annual cycles' amplitudes are 0
+// and the direction westward at the equator, where the measured 0.07, 0.08 s
+// and 4° south of west would step between the hemispheres; the direction
+// keeps no annual cycle, where between 5° and 25° the same series' northward
+// propagation swings over the year by an annual cosine of 0.38-0.53, more
+// than its mean resultant of 0.20-0.33, as the far hemisphere's winter
+// swell crosses into summer; and beyond 70°, where no open sea was measured,
+// the knots hold 70°'s values and the direction turns to east at the pole,
+// through which the world mirrors.
+const SWELL_DIRECTION_DEGREES: [f32; 10] =
+    [180.0, 99.0, 84.0, 63.0, 31.0, 4.0, -31.0, -63.0, -31.5, 0.0];
+// The spread of the swell's natural logarithm of height and peak period at a
+// point once the annual cycle is removed: from the coefficients of variation
+// CV of a point's ratios to its calendar month's mean, σ = √ln(1 + CV²), the
+// log-normal of that CV, whose deciles match the measured within 0.05 of the
+// mean between 0° and 30° and the median and upper decile beyond.
+const SWELL_HEIGHT_LOG_SPREAD: [f32; 10] =
+    [0.34, 0.41, 0.43, 0.45, 0.52, 0.59, 0.60, 0.62, 0.62, 0.62];
+const SWELL_PERIOD_LOG_SPREAD: [f32; 10] =
+    [0.23, 0.22, 0.21, 0.19, 0.19, 0.20, 0.21, 0.24, 0.24, 0.24];
+// The circular standard deviation of its direction at a point, √(-2 ln R),
+// from each point's resultant length R within a calendar month, in degrees.
+const SWELL_DIRECTION_SPREAD_DEGREES: [f32; 10] =
+    [48.0, 49.0, 49.0, 52.0, 57.0, 67.0, 64.0, 54.0, 54.0, 54.0];
+// The season phase at which a hemisphere's swell peaks: the fitted annual
+// cycles peak within a few weeks of mid-January in the north, the season
+// phase counting from the December solstice.
+const SWELL_WINTER_SEASON_PHASE: f64 = 0.05;
+// The swell's height, period and direction each wander with one slow signal,
+// a sum of `SWELL_SIGNAL_TERMS` cosines of seeded phases and of frequencies
+// drawn from a Gaussian of standard deviation √2 / `SWELL_COHERENCE_S`,
+// whose autocorrelation is exp(-(τ / `SWELL_COHERENCE_S`)²) in expectation.
+// At a point the measured autocorrelation of the swell's log height falls to
+// 1/e in 21 h and its period's and direction's in 18 h (3-hourly series at 75
+// open-ocean points over June and July 2019); `SWELL_COHERENCE_S` is their
+// 20 h. Compromises: the signals are the same everywhere, so swell
+// events reach every longitude at once; they are independent of each other,
+// where the measured correlation of log height and period is +0.1 to +0.3;
+// and the measured autocorrelation falls faster in the first 6 h, to 0.70,
+// which the smooth signal leaves out.
+const SWELL_COHERENCE_S: f64 = 20.0 * 3_600.0;
+const SWELL_SIGNAL_TERMS: usize = 8;
+// Goda's maximum spreading parameter for swell that has travelled far, in
+// Mitsuyasu's cos^2s(θ/2) about its direction (Goda, Takayama and Suzuki
+// 1978, Proc. 16th ICCE, ch. 35, after Goda and Suzuki 1975): 9° rms at the
+// peak.
+const SWELL_PEAK_SPREAD: f64 = 75.0;
+// The swell's wave modes span 0.7 to 2.1 times its peak wavenumber and hold
+// 92% of its variance. That window is 3.17 half-octave bands wide, so it
+// touches at most `SWELL_VISITED_BANDS` bands, each visiting
+// `SWELL_VISITED_DIRECTIONS` directions. Compromise for cost: the 8% outside
+// has no height, where 0.62-2.73 would hold 98% in up to six bands.
+const SWELL_WINDOW: [f64; 2] = [0.7, 2.1];
+const SWELL_VISITED_BANDS: usize = 5;
+const SWELL_VISITED_DIRECTIONS: usize = 3;
+// `for_each_component` holds a band's direction weights in an array of
+// `VISITED_DIRECTIONS`.
+const _: () = assert!(SWELL_VISITED_DIRECTIONS <= VISITED_DIRECTIONS);
+
+/// The swell climate's knots for the renderer, two rows to a knot at 0°,
+/// 10°, … 90°: height, its annual amplitude, period and its annual
+/// amplitude, then direction, the spreads of log height and log period, and
+/// the direction's spread in degrees.
+pub fn swell_climate_knots() -> [[f32; 4]; 20] {
+    std::array::from_fn(|row| {
+        let knot = row / 2;
+        if row % 2 == 0 {
+            [
+                SWELL_HEIGHT_M[knot],
+                SWELL_HEIGHT_SEASONAL_AMPLITUDE[knot],
+                SWELL_PERIOD_S[knot],
+                SWELL_PERIOD_SEASONAL_AMPLITUDE_S[knot],
+            ]
+        } else {
+            [
+                SWELL_DIRECTION_DEGREES[knot],
+                SWELL_HEIGHT_LOG_SPREAD[knot],
+                SWELL_PERIOD_LOG_SPREAD[knot],
+                SWELL_DIRECTION_SPREAD_DEGREES[knot],
+            ]
+        }
+    })
+}
+
+/// The clock's part of the background swell: the annual cycle at the
+/// northern hemisphere's latitudes, cos 2π(season - winter), and the slow
+/// signals its height, period and direction wander with, each of unit
+/// variance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SwellClock {
+    pub season: f64,
+    pub height: f64,
+    pub period: f64,
+    pub direction: f64,
+}
+
+fn swell_clock(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+) -> SwellClock {
+    let world_time_s = (world_tick as f64 + f64::from(world_tick_fraction)) * TICK_SECONDS;
+    let season_phase = f64::from(
+        crate::world_celestial_conditions(world_geometry, world_time_s, Vector::ZERO).season_phase,
+    );
+    let gaussian_scale = std::f64::consts::SQRT_2 / SWELL_COHERENCE_S;
+    let signal = |index: u64| {
+        let mut sum = 0.0;
+        for term in 0..SWELL_SIGNAL_TERMS as u64 {
+            let key = match_seed
+                ^ 0x2545_f491_4f6c_dd1d
+                ^ (index * SWELL_SIGNAL_TERMS as u64 + term).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            // |N(0, 1)| by Box and Muller.
+            let gaussian = libm::sqrt(-2.0 * libm::log(hash_unit(key ^ 0x94d0_49bb_1331_11eb)))
+                * libm::fabs(libm::cos(
+                    std::f64::consts::TAU * hash_unit(key ^ 0xd6e8_feb8_6659_fd93),
+                ));
+            let phase_per_tick = gaussian * gaussian_scale * TICK_SECONDS;
+            sum += libm::cos(
+                std::f64::consts::TAU * hash_unit(key ^ 0x8ebc_6af0_9c88_c6e3)
+                    + tick_phase_radians(world_tick, phase_per_tick)
+                    + f64::from(world_tick_fraction) * phase_per_tick,
+            );
+        }
+        libm::sqrt(2.0 / SWELL_SIGNAL_TERMS as f64) * sum
+    };
+    SwellClock {
+        season: libm::cos(std::f64::consts::TAU * (season_phase - SWELL_WINTER_SEASON_PHASE)),
+        height: signal(0),
+        period: signal(1),
+        direction: signal(2),
+    }
+}
+
+/// The background swell at a point and clock: the swell that storms beyond
+/// the world's scale send a sea at its latitude in its season, wandering with
+/// slow signals that keep the climate's mean square height and mean period,
+/// log-normal in both. Compromise: every water point takes the open sea's
+/// swell, island lees, bays and lagoons too, until an exposure law shelters
+/// them.
+pub fn background_swell(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+) -> Swell {
+    let clock =
+        ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction).swell_clock;
+    let y_m = f64::from(position_m.y);
+    let latitude = world_geometry.latitude_degrees(y_m) as f32;
+    let knot = |knots| f64::from(crate::latitude_curve_value(knots, latitude));
+    let hemisphere = if latitude >= 0.0 { 1.0 } else { -1.0 };
+    let season = hemisphere * clock.season;
+    let height_spread = knot(SWELL_HEIGHT_LOG_SPREAD);
+    let period_spread = knot(SWELL_PERIOD_LOG_SPREAD);
+    let significant_height_m = knot(SWELL_HEIGHT_M)
+        * libm::sqrt(1.0 + knot(SWELL_HEIGHT_SEASONAL_AMPLITUDE) * season)
+        * libm::exp(height_spread * clock.height - height_spread * height_spread);
+    let period_s = (knot(SWELL_PERIOD_S) + knot(SWELL_PERIOD_SEASONAL_AMPLITUDE_S) * season)
+        * libm::exp(period_spread * clock.period - 0.5 * period_spread * period_spread);
+    // Toward the equator is south in the north, and flips beyond a pole,
+    // where latitude falls northward.
+    let equatorward = -hemisphere * world_geometry.latitude_gradient_degrees_per_m(y_m).signum();
+    let local = knot(SWELL_DIRECTION_DEGREES).to_radians();
+    let peak_frequency = std::f64::consts::TAU / period_s;
+    Swell {
+        significant_height_m,
+        peak_wavenumber_per_m: peak_frequency * peak_frequency / GRAVITY_M_S2,
+        direction_rad: libm::atan2(equatorward * libm::sin(local), libm::cos(local))
+            + knot(SWELL_DIRECTION_SPREAD_DEGREES).to_radians() * clock.direction,
+    }
 }
 
 pub(crate) fn procedural_wave_state(query: OceanQuery) -> OceanState {
@@ -244,18 +525,27 @@ pub(crate) fn procedural_wave_state(query: OceanQuery) -> OceanState {
         query.position_m,
         OceanWaveForcing {
             surface_wind_velocity_m_s: query.wave_forcing_wind_velocity_m_s,
-            upper_wind_velocity_m_s: query.weather.upper_wind_velocity_m_s,
+            swell: background_swell(
+                query.world_geometry,
+                query.match_seed,
+                query.world_tick,
+                query.world_tick_fraction,
+                query.position_m,
+            ),
             water_depth_m: query.water_depth_m,
         },
     )
 }
 
-/// The sea's surface at a point and clock under `forcing`: the wind sea's
-/// modes with Tayfun's (1980) narrow-band second order,
-/// η₂ = (k_m/2)(η² - η̂²) at their mean wavenumber, where η̂ is the sum's
-/// quadrature, and the upper wind's swell. Compromise: the significant height
-/// is capped at 0.78 of the depth, McCowan's (1894) breaker limit, a hard cap
-/// that a smooth saturation is to replace with the shore's waves.
+/// The sea's surface at a point and clock under `forcing`: the wind sea's and
+/// the swell's modes, each component taking the larger of the two spectra so
+/// that neither counts twice where they meet, with Tayfun's (1980)
+/// narrow-band second order, η₂ = (k_m/2)(η² - η̂²) at their mean
+/// wavenumber, where η̂ is the sum's quadrature. Compromises: Tayfun's term
+/// treats a sea of wind sea and swell as one narrow band, at the mean
+/// wavenumber of both windows' variance; and McCowan's (1894) breaker limit,
+/// 0.78 of the depth, caps the sea, a hard cap that a smooth saturation is to
+/// replace with the shore's waves.
 pub fn ocean_wave_state(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -264,66 +554,62 @@ pub fn ocean_wave_state(
     position_m: Vector,
     forcing: OceanWaveForcing,
 ) -> OceanState {
-    let upper_wind_speed_m_s = forcing.upper_wind_velocity_m_s.length();
-    let upper_wind_direction = if upper_wind_speed_m_s > 0.0 {
-        forcing.upper_wind_velocity_m_s / upper_wind_speed_m_s
-    } else {
-        Vector::ZERO
-    };
-    let wind_sea_height_m =
-        wind_sea(f64::from(forcing.surface_wind_velocity_m_s.length())).significant_height_m();
-    // Swell from the upper wind stands in for swell travelling from distant storms.
-    let swell_height_m = 0.006 * f64::from(upper_wind_speed_m_s).powi(2);
-    let unrestricted_height_m = libm::hypot(wind_sea_height_m, swell_height_m);
+    let table = ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
+    let width_m = f64::from(world_geometry.width_m() as f32);
+    let x_m = f64::from(position_m.x).rem_euclid(width_m);
+    let y_m = f64::from(position_m.y);
+    let mut sum = SurfaceSum::default();
+    let wind_sea = SeaPartition::wind_sea(forcing.surface_wind_velocity_m_s);
+    let swell = SeaPartition::swell(forcing.swell);
+    let mut wind_amplitudes = [[0.0; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT];
+    let (mut window_variance, mut weighted_wavenumber) =
+        for_each_component(&table, &wind_sea, |band, direction, amplitude_m, _| {
+            wind_amplitudes[band][direction] = amplitude_m;
+            sum.add(&table.modes[band][direction], amplitude_m, x_m, y_m);
+        });
+    // A component both seas share takes the larger amplitude: the swell adds
+    // only its excess there, and the variance it shares counts once.
+    let mut shared_variance = 0.0;
+    for_each_component(
+        &table,
+        &swell,
+        |band, direction, amplitude_m, wavenumber| {
+            let wind_amplitude_m = wind_amplitudes[band][direction];
+            let excess_variance =
+                0.5 * (amplitude_m.max(wind_amplitude_m).powi(2) - wind_amplitude_m.powi(2));
+            sum.add(
+                &table.modes[band][direction],
+                (amplitude_m - wind_amplitude_m).max(0.0),
+                x_m,
+                y_m,
+            );
+            shared_variance += 0.5 * amplitude_m.min(wind_amplitude_m).powi(2);
+            window_variance += excess_variance;
+            weighted_wavenumber += excess_variance * wavenumber;
+        },
+    );
+    let unrestricted_height_m =
+        4.0 * libm::sqrt((wind_sea.variance_m2 + swell.variance_m2 - shared_variance).max(0.0));
     let significant_height_m = unrestricted_height_m.min(0.78 * f64::from(forcing.water_depth_m));
     let depth_scale = if unrestricted_height_m > 0.0 {
         significant_height_m / unrestricted_height_m
     } else {
         0.0
     };
-
-    let table = ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
-    let width_m = f64::from(world_geometry.width_m() as f32);
-    let x_m = f64::from(position_m.x).rem_euclid(width_m);
-    let y_m = f64::from(position_m.y);
-    let mut sum = SurfaceSum::default();
-    let mean_wavenumber = for_each_wind_sea_component(
-        &table,
-        forcing.surface_wind_velocity_m_s,
-        |_, mode, amplitude_m| sum.add(mode, depth_scale * amplitude_m, x_m, y_m),
-    );
-    let mut displacement_m = sum.displacement_m
-        + 0.5
-            * mean_wavenumber
-            * (sum.displacement_m * sum.displacement_m - sum.quadrature_m * sum.quadrature_m);
-    let mut slope = sum.slope
+    let mean_wavenumber = if window_variance > 0.0 {
+        weighted_wavenumber / window_variance
+    } else {
+        0.0
+    };
+    let linear_m = depth_scale * sum.displacement_m;
+    let quadrature_m = depth_scale * sum.quadrature_m;
+    let displacement_m =
+        linear_m + 0.5 * mean_wavenumber * (linear_m * linear_m - quadrature_m * quadrature_m);
+    let slope = depth_scale * sum.slope
         + mean_wavenumber
-            * (sum.displacement_m * sum.slope - sum.quadrature_m * sum.quadrature_slope);
-    let mut orbital_velocity_m_s = sum.orbital_velocity_m_s;
-
-    let swell_modes =
-        cached_ocean_swell_modes(world_geometry, match_seed, world_tick, world_tick_fraction);
-    let swell_weights = swell_modes.map(|mode| {
-        let alignment = (mode.wave_number_x_per_m * f64::from(upper_wind_direction.x)
-            + mode.wave_number_y_per_m * f64::from(upper_wind_direction.y))
-            / mode.wave_number_per_m;
-        0.20 + alignment.max(0.0).powi(4)
-    });
-    let swell_scale = depth_scale * swell_height_m
-        / (4.0
-            * libm::sqrt(
-                0.5 * swell_weights
-                    .iter()
-                    .map(|weight| weight * weight)
-                    .sum::<f64>(),
-            ));
-    let mut swell = SurfaceSum::default();
-    for (mode, weight) in swell_modes.iter().zip(swell_weights) {
-        swell.add(mode, swell_scale * weight, x_m, y_m);
-    }
-    displacement_m += swell.displacement_m;
-    slope += swell.slope;
-    orbital_velocity_m_s += swell.orbital_velocity_m_s;
+            * depth_scale
+            * (linear_m * sum.slope - quadrature_m * sum.quadrature_slope);
+    let orbital_velocity_m_s = depth_scale * sum.orbital_velocity_m_s;
 
     let surface_displacement_m = displacement_m as f32;
     let significant_wave_height_m = significant_height_m as f32;
@@ -363,10 +649,10 @@ impl SurfaceSum {
     }
 }
 
-/// The wind sea's wave table at a clock. Each band's modes take seeded
+/// The wave table at a clock. Each band's modes take seeded
 /// wavenumbers within the band, with eastward wavenumbers fitted to the
-/// world's width so waves join across longitude. Only the phases depend on
-/// the clock, so the rest is built once per world and seed.
+/// world's width so waves join across longitude. Of the modes only the
+/// phases depend on the clock, so the rest is built once per world and seed.
 pub fn ocean_wave_table(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -391,13 +677,23 @@ pub fn ocean_wave_table(
             modes: start
                 .modes
                 .map(|band| band.map(|mode| mode.at_clock(world_tick, world_tick_fraction))),
+            swell_clock: swell_clock(world_geometry, match_seed, world_tick, world_tick_fraction),
         });
         *latest = Some((inputs, table.clone()));
         table
     })
 }
 
-fn ocean_wave_table_at_start(world_geometry: WorldGeometry, match_seed: u64) -> Rc<OceanWaveTable> {
+/// The wave modes at the clock's start, with each band's direction rotation.
+struct WaveModesAtStart {
+    band_rotation_rad: [f64; OCEAN_WAVE_BAND_COUNT],
+    modes: [[OceanWaveMode; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
+}
+
+fn ocean_wave_table_at_start(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+) -> Rc<WaveModesAtStart> {
     WAVE_TABLE_AT_START.with_borrow_mut(|latest| {
         if let Some((inputs, table)) = latest
             && *inputs == (world_geometry, match_seed)
@@ -433,37 +729,12 @@ fn ocean_wave_table_at_start(world_geometry: WorldGeometry, match_seed: u64) -> 
                 )
             })
         });
-        let table = Rc::new(OceanWaveTable {
+        let table = Rc::new(WaveModesAtStart {
             band_rotation_rad,
             modes,
         });
         *latest = Some(((world_geometry, match_seed), table.clone()));
         table
-    })
-}
-
-/// The upper wind's swell modes: wavelengths log-uniform from 120 to 600 m,
-/// directions over a quarter turn from a seeded rotation.
-pub fn ocean_swell_modes(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-) -> [OceanWaveMode; OCEAN_SWELL_MODE_COUNT] {
-    let rotation = std::f64::consts::TAU * hash_unit(match_seed ^ 0x3c6e_f372_fe94_f82b);
-    std::array::from_fn(|swell_index| {
-        let mode_index = 12 + swell_index;
-        let mode_key = match_seed
-            ^ 0xa409_3822_299f_31d0
-            ^ (mode_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        let wavelength_m = 120.0 * libm::pow(5.0, hash_unit(mode_key ^ 0xe703_7ed1_a0b4_28db));
-        ocean_wave_mode(
-            world_geometry,
-            rotation + std::f64::consts::TAU * mode_index as f64 / 16.0,
-            wavelength_m,
-            mode_key,
-        )
-        .at_clock(world_tick, world_tick_fraction)
     })
 }
 
@@ -505,41 +776,15 @@ impl OceanWaveMode {
 }
 
 type WaveModeInputs = (WorldGeometry, u64, u64, u32);
-type CachedWaveTable<Inputs> = RefCell<Option<(Inputs, Rc<OceanWaveTable>)>>;
+type CachedWaveTable<Inputs, Table> = RefCell<Option<(Inputs, Rc<Table>)>>;
 
 thread_local! {
     // Keyed on every input of the tables, which depend on world, seed and
     // clock alone, so all samples at one clock share one table.
-    static WAVE_TABLE_AT_START: CachedWaveTable<(WorldGeometry, u64)> =
+    static WAVE_TABLE_AT_START: CachedWaveTable<(WorldGeometry, u64), WaveModesAtStart> =
         const { RefCell::new(None) };
-    static LATEST_WAVE_TABLE: CachedWaveTable<WaveModeInputs> =
+    static LATEST_WAVE_TABLE: CachedWaveTable<WaveModeInputs, OceanWaveTable> =
         const { RefCell::new(None) };
-    static LATEST_SWELL_MODES: RefCell<Option<(WaveModeInputs, [OceanWaveMode; OCEAN_SWELL_MODE_COUNT])>> =
-        const { RefCell::new(None) };
-}
-
-fn cached_ocean_swell_modes(
-    world_geometry: WorldGeometry,
-    match_seed: u64,
-    world_tick: u64,
-    world_tick_fraction: f32,
-) -> [OceanWaveMode; OCEAN_SWELL_MODE_COUNT] {
-    let inputs = (
-        world_geometry,
-        match_seed,
-        world_tick,
-        world_tick_fraction.to_bits(),
-    );
-    LATEST_SWELL_MODES.with_borrow_mut(|latest| {
-        if let Some((latest_inputs, modes)) = latest
-            && *latest_inputs == inputs
-        {
-            return *modes;
-        }
-        let modes = ocean_swell_modes(world_geometry, match_seed, world_tick, world_tick_fraction);
-        *latest = Some((inputs, modes));
-        modes
-    })
 }
 
 fn tick_phase_radians(tick: u64, phase_per_tick_radians: f64) -> f64 {

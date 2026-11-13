@@ -13,8 +13,8 @@ use browser::{
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
-    OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, celestial_lighting,
-    celestial_orbit, cloud_field_time_coordinates_interpolated, dinghy_parameters,
+    OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, celestial_lighting, celestial_orbit,
+    cloud_field_time_coordinates_interpolated, dinghy_parameters,
     procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
@@ -145,7 +145,8 @@ struct SceneUniforms {
     baked_surface_grid_m: [f32; 4],
     baked_surface_texels: [u32; 4],
     baked_surface_level: [u32; 4],
-    ocean_swell_modes: [[f32; 4]; OCEAN_SWELL_MODE_COUNT],
+    ocean_swell_clock: [f32; 4],
+    ocean_swell_knots: [[f32; 4]; 20],
     ocean_wave_band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
     ocean_wave_table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
@@ -1520,6 +1521,11 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             value,
             "lighting_model_regressions",
             &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 54.0)],
+        ),
+        "lighting_background_swell" => diagnostic(
+            value,
+            "lighting_model_regressions",
+            &[("LIGHTING_MODEL_REGRESSION_OUTPUT", 55.0)],
         ),
         "lighting_view_direction" => diagnostic(
             value,
@@ -3004,7 +3010,8 @@ fn scene_uniforms(
         baked_surface_grid_m: baked_surface.grid_m,
         baked_surface_texels: baked_surface.texels,
         baked_surface_level: baked_surface.level,
-        ocean_swell_modes: waves.swell_modes,
+        ocean_swell_clock: waves.swell_clock,
+        ocean_swell_knots: waves.swell_knots,
         ocean_wave_band_rotations: waves.band_rotations,
         ocean_wave_table: waves.table,
     })

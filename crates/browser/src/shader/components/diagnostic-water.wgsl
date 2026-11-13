@@ -24,19 +24,26 @@ fn diagnostic_water_significant_wave_height(input: VertexOutput) -> vec4<f32> {
     ), 1.0);
 }
 
-// The wind sea's peak period over water, from 0 to 20 s.
+// The peak period over water of the wind sea and the swell together, each
+// one's peak weighted by its variance, from 0 to 20 s.
 fn diagnostic_water_wave_peak_period(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
     let wind_m_s = resolved_surface_wind_m_s_from_pressure(
         position_m,
         surface_atmosphere_sample_at(position_m).pressure,
     );
-    let period_s = TAU / sqrt(9.81 * wind_sea(length(wind_m_s)).peak_wavenumber_per_m);
+    let sea = wind_sea(length(wind_m_s));
+    let swell = background_swell(position_m);
+    let variance = sea.variance_m2 + swell.variance_m2;
+    let period_s = (sea.variance_m2 * wave_period_s(TAU / sea.peak_wavenumber_per_m)
+        + swell.variance_m2 * wave_period_s(TAU / swell.peak_wavenumber_per_m))
+        / max(variance, 1.0e-20);
     let water = ocean_forcing_at(position_m).z > 0.0;
     return vec4<f32>(scalar_debug_color(select(0.0, period_s / 20.0, water)), 1.0);
 }
 
-// The wind sea's direction over water, coloured as a wind of its
+// The direction over water of the wind sea and the swell together, their
+// directions weighted by their variances, coloured as a wind of the sea's
 // significant height in metres.
 fn diagnostic_water_wave_direction(input: VertexOutput) -> vec4<f32> {
     let position_m = input.world_position_m;
@@ -44,9 +51,13 @@ fn diagnostic_water_wave_direction(input: VertexOutput) -> vec4<f32> {
         position_m,
         surface_atmosphere_sample_at(position_m).pressure,
     );
+    let sea = wind_sea(length(wind_m_s));
+    let swell = background_swell(position_m);
+    let direction = sea.variance_m2 * wind_m_s / max(length(wind_m_s), 1.0e-6)
+        + swell.variance_m2 * vec2<f32>(cos(swell.direction_rad), sin(swell.direction_rad));
     let height_m = ocean_forcing_at(position_m).z;
     return vec4<f32>(
-        wind_debug_color(wind_m_s / max(length(wind_m_s), 1.0e-6) * height_m),
+        wind_debug_color(direction / max(length(direction), 1.0e-20) * height_m),
         1.0,
     );
 }

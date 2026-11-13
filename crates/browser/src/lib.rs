@@ -52,9 +52,8 @@ pub use terrain_cache::TerrainCachePass;
 pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
-    CloudFieldTimeCoordinates, OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT,
-    OCEAN_WAVE_DIRECTIONS, OceanWaveMode, WorldEnvironment,
-    cloud_field_time_coordinates_interpolated, computed_yaw_rate_targets,
+    CloudFieldTimeCoordinates, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, OceanWaveMode,
+    WorldEnvironment, cloud_field_time_coordinates_interpolated, computed_yaw_rate_targets,
     computed_yaw_rate_targets_in_environment, dinghy_parameters, match_environment,
     procedural_match_environment, procedural_world_environment,
     procedural_world_environment_interpolated,
@@ -369,11 +368,13 @@ pub const OCEAN_WAVE_BAND_ROTATION_ROWS: usize = OCEAN_WAVE_BAND_COUNT.div_ceil(
 
 /// The wave modes as the scene shader reads them, each as its wave-number
 /// vector, its length, and its phase at the view centre `camera_m` at the
-/// world clock, in `[0, TAU)`: the upper wind's swell modes, then each
-/// wind-sea band's direction rotation, four to a row, then the wind-sea table.
+/// world clock, in `[0, TAU)`: the background swell's clock and climate
+/// knots, then each table band's direction rotation, four to a row, then the
+/// wave table.
 #[derive(Clone, Copy)]
 pub struct OceanWaveUniforms {
-    pub swell_modes: [[f32; 4]; OCEAN_SWELL_MODE_COUNT],
+    pub swell_clock: [f32; 4],
+    pub swell_knots: [[f32; 4]; 20],
     pub band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
     pub table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
@@ -400,14 +401,13 @@ pub fn ocean_wave_uniforms(
     };
     let table = game::ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
     OceanWaveUniforms {
-        swell_modes: game::ocean_swell_modes(
-            world_geometry,
-            match_seed,
-            world_tick,
-            world_tick_fraction,
-        )
-        .each_ref()
-        .map(uniform),
+        swell_clock: [
+            table.swell_clock.season as f32,
+            table.swell_clock.height as f32,
+            table.swell_clock.period as f32,
+            table.swell_clock.direction as f32,
+        ],
+        swell_knots: game::swell_climate_knots(),
         band_rotations: std::array::from_fn(|row| {
             std::array::from_fn(|column| {
                 table

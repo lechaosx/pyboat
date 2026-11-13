@@ -1,7 +1,6 @@
 struct OceanForcingSample {
-    significant_height_m: f32,
+    water_depth_m: f32,
     surface_wind_m_s: vec2<f32>,
-    upper_wind_m_s: vec2<f32>,
     sea: WindSea,
 }
 
@@ -12,21 +11,14 @@ fn ocean_forcing_from_surface(
     surface_tide: SurfaceTideSample,
 ) -> OceanForcingSample {
     let tide_height_m = ocean_tide_height_sample(atmosphere, surface_tide).value;
-    let water_depth_m = max(tide_height_m - terrain_elevation_m, 0.0);
     let surface_wind_m_s = resolved_surface_wind_m_s_from_pressure(
         position_m,
         atmosphere.pressure,
     );
-    let upper_wind_m_s = upper_wind_m_s_from_atmosphere(position_m, atmosphere);
-    let sea = wind_sea(length(surface_wind_m_s));
-    if water_depth_m == 0.0 {
-        return OceanForcingSample(0.0, surface_wind_m_s, upper_wind_m_s, sea);
-    }
     return OceanForcingSample(
-        significant_wave_height_m(sea, length(upper_wind_m_s), water_depth_m),
+        max(tide_height_m - terrain_elevation_m, 0.0),
         surface_wind_m_s,
-        upper_wind_m_s,
-        sea,
+        wind_sea(length(surface_wind_m_s)),
     );
 }
 
@@ -59,18 +51,62 @@ fn wind_sea(surface_speed_m_s: f32) -> WindSea {
     );
 }
 
-// Significant wave height over water `depth_m` deep, of the wind `sea` of
-// sustained resolved winds and the swell of the upper wind: wave energy
-// responds to sustained resolved flow, not an instantaneous 256 m surface
-// gust. Compromise: McCowan's (1894) breaker limit, 0.78 of the depth, caps
-// it, a hard cap that a smooth saturation is to replace with the shore's
-// waves.
-fn significant_wave_height_m(sea: WindSea, upper_speed_m_s: f32, depth_m: f32) -> f32 {
-    let wind_sea_height_m = 4.0 * sqrt(sea.variance_m2);
-    // Swell from the upper wind stands in for swell travelling from distant storms.
-    let swell_height_m = 0.006 * upper_speed_m_s * upper_speed_m_s;
-    let unrestricted_height_m = length(vec2<f32>(wind_sea_height_m, swell_height_m));
-    return min(unrestricted_height_m, 0.78 * depth_m);
+// The wind sea's significant wave height over water `depth_m` deep, of the
+// sustained resolved winds: wave energy responds to sustained resolved flow,
+// not an instantaneous 256 m surface gust. Compromise: McCowan's (1894)
+// breaker limit, 0.78 of the depth, caps it, a hard cap that a smooth
+// saturation is to replace with the shore's waves.
+fn wind_sea_height_m(sea: WindSea, depth_m: f32) -> f32 {
+    return min(4.0 * sqrt(sea.variance_m2), 0.78 * depth_m);
+}
+
+// The background swell, as `background_swell` in crates/game/src/ocean.rs
+// gives it: its variance, peak wavenumber, and the direction it travels
+// toward, anticlockwise from east.
+struct BackgroundSwell {
+    variance_m2: f32,
+    peak_wavenumber_per_m: f32,
+    direction_rad: f32,
+};
+
+// `scene.ocean_swell_clock` holds the clock's part: the northern annual
+// cycle and the slow signals of height, period and direction; and
+// `scene.ocean_swell_knots` the climate's knots, interpolated as
+// `latitude_curve_value` interpolates, from uniforms rather than constant
+// arrays, which the shader would copy for every lookup.
+fn background_swell(position_m: vec2<f32>) -> BackgroundSwell {
+    let clock = scene.ocean_swell_clock;
+    let latitude = surface_latitude_degrees_at(position_m);
+    let knot_position = clamp(abs(latitude) / 10.0, 0.0, 9.0);
+    let lower = min(u32(floor(knot_position)), 8u);
+    let fraction = knot_position - f32(lower);
+    let amount = fraction * fraction * (3.0 - 2.0 * fraction);
+    // Height, its annual amplitude, period and its annual amplitude; then
+    // direction, the log spreads of height and period, and direction's spread.
+    let first = mix(
+        scene.ocean_swell_knots[2u * lower],
+        scene.ocean_swell_knots[2u * lower + 2u],
+        amount,
+    );
+    let second = mix(
+        scene.ocean_swell_knots[2u * lower + 1u],
+        scene.ocean_swell_knots[2u * lower + 3u],
+        amount,
+    );
+    let hemisphere = select(-1.0, 1.0, latitude >= 0.0);
+    let season = hemisphere * clock.x;
+    let height_m = first.x * sqrt(1.0 + first.y * season)
+        * exp(second.y * clock.y - second.y * second.y);
+    let period_s = (first.z + first.w * season)
+        * exp(second.z * clock.z - 0.5 * second.z * second.z);
+    let equatorward = -hemisphere * sign(surface_latitude_gradient_rad_per_m_at(position_m));
+    let local = radians(second.x);
+    let peak_frequency = TAU / period_s;
+    return BackgroundSwell(
+        height_m * height_m / 16.0,
+        peak_frequency * peak_frequency / 9.81,
+        atan2(equatorward * sin(local), cos(local)) + radians(second.w) * clock.w,
+    );
 }
 
 // The resolved wave modes at a position, with the forcing that sets them.
@@ -89,10 +125,11 @@ struct WaterWaveSample {
 // stir at the same point reuses rather than evaluating the winds again.
 var<private> sampled_wave_forcing: OceanForcingSample;
 
-// The waves `ocean_wave_state` in crates/game/src/ocean.rs gives, each mode
-// filtered by the pixel's footprint, exp(-(k fp)² / 2), and a band skipped
-// once its longest mode falls under about two pixels, k fp ≥ 3, where the
-// filter leaves 1%. Compromise: the mean squared slope leaves out Tayfun's
+// The drawn surface: the wind sea's waves, as `ocean_wave_state` in
+// crates/game/src/ocean.rs gives them without swell, each mode filtered by
+// the pixel's footprint, exp(-(k fp)² / 2), and a band skipped once its
+// longest mode falls under about two pixels, k fp ≥ 3, where the filter
+// leaves 1%. Compromise: the mean squared slope leaves out Tayfun's
 // steepening of crests, 1-2% of the modes' slope variance.
 fn physical_water_wave_sample_from_surface(
     position_m: vec2<f32>,
@@ -113,7 +150,7 @@ fn physical_water_wave_sample_from_surface(
     if material_feature_visibility().y <= 0.0 {
         return sample;
     }
-    let significant_height_m = forcing.significant_height_m;
+    let significant_height_m = wind_sea_height_m(forcing.sea, forcing.water_depth_m);
     sample.significant_height_m = significant_height_m;
     if significant_height_m <= 0.0 && !EVALUATE_ALL_BRANCHES {
         return sample;
@@ -123,12 +160,8 @@ fn physical_water_wave_sample_from_surface(
     }
 
     let surface_wind = forcing.surface_wind_m_s;
-    let upper_speed = length(forcing.upper_wind_m_s);
-    let upper_direction = forcing.upper_wind_m_s / max(upper_speed, 0.0001);
     let sea = forcing.sea;
-    let swell_height_m = 0.006 * upper_speed * upper_speed;
-    let depth_scale = significant_height_m
-        / max(length(vec2<f32>(4.0 * sqrt(sea.variance_m2), swell_height_m)), 1.0e-6);
+    let depth_scale = significant_height_m / max(4.0 * sqrt(sea.variance_m2), 1.0e-6);
     let relative_m = camera_relative_position_m(position_m);
     let footprint_m = visual_pixel_footprint_m;
 
@@ -217,27 +250,6 @@ fn physical_water_wave_sample_from_surface(
         * (linear_m * linear_m - quadrature_m * quadrature_m);
     gradient += mean_wavenumber * (linear_m * gradient - quadrature_m * quadrature_gradient);
 
-    var swell_weights: array<f32, OCEAN_SWELL_MODE_COUNT>;
-    var swell_weight_squares = 0.0;
-    for (var mode_index = 0u; mode_index < OCEAN_SWELL_MODE_COUNT; mode_index++) {
-        let mode = scene.ocean_swell_modes[mode_index];
-        let weight = 0.20 + pow(max(dot(mode.xy / mode.z, upper_direction), 0.0), 4.0);
-        swell_weights[mode_index] = weight;
-        swell_weight_squares += weight * weight;
-    }
-    let swell_scale = depth_scale * swell_height_m
-        / (4.0 * sqrt(0.5 * swell_weight_squares));
-    for (var mode_index = 0u; mode_index < OCEAN_SWELL_MODE_COUNT; mode_index++) {
-        let mode = scene.ocean_swell_modes[mode_index];
-        let filtered = mode.z * footprint_m;
-        let amplitude_m = swell_scale * swell_weights[mode_index]
-            * exp(-0.5 * filtered * filtered);
-        let phase = dot(mode.xy, relative_m) + mode.w;
-        displacement_m += amplitude_m * cos(phase);
-        gradient -= amplitude_m * sin(phase) * mode.xy;
-        sample.slope_covariance += 0.5 * amplitude_m * amplitude_m
-            * vec3<f32>(mode.xy * mode.xy, mode.x * mode.y);
-    }
     sample.displacement_m = displacement_m;
     sample.gradient = gradient;
     return sample;
@@ -309,6 +321,28 @@ fn wave_peak_wavelength_m(sea: WindSea) -> f32 {
     );
 }
 
+// The significant height over water `depth_m` deep of the wind sea and the
+// swell together. Compromise: their variances add, so where the two share
+// components, which the wave modes count once, this counts them twice; with
+// both from one direction at one period, Hs comes out up to √2 too high.
+fn combined_sea_height_m(sea: WindSea, swell: BackgroundSwell, depth_m: f32) -> f32 {
+    return min(4.0 * sqrt(sea.variance_m2 + swell.variance_m2), 0.78 * depth_m);
+}
+
+// The peak wavelength of the wind sea and the swell together: each one's
+// weighted by its variance, so it moves continuously from one to the other.
+// Compromise: as for the wind sea's, it is no shorter than the decorative
+// octaves reach.
+fn combined_peak_wavelength_m(sea: WindSea, swell: BackgroundSwell) -> f32 {
+    let variance = sea.variance_m2 + swell.variance_m2;
+    return max(
+        (sea.variance_m2 * TAU / sea.peak_wavenumber_per_m
+            + swell.variance_m2 * TAU / swell.peak_wavenumber_per_m)
+            / max(variance, 1.0e-20),
+        1.4142135 * DECORATIVE_WATER_WAVELENGTH_M,
+    );
+}
+
 // The period of waves of `wavelength_m` in deep water, √(2πλ/g).
 fn wave_period_s(wavelength_m: f32) -> f32 {
     return sqrt(TAU * wavelength_m / 9.81);
@@ -352,8 +386,8 @@ const WIND_CLIMATE_WEIBULL = vec2<f32>(1.7, 9.0);
 // sand, then fine sediment: the share of the wind climate's winds whose wind
 // sea moves each past its threshold orbital speed, at depths 2^(i/8 - 2) m,
 // from 0.25 to 256 m. Compromises: one climate stands for every place, as the
-// waves have no fetch; the upper wind's swell, which adds up to 0.03, is left
-// out; and the tide does not change the depth. Its test,
+// waves have no fetch; swell is left out, as if beds were sheltered from it;
+// and the tide does not change the depth. Its test,
 // `the_seabed_mobility_table_follows_the_wave_climate`, prints it afresh from
 // the functions above.
 const SEABED_MOBILITY = array<vec2<f32>, 81>(

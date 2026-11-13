@@ -1,7 +1,7 @@
 use game::{
-    OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, ocean_wave_state,
-    procedural_world_environment, procedural_world_environment_interpolated, wind_sea,
-    wind_sea_components,
+    OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, Swell, background_swell,
+    ocean_wave_state, procedural_world_environment, procedural_world_environment_interpolated,
+    swell_climate_knots, wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
@@ -163,7 +163,7 @@ fn wind_sea_gains_energy_in_strong_wind_and_is_depth_limited() {
     let mut maximum_orbital_speed = 0.0_f32;
     let mut maximum_surface_wind_speed = 0.0_f32;
     let mut maximum_pressure_wind_speed = 0.0_f32;
-    let mut maximum_upper_wind_speed = 0.0_f32;
+    let mut maximum_swell_height_m = 0.0_f64;
 
     for y_index in 0..32 {
         for x_index in 0..64 {
@@ -188,8 +188,8 @@ fn wind_sea_gains_energy_in_strong_wind_and_is_depth_limited() {
                 (sample.weather.wind_velocity_m_s - sample.weather.surface_gust_velocity_m_s)
                     .length(),
             );
-            maximum_upper_wind_speed =
-                maximum_upper_wind_speed.max(sample.weather.upper_wind_velocity_m_s.length());
+            maximum_swell_height_m = maximum_swell_height_m
+                .max(background_swell(world, SEED, TICK, 0.0, position_m).significant_height_m);
             maximum_height = maximum_height.max(sample.ocean.significant_wave_height_m);
             maximum_orbital_speed =
                 maximum_orbital_speed.max(sample.ocean.wave_orbital_velocity_m_s.length());
@@ -226,13 +226,13 @@ fn wind_sea_gains_energy_in_strong_wind_and_is_depth_limited() {
         "calm Hs {calm_mean}, windy Hs {windy_mean}"
     );
     // No sea outgrows the fully developed wind sea of the strongest resolved
-    // wind beside the strongest upper wind's swell, 0.006 U².
+    // wind beside the strongest swell.
     let ceiling_m = wind_sea(f64::from(maximum_pressure_wind_speed))
         .significant_height_m()
-        .hypot(0.006 * f64::from(maximum_upper_wind_speed).powi(2));
+        .hypot(maximum_swell_height_m);
     assert!(
         maximum_height > 3.0 && f64::from(maximum_height) <= 1.01 * ceiling_m,
-        "maximum significant wave height {maximum_height} m under resolved wind {maximum_pressure_wind_speed} m/s, gusty wind {maximum_surface_wind_speed} m/s and upper wind {maximum_upper_wind_speed} m/s, ceiling {ceiling_m} m",
+        "maximum significant wave height {maximum_height} m under resolved wind {maximum_pressure_wind_speed} m/s, gusty wind {maximum_surface_wind_speed} m/s and swell {maximum_swell_height_m} m, ceiling {ceiling_m} m",
     );
     // This is a numerical smoke ceiling, not a tuned orbital-speed target.
     assert!(maximum_orbital_speed < 12.0);
@@ -290,7 +290,7 @@ fn wave_motion_has_no_persistent_drift_and_constructively_interferes() {
     // serves every sample.
     let storm = OceanWaveForcing {
         surface_wind_velocity_m_s: Vector::new(14.0, 11.0),
-        upper_wind_velocity_m_s: Vector::ZERO,
+        swell: Swell::NONE,
         water_depth_m: 10_000.0,
     };
     for time_index in 0..32 {
@@ -369,7 +369,7 @@ const GAMEPLAY_WINDOW: [f64; 2] = [0.36, 3.0];
 fn deep_forcing(wind_m_s: Vector) -> OceanWaveForcing {
     OceanWaveForcing {
         surface_wind_velocity_m_s: wind_m_s,
-        upper_wind_velocity_m_s: Vector::ZERO,
+        swell: Swell::NONE,
         water_depth_m: 10_000.0,
     }
 }
@@ -653,6 +653,427 @@ fn a_uniform_wind_raises_waves_that_travel_downwind() {
         assert!(
             travel < 0.0,
             "wind at {angle} rad: the surface changes as waves travelling upwind change it, {travel}"
+        );
+    }
+}
+
+/// A swell of significant height `height_m` peaking at `period_s` and
+/// travelling toward `direction_rad`.
+fn swell(height_m: f64, period_s: f64, direction_rad: f64) -> Swell {
+    let peak_frequency = std::f64::consts::TAU / period_s;
+    Swell {
+        significant_height_m: height_m,
+        peak_wavenumber_per_m: peak_frequency * peak_frequency / GRAVITY_M_S2,
+        direction_rad,
+    }
+}
+
+/// The wave modes hold the swell between 0.7 and 2.1 times its peak
+/// wavenumber.
+const SWELL_WINDOW: [f64; 2] = [0.7, 2.1];
+
+/// Ochi and Hubble's (1976, Proc. 15th ICCE, ch. 18) swell spectrum of
+/// significant height `height_m` and modal frequency `peak_frequency`, of
+/// their most probable shape λ = 3, per unit angular frequency:
+/// Hs²/4 ((4λ+1)/4 ω_m⁴)^λ / Γ(λ) ω^-(4λ+1) exp(-(4λ+1)/4 (ω_m/ω)⁴).
+fn ochi_hubble_swell_density(frequency: f64, height_m: f64, peak_frequency: f64) -> f64 {
+    let shape = 3.0;
+    let scale = (4.0 * shape + 1.0) / 4.0;
+    0.25 * height_m * height_m * (scale * peak_frequency.powi(4)).powf(shape) / 2.0
+        * frequency.powf(-(4.0 * shape + 1.0))
+        * (-scale * (peak_frequency / frequency).powi(4)).exp()
+}
+
+/// The swell's variance between deep-water wavenumbers `lower` and `upper`,
+/// by Simpson's rule over angular frequency.
+fn swell_variance(lower: f64, upper: f64, swell: Swell) -> f64 {
+    let peak_frequency = (GRAVITY_M_S2 * swell.peak_wavenumber_per_m).sqrt();
+    let (from, to) = ((GRAVITY_M_S2 * lower).sqrt(), (GRAVITY_M_S2 * upper).sqrt());
+    let steps = 2_000;
+    let step = (to - from) / steps as f64;
+    (0..=steps)
+        .map(|index| {
+            let weight = if index == 0 || index == steps {
+                1.0
+            } else if index % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            weight
+                * ochi_hubble_swell_density(
+                    from + index as f64 * step,
+                    swell.significant_height_m,
+                    peak_frequency,
+                )
+        })
+        .sum::<f64>()
+        * step
+        / 3.0
+}
+
+/// The mean square of the surface's height and the mean of its height times
+/// its orbital velocity, over points spread across the world and the clock,
+/// under `forcing`, on `seed`.
+fn surface_statistics(seed: u64, forcing: OceanWaveForcing) -> (f64, Vector) {
+    let (mut squares, mut flux) = (0.0, [0.0_f64; 2]);
+    let count = 32_768_u32;
+    for index in 0..count {
+        let fraction = |step: f64| (f64::from(index) * step).fract() as f32;
+        let position_m = Vector::new(
+            (fraction(0.618_033_988_75) - 0.5) * geometry().width_m() as f32,
+            (fraction(0.754_877_666_25) - 0.5) * geometry().height_m() as f32,
+        );
+        let state = ocean_wave_state(
+            geometry(),
+            seed,
+            TICK + u64::from(index / 256) * 7_919,
+            0.0,
+            position_m,
+            forcing,
+        );
+        let height_m = f64::from(state.surface_displacement_m);
+        squares += height_m * height_m;
+        flux[0] += height_m * f64::from(state.wave_orbital_velocity_m_s.x);
+        flux[1] += height_m * f64::from(state.wave_orbital_velocity_m_s.y);
+    }
+    (
+        squares / f64::from(count),
+        Vector::new(flux[0] as f32, flux[1] as f32),
+    )
+}
+
+/// Where the wind is still, the sea is the swell's: its significant height,
+/// the variance its spectrum holds in the wave modes' window on every seed,
+/// and its energy carried within 5° of its direction.
+#[test]
+fn a_still_wind_leaves_the_swell_alone() {
+    let swell = swell(2.0, 12.0, 0.7);
+    let forcing = OceanWaveForcing {
+        surface_wind_velocity_m_s: Vector::ZERO,
+        swell,
+        water_depth_m: 10_000.0,
+    };
+    let state = ocean_wave_state(
+        geometry(),
+        SEED,
+        TICK,
+        0.0,
+        Vector::new(1_234.0, -5_678.0),
+        forcing,
+    );
+    assert!(
+        (f64::from(state.significant_wave_height_m) / swell.significant_height_m - 1.0).abs()
+            < 1.0e-4,
+        "Hs {} m under a still wind, swell {} m",
+        state.significant_wave_height_m,
+        swell.significant_height_m
+    );
+    let expected = swell_variance(
+        SWELL_WINDOW[0] * swell.peak_wavenumber_per_m,
+        SWELL_WINDOW[1] * swell.peak_wavenumber_per_m,
+        swell,
+    );
+    for seed in SEED..SEED + 6 {
+        let (variance, flux) = surface_statistics(seed, forcing);
+        assert!(
+            (variance / expected - 1.0).abs() < 0.03,
+            "seed {seed}: variance {variance} m², swell's window {expected} m²"
+        );
+        let direction = Vector::new(
+            swell.direction_rad.cos() as f32,
+            swell.direction_rad.sin() as f32,
+        );
+        let degrees = flux.angle_to(direction).to_degrees().abs();
+        assert!(
+            degrees < 5.0,
+            "seed {seed}: energy {degrees}° from the swell"
+        );
+    }
+}
+
+/// Each wave component takes the larger of the wind sea's and the swell's
+/// spectra, so neither is counted twice: a weak swell along a strong wind,
+/// which lies under the wind sea in every component the two share, leaves
+/// the wind sea's surface; and a long swell against a moderate wind, which
+/// shares none, adds its variance and its height in quadrature.
+#[test]
+fn each_component_takes_the_larger_of_wind_sea_and_swell() {
+    let wind_m_s = Vector::new(15.0, 0.0);
+    let under = OceanWaveForcing {
+        surface_wind_velocity_m_s: wind_m_s,
+        swell: swell(0.5, 11.7, 0.0),
+        water_depth_m: 10_000.0,
+    };
+    let wind_height_m = wind_sea(15.0).significant_height_m();
+    for index in 0..512_u32 {
+        let position_m = Vector::new(index as f32 * 97.3 - 20_000.0, index as f32 * 31.1);
+        let tick = TICK + u64::from(index) * 13;
+        let with = ocean_wave_state(geometry(), SEED, tick, 0.0, position_m, under);
+        let without = ocean_wave_state(
+            geometry(),
+            SEED,
+            tick,
+            0.0,
+            position_m,
+            deep_forcing(wind_m_s),
+        );
+        assert!(
+            (with.surface_displacement_m - without.surface_displacement_m).abs() < 1.0e-5
+                && (with.surface_slope - without.surface_slope).length() < 1.0e-6,
+            "at {position_m:?}: {with:?} with the swell, {without:?} without"
+        );
+        assert!(
+            (f64::from(with.significant_wave_height_m) / wind_height_m - 1.0).abs() < 2.0e-3,
+            "Hs {} m beside the wind sea's {wind_height_m} m",
+            with.significant_wave_height_m
+        );
+    }
+
+    let wind_m_s = 8.0_f32;
+    let against = OceanWaveForcing {
+        surface_wind_velocity_m_s: Vector::new(wind_m_s, 0.0),
+        swell: swell(2.0, 13.0, std::f64::consts::PI),
+        water_depth_m: 10_000.0,
+    };
+    let peak_wavenumber = wind_sea(f64::from(wind_m_s)).peak_wavenumber_per_m;
+    let expected = spectral_variance(
+        GAMEPLAY_WINDOW[0] * peak_wavenumber,
+        GAMEPLAY_WINDOW[1] * peak_wavenumber,
+        peak_wavenumber,
+    ) + swell_variance(
+        SWELL_WINDOW[0] * against.swell.peak_wavenumber_per_m,
+        SWELL_WINDOW[1] * against.swell.peak_wavenumber_per_m,
+        against.swell,
+    );
+    let (variance, _) = surface_statistics(SEED, against);
+    assert!(
+        (variance / expected - 1.0).abs() < 0.03,
+        "variance {variance} m², wind sea's and swell's windows {expected} m²"
+    );
+    let state = ocean_wave_state(geometry(), SEED, TICK, 0.0, Vector::ZERO, against);
+    let expected_height_m = wind_sea(f64::from(wind_m_s))
+        .significant_height_m()
+        .hypot(against.swell.significant_height_m);
+    assert!(
+        (f64::from(state.significant_wave_height_m) / expected_height_m - 1.0).abs() < 1.0e-4,
+        "Hs {} m, expected {expected_height_m} m",
+        state.significant_wave_height_m
+    );
+}
+
+/// The breaker limit, 0.78 of the depth, caps the sea's height counting the
+/// components wind sea and swell share once: a swell along the wind at its
+/// peak period over water deep enough for that height, though not for the
+/// two seas' heights in quadrature, keeps its deep-water surface.
+#[test]
+fn the_breaker_limit_caps_the_height_shared_components_count_once_in() {
+    let wind_m_s = 10.0_f32;
+    let sea = wind_sea(f64::from(wind_m_s));
+    let peak_period_s = std::f64::consts::TAU / (GRAVITY_M_S2 * sea.peak_wavenumber_per_m).sqrt();
+    let aligned = |water_depth_m: f32| OceanWaveForcing {
+        surface_wind_velocity_m_s: Vector::new(wind_m_s, 0.0),
+        swell: swell(sea.significant_height_m(), peak_period_s, 0.0),
+        water_depth_m,
+    };
+    let deep = ocean_wave_state(geometry(), SEED, TICK, 0.0, Vector::ZERO, aligned(10_000.0));
+    let deep_height_m = f64::from(deep.significant_wave_height_m);
+    let quadrature_height_m = sea.significant_height_m() * std::f64::consts::SQRT_2;
+    assert!(
+        quadrature_height_m > 1.1 * deep_height_m,
+        "shared components bring Hs {deep_height_m} m only a little under {quadrature_height_m} m"
+    );
+    let depth_m = 1.05 * deep_height_m / 0.78;
+    let shallow = ocean_wave_state(
+        geometry(),
+        SEED,
+        TICK,
+        0.0,
+        Vector::ZERO,
+        aligned(depth_m as f32),
+    );
+    assert!(
+        (f64::from(shallow.significant_wave_height_m) / deep_height_m - 1.0).abs() < 1.0e-4
+            && (shallow.surface_displacement_m - deep.surface_displacement_m).abs() < 1.0e-5,
+        "over {depth_m} m: Hs {} m, height {} m; deep: Hs {deep_height_m} m, height {} m",
+        shallow.significant_wave_height_m,
+        shallow.surface_displacement_m,
+        deep.surface_displacement_m
+    );
+}
+
+/// The world position at `latitude_degrees` on the default world.
+fn at_latitude(latitude_degrees: f32) -> Vector {
+    Vector::new(
+        3_000.0,
+        latitude_degrees / 180.0 * WorldGeometry::default().height_m() as f32,
+    )
+}
+
+/// The background swell holds the swell climate of NOAA's operational
+/// WAVEWATCH III over 2018-2024, pooled by absolute latitude: over a year,
+/// the mean of its height's square is the climate's at 10°, 30° and 50°, and
+/// its mean peak period the climate's, in either hemisphere; its local
+/// winter is rougher than its summer; and it repeats for a seed and differs
+/// between seeds.
+#[test]
+fn the_background_swell_holds_the_swell_climate() {
+    let world = WorldGeometry::default();
+    let ticks_per_year = 365 * 86_400 * simulation::TICKS_PER_SECOND;
+    let knots = swell_climate_knots();
+    for latitude in [10.0_f32, 30.0, 50.0] {
+        let climate = knots[2 * (latitude / 10.0) as usize];
+        let (height_m, period_s) = (f64::from(climate[0]), f64::from(climate[2]));
+        for hemisphere in [1.0, -1.0] {
+            let position_m = at_latitude(hemisphere * latitude);
+            let (mut squares, mut periods, mut count) = (0.0, 0.0, 0.0);
+            for seed in 0..16 {
+                for step in 0..1_000_u64 {
+                    let swell = background_swell(
+                        world,
+                        seed,
+                        step * ticks_per_year / 1_000,
+                        0.0,
+                        position_m,
+                    );
+                    squares += swell.significant_height_m.powi(2);
+                    periods +=
+                        std::f64::consts::TAU / (GRAVITY_M_S2 * swell.peak_wavenumber_per_m).sqrt();
+                    count += 1.0;
+                }
+            }
+            let rms_m = (squares / count).sqrt();
+            let mean_period_s = periods / count;
+            assert!(
+                (rms_m / height_m - 1.0).abs() < 0.05,
+                "latitude {}: rms Hs {rms_m} m, climate {height_m} m",
+                hemisphere * latitude
+            );
+            assert!(
+                (mean_period_s / period_s - 1.0).abs() < 0.03,
+                "latitude {}: mean Tp {mean_period_s} s, climate {period_s} s",
+                hemisphere * latitude
+            );
+        }
+    }
+    // Winters at 50°: northern ones around January, southern around July.
+    let quarter_mean_square = |latitude: f32, start_day: u64| {
+        let mut squares = 0.0;
+        for seed in 0..16 {
+            for day in 0..90 {
+                let tick = (start_day + day) * 86_400 * simulation::TICKS_PER_SECOND;
+                squares += background_swell(world, seed, tick, 0.0, at_latitude(latitude))
+                    .significant_height_m
+                    .powi(2);
+            }
+        }
+        squares
+    };
+    for (latitude, winter, summer) in [(50.0, 0, 182), (-50.0, 182, 0)] {
+        assert!(
+            quarter_mean_square(latitude, winter) > 1.3 * quarter_mean_square(latitude, summer),
+            "latitude {latitude}: winter no rougher than summer"
+        );
+    }
+    let sample = |seed| background_swell(world, seed, TICK, 0.25, at_latitude(40.0));
+    assert_eq!(sample(SEED), sample(SEED));
+    assert_ne!(sample(SEED), sample(SEED + 1));
+}
+
+/// The largest change in a still sea's surface between neighbouring points
+/// of a meridional sweep across `centre_y_m`, `count` steps of `step_m`
+/// either side.
+fn largest_swell_step(centre_y_m: f32, step_m: f32, count: i32) -> (f32, f32) {
+    let world = WorldGeometry::default();
+    let (mut height_step, mut slope_step) = (0.0_f32, 0.0_f32);
+    let mut previous: Option<(f32, Vector)> = None;
+    for index in -count..=count {
+        let position_m = Vector::new(-7_100.0, centre_y_m + index as f32 * step_m);
+        let forcing = OceanWaveForcing {
+            surface_wind_velocity_m_s: Vector::ZERO,
+            swell: background_swell(world, SEED, TICK, 0.0, position_m),
+            water_depth_m: 10_000.0,
+        };
+        let state = ocean_wave_state(world, SEED, TICK, 0.0, position_m, forcing);
+        if let Some((height, slope)) = previous {
+            height_step = height_step.max((state.surface_displacement_m - height).abs());
+            slope_step = slope_step.max((state.surface_slope - slope).length());
+        }
+        previous = Some((state.surface_displacement_m, state.surface_slope));
+    }
+    (height_step, slope_step)
+}
+
+/// The largest root-mean-square change of a still wind's sea of a 2 m swell
+/// over 64 points between neighbouring peak periods `step_s` apart, over
+/// `count` steps either side of `centre_s`.
+fn largest_swell_period_step(centre_s: f64, step_s: f64, count: i32) -> f64 {
+    let world = geometry();
+    let surface = |period_s: f64| -> Vec<f32> {
+        (0..64_u32)
+            .map(|index| {
+                let position_m = Vector::new(
+                    index as f32 * 1_213.7 - 39_000.0,
+                    index as f32 * 571.3 - 18_000.0,
+                );
+                let forcing = OceanWaveForcing {
+                    surface_wind_velocity_m_s: Vector::ZERO,
+                    swell: swell(2.0, period_s, 0.3),
+                    water_depth_m: 10_000.0,
+                };
+                ocean_wave_state(world, SEED, TICK, 0.0, position_m, forcing).surface_displacement_m
+            })
+            .collect()
+    };
+    let mut largest = 0.0_f64;
+    let mut previous = surface(centre_s - f64::from(count) * step_s);
+    for index in -count + 1..=count {
+        let next = surface(centre_s + f64::from(index) * step_s);
+        let mean_square = previous
+            .iter()
+            .zip(&next)
+            .map(|(before, after)| f64::from(after - before).powi(2))
+            .sum::<f64>()
+            / previous.len() as f64;
+        largest = largest.max(mean_square.sqrt());
+        previous = next;
+    }
+    largest
+}
+
+/// The swell's surface changes continuously with its period where its
+/// window's lower edge crosses a band edge, near 10.71 s: refining a sweep's
+/// step 64-fold cuts the largest change between neighbouring periods at
+/// least fourfold, where a band entering or leaving with variance would keep
+/// it, about 6 cm for 1.3% of a 2 m swell's variance. A band entering empty
+/// grows as the square root of its width, so the change shrinks only as the
+/// step's square root.
+#[test]
+fn the_swell_is_continuous_in_its_period_across_band_edges() {
+    let coarse = largest_swell_period_step(10.71, 0.005, 8);
+    let fine = largest_swell_period_step(10.71, 0.000_078_125, 512);
+    assert!(coarse > 0.0, "no swell");
+    assert!(
+        fine <= 0.25 * coarse,
+        "rms steps {coarse} m, then {fine} m at a 64th of the step"
+    );
+}
+
+/// The swell changes continuously through the equator, where the
+/// hemispheres' seasons and directions meet, and through a pole, across
+/// which the world mirrors: refining a sweep's step eightfold cuts the
+/// largest change between neighbouring points at least fourfold, where a
+/// step in the surface would keep it.
+#[test]
+fn the_background_swell_is_continuous_through_the_equator_and_the_poles() {
+    let pole_y_m = 0.5 * WorldGeometry::default().height_m() as f32;
+    for centre_y_m in [0.0, pole_y_m] {
+        let coarse = largest_swell_step(centre_y_m, 0.4, 16);
+        let fine = largest_swell_step(centre_y_m, 0.05, 128);
+        assert!(coarse.0 > 0.0, "no swell at y {centre_y_m} m");
+        assert!(
+            fine.0 <= 0.25 * coarse.0 && fine.1 <= 0.25 * coarse.1,
+            "at y {centre_y_m} m: steps {coarse:?}, then {fine:?} at an eighth of the step"
         );
     }
 }

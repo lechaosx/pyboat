@@ -6,9 +6,10 @@ use std::{
 };
 
 use game::{
-    broad_landform_elevation_m, celestial_disc_visibility_at_height, celestial_lighting,
-    celestial_lighting_at_height, procedural_solid_surface_elevation_m,
-    procedural_terrain_elevation_m, procedural_water_depth_m, procedural_world_environment,
+    OceanState, OceanWaveForcing, Swell, background_swell, broad_landform_elevation_m,
+    celestial_disc_visibility_at_height, celestial_lighting, celestial_lighting_at_height,
+    ocean_wave_state, procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
+    procedural_water_depth_m, procedural_world_environment,
     procedural_world_environment_interpolated, world_celestial_conditions,
 };
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -589,26 +590,42 @@ fn rendered_wave_surfaces(
         .collect()
 }
 
-/// The renderer draws the authoritative sea: at deep open-water points in
-/// a calm, a moderate sea and the two stormiest seas a survey finds, at a
-/// whole and a fractional clock, at least 150 of the 384 points, its height
-/// agrees with Rust's within 2 mm plus 0.05% of the significant height, and
-/// its slope within 0.001, under 1% of a fully developed sea's steepness,
-/// 2π Hs / λ_p = 0.16.
+/// The authoritative surface the renderer draws at a clock: the wind sea of
+/// the environment's resolved wind over its depth, without the swell, with
+/// the environment sample that sets it.
+fn drawn_surface(
+    world: WorldGeometry,
+    time_s: f64,
+    position_m: Vector,
+) -> (game::WorldEnvironment, OceanState) {
+    let tick_position = time_s * TICKS_PER_SECOND as f64;
+    let tick = tick_position.floor() as u64;
+    let fraction = (tick_position - tick as f64) as f32;
+    let sample = procedural_world_environment_interpolated(world, SEED, tick, fraction, position_m);
+    let forcing = OceanWaveForcing {
+        surface_wind_velocity_m_s: sample.weather.wind_velocity_m_s
+            - sample.weather.surface_gust_velocity_m_s,
+        swell: Swell::NONE,
+        water_depth_m: sample.environment.water_depth_m as f32,
+    };
+    (
+        sample,
+        ocean_wave_state(world, SEED, tick, fraction, position_m, forcing),
+    )
+}
+
+/// The renderer draws the authoritative wind sea, leaving the swell out: at
+/// deep open-water points in a calm, a moderate sea and the two stormiest
+/// seas a survey finds, at a whole and a fractional clock, at least 150 of
+/// the 384 points, its height agrees with Rust's within 2 mm plus 0.05% of
+/// the significant height, and its slope within 0.001, under 1% of a fully
+/// developed sea's steepness, 2π Hs / λ_p = 0.16.
 #[test]
 fn rendered_waves_match_authoritative_rust() {
     let world = WorldGeometry::default();
     let deep = |time_s: f64, position_m: Vector| {
-        let tick_position = time_s * TICKS_PER_SECOND as f64;
-        let tick = tick_position.floor() as u64;
-        let sample = procedural_world_environment_interpolated(
-            world,
-            SEED,
-            tick,
-            (tick_position - tick as f64) as f32,
-            position_m,
-        );
-        (sample.environment.water_depth_m >= 100.0).then_some(sample)
+        let (sample, drawn) = drawn_surface(world, time_s, position_m);
+        (sample.environment.water_depth_m >= 100.0).then_some(drawn)
     };
     let mut compared = 0;
     for time_s in [0.0, 4_321.37] {
@@ -620,8 +637,7 @@ fn rendered_waves_match_authoritative_rust() {
                 )
             })
             .filter_map(|position_m| {
-                deep(time_s, position_m)
-                    .map(|sample| (sample.ocean.significant_wave_height_m, position_m))
+                deep(time_s, position_m).map(|drawn| (drawn.significant_wave_height_m, position_m))
             })
             .collect();
         seas.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -637,26 +653,81 @@ fn rendered_waves_match_authoritative_rust() {
             for (position_m, (height, slope)) in
                 wave_surface_points(camera_m, 48).into_iter().zip(rendered)
             {
-                let Some(sample) = deep(time_s, position_m) else {
+                let Some(drawn) = deep(time_s, position_m) else {
                     continue;
                 };
-                let height_m = sample.ocean.significant_wave_height_m;
-                let height_error = (height - sample.ocean.surface_displacement_m).abs();
+                let height_m = drawn.significant_wave_height_m;
+                let height_error = (height - drawn.surface_displacement_m).abs();
                 assert!(
                     height_error <= 0.002 + 0.0005 * height_m,
                     "height at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {height} m, Rust {} m",
-                    sample.ocean.surface_displacement_m,
+                    drawn.surface_displacement_m,
                 );
                 assert!(
-                    (slope - sample.ocean.surface_slope).length() <= 0.001,
+                    (slope - drawn.surface_slope).length() <= 0.001,
                     "slope at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {slope:?}, Rust {:?}",
-                    sample.ocean.surface_slope,
+                    drawn.surface_slope,
                 );
                 compared += 1;
             }
         }
     }
     assert!(compared >= 150, "only {compared} deep points compared");
+}
+
+/// The swell the renderer's consumers read, run-up and the lab maps, is the
+/// authoritative background swell: at points across latitudes from pole to
+/// pole, at a whole and a fractional clock, its significant height and peak
+/// period agree with Rust's within 0.1% and its direction within 0.002 rad.
+#[test]
+fn rendered_background_swell_matches_authoritative_rust() {
+    let world = WorldGeometry::default();
+    let mut compared = 0;
+    for time_s in [37.0, 561_600.25] {
+        let tick_position = time_s * TICKS_PER_SECOND as f64;
+        let tick = tick_position.floor() as u64;
+        let fraction = (tick_position - tick as f64) as f32;
+        for latitude in [-85.0_f32, -50.0, -20.0, -0.4, 0.3, 15.0, 45.0, 75.0] {
+            let camera_m = Vector::new(-9_000.0, latitude / 180.0 * world.height_m() as f32);
+            let pixels = render_diagnostic_image_with_view_at(
+                world,
+                camera_m,
+                time_s,
+                0.001,
+                "lighting_background_swell",
+                4 * 8,
+                1,
+            );
+            let values: Vec<f64> = pixels
+                .chunks(4)
+                .map(|pixel| f64::from(pixel[0]) * 256.0 + f64::from(pixel[1]))
+                .collect();
+            for (position_m, point) in wave_surface_points(camera_m, 8)
+                .into_iter()
+                .zip(values.chunks(4))
+            {
+                let swell = background_swell(world, SEED, tick, fraction, position_m);
+                let period_s = std::f64::consts::TAU / (9.81 * swell.peak_wavenumber_per_m).sqrt();
+                let height_m = point[0] / 1000.0;
+                let rendered_period_s = point[1] / 1000.0;
+                let rendered_direction =
+                    ((point[3] - 32_768.0) / 1.0e4).atan2((point[2] - 32_768.0) / 1.0e4);
+                let direction_error = (rendered_direction - swell.direction_rad)
+                    .sin()
+                    .atan2((rendered_direction - swell.direction_rad).cos())
+                    .abs();
+                assert!(
+                    (height_m - swell.significant_height_m).abs()
+                        <= 0.001 + 0.001 * swell.significant_height_m
+                        && (rendered_period_s - period_s).abs() <= 0.001 + 0.001 * period_s
+                        && direction_error <= 0.002,
+                    "at {position_m:?}, {time_s} s: rendered Hs {height_m} m, Tp {rendered_period_s} s, direction {rendered_direction} rad; Rust {swell:?}, Tp {period_s} s",
+                );
+                compared += 1;
+            }
+        }
+    }
+    assert_eq!(compared, 128);
 }
 
 #[test]

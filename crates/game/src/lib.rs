@@ -5,10 +5,10 @@ mod ocean;
 
 use ocean::procedural_wave_state;
 pub use ocean::{
-    OCEAN_SWELL_MODE_COUNT, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_BANDS_PER_OCTAVE,
-    OCEAN_WAVE_DIRECTIONS, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable,
-    WaveComponent, WindSea, ocean_swell_modes, ocean_wave_state, ocean_wave_table, wind_sea,
-    wind_sea_components,
+    OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_DIRECTIONS,
+    OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable, Swell, SwellClock,
+    WaveComponent, WindSea, background_swell, ocean_wave_state, ocean_wave_table,
+    swell_climate_knots, wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
 use physics::prelude::Vector as PhysicsVector;
