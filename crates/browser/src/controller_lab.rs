@@ -146,7 +146,7 @@ impl LabController {
                 learning::predictive_targets(&observation, &mut self.predictive)
             }
             LabControllerKind::Learned => learning::learned_targets(&observation),
-            LabControllerKind::Physical => physical_targets(&observation),
+            LabControllerKind::Physical => physical_rudder_targets(&observation),
             LabControllerKind::Current => unreachable!(),
         };
         targets.sheet_target_angle_rad = targets.sheet_target_angle_rad.clamp(
@@ -376,7 +376,29 @@ pub(super) fn joint_targets(observation: &LabObservation, moment: f64) -> Surfac
 }
 
 pub(super) fn physical_targets(observation: &LabObservation) -> SurfaceTargets {
+    // The learned weights are calibrated against this joint policy.
     joint_targets(observation, requested_total_moment(observation))
+}
+
+fn physical_rudder_targets(observation: &LabObservation) -> SurfaceTargets {
+    let mut targets = yaw_rate_move_control(
+        &observation.input,
+        observation.intent,
+        observation.maximum_yaw_rate_rad_s,
+    );
+    let sail = legacy_sail_effect(observation, observation.intent.forward.clamp(-1.0, 1.0));
+    // Penalizing sail displacement from its loaded angle can prevent useful trim indefinitely.
+    // The rudder's energy-dimensioned preference is not measured hand work or physical resistance.
+    const TRADEOFF_SECONDS: f64 = 0.25;
+    targets.rudder_target_angle_rad = allocate_moment(
+        &observation.input,
+        observation.motion.rudder_angle_rad,
+        requested_total_moment(observation) - sail.yaw_moment_n_m,
+        observation.locked_inertia_kg_m2,
+        observation.rudder_hinge_inertia_kg_m2,
+        TRADEOFF_SECONDS,
+    );
+    targets
 }
 
 fn classical_targets(observation: &LabObservation, state: &mut ClassicalState) -> SurfaceTargets {
@@ -410,7 +432,6 @@ fn classical_targets(observation: &LabObservation, state: &mut ClassicalState) -
     targets
 }
 
-#[cfg(test)]
 fn allocate_moment(
     input: &ControlInput,
     actual_angle: f64,

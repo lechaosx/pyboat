@@ -85,7 +85,7 @@ fn switching_and_resetting_controller_never_changes_physical_state() {
 }
 
 #[test]
-fn joint_policies_leave_surfaces_at_their_actual_angles_without_fluid_authority() {
+fn allocation_holds_the_rudder_without_fluid_authority() {
     let mut parameters = dinghy_parameters();
     parameters.air_density_kg_m3 = 0.0;
     parameters.water_density_kg_m3 = 0.0;
@@ -104,7 +104,30 @@ fn joint_policies_leave_surfaces_at_their_actual_angles_without_fluid_authority(
             },
         );
         assert!((targets.rudder_target_angle_rad - motion().rudder_angle_rad).abs() < 1e-14);
-        assert!((targets.sail_target_angle_rad.unwrap() - motion().sail_angle_rad).abs() < 1e-14);
+        if kind == LabControllerKind::Classical {
+            assert!(
+                (targets.sail_target_angle_rad.unwrap() - motion().sail_angle_rad).abs() < 1e-14
+            );
+        } else {
+            let reference = LabController::new(LabControllerKind::Current).targets(
+                &sim,
+                boat,
+                parameters,
+                Environment::default(),
+                MotionIntent {
+                    forward: 1.0,
+                    turn: 1.0,
+                },
+            );
+            assert_eq!(
+                targets.sail_target_angle_rad,
+                reference.sail_target_angle_rad
+            );
+            assert_eq!(
+                targets.sheet_target_angle_rad,
+                reference.sheet_target_angle_rad
+            );
+        }
     }
 }
 
@@ -182,6 +205,59 @@ fn restored_controller_memory_replays_identical_real_fixed_ticks() {
             first.advance_controlled_with_environments(&[environment], &[Some(a)]);
             second.advance_controlled_with_environments(&[environment], &[Some(b)]);
             assert_eq!(first.motion(0), second.motion(0));
+        }
+    }
+}
+
+#[test]
+fn physical_allocation_preserves_current_sail_policy_across_fractional_inputs() {
+    let parameters = dinghy_parameters();
+    for wind in [
+        Vector::new(0.0, 6.0),
+        Vector::new(-6.0, 0.0),
+        Vector::new(6.0, 0.0),
+        Vector::new(6.0, 0.3),
+        Vector::new(6.0, -0.3),
+    ] {
+        let environment = Environment {
+            true_wind_velocity_m_s: wind,
+            ..Environment::default()
+        };
+        for angle in [-0.7, 0.0, 1.2] {
+            for sail_side in [-1.0, 1.0] {
+                let mut sim = SharedSimulation::new();
+                let mut state = motion();
+                state.angle_rad = angle;
+                state.sail_angle_rad *= sail_side;
+                let boat = sim.add_boat(parameters, state);
+                for forward in [-1.0, -0.5, -1e-6, 0.0, 0.1, 0.5, 1.0] {
+                    for turn in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+                        let intent = MotionIntent { forward, turn };
+                        let reference = LabController::new(LabControllerKind::Current).targets(
+                            &sim,
+                            boat,
+                            parameters,
+                            environment,
+                            intent,
+                        );
+                        let allocated = LabController::new(LabControllerKind::Physical).targets(
+                            &sim,
+                            boat,
+                            parameters,
+                            environment,
+                            intent,
+                        );
+                        assert_eq!(
+                            allocated.sheet_target_angle_rad,
+                            reference.sheet_target_angle_rad
+                        );
+                        assert_eq!(
+                            allocated.sail_target_angle_rad,
+                            reference.sail_target_angle_rad
+                        );
+                    }
+                }
+            }
         }
     }
 }
