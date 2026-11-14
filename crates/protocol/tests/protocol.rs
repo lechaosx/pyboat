@@ -161,6 +161,14 @@ fn protocol_rejects_an_unsupported_version() {
 }
 
 #[test]
+fn rejects_protocol_14_before_decoding_its_incompatible_snapshot() {
+    assert_eq!(
+        decode_server_message(&[14, 1, 7, 0, 0]),
+        Err(ProtocolError::UnsupportedVersion(14))
+    );
+}
+
+#[test]
 fn snapshot_preserves_sub_float_motion_precision() {
     let expected = [
         4_100.000_001_f64,
