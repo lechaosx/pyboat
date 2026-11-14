@@ -66,6 +66,7 @@ scale, a frame-rate cap, and automatic resolution.
 | --- | --- |
 | `W` / `S`, `A` / `D` | Forward / reverse power, turn |
 | Gamepad left stick | World-relative movement |
+| Touch / left mouse drag | World-relative movement; floating wheel shows rudder position |
 | Mouse wheel / middle mouse | Zoom / reset zoom |
 
 The HUD reports sailing and under-keel conditions. Destroyed boats remain as

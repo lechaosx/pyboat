@@ -2634,6 +2634,10 @@ impl BrowserGame {
             .unwrap_or(0.0)
     }
 
+    pub fn rudder_angle_rad(&self) -> f64 {
+        self.client.borrow().rudder_angle_rad().unwrap_or(0.0)
+    }
+
     pub fn apparent_wind_speed_m_s(&self) -> f32 {
         self.client
             .borrow()

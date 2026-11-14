@@ -162,9 +162,14 @@ See [README.md](README.md) for what is playable now and
   water.
 - **[Explicit]** The player chooses maneuvers; the controller executes present
   forward and turn intent.
-- **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
-  movement is boat-relative; the first gamepad's left stick is world-relative
-  with no added software deadzone.
+- **[Explicit]** Keyboard, gamepad, touch, and mouse controls remain usable
+  together.
+- **[Explicit]** Keyboard movement is boat-relative; the first gamepad's left
+  stick is world-relative with no added software deadzone.
+- **[Explicit]** Touch or primary mouse drag places a floating joystick at the
+  contact point, with the gamepad stick's world-relative and fractional input.
+- **[Explicit]** The floating joystick looks like a ship's wheel whose rotation
+  follows actual rudder movement.
 - **[Explicit]** Preserve how device input becomes separate forward and turn
   intentions, including fractional input. Changes downstream of those intentions
   are evaluated through side-by-side playtesting.

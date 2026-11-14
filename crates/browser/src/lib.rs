@@ -833,6 +833,10 @@ impl MultiplayerClient {
         Some(self.boats.get(player_id)?.snapshot.health)
     }
 
+    pub fn rudder_angle_rad(&self) -> Option<f64> {
+        Some(self.local_motion()?.rudder_angle_rad)
+    }
+
     pub fn scenes(&self) -> Vec<BoatScene> {
         let local_position_m = self.local_motion().map(|motion| motion.position_m);
         let mut boats = self.boats.values().collect::<Vec<_>>();

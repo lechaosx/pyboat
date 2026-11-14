@@ -12,7 +12,7 @@
     "dev:web": "npm run dev --workspace web",
     "dev:playground": "npm run dev",
     "dev": "npm run build:wasm:all:dev && (npm run dev:rust & npm run dev:web)",
-    "test": "node --test playground/tests/*.test.ts",
+    "test": "node --test playground/tests/*.test.ts web/tests/*.test.ts",
     "build:wasm:all": "npm run build:wasm && npm run build:wasm:playground",
     "build:wasm:all:dev": "npm run build:wasm:dev && npm run build:wasm:playground:dev"
   },

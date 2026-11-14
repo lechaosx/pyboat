@@ -1,4 +1,5 @@
 import { BrowserGame } from "browser";
+import { pointerVector, worldSteering } from "./steering";
 import "./style.css";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
@@ -40,26 +41,14 @@ const bottomClearanceElement = bottomClearance;
 const bottomContactElement = bottomContact;
 const scaleLabelElement = scaleLabel;
 const scaleLineElement = scaleLine;
-
-window.addEventListener("keydown", (event) => {
-  if (controlKeys.has(event.code)) {
-    pressedKeys.add(event.code);
-    event.preventDefault();
-  }
-});
-window.addEventListener("keyup", (event) => {
-  if (controlKeys.has(event.code)) {
-    pressedKeys.delete(event.code);
-    event.preventDefault();
-  }
-});
-window.addEventListener("blur", () => pressedKeys.clear());
+const gameCanvas = canvas;
 
 function keyboardAxis(positive: string, negative: string): number {
   return Number(pressedKeys.has(positive)) - Number(pressedKeys.has(negative));
 }
 
 function firstGamepad(): Gamepad | null {
+  if (!document.hasFocus() || document.hidden) return null;
   for (const gamepad of navigator.getGamepads()) {
     if (gamepad?.connected && gamepad.axes.length >= 2) {
       return gamepad;
@@ -71,6 +60,88 @@ function firstGamepad(): Gamepad | null {
 try {
   const game = await BrowserGame.create(canvas);
   let previousTimeMs = performance.now();
+  let pointer: { id: number; x: number; y: number; vector: [number, number] } | undefined;
+  const pointerRadiusPx = 64;
+  const helm = document.createElement("div");
+  helm.className = "pointer-helm";
+  helm.hidden = true;
+  helm.setAttribute("aria-hidden", "true");
+  helm.innerHTML = `<svg class="helm-wheel" viewBox="0 0 140 140">
+    <defs>
+      <linearGradient id="helm-wood" x2="1" y2="1"><stop stop-color="#f3c47a"/><stop offset=".45" stop-color="#aa652e"/><stop offset="1" stop-color="#633517"/></linearGradient>
+      <radialGradient id="helm-brass"><stop stop-color="#ffe3a0"/><stop offset=".6" stop-color="#c99d50"/><stop offset="1" stop-color="#775326"/></radialGradient>
+    </defs>
+    <g stroke="#4c2a18" stroke-width="10" stroke-linecap="round">
+      <path d="M70 12V128 M12 70H128 M29 29L111 111 M29 111L111 29"/>
+    </g>
+    <g stroke="url(#helm-wood)" stroke-width="7" stroke-linecap="round">
+      <path d="M70 12V128 M12 70H128 M29 29L111 111 M29 111L111 29"/>
+    </g>
+    <circle cx="70" cy="70" r="42" fill="none" stroke="#4c2a18" stroke-width="15"/>
+    <circle cx="70" cy="70" r="42" fill="none" stroke="url(#helm-wood)" stroke-width="11"/>
+    <circle cx="70" cy="70" r="47" fill="none" stroke="#ddb566" stroke-width="1.5"/>
+    <circle cx="70" cy="70" r="37" fill="none" stroke="#ddb566" stroke-width="1.5"/>
+    <circle cx="70" cy="70" r="12" fill="url(#helm-brass)" stroke="#61401f" stroke-width="2"/>
+    <circle cx="70" cy="70" r="4" fill="#835a2d"/>
+    <path d="M67 10H73V22H67Z" fill="#f7d896"/>
+  </svg><span class="helm-direction"></span>`;
+  canvas.parentElement!.append(helm);
+  const wheel = helm.querySelector<SVGElement>(".helm-wheel")!;
+  const direction = helm.querySelector<HTMLElement>(".helm-direction")!;
+
+  function releasePointer(): void {
+    const id = pointer?.id;
+    pointer = undefined;
+    helm.hidden = true;
+    if (id !== undefined && gameCanvas.hasPointerCapture(id)) gameCanvas.releasePointerCapture(id);
+  }
+
+  function clearInput(): void {
+    pressedKeys.clear();
+    releasePointer();
+    game.set_player_input(0, 0, 0, 0);
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (controlKeys.has(event.code)) {
+      pressedKeys.add(event.code);
+      event.preventDefault();
+    }
+  });
+  window.addEventListener("keyup", (event) => {
+    if (controlKeys.has(event.code)) {
+      pressedKeys.delete(event.code);
+      event.preventDefault();
+    }
+  });
+  window.addEventListener("blur", clearInput);
+  window.addEventListener("resize", clearInput);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) clearInput(); });
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0 || pointer) return;
+    pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, vector: [0, 0] };
+    canvas.setPointerCapture(event.pointerId);
+    helm.style.left = `${event.clientX}px`;
+    helm.style.top = `${event.clientY}px`;
+    direction.style.transform = "translate(0, 0)";
+    helm.hidden = false;
+    event.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (pointer?.id !== event.pointerId) return;
+    pointer.vector = pointerVector(
+      (event.clientX - pointer.x) / pointerRadiusPx,
+      (event.clientY - pointer.y) / pointerRadiusPx,
+    );
+    direction.style.transform = `translate(${pointer.vector[0] * pointerRadiusPx}px, ${-pointer.vector[1] * pointerRadiusPx}px)`;
+    event.preventDefault();
+  });
+  const finishPointer = (event: PointerEvent): void => {
+    if (pointer?.id === event.pointerId) releasePointer();
+  };
+  canvas.addEventListener("pointerup", finishPointer);
+  canvas.addEventListener("pointercancel", finishPointer);
+  canvas.addEventListener("lostpointercapture", finishPointer);
 
   canvas.addEventListener(
     "wheel",
@@ -103,8 +174,7 @@ try {
     previousTimeMs = timeMs;
     try {
       const gamepad = firstGamepad();
-      const worldX = gamepad?.axes[0] ?? 0;
-      const worldY = -(gamepad?.axes[1] ?? 0);
+      const [worldX, worldY] = worldSteering(gamepad?.axes, pointer?.vector ?? [0, 0]);
       game.set_player_input(
         keyboardAxis("KeyW", "KeyS"),
         keyboardAxis("KeyA", "KeyD"),
@@ -112,6 +182,8 @@ try {
         worldY,
       );
       game.frame(elapsedSeconds);
+      // The rudder uses counterclockwise world angles; CSS rotates clockwise.
+      wheel.style.transform = `rotate(${-game.rudder_angle_rad()}rad)`;
       statusElement.textContent = game.status();
       speedElement.textContent = game.speed_m_s().toFixed(1);
       apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
@@ -132,6 +204,7 @@ try {
     } catch (error) {
       console.error(error);
       if (!game.renderer_is_available()) {
+        clearInput();
         game.shutdown();
         statusElement.textContent = "Rendering stopped; reload to reconnect to the GPU";
         return;
