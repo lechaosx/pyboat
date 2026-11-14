@@ -1,16 +1,12 @@
-use game::{dinghy_parameters, procedural_match_environment};
+use game::{Sailor, dinghy_parameters, procedural_match_environment};
 use rapier2d_f64::prelude::Vector;
 use simulation::{BoatMotion, Environment, MotionIntent, SharedSimulation, WorldGeometry};
 
-use crate::{
-    BoatScene, Windsock, boat_scene,
-    controller_lab::{LabController, LabControllerKind},
-    player_motion_intent,
-};
+use crate::{BoatScene, Windsock, boat_scene, player_motion_intent};
 
 pub struct PlaygroundBoat {
     simulation: SharedSimulation,
-    controller: LabController,
+    sailor: Sailor,
     pub(crate) geometry: WorldGeometry,
     pub(crate) seed: u64,
     tick: u64,
@@ -49,7 +45,7 @@ impl PlaygroundBoat {
         simulation.add_boat(parameters, motion);
         Some(Self {
             simulation,
-            controller: LabController::new(LabControllerKind::Current),
+            sailor: Sailor::default(),
             geometry,
             seed,
             tick,
@@ -67,9 +63,6 @@ impl PlaygroundBoat {
     pub fn intent(&self) -> MotionIntent {
         self.intent
     }
-    pub fn kind(&self) -> LabControllerKind {
-        self.controller.kind()
-    }
     pub fn environment(&self) -> Environment {
         procedural_match_environment(
             self.geometry,
@@ -81,9 +74,6 @@ impl PlaygroundBoat {
     pub fn set_player_input(&mut self, input: [f32; 4]) {
         self.input = input;
     }
-    pub fn select(&mut self, kind: LabControllerKind) {
-        self.controller.select(kind);
-    }
     pub fn rebase(&mut self, geometry: WorldGeometry, seed: u64, tick: u64) {
         if geometry != self.geometry {
             let motion = self.motion();
@@ -93,7 +83,7 @@ impl PlaygroundBoat {
         self.geometry = geometry;
         self.seed = seed;
         self.tick = tick;
-        self.controller.reset();
+        self.sailor = Sailor::default();
     }
     pub fn step(&mut self) {
         self.intent = player_motion_intent(
@@ -104,13 +94,9 @@ impl PlaygroundBoat {
             self.input[3],
         );
         let environment = self.environment();
-        let targets = self.controller.targets(
-            &self.simulation,
-            0,
-            dinghy_parameters(),
-            environment,
-            self.intent,
-        );
+        let targets =
+            self.sailor
+                .targets(dinghy_parameters(), self.motion(), environment, self.intent);
         self.simulation
             .advance_controlled_with_environments(&[environment], &[Some(targets)]);
         self.tick += 1;

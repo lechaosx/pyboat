@@ -154,9 +154,12 @@ See [README.md](README.md) for what is playable now and
 
 - **[Explicit]** An ideal sailor reacts immediately with bounded hand force;
   boat inertia, friction, and fluid loads determine the resulting motion.
-- **[Explicit]** All controller candidates pursue player movement intent as
-  effectively as physical limits allow, including useful attempts when the
-  requested motion cannot be achieved.
+- **[Explicit]** The sailor pursues player movement intent as effectively as
+  physical limits allow, including useful attempts when the requested motion
+  cannot be achieved.
+- **[Explicit]** Simple sailor assigns forward intent to sail power and turn
+  intent to rudder position, reversing the helm when moving stern-first through
+  water.
 - **[Explicit]** The player chooses maneuvers; the controller executes present
   forward and turn intent.
 - **[Explicit]** Keyboard, controller, and touchpad users cross-play. Keyboard
@@ -164,7 +167,7 @@ See [README.md](README.md) for what is playable now and
   with no added software deadzone.
 - **[Explicit]** Preserve how device input becomes separate forward and turn
   intentions, including fractional input. Changes downstream of those intentions
-  are evaluated against the existing controller through side-by-side playtesting.
+  are evaluated through side-by-side playtesting.
 - **[Explicit]** Nearby boats appear without intentional interpolation delay.
   Prediction, reconciliation, and entry/exit from physical interaction stay smooth.
   Accepted steering and latency compensation remain the responsiveness baseline
@@ -180,9 +183,7 @@ See [README.md](README.md) for what is playable now and
 ## Procedural playground
 
 - **[Explicit]** Players can spawn and drive a boat in the lab with the game’s
-  input-to-intent mapping, then switch controller experiments while preserving
-  physical motion and the world clock. Sail and rudder policies may vary.
-
+  input-to-intent mapping and sailor policy.
 - **[Explicit]** One browser lab covers weather, landscape, and water with
   production rendering. A spacious live preview remains beside one continuous
   scrolling panel ordered as time/playback, world, scene, then outputs/diagnostics.

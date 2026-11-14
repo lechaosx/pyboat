@@ -150,7 +150,6 @@ dependencies = [
  "futures-util",
  "game",
  "js-sys",
- "libm",
  "naga",
  "png",
  "protocol",

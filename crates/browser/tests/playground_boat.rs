@@ -1,25 +1,17 @@
 #![cfg(feature = "playground")]
-use browser::{PlaygroundBoat, controller_lab::LabControllerKind, player_motion_intent};
-use game::{
-    computed_yaw_rate_targets_in_environment, dinghy_parameters, procedural_match_environment,
-};
+use browser::{PlaygroundBoat, player_motion_intent};
+use game::{Sailor, dinghy_parameters, procedural_match_environment};
 use rapier2d_f64::prelude::Vector;
 use simulation::{SharedSimulation, WorldGeometry};
 
 #[test]
-fn switching_and_world_rebase_preserve_physical_state() {
+fn world_rebase_preserves_physical_state() {
     let mut boat = PlaygroundBoat::spawn(WorldGeometry::default(), 7, 3600, Vector::ZERO).unwrap();
     boat.set_player_input([1.0, 0.5, 0.0, 0.0]);
     for _ in 0..12 {
         boat.step();
     }
     let motion = boat.motion();
-    let tick = boat.tick();
-    for kind in LabControllerKind::ALL {
-        boat.select(kind);
-        assert_eq!(boat.motion(), motion);
-        assert_eq!(boat.tick(), tick);
-    }
     boat.rebase(WorldGeometry::new(32_000.0, 48_000.0).unwrap(), 8, 7200);
     assert_eq!(boat.motion(), motion);
     assert_eq!(boat.tick(), 7200);
@@ -33,6 +25,7 @@ fn every_tick_uses_production_environment_and_current_heading_intent() {
     boat.set_player_input(input);
     let mut reference = SharedSimulation::new_with_world_geometry(geometry);
     reference.add_boat(dinghy_parameters(), boat.motion());
+    let mut sailor = Sailor::default();
     for _ in 0..6 {
         let motion = boat.motion();
         let expected = player_motion_intent(
@@ -44,8 +37,12 @@ fn every_tick_uses_production_environment_and_current_heading_intent() {
         );
         let environment = procedural_match_environment(geometry, 7, boat.tick(), motion.position_m);
         assert_eq!(boat.environment(), environment);
-        let targets =
-            computed_yaw_rate_targets_in_environment(reference.motion(0), expected, environment);
+        let targets = sailor.targets(
+            dinghy_parameters(),
+            reference.motion(0),
+            environment,
+            expected,
+        );
         reference.advance_controlled_with_environments(&[environment], &[Some(targets)]);
         boat.step();
         assert_eq!(boat.intent(), expected);

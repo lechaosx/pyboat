@@ -12,7 +12,6 @@ export class DrivingBoat {
   readonly follow: HTMLInputElement;
   readonly readout: HTMLElement;
   readonly message: HTMLElement;
-  private readonly select: HTMLSelectElement;
   private readonly remove: HTMLButtonElement;
   private readonly pause: HTMLButtonElement;
   private readonly keys = new Set<string>();
@@ -35,15 +34,13 @@ export class DrivingBoat {
     this.element.className = "panel-section boat-controls";
     this.element.innerHTML = `<h2>Drive a boat</h2>
       <div class="boat-actions"><button id="boat-spawn">Spawn / respawn</button><button id="boat-remove" disabled>Remove</button><button id="boat-pause" disabled>Pause</button></div>
-      <label>Controller <select id="boat-controller"><option value="0">Current · reference</option><option value="1">Physical rudder allocation</option><option value="5">Current refined</option><option value="2">Classical PID</option><option value="4">Neural · residual pilot</option><option value="6">Neural · standalone pilot (failed)</option><option value="7">Simple sailor · guide rules</option><option value="8">Advanced sailor · experimental</option></select></label>
       <label><input id="boat-follow" type="checkbox" checked> Follow boat / drive with pointer</label>
       <p>W/S power · A/D turn · gamepad or drag to steer toward a world direction. Disable follow to pan.</p>
-      <p>Switching preserves boat motion and resets the new controller’s memory. Driving uses real time; pause remains available.</p>
+      <p>Driving uses real time; pause remains available.</p>
       <output id="boat-readout"></output><p id="boat-message" role="status"></p>`;
     this.follow = this.element.querySelector<HTMLInputElement>("#boat-follow")!;
     this.readout = this.element.querySelector<HTMLElement>("#boat-readout")!;
     this.message = this.element.querySelector<HTMLElement>("#boat-message")!;
-    this.select = this.element.querySelector<HTMLSelectElement>("#boat-controller")!;
     this.remove = this.element.querySelector<HTMLButtonElement>("#boat-remove")!;
     this.pause = this.element.querySelector<HTMLButtonElement>("#boat-pause")!;
     this.element.querySelector("#boat-spawn")!.addEventListener("click", () => this.spawn());
@@ -55,9 +52,6 @@ export class DrivingBoat {
     });
     this.pause.addEventListener("click", () => {
       this.setPaused(this.pause.textContent === "Pause");
-    });
-    this.select.addEventListener("change", () => {
-      this.driver?.select(Number(this.select.value)); this.clearInput();
     });
     window.addEventListener("keydown", (event) => {
       if (!this.driver || (event.target instanceof HTMLElement && event.target.closest("input, select, textarea"))) return;
@@ -105,7 +99,7 @@ export class DrivingBoat {
     const world = this.getWorld(); const [x, y] = this.getCenter();
     try {
       const driver = new PlaygroundBoatDriver(world.width, world.height, world.seed, world.tick, x, y);
-      driver.select(Number(this.select.value)); this.driver?.free(); this.driver = driver;
+      this.driver?.free(); this.driver = driver;
       this.world = world; this.clearInput(); this.follow.checked = true;
       this.remove.disabled = this.pause.disabled = false; this.pause.textContent = "Pause";
       this.playback(true, false);

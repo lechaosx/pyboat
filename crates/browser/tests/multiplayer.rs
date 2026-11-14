@@ -13,6 +13,7 @@ fn boat(id: &str, x: f64) -> BoatSnapshot {
         health: 100.0,
         last_hit_tick: None,
         wreck: false,
+        sailor_sternway: false,
         x,
         y: 2.0,
         vx: 3.0,

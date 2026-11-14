@@ -1,4 +1,4 @@
-use crate::{ClothMotion, PlaygroundBoat, controller_lab::LabControllerKind};
+use crate::{ClothMotion, PlaygroundBoat};
 use rapier2d_f64::glamx::Vec2;
 use simulation::WorldGeometry;
 use wasm_bindgen::prelude::*;
@@ -40,14 +40,6 @@ impl PlaygroundBoatDriver {
             vertices: Vec::new(),
             batches: Vec::new(),
         })
-    }
-    pub fn select(&mut self, kind: u32) {
-        if let Some(kind) = LabControllerKind::ALL
-            .into_iter()
-            .find(|candidate| *candidate as u32 == kind)
-        {
-            self.boat.select(kind);
-        }
     }
     pub fn rebase(&mut self, width: f64, height: f64, seed: u64, tick: u64) -> Result<(), JsValue> {
         let geometry = WorldGeometry::new(width, height)

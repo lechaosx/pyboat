@@ -723,10 +723,11 @@ and verification details.
   Excess sessions close before registration.
 - **[Explicit]** Source-style prediction includes local/nearby boat interaction
   before contact. Bubble transitions and authoritative corrections remain visually smooth.
-- **[Implicit]** Reconciliation restores acknowledged authority and replays bounded
-  unacknowledged fixed-tick input, correcting physics immediately and smoothing
-  render pose/velocity. Nearby boats share prediction; distant boats use bounded
-  kinematic extrapolation with minimum-image render displacement.
+- **[Implicit]** Reconciliation restores acknowledged physics and sailor state
+  before replaying bounded unacknowledged fixed-tick input, correcting physics
+  immediately and smoothing render pose/velocity. Nearby boats share prediction;
+  distant boats use bounded kinematic extrapolation with minimum-image render
+  displacement.
 - **[Explicit]** Snapshots are per recipient because nearby boats need prediction
   data. Viewport half-diagonal plus margin sets interest with no smaller fixed
   world-distance cap; proximity wraps longitude only.

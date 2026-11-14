@@ -43,6 +43,7 @@ pub struct BoatSnapshot {
     pub health: f32,
     pub last_hit_tick: Option<u64>,
     pub wreck: bool,
+    pub sailor_sternway: bool,
     pub x: f64,
     pub y: f64,
     pub vx: f64,

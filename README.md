@@ -30,17 +30,10 @@ npm ci
 Run `npm run dev` to serve the game at `/` and the procedural playground at
 `/playground/`. The playground provides a live preview and controls for inspecting
 the world and tuning its appearance; it needs no backend.
-“Drive a boat” spawns a boat in safe nearby water. Compare controller experiments
-including simple guide rules and coordinated sail/rudder control, while sailing
-with keyboard, gamepad, or a draggable pointer stick; switching
-preserves motion and clears the new controller’s memory. Boat driving uses
-real time or pause, and removing the boat restores the clock controls.
-
-For local controller comparison, run `npm run dev` and open `/controller.html`.
-It needs no backend. The two independent boats compare the current controller
-with intermediate rudder targets; reset gives both the same starting conditions.
-Keyboard, gamepad, and the draggable stick work on either or both boats. The
-multiplayer game keeps its current controller.
+“Drive a boat” spawns a boat in safe nearby water, using the game’s Simple
+sailor with keyboard, gamepad, or a draggable pointer stick. Forward intent
+controls sail power; turn intent controls the rudder. Boat driving uses real
+time or pause, and removing the boat restores the clock controls.
 
 For GitHub Pages and backend deployment, follow the
 [hosting setup](crates/server/README.md#hosting).

@@ -2,11 +2,9 @@ use std::f64::consts::PI;
 
 use rapier2d::prelude::{RigidBody, Rotation, Vector};
 use simulation::{
-    ActuatorTorques, AutoSheetIntent, BoatMotion, BoatParameters, ControlInput, ControlSettings,
-    DT_SECONDS, Environment, HullParameters, MotionIntent, SharedSimulation, Simulation,
-    SurfaceControlCommand, SurfaceEffect, auto_sheet_control, computed_maximum_yaw_rate_rad_s,
-    flat_plate_force, hull_resistance_force, rudder_foil_force, streamlined_foil_force,
-    surface_control_input, yaw_rate_move_control,
+    ActuatorTorques, BoatMotion, BoatParameters, DT_SECONDS, Environment, HullParameters,
+    SharedSimulation, Simulation, flat_plate_force, hull_resistance_force, rudder_foil_force,
+    streamlined_foil_force,
 };
 
 fn reference_parameters() -> BoatParameters {
@@ -95,16 +93,9 @@ fn gripping_at_the_rudder_hinge_cannot_turn_it() {
     };
     let mut simulation = Simulation::new(parameters, initial);
     for _ in 0..30 {
-        simulation.advance_controlled(
+        simulation.advance_targets(
             Environment::default(),
-            SurfaceControlCommand::AutoSheet(AutoSheetIntent {
-                power: 0.0,
-                rudder: 1.0,
-            }),
-            ControlSettings {
-                angle_resolution_deg: 1,
-                sail_side_hysteresis_angle_rad: 0.0,
-            },
+            rudder_targets(parameters.max_rudder_angle_rad),
         );
     }
     assert!(simulation.motion().rudder_angle_rad.abs() < 1.0e-6);
@@ -752,32 +743,35 @@ fn rudder_steady_load_tracks_whole_blade_aspect_ratio() {
         parameters.rudder_draw_length_m = chord;
         parameters.rudder_area_m2 = area;
         let flow = Vector::new(2.0, 0.0);
-        let input = surface_control_input(
-            parameters,
-            BoatMotion {
-                position_m: Vector::ZERO,
-                velocity_m_s: Vector::ZERO,
-                angle_rad: 0.0,
-                angular_velocity_rad_s: 0.0,
-                sail_angle_rad: 0.0,
-                sail_angular_velocity_rad_s: 0.0,
-                rudder_angle_rad: 0.0,
-                rudder_angular_velocity_rad_s: 0.0,
-            },
-            Environment {
-                true_water_velocity_m_s: flow,
-                ..Default::default()
-            },
-            1,
-            0.0,
-        );
+        parameters.air_density_kg_m3 = 0.0;
+        // Weak loading isolates steady force before the blade starts moving.
+        parameters.water_density_kg_m3 = 0.0001;
         for angle_deg in [-30_i32, -15, -1, 1, 15, 30] {
             let angle = (angle_deg as f64).to_radians();
-            let effect = input
-                .rudder_effects
-                .iter()
-                .find(|effect| (effect.angle_rad - angle).abs() < 1.0e-5)
-                .unwrap();
+            let mut simulation = Simulation::new(
+                parameters,
+                BoatMotion {
+                    position_m: Vector::ZERO,
+                    velocity_m_s: Vector::ZERO,
+                    angle_rad: 0.0,
+                    angular_velocity_rad_s: 0.0,
+                    sail_angle_rad: 0.0,
+                    sail_angular_velocity_rad_s: 0.0,
+                    rudder_angle_rad: angle,
+                    rudder_angular_velocity_rad_s: 0.0,
+                },
+            );
+            let initial_center = simulation.world.bodies[simulation.boat.rudder].center_of_mass();
+            simulation.advance(
+                Environment {
+                    true_water_velocity_m_s: flow,
+                    ..Default::default()
+                },
+                ActuatorTorques::default(),
+            );
+            let rudder = &simulation.world.bodies[simulation.boat.rudder];
+            let force = rudder.user_force();
+            let torque = rudder.user_torque() + initial_center.perp_dot(force);
             let aspect_ratio = area / chord.powi(2);
             let slope = 6.13 * aspect_ratio / (aspect_ratio + 2.25);
             let normal = Vector::new(-angle.sin(), angle.cos());
@@ -789,8 +783,9 @@ fn rudder_steady_load_tracks_whole_blade_aspect_ratio() {
                     + slope * flow.dot(normal) * normal);
             let center =
                 parameters.rudder_position_m - Vector::new(angle.cos(), angle.sin()) * chord / 2.0;
-            assert!((effect.drive_force_n - expected_force.x).abs() < 0.001);
-            assert!((effect.yaw_moment_n_m - center.perp_dot(expected_force)).abs() < 0.001);
+            assert!((force - expected_force).length() < expected_force.length() * 1.0e-6);
+            let expected_torque = center.perp_dot(expected_force);
+            assert!((torque - expected_torque).abs() < expected_torque.abs() * 1.0e-6);
         }
     }
 }
@@ -1095,217 +1090,6 @@ fn sheet_control_never_pushes_the_sail_outward() {
     }
 }
 
-fn controller_input() -> ControlInput {
-    ControlInput {
-        boat_angular_velocity_rad_s: 0.0,
-        free_sail_angle_rad: -PI / 2.0,
-        sail_angle_rad: -PI / 4.0,
-        apparent_wind_angle_from_boat_forward_rad: 0.0,
-        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
-        max_rudder_angle_rad: PI / 6.0,
-        sail_effects: vec![
-            SurfaceEffect {
-                angle_rad: -PI / 2.0,
-                drive_force_n: 0.0,
-                yaw_moment_n_m: 0.0,
-            },
-            SurfaceEffect {
-                angle_rad: -PI / 4.0,
-                drive_force_n: 10.0,
-                yaw_moment_n_m: 2.0,
-            },
-            SurfaceEffect {
-                angle_rad: 0.0,
-                drive_force_n: 5.0,
-                yaw_moment_n_m: 0.0,
-            },
-            SurfaceEffect {
-                angle_rad: PI / 4.0,
-                drive_force_n: 20.0,
-                yaw_moment_n_m: -2.0,
-            },
-            SurfaceEffect {
-                angle_rad: PI / 2.0,
-                drive_force_n: -8.0,
-                yaw_moment_n_m: -1.0,
-            },
-        ],
-        rudder_effects: vec![
-            SurfaceEffect {
-                angle_rad: -PI / 6.0,
-                drive_force_n: -1.0,
-                yaw_moment_n_m: 10.0,
-            },
-            SurfaceEffect {
-                angle_rad: -PI / 12.0,
-                drive_force_n: -0.5,
-                yaw_moment_n_m: 2.0,
-            },
-            SurfaceEffect {
-                angle_rad: 0.0,
-                drive_force_n: 0.0,
-                yaw_moment_n_m: 0.0,
-            },
-            SurfaceEffect {
-                angle_rad: PI / 12.0,
-                drive_force_n: -0.5,
-                yaw_moment_n_m: -2.0,
-            },
-            SurfaceEffect {
-                angle_rad: PI / 6.0,
-                drive_force_n: -1.0,
-                yaw_moment_n_m: -10.0,
-            },
-        ],
-    }
-}
-
-#[test]
-fn quasi_static_control_predictions_match_distributed_fluid_loads() {
-    let mut parameters = reference_parameters();
-    parameters.air_density_kg_m3 = 0.0001;
-    parameters.water_density_kg_m3 = 0.0001;
-    let mut current = motion();
-    current.velocity_m_s = Vector::new(1.0, -0.5);
-    current.angle_rad = 0.4;
-    current.angular_velocity_rad_s = 0.2;
-    current.sail_angle_rad = 0.0;
-    current.rudder_angle_rad = 0.0;
-    let environment = Environment {
-        true_wind_velocity_m_s: Vector::new(6.0, 1.0),
-        true_water_velocity_m_s: Vector::new(0.5, -0.25),
-        ..Default::default()
-    };
-    let input = surface_control_input(parameters, current, environment, 30, 10.0_f64.to_radians());
-    assert_eq!(input.sail_effects.len(), 7);
-    assert_eq!(input.rudder_effects.len(), 3);
-    let mut simulation = Simulation::new(parameters, current);
-    let initial_centers = [simulation.boat.sail, simulation.boat.rudder]
-        .map(|handle| simulation.world.bodies[handle].center_of_mass() - current.position_m);
-    simulation.advance(environment, ActuatorTorques::default());
-    let boat_forward = Rotation::new(current.angle_rad).transform_vector(Vector::new(1.0, 0.0));
-    for (effects, handle, center) in [
-        (
-            &input.sail_effects,
-            simulation.boat.sail,
-            initial_centers[0],
-        ),
-        (
-            &input.rudder_effects,
-            simulation.boat.rudder,
-            initial_centers[1],
-        ),
-    ] {
-        let effect = effects
-            .iter()
-            .find(|effect| effect.angle_rad == 0.0)
-            .unwrap();
-        let body = &simulation.world.bodies[handle];
-        let force = body.user_force();
-        let torque = body.user_torque() + center.perp_dot(force);
-        assert!((effect.drive_force_n - force.dot(boat_forward)).abs() < 1.0e-8);
-        assert!((effect.yaw_moment_n_m - torque).abs() < 1.0e-8);
-    }
-}
-
-#[test]
-fn computed_maximum_yaw_rate_uses_local_water_speed_and_steering_baseline() {
-    let parameters = reference_parameters();
-    let mut current = motion();
-    current.velocity_m_s = Vector::new(1.0, -0.5);
-    current.angle_rad = 0.4;
-    current.angular_velocity_rad_s = 0.2;
-    let environment = Environment {
-        true_water_velocity_m_s: Vector::new(0.5, -0.25),
-        ..Default::default()
-    };
-    let rudder_position_world_m =
-        Rotation::new(current.angle_rad).transform_vector(parameters.rudder_position_m);
-    let rudder_apparent_water_m_s = environment.true_water_velocity_m_s
-        - current.velocity_m_s
-        - Vector::new(-rudder_position_world_m.y, rudder_position_world_m.x)
-            * current.angular_velocity_rad_s;
-    let steering_baseline_m = (parameters.rudder_position_m - parameters.keel_position_m).length();
-    let expected_rad_s = rudder_apparent_water_m_s.length() * parameters.max_rudder_angle_rad.tan()
-        / steering_baseline_m;
-
-    assert_close(
-        computed_maximum_yaw_rate_rad_s(parameters, current, environment),
-        expected_rad_s,
-    );
-}
-
-#[test]
-fn auto_sheet_selects_drive_and_maps_rudder_position() {
-    let input = controller_input();
-    let targets = auto_sheet_control(
-        &input,
-        AutoSheetIntent {
-            power: 1.0,
-            rudder: 0.5,
-        },
-    );
-
-    assert_close(targets.sheet_target_angle_rad, -PI / 4.0);
-    assert_close(targets.rudder_target_angle_rad, PI / 12.0);
-    assert_eq!(targets.sail_target_angle_rad, None);
-
-    let eased = auto_sheet_control(
-        &input,
-        AutoSheetIntent {
-            power: 0.0,
-            rudder: 0.0,
-        },
-    );
-    assert_close(eased.sheet_target_angle_rad, -PI / 2.0);
-}
-
-#[test]
-fn auto_sheet_retains_the_sail_side_only_inside_downwind_hysteresis() {
-    let mut input = controller_input();
-    input.sail_angle_rad = PI / 4.0;
-    input.apparent_wind_angle_from_boat_forward_rad = 5.0_f64.to_radians();
-    let retained = auto_sheet_control(
-        &input,
-        AutoSheetIntent {
-            power: 1.0,
-            rudder: 0.0,
-        },
-    );
-    assert_close(retained.sheet_target_angle_rad, PI / 4.0);
-
-    input.apparent_wind_angle_from_boat_forward_rad = 11.0_f64.to_radians();
-    let switched = auto_sheet_control(
-        &input,
-        AutoSheetIntent {
-            power: 1.0,
-            rudder: 0.0,
-        },
-    );
-    assert_close(switched.sheet_target_angle_rad, -PI / 4.0);
-}
-
-#[test]
-fn yaw_rate_control_preserves_analog_turn_and_backing_behavior() {
-    let mut input = controller_input();
-    input.boat_angular_velocity_rad_s = 0.25;
-    for (turn, expected_rudder_angle_rad) in [(0.25, PI / 12.0), (0.5, 0.0), (0.75, -PI / 12.0)] {
-        let targets = yaw_rate_move_control(&input, MotionIntent { forward: 0.5, turn }, 0.5);
-        assert_close(targets.rudder_target_angle_rad, expected_rudder_angle_rad);
-    }
-
-    let backing = yaw_rate_move_control(
-        &controller_input(),
-        MotionIntent {
-            forward: -1.0,
-            turn: 1.0,
-        },
-        0.5,
-    );
-    assert!(backing.rudder_target_angle_rad < 0.0);
-    assert!(backing.sail_target_angle_rad.is_some());
-}
-
 #[test]
 fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
     let parameters = vacuum_parameters();
@@ -1333,88 +1117,12 @@ fn surface_targets_choose_sheet_limited_or_explicit_sail_control() {
 }
 
 #[test]
-fn controlled_advance_matches_the_manual_pipeline_for_each_mode() {
-    let parameters = reference_parameters();
-    let initial = motion();
-    let environment = Environment {
-        true_wind_velocity_m_s: Vector::new(6.0, 1.0),
-        true_water_velocity_m_s: Vector::new(0.5, -0.25),
-        ..Default::default()
-    };
-    let settings = ControlSettings {
-        angle_resolution_deg: 30,
-        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
-    };
-    let commands = [
-        SurfaceControlCommand::AutoSheet(AutoSheetIntent {
-            power: 0.7,
-            rudder: -0.4,
-        }),
-        SurfaceControlCommand::ComputedYawRate(MotionIntent {
-            forward: 0.7,
-            turn: -0.4,
-        }),
-        SurfaceControlCommand::FixedYawRate {
-            intent: MotionIntent {
-                forward: 0.7,
-                turn: -0.4,
-            },
-            maximum_yaw_rate_rad_s: 0.5,
-        },
-    ];
-
-    for command in commands {
-        let mut controlled = Simulation::new(parameters, initial);
-        let mut manual = Simulation::new(parameters, initial);
-        let input = surface_control_input(
-            parameters,
-            manual.motion(),
-            environment,
-            settings.angle_resolution_deg,
-            settings.sail_side_hysteresis_angle_rad,
-        );
-        let (expected_targets, expected_maximum_yaw_rate_rad_s) = match command {
-            SurfaceControlCommand::AutoSheet(intent) => (auto_sheet_control(&input, intent), None),
-            SurfaceControlCommand::ComputedYawRate(intent) => {
-                let maximum_yaw_rate_rad_s =
-                    computed_maximum_yaw_rate_rad_s(parameters, manual.motion(), environment);
-                (
-                    yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
-                    Some(maximum_yaw_rate_rad_s),
-                )
-            }
-            SurfaceControlCommand::FixedYawRate {
-                intent,
-                maximum_yaw_rate_rad_s,
-            } => (
-                yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s),
-                Some(maximum_yaw_rate_rad_s),
-            ),
-        };
-        manual.advance_targets(environment, expected_targets);
-
-        let telemetry = controlled.advance_controlled(environment, command, settings);
-
-        assert_eq!(telemetry.targets, expected_targets);
-        assert_eq!(
-            telemetry.maximum_yaw_rate_rad_s,
-            expected_maximum_yaw_rate_rad_s
-        );
-        assert_eq!(controlled.motion(), manual.motion());
-    }
-}
-
-#[test]
-fn mirrored_computed_yaw_rate_steps_produce_mirrored_motion() {
+fn mirrored_surface_targets_produce_mirrored_motion() {
     let parameters = reference_parameters();
     let environment = Environment {
         true_wind_velocity_m_s: Vector::new(6.0, 0.0),
         true_water_velocity_m_s: Vector::ZERO,
         ..Default::default()
-    };
-    let settings = ControlSettings {
-        angle_resolution_deg: 1,
-        sail_side_hysteresis_angle_rad: 10.0_f64.to_radians(),
     };
     let mut port_motion = motion();
     port_motion.velocity_m_s = Vector::ZERO;
@@ -1432,21 +1140,21 @@ fn mirrored_computed_yaw_rate_steps_produce_mirrored_motion() {
         };
         let mut port = Simulation::new(parameters, port_motion);
         let mut starboard = Simulation::new(parameters, mirrored);
-        port.advance_controlled(
+        port.advance_targets(
             environment,
-            SurfaceControlCommand::ComputedYawRate(MotionIntent {
-                forward: 1.0,
-                turn: -1.0,
-            }),
-            settings,
+            simulation::SurfaceTargets {
+                sheet_target_angle_rad: -0.4,
+                rudder_target_angle_rad: -0.25,
+                sail_target_angle_rad: None,
+            },
         );
-        starboard.advance_controlled(
+        starboard.advance_targets(
             environment,
-            SurfaceControlCommand::ComputedYawRate(MotionIntent {
-                forward: 1.0,
-                turn: 1.0,
-            }),
-            settings,
+            simulation::SurfaceTargets {
+                sheet_target_angle_rad: 0.4,
+                rudder_target_angle_rad: 0.25,
+                sail_target_angle_rad: None,
+            },
         );
         let port = port.motion();
         let starboard = starboard.motion();

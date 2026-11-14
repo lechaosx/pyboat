@@ -14,7 +14,7 @@ use physics::glamx::Vec2 as Vector;
 use physics::prelude::Vector as PhysicsVector;
 use simulation::{
     BoatMotion, BoatParameters, Environment, HullParameters, MotionIntent, TICKS_PER_SECOND,
-    WorldGeometry, computed_maximum_yaw_rate_rad_s, surface_control_input, yaw_rate_move_control,
+    WorldGeometry,
 };
 
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
@@ -3827,28 +3827,84 @@ fn wind_hash(mut value: u64) -> u64 {
     value
 }
 
-pub fn computed_yaw_rate_targets(
-    motion: BoatMotion,
-    intent: MotionIntent,
-) -> simulation::SurfaceTargets {
-    computed_yaw_rate_targets_in_environment(motion, intent, match_environment())
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sailor {
+    pub sternway: bool,
 }
 
-pub fn computed_yaw_rate_targets_in_environment(
-    motion: BoatMotion,
-    intent: MotionIntent,
-    environment: Environment,
-) -> simulation::SurfaceTargets {
-    let parameters = dinghy_parameters();
-    let input = surface_control_input(
-        parameters,
-        motion,
-        environment,
-        1,
-        f64::from(10.0_f32.to_radians()),
-    );
-    let maximum_yaw_rate_rad_s = computed_maximum_yaw_rate_rad_s(parameters, motion, environment);
-    yaw_rate_move_control(&input, intent, maximum_yaw_rate_rad_s)
+impl Sailor {
+    pub fn targets(
+        &mut self,
+        parameters: BoatParameters,
+        motion: BoatMotion,
+        environment: Environment,
+        intent: MotionIntent,
+    ) -> simulation::SurfaceTargets {
+        use physics::prelude::{Rotation, Vector};
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+        let body = Rotation::new(-motion.angle_rad);
+        let wind = body.transform_vector(environment.true_wind_velocity_m_s - motion.velocity_m_s);
+        let raw_from = if wind.length_squared() == 0.0 {
+            0.0
+        } else {
+            libm::atan2(wind.y, wind.x).rem_euclid(TAU) - PI
+        };
+        let side = if raw_from == 0.0
+            || (raw_from.abs() > PI - f64::from(10_f32.to_radians())
+                && raw_from * motion.sail_angle_rad < 0.0)
+        {
+            if motion.sail_angle_rad == 0.0 {
+                1.0
+            } else {
+                motion.sail_angle_rad.signum()
+            }
+        } else {
+            raw_from.signum()
+        };
+        let from = raw_from.abs().copysign(side);
+        let limit = parameters.max_sail_angle_rad;
+        let free = from.clamp(-limit, limit);
+        // RYA points of sail: tight upwind, eased across/downwind. Half the apparent
+        // angle interpolates those endpoints for this flat-plate model, not every real rig.
+        // https://www.rya.org.uk/training/do-you-know-your-points-of-sail/
+        let drive = (from * 0.5).clamp(-limit, limit);
+        let power = intent.forward.clamp(-1.0, 1.0);
+        let sail = if power < 0.0 {
+            let backing_side = if raw_from == 0.0 {
+                side
+            } else {
+                raw_from.signum()
+            };
+            let back = (raw_from * 0.5 - backing_side * FRAC_PI_2).clamp(-limit, limit);
+            // Interpolating free-to-backed can drive forward at partial negative input.
+            // Centerline-to-backed avoids that force branch, at the cost of a target jump at zero.
+            -power * back
+        } else {
+            free + power * (drive - free)
+        };
+        let hinge = Rotation::new(motion.angle_rad).transform_vector(parameters.rudder_position_m);
+        let hinge_velocity =
+            motion.velocity_m_s + Vector::new(-hinge.y, hinge.x) * motion.angular_velocity_rad_s;
+        let headway = body
+            .transform_vector(hinge_velocity - environment.true_water_velocity_m_s)
+            .x;
+        // CSC Dinghy Manual §§6.1,6.8 backs the main and reverses helm under sternway.
+        // The 0.1 m/s band is anti-chatter tuning, not a physical steering threshold.
+        // https://www.cal-sailing.org/images/official_files/Dinghy18.pdf
+        if headway > 0.1 {
+            self.sternway = false;
+        } else if headway < -0.1 {
+            self.sternway = true;
+        }
+        simulation::SurfaceTargets {
+            sheet_target_angle_rad: sail,
+            sail_target_angle_rad: (power < 0.0).then_some(sail),
+            rudder_target_angle_rad: if self.sternway { 1.0 } else { -1.0 }
+                * intent.turn.clamp(-1.0, 1.0)
+                * parameters.max_rudder_angle_rad,
+        }
+    }
 }
 
 #[cfg(test)]

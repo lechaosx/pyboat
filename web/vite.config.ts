@@ -7,7 +7,7 @@ export default defineConfig({
   build: {
     target: "esnext",
     license: { fileName: "third-party-licenses-npm.md" },
-    rollupOptions: { input: ["index.html", "controller.html", "playground/index.html"] },
+    rollupOptions: { input: ["index.html", "playground/index.html"] },
   },
   optimizeDeps: { exclude: ["browser", "browser/playground"] },
 });
