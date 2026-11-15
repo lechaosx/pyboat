@@ -137,6 +137,9 @@ See [README.md](README.md) for what is playable now and
   fields are outside the product UI.
 - **[Explicit]** The browser HUD reports sailing state, depth, under-keel clearance,
   and grounding. Zoom has no gameplay limit and middle-click restores its original value.
+- **[Explicit]** At the same zoom, every gameplay view covers the same sea-level
+  area. Wider views trade vertical reach for horizontal reach; extreme aspect
+  ratios have bars instead of extra visibility or stretching.
 - **[Explicit]** A tiny corner indicator reports rendered frames per second.
 
 ## Graphics settings

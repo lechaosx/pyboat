@@ -12,16 +12,20 @@
 body {
   margin: 0;
   overflow: hidden;
+  display: grid;
+  place-items: center;
+  height: 100dvh;
 }
 
-main,
-canvas {
-  width: 100vw;
-  height: 100vh;
+main {
+  width: min(100vw, calc(100dvh * 7 / 3));
+  height: min(100dvh, calc(100vw * 7 / 3));
 }
 
 canvas {
   display: block;
+  width: 100%;
+  height: 100%;
   touch-action: none;
 }
 

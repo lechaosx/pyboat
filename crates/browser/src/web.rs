@@ -43,9 +43,9 @@ use crate::{
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth,
     UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
     baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
-    field_grids, ocean_wave_uniforms, periodic_effect_time_interpolated, queue_latest_snapshot,
-    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
-    scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
+    field_grids, gameplay_view_height_m, ocean_wave_uniforms, periodic_effect_time_interpolated,
+    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
+    scale_bar, scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
     viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
     zoom_view_height_m,
 };
@@ -1994,10 +1994,7 @@ impl Renderer {
         };
         self.frame_pacer
             .frame_rendered(self.graphics.frame_rate_cap);
-        let view_width_m = view_width_m(
-            self.config.width as f32 / self.config.height as f32,
-            view_height_m,
-        );
+        let view_width_m = view_width_m(self.aspect_ratio(), view_height_m);
         let camera = DroneCamera::production(
             world_geometry,
             Vector::from(canonical_camera_m),
@@ -2430,12 +2427,7 @@ impl Renderer {
     }
 
     fn aspect_ratio(&self) -> f32 {
-        let (width, height) = canvas_dimensions(
-            &self.canvas,
-            self.device.limits().max_texture_dimension_2d,
-            self.graphics.maximum_pixel_ratio,
-        );
-        width as f32 / height as f32
+        self.canvas.client_width().max(1) as f32 / self.canvas.client_height().max(1) as f32
     }
 
     fn is_available(&self) -> bool {
@@ -2455,7 +2447,7 @@ pub struct BrowserGame {
     sending_datagrams: Rc<Cell<bool>>,
     sending_reliable: Rc<Cell<bool>>,
     renderer: Renderer,
-    view_height_m: f32,
+    reference_view_height_m: f32,
     presented_view_height_m: f32,
     world_presented: bool,
     joining: bool,
@@ -2530,7 +2522,7 @@ impl BrowserGame {
             sending_datagrams,
             sending_reliable,
             renderer,
-            view_height_m: DEFAULT_VIEW_HEIGHT_M,
+            reference_view_height_m: DEFAULT_VIEW_HEIGHT_M,
             presented_view_height_m: DEFAULT_VIEW_HEIGHT_M,
             world_presented: false,
             joining: false,
@@ -2564,18 +2556,20 @@ impl BrowserGame {
         }
         let target_m = client.camera_m().unwrap_or(Vector::ZERO);
         let world = client.world_geometry().unwrap_or_default();
+        let aspect = self.renderer.aspect_ratio();
+        let view_height_m = gameplay_view_height_m(aspect, self.reference_view_height_m);
         let (camera_m, height_m) = if let Some((start_m, elapsed)) = &mut self.spawn_camera {
             *elapsed += elapsed_seconds.max(0.0);
             crate::camera::spawn_camera_view(
                 world,
                 *start_m,
                 target_m,
-                self.view_height_m,
-                self.renderer.aspect_ratio(),
+                view_height_m,
+                aspect,
                 (*elapsed / 2.0) as f32,
             )
         } else {
-            (target_m, self.view_height_m)
+            (target_m, view_height_m)
         };
         if self.spawn_camera.is_some_and(|(_, elapsed)| elapsed >= 2.0) {
             self.spawn_camera = None;
@@ -2589,8 +2583,7 @@ impl BrowserGame {
         )
         .length();
         drop(client);
-        let viewport_radius_m =
-            viewport_interest_radius_m(self.renderer.aspect_ratio(), height_m) + offset_m;
+        let viewport_radius_m = viewport_interest_radius_m(aspect, height_m) + offset_m;
         let mut client = self.client.borrow_mut();
         let viewport = client.update_viewport(viewport_radius_m);
         drop(client);
@@ -2748,11 +2741,12 @@ impl BrowserGame {
     }
 
     pub fn zoom(&mut self, wheel_delta_y: f32) {
-        self.view_height_m = zoom_view_height_m(self.view_height_m, wheel_delta_y);
+        self.reference_view_height_m =
+            zoom_view_height_m(self.reference_view_height_m, wheel_delta_y);
     }
 
     pub fn reset_zoom(&mut self) {
-        self.view_height_m = DEFAULT_VIEW_HEIGHT_M;
+        self.reference_view_height_m = DEFAULT_VIEW_HEIGHT_M;
     }
 
     pub fn scale_bar_width_px(&self) -> f32 {

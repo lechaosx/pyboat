@@ -1121,6 +1121,13 @@ pub fn viewport_interest_radius_m(aspect_ratio: f32, view_height_m: f32) -> f32 
         .min(f64::from(f32::MAX)) as f32
 }
 
+pub fn gameplay_view_height_m(aspect_ratio: f32, reference_height_m: f32) -> f32 {
+    // Preserve the original 16:9 desktop framing while keeping its sea-level
+    // area on other displays. Zoom stores this reference height, not screen height.
+    (f64::from(reference_height_m) * ((16.0 / 9.0) / f64::from(aspect_ratio)).sqrt())
+        .min(f64::from(f32::MAX)) as f32
+}
+
 pub fn bounded_canvas_dimensions(
     css_width_px: i32,
     css_height_px: i32,

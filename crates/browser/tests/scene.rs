@@ -1,8 +1,9 @@
 use std::f32::consts::PI;
 
 use browser::{
-    Demo, PointOfSail, boat_scene, bounded_canvas_dimensions, point_of_sail, scale_bar,
-    view_width_m, viewport_interest_radius_m, windsock_extension, zoom_view_height_m,
+    DEFAULT_VIEW_HEIGHT_M, Demo, PointOfSail, boat_scene, bounded_canvas_dimensions,
+    gameplay_view_height_m, point_of_sail, scale_bar, view_width_m, viewport_interest_radius_m,
+    windsock_extension, zoom_view_height_m,
 };
 use game::dinghy_parameters;
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -77,6 +78,39 @@ fn canvas_dimensions_preserve_aspect_ratio_within_the_device_limit() {
         bounded_canvas_dimensions(10_000, 5_000, 2.0, 8_192),
         (8_192, 4_096),
     );
+}
+
+#[test]
+fn gameplay_views_trade_width_for_height_at_equal_area() {
+    let reference_area_m2 = 400.0;
+    for (width_px, height_px) in [(1920, 1080), (1080, 1920), (800, 800), (2100, 900)] {
+        let aspect = width_px as f32 / height_px as f32;
+        let height_m = gameplay_view_height_m(aspect, DEFAULT_VIEW_HEIGHT_M);
+        let width_m = view_width_m(aspect, height_m);
+        assert!((width_m * height_m - reference_area_m2).abs() < 1e-3);
+        assert!((width_m / width_px as f32 - height_m / height_px as f32).abs() < 1e-6);
+        let scale = scale_bar(height_m, height_px as f32);
+        assert!((scale.distance_m * height_px as f32 / scale.width_px - height_m).abs() < 1e-4);
+        assert!(viewport_interest_radius_m(aspect, height_m) >= width_m.hypot(height_m) / 2.0);
+    }
+    assert_eq!(
+        gameplay_view_height_m(16.0 / 9.0, DEFAULT_VIEW_HEIGHT_M),
+        15.0
+    );
+    assert_eq!(gameplay_view_height_m(1.0, DEFAULT_VIEW_HEIGHT_M), 20.0);
+}
+
+#[test]
+fn gameplay_resize_keeps_zoom_and_reset_restores_default_area() {
+    let zoomed = zoom_view_height_m(DEFAULT_VIEW_HEIGHT_M, 600.0);
+    let landscape_height = gameplay_view_height_m(16.0 / 9.0, zoomed);
+    let portrait_height = gameplay_view_height_m(9.0 / 16.0, zoomed);
+    assert!((landscape_height * 16.0 / 9.0 - portrait_height).abs() < 1e-4);
+    let restored = zoom_view_height_m(zoomed, -600.0);
+    for aspect in [3.0 / 7.0, 1.0, 16.0 / 9.0, 7.0 / 3.0] {
+        let height = gameplay_view_height_m(aspect, restored);
+        assert!((height * view_width_m(aspect, height) - 400.0).abs() < 1e-3);
+    }
 }
 
 #[test]
