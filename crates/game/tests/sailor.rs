@@ -1,4 +1,4 @@
-use game::{Sailor, dinghy_parameters};
+use game::{dinghy_parameters, sailor_targets};
 use physics::prelude::{Rotation, Vector};
 use simulation::{BoatMotion, Environment, MotionIntent};
 
@@ -28,7 +28,6 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
             true_wind_velocity_m_s: Vector::new(0.0, -6.0 * side),
             ..Environment::default()
         };
-        let mut controller = Sailor::default();
         for (power, expected_degrees) in [
             (0.0, 90.0),
             (1e-6, 90.0 - 45e-6),
@@ -38,7 +37,7 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
             (-0.5, -22.5),
             (-1.0, -45.0),
         ] {
-            let targets = controller.targets(
+            let targets = sailor_targets(
                 p,
                 state,
                 environment,
@@ -60,56 +59,47 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
                 -0.5 * p.max_rudder_angle_rad
             );
         }
-        let neutral = controller.targets(p, state, environment, MotionIntent::default());
+        let neutral = sailor_targets(p, state, environment, MotionIntent::default());
         assert_eq!(neutral.rudder_target_angle_rad, 0.0);
     }
 }
 
 #[test]
-fn sternway_uses_hinge_relative_flow_with_hysteresis() {
-    let p = dinghy_parameters();
-    let mut state = motion();
-    state.velocity_m_s = Vector::ZERO;
-    state.angular_velocity_rad_s = 0.0;
-    let intent = MotionIntent {
-        forward: 0.0,
-        turn: 0.5,
-    };
-    let mut controller = Sailor::default();
-    for (speed, polarity) in [
-        (2.0, 1.0),
-        (0.05, 1.0),
-        (-0.05, 1.0),
-        (-0.11, -1.0),
-        (-2.0, -1.0),
-        (-0.05, -1.0),
-        (0.05, -1.0),
-        (0.11, 1.0),
+fn direct_helm_targets_ignore_flow_direction_and_history() {
+    let mut p = dinghy_parameters();
+    p.rudder_position_m.y = 0.4;
+    for (velocity, current, angular_velocity) in [
+        (2.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+        (-2.0, 0.0, 0.0),
+        (0.0, 0.05, 0.0),
+        (0.0, -0.05, 0.0),
+        (0.0, -2.0, 0.0),
+        (0.0, 2.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (0.0, 0.0, -1.0),
+        (0.0, 0.0, 0.0),
     ] {
+        let state = BoatMotion {
+            velocity_m_s: Vector::new(velocity, 0.0),
+            angular_velocity_rad_s: angular_velocity,
+            ..motion()
+        };
         let environment = Environment {
-            true_water_velocity_m_s: Vector::new(-speed, 0.0),
+            true_water_velocity_m_s: Vector::new(current, 0.0),
             ..Environment::default()
         };
-        let target = controller.targets(p, state, environment, intent);
-        assert_eq!(
-            target.rudder_target_angle_rad,
-            -polarity * 0.5 * p.max_rudder_angle_rad
-        );
+        for turn in [-2.0_f64, -1.0, -0.5, 0.0, 0.25, 1.0, 2.0] {
+            for forward in [-1.0, 0.0, 1.0] {
+                let target = sailor_targets(p, state, environment, MotionIntent { forward, turn });
+                assert_eq!(
+                    target.rudder_target_angle_rad,
+                    -turn.clamp(-1.0, 1.0) * p.max_rudder_angle_rad,
+                    "velocity={velocity}, current={current}, angular_velocity={angular_velocity}, turn={turn}, forward={forward}"
+                );
+            }
+        }
     }
-    let mut offset_hinge = p;
-    offset_hinge.rudder_position_m.y = 0.4;
-    state.angular_velocity_rad_s = 1.0;
-    let target = controller.targets(offset_hinge, state, Environment::default(), intent);
-    assert_eq!(target.rudder_target_angle_rad, 0.5 * p.max_rudder_angle_rad);
-    state.angular_velocity_rad_s = 0.0;
-    let retained = controller.targets(p, state, Environment::default(), intent);
-    assert_eq!(
-        retained.rudder_target_angle_rad,
-        target.rudder_target_angle_rad
-    );
-    controller = Sailor::default();
-    let reset = controller.targets(p, state, Environment::default(), intent);
-    assert_eq!(reset.rudder_target_angle_rad, -0.5 * p.max_rudder_angle_rad);
 }
 
 #[test]
@@ -125,8 +115,7 @@ fn backing_uses_raw_wind_side_even_when_drive_retains_boom_side() {
         true_wind_velocity_m_s: Rotation::new(beta).transform_vector(Vector::new(-6.0, 0.0)),
         ..Environment::default()
     };
-    let mut controller = Sailor::default();
-    let drive = controller.targets(
+    let drive = sailor_targets(
         p,
         state,
         environment,
@@ -136,7 +125,7 @@ fn backing_uses_raw_wind_side_even_when_drive_retains_boom_side() {
         },
     );
     assert!((drive.sheet_target_angle_rad.to_degrees() + 87.5).abs() < 1e-10);
-    let back = controller.targets(
+    let back = sailor_targets(
         p,
         state,
         environment,
@@ -161,7 +150,7 @@ fn targets_reflect_and_rotate_with_the_boat_and_flows() {
         forward: -0.5,
         turn: 0.25,
     };
-    let target = Sailor::default().targets(p, state, environment, intent);
+    let target = sailor_targets(p, state, environment, intent);
     let reflected = BoatMotion {
         position_m: Vector::new(state.position_m.x, -state.position_m.y),
         velocity_m_s: Vector::new(state.velocity_m_s.x, -state.velocity_m_s.y),
@@ -183,7 +172,7 @@ fn targets_reflect_and_rotate_with_the_boat_and_flows() {
         ),
         ..environment
     };
-    let mirrored = Sailor::default().targets(
+    let mirrored = sailor_targets(
         p,
         reflected,
         reflected_environment,
@@ -209,7 +198,7 @@ fn targets_reflect_and_rotate_with_the_boat_and_flows() {
         true_water_velocity_m_s: rotation.transform_vector(environment.true_water_velocity_m_s),
         ..environment
     };
-    let turned = Sailor::default().targets(p, rotated, rotated_environment, intent);
+    let turned = sailor_targets(p, rotated, rotated_environment, intent);
     assert!((target.sheet_target_angle_rad - turned.sheet_target_angle_rad).abs() < 1e-12);
     assert_eq!(
         target.rudder_target_angle_rad,

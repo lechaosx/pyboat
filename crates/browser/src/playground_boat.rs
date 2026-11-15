@@ -1,4 +1,4 @@
-use game::{Sailor, dinghy_parameters, procedural_match_environment};
+use game::{dinghy_parameters, procedural_match_environment, sailor_targets};
 use rapier2d_f64::prelude::Vector;
 use simulation::{BoatMotion, Environment, MotionIntent, SharedSimulation, WorldGeometry};
 
@@ -6,7 +6,6 @@ use crate::{BoatScene, Windsock, boat_scene, player_motion_intent};
 
 pub struct PlaygroundBoat {
     simulation: SharedSimulation,
-    sailor: Sailor,
     pub(crate) geometry: WorldGeometry,
     pub(crate) seed: u64,
     tick: u64,
@@ -45,7 +44,6 @@ impl PlaygroundBoat {
         simulation.add_boat(parameters, motion);
         Some(Self {
             simulation,
-            sailor: Sailor::default(),
             geometry,
             seed,
             tick,
@@ -83,7 +81,6 @@ impl PlaygroundBoat {
         self.geometry = geometry;
         self.seed = seed;
         self.tick = tick;
-        self.sailor = Sailor::default();
     }
     pub fn step(&mut self) {
         self.intent = player_motion_intent(
@@ -94,9 +91,7 @@ impl PlaygroundBoat {
             self.input[3],
         );
         let environment = self.environment();
-        let targets =
-            self.sailor
-                .targets(dinghy_parameters(), self.motion(), environment, self.intent);
+        let targets = sailor_targets(dinghy_parameters(), self.motion(), environment, self.intent);
         self.simulation
             .advance_controlled_with_environments(&[environment], &[Some(targets)]);
         self.tick += 1;

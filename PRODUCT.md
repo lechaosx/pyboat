@@ -159,8 +159,7 @@ See [README.md](README.md) for what is playable now and
   physical limits allow, including useful attempts when the requested motion
   cannot be achieved.
 - **[Explicit]** Simple sailor assigns forward intent to sail power and turn
-  intent to rudder position, reversing the helm when moving stern-first through
-  water.
+  intent directly to rudder position, including when moving stern-first.
 - **[Explicit]** The player chooses maneuvers; the controller executes present
   forward and turn intent.
 - **[Explicit]** Keyboard, gamepad, touch, and mouse controls remain usable

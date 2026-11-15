@@ -1,6 +1,6 @@
 #![cfg(feature = "playground")]
 use browser::{PlaygroundBoat, player_motion_intent};
-use game::{Sailor, dinghy_parameters, procedural_match_environment};
+use game::{dinghy_parameters, procedural_match_environment, sailor_targets};
 use rapier2d_f64::prelude::Vector;
 use simulation::{SharedSimulation, WorldGeometry};
 
@@ -25,7 +25,6 @@ fn every_tick_uses_production_environment_and_current_heading_intent() {
     boat.set_player_input(input);
     let mut reference = SharedSimulation::new_with_world_geometry(geometry);
     reference.add_boat(dinghy_parameters(), boat.motion());
-    let mut sailor = Sailor::default();
     for _ in 0..6 {
         let motion = boat.motion();
         let expected = player_motion_intent(
@@ -37,7 +36,7 @@ fn every_tick_uses_production_environment_and_current_heading_intent() {
         );
         let environment = procedural_match_environment(geometry, 7, boat.tick(), motion.position_m);
         assert_eq!(boat.environment(), environment);
-        let targets = sailor.targets(
+        let targets = sailor_targets(
             dinghy_parameters(),
             reference.motion(0),
             environment,

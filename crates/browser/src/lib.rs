@@ -48,10 +48,10 @@ pub use terrain_cache::TerrainCachePass;
 pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
-    CloudFieldTimeCoordinates, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, OceanWaveMode, Sailor,
+    CloudFieldTimeCoordinates, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, OceanWaveMode,
     WorldEnvironment, cloud_field_time_coordinates_interpolated, dinghy_parameters,
     match_environment, procedural_match_environment, procedural_world_environment,
-    procedural_world_environment_interpolated,
+    procedural_world_environment_interpolated, sailor_targets,
 };
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -543,7 +543,6 @@ struct InputCommand {
 #[derive(Clone, Copy)]
 struct PredictedBoat {
     index: usize,
-    sailor: Sailor,
     intent: MotionIntent,
     wreck: bool,
 }
@@ -946,9 +945,6 @@ impl MultiplayerClient {
                 player_id.clone(),
                 PredictedBoat {
                     index,
-                    sailor: Sailor {
-                        sternway: boat.snapshot.sailor_sternway,
-                    },
                     intent: MotionIntent {
                         forward: f64::from(forward),
                         turn: f64::from(turn),
@@ -1000,7 +996,7 @@ impl MultiplayerClient {
             );
             environments[boat.index] = environment;
             if !boat.wreck {
-                targets[boat.index] = Some(boat.sailor.targets(
+                targets[boat.index] = Some(sailor_targets(
                     dinghy_parameters(),
                     motion,
                     environment,
@@ -1246,7 +1242,6 @@ pub fn player_motion_intent(
 
 pub struct Demo {
     parameters: BoatParameters,
-    sailor: Sailor,
     simulation: SharedSimulation,
     player_boat: usize,
     practice_boat: usize,
@@ -1283,7 +1278,6 @@ impl Demo {
         let practice_boat = simulation.add_boat(parameters, practice_motion);
         Self {
             parameters,
-            sailor: Sailor::default(),
             simulation,
             player_boat,
             practice_boat,
@@ -1324,7 +1318,7 @@ impl Demo {
         self.accumulator_seconds += f64::from(elapsed_seconds.min(0.25));
         while self.accumulator_seconds >= DT_SECONDS {
             let motion = self.motion();
-            let player_targets = self.sailor.targets(
+            let player_targets = sailor_targets(
                 self.parameters,
                 motion,
                 match_environment(),
@@ -1506,7 +1500,6 @@ mod tests {
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
-                sailor_sternway: false,
                 x: 0.0,
                 y: 0.0,
                 vx: 0.0,
@@ -1537,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn reconciliation_restores_sternway_before_replaying_local_and_remote_inputs() {
+    fn reconciliation_replays_local_and_remote_inputs_across_flow_directions() {
         let geometry = WorldGeometry::default();
         let seed = 7;
         let tick = 3600;
@@ -1545,7 +1538,7 @@ mod tests {
             forward: 0.0,
             turn: 0.25,
         };
-        for sternway in [false, true] {
+        for headway in [-2.0, 0.0, 2.0] {
             let snapshots = [0.0, 20.0]
                 .into_iter()
                 .enumerate()
@@ -1559,10 +1552,9 @@ mod tests {
                         health: 100.0,
                         last_hit_tick: None,
                         wreck: false,
-                        sailor_sternway: sternway,
                         x,
                         y: 0.0,
-                        vx: water.x,
+                        vx: water.x + headway,
                         vy: water.y,
                         angle: 0.0,
                         angular_velocity: 0.0,
@@ -1577,7 +1569,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let mut reference = SharedSimulation::new_with_world_geometry(geometry);
-            let mut sailors = [Sailor { sternway }; 2];
             for snapshot in &snapshots {
                 reference.add_boat(dinghy_parameters(), snapshot_motion(snapshot));
             }
@@ -1597,25 +1588,24 @@ mod tests {
             client.accept(initial.clone());
             client.set_motion_intent(intent.forward as f32, intent.turn as f32);
             client.take_inputs(TICK_SECONDS);
-            let advance_reference =
-                |reference: &mut SharedSimulation, sailors: &mut [Sailor; 2], tick| {
-                    let mut environments = Vec::new();
-                    let mut targets = Vec::new();
-                    for (index, sailor) in sailors.iter_mut().enumerate() {
-                        let motion = reference.motion(index);
-                        let environment =
-                            procedural_match_environment(geometry, seed, tick, motion.position_m);
-                        environments.push(environment);
-                        targets.push(Some(sailor.targets(
-                            dinghy_parameters(),
-                            motion,
-                            environment,
-                            intent,
-                        )));
-                    }
-                    reference.advance_controlled_with_environments(&environments, &targets);
-                };
-            advance_reference(&mut reference, &mut sailors, tick);
+            let advance_reference = |reference: &mut SharedSimulation, tick| {
+                let mut environments = Vec::new();
+                let mut targets = Vec::new();
+                for index in 0..2 {
+                    let motion = reference.motion(index);
+                    let environment =
+                        procedural_match_environment(geometry, seed, tick, motion.position_m);
+                    environments.push(environment);
+                    targets.push(Some(sailor_targets(
+                        dinghy_parameters(),
+                        motion,
+                        environment,
+                        intent,
+                    )));
+                }
+                reference.advance_controlled_with_environments(&environments, &targets);
+            };
+            advance_reference(&mut reference, tick);
             client.accept(initial);
             for index in 0..2 {
                 assert_eq!(
@@ -1635,7 +1625,7 @@ mod tests {
                     )
                 })
                 .collect::<Vec<_>>();
-            let targets = sailors[0].targets(
+            let targets = sailor_targets(
                 dinghy_parameters(),
                 reference.motion(0),
                 environments[0],
@@ -1679,7 +1669,6 @@ mod tests {
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
-                sailor_sternway: false,
                 x: expected[0],
                 y: expected[1],
                 vx: expected[2],
@@ -2030,7 +2019,6 @@ mod tests {
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
-                sailor_sternway: false,
                 x: 0.0,
                 y: 0.0,
                 vx: 0.0,
@@ -2096,7 +2084,6 @@ mod tests {
             health: 100.0,
             last_hit_tick: Some(u64::MAX),
             wreck: true,
-            sailor_sternway: false,
             x: f64::MAX,
             y: f64::MAX,
             vx: f64::MAX,
@@ -2158,7 +2145,6 @@ mod tests {
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
-                sailor_sternway: false,
                 x: 0.0,
                 y: 0.0,
                 vx: 0.0,

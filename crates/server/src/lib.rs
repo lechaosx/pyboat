@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use game::{Sailor, dinghy_parameters, procedural_match_environment};
+use game::{dinghy_parameters, procedural_match_environment, sailor_targets};
 use protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
@@ -165,7 +165,6 @@ impl SessionState {
 struct Player {
     id: String,
     nickname: String,
-    sailor: Sailor,
     intent: MotionIntent,
     acknowledged_input: i64,
     last_received_input: i64,
@@ -287,7 +286,6 @@ impl GameMatch {
         self.players.push(Player {
             id: player_id,
             nickname: "Sailor".into(),
-            sailor: Sailor::default(),
             intent: MotionIntent::default(),
             acknowledged_input: 0,
             last_received_input: 0,
@@ -356,7 +354,7 @@ impl GameMatch {
                 player.intent = intent;
                 player.acknowledged_input = sequence;
             }
-            targets.push(Some(player.sailor.targets(
+            targets.push(Some(sailor_targets(
                 self.parameters,
                 motion,
                 environment,
@@ -471,7 +469,6 @@ impl GameMatch {
                     health: player.health,
                     last_hit_tick: player.last_hit_tick,
                     wreck: player.wreck,
-                    sailor_sternway: player.sailor.sternway,
                     x: motion.position_m.x,
                     y: motion.position_m.y,
                     vx: motion.velocity_m_s.x,
@@ -919,7 +916,6 @@ mod tests {
             players.push(Player {
                 id: format!("player-{}", index + 1),
                 nickname: "Sailor".into(),
-                sailor: Sailor::default(),
                 intent: MotionIntent::default(),
                 acknowledged_input: 0,
                 last_received_input: 0,
@@ -982,7 +978,6 @@ mod tests {
                 .map(|number| Player {
                     id: format!("player-{number}"),
                     nickname: "Sailor".into(),
-                    sailor: Sailor::default(),
                     intent: MotionIntent::default(),
                     acknowledged_input: 0,
                     last_received_input: 0,
