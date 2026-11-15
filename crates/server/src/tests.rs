@@ -1,5 +1,5 @@
 use super::*;
-use protocol::{ServerMessage, decode_server_message};
+use protocol::{ClientMessage, ServerMessage, decode_server_message, encode_client_message};
 use std::{path::Path, time::Duration};
 use tokio::time::timeout;
 use wtransport::{ClientConfig, Connection, Endpoint, endpoint::endpoint_side::Client};
@@ -102,16 +102,33 @@ async fn certificate_polling_preserves_connections_and_retries_invalid_replaceme
         panic!("expected welcome")
     };
     assert_eq!(player_id, "player-1");
-    let before = timeout(Duration::from_secs(2), first.receive_datagram())
-        .await
-        .unwrap()
-        .unwrap();
-    let ServerMessage::Snapshot {
-        tick: before_tick, ..
-    } = decode_server_message(&before).unwrap()
-    else {
-        panic!("expected snapshot")
-    };
+    let join = encode_client_message(&ClientMessage::Join {
+        nickname: "Sailor".into(),
+        input_sequence: 1,
+    })
+    .unwrap();
+    let mut stream = first.open_uni().await.unwrap().await.unwrap();
+    stream.write_all(&join).await.unwrap();
+    stream.finish().await.unwrap();
+    let (before_tick, boat_id) = timeout(Duration::from_secs(2), async {
+        loop {
+            let bytes = first.receive_datagram().await.unwrap();
+            if let ServerMessage::Snapshot {
+                tick,
+                controlled_boat_id: Some(boat_id),
+                boats,
+                ..
+            } = decode_server_message(&bytes).unwrap()
+                && boats
+                    .iter()
+                    .any(|boat| boat.id == boat_id && boat.acknowledged_input == Some(0))
+            {
+                break (tick, boat_id);
+            }
+        }
+    })
+    .await
+    .unwrap();
     let renewed = Identity::self_signed(["localhost", "127.0.0.1"]).unwrap();
     replace_preserving_metadata(
         &certificate,
@@ -173,10 +190,19 @@ async fn certificate_polling_preserves_connections_and_retries_invalid_replaceme
     timeout(Duration::from_secs(2), async {
         loop {
             let bytes = first.receive_datagram().await.unwrap();
-            if let ServerMessage::Snapshot { tick, boats, .. } =
-                decode_server_message(&bytes).unwrap()
+            if let ServerMessage::Snapshot {
+                tick,
+                controlled_boat_id,
+                boats,
+                ..
+            } = decode_server_message(&bytes).unwrap()
                 && tick > before_tick
-                && boats.iter().any(|boat| boat.id == player_id)
+                && controlled_boat_id.as_ref() == Some(&boat_id)
+                && boats.iter().any(|boat| {
+                    boat.id == boat_id
+                        && boat.nickname == "Sailor"
+                        && boat.acknowledged_input == Some(0)
+                })
             {
                 break;
             }
