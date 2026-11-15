@@ -3,14 +3,34 @@
 pub const SETTLED_ADAPTATION_SECONDS: f32 = f32::MAX;
 
 /// Seconds over which the eye adapts in the next rendered frame: the time
-/// since the last rendered frame, or until one is rendered, long enough to
-/// settle.
-#[derive(Default)]
+/// since the last rendered frame. Loading time does not advance the initial
+/// state; the lab defaults to a settled view and gameplay starts in daylight.
 pub struct AdaptationClock {
     seconds_since_rendered: Option<f64>,
+    initial_seconds: f32,
+}
+
+impl Default for AdaptationClock {
+    fn default() -> Self {
+        Self {
+            seconds_since_rendered: None,
+            initial_seconds: SETTLED_ADAPTATION_SECONDS,
+        }
+    }
 }
 
 impl AdaptationClock {
+    pub fn daylight() -> Self {
+        Self {
+            initial_seconds: 0.0,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_initial(&self) -> bool {
+        self.seconds_since_rendered.is_none()
+    }
+
     pub fn advance(&mut self, elapsed_seconds: f64) {
         if let Some(seconds) = &mut self.seconds_since_rendered {
             *seconds += elapsed_seconds.max(0.0);
@@ -19,7 +39,7 @@ impl AdaptationClock {
 
     pub fn seconds(&self) -> f32 {
         self.seconds_since_rendered
-            .map_or(SETTLED_ADAPTATION_SECONDS, |seconds| seconds as f32)
+            .map_or(self.initial_seconds, |seconds| seconds as f32)
     }
 
     pub fn frame_rendered(&mut self) {
@@ -119,6 +139,21 @@ mod tests {
             );
             previous = compensated;
         }
+    }
+
+    #[test]
+    fn daylight_start_waits_for_the_first_visible_match_frame() {
+        let mut clock = AdaptationClock::daylight();
+        clock.advance(30.0);
+        assert_eq!(clock.seconds(), 0.0);
+        assert!(clock.is_initial());
+        clock.frame_rendered();
+        clock.advance(0.25);
+        clock.advance(0.5);
+        assert_eq!(clock.seconds(), 0.75);
+        assert!(!clock.is_initial());
+        clock.frame_rendered();
+        assert_eq!(clock.seconds(), 0.0);
     }
 
     #[test]

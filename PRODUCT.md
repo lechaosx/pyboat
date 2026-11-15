@@ -85,6 +85,8 @@ See [README.md](README.md) for what is playable now and
   visual differences.
 - **[Explicit]** Exposure adapts gradually when moving between dark and bright
   environments, like eyes adjusting to light.
+- **[Explicit]** A new session starts daylight-adapted, so night detail appears
+  gradually from near black, consistently across boats and surroundings.
 - **[Explicit]** Exposure and tone mapping apply to the whole rendered view.
 - **[Explicit]** Dark adaptation progressively shifts the rendered view from
   color-sensitive cone vision toward achromatic rod vision, making red dimmer

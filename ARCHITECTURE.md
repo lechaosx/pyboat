@@ -312,8 +312,8 @@ and verification details.
   neutral shows as the display's white, alike for SDR and HDR below diffuse
   white; HDR only adds headroom above it. The viewer's own viewing conditions are unknown and stay
   outside the model.
-- **[Explicit]** Unlit overlays, such as boats and the windsock, take the
-  light the view is adapted to where they are.
+- **[Explicit]** Boats and the windsock take current scene illumination before
+  the shared eye response; adaptation history changes perception, not incident light.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
   rendered world position and reconstructs environment fields there from a
   per-frame grid anchored to world coordinates, with spacing matched to the

@@ -19,11 +19,11 @@ fn fragment(input: VertexOutput) -> SceneFragment {
 @fragment
 fn fragment_illumination(input: VertexOutput) -> @location(0) vec4<f32> {
     let surface = initialize_production_surface(input);
-    return adapting_light(scene_illumination(
+    return vec4<f32>(scene_illumination(
         surface.input.world_position_m,
         surface.atmosphere,
         surface.circle_position,
-    ));
+    ), 1.0);
 }
 
 struct ProductionSurfaceInput {

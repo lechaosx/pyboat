@@ -52,7 +52,7 @@ fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) v
         var row_total = 0.0;
         for (var column = 0u; column < ILLUMINATION_TEXELS; column++) {
             let light = textureLoad(illumination, vec2<u32>(column, row), 0);
-            row_light += column_weights[column] * exp2(light.r) * light.gba;
+            row_light += column_weights[column] * light.rgb;
             row_total += column_weights[column];
         }
         weighted_light += row_weight * row_light;

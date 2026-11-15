@@ -102,8 +102,6 @@ fn chromatically_adapted_color(linear_color: vec3<f32>, adaptation: EyeAdaptatio
     return CAT16_TO_SRGB * (gains * (SRGB_TO_CAT16 * linear_color));
 }
 
-// Unlit colours, such as boats and the windsock, as level ground lit by the
-// light the view is adapted to there.
 fn adapted_unlit_color(linear_color: vec3<f32>, adaptation: EyeAdaptation) -> vec3<f32> {
     return linear_color * adaptation.white * adapted_view_light(adaptation.gain);
 }

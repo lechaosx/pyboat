@@ -3,6 +3,7 @@
 // The height above mean sea level of the surface each scene pixel shows,
 // which the scene pass writes beside its colour.
 @group(2) @binding(0) var surface_height: texture_2d<f32>;
+@group(2) @binding(1) var scene_light: texture_2d<f32>;
 override IS_SAIL: bool = false;
 
 struct BoatVertexInput {
@@ -54,6 +55,22 @@ fn hidden_by_surface(input: BoatSpriteOutput) -> bool {
     return textureLoad(surface_height, texel, 0).r > input.height_m;
 }
 
+// Reuse the unblurred illumination grid to avoid evaluating the full scene per
+// boat fragment. Small shadow edges inherit its resolution and ground height.
+fn boat_illumination(input: BoatSpriteOutput) -> vec3<f32> {
+    let uv = vec2<f32>(0.5) + vec2<f32>(1.0, -1.0) * input.view_offset_m / scene.camera_and_view_m.zw;
+    let size = textureDimensions(scene_light);
+    let texel = clamp(uv * vec2<f32>(size) - 0.5, vec2<f32>(0.0), vec2<f32>(size - 1u));
+    let origin = vec2<u32>(texel);
+    let next = min(origin + 1u, size - 1u);
+    let blend = fract(texel);
+    return mix(
+        mix(textureLoad(scene_light, origin, 0).rgb, textureLoad(scene_light, vec2<u32>(next.x, origin.y), 0).rgb, blend.x),
+        mix(textureLoad(scene_light, vec2<u32>(origin.x, next.y), 0).rgb, textureLoad(scene_light, next, 0).rgb, blend.x),
+        blend.y,
+    );
+}
+
 @fragment
 fn fragment_sail_depth(input: BoatSpriteOutput) -> @location(0) vec4<f32> {
     if textureSample(boat_texture, boat_sampler, input.color.xy).a * input.coverage <= 0.0 {
@@ -90,6 +107,6 @@ fn fragment_boat_sprite(
     }
     let adaptation = field_adaptation(input.css_position_px);
     return vec4<f32>(encode_display_color(tone_map_scene_color(
-        adapted_unlit_color(color, adaptation), adaptation, input.css_position_px,
+        color * boat_illumination(input), adaptation, input.css_position_px,
     )), texel.a * input.coverage);
 }

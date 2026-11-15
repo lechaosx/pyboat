@@ -1888,7 +1888,7 @@ impl Renderer {
             cloth: ClothPresentation::default(),
             cloth_match_seed: None,
             field_grid_history: FieldGridHistory::default(),
-            adaptation_clock: AdaptationClock::default(),
+            adaptation_clock: AdaptationClock::daylight(),
             vision_noise_phase: 0.0,
             frame_pacer: FramePacer::default(),
             render_scale: graphics.render_scale,
@@ -1919,6 +1919,7 @@ impl Renderer {
         if self.cloth_match_seed != match_seed {
             self.cloth = ClothPresentation::default();
             self.cloth_match_seed = match_seed;
+            self.adaptation_clock = AdaptationClock::daylight();
         }
         let cloth = self.cloth.advance(scenes, elapsed_seconds);
         self.follow_baked_surface_size(elapsed_seconds);
@@ -1946,7 +1947,7 @@ impl Renderer {
         if render_clock.is_some() {
             self.adaptation_clock.advance(elapsed_seconds);
         } else {
-            self.adaptation_clock = AdaptationClock::default();
+            self.adaptation_clock = AdaptationClock::daylight();
         }
         self.vision_noise_phase =
             (self.vision_noise_phase + elapsed_seconds.max(0.0) * 8.0) % 4096.0;
@@ -2199,6 +2200,9 @@ impl Renderer {
             self.terrain_depth
                 .encode(&mut encoder, &self.terrain_depth_input, &field_grids, None);
         }
+        if self.adaptation_clock.is_initial() {
+            self.adapting_field.reset_to_daylight(&mut encoder);
+        }
         self.adapting_field
             .encode(&mut encoder, &self.bind_group, None, |pass| {
                 if terrain_vertex_count > 0 {
@@ -2263,6 +2267,7 @@ impl Renderer {
             output_size,
             &self.scene_bind_group,
             &self.surface_height.1,
+            &self.adapting_field.illumination_view,
             scenes,
             &cloth,
             world_geometry,
@@ -2272,7 +2277,9 @@ impl Renderer {
             world_time_seconds,
         );
         self.queue.submit(Some(encoder.finish()));
-        self.adaptation_clock.frame_rendered();
+        if render_clock.is_some() {
+            self.adaptation_clock.frame_rendered();
+        }
         let frame_timing = self
             .resolution
             .is_some()
@@ -2644,6 +2651,7 @@ impl BrowserGame {
 
     pub fn reconnect(&mut self) -> Result<(), JsValue> {
         self.shutdown();
+        self.renderer.adaptation_clock = AdaptationClock::daylight();
         self.client = Rc::new(RefCell::new(MultiplayerClient::new()));
         self.pending_snapshot = Rc::new(RefCell::new(None));
         self.connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));

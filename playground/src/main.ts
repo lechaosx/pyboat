@@ -2038,7 +2038,7 @@ function renderFrame(): Promise<void> {
     const illuminationPass = encoder.beginRenderPass({
       colorAttachments: [{
         view: illuminationView,
-        clearValue: { r: 0, g: 1, b: 1, a: 1 },
+        clearValue: { r: 1, g: 1, b: 1, a: 1 },
         loadOp: "clear",
         storeOp: "store",
       }],
@@ -2114,7 +2114,7 @@ function renderFrame(): Promise<void> {
   if (drivingBoat.driver && state.diagnostic === "scene" && surfaceHeightPipelines.has(renderResources.pipeline)) {
     boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView);
     const target = canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
-    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), outputHeight: previewCanvas.height, time: state.worldTimeSeconds });
+    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, illuminationView, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), outputHeight: previewCanvas.height, time: state.worldTimeSeconds });
   }
   if (timestampReadback) {
     const timestampBytes = (lastEnd + 1) * 8;

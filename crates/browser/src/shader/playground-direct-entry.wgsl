@@ -18,9 +18,9 @@ fn fragment_playground_scene(input: VertexOutput) -> PlaygroundSceneFragment {
 @fragment
 fn fragment_playground_illumination(input: VertexOutput) -> @location(0) vec4<f32> {
     let initialized = initialize_playground_scene(input);
-    return adapting_light(scene_illumination(
+    return vec4<f32>(scene_illumination(
         initialized.input.world_position_m,
         initialized.atmosphere,
         initialized.surface_circle_position,
-    ));
+    ), 1.0);
 }

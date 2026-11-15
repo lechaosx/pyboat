@@ -155,7 +155,7 @@ export class BoatPass {
       { binding: 0, visibility: 2, texture: { sampleType: "float" } },
       { binding: 1, visibility: 2, sampler: { type: "filtering" } },
     ] });
-    this.heightLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: 2, texture: { sampleType: "unfilterable-float" } }] });
+    this.heightLayout = device.createBindGroupLayout({ entries: [0, 1].map((binding) => ({ binding, visibility: 2, texture: { sampleType: "unfilterable-float" as GPUTextureSampleType } })) });
     this.scene = device.createBindGroup({ layout: this.sceneLayout, entries: [
       { binding: 0, resource: { buffer: sceneBuffer } }, { binding: 7, resource: adaptation },
     ] });
@@ -187,7 +187,7 @@ export class BoatPass {
     result = [pipeline(false, false), pipeline(true, true), pipeline(true, false)];
     this.pipelines.set(format, result); return result;
   }
-  encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, size: [number, number], driver: PlaygroundBoatDriver, view: BoatView): void {
+  encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, illumination: GPUTextureView, size: [number, number], driver: PlaygroundBoatDriver, view: BoatView): void {
     driver.prepare_mesh(view.x, view.y, view.outputHeight, view.height, view.time);
     const vertices = driver.vertices(); const batches = driver.batches();
     if (vertices.byteLength > this.vertexBytes) {
@@ -198,7 +198,7 @@ export class BoatPass {
     if (this.size !== size.join()) {
       this.depth?.destroy(); this.depth = this.device.createTexture({ size, format: "depth32float", usage: 0x10 }); this.size = size.join();
     }
-    const height = this.device.createBindGroup({ layout: this.heightLayout, entries: [{ binding: 0, resource: surface }] });
+    const height = this.device.createBindGroup({ layout: this.heightLayout, entries: [{ binding: 0, resource: surface }, { binding: 1, resource: illumination }] });
     const pipelines = this.forFormat(format);
     let pass: GPURenderPassEncoder | undefined;
     for (let offset = 0; offset < batches.length; offset += 4) {

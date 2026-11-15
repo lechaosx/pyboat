@@ -195,8 +195,8 @@ impl BoatSprites {
         let surface_height_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Surface height layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -204,7 +204,7 @@ impl BoatSprites {
                         multisampled: false,
                     },
                     count: None,
-                }],
+                }),
             });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Boat sprite pipeline layout"),
@@ -289,6 +289,7 @@ impl BoatSprites {
         output_size: (u32, u32),
         scene_bind_group: &wgpu::BindGroup,
         surface_height: &wgpu::TextureView,
+        illumination: &wgpu::TextureView,
         scenes: &[BoatScene],
         cloth: &[ClothPose],
         world_geometry: WorldGeometry,
@@ -313,10 +314,16 @@ impl BoatSprites {
         let surface_height = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Surface height bind group"),
             layout: &self.surface_height_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(surface_height),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(surface_height),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(illumination),
+                },
+            ],
         });
         if vertices.len() > self.vertex_capacity {
             self.vertex_capacity = vertices.len().next_power_of_two();

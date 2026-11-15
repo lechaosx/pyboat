@@ -7,8 +7,7 @@ use crate::ADAPTING_FIELD_BLUR_SHADER;
 pub const ILLUMINATION_TEXELS: u32 = 32;
 pub const ADAPTING_FIELD_TEXELS: u32 = 32;
 
-/// Format of both textures, which hold stops of scene light and its colour at
-/// unit luminance.
+/// Illumination stores linear RGB; adaptation stores stops and unit-luminance white.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// The eye's adapting field over the view: the scene's illumination, rendered
@@ -16,7 +15,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 /// and adapted to over the seconds the scene uniforms give. The scene reads
 /// `view` at binding 7 of its first group.
 pub struct AdaptingField {
-    illumination_view: wgpu::TextureView,
+    pub illumination_view: wgpu::TextureView,
     pub view: wgpu::TextureView,
     blur_pipeline: wgpu::RenderPipeline,
     blur_input: wgpu::BindGroup,
@@ -137,9 +136,18 @@ impl AdaptingField {
         &self.field
     }
 
+    pub fn reset_to_daylight(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.encode_uniform(encoder, 1.0, [1.0; 3]);
+        encoder.copy_texture_to_texture(
+            self.field.as_image_copy(),
+            self.previous_field.as_image_copy(),
+            self.field.size(),
+        );
+    }
+
     /// Renders the illumination that `draw` records, then blurs it into the
     /// field's target and adapts the field toward it. Before anything is drawn
-    /// the illumination holds daylight's zero stops in the display's white.
+    /// the illumination holds daylight in the display's white.
     /// Timestamps, when given as a query set and a beginning index, mark the
     /// start of the first pass.
     pub fn encode(
@@ -156,7 +164,7 @@ impl AdaptingField {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
+                        r: 1.0,
                         g: 1.0,
                         b: 1.0,
                         a: 1.0,

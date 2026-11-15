@@ -23,11 +23,10 @@ const VIEW_HEIGHT_DEGREES: f32 = 23.0;
 @group(0) @binding(7)
 var adapting_field: texture_2d<f32>;
 
-// Light as the illumination and the adapting field hold it: stops of its
+// Light as the adapting field holds it: stops of its
 // luminance, in scene light, then its colour at unit luminance. The eye
 // adapts no further than full dark adaptation, so darker light counts as
-// that bound. Light without luminance, as when the lab hides every light,
-// takes the display's white.
+// that bound. Light without luminance takes the display's white.
 fn adapting_light(light: vec3<f32>) -> vec4<f32> {
     let luminance = dot(light, vec3<f32>(0.2126, 0.7152, 0.0722));
     return vec4<f32>(

@@ -2581,6 +2581,13 @@ fn render_world(
             })
         }
     };
+    if let Some(adaptation) = adaptation {
+        adaptation
+            .field
+            .encode(&mut encoder, &scene_bind_group, None, |pass| {
+                draw_illumination(pass, adaptation, &fragment_scene_bind_group)
+            });
+    }
     match adaptation {
         Some(adaptation) if options.fixed_adaptation => {
             let world = WorldGeometry::new(
@@ -2599,14 +2606,7 @@ fn render_world(
                 [1.0; 3],
             );
         }
-        Some(adaptation) => {
-            adaptation
-                .field
-                .encode(&mut encoder, &scene_bind_group, None, |pass| {
-                    draw_illumination(pass, adaptation, &fragment_scene_bind_group)
-                });
-        }
-        None => {}
+        _ => {}
     }
     let adapting_field_readback = adaptation.map(|adaptation| {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2671,7 +2671,9 @@ fn render_world(
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
     }
-    if let (Some([x_m, y_m, heading_degrees]), Some(fields)) = (options.boat, fields) {
+    if let (Some([x_m, y_m, heading_degrees]), Some(fields), Some(adaptation)) =
+        (options.boat, fields, adaptation)
+    {
         let mut sprites = BoatSprites::new(
             device,
             queue,
@@ -2700,6 +2702,7 @@ fn render_world(
             (options.width, options.height),
             &fragment_scene_bind_group,
             &surface_height,
+            &adaptation.field.illumination_view,
             &[scene],
             &[cloth],
             WorldGeometry::new(
