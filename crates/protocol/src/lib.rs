@@ -8,10 +8,14 @@ pub use simulation::WorldGeometry;
 // the world `game` generates from a match seed, because clients predict and
 // render that world from the seed in Welcome. Predicted boat geometry must also
 // agree between clients and servers.
-pub const PROTOCOL_VERSION: u8 = 15;
+pub const PROTOCOL_VERSION: u8 = 16;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
+    Join {
+        nickname: String,
+        input_sequence: i64,
+    },
     Input {
         sequence: i64,
         forward: f32,
@@ -32,6 +36,8 @@ pub enum ServerMessage {
     },
     Snapshot {
         tick: u64,
+        controlled_boat_id: Option<String>,
+        focus_m: [f64; 2],
         boats: Vec<BoatSnapshot>,
         removed_player_ids: Vec<String>,
     },
@@ -40,6 +46,7 @@ pub enum ServerMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoatSnapshot {
     pub id: String,
+    pub nickname: String,
     pub health: f32,
     pub last_hit_tick: Option<u64>,
     pub wreck: bool,
@@ -66,6 +73,8 @@ pub enum ProtocolError {
     MissingVersion,
     InvalidMotionIntent,
     InvalidViewportRadius,
+    InvalidNickname,
+    InvalidJoinSequence,
 }
 
 impl fmt::Display for ProtocolError {
@@ -78,6 +87,11 @@ impl fmt::Display for ProtocolError {
             Self::MissingVersion => formatter.write_str("protocol message is missing its version"),
             Self::InvalidMotionIntent => {
                 formatter.write_str("motion intent values must be finite and between -1 and 1")
+            }
+            Self::InvalidNickname => formatter
+                .write_str("nickname must contain 1–24 characters and no control characters"),
+            Self::InvalidJoinSequence => {
+                formatter.write_str("join input sequence must be positive")
             }
             Self::InvalidViewportRadius => {
                 formatter.write_str("viewport radius must be finite and positive")
@@ -101,6 +115,12 @@ pub fn encode_client_message(message: &ClientMessage) -> Result<Vec<u8>, Protoco
 
 fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError> {
     match message {
+        ClientMessage::Join { input_sequence, .. } if *input_sequence <= 0 => {
+            Err(ProtocolError::InvalidJoinSequence)
+        }
+        ClientMessage::Join { nickname, .. } if !valid_nickname(nickname) => {
+            Err(ProtocolError::InvalidNickname)
+        }
         ClientMessage::Input { forward, turn, .. }
             if !forward.is_finite()
                 || !turn.is_finite()
@@ -114,6 +134,12 @@ fn validate_client_message(message: &ClientMessage) -> Result<(), ProtocolError>
         }
         _ => Ok(()),
     }
+}
+
+pub fn valid_nickname(nickname: &str) -> bool {
+    !nickname.trim().is_empty()
+        && nickname.chars().count() <= 24
+        && !nickname.chars().any(char::is_control)
 }
 
 pub fn decode_server_message(message: &[u8]) -> Result<ServerMessage, ProtocolError> {

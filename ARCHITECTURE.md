@@ -704,8 +704,12 @@ and verification details.
 - **[Explicit]** Versioned Postcard binary messages travel over encrypted
   WebTransport. Development pins a short-lived certificate hash; deployment
   uses a browser-trusted certificate.
-- **[Implicit]** Welcome establishes identity, seed, and validated shared geometry
-  before authoritative registration; a failed send does not create a player.
+- **[Implicit]** Welcome establishes session identity, seed, and validated shared
+  geometry before session registration; a failed send does not register a session.
+- **[Explicit]** A connected session can spectate without owning a boat; an
+  explicit join requests a server-authoritative spawn.
+- **[Implicit]** Session identity survives boat destruction and respawn. Each
+  boat keeps its own identity so earlier wrecks persist independently of their owner.
 - **[Explicit]** Browser replication waits for Welcome, retaining the newest
   pending snapshot. Environmental render motion starts with the first
   authoritative snapshot; late messages after disconnection cannot restart replication.

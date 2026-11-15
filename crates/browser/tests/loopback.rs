@@ -47,7 +47,17 @@ async fn browser_client_predicts_and_reconciles_against_the_real_server() {
     let mut client = MultiplayerClient::new();
 
     client.accept(next_server_message(&connection).await);
-    client.accept(next_server_message(&connection).await);
+    let join = encode_client_message(&ClientMessage::Join {
+        input_sequence: 1,
+        nickname: "Sailor".into(),
+    })
+    .unwrap();
+    let mut stream = connection.open_uni().await.unwrap().await.unwrap();
+    stream.write_all(&join).await.unwrap();
+    stream.finish().await.unwrap();
+    while client.player_id().is_none() {
+        client.accept(next_server_message(&connection).await);
+    }
     let player_id = client.player_id().unwrap().to_owned();
     client.set_motion_intent(1.0, 0.5);
 

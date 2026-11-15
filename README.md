@@ -69,8 +69,13 @@ scale, a frame-rate cap, and automatic resolution.
 | Touch / left mouse drag | World-relative movement; floating wheel shows rudder position |
 | Mouse wheel / middle mouse | Zoom / reset zoom |
 
-The HUD reports sailing and under-keel conditions. Destroyed boats remain as
-physical wrecks while their owners spectate.
+The welcome screen spectates the live world while the game loads. Choose a
+nickname and set sail when ready; the camera moves to your spawned boat.
+Destruction or connection failure returns to the dialog to join again or
+reconnect. Destroyed boats remain physical wrecks.
+
+A compact HUD reports sailing and under-keel conditions during play. A tiny
+corner counter reports rendered FPS.
 
 ## Project guide
 

@@ -364,3 +364,66 @@ mod tests {
         }
     }
 }
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn spawn_camera_view(
+    world: WorldGeometry,
+    start_m: Vector,
+    target_m: Vector,
+    view_height_m: f32,
+    aspect_ratio: f32,
+    progress: f32,
+) -> (Vector, f32) {
+    let progress = progress.clamp(0.0, 1.0);
+    let eased = progress * progress * (3.0 - 2.0 * progress);
+    let delta = Vector::from(
+        world
+            .minimum_image_displacement_m((target_m - start_m).as_dvec2().into())
+            .map(|v| v as f32),
+    );
+    let center = Vector::from(
+        world
+            .wrap_position_m((start_m + delta * eased).as_dvec2().into())
+            .map(|v| v as f32),
+    );
+    let overview_height_m =
+        view_height_m.max(delta.y.abs().max(delta.x.abs() / aspect_ratio) * 1.25);
+    let height = view_height_m
+        + (overview_height_m - view_height_m) * (std::f32::consts::PI * progress).sin();
+    (center, height)
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn portrait_spawn_overview_contains_both_ends_of_a_horizontal_pan() {
+        let world = WorldGeometry::new(8000.0, 8000.0).unwrap();
+        let start = Vector::ZERO;
+        let target = Vector::new(100.0, 0.0);
+        let aspect = 0.45;
+        let (center, height) = spawn_camera_view(world, start, target, 24.0, aspect, 0.5);
+        for point in [start, target] {
+            assert!((point.x - center.x).abs() <= height * aspect / 2.0);
+            assert!((point.y - center.y).abs() <= height / 2.0);
+        }
+    }
+
+    #[test]
+    fn spawn_camera_uses_the_short_seam_path_and_restores_player_zoom() {
+        let world = WorldGeometry::new(8000.0, 8000.0).unwrap();
+        let start = Vector::new(3990.0, 0.0);
+        let target = Vector::new(-3990.0, 40.0);
+        assert_eq!(
+            spawn_camera_view(world, start, target, 24.0, 1.0, 0.0),
+            (start, 24.0)
+        );
+        let (middle, height) = spawn_camera_view(world, start, target, 24.0, 1.0, 0.5);
+        assert_eq!(middle, Vector::new(-4000.0, 20.0));
+        assert!(height >= 40.0);
+        let (end, height) = spawn_camera_view(world, start, target, 24.0, 1.0, 1.0);
+        assert_eq!(end, target);
+        assert!((height - 24.0).abs() < 1e-4);
+    }
+}

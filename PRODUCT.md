@@ -137,6 +137,7 @@ See [README.md](README.md) for what is playable now and
   fields are outside the product UI.
 - **[Explicit]** The browser HUD reports sailing state, depth, under-keel clearance,
   and grounding. Zoom has no gameplay limit and middle-click restores its original value.
+- **[Explicit]** A tiny corner indicator reports rendered frames per second.
 
 ## Graphics settings
 
@@ -177,6 +178,11 @@ See [README.md](README.md) for what is playable now and
   Prediction, reconciliation, and entry/exit from physical interaction stay smooth.
   Accepted steering and latency compensation remain the responsiveness baseline
   until contrary measurement or playtesting exists.
+- **[Explicit]** A welcome dialog collects a nickname over a live spectator view.
+  Joining waits for the game to load and spawns the player's boat; the camera
+  moves from the spectator view to that boat so its place among the fleet is clear.
+- **[Explicit]** Destruction or connection failure returns to the welcome dialog
+  with the reason and an action to join again or reconnect.
 - **[Explicit]** Boats spawn beyond the fleet at a random bearing, point with
   local wind, and have safe under-keel clearance.
 - **[Explicit]** Collision damage depends on impact and hull region. Destroyed

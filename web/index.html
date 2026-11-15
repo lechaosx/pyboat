@@ -3,51 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sailing game</title>
+    <title>Under sail</title>
   </head>
   <body>
     <main>
       <canvas id="game" aria-label="Multiplayer sailing boats on the water"></canvas>
-      <section class="overlay">
+      <section id="welcome" class="welcome" role="dialog" aria-labelledby="welcome-title" aria-describedby="status">
         <p class="eyebrow">NAVAL COMBAT / MULTIPLAYER</p>
-        <h1>Under sail</h1>
-        <p id="status">Starting WebGPU…</p>
-        <dl class="telemetry">
-          <div>
-            <dt>Speed</dt>
-            <dd><span id="speed">0.0</span> m/s</dd>
-          </div>
-          <div>
-            <dt>Apparent wind</dt>
-            <dd><span id="apparent-wind">6.0</span> m/s</dd>
-          </div>
-          <div>
-            <dt>Point of sail</dt>
-            <dd id="point-of-sail">close-hauled</dd>
-          </div>
-          <div>
-            <dt>Health</dt>
-            <dd id="health">100</dd>
-          </div>
-          <div>
-            <dt>Water depth</dt>
-            <dd><span id="water-depth">0.0</span> m</dd>
-          </div>
-          <div>
-            <dt>Under keel</dt>
-            <dd><span id="bottom-clearance">0.0</span> m</dd>
-          </div>
-          <div>
-            <dt>Bottom</dt>
-            <dd id="bottom-contact">clear</dd>
-          </div>
-        </dl>
-        <p class="controls">W/S power · A/D turn · left stick or drag to move</p>
+        <h1 id="welcome-title">Under sail</h1>
+        <p id="status" role="status">Preparing the sea…</p>
+        <form id="join-form">
+          <label for="nickname">Your nickname</label>
+          <input id="nickname" name="nickname" type="text" maxlength="96" autocomplete="nickname" placeholder="Captain" required />
+          <button id="join" type="submit" disabled>Loading…</button>
+        </form>
+        <p class="controls">W/S power · A/D turn<br />Left stick or drag to move · scroll to zoom</p>
       </section>
+      <section id="hud" class="hud" aria-label="Sailing instruments" hidden>
+        <div class="sailing"><strong id="captain"></strong><span><span id="speed">0.0</span> m/s</span><span id="point-of-sail">waiting</span></div>
+        <div class="instruments"><span>Wind <b id="apparent-wind">0.0</b> m/s</span><span>Hull <b id="health">100</b>%</span><span>Depth <b id="water-depth">0.0</b> m</span><span>Keel <b id="bottom-clearance">0.0</b> m</span><strong id="bottom-contact">clear</strong></div>
+      </section>
+      <span id="fps" class="fps" aria-label="Rendered frames per second">— FPS</span>
       <div class="scale-bar" aria-label="Map scale">
-        <div id="scale-line">
-          <span></span><span></span><span></span><span></span>
-        </div>
+        <div id="scale-line"><span></span><span></span><span></span><span></span></div>
         <div class="scale-labels"><span>0</span><span id="scale-label">2 m</span></div>
       </div>
     </main>

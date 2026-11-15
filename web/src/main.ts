@@ -13,6 +13,14 @@ const bottomClearance = document.querySelector<HTMLElement>("#bottom-clearance")
 const bottomContact = document.querySelector<HTMLElement>("#bottom-contact");
 const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
 const scaleLine = document.querySelector<HTMLElement>("#scale-line");
+const welcome = document.querySelector<HTMLElement>("#welcome")!;
+const welcomeTitle = document.querySelector<HTMLElement>("#welcome-title")!;
+const joinForm = document.querySelector<HTMLFormElement>("#join-form")!;
+const nickname = document.querySelector<HTMLInputElement>("#nickname")!;
+const joinButton = document.querySelector<HTMLButtonElement>("#join")!;
+const hud = document.querySelector<HTMLElement>("#hud")!;
+const captain = document.querySelector<HTMLElement>("#captain")!;
+const fps = document.querySelector<HTMLElement>("#fps")!;
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 
@@ -60,6 +68,51 @@ function firstGamepad(): Gamepad | null {
 try {
   const game = await BrowserGame.create(canvas);
   let previousTimeMs = performance.now();
+  let fpsStartMs = previousTimeMs;
+  let fpsStartFrames = game.presented_frames();
+  let currentState = "loading";
+  let renderingStopped = false;
+
+  function inputEnabled(): boolean {
+    return currentState === "playing" && document.hasFocus() && !document.hidden;
+  }
+
+  function updateSession(): void {
+    const nextState = game.session_state();
+    if (nextState !== currentState) clearInput();
+    currentState = nextState;
+    welcome.hidden = currentState === "playing";
+    hud.hidden = currentState !== "playing";
+    const disconnected = currentState === "disconnected";
+    const ready = currentState === "ready" || currentState === "dead";
+    welcomeTitle.textContent = currentState === "dead" ? "Ship lost" : disconnected ? "Disconnected" : "Under sail";
+    statusElement.textContent = currentState === "dead" ? "Your boat was destroyed. Its wreck remains at sea." : ready ? "The sea is ready. Choose a name and set sail." : currentState === "joining" ? "Launching your boat…" : game.status();
+    nickname.disabled = currentState === "joining" || disconnected;
+    nickname.required = !disconnected;
+    joinButton.textContent = disconnected ? "Reconnect" : currentState === "dead" ? "Set sail again" : ready ? "Set sail" : currentState === "joining" ? "Launching…" : "Loading…";
+    joinButton.disabled = !disconnected && !ready;
+    captain.textContent = game.nickname();
+  }
+
+  joinForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      clearInput();
+      if (renderingStopped) { location.reload(); return; }
+      if (currentState === "disconnected") {
+        game.reconnect();
+      } else {
+        const name = nickname.value.trim();
+        nickname.setCustomValidity(!name ? "Enter a nickname." : [...name].length > 24 ? "Use at most 24 characters." : "");
+        if (!nickname.reportValidity()) return;
+        game.join(name);
+      }
+      updateSession();
+    } catch (error) {
+      statusElement.textContent = String(error);
+    }
+  });
+  nickname.addEventListener("input", () => nickname.setCustomValidity(""));
   let pointer: { id: number; x: number; y: number; vector: [number, number] } | undefined;
   const pointerRadiusPx = 64;
   const helm = document.createElement("div");
@@ -103,7 +156,7 @@ try {
   }
 
   window.addEventListener("keydown", (event) => {
-    if (controlKeys.has(event.code)) {
+    if (inputEnabled() && controlKeys.has(event.code)) {
       pressedKeys.add(event.code);
       event.preventDefault();
     }
@@ -111,14 +164,14 @@ try {
   window.addEventListener("keyup", (event) => {
     if (controlKeys.has(event.code)) {
       pressedKeys.delete(event.code);
-      event.preventDefault();
+      if (inputEnabled()) event.preventDefault();
     }
   });
   window.addEventListener("blur", clearInput);
   window.addEventListener("resize", clearInput);
   document.addEventListener("visibilitychange", () => { if (document.hidden) clearInput(); });
   canvas.addEventListener("pointerdown", (event) => {
-    if (!event.isPrimary || event.button !== 0 || pointer) return;
+    if (!inputEnabled() || !event.isPrimary || event.button !== 0 || pointer) return;
     pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, vector: [0, 0] };
     canvas.setPointerCapture(event.pointerId);
     helm.style.left = `${event.clientX}px`;
@@ -173,7 +226,7 @@ try {
     const elapsedSeconds = (timeMs - previousTimeMs) / 1000;
     previousTimeMs = timeMs;
     try {
-      const gamepad = firstGamepad();
+      const gamepad = inputEnabled() ? firstGamepad() : null;
       const [worldX, worldY] = worldSteering(gamepad?.axes, pointer?.vector ?? [0, 0]);
       game.set_player_input(
         keyboardAxis("KeyW", "KeyS"),
@@ -182,9 +235,15 @@ try {
         worldY,
       );
       game.frame(elapsedSeconds);
+      updateSession();
+      if (timeMs - fpsStartMs >= 1000) {
+        const frames = game.presented_frames();
+        fps.textContent = `${Math.round((frames - fpsStartFrames) * 1000 / (timeMs - fpsStartMs))} FPS`;
+        fpsStartMs = timeMs;
+        fpsStartFrames = frames;
+      }
       // The rudder uses counterclockwise world angles; CSS rotates clockwise.
       wheel.style.transform = `rotate(${-game.rudder_angle_rad()}rad)`;
-      statusElement.textContent = game.status();
       speedElement.textContent = game.speed_m_s().toFixed(1);
       apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
       pointOfSailElement.textContent = game.point_of_sail();
@@ -206,7 +265,17 @@ try {
       if (!game.renderer_is_available()) {
         clearInput();
         game.shutdown();
-        statusElement.textContent = "Rendering stopped; reload to reconnect to the GPU";
+        renderingStopped = true;
+        currentState = "disconnected";
+        welcome.hidden = false;
+        hud.hidden = true;
+        welcomeTitle.textContent = "Rendering stopped";
+        statusElement.textContent = "The graphics device became unavailable. Reload to reconnect.";
+        nickname.disabled = true;
+        nickname.required = false;
+        joinButton.textContent = "Reload game";
+        joinButton.disabled = false;
+        fps.textContent = "— FPS";
         return;
       }
       statusElement.textContent = "Rendering failed; retrying";
@@ -216,6 +285,12 @@ try {
 
   requestAnimationFrame(frame);
 } catch (error) {
-  statusElement.textContent = "The game could not start in this browser";
-  throw error;
+  welcomeTitle.textContent = "Could not start";
+  statusElement.textContent = `The game could not start: ${String(error)}`;
+  nickname.disabled = true;
+  nickname.required = false;
+  joinButton.textContent = "Reload game";
+  joinButton.disabled = false;
+  joinForm.addEventListener("submit", (event) => { event.preventDefault(); location.reload(); });
+  console.error(error);
 }

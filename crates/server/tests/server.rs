@@ -59,7 +59,7 @@ fn client_endpoint(certificate_hash: Sha256Digest) -> Endpoint<Client> {
     .unwrap()
 }
 
-async fn connect(server: &TestServer) -> (TestClient, ServerMessage) {
+async fn connect_spectator(server: &TestServer) -> (TestClient, ServerMessage) {
     let endpoint = client_endpoint(server.certificate_hash.clone());
     let connection = endpoint
         .connect(&format!("https://127.0.0.1:{}/game", server.address.port()))
@@ -73,6 +73,23 @@ async fn connect(server: &TestServer) -> (TestClient, ServerMessage) {
         },
         decode_server_message(&welcome).unwrap(),
     )
+}
+
+async fn connect(server: &TestServer) -> (TestClient, ServerMessage) {
+    let (client, welcome) = connect_spectator(server).await;
+    let join = encode_client_message(&ClientMessage::Join {
+        input_sequence: 1,
+        nickname: "Sailor".into(),
+    })
+    .unwrap();
+    send_reliable(&client.connection, &join).await;
+    loop {
+        let (_, boats, _) = next_snapshot(&client).await;
+        if boats.iter().any(|boat| boat.acknowledged_input.is_some()) {
+            break;
+        }
+    }
+    (client, welcome)
 }
 
 async fn receive_reliable(connection: &Connection) -> Vec<u8> {
@@ -116,6 +133,7 @@ async fn next_snapshot(client: &TestClient) -> (u64, Vec<BoatSnapshot>, Vec<Stri
             tick,
             boats,
             removed_player_ids,
+            ..
         } => (tick, boats, removed_player_ids),
         ServerMessage::Welcome { .. } => panic!("expected snapshot message"),
     }
@@ -753,4 +771,14 @@ async fn sigterm_gracefully_stops_the_server_process() {
             .success()
     );
     tokio::fs::remove_dir_all(directory).await.unwrap();
+}
+
+#[tokio::test]
+async fn connection_starts_as_spectator_without_spawning_a_boat() {
+    let server = start_server();
+    let (client, _) = connect_spectator(&server).await;
+    let (_, boats, _) = next_snapshot(&client).await;
+    assert!(boats.is_empty(), "connecting alone must not create a boat");
+    close(&client);
+    server.task.abort();
 }

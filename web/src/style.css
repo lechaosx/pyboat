@@ -58,75 +58,167 @@ canvas {
   background: #173b45;
 }
 
-.overlay {
+[hidden] {
+  display: none !important;
+}
+
+.welcome {
   position: fixed;
-  top: 2rem;
-  left: 2rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid rgb(157 213 210 / 20%);
-  border-radius: 0.35rem;
-  background: rgb(4 18 24 / 72%);
+  top: 50dvh;
+  left: max(1.25rem, calc((100vw - 68rem) / 2));
+  transform: translateY(-50%);
+  width: min(21rem, calc(100vw - 2.5rem));
+  max-height: calc(100dvh - 2.5rem);
+  overflow-y: auto;
+  padding: 1.65rem;
+  border: 1px solid rgb(157 213 210 / 24%);
+  border-radius: .55rem;
+  background: rgb(4 18 24 / 86%);
+  box-shadow: 0 12px 48px rgb(0 0 0 / 25%);
   backdrop-filter: blur(12px);
 }
 
-.overlay p,
-.overlay h1 {
+.welcome p, .welcome h1 {
   margin: 0;
 }
 
 .eyebrow {
   color: #75c9c2;
-  font-size: 0.68rem;
+  font-size: .6rem;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: .15em;
 }
 
-.overlay h1 {
-  margin-top: 0.2rem;
-  font-family: Georgia, serif;
-  font-size: clamp(1.8rem, 4vw, 3.4rem);
-  font-weight: 400;
+.welcome h1 {
+  margin-top: .25rem;
+  font: clamp(1.7rem, 8vw, 2.8rem) Georgia, serif;
 }
 
 #status {
-  margin-top: 0.45rem;
-  color: #9db5b9;
-  font-size: 0.78rem;
+  min-height: 2.7em;
+  margin-top: .8rem;
+  color: #c4d7d8;
+  font-size: .82rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
-.telemetry {
+#join-form {
   display: grid;
-  grid-template-columns: repeat(4, auto);
-  gap: 1rem;
-  margin: 1rem 0 0;
+  gap: .55rem;
+  margin-top: 1.25rem;
 }
 
-.telemetry dt {
+#join-form label {
+  font-size: .75rem;
+  color: #c4d7d8;
+}
+
+#nickname, #join {
+  min-height: 2.75rem;
+  padding: .6rem .8rem;
+  border: 1px solid #547c7e;
+  border-radius: .25rem;
+  font: inherit;
+}
+
+#nickname {
+  width: 100%;
+  color: #fff2d4;
+  background: #0d2932;
+}
+
+#nickname:focus-visible, #join:focus-visible {
+  outline: 2px solid #f3c47a;
+  outline-offset: 3px;
+}
+
+#join {
+  margin-top: .25rem;
+  color: #122b30;
+  background: #edc487;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+#join:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.welcome .controls {
+  margin-top: 1.1rem;
+  color: #9db5b9;
+  font-size: .7rem;
+  line-height: 1.6;
+}
+
+.hud {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  max-width: calc(100vw - 2rem);
+  padding: .55rem .75rem;
+  border-radius: .3rem;
+  background: rgb(4 18 24 / 75%);
+  font-size: .7rem;
+  pointer-events: none;
+}
+
+.sailing, .instruments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .35rem .8rem;
+}
+
+.sailing {
+  font-size: .8rem;
+}
+
+#captain {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #edc487;
+}
+
+.instruments {
+  margin-top: .35rem;
+  color: #bacdd0;
+}
+
+.instruments b {
+  color: #e8f2f2;
+  font-weight: 400;
+}
+
+#bottom-contact {
   color: #75c9c2;
-  font-size: 0.62rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.telemetry dd {
-  margin: 0.15rem 0 0;
-  font-size: 0.82rem;
+  font-weight: 400;
 }
 
 #bottom-contact.active {
-  color: #e26b58;
+  color: #ff9583;
 }
 
-.overlay .controls {
-  margin-top: 0.75rem;
-  color: #c4d7d8;
-  font-size: 0.72rem;
+.fps {
+  position: fixed;
+  top: .35rem;
+  right: .45rem;
+  color: rgb(232 242 242 / 65%);
+  text-shadow: 0 1px 2px #07171d;
+  font: 10px ui-monospace, monospace;
+  pointer-events: none;
 }
+
+
 
 .scale-bar {
   position: fixed;
-  bottom: 2rem;
-  left: 2rem;
+  bottom: 1rem;
+  left: 1rem;
   color: #e8f2f2;
   filter: drop-shadow(0 1px 2px rgb(4 18 24 / 90%));
   font-size: 0.72rem;

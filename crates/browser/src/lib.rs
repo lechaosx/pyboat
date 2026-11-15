@@ -562,6 +562,7 @@ struct MotionCorrection {
 
 pub struct MultiplayerClient {
     player_id: Option<String>,
+    spectator_focus_m: PhysicsVector,
     match_seed: Option<u64>,
     world_geometry: Option<WorldGeometry>,
     session_state: ClientSessionState,
@@ -599,6 +600,7 @@ impl MultiplayerClient {
     pub fn new() -> Self {
         Self {
             player_id: None,
+            spectator_focus_m: PhysicsVector::ZERO,
             match_seed: None,
             world_geometry: None,
             session_state: ClientSessionState::AwaitingWelcome,
@@ -623,20 +625,21 @@ impl MultiplayerClient {
     pub fn accept(&mut self, message: ServerMessage) {
         match message {
             ServerMessage::Welcome {
-                player_id,
+                player_id: _,
                 match_seed,
                 world_geometry,
             } => {
                 if self.session_state != ClientSessionState::AwaitingWelcome {
                     return;
                 }
-                self.player_id = Some(player_id);
                 self.match_seed = Some(match_seed);
                 self.world_geometry = Some(world_geometry);
                 self.session_state = ClientSessionState::Active;
             }
             ServerMessage::Snapshot {
                 tick,
+                controlled_boat_id,
+                focus_m,
                 boats,
                 removed_player_ids: _,
             } => {
@@ -646,6 +649,16 @@ impl MultiplayerClient {
                 if self.tick.is_some_and(|current| tick < current) {
                     return;
                 }
+                let controlled_boat_id =
+                    controlled_boat_id.filter(|id| boats.iter().any(|boat| &boat.id == id));
+                if self.player_id != controlled_boat_id {
+                    self.player_id = controlled_boat_id;
+                    self.input_history.clear();
+                    self.motion_intent = MotionIntent::default();
+                    self.predicted_boats.clear();
+                    self.corrections.clear();
+                }
+                self.spectator_focus_m = PhysicsVector::from(focus_m);
                 let previous_motion = self
                     .boats
                     .keys()
@@ -763,7 +776,7 @@ impl MultiplayerClient {
             .is_some_and(|boat| boat.snapshot.wreck);
         let mut inputs = Vec::new();
         while self.input_accumulator_seconds >= TICK_SECONDS {
-            if self.is_ready() && !local_wreck {
+            if self.is_ready() && self.player_id.is_some() && !local_wreck {
                 let command = InputCommand {
                     sequence: self.next_input_sequence,
                     intent: self.motion_intent,
@@ -780,13 +793,20 @@ impl MultiplayerClient {
                 self.next_input_sequence += 1;
             }
             self.advance_prediction(self.motion_intent);
+            if self.player_id.is_none() {
+                self.prediction_tick += 1;
+            }
             self.input_accumulator_seconds -= TICK_SECONDS;
         }
         inputs
     }
 
     pub fn camera_m(&self) -> Option<Vector> {
-        let position_m = self.local_motion()?.position_m;
+        self.tick?;
+        let position_m = self
+            .local_motion()
+            .map(|motion| motion.position_m)
+            .unwrap_or(self.spectator_focus_m);
         Some(PhysicsVector::from(self.world_geometry?.wrap_position_m(position_m.into())).as_vec2())
     }
 
@@ -838,7 +858,11 @@ impl MultiplayerClient {
     }
 
     pub fn scenes(&self) -> Vec<BoatScene> {
-        let local_position_m = self.local_motion().map(|motion| motion.position_m);
+        self.scenes_at(self.camera_m().unwrap_or(Vector::ZERO))
+    }
+
+    pub fn scenes_at(&self, camera_m: Vector) -> Vec<BoatScene> {
+        let camera_m = camera_m.as_dvec2();
         let mut boats = self.boats.values().collect::<Vec<_>>();
         boats.sort_by(|first, second| {
             let first_is_local = self.player_id() == Some(first.snapshot.id.as_str());
@@ -851,12 +875,10 @@ impl MultiplayerClient {
             .into_iter()
             .filter_map(|boat| {
                 self.render_motion(&boat.snapshot.id).map(|mut motion| {
-                    if let (Some(world_geometry), Some(local_position_m)) =
-                        (self.world_geometry, local_position_m)
-                    {
-                        motion.position_m = local_position_m
+                    if let Some(world_geometry) = self.world_geometry {
+                        motion.position_m = camera_m
                             + PhysicsVector::from(world_geometry.minimum_image_displacement_m(
-                                (motion.position_m - local_position_m).into(),
+                                (motion.position_m - camera_m).into(),
                             ));
                     }
                     let mut scene = boat_scene(dinghy_parameters(), motion);
@@ -900,6 +922,7 @@ impl MultiplayerClient {
     }
 
     fn rebuild_prediction(&mut self, visible_player_ids: &[String]) {
+        self.prediction_tick = self.tick.unwrap_or(0);
         let Some(local_id) = self.player_id.as_ref() else {
             return;
         };
@@ -1475,8 +1498,11 @@ mod tests {
         });
         client.accept(ServerMessage::Snapshot {
             tick: 1,
+            controlled_boat_id: Some("player".into()),
+            focus_m: [0.0, 0.0],
             boats: vec![BoatSnapshot {
                 id: "player".into(),
+                nickname: "Sailor".into(),
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
@@ -1529,6 +1555,7 @@ mod tests {
                         .true_water_velocity_m_s;
                     BoatSnapshot {
                         id: format!("player-{index}"),
+                        nickname: "Sailor".into(),
                         health: 100.0,
                         last_hit_tick: None,
                         wreck: false,
@@ -1556,6 +1583,8 @@ mod tests {
             }
             let initial = ServerMessage::Snapshot {
                 tick,
+                controlled_boat_id: Some("player-0".into()),
+                focus_m: [0.0, 0.0],
                 boats: snapshots,
                 removed_player_ids: Vec::new(),
             };
@@ -1642,8 +1671,11 @@ mod tests {
         });
         client.accept(ServerMessage::Snapshot {
             tick: 1,
+            controlled_boat_id: Some("player".into()),
+            focus_m: [0.0, 0.0],
             boats: vec![BoatSnapshot {
                 id: "player".into(),
+                nickname: "Sailor".into(),
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,
@@ -1685,6 +1717,8 @@ mod tests {
     fn snapshot(tick: u64) -> ServerMessage {
         ServerMessage::Snapshot {
             tick,
+            controlled_boat_id: None,
+            focus_m: [0.0, 0.0],
             boats: Vec::new(),
             removed_player_ids: Vec::new(),
         }
@@ -1730,7 +1764,7 @@ mod tests {
         });
 
         assert_eq!(client.tick(), None);
-        assert_eq!(client.player_id(), Some("player-1"));
+        assert_eq!(client.player_id(), None);
         assert_eq!(client.match_seed(), Some(42));
         assert_eq!(client.update_viewport(10.0), None);
     }
@@ -1986,6 +2020,33 @@ mod tests {
             world_geometry: WorldGeometry::default(),
         });
 
+        client.accept(ServerMessage::Snapshot {
+            tick: 1,
+            controlled_boat_id: Some("player".into()),
+            focus_m: [0.0, 0.0],
+            boats: vec![BoatSnapshot {
+                id: "player".into(),
+                nickname: "Sailor".into(),
+                health: 100.0,
+                last_hit_tick: None,
+                wreck: false,
+                sailor_sternway: false,
+                x: 0.0,
+                y: 0.0,
+                vx: 0.0,
+                vy: 0.0,
+                angle: 0.37,
+                angular_velocity: 0.0,
+                sail: 0.0,
+                sail_angular_velocity: 0.0,
+                rudder: 0.0,
+                rudder_angular_velocity: 0.0,
+                forward: Some(0.0),
+                turn: Some(0.0),
+                acknowledged_input: Some(0),
+            }],
+            removed_player_ids: Vec::new(),
+        });
         for _ in 0..10 {
             client.take_inputs(MAXIMUM_PREDICTION_SECONDS);
         }
@@ -2031,6 +2092,7 @@ mod tests {
     fn reliable_server_message_limit_fits_the_largest_match_snapshot() {
         let boat = BoatSnapshot {
             id: "player-18446744073709551615".to_owned(),
+            nickname: "🛥".repeat(24),
             health: 100.0,
             last_hit_tick: Some(u64::MAX),
             wreck: true,
@@ -2051,6 +2113,8 @@ mod tests {
         };
         let encoded = protocol::encode_server_message(&ServerMessage::Snapshot {
             tick: u64::MAX,
+            controlled_boat_id: Some("player".into()),
+            focus_m: [0.0, 0.0],
             boats: vec![boat; 64],
             removed_player_ids: Vec::new(),
         })
@@ -2086,8 +2150,11 @@ mod tests {
         assert_eq!(client.render_clock(), None);
         client.accept(ServerMessage::Snapshot {
             tick: 900_000,
+            controlled_boat_id: Some("player-1".into()),
+            focus_m: [0.0, 0.0],
             boats: vec![BoatSnapshot {
                 id: "player-1".to_owned(),
+                nickname: "Sailor".into(),
                 health: 100.0,
                 last_hit_tick: None,
                 wreck: false,

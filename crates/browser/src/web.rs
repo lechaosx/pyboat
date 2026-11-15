@@ -58,6 +58,12 @@ extern "C" {
     fn canvas_has_hdr_output(canvas: &HtmlCanvasElement) -> bool;
 }
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn log_transport_error(message: &str);
+}
+
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
 #[derive(Default)]
@@ -1447,6 +1453,7 @@ struct Renderer {
     render_scale: f32,
     resolution: Option<ResolutionController>,
     frame_timing: Arc<Mutex<FrameTiming>>,
+    presented_frames: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1890,6 +1897,7 @@ impl Renderer {
                 .then(|| ResolutionController::new(graphics.render_scale)),
             graphics,
             frame_timing: Arc::default(),
+            presented_frames: 0,
         })
     }
 
@@ -2290,6 +2298,7 @@ impl Renderer {
             drop(frame_permit);
         });
         self.queue.present(frame);
+        self.presented_frames += 1;
         Ok(())
     }
 
@@ -2447,6 +2456,12 @@ pub struct BrowserGame {
     sending_reliable: Rc<Cell<bool>>,
     renderer: Renderer,
     view_height_m: f32,
+    presented_view_height_m: f32,
+    world_presented: bool,
+    joining: bool,
+    camera_m: Option<Vector>,
+    camera_boat_id: Option<String>,
+    spawn_camera: Option<(Vector, f64)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -2516,6 +2531,12 @@ impl BrowserGame {
             sending_reliable,
             renderer,
             view_height_m: DEFAULT_VIEW_HEIGHT_M,
+            presented_view_height_m: DEFAULT_VIEW_HEIGHT_M,
+            world_presented: false,
+            joining: false,
+            camera_m: None,
+            camera_boat_id: None,
+            spawn_camera: None,
         })
     }
 
@@ -2523,11 +2544,55 @@ impl BrowserGame {
         if !self.renderer.is_available() {
             return Err(JsValue::from_str("WebGPU renderer is unavailable"));
         }
+        {
+            let mut client = self.client.borrow_mut();
+            if client.is_ready()
+                && let Some(snapshot) = self.pending_snapshot.borrow_mut().take()
+            {
+                client.accept(snapshot);
+            }
+        }
+        let inputs = self.client.borrow_mut().take_inputs(elapsed_seconds);
+        let client = self.client.borrow();
+        let boat_id = client.player_id().map(str::to_owned);
+        if boat_id != self.camera_boat_id {
+            if boat_id.is_some() {
+                self.spawn_camera = self.camera_m.map(|start| (start, 0.0));
+                self.joining = false;
+            }
+            self.camera_boat_id = boat_id;
+        }
+        let target_m = client.camera_m().unwrap_or(Vector::ZERO);
+        let world = client.world_geometry().unwrap_or_default();
+        let (camera_m, height_m) = if let Some((start_m, elapsed)) = &mut self.spawn_camera {
+            *elapsed += elapsed_seconds.max(0.0);
+            crate::camera::spawn_camera_view(
+                world,
+                *start_m,
+                target_m,
+                self.view_height_m,
+                self.renderer.aspect_ratio(),
+                (*elapsed / 2.0) as f32,
+            )
+        } else {
+            (target_m, self.view_height_m)
+        };
+        if self.spawn_camera.is_some_and(|(_, elapsed)| elapsed >= 2.0) {
+            self.spawn_camera = None;
+        }
+        self.camera_m = Some(camera_m);
+        self.presented_view_height_m = height_m;
+        let offset_m = Vector::from(
+            world
+                .minimum_image_displacement_m((camera_m - target_m).as_dvec2().into())
+                .map(|v| v as f32),
+        )
+        .length();
+        drop(client);
         let viewport_radius_m =
-            viewport_interest_radius_m(self.renderer.aspect_ratio(), self.view_height_m);
+            viewport_interest_radius_m(self.renderer.aspect_ratio(), height_m) + offset_m;
         let mut client = self.client.borrow_mut();
         let viewport = client.update_viewport(viewport_radius_m);
-        let inputs = client.take_inputs(elapsed_seconds);
         drop(client);
         if let Some(viewport) = viewport {
             self.pending_viewport
@@ -2550,24 +2615,21 @@ impl BrowserGame {
             &self.pending_viewport,
             &self.sending_reliable,
         );
-        {
-            let mut client = self.client.borrow_mut();
-            if client.is_ready()
-                && let Some(snapshot) = self.pending_snapshot.borrow_mut().take()
-            {
-                client.accept(snapshot);
-            }
-        }
         let client = self.client.borrow();
+        let before = self.renderer.presented_frames;
         self.renderer.render(
-            &client.scenes(),
+            &client.scenes_at(camera_m),
             client.match_seed(),
             client.world_geometry().unwrap_or_default(),
             client.render_clock(),
             elapsed_seconds,
-            client.camera_m().unwrap_or(Vector::ZERO),
-            self.view_height_m,
-        )
+            camera_m,
+            height_m,
+        )?;
+        if client.tick().is_some() && self.renderer.presented_frames > before {
+            self.world_presented = true;
+        }
+        Ok(())
     }
 
     pub fn renderer_is_available(&self) -> bool {
@@ -2587,6 +2649,104 @@ impl BrowserGame {
         }
     }
 
+    pub fn reconnect(&mut self) -> Result<(), JsValue> {
+        self.shutdown();
+        self.client = Rc::new(RefCell::new(MultiplayerClient::new()));
+        self.pending_snapshot = Rc::new(RefCell::new(None));
+        self.connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
+        self.close_notice = Rc::new(RefCell::new(None));
+        self.transport = Rc::new(RefCell::new(None));
+        self.pending_datagrams = Rc::new(RefCell::new(VecDeque::new()));
+        self.pending_viewport = Rc::new(RefCell::new(None));
+        self.sending_datagrams = Rc::new(Cell::new(false));
+        self.sending_reliable = Rc::new(Cell::new(false));
+        self.joining = false;
+        self.world_presented = false;
+        self.camera_m = None;
+        self.camera_boat_id = None;
+        self.spawn_camera = None;
+        connect_webtransport(
+            Rc::clone(&self.client),
+            Rc::clone(&self.pending_snapshot),
+            Rc::clone(&self.connection_status),
+            Rc::clone(&self.close_notice),
+            Rc::clone(&self.transport),
+            Rc::clone(&self.pending_datagrams),
+            Rc::clone(&self.pending_viewport),
+            Rc::clone(&self.sending_datagrams),
+            Rc::clone(&self.sending_reliable),
+        )
+    }
+
+    pub fn session_state(&self) -> String {
+        match self.connection_status.get() {
+            ConnectionStatus::Connecting => "connecting",
+            ConnectionStatus::Error | ConnectionStatus::Closed => "disconnected",
+            ConnectionStatus::Open if !self.world_presented => "loading",
+            ConnectionStatus::Open if self.joining => "joining",
+            ConnectionStatus::Open => match self.client.borrow().health() {
+                Some(health) if health > 0.0 => "playing",
+                Some(_) => "dead",
+                None => "ready",
+            },
+        }
+        .into()
+    }
+
+    pub fn join(&mut self, nickname: String) -> Result<(), JsValue> {
+        if !matches!(self.session_state().as_str(), "ready" | "dead") {
+            return Ok(());
+        }
+        let message = encode_client_message(&protocol::ClientMessage::Join {
+            nickname,
+            input_sequence: self.client.borrow().next_input_sequence,
+        })
+        .map_err(js_error)?;
+        let Some(session) = self.transport.borrow().clone() else {
+            return Ok(());
+        };
+        self.joining = true;
+        self.client.borrow_mut().set_motion_intent(0.0, 0.0);
+        let status = Rc::clone(&self.connection_status);
+        let notice = Rc::clone(&self.close_notice);
+        let client = Rc::clone(&self.client);
+        let pending = Rc::clone(&self.pending_snapshot);
+        spawn_local(async move {
+            let result = async {
+                let mut stream = session.open_uni().await?;
+                stream.write(&message).await?;
+                stream.finish()?;
+                stream.closed().await
+            }
+            .await;
+            if !matches!(result, Ok(None)) && status.get() == ConnectionStatus::Open {
+                status.set(ConnectionStatus::Error);
+                notice.replace(Some(
+                    "Could not join. Choose Reconnect to try again.".into(),
+                ));
+                disconnect_and_clear_pending_snapshot(
+                    &mut client.borrow_mut(),
+                    &mut pending.borrow_mut(),
+                );
+                session.close(1, "Join request failed");
+            }
+        });
+        Ok(())
+    }
+
+    pub fn presented_frames(&self) -> f64 {
+        self.renderer.presented_frames as f64
+    }
+
+    pub fn nickname(&self) -> String {
+        let client = self.client.borrow();
+        client
+            .player_id()
+            .and_then(|id| client.boat(id))
+            .map(|boat| boat.snapshot.nickname.clone())
+            .unwrap_or_default()
+    }
+
     pub fn zoom(&mut self, wheel_delta_y: f32) {
         self.view_height_m = zoom_view_height_m(self.view_height_m, wheel_delta_y);
     }
@@ -2597,7 +2757,7 @@ impl BrowserGame {
 
     pub fn scale_bar_width_px(&self) -> f32 {
         scale_bar(
-            self.view_height_m,
+            self.presented_view_height_m,
             self.renderer.canvas.client_height() as f32,
         )
         .width_px
@@ -2605,7 +2765,7 @@ impl BrowserGame {
 
     pub fn scale_bar_label(&self) -> String {
         scale_bar(
-            self.view_height_m,
+            self.presented_view_height_m,
             self.renderer.canvas.client_height() as f32,
         )
         .label
@@ -2685,19 +2845,22 @@ impl BrowserGame {
     pub fn status(&self) -> String {
         match self.connection_status.get() {
             ConnectionStatus::Connecting => "Connecting to authoritative server…".to_owned(),
-            ConnectionStatus::Open => self
-                .client
+            ConnectionStatus::Open => if self.client.borrow().tick().is_some() {
+                "Spectating the live match"
+            } else {
+                "Loading shared world…"
+            }
+            .into(),
+            ConnectionStatus::Error => self
+                .close_notice
                 .borrow()
-                .player_id()
-                .map(|player_id| format!("Authoritative server · {player_id}"))
-                .unwrap_or_else(|| "Connected · waiting for identity…".to_owned()),
-            ConnectionStatus::Error => "Server connection failed".to_owned(),
+                .clone()
+                .unwrap_or_else(|| "Could not connect. Choose Reconnect to try again.".into()),
             ConnectionStatus::Closed => self
                 .close_notice
                 .borrow()
-                .as_ref()
-                .map(|notice| format!("Server connection closed · {notice}"))
-                .unwrap_or_else(|| "Server connection closed".to_owned()),
+                .clone()
+                .unwrap_or_else(|| "Connection lost. Choose Reconnect to try again.".into()),
         }
     }
 }
@@ -2729,7 +2892,11 @@ fn connect_webtransport(
             Err(error) => {
                 if connection_status.get() == ConnectionStatus::Connecting {
                     protocol_client.borrow_mut().disconnect();
-                    close_notice.replace(Some(error.to_string()));
+                    log_transport_error(&error.to_string());
+                    close_notice.replace(Some(connection_notice(
+                        &error,
+                        "Could not connect. Check your connection and choose Reconnect.",
+                    )));
                     connection_status.set(ConnectionStatus::Error);
                 }
                 return;
@@ -2930,6 +3097,18 @@ fn fail_protocol(
     session.close(1, "Protocol error");
 }
 
+fn connection_notice(error: &web_transport_wasm::Error, fallback: &str) -> String {
+    match error {
+        web_transport_wasm::Error::Session { reason, .. } if !reason.trim().is_empty() => {
+            format!(
+                "{}. Choose Reconnect to try again.",
+                reason.trim().trim_end_matches('.')
+            )
+        }
+        _ => fallback.into(),
+    }
+}
+
 fn watch_connection_close(
     session: Session,
     protocol_client: Rc<RefCell<MultiplayerClient>>,
@@ -2945,7 +3124,13 @@ fn watch_connection_close(
             &mut protocol_client.borrow_mut(),
             &mut pending_snapshot.borrow_mut(),
         );
-        close_notice.replace(Some(error.to_string()));
+        log_transport_error(&error.to_string());
+        if close_notice.borrow().is_none() {
+            close_notice.replace(Some(connection_notice(
+                &error,
+                "Connection lost. Choose Reconnect to try again.",
+            )));
+        }
         if connection_status.get() != ConnectionStatus::Error {
             connection_status.set(ConnectionStatus::Closed);
         }

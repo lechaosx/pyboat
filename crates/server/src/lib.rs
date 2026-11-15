@@ -55,9 +55,13 @@ enum ConnectionEvent {
     },
     Connected {
         player_id: String,
-        player_number: u64,
         outbound: watch::Sender<Option<OutboundMessage>>,
         registered: oneshot::Sender<()>,
+    },
+    Join {
+        player_id: String,
+        nickname: String,
+        input_sequence: i64,
     },
     Input {
         player_id: String,
@@ -82,18 +86,90 @@ enum IncomingMessage {
 #[derive(Clone)]
 enum OutboundMessage {
     Snapshot(Vec<u8>),
-    Close,
+    Close(String),
+}
+
+struct SessionState {
+    outbound: watch::Sender<Option<OutboundMessage>>,
+    boat_id: Option<String>,
+    last_viewport: Option<i64>,
+    radius_m: f64,
+}
+
+impl SessionState {
+    fn join(
+        &mut self,
+        game_match: &mut GameMatch,
+        nickname: String,
+        input_sequence: i64,
+        next_boat_number: &mut u64,
+    ) {
+        if !protocol::valid_nickname(&nickname)
+            || input_sequence <= 0
+            || self.boat_id.as_ref().is_some_and(|id| {
+                game_match
+                    .players
+                    .iter()
+                    .any(|boat| &boat.id == id && !boat.wreck)
+            })
+        {
+            return;
+        }
+        if !game_match.has_player_capacity() {
+            self.outbound
+                .send_replace(Some(OutboundMessage::Close("Match is full".into())));
+            return;
+        }
+        let boat_id = format!("player-{next_boat_number}");
+        game_match.add_player(boat_id.clone(), *next_boat_number);
+        *next_boat_number += 1;
+        let boat = game_match.players.last_mut().unwrap();
+        boat.nickname = nickname.trim().into();
+        // A delayed datagram from the previous boat must not steer its replacement.
+        boat.acknowledged_input = input_sequence - 1;
+        boat.last_received_input = input_sequence - 1;
+        self.boat_id = Some(boat_id);
+    }
+
+    fn publish_snapshot(&self, snapshot: Vec<u8>) {
+        if matches!(
+            self.outbound.borrow().as_ref(),
+            Some(OutboundMessage::Close(_))
+        ) {
+            return;
+        }
+        self.outbound
+            .send_replace(Some(OutboundMessage::Snapshot(snapshot)));
+    }
+
+    fn set_viewport(&mut self, sequence: i64, radius_m: f32) {
+        if self.last_viewport.is_none_or(|last| sequence > last) {
+            self.last_viewport = Some(sequence);
+            self.radius_m = f64::from(radius_m).max(PHYSICS_BUBBLE_RADIUS_M);
+        }
+    }
+
+    fn visible_boats(&self, game_match: &GameMatch) -> Vec<usize> {
+        let focus_m = self
+            .boat_id
+            .as_ref()
+            .and_then(|id| game_match.players.iter().position(|boat| &boat.id == id))
+            .map(|index| game_match.simulation.motion(index).position_m)
+            .unwrap_or_else(|| game_match.spectator_focus());
+        game_match
+            .simulation
+            .boats_within_radius(focus_m, self.radius_m)
+    }
 }
 
 struct Player {
     id: String,
+    nickname: String,
     sailor: Sailor,
     intent: MotionIntent,
     acknowledged_input: i64,
     last_received_input: i64,
     pending_inputs: VecDeque<(i64, MotionIntent)>,
-    last_received_viewport: Option<i64>,
-    visibility_radius_m: f64,
     health: f32,
     last_hit_tick: Option<u64>,
     wreck: bool,
@@ -129,8 +205,8 @@ impl GameMatch {
         }
     }
 
-    fn has_player_capacity(&self, pending_players: usize) -> bool {
-        self.players.len().saturating_add(pending_players) < MAX_MATCH_BOATS
+    fn has_player_capacity(&self) -> bool {
+        self.players.len() < MAX_MATCH_BOATS
     }
 
     fn add_player(&mut self, player_id: String, player_number: u64) {
@@ -210,13 +286,12 @@ impl GameMatch {
         );
         self.players.push(Player {
             id: player_id,
+            nickname: "Sailor".into(),
             sailor: Sailor::default(),
             intent: MotionIntent::default(),
             acknowledged_input: 0,
             last_received_input: 0,
             pending_inputs: VecDeque::new(),
-            last_received_viewport: None,
-            visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
             health: BOAT_MAX_HEALTH,
             last_hit_tick: None,
             wreck: false,
@@ -259,24 +334,6 @@ impl GameMatch {
         }
         player.pending_inputs.push_back((sequence, intent));
         player.last_received_input = sequence;
-    }
-
-    fn set_viewport(&mut self, player_id: &str, sequence: i64, radius_m: f32) {
-        let Some(player) = self
-            .players
-            .iter_mut()
-            .find(|player| player.id == player_id)
-        else {
-            return;
-        };
-        if player
-            .last_received_viewport
-            .is_some_and(|last_sequence| sequence <= last_sequence)
-        {
-            return;
-        }
-        player.last_received_viewport = Some(sequence);
-        player.visibility_radius_m = f64::from(radius_m).max(PHYSICS_BUBBLE_RADIUS_M);
     }
 
     fn advance(&mut self) {
@@ -375,24 +432,28 @@ impl GameMatch {
         self.active_hull_contacts = active_hull_contacts;
     }
 
-    fn visible_boats(&self, player_id: &str) -> Vec<usize> {
-        let viewer = self
-            .players
+    fn spectator_focus(&self) -> Vector {
+        self.players
             .iter()
-            .position(|player| player.id == player_id)
-            .expect("a connection must have an authoritative boat");
-        let radius_m = self.players[viewer].visibility_radius_m;
-        self.simulation
-            .boats_within_radius(self.simulation.motion(viewer).position_m, radius_m)
+            .enumerate()
+            .min_by(|(_, first), (_, second)| {
+                first
+                    .wreck
+                    .cmp(&second.wreck)
+                    .then_with(|| first.id.cmp(&second.id))
+            })
+            .map(|(index, _)| self.simulation.motion(index).position_m)
+            .unwrap_or_else(|| self.spawn_origin_m.unwrap_or(Vector::ZERO))
     }
 
     fn snapshot_for(&self, player_id: &str, visible_boats: &[usize]) -> ServerMessage {
         let viewer = self
             .players
             .iter()
-            .position(|player| player.id == player_id)
-            .expect("a connection must have an authoritative boat");
-        let viewer_position_m = self.simulation.motion(viewer).position_m;
+            .position(|player| player.id == player_id);
+        let viewer_position_m = viewer
+            .map(|index| self.simulation.motion(index).position_m)
+            .unwrap_or_else(|| self.spectator_focus());
         let boats = visible_boats
             .iter()
             .map(|&boat| {
@@ -406,6 +467,7 @@ impl GameMatch {
                         <= PHYSICS_BUBBLE_RADIUS_M * PHYSICS_BUBBLE_RADIUS_M;
                 BoatSnapshot {
                     id: player.id.clone(),
+                    nickname: player.nickname.clone(),
                     health: player.health,
                     last_hit_tick: player.last_hit_tick,
                     wreck: player.wreck,
@@ -429,6 +491,8 @@ impl GameMatch {
             .collect();
         ServerMessage::Snapshot {
             tick: self.tick,
+            controlled_boat_id: viewer.map(|index| self.players[index].id.clone()),
+            focus_m: viewer_position_m.into(),
             boats,
             removed_player_ids: Vec::new(),
         }
@@ -497,9 +561,10 @@ where
     E: Error + Send + Sync + 'static,
 {
     let (events, mut incoming_events) = mpsc::channel(MAX_PENDING_CONNECTION_EVENTS);
-    let mut connections: HashMap<String, watch::Sender<Option<OutboundMessage>>> = HashMap::new();
+    let mut connections: HashMap<String, SessionState> = HashMap::new();
     let mut game_match = GameMatch::new_with_world_geometry(new_match_seed(), world_geometry);
     let mut next_player_number = 1_u64;
+    let mut next_boat_number = 1_u64;
     let mut ticker = interval(Duration::from_secs_f64(1.0 / 60.0));
     let mut upgrades = tokio::task::JoinSet::new();
     let mut sessions = tokio::task::JoinSet::new();
@@ -509,17 +574,18 @@ where
             result = &mut shutdown => {
                 result.map_err(|error| Box::new(error) as Box<dyn Error + Send + Sync>)?;
                 endpoint.close(VarInt::from_u32(1), b"Server shutting down");
-                for outbound in connections.values() {
-                    outbound.send_replace(Some(OutboundMessage::Close));
+                for session in connections.values() {
+                    session.outbound.send_replace(Some(OutboundMessage::Close("Server shutting down".into())));
                 }
                 drop(timeout(CONNECTION_SHUTDOWN_TIMEOUT, async {
                     while !connections.is_empty() {
                         let Some(event) = incoming_events.recv().await else {
                             break;
                         };
-                        if let ConnectionEvent::Disconnected { player_id } = event {
-                            connections.remove(&player_id);
-                            game_match.remove_player(&player_id);
+                        if let ConnectionEvent::Disconnected { player_id } = event
+                            && let Some(session) = connections.remove(&player_id)
+                            && let Some(boat_id) = session.boat_id {
+                            game_match.remove_player(&boat_id);
                         }
                     }
                     // Keep the QUIC socket alive while its connection-close
@@ -553,10 +619,8 @@ where
             }
             Some(event) = incoming_events.recv() => match event {
                 ConnectionEvent::Upgraded { connection } => {
-                    let pending_players = sessions.len().saturating_sub(connections.len());
                     if sessions.len() >= MAX_ACTIVE_SESSIONS
                         || connections.len() >= MAX_ACTIVE_SESSIONS
-                        || !game_match.has_player_capacity(pending_players)
                     {
                         connection.close(VarInt::from_u32(1), b"Match is full");
                         continue;
@@ -569,7 +633,6 @@ where
                         if let Err(error) = handle_connection(
                             connection,
                             player_id,
-                            player_number,
                             game_match.match_seed,
                             game_match.world_geometry,
                             events,
@@ -580,33 +643,39 @@ where
                 }
                 ConnectionEvent::Connected {
                     player_id,
-                    player_number,
                     outbound,
                     registered,
                 } => {
-                    game_match.add_player(player_id.clone(), player_number);
-                    connections.insert(player_id, outbound);
+                    connections.insert(player_id, SessionState { outbound, boat_id: None, last_viewport: None, radius_m: DEFAULT_VISIBILITY_RADIUS_M });
                     let _registration_result = registered.send(());
                 }
+                ConnectionEvent::Join { player_id, nickname, input_sequence } => {
+                    if let Some(session) = connections.get_mut(&player_id) {
+                        session.join(&mut game_match, nickname, input_sequence, &mut next_boat_number);
+                    }
+                }
                 ConnectionEvent::Input { player_id, sequence, intent } => {
-                    game_match.set_input(&player_id, sequence, intent);
+                    if let Some(boat_id) = connections.get(&player_id).and_then(|session| session.boat_id.as_deref()) {
+                        game_match.set_input(boat_id, sequence, intent);
+                    }
                 }
                 ConnectionEvent::Viewport { player_id, sequence, radius_m } => {
-                    game_match.set_viewport(&player_id, sequence, radius_m);
+                    if let Some(session) = connections.get_mut(&player_id) { session.set_viewport(sequence, radius_m); }
                 }
                 ConnectionEvent::Disconnected { player_id } => {
-                    connections.remove(&player_id);
-                    game_match.remove_player(&player_id);
+                    if let Some(session) = connections.remove(&player_id)
+                        && let Some(boat_id) = session.boat_id {
+                        game_match.remove_player(&boat_id);
+                    }
                 }
             },
             _ = ticker.tick() => {
                 game_match.advance();
-                for (player_id, outbound) in &connections {
-                    let visible_boats = game_match.visible_boats(player_id);
-                    let snapshot = encode_server_message(
-                        &game_match.snapshot_for(player_id, &visible_boats),
-                    )?;
-                    outbound.send_replace(Some(OutboundMessage::Snapshot(snapshot)));
+                for session in connections.values() {
+                    let boat_id = session.boat_id.as_deref().unwrap_or("");
+                    let visible_boats = session.visible_boats(&game_match);
+                    let snapshot = encode_server_message(&game_match.snapshot_for(boat_id, &visible_boats))?;
+                    session.publish_snapshot(snapshot);
                 }
             }
         }
@@ -625,7 +694,6 @@ async fn upgrade_connection(incoming_session: IncomingSession) -> ConnectionResu
 async fn handle_connection(
     connection: Connection,
     player_id: String,
-    player_number: u64,
     match_seed: u64,
     world_geometry: WorldGeometry,
     events: mpsc::Sender<ConnectionEvent>,
@@ -641,7 +709,6 @@ async fn handle_connection(
     events
         .send(ConnectionEvent::Connected {
             player_id: player_id.clone(),
-            player_number,
             outbound,
             registered,
         })
@@ -666,6 +733,11 @@ async fn handle_connection(
                             sequence,
                             intent: MotionIntent { forward: f64::from(forward), turn: f64::from(turn) },
                         }).await.is_err() {
+                            break Ok(());
+                        }
+                    }
+                    Some(Ok(IncomingMessage::Reliable(ClientMessage::Join { nickname, input_sequence }))) => {
+                        if events.send(ConnectionEvent::Join { player_id: player_id.clone(), nickname, input_sequence }).await.is_err() {
                             break Ok(());
                         }
                     }
@@ -700,8 +772,8 @@ async fn handle_connection(
                                 Err(error) => break Err(error.into()),
                             }
                         }
-                        Some(OutboundMessage::Close) => {
-                            connection.close(VarInt::from_u32(1), b"Server shutting down");
+                        Some(OutboundMessage::Close(reason)) => {
+                            connection.close(VarInt::from_u32(1), reason.as_bytes());
                             break Ok(());
                         }
                         None => {}
@@ -846,13 +918,12 @@ mod tests {
             );
             players.push(Player {
                 id: format!("player-{}", index + 1),
+                nickname: "Sailor".into(),
                 sailor: Sailor::default(),
                 intent: MotionIntent::default(),
                 acknowledged_input: 0,
                 last_received_input: 0,
                 pending_inputs: VecDeque::new(),
-                last_received_viewport: None,
-                visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
                 health: BOAT_MAX_HEALTH,
                 last_hit_tick: None,
                 wreck: false,
@@ -910,13 +981,12 @@ mod tests {
             players: (1..=2)
                 .map(|number| Player {
                     id: format!("player-{number}"),
+                    nickname: "Sailor".into(),
                     sailor: Sailor::default(),
                     intent: MotionIntent::default(),
                     acknowledged_input: 0,
                     last_received_input: 0,
                     pending_inputs: VecDeque::new(),
-                    last_received_viewport: None,
-                    visibility_radius_m: DEFAULT_VISIBILITY_RADIUS_M,
                     health: BOAT_MAX_HEALTH,
                     last_hit_tick: None,
                     wreck: false,
@@ -952,12 +1022,79 @@ mod tests {
         )
     }
 
+    fn session_for(boat_id: &str) -> SessionState {
+        let (outbound, _) = watch::channel(None);
+        SessionState {
+            outbound,
+            boat_id: Some(boat_id.into()),
+            last_viewport: None,
+            radius_m: DEFAULT_VISIBILITY_RADIUS_M,
+        }
+    }
+
     fn player<'a>(game_match: &'a GameMatch, player_id: &str) -> &'a Player {
         game_match
             .players
             .iter()
             .find(|player| player.id == player_id)
             .unwrap()
+    }
+
+    #[test]
+    fn respawn_preserves_wreck_and_rejects_delayed_input_for_previous_boat() {
+        let mut game_match = GameMatch::new(42);
+        let mut session = session_for("");
+        session.boat_id = None;
+        let mut next = 1;
+        session.join(&mut game_match, "First".into(), 1, &mut next);
+        session.join(&mut game_match, "Duplicate".into(), 1, &mut next);
+        assert_eq!(game_match.players.len(), 1);
+        game_match.set_input(
+            "player-1",
+            9,
+            MotionIntent {
+                forward: 1.0,
+                turn: 1.0,
+            },
+        );
+        game_match.apply_collision_damage("player-1", 2000.0, -1.5);
+        session.join(&mut game_match, "Second".into(), 10, &mut next);
+        assert_eq!(session.boat_id.as_deref(), Some("player-2"));
+        assert_eq!(game_match.players.len(), 2);
+        assert!(player(&game_match, "player-1").wreck);
+        game_match.set_input(
+            "player-2",
+            9,
+            MotionIntent {
+                forward: 1.0,
+                turn: 1.0,
+            },
+        );
+        assert!(player(&game_match, "player-2").pending_inputs.is_empty());
+        assert_eq!(player(&game_match, "player-2").acknowledged_input, 9);
+        game_match.set_input(
+            "player-2",
+            10,
+            MotionIntent {
+                forward: 0.5,
+                turn: -0.25,
+            },
+        );
+        game_match.advance();
+        assert_eq!(player(&game_match, "player-2").acknowledged_input, 10);
+        assert_eq!(player(&game_match, "player-2").nickname, "Second");
+    }
+
+    #[test]
+    fn closing_session_cannot_be_overwritten_by_a_later_snapshot() {
+        let session = session_for("player-1");
+        session
+            .outbound
+            .send_replace(Some(OutboundMessage::Close("Match is full".into())));
+        session.publish_snapshot(vec![1, 2, 3]);
+        assert!(
+            matches!(session.outbound.borrow().as_ref(), Some(OutboundMessage::Close(reason)) if reason == "Match is full")
+        );
     }
 
     #[test]
@@ -1081,7 +1218,10 @@ mod tests {
             ],
         );
 
-        assert_eq!(game_match.visible_boats("player-1"), vec![0, 1]);
+        assert_eq!(
+            session_for("player-1").visible_boats(&game_match),
+            vec![0, 1]
+        );
         let ServerMessage::Snapshot { boats, .. } =
             game_match.snapshot_for("player-1", &[0, 1, 2, 3])
         else {
@@ -1098,11 +1238,12 @@ mod tests {
     #[test]
     fn viewport_interest_honors_radii_beyond_the_default_view() {
         let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
-        let mut game_match = game_match_with_boats(world, &[Vector::ZERO, Vector::new(40.0, 0.0)]);
+        let game_match = game_match_with_boats(world, &[Vector::ZERO, Vector::new(40.0, 0.0)]);
 
-        game_match.set_viewport("player-1", 1, 50.0);
+        let mut session = session_for("player-1");
+        session.set_viewport(1, 50.0);
 
-        assert_eq!(game_match.visible_boats("player-1"), vec![0, 1]);
+        assert_eq!(session.visible_boats(&game_match), vec![0, 1]);
     }
 
     #[test]
@@ -1114,9 +1255,10 @@ mod tests {
             player.wreck = true;
         }
 
-        assert!(!game_match.has_player_capacity(0));
-        game_match.set_viewport("player-1", 1, f32::MAX);
-        assert_eq!(game_match.visible_boats("player-1").len(), MAX_MATCH_BOATS);
+        assert!(!game_match.has_player_capacity());
+        let mut session = session_for("player-1");
+        session.set_viewport(1, f32::MAX);
+        assert_eq!(session.visible_boats(&game_match).len(), MAX_MATCH_BOATS);
     }
 
     #[test]

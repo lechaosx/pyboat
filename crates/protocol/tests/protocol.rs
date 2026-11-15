@@ -108,13 +108,15 @@ fn viewport_message_is_compact_and_rejects_invalid_radius() {
 fn empty_snapshot_is_compact_and_round_trips() {
     let expected = ServerMessage::Snapshot {
         tick: 7,
+        controlled_boat_id: Some("player-1".into()),
+        focus_m: [0.0, 0.0],
         boats: Vec::new(),
         removed_player_ids: Vec::new(),
     };
     let encoded = encode_server_message(&expected).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert_eq!(encoded, [protocol::PROTOCOL_VERSION, 1, 7, 0, 0]);
+    assert!(encoded.len() < 40);
     assert_eq!(decoded, expected);
 }
 
@@ -122,8 +124,11 @@ fn empty_snapshot_is_compact_and_round_trips() {
 fn boat_damage_state_is_compact_and_round_trips() {
     let message = ServerMessage::Snapshot {
         tick: 12,
+        controlled_boat_id: Some("player-1".into()),
+        focus_m: [0.0, 0.0],
         boats: vec![BoatSnapshot {
             id: "player-2".to_owned(),
+            nickname: "Sailor".into(),
             health: 75.0,
             last_hit_tick: Some(11),
             wreck: false,
@@ -148,7 +153,7 @@ fn boat_damage_state_is_compact_and_round_trips() {
     let encoded = encode_server_message(&message).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
 
-    assert!(encoded.len() < 120);
+    assert!(encoded.len() < 180);
     assert_eq!(decoded, message);
 }
 
@@ -184,8 +189,11 @@ fn snapshot_preserves_sub_float_motion_precision() {
     ];
     let message = ServerMessage::Snapshot {
         tick: 12,
+        controlled_boat_id: Some("player-1".into()),
+        focus_m: [0.0, 0.0],
         boats: vec![BoatSnapshot {
             id: "player-2".to_owned(),
+            nickname: "Sailor".into(),
             health: 75.0,
             last_hit_tick: None,
             wreck: false,
@@ -224,4 +232,46 @@ fn snapshot_preserves_sub_float_motion_precision() {
         boat.rudder_angular_velocity,
     ];
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn join_round_trips_and_rejects_invalid_nicknames() {
+    let message = ClientMessage::Join {
+        input_sequence: 1,
+        nickname: "Captain 🛥".into(),
+    };
+    assert_eq!(
+        decode_client_message(&encode_client_message(&message).unwrap()).unwrap(),
+        message
+    );
+    for nickname in ["".into(), "  ".into(), "a\nb".into(), "🛥".repeat(25)] {
+        assert_eq!(
+            encode_client_message(&ClientMessage::Join {
+                input_sequence: 1,
+                nickname
+            })
+            .unwrap_err(),
+            ProtocolError::InvalidNickname
+        );
+    }
+    assert!(
+        encode_client_message(&ClientMessage::Join {
+            input_sequence: 1,
+            nickname: "🛥".repeat(24)
+        })
+        .is_ok()
+    );
+}
+
+#[test]
+fn join_requires_a_positive_input_sequence_floor() {
+    for input_sequence in [0, -1, i64::MIN] {
+        assert!(
+            encode_client_message(&ClientMessage::Join {
+                nickname: "Captain".into(),
+                input_sequence
+            })
+            .is_err()
+        );
+    }
 }
