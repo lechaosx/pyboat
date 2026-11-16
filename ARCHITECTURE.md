@@ -100,8 +100,10 @@ and verification details.
   uses wave-phase derivatives with amplitude and direction held fixed; wind
   and current acceleration are omitted. This approximation retains the dominant
   tested wave response at low computation and maintenance cost.
-- **[Explicit]** Spatial-gradient and Froude–Krylov loads are deferred until
-  further wave and current model development.
+- **[Explicit]** A floating hull takes the Froude–Krylov load of the waves'
+  water acceleration averaged over its waterplane, and that load's yaw moment.
+- **[Explicit]** Spatial-gradient loads are deferred until further wave and
+  current model development.
 - **[Explicit]** Rendered and collision hull geometry agree.
 - **[Explicit]** Destruction removes the controller while retaining bodies,
   momentum, fluid forces, and collisions. The owner spectates the wreck.
@@ -221,8 +223,14 @@ and verification details.
   water boundary, and the calibrated polar climate remains frozen through summer.
 - **[Explicit]** Ocean motion enters the same water-relative load path on the
   authoritative server and predicting client.
-- **[Implicit]** Boat dynamics remain planar: horizontal orbital motion affects
-  sailing; capsize, refraction, and diffraction are outside the model.
+- **[Implicit]** Boat dynamics remain planar: the waves' horizontal motion and
+  pressure carry and turn boats; capsize, refraction, and diffraction are
+  outside the model.
+- **[Explicit]** Hull, keel, and rudder take the waves' orbital velocity
+  averaged over the hull's waterplane at the surface.
+- **[Implicit]** A boat's water velocity includes the mean drift its heave
+  through the orbital velocity's vertical shear adds, so a boat that follows
+  the water keeps the waves' Stokes drift.
 - **[Implicit]** A hull rides the sea without motion of its own: its heave,
   pitch, and roll are the plane fitted to the surface over its waterplane.
 - **[Explicit]** A boat's depth is the still water's plus the whole sea, swell

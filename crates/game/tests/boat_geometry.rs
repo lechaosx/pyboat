@@ -21,6 +21,7 @@ fn centering_a_small_rudder_error_dissipates_energy_without_fluid_loads() {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
         water_depth_m: f64::INFINITY,
+        ..simulation::Environment::default()
     };
     let stiffness =
         parameters.max_rudder_actuator_torque_n_m() / (parameters.max_rudder_angle_rad / 10.0);
@@ -68,6 +69,7 @@ fn passive_boats_cannot_gain_kinetic_energy_in_still_water() {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
         water_depth_m: f64::INFINITY,
+        ..simulation::Environment::default()
     };
     for (speed_m_s, yaw_speed, sail_speed, rudder_speed_rad_s) in [
         (5.0, 0.0, 0.0, 0.0),
@@ -130,6 +132,7 @@ fn rudder_actuator_startup_cannot_leave_a_passive_boat_gaining_energy() {
         true_wind_velocity_m_s: Vector::ZERO,
         true_water_velocity_m_s: Vector::ZERO,
         water_depth_m: f64::INFINITY,
+        ..simulation::Environment::default()
     };
     let torques = simulation::ActuatorTorques {
         sail_n_m: 0.0,

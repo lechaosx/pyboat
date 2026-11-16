@@ -275,6 +275,11 @@ pub struct Environment {
     pub true_wind_velocity_m_s: Vector,
     pub true_water_velocity_m_s: Vector,
     pub water_depth_m: f64,
+    /// The waves' Froude–Krylov load on a floating hull per kilogram it
+    /// displaces: the water's acceleration averaged over its waterplane, and
+    /// that load's yaw moment about its reference point.
+    pub wave_acceleration_m_s2: Vector,
+    pub wave_yaw_moment_m2_s2: f64,
 }
 
 impl Default for Environment {
@@ -283,6 +288,8 @@ impl Default for Environment {
             true_wind_velocity_m_s: Vector::ZERO,
             true_water_velocity_m_s: Vector::ZERO,
             water_depth_m: f64::INFINITY,
+            wave_acceleration_m_s2: Vector::ZERO,
+            wave_yaw_moment_m2_s2: 0.0,
         }
     }
 }
@@ -631,7 +638,7 @@ fn grounding_friction_force_at_step(
     kinetic_friction_coefficient: f64,
     step_seconds: f64,
 ) -> Vector {
-    let support_fraction = ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0);
+    let support_fraction = support_fraction(draft_m, water_depth_m);
     let maximum_force_n = kinetic_friction_coefficient
         * supported_mass_kg
         * GRAVITY_ACCELERATION_M_S2
@@ -645,6 +652,12 @@ fn grounding_friction_force_at_step(
     } else {
         -point_velocity_m_s.normalize() * maximum_force_n
     }
+}
+
+/// The share of a boat's weight the ground carries where water stands
+/// `water_depth_m` deep over it.
+fn support_fraction(draft_m: f64, water_depth_m: f64) -> f64 {
+    ((draft_m - water_depth_m) / draft_m).clamp(0.0, 1.0)
 }
 
 fn total_mass_kg(parameters: BoatParameters) -> f64 {
@@ -662,8 +675,7 @@ fn apply_grounding_friction(
     water_depth_m: f64,
     step_seconds: f64,
 ) {
-    let support_fraction =
-        ((parameters.draft_m - water_depth_m) / parameters.draft_m).clamp(0.0, 1.0);
+    let support_fraction = support_fraction(parameters.draft_m, water_depth_m);
     if support_fraction == 0.0 {
         world.bodies[boat.hull.body].set_body_type(RigidBodyType::Dynamic, true);
         return;
@@ -1377,6 +1389,29 @@ fn apply_boat_forces(
         world.bodies[boat.hull.body].add_force_at_point(force_n, world_position_m, true);
     }
 
+    // A floating hull displaces its own mass less the share of its weight the
+    // ground carries, and trims its centre of buoyancy under its centre of
+    // mass, the reference point, where the Froude–Krylov load acts.
+    // Compromise: the load is the undisturbed wave's alone; the diffraction
+    // that would add the displaced water's added mass to it and the radiation
+    // that would damp the hull's motion are left out, as added mass is. For
+    // waves much longer than the hull, a hull following the water feels the
+    // added mass's load and its inertia equally, so it still moves with the
+    // water; waves near its length push it by their pressure alone. The load,
+    // like the water velocity, is the surface's, without the pressure's decay
+    // over the hull's immersion: a few percent in a moderate sea, up to about
+    // 10% in light-wind chop. And the grounding law's support share stands in
+    // for the volume a grounded hull still displaces.
+    let displaced_mass_kg = total_mass_kg(parameters)
+        * (1.0 - support_fraction(parameters.draft_m, environment.water_depth_m));
+    let hull = &mut world.bodies[boat.hull.body];
+    let reference_m = hull.translation();
+    hull.add_force_at_point(
+        displaced_mass_kg * environment.wave_acceleration_m_s2,
+        reference_m,
+        true,
+    );
+    hull.add_torque(displaced_mass_kg * environment.wave_yaw_moment_m2_s2, true);
     world.bodies[boat.sail].add_torque(actuator_torques.sail_n_m, true);
     world.bodies[boat.rudder].add_torque(actuator_torques.rudder_n_m, true);
     world.bodies[boat.hull.body].add_torque(

@@ -1,8 +1,8 @@
 use game::{
     OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, Swell, Waterplane,
     background_swell, dinghy_parameters, hull_wave_fit, ocean_wave_state,
-    procedural_world_environment, procedural_world_environment_interpolated, swell_climate_knots,
-    wind_sea, wind_sea_components,
+    procedural_match_environment, procedural_world_environment,
+    procedural_world_environment_interpolated, swell_climate_knots, wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
@@ -1210,5 +1210,237 @@ fn a_hull_follows_long_waves_and_averages_out_waves_its_own_length() {
     assert!(
         short.0 < 0.15 && short.1 < 0.15,
         "a swell of the hull's length: height and slope shares {short:?}"
+    );
+}
+
+/// A hull's Froude-Krylov load per kilogram it displaces, and that load's yaw
+/// moment, are the surface's pressure gradient, -g ∇η, averaged over its
+/// waterplane and taken as a moment about its centre. Checked against a
+/// midpoint quadrature of the point surface's slope in a low sea of waves
+/// near the hull's length, where Tayfun's second order is under 1%.
+#[test]
+fn the_froude_krylov_load_is_the_waterplanes_pressure_gradient() {
+    let (cells_along, cells_across) = (64, 32);
+    let mut squares = [0.0; 4];
+    for (case, (period_s, heading_rad)) in [(1.9, 0.3), (2.3, 1.2), (2.8, 2.6), (1.6, -0.9)]
+        .into_iter()
+        .enumerate()
+    {
+        let forcing = OceanWaveForcing {
+            surface_wind_velocity_m_s: Vector::ZERO,
+            swell: swell(0.005, period_s, 0.4),
+            water_depth_m: 10_000.0,
+        };
+        let waterplane = Waterplane::of_hull(dinghy_parameters().hull, heading_rad);
+        let along = Vector::new(heading_rad.cos() as f32, heading_rad.sin() as f32);
+        let across = along.perp();
+        for clock in 0..8_u64 {
+            let tick = TICK + clock * 37 + case as u64;
+            let centre_m = Vector::new(123.0 + 17.0 * clock as f32, -45.0 + 3.0 * case as f32);
+            let hull = hull_wave_fit(
+                geometry(),
+                SEED,
+                tick,
+                0.0,
+                centre_m,
+                forcing,
+                waterplane,
+                0.0,
+            )
+            .sea;
+            let (mut acceleration, mut moment) = (Vector::ZERO, 0.0);
+            for i in 0..cells_along {
+                for j in 0..cells_across {
+                    let x = ((i as f64 + 0.5) / cells_along as f64 - 0.5) * waterplane.length_m;
+                    let y = ((j as f64 + 0.5) / cells_across as f64 - 0.5) * waterplane.beam_m;
+                    let slope = ocean_wave_state(
+                        geometry(),
+                        SEED,
+                        tick,
+                        0.0,
+                        centre_m + x as f32 * along + y as f32 * across,
+                        forcing,
+                    )
+                    .surface_slope;
+                    let pressure_gradient = -GRAVITY_M_S2 as f32 * slope;
+                    acceleration += pressure_gradient;
+                    moment += x * f64::from(pressure_gradient.dot(across))
+                        - y * f64::from(pressure_gradient.dot(along));
+                }
+            }
+            let cells = f64::from(cells_along * cells_across);
+            let acceleration = acceleration.as_dvec2() / cells;
+            let moment = moment / cells;
+            squares[0] += (hull.water_acceleration_m_s2 - acceleration).length_squared();
+            squares[1] += acceleration.length_squared();
+            squares[2] += (hull.yaw_moment_m2_s2 - moment).powi(2);
+            squares[3] += moment * moment;
+        }
+    }
+    let acceleration_error = (squares[0] / squares[1]).sqrt();
+    let moment_error = (squares[2] / squares[3]).sqrt();
+    assert!(
+        acceleration_error < 0.02 && moment_error < 0.02,
+        "relative rms errors: load {acceleration_error}, yaw moment {moment_error}"
+    );
+}
+
+/// The mean velocity of a tracer that moves for half an hour with the water
+/// velocity a dinghy heading `heading_rad` takes in the sea `forcing`
+/// raises, and that velocity's drift part.
+fn tracer_drift(
+    forcing: OceanWaveForcing,
+    heading_rad: f64,
+) -> (physics::glamx::DVec2, physics::glamx::DVec2) {
+    let sea = game::sea_components(geometry(), SEED, forcing);
+    let waterplane = Waterplane::of_hull(dinghy_parameters().hull, heading_rad);
+    let fit = |position_m: physics::glamx::DVec2, tick: u64, fraction: f32| {
+        game::hull_wave_fit_of_sea(
+            geometry(),
+            SEED,
+            tick,
+            fraction,
+            position_m.as_vec2(),
+            &sea,
+            waterplane,
+            0.0,
+        )
+        .sea
+    };
+    let velocity = |position_m, tick, fraction| {
+        let fit = fit(position_m, tick, fraction);
+        fit.orbital_velocity_m_s + fit.drift_velocity_m_s
+    };
+    let ticks = 30 * 60 * 60;
+    let step_s = 1.0 / 60.0;
+    let start_m = physics::glamx::DVec2::new(250.0, -120.0);
+    let mut position_m = start_m;
+    for tick in TICK..TICK + ticks {
+        let midpoint_m = position_m + 0.5 * step_s * velocity(position_m, tick, 0.0);
+        position_m += step_s * velocity(midpoint_m, tick, 0.5);
+    }
+    (
+        (position_m - start_m) / (ticks as f64 * step_s),
+        fit(start_m, TICK, 0.0).drift_velocity_m_s,
+    )
+}
+
+/// A tracer that moves with the water velocity a hull takes drifts at
+/// Stokes's (1847) rate, Σ a² ω k, of the sea's components: the vertical
+/// shear the hull's heave meets adds half and the tracer's own motion
+/// through the waves the other half. A 15 m/s wind's sea is long enough
+/// that the hull follows all of it.
+#[test]
+fn a_tracer_carried_with_a_hull_drifts_at_stokess_rate() {
+    let wind_m_s = Vector::new(12.0, 9.0);
+    let expected = wind_sea_components(geometry(), SEED, wind_m_s)
+        .iter()
+        .map(|component| {
+            let mode = component.mode;
+            component.amplitude_m.powi(2)
+                * mode.angular_frequency_rad_s
+                * physics::glamx::DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m)
+        })
+        .sum::<physics::glamx::DVec2>();
+    let (drift, _) = tracer_drift(deep_forcing(wind_m_s), 0.6435);
+    assert!(
+        (drift - expected).length() < 0.05 * expected.length(),
+        "drift {drift}, Stokes {expected}"
+    );
+}
+
+/// Where a swell outgrows the wind sea in the modes they share, the hull's
+/// drift takes each mode's whole amplitude, as the tracer's own motion
+/// through the waves does: a tracer in a sea of both drifts at twice the
+/// part the hull's heave adds.
+#[test]
+fn a_mixed_seas_drift_takes_each_shared_modes_whole_amplitude() {
+    let wind_m_s = Vector::new(12.0, 9.0);
+    let forcing = OceanWaveForcing {
+        swell: swell(5.0, 11.5, 0.6435),
+        ..deep_forcing(wind_m_s)
+    };
+    let (drift, heave_drift) = tracer_drift(forcing, 0.6435);
+    assert!(
+        (drift - 2.0 * heave_drift).length() < 0.03 * drift.length(),
+        "drift {drift}, twice the heave's {}",
+        2.0 * heave_drift
+    );
+}
+
+/// A free boat heading downwave in a moderate sea, launched at rest in the
+/// water, surges with the water the waves move under it: its velocity along
+/// its hull follows the water's there, at a gain near one over a minute. The
+/// wind is kept off its free sail, whose flogging would turn and push it.
+#[test]
+fn a_free_boat_surges_with_the_water() {
+    let world = geometry();
+    let (position_m, sample) = (0..512)
+        .map(|index| {
+            let position_m = Vector::new(
+                -0.5 * (world.width_m() as f32)
+                    + (index % 32) as f32 * (world.width_m() as f32) / 32.0,
+                -0.5 * (world.height_m() as f32)
+                    + (index / 32) as f32 * (world.height_m() as f32) / 16.0,
+            );
+            (
+                position_m,
+                procedural_world_environment(world, SEED, TICK, position_m),
+            )
+        })
+        .find(|(_, sample)| {
+            (2.5..4.0).contains(&sample.ocean.significant_wave_height_m)
+                && sample.wave_forcing.water_depth_m > 200.0
+        })
+        .expect("a deep moderate sea");
+    let height_m = sample.ocean.significant_wave_height_m;
+    let wind = sample.wave_forcing.surface_wind_velocity_m_s;
+    let heading_rad = f64::from(wind.y.atan2(wind.x));
+    let position_m = position_m.as_dvec2();
+    let mut parameters = dinghy_parameters();
+    parameters.air_density_kg_m3 = 0.0;
+    let mut simulation = simulation::SharedSimulation::new_with_world_geometry(world);
+    simulation.add_boat(
+        parameters,
+        simulation::BoatMotion {
+            position_m,
+            velocity_m_s: procedural_match_environment(world, SEED, TICK, position_m, heading_rad)
+                .true_water_velocity_m_s,
+            angle_rad: heading_rad,
+            angular_velocity_rad_s: 0.0,
+            sail_angle_rad: 0.0,
+            sail_angular_velocity_rad_s: 0.0,
+            rudder_angle_rad: 0.0,
+            rudder_angular_velocity_rad_s: 0.0,
+        },
+    );
+    let mut surges = Vec::new();
+    for tick in TICK..TICK + 3_600 {
+        let motion = simulation.motion(0);
+        let environment =
+            procedural_match_environment(world, SEED, tick, motion.position_m, motion.angle_rad);
+        let along = physics::glamx::DVec2::new(motion.angle_rad.cos(), motion.angle_rad.sin());
+        surges.push((
+            motion.velocity_m_s.dot(along),
+            environment.true_water_velocity_m_s.dot(along),
+        ));
+        simulation.advance_controlled_with_environments(&[environment], &[None]);
+    }
+    let count = surges.len() as f64;
+    let mean = surges.iter().fold((0.0, 0.0), |sum, (boat, water)| {
+        (sum.0 + boat, sum.1 + water)
+    });
+    let (mean_boat, mean_water) = (mean.0 / count, mean.1 / count);
+    let (covariance, water_variance) = surges.iter().fold((0.0, 0.0), |sums, (boat, water)| {
+        (
+            sums.0 + (boat - mean_boat) * (water - mean_water),
+            sums.1 + (water - mean_water).powi(2),
+        )
+    });
+    let gain = covariance / water_variance;
+    assert!(
+        water_variance / count > 0.01 && (gain - 1.0).abs() < 0.05,
+        "Hs {height_m} m: water surge variance {} m²/s², boat's gain {gain}",
+        water_variance / count
     );
 }

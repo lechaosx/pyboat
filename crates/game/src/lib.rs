@@ -1735,14 +1735,23 @@ pub fn match_environment() -> Environment {
         true_wind_velocity_m_s: PhysicsVector::new(6.0, 0.0),
         true_water_velocity_m_s: PhysicsVector::ZERO,
         water_depth_m: f64::INFINITY,
+        ..Environment::default()
     }
 }
 
 /// The environment of a match's boat at `position_m` heading `heading_rad`:
 /// its water is as deep as the still water plus the whole sea, swell
-/// included, fitted over the boat's hull. Compromise: the still water's
-/// depth is the bed's at the hull's reference point alone, where it grounds,
-/// whatever the bed does along the hull.
+/// included, fitted over the boat's hull; it moves with the current and the
+/// sea's orbital velocity averaged over the hull's waterplane, plus the drift
+/// a hull riding the sea keeps; and the sea's Froude–Krylov load acts on it.
+/// Compromises: the still water's depth is the bed's at the hull's reference
+/// point alone, where it grounds, whatever the bed does along the hull; and
+/// hull, keel and rudder all take the averaged orbital velocity at the
+/// surface, leaving out its decay to the foils' depth, a few percent of a
+/// moderate sea's and up to about a quarter in light-wind chop, and its
+/// variation along the hull, which in a moderate sea reaches about 15% of it
+/// at the rudder, so keel and hull damp the turn the yaw moment drives as if
+/// the water did not rotate.
 pub fn procedural_match_environment(
     world_geometry: WorldGeometry,
     match_seed: u64,
@@ -1758,9 +1767,16 @@ pub fn procedural_match_environment(
         Vector::new(position_m.x as f32, position_m.y as f32),
         Some(Waterplane::of_hull(dinghy_parameters().hull, heading_rad)),
     );
-    let heave_m = hull.map_or(0.0, |hull| hull.height_m);
+    let Some(hull) = hull else {
+        return sample.environment;
+    };
     Environment {
-        water_depth_m: (sample.environment.water_depth_m + heave_m).max(0.0),
+        true_water_velocity_m_s: sample.ocean.current_velocity_m_s.as_dvec2()
+            + hull.orbital_velocity_m_s
+            + hull.drift_velocity_m_s,
+        water_depth_m: (sample.environment.water_depth_m + hull.height_m).max(0.0),
+        wave_acceleration_m_s2: hull.water_acceleration_m_s2,
+        wave_yaw_moment_m2_s2: hull.yaw_moment_m2_s2,
         ..sample.environment
     }
 }
@@ -1889,6 +1905,7 @@ fn world_environment_and_hull_fit(
             PhysicsVector::new(f64::from(velocity.x), f64::from(velocity.y))
         },
         water_depth_m: f64::from(water_depth_m),
+        ..Environment::default()
     };
 
     (

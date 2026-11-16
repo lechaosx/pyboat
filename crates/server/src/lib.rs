@@ -279,12 +279,21 @@ impl GameMatch {
         )
         .environment
         .true_wind_velocity_m_s;
+        let angle_rad = wind.y.atan2(wind.x);
         self.simulation.add_boat(
             self.parameters,
             BoatMotion {
                 position_m,
-                velocity_m_s: Vector::ZERO,
-                angle_rad: wind.y.atan2(wind.x),
+                // At rest in the water, which its current and waves move.
+                velocity_m_s: procedural_match_environment(
+                    self.world_geometry,
+                    self.match_seed,
+                    self.tick,
+                    position_m,
+                    angle_rad,
+                )
+                .true_water_velocity_m_s,
+                angle_rad,
                 angular_velocity_rad_s: 0.0,
                 sail_angle_rad: 0.0,
                 sail_angular_velocity_rad_s: 0.0,
@@ -1103,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn new_players_spawn_safely_beyond_the_fleet_and_point_downwind() {
+    fn new_players_spawn_safely_beyond_the_fleet_downwind_at_rest_in_the_water() {
         // Seed 37's first spawns lie in water that its significant trough
         // leaves shallower than the minimum.
         for seed in [42, 37] {
@@ -1139,6 +1148,18 @@ mod tests {
                 let forward = Vector::new(spawned.angle_rad.cos(), spawned.angle_rad.sin());
                 assert!(
                     forward.dot(sample.environment.true_wind_velocity_m_s.normalize()) > 0.999_99
+                );
+                assert_eq!(
+                    spawned.velocity_m_s,
+                    procedural_match_environment(
+                        game_match.world_geometry,
+                        game_match.match_seed,
+                        game_match.tick,
+                        spawned.position_m,
+                        spawned.angle_rad,
+                    )
+                    .true_water_velocity_m_s,
+                    "seed {seed}, player {player_number}"
                 );
             }
         }

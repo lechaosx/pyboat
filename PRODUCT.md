@@ -49,9 +49,9 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Currents include gyres, coastal flow, and reversing tides with
   zero world-scale net transport. Rotational circulation reverses between
   hemispheres and fades near the equator.
-- **[Explicit]** Shared waves raise, lower, and tilt boats, change the depth
-  beneath them, and affect boat-relative water motion. Exceptional crests
-  emerge through interference in severe seas.
+- **[Explicit]** Shared waves raise, lower, tilt, and carry boats and change
+  the depth beneath them. Exceptional crests emerge through interference in
+  severe seas.
 - **[Explicit]** Storm conditions emerge continuously from weather.
 - **[Implicit]** Default humidity and variation normally leave severe rain active
   somewhere at world scale, without guaranteeing a storm.
@@ -242,7 +242,7 @@ See [README.md](README.md) for what is playable now and
 | Wreck lifecycle | Cleanup timing and whether time, distance, capacity, or salvage governs it |
 | Progression | Progression, matchmaking, ship-class, weapon, and custom-action rules |
 | Grounding | Recovery, rock damage, draft, spawn clearance, and friction tuning |
-| Seakeeping | Whether steep or breaking seas swamp, damage, or capsize hulls |
+| Seakeeping | Whether steep or breaking seas swamp, damage, capsize, or broach hulls |
 | Navigation | Large-ship drafts and reef-passage availability by class |
 | Combat | Health, impact thresholds, damage conversion, and hull-zone balance after playtesting |
 | Graphics settings | Where players choose graphics settings, and which presets they see |

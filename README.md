@@ -6,8 +6,8 @@ world, whose islands a drone-like camera shows in perspective. Wooden hull
 sprites carry cloth sails that fill or luff with apparent wind. Day/night
 lighting uses gradual eye adaptation to the brightness and color of the light
 falling on each part of the view, with HDR highlights on supported browsers and
-displays. The local wind raises a fully developed sea that lifts and tilts
-boats; swell from distant storms isn't drawn, but it tilts and moves boats
+displays. The local wind raises a fully developed sea that lifts, tilts and
+carries boats; swell from distant storms isn't drawn, but it does the same
 and can ground them in its troughs. Water mirrors the sky and
 glints in sunlight and moonlight; its depth, its bed, and the sediment waves
 stir set its color; ground darkens where tide, waves, dew, or humid and rainy

@@ -30,7 +30,10 @@ const VISITED_DIRECTIONS: usize = 6;
 // Pierson and Moskowitz's spectrum falls under 0.3% of its peak and holds
 // 0.007% of its variance. Compromise: above, the 13% of the variance
 // beyond three times the peak is left to the decorative octaves' slopes and
-// has no height.
+// has no height, load or velocity for boats: they cannot surf waves slower
+// than about 0.69 of the wind, the only ones a dinghy is fast enough to
+// catch, and the window keeps about 35% of the sea's surface Stokes drift, about 0.6%
+// of the wind's speed instead of 1.7%.
 const GAMEPLAY_WINDOW: [f64; 2] = [0.36, 3.0];
 
 /// A wave mode's spatial phase is `wave_number_x_per_m * x + wave_number_y_per_m * y`
@@ -613,10 +616,14 @@ pub(crate) fn ocean_wave_state_and_hull_fit(
         &components,
         |band, mode| {
             [
-                Some((
-                    1.0,
-                    DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m),
-                )),
+                Some(Transfer {
+                    height: 1.0,
+                    slope_wave_number: DVec2::new(
+                        mode.wave_number_x_per_m,
+                        mode.wave_number_y_per_m,
+                    ),
+                    yaw_m2: 0.0,
+                }),
                 hull.as_ref().and_then(|hull| hull.transfer(band, mode)),
             ]
         },
@@ -689,6 +696,10 @@ impl Waterplane {
 pub struct SurfaceFit {
     pub height_m: f64,
     pub slope: DVec2,
+    pub orbital_velocity_m_s: DVec2,
+    pub drift_velocity_m_s: DVec2,
+    pub water_acceleration_m_s2: DVec2,
+    pub yaw_moment_m2_s2: f64,
 }
 
 /// The wind sea alone, as the drawn surface shows it, and the whole sea
@@ -796,10 +807,9 @@ impl HullTransfer {
         }
     }
 
-    /// The share of the mode's height in the fit and the wavenumber that
-    /// turns its height into the fit's slope, or `None` where the footprint
-    /// skips its band.
-    fn transfer(&self, band: usize, mode: &OceanWaveMode) -> Option<(f64, DVec2)> {
+    /// How the mode enters the fit, or `None` where the footprint skips its
+    /// band.
+    fn transfer(&self, band: usize, mode: &OceanWaveMode) -> Option<Transfer> {
         let lowest_wavenumber = std::f64::consts::TAU / OCEAN_WAVE_LONGEST_M;
         let band_wavenumber =
             lowest_wavenumber * libm::exp2(band as f64 / OCEAN_WAVE_BANDS_PER_OCTAVE as f64);
@@ -815,13 +825,31 @@ impl HullTransfer {
             waterplane_transfers(0.5 * wave_number_along * self.waterplane.length_m);
         let (height_across, slope_across) =
             waterplane_transfers(0.5 * wave_number_across * self.waterplane.beam_m);
-        Some((
-            filter * height_along * height_across,
-            filter
+        let (length_m, beam_m) = (self.waterplane.length_m, self.waterplane.beam_m);
+        Some(Transfer {
+            height: filter * height_along * height_across,
+            slope_wave_number: filter
                 * (wave_number_along * slope_along * height_across * self.along
                     + wave_number_across * height_along * slope_across * self.across),
-        ))
+            yaw_m2: filter
+                * wave_number_along
+                * wave_number_across
+                * (length_m * length_m / 12.0 * slope_along * height_across
+                    - beam_m * beam_m / 12.0 * height_along * slope_across),
+        })
     }
+}
+
+/// How a mode enters a sum over a waterplane: `height` is the waterplane's
+/// mean of its height, and so of its orbital velocity and of its pressure
+/// gradient's load; `slope_wave_number` stands in for its wavenumber in the
+/// fitted plane's slope; and `yaw_m2`, times its height at the centre, is
+/// the waterplane's mean of y ∂η/∂x - x ∂η/∂y along and across the heading,
+/// the yaw of -∇η, per mode a k∥k⊥ (L²/12 P(u) S(v) - B²/12 S(u) P(v)) cos φ.
+struct Transfer {
+    height: f64,
+    slope_wave_number: DVec2,
+    yaw_m2: f64,
 }
 
 /// A waterplane's height and slope transfers along one axis at half its
@@ -862,6 +890,10 @@ fn second_order(sum: &SurfaceSum, depth_scale: f64, window: (f64, f64)) -> Surfa
             + mean_wavenumber
                 * depth_scale
                 * (linear_m * sum.slope - quadrature_m * sum.quadrature_slope),
+        orbital_velocity_m_s: depth_scale * sum.orbital_velocity_m_s,
+        drift_velocity_m_s: depth_scale * depth_scale * sum.drift_velocity_m_s,
+        water_acceleration_m_s2: depth_scale * sum.water_acceleration_m_s2,
+        yaw_moment_m2_s2: depth_scale * sum.yaw_moment_m2_s2,
     }
 }
 
@@ -872,12 +904,14 @@ struct PartitionSums {
     swell_excess: SurfaceSum,
 }
 
-/// A table mode's band and direction, and its amplitude.
+/// A table mode's band and direction, its amplitude, and the amplitude of
+/// the component it adds to: the wind sea's, for the swell's excess.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SeaComponent {
     band: u8,
     direction: u8,
     amplitude_m: f64,
+    base_amplitude_m: f64,
 }
 
 impl SeaComponent {
@@ -885,6 +919,7 @@ impl SeaComponent {
         band: 0,
         direction: 0,
         amplitude_m: 0.0,
+        base_amplitude_m: 0.0,
     };
 }
 
@@ -961,6 +996,7 @@ pub fn sea_components(
                 band: band as u8,
                 direction: direction as u8,
                 amplitude_m,
+                base_amplitude_m: 0.0,
             };
             components.wind_count += 1;
         },
@@ -977,6 +1013,7 @@ pub fn sea_components(
                 band: band as u8,
                 direction: direction as u8,
                 amplitude_m: (amplitude_m - wind_amplitude_m).max(0.0),
+                base_amplitude_m: wind_amplitude_m,
             };
             components.swell_count += 1;
             components.shared_variance_m2 += 0.5 * amplitude_m.min(wind_amplitude_m).powi(2);
@@ -998,7 +1035,7 @@ fn sea_sums(
     world_tick_fraction: f32,
     position_m: Vector,
     sea: &SeaComponents,
-    transfer: impl Fn(usize, &OceanWaveMode) -> [Option<(f64, DVec2)>; 2],
+    transfer: impl Fn(usize, &OceanWaveMode) -> [Option<Transfer>; 2],
 ) -> [PartitionSums; 2] {
     let table = ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
     let width_m = f64::from(world_geometry.width_m() as f32);
@@ -1016,19 +1053,13 @@ fn sea_sums(
             if transfers.iter().any(Option::is_some) {
                 let phase = mode.phase_at(x_m, y_m);
                 for (sums, transfer) in sums.iter_mut().zip(transfers) {
-                    if let Some((weight, slope_wave_number)) = transfer {
+                    if let Some(transfer) = transfer {
                         let sum = if swell {
                             &mut sums.swell_excess
                         } else {
                             &mut sums.wind
                         };
-                        sum.add(
-                            mode,
-                            component.amplitude_m,
-                            phase,
-                            weight,
-                            slope_wave_number,
-                        );
+                        sum.add(mode, component, phase, &transfer);
                     }
                 }
             }
@@ -1046,11 +1077,22 @@ fn whole_sea(sums: &PartitionSums) -> SurfaceSum {
         slope: wind.slope + swell_excess.slope,
         quadrature_slope: wind.quadrature_slope + swell_excess.quadrature_slope,
         orbital_velocity_m_s: wind.orbital_velocity_m_s + swell_excess.orbital_velocity_m_s,
+        water_acceleration_m_s2: wind.water_acceleration_m_s2
+            + swell_excess.water_acceleration_m_s2,
+        yaw_moment_m2_s2: wind.yaw_moment_m2_s2 + swell_excess.yaw_moment_m2_s2,
+        drift_velocity_m_s: wind.drift_velocity_m_s + swell_excess.drift_velocity_m_s,
     }
 }
 
-/// Sums of deep-water modes at a point: height, its quadrature, their slopes,
-/// and the surface's horizontal orbital velocity.
+/// Sums of deep-water modes at a point or over a waterplane: height, its
+/// quadrature, their slopes, the surface's horizontal orbital velocity, the
+/// water's acceleration under the surface's pressure gradient, -g ∇η, which
+/// in deep water is that velocity's rate of change, and the yaw moment that
+/// gradient exerts per unit of displaced mass; and the mean drift of a hull
+/// that rides the surface, from its heave through the orbital velocity's
+/// vertical shear. Compromise: the load takes the linear wave's local
+/// acceleration, leaving out the second-order convective acceleration, whose
+/// mean is zero.
 #[derive(Default)]
 struct SurfaceSum {
     displacement_m: f64,
@@ -1058,27 +1100,52 @@ struct SurfaceSum {
     slope: DVec2,
     quadrature_slope: DVec2,
     orbital_velocity_m_s: DVec2,
+    water_acceleration_m_s2: DVec2,
+    yaw_moment_m2_s2: f64,
+    drift_velocity_m_s: DVec2,
 }
 
 impl SurfaceSum {
-    /// Adds a mode at `(sin, cos)` of its phase, whose height enters by
-    /// `weight` and whose slope by `slope_wave_number` in place of its
-    /// wavenumber.
+    /// Adds a component's mode at `(sin, cos)` of its phase by `transfer`.
+    ///
+    /// A hull at depth z under the heaving surface meets the orbital
+    /// velocity's vertical shear, k u in deep water, so its velocity gains
+    /// k η u; a mode's mean of that is ½ a² ω k along its travel, half of
+    /// Stokes's (1847) drift a² ω k, and the hull's own motion through the
+    /// waves supplies the other half. The drift takes the component's
+    /// amplitude together with the one it adds to, as its mode's whole
+    /// amplitude. Compromises: the drift keeps that product's mean alone,
+    /// leaving out its oscillation at twice the wave's frequency and the
+    /// products of different modes, which extrapolating short waves' shear
+    /// through a long swell's heave would make unphysically large; and the
+    /// hull takes the shear and the orbital velocity at the surface, without
+    /// their decay to its immersion, as the heave leaves out the pressure's
+    /// decay to its draft.
     fn add(
         &mut self,
         mode: &OceanWaveMode,
-        amplitude_m: f64,
+        component: &SeaComponent,
         (sine, cosine): (f64, f64),
-        weight: f64,
-        slope_wave_number: DVec2,
+        transfer: &Transfer,
     ) {
+        let amplitude_m = component.amplitude_m;
         let wave_number = DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m);
-        self.displacement_m += weight * amplitude_m * cosine;
-        self.quadrature_m += weight * amplitude_m * sine;
-        self.slope -= amplitude_m * sine * slope_wave_number;
-        self.quadrature_slope += amplitude_m * cosine * slope_wave_number;
-        self.orbital_velocity_m_s += amplitude_m * mode.angular_frequency_rad_s * cosine
-            / mode.wave_number_per_m
+        let height_m = transfer.height * amplitude_m;
+        self.displacement_m += height_m * cosine;
+        self.quadrature_m += height_m * sine;
+        self.slope -= amplitude_m * sine * transfer.slope_wave_number;
+        self.quadrature_slope += amplitude_m * cosine * transfer.slope_wave_number;
+        self.orbital_velocity_m_s +=
+            height_m * mode.angular_frequency_rad_s * cosine / mode.wave_number_per_m * wave_number;
+        self.water_acceleration_m_s2 += GRAVITY_M_S2 * height_m * sine * wave_number;
+        self.yaw_moment_m2_s2 += GRAVITY_M_S2 * amplitude_m * cosine * transfer.yaw_m2;
+        let whole_amplitude_m = component.base_amplitude_m + amplitude_m;
+        self.drift_velocity_m_s += 0.5
+            * transfer.height
+            * transfer.height
+            * (whole_amplitude_m * whole_amplitude_m
+                - component.base_amplitude_m * component.base_amplitude_m)
+            * mode.angular_frequency_rad_s
             * wave_number;
     }
 }

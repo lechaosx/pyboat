@@ -58,10 +58,6 @@ fn server_browser_and_playground_center_use_the_production_environment_sampler()
         browser.environment.true_wind_velocity_m_s,
         boat.true_wind_velocity_m_s
     );
-    assert_eq!(
-        browser.environment.true_water_velocity_m_s,
-        boat.true_water_velocity_m_s
-    );
     assert_eq!(browser.celestial.geographic_latitude_degrees, 45.0);
     assert_eq!(browser.celestial.day_phase, production.celestial.day_phase);
 }

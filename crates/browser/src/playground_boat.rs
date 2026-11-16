@@ -35,10 +35,13 @@ impl PlaygroundBoat {
         let wind = procedural_world_environment(geometry, seed, tick, position.as_vec2())
             .environment
             .true_wind_velocity_m_s;
+        let angle_rad = wind.y.atan2(wind.x);
         let motion = BoatMotion {
             position_m: position,
-            velocity_m_s: Vector::ZERO,
-            angle_rad: wind.y.atan2(wind.x),
+            // At rest in the water, which its current and waves move.
+            velocity_m_s: procedural_match_environment(geometry, seed, tick, position, angle_rad)
+                .true_water_velocity_m_s,
+            angle_rad,
             angular_velocity_rad_s: 0.0,
             sail_angle_rad: 0.0,
             sail_angular_velocity_rad_s: 0.0,
