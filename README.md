@@ -55,11 +55,16 @@ Replace the hash and reload after every server restart. TLS alert 42 usually
 means the hash is missing or stale. Omit it when using a browser-trusted server
 certificate; the local Vite page can use HTTP, but WebTransport stays encrypted.
 
-Graphics settings are URL parameters: `quality` (`low`, `medium`, or `high`
-detail), `renderScale` (scene resolution fraction), `pixelRatio` (device pixel
+The Graphics button changes detail, resolution, and frame rate immediately,
+without leaving the game, and saves choices on this device. Scene resolution
+defaults to CSS pixels, bounded by the 2× upscale limit; boats stay at display
+resolution. Touch screens default to lower detail, a frame-rate cap, and
+automatic resolution.
+
+Startup URL overrides remain available: `quality` (`low`, `medium`, or `high`),
+`renderScale` (scene fraction of output resolution), `pixelRatio` (device pixel
 ratio cap), `fps` (frame-rate cap, 0 for none), and `autoResolution` (1 to lower
-the scale when frames run long). Touch screens default to low quality, a reduced
-scale, a frame-rate cap, and automatic resolution.
+the scale when frames run long).
 
 ## Controls
 

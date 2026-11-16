@@ -217,6 +217,76 @@ canvas {
   pointer-events: none;
 }
 
+.graphics-open {
+  position: fixed;
+  right: .65rem;
+  bottom: .65rem;
+}
+
+.graphics-open, #graphics-dialog button, #graphics-dialog select, #graphics-dialog input[type="number"] {
+  min-height: 2.5rem;
+  padding: .45rem .65rem;
+  border: 1px solid #547c7e;
+  border-radius: .25rem;
+  color: #e8f2f2;
+  background: #0d2932;
+  font: inherit;
+}
+
+#graphics-dialog {
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  padding: 1.4rem;
+  border: 1px solid #547c7e;
+  border-radius: .55rem;
+  color: #e8f2f2;
+  background: #071c24;
+}
+
+#graphics-dialog::backdrop {
+  background: rgb(4 18 24 / 60%);
+}
+
+#graphics-dialog h2 {
+  margin: 0;
+  font: 1.7rem Georgia, serif;
+}
+
+#graphics-dialog p {
+  color: #bacdd0;
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
+#graphics-form {
+  display: grid;
+  gap: .5rem;
+  font-size: .82rem;
+}
+
+#graphics-form > label:not(:first-child) {
+  margin-top: .35rem;
+}
+
+.graphics-checkbox {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 2.5rem;
+}
+
+.graphics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: .5rem;
+}
+
+:is(.graphics-open, #graphics-dialog button, #graphics-dialog select, #graphics-dialog input):focus-visible {
+  outline: 2px solid #f3c47a;
+  outline-offset: 3px;
+}
 
 
 .scale-bar {

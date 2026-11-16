@@ -170,10 +170,21 @@ pub struct GraphicsSettings {
     pub frame_rate_cap: Option<f64>,
     pub automatic_resolution: bool,
     pub quality: GraphicsQuality,
+    /// Scene pixels per CSS pixel when the scene scale was not overridden.
+    pub css_scene_scale: Option<f32>,
 }
 
 impl GraphicsSettings {
     pub fn from_query(search: &str, touch_screen: bool) -> Self {
+        Self::from_sources("", search, touch_screen, 1.0)
+    }
+
+    pub fn from_sources(
+        saved: &str,
+        search: &str,
+        touch_screen: bool,
+        device_pixel_ratio: f64,
+    ) -> Self {
         let mut settings = if touch_screen {
             Self {
                 maximum_pixel_ratio: 2.0,
@@ -181,6 +192,7 @@ impl GraphicsSettings {
                 frame_rate_cap: Some(30.0),
                 automatic_resolution: true,
                 quality: GraphicsQuality::Low,
+                css_scene_scale: Some(0.75),
             }
         } else {
             Self {
@@ -189,11 +201,13 @@ impl GraphicsSettings {
                 frame_rate_cap: None,
                 automatic_resolution: false,
                 quality: GraphicsQuality::High,
+                css_scene_scale: Some(1.0),
             }
         };
-        for (key, value) in search
+        for (key, value) in saved
             .trim_start_matches('?')
             .split('&')
+            .chain(search.trim_start_matches('?').split('&'))
             .filter_map(|parameter| parameter.split_once('='))
         {
             let number = value
@@ -203,6 +217,7 @@ impl GraphicsSettings {
             match (key, number) {
                 ("renderScale", Some(scale)) => {
                     settings.render_scale = (scale as f32).clamp(MINIMUM_RENDER_SCALE, 1.0);
+                    settings.css_scene_scale = None;
                 }
                 ("pixelRatio", Some(ratio)) => settings.maximum_pixel_ratio = ratio.max(1.0),
                 ("fps", Some(0.0)) => settings.frame_rate_cap = None,
@@ -216,7 +231,14 @@ impl GraphicsSettings {
                 _ => {}
             }
         }
+        settings.follow_output_pixel_ratio(device_pixel_ratio.min(settings.maximum_pixel_ratio));
         settings
+    }
+
+    pub fn follow_output_pixel_ratio(&mut self, ratio: f64) {
+        if let Some(css_scale) = self.css_scene_scale {
+            self.render_scale = (css_scale / ratio as f32).clamp(MINIMUM_RENDER_SCALE, 1.0);
+        }
     }
 }
 
@@ -398,6 +420,7 @@ mod tests {
                 frame_rate_cap: Some(45.0),
                 automatic_resolution: true,
                 quality: GraphicsQuality::High,
+                css_scene_scale: None,
             }
         );
         let uncapped = GraphicsSettings::from_query("?fps=0&autoResolution=0", true);
@@ -408,6 +431,7 @@ mod tests {
             GraphicsSettings {
                 maximum_pixel_ratio: 1.0,
                 render_scale: MINIMUM_RENDER_SCALE,
+                css_scene_scale: None,
                 ..desktop
             }
         );
@@ -415,6 +439,53 @@ mod tests {
             GraphicsSettings::from_query("?renderScale=NaN&pixelRatio=x&fps=-5", false),
             desktop
         );
+    }
+
+    #[test]
+    fn saved_graphics_and_url_overrides_share_normalization_and_precedence() {
+        let settings = GraphicsSettings::from_sources(
+            "quality=low&fps=30&renderScale=0.8&pixelRatio=1",
+            "?quality=medium&fps=60&renderScale=0.1&pixelRatio=3",
+            false,
+            2.0,
+        );
+        assert_eq!(settings.quality, GraphicsQuality::Medium);
+        assert_eq!(settings.frame_rate_cap, Some(60.0));
+        assert_eq!(settings.render_scale, MINIMUM_RENDER_SCALE);
+        assert_eq!(settings.maximum_pixel_ratio, 3.0);
+        assert_eq!(settings.css_scene_scale, None);
+        let invalid = GraphicsSettings::from_sources(
+            "fps=45&quality=low",
+            "?fps=NaN&quality=unknown",
+            false,
+            1.0,
+        );
+        assert_eq!(invalid.frame_rate_cap, Some(45.0));
+        assert_eq!(invalid.quality, GraphicsQuality::Low);
+    }
+
+    #[test]
+    fn default_scene_size_uses_css_pixels_with_the_existing_upscale_floor() {
+        for (touch, ratio, expected) in [
+            (false, 1.0, 1.0),
+            (false, 1.5, 2.0 / 3.0),
+            (false, 2.0, 0.5),
+            (true, 1.0, 0.75),
+            (true, 2.0, 0.5),
+            (false, 3.0, 0.5),
+        ] {
+            let settings = GraphicsSettings::from_sources("", "", touch, ratio);
+            assert!((settings.render_scale - expected).abs() < 1e-6);
+            assert!(settings.css_scene_scale.is_some());
+        }
+        let capped = GraphicsSettings::from_sources("pixelRatio=1", "", false, 2.0);
+        assert_eq!(capped.render_scale, 1.0);
+        let explicit = GraphicsSettings::from_sources("renderScale=0.75", "", false, 2.0);
+        assert_eq!(explicit.render_scale, 0.75);
+        assert_eq!(explicit.css_scene_scale, None);
+        let restored = GraphicsSettings::from_sources("", "", false, 2.0);
+        assert_eq!(restored.render_scale, 0.5);
+        assert!(restored.css_scene_scale.is_some());
     }
 
     #[test]

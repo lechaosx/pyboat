@@ -147,6 +147,7 @@ See [README.md](README.md) for what is playable now and
 
 ## Graphics settings
 
+- **[Explicit]** Players can adjust graphics before joining and during play.
 - **[Explicit]** No graphics setting, whether detail, resolution, or frame rate,
   gives any player an advantage or affects physics or gameplay.
 - **[Implicit]** Night and storm darkening, shallow-water hazards, shorelines,
@@ -245,4 +246,3 @@ See [README.md](README.md) for what is playable now and
 | Seakeeping | Whether steep or breaking seas swamp, damage, capsize, or broach hulls |
 | Navigation | Large-ship drafts and reef-passage availability by class |
 | Combat | Health, impact thresholds, damage conversion, and hull-zone balance after playtesting |
-| Graphics settings | Where players choose graphics settings, and which presets they see |

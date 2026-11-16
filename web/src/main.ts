@@ -21,6 +21,15 @@ const joinButton = document.querySelector<HTMLButtonElement>("#join")!;
 const hud = document.querySelector<HTMLElement>("#hud")!;
 const captain = document.querySelector<HTMLElement>("#captain")!;
 const fps = document.querySelector<HTMLElement>("#fps")!;
+const graphicsOpen = document.querySelector<HTMLButtonElement>("#graphics-open")!;
+const graphicsDialog = document.querySelector<HTMLDialogElement>("#graphics-dialog")!;
+const graphicsForm = document.querySelector<HTMLFormElement>("#graphics-form")!;
+const graphicsNote = document.querySelector<HTMLElement>("#graphics-note")!;
+const graphicsResolution = document.querySelector<HTMLElement>("#graphics-resolution")!;
+const graphicsStorageKey = "graphics-settings";
+let savedGraphics = new URLSearchParams();
+try { savedGraphics = new URLSearchParams(localStorage.getItem(graphicsStorageKey) ?? ""); } catch { /* Session settings still work without storage. */ }
+const graphicsOverrides = new URLSearchParams(location.search);
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
 
@@ -66,7 +75,7 @@ function firstGamepad(): Gamepad | null {
 }
 
 try {
-  const game = await BrowserGame.create(canvas);
+  const game = await BrowserGame.create(canvas, savedGraphics.toString());
   let previousTimeMs = performance.now();
   let fpsStartMs = previousTimeMs;
   let fpsStartFrames = game.presented_frames();
@@ -74,8 +83,72 @@ try {
   let renderingStopped = false;
 
   function inputEnabled(): boolean {
-    return currentState === "playing" && document.hasFocus() && !document.hidden;
+    return currentState === "playing" && !graphicsDialog.open && document.hasFocus() && !document.hidden;
   }
+
+  function updateGraphicsForm(): void {
+    const settings = new URLSearchParams(game.graphics_settings());
+    for (const control of graphicsForm.elements) {
+      if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement)) continue;
+      const value = settings.get(control.name);
+      if (value === null) continue;
+      if (control instanceof HTMLInputElement && control.type === "checkbox") {
+        control.checked = value === "1";
+      } else {
+        if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) {
+          control.add(new Option(value, value));
+        }
+        control.value = value;
+      }
+    }
+    updateGraphicsResolution(settings);
+  }
+
+  function updateGraphicsResolution(settings: URLSearchParams): void {
+    graphicsResolution.textContent = `Current scene: ${Math.round(Number(settings.get("effectiveRenderScale")) * 100)}% of output. Automatic saves detail on high-density screens. Boats stay sharp.`;
+  }
+
+  function applyGraphics(): void {
+    game.set_graphics_settings(savedGraphics.toString(), graphicsOverrides.toString());
+    try {
+      if (savedGraphics.size) localStorage.setItem(graphicsStorageKey, savedGraphics.toString());
+      else localStorage.removeItem(graphicsStorageKey);
+      const urlOverrides = [...graphicsForm.elements].some(control =>
+        (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) && new URLSearchParams(location.search).has(control.name));
+      graphicsNote.textContent = `Saved on this device.${urlOverrides ? " URL graphics options apply again on reload." : ""}`;
+    } catch {
+      graphicsNote.textContent = "Applied for this visit. Browser storage is unavailable.";
+    }
+    updateGraphicsForm();
+  }
+
+  graphicsOpen.disabled = false;
+  graphicsOpen.addEventListener("click", () => {
+    clearInput();
+    updateGraphicsForm();
+    graphicsDialog.showModal();
+  });
+  graphicsForm.addEventListener("submit", event => event.preventDefault());
+  graphicsForm.addEventListener("change", event => {
+    const control = event.target;
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement) || !graphicsForm.reportValidity()) return;
+    const value = control instanceof HTMLInputElement
+      ? control.type === "checkbox" ? (control.checked ? "1" : "0") : control.valueAsNumber.toString().replace("e+", "e")
+      : control.value;
+    graphicsOverrides.delete(control.name);
+    if (value === "") savedGraphics.delete(control.name);
+    else savedGraphics.set(control.name, value);
+    applyGraphics();
+  });
+  document.querySelector("#graphics-reset")!.addEventListener("click", () => {
+    for (const control of graphicsForm.elements) {
+      if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) graphicsOverrides.delete(control.name);
+    }
+    savedGraphics = new URLSearchParams();
+    applyGraphics();
+  });
+  document.querySelector("#graphics-close")!.addEventListener("click", () => graphicsDialog.close());
+  graphicsDialog.addEventListener("close", clearInput);
 
   function updateSession(): void {
     const nextState = game.session_state();
@@ -241,6 +314,7 @@ try {
         fps.textContent = `${Math.round((frames - fpsStartFrames) * 1000 / (timeMs - fpsStartMs))} FPS`;
         fpsStartMs = timeMs;
         fpsStartFrames = frames;
+        if (graphicsDialog.open) updateGraphicsResolution(new URLSearchParams(game.graphics_settings()));
       }
       // The rudder uses counterclockwise world angles; CSS rotates clockwise.
       wheel.style.transform = `rotate(${-game.rudder_angle_rad()}rad)`;

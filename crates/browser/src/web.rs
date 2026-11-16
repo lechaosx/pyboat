@@ -2364,6 +2364,13 @@ impl Renderer {
             self.device.limits().max_texture_dimension_2d,
             self.graphics.maximum_pixel_ratio,
         );
+        let old_scale = self.graphics.render_scale;
+        self.graphics.follow_output_pixel_ratio(
+            f64::from(width) / f64::from(self.canvas.client_width().max(1)),
+        );
+        if self.graphics.render_scale != old_scale {
+            self.reset_resolution();
+        }
         if self.config.width == width && self.config.height == height {
             return;
         }
@@ -2372,6 +2379,30 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+    }
+
+    fn reset_resolution(&mut self) {
+        self.render_scale = self.graphics.render_scale;
+        self.resolution = self
+            .graphics
+            .automatic_resolution
+            .then(|| ResolutionController::new(self.graphics.render_scale));
+        self.frame_timing.lock().unwrap().frame_ms.clear();
+    }
+
+    fn set_graphics(&mut self, graphics: GraphicsSettings) {
+        if self.graphics.quality != graphics.quality {
+            (self.pipeline, self.illumination_pipeline) = scene_pipelines(
+                &self.device,
+                &self.scene_layout,
+                graphics.quality,
+                self.config.format.add_srgb_suffix(),
+            );
+        }
+        self.graphics = graphics;
+        self.frame_pacer = FramePacer::default();
+        self.reset_resolution();
+        self.resize();
     }
 
     /// Reallocates the bake once the canvas size it needs has settled; until
@@ -2466,6 +2497,7 @@ pub struct BrowserGame {
     sending_datagrams: Rc<Cell<bool>>,
     sending_reliable: Rc<Cell<bool>>,
     renderer: Renderer,
+    touch_screen: bool,
     reference_view_height_m: f32,
     presented_view_height_m: f32,
     world_presented: bool,
@@ -2485,7 +2517,10 @@ enum ConnectionStatus {
 
 #[wasm_bindgen]
 impl BrowserGame {
-    pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserGame, JsValue> {
+    pub async fn create(
+        canvas: HtmlCanvasElement,
+        saved_graphics: Option<String>,
+    ) -> Result<BrowserGame, JsValue> {
         console_error_panic_hook::set_once();
         let window =
             web_sys::window().ok_or_else(|| JsValue::from_str("browser window is unavailable"))?;
@@ -2493,7 +2528,12 @@ impl BrowserGame {
             .match_media("(pointer: coarse)")?
             .is_some_and(|query| query.matches());
         let search = window.location().search()?;
-        let graphics = GraphicsSettings::from_query(&search, touch_screen);
+        let graphics = GraphicsSettings::from_sources(
+            saved_graphics.as_deref().unwrap_or_default(),
+            &search,
+            touch_screen,
+            window.device_pixel_ratio(),
+        );
         let fresh_surface = search
             .trim_start_matches('?')
             .split('&')
@@ -2541,6 +2581,7 @@ impl BrowserGame {
             sending_datagrams,
             sending_reliable,
             renderer,
+            touch_screen,
             reference_view_height_m: DEFAULT_VIEW_HEIGHT_M,
             presented_view_height_m: DEFAULT_VIEW_HEIGHT_M,
             world_presented: false,
@@ -2646,6 +2687,33 @@ impl BrowserGame {
 
     pub fn renderer_is_available(&self) -> bool {
         self.renderer.is_available()
+    }
+
+    pub fn graphics_settings(&self) -> String {
+        let graphics = self.renderer.graphics;
+        let scale = if graphics.css_scene_scale.is_some() {
+            String::new()
+        } else {
+            graphics.render_scale.to_string()
+        };
+        format!(
+            "quality={}&renderScale={scale}&pixelRatio={}&fps={}&autoResolution={}&effectiveRenderScale={}",
+            graphics.quality.name(),
+            graphics.maximum_pixel_ratio,
+            graphics.frame_rate_cap.unwrap_or(0.0),
+            u8::from(graphics.automatic_resolution),
+            self.renderer.render_scale,
+        )
+    }
+
+    pub fn set_graphics_settings(&mut self, saved: &str, overrides: &str) {
+        let ratio = web_sys::window().map_or(1.0, |window| window.device_pixel_ratio());
+        self.renderer.set_graphics(GraphicsSettings::from_sources(
+            saved,
+            overrides,
+            self.touch_screen,
+            ratio,
+        ));
     }
 
     pub fn shutdown(&mut self) {

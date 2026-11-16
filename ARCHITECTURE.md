@@ -599,6 +599,8 @@ and verification details.
   limits.
 - **[Explicit]** The scene renders below the canvas backing resolution at a
   chosen scale.
+- **[Implicit]** The default scene scale targets CSS pixels so high-density
+  displays do not multiply scene work, within the upscaler's supported 2× limit.
 - **[Explicit]** A spatial upscale fills the canvas from the scene.
 - **[Implicit]** The upscale uses neither temporal accumulation nor optional GPU
   features, so it runs on mobile WebGPU without history artifacts.
