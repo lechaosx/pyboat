@@ -1534,6 +1534,65 @@ struct FrameTiming {
     frame_ms: Vec<f64>,
 }
 
+fn scene_pipelines(
+    device: &wgpu::Device,
+    scene_layout: &wgpu::BindGroupLayout,
+    quality: crate::GraphicsQuality,
+    output_format: wgpu::TextureFormat,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Scene shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SCENE_SHADER)),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Scene pipeline layout"),
+        bind_group_layouts: &[Some(scene_layout)],
+        immediate_size: 0,
+    });
+    let scene_pipeline = |entry_point, targets: &[Option<wgpu::ColorTargetState>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(entry_point),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vertex"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: mem::size_of::<SceneVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32],
+                })],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry_point),
+                targets,
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: quality.scene_constants(),
+                    ..Default::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let pipeline = scene_pipeline(
+        "fragment",
+        &[
+            Some(output_format.into()),
+            Some(SURFACE_HEIGHT_FORMAT.into()),
+        ],
+    );
+    let illumination_pipeline = scene_pipeline(
+        "fragment_illumination",
+        &[Some(AdaptingField::illumination_target())],
+    );
+    (pipeline, illumination_pipeline)
+}
+
 impl Renderer {
     async fn new(
         canvas: HtmlCanvasElement,
@@ -1608,10 +1667,6 @@ impl Renderer {
         }
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Scene shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SCENE_SHADER)),
-        });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Scene uniforms layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -1695,52 +1750,8 @@ impl Renderer {
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Scene pipeline layout"),
-            bind_group_layouts: &[Some(&scene_layout)],
-            immediate_size: 0,
-        });
-        let scene_pipeline = |entry_point, targets: &[Option<wgpu::ColorTargetState>]| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry_point),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vertex"),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: mem::size_of::<SceneVertex>() as wgpu::BufferAddress,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3, 2 => Float32],
-                    })],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    targets,
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: graphics.quality.scene_constants(),
-                        ..Default::default()
-                    },
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let pipeline = scene_pipeline(
-            "fragment",
-            &[
-                Some(output_format.into()),
-                Some(SURFACE_HEIGHT_FORMAT.into()),
-            ],
-        );
-        let illumination_pipeline = scene_pipeline(
-            "fragment_illumination",
-            &[Some(AdaptingField::illumination_target())],
-        );
+        let (pipeline, illumination_pipeline) =
+            scene_pipelines(&device, &scene_layout, graphics.quality, output_format);
         let boat_sprites =
             BoatSprites::new(&device, &queue, &scene_layout, output_format).map_err(js_error)?;
         let terrain_quad_vertices = [
