@@ -1,8 +1,11 @@
 use std::f32::consts::{PI, TAU};
 
-use game::{procedural_ground_elevation_m, procedural_water_height_m};
+use game::{
+    SeaComponents, Waterplane, dinghy_parameters, hull_wave_fit_of_sea,
+    procedural_ground_elevation_m, procedural_water_height_m,
+};
 use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
-use simulation::WorldGeometry;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};
 
@@ -70,20 +73,81 @@ fn textured(position_m: Vector, rect: [f32; 4], u: f32, v: f32) -> BoatSpriteVer
     }
 }
 
-/// The height above mean sea level of the sheer of a boat centred at
-/// `center_m`. Afloat, its hull draws its draft below the water; grounded, its
-/// keel rests on the ground.
-pub fn boat_sheer_height_m(
+/// How a boat is drawn: the height above mean sea level of its sheer over
+/// the hull's reference point, and the slope its deck takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawnBoatPose {
+    pub sheer_m: f32,
+    pub deck_slope: Vector,
+}
+
+/// The drawn pose at `world_time_seconds` of a boat centred at `center_m`
+/// heading `heading_rad`, on the sea whose components `sea` holds, or on
+/// still water without it, in a scene of pixel footprint `footprint_m`.
+/// Afloat, its hull draws its draft below the drawn waves fitted over it;
+/// grounded, its keel rests on the ground. Its deck tilts with the whole sea
+/// fitted over its hull, filtered as the scene filters the drawn waves.
+/// Compromises: the drawn surface leaves out the swell, so the boat rises
+/// and falls with the wind sea alone and can ground in a swell trough while
+/// drawn afloat; and it tilts with the swell, which the drawn surface does
+/// not show. Over deep water of the default world across seven years, that
+/// tilt is 1.6° or less nine times in ten, 3.0° at the 99th percentile and
+/// at most 6°, moving the hull's corners against the drawn water by 5, 10
+/// and at most 21 cm, within its 31 cm freeboard; and the client takes
+/// `sea`, the modes' amplitudes, the depth and its breaker limit, at the
+/// prediction tick and the hull's reference point, and only the phases at
+/// the render clock, where the drawn surface takes all of them per pixel at
+/// the render clock.
+#[allow(clippy::too_many_arguments)]
+pub fn drawn_boat_pose(
     world_geometry: WorldGeometry,
     match_seed: u64,
     world_time_seconds: f64,
     center_m: Vector,
-) -> f32 {
+    heading_rad: f64,
+    sea: Option<&SeaComponents>,
+    footprint_m: f32,
+) -> DrawnBoatPose {
     let water_m =
         procedural_water_height_m(world_geometry, match_seed, world_time_seconds, center_m);
     let ground_m =
         procedural_ground_elevation_m(world_geometry, match_seed, world_time_seconds, center_m);
-    (water_m - BOAT_HULL_DRAFT_M).max(ground_m) + BOAT_SHEER_ABOVE_KEEL_M
+    let (heave_m, deck_slope) = sea.map_or((0.0, Vector::ZERO), |sea| {
+        let ticks = world_time_seconds * TICKS_PER_SECOND as f64;
+        let tick = ticks.floor();
+        let fit = hull_wave_fit_of_sea(
+            world_geometry,
+            match_seed,
+            tick as u64,
+            (ticks - tick) as f32,
+            center_m,
+            sea,
+            Waterplane::of_hull(dinghy_parameters().hull, heading_rad),
+            f64::from(footprint_m),
+        );
+        (fit.wind_sea.height_m as f32, fit.sea.slope.as_vec2())
+    });
+    DrawnBoatPose {
+        sheer_m: (water_m + heave_m - BOAT_HULL_DRAFT_M).max(ground_m) + BOAT_SHEER_ABOVE_KEEL_M,
+        deck_slope,
+    }
+}
+
+/// The point `offset_m` from a deck's pivot along the deck, and `height_m`
+/// above it, once the deck tilts to `slope`: rotated by the least rotation
+/// that turns the vertical to the deck's normal, as its offset from the
+/// pivot and height above it.
+pub fn tilted_by_deck(offset_m: Vector, height_m: f32, slope: Vector) -> (Vector, f32) {
+    let normal_scale = 1.0 / (1.0 + slope.length_squared()).sqrt();
+    let normal = -slope * normal_scale;
+    // With w = up × normal, R v = v + w × v + w × (w × v) / (1 + normal·up).
+    let turn = Vector::new(normal.x * height_m, normal.y * height_m);
+    let rise = -normal.dot(offset_m);
+    let fold = 1.0 / (1.0 + normal_scale);
+    (
+        offset_m + turn + normal * (rise * fold),
+        height_m + rise - normal.dot(turn) * fold,
+    )
 }
 
 pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {

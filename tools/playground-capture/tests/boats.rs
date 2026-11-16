@@ -1,8 +1,12 @@
 use std::{fs, io::BufReader, process::Command};
 
-use game::{dinghy_parameters, procedural_water_depth_m};
+use game::{
+    Waterplane, dinghy_parameters, hull_wave_fit_of_sea, procedural_water_depth_m,
+    procedural_world_environment,
+};
 use rapier2d_f64::glamx::Vec2 as Vector;
-use simulation::WorldGeometry;
+use rapier2d_f64::prelude::Rotation as PhysicsRotation;
+use simulation::{WorldGeometry, hull_outline_m};
 
 const SEED: u64 = 0x5eed;
 const WORLD_TIME_SECONDS: f64 = 43_200.0;
@@ -153,4 +157,123 @@ fn a_boat_on_a_dry_beach_stays_visible() {
     assert_eq!(depth_m, 0.0);
     let pixels = boat_pixels(&view, boat_m) as f32;
     assert!(pixels > 0.5 * hull_pixels(&view), "{pixels} pixels");
+}
+
+/// Over deep water of the default world, 100 clocks and four headings at
+/// each of 100 points, where the drawn water stands highest over a drawn
+/// hull's outline above the deck plane the boat is drawn at, for a scene of
+/// pixel footprint `footprint_m`: the boat's position, clock, heading in
+/// radians, and that height. The plane rises with the drawn wind sea fitted
+/// over the hull and tilts with the whole sea, swell included.
+fn highest_water_over_a_hull(footprint_m: f64) -> (Vector, u64, f64, f64) {
+    let world = WorldGeometry::default();
+    let hull = dinghy_parameters().hull;
+    let point = Waterplane {
+        heading_rad: 0.0,
+        length_m: 0.0,
+        beam_m: 0.0,
+    };
+    let mut highest = (Vector::ZERO, 0, 0.0, f64::NEG_INFINITY);
+    for clock in 0..100_u64 {
+        let tick = 600 + clock * 14_246_917;
+        for index in 0..100 {
+            let position_m = Vector::new(
+                -30_000.0 + (index % 10) as f32 * 6_011.0 + clock as f32 * 37.0,
+                -29_000.0 + (index / 10) as f32 * 5_903.0,
+            );
+            let sample = procedural_world_environment(world, SEED, tick, position_m);
+            if sample.environment.water_depth_m < 20.0 {
+                continue;
+            }
+            for quarter in 0..4 {
+                let heading_rad =
+                    f64::from(quarter) * std::f64::consts::FRAC_PI_4 + index as f64 * 0.1;
+                let fit = hull_wave_fit_of_sea(
+                    world,
+                    SEED,
+                    tick,
+                    0.0,
+                    position_m,
+                    &sample.sea,
+                    Waterplane::of_hull(hull, heading_rad),
+                    footprint_m,
+                );
+                let rotation = PhysicsRotation::new(heading_rad);
+                for corner_m in hull_outline_m(hull) {
+                    let offset_m = rotation.transform_vector(corner_m);
+                    let water_m = hull_wave_fit_of_sea(
+                        world,
+                        SEED,
+                        tick,
+                        0.0,
+                        position_m + offset_m.as_vec2(),
+                        &sample.sea,
+                        point,
+                        footprint_m,
+                    )
+                    .wind_sea
+                    .height_m;
+                    let height_m = water_m - fit.wind_sea.height_m - fit.sea.slope.dot(offset_m);
+                    if height_m > highest.3 {
+                        highest = (position_m, tick, heading_rad, height_m);
+                    }
+                }
+            }
+        }
+    }
+    highest
+}
+
+/// The hull pixels a boat at `boat_m` changes in `view` at `tick`, heading
+/// `heading_rad`, drawn behind the scene's surfaces or in front of them.
+fn hull_pixels_drawn(
+    view: &View,
+    boat_m: Vector,
+    tick: u64,
+    heading_rad: f64,
+    unhidden: bool,
+) -> usize {
+    let world_time = (tick as f64 / 60.0).to_string();
+    let boat = format!("{},{},{}", boat_m.x, boat_m.y, heading_rad.to_degrees());
+    let time = ["--world-time", world_time.as_str()];
+    let without = capture(view, &time, "hull-without");
+    let mut extra = vec![
+        "--world-time",
+        world_time.as_str(),
+        "--boat",
+        boat.as_str(),
+        "--boat-hull-only",
+    ];
+    if unhidden {
+        extra.push("--boat-unhidden");
+    }
+    let with = capture(view, &extra, "hull-with");
+    without
+        .chunks(4)
+        .zip(with.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
+/// Where the drawn water stands highest over a hull's outline above its
+/// deck plane, which the undrawn swell tilts, the hull stays wholly in view:
+/// in a 30 m view of 540 rows and a 240 m view of 1080, the hull changes as
+/// many pixels behind the scene's surfaces as in front of them.
+#[test]
+fn the_water_never_hides_an_afloat_hull() {
+    for (view_height_m, size) in [(30.0, (960, 540)), (240.0, (1920, 1080))] {
+        let footprint_m = f64::from(view_height_m) / f64::from(size.1);
+        let (boat_m, tick, heading_rad, height_m) = highest_water_over_a_hull(footprint_m);
+        let view = View {
+            camera_m: [boat_m.x, boat_m.y],
+            view_height_m,
+            size,
+        };
+        let unhidden = hull_pixels_drawn(&view, boat_m, tick, heading_rad, true);
+        let drawn = hull_pixels_drawn(&view, boat_m, tick, heading_rad, false);
+        assert!(
+            unhidden as f32 > 0.5 * hull_pixels(&view) && drawn == unhidden,
+            "a {view_height_m} m view: {drawn} of {unhidden} hull pixels drawn where the water stands {height_m:.3} m over the deck plane at {boat_m:?}, tick {tick}",
+        );
+    }
 }

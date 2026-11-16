@@ -102,6 +102,10 @@ struct Options {
     camera_height_m: Option<f32>,
     /// A boat's x and y in metres and its heading in degrees from world x.
     boat: Option<[f32; 3]>,
+    /// Draw only the boat's hull.
+    boat_hull_only: bool,
+    /// Draw the boat in front of every surface.
+    boat_unhidden: bool,
 }
 
 #[repr(C)]
@@ -146,7 +150,7 @@ struct SceneUniforms {
     baked_surface_texels: [u32; 4],
     baked_surface_level: [u32; 4],
     ocean_swell_clock: [f32; 4],
-    ocean_swell_knots: [[f32; 4]; 20],
+    ocean_swell_knots: [[f32; 4]; 30],
     ocean_wave_band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
     ocean_wave_table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
@@ -772,6 +776,8 @@ fn default_options() -> Options {
         terrain_elevations: None,
         camera_height_m: None,
         boat: None,
+        boat_hull_only: false,
+        boat_unhidden: false,
     }
 }
 
@@ -917,6 +923,8 @@ fn parse_options() -> Result<Command, String> {
                 options.terrain_elevations = Some(value(&mut arguments)?.into())
             }
             "--boat" => options.boat = Some(parse_f32x3(&value(&mut arguments)?, &argument)?),
+            "--boat-hull-only" => options.boat_hull_only = true,
+            "--boat-unhidden" => options.boat_unhidden = true,
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -1823,7 +1831,9 @@ fn print_help() {
                                   scene's terrain depth, as little-endian f32 rows from the\n\
                                   top; grid scene compositions only\n\
            --boat X,Y,HEADING     draw the game's boat at rest at X,Y metres, heading HEADING\n\
-                                  degrees from world x; scene_production only\n\n\
+                                  degrees from world x; scene_production only\n\
+           --boat-hull-only       draw only the boat's hull\n\
+           --boat-unhidden        draw the boat in front of every surface\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
          and image metrics.\n\n\
          playground-capture --bench --output-dir DIR [--baseline DIR] [options]\n\n\
@@ -2089,6 +2099,9 @@ async fn render(options: &Options) -> Result<(), String> {
     let production = options.diagnostic.id == "scene_production";
     if !production && options.boat.is_some() {
         return Err("--boat applies only to scene_production".to_owned());
+    }
+    if options.boat.is_none() && (options.boat_hull_only || options.boat_unhidden) {
+        return Err("--boat-hull-only and --boat-unhidden need --boat".to_owned());
     }
     let constants = if production {
         options.quality.scene_constants().to_vec()
@@ -2674,13 +2687,45 @@ fn render_world(
     if let (Some([x_m, y_m, heading_degrees]), Some(fields), Some(adaptation)) =
         (options.boat, fields, adaptation)
     {
-        let mut sprites = BoatSprites::new(
+        let world_geometry = WorldGeometry::new(
+            f64::from(options.world_width_m),
+            f64::from(options.world_height_m),
+        )
+        .map_err(|error| error.to_string())?;
+        let transparent = transparent_png();
+        let mut images = browser::BOAT_IMAGES;
+        if options.boat_hull_only {
+            images[1..].fill(&transparent);
+        }
+        let mut sprites = BoatSprites::with_images(
             device,
             queue,
             &fields.scene_layout,
             wgpu::TextureFormat::Rgba8UnormSrgb,
+            images,
         )?;
-        let scene = boat_scene(
+        let unhidden = options.boat_unhidden.then(|| {
+            let view = surface_height_texture(device, (options.width, options.height))
+                .create_view(&Default::default());
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("unhiding surface height"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(SURFACE_HEIGHT_CLEAR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            view
+        });
+        let mut scene = boat_scene(
             dinghy_parameters(),
             BoatMotion {
                 position_m: PhysicsVector::new(f64::from(x_m), f64::from(y_m)),
@@ -2693,6 +2738,17 @@ fn render_world(
                 rudder_angular_velocity_rad_s: 0.0,
             },
         );
+        let ticks = options.world_time_seconds * TICKS_PER_SECOND as f64;
+        scene.sea = Some(
+            procedural_world_environment_interpolated(
+                world_geometry,
+                options.seed,
+                ticks.floor() as u64,
+                ticks.fract() as f32,
+                Vector::new(x_m, y_m),
+            )
+            .sea,
+        );
         let cloth = ClothMotion::new(&scene).pose();
         sprites.encode(
             device,
@@ -2701,18 +2757,15 @@ fn render_world(
             &view,
             (options.width, options.height),
             &fragment_scene_bind_group,
-            &surface_height,
+            unhidden.as_ref().unwrap_or(&surface_height),
             &adaptation.field.illumination_view,
             &[scene],
             &[cloth],
-            WorldGeometry::new(
-                f64::from(options.world_width_m),
-                f64::from(options.world_height_m),
-            )
-            .map_err(|error| error.to_string())?,
+            world_geometry,
             options.seed,
             Vector::new(options.camera_x_m, options.camera_y_m),
             options.view_height_m,
+            visual_pixel_footprint_m(options.view_height_m, options.height),
             options.world_time_seconds,
         );
     }
@@ -3319,4 +3372,16 @@ fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Re
         .map_err(|error| format!("failed to write PNG header: {error}"))?
         .write_image_data(rgba)
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+/// A one-pixel transparent PNG, which draws nothing in place of a sprite.
+fn transparent_png() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("a 1x1 PNG header encodes");
+    writer.write_image_data(&[0; 4]).expect("a 1x1 PNG encodes");
+    writer.finish().expect("a 1x1 PNG finishes");
+    bytes
 }

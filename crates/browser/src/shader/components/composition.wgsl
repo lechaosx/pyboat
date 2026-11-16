@@ -575,7 +575,12 @@ fn lit_scene_surface(
     let surface = scene_surface.surface;
     let albedo = select(linear_material_color(surface.color), vec3<f32>(1.0), illumination);
     let surface_height_m = max(scene_surface.elevation_m, water_height_m);
-    drawn_surface_height_m = surface_height_m;
+    // Water stands at the waves `scene_surface_at` sampled for it.
+    drawn_surface_height_m = select(
+        max(scene_surface.elevation_m, water_height_m + sampled_wave_height_m),
+        surface_height_m,
+        is_land,
+    );
     let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
     let ambient_light = calculate_atmospheric_ambient_light(
         ambient_sky,

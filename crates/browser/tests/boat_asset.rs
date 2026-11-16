@@ -1,4 +1,4 @@
-use browser::{BoatScene, boat_scene, boat_sheer_height_m, hull_sprite_mesh, sail_mesh};
+use browser::{BoatScene, boat_scene, drawn_boat_pose, hull_sprite_mesh, sail_mesh};
 use game::{dinghy_parameters, procedural_ground_elevation_m, procedural_water_height_m};
 use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
 use rapier2d_f64::prelude::Vector as PhysicsVector;
@@ -14,11 +14,11 @@ fn a_boat_floats_its_draft_below_the_tide_and_grounds_its_keel_on_dry_land() {
     let times = [10_800.0, 32_400.0];
     let water_m = times.map(|time| procedural_water_height_m(world, seed, time, sea_m));
     assert!((water_m[0] - water_m[1]).abs() > 0.2, "{water_m:?}");
-    let freeboard_m =
-        [0, 1].map(|i| boat_sheer_height_m(world, seed, times[i], sea_m) - water_m[i]);
+    let sheer_m =
+        |time, position_m| drawn_boat_pose(world, seed, time, position_m, 0.0, None, 0.2).sheer_m;
+    let freeboard_m = [0, 1].map(|i| sheer_m(times[i], sea_m) - water_m[i]);
     let above_ground_m = times.map(|time| {
-        boat_sheer_height_m(world, seed, time, beach_m)
-            - procedural_ground_elevation_m(world, seed, time, beach_m)
+        sheer_m(time, beach_m) - procedural_ground_elevation_m(world, seed, time, beach_m)
     });
     // The sheer rides a fixed freeboard on the tide; aground, the keel that
     // floats below the water rests on the ground, so the sheer stands higher.

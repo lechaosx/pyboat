@@ -1,4 +1,6 @@
-use game::{dinghy_parameters, procedural_match_environment, sailor_targets};
+use game::{
+    dinghy_parameters, procedural_match_environment, procedural_world_environment, sailor_targets,
+};
 use rapier2d_f64::prelude::Vector;
 use simulation::{BoatMotion, Environment, MotionIntent, SharedSimulation, WorldGeometry};
 
@@ -24,12 +26,15 @@ impl PlaygroundBoat {
             };
             let angle = f64::from(sample) * 2.399_963_229_728_653;
             let position = center + Vector::new(angle.cos(), angle.sin()) * radius;
-            (procedural_match_environment(geometry, seed, tick, position).water_depth_m
+            (procedural_world_environment(geometry, seed, tick, position.as_vec2())
+                .environment
+                .water_depth_m
                 > parameters.draft_m + 0.5)
                 .then_some(position)
         })?;
-        let environment = procedural_match_environment(geometry, seed, tick, position);
-        let wind = environment.true_wind_velocity_m_s;
+        let wind = procedural_world_environment(geometry, seed, tick, position.as_vec2())
+            .environment
+            .true_wind_velocity_m_s;
         let motion = BoatMotion {
             position_m: position,
             velocity_m_s: Vector::ZERO,
@@ -62,11 +67,13 @@ impl PlaygroundBoat {
         self.intent
     }
     pub fn environment(&self) -> Environment {
+        let motion = self.motion();
         procedural_match_environment(
             self.geometry,
             self.seed,
             self.tick,
-            self.motion().position_m,
+            motion.position_m,
+            motion.angle_rad,
         )
     }
     pub fn set_player_input(&mut self, input: [f32; 4]) {
@@ -109,8 +116,15 @@ impl PlaygroundBoat {
         let mut scene = boat_scene(dinghy_parameters(), motion);
         scene.id = Some("playground-boat".into());
         scene.is_local = true;
+        let sample = procedural_world_environment(
+            self.geometry,
+            self.seed,
+            self.tick,
+            motion.position_m.as_vec2(),
+        );
         scene.apparent_wind_velocity_m_s =
-            (self.environment().true_wind_velocity_m_s - motion.velocity_m_s).as_vec2();
+            (sample.environment.true_wind_velocity_m_s - motion.velocity_m_s).as_vec2();
+        scene.sea = Some(sample.sea);
         scene.windsock = Some(Windsock {
             anchor_m: scene.hull_m[0],
             apparent_wind_velocity_m_s: scene.apparent_wind_velocity_m_s,

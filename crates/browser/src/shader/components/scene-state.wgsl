@@ -40,7 +40,7 @@ struct SceneUniforms {
     // direction rotation, four to a row, then the wave table by band and
     // direction: wave-number vector, its length, and phase at the view centre.
     ocean_swell_clock: vec4<f32>,
-    ocean_swell_knots: array<vec4<f32>, 20>,
+    ocean_swell_knots: array<vec4<f32>, 30>,
     ocean_wave_band_rotations: array<vec4<f32>, WAVE_BAND_ROTATION_ROWS>,
     ocean_wave_table: array<vec4<f32>, WAVE_TABLE_MODES>,
 };
@@ -140,9 +140,12 @@ var<private> surface_tidal_range_m: f32;
 var<private> surface_tidal_phase_offset: f32;
 var<private> surface_cloud_weather: CloudWeatherSample;
 // The height above mean sea level of the surface a pixel shows: its ground,
-// or the water over it. Compromise: the ground is the detailed terrain where
-// the eye ray meets the broad landform, the parallax the picture takes. A
-// pixel showing no surface keeps the lowest height, which hides nothing.
+// or the drawn waves of the water over it. Compromises: the ground is the
+// detailed terrain where the eye ray meets the broad landform, the parallax
+// the picture takes; and the waves take the still water's parallax, which
+// misplaces them by their height times the eye ray's slope, 0.14 of it at
+// the corners of a 240 m view. A pixel showing no surface keeps the lowest
+// height, which hides nothing.
 // Keep synchronized with `SURFACE_HEIGHT_CLEAR` in boat_sprites.rs.
 var<private> drawn_surface_height_m: f32 = -65504.0;
 

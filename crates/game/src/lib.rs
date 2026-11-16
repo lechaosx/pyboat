@@ -5,9 +5,10 @@ mod ocean;
 
 use ocean::procedural_wave_state;
 pub use ocean::{
-    OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_DIRECTIONS,
-    OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable, Swell, SwellClock,
-    WaveComponent, WindSea, background_swell, ocean_wave_state, ocean_wave_table,
+    HullSurface, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_DIRECTIONS,
+    OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable, SeaComponents,
+    SurfaceFit, Swell, SwellClock, Waterplane, WaveComponent, WindSea, background_swell,
+    hull_wave_fit, hull_wave_fit_of_sea, ocean_wave_state, ocean_wave_table, sea_components,
     swell_climate_knots, wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
@@ -379,6 +380,10 @@ pub struct WorldEnvironment {
     pub tide: TidalConditions,
     pub surface_climate: SurfaceClimate,
     pub water_height_m: f32,
+    /// What raises the sea here, over its still water.
+    pub wave_forcing: OceanWaveForcing,
+    /// The sea that forcing raises here, at every clock.
+    pub sea: SeaComponents,
     pub ocean: OceanState,
     pub environment: Environment,
 }
@@ -428,8 +433,8 @@ struct OceanQuery {
     weather: ProceduralWeather,
     tidal_sample: TidalSample,
     water_height_m: f32,
-    water_depth_m: f32,
-    wave_forcing_wind_velocity_m_s: Vector,
+    wave_forcing: OceanWaveForcing,
+    waterplane: Option<Waterplane>,
 }
 
 struct TemperatureSample {
@@ -1733,19 +1738,31 @@ pub fn match_environment() -> Environment {
     }
 }
 
+/// The environment of a match's boat at `position_m` heading `heading_rad`:
+/// its water is as deep as the still water plus the whole sea, swell
+/// included, fitted over the boat's hull. Compromise: the still water's
+/// depth is the bed's at the hull's reference point alone, where it grounds,
+/// whatever the bed does along the hull.
 pub fn procedural_match_environment(
     world_geometry: WorldGeometry,
     match_seed: u64,
     tick: u64,
     position_m: PhysicsVector,
+    heading_rad: f64,
 ) -> Environment {
-    procedural_world_environment(
+    let (sample, hull) = world_environment_and_hull_fit(
         world_geometry,
         match_seed,
         tick,
+        0.0,
         Vector::new(position_m.x as f32, position_m.y as f32),
-    )
-    .environment
+        Some(Waterplane::of_hull(dinghy_parameters().hull, heading_rad)),
+    );
+    let heave_m = hull.map_or(0.0, |hull| hull.height_m);
+    Environment {
+        water_depth_m: (sample.environment.water_depth_m + heave_m).max(0.0),
+        ..sample.environment
+    }
 }
 
 pub fn procedural_world_environment(
@@ -1764,6 +1781,27 @@ pub fn procedural_world_environment_interpolated(
     tick_fraction: f32,
     position_m: Vector,
 ) -> WorldEnvironment {
+    world_environment_and_hull_fit(
+        world_geometry,
+        match_seed,
+        tick,
+        tick_fraction,
+        position_m,
+        None,
+    )
+    .0
+}
+
+/// The world's environment at a point, and with a waterplane the whole sea
+/// fitted over it, where there is water.
+fn world_environment_and_hull_fit(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    tick: u64,
+    tick_fraction: f32,
+    position_m: Vector,
+    waterplane: Option<Waterplane>,
+) -> (WorldEnvironment, Option<SurfaceFit>) {
     let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) * TICK_SECONDS;
     let celestial = world_celestial_conditions(world_geometry, world_time_seconds, position_m);
     let climate = world_climate_conditions(celestial.geographic_latitude_degrees);
@@ -1818,7 +1856,16 @@ pub fn procedural_world_environment_interpolated(
         celestial.geographic_latitude_degrees,
     );
     let water_depth_m = (water_height_m - solid_surface_elevation_m).max(0.0);
-    let ocean = procedural_ocean_state(OceanQuery {
+    let wave_forcing = OceanWaveForcing {
+        surface_wind_velocity_m_s: wave_forcing_wind_velocity_m_s,
+        swell: if water_depth_m > 0.0 {
+            background_swell(world_geometry, match_seed, tick, tick_fraction, position_m)
+        } else {
+            Swell::NONE
+        },
+        water_depth_m,
+    };
+    let (ocean, hull, sea) = procedural_ocean_state(OceanQuery {
         world_geometry,
         match_seed,
         world_tick: tick,
@@ -1829,8 +1876,8 @@ pub fn procedural_world_environment_interpolated(
         weather,
         tidal_sample,
         water_height_m,
-        water_depth_m,
-        wave_forcing_wind_velocity_m_s,
+        wave_forcing,
+        waterplane,
     });
     let environment = Environment {
         true_wind_velocity_m_s: PhysicsVector::new(
@@ -1844,21 +1891,26 @@ pub fn procedural_world_environment_interpolated(
         water_depth_m: f64::from(water_depth_m),
     };
 
-    WorldEnvironment {
-        celestial,
-        climate,
-        weather,
-        tide,
-        surface_climate,
-        water_height_m,
-        ocean,
-        environment,
-    }
+    (
+        WorldEnvironment {
+            celestial,
+            climate,
+            weather,
+            tide,
+            surface_climate,
+            water_height_m,
+            wave_forcing,
+            sea,
+            ocean,
+            environment,
+        },
+        hull,
+    )
 }
 
-fn procedural_ocean_state(query: OceanQuery) -> OceanState {
-    if query.water_depth_m == 0.0 {
-        return OceanState {
+fn procedural_ocean_state(query: OceanQuery) -> (OceanState, Option<SurfaceFit>, SeaComponents) {
+    if query.wave_forcing.water_depth_m == 0.0 {
+        let still = OceanState {
             current_velocity_m_s: Vector::ZERO,
             wave_orbital_velocity_m_s: Vector::ZERO,
             significant_wave_height_m: 0.0,
@@ -1866,12 +1918,13 @@ fn procedural_ocean_state(query: OceanQuery) -> OceanState {
             surface_slope: Vector::ZERO,
             rogue_crest_excess_m: 0.0,
         };
+        return (still, None, SeaComponents::NONE);
     }
 
     let current_velocity_m_s = procedural_current_velocity_m_s(query);
-    let mut waves = procedural_wave_state(query);
+    let (mut waves, hull, sea) = procedural_wave_state(query);
     waves.current_velocity_m_s = current_velocity_m_s;
-    waves
+    (waves, hull, sea)
 }
 
 fn procedural_current_velocity_m_s(query: OceanQuery) -> Vector {
@@ -3941,6 +3994,7 @@ mod tests {
             match_seed,
             tick,
             position_m.as_dvec2(),
+            0.0,
         )
     }
 

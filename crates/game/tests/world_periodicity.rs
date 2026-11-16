@@ -336,8 +336,8 @@ fn assert_field_sides_close(world: WorldGeometry, seed: u64, tick: u64, low: Vec
         procedural_unsheltered_wind_velocity_m_s(world, seed, tick, high),
         0.25,
     );
-    let low_environment = procedural_match_environment(world, seed, tick, low.as_dvec2());
-    let high_environment = procedural_match_environment(world, seed, tick, high.as_dvec2());
+    let low_environment = procedural_match_environment(world, seed, tick, low.as_dvec2(), 0.0);
+    let high_environment = procedural_match_environment(world, seed, tick, high.as_dvec2(), 0.0);
     assert!(
         (low_environment.true_wind_velocity_m_s - high_environment.true_wind_velocity_m_s).length()
             <= 0.3,

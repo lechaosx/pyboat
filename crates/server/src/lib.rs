@@ -7,7 +7,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use game::{dinghy_parameters, procedural_match_environment, sailor_targets};
+use game::{
+    dinghy_parameters, procedural_match_environment, procedural_world_environment, sailor_targets,
+};
 use protocol::{
     BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
 };
@@ -245,13 +247,19 @@ impl GameMatch {
                 if cylindrical_displacement_m.length() < minimum_radius_m {
                     continue;
                 }
-                if procedural_match_environment(
+                // Compromise: spawning asks for the minimum depth under a
+                // trough as deep as the sea's significant height, which one
+                // linear wave in about three thousand exceeds (Rayleigh's
+                // exp(-8)), rather than under the deepest trough a new boat
+                // meets before it leaves.
+                let sample = procedural_world_environment(
                     self.world_geometry,
                     self.match_seed,
                     self.tick,
-                    candidate_m,
-                )
-                .water_depth_m
+                    candidate_m.as_vec2(),
+                );
+                if sample.environment.water_depth_m
+                    - f64::from(sample.ocean.significant_wave_height_m)
                     >= MINIMUM_SPAWN_WATER_DEPTH_M
                 {
                     break 'spawn candidate_m;
@@ -263,12 +271,13 @@ impl GameMatch {
             radius_m = radius_m.max(minimum_radius_m) + SPAWN_CLEARANCE_M;
         };
         self.spawn_origin_m.get_or_insert(position_m);
-        let wind = procedural_match_environment(
+        let wind = procedural_world_environment(
             self.world_geometry,
             self.match_seed,
             self.tick,
-            position_m,
+            position_m.as_vec2(),
         )
+        .environment
         .true_wind_velocity_m_s;
         self.simulation.add_boat(
             self.parameters,
@@ -344,6 +353,7 @@ impl GameMatch {
                 self.match_seed,
                 self.tick,
                 motion.position_m,
+                motion.angle_rad,
             );
             environments.push(environment);
             if player.wreck {
@@ -1094,34 +1104,48 @@ mod tests {
 
     #[test]
     fn new_players_spawn_safely_beyond_the_fleet_and_point_downwind() {
-        let mut game_match = GameMatch::new(42);
-        for player_number in 1..=5 {
-            let spawn_origin_m = game_match.spawn_origin_m.unwrap_or(Vector::ZERO);
-            let fleet_radius_m = (0..game_match.players.len())
-                .map(|boat| {
-                    (game_match.simulation.motion(boat).position_m - spawn_origin_m).length()
-                })
-                .fold(0.0_f64, f64::max);
-            game_match.add_player(format!("player-{player_number}"), player_number);
+        // Seed 37's first spawns lie in water that its significant trough
+        // leaves shallower than the minimum.
+        for seed in [42, 37] {
+            let mut game_match = GameMatch::new(seed);
+            for player_number in 1..=5 {
+                let spawn_origin_m = game_match.spawn_origin_m.unwrap_or(Vector::ZERO);
+                let fleet_radius_m = (0..game_match.players.len())
+                    .map(|boat| {
+                        (game_match.simulation.motion(boat).position_m - spawn_origin_m).length()
+                    })
+                    .fold(0.0_f64, f64::max);
+                game_match.add_player(format!("player-{player_number}"), player_number);
 
-            let spawned = game_match.simulation.motion(player_number as usize - 1);
-            if player_number > 1 {
+                let spawned = game_match.simulation.motion(player_number as usize - 1);
+                if player_number > 1 {
+                    assert!(
+                        (spawned.position_m - game_match.spawn_origin_m.unwrap()).length()
+                            >= fleet_radius_m + SPAWN_CLEARANCE_M
+                    );
+                }
+                let sample = procedural_world_environment(
+                    game_match.world_geometry,
+                    game_match.match_seed,
+                    game_match.tick,
+                    spawned.position_m.as_vec2(),
+                );
+                let trough_depth_m = sample.environment.water_depth_m
+                    - f64::from(sample.ocean.significant_wave_height_m);
                 assert!(
-                    (spawned.position_m - game_match.spawn_origin_m.unwrap()).length()
-                        >= fleet_radius_m + SPAWN_CLEARANCE_M
+                    trough_depth_m >= MINIMUM_SPAWN_WATER_DEPTH_M,
+                    "seed {seed}, player {player_number}: {trough_depth_m} m deep under a significant trough"
+                );
+                let forward = Vector::new(spawned.angle_rad.cos(), spawned.angle_rad.sin());
+                assert!(
+                    forward.dot(sample.environment.true_wind_velocity_m_s.normalize()) > 0.999_99
                 );
             }
-            let environment = procedural_match_environment(
-                game_match.world_geometry,
-                game_match.match_seed,
-                game_match.tick,
-                spawned.position_m,
-            );
-            assert!(environment.water_depth_m >= MINIMUM_SPAWN_WATER_DEPTH_M);
-            let forward = Vector::new(spawned.angle_rad.cos(), spawned.angle_rad.sin());
-            assert!(forward.dot(environment.true_wind_velocity_m_s.normalize()) > 0.999_99);
         }
 
+        let mut game_match = GameMatch::new(42);
+        game_match.add_player("player-1".to_owned(), 1);
+        game_match.add_player("player-2".to_owned(), 2);
         let mut repeated_match = GameMatch::new(42);
         repeated_match.add_player("player-1".to_owned(), 1);
         repeated_match.add_player("player-2".to_owned(), 2);

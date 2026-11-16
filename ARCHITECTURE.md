@@ -221,8 +221,12 @@ and verification details.
   water boundary, and the calibrated polar climate remains frozen through summer.
 - **[Explicit]** Ocean motion enters the same water-relative load path on the
   authoritative server and predicting client.
-- **[Implicit]** Ocean forcing remains planar: horizontal orbital motion affects
-  sailing, while heave, roll, capsize, refraction, and diffraction are outside the model.
+- **[Implicit]** Boat dynamics remain planar: horizontal orbital motion affects
+  sailing; capsize, refraction, and diffraction are outside the model.
+- **[Implicit]** A hull rides the sea without motion of its own: its heave,
+  pitch, and roll are the plane fitted to the surface over its waterplane.
+- **[Explicit]** A boat's depth is the still water's plus the whole sea, swell
+  included, fitted over its hull, so boats ground in troughs.
 - **[Implicit]** Rendering takes ocean wave modes and their clock phases from the
   authoritative Rust modes, computed once per frame in double precision relative
   to the view centre; shaders evaluate only position-dependent terms and local
@@ -235,6 +239,9 @@ and verification details.
   climate by latitude and season and wander slowly around it.
 - **[Explicit]** Both hemispheres share one swell climate, half a year apart,
   because the planet is symmetric.
+- **[Explicit]** The swell wanders in steepness and period, and its height
+  follows from them, so long swell is high swell; at each latitude its
+  steepest swell is as steep as measured.
 - **[Explicit]** Each component of the sea takes the larger of the wind sea
   and the swell, so neither counts twice.
 - **[Explicit]** The swell shapes the sea's state and the boats' motion, but
@@ -263,8 +270,10 @@ and verification details.
   names.
 - **[Implicit]** Each pixel shows the first surface its eye ray meets on the
   broad landform grid; finer relief takes the broad surface's parallax.
-- **[Explicit]** Boats stand at their real height, afloat on the tide or
-  resting on the ground beneath them.
+- **[Explicit]** Boats are drawn afloat on the drawn surface and tilted by the
+  whole sea fitted over their hull, or resting on the ground beneath them.
+- **[Explicit]** Drawn boats take the drawn waves filtered by the scene's pixel
+  footprint, so render scale does not change what hides them.
 - **[Explicit]** A boat hides where the surface the scene shows through a
   pixel stands higher than it.
 - **[Explicit]** Lighting and composition use linear color, followed by exposure,

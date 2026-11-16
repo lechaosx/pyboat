@@ -70,7 +70,7 @@ struct BackgroundSwell {
 };
 
 // `scene.ocean_swell_clock` holds the clock's part: the northern annual
-// cycle and the slow signals of height, period and direction; and
+// cycle and the slow signals of steepness, period and direction; and
 // `scene.ocean_swell_knots` the climate's knots, interpolated as
 // `latitude_curve_value` interpolates, from uniforms rather than constant
 // arrays, which the shader would copy for every lookup.
@@ -82,21 +82,31 @@ fn background_swell(position_m: vec2<f32>) -> BackgroundSwell {
     let fraction = knot_position - f32(lower);
     let amount = fraction * fraction * (3.0 - 2.0 * fraction);
     // Height, its annual amplitude, period and its annual amplitude; then
-    // direction, the log spreads of height and period, and direction's spread.
+    // direction, the log spreads of steepness and period, and direction's
+    // spread; then the correlation of log steepness with log period.
     let first = mix(
-        scene.ocean_swell_knots[2u * lower],
-        scene.ocean_swell_knots[2u * lower + 2u],
+        scene.ocean_swell_knots[3u * lower],
+        scene.ocean_swell_knots[3u * lower + 3u],
         amount,
     );
     let second = mix(
-        scene.ocean_swell_knots[2u * lower + 1u],
-        scene.ocean_swell_knots[2u * lower + 3u],
+        scene.ocean_swell_knots[3u * lower + 1u],
+        scene.ocean_swell_knots[3u * lower + 4u],
+        amount,
+    );
+    let correlation = mix(
+        scene.ocean_swell_knots[3u * lower + 2u].x,
+        scene.ocean_swell_knots[3u * lower + 5u].x,
         amount,
     );
     let hemisphere = select(-1.0, 1.0, latitude >= 0.0);
     let season = hemisphere * clock.x;
+    let period_coefficient = 2.0 * second.z + correlation * second.y;
+    let steepness_coefficient = second.y * sqrt(1.0 - correlation * correlation);
+    let variance = period_coefficient * period_coefficient
+        + steepness_coefficient * steepness_coefficient;
     let height_m = first.x * sqrt(1.0 + first.y * season)
-        * exp(second.y * clock.y - second.y * second.y);
+        * exp(period_coefficient * clock.z + steepness_coefficient * clock.y - variance);
     let period_s = (first.z + first.w * season)
         * exp(second.z * clock.z - 0.5 * second.z * second.z);
     let equatorward = -hemisphere * sign(surface_latitude_gradient_rad_per_m_at(position_m));
@@ -124,6 +134,9 @@ struct WaterWaveSample {
 // The forcing of the waves the scene last sampled, which the sediment they
 // stir at the same point reuses rather than evaluating the winds again.
 var<private> sampled_wave_forcing: OceanForcingSample;
+// The height above still water of the waves the scene last sampled, which
+// the drawn surface stands at.
+var<private> sampled_wave_height_m: f32 = 0.0;
 
 // The drawn surface: the wind sea's waves, as `ocean_wave_state` in
 // crates/game/src/ocean.rs gives them without swell, each mode filtered by
@@ -138,6 +151,7 @@ fn physical_water_wave_sample_from_surface(
     tide: SurfaceTideSample,
 ) -> WaterWaveSample {
     var sample = WaterWaveSample(0.0, 0.0, vec2<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0));
+    sampled_wave_height_m = 0.0;
     let forcing = ocean_forcing_from_surface(
         position_m,
         terrain_elevation_m,
@@ -252,6 +266,7 @@ fn physical_water_wave_sample_from_surface(
 
     sample.displacement_m = displacement_m;
     sample.gradient = gradient;
+    sampled_wave_height_m = displacement_m;
     return sample;
 }
 

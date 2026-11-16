@@ -1,6 +1,6 @@
 use game::{
-    celestial_orbit, cloud_field_time_coordinates, current_air_temperature_c,
-    procedural_world_environment, scalar_field_time_coordinates,
+    celestial_orbit, cloud_field_time_coordinates, current_air_temperature_c, dinghy_parameters,
+    procedural_match_environment, procedural_world_environment, scalar_field_time_coordinates,
     scalar_field_time_coordinates_interpolated, vector_field_time_coordinates,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
     world_climate_conditions,
@@ -309,4 +309,42 @@ fn evolving_weather_fields_advance_over_an_hour_at_huge_ticks_without_offsets() 
     );
     assert_ne!(vector_before.pressure, vector_after.pressure);
     assert_ne!(vector_before.ocean_current, vector_after.ocean_current);
+}
+
+/// Over a bed shallower than a dinghy's draft plus half the sea's
+/// significant height, the troughs of the waves fitted over its hull ground
+/// it and their crests float it, within a minute.
+#[test]
+fn a_boat_grounds_in_the_troughs_over_a_shallow_bed() {
+    let world = WorldGeometry::default();
+    let draft_m = dinghy_parameters().draft_m;
+    // Shallows off a beach of the default world.
+    let position_m = (0..40_000)
+        .map(|index| {
+            Vector::new(-32_246.0, 9_660.0)
+                + 5.0 * Vector::new((index % 200) as f32, (index / 200) as f32)
+        })
+        .find(|&position_m| {
+            let sample = procedural_world_environment(world, SEED, TICK, position_m);
+            let depth_m = sample.environment.water_depth_m;
+            let height_m = f64::from(sample.ocean.significant_wave_height_m);
+            depth_m > draft_m + 0.1 * height_m && depth_m < draft_m + 0.4 * height_m
+        })
+        .expect("shallows a little deeper than the draft");
+    let depths_m: Vec<f64> = (0..TICKS_PER_SECOND * 60)
+        .step_by(3)
+        .map(|tick| {
+            procedural_match_environment(world, SEED, TICK + tick, position_m.as_dvec2(), 0.0)
+                .water_depth_m
+        })
+        .collect();
+    assert!(
+        depths_m.iter().any(|&depth_m| depth_m < draft_m)
+            && depths_m.iter().any(|&depth_m| depth_m > draft_m),
+        "at {position_m:?}, depths {:?} m against a {draft_m} m draft",
+        (
+            depths_m.iter().copied().fold(f64::INFINITY, f64::min),
+            depths_m.iter().copied().fold(0.0, f64::max)
+        ),
+    );
 }

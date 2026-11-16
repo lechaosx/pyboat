@@ -4,7 +4,7 @@ import {
 } from "browser/playground";
 
 export type BoatWorld = { width: number; height: number; seed: bigint; tick: bigint };
-export type BoatView = { x: number; y: number; height: number; outputHeight: number; time: number };
+export type BoatView = { x: number; y: number; height: number; outputWidth: number; outputHeight: number; sceneHeight: number; time: number };
 
 export class DrivingBoat {
   driver: PlaygroundBoatDriver | undefined;
@@ -188,7 +188,7 @@ export class BoatPass {
     this.pipelines.set(format, result); return result;
   }
   encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, illumination: GPUTextureView, size: [number, number], driver: PlaygroundBoatDriver, view: BoatView): void {
-    driver.prepare_mesh(view.x, view.y, view.outputHeight, view.height, view.time);
+    driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.time);
     const vertices = driver.vertices(); const batches = driver.batches();
     if (vertices.byteLength > this.vertexBytes) {
       this.vertex.destroy(); this.vertexBytes = vertices.byteLength;

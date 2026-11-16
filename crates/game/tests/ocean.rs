@@ -1,7 +1,8 @@
 use game::{
-    OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, Swell, background_swell,
-    ocean_wave_state, procedural_world_environment, procedural_world_environment_interpolated,
-    swell_climate_knots, wind_sea, wind_sea_components,
+    OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, Swell, Waterplane,
+    background_swell, dinghy_parameters, hull_wave_fit, ocean_wave_state,
+    procedural_world_environment, procedural_world_environment_interpolated, swell_climate_knots,
+    wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
@@ -922,7 +923,7 @@ fn the_background_swell_holds_the_swell_climate() {
     let ticks_per_year = 365 * 86_400 * simulation::TICKS_PER_SECOND;
     let knots = swell_climate_knots();
     for latitude in [10.0_f32, 30.0, 50.0] {
-        let climate = knots[2 * (latitude / 10.0) as usize];
+        let climate = knots[3 * (latitude / 10.0) as usize];
         let (height_m, period_s) = (f64::from(climate[0]), f64::from(climate[2]));
         for hemisphere in [1.0, -1.0] {
             let position_m = at_latitude(hemisphere * latitude);
@@ -1076,4 +1077,138 @@ fn the_background_swell_is_continuous_through_the_equator_and_the_poles() {
             "at y {centre_y_m} m: steps {coarse:?}, then {fine:?} at an eighth of the step"
         );
     }
+}
+
+/// The 99.9th percentile of the swell's steepness Hs / Lp within 3° of each
+/// knot from 0° to 70°, area-weighted, in NOAA's operational WAVEWATCH III
+/// swell partition over 2018-2024 (PacIOOS ERDDAP `ww3_global`, `shgt` over
+/// g `sper`² / 2π, sampled every 121 h), with its standard error from a
+/// bootstrap over the sampled instants.
+const MEASURED_STEEPEST_SWELL: [(f64, f64); 8] = [
+    (0.0219, 0.0001),
+    (0.0226, 0.0001),
+    (0.0230, 0.0001),
+    (0.0257, 0.0001),
+    (0.0265, 0.0001),
+    (0.0263, 0.0001),
+    (0.0259, 0.0001),
+    (0.0252, 0.0003),
+];
+
+/// At every latitude, one swell in a thousand is as steep as measured: the
+/// 99.9th percentile of the background swell's steepness within 3° of each
+/// knot from 0° to 70°, over 16 seeds and seven years of clocks, is
+/// WAVEWATCH III's within three standard errors of the two, the model's from
+/// the spread of its seeds' percentiles.
+#[test]
+fn one_swell_in_a_thousand_is_as_steep_as_measured_at_every_latitude() {
+    let world = WorldGeometry::default();
+    let ticks_per_year = 365 * 86_400 * simulation::TICKS_PER_SECOND;
+    let seeds = 16;
+    let mut steepness = vec![vec![Vec::new(); seeds]; MEASURED_STEEPEST_SWELL.len()];
+    for seed in 0..seeds {
+        for step in 0..500_u64 {
+            let tick = step * 7 * ticks_per_year / 500 + seed as u64 * 7_919;
+            for (knot, by_seed) in steepness.iter_mut().enumerate() {
+                for offset in [-3.0, -1.5, 0.0, 1.5, 3.0] {
+                    let latitude = (knot as f32 * 10.0 + offset).clamp(0.0, 69.9);
+                    for hemisphere in [1.0, -1.0] {
+                        let swell = background_swell(
+                            world,
+                            seed as u64,
+                            tick,
+                            0.0,
+                            at_latitude(hemisphere * latitude),
+                        );
+                        by_seed[seed].push(
+                            swell.significant_height_m * swell.peak_wavenumber_per_m
+                                / std::f64::consts::TAU,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let steepest = |values: &mut Vec<f64>| {
+        values.sort_by(f64::total_cmp);
+        values[(0.999 * (values.len() - 1) as f64) as usize]
+    };
+    for (knot, (by_seed, &(measured, measured_error))) in steepness
+        .iter_mut()
+        .zip(&MEASURED_STEEPEST_SWELL)
+        .enumerate()
+    {
+        let per_seed: Vec<f64> = by_seed.iter_mut().map(steepest).collect();
+        let mean = per_seed.iter().sum::<f64>() / seeds as f64;
+        let error = (per_seed
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / ((seeds - 1) * seeds) as f64)
+            .sqrt();
+        let model = steepest(&mut by_seed.concat());
+        assert!(
+            (model - measured).abs()
+                <= 3.0 * (error * error + measured_error * measured_error).sqrt(),
+            "{}°: one swell in a thousand {model:.4} steep, measured {measured:.4}, standard errors {error:.4} and {measured_error:.4}",
+            knot * 10,
+        );
+    }
+}
+
+/// The mean squares of a dinghy's fitted height and slope, heading along the
+/// swell `swell`, as shares of the surface's own at its centre, over points
+/// spread across the world and the clock.
+fn hull_following_shares(swell: Swell) -> (f64, f64) {
+    let forcing = OceanWaveForcing {
+        surface_wind_velocity_m_s: Vector::ZERO,
+        swell,
+        water_depth_m: 10_000.0,
+    };
+    let waterplane = Waterplane::of_hull(dinghy_parameters().hull, swell.direction_rad);
+    let mut squares = [0.0; 4];
+    for index in 0..4_096_u32 {
+        let fraction = |step: f64| (f64::from(index) * step).fract() as f32;
+        let position_m = Vector::new(
+            (fraction(0.618_033_988_75) - 0.5) * geometry().width_m() as f32,
+            (fraction(0.754_877_666_25) - 0.5) * geometry().height_m() as f32,
+        );
+        let tick = TICK + u64::from(index / 64) * 7_919;
+        let point = ocean_wave_state(geometry(), SEED, tick, 0.0, position_m, forcing);
+        let hull = hull_wave_fit(
+            geometry(),
+            SEED,
+            tick,
+            0.0,
+            position_m,
+            forcing,
+            waterplane,
+            0.0,
+        )
+        .sea;
+        squares[0] += hull.height_m * hull.height_m;
+        squares[1] += f64::from(point.surface_displacement_m).powi(2);
+        squares[2] += hull.slope.length_squared();
+        squares[3] += f64::from(point.surface_slope.length_squared());
+    }
+    (squares[0] / squares[1], squares[2] / squares[3])
+}
+
+/// A hull rides waves far longer than itself as the water at its centre
+/// moves, and averages out most of the height and slope of waves as long as
+/// itself, heading into them.
+#[test]
+fn a_hull_follows_long_waves_and_averages_out_waves_its_own_length() {
+    let length_m = dinghy_parameters().hull.length_m;
+    let long = hull_following_shares(swell(2.0, 16.0, 0.4));
+    assert!(
+        (long.0 - 1.0).abs() < 0.01 && (long.1 - 1.0).abs() < 0.01,
+        "a 400 m swell: height and slope shares {long:?}"
+    );
+    let period_s = (std::f64::consts::TAU * length_m / GRAVITY_M_S2).sqrt();
+    let short = hull_following_shares(swell(0.3, period_s, 0.4));
+    assert!(
+        short.0 < 0.15 && short.1 < 0.15,
+        "a swell of the hull's length: height and slope shares {short:?}"
+    );
 }

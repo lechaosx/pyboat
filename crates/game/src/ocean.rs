@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use physics::glamx::{DVec2, Vec2 as Vector};
-use simulation::WorldGeometry;
+use simulation::{HullParameters, WorldGeometry, hull_outline_m};
 
 use crate::{OceanQuery, OceanState, TICK_SECONDS, hash_unit};
 
@@ -122,7 +122,7 @@ pub fn wind_sea_components(
     let table = ocean_wave_table(world_geometry, match_seed, 0, 0.0);
     let mut components = Vec::new();
     for_each_component(
-        &table,
+        &table.band_rotation_rad,
         &SeaPartition::wind_sea(surface_wind_velocity_m_s),
         |band, direction, amplitude_m, _| {
             components.push(WaveComponent {
@@ -223,7 +223,7 @@ impl SeaPartition {
 /// spreads away from the peak. Returns the window's variance and its sum of
 /// each band's centre wavenumber times the band's variance.
 fn for_each_component(
-    table: &OceanWaveTable,
+    band_rotation_rad: &[f64; OCEAN_WAVE_BAND_COUNT],
     sea: &SeaPartition,
     mut visit: impl FnMut(usize, usize, f64, f64),
 ) -> (f64, f64) {
@@ -267,7 +267,7 @@ fn for_each_component(
             );
         // The visited directions straddle the sea's: an even count the two
         // table directions either side of it, an odd one the nearest.
-        let position = (sea.direction_rad - table.band_rotation_rad[band]) / spacing;
+        let position = (sea.direction_rad - band_rotation_rad[band]) / spacing;
         let nearest = libm::floor(position + 0.5 * (sea.visited_directions % 2) as f64);
         let offset = position - nearest;
         let first_step = -((sea.visited_directions as i64 - 1) / 2);
@@ -352,13 +352,28 @@ const SWELL_PERIOD_SEASONAL_AMPLITUDE_S: [f32; 10] =
 // through which the world mirrors.
 const SWELL_DIRECTION_DEGREES: [f32; 10] =
     [180.0, 99.0, 84.0, 63.0, 31.0, 4.0, -31.0, -63.0, -31.5, 0.0];
-// The spread of the swell's natural logarithm of height and peak period at a
-// point once the annual cycle is removed: from the coefficients of variation
-// CV of a point's ratios to its calendar month's mean, σ = √ln(1 + CV²), the
-// log-normal of that CV, whose deciles match the measured within 0.05 of the
-// mean between 0° and 30° and the median and upper decile beyond.
-const SWELL_HEIGHT_LOG_SPREAD: [f32; 10] =
-    [0.34, 0.41, 0.43, 0.45, 0.52, 0.59, 0.60, 0.62, 0.62, 0.62];
+// The swell wanders at a point, once the annual cycle is removed, in its
+// steepness Hs / Lp and its peak period, of each value's ratio to its
+// point's calendar month's mean in the same series; its height is the
+// steepness times its wavelength, so long swell is high swell and short
+// swell low, as measured.
+// The spread of the log-normal of the steepness's ratio: the σ that gives
+// the swell within 3° of the knot, over the seasons and the wander, the
+// measured 99.9th percentile of absolute steepness there, 0.022-0.027, the
+// steep end where swell tilts boats. Compromises: a log-normal cannot hold
+// the measured shape, so the swell's 99th percentile falls 5-14% short of
+// the measured at every knot; and its mean steepness stands up to 16% over
+// the measured at 40-70°, as the knots keep the measured mean square height
+// and mean period rather than mean steepness.
+const SWELL_STEEPNESS_LOG_SPREAD: [f32; 10] =
+    [0.43, 0.47, 0.41, 0.36, 0.32, 0.30, 0.30, 0.33, 0.33, 0.33];
+// The correlation of the logarithms of the steepness's and the period's
+// ratios: steeper swell is shorter.
+const SWELL_STEEPNESS_PERIOD_CORRELATION: [f32; 10] = [
+    -0.75, -0.68, -0.61, -0.47, -0.35, -0.35, -0.36, -0.41, -0.41, -0.41,
+];
+// The spread of the period's ratio: from its coefficient of variation CV,
+// σ = √ln(1 + CV²), the log-normal of that CV.
 const SWELL_PERIOD_LOG_SPREAD: [f32; 10] =
     [0.23, 0.22, 0.21, 0.19, 0.19, 0.20, 0.21, 0.24, 0.24, 0.24];
 // The circular standard deviation of its direction at a point, √(-2 ln R),
@@ -369,18 +384,19 @@ const SWELL_DIRECTION_SPREAD_DEGREES: [f32; 10] =
 // cycles peak within a few weeks of mid-January in the north, the season
 // phase counting from the December solstice.
 const SWELL_WINTER_SEASON_PHASE: f64 = 0.05;
-// The swell's height, period and direction each wander with one slow signal,
+// The swell's steepness, period and direction each wander with one slow signal,
 // a sum of `SWELL_SIGNAL_TERMS` cosines of seeded phases and of frequencies
 // drawn from a Gaussian of standard deviation √2 / `SWELL_COHERENCE_S`,
 // whose autocorrelation is exp(-(τ / `SWELL_COHERENCE_S`)²) in expectation.
 // At a point the measured autocorrelation of the swell's log height falls to
 // 1/e in 21 h and its period's and direction's in 18 h (3-hourly series at 75
 // open-ocean points over June and July 2019); `SWELL_COHERENCE_S` is their
-// 20 h. Compromises: the signals are the same everywhere, so swell
-// events reach every longitude at once; they are independent of each other,
-// where the measured correlation of log height and period is +0.1 to +0.3;
-// and the measured autocorrelation falls faster in the first 6 h, to 0.70,
-// which the smooth signal leaves out.
+// 20 h. The steepness takes the measured correlation with the period from
+// the period's signal and the rest from its own. Compromises: the signals
+// are the same everywhere, so swell events reach every longitude at once;
+// the direction wanders independently; and the measured autocorrelation
+// falls faster in the first 6 h, to 0.70, which the smooth signal leaves
+// out.
 const SWELL_COHERENCE_S: f64 = 20.0 * 3_600.0;
 const SWELL_SIGNAL_TERMS: usize = 8;
 // Goda's maximum spreading parameter for swell that has travelled far, in
@@ -400,14 +416,17 @@ const SWELL_VISITED_DIRECTIONS: usize = 3;
 // `VISITED_DIRECTIONS`.
 const _: () = assert!(SWELL_VISITED_DIRECTIONS <= VISITED_DIRECTIONS);
 
-/// The swell climate's knots for the renderer, two rows to a knot at 0°,
+/// The swell climate's knots for the renderer, three rows to a knot at 0°,
 /// 10°, … 90°: height, its annual amplitude, period and its annual
-/// amplitude, then direction, the spreads of log height and log period, and
-/// the direction's spread in degrees.
-pub fn swell_climate_knots() -> [[f32; 4]; 20] {
+/// amplitude; then direction, the spreads of log steepness and log period,
+/// and the direction's spread in degrees; then the correlation of log
+/// steepness with log period.
+pub fn swell_climate_knots() -> [[f32; 4]; 30] {
     std::array::from_fn(|row| {
-        let knot = row / 2;
-        if row % 2 == 0 {
+        let knot = row / 3;
+        if row % 3 == 2 {
+            [SWELL_STEEPNESS_PERIOD_CORRELATION[knot], 0.0, 0.0, 0.0]
+        } else if row % 3 == 0 {
             [
                 SWELL_HEIGHT_M[knot],
                 SWELL_HEIGHT_SEASONAL_AMPLITUDE[knot],
@@ -417,7 +436,7 @@ pub fn swell_climate_knots() -> [[f32; 4]; 20] {
         } else {
             [
                 SWELL_DIRECTION_DEGREES[knot],
-                SWELL_HEIGHT_LOG_SPREAD[knot],
+                SWELL_STEEPNESS_LOG_SPREAD[knot],
                 SWELL_PERIOD_LOG_SPREAD[knot],
                 SWELL_DIRECTION_SPREAD_DEGREES[knot],
             ]
@@ -427,12 +446,12 @@ pub fn swell_climate_knots() -> [[f32; 4]; 20] {
 
 /// The clock's part of the background swell: the annual cycle at the
 /// northern hemisphere's latitudes, cos 2π(season - winter), and the slow
-/// signals its height, period and direction wander with, each of unit
-/// variance.
+/// signals its steepness, period and direction wander with, each of unit
+/// variance; the steepness's is the part apart from the period's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwellClock {
     pub season: f64,
-    pub height: f64,
+    pub steepness: f64,
     pub period: f64,
     pub direction: f64,
 }
@@ -470,7 +489,7 @@ fn swell_clock(
     };
     SwellClock {
         season: libm::cos(std::f64::consts::TAU * (season_phase - SWELL_WINTER_SEASON_PHASE)),
-        height: signal(0),
+        steepness: signal(0),
         period: signal(1),
         direction: signal(2),
     }
@@ -478,8 +497,8 @@ fn swell_clock(
 
 /// The background swell at a point and clock: the swell that storms beyond
 /// the world's scale send a sea at its latitude in its season, wandering with
-/// slow signals that keep the climate's mean square height and mean period,
-/// log-normal in both. Compromise: every water point takes the open sea's
+/// slow signals in a log-normal steepness and period that keep the climate's
+/// mean square height and mean period. Compromise: every water point takes the open sea's
 /// swell, island lees, bays and lagoons too, until an exposure law shelters
 /// them.
 pub fn background_swell(
@@ -496,11 +515,23 @@ pub fn background_swell(
     let knot = |knots| f64::from(crate::latitude_curve_value(knots, latitude));
     let hemisphere = if latitude >= 0.0 { 1.0 } else { -1.0 };
     let season = hemisphere * clock.season;
-    let height_spread = knot(SWELL_HEIGHT_LOG_SPREAD);
+    let steepness_spread = knot(SWELL_STEEPNESS_LOG_SPREAD);
     let period_spread = knot(SWELL_PERIOD_LOG_SPREAD);
+    let correlation = knot(SWELL_STEEPNESS_PERIOD_CORRELATION);
+    // ln Hs = ln steepness + 2 ln Tp + constant is normal, of the period's
+    // signal and the steepness's own, with `variance`; subtracting it keeps
+    // the climate's mean of Hs², E[exp(2X)] = exp(2 Var X) for a centred
+    // normal X. Compromise: that holds for Gaussian signals; the signals'
+    // eight cosines leave the mean of Hs² about 0.1-0.3% low.
+    let period_coefficient = 2.0 * period_spread + correlation * steepness_spread;
+    let steepness_coefficient = steepness_spread * libm::sqrt(1.0 - correlation * correlation);
+    let variance =
+        period_coefficient * period_coefficient + steepness_coefficient * steepness_coefficient;
     let significant_height_m = knot(SWELL_HEIGHT_M)
         * libm::sqrt(1.0 + knot(SWELL_HEIGHT_SEASONAL_AMPLITUDE) * season)
-        * libm::exp(height_spread * clock.height - height_spread * height_spread);
+        * libm::exp(
+            period_coefficient * clock.period + steepness_coefficient * clock.steepness - variance,
+        );
     let period_s = (knot(SWELL_PERIOD_S) + knot(SWELL_PERIOD_SEASONAL_AMPLITUDE_S) * season)
         * libm::exp(period_spread * clock.period - 0.5 * period_spread * period_spread);
     // Toward the equator is south in the north, and flips beyond a pole,
@@ -516,24 +547,17 @@ pub fn background_swell(
     }
 }
 
-pub(crate) fn procedural_wave_state(query: OceanQuery) -> OceanState {
-    ocean_wave_state(
+pub(crate) fn procedural_wave_state(
+    query: OceanQuery,
+) -> (OceanState, Option<SurfaceFit>, SeaComponents) {
+    ocean_wave_state_and_hull_fit(
         query.world_geometry,
         query.match_seed,
         query.world_tick,
         query.world_tick_fraction,
         query.position_m,
-        OceanWaveForcing {
-            surface_wind_velocity_m_s: query.wave_forcing_wind_velocity_m_s,
-            swell: background_swell(
-                query.world_geometry,
-                query.match_seed,
-                query.world_tick,
-                query.world_tick_fraction,
-                query.position_m,
-            ),
-            water_depth_m: query.water_depth_m,
-        },
+        query.wave_forcing,
+        query.waterplane,
     )
 }
 
@@ -554,72 +578,474 @@ pub fn ocean_wave_state(
     position_m: Vector,
     forcing: OceanWaveForcing,
 ) -> OceanState {
-    let table = ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
-    let width_m = f64::from(world_geometry.width_m() as f32);
-    let x_m = f64::from(position_m.x).rem_euclid(width_m);
-    let y_m = f64::from(position_m.y);
-    let mut sum = SurfaceSum::default();
-    let wind_sea = SeaPartition::wind_sea(forcing.surface_wind_velocity_m_s);
-    let swell = SeaPartition::swell(forcing.swell);
-    let mut wind_amplitudes = [[0.0; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT];
-    let (mut window_variance, mut weighted_wavenumber) =
-        for_each_component(&table, &wind_sea, |band, direction, amplitude_m, _| {
-            wind_amplitudes[band][direction] = amplitude_m;
-            sum.add(&table.modes[band][direction], amplitude_m, x_m, y_m);
-        });
-    // A component both seas share takes the larger amplitude: the swell adds
-    // only its excess there, and the variance it shares counts once.
-    let mut shared_variance = 0.0;
-    for_each_component(
-        &table,
-        &swell,
-        |band, direction, amplitude_m, wavenumber| {
-            let wind_amplitude_m = wind_amplitudes[band][direction];
-            let excess_variance =
-                0.5 * (amplitude_m.max(wind_amplitude_m).powi(2) - wind_amplitude_m.powi(2));
-            sum.add(
-                &table.modes[band][direction],
-                (amplitude_m - wind_amplitude_m).max(0.0),
-                x_m,
-                y_m,
-            );
-            shared_variance += 0.5 * amplitude_m.min(wind_amplitude_m).powi(2);
-            window_variance += excess_variance;
-            weighted_wavenumber += excess_variance * wavenumber;
+    ocean_wave_state_and_hull_fit(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        position_m,
+        forcing,
+        None,
+    )
+    .0
+}
+
+/// `ocean_wave_state`, and with a waterplane the whole sea's unfiltered
+/// `hull_wave_fit` over it, from one pass over the modes; and the sea's
+/// components.
+pub(crate) fn ocean_wave_state_and_hull_fit(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+    forcing: OceanWaveForcing,
+    waterplane: Option<Waterplane>,
+) -> (OceanState, Option<SurfaceFit>, SeaComponents) {
+    let hull = waterplane.map(|waterplane| HullTransfer::new(waterplane, 0.0));
+    let components = sea_components(world_geometry, match_seed, forcing);
+    let sums = sea_sums(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        position_m,
+        &components,
+        |band, mode| {
+            [
+                Some((
+                    1.0,
+                    DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m),
+                )),
+                hull.as_ref().and_then(|hull| hull.transfer(band, mode)),
+            ]
         },
     );
-    let unrestricted_height_m =
-        4.0 * libm::sqrt((wind_sea.variance_m2 + swell.variance_m2 - shared_variance).max(0.0));
-    let significant_height_m = unrestricted_height_m.min(0.78 * f64::from(forcing.water_depth_m));
-    let depth_scale = if unrestricted_height_m > 0.0 {
-        significant_height_m / unrestricted_height_m
+    let sea = whole_sea(&sums[0]);
+    let unrestricted_height_m = components.sea_height_m();
+    let depth_scale = depth_scale(unrestricted_height_m, forcing.water_depth_m);
+    let significant_height_m = depth_scale * unrestricted_height_m;
+    let fit = second_order(&sea, depth_scale, components.sea_window);
+    let orbital_velocity_m_s = depth_scale * sea.orbital_velocity_m_s;
+
+    let surface_displacement_m = fit.height_m as f32;
+    let significant_wave_height_m = significant_height_m as f32;
+    (
+        OceanState {
+            current_velocity_m_s: Vector::ZERO,
+            wave_orbital_velocity_m_s: orbital_velocity_m_s.as_vec2(),
+            significant_wave_height_m,
+            surface_displacement_m,
+            surface_slope: fit.slope.as_vec2(),
+            rogue_crest_excess_m: (surface_displacement_m - significant_wave_height_m).max(0.0),
+        },
+        hull.map(|_| second_order(&whole_sea(&sums[1]), depth_scale, components.sea_window)),
+        components,
+    )
+}
+
+/// A hull's waterplane as the sea's surface is fitted over it: a rectangle
+/// along the hull's heading, centred on the hull's reference point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Waterplane {
+    pub heading_rad: f64,
+    pub length_m: f64,
+    pub beam_m: f64,
+}
+
+impl Waterplane {
+    /// The rectangle with the second moments per area, along and across the
+    /// hull about its reference point, of the hull's outline, so a hull
+    /// follows long waves' height and slope as its own waterplane would to
+    /// second order in wavenumber. Compromises: the deck outline stands in
+    /// for the flared hull's narrower waterplane; a rectangle stands in for
+    /// its pointed shape where waves are short enough to tell them apart; and
+    /// the rectangle is centred on the reference point, which for the dinghy
+    /// lies 0.22 m ahead of its outline's centroid.
+    pub fn of_hull(hull: HullParameters, heading_rad: f64) -> Self {
+        let outline = hull_outline_m(hull);
+        let (mut twice_area, mut along, mut across) = (0.0, 0.0, 0.0);
+        for (index, first) in outline.iter().enumerate() {
+            let second = outline[(index + 1) % outline.len()];
+            let cross = first.perp_dot(second);
+            twice_area += cross;
+            along += cross * (first.x * first.x + first.x * second.x + second.x * second.x);
+            across += cross * (first.y * first.y + first.y * second.y + second.y * second.y);
+        }
+        // A rectangle's ∫x² dA / A is L²/12, and a polygon's is
+        // Σ cross (x₁² + x₁x₂ + x₂²) / (6 Σ cross).
+        Self {
+            heading_rad,
+            length_m: libm::sqrt(2.0 * along / twice_area),
+            beam_m: libm::sqrt(2.0 * across / twice_area),
+        }
+    }
+}
+
+/// The surface fitted over a waterplane: its height at the waterplane's
+/// centre and its slope, both from Tayfun's second order of the fitted first
+/// order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceFit {
+    pub height_m: f64,
+    pub slope: DVec2,
+}
+
+/// The wind sea alone, as the drawn surface shows it, and the whole sea
+/// fitted over a waterplane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HullSurface {
+    pub wind_sea: SurfaceFit,
+    pub sea: SurfaceFit,
+}
+
+/// The sea's surface under `forcing` fitted over `waterplane` at a clock, as
+/// a hull that follows it without motion of its own floats: the least-squares
+/// plane over the waterplane, which for a wall-sided hull in the undisturbed
+/// wave is where its waterplane's restoring force and moments balance the
+/// wave's pressure, the Froude-Krylov heave force and moments (Journée and
+/// Massie 2001, Offshore Hydromechanics, ch. 6). A mode of amplitude a and
+/// phase φ at the centre, with u = k∥L/2 and v = k⊥B/2 along and across the
+/// heading, raises it a S(u) S(v) cos φ, with S(u) = sin u / u, and tilts it
+/// by -a sin φ (k∥ P(u) S(v), k⊥ S(u) P(v)) along and across, with
+/// P(u) = 3 (sin u - u cos u) / u³. Each mode is also filtered by a
+/// `footprint_m` pixel's footprint as the drawn surface filters it,
+/// exp(-(k fp)² / 2), skipping its band once the band's longest wave falls
+/// under about two pixels, k fp ≥ 3. Compromises: the hull follows the sea
+/// quasi-statically, leaving out its heave resonance, estimated at 0.7-0.8 s
+/// from its waterplane and an added mass like its own, which raises its
+/// response to waves twice its length by about 10-15%; it leaves out
+/// the pressure's decay to its draft (the Smith effect), which takes about
+/// 14% from those waves; and Tayfun's term is that of the fitted first
+/// order, not the second order fitted over the hull.
+#[allow(clippy::too_many_arguments)]
+pub fn hull_wave_fit(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+    forcing: OceanWaveForcing,
+    waterplane: Waterplane,
+    footprint_m: f64,
+) -> HullSurface {
+    hull_wave_fit_of_sea(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        position_m,
+        &sea_components(world_geometry, match_seed, forcing),
+        waterplane,
+        footprint_m,
+    )
+}
+
+/// `hull_wave_fit` of the sea whose components `sea` holds.
+#[allow(clippy::too_many_arguments)]
+pub fn hull_wave_fit_of_sea(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+    sea: &SeaComponents,
+    waterplane: Waterplane,
+    footprint_m: f64,
+) -> HullSurface {
+    let hull = HullTransfer::new(waterplane, footprint_m);
+    let [sums, _] = sea_sums(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        position_m,
+        sea,
+        |band, mode| [hull.transfer(band, mode), None],
+    );
+    HullSurface {
+        wind_sea: second_order(
+            &sums.wind,
+            depth_scale(sea.wind_sea_height_m(), sea.water_depth_m),
+            sea.wind_window,
+        ),
+        sea: second_order(
+            &whole_sea(&sums),
+            depth_scale(sea.sea_height_m(), sea.water_depth_m),
+            sea.sea_window,
+        ),
+    }
+}
+
+/// How a mode enters a fit over a waterplane through a pixel footprint.
+struct HullTransfer {
+    waterplane: Waterplane,
+    footprint_m: f64,
+    along: DVec2,
+    across: DVec2,
+}
+
+impl HullTransfer {
+    fn new(waterplane: Waterplane, footprint_m: f64) -> Self {
+        let (across_x, along_x) = libm::sincos(waterplane.heading_rad);
+        Self {
+            waterplane,
+            footprint_m,
+            along: DVec2::new(along_x, across_x),
+            across: DVec2::new(-across_x, along_x),
+        }
+    }
+
+    /// The share of the mode's height in the fit and the wavenumber that
+    /// turns its height into the fit's slope, or `None` where the footprint
+    /// skips its band.
+    fn transfer(&self, band: usize, mode: &OceanWaveMode) -> Option<(f64, DVec2)> {
+        let lowest_wavenumber = std::f64::consts::TAU / OCEAN_WAVE_LONGEST_M;
+        let band_wavenumber =
+            lowest_wavenumber * libm::exp2(band as f64 / OCEAN_WAVE_BANDS_PER_OCTAVE as f64);
+        if band_wavenumber * self.footprint_m >= 3.0 {
+            return None;
+        }
+        let filtered = mode.wave_number_per_m * self.footprint_m;
+        let filter = libm::exp(-0.5 * filtered * filtered);
+        let wave_number = DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m);
+        let wave_number_along = wave_number.dot(self.along);
+        let wave_number_across = wave_number.dot(self.across);
+        let (height_along, slope_along) =
+            waterplane_transfers(0.5 * wave_number_along * self.waterplane.length_m);
+        let (height_across, slope_across) =
+            waterplane_transfers(0.5 * wave_number_across * self.waterplane.beam_m);
+        Some((
+            filter * height_along * height_across,
+            filter
+                * (wave_number_along * slope_along * height_across * self.along
+                    + wave_number_across * height_along * slope_across * self.across),
+        ))
+    }
+}
+
+/// A waterplane's height and slope transfers along one axis at half its
+/// wavenumber times its extent, `u`: sin u / u and 3 (sin u - u cos u) / u³,
+/// from their series where those cancel.
+fn waterplane_transfers(u: f64) -> (f64, f64) {
+    if libm::fabs(u) < 1.0e-2 {
+        return (1.0 - u * u / 6.0, 1.0 - u * u / 10.0);
+    }
+    let (sine, cosine) = libm::sincos(u);
+    (sine / u, 3.0 * (sine - u * cosine) / (u * u * u))
+}
+
+/// The share of a sea's unrestricted significant height that McCowan's
+/// breaker limit leaves over water `water_depth_m` deep.
+fn depth_scale(unrestricted_height_m: f64, water_depth_m: f32) -> f64 {
+    if unrestricted_height_m > 0.0 {
+        unrestricted_height_m.min(0.78 * f64::from(water_depth_m)) / unrestricted_height_m
     } else {
         0.0
-    };
-    let mean_wavenumber = if window_variance > 0.0 {
-        weighted_wavenumber / window_variance
+    }
+}
+
+/// Tayfun's second order of a sum scaled by `depth_scale`, at the mean
+/// wavenumber of its window's `(variance, wavenumber-weighted variance)`.
+fn second_order(sum: &SurfaceSum, depth_scale: f64, window: (f64, f64)) -> SurfaceFit {
+    let mean_wavenumber = if window.0 > 0.0 {
+        window.1 / window.0
     } else {
         0.0
     };
     let linear_m = depth_scale * sum.displacement_m;
     let quadrature_m = depth_scale * sum.quadrature_m;
-    let displacement_m =
-        linear_m + 0.5 * mean_wavenumber * (linear_m * linear_m - quadrature_m * quadrature_m);
-    let slope = depth_scale * sum.slope
-        + mean_wavenumber
-            * depth_scale
-            * (linear_m * sum.slope - quadrature_m * sum.quadrature_slope);
-    let orbital_velocity_m_s = depth_scale * sum.orbital_velocity_m_s;
+    SurfaceFit {
+        height_m: linear_m
+            + 0.5 * mean_wavenumber * (linear_m * linear_m - quadrature_m * quadrature_m),
+        slope: depth_scale * sum.slope
+            + mean_wavenumber
+                * depth_scale
+                * (linear_m * sum.slope - quadrature_m * sum.quadrature_slope),
+    }
+}
 
-    let surface_displacement_m = displacement_m as f32;
-    let significant_wave_height_m = significant_height_m as f32;
-    OceanState {
-        current_velocity_m_s: Vector::ZERO,
-        wave_orbital_velocity_m_s: orbital_velocity_m_s.as_vec2(),
-        significant_wave_height_m,
-        surface_displacement_m,
-        surface_slope: slope.as_vec2(),
-        rogue_crest_excess_m: (surface_displacement_m - significant_wave_height_m).max(0.0),
+/// The wind sea's sum and the swell's excess over it, by one transfer.
+#[derive(Default)]
+struct PartitionSums {
+    wind: SurfaceSum,
+    swell_excess: SurfaceSum,
+}
+
+/// A table mode's band and direction, and its amplitude.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SeaComponent {
+    band: u8,
+    direction: u8,
+    amplitude_m: f64,
+}
+
+impl SeaComponent {
+    const NONE: Self = Self {
+        band: 0,
+        direction: 0,
+        amplitude_m: 0.0,
+    };
+}
+
+/// The sea a forcing raises, apart from the clock and the position: the
+/// wind sea's components, the swell's excess over them, the partitions'
+/// variances and the variance they share, the wind sea's window's and the
+/// whole sea's windows' variance and wavenumber-weighted variance, and the
+/// water's depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeaComponents {
+    wind: [SeaComponent; VISITED_BANDS * VISITED_DIRECTIONS],
+    wind_count: usize,
+    swell_excess: [SeaComponent; SWELL_VISITED_BANDS * SWELL_VISITED_DIRECTIONS],
+    swell_count: usize,
+    wind_sea_variance_m2: f64,
+    swell_variance_m2: f64,
+    shared_variance_m2: f64,
+    wind_window: (f64, f64),
+    sea_window: (f64, f64),
+    water_depth_m: f32,
+}
+
+impl SeaComponents {
+    /// No sea, as over dry ground.
+    pub const NONE: Self = Self {
+        wind: [SeaComponent::NONE; VISITED_BANDS * VISITED_DIRECTIONS],
+        wind_count: 0,
+        swell_excess: [SeaComponent::NONE; SWELL_VISITED_BANDS * SWELL_VISITED_DIRECTIONS],
+        swell_count: 0,
+        wind_sea_variance_m2: 0.0,
+        swell_variance_m2: 0.0,
+        shared_variance_m2: 0.0,
+        wind_window: (0.0, 0.0),
+        sea_window: (0.0, 0.0),
+        water_depth_m: 0.0,
+    };
+
+    fn sea_height_m(&self) -> f64 {
+        4.0 * libm::sqrt(
+            (self.wind_sea_variance_m2 + self.swell_variance_m2 - self.shared_variance_m2).max(0.0),
+        )
+    }
+
+    fn wind_sea_height_m(&self) -> f64 {
+        4.0 * libm::sqrt(self.wind_sea_variance_m2)
+    }
+}
+
+/// The sea `forcing` raises in a world and seed, at every clock and
+/// position: a component both seas share takes the larger amplitude, the
+/// swell adding only its excess there, and the variance it shares counts
+/// once.
+pub fn sea_components(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    forcing: OceanWaveForcing,
+) -> SeaComponents {
+    let band_rotation_rad = ocean_wave_table_at_start(world_geometry, match_seed).band_rotation_rad;
+    let wind_sea = SeaPartition::wind_sea(forcing.surface_wind_velocity_m_s);
+    let swell = SeaPartition::swell(forcing.swell);
+    let mut components = SeaComponents {
+        wind_sea_variance_m2: wind_sea.variance_m2,
+        swell_variance_m2: swell.variance_m2,
+        water_depth_m: forcing.water_depth_m,
+        ..SeaComponents::NONE
+    };
+    let mut wind_amplitudes = [[0.0; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT];
+    components.wind_window = for_each_component(
+        &band_rotation_rad,
+        &wind_sea,
+        |band, direction, amplitude_m, _| {
+            wind_amplitudes[band][direction] = amplitude_m;
+            components.wind[components.wind_count] = SeaComponent {
+                band: band as u8,
+                direction: direction as u8,
+                amplitude_m,
+            };
+            components.wind_count += 1;
+        },
+    );
+    components.sea_window = components.wind_window;
+    for_each_component(
+        &band_rotation_rad,
+        &swell,
+        |band, direction, amplitude_m, wavenumber| {
+            let wind_amplitude_m = wind_amplitudes[band][direction];
+            let excess_variance =
+                0.5 * (amplitude_m.max(wind_amplitude_m).powi(2) - wind_amplitude_m.powi(2));
+            components.swell_excess[components.swell_count] = SeaComponent {
+                band: band as u8,
+                direction: direction as u8,
+                amplitude_m: (amplitude_m - wind_amplitude_m).max(0.0),
+            };
+            components.swell_count += 1;
+            components.shared_variance_m2 += 0.5 * amplitude_m.min(wind_amplitude_m).powi(2);
+            components.sea_window.0 += excess_variance;
+            components.sea_window.1 += excess_variance * wavenumber;
+        },
+    );
+    components
+}
+
+/// The sums of `sea`'s components at a point and clock by each of
+/// `transfer`'s two transfers, through which each mode enters by its share
+/// of height and the wavenumber that turns its height into slope, or not at
+/// all where it gives `None`. Both share the modes' phases.
+fn sea_sums(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+    sea: &SeaComponents,
+    transfer: impl Fn(usize, &OceanWaveMode) -> [Option<(f64, DVec2)>; 2],
+) -> [PartitionSums; 2] {
+    let table = ocean_wave_table(world_geometry, match_seed, world_tick, world_tick_fraction);
+    let width_m = f64::from(world_geometry.width_m() as f32);
+    let x_m = f64::from(position_m.x).rem_euclid(width_m);
+    let y_m = f64::from(position_m.y);
+    let mut sums: [PartitionSums; 2] = Default::default();
+    for (components, swell) in [
+        (&sea.wind[..sea.wind_count], false),
+        (&sea.swell_excess[..sea.swell_count], true),
+    ] {
+        for component in components {
+            let band = usize::from(component.band);
+            let mode = &table.modes[band][usize::from(component.direction)];
+            let transfers = transfer(band, mode);
+            if transfers.iter().any(Option::is_some) {
+                let phase = mode.phase_at(x_m, y_m);
+                for (sums, transfer) in sums.iter_mut().zip(transfers) {
+                    if let Some((weight, slope_wave_number)) = transfer {
+                        let sum = if swell {
+                            &mut sums.swell_excess
+                        } else {
+                            &mut sums.wind
+                        };
+                        sum.add(
+                            mode,
+                            component.amplitude_m,
+                            phase,
+                            weight,
+                            slope_wave_number,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    sums
+}
+
+/// The whole sea's sum.
+fn whole_sea(sums: &PartitionSums) -> SurfaceSum {
+    let PartitionSums { wind, swell_excess } = sums;
+    SurfaceSum {
+        displacement_m: wind.displacement_m + swell_excess.displacement_m,
+        quadrature_m: wind.quadrature_m + swell_excess.quadrature_m,
+        slope: wind.slope + swell_excess.slope,
+        quadrature_slope: wind.quadrature_slope + swell_excess.quadrature_slope,
+        orbital_velocity_m_s: wind.orbital_velocity_m_s + swell_excess.orbital_velocity_m_s,
     }
 }
 
@@ -635,14 +1061,22 @@ struct SurfaceSum {
 }
 
 impl SurfaceSum {
-    fn add(&mut self, mode: &OceanWaveMode, amplitude_m: f64, x_m: f64, y_m: f64) {
+    /// Adds a mode at `(sin, cos)` of its phase, whose height enters by
+    /// `weight` and whose slope by `slope_wave_number` in place of its
+    /// wavenumber.
+    fn add(
+        &mut self,
+        mode: &OceanWaveMode,
+        amplitude_m: f64,
+        (sine, cosine): (f64, f64),
+        weight: f64,
+        slope_wave_number: DVec2,
+    ) {
         let wave_number = DVec2::new(mode.wave_number_x_per_m, mode.wave_number_y_per_m);
-        let phase = wave_number.x * x_m + wave_number.y * y_m + mode.phase_rad;
-        let (sine, cosine) = libm::sincos(phase);
-        self.displacement_m += amplitude_m * cosine;
-        self.quadrature_m += amplitude_m * sine;
-        self.slope -= amplitude_m * sine * wave_number;
-        self.quadrature_slope += amplitude_m * cosine * wave_number;
+        self.displacement_m += weight * amplitude_m * cosine;
+        self.quadrature_m += weight * amplitude_m * sine;
+        self.slope -= amplitude_m * sine * slope_wave_number;
+        self.quadrature_slope += amplitude_m * cosine * slope_wave_number;
         self.orbital_velocity_m_s += amplitude_m * mode.angular_frequency_rad_s * cosine
             / mode.wave_number_per_m
             * wave_number;
@@ -764,6 +1198,13 @@ fn ocean_wave_mode(
 }
 
 impl OceanWaveMode {
+    /// `(sin, cos)` of the mode's phase at `x_m`, in `[0, width)`, and `y_m`.
+    fn phase_at(&self, x_m: f64, y_m: f64) -> (f64, f64) {
+        libm::sincos(
+            self.wave_number_x_per_m * x_m + self.wave_number_y_per_m * y_m + self.phase_rad,
+        )
+    }
+
     fn at_clock(self, world_tick: u64, world_tick_fraction: f32) -> Self {
         let phase_per_tick = self.angular_frequency_rad_s * TICK_SECONDS;
         Self {

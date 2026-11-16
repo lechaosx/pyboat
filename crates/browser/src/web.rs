@@ -1057,7 +1057,7 @@ struct SceneUniforms {
     baked_surface_texels: [u32; 4],
     baked_surface_level: [u32; 4],
     ocean_swell_clock: [f32; 4],
-    ocean_swell_knots: [[f32; 4]; 20],
+    ocean_swell_knots: [[f32; 4]; 30],
     ocean_wave_band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
     ocean_wave_table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
@@ -2274,6 +2274,7 @@ impl Renderer {
             match_seed,
             camera_m,
             view_height_m,
+            pixel_footprint_m,
             world_time_seconds,
         );
         self.queue.submit(Some(encoder.finish()));

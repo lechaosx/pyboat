@@ -52,6 +52,7 @@ fn procedural_match_environment(
         match_seed,
         tick,
         position_m.as_dvec2(),
+        0.0,
     )
 }
 
@@ -2855,10 +2856,14 @@ fn astronomical_tide_changes_authoritative_water_depth() {
         .flat_map(|x| (-32..=32).map(move |y| Vector::new(x as f32 * 128.0, y as f32 * 128.0)))
         .find(|position_m| procedural_terrain_elevation_m(seed, *position_m) < -3.0)
         .expect("representative region should contain deep water");
-    let high_tide_depth = procedural_match_environment(seed, 0, position_m).water_depth_m;
+    let still_depth_m = |tick| {
+        game::procedural_world_environment(WorldGeometry::default(), seed, tick, position_m)
+            .environment
+            .water_depth_m
+    };
+    let high_tide_depth = still_depth_m(0);
     let six_hours_in_ticks = 6 * 60 * 60 * 60;
-    let low_tide_depth =
-        procedural_match_environment(seed, six_hours_in_ticks, position_m).water_depth_m;
+    let low_tide_depth = still_depth_m(six_hours_in_ticks);
 
     assert!((high_tide_depth - low_tide_depth).abs() > 0.1);
 }
@@ -3159,7 +3164,9 @@ fn procedural_terrain_is_seeded_and_continuous() {
     );
     assert!((procedural_terrain_elevation_m(seed + 1, position_m) - elevation_m).abs() > 0.01);
     assert_eq!(
-        procedural_match_environment(seed, 600, position_m).water_depth_m,
+        game::procedural_world_environment(WorldGeometry::default(), seed, 600, position_m)
+            .environment
+            .water_depth_m,
         f64::from(procedural_water_depth_m(seed, 10.0, position_m))
     );
 }

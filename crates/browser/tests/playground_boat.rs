@@ -34,7 +34,13 @@ fn every_tick_uses_production_environment_and_current_heading_intent() {
             input[2],
             input[3],
         );
-        let environment = procedural_match_environment(geometry, 7, boat.tick(), motion.position_m);
+        let environment = procedural_match_environment(
+            geometry,
+            7,
+            boat.tick(),
+            motion.position_m,
+            motion.angle_rad,
+        );
         assert_eq!(boat.environment(), environment);
         let targets = sailor_targets(
             dinghy_parameters(),

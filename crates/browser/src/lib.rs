@@ -12,9 +12,9 @@ mod boat_texture;
 mod camera;
 mod cloth;
 pub use boat_asset::{
-    BOAT_IMAGES, BoatSpriteVertex, HULL_IMAGE, RIG_IMAGE, boat_mesh, boat_mesh_with_cloth,
-    boat_sheer_height_m, hull_sprite_mesh, rope_curve, sail_mesh, sail_mesh_with_cloth,
-    windsock_mesh, windsock_mesh_with_cloth,
+    BOAT_IMAGES, BoatSpriteVertex, DrawnBoatPose, HULL_IMAGE, RIG_IMAGE, boat_mesh,
+    boat_mesh_with_cloth, drawn_boat_pose, hull_sprite_mesh, rope_curve, sail_mesh,
+    sail_mesh_with_cloth, tilted_by_deck, windsock_mesh, windsock_mesh_with_cloth,
 };
 pub use boat_texture::{SpriteMip, sprite_mip_chain};
 pub use camera::DroneCamera;
@@ -49,7 +49,7 @@ pub use terrain_cache::{TerrainCache, TerrainCacheFrame};
 
 use game::{
     CloudFieldTimeCoordinates, OCEAN_WAVE_BAND_COUNT, OCEAN_WAVE_DIRECTIONS, OceanWaveMode,
-    WorldEnvironment, cloud_field_time_coordinates_interpolated, dinghy_parameters,
+    SeaComponents, WorldEnvironment, cloud_field_time_coordinates_interpolated, dinghy_parameters,
     match_environment, procedural_match_environment, procedural_world_environment,
     procedural_world_environment_interpolated, sailor_targets,
 };
@@ -369,7 +369,7 @@ pub const OCEAN_WAVE_BAND_ROTATION_ROWS: usize = OCEAN_WAVE_BAND_COUNT.div_ceil(
 #[derive(Clone, Copy)]
 pub struct OceanWaveUniforms {
     pub swell_clock: [f32; 4],
-    pub swell_knots: [[f32; 4]; 20],
+    pub swell_knots: [[f32; 4]; 30],
     pub band_rotations: [[f32; 4]; OCEAN_WAVE_BAND_ROTATION_ROWS],
     pub table: [[[f32; 4]; OCEAN_WAVE_DIRECTIONS]; OCEAN_WAVE_BAND_COUNT],
 }
@@ -398,7 +398,7 @@ pub fn ocean_wave_uniforms(
     OceanWaveUniforms {
         swell_clock: [
             table.swell_clock.season as f32,
-            table.swell_clock.height as f32,
+            table.swell_clock.steepness as f32,
             table.swell_clock.period as f32,
             table.swell_clock.direction as f32,
         ],
@@ -486,6 +486,8 @@ pub struct BoatScene {
     pub rudder_m: [Vector; 2],
     pub tiller_end_m: Vector,
     pub apparent_wind_velocity_m_s: Vector,
+    /// The sea the boat floats on, or `None` on still water.
+    pub sea: Option<SeaComponents>,
     pub windsock: Option<Windsock>,
     pub is_local: bool,
     pub recently_damaged: bool,
@@ -820,11 +822,15 @@ impl MultiplayerClient {
 
     pub fn view(&self) -> Option<DemoView> {
         let motion = self.local_motion()?;
+        // Compromise: depth, clearance and contact follow the whole sea under
+        // the hull, so they rise and fall with the swell, which the drawn
+        // surface leaves out.
         let environment = procedural_match_environment(
             self.world_geometry?,
             self.match_seed?,
             self.prediction_tick,
             motion.position_m,
+            motion.angle_rad,
         );
         let draft_m = dinghy_parameters().draft_m;
         let upwind_angle_rad = environment
@@ -883,20 +889,20 @@ impl MultiplayerClient {
                     let mut scene = boat_scene(dinghy_parameters(), motion);
                     scene.id = Some(boat.snapshot.id.clone());
                     scene.is_local = self.player_id() == Some(boat.snapshot.id.as_str());
-                    scene.apparent_wind_velocity_m_s =
-                        self.match_seed.map_or(Vector::ZERO, |match_seed| {
-                            apparent_flow(
-                                procedural_match_environment(
-                                    self.world_geometry.unwrap_or_default(),
-                                    match_seed,
-                                    self.prediction_tick,
-                                    motion.position_m,
-                                )
-                                .true_wind_velocity_m_s,
-                                motion.velocity_m_s,
-                            )
-                            .as_vec2()
-                        });
+                    if let Some(match_seed) = self.match_seed {
+                        let sample = procedural_world_environment(
+                            self.world_geometry.unwrap_or_default(),
+                            match_seed,
+                            self.prediction_tick,
+                            motion.position_m.as_vec2(),
+                        );
+                        scene.apparent_wind_velocity_m_s = apparent_flow(
+                            sample.environment.true_wind_velocity_m_s,
+                            motion.velocity_m_s,
+                        )
+                        .as_vec2();
+                        scene.sea = Some(sample.sea);
+                    }
                     if scene.is_local {
                         scene.windsock = self.match_seed.map(|_| Windsock {
                             anchor_m: scene.hull_m[0],
@@ -993,6 +999,7 @@ impl MultiplayerClient {
                 match_seed,
                 self.prediction_tick,
                 motion.position_m,
+                motion.angle_rad,
             );
             environments[boat.index] = environment;
             if !boat.wreck {
@@ -1432,6 +1439,7 @@ pub fn boat_scene(parameters: BoatParameters, motion: BoatMotion) -> BoatScene {
                 .transform_vector(PhysicsVector::new(parameters.tiller_length_m, 0.0)))
         .as_vec2(),
         apparent_wind_velocity_m_s: Vector::ZERO,
+        sea: None,
         windsock: None,
         is_local: false,
         recently_damaged: false,
@@ -1551,7 +1559,7 @@ mod tests {
                 .enumerate()
                 .map(|(index, x)| {
                     let position = PhysicsVector::new(x, 0.0);
-                    let water = procedural_match_environment(geometry, seed, tick, position)
+                    let water = procedural_match_environment(geometry, seed, tick, position, 0.0)
                         .true_water_velocity_m_s;
                     BoatSnapshot {
                         id: format!("player-{index}"),
@@ -1600,8 +1608,13 @@ mod tests {
                 let mut targets = Vec::new();
                 for index in 0..2 {
                     let motion = reference.motion(index);
-                    let environment =
-                        procedural_match_environment(geometry, seed, tick, motion.position_m);
+                    let environment = procedural_match_environment(
+                        geometry,
+                        seed,
+                        tick,
+                        motion.position_m,
+                        motion.angle_rad,
+                    );
                     environments.push(environment);
                     targets.push(Some(sailor_targets(
                         dinghy_parameters(),
@@ -1629,6 +1642,7 @@ mod tests {
                         seed,
                         tick + 1,
                         reference.motion(index).position_m,
+                        reference.motion(index).angle_rad,
                     )
                 })
                 .collect::<Vec<_>>();

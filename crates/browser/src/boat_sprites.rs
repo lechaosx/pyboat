@@ -5,8 +5,8 @@ use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::WorldGeometry;
 
 use crate::{
-    BOAT_IMAGES, BoatScene, ClothPose, boat_mesh_with_cloth, boat_sheer_height_m, hull_sprite_mesh,
-    sprite_mip_chain, windsock_mesh_with_cloth,
+    BOAT_IMAGES, BoatScene, ClothPose, boat_mesh_with_cloth, drawn_boat_pose, hull_sprite_mesh,
+    sprite_mip_chain, tilted_by_deck, windsock_mesh_with_cloth,
 };
 
 /// The scene pass's second target: the height above mean sea level of the
@@ -92,6 +92,17 @@ impl BoatSprites {
         scene_layout: &wgpu::BindGroupLayout,
         output_format: wgpu::TextureFormat,
     ) -> Result<Self, String> {
+        Self::with_images(device, queue, scene_layout, output_format, BOAT_IMAGES)
+    }
+
+    /// `new` drawing the PNG `images` in place of `BOAT_IMAGES`.
+    pub fn with_images(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene_layout: &wgpu::BindGroupLayout,
+        output_format: wgpu::TextureFormat,
+        images: [&[u8]; 5],
+    ) -> Result<Self, String> {
         let sprite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Boat sprite layout"),
             entries: &[
@@ -122,7 +133,7 @@ impl BoatSprites {
             ..Default::default()
         });
         let mut bind_groups = Vec::new();
-        for image in BOAT_IMAGES {
+        for image in images {
             let mut decoder = png::Decoder::new(std::io::Cursor::new(image));
             decoder
                 .set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -278,7 +289,8 @@ impl BoatSprites {
 
     /// Draws `scenes` over `view`, whose size is `output_size`, for a view
     /// `view_height_m` tall centred on `camera_m`, behind the surfaces in
-    /// `surface_height`, a `surface_height_texture` the scene pass wrote.
+    /// `surface_height`, a `surface_height_texture` the scene pass wrote at
+    /// a pixel footprint of `scene_footprint_m`.
     #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
@@ -296,6 +308,7 @@ impl BoatSprites {
         match_seed: u64,
         camera_m: Vector,
         view_height_m: f32,
+        scene_footprint_m: f32,
         time_seconds: f64,
     ) {
         let (vertices, batches) = sprite_vertices(
@@ -304,8 +317,9 @@ impl BoatSprites {
             world_geometry,
             match_seed,
             camera_m,
-            output_size.1,
+            output_size,
             view_height_m,
+            scene_footprint_m,
             time_seconds,
         );
         if vertices.is_empty() {
@@ -416,12 +430,23 @@ pub(crate) fn sprite_vertices(
     world_geometry: WorldGeometry,
     match_seed: u64,
     camera_m: Vector,
-    output_height: u32,
+    output_size: (u32, u32),
     view_height_m: f32,
+    scene_footprint_m: f32,
     time_seconds: f64,
 ) -> (Vec<Vertex>, Vec<SpriteBatch>) {
     let mut vertices = Vec::new();
     let mut batches: Vec<SpriteBatch> = Vec::new();
+    // A boat whose centre lies more than 8 m, twice its rig's reach, outside
+    // the view stays out of it: the drone camera, 1000 m up, draws raised
+    // points farther out, and points down to 10 m below sea level at most
+    // 1% nearer.
+    let reach = Vector::new(
+        view_height_m * output_size.0 as f32 / output_size.1 as f32,
+        view_height_m,
+    ) * 0.5
+        * 1.01
+        + Vector::splat(8.0);
     for (scene, &cloth) in scenes.iter().zip(cloth) {
         let state = if scene.wreck {
             1.0
@@ -430,8 +455,21 @@ pub(crate) fn sprite_vertices(
         } else {
             0.0
         };
-        let center_m = (scene.hull_m[0] + (scene.hull_m[7] + scene.hull_m[8]) * 0.5) * 0.5;
-        let sheer_m = boat_sheer_height_m(world_geometry, match_seed, time_seconds, center_m);
+        let stern_m = (scene.hull_m[7] + scene.hull_m[8]) * 0.5;
+        let center_m = (scene.hull_m[0] + stern_m) * 0.5;
+        if ((center_m - camera_m).abs() - reach).max_element() > 0.0 {
+            continue;
+        }
+        let forward = scene.hull_m[0] - stern_m;
+        let pose = drawn_boat_pose(
+            world_geometry,
+            match_seed,
+            time_seconds,
+            center_m,
+            f64::from(forward.y.atan2(forward.x)),
+            scene.sea.as_ref(),
+            scene_footprint_m,
+        );
         let sock = scene
             .windsock
             .map(|sock| windsock_mesh_with_cloth(sock, time_seconds, cloth))
@@ -441,7 +479,7 @@ pub(crate) fn sprite_vertices(
             .chain(boat_mesh_with_cloth(
                 scene,
                 time_seconds,
-                view_height_m / output_height as f32,
+                view_height_m / output_size.1 as f32,
                 cloth,
             ))
             .chain(sock)
@@ -459,9 +497,14 @@ pub(crate) fn sprite_vertices(
                     vertices: index..index + 1,
                 });
             }
-            let relative_m = sprite.position_m - camera_m;
+            let (offset_m, height_m) = tilted_by_deck(
+                sprite.position_m - center_m,
+                sprite.height_m,
+                pose.deck_slope,
+            );
+            let relative_m = center_m - camera_m + offset_m;
             vertices.push(Vertex {
-                position: [relative_m.x, relative_m.y, sheer_m + sprite.height_m],
+                position: [relative_m.x, relative_m.y, pose.sheer_m + height_m],
                 color: [
                     sprite.uv[0],
                     sprite.uv[1],

@@ -70,11 +70,14 @@ impl PlaygroundBoatDriver {
             self.boat.environment().water_depth_m,
         ]
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_mesh(
         &mut self,
         camera_x: f32,
         camera_y: f32,
+        output_width: u32,
         output_height: u32,
+        scene_height: u32,
         view_height: f32,
         time_seconds: f64,
     ) {
@@ -89,8 +92,9 @@ impl PlaygroundBoatDriver {
             self.boat.geometry,
             self.boat.seed,
             Vec2::new(camera_x, camera_y),
-            output_height,
+            (output_width, output_height),
             view_height,
+            crate::visual_pixel_footprint_m(view_height, scene_height),
             time_seconds,
         );
         self.vertices = bytemuck::cast_slice(&vertices).to_vec();

@@ -6,10 +6,10 @@ use std::{
 };
 
 use game::{
-    OceanState, OceanWaveForcing, Swell, background_swell, broad_landform_elevation_m,
+    OceanWaveForcing, Swell, Waterplane, background_swell, broad_landform_elevation_m,
     celestial_disc_visibility_at_height, celestial_lighting, celestial_lighting_at_height,
-    ocean_wave_state, procedural_solid_surface_elevation_m, procedural_terrain_elevation_m,
-    procedural_water_depth_m, procedural_world_environment,
+    hull_wave_fit, ocean_wave_state, procedural_solid_surface_elevation_m,
+    procedural_terrain_elevation_m, procedural_water_depth_m, procedural_world_environment,
     procedural_world_environment_interpolated, world_celestial_conditions,
 };
 use rapier2d_f64::glamx::Vec2 as Vector;
@@ -563,19 +563,20 @@ fn wave_surface_points(camera_m: Vector, count: usize) -> Vec<Vector> {
 }
 
 /// The water's surface the renderer draws at `wave_surface_points`, its
-/// height and slope at each. A millimetre view leaves every wave mode
-/// unfiltered by the pixel's footprint.
+/// height and slope at each, filtered by a pixel footprint of
+/// `footprint_m`, the height of the one-row view.
 fn rendered_wave_surfaces(
     world: WorldGeometry,
     camera_m: Vector,
     world_time_seconds: f64,
+    footprint_m: f32,
     count: usize,
 ) -> Vec<(f32, Vector)> {
     let pixels = render_diagnostic_image_with_view_at(
         world,
         camera_m,
         world_time_seconds,
-        0.001,
+        footprint_m,
         "lighting_wave_surface",
         3 * count as u32,
         1,
@@ -590,14 +591,16 @@ fn rendered_wave_surfaces(
         .collect()
 }
 
-/// The authoritative surface the renderer draws at a clock: the wind sea of
-/// the environment's resolved wind over its depth, without the swell, with
-/// the environment sample that sets it.
+/// The authoritative surface the renderer draws at a clock, filtered by a
+/// pixel footprint of `footprint_m`: the wind sea of the environment's
+/// resolved wind over its depth, without the swell, with the environment
+/// sample that sets it and the unfiltered sea's significant height.
 fn drawn_surface(
     world: WorldGeometry,
     time_s: f64,
     position_m: Vector,
-) -> (game::WorldEnvironment, OceanState) {
+    footprint_m: f32,
+) -> (game::WorldEnvironment, f32, game::SurfaceFit) {
     let tick_position = time_s * TICKS_PER_SECOND as f64;
     let tick = tick_position.floor() as u64;
     let fraction = (tick_position - tick as f64) as f32;
@@ -608,24 +611,43 @@ fn drawn_surface(
         swell: Swell::NONE,
         water_depth_m: sample.environment.water_depth_m as f32,
     };
+    let point = Waterplane {
+        heading_rad: 0.0,
+        length_m: 0.0,
+        beam_m: 0.0,
+    };
     (
         sample,
-        ocean_wave_state(world, SEED, tick, fraction, position_m, forcing),
+        ocean_wave_state(world, SEED, tick, fraction, position_m, forcing)
+            .significant_wave_height_m,
+        hull_wave_fit(
+            world,
+            SEED,
+            tick,
+            fraction,
+            position_m,
+            forcing,
+            point,
+            f64::from(footprint_m),
+        )
+        .wind_sea,
     )
 }
 
-/// The renderer draws the authoritative wind sea, leaving the swell out: at
-/// deep open-water points in a calm, a moderate sea and the two stormiest
-/// seas a survey finds, at a whole and a fractional clock, at least 150 of
-/// the 384 points, its height agrees with Rust's within 2 mm plus 0.05% of
-/// the significant height, and its slope within 0.001, under 1% of a fully
-/// developed sea's steepness, 2π Hs / λ_p = 0.16.
+/// The renderer draws the authoritative wind sea, leaving the swell out and
+/// filtering it by the pixel's footprint: at deep open-water points in a
+/// calm, a moderate sea and the two stormiest seas a survey finds, at a whole
+/// and a fractional clock, for footprints of a millimetre and of 240 m and
+/// 2 km views of 1080 and 540 rows, at least 450 of the 1152 points, its
+/// height agrees with Rust's within 2 mm plus 0.05% of the significant
+/// height, and its slope within 0.001, under 1% of a fully developed sea's
+/// steepness, 2π Hs / λ_p = 0.16.
 #[test]
 fn rendered_waves_match_authoritative_rust() {
     let world = WorldGeometry::default();
-    let deep = |time_s: f64, position_m: Vector| {
-        let (sample, drawn) = drawn_surface(world, time_s, position_m);
-        (sample.environment.water_depth_m >= 100.0).then_some(drawn)
+    let deep = |time_s: f64, position_m: Vector, footprint_m: f32| {
+        let (sample, height_m, drawn) = drawn_surface(world, time_s, position_m, footprint_m);
+        (sample.environment.water_depth_m >= 100.0).then_some((height_m, drawn))
     };
     let mut compared = 0;
     for time_s in [0.0, 4_321.37] {
@@ -637,7 +659,7 @@ fn rendered_waves_match_authoritative_rust() {
                 )
             })
             .filter_map(|position_m| {
-                deep(time_s, position_m).map(|drawn| (drawn.significant_wave_height_m, position_m))
+                deep(time_s, position_m, 0.001).map(|(height_m, _)| (height_m, position_m))
             })
             .collect();
         seas.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -648,31 +670,32 @@ fn rendered_waves_match_authoritative_rust() {
             seas[seas.len() - 1],
         ];
         assert!(cameras[3].0 >= 8.0, "stormiest sea {} m", cameras[3].0);
-        for (_, camera_m) in cameras {
-            let rendered = rendered_wave_surfaces(world, camera_m, time_s, 48);
-            for (position_m, (height, slope)) in
-                wave_surface_points(camera_m, 48).into_iter().zip(rendered)
-            {
-                let Some(drawn) = deep(time_s, position_m) else {
-                    continue;
-                };
-                let height_m = drawn.significant_wave_height_m;
-                let height_error = (height - drawn.surface_displacement_m).abs();
-                assert!(
-                    height_error <= 0.002 + 0.0005 * height_m,
-                    "height at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {height} m, Rust {} m",
-                    drawn.surface_displacement_m,
-                );
-                assert!(
-                    (slope - drawn.surface_slope).length() <= 0.001,
-                    "slope at {position_m:?}, {time_s} s, Hs {height_m} m: rendered {slope:?}, Rust {:?}",
-                    drawn.surface_slope,
-                );
-                compared += 1;
+        for footprint_m in [0.001, 240.0 / 1080.0, 2_000.0 / 540.0] {
+            for (_, camera_m) in cameras {
+                let rendered = rendered_wave_surfaces(world, camera_m, time_s, footprint_m, 48);
+                for (position_m, (height, slope)) in
+                    wave_surface_points(camera_m, 48).into_iter().zip(rendered)
+                {
+                    let Some((height_m, drawn)) = deep(time_s, position_m, footprint_m) else {
+                        continue;
+                    };
+                    let height_error = (f64::from(height) - drawn.height_m).abs();
+                    assert!(
+                        height_error <= 0.002 + 0.0005 * f64::from(height_m),
+                        "height at {position_m:?}, {time_s} s, footprint {footprint_m} m, Hs {height_m} m: rendered {height} m, Rust {} m",
+                        drawn.height_m,
+                    );
+                    assert!(
+                        (slope.as_dvec2() - drawn.slope).length() <= 0.001,
+                        "slope at {position_m:?}, {time_s} s, footprint {footprint_m} m, Hs {height_m} m: rendered {slope:?}, Rust {:?}",
+                        drawn.slope,
+                    );
+                    compared += 1;
+                }
             }
         }
     }
-    assert!(compared >= 150, "only {compared} deep points compared");
+    assert!(compared >= 450, "only {compared} deep points compared");
 }
 
 /// The swell the renderer's consumers read, run-up and the lab maps, is the

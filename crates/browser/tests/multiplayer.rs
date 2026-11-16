@@ -228,8 +228,13 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
     assert_eq!(client.health(), Some(100.0));
     assert_eq!(client.camera_m().unwrap().x, 7.0);
     assert_eq!(client.camera_m().unwrap().y, 2.0);
-    let environment =
-        procedural_match_environment(world_geometry, 42, 9, client.camera_m().unwrap().as_dvec2());
+    let environment = procedural_match_environment(
+        world_geometry,
+        42,
+        9,
+        client.camera_m().unwrap().as_dvec2(),
+        0.5,
+    );
     assert_eq!(
         client.view().unwrap().speed_m_s,
         (PhysicsVector::new(3.0, 4.0) - environment.true_water_velocity_m_s).length() as f32,
@@ -241,6 +246,7 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
             42,
             9,
             client.camera_m().unwrap().as_dvec2(),
+            0.5,
         )
     );
     assert_eq!(
@@ -310,6 +316,7 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
         match_seed,
         9,
         position_m.as_dvec2(),
+        0.5,
     )
     .water_depth_m;
     let draft_m = game::dinghy_parameters().draft_m;
@@ -354,7 +361,7 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
     assert_eq!(
         windsock.apparent_wind_velocity_m_s,
         apparent_flow(
-            procedural_match_environment(WorldGeometry::default(), 42, 9, position_m)
+            procedural_match_environment(WorldGeometry::default(), 42, 9, position_m, local.angle)
                 .true_wind_velocity_m_s,
             PhysicsVector::new(local.vx, local.vy),
         )
@@ -387,6 +394,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
             match_seed,
             9,
             position_m.as_dvec2(),
+            0.0,
         )
         .water_depth_m
     }
