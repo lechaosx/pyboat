@@ -43,12 +43,13 @@ fn adapting_luminance(adapted_gain: f32) -> f32 {
     return 0.2 * adapted_view_light(adapted_gain) * ZENITH_DAYLIGHT_LUX / PI;
 }
 
-// Share of vision that rods carry: one minus the photopic weight of CIE
-// 191:2010's mesopic model, 0.7670 + 0.3334 log10 L between 0.005 and 5
-// cd/m², for the adapting luminance L without the model's iteration.
+// A display approximation to colour loss, interpolated in log luminance
+// across the 0.001–10 cd/m² mesopic regime described by Jacobs et al.
+// (2015, §2.3, https://graphics.stanford.edu/papers/gazehdr/). Its broad
+// bounds retain some moonlit colour; this is not a rod/cone sensitivity fit.
 fn rod_vision_fraction(adapted_gain: f32) -> f32 {
     return 1.0 - clamp(
-        0.7670 + 0.3334 * log2(adapting_luminance(adapted_gain)) / log2(10.0),
+        (log2(adapting_luminance(adapted_gain)) / log2(10.0) + 3.0) / 4.0,
         0.0,
         1.0,
     );
@@ -130,11 +131,14 @@ fn adapted_view_color(linear_color: vec3<f32>, adaptation: EyeAdaptation, css_po
     }
     let vision_color = night_vision_color(cone_color, linear_color, rod_fraction);
     let signal = dot(vision_color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    // Relative uncertainty grows as photon signal falls. Multiplicative noise
-    // preserves black and has zero mean; the cap keeps faint hazards readable.
-    // 1.43e-6 sets the noise at unit scene light in place of a photon count:
-    // 1.07% on white under a clear moonless sky's light.
-    let amplitude = rod_fraction * min(0.12, 1.43e-6 / sqrt(max(signal, 1e-20)));
+    // An effective photon budget: 7 mm pupil, 10 arcmin circular patch,
+    // 100 ms integration and 10% absorption, with 555 nm light at 683 lm/W.
+    // Hecht et al. (1942, doi:10.1085/jgp.25.6.819) motivate the patch and
+    // absorption; pupil and integration are representative dark-view assumptions.
+    // These give 10480 photons/(cd/m²), or 3.91e8 per scene-light unit.
+    // The filtered uniform field only approximates retinal uncertainty, not
+    // Poisson statistics. The 12% ceiling preserves navigation detail and black.
+    let amplitude = rod_fraction / sqrt(1.0 / (0.12 * 0.12) + max(signal, 0.0) * 3.91e8);
     // CSS-pixel cells keep the grain's on-screen size the same at every graphics setting.
     let grid = css_position_px / 4.0;
     let cell = vec2<u32>(floor(grid));

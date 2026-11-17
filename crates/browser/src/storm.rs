@@ -2,6 +2,59 @@
 mod tests {
     use super::*;
     #[test]
+    fn lightning_has_irregular_repeated_strokes_without_preflash() {
+        let event = LightningEvent {
+            id: (0, 0, 0),
+            seconds: 10.0,
+            position_m: [0.0; 2],
+            strength: 1.0,
+            temperature_c: 15.0,
+        };
+        let profile = |event: LightningEvent| {
+            (0..801)
+                .map(|millisecond| {
+                    lightning_rows(
+                        WorldGeometry::default(),
+                        event.seconds + f64::from(millisecond) / 1000.0,
+                        [0.0; 2],
+                        vec![event],
+                    )[0][3]
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            lightning_rows(WorldGeometry::default(), 9.999, [0.0; 2], vec![event])[0][3],
+            0.0,
+        );
+        let profiles: Vec<_> = (0..16)
+            .map(|id| {
+                profile(LightningEvent {
+                    id: (id, 0, 0),
+                    ..event
+                })
+            })
+            .collect();
+        assert!(profiles.windows(2).any(|pair| pair[0] != pair[1]));
+        assert!(
+            profiles
+                .iter()
+                .all(|profile| profile.iter().all(|v| v.is_finite() && *v >= 0.0))
+        );
+        assert!(profiles.iter().all(|profile| profile[800] == 0.0));
+        let peaks = |profile: &[f32]| {
+            profile
+                .windows(3)
+                .filter(|v| v[1] > v[0] && v[1] >= v[2])
+                .count()
+        };
+        assert!(profiles.iter().any(|profile| peaks(profile) >= 2));
+        assert!(
+            profiles
+                .iter()
+                .any(|profile| peaks(profile) != peaks(&profiles[0]))
+        );
+    }
+    #[test]
     fn candidates_wrap_and_do_not_depend_on_query_order() {
         let g = WorldGeometry::default();
         let mut a = StormField::default();
@@ -296,6 +349,39 @@ fn unit(x: u64) -> f64 {
     (x >> 11) as f64 / ((1_u64 << 53) as f64)
 }
 
+fn lightning_envelope(event: LightningEvent, seconds: f64) -> f32 {
+    let age = seconds - event.seconds;
+    if !(0.0..0.8).contains(&age) {
+        return 0.0;
+    }
+    let mut state = hash(
+        hash(event.id.0 as u64)
+            ^ hash(event.id.1 as u64).rotate_left(19)
+            ^ hash(event.id.2).rotate_left(37),
+    );
+    let strokes = 1 + state % 5;
+    let mut onset = 0.0;
+    let mut light = 0.0;
+    for stroke in 0..strokes {
+        state = hash(state.wrapping_add(0x9e3779b97f4a7c15));
+        // Natural multi-stroke flashes commonly have 40–80 ms intervals:
+        // https://natural-resources.canada.ca/forests-forestry/wildland-fires/lightning-more-information
+        // The 18 ms decay broadens the optical impulse for frame-rate visibility;
+        // it represents cloud-scattered light on a display, not channel current.
+        let elapsed = age - onset;
+        if (0.0..0.06).contains(&elapsed) {
+            let strength = if stroke == 0 {
+                1.0
+            } else {
+                0.3 + 0.9 * unit(state)
+            };
+            light += strength * (-elapsed / 0.018).exp();
+        }
+        onset += 0.04 + 0.04 * unit(hash(state));
+    }
+    light as f32
+}
+
 /// Diffuse cloud-scattered flashes, represented as at most four light sources.
 /// The finite height and capped range are a presentation proxy for a channel
 /// illuminating its cloud, not a resolved lightning radiation model.
@@ -319,8 +405,7 @@ fn lightning_rows(
     let mut sources: Vec<_> = events
         .into_iter()
         .map(|event| {
-            let age = (seconds - event.seconds) as f32;
-            let envelope = (-age / 0.12).exp() + 0.45 * (-(age - 0.18).abs() / 0.045).exp();
+            let envelope = lightning_envelope(event, seconds);
             let d = event.displacement(geometry, camera);
             (
                 event.id,
