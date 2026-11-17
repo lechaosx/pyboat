@@ -45,6 +45,7 @@ fn multiplayer_client_discards_boats_omitted_from_interest() {
         players: None,
         boats: vec![boat("player-1", 0.0), boat("player-2", 10.0)],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     assert_eq!(client.player_id(), Some("player-1"));
@@ -58,6 +59,7 @@ fn multiplayer_client_discards_boats_omitted_from_interest() {
         players: None,
         boats: vec![boat("player-1", 1.0)],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     assert!(client.boat("player-2").is_none());
@@ -82,6 +84,7 @@ fn multiplayer_client_emits_clamped_sequenced_input_at_fixed_ticks() {
         players: None,
         boats: vec![boat("player-1", 0.0)],
         removed_player_ids: vec![],
+        impacts: Vec::new(),
     });
     client.set_motion_intent(2.0, -2.0);
 
@@ -166,6 +169,7 @@ fn multiplayer_client_keeps_cruising_and_marks_remote_boats_dead_after_disconnec
         players: None,
         boats: vec![local, remote],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     let connected_position_m = client.camera_m().unwrap();
 
@@ -204,6 +208,7 @@ fn destroyed_player_spectates_their_passive_wreck_without_sending_input() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     let initial_position_m = client.camera_m().unwrap();
     client.set_motion_intent(1.0, 1.0);
@@ -230,6 +235,7 @@ fn multiplayer_client_derives_camera_and_view_from_authoritative_state() {
         players: None,
         boats: vec![boat("player-1", 7.0), boat("player-2", 10.0)],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     assert_eq!(client.tick(), Some(9));
@@ -317,6 +323,7 @@ fn multiplayer_client_reports_depth_clearance_and_bottom_contact() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     let view = client.view().unwrap();
@@ -354,6 +361,7 @@ fn multiplayer_client_adds_one_local_apparent_wind_windsock() {
         players: None,
         boats: vec![local.clone(), boat("player-2", 10.0)],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     let scenes = client.scenes();
@@ -431,6 +439,7 @@ fn multiplayer_prediction_applies_seeded_grounding_resistance() {
             players: None,
             boats: vec![local],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         client.take_inputs(TICK_SECONDS);
         client.view().unwrap().speed_m_s
@@ -477,6 +486,7 @@ fn multiplayer_client_marks_recent_hits_and_wrecks_for_rendering() {
         players: None,
         boats: vec![local, wreck],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     let scenes = client.scenes();
@@ -516,6 +526,7 @@ fn multiplayer_prediction_does_not_control_wrecks() {
             players: None,
             boats: vec![local, wreck],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         client
     }
@@ -550,6 +561,7 @@ fn multiplayer_client_predicts_local_input_before_server_acknowledgement() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     client.set_motion_intent(1.0, 1.0);
@@ -583,6 +595,7 @@ fn multiplayer_client_does_not_replay_input_from_before_boat_ownership() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     assert_eq!(client.camera_m().unwrap().x, 0.0);
@@ -636,6 +649,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
         players: None,
         boats: vec![local.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     client.accept(ServerMessage::Snapshot {
         tick: 1,
@@ -644,6 +658,7 @@ fn multiplayer_client_predicts_nearby_collision_in_one_physics_world() {
         players: None,
         boats: vec![local, other],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     client.take_inputs(0.25);
@@ -697,6 +712,7 @@ fn multiplayer_prediction_matches_authoritative_cylinder_collision_rules() {
         players: None,
         boats: vec![local, other],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     client.take_inputs(0.25);
@@ -736,6 +752,7 @@ fn multiplayer_client_extrapolates_distant_boats_for_at_most_quarter_second() {
         players: None,
         boats: vec![local, distant],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     let initial_bow_x = client.scenes()[1].hull_m[0].x;
 
@@ -767,6 +784,7 @@ fn multiplayer_client_smooths_authoritative_position_corrections() {
         players: None,
         boats: vec![local.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     local.x = 1.0;
 
@@ -777,6 +795,7 @@ fn multiplayer_client_smooths_authoritative_position_corrections() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     assert!(client.camera_m().unwrap().x.abs() < 1.0e-4);
@@ -806,6 +825,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
         players: None,
         boats: vec![local.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     local.angle = -std::f64::consts::PI + 0.05;
     client.accept(ServerMessage::Snapshot {
@@ -815,6 +835,7 @@ fn multiplayer_client_smooths_rotation_across_the_angle_wrap() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     client.take_inputs(0.05);
@@ -853,6 +874,7 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
         players: None,
         boats: vec![local.clone(), remote.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     client.take_inputs(0.05);
     let before_enter = client.scenes()[1].hull_m[0];
@@ -867,6 +889,7 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
         players: None,
         boats: vec![local.clone(), remote.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     let at_enter = client.scenes()[1].hull_m[0];
     assert!((at_enter - before_enter).length() < 1.0e-4);
@@ -883,6 +906,7 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
         players: None,
         boats: vec![local, remote],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     let at_leave = client.scenes()[1].hull_m[0];
     assert!((at_leave - before_leave).length() < 1.0e-4);
@@ -919,6 +943,7 @@ fn multiplayer_client_preserves_visual_velocity_across_kinematic_corrections() {
         players: None,
         boats: vec![local.clone(), remote.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     client.take_inputs(0.05);
     let before = client.scenes()[1].hull_m[0].x;
@@ -932,6 +957,7 @@ fn multiplayer_client_preserves_visual_velocity_across_kinematic_corrections() {
         players: None,
         boats: vec![local, remote],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     client.take_inputs(0.001);
 
@@ -959,6 +985,7 @@ fn multiplayer_correction_stays_local_when_authority_crosses_a_seam() {
         players: None,
         boats: vec![local.clone()],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
     local.x = -3_999.9;
     client.accept(ServerMessage::Snapshot {
@@ -968,6 +995,7 @@ fn multiplayer_correction_stays_local_when_authority_crosses_a_seam() {
         players: None,
         boats: vec![local],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     client.take_inputs(0.05);
@@ -1010,6 +1038,7 @@ fn multiplayer_renders_longitude_neighbors_in_the_local_minimum_image() {
         players: None,
         boats: vec![local, remote],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     let scenes = client.scenes();
@@ -1043,6 +1072,7 @@ fn multiplayer_does_not_fold_north_and_south_poles_together() {
         players: None,
         boats: vec![local, remote],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     });
 
     let scenes = client.scenes();
@@ -1082,6 +1112,7 @@ fn spectator_and_spawn_camera_show_neighbors_across_the_longitude_seam() {
             players: None,
             boats: vec![first.clone(), second.clone()],
             removed_player_ids: vec![],
+            impacts: Vec::new(),
         });
         for camera in [
             Vector::new(3999.0, 0.0),

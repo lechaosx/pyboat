@@ -216,6 +216,9 @@ struct GameMatch {
     simulation: SharedSimulation,
     players: Vec<Player>,
     active_hull_contacts: HashSet<(String, String)>,
+    next_impact_id: u64,
+    impacts: Vec<protocol::HullImpact>,
+    audible_hull_contacts: HashSet<(String, String)>,
     match_seed: u64,
     world_geometry: WorldGeometry,
     spawn_origin_m: Option<Vector>,
@@ -234,6 +237,9 @@ impl GameMatch {
             simulation: SharedSimulation::new_with_world_geometry(world_geometry),
             players: Vec::new(),
             active_hull_contacts: HashSet::new(),
+            next_impact_id: 1,
+            impacts: Vec::new(),
+            audible_hull_contacts: HashSet::new(),
             match_seed,
             world_geometry,
             spawn_origin_m: None,
@@ -456,6 +462,8 @@ impl GameMatch {
     }
 
     fn apply_hull_contacts(&mut self, contacts: &[HullContact]) {
+        self.impacts
+            .retain(|impact| self.tick.saturating_sub(impact.tick) <= 30);
         let mut active_hull_contacts = HashSet::with_capacity(contacts.len());
         for contact in contacts {
             let first_player_id = self.players[contact.first_boat].id.clone();
@@ -466,7 +474,28 @@ impl GameMatch {
                 (second_player_id.clone(), first_player_id.clone())
             };
             let contact_began = !self.active_hull_contacts.contains(&contact_pair);
-            active_hull_contacts.insert(contact_pair);
+            active_hull_contacts.insert(contact_pair.clone());
+            if contact.impulse_magnitude_n_s > 0.0
+                && !self.audible_hull_contacts.contains(&contact_pair)
+            {
+                self.audible_hull_contacts.insert(contact_pair);
+                let motion = self.simulation.motion(contact.first_boat);
+                let (sin, cos) = motion.angle_rad.sin_cos();
+                let local = contact.first_contact_local_m;
+                let position = motion.position_m
+                    + Vector::new(cos * local.x - sin * local.y, sin * local.x + cos * local.y);
+                let impact = protocol::HullImpact {
+                    id: self.next_impact_id,
+                    tick: self.tick,
+                    position_m: position.into(),
+                    impulse_n_s: contact.impulse_magnitude_n_s as f32,
+                };
+                self.next_impact_id += 1;
+                if self.impacts.len() == 16 {
+                    self.impacts.remove(0);
+                }
+                self.impacts.push(impact);
+            }
             if !contact_began {
                 continue;
             }
@@ -481,6 +510,8 @@ impl GameMatch {
                 contact.second_contact_local_m.x,
             );
         }
+        self.audible_hull_contacts
+            .retain(|pair| active_hull_contacts.contains(pair));
         self.active_hull_contacts = active_hull_contacts;
     }
 
@@ -558,6 +589,7 @@ impl GameMatch {
             players: None,
             boats,
             removed_player_ids: Vec::new(),
+            impacts: self.impacts.clone(),
         }
     }
 }
@@ -1007,6 +1039,9 @@ mod tests {
             simulation,
             players,
             active_hull_contacts: HashSet::new(),
+            next_impact_id: 1,
+            impacts: Vec::new(),
+            audible_hull_contacts: HashSet::new(),
             match_seed: 42,
             world_geometry,
             spawn_origin_m: None,
@@ -1065,6 +1100,9 @@ mod tests {
                 })
                 .collect(),
             active_hull_contacts: HashSet::new(),
+            next_impact_id: 1,
+            impacts: Vec::new(),
+            audible_hull_contacts: HashSet::new(),
             match_seed: 42,
             world_geometry,
             spawn_origin_m: None,
@@ -1086,6 +1124,12 @@ mod tests {
                 });
             game_match.apply_hull_contacts(&contacts);
             game_match.tick += 1;
+        }
+        if maximum_impulse_n_s > 0.0 {
+            assert!(
+                !game_match.impacts.is_empty(),
+                "solver contacts must reach snapshot audio events"
+            );
         }
         (
             maximum_impulse_n_s,
@@ -1310,6 +1354,59 @@ mod tests {
         assert!((losses[0] - 30.0).abs() < 1.0e-5);
         assert!((losses[1] - 60.0).abs() < 1.0e-5);
         assert!((losses[2] - 100.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn gentle_contacts_publish_one_shared_impact_without_damage() {
+        let mut game_match = GameMatch::new(42);
+        assert_eq!(game_match.next_impact_id, 1);
+        game_match.add_player("player-1".into(), 1);
+        game_match.add_player("player-2".into(), 2);
+        let contact = HullContact {
+            first_boat: 0,
+            second_boat: 1,
+            impulse_magnitude_n_s: 12.0,
+            first_contact_local_m: Vector::new(1.0, 0.0),
+            second_contact_local_m: Vector::ZERO,
+        };
+        game_match.apply_hull_contacts(&[contact]);
+        assert_eq!(game_match.players[0].health, BOAT_MAX_HEALTH);
+        assert_eq!(game_match.players[0].last_hit_tick, None);
+        assert_eq!(game_match.impacts.len(), 1);
+        assert_eq!(game_match.impacts[0].impulse_n_s, 12.0);
+        game_match.apply_hull_contacts(&[contact]);
+        assert_eq!(game_match.impacts.len(), 1);
+        game_match.apply_hull_contacts(&[]);
+        game_match.tick += 1;
+        game_match.apply_hull_contacts(&[contact]);
+        assert_eq!(game_match.impacts.len(), 2);
+        assert_ne!(game_match.impacts[0].id, game_match.impacts[1].id);
+        let message = game_match.snapshot_for("player-1", &[0, 1]);
+        let decoded =
+            protocol::decode_server_message(&protocol::encode_server_message(&message).unwrap())
+                .unwrap();
+        assert_eq!(decoded, message);
+        if let ServerMessage::Snapshot { impacts, .. } = decoded {
+            assert_eq!(impacts.len(), 2);
+        }
+
+        game_match.players[0].wreck = true;
+        for _ in 0..20 {
+            game_match.apply_hull_contacts(&[]);
+            game_match.apply_hull_contacts(&[contact]);
+        }
+        assert_eq!(game_match.impacts.len(), 16);
+        game_match.tick += 31;
+        game_match.apply_hull_contacts(&[]);
+        assert!(game_match.impacts.is_empty());
+        let zero = HullContact {
+            impulse_magnitude_n_s: 0.0,
+            ..contact
+        };
+        game_match.apply_hull_contacts(&[zero]);
+        assert!(game_match.impacts.is_empty());
+        game_match.apply_hull_contacts(&[contact]);
+        assert_eq!(game_match.impacts.len(), 1);
     }
 
     #[test]

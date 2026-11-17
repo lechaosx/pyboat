@@ -69,3 +69,45 @@ test('thunder is a bounded transient and cancellation removes queued channels', 
   dsp.resetThunder(); dsp.render(l,r);
   assert.ok(l.every(value => value === 0) && r.every(value => value === 0));
 });
+
+test('nearest-boat reordering preserves source tails', () => {
+  const boat = (id: number, x: number) => ({ id, x, y: 0, speed: 3, angular: 1, load: 0, flutter: 0, heave: 0 });
+  const state = { wind: 0, waves: 0, rain: 0, water: 0, boats: [boat(1, -3), boat(2, 4)], shores: [] };
+  const a = new SeaSoundDSP(48000, 200), b = new SeaSoundDSP(48000, 200);
+  const l = new Float32Array(48000), r = new Float32Array(48000);
+  for (const dsp of [a, b]) { dsp.setState(state); dsp.render(l, r); }
+  a.setState(state);
+  b.setState({ ...state, boats: [...state.boats].reverse() });
+  const al = new Float32Array(128), ar = new Float32Array(128), bl = new Float32Array(128), br = new Float32Array(128);
+  a.render(al, ar); b.render(bl, br);
+  assert.deepEqual(al, bl); assert.deepEqual(ar, br);
+});
+
+test('hull impacts preserve distance and stereo, and stop on suspension', () => {
+  function impact(x: number): number[] {
+    const dsp = new SeaSoundDSP(48000, 7);
+    dsp.layers = [0, 0, 0, 0, 0, 0, 0, 1];
+    dsp.queueImpact({ x, y: 0, strength: 0.3 });
+    const l = new Float32Array(4800), r = new Float32Array(4800);
+    dsp.render(l, r);
+    const energy = (samples: Float32Array) => samples.reduce((sum, x) => sum + x*x, 0);
+    const result = [energy(l), energy(r)];
+    dsp.resetEvents(); dsp.render(l, r);
+    assert.ok(l.every(x => x === 0) && r.every(x => x === 0));
+    return result;
+  }
+  const near = impact(4), far = impact(80);
+  assert.ok(near[1]! > near[0]!);
+  assert.ok(near[1]! > far[1]! && far[1]! > 0);
+});
+
+test('dry or frozen hulls do not lap, while wet hulls can be heard from land', () => {
+  function hull(water: number): boolean {
+    const dsp = new SeaSoundDSP(48000, 5);
+    dsp.layers = [0, 0, 1, 0, 0, 0, 0, 0];
+    dsp.setState({ wind: 0, waves: 0, rain: 0, water: 0, boats: [{ id: 1, x: 5, y: 0, speed: 0, angular: 0, load: 0, flutter: 0, heave: 0, water }], shores: [] });
+    const l = new Float32Array(480000), r = new Float32Array(480000);
+    dsp.render(l, r); return l.some(x => x !== 0);
+  }
+  assert.equal(hull(0), false); assert.equal(hull(1), true);
+});

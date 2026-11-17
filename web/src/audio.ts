@@ -2,13 +2,13 @@ import workletUrl from './audio-worklet.js?worker&url';
 import type { SoundState } from './audio-dsp.js';
 
 const storageKey = 'sound-settings';
-export const soundLayers = ['Wind', 'Sea and shore', 'Hull water', 'Wooden creaks', 'Sail flutter', 'Rain', 'Thunder'] as const;
+export const soundLayers = ['Wind', 'Sea and shore', 'Hull water', 'Wooden creaks', 'Sail flutter', 'Rain', 'Thunder', 'Hull impacts'] as const;
 
 export function decodeSoundScene(data: Float32Array): SoundState {
   const state: SoundState = { wind: data[0] ?? 0, waves: data[1] ?? 0, rain: data[2] ?? 0, water: data[3] ?? 0, boats: [], shores: [] };
   for (let i = 0; i < 4; i++) {
     const start = 8 + i * 9;
-    if (data[start]) state.boats.push({ id: data[start]!, x: data[start + 1]!, y: data[start + 2]!, speed: data[start + 3]!, angular: data[start + 4]!, load: data[start + 5]!, flutter: data[start + 6]!, heave: data[start + 7]! });
+    if (data[start]) state.boats.push({ id: data[start]!, x: data[start + 1]!, y: data[start + 2]!, speed: data[start + 3]!, angular: data[start + 4]!, load: data[start + 5]!, flutter: data[start + 6]!, heave: data[start + 7]!, water: data[start + 8]! });
     const shore = 44 + i * 3;
     if (data[shore + 2]) state.shores.push({ x: data[shore]!, y: data[shore + 1]!, strength: data[shore + 2]! });
   }
@@ -66,7 +66,7 @@ export class SailingAudio {
     window.addEventListener('blur', () => this.syncPlayback());
     window.addEventListener('focus', () => this.syncPlayback());
     document.addEventListener('visibilitychange', () => this.syncPlayback());
-    window.addEventListener('pagehide', event => { this.wasRunning = false; this.processor?.port.postMessage({ resetThunder: true }); if (event.persisted) void this.context?.suspend(); else void this.context?.close(); });
+    window.addEventListener('pagehide', event => { this.wasRunning = false; this.processor?.port.postMessage({ resetEvents: true }); if (event.persisted) void this.context?.suspend(); else void this.context?.close(); });
     window.addEventListener('pageshow', () => this.syncPlayback());
   }
   private save(): void { try { localStorage.setItem(storageKey, JSON.stringify({ volume: this.volume, muted: this.muted })); } catch { /* Changes still apply this visit. */ } }
@@ -74,7 +74,7 @@ export class SailingAudio {
     if (!this.master || !this.context) return;
     this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.context.currentTime, 0.03);
     window.clearTimeout(this.pauseTimer);
-    if (this.muted || this.volume === 0) { this.processor?.port.postMessage({ resetThunder: true }); this.wasRunning = false; this.pauseTimer = window.setTimeout(() => this.syncPlayback(), 180); }
+    if (this.muted || this.volume === 0) { this.processor?.port.postMessage({ resetEvents: true }); this.wasRunning = false; this.pauseTimer = window.setTimeout(() => this.syncPlayback(), 180); }
     else this.syncPlayback();
   }
   async start(): Promise<void> {
@@ -108,7 +108,7 @@ export class SailingAudio {
   private syncPlayback(): void {
     if (!this.context || !this.enabled) return;
     if (this.active && !this.muted && this.volume > 0 && !document.hidden && document.hasFocus()) void this.context.resume().catch(() => { this.enable.hidden = false; });
-    else { this.processor?.port.postMessage({ resetThunder: true }); void this.context.suspend().catch(() => {}); this.wasRunning = false; }
+    else { this.processor?.port.postMessage({ resetEvents: true }); void this.context.suspend().catch(() => {}); this.wasRunning = false; }
   }
   due(now: number): boolean {
     if (!this.enabled || this.muted || this.volume === 0 || !this.active || document.hidden || !document.hasFocus() || this.context?.state !== 'running' || now < this.nextUpdate) return false;
@@ -118,7 +118,10 @@ export class SailingAudio {
   }
   update(scene: Float32Array): void {
     const thunder = [];
-    for (let i = 57; i + 3 < scene.length; i += 4) thunder.push({ x: scene[i]!, y: scene[i+1]!, strength: scene[i+2]!, distance: scene[i+3]! });
-    this.processor?.port.postMessage({ state: decodeSoundScene(scene), elapsedSeconds: this.elapsedSeconds, resetThunder: Boolean(scene[56]), thunder });
+    let offset = 59;
+    for (let n = 0; n < (scene[57] ?? 0); n++, offset += 4) thunder.push({ x: scene[offset]!, y: scene[offset+1]!, strength: scene[offset+2]!, distance: scene[offset+3]! });
+    const impacts = [];
+    for (let n = 0; n < (scene[58] ?? 0); n++, offset += 3) impacts.push({ x: scene[offset]!, y: scene[offset+1]!, strength: scene[offset+2]! });
+    this.processor?.port.postMessage({ state: decodeSoundScene(scene), elapsedSeconds: this.elapsedSeconds, resetEvents: Boolean(scene[56]), thunder, impacts });
   }
 }

@@ -17,6 +17,7 @@ mod tests {
             true,
             rapier2d_f64::prelude::Vector::ZERO,
             &[],
+            &[],
         );
         let second = sampler.sample(
             geometry,
@@ -27,6 +28,7 @@ mod tests {
             0,
             true,
             rapier2d_f64::prelude::Vector::ZERO,
+            &[],
             &[],
         );
         assert_eq!(first[..56], second[..56]);
@@ -60,13 +62,14 @@ mod tests {
                 realtime,
                 listener.into(),
                 &[],
+                &[],
             )
         };
         sample(arrival - 0.1, 0.0, false);
         let resumed = sample(arrival + 0.1, 0.2, true);
         assert_eq!(
             resumed.len(),
-            57,
+            59,
             "realtime resume must not replay an arrival from accelerated playback"
         );
         assert_eq!(resumed[56], 1.0, "resume cancels already-playing channels");
@@ -77,6 +80,139 @@ mod tests {
         assert!(coast.iter().any(|p| (p.x - 25.0).abs() < 2.0));
         assert!(find_shores(Vec2::ZERO, 0.0, |_| -100.0).is_empty());
         assert!(!find_shores(Vec2::new(30.0, 0.0), 0.0, |p| p.x - 25.0).is_empty());
+    }
+
+    #[test]
+    fn impacts_are_once_only_and_do_not_replay_on_join_resume_or_rewind() {
+        let mut sampler = SoundSampler::default();
+        let impact = protocol::HullImpact {
+            id: 1,
+            tick: 101,
+            position_m: [0.0, 0.0],
+            impulse_n_s: 12.0,
+        };
+        let mut sample = |tick, epoch, impacts: &[protocol::HullImpact]| {
+            sampler.sample(
+                WorldGeometry::default(),
+                42,
+                tick,
+                0.0,
+                tick as f64 / 60.0,
+                epoch,
+                true,
+                rapier2d_f64::prelude::Vector::ZERO,
+                &[],
+                impacts,
+            )
+        };
+        assert_eq!(sample(100, 1, &[])[58], 0.0);
+        assert_eq!(sample(102, 1, &[impact.clone(), impact.clone()])[58], 1.0);
+        assert_eq!(sample(103, 1, std::slice::from_ref(&impact))[58], 0.0);
+        assert_eq!(sample(100, 1, std::slice::from_ref(&impact))[58], 0.0);
+        assert_eq!(sample(105, 1, std::slice::from_ref(&impact))[58], 0.0);
+        assert_eq!(sample(104, 2, std::slice::from_ref(&impact))[58], 0.0);
+        assert_eq!(sample(90, 2, &[])[58], 0.0);
+        assert_eq!(sample(140, 2, &[impact])[58], 0.0);
+    }
+
+    #[test]
+    fn a_new_world_resets_impact_time_and_ids() {
+        let mut sampler = SoundSampler::default();
+        let geometry = WorldGeometry::default();
+        let listener = rapier2d_f64::prelude::Vector::ZERO;
+        sampler.sample(geometry, 1, 1000, 0.0, 0.0, 1, true, listener, &[], &[]);
+        sampler.sample(geometry, 2, 100, 0.0, 1.0, 1, true, listener, &[], &[]);
+        let impact = protocol::HullImpact {
+            id: 1,
+            tick: 101,
+            position_m: [0.0, 0.0],
+            impulse_n_s: 12.0,
+        };
+        assert_eq!(
+            sampler.sample(
+                geometry,
+                2,
+                102,
+                0.0,
+                1.05,
+                1,
+                true,
+                listener,
+                &[],
+                std::slice::from_ref(&impact)
+            )[58],
+            1.0
+        );
+        assert_eq!(
+            sampler.sample(
+                geometry,
+                2,
+                103,
+                0.0,
+                1.10,
+                1,
+                true,
+                listener,
+                &[],
+                &[impact]
+            )[58],
+            0.0
+        );
+    }
+
+    #[test]
+    fn listener_boat_velocity_and_contacts_use_the_nearest_longitude_image() {
+        let geometry = WorldGeometry::default();
+        let velocity = rapier2d_f64::prelude::Vector::new(4.0, -2.0);
+        let motion = BoatMotion {
+            position_m: [geometry.width_m(), 0.0].into(),
+            velocity_m_s: velocity,
+            angle_rad: 0.0,
+            angular_velocity_rad_s: 0.0,
+            sail_angle_rad: 0.0,
+            sail_angular_velocity_rad_s: 0.0,
+            rudder_angle_rad: 0.0,
+            rudder_angular_velocity_rad_s: 0.0,
+        };
+        let mut sampler = SoundSampler::default();
+        let expected =
+            procedural_world_environment_interpolated(geometry, 42, 100, 0.0, Vec2::ZERO)
+                .environment
+                .true_wind_velocity_m_s
+                - velocity;
+        let first = sampler.sample(
+            geometry,
+            42,
+            100,
+            0.0,
+            0.0,
+            1,
+            true,
+            [0.0, 0.0].into(),
+            &[(1, motion)],
+            &[],
+        );
+        assert!((first[0] - expected.length() as f32).abs() < 1e-5);
+        let impact = protocol::HullImpact {
+            id: 1,
+            tick: 101,
+            position_m: [geometry.width_m() + 3.0, 0.0],
+            impulse_n_s: 12.0,
+        };
+        let next = sampler.sample(
+            geometry,
+            42,
+            102,
+            0.0,
+            0.05,
+            1,
+            true,
+            [0.0, 0.0].into(),
+            &[(1, motion)],
+            &[impact],
+        );
+        assert_eq!(next[58], 1.0);
+        assert_eq!(next[next.len() - 3], 3.0);
     }
 }
 
@@ -145,12 +281,15 @@ pub(crate) struct SoundSampler {
     storms: crate::StormField,
     thunder: crate::storm::ThunderCursor,
     playback_epoch: u32,
+    impact_ids: std::collections::HashMap<u64, u64>,
+    impact_start_tick: Option<u64>,
+    impact_last_tick: u64,
 }
 
 impl SoundSampler {
     // Packed presentation boundary: 8 environment values, four 9-value boats,
-    // then four 3-value shores, a thunder-reset flag, and 4-value thunder
-    // arrivals (x, y, strength, slant distance). Positions are listener-relative.
+    // then four 3-value shores, a reset flag, thunder/impact counts,
+    // 4-value thunder arrivals and 3-value impacts. Positions are listener-relative.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sample(
         &mut self,
@@ -163,6 +302,7 @@ impl SoundSampler {
         realtime: bool,
         listener: rapier2d_f64::prelude::Vector,
         boats: &[(u32, BoatMotion)],
+        impacts: &[protocol::HullImpact],
     ) -> Vec<f32> {
         let center = listener.as_vec2();
         let environment =
@@ -170,7 +310,11 @@ impl SoundSampler {
         let weather = environment.weather;
         let velocity = boats
             .iter()
-            .find(|(_, motion)| (motion.position_m - listener).length_squared() < 0.01)
+            .find(|(_, motion)| {
+                let delta =
+                    geometry.minimum_image_displacement_m((motion.position_m - listener).into());
+                delta[0].hypot(delta[1]) < 0.1
+            })
             .map_or(rapier2d_f64::prelude::Vector::ZERO, |(_, motion)| {
                 motion.velocity_m_s
             });
@@ -209,7 +353,7 @@ impl SoundSampler {
                 -angle.sin(),
                 angle.cos(),
             ));
-            let load = across / (across * across + 4.0).sqrt();
+            let load = across / (across * across + 25.0).sqrt();
             let water = open_water(
                 local.environment.water_depth_m as f32,
                 local.surface_climate.polar_ice_closure,
@@ -222,7 +366,8 @@ impl SoundSampler {
                 displacement[0] as f32,
                 displacement[1] as f32,
                 speed * water,
-                motion.angular_velocity_rad_s as f32,
+                (motion.angular_velocity_rad_s.abs() + motion.sail_angular_velocity_rad_s.abs())
+                    as f32,
                 load as f32,
                 (wind.length() / (wind.length() + 2.0) * (1.0 - load.abs())) as f32,
                 local.ocean.surface_displacement_m,
@@ -288,15 +433,21 @@ impl SoundSampler {
                 ]);
             }
         }
-        if playback_epoch != self.playback_epoch
+        let reset = playback_epoch != self.playback_epoch
             || !realtime
-            || self.storms.identity() != Some((geometry, seed))
-        {
+            || self.storms.identity() != Some((geometry, seed));
+        if reset || self.impact_start_tick.is_none() {
+            self.impact_ids.clear();
+            self.impact_start_tick = Some(tick);
+            self.impact_last_tick = tick;
+        }
+        self.impact_last_tick = self.impact_last_tick.max(tick);
+        if reset {
             self.thunder = crate::storm::ThunderCursor::default();
             self.playback_epoch = playback_epoch;
         }
         if !realtime {
-            result.push(1.0);
+            result.extend([1.0, 0.0, 0.0]);
             return result;
         }
         let events = self.storms.events(
@@ -309,9 +460,33 @@ impl SoundSampler {
         let arrivals =
             self.thunder
                 .advance(seconds, now_seconds, &events, geometry, listener.into());
-        result.push(f32::from(self.thunder.reset));
+        result.extend([f32::from(self.thunder.reset), arrivals.len() as f32, 0.0]);
         for thunder in arrivals {
             result.extend(thunder);
+        }
+        self.impact_ids
+            .retain(|_, event_tick| self.impact_last_tick.saturating_sub(*event_tick) <= 60);
+        for impact in impacts {
+            if impact.tick <= self.impact_start_tick.unwrap_or(tick)
+                || impact.tick > tick
+                || tick.saturating_sub(impact.tick) > 30
+                || self.impact_ids.insert(impact.id, impact.tick).is_some()
+            {
+                continue;
+            }
+            let delta = geometry.minimum_image_displacement_m([
+                impact.position_m[0] - listener.x,
+                impact.position_m[1] - listener.y,
+            ]);
+            if delta[0].hypot(delta[1]) > 180.0 {
+                continue;
+            }
+            result[58] += 1.0;
+            result.extend([
+                delta[0] as f32,
+                delta[1] as f32,
+                (impact.impulse_n_s / (impact.impulse_n_s + 100.0)).sqrt(),
+            ]);
         }
         result
     }
@@ -372,6 +547,7 @@ impl crate::MultiplayerClient {
             true,
             listener,
             &boats,
+            &self.impacts,
         )
     }
 }

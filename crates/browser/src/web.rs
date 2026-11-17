@@ -3540,6 +3540,7 @@ impl PlaygroundSoundScene {
             realtime,
             rapier2d_f64::prelude::Vector::new(x, y),
             &boats,
+            &[],
         ))
     }
 }

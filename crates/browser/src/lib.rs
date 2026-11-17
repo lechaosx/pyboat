@@ -91,7 +91,7 @@ mod web;
 pub const DEFAULT_VIEW_HEIGHT_M: f32 = 15.0;
 
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) const MAX_SERVER_MESSAGE_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_SERVER_MESSAGE_BYTES: usize = 32 * 1024;
 
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn append_reliable_server_message_chunk(message: &mut Vec<u8>, chunk: &[u8]) -> bool {
@@ -576,6 +576,7 @@ pub struct MultiplayerClient {
     session_state: ClientSessionState,
     boats: HashMap<String, ReplicatedBoat>,
     snapshot_received_at_seconds: HashMap<String, f64>,
+    impacts: Vec<protocol::HullImpact>,
     tick: Option<u64>,
     prediction_tick: u64,
     motion_intent: MotionIntent,
@@ -617,6 +618,7 @@ impl MultiplayerClient {
             session_state: ClientSessionState::AwaitingWelcome,
             boats: HashMap::new(),
             snapshot_received_at_seconds: HashMap::new(),
+            impacts: Vec::new(),
             tick: None,
             prediction_tick: 0,
             motion_intent: MotionIntent::default(),
@@ -654,6 +656,7 @@ impl MultiplayerClient {
                 players,
                 boats,
                 removed_player_ids: _,
+                impacts,
             } => {
                 if self.session_state != ClientSessionState::Active {
                     return;
@@ -694,6 +697,7 @@ impl MultiplayerClient {
                     self.boats
                         .insert(snapshot.id.clone(), ReplicatedBoat { snapshot });
                 }
+                self.impacts = impacts;
                 self.tick = Some(tick);
                 self.rebuild_prediction(&visible_player_ids);
                 self.start_correction(previous_motion, &visible_player_ids);
@@ -1580,6 +1584,7 @@ mod tests {
                 acknowledged_input: Some(0),
             }],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         client.set_player_input(0.0, 0.0, 0.31, -0.47);
         let messages = client.take_inputs(TICK_SECONDS);
@@ -1644,6 +1649,7 @@ mod tests {
                 players: None,
                 boats: snapshots,
                 removed_player_ids: Vec::new(),
+                impacts: Vec::new(),
             };
             let mut client = MultiplayerClient::new();
             client.accept(ServerMessage::Welcome {
@@ -1757,6 +1763,7 @@ mod tests {
                 acknowledged_input: Some(0),
             }],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         let motion = client.predicted_motion("player").unwrap();
         let actual = [
@@ -1784,6 +1791,7 @@ mod tests {
             players: None,
             boats: Vec::new(),
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         }
     }
 
@@ -2137,6 +2145,7 @@ mod tests {
                 acknowledged_input: Some(0),
             }],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         for _ in 0..10 {
             client.take_inputs(MAXIMUM_PREDICTION_SECONDS);
@@ -2201,17 +2210,51 @@ mod tests {
             turn: Some(1.0),
             acknowledged_input: Some(i64::MAX),
         };
-        let encoded = protocol::encode_server_message(&ServerMessage::Snapshot {
+        let boats: Vec<_> = (0..64)
+            .map(|index| BoatSnapshot {
+                id: format!("player-{}", u64::MAX - index),
+                ..boat.clone()
+            })
+            .collect();
+        let snapshot = ServerMessage::Snapshot {
             tick: u64::MAX,
-            controlled_boat_id: Some("player".into()),
-            focus_m: [0.0, 0.0],
-            players: None,
-            boats: vec![boat; 64],
+            controlled_boat_id: Some(boats[0].id.clone()),
+            focus_m: [f64::MAX; 2],
+            players: Some(
+                boats
+                    .iter()
+                    .map(|boat| protocol::PlayerSummary {
+                        id: boat.id.clone(),
+                        nickname: boat.nickname.clone(),
+                    })
+                    .collect(),
+            ),
+            boats,
             removed_player_ids: Vec::new(),
-        })
-        .unwrap();
+            impacts: vec![
+                protocol::HullImpact {
+                    id: u64::MAX,
+                    tick: u64::MAX,
+                    position_m: [f64::MAX; 2],
+                    impulse_n_s: f32::MAX
+                };
+                16
+            ],
+        };
+        let encoded = protocol::encode_server_message(&snapshot).unwrap();
+        let mut received = Vec::new();
 
-        assert!(encoded.len() <= MAX_SERVER_MESSAGE_BYTES);
+        for chunk in encoded.chunks(1024) {
+            assert!(
+                append_reliable_server_message_chunk(&mut received, chunk),
+                "{}-byte snapshot exceeded the receive limit",
+                encoded.len()
+            );
+        }
+        assert_eq!(
+            protocol::decode_server_message(&received).unwrap(),
+            snapshot
+        );
     }
 
     #[test]
@@ -2265,6 +2308,7 @@ mod tests {
                 acknowledged_input: Some(0),
             }],
             removed_player_ids: Vec::new(),
+            impacts: Vec::new(),
         });
         assert_eq!(client.render_clock(), Some((900_000, 0.0)));
     }

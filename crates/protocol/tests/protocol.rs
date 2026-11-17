@@ -115,6 +115,7 @@ fn empty_snapshot_is_compact_and_round_trips() {
         players: None,
         boats: Vec::new(),
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     };
     let encoded = encode_server_message(&expected).unwrap();
     let decoded = decode_server_message(&encoded).unwrap();
@@ -151,6 +152,7 @@ fn boat_damage_state_is_compact_and_round_trips() {
             acknowledged_input: None,
         }],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     };
 
     let encoded = encode_server_message(&message).unwrap();
@@ -216,6 +218,7 @@ fn snapshot_preserves_sub_float_motion_precision() {
             acknowledged_input: None,
         }],
         removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
     };
     let encoded = encode_server_message(&message).unwrap();
     let ServerMessage::Snapshot { boats, .. } = decode_server_message(&encoded).unwrap() else {
