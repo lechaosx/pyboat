@@ -24,11 +24,12 @@
         <div class="instruments"><span>Wind <b id="apparent-wind">0.0</b> m/s</span><span>Hull <b id="health">100</b>%</span><span>Depth <b id="water-depth">0.0</b> m</span><span>Keel <b id="bottom-clearance">0.0</b> m</span><strong id="bottom-contact">clear</strong></div>
       </section>
       <span id="fps" class="fps" aria-label="Rendered frames per second">— FPS</span>
-      <button id="graphics-open" class="graphics-open" type="button" disabled>Graphics</button>
+      <button id="graphics-open" class="graphics-open" type="button" disabled>Settings</button>
       <dialog id="graphics-dialog" aria-labelledby="graphics-title">
-        <h2 id="graphics-title">Graphics</h2>
+        <h2 id="graphics-title">Settings</h2>
         <p>Changes apply immediately. Your boat stays in the game.</p>
         <form id="graphics-form">
+          <h3>Graphics</h3>
           <label for="graphics-quality">Detail</label>
           <select id="graphics-quality" name="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
           <label for="graphics-scale">Scene resolution</label>
@@ -41,7 +42,7 @@
           <label class="graphics-checkbox"><input name="autoResolution" type="checkbox" /> Lower scene resolution when needed</label>
           <p id="graphics-resolution"></p>
           <p id="graphics-note" role="status"></p>
-          <div class="graphics-actions"><button id="graphics-reset" type="button">Reset defaults</button><button id="graphics-close" type="button">Done</button></div>
+          <div class="graphics-actions"><button id="graphics-reset" type="button">Reset graphics</button><button id="graphics-close" type="button">Done</button></div>
         </form>
       </dialog>
       <div class="scale-bar" aria-label="Map scale">

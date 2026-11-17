@@ -145,6 +145,12 @@ See [README.md](README.md) for what is playable now and
   ratios have bars instead of extra visibility or stretching.
 - **[Explicit]** A tiny corner indicator reports rendered frames per second.
 
+## Sound
+
+- **[Explicit]** Procedural sound conveys sea conditions, sailing, wind, shore
+  surf, storms, rain, and wooden hull movement.
+- **[Explicit]** Local sounds change with physical distance from the listener.
+
 ## Graphics settings
 
 - **[Explicit]** Players can adjust graphics before joining and during play.

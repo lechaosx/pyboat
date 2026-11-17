@@ -55,11 +55,17 @@ Replace the hash and reload after every server restart. TLS alert 42 usually
 means the hash is missing or stale. Omit it when using a browser-trusted server
 certificate; the local Vite page can use HTTP, but WebTransport stays encrypted.
 
-The Graphics button changes detail, resolution, and frame rate immediately,
+The Settings button changes detail, resolution, and frame rate immediately,
 without leaving the game, and saves choices on this device. Scene resolution
 defaults to CSS pixels, bounded by the 2× upscale limit; boats stay at display
 resolution. Touch screens default to lower detail, a frame-rate cap, and
 automatic resolution.
+
+Sound starts when you set sail or enable it in Settings, with saved volume and
+mute controls. Procedural wind, waves, rain, hull wash, creaks, and sail flutter
+follow the world and boat motion; nearby surf and boats have distance and stereo
+position. Sound pauses while the window is inactive. The playground's Sound
+panel auditions each layer in the current world.
 
 Startup URL overrides remain available: `quality` (`low`, `medium`, or `high`),
 `renderScale` (scene fraction of output resolution), `pixelRatio` (device pixel

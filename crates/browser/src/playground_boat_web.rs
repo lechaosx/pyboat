@@ -54,6 +54,20 @@ impl PlaygroundBoatDriver {
         self.cloth
             .advance(&self.boat.scene(), simulation::DT_SECONDS);
     }
+    pub fn sound_motion(&self) -> Vec<f64> {
+        let m = self.boat.motion();
+        vec![
+            m.position_m.x,
+            m.position_m.y,
+            m.velocity_m_s.x,
+            m.velocity_m_s.y,
+            m.angle_rad,
+            m.angular_velocity_rad_s,
+            m.sail_angle_rad,
+            m.sail_angular_velocity_rad_s,
+            m.rudder_angle_rad,
+        ]
+    }
     pub fn state(&self) -> Vec<f64> {
         let m = self.boat.motion();
         vec![

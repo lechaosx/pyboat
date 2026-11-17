@@ -24,6 +24,8 @@ mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
 mod graphics;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sound;
 mod terrain_cache;
 pub use baked_surface::{
     BAKED_SURFACE_COLOR_LAYERS, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame,

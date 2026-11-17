@@ -21,6 +21,10 @@ and verification details.
 - **[Explicit]** Rust/WASM owns transport, decoding, replication, prediction,
   reconciliation, physics, and rendering. TypeScript/HTML/CSS own DOM presentation,
   exchanging commands, discrete events, and a small derived UI view with Rust.
+- **[Implicit]** Web Audio synthesizes sound from a small derived world view;
+  audio processing runs independently of rendering and shared simulation.
+- **[Implicit]** The audio listener follows the player's boat or, while
+  spectating, the view center at sea level.
 - **[Explicit]** JavaScript tooling runs on Node.js for ecosystem compatibility.
 - **[Implicit]** Development follows the latest Node.js LTS line.
 - **[Implicit]** npm manages JavaScript dependencies and scripts.

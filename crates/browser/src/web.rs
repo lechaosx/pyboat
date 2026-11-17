@@ -2505,6 +2505,7 @@ pub struct BrowserGame {
     camera_m: Option<Vector>,
     camera_boat_id: Option<String>,
     spawn_camera: Option<(Vector, f64)>,
+    sound_sampler: crate::sound::SoundSampler,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -2589,6 +2590,7 @@ impl BrowserGame {
             camera_m: None,
             camera_boat_id: None,
             spawn_camera: None,
+            sound_sampler: crate::sound::SoundSampler::default(),
         })
     }
 
@@ -2683,6 +2685,14 @@ impl BrowserGame {
             self.world_presented = true;
         }
         Ok(())
+    }
+
+    pub fn sound_scene(&mut self, now_seconds: f64) -> Vec<f32> {
+        self.client.borrow().sound_scene(
+            &mut self.sound_sampler,
+            self.camera_m.unwrap_or(Vector::ZERO),
+            now_seconds,
+        )
     }
 
     pub fn renderer_is_available(&self) -> bool {
@@ -3351,4 +3361,58 @@ fn now_ms() -> f64 {
 
 fn js_error(error: impl ToString) -> JsValue {
     JsValue::from_str(&error.to_string())
+}
+
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct PlaygroundSoundScene {
+    sampler: crate::sound::SoundSampler,
+}
+#[wasm_bindgen]
+impl PlaygroundSoundScene {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn sample(
+        &mut self,
+        width: f64,
+        height: f64,
+        seed: u64,
+        tick: u64,
+        fraction: f32,
+        now_seconds: f64,
+        x: f64,
+        y: f64,
+        boat: &[f64],
+    ) -> Result<Vec<f32>, JsValue> {
+        let geometry = WorldGeometry::new(width, height).map_err(js_error)?;
+        let boats = if boat.len() >= 9 {
+            vec![(
+                1,
+                simulation::BoatMotion {
+                    position_m: rapier2d_f64::prelude::Vector::new(boat[0], boat[1]),
+                    velocity_m_s: rapier2d_f64::prelude::Vector::new(boat[2], boat[3]),
+                    angle_rad: boat[4],
+                    angular_velocity_rad_s: boat[5],
+                    sail_angle_rad: boat[6],
+                    sail_angular_velocity_rad_s: boat[7],
+                    rudder_angle_rad: boat[8],
+                    rudder_angular_velocity_rad_s: 0.0,
+                },
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok(self.sampler.sample(
+            geometry,
+            seed,
+            tick,
+            fraction,
+            now_seconds,
+            rapier2d_f64::prelude::Vector::new(x, y),
+            &boats,
+        ))
+    }
 }

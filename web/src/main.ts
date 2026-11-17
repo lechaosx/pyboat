@@ -1,6 +1,7 @@
 import { BrowserGame } from "browser";
 import { pointerVector, worldSteering } from "./steering";
 import "./style.css";
+import { SailingAudio } from "./audio";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
 const status = document.querySelector<HTMLElement>("#status");
@@ -76,6 +77,9 @@ function firstGamepad(): Gamepad | null {
 
 try {
   const game = await BrowserGame.create(canvas, savedGraphics.toString());
+  const audio = new SailingAudio();
+  graphicsDialog.append(audio.element);
+  graphicsDialog.append(graphicsDialog.querySelector(".graphics-actions")!);
   let previousTimeMs = performance.now();
   let fpsStartMs = previousTimeMs;
   let fpsStartFrames = game.presented_frames();
@@ -178,6 +182,7 @@ try {
         const name = nickname.value.trim();
         nickname.setCustomValidity(!name ? "Enter a nickname." : [...name].length > 24 ? "Use at most 24 characters." : "");
         if (!nickname.reportValidity()) return;
+        void audio.start();
         game.join(name);
       }
       updateSession();
@@ -309,6 +314,8 @@ try {
       );
       game.frame(elapsedSeconds);
       updateSession();
+      audio.setActive(!["connecting", "loading", "disconnected"].includes(currentState));
+      if (audio.due(timeMs)) audio.update(game.sound_scene(timeMs / 1000));
       if (timeMs - fpsStartMs >= 1000) {
         const frames = game.presented_frames();
         fps.textContent = `${Math.round((frames - fpsStartFrames) * 1000 / (timeMs - fpsStartMs))} FPS`;
@@ -339,6 +346,7 @@ try {
       if (!game.renderer_is_available()) {
         clearInput();
         game.shutdown();
+        audio.setActive(false);
         renderingStopped = true;
         currentState = "disconnected";
         welcome.hidden = false;

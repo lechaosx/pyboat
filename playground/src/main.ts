@@ -1,3 +1,4 @@
+import { SailingAudio } from "../../web/src/audio";
 import {
   PlaygroundAdaptationClock,
   PlaygroundBakedSurface,
@@ -32,6 +33,7 @@ import {
   production_camera_height_m,
   production_scene_shader_source,
   sample_playground_environment,
+  PlaygroundSoundScene,
   sample_playground_view_cloud_state,
   sample_playground_world_geometry,
   sample_playground_world_phases,
@@ -811,6 +813,9 @@ const drivingBoat = new DrivingBoat(previewCanvas, boatWorld, () => [state.camer
   worldTimeScaleInput.disabled = active; worldTimeValueInput.disabled = active;
 });
 worldToolbarElement.closest(".panel-section")!.after(drivingBoat.element);
+const audio = new SailingAudio(true);
+const soundScene = new PlaygroundSoundScene();
+drivingBoat.element.after(audio.element);
 let boatPass: BoatPass | undefined;
 let boatSurface: GPUTexture | undefined;
 let boatSurfaceView: GPUTextureView | undefined;
@@ -1888,6 +1893,11 @@ function advanceFrame(now: number): void {
     state.worldTimeSeconds,
     renderFractionSeconds * state.worldTimeScale,
   );
+  if (audio.due(now)) {
+    const [tick, fraction] = splitTick(worldTimeSeconds);
+    const listenerX = boatState?.[0] ?? state.cameraX, listenerY = boatState?.[1] ?? state.cameraY;
+    audio.update(soundScene.sample(state.worldWidthM, state.worldHeightM, parsedSeed(), tick, fraction, now / 1000, listenerX, listenerY, drivingBoat.driver?.sound_motion() ?? new Float64Array()));
+  }
   updateRenderedGeometry();
   if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {
     updateViewCenterDiagnostics(worldTimeSeconds);
