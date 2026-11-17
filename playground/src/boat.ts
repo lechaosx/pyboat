@@ -1,10 +1,10 @@
 import {
   PlaygroundBoatDriver, PlaygroundBoatImage, playground_boat_image_count,
-  playground_boat_shader_source,
+  playground_boat_shader_source, playground_boat_composite_shader_source,
 } from "browser/playground";
 
 export type BoatWorld = { width: number; height: number; seed: bigint; tick: bigint };
-export type BoatView = { x: number; y: number; height: number; outputWidth: number; outputHeight: number; sceneHeight: number; time: number };
+export type BoatView = { x: number; y: number; height: number; cameraHeight: number; outputWidth: number; outputHeight: number; sceneHeight: number; time: number };
 
 export class DrivingBoat {
   driver: PlaygroundBoatDriver | undefined;
@@ -138,11 +138,13 @@ export class BoatPass {
   private readonly heightLayout: GPUBindGroupLayout;
   private readonly scene: GPUBindGroup;
   private readonly images: GPUBindGroup[] = [];
-  private readonly pipelines = new Map<GPUTextureFormat, [GPURenderPipeline, GPURenderPipeline, GPURenderPipeline]>();
+  private readonly pipelines = new Map<GPUTextureFormat, [GPURenderPipeline, GPURenderPipeline, GPURenderPipeline, GPURenderPipeline]>();
+  private readonly bounds: GPUBuffer;
+  private readonly compositeLayout: GPUBindGroupLayout;
+  private readonly compositeShader: GPUShaderModule;
   private vertex: GPUBuffer;
   private vertexBytes = 1024;
-  private depth: GPUTexture | undefined;
-  private size = "";
+  private targets: { size: [number, number]; format: GPUTextureFormat; color: GPUTexture; resolved: GPUTexture; depth: GPUTexture; fold: GPUTexture; composite: GPUBindGroup } | undefined;
   private readonly device: GPUDevice;
   constructor(device: GPUDevice, sceneBuffer: GPUBuffer, adaptation: GPUTextureView) {
     this.device = device;
@@ -155,7 +157,17 @@ export class BoatPass {
       { binding: 0, visibility: 2, texture: { sampleType: "float" } },
       { binding: 1, visibility: 2, sampler: { type: "filtering" } },
     ] });
-    this.heightLayout = device.createBindGroupLayout({ entries: [0, 1].map((binding) => ({ binding, visibility: 2, texture: { sampleType: "unfilterable-float" as GPUTextureSampleType } })) });
+    this.heightLayout = device.createBindGroupLayout({ entries: [
+      ...[0, 1].map((binding) => ({ binding, visibility: 2, texture: { sampleType: "unfilterable-float" as GPUTextureSampleType } })),
+      { binding: 2, visibility: 3, buffer: { type: "uniform" } },
+      { binding: 3, visibility: 2, texture: { sampleType: "depth", multisampled: true } },
+    ] });
+    this.bounds = device.createBuffer({ size: 32, usage: 0x40 | 0x08 });
+    this.compositeLayout = device.createBindGroupLayout({ entries: [
+      { binding: 0, visibility: 2, texture: { sampleType: "unfilterable-float" } },
+      { binding: 1, visibility: 2, buffer: { type: "uniform" } },
+    ] });
+    this.compositeShader = device.createShaderModule({ code: playground_boat_composite_shader_source() });
     this.scene = device.createBindGroup({ layout: this.sceneLayout, entries: [
       { binding: 0, resource: { buffer: sceneBuffer } }, { binding: 7, resource: adaptation },
     ] });
@@ -172,7 +184,7 @@ export class BoatPass {
       image.free();
     }
   }
-  private forFormat(format: GPUTextureFormat): [GPURenderPipeline, GPURenderPipeline, GPURenderPipeline] {
+  private forFormat(format: GPUTextureFormat): [GPURenderPipeline, GPURenderPipeline, GPURenderPipeline, GPURenderPipeline] {
     let result = this.pipelines.get(format); if (result) return result;
     const layout = this.device.createPipelineLayout({ bindGroupLayouts: [this.sceneLayout, this.imageLayout, this.heightLayout] });
     const pipeline = (sail: boolean, depth: boolean): GPURenderPipeline => this.device.createRenderPipeline({
@@ -180,40 +192,98 @@ export class BoatPass {
       vertex: { module: this.shader, entryPoint: "vertex_boat_sprite", buffers: [{ arrayStride: 28, attributes: [
         { shaderLocation: 0, offset: 0, format: "float32x3" }, { shaderLocation: 1, offset: 12, format: "float32x3" }, { shaderLocation: 2, offset: 24, format: "float32" },
       ] }] },
-      fragment: { module: this.shader, entryPoint: depth ? "fragment_sail_depth" : "fragment_boat_sprite", constants: { IS_SAIL: Number(sail) }, targets: [{ format, writeMask: depth ? 0 : 15, blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" } } }] },
+      fragment: { module: this.shader, entryPoint: depth ? "fragment_sail_depth" : sail ? "fragment_sail" : "fragment_boat_sprite", constants: { IS_SAIL: Number(sail) }, targets: depth ? [] : [{ format }] },
       primitive: { topology: "triangle-list" },
-      ...(sail ? { depthStencil: { format: "depth32float", depthWriteEnabled: depth, depthCompare: depth ? "less-equal" : "equal" } } : {}),
+      depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less-equal" },
+      multisample: { count: 4 },
     });
-    result = [pipeline(false, false), pipeline(true, true), pipeline(true, false)];
+    const composite = this.device.createRenderPipeline({
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.compositeLayout] }),
+      vertex: { module: this.compositeShader, entryPoint: "vertex" },
+      fragment: { module: this.compositeShader, entryPoint: "fragment", targets: [{ format, blend: {
+        color: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+        alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+      } }] },
+    });
+    result = [pipeline(false, false), pipeline(true, true), pipeline(true, false), composite];
     this.pipelines.set(format, result); return result;
+  }
+  releaseTargets(): void {
+    const t = this.targets;
+    if (t) for (const texture of [t.color, t.resolved, t.depth, t.fold]) texture.destroy();
+    this.targets = undefined;
   }
   encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, illumination: GPUTextureView, size: [number, number], driver: PlaygroundBoatDriver, view: BoatView): void {
     driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.time);
     const vertices = driver.vertices(); const batches = driver.batches();
+    let left = size[0]; let top = size[1]; let right = 0; let bottom = 0;
+    const mesh = new DataView(vertices.buffer, vertices.byteOffset, vertices.byteLength);
+    const viewWidth = view.height * size[0] / size[1];
+    for (let i = 0; i < vertices.byteLength; i += 28) {
+      const scale = 1 - mesh.getFloat32(i + 8, true) / view.cameraHeight;
+      if (scale <= 0) { left = top = 0; [right, bottom] = size; break; }
+      const x = (mesh.getFloat32(i, true) / (viewWidth * scale) + 0.5) * size[0];
+      const y = (0.5 - mesh.getFloat32(i + 4, true) / (view.height * scale)) * size[1];
+      left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+    left = Math.max(0, Math.floor(left)); top = Math.max(0, Math.floor(top));
+    right = Math.min(size[0], Math.ceil(right)); bottom = Math.min(size[1], Math.ceil(bottom));
+    if (right <= left || bottom <= top) { this.releaseTargets(); return; }
+    const required: [number, number] = [right - left, bottom - top];
+    const allocation: [number, number] = required.map((v, i) => Math.min(size[i]!, Math.ceil(v / 64) * 64)) as [number, number];
+    if (!this.targets || this.targets.format !== format || allocation.some((v, i) => required[i]! > this.targets!.size[i]! || v < this.targets!.size[i]! / 2 || this.targets!.size[i]! > size[i]!)) {
+      this.releaseTargets();
+      const texture = (format: GPUTextureFormat, sampleCount: number, usage: GPUTextureUsageFlags) => this.device.createTexture({ size: allocation, format, sampleCount, usage });
+      const color = texture(format, 4, 0x10);
+      const resolved = texture(format, 1, 0x10 | 0x04);
+      const depth = texture("depth32float", 4, 0x10 | 0x04);
+      const fold = texture("depth32float", 4, 0x10 | 0x04);
+      const composite = this.device.createBindGroup({ layout: this.compositeLayout, entries: [
+        { binding: 0, resource: resolved.createView() }, { binding: 1, resource: { buffer: this.bounds } },
+      ] });
+      this.targets = { size: allocation, format, color, resolved, depth, fold, composite };
+    }
+    const t = this.targets; const [width, height] = t.size;
+    this.device.queue.writeBuffer(this.bounds, 0, new Float32Array([
+      size[0] / width, size[1] / height, (size[0] - 2 * left) / width - 1, 1 - (size[1] - 2 * top) / height,
+      left, top, width, height,
+    ]));
     if (vertices.byteLength > this.vertexBytes) {
       this.vertex.destroy(); this.vertexBytes = vertices.byteLength;
       this.vertex = this.device.createBuffer({ size: this.vertexBytes, usage: 0x20 | 0x08 });
     }
     this.device.queue.writeBuffer(this.vertex, 0, vertices);
-    if (this.size !== size.join()) {
-      this.depth?.destroy(); this.depth = this.device.createTexture({ size, format: "depth32float", usage: 0x10 }); this.size = size.join();
-    }
-    const height = this.device.createBindGroup({ layout: this.heightLayout, entries: [{ binding: 0, resource: surface }, { binding: 1, resource: illumination }] });
+    const surfaces = (fold: GPUTexture) => this.device.createBindGroup({ layout: this.heightLayout, entries: [
+      { binding: 0, resource: surface }, { binding: 1, resource: illumination },
+      { binding: 2, resource: { buffer: this.bounds } }, { binding: 3, resource: fold.createView() },
+    ] });
+    const colorSurfaces = surfaces(t.fold); const foldSurfaces = surfaces(t.depth);
     const pipelines = this.forFormat(format);
+    const bind = (pass: GPURenderPassEncoder, surfaces: GPUBindGroup) => {
+      pass.setBindGroup(0, this.scene); pass.setBindGroup(2, surfaces); pass.setVertexBuffer(0, this.vertex);
+    };
     let pass: GPURenderPassEncoder | undefined;
+    let first = true;
     for (let offset = 0; offset < batches.length; offset += 4) {
       const image = batches[offset]!; const sail = batches[offset + 1] !== 0;
-      if (sail || !pass) {
-        pass?.end();
-        pass = encoder.beginRenderPass({ colorAttachments: [{ view: target, loadOp: "load", storeOp: "store" }], ...(sail ? { depthStencilAttachment: { view: this.depth!.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" } } : {}) });
-        pass.setBindGroup(0, this.scene); pass.setBindGroup(2, height); pass.setVertexBuffer(0, this.vertex);
-      }
-      pass.setBindGroup(1, this.images[image]!);
       const start = batches[offset + 2]!; const count = batches[offset + 3]! - start;
-      if (sail) { pass.setPipeline(pipelines[1]); pass.draw(count, 1, start); }
-      pass.setPipeline(pipelines[sail ? 2 : 0]); pass.draw(count, 1, start);
+      if (sail) {
+        pass?.end(); pass = undefined;
+        const fold = encoder.beginRenderPass({ colorAttachments: [],
+          depthStencilAttachment: { view: t.fold.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store" } });
+        bind(fold, foldSurfaces); fold.setBindGroup(1, this.images[image]!); fold.setPipeline(pipelines[1]); fold.draw(count, 1, start); fold.end();
+      }
+      if (!pass) {
+        const final = sail ? offset + 4 === batches.length : !Array.from(batches).some((value, index) => index >= offset && index % 4 === 1 && value !== 0);
+        pass = encoder.beginRenderPass({ colorAttachments: [{ view: t.color.createView(), ...(final ? { resolveTarget: t.resolved.createView() } : {}), loadOp: first ? "clear" : "load", storeOp: "store", clearValue: [0, 0, 0, 0] }],
+          depthStencilAttachment: { view: t.depth.createView(), depthClearValue: 1, depthLoadOp: first ? "clear" : "load", depthStoreOp: "store" } });
+        bind(pass, colorSurfaces); first = false;
+      }
+      pass.setBindGroup(1, this.images[image]!); pass.setPipeline(pipelines[sail ? 2 : 0]); pass.draw(count, 1, start);
       if (sail) { pass.end(); pass = undefined; }
     }
     pass?.end();
+    const composite = encoder.beginRenderPass({ colorAttachments: [{ view: target, loadOp: "load", storeOp: "store" }] });
+    composite.setScissorRect(left, top, required[0], required[1]); composite.setPipeline(pipelines[3]); composite.setBindGroup(0, t.composite); composite.draw(3); composite.end();
   }
 }

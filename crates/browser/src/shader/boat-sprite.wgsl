@@ -4,6 +4,12 @@
 // which the scene pass writes beside its colour.
 @group(2) @binding(0) var surface_height: texture_2d<f32>;
 @group(2) @binding(1) var scene_light: texture_2d<f32>;
+struct BoatTarget {
+    clip_scale_offset: vec4<f32>,
+    origin_and_size_px: vec4<f32>,
+};
+@group(2) @binding(2) var<uniform> boat_target: BoatTarget;
+@group(2) @binding(3) var sail_depth: texture_depth_multisampled_2d;
 override IS_SAIL: bool = false;
 
 struct BoatVertexInput {
@@ -25,13 +31,17 @@ struct BoatSpriteOutput {
     @location(4) height_m: f32,
 };
 
-// Projects as `vertex_terrain_depth` does; depth orders sail folds.
+// Projection and lighting retain the full view's coordinates when the boat
+// attachments cover only the occupied rectangle.
 @vertex
 fn vertex_boat_sprite(input: BoatVertexInput) -> BoatSpriteOutput {
     var output: BoatSpriteOutput;
     let scale = 1.0 - input.position_m.z / scene.drone_camera.x;
     let clip_xy = (input.position_m.xy / scene.camera_and_view_m.zw) * 2.0;
-    output.position = vec4<f32>(clip_xy, scale - scene.drone_camera.y, scale);
+    output.position = vec4<f32>(
+        clip_xy * boat_target.clip_scale_offset.xy + scale * boat_target.clip_scale_offset.zw,
+        scale - scene.drone_camera.y, scale,
+    );
     output.color = input.color;
     output.coverage = input.coverage;
     output.view_offset_m = input.position_m.xy / scale;
@@ -71,21 +81,36 @@ fn boat_illumination(input: BoatSpriteOutput) -> vec3<f32> {
     );
 }
 
+struct SailDepth {
+    @builtin(frag_depth) depth: f32,
+    @builtin(sample_mask) coverage: u32,
+};
+
 @fragment
-fn fragment_sail_depth(input: BoatSpriteOutput) -> @location(0) vec4<f32> {
+fn fragment_sail_depth(input: BoatSpriteOutput, @builtin(sample_index) sample_index: u32) -> SailDepth {
     if textureSample(boat_texture, boat_sampler, input.color.xy).a * input.coverage <= 0.0 {
         discard;
     }
-    return vec4<f32>(0.0);
+    // Store the shader's per-sample depth so the colour pass compares the
+    // same arithmetic rather than the rasterizer's rounded depth interpolation.
+    return SailDepth(input.position.z, 1u << sample_index);
 }
 
-@fragment
-fn fragment_boat_sprite(
+struct BoatFragment {
+    @location(0) color: vec4<f32>,
+    @builtin(sample_mask) coverage: u32,
+};
+
+fn shade_boat_sprite(
     input: BoatSpriteOutput,
-    @builtin(front_facing) front_facing: bool,
-) -> @location(0) vec4<f32> {
+    front_facing: bool,
+    sample_index: u32,
+) -> BoatFragment {
     let texel = textureSample(boat_texture, boat_sampler, input.color.xy);
     if hidden_by_surface(input) {
+        discard;
+    }
+    if IS_SAIL && input.position.z != textureLoad(sail_depth, vec2<i32>(input.position.xy), i32(sample_index)) {
         discard;
     }
     // Negative state carries cloth shading; nonnegative state carries hull damage.
@@ -106,7 +131,23 @@ fn fragment_boat_sprite(
         color = mix(color, vec3<f32>(gray), 0.7) * 0.65;
     }
     let adaptation = field_adaptation(input.css_position_px);
-    return vec4<f32>(encode_display_color(tone_map_scene_color(
+    var output: BoatFragment;
+    output.color = vec4<f32>(encode_display_color(tone_map_scene_color(
         color * boat_illumination(input), adaptation, input.css_position_px,
-    )), texel.a * input.coverage);
+    )), 1.0);
+    // Alpha describes filtered silhouette coverage. Retained samples are opaque;
+    // applying alpha again when resolving would attenuate their edges twice.
+    let samples = u32(round(clamp(texel.a * input.coverage, 0.0, 1.0) * 4.0));
+    output.coverage = (1u << samples) - 1u;
+    return output;
+}
+
+@fragment
+fn fragment_boat_sprite(input: BoatSpriteOutput, @builtin(front_facing) front_facing: bool) -> BoatFragment {
+    return shade_boat_sprite(input, front_facing, 0u);
+}
+
+@fragment
+fn fragment_sail(input: BoatSpriteOutput, @builtin(front_facing) front_facing: bool, @builtin(sample_index) sample_index: u32) -> BoatFragment {
+    return shade_boat_sprite(input, front_facing, sample_index);
 }

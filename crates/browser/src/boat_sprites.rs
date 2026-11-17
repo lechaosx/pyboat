@@ -78,9 +78,22 @@ pub struct BoatSprites {
     sail_pipeline: wgpu::RenderPipeline,
     bind_groups: Vec<wgpu::BindGroup>,
     surface_height_layout: wgpu::BindGroupLayout,
-    sail_depth: Option<((u32, u32), wgpu::TextureView)>,
+    targets: Option<BoatTargets>,
+    target_buffer: wgpu::Buffer,
+    composite_layout: wgpu::BindGroupLayout,
+    composite_pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
+}
+
+struct BoatTargets {
+    size: (u32, u32),
+    color: wgpu::TextureView,
+    resolved: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    sail_depth: wgpu::TextureView,
+    composite: wgpu::BindGroup,
 }
 
 impl BoatSprites {
@@ -206,7 +219,30 @@ impl BoatSprites {
         let surface_height_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Surface height layout"),
-                entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: true,
+                        },
+                        count: None,
+                    },
+                ]
+                .into_iter()
+                .chain([0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -215,7 +251,8 @@ impl BoatSprites {
                         multisampled: false,
                     },
                     count: None,
-                }),
+                }))
+                .collect::<Vec<_>>(),
             });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Boat sprite pipeline layout"),
@@ -226,7 +263,12 @@ impl BoatSprites {
             ],
             immediate_size: 0,
         });
-        let pipeline = |entry_point, sail, write_mask, depth_stencil| {
+        let pipeline = |entry_point, sail, write_mask: wgpu::ColorWrites, depth_stencil| {
+            let targets = [Some(wgpu::ColorTargetState {
+                format: output_format,
+                blend: None,
+                write_mask,
+            })];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry_point),
                 layout: Some(&layout),
@@ -239,11 +281,7 @@ impl BoatSprites {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(entry_point),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: output_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask,
-                    })],
+                    targets: if write_mask.is_empty() { &[] } else { &targets },
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[("IS_SAIL", if sail { 1.0 } else { 0.0 })],
                         ..Default::default()
@@ -251,7 +289,10 @@ impl BoatSprites {
                 }),
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil,
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState {
+                    count: 4,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })
@@ -265,8 +306,82 @@ impl BoatSprites {
                 bias: Default::default(),
             })
         };
+        let target_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Boat target bounds"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Boat composite layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Boat composite shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(concat!(
+                env!("OUT_DIR"),
+                "/boat-composite.wgsl"
+            )))),
+        });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Boat composite"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&composite_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vertex"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fragment"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         Ok(Self {
-            sprite_pipeline: pipeline("fragment_boat_sprite", false, wgpu::ColorWrites::ALL, None),
+            sprite_pipeline: pipeline(
+                "fragment_boat_sprite",
+                false,
+                wgpu::ColorWrites::ALL,
+                depth(true, wgpu::CompareFunction::LessEqual),
+            ),
             sail_depth_pipeline: pipeline(
                 "fragment_sail_depth",
                 true,
@@ -274,14 +389,18 @@ impl BoatSprites {
                 depth(true, wgpu::CompareFunction::LessEqual),
             ),
             sail_pipeline: pipeline(
-                "fragment_boat_sprite",
+                "fragment_sail",
                 true,
                 wgpu::ColorWrites::ALL,
-                depth(false, wgpu::CompareFunction::Equal),
+                depth(true, wgpu::CompareFunction::LessEqual),
             ),
             bind_groups,
             surface_height_layout,
-            sail_depth: None,
+            targets: None,
+            target_buffer,
+            composite_layout,
+            composite_pipeline,
+            format: output_format,
             vertex_buffer: vertex_buffer(device, INITIAL_VERTEX_CAPACITY),
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
         })
@@ -308,6 +427,7 @@ impl BoatSprites {
         match_seed: u64,
         camera_m: Vector,
         view_height_m: f32,
+        camera_height_m: f32,
         scene_footprint_m: f32,
         time_seconds: f64,
     ) {
@@ -322,85 +442,150 @@ impl BoatSprites {
             scene_footprint_m,
             time_seconds,
         );
-        if vertices.is_empty() {
+        let Some(rect) = occupied_rect(&vertices, output_size, view_height_m, camera_height_m)
+        else {
+            self.targets = None;
             return;
+        };
+        let required = (rect[2], rect[3]);
+        let size = (
+            (required.0.div_ceil(64) * 64).min(output_size.0),
+            (required.1.div_ceil(64) * 64).min(output_size.1),
+        );
+        if self.targets.as_ref().is_none_or(|targets| {
+            targets.size.0 < required.0
+                || targets.size.1 < required.1
+                || size.0 < targets.size.0 / 2
+                || size.1 < targets.size.1 / 2
+                || targets.size.0 > output_size.0
+                || targets.size.1 > output_size.1
+        }) {
+            self.targets = Some(BoatTargets::new(
+                device,
+                size,
+                self.format,
+                &self.composite_layout,
+                &self.target_buffer,
+            ));
         }
-        let surface_height = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Surface height bind group"),
-            layout: &self.surface_height_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(surface_height),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(illumination),
-                },
-            ],
-        });
+        let targets = self.targets.as_ref().unwrap();
+        let (width, height) = (targets.size.0 as f32, targets.size.1 as f32);
+        queue.write_buffer(
+            &self.target_buffer,
+            0,
+            bytemuck::cast_slice(&[
+                output_size.0 as f32 / width,
+                output_size.1 as f32 / height,
+                (output_size.0 as f32 - 2.0 * rect[0] as f32) / width - 1.0,
+                1.0 - (output_size.1 as f32 - 2.0 * rect[1] as f32) / height,
+                rect[0] as f32,
+                rect[1] as f32,
+                width,
+                height,
+            ]),
+        );
+        let surface_group = |fold_depth| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Boat surfaces and target"),
+                layout: &self.surface_height_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(surface_height),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(illumination),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.target_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(fold_depth),
+                    },
+                ],
+            })
+        };
+        let color_surfaces = surface_group(&targets.sail_depth);
+        let fold_surfaces = surface_group(&targets.depth);
         if vertices.len() > self.vertex_capacity {
             self.vertex_capacity = vertices.len().next_power_of_two();
             self.vertex_buffer = vertex_buffer(device, self.vertex_capacity);
         }
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-        if batches.iter().any(|batch| batch.sail)
-            && self
-                .sail_depth
-                .as_ref()
-                .is_none_or(|(size, _)| *size != output_size)
-        {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Sail depth"),
-                size: wgpu::Extent3d {
-                    width: output_size.0,
-                    height: output_size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            self.sail_depth = Some((output_size, texture.create_view(&Default::default())));
-        }
+        let mut first = true;
         let mut batches = batches.iter().peekable();
         while let Some(&batch) = batches.peek() {
-            let depth = batch.sail.then(|| wgpu::RenderPassDepthStencilAttachment {
-                view: &self.sail_depth.as_ref().unwrap().1,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
-                }),
-                stencil_ops: None,
-            });
+            if batch.sail {
+                // Cloth hides its own rear folds even where its silhouette is
+                // filtered; those folds must not tint the cloth's front edge.
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Sail nearest fold"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &targets.sail_depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_bind_group(0, scene_bind_group, &[]);
+                pass.set_bind_group(1, &self.bind_groups[batch.image], &[]);
+                pass.set_bind_group(2, &fold_surfaces, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_pipeline(&self.sail_depth_pipeline);
+                pass.draw(batch.vertices.clone(), 0..1);
+            }
+            let final_pass = if batch.sail {
+                batches.len() == 1
+            } else {
+                batches.clone().all(|b| !b.sail)
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(if batch.sail { "Sail pass" } else { "Boat pass" }),
+                label: Some("Boat shared depth"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &targets.color,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: final_pass.then_some(&targets.resolved),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: if first {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: depth,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: if first {
+                            wgpu::LoadOp::Clear(1.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            first = false;
             pass.set_bind_group(0, scene_bind_group, &[]);
-            pass.set_bind_group(2, &surface_height, &[]);
+            pass.set_bind_group(2, &color_surfaces, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             if batch.sail {
                 let batch = batches.next().unwrap();
                 pass.set_bind_group(1, &self.bind_groups[batch.image], &[]);
-                // Resolve the nearest fold before alpha blending its filtered edge.
-                pass.set_pipeline(&self.sail_depth_pipeline);
-                pass.draw(batch.vertices.clone(), 0..1);
                 pass.set_pipeline(&self.sail_pipeline);
                 pass.draw(batch.vertices.clone(), 0..1);
             } else {
@@ -411,7 +596,140 @@ impl BoatSprites {
                 }
             }
         }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Boat composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+        pass.set_pipeline(&self.composite_pipeline);
+        pass.set_bind_group(0, &targets.composite, &[]);
+        pass.draw(0..3, 0..1);
     }
+}
+
+impl BoatTargets {
+    fn new(
+        device: &wgpu::Device,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+        layout: &wgpu::BindGroupLayout,
+        bounds: &wgpu::Buffer,
+    ) -> Self {
+        let texture = |label, format, samples, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let color = texture(
+            "Boat coverage",
+            format,
+            4,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let resolved = texture(
+            "Boat resolved coverage",
+            format,
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let depth_usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let depth = texture(
+            "Boat shared depth",
+            wgpu::TextureFormat::Depth32Float,
+            4,
+            depth_usage,
+        );
+        let sail_depth = texture(
+            "Sail nearest fold",
+            wgpu::TextureFormat::Depth32Float,
+            4,
+            depth_usage,
+        );
+        let composite = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Boat composite"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&resolved),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: bounds.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            size,
+            color,
+            resolved,
+            depth,
+            sail_depth,
+            composite,
+        }
+    }
+}
+
+fn occupied_rect(
+    vertices: &[Vertex],
+    output: (u32, u32),
+    view_height_m: f32,
+    camera_height_m: f32,
+) -> Option<[u32; 4]> {
+    let view_width_m = view_height_m * output.0 as f32 / output.1 as f32;
+    let mut low = Vector::new(output.0 as f32, output.1 as f32);
+    let mut high = Vector::ZERO;
+    for vertex in vertices {
+        let [x, y, z] = vertex.position;
+        let scale = 1.0 - z / camera_height_m;
+        if scale <= 0.0 {
+            return Some([0, 0, output.0, output.1]);
+        }
+        let pixel = Vector::new(
+            (x / (view_width_m * scale) + 0.5) * output.0 as f32,
+            (0.5 - y / (view_height_m * scale)) * output.1 as f32,
+        );
+        low = low.min(pixel);
+        high = high.max(pixel);
+    }
+    let low = low.floor().max(Vector::ZERO);
+    let high = high
+        .ceil()
+        .min(Vector::new(output.0 as f32, output.1 as f32));
+    (high.x > low.x && high.y > low.y).then_some({
+        [
+            low.x as u32,
+            low.y as u32,
+            (high.x - low.x) as u32,
+            (high.y - low.y) as u32,
+        ]
+    })
 }
 
 fn vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -447,7 +765,11 @@ pub(crate) fn sprite_vertices(
     ) * 0.5
         * 1.01
         + Vector::splat(8.0);
-    for (scene, &cloth) in scenes.iter().zip(cloth) {
+    let mut ordered: Vec<_> = scenes.iter().zip(cloth).collect();
+    // Authored deck details keep their local order; distinct coplanar boats
+    // break depth ties by persistent identity.
+    ordered.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+    for (scene, &cloth) in ordered {
         let state = if scene.wreck {
             1.0
         } else if scene.recently_damaged {

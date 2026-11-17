@@ -2124,7 +2124,9 @@ function renderFrame(): Promise<void> {
   if (drivingBoat.driver && state.diagnostic === "scene" && surfaceHeightPipelines.has(renderResources.pipeline)) {
     boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView);
     const target = canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
-    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, illuminationView, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
+    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, illuminationView, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
+  } else {
+    boatPass?.releaseTargets();
   }
   if (timestampReadback) {
     const timestampBytes = (lastEnd + 1) * 8;

@@ -1,5 +1,8 @@
 use std::{env, fs, path::PathBuf};
 
+#[cfg(test)]
+mod boat_depth_tests;
+
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
     BakedSurfaceSizes, BakedSurfaceTextures, BoatSprites, ClothMotion, DroneCamera,
@@ -2766,6 +2769,7 @@ fn render_world(
             options.seed,
             Vector::new(options.camera_x_m, options.camera_y_m),
             options.view_height_m,
+            capture_camera(options)?.height_m,
             visual_pixel_footprint_m(options.view_height_m, options.height),
             options.world_time_seconds,
         );

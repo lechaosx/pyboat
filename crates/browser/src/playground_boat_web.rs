@@ -138,6 +138,11 @@ pub fn playground_boat_shader_source() -> String {
 }
 
 #[wasm_bindgen]
+pub fn playground_boat_composite_shader_source() -> String {
+    include_str!(concat!(env!("OUT_DIR"), "/boat-composite.wgsl")).to_owned()
+}
+
+#[wasm_bindgen]
 pub fn playground_boat_image_count() -> u32 {
     crate::BOAT_IMAGES.len() as u32
 }

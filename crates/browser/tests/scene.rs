@@ -169,7 +169,7 @@ fn boat_sprite_shader_satisfies_webgpu_validation() {
     let module = naga::front::wgsl::parse_str(shader).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+        naga::valid::Capabilities::MULTISAMPLED_SHADING,
     )
     .validate(&module)
     .unwrap();

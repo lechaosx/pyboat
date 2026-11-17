@@ -2365,6 +2365,7 @@ impl Renderer {
             match_seed,
             camera_m,
             view_height_m,
+            DroneCamera::PRODUCTION_HEIGHT_M,
             pixel_footprint_m,
             world_time_seconds,
         );

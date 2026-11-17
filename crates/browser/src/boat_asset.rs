@@ -373,8 +373,7 @@ pub fn boat_mesh_with_cloth(
         );
     }
 
-    // The bridle and sheet lie ahead of the tiller's entire sweep. All rope
-    // geometry is below the cloth in this top-down projection.
+    // The bridle and sheet lie ahead of the tiller's entire sweep.
     let sheet_deck = center - forward * (327.5 * pixel_m);
     let sheet_boom = mast + boom * 0.45;
     let sheet_direction = (sheet_boom - sheet_deck).normalize();

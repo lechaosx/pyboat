@@ -63,9 +63,15 @@ fn main() {
         &[
             "vertex_boat_sprite",
             "fragment_boat_sprite",
+            "fragment_sail",
             "fragment_sail_depth",
         ],
         "boat-sprite.wgsl",
+    );
+    write_shader(
+        &read_component("src/shader/boat-composite.wgsl"),
+        &["vertex", "fragment"],
+        "boat-composite.wgsl",
     );
     write_shader(
         &compose(&[
@@ -341,7 +347,7 @@ fn parse_shader(source: &str) -> naga::Module {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+        naga::valid::Capabilities::MULTISAMPLED_SHADING,
     )
     .validate(&module)
     .unwrap();
@@ -355,7 +361,7 @@ fn write_selected_shader(mut module: naga::Module, entry_points: &[&str], output
     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+        naga::valid::Capabilities::MULTISAMPLED_SHADING,
     )
     .validate(&module)
     .unwrap();
