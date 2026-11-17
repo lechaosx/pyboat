@@ -12,8 +12,8 @@ mod boat_texture;
 mod camera;
 mod cloth;
 pub use boat_asset::{
-    BOAT_IMAGES, BoatSpriteVertex, DrawnBoatPose, HULL_IMAGE, RIG_IMAGE, boat_mesh,
-    boat_mesh_with_cloth, drawn_boat_pose, hull_sprite_mesh, rope_curve, sail_mesh,
+    BOAT_IMAGES, BoatSpriteVertex, DrawnBoatPose, HULL_IMAGE, MAST_FITTING_RADIUS_M, RIG_IMAGE,
+    boat_mesh, boat_mesh_with_cloth, drawn_boat_pose, hull_sprite_mesh, rope_curve, sail_mesh,
     sail_mesh_with_cloth, tilted_by_deck, windsock_mesh, windsock_mesh_with_cloth,
 };
 pub use boat_texture::{SpriteMip, sprite_mip_chain};

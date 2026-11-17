@@ -274,6 +274,10 @@ and verification details.
 - **[Explicit]** Sail presentation uses a three-dimensional surface; the whole
   scene, relief and sails included, is seen in perspective from one camera
   while gameplay dynamics remain planar.
+- **[Explicit]** Standing-rig geometry limits boom travel.
+- **[Implicit]** Sail contact with stays is a presentation compromise: free cloth
+  flattens against a conservative geometric envelope while its mast and boom
+  attachments stay fixed.
 - **[Explicit]** One camera, like a drone, looks straight down at the view
   centre from a fixed height above mean sea level; zoom changes only its focal
   length. The playground deliberately lets its height and field of view vary.

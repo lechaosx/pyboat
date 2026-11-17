@@ -1668,6 +1668,33 @@ const WIND_BANDS: [WindBand; 4] = [
     },
 ];
 
+// Mirror rules 5.1.6/5.5 put the boom 0.66m above the mast heel, whose deck is
+// 0.10–0.13m below sheer. https://www.sailing.org/tools/documents/MIR2010CR170910-%5B9295%5D.pdf
+pub const DINGHY_BOOM_ABOVE_SHEER_M: f32 = 0.55;
+const DINGHY_BOOM_RADIUS_M: f64 = 0.025;
+// Stylized to match the bow coil's ~10px strands on the 1565px, 4.05m hull.
+pub const DINGHY_STAY_RADIUS_M: f32 = 0.014;
+
+pub fn dinghy_stay_anchors_m(hull_length_m: f64) -> [PhysicsVector; 3] {
+    let pixel_m = hull_length_m / 1565.0;
+    // The bow eye and mirrored rail bolts on the painted hull.
+    [
+        PhysicsVector::new(770.5 * pixel_m, 0.0),
+        PhysicsVector::new(82.5 * pixel_m, 259.0 * pixel_m),
+        PhysicsVector::new(82.5 * pixel_m, -259.0 * pixel_m),
+    ]
+}
+
+fn dinghy_sail_limit_rad(hull_length_m: f64, mast_position_m: PhysicsVector, luff_m: f64) -> f64 {
+    let shroud = dinghy_stay_anchors_m(hull_length_m)[1] - mast_position_m;
+    // Shrouds obstruct mainsail travel downwind (Cal Sailing Club Dinghy Manual,
+    // §5.7). Treat the round boom and thick drawn stay as a hard contact stop.
+    // https://www.cal-sailing.org/images/official_files/Dinghy17.pdf
+    let at_boom_m = shroud.length() * luff_m / (luff_m + f64::from(DINGHY_BOOM_ABOVE_SHEER_M));
+    libm::atan2(shroud.y, -shroud.x)
+        - libm::asin((DINGHY_BOOM_RADIUS_M + f64::from(DINGHY_STAY_RADIUS_M)) / at_boom_m)
+}
+
 pub fn dinghy_parameters() -> BoatParameters {
     // The painted hull spans 1565 × 580 pixels. A provisional 4.05 m length
     // preserves its aspect ratio while keeping beam above the shared 1.5 m
@@ -1698,7 +1725,11 @@ pub fn dinghy_parameters() -> BoatParameters {
         boom_mass_kg: f64::from(2.0_f32),
         boom_length_m: f64::from(boom_length_m),
         mast_position_m: PhysicsVector::new(f64::from(0.4_f32), 0.0),
-        max_sail_angle_rad: f64::from(std::f32::consts::FRAC_PI_2),
+        max_sail_angle_rad: dinghy_sail_limit_rad(
+            f64::from(length_m),
+            PhysicsVector::new(f64::from(0.4_f32), 0.0),
+            f64::from(sail_luff_m),
+        ),
         air_density_kg_m3: f64::from(1.225_f32),
         sail_area_m2: f64::from(boom_length_m * sail_luff_m / 2.0_f32),
         sail_base_drag_coefficient: f64::from(0.02_f32),

@@ -127,6 +127,7 @@ fn sail_and_sock_stay_attached_when_their_support_moves_before_the_cloth_settles
     let rotation = Rotation::new(0.8);
     let translation = Vector::new(8_000.0, -3.0);
     scene.sail_m = scene.sail_m.map(|point| rotation * point + translation);
+    scene.hull_m = scene.hull_m.map(|point| rotation * point + translation);
     motion.advance(&scene, 0.02);
     let mesh = sail_mesh_with_cloth(&scene, 0.4, motion.pose());
     let foot_v = mesh

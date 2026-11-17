@@ -175,7 +175,7 @@ fn backing_uses_raw_wind_side_even_when_drive_retains_boom_side() {
             turn: 0.0,
         },
     );
-    assert!((drive.sheet_target_angle_rad.to_degrees() + 87.5).abs() < 1e-10);
+    assert_eq!(drive.sheet_target_angle_rad, -p.max_sail_angle_rad);
     let back = sailor_targets(
         p,
         state,

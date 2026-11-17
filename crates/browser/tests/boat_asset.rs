@@ -379,6 +379,7 @@ fn cloth_follows_the_boat_pose_and_wind_in_world_coordinates() {
     let translation = Vector::new(25.0, -13.0);
     let mut transformed = original.clone();
     transformed.sail_m = original.sail_m.map(|p| rotation * p + translation);
+    transformed.hull_m = original.hull_m.map(|p| rotation * p + translation);
     transformed.apparent_wind_velocity_m_s = rotation * original.apparent_wind_velocity_m_s;
     for (before, after) in sail_mesh(&original, 0.7)
         .iter()
@@ -501,4 +502,124 @@ fn sail_foot_samples_opaque_canvas_at_its_boom_attachment() {
             "transparent atlas padding must not separate the sail foot from its boom"
         );
     }
+}
+
+fn segment_triangle_intersection(
+    start: [f32; 3],
+    end: [f32; 3],
+    triangle: [[f32; 3]; 3],
+) -> Option<[f32; 3]> {
+    if (0..3).any(|i| {
+        let low = triangle.iter().map(|v| v[i]).fold(f32::INFINITY, f32::min);
+        let high = triangle
+            .iter()
+            .map(|v| v[i])
+            .fold(f32::NEG_INFINITY, f32::max);
+        start[i].min(end[i]) > high || start[i].max(end[i]) < low
+    }) {
+        return None;
+    }
+    let sub = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] - b[i]);
+    let dot = |a: [f32; 3], b: [f32; 3]| a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f32>();
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let direction = sub(end, start);
+    let edge_a = sub(triangle[1], triangle[0]);
+    let edge_b = sub(triangle[2], triangle[0]);
+    let p = cross(direction, edge_b);
+    let determinant = dot(edge_a, p);
+    if determinant.abs() < 1.0e-9 {
+        return None;
+    }
+    let offset = sub(start, triangle[0]);
+    let u = dot(offset, p) / determinant;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = cross(offset, edge_a);
+    let v = dot(direction, q) / determinant;
+    let t = dot(edge_b, q) / determinant;
+    (v >= 0.0 && u + v <= 1.0 && (1.0e-4..1.0 - 1.0e-4).contains(&t))
+        .then(|| std::array::from_fn(|i| start[i] + direction[i] * t))
+}
+
+#[test]
+fn sail_clears_standing_rigging_through_the_boom_sweep() {
+    let mut failures = Vec::new();
+    for step in -6..=6 {
+        let angle = step as f32 * dinghy_parameters().max_sail_angle_rad as f32 / 6.0;
+        for wind in [
+            Vector::new(0.0, 8.0),
+            Vector::new(0.0, -8.0),
+            Vector::new(8.0, 0.0),
+        ] {
+            let mut scene = scene(wind);
+            let mast = scene.sail_m[0];
+            scene.sail_m[1] = mast + Rotation::new(angle) * (scene.sail_m[1] - mast);
+            for (lag, luffing, time) in [(0.0, false, 0.3), (-2.0, true, 0.0), (2.0, true, 0.17)] {
+                let mut cloth_pose = browser::ClothMotion::new(&scene).pose();
+                cloth_pose.sail_angle_rad += lag;
+                if luffing {
+                    cloth_pose.sail_load = 0.0;
+                    cloth_pose.flutter_response = 1.0;
+                }
+                let mesh = browser::boat_mesh_with_cloth(&scene, time, 0.001, cloth_pose);
+                let point =
+                    |v: &browser::BoatSpriteVertex| [v.position_m.x, v.position_m.y, v.height_m];
+                let cloth: Vec<_> = mesh
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .filter(|t| t[0].sail)
+                    .map(|t| [point(&t[0]), point(&t[1]), point(&t[2])])
+                    .collect();
+                let mut hits = 0;
+                for rope in mesh.as_chunks::<3>().0.iter().filter(|t| {
+                    !t[0].sail
+                        && t.iter().all(|v| v.opacity > 0.999)
+                        && t.iter().any(|v| v.height_m > 0.55)
+                        && (t[0].height_m - t[1].height_m).abs() > 1.0e-6
+                }) {
+                    let rope = [point(&rope[0]), point(&rope[1]), point(&rope[2])];
+                    for triangle in &cloth {
+                        for edge in [[0, 1], [1, 2], [2, 0]] {
+                            for hit in [
+                                segment_triangle_intersection(
+                                    rope[edge[0]],
+                                    rope[edge[1]],
+                                    *triangle,
+                                ),
+                                segment_triangle_intersection(
+                                    triangle[edge[0]],
+                                    triangle[edge[1]],
+                                    rope,
+                                ),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                if Vector::new(hit[0], hit[1]).distance(mast)
+                                    > browser::MAST_FITTING_RADIUS_M
+                                {
+                                    hits += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                if hits > 0 {
+                    failures.push((angle, wind, lag, hits));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "sail/standing-rig intersections: {failures:?}"
+    );
 }

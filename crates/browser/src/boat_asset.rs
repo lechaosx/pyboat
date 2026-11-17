@@ -1,13 +1,17 @@
 use std::f32::consts::{PI, TAU};
 
 use game::{
-    SeaComponents, Waterplane, dinghy_parameters, hull_wave_fit_of_sea,
-    procedural_ground_elevation_m, procedural_water_height_m,
+    DINGHY_BOOM_ABOVE_SHEER_M, DINGHY_STAY_RADIUS_M, SeaComponents, Waterplane, dinghy_parameters,
+    dinghy_stay_anchors_m, hull_wave_fit_of_sea, procedural_ground_elevation_m,
+    procedural_water_height_m,
 };
 use rapier2d_f64::glamx::{Rot2 as Rotation, Vec2 as Vector};
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 use crate::{BoatScene, ClothMotion, ClothPose, Windsock, windsock_extension};
+
+// Estimated common attachment region around the painted mast head.
+pub const MAST_FITTING_RADIUS_M: f32 = 0.08;
 
 pub const HULL_IMAGE: &[u8] = include_bytes!("../assets/wooden-dinghy-painted.png");
 pub const RIG_IMAGE: &[u8] = include_bytes!("../assets/boat-rig-painted.png");
@@ -33,17 +37,14 @@ const BOAT_SHEER_ABOVE_KEEL_M: f32 = 0.50;
 /// the rule 1.4.3 sections to the 250 kg loaded displacement; the class
 /// association's 0.09 m is unladen.
 const BOAT_HULL_DRAFT_M: f32 = 0.19;
-/// The boom 0.66 m above the mast heel (rules 5.1.6 and 5.5), whose heel
-/// stands on the deck 0.10 to 0.13 m below the sheer.
-const BOOM_ABOVE_SHEER_M: f32 = 0.55;
+const BOOM_ABOVE_SHEER_M: f32 = DINGHY_BOOM_ABOVE_SHEER_M;
 // Estimated bow-staff height above the gunwale.
 const WINDSOCK_ABOVE_SHEER_M: f32 = 0.4;
 
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
 const ROPE: [f32; 4] = [530.0, 691.0, 982.0, 795.0];
-// Matches the bow coil's roughly 10-pixel strands on the 1565-pixel, 4.05 m hull.
-const ROPE_RADIUS_M: f32 = 0.014;
+const ROPE_RADIUS_M: f32 = DINGHY_STAY_RADIUS_M;
 const CLOTH: [f32; 4] = [48.0, 985.0, 473.0, 1404.0];
 const SOCK: [f32; 4] = [509.0, 1085.0, 1017.0, 1338.0];
 
@@ -202,6 +203,17 @@ pub fn sail_mesh_with_cloth(
     let flutter = 0.12 * cloth.flutter_response * (1.0 - load * load).powi(2);
     let boom_angle = boom.y.atan2(boom.x);
     let twist_angle = (cloth.sail_angle_rad - boom_angle + PI).rem_euclid(TAU) - PI;
+    let stern = (scene.hull_m[7] + scene.hull_m[8]) * 0.5;
+    let hull_axis = scene.hull_m[0] - stern;
+    let forward = hull_axis.normalize();
+    let port = Vector::new(-forward.y, forward.x);
+    let center = (scene.hull_m[0] + stern) * 0.5;
+    let mast_offset = scene.sail_m[0] - center;
+    let shroud = dinghy_stay_anchors_m(f64::from(hull_axis.length()))[1].as_vec2();
+    let shroud = shroud - Vector::new(mast_offset.dot(forward), mast_offset.dot(port));
+    // The cloth/head connection overlaps the stays inside the common fitting.
+    let limit = shroud.y.atan2(-shroud.x) - (ROPE_RADIUS_M / MAST_FITTING_RADIUS_M).asin();
+    let spread = limit.tan();
     let mut vertices = Vec::new();
     const LENGTH_STEPS: usize = 24;
     const HEIGHT_STEPS: usize = 12;
@@ -230,12 +242,23 @@ pub fn sail_mesh_with_cloth(
                 // Ruled flutter keeps each luffing flap facing one way through
                 // its height; foot and vertical luff remain fixed.
                 let flutter_offset = 1.5 * along * height * flutter * ripple;
-                let point = scene.sail_m[0]
+                let mut point = scene.sail_m[0]
                     + Rotation::new(twist) * boom * along
                     + normal
                         * (length
                             * (chord * envelope * (PI * height).sin() * 0.18 * load
                                 + flutter_offset));
+                // Contact approximation: flatten free cloth against an aft
+                // wedge rather than solving local cloth/wire collisions.
+                // Only free cloth moves; its foot and vertical luff stay attached.
+                if height > 0.0 && along > 0.0 {
+                    let offset = point - scene.sail_m[0];
+                    let aft = -offset.dot(forward);
+                    let side = offset
+                        .dot(port)
+                        .clamp(-aft.max(0.0) * spread, aft.max(0.0) * spread);
+                    point = scene.sail_m[0] - forward * aft.max(0.0) + port * side;
+                }
                 // UVs use material distance, so sewn panels narrow with the triangle.
                 let mut vertex = textured(point, CLOTH, along, 1.0 - height);
                 vertex.height_m = BOOM_ABOVE_SHEER_M + scene.sail_luff_m * height;
@@ -357,11 +380,8 @@ pub fn boat_mesh_with_cloth(
     // Rail bolts at source (930,211)/(930,729), and the bow's bronze eye.
     // Mirror the fittings around the structural centerline rather than the
     // slightly asymmetric painted highlights.
-    for anchor in [
-        center + forward * (770.5 * pixel_m),
-        center + forward * (82.5 * pixel_m) + port * (259.0 * pixel_m),
-        center + forward * (82.5 * pixel_m) - port * (259.0 * pixel_m),
-    ] {
+    for anchor in dinghy_stay_anchors_m(f64::from(length)) {
+        let anchor = center + forward * anchor.x as f32 + port * anchor.y as f32;
         rope(
             &mut vertices,
             mast,
