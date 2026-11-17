@@ -1,9 +1,13 @@
-use browser::MultiplayerClient;
-use game::{procedural_match_environment, procedural_water_depth_m};
+use browser::{MultiplayerClient, boat_scene};
+use game::{
+    dinghy_parameters, procedural_match_environment, procedural_water_depth_m, sailor_targets,
+};
 use protocol::{BoatSnapshot, ClientMessage, ServerMessage};
 use rapier2d_f64::glamx::Vec2 as Vector;
 use rapier2d_f64::prelude::Vector as PhysicsVector;
-use simulation::{TICKS_PER_SECOND, WorldGeometry, apparent_flow};
+use simulation::{
+    BoatMotion, MotionIntent, SharedSimulation, TICKS_PER_SECOND, WorldGeometry, apparent_flow,
+};
 
 const TICK_SECONDS: f64 = 1.0 / TICKS_PER_SECOND as f64;
 
@@ -910,6 +914,133 @@ fn multiplayer_client_preserves_pose_across_physics_bubble_transitions() {
     });
     let at_leave = client.scenes()[1].hull_m[0];
     assert!((at_leave - before_leave).length() < 1.0e-4);
+}
+
+#[test]
+fn multiplayer_prediction_renders_the_fractional_tick_without_advancing_physics() {
+    let geometry = WorldGeometry::default();
+    let seed = 42;
+    let tick = 3600;
+    let initial = BoatMotion {
+        position_m: PhysicsVector::new(0.0, 0.0),
+        velocity_m_s: PhysicsVector::new(3.0, 1.0),
+        angle_rad: 0.5,
+        angular_velocity_rad_s: 0.1,
+        sail_angle_rad: 0.2,
+        sail_angular_velocity_rad_s: -0.1,
+        rudder_angle_rad: -0.3,
+        rudder_angular_velocity_rad_s: 0.2,
+    };
+    let mut snapshot = boat("player-1", initial.position_m.x);
+    snapshot.y = initial.position_m.y;
+    snapshot.vx = initial.velocity_m_s.x;
+    snapshot.vy = initial.velocity_m_s.y;
+    snapshot.angle = initial.angle_rad;
+    snapshot.angular_velocity = initial.angular_velocity_rad_s;
+    snapshot.sail = initial.sail_angle_rad;
+    snapshot.sail_angular_velocity = initial.sail_angular_velocity_rad_s;
+    snapshot.rudder = initial.rudder_angle_rad;
+    snapshot.rudder_angular_velocity = initial.rudder_angular_velocity_rad_s;
+    snapshot.acknowledged_input = Some(0);
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".into(),
+        match_seed: seed,
+        world_geometry: geometry,
+    });
+    client.accept(ServerMessage::Snapshot {
+        tick,
+        controlled_boat_id: Some("player-1".into()),
+        focus_m: [0.0, 0.0],
+        players: None,
+        boats: vec![snapshot],
+        removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
+    });
+    let mut reference = SharedSimulation::new_with_world_geometry(geometry);
+    reference.add_boat(dinghy_parameters(), initial);
+    client.take_inputs(TICK_SECONDS);
+    let environment =
+        procedural_match_environment(geometry, seed, tick, initial.position_m, initial.angle_rad);
+    let targets = sailor_targets(
+        dinghy_parameters(),
+        initial,
+        environment,
+        MotionIntent::default(),
+    );
+    reference.advance_controlled_with_environments(&[environment], &[Some(targets)]);
+    let mut expected = reference.motion(0);
+    assert!(client.take_inputs(TICK_SECONDS / 2.0).is_empty());
+    expected.position_m += expected.velocity_m_s * (TICK_SECONDS / 2.0);
+    expected.angle_rad += expected.angular_velocity_rad_s * (TICK_SECONDS / 2.0);
+    expected.sail_angle_rad += expected.sail_angular_velocity_rad_s * (TICK_SECONDS / 2.0);
+    expected.rudder_angle_rad += expected.rudder_angular_velocity_rad_s * (TICK_SECONDS / 2.0);
+    let expected = boat_scene(dinghy_parameters(), expected);
+    let actual = &client.scenes()[0];
+    assert!(
+        (actual.hull_m[0] - expected.hull_m[0]).length() < 1.0e-5,
+        "fractional hull displacement: {} m",
+        (actual.hull_m[0] - expected.hull_m[0]).length()
+    );
+    assert!((actual.sail_m[1] - expected.sail_m[1]).length() < 1.0e-5);
+    assert!((actual.rudder_m[1] - expected.rudder_m[1]).length() < 1.0e-5);
+    assert_eq!(client.take_inputs(TICK_SECONDS / 2.0).len(), 1);
+}
+
+#[test]
+fn multiplayer_distant_extrapolation_includes_unacknowledged_prediction_time() {
+    let mut client = MultiplayerClient::new();
+    client.accept(ServerMessage::Welcome {
+        player_id: "player-1".into(),
+        match_seed: 42,
+        world_geometry: WorldGeometry::default(),
+    });
+    let mut local = boat("player-1", 0.0);
+    local.acknowledged_input = Some(0);
+    let mut remote = boat("player-2", 100.0);
+    remote.forward = None;
+    remote.turn = None;
+    let snapshot = |tick, local, remote| ServerMessage::Snapshot {
+        tick,
+        controlled_boat_id: Some("player-1".into()),
+        focus_m: [0.0, 0.0],
+        players: None,
+        boats: vec![local, remote],
+        removed_player_ids: Vec::new(),
+        impacts: Vec::new(),
+    };
+    client.accept(snapshot(1, local.clone(), remote.clone()));
+    client.take_inputs(12.0 * TICK_SECONDS);
+    local.acknowledged_input = Some(6);
+    client.accept(snapshot(7, local, remote.clone()));
+    client.take_inputs(6.0 * TICK_SECONDS + TICK_SECONDS / 2.0);
+    let expected = |seconds| {
+        boat_scene(
+            dinghy_parameters(),
+            BoatMotion {
+                position_m: PhysicsVector::new(
+                    remote.x + remote.vx * seconds,
+                    remote.y + remote.vy * seconds,
+                ),
+                velocity_m_s: PhysicsVector::new(remote.vx, remote.vy),
+                angle_rad: remote.angle + remote.angular_velocity * seconds,
+                angular_velocity_rad_s: remote.angular_velocity,
+                sail_angle_rad: remote.sail + remote.sail_angular_velocity * seconds,
+                sail_angular_velocity_rad_s: remote.sail_angular_velocity,
+                rudder_angle_rad: remote.rudder + remote.rudder_angular_velocity * seconds,
+                rudder_angular_velocity_rad_s: remote.rudder_angular_velocity,
+            },
+        )
+    };
+    let at_prediction_time = expected(12.5 * TICK_SECONDS);
+    let actual = &client.scenes()[1];
+    assert!(
+        (actual.hull_m[0] - at_prediction_time.hull_m[0]).length() < 1.0e-4,
+        "prediction-clock mismatch: {} m",
+        (actual.hull_m[0] - at_prediction_time.hull_m[0]).length()
+    );
+    client.take_inputs(1.0);
+    assert!((client.scenes()[1].hull_m[0] - expected(0.25).hull_m[0]).length() < 1.0e-4);
 }
 
 #[test]

@@ -575,7 +575,6 @@ pub struct MultiplayerClient {
     world_geometry: Option<WorldGeometry>,
     session_state: ClientSessionState,
     boats: HashMap<String, ReplicatedBoat>,
-    snapshot_received_at_seconds: HashMap<String, f64>,
     impacts: Vec<protocol::HullImpact>,
     tick: Option<u64>,
     prediction_tick: u64,
@@ -617,7 +616,6 @@ impl MultiplayerClient {
             world_geometry: None,
             session_state: ClientSessionState::AwaitingWelcome,
             boats: HashMap::new(),
-            snapshot_received_at_seconds: HashMap::new(),
             impacts: Vec::new(),
             tick: None,
             prediction_tick: 0,
@@ -690,10 +688,7 @@ impl MultiplayerClient {
                     .map(|snapshot| snapshot.id.clone())
                     .collect::<Vec<_>>();
                 self.boats.clear();
-                self.snapshot_received_at_seconds.clear();
                 for snapshot in boats {
-                    self.snapshot_received_at_seconds
-                        .insert(snapshot.id.clone(), self.time_seconds);
                     self.boats
                         .insert(snapshot.id.clone(), ReplicatedBoat { snapshot });
                 }
@@ -1113,13 +1108,20 @@ impl MultiplayerClient {
     }
 
     fn predicted_motion(&self, player_id: &str) -> Option<BoatMotion> {
-        if let Some(boat) = self.predicted_boats.get(player_id) {
-            return Some(self.prediction.motion(boat.index));
-        }
-        let boat = self.boats.get(player_id)?;
-        let mut motion = snapshot_motion(&boat.snapshot);
-        let received_at = self.snapshot_received_at_seconds[player_id];
-        let seconds = (self.time_seconds - received_at).clamp(0.0, MAXIMUM_PREDICTION_SECONDS);
+        let fraction_seconds = self.input_accumulator_seconds.clamp(0.0, TICK_SECONDS);
+        let (mut motion, seconds) = if let Some(boat) = self.predicted_boats.get(player_id) {
+            (self.prediction.motion(boat.index), fraction_seconds)
+        } else {
+            let boat = self.boats.get(player_id)?;
+            // Both sides of the physics bubble render at the replay clock;
+            // receipt time omits the unacknowledged input's prediction lead.
+            let seconds = self.prediction_tick.saturating_sub(self.tick?) as f64 * TICK_SECONDS
+                + fraction_seconds;
+            (
+                snapshot_motion(&boat.snapshot),
+                seconds.min(MAXIMUM_PREDICTION_SECONDS),
+            )
+        };
         motion.position_m += motion.velocity_m_s * seconds;
         motion.position_m = PhysicsVector::from(
             self.world_geometry
