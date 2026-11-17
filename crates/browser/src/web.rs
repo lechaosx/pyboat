@@ -1413,7 +1413,52 @@ impl OccluderFields {
     }
 }
 
+// History entries can retain the WASM heap after navigation. Release GPU
+// allocations on pagehide, including while renderer construction is suspended.
+struct PageGpuSession {
+    window: web_sys::Window,
+    on_page_hide: Closure<dyn FnMut()>,
+    device: Rc<RefCell<Option<wgpu::Device>>>,
+}
+
+impl PageGpuSession {
+    fn new(terminal_error: &Arc<AtomicBool>) -> Result<Self, JsValue> {
+        let device = Rc::new(RefCell::new(None::<wgpu::Device>));
+        let device_on_hide = Rc::clone(&device);
+        let terminal_error = Arc::clone(terminal_error);
+        let session = Self {
+            window: web_sys::window()
+                .ok_or_else(|| JsValue::from_str("browser window is unavailable"))?,
+            on_page_hide: Closure::new(move || {
+                terminal_error.store(true, Ordering::Release);
+                if let Some(device) = device_on_hide.borrow().as_ref() {
+                    device.destroy();
+                }
+            }),
+            device,
+        };
+        session.window.add_event_listener_with_callback(
+            "pagehide",
+            session.on_page_hide.as_ref().unchecked_ref(),
+        )?;
+        Ok(session)
+    }
+}
+
+impl Drop for PageGpuSession {
+    fn drop(&mut self) {
+        drop(self.window.remove_event_listener_with_callback(
+            "pagehide",
+            self.on_page_hide.as_ref().unchecked_ref(),
+        ));
+        if let Some(device) = self.device.borrow().as_ref() {
+            device.destroy();
+        }
+    }
+}
+
 struct Renderer {
+    _page_gpu_session: PageGpuSession,
     canvas: HtmlCanvasElement,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -1607,6 +1652,8 @@ impl Renderer {
         bake_memory_bytes: u64,
         fresh_surface: bool,
     ) -> Result<Self, JsValue> {
+        let terminal_error = Arc::new(AtomicBool::new(false));
+        let page_gpu_session = PageGpuSession::new(&terminal_error)?;
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -1631,7 +1678,12 @@ impl Renderer {
             })
             .await
             .map_err(js_error)?;
-        let terminal_error = Arc::new(AtomicBool::new(false));
+        page_gpu_session.device.replace(Some(device.clone()));
+        if terminal_error.load(Ordering::Acquire) {
+            return Err(JsValue::from_str(
+                "WebGPU became unavailable during startup",
+            ));
+        }
         let device_lost_callback = Arc::clone(&terminal_error);
         device.set_device_lost_callback(move |_, _| {
             device_lost_callback.store(true, Ordering::Release);
@@ -1869,6 +1921,7 @@ impl Renderer {
         let upscaler = Upscaler::new(&device, config.format);
 
         Ok(Self {
+            _page_gpu_session: page_gpu_session,
             canvas,
             device,
             queue,
@@ -2562,6 +2615,11 @@ impl BrowserGame {
             fresh_surface,
         )
         .await?;
+        if !renderer.is_available() {
+            return Err(JsValue::from_str(
+                "WebGPU became unavailable during startup",
+            ));
+        }
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
@@ -2751,6 +2809,12 @@ impl BrowserGame {
         if let Some(session) = self.transport.borrow_mut().take() {
             session.close(0, "Client shutdown");
         }
+    }
+
+    pub fn dispose(&mut self) {
+        self.shutdown();
+        self.renderer.terminal_error.store(true, Ordering::Release);
+        self.renderer.device.destroy();
     }
 
     pub fn reconnect(&mut self) -> Result<(), JsValue> {

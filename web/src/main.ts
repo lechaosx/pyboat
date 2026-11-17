@@ -75,6 +75,10 @@ function firstGamepad(): Gamepad | null {
   return null;
 }
 
+window.addEventListener("pageshow", event => {
+  if (event.persisted) location.reload();
+});
+
 try {
   const game = await BrowserGame.create(canvas, savedGraphics.toString());
   const audio = new SailingAudio();
@@ -85,6 +89,17 @@ try {
   let fpsStartFrames = game.presented_frames();
   let currentState = "loading";
   let renderingStopped = false;
+  let pageEnded = false;
+
+  function endSession(): void {
+    if (pageEnded) return;
+    pageEnded = true;
+    clearInput();
+    audio.setActive(false);
+    game.dispose();
+  }
+  window.addEventListener("pagehide", endSession, { once: true });
+  if (import.meta.hot) import.meta.hot.dispose(endSession);
 
   function inputEnabled(): boolean {
     return currentState === "playing" && !graphicsDialog.open && document.hasFocus() && !document.hidden;
@@ -301,6 +316,7 @@ try {
   });
 
   function frame(timeMs: number): void {
+    if (pageEnded) return;
     const elapsedSeconds = (timeMs - previousTimeMs) / 1000;
     previousTimeMs = timeMs;
     try {
@@ -345,7 +361,7 @@ try {
       console.error(error);
       if (!game.renderer_is_available()) {
         clearInput();
-        game.shutdown();
+        game.dispose();
         audio.setActive(false);
         renderingStopped = true;
         currentState = "disconnected";
