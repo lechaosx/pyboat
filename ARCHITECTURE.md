@@ -62,8 +62,8 @@ and verification details.
 - **[Explicit]** Frontend pushes to `master` deploy automatically and independently
   of backend releases. Graphics and UI updates preserve multiplayer
   compatibility with supported servers.
-- **[Explicit]** Backend deployment requires a manual pipeline action that
-  acknowledges discarding the game in progress.
+- **[Explicit]** Backend deployment uses a separate manual workflow. Dispatching
+  it requests deployment and discards the game in progress.
 - **[Explicit]** Certificate renewal preserves the running match and connections.
 - **[Explicit]** Backend updates, host configuration updates, service
   restarts, and reboots remain deliberate.

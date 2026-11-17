@@ -8,11 +8,6 @@ on:
         required: true
         default: master
         type: string
-      discard_current_match:
-        description: Restart the backend and permanently discard the game in progress
-        required: true
-        default: false
-        type: boolean
 
 concurrency:
   group: production-backend
@@ -23,7 +18,6 @@ permissions:
 
 jobs:
   build:
-    if: ${{ inputs.discard_current_match }}
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -76,6 +70,7 @@ jobs:
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
   deploy:
+    name: Deploy and discard current match
     needs: build
     runs-on: ubuntu-24.04
     environment: production

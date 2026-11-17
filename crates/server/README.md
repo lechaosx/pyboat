@@ -44,11 +44,10 @@ Production uses UDP 443; local builds retain UDP 8765 unless `WEBTRANSPORT_PORT`
 is set at build time or `webtransportPort` is supplied in the browser URL.
 
 The backend runs with socketless `podman-compose` in rootless Podman on NixOS.
-The **Deploy backend (discard
-current match)** workflow is manual: run it from `master`, set `revision` to
-the game branch, tag, or full commit SHA, and check `discard_current_match`.
-It tests and publishes an ARM64
-image to GHCR, pulls that exact digest on the Pi, and restarts the user service.
+Run **Deploy backend (discard current match)** from `master` and set `revision`
+to the game branch, tag, or full commit SHA. Dispatching the workflow tests and
+publishes an ARM64 image to GHCR, pulls that exact digest on the Pi, and restarts
+the user service.
 **Deployment permanently loses the game in progress and disconnects all players.**
 
 On the first run, change the GHCR package's visibility to **Public** after the
