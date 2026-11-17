@@ -148,8 +148,7 @@ See [README.md](README.md) for what is playable now and
 
 ## Sound
 
-- **[Explicit]** Sound defaults on after the first interaction, respecting saved mute
-  and volume preferences.
+- **[Explicit]** Sound output is disabled.
 - **[Explicit]** Procedural sound conveys sea conditions, sailing, wind, shore
   surf, storms, rain, and wooden hull movement.
 - **[Explicit]** Local sounds change with physical distance from the listener.

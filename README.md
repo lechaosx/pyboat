@@ -11,7 +11,7 @@ carries boats; swell from distant storms isn't drawn, but it does the same
 and can ground them in its troughs. Water mirrors the sky and
 glints in sunlight and moonlight; its depth, its bed, and the sediment waves
 stir set its color; ground darkens where tide, waves, dew, or humid and rainy
-weather wet it.
+weather wet it. Storm lightning illuminates the scene.
 
 The intended game adds varied ships, mostly automatic weapons, and progression.
 [Product decisions](PRODUCT.md) describe that scope.
@@ -61,12 +61,7 @@ defaults to CSS pixels, bounded by the 2× upscale limit; boats stay at display
 resolution. Touch screens default to lower detail, a frame-rate cap, and
 automatic resolution.
 
-Sound starts on the first menu interaction, with saved volume and mute controls.
-Procedural wind, waves, rain, hull wash, creaks, sail flutter, and hull impacts
-follow the world and boat motion; nearby surf and boats have distance and stereo
-position. Storm flashes illuminate the scene, followed by distance-delayed
-thunder. Sound pauses while the window is inactive. The playground's Sound
-panel auditions each layer in the current world.
+Sound is currently unavailable in the game and playground.
 
 Startup URL overrides remain available: `quality` (`low`, `medium`, or `high`),
 `renderScale` (scene fraction of output resolution), `pixelRatio` (device pixel

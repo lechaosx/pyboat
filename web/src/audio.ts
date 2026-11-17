@@ -2,6 +2,7 @@ import workletUrl from './audio-worklet.js?worker&url';
 import type { SoundState } from './audio-dsp.js';
 
 const storageKey = 'sound-settings';
+const soundAvailable = false;
 export const soundLayers = ['Wind', 'Sea and shore', 'Hull water', 'Wooden creaks', 'Sail flutter', 'Rain', 'Thunder', 'Hull impacts'] as const;
 
 export function decodeSoundScene(data: Float32Array): SoundState {
@@ -35,6 +36,14 @@ export class SailingAudio {
   private readonly enable = document.createElement('button');
   readonly element = document.createElement('section');
   constructor(audition = false) {
+    this.element.className = 'panel-section sound-controls';
+    this.element.innerHTML = '<h3>Sound</h3>';
+    this.status.setAttribute('role', 'status');
+    if (!soundAvailable) {
+      this.status.textContent = 'Sound is currently unavailable.';
+      this.element.append(this.status);
+      return;
+    }
     try {
       const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
       if (saved && typeof saved === 'object') {
@@ -42,8 +51,6 @@ export class SailingAudio {
         if ('muted' in saved && typeof saved.muted === 'boolean') this.muted = saved.muted;
       }
     } catch { /* Device storage is optional. */ }
-    this.element.className = 'panel-section sound-controls';
-    this.element.innerHTML = '<h3>Sound</h3>';
     this.enable.type = 'button'; this.enable.textContent = 'Enable sound';
     this.enable.addEventListener('click', () => { void this.start(); });
     const volumeLabel = document.createElement('label'); volumeLabel.textContent = 'Volume';
@@ -53,7 +60,7 @@ export class SailingAudio {
     const muteLabel = document.createElement('label'); const mute = document.createElement('input'); mute.type = 'checkbox'; mute.checked = this.muted;
     mute.addEventListener('change', () => { this.muted = mute.checked; this.save(); this.applyGain(); if (!this.muted) void this.start(); });
     muteLabel.append(mute, ' Mute');
-    this.status.setAttribute('role', 'status'); this.status.textContent = 'Sound is on. Interact with the menu to begin.';
+    this.status.textContent = 'Sound is on. Interact with the menu to begin.';
     this.element.append(this.enable, volumeLabel, muteLabel, this.status);
     if (audition) {
       for (let i = 0; i < soundLayers.length; i++) {
@@ -78,6 +85,7 @@ export class SailingAudio {
     else this.syncPlayback();
   }
   async start(): Promise<void> {
+    if (!soundAvailable) return;
     if (this.starting) return this.starting;
     if (this.enabled) { this.syncPlayback(); return; }
     if (this.muted) return;
@@ -111,12 +119,13 @@ export class SailingAudio {
     else { this.processor?.port.postMessage({ resetEvents: true }); void this.context.suspend().catch(() => {}); this.wasRunning = false; }
   }
   due(now: number): boolean {
-    if (!this.enabled || this.muted || this.volume === 0 || !this.active || document.hidden || !document.hasFocus() || this.context?.state !== 'running' || now < this.nextUpdate) return false;
+    if (!soundAvailable || !this.enabled || this.muted || this.volume === 0 || !this.active || document.hidden || !document.hasFocus() || this.context?.state !== 'running' || now < this.nextUpdate) return false;
     if (!this.wasRunning) { this.playbackEpoch++; this.wasRunning = true; }
     this.elapsedSeconds = this.lastUpdate === undefined ? 0.05 : (now - this.lastUpdate) / 1000;
     this.lastUpdate = now; this.nextUpdate = now + 50; return true;
   }
   update(scene: Float32Array): void {
+    if (!soundAvailable) return;
     const thunder = [];
     let offset = 59;
     for (let n = 0; n < (scene[57] ?? 0); n++, offset += 4) thunder.push({ x: scene[offset]!, y: scene[offset+1]!, strength: scene[offset+2]!, distance: scene[offset+3]! });
