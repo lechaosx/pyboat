@@ -175,8 +175,10 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** The sailor pursues player movement intent as effectively as
   physical limits allow, including useful attempts when the requested motion
   cannot be achieved.
-- **[Explicit]** Simple sailor assigns forward intent to sail power and turn
-  intent directly to rudder position, including when moving stern-first.
+- **[Explicit]** Simple sailor holds the sail on the boat's centerline at zero
+  forward intent and interpolates its angle toward forward or reverse trim with
+  fractional intent. Turn intent directly sets rudder position, including when
+  moving stern-first.
 - **[Explicit]** The player chooses maneuvers; the controller executes present
   forward and turn intent.
 - **[Explicit]** Keyboard, gamepad, touch, and mouse controls remain usable

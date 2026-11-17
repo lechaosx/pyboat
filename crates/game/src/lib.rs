@@ -3927,7 +3927,6 @@ pub fn sailor_targets(
     };
     let from = raw_from.abs().copysign(side);
     let limit = parameters.max_sail_angle_rad;
-    let free = from.clamp(-limit, limit);
     // RYA points of sail: tight upwind, eased across/downwind. Half the apparent
     // angle interpolates those endpoints for this flat-plate model, not every real rig.
     // https://www.rya.org.uk/training/do-you-know-your-points-of-sail/
@@ -3940,15 +3939,13 @@ pub fn sailor_targets(
             raw_from.signum()
         };
         let back = (raw_from * 0.5 - backing_side * FRAC_PI_2).clamp(-limit, limit);
-        // Interpolating free-to-backed can drive forward at partial negative input.
-        // Centerline-to-backed avoids that force branch, at the cost of a target jump at zero.
         -power * back
     } else {
-        free + power * (drive - free)
+        power * drive
     };
     simulation::SurfaceTargets {
         sheet_target_angle_rad: sail,
-        sail_target_angle_rad: (power < 0.0).then_some(sail),
+        sail_target_angle_rad: Some(sail),
         rudder_target_angle_rad: -intent.turn.clamp(-1.0, 1.0) * parameters.max_rudder_angle_rad,
     }
 }

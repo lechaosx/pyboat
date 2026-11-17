@@ -16,7 +16,7 @@ fn motion() -> BoatMotion {
 }
 
 #[test]
-fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
+fn power_regimes_hold_fractional_sail_angles_and_direct_helm_targets() {
     let p = dinghy_parameters();
     for side in [-1.0, 1.0] {
         let state = BoatMotion {
@@ -29,9 +29,9 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
             ..Environment::default()
         };
         for (power, expected_degrees) in [
-            (0.0, 90.0),
-            (1e-6, 90.0 - 45e-6),
-            (0.5, 67.5),
+            (0.0, 0.0),
+            (1e-6, 45e-6),
+            (0.5, 22.5),
             (1.0, 45.0),
             (-1e-6, -45e-6),
             (-0.5, -22.5),
@@ -52,7 +52,7 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
             );
             assert_eq!(
                 targets.sail_target_angle_rad,
-                (power < 0.0).then_some(targets.sheet_target_angle_rad)
+                Some(targets.sheet_target_angle_rad)
             );
             assert_eq!(
                 targets.rudder_target_angle_rad,
@@ -61,6 +61,57 @@ fn power_regimes_use_fractional_sheet_and_direct_helm_targets() {
         }
         let neutral = sailor_targets(p, state, environment, MotionIntent::default());
         assert_eq!(neutral.rudder_target_angle_rad, 0.0);
+    }
+}
+
+#[test]
+fn fractional_power_interpolates_from_held_centerline_across_wind_headings() {
+    let p = dinghy_parameters();
+    for degrees in (-180..=180).step_by(15) {
+        for sail_angle_rad in [-0.3, 0.0, 0.3] {
+            let state = BoatMotion {
+                velocity_m_s: Vector::ZERO,
+                sail_angle_rad,
+                ..motion()
+            };
+            let environment = Environment {
+                true_wind_velocity_m_s: Rotation::new(f64::from(degrees).to_radians())
+                    .transform_vector(Vector::new(-6.0, 0.0)),
+                ..Environment::default()
+            };
+            for endpoint in [-1.0, 1.0] {
+                let full = sailor_targets(
+                    p,
+                    state,
+                    environment,
+                    MotionIntent {
+                        forward: endpoint,
+                        turn: 0.0,
+                    },
+                );
+                for fraction in [0.0, 1e-6, 0.25, 0.5, 0.75, 1.0] {
+                    let target = sailor_targets(
+                        p,
+                        state,
+                        environment,
+                        MotionIntent {
+                            forward: fraction * endpoint,
+                            turn: 0.0,
+                        },
+                    );
+                    let expected = fraction * full.sheet_target_angle_rad;
+                    assert!(
+                        (target.sheet_target_angle_rad - expected).abs() < 1e-12,
+                        "wind={degrees}, sail={sail_angle_rad}, forward={}",
+                        fraction * endpoint
+                    );
+                    assert_eq!(
+                        target.sail_target_angle_rad,
+                        Some(target.sheet_target_angle_rad)
+                    );
+                }
+            }
+        }
     }
 }
 
