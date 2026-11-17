@@ -64,7 +64,8 @@ automatic resolution.
 Sound starts when you set sail or enable it in Settings, with saved volume and
 mute controls. Procedural wind, waves, rain, hull wash, creaks, and sail flutter
 follow the world and boat motion; nearby surf and boats have distance and stereo
-position. Sound pauses while the window is inactive. The playground's Sound
+position. Storm flashes illuminate the scene, followed by distance-delayed
+thunder. Sound pauses while the window is inactive. The playground's Sound
 panel auditions each layer in the current world.
 
 Startup URL overrides remain available: `quality` (`low`, `medium`, or `high`),

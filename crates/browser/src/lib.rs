@@ -24,6 +24,8 @@ mod field_grids;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_queue;
 mod graphics;
+mod storm;
+pub use storm::{LightningEvent, StormField, lightning_sources};
 #[cfg(any(target_arch = "wasm32", test))]
 mod sound;
 mod terrain_cache;

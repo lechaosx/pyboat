@@ -1896,7 +1896,7 @@ function advanceFrame(now: number): void {
   if (audio.due(now)) {
     const [tick, fraction] = splitTick(worldTimeSeconds);
     const listenerX = boatState?.[0] ?? state.cameraX, listenerY = boatState?.[1] ?? state.cameraY;
-    audio.update(soundScene.sample(state.worldWidthM, state.worldHeightM, parsedSeed(), tick, fraction, now / 1000, listenerX, listenerY, drivingBoat.driver?.sound_motion() ?? new Float64Array()));
+    audio.update(soundScene.sample(state.worldWidthM, state.worldHeightM, parsedSeed(), tick, fraction, now / 1000, audio.playbackEpoch, state.worldTimeScale === 1, listenerX, listenerY, drivingBoat.driver?.sound_motion() ?? new Float64Array()));
   }
   updateRenderedGeometry();
   if (diagnosticsDetailsElement.open && now >= nextDiagnosticsAt) {

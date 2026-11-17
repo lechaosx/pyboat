@@ -150,6 +150,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Procedural sound conveys sea conditions, sailing, wind, shore
   surf, storms, rain, and wooden hull movement.
 - **[Explicit]** Local sounds change with physical distance from the listener.
+- **[Explicit]** Storm lightning brightens the whole scene without a visible bolt.
+- **[Implicit]** Thunder arrives after the sound has travelled from the storm.
 
 ## Graphics settings
 

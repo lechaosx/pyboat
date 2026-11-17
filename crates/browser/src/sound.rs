@@ -13,6 +13,8 @@ mod tests {
             100,
             0.5,
             0.0,
+            0,
+            true,
             rapier2d_f64::prelude::Vector::ZERO,
             &[],
         );
@@ -22,10 +24,12 @@ mod tests {
             100,
             0.5,
             0.0,
+            0,
+            true,
             rapier2d_f64::prelude::Vector::ZERO,
             &[],
         );
-        assert_eq!(first, second);
+        assert_eq!(first[..56], second[..56]);
         assert!(first.iter().all(|value| value.is_finite()));
     }
     #[test]
@@ -35,6 +39,37 @@ mod tests {
         assert_eq!(open_water(4.0, 1.0), 0.0);
         assert_eq!(open_water(-1.0, 0.0), 0.0);
         assert_eq!(open_water(4.0, 0.0), 1.0);
+    }
+    #[test]
+    fn returning_to_realtime_starts_thunder_at_the_present() {
+        let geometry = WorldGeometry::default();
+        let listener = [48_126.919_571_367_784, 463.973_433_833_122_5];
+        let event =
+            crate::StormField::default().events(geometry, 0x5eed, listener, 846.0, 849.0)[0];
+        let arrival = event.arrival(geometry, listener);
+        let mut sampler = SoundSampler::default();
+        let mut sample = |time: f64, wall, realtime| {
+            let ticks = time / simulation::DT_SECONDS;
+            sampler.sample(
+                geometry,
+                0x5eed,
+                ticks.floor() as u64,
+                ticks.fract() as f32,
+                wall,
+                1,
+                realtime,
+                listener.into(),
+                &[],
+            )
+        };
+        sample(arrival - 0.1, 0.0, false);
+        let resumed = sample(arrival + 0.1, 0.2, true);
+        assert_eq!(
+            resumed.len(),
+            57,
+            "realtime resume must not replay an arrival from accelerated playback"
+        );
+        assert_eq!(resumed[56], 1.0, "resume cancels already-playing channels");
     }
     #[test]
     fn shore_crossings_are_found_from_either_side_and_absent_in_open_water() {
@@ -107,11 +142,15 @@ struct ShoreCache {
 #[derive(Default)]
 pub(crate) struct SoundSampler {
     shore_cache: Option<ShoreCache>,
+    storms: crate::StormField,
+    thunder: crate::storm::ThunderCursor,
+    playback_epoch: u32,
 }
 
 impl SoundSampler {
     // Packed presentation boundary: 8 environment values, four 9-value boats,
-    // then four 3-value shores. Positions are listener-relative before f32.
+    // then four 3-value shores, a thunder-reset flag, and 4-value thunder
+    // arrivals (x, y, strength, slant distance). Positions are listener-relative.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sample(
         &mut self,
@@ -120,6 +159,8 @@ impl SoundSampler {
         tick: u64,
         fraction: f32,
         now_seconds: f64,
+        playback_epoch: u32,
+        realtime: bool,
         listener: rapier2d_f64::prelude::Vector,
         boats: &[(u32, BoatMotion)],
     ) -> Vec<f32> {
@@ -247,6 +288,31 @@ impl SoundSampler {
                 ]);
             }
         }
+        if playback_epoch != self.playback_epoch
+            || !realtime
+            || self.storms.identity() != Some((geometry, seed))
+        {
+            self.thunder = crate::storm::ThunderCursor::default();
+            self.playback_epoch = playback_epoch;
+        }
+        if !realtime {
+            result.push(1.0);
+            return result;
+        }
+        let events = self.storms.events(
+            geometry,
+            seed,
+            listener.into(),
+            (seconds - 96.0).max(0.0),
+            seconds,
+        );
+        let arrivals =
+            self.thunder
+                .advance(seconds, now_seconds, &events, geometry, listener.into());
+        result.push(f32::from(self.thunder.reset));
+        for thunder in arrivals {
+            result.extend(thunder);
+        }
         result
     }
 }
@@ -258,6 +324,7 @@ impl crate::MultiplayerClient {
         sampler: &mut SoundSampler,
         spectator: Vec2,
         now_seconds: f64,
+        playback_epoch: u32,
     ) -> Vec<f32> {
         let (Some(geometry), Some(seed), Some((tick, fraction))) = (
             self.world_geometry(),
@@ -298,6 +365,8 @@ impl crate::MultiplayerClient {
             tick,
             fraction,
             now_seconds,
+            playback_epoch,
+            true,
             listener,
             &boats,
         )

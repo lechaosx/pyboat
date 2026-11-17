@@ -12,15 +12,35 @@ export class SeaSoundDSP {
   constructor(rate, seed = 1234567) {
     this.rate = rate; this.seed = seed >>> 0 || 1;
     this.time = 0; this.wind = 0; this.waves = 0; this.rain = 0; this.water = 0;
-    this.targets = [0, 0, 0, 0]; this.layers = [1, 1, 1, 1, 1, 1];
+    this.targets = [0, 0, 0, 0]; this.layers = [1, 1, 1, 1, 1, 1, 1];
     this.windLow = 0; this.windBody = 0; this.seaLow = 0; this.seaBody = 0; this.surge = 0;
     this.smooth = 1 - Math.exp(-1 / (0.2 * rate));
     this.low = 1 - Math.exp(-2 * Math.PI * 180 / rate);
     this.mid = 1 - Math.exp(-2 * Math.PI * 1800 / rate);
     this.voices = Array.from({ length: 8 }, () => ({ id: -1, target: 0, gain: 0, left: 0.707, right: 0.707, filter: 0, alpha: 0.1, speed: 0, flutter: 0, strain: 0, wood: 0, phase: 0, phaseStep: 0.02, lastLoad: 0, lastHeave: 0, wash: 0 }));
     this.drops = Array.from({ length: 6 }, () => ({ value: 0, phase: 0, step: 0, pan: 0.5 }));
+    this.thunder = Array.from({ length: 12 }, () => ({ age: Infinity, duration: 0, gain: 0, left: 0, right: 0, low: 0, alpha: 0 }));
     this.dropDecay = Math.exp(-1 / (0.008 * rate));
     this.woodDecay = Math.exp(-1 / (0.18 * rate));
+  }
+  resetThunder() { for (const voice of this.thunder) voice.age = Infinity; }
+  queueThunder(event) {
+    const distance = Math.max(0, event.distance);
+    const pan = event.x / Math.max(1000, Math.hypot(event.x, event.y));
+    const angle = (pan + 1) * Math.PI / 4;
+    // Three delayed channel patches give a crack followed by a spatially
+    // extended rumble. Distance removes high frequencies and spreads arrivals;
+    // this is a finite-channel acoustic proxy, not propagation through weather.
+    for (let patch = 0; patch < 3; patch++) {
+      let voice = this.thunder.find(v => v.age > v.duration);
+      if (!voice) voice = this.thunder.reduce((a,b) => a.age > b.age ? a : b);
+      Object.assign(voice, {
+        age: -patch * (0.13 + distance / 16000), duration: 3 + distance / 5000,
+        gain: event.strength / Math.sqrt(1 + (distance / 1200) ** 2) * (0.8 - patch * 0.18),
+        left: Math.cos(angle), right: Math.sin(angle), low: 0,
+        alpha: 1 - Math.exp(-2 * Math.PI * (1800 / (1 + distance / 1800)) / this.rate),
+      });
+    }
   }
   random() {
     let x = this.seed; x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
@@ -98,6 +118,16 @@ export class SeaSoundDSP {
         drop.value *= this.dropDecay; drop.phase += drop.step;
         const value = Math.sin(drop.phase) * drop.value * this.layers[5];
         l += value * (1 - drop.pan); r += value * drop.pan;
+      }
+      for (const voice of this.thunder) {
+        if (voice.age > voice.duration) continue;
+        voice.age += 1 / this.rate;
+        if (voice.age < 0) continue;
+        const noise = this.random() * 2 - 1;
+        voice.low += (noise - voice.low) * voice.alpha;
+        const envelope = (1 - Math.exp(-voice.age / 0.012)) * Math.exp(-voice.age / (voice.duration / 4));
+        const value = voice.low * envelope * voice.gain * (this.layers[6] ?? 0);
+        l += value * voice.left; r += value * voice.right;
       }
       // Soft saturation bounds coincident stochastic transients without a
       // main-thread compressor or an unbounded peak at a crowded shoreline.

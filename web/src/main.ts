@@ -315,7 +315,7 @@ try {
       game.frame(elapsedSeconds);
       updateSession();
       audio.setActive(!["connecting", "loading", "disconnected"].includes(currentState));
-      if (audio.due(timeMs)) audio.update(game.sound_scene(timeMs / 1000));
+      if (audio.due(timeMs)) audio.update(game.sound_scene(timeMs / 1000, audio.playbackEpoch));
       if (timeMs - fpsStartMs >= 1000) {
         const frames = game.presented_frames();
         fps.textContent = `${Math.round((frames - fpsStartFrames) * 1000 / (timeMs - fpsStartMs))} FPS`;

@@ -2,7 +2,7 @@ import workletUrl from './audio-worklet.js?worker&url';
 import type { SoundState } from './audio-dsp.js';
 
 const storageKey = 'sound-settings';
-export const soundLayers = ['Wind', 'Sea and shore', 'Hull water', 'Wooden creaks', 'Sail flutter', 'Rain'] as const;
+export const soundLayers = ['Wind', 'Sea and shore', 'Hull water', 'Wooden creaks', 'Sail flutter', 'Rain', 'Thunder'] as const;
 
 export function decodeSoundScene(data: Float32Array): SoundState {
   const state: SoundState = { wind: data[0] ?? 0, waves: data[1] ?? 0, rain: data[2] ?? 0, water: data[3] ?? 0, boats: [], shores: [] };
@@ -16,6 +16,8 @@ export function decodeSoundScene(data: Float32Array): SoundState {
 }
 
 export class SailingAudio {
+  playbackEpoch = 0;
+  private wasRunning = false;
   private context: AudioContext | undefined;
   private processor: AudioWorkletNode | undefined;
   private master: GainNode | undefined;
@@ -59,12 +61,12 @@ export class SailingAudio {
         input.addEventListener('change', () => { this.layers[i] = Number(input.checked); this.processor?.port.postMessage({ layers: this.layers }); });
         label.append(input, ` ${soundLayers[i]}`); this.element.append(label);
       }
-      const note = document.createElement('p'); note.textContent = 'Audition the current world. Spawn and drive a boat for hull, sail and creaks; pan near a coast for surf.'; this.element.append(note);
+      const note = document.createElement('p'); note.textContent = 'Audition the current world. Spawn and drive a boat for hull, sail and creaks; pan near a coast for surf. Thunder plays at real-time playback only.'; this.element.append(note);
     }
     window.addEventListener('blur', () => this.syncPlayback());
     window.addEventListener('focus', () => this.syncPlayback());
     document.addEventListener('visibilitychange', () => this.syncPlayback());
-    window.addEventListener('pagehide', event => { if (event.persisted) void this.context?.suspend(); else void this.context?.close(); });
+    window.addEventListener('pagehide', event => { this.wasRunning = false; this.processor?.port.postMessage({ resetThunder: true }); if (event.persisted) void this.context?.suspend(); else void this.context?.close(); });
     window.addEventListener('pageshow', () => this.syncPlayback());
   }
   private save(): void { try { localStorage.setItem(storageKey, JSON.stringify({ volume: this.volume, muted: this.muted })); } catch { /* Changes still apply this visit. */ } }
@@ -72,7 +74,7 @@ export class SailingAudio {
     if (!this.master || !this.context) return;
     this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.context.currentTime, 0.03);
     window.clearTimeout(this.pauseTimer);
-    if (this.muted || this.volume === 0) this.pauseTimer = window.setTimeout(() => this.syncPlayback(), 180);
+    if (this.muted || this.volume === 0) { this.processor?.port.postMessage({ resetThunder: true }); this.wasRunning = false; this.pauseTimer = window.setTimeout(() => this.syncPlayback(), 180); }
     else this.syncPlayback();
   }
   async start(): Promise<void> {
@@ -106,12 +108,17 @@ export class SailingAudio {
   private syncPlayback(): void {
     if (!this.context || !this.enabled) return;
     if (this.active && !this.muted && this.volume > 0 && !document.hidden && document.hasFocus()) void this.context.resume().catch(() => { this.enable.hidden = false; });
-    else void this.context.suspend().catch(() => {});
+    else { this.processor?.port.postMessage({ resetThunder: true }); void this.context.suspend().catch(() => {}); this.wasRunning = false; }
   }
   due(now: number): boolean {
     if (!this.enabled || this.muted || this.volume === 0 || !this.active || document.hidden || !document.hasFocus() || this.context?.state !== 'running' || now < this.nextUpdate) return false;
+    if (!this.wasRunning) { this.playbackEpoch++; this.wasRunning = true; }
     this.elapsedSeconds = this.lastUpdate === undefined ? 0.05 : (now - this.lastUpdate) / 1000;
     this.lastUpdate = now; this.nextUpdate = now + 50; return true;
   }
-  update(scene: Float32Array): void { this.processor?.port.postMessage({ state: decodeSoundScene(scene), elapsedSeconds: this.elapsedSeconds }); }
+  update(scene: Float32Array): void {
+    const thunder = [];
+    for (let i = 57; i + 3 < scene.length; i += 4) thunder.push({ x: scene[i]!, y: scene[i+1]!, strength: scene[i+2]!, distance: scene[i+3]! });
+    this.processor?.port.postMessage({ state: decodeSoundScene(scene), elapsedSeconds: this.elapsedSeconds, resetThunder: Boolean(scene[56]), thunder });
+  }
 }

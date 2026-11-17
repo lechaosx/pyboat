@@ -20,6 +20,7 @@ struct SceneUniforms {
     // Seconds the adapting field adapts over this frame, the output peak, 1
     // for HDR output, then the vision noise phase.
     exposure_and_output: vec4<f32>,
+    lightning_sources: array<vec4<f32>, 4>,
     environment_field_grid_m: vec4<f32>,
     environment_field_texels: vec4<u32>,
     cloud_weather_grid_m: vec4<f32>,

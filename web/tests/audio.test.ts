@@ -56,3 +56,16 @@ test('the same load-change rate produces the same creak activity at different co
   assert.ok(at20.some(value => value !== 0));
   assert.ok(at20.every((value, index) => value === at10[index]), 'equal physical load-change rates should produce equal creak excitation');
 });
+
+test('thunder is a bounded transient and cancellation removes queued channels', () => {
+  const dsp = new SeaSoundDSP(48000, 42);
+  dsp.layers = [0, 0, 0, 0, 0, 0, 1];
+  dsp.queueThunder({ x: 3000, y: 0, strength: 1, distance: 3600 });
+  const l = new Float32Array(48000), r = new Float32Array(48000);
+  dsp.render(l, r);
+  assert.ok(l.some(value => value !== 0));
+  assert.ok(l.every(value => Number.isFinite(value) && Math.abs(value) <= 1));
+  assert.ok(r.reduce((a,x) => a+x*x,0) > l.reduce((a,x) => a+x*x,0));
+  dsp.resetThunder(); dsp.render(l,r);
+  assert.ok(l.every(value => value === 0) && r.every(value => value === 0));
+});

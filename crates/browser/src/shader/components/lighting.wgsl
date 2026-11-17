@@ -482,10 +482,26 @@ struct AtmosphericAmbientLight {
     beam_transmittance: vec2<f32>,
 };
 
+fn lightning_ambient_light(receiver: CelestialReceiverLight) -> vec3<f32> {
+    var amount = 0.0;
+    for (var i = 0u; i < 4u; i++) {
+        let source = scene.lightning_sources[i];
+        if source.w > 0.0 {
+            var delta = source.xy - (receiver.position_m - scene.camera_and_view_m.xy);
+            delta.x -= round(delta.x / scene.world_size_m.x) * scene.world_size_m.x;
+            let height = max(source.z - receiver.height_m, 100.0);
+            amount += source.w * source.z * source.z / (dot(delta, delta) + height * height);
+        }
+    }
+    // Cloud-scattered light shares the canopy's diffuse response and exposure.
+    return vec3<f32>(0.85, 0.92, 1.0) * min(amount, 32.0);
+}
+
 fn calculate_atmospheric_ambient_light(
     canopy: RegionalCanopyConditions,
     receiver: CelestialReceiverLight,
 ) -> AtmosphericAmbientLight {
+    let flash = lightning_ambient_light(receiver);
     let solar_ambient = twilight_clear_sky_light(receiver.sun_direction.z, receiver.height_m);
     let lunar_ambient = moon_atmospheric_amount(receiver);
     let clear_intensity = clear_sky_intensity(receiver);
@@ -527,7 +543,7 @@ fn calculate_atmospheric_ambient_light(
             clear_contribution,
             source_shares,
             vec3<f32>(0.0),
-            vec3<f32>(0.0),
+            flash,
             vec2<f32>(0.0),
             split,
             vec2<f32>(1.0),
@@ -574,7 +590,7 @@ fn calculate_atmospheric_ambient_light(
         clear_contribution,
         source_shares,
         select(canopy.sky_fraction * transmitted_light, vec3<f32>(0.0), absent),
-        select(canopy.sky_fraction * scattered_light, vec3<f32>(0.0), absent),
+        select(canopy.sky_fraction * scattered_light, vec3<f32>(0.0), absent) + flash,
         select(canopy.sky_fraction * scattered_beams, vec2<f32>(0.0), absent),
         split,
         1.0 - canopy.sky_fraction * intercepted,

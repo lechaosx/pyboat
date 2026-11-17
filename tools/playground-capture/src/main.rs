@@ -136,6 +136,7 @@ struct SceneUniforms {
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
     exposure_and_output: [f32; 4],
+    lightning_sources: [[f32; 4]; 4],
     environment_field_grid_m: [f32; 4],
     environment_field_texels: [u32; 4],
     cloud_weather_grid_m: [f32; 4],
@@ -3013,6 +3014,12 @@ fn scene_uniforms(
             scalar_time.water_vapor,
             scalar_time.decorative_water,
         ],
+        lightning_sources: browser::lightning_sources(
+            world_geometry,
+            options.seed,
+            options.world_time_seconds,
+            canonical_camera_m.map(f64::from),
+        ),
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         precipitation_epoch: [
             precipitation_epoch as u32,

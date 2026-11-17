@@ -3,6 +3,8 @@ class SeaProcessor extends AudioWorkletProcessor {
   constructor() {
     super(); this.dsp = new SeaSoundDSP(sampleRate);
     this.port.onmessage = ({ data }) => {
+      if (data.resetThunder) this.dsp.resetThunder();
+      if (data.thunder) for (const event of data.thunder) this.dsp.queueThunder(event);
       if (data.state) this.dsp.setState(data.state, data.elapsedSeconds);
       if (data.layers) this.dsp.layers = data.layers;
     };

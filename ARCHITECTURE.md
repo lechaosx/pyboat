@@ -25,6 +25,10 @@ and verification details.
   audio processing runs independently of rendering and shared simulation.
 - **[Implicit]** The audio listener follows the player's boat or, while
   spectating, the view center at sea level.
+- **[Implicit]** Lightning and thunder share client-generated events from the
+  match seed, world clock, and weather at the source.
+- **[Implicit]** Lightning enters the shared illumination and exposure path as
+  diffuse cloud light.
 - **[Explicit]** JavaScript tooling runs on Node.js for ecosystem compatibility.
 - **[Implicit]** Development follows the latest Node.js LTS line.
 - **[Implicit]** npm manages JavaScript dependencies and scripts.

@@ -914,6 +914,12 @@ pub fn playground_scene_uniforms(
         view_cloud_motion_m,
         cloud_time_coordinates: [cloud_time.cumulus, cloud_time.upper, 0.0, 0.0],
         exposure_and_output: row(exposure_and_output)?,
+        lightning_sources: crate::lightning_sources(
+            geometry,
+            match_seed,
+            (tick as f64 + f64::from(tick_fraction)) * simulation::DT_SECONDS,
+            [camera_x_m as f64, camera_y_m as f64],
+        ),
         environment_field_grid_m: grids.environment.uniforms,
         environment_field_texels: grids.environment.texel_uniforms(),
         cloud_weather_grid_m: grids.cloud_weather.uniforms,
@@ -1043,6 +1049,7 @@ struct SceneUniforms {
     view_cloud_motion_m: [f32; 4],
     cloud_time_coordinates: [f32; 4],
     exposure_and_output: [f32; 4],
+    lightning_sources: [[f32; 4]; 4],
     environment_field_grid_m: [f32; 4],
     environment_field_texels: [u32; 4],
     cloud_weather_grid_m: [f32; 4],
@@ -2156,6 +2163,12 @@ impl Renderer {
                     f32::from(hdr),
                     self.vision_noise_phase as f32,
                 ],
+                lightning_sources: crate::lightning_sources(
+                    world_geometry,
+                    match_seed,
+                    (tick as f64 + f64::from(tick_fraction)) * simulation::DT_SECONDS,
+                    canonical_camera_m.map(f64::from),
+                ),
                 environment_field_grid_m: field_grids.environment.uniforms,
                 environment_field_texels: field_grids.environment.texel_uniforms(),
                 cloud_weather_grid_m: field_grids.cloud_weather.uniforms,
@@ -2687,11 +2700,12 @@ impl BrowserGame {
         Ok(())
     }
 
-    pub fn sound_scene(&mut self, now_seconds: f64) -> Vec<f32> {
+    pub fn sound_scene(&mut self, now_seconds: f64, playback_epoch: u32) -> Vec<f32> {
         self.client.borrow().sound_scene(
             &mut self.sound_sampler,
             self.camera_m.unwrap_or(Vector::ZERO),
             now_seconds,
+            playback_epoch,
         )
     }
 
@@ -3383,6 +3397,8 @@ impl PlaygroundSoundScene {
         tick: u64,
         fraction: f32,
         now_seconds: f64,
+        playback_epoch: u32,
+        realtime: bool,
         x: f64,
         y: f64,
         boat: &[f64],
@@ -3411,6 +3427,8 @@ impl PlaygroundSoundScene {
             tick,
             fraction,
             now_seconds,
+            playback_epoch,
+            realtime,
             rapier2d_f64::prelude::Vector::new(x, y),
             &boats,
         ))
