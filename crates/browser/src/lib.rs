@@ -568,6 +568,9 @@ struct MotionCorrection {
 pub struct MultiplayerClient {
     player_id: Option<String>,
     spectator_focus_m: PhysicsVector,
+    players: Vec<protocol::PlayerSummary>,
+    players_tick: Option<u64>,
+    spectator_target: Option<String>,
     match_seed: Option<u64>,
     world_geometry: Option<WorldGeometry>,
     session_state: ClientSessionState,
@@ -606,6 +609,9 @@ impl MultiplayerClient {
         Self {
             player_id: None,
             spectator_focus_m: PhysicsVector::ZERO,
+            players: Vec::new(),
+            players_tick: None,
+            spectator_target: None,
             match_seed: None,
             world_geometry: None,
             session_state: ClientSessionState::AwaitingWelcome,
@@ -645,11 +651,15 @@ impl MultiplayerClient {
                 tick,
                 controlled_boat_id,
                 focus_m,
+                players,
                 boats,
                 removed_player_ids: _,
             } => {
                 if self.session_state != ClientSessionState::Active {
                     return;
+                }
+                if let Some(players) = players {
+                    self.accept_roster(tick, players);
                 }
                 if self.tick.is_some_and(|current| tick < current) {
                     return;
@@ -689,6 +699,37 @@ impl MultiplayerClient {
                 self.start_correction(previous_motion, &visible_player_ids);
             }
         }
+    }
+
+    pub(crate) fn accept_roster(&mut self, tick: u64, players: Vec<protocol::PlayerSummary>) {
+        if self.session_state != ClientSessionState::Disconnected
+            && self.players_tick.is_none_or(|previous| tick >= previous)
+        {
+            self.players = players;
+            self.players_tick = Some(tick);
+            if self
+                .spectator_target
+                .as_ref()
+                .is_some_and(|target| !self.players.iter().any(|player| &player.id == target))
+            {
+                self.spectator_target = None;
+                self.sent_viewport_radius_m = None;
+            }
+        }
+    }
+
+    pub fn select_spectator(&mut self, target: Option<String>) {
+        if self.health().is_some_and(|health| health > 0.0) {
+            return;
+        }
+        if self.spectator_target != target {
+            self.spectator_target = target;
+            self.sent_viewport_radius_m = None;
+        }
+    }
+
+    pub fn players(&self) -> &[protocol::PlayerSummary] {
+        &self.players
     }
 
     pub fn player_id(&self) -> Option<&str> {
@@ -751,6 +792,7 @@ impl MultiplayerClient {
         Some(ClientMessage::Viewport {
             sequence,
             radius: radius_m,
+            spectator_target: self.spectator_target.clone(),
         })
     }
 
@@ -810,6 +852,9 @@ impl MultiplayerClient {
         self.tick?;
         let position_m = self
             .local_motion()
+            .filter(|_| {
+                self.spectator_target.is_none() || self.health().is_some_and(|health| health > 0.0)
+            })
             .map(|motion| motion.position_m)
             .unwrap_or(self.spectator_focus_m);
         Some(PhysicsVector::from(self.world_geometry?.wrap_position_m(position_m.into())).as_vec2())
@@ -1513,6 +1558,7 @@ mod tests {
             tick: 1,
             controlled_boat_id: Some("player".into()),
             focus_m: [0.0, 0.0],
+            players: None,
             boats: vec![BoatSnapshot {
                 id: "player".into(),
                 nickname: "Sailor".into(),
@@ -1595,6 +1641,7 @@ mod tests {
                 tick,
                 controlled_boat_id: Some("player-0".into()),
                 focus_m: [0.0, 0.0],
+                players: None,
                 boats: snapshots,
                 removed_player_ids: Vec::new(),
             };
@@ -1688,6 +1735,7 @@ mod tests {
             tick: 1,
             controlled_boat_id: Some("player".into()),
             focus_m: [0.0, 0.0],
+            players: None,
             boats: vec![BoatSnapshot {
                 id: "player".into(),
                 nickname: "Sailor".into(),
@@ -1733,9 +1781,38 @@ mod tests {
             tick,
             controlled_boat_id: None,
             focus_m: [0.0, 0.0],
+            players: None,
             boats: Vec::new(),
             removed_player_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn roster_arrives_independently_of_newer_motion_and_rejects_stale_names() {
+        let mut client = MultiplayerClient::new();
+        client.accept(ServerMessage::Welcome {
+            player_id: "spectator".into(),
+            match_seed: 42,
+            world_geometry: WorldGeometry::default(),
+        });
+        client.accept(snapshot(12));
+        let mut roster = snapshot(10);
+        let players = vec![protocol::PlayerSummary {
+            id: "boat".into(),
+            nickname: "Captain".into(),
+        }];
+        if let ServerMessage::Snapshot { players: field, .. } = &mut roster {
+            *field = Some(players.clone());
+        }
+        client.accept(roster);
+        assert_eq!(client.players(), players);
+        assert_eq!(client.tick(), Some(12));
+        let mut stale = snapshot(9);
+        if let ServerMessage::Snapshot { players, .. } = &mut stale {
+            *players = Some(Vec::new());
+        }
+        client.accept(stale);
+        assert_eq!(client.players(), players);
     }
 
     #[test]
@@ -2038,6 +2115,7 @@ mod tests {
             tick: 1,
             controlled_boat_id: Some("player".into()),
             focus_m: [0.0, 0.0],
+            players: None,
             boats: vec![BoatSnapshot {
                 id: "player".into(),
                 nickname: "Sailor".into(),
@@ -2127,6 +2205,7 @@ mod tests {
             tick: u64::MAX,
             controlled_boat_id: Some("player".into()),
             focus_m: [0.0, 0.0],
+            players: None,
             boats: vec![boat; 64],
             removed_player_ids: Vec::new(),
         })
@@ -2164,6 +2243,7 @@ mod tests {
             tick: 900_000,
             controlled_boat_id: Some("player-1".into()),
             focus_m: [0.0, 0.0],
+            players: None,
             boats: vec![BoatSnapshot {
                 id: "player-1".to_owned(),
                 nickname: "Sailor".into(),

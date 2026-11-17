@@ -3,51 +3,52 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101e2a" />
     <title>Under sail</title>
   </head>
   <body>
     <main>
       <canvas id="game" aria-label="Multiplayer sailing boats on the water"></canvas>
-      <section id="welcome" class="welcome" role="dialog" aria-labelledby="welcome-title" aria-describedby="status">
-        <p class="eyebrow">NAVAL COMBAT / MULTIPLAYER</p>
-        <h1 id="welcome-title">Under sail</h1>
-        <p id="status" role="status">Preparing the sea…</p>
-        <form id="join-form">
-          <label for="nickname">Your nickname</label>
-          <input id="nickname" name="nickname" type="text" maxlength="96" autocomplete="nickname" placeholder="Captain" required />
-          <button id="join" type="submit" disabled>Loading…</button>
-        </form>
-        <p class="controls">W/S power · A/D turn<br />Left stick or drag to move · scroll to zoom</p>
-      </section>
-      <section id="hud" class="hud" aria-label="Sailing instruments" hidden>
-        <div class="sailing"><strong id="captain"></strong><span><span id="speed">0.0</span> m/s</span><span id="point-of-sail">waiting</span></div>
-        <div class="instruments"><span>Wind <b id="apparent-wind">0.0</b> m/s</span><span>Hull <b id="health">100</b>%</span><span>Depth <b id="water-depth">0.0</b> m</span><span>Keel <b id="bottom-clearance">0.0</b> m</span><strong id="bottom-contact">clear</strong></div>
+      <section id="welcome" class="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+        <div id="menu-home">
+          <p class="eyebrow">NAVAL COMBAT</p>
+          <h1 id="welcome-title">Under sail</h1>
+          <p id="status" role="status">Preparing to download the game…</p>
+          <details id="loading" open><summary id="load-stage">Loading the engine</summary><ol id="load-log"></ol></details>
+          <details id="error-details" hidden><summary>Technical details</summary><p id="error-message"></p></details>
+          <form id="join-form">
+            <label for="nickname">Captain’s name</label>
+            <input id="nickname" name="nickname" type="text" maxlength="96" autocomplete="nickname" required />
+            <button id="join" class="primary" type="submit" disabled>Loading…</button>
+          </form>
+          <section id="spectators" class="fleet" hidden><h2>At sea <span id="fleet-count"></span></h2><p class="hint">Choose a captain to follow</p><div id="spectator-list" class="player-list"></div></section>
+          <nav class="menu-footer"><button id="graphics-open" type="button" class="quiet">Settings <span aria-hidden="true">↗</span></button></nav>
+        </div>
+        <div id="settings" hidden>
+          <header class="settings-header"><button id="graphics-close" type="button" class="quiet">← Back</button><h2>Settings</h2></header>
+          <form id="graphics-form">
+            <fieldset id="graphics-controls" disabled>
+              <legend>Graphics</legend>
+              <label for="graphics-quality">Detail</label>
+              <select id="graphics-quality" name="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+              <label for="graphics-scale">Scene resolution</label>
+              <select id="graphics-scale" name="renderScale"><option value="">Automatic · CSS pixels</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
+              <div class="settings-pair"><label for="graphics-ratio">Sharpness limit<input id="graphics-ratio" name="pixelRatio" type="number" min="1" step="any" required /></label><label for="graphics-fps">Frame limit<input id="graphics-fps" name="fps" type="number" min="0" step="any" required /></label></div>
+              <small>Sharpness: 1× standard, 2× high density. Frame limit: 0 = unlimited.</small>
+              <label class="checkbox"><input name="autoResolution" type="checkbox" /> Adapt resolution to performance</label>
+              <p id="graphics-resolution" class="hint"></p>
+              <button id="graphics-reset" class="quiet" type="button">Reset graphics</button>
+              <p id="graphics-note" class="hint" role="status"></p>
+            </fieldset>
+          </form>
+          <div id="sound-settings"></div>
+        </div>
       </section>
       <span id="fps" class="fps" aria-label="Rendered frames per second">— FPS</span>
-      <button id="graphics-open" class="graphics-open" type="button" disabled>Settings</button>
-      <dialog id="graphics-dialog" aria-labelledby="graphics-title">
-        <h2 id="graphics-title">Settings</h2>
-        <p>Changes apply immediately. Your boat stays in the game.</p>
-        <form id="graphics-form">
-          <h3>Graphics</h3>
-          <label for="graphics-quality">Detail</label>
-          <select id="graphics-quality" name="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-          <label for="graphics-scale">Scene resolution</label>
-          <select id="graphics-scale" name="renderScale"><option value="">Automatic (screen size)</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
-          <label for="graphics-ratio">Display sharpness limit</label>
-          <input id="graphics-ratio" name="pixelRatio" type="number" min="1" step="any" required />
-          <small>1× standard; 2× sharper on high-density screens.</small>
-          <label for="graphics-fps">Frame limit (0 = unlimited)</label>
-          <input id="graphics-fps" name="fps" type="number" min="0" step="any" required />
-          <label class="graphics-checkbox"><input name="autoResolution" type="checkbox" /> Lower scene resolution when needed</label>
-          <p id="graphics-resolution"></p>
-          <p id="graphics-note" role="status"></p>
-          <div class="graphics-actions"><button id="graphics-reset" type="button">Reset graphics</button><button id="graphics-close" type="button">Done</button></div>
-        </form>
-      </dialog>
-      <div class="scale-bar" aria-label="Map scale">
+      <aside id="live-fleet" class="live-fleet" aria-label="Players at sea" hidden><button id="menu-open" type="button" aria-label="Open menu">☰ <span>Menu</span></button><div id="live-player-list"></div></aside>
+      <div id="scale" class="scale-bar" aria-label="Map scale" hidden>
         <div id="scale-line"><span></span><span></span><span></span><span></span></div>
-        <div class="scale-labels"><span>0</span><span id="scale-label">2 m</span></div>
+        <div class="scale-labels"><span>0</span><span id="scale-label"></span></div>
       </div>
     </main>
     <script type="module" src="/src/main.ts"></script>

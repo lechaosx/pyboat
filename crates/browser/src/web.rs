@@ -1645,12 +1645,21 @@ fn scene_pipelines(
     (pipeline, illumination_pipeline)
 }
 
+async fn report_loading(progress: Option<&js_sys::Function>, stage: &str) -> Result<(), JsValue> {
+    if let Some(progress) = progress {
+        let result = progress.call1(&JsValue::NULL, &JsValue::from_str(stage))?;
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&result)).await?;
+    }
+    Ok(())
+}
+
 impl Renderer {
     async fn new(
         canvas: HtmlCanvasElement,
         graphics: GraphicsSettings,
         bake_memory_bytes: u64,
         fresh_surface: bool,
+        progress: Option<&js_sys::Function>,
     ) -> Result<Self, JsValue> {
         let terminal_error = Arc::new(AtomicBool::new(false));
         let page_gpu_session = PageGpuSession::new(&terminal_error)?;
@@ -1660,6 +1669,7 @@ impl Renderer {
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(js_error)?;
+        report_loading(progress, "Finding a graphics adapter").await?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -1667,6 +1677,7 @@ impl Renderer {
             })
             .await
             .map_err(js_error)?;
+        report_loading(progress, "Opening the graphics device").await?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("WebGPU device"),
@@ -1809,8 +1820,10 @@ impl Renderer {
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
             ],
         });
+        report_loading(progress, "Building ocean and lighting shaders").await?;
         let (pipeline, illumination_pipeline) =
             scene_pipelines(&device, &scene_layout, graphics.quality, output_format);
+        report_loading(progress, "Loading painted boat artwork").await?;
         let boat_sprites =
             BoatSprites::new(&device, &queue, &scene_layout, output_format).map_err(js_error)?;
         let terrain_quad_vertices = [
@@ -1855,6 +1868,7 @@ impl Renderer {
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+        report_loading(progress, "Preparing weather and world surfaces").await?;
         let environment_fields = EnvironmentFields::new(&device, &bind_group_layout);
         let occluder_fields = OccluderFields::new(
             &device,
@@ -2587,6 +2601,7 @@ impl BrowserGame {
     pub async fn create(
         canvas: HtmlCanvasElement,
         saved_graphics: Option<String>,
+        progress: Option<js_sys::Function>,
     ) -> Result<BrowserGame, JsValue> {
         console_error_panic_hook::set_once();
         let window =
@@ -2613,6 +2628,7 @@ impl BrowserGame {
             graphics,
             crate::baked_surface_memory_bytes(touch_screen, device_memory_gb),
             fresh_surface,
+            progress.as_ref(),
         )
         .await?;
         if !renderer.is_available() {
@@ -2620,6 +2636,7 @@ impl BrowserGame {
                 "WebGPU became unavailable during startup",
             ));
         }
+        report_loading(progress.as_ref(), "Connecting to the match").await?;
         let client = Rc::new(RefCell::new(MultiplayerClient::new()));
         let pending_snapshot = Rc::new(RefCell::new(None));
         let connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));
@@ -2845,6 +2862,28 @@ impl BrowserGame {
             Rc::clone(&self.sending_datagrams),
             Rc::clone(&self.sending_reliable),
         )
+    }
+
+    pub fn players(&self) -> js_sys::Array {
+        let client = self.client.borrow();
+        client
+            .players()
+            .iter()
+            .map(|player| {
+                let row = js_sys::Array::new();
+                row.push(&JsValue::from_str(&player.id));
+                row.push(&JsValue::from_str(&player.nickname));
+                JsValue::from(row)
+            })
+            .collect()
+    }
+
+    pub fn controlled_boat_id(&self) -> Option<String> {
+        self.client.borrow().player_id().map(str::to_owned)
+    }
+
+    pub fn spectate(&mut self, target: Option<String>) {
+        self.client.borrow_mut().select_spectator(target);
     }
 
     pub fn session_state(&self) -> String {
@@ -3241,7 +3280,13 @@ fn accept_server_message(
     }
     match decode_server_message(bytes)? {
         message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
-        message @ ServerMessage::Snapshot { .. } => {
+        mut message @ ServerMessage::Snapshot { .. } => {
+            // Names must survive coalescing even when a newer motion datagram wins.
+            if let ServerMessage::Snapshot { tick, players, .. } = &mut message
+                && let Some(players) = players.take()
+            {
+                protocol_client.borrow_mut().accept_roster(*tick, players);
+            }
             queue_latest_snapshot(&mut pending_snapshot.borrow_mut(), message);
         }
     }

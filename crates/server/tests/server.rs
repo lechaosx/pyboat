@@ -361,6 +361,7 @@ async fn server_clamps_viewport_interest_to_prediction_minimum() {
         let viewport = encode_client_message(&ClientMessage::Viewport {
             sequence: index as i64 + 1,
             radius: *radius,
+            spectator_target: None,
         })
         .unwrap();
         send_reliable(&clients[0].connection, &viewport).await;
@@ -407,12 +408,14 @@ async fn stale_viewport_stream_cannot_overwrite_a_newer_update() {
     let stale = encode_client_message(&ClientMessage::Viewport {
         sequence: -1,
         radius: 100.0,
+        spectator_target: None,
     })
     .unwrap();
     stale_stream.write_all(&stale).await.unwrap();
     let current = encode_client_message(&ClientMessage::Viewport {
         sequence: 0,
         radius: 1.0,
+        spectator_target: None,
     })
     .unwrap();
     send_reliable(&clients[0].connection, &current).await;
@@ -553,6 +556,7 @@ async fn reset_reliable_stream_does_not_block_later_viewport_updates() {
     let viewport = encode_client_message(&ClientMessage::Viewport {
         sequence: 1,
         radius: 1.0,
+        spectator_target: None,
     })
     .unwrap();
     send_reliable(&clients[0].connection, &viewport).await;
@@ -598,6 +602,7 @@ async fn unsupported_reliable_protocol_version_closes_the_session() {
     let mut viewport = encode_client_message(&ClientMessage::Viewport {
         sequence: 1,
         radius: 10.0,
+        spectator_target: None,
     })
     .unwrap();
     viewport[0] = PROTOCOL_VERSION - 1;

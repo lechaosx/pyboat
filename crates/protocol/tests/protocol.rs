@@ -88,16 +88,18 @@ fn viewport_message_is_compact_and_rejects_invalid_radius() {
     let expected = ClientMessage::Viewport {
         sequence: 7,
         radius: 17.5,
+        spectator_target: None,
     };
     let encoded = encode_client_message(&expected).unwrap();
     let decoded = decode_client_message(&encoded).unwrap();
 
-    assert_eq!(encoded.len(), 7);
+    assert_eq!(encoded.len(), 8);
     assert_eq!(decoded, expected);
     assert_eq!(
         encode_client_message(&ClientMessage::Viewport {
             sequence: 7,
             radius: 0.0,
+            spectator_target: None,
         })
         .unwrap_err(),
         ProtocolError::InvalidViewportRadius
@@ -110,6 +112,7 @@ fn empty_snapshot_is_compact_and_round_trips() {
         tick: 7,
         controlled_boat_id: Some("player-1".into()),
         focus_m: [0.0, 0.0],
+        players: None,
         boats: Vec::new(),
         removed_player_ids: Vec::new(),
     };
@@ -126,6 +129,7 @@ fn boat_damage_state_is_compact_and_round_trips() {
         tick: 12,
         controlled_boat_id: Some("player-1".into()),
         focus_m: [0.0, 0.0],
+        players: None,
         boats: vec![BoatSnapshot {
             id: "player-2".to_owned(),
             nickname: "Sailor".into(),
@@ -190,6 +194,7 @@ fn snapshot_preserves_sub_float_motion_precision() {
         tick: 12,
         controlled_boat_id: Some("player-1".into()),
         focus_m: [0.0, 0.0],
+        players: None,
         boats: vec![BoatSnapshot {
             id: "player-2".to_owned(),
             nickname: "Sailor".into(),

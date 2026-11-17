@@ -1,209 +1,244 @@
-import { BrowserGame } from "browser";
 import { pointerVector, worldSteering } from "./steering";
 import "./style.css";
 import { SailingAudio } from "./audio";
 
-const canvas = document.querySelector<HTMLCanvasElement>("#game");
-const status = document.querySelector<HTMLElement>("#status");
-const speed = document.querySelector<HTMLElement>("#speed");
-const apparentWind = document.querySelector<HTMLElement>("#apparent-wind");
-const pointOfSail = document.querySelector<HTMLElement>("#point-of-sail");
-const health = document.querySelector<HTMLElement>("#health");
-const waterDepth = document.querySelector<HTMLElement>("#water-depth");
-const bottomClearance = document.querySelector<HTMLElement>("#bottom-clearance");
-const bottomContact = document.querySelector<HTMLElement>("#bottom-contact");
-const scaleLabel = document.querySelector<HTMLElement>("#scale-label");
-const scaleLine = document.querySelector<HTMLElement>("#scale-line");
+const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
+const status = document.querySelector<HTMLElement>("#status")!;
 const welcome = document.querySelector<HTMLElement>("#welcome")!;
 const welcomeTitle = document.querySelector<HTMLElement>("#welcome-title")!;
+const home = document.querySelector<HTMLElement>("#menu-home")!;
+const settings = document.querySelector<HTMLElement>("#settings")!;
 const joinForm = document.querySelector<HTMLFormElement>("#join-form")!;
 const nickname = document.querySelector<HTMLInputElement>("#nickname")!;
 const joinButton = document.querySelector<HTMLButtonElement>("#join")!;
-const hud = document.querySelector<HTMLElement>("#hud")!;
-const captain = document.querySelector<HTMLElement>("#captain")!;
 const fps = document.querySelector<HTMLElement>("#fps")!;
-const graphicsOpen = document.querySelector<HTMLButtonElement>("#graphics-open")!;
-const graphicsDialog = document.querySelector<HTMLDialogElement>("#graphics-dialog")!;
 const graphicsForm = document.querySelector<HTMLFormElement>("#graphics-form")!;
 const graphicsNote = document.querySelector<HTMLElement>("#graphics-note")!;
 const graphicsResolution = document.querySelector<HTMLElement>("#graphics-resolution")!;
+const liveFleet = document.querySelector<HTMLElement>("#live-fleet")!;
+const spectatorSection = document.querySelector<HTMLElement>("#spectators")!;
+const spectatorList = document.querySelector<HTMLElement>("#spectator-list")!;
+const livePlayerList = document.querySelector<HTMLElement>("#live-player-list")!;
+const loading = document.querySelector<HTMLDetailsElement>("#loading")!;
+const loadStage = document.querySelector<HTMLElement>("#load-stage")!;
+const loadLog = document.querySelector<HTMLElement>("#load-log")!;
+const errorDetails = document.querySelector<HTMLDetailsElement>("#error-details")!;
+const errorMessage = document.querySelector<HTMLElement>("#error-message")!;
+const scale = document.querySelector<HTMLElement>("#scale")!;
+const scaleLabel = document.querySelector<HTMLElement>("#scale-label")!;
+const scaleLine = document.querySelector<HTMLElement>("#scale-line")!;
 const graphicsStorageKey = "graphics-settings";
 let savedGraphics = new URLSearchParams();
 try { savedGraphics = new URLSearchParams(localStorage.getItem(graphicsStorageKey) ?? ""); } catch { /* Session settings still work without storage. */ }
 const graphicsOverrides = new URLSearchParams(location.search);
 const pressedKeys = new Set<string>();
 const controlKeys = new Set(["KeyW", "KeyS", "KeyA", "KeyD"]);
-
-if (
-  !canvas ||
-  !status ||
-  !speed ||
-  !apparentWind ||
-  !pointOfSail ||
-  !health ||
-  !waterDepth ||
-  !bottomClearance ||
-  !bottomContact ||
-  !scaleLabel ||
-  !scaleLine
-) {
-  throw new Error("The game page is incomplete");
-}
-const statusElement = status;
-const speedElement = speed;
-const apparentWindElement = apparentWind;
-const pointOfSailElement = pointOfSail;
-const healthElement = health;
-const waterDepthElement = waterDepth;
-const bottomClearanceElement = bottomClearance;
-const bottomContactElement = bottomContact;
-const scaleLabelElement = scaleLabel;
-const scaleLineElement = scaleLine;
 const gameCanvas = canvas;
+const audio = new SailingAudio();
+audio.setActive(false);
+document.querySelector("#sound-settings")!.append(audio.element);
+const names = ["Swift", "Quiet", "Brave", "Wandering", "Lucky", "Salty"];
+const ships = ["Gull", "Tern", "Albatross", "Mariner", "Petrel", "Heron"];
+nickname.value = `${names[Math.floor(Math.random() * names.length)]} ${ships[Math.floor(Math.random() * ships.length)]} ${Math.floor(Math.random() * 90) + 10}`;
 
+function firstInteraction(event: Event): void {
+  if (event.target instanceof Node && audio.element.contains(event.target)) return;
+  void audio.start();
+}
+window.addEventListener("keydown", event => {
+    if (!welcome.hidden && event.code === "Tab") {
+      const controls = [...welcome.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary')].filter(control => control.getClientRects().length);
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { last?.focus(); event.preventDefault(); }
+      else if (!event.shiftKey && document.activeElement === last) { first?.focus(); event.preventDefault(); }
+    }
+  });
+window.addEventListener("click", firstInteraction);
+window.addEventListener("keydown", firstInteraction);
+window.addEventListener("pageshow", event => { if (event.persisted) location.reload(); });
 function keyboardAxis(positive: string, negative: string): number {
   return Number(pressedKeys.has(positive)) - Number(pressedKeys.has(negative));
 }
-
 function firstGamepad(): Gamepad | null {
   if (!document.hasFocus() || document.hidden) return null;
-  for (const gamepad of navigator.getGamepads()) {
-    if (gamepad?.connected && gamepad.axes.length >= 2) {
-      return gamepad;
-    }
-  }
-  return null;
+  return [...navigator.getGamepads()].find(gamepad => gamepad?.connected && gamepad.axes.length >= 2) ?? null;
 }
-
-window.addEventListener("pageshow", event => {
-  if (event.persisted) location.reload();
-});
+function stage(label: string): void {
+  if (loadStage.textContent === label) return;
+  const item = document.createElement("li"); item.textContent = label;
+  loadLog.append(item);
+  loadStage.textContent = label;
+}
+function showFailure(title: string, message: string, detail: unknown): void {
+  welcome.hidden = false; home.hidden = false; settings.hidden = true;
+  welcomeTitle.textContent = title; status.textContent = message;
+  loading.hidden = true;
+  errorMessage.textContent = String(detail); errorDetails.hidden = false;
+  nickname.disabled = true; nickname.required = false;
+  joinButton.disabled = false; joinButton.textContent = "Reload game";
+  liveFleet.hidden = true; fps.textContent = "— FPS";
+  audio.setActive(false);
+  document.querySelector<HTMLFieldSetElement>("#graphics-controls")!.disabled = true;
+}
+let engineReady = false;
+window.addEventListener("keydown", event => { if (!engineReady && event.code === "Escape" && !settings.hidden) openSettings(false); });
+let openSettings = (open: boolean): void => {
+  home.hidden = open; settings.hidden = !open;
+  if (open) document.querySelector<HTMLButtonElement>("#graphics-close")!.focus();
+  else document.querySelector<HTMLButtonElement>("#graphics-open")!.focus();
+  welcome.scrollTop = 0;
+};
+document.querySelector("#graphics-open")!.addEventListener("click", () => openSettings(true));
+document.querySelector("#graphics-close")!.addEventListener("click", () => openSettings(false));
 
 try {
-  const game = await BrowserGame.create(canvas, savedGraphics.toString());
-  const audio = new SailingAudio();
-  graphicsDialog.append(audio.element);
-  graphicsDialog.append(graphicsDialog.querySelector(".graphics-actions")!);
+  stage("Downloading and starting the game engine");
+  const { BrowserGame } = await import("browser");
+  const game = await BrowserGame.create(canvas, savedGraphics.toString(), async (label: string) => {
+    stage(label);
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+  engineReady = true;
+  document.querySelector<HTMLFieldSetElement>("#graphics-controls")!.disabled = false;
   let previousTimeMs = performance.now();
   let fpsStartMs = previousTimeMs;
   let fpsStartFrames = game.presented_frames();
-  let currentState = "loading";
+  let currentState = "";
+  let menuOpen = true;
   let renderingStopped = false;
   let pageEnded = false;
+  let nextRosterMs = 0;
+  let lastRoster = "";
+  let selectedPlayer: string | undefined;
 
   function endSession(): void {
     if (pageEnded) return;
-    pageEnded = true;
-    clearInput();
-    audio.setActive(false);
-    game.dispose();
+    pageEnded = true; clearInput(); audio.setActive(false); game.dispose();
+    window.removeEventListener("click", firstInteraction);
+    window.removeEventListener("keydown", firstInteraction);
   }
   window.addEventListener("pagehide", endSession, { once: true });
   if (import.meta.hot) import.meta.hot.dispose(endSession);
-
   function inputEnabled(): boolean {
-    return currentState === "playing" && !graphicsDialog.open && document.hasFocus() && !document.hidden;
+    return currentState === "playing" && !menuOpen && document.hasFocus() && !document.hidden;
   }
+  function setMenu(open: boolean): void {
+    clearInput(); menuOpen = open; welcome.hidden = !open;
+    liveFleet.hidden = open || currentState !== "playing";
+    if (open) { showSettings(false); joinButton.focus(); }
+  }
+  function showSettings(open: boolean): void {
+    clearInput();
+    if (open) updateGraphicsForm();
+    home.hidden = open; settings.hidden = !open;
+    (document.querySelector(open ? "#graphics-close" : "#graphics-open") as HTMLButtonElement).focus();
+    welcome.scrollTop = 0;
+  }
+  openSettings = showSettings;
+  document.querySelector("#menu-open")!.addEventListener("click", () => setMenu(true));
 
   function updateGraphicsForm(): void {
-    const settings = new URLSearchParams(game.graphics_settings());
+    const values = new URLSearchParams(game.graphics_settings());
     for (const control of graphicsForm.elements) {
       if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement)) continue;
-      const value = settings.get(control.name);
+      const value = values.get(control.name);
       if (value === null) continue;
-      if (control instanceof HTMLInputElement && control.type === "checkbox") {
-        control.checked = value === "1";
-      } else {
-        if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) {
-          control.add(new Option(value, value));
-        }
+      if (control instanceof HTMLInputElement && control.type === "checkbox") control.checked = value === "1";
+      else {
+        if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) control.add(new Option(value, value));
         control.value = value;
       }
     }
-    updateGraphicsResolution(settings);
+    updateGraphicsResolution(values);
   }
-
-  function updateGraphicsResolution(settings: URLSearchParams): void {
-    graphicsResolution.textContent = `Current scene: ${Math.round(Number(settings.get("effectiveRenderScale")) * 100)}% of output. Automatic saves detail on high-density screens. Boats stay sharp.`;
+  function updateGraphicsResolution(values: URLSearchParams): void {
+    graphicsResolution.textContent = `Scene resolution: ${Math.round(Number(values.get("effectiveRenderScale")) * 100)}% of output. Boats stay at display resolution.`;
   }
-
   function applyGraphics(): void {
     game.set_graphics_settings(savedGraphics.toString(), graphicsOverrides.toString());
     try {
       if (savedGraphics.size) localStorage.setItem(graphicsStorageKey, savedGraphics.toString());
       else localStorage.removeItem(graphicsStorageKey);
-      const urlOverrides = [...graphicsForm.elements].some(control =>
-        (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) && new URLSearchParams(location.search).has(control.name));
-      graphicsNote.textContent = `Saved on this device.${urlOverrides ? " URL graphics options apply again on reload." : ""}`;
-    } catch {
-      graphicsNote.textContent = "Applied for this visit. Browser storage is unavailable.";
-    }
+      const overridden = [...graphicsForm.elements].some(control => (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) && new URLSearchParams(location.search).has(control.name));
+      graphicsNote.textContent = `Saved on this device.${overridden ? " URL options apply again on reload." : ""}`;
+    } catch { graphicsNote.textContent = "Applied for this visit. Device storage is unavailable."; }
     updateGraphicsForm();
   }
-
-  graphicsOpen.disabled = false;
-  graphicsOpen.addEventListener("click", () => {
-    clearInput();
-    updateGraphicsForm();
-    graphicsDialog.showModal();
-  });
+  updateGraphicsForm();
   graphicsForm.addEventListener("submit", event => event.preventDefault());
   graphicsForm.addEventListener("change", event => {
     const control = event.target;
     if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement) || !graphicsForm.reportValidity()) return;
-    const value = control instanceof HTMLInputElement
-      ? control.type === "checkbox" ? (control.checked ? "1" : "0") : control.valueAsNumber.toString().replace("e+", "e")
-      : control.value;
+    const value = control instanceof HTMLInputElement ? control.type === "checkbox" ? (control.checked ? "1" : "0") : control.valueAsNumber.toString().replace("e+", "e") : control.value;
     graphicsOverrides.delete(control.name);
-    if (value === "") savedGraphics.delete(control.name);
-    else savedGraphics.set(control.name, value);
+    if (value === "") savedGraphics.delete(control.name); else savedGraphics.set(control.name, value);
     applyGraphics();
   });
   document.querySelector("#graphics-reset")!.addEventListener("click", () => {
-    for (const control of graphicsForm.elements) {
-      if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) graphicsOverrides.delete(control.name);
-    }
-    savedGraphics = new URLSearchParams();
-    applyGraphics();
+    for (const control of graphicsForm.elements) if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) graphicsOverrides.delete(control.name);
+    savedGraphics = new URLSearchParams(); applyGraphics();
   });
-  document.querySelector("#graphics-close")!.addEventListener("click", () => graphicsDialog.close());
-  graphicsDialog.addEventListener("close", clearInput);
 
   function updateSession(): void {
-    const nextState = game.session_state();
-    if (nextState !== currentState) clearInput();
-    currentState = nextState;
-    welcome.hidden = currentState === "playing";
-    hud.hidden = currentState !== "playing";
+    const next = game.session_state();
+    if (next === currentState) return;
+    if (next !== currentState) {
+      clearInput();
+      const wasPlaying = currentState === "playing";
+      currentState = next;
+      if (next === "playing" && !wasPlaying) setMenu(false);
+      else if (next !== "playing") { menuOpen = true; welcome.hidden = false; liveFleet.hidden = true; }
+      if (["dead", "disconnected"].includes(next)) showSettings(false);
+      lastRoster = "";
+    }
     const disconnected = currentState === "disconnected";
     const ready = currentState === "ready" || currentState === "dead";
-    welcomeTitle.textContent = currentState === "dead" ? "Ship lost" : disconnected ? "Disconnected" : "Under sail";
-    statusElement.textContent = currentState === "dead" ? "Your boat was destroyed. Its wreck remains at sea." : ready ? "The sea is ready. Choose a name and set sail." : currentState === "joining" ? "Launching your boat…" : game.status();
-    nickname.disabled = currentState === "joining" || disconnected;
-    nickname.required = !disconnected;
-    joinButton.textContent = disconnected ? "Reconnect" : currentState === "dead" ? "Set sail again" : ready ? "Set sail" : currentState === "joining" ? "Launching…" : "Loading…";
-    joinButton.disabled = !disconnected && !ready;
-    captain.textContent = game.nickname();
+    const playing = currentState === "playing";
+    const busy = !ready && !playing && !disconnected;
+    loading.hidden = !busy;
+    welcomeTitle.textContent = playing ? "At the helm" : currentState === "dead" ? "Ship lost" : disconnected ? "Connection lost" : "Under sail";
+    status.textContent = playing ? "Your boat is still at sea." : currentState === "dead" ? "Your boat was destroyed. Join again when you’re ready." : disconnected ? game.status() : ready ? "The sea is yours." : currentState === "joining" ? "Launching your boat…" : currentState === "connecting" ? "Establishing a secure connection…" : "Waiting for the first view of the sea…";
+    if (currentState === "connecting") stage("Connecting to the match");
+    else if (currentState === "loading") stage("Receiving the world and drawing the first frame");
+    nickname.disabled = playing || currentState === "joining" || disconnected;
+    nickname.required = !nickname.disabled;
+    joinButton.textContent = playing ? "Resume" : disconnected ? "Reconnect" : currentState === "dead" ? "Join again" : ready ? "Join" : currentState === "joining" ? "Launching…" : "Loading…";
+    joinButton.disabled = busy;
+    spectatorSection.hidden = playing || disconnected || spectatorList.childElementCount === 0;
   }
-
-  joinForm.addEventListener("submit", (event) => {
+  function updatePlayers(): void {
+    const own = game.controlled_boat_id();
+    const players = game.players() as [string, string][];
+    if (selectedPlayer && !players.some(([id]) => id === selectedPlayer)) selectedPlayer = undefined;
+    const key = JSON.stringify([players, own, currentState, selectedPlayer]);
+    if (key === lastRoster) return;
+    lastRoster = key;
+    spectatorList.replaceChildren(); livePlayerList.replaceChildren();
+    document.querySelector("#fleet-count")!.textContent = String(players.length);
+    for (const [id, name] of players) {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = name;
+      button.setAttribute("aria-pressed", String(id === selectedPlayer));
+      button.addEventListener("click", () => { selectedPlayer = id; game.spectate(id); lastRoster = ""; updatePlayers(); });
+      spectatorList.append(button);
+      if (id !== own) { const row = document.createElement("span"); row.textContent = name; livePlayerList.append(row); }
+    }
+    spectatorSection.hidden = currentState === "playing" || currentState === "disconnected" || !players.length;
+  }
+  joinForm.addEventListener("submit", event => {
     event.preventDefault();
     try {
       clearInput();
       if (renderingStopped) { location.reload(); return; }
-      if (currentState === "disconnected") {
-        game.reconnect();
-      } else {
+      if (currentState === "playing") { setMenu(false); return; }
+      if (currentState === "disconnected") game.reconnect();
+      else {
         const name = nickname.value.trim();
-        nickname.setCustomValidity(!name ? "Enter a nickname." : [...name].length > 24 ? "Use at most 24 characters." : "");
+        nickname.setCustomValidity(!name ? "Enter a captain’s name." : [...name].length > 24 ? "Use at most 24 characters." : "");
         if (!nickname.reportValidity()) return;
-        void audio.start();
         game.join(name);
       }
       updateSession();
-    } catch (error) {
-      statusElement.textContent = String(error);
-    }
+    } catch (error) { status.textContent = "That did not work. Please try again."; errorDetails.hidden = false; errorMessage.textContent = String(error); }
   });
   nickname.addEventListener("input", () => nickname.setCustomValidity(""));
   let pointer: { id: number; x: number; y: number; vector: [number, number] } | undefined;
@@ -249,6 +284,12 @@ try {
   }
 
   window.addEventListener("keydown", (event) => {
+    if (event.code === "Escape") {
+      event.preventDefault();
+      if (!settings.hidden) showSettings(false);
+      else if (currentState === "playing") setMenu(!menuOpen);
+      return;
+    }
     if (inputEnabled() && controlKeys.has(event.code)) {
       pressedKeys.add(event.code);
       event.preventDefault();
@@ -289,32 +330,6 @@ try {
   canvas.addEventListener("pointercancel", finishPointer);
   canvas.addEventListener("lostpointercapture", finishPointer);
 
-  canvas.addEventListener(
-    "wheel",
-    (event) => {
-      const deltaScale =
-        event.deltaMode === WheelEvent.DOM_DELTA_LINE
-          ? 16
-          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-            ? canvas.clientHeight
-            : 1;
-      game.zoom(event.deltaY * deltaScale);
-      event.preventDefault();
-    },
-    { passive: false },
-  );
-  canvas.addEventListener("mousedown", (event) => {
-    if (event.button === 1) {
-      game.reset_zoom();
-      event.preventDefault();
-    }
-  });
-  canvas.addEventListener("auxclick", (event) => {
-    if (event.button === 1) {
-      event.preventDefault();
-    }
-  });
-
   function frame(timeMs: number): void {
     if (pageEnded) return;
     const elapsedSeconds = (timeMs - previousTimeMs) / 1000;
@@ -322,73 +337,38 @@ try {
     try {
       const gamepad = inputEnabled() ? firstGamepad() : null;
       const [worldX, worldY] = worldSteering(gamepad?.axes, pointer?.vector ?? [0, 0]);
-      game.set_player_input(
-        keyboardAxis("KeyW", "KeyS"),
-        keyboardAxis("KeyA", "KeyD"),
-        worldX,
-        worldY,
-      );
+      game.set_player_input(keyboardAxis("KeyW", "KeyS"), keyboardAxis("KeyA", "KeyD"), worldX, worldY);
       game.frame(elapsedSeconds);
       updateSession();
       audio.setActive(!["connecting", "loading", "disconnected"].includes(currentState));
       if (audio.due(timeMs)) audio.update(game.sound_scene(timeMs / 1000, audio.playbackEpoch));
+      if (timeMs >= nextRosterMs) { updatePlayers(); nextRosterMs = timeMs + 250; }
       if (timeMs - fpsStartMs >= 1000) {
         const frames = game.presented_frames();
         fps.textContent = `${Math.round((frames - fpsStartFrames) * 1000 / (timeMs - fpsStartMs))} FPS`;
-        fpsStartMs = timeMs;
-        fpsStartFrames = frames;
-        if (graphicsDialog.open) updateGraphicsResolution(new URLSearchParams(game.graphics_settings()));
+        fpsStartMs = timeMs; fpsStartFrames = frames;
+        if (!settings.hidden) updateGraphicsResolution(new URLSearchParams(game.graphics_settings()));
       }
       // The rudder uses counterclockwise world angles; CSS rotates clockwise.
       wheel.style.transform = `rotate(${-game.rudder_angle_rad()}rad)`;
-      speedElement.textContent = game.speed_m_s().toFixed(1);
-      apparentWindElement.textContent = game.apparent_wind_speed_m_s().toFixed(1);
-      pointOfSailElement.textContent = game.point_of_sail();
-      healthElement.textContent = game.health().toFixed(0);
-      waterDepthElement.textContent = game.water_depth_m().toFixed(1);
-      bottomClearanceElement.textContent = game.bottom_clearance_m().toFixed(1);
-      const bottomContactFraction = game.bottom_contact_fraction();
-      bottomContactElement.textContent =
-        bottomContactFraction >= 1
-          ? "grounded"
-          : bottomContactFraction > 0
-            ? `dragging ${(bottomContactFraction * 100).toFixed(0)}%`
-            : "clear";
-      bottomContactElement.classList.toggle("active", bottomContactFraction > 0);
-      scaleLabelElement.textContent = game.scale_bar_label();
-      scaleLineElement.style.width = `${game.scale_bar_width_px()}px`;
+      if (["ready", "playing", "dead", "joining"].includes(currentState)) {
+        const width = game.scale_bar_width_px();
+        if (Number.isFinite(width) && width > 0) {
+          scale.hidden = !settings.hidden; scaleLabel.textContent = game.scale_bar_label(); scaleLine.style.width = `${width}px`;
+        }
+      }
     } catch (error) {
       console.error(error);
-      if (!game.renderer_is_available()) {
-        clearInput();
-        game.dispose();
-        audio.setActive(false);
-        renderingStopped = true;
-        currentState = "disconnected";
-        welcome.hidden = false;
-        hud.hidden = true;
-        welcomeTitle.textContent = "Rendering stopped";
-        statusElement.textContent = "The graphics device became unavailable. Reload to reconnect.";
-        nickname.disabled = true;
-        nickname.required = false;
-        joinButton.textContent = "Reload game";
-        joinButton.disabled = false;
-        fps.textContent = "— FPS";
-        return;
-      }
-      statusElement.textContent = "Rendering failed; retrying";
+      clearInput(); game.dispose(); renderingStopped = true; currentState = "disconnected"; menuOpen = true;
+      showFailure("Graphics stopped", "The graphics device became unavailable. Reload to return to sea.", error);
+      return;
     }
     requestAnimationFrame(frame);
   }
-
   requestAnimationFrame(frame);
 } catch (error) {
-  welcomeTitle.textContent = "Could not start";
-  statusElement.textContent = `The game could not start: ${String(error)}`;
-  nickname.disabled = true;
-  nickname.required = false;
-  joinButton.textContent = "Reload game";
-  joinButton.disabled = false;
-  joinForm.addEventListener("submit", (event) => { event.preventDefault(); location.reload(); });
+  const memoryLimited = /not enough memory|out of memory/i.test(String(error));
+  showFailure("Could not set sail", memoryLimited ? "The browser could not allocate graphics memory. Close this tab and open the game again." : "The game could not start. Reload to try again.", error);
+  joinForm.addEventListener("submit", event => { event.preventDefault(); location.reload(); });
   console.error(error);
 }

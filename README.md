@@ -61,8 +61,8 @@ defaults to CSS pixels, bounded by the 2× upscale limit; boats stay at display
 resolution. Touch screens default to lower detail, a frame-rate cap, and
 automatic resolution.
 
-Sound starts when you set sail or enable it in Settings, with saved volume and
-mute controls. Procedural wind, waves, rain, hull wash, creaks, and sail flutter
+Sound starts on the first menu interaction, with saved volume and mute controls.
+Procedural wind, waves, rain, hull wash, creaks, and sail flutter
 follow the world and boat motion; nearby surf and boats have distance and stereo
 position. Storm flashes illuminate the scene, followed by distance-delayed
 thunder. Sound pauses while the window is inactive. The playground's Sound
@@ -80,15 +80,16 @@ the scale when frames run long).
 | `W` / `S`, `A` / `D` | Forward / reverse power, turn |
 | Gamepad left stick | World-relative movement |
 | Touch / left mouse drag | World-relative movement; floating wheel shows rudder position |
-| Mouse wheel / middle mouse | Zoom / reset zoom |
 
-The welcome screen spectates the live world while the game loads. Choose a
-nickname and set sail when ready; the camera moves to your spawned boat.
-Destruction or connection failure returns to the dialog to join again or
-reconnect. Destroyed boats remain physical wrecks.
+The menu shows loading stages over the live sea. Keep the generated nickname
+or choose your own, then Join when ready; the camera moves to your spawned boat.
+Before joining or after destruction, choose a live player to spectate. Escape
+or the corner menu button opens the menu during play; Resume returns to your
+boat. Settings opens inside the same dialog. Destruction or connection failure
+returns to the menu with an action to join again or reconnect. Wrecks persist.
 
-A compact HUD reports sailing and under-keel conditions during play. A tiny
-corner counter reports rendered FPS.
+Gameplay has a fixed zoom, a compact player list, a tiny FPS counter, and a scale
+indicator once the view is known.
 
 ## Project guide
 

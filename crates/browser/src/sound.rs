@@ -335,6 +335,9 @@ impl crate::MultiplayerClient {
         };
         let listener = self
             .local_motion()
+            .filter(|_| {
+                self.spectator_target.is_none() || self.health().is_some_and(|health| health > 0.0)
+            })
             .map_or(spectator.as_dvec2(), |motion| motion.position_m);
         let mut nearest: Vec<_> = self
             .boats

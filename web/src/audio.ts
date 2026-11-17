@@ -48,12 +48,12 @@ export class SailingAudio {
     this.enable.addEventListener('click', () => { void this.start(); });
     const volumeLabel = document.createElement('label'); volumeLabel.textContent = 'Volume';
     const volume = document.createElement('input'); volume.type = 'range'; volume.min = '0'; volume.max = '1'; volume.step = '0.01'; volume.value = String(this.volume); volume.setAttribute('aria-label', 'Sound volume');
-    volume.addEventListener('input', () => { this.volume = Number(volume.value); this.save(); this.applyGain(); });
+    volume.addEventListener('input', () => { this.volume = Number(volume.value); this.save(); this.applyGain(); void this.start(); });
     volumeLabel.append(volume);
     const muteLabel = document.createElement('label'); const mute = document.createElement('input'); mute.type = 'checkbox'; mute.checked = this.muted;
     mute.addEventListener('change', () => { this.muted = mute.checked; this.save(); this.applyGain(); if (!this.muted) void this.start(); });
     muteLabel.append(mute, ' Mute');
-    this.status.setAttribute('role', 'status'); this.status.textContent = 'Sound starts when you set sail or enable it here.';
+    this.status.setAttribute('role', 'status'); this.status.textContent = 'Sound is on. Interact with the menu to begin.';
     this.element.append(this.enable, volumeLabel, muteLabel, this.status);
     if (audition) {
       for (let i = 0; i < soundLayers.length; i++) {

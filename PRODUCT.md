@@ -138,8 +138,9 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** One local apparent-wind windsock indicates speed through visible
   length. Ship-direction arrows are diagnostic UI; world grids and wind-arrow
   fields are outside the product UI.
-- **[Explicit]** The browser HUD reports sailing state, depth, under-keel clearance,
-  and grounding. Zoom has no gameplay limit and middle-click restores its original value.
+- **[Explicit]** Gameplay shows only a small player list, a menu button, FPS, and
+  a scale indicator once the view is known.
+- **[Explicit]** The game camera has a fixed zoom.
 - **[Explicit]** At the same zoom, every gameplay view covers the same sea-level
   area. Wider views trade vertical reach for horizontal reach; extreme aspect
   ratios have bars instead of extra visibility or stretching.
@@ -147,6 +148,8 @@ See [README.md](README.md) for what is playable now and
 
 ## Sound
 
+- **[Explicit]** Sound defaults on after the first interaction, respecting saved mute
+  and volume preferences.
 - **[Explicit]** Procedural sound conveys sea conditions, sailing, wind, shore
   surf, storms, rain, and wooden hull movement.
 - **[Explicit]** Local sounds change with physical distance from the listener.
@@ -192,15 +195,20 @@ See [README.md](README.md) for what is playable now and
   Prediction, reconciliation, and entry/exit from physical interaction stay smooth.
   Accepted steering and latency compensation remain the responsiveness baseline
   until contrary measurement or playtesting exists.
-- **[Explicit]** A welcome dialog collects a nickname over a live spectator view.
-  Joining waits for the game to load and spawns the player's boat; the camera
-  moves from the spectator view to that boat so its place among the fleet is clear.
+- **[Explicit]** A minimal naval-themed menu offers a generated nickname and Join
+  over a live spectator view. Loading names its current work; joining waits for
+  the first valid world frame, then the camera moves to the spawned boat.
+- **[Explicit]** Spectators can choose any live player to follow.
+- **[Explicit]** During play, the menu locks the nickname and camera to the
+  player's boat; Resume returns to control. Escape or the touch-friendly menu
+  button opens it.
+- **[Explicit]** Settings is a nested view within the menu.
 - **[Explicit]** Destruction or connection failure returns to the welcome dialog
   with the reason and an action to join again or reconnect.
 - **[Explicit]** Boats spawn beyond the fleet at a random bearing, point with
   local wind, and have safe under-keel clearance.
 - **[Explicit]** Collision damage depends on impact and hull region. Destroyed
-  boats remain physical uncontrolled wrecks; connected owners spectate them.
+  boats remain physical uncontrolled wrecks; owners can spectate live players.
 - **[Explicit]** Disconnection is clearly reported. A surviving local boat can
   cruise locally, remote boats become wrecks, and an already-destroyed local boat
   continues its wreck scene.

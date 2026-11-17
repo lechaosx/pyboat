@@ -114,7 +114,8 @@ and verification details.
   current model development.
 - **[Explicit]** Rendered and collision hull geometry agree.
 - **[Explicit]** Destruction removes the controller while retaining bodies,
-  momentum, fluid forces, and collisions. The owner spectates the wreck.
+  momentum, fluid forces, and collisions. Spectating falls back to the owned wreck
+  when no live target is selected.
 
 ## Procedural contracts
 
@@ -744,6 +745,11 @@ and verification details.
   reads prevent stale backlog and head-of-line blocking. Sequenced commands and
   interest updates cannot regress state; acknowledgements cover only tick-applied input.
 - **[Implicit]** Failed viewport sends remain retryable until superseded.
+- **[Implicit]** The latest outbound snapshot retains the live-player roster.
+  The sender delivers roster changes reliably; the client orders names by their
+  own tick before coalescing motion, so faster motion datagrams cannot lose them.
+- **[Explicit]** A sequenced spectator target controls both camera focus and
+  replication interest; an alive owned boat always takes precedence.
 - **[Implicit]** Individual stream resets leave later streams usable.
 - **[Implicit]** Protocol/version failure closes the session and discards queued replicated state.
 - **[Implicit]** The protocol version also gates shared simulation compatibility,
@@ -798,7 +804,6 @@ and verification details.
 | Convective outflow | Whether rain-cooled cold pools need a mesoscale pressure/temperature/lifetime/gust-front model |
 | Shadow consistency | Whether the consistent shadow look holds up by eye against the lab's legacy shadow look before release |
 | Level switches | Whether switching baked levels needs blending, judged by eye |
-| Gameplay zoom | Whether gameplay zoom anchors at a level's sharp end, and whether rung thresholds need hysteresis |
 | Edge smoothing | Whether shorelines and the sea-ice edge get smoothing as a look option |
 | Tidal wet band | Whether a falling tide's seepage face needs the beach water table's lag beyond drying since exposure |
 | Thick cumulus rims | How the sharpest thick-cumulus rims, about 0.9× the disc's penumbra even when evaluated per pixel, come to span it |

@@ -4,6 +4,7 @@ use std::{
     future::{Future, pending},
     io,
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,7 +12,8 @@ use game::{
     dinghy_parameters, procedural_match_environment, procedural_world_environment, sailor_targets,
 };
 use protocol::{
-    BoatSnapshot, ClientMessage, ServerMessage, decode_client_message, encode_server_message,
+    BoatSnapshot, ClientMessage, PlayerSummary, ServerMessage, decode_client_message,
+    encode_server_message,
 };
 use rapier2d::prelude::Vector;
 use simulation::{
@@ -74,6 +76,7 @@ enum ConnectionEvent {
         player_id: String,
         sequence: i64,
         radius_m: f32,
+        spectator_target: Option<String>,
     },
     Disconnected {
         player_id: String,
@@ -87,7 +90,7 @@ enum IncomingMessage {
 
 #[derive(Clone)]
 enum OutboundMessage {
-    Snapshot(Vec<u8>),
+    Snapshot(ServerMessage, Arc<Vec<PlayerSummary>>),
     Close(String),
 }
 
@@ -96,6 +99,7 @@ struct SessionState {
     boat_id: Option<String>,
     last_viewport: Option<i64>,
     radius_m: f64,
+    spectator_target: Option<String>,
 }
 
 impl SessionState {
@@ -133,7 +137,7 @@ impl SessionState {
         self.boat_id = Some(boat_id);
     }
 
-    fn publish_snapshot(&self, snapshot: Vec<u8>) {
+    fn publish_snapshot(&self, snapshot: ServerMessage, players: Arc<Vec<PlayerSummary>>) {
         if matches!(
             self.outbound.borrow().as_ref(),
             Some(OutboundMessage::Close(_))
@@ -141,26 +145,57 @@ impl SessionState {
             return;
         }
         self.outbound
-            .send_replace(Some(OutboundMessage::Snapshot(snapshot)));
+            .send_replace(Some(OutboundMessage::Snapshot(snapshot, players)));
     }
 
-    fn set_viewport(&mut self, sequence: i64, radius_m: f32) {
+    fn set_viewport(&mut self, sequence: i64, radius_m: f32, spectator_target: Option<String>) {
         if self.last_viewport.is_none_or(|last| sequence > last) {
             self.last_viewport = Some(sequence);
             self.radius_m = f64::from(radius_m).max(PHYSICS_BUBBLE_RADIUS_M);
+            self.spectator_target = spectator_target;
         }
     }
 
-    fn visible_boats(&self, game_match: &GameMatch) -> Vec<usize> {
-        let focus_m = self
+    fn focus_m(&self, game_match: &GameMatch) -> Vector {
+        let own = self
+            .boat_id
+            .as_ref()
+            .and_then(|id| game_match.players.iter().position(|boat| &boat.id == id));
+        own.filter(|&index| !game_match.players[index].wreck)
+            .or_else(|| {
+                self.spectator_target.as_ref().and_then(|id| {
+                    game_match
+                        .players
+                        .iter()
+                        .position(|boat| &boat.id == id && !boat.wreck)
+                })
+            })
+            .or(own)
+            .map(|index| game_match.simulation.motion(index).position_m)
+            .unwrap_or_else(|| game_match.spectator_focus())
+    }
+
+    fn snapshot(&self, game_match: &GameMatch) -> ServerMessage {
+        let mut visible = self.visible_boats(game_match);
+        if let Some(index) = self
             .boat_id
             .as_ref()
             .and_then(|id| game_match.players.iter().position(|boat| &boat.id == id))
-            .map(|index| game_match.simulation.motion(index).position_m)
-            .unwrap_or_else(|| game_match.spectator_focus());
+            && !visible.contains(&index)
+        {
+            visible.push(index);
+        }
+        let mut snapshot = game_match.snapshot_for(self.boat_id.as_deref().unwrap_or(""), &visible);
+        if let ServerMessage::Snapshot { focus_m, .. } = &mut snapshot {
+            *focus_m = self.focus_m(game_match).into();
+        }
+        snapshot
+    }
+
+    fn visible_boats(&self, game_match: &GameMatch) -> Vec<usize> {
         game_match
             .simulation
-            .boats_within_radius(focus_m, self.radius_m)
+            .boats_within_radius(self.focus_m(game_match), self.radius_m)
     }
 }
 
@@ -449,6 +484,17 @@ impl GameMatch {
         self.active_hull_contacts = active_hull_contacts;
     }
 
+    fn live_players(&self) -> Vec<PlayerSummary> {
+        self.players
+            .iter()
+            .filter(|player| !player.wreck)
+            .map(|player| PlayerSummary {
+                id: player.id.clone(),
+                nickname: player.nickname.clone(),
+            })
+            .collect()
+    }
+
     fn spectator_focus(&self) -> Vector {
         self.players
             .iter()
@@ -509,6 +555,7 @@ impl GameMatch {
             tick: self.tick,
             controlled_boat_id: viewer.map(|index| self.players[index].id.clone()),
             focus_m: viewer_position_m.into(),
+            players: None,
             boats,
             removed_player_ids: Vec::new(),
         }
@@ -662,7 +709,7 @@ where
                     outbound,
                     registered,
                 } => {
-                    connections.insert(player_id, SessionState { outbound, boat_id: None, last_viewport: None, radius_m: DEFAULT_VISIBILITY_RADIUS_M });
+                    connections.insert(player_id, SessionState { outbound, boat_id: None, last_viewport: None, radius_m: DEFAULT_VISIBILITY_RADIUS_M, spectator_target: None });
                     let _registration_result = registered.send(());
                 }
                 ConnectionEvent::Join { player_id, nickname, input_sequence } => {
@@ -675,8 +722,8 @@ where
                         game_match.set_input(boat_id, sequence, intent);
                     }
                 }
-                ConnectionEvent::Viewport { player_id, sequence, radius_m } => {
-                    if let Some(session) = connections.get_mut(&player_id) { session.set_viewport(sequence, radius_m); }
+                ConnectionEvent::Viewport { player_id, sequence, radius_m, spectator_target } => {
+                    if let Some(session) = connections.get_mut(&player_id) { session.set_viewport(sequence, radius_m, spectator_target); }
                 }
                 ConnectionEvent::Disconnected { player_id } => {
                     if let Some(session) = connections.remove(&player_id)
@@ -687,11 +734,9 @@ where
             },
             _ = ticker.tick() => {
                 game_match.advance();
+                let players = Arc::new(game_match.live_players());
                 for session in connections.values() {
-                    let boat_id = session.boat_id.as_deref().unwrap_or("");
-                    let visible_boats = session.visible_boats(&game_match);
-                    let snapshot = encode_server_message(&game_match.snapshot_for(boat_id, &visible_boats))?;
-                    session.publish_snapshot(snapshot);
+                    session.publish_snapshot(session.snapshot(&game_match), Arc::clone(&players));
                 }
             }
         }
@@ -736,6 +781,7 @@ async fn handle_connection(
     let (mut incoming_messages, receive_tasks) = receive_messages(&connection);
 
     let result: ConnectionResult<()> = async {
+        let mut sent_players: Option<Arc<Vec<PlayerSummary>>> = None;
         loop {
             tokio::select! {
                 incoming = incoming_messages.recv() => match incoming {
@@ -760,11 +806,13 @@ async fn handle_connection(
                     Some(Ok(IncomingMessage::Reliable(ClientMessage::Viewport {
                         sequence,
                         radius,
+                        spectator_target,
                     }))) => {
                         if events.send(ConnectionEvent::Viewport {
                             player_id: player_id.clone(),
                             sequence,
                             radius_m: radius,
+                            spectator_target,
                         }).await.is_err() {
                             break Ok(());
                         }
@@ -779,7 +827,17 @@ async fn handle_connection(
                     }
                     let message = outbound_updates.borrow_and_update().clone();
                     match message {
-                        Some(OutboundMessage::Snapshot(message)) => {
+                        Some(OutboundMessage::Snapshot(mut snapshot, players)) => {
+                            let roster_changed = sent_players.as_deref() != Some(players.as_ref());
+                            if roster_changed && let ServerMessage::Snapshot { players: roster, .. } = &mut snapshot {
+                                *roster = Some(players.as_ref().clone());
+                            }
+                            let message = encode_server_message(&snapshot)?;
+                            if roster_changed {
+                                send_reliable_message(&connection, &message).await?;
+                                sent_players = Some(players);
+                                continue;
+                            }
                             match connection.send_datagram(&message) {
                                 Ok(()) => {}
                                 Err(SendDatagramError::TooLarge) => {
@@ -1043,6 +1101,7 @@ mod tests {
             boat_id: Some(boat_id.into()),
             last_viewport: None,
             radius_m: DEFAULT_VISIBILITY_RADIUS_M,
+            spectator_target: None,
         }
     }
 
@@ -1100,12 +1159,43 @@ mod tests {
     }
 
     #[test]
+    fn coalesced_outbound_snapshots_retain_latest_live_roster() {
+        let mut game_match = game_match_with_boats(
+            WorldGeometry::default(),
+            &[Vector::ZERO, Vector::new(400.0, 0.0)],
+        );
+        let session = session_for("");
+        let mut receiver = session.outbound.subscribe();
+        session.publish_snapshot(
+            session.snapshot(&game_match),
+            Arc::new(game_match.live_players()),
+        );
+        game_match.remove_player("player-1");
+        game_match.tick += 1;
+        session.publish_snapshot(
+            session.snapshot(&game_match),
+            Arc::new(game_match.live_players()),
+        );
+        let Some(OutboundMessage::Snapshot(ServerMessage::Snapshot { tick, .. }, players)) =
+            receiver.borrow_and_update().clone()
+        else {
+            panic!("expected latest snapshot");
+        };
+        assert_eq!(tick, game_match.tick);
+        assert_eq!(players.len(), 1);
+        assert_eq!(players[0].id, "player-2");
+    }
+
+    #[test]
     fn closing_session_cannot_be_overwritten_by_a_later_snapshot() {
         let session = session_for("player-1");
         session
             .outbound
             .send_replace(Some(OutboundMessage::Close("Match is full".into())));
-        session.publish_snapshot(vec![1, 2, 3]);
+        session.publish_snapshot(
+            GameMatch::new(42).snapshot_for("", &[]),
+            Arc::new(Vec::new()),
+        );
         assert!(
             matches!(session.outbound.borrow().as_ref(), Some(OutboundMessage::Close(reason)) if reason == "Match is full")
         );
@@ -1281,9 +1371,40 @@ mod tests {
         let game_match = game_match_with_boats(world, &[Vector::ZERO, Vector::new(40.0, 0.0)]);
 
         let mut session = session_for("player-1");
-        session.set_viewport(1, 50.0);
+        session.set_viewport(1, 50.0, None);
 
         assert_eq!(session.visible_boats(&game_match), vec![0, 1]);
+    }
+
+    #[test]
+    fn spectator_target_controls_interest_but_never_an_alive_players_camera() {
+        let world = WorldGeometry::new(8_000.0, 8_000.0).unwrap();
+        let mut game_match = game_match_with_boats(world, &[Vector::ZERO, Vector::new(400.0, 0.0)]);
+        let mut spectator = session_for("");
+        spectator.set_viewport(2, 24.0, Some("player-2".into()));
+        assert_eq!(spectator.visible_boats(&game_match), vec![1]);
+        spectator.set_viewport(1, 24.0, Some("player-1".into()));
+        assert_eq!(spectator.visible_boats(&game_match), vec![1]);
+        let mut owner = session_for("player-1");
+        owner.set_viewport(1, 24.0, Some("player-2".into()));
+        assert_eq!(owner.visible_boats(&game_match), vec![0]);
+        game_match.players[0].wreck = true;
+        assert_eq!(owner.visible_boats(&game_match), vec![1]);
+        if let ServerMessage::Snapshot {
+            controlled_boat_id,
+            boats,
+            focus_m,
+            ..
+        } = owner.snapshot(&game_match)
+        {
+            assert_eq!(controlled_boat_id.as_deref(), Some("player-1"));
+            assert_eq!(focus_m, [400.0, 0.0]);
+            assert!(boats.iter().any(|boat| boat.id == "player-1" && boat.wreck));
+        } else {
+            panic!("expected snapshot");
+        }
+        game_match.players[1].wreck = true;
+        assert_eq!(owner.visible_boats(&game_match), vec![0]);
     }
 
     #[test]
@@ -1297,7 +1418,7 @@ mod tests {
 
         assert!(!game_match.has_player_capacity());
         let mut session = session_for("player-1");
-        session.set_viewport(1, f32::MAX);
+        session.set_viewport(1, f32::MAX, None);
         assert_eq!(session.visible_boats(&game_match).len(), MAX_MATCH_BOATS);
     }
 
