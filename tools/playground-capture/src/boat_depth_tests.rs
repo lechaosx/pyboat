@@ -469,6 +469,78 @@ fn boat_coverage_survives_gameplay_and_wide_views() {
 }
 
 #[test]
+fn bow_windsock_stays_above_the_rocking_deck() {
+    let fixture = Fixture::at((768, 768), 6.0);
+    let blank = transparent_png();
+    let hull = solid_image([30, 220, 70, 255]);
+    let mut rgba = vec![0; 1024 * 1536 * 4];
+    for y in 1085..1339 {
+        for x in 509..1018 {
+            rgba[(y * 1024 + x) * 4..(y * 1024 + x) * 4 + 4].copy_from_slice(&[220, 30, 30, 255]);
+        }
+    }
+    let mut sock = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut sock, 1024, 1536);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&rgba)
+            .unwrap();
+    }
+    let mut boat = scene(1, 0.3, false);
+    boat.sea = Some(game::sea_components(
+        WorldGeometry::default(),
+        0x5eed,
+        game::OceanWaveForcing {
+            surface_wind_velocity_m_s: Vector::new(12.0, 6.0),
+            swell: game::Swell::NONE,
+            water_depth_m: 100.0,
+        },
+    ));
+    for (i, speed) in [0.0, 3.0, 8.0].into_iter().enumerate() {
+        boat.apparent_wind_velocity_m_s = Vector::new(-speed, -speed * 0.3);
+        boat.windsock = Some(browser::Windsock {
+            anchor_m: boat.hull_m[0],
+            apparent_wind_velocity_m_s: boat.apparent_wind_velocity_m_s,
+        });
+        let sock_only = fixture.render(
+            std::slice::from_ref(&boat),
+            [&blank, &sock, &blank, &blank, &blank],
+            &format!("sock-only-{i}"),
+        );
+        let combined = fixture.render(
+            std::slice::from_ref(&boat),
+            [&hull, &sock, &blank, &blank, &blank],
+            &format!("sock-deck-{i}"),
+        );
+        fixture.render(
+            std::slice::from_ref(&boat),
+            browser::BOAT_IMAGES,
+            &format!("sock-art-{i}"),
+        );
+        let mut checked = 0;
+        for (sock, combined) in sock_only
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(combined.as_chunks::<4>().0.iter())
+        {
+            if sock[3] == 255 {
+                assert_eq!(sock, combined, "the deck occluded the raised windsock");
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 100,
+            "only {checked} windsock pixels were exercised"
+        );
+    }
+}
+
+#[test]
 fn filtered_cloth_shows_its_hull_backing_instead_of_the_sea() {
     let fixture = Fixture::new();
     let blank = transparent_png();

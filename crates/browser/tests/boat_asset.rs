@@ -255,6 +255,20 @@ fn filled_windsock_flutters_along_and_across_the_wind() {
 }
 
 #[test]
+fn windsock_has_clearance_above_the_deck_at_every_extension() {
+    for speed in [0.0, 3.0, 8.0] {
+        let mesh = browser::windsock_mesh(
+            browser::Windsock {
+                anchor_m: Vector::ZERO,
+                apparent_wind_velocity_m_s: Vector::new(speed, 0.0),
+            },
+            0.3,
+        );
+        assert!(mesh.iter().all(|vertex| vertex.height_m > 0.0));
+    }
+}
+
+#[test]
 fn partial_windsock_keeps_all_cloth_and_the_exposed_stripe_scale() {
     let mesh = |speed| {
         browser::windsock_mesh(

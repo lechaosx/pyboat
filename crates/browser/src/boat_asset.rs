@@ -36,6 +36,8 @@ const BOAT_HULL_DRAFT_M: f32 = 0.19;
 /// The boom 0.66 m above the mast heel (rules 5.1.6 and 5.5), whose heel
 /// stands on the deck 0.10 to 0.13 m below the sheer.
 const BOOM_ABOVE_SHEER_M: f32 = 0.55;
+// Estimated bow-staff height above the gunwale.
+const WINDSOCK_ABOVE_SHEER_M: f32 = 0.4;
 
 const MAST: [f32; 4] = [634.0, 94.0, 931.0, 394.0];
 const BLOCK: [f32; 4] = [110.0, 511.0, 400.0, 665.0];
@@ -529,6 +531,7 @@ fn windsock_mesh_parameters(
                         + direction * (along + axial)
                         + normal * (sway + side * 0.125);
                     let mut vertex = textured(point, SOCK, u, (1.0 - side) * 0.5);
+                    vertex.height_m = WINDSOCK_ABOVE_SHEER_M;
                     vertex.shade = 1.0 - 0.3 * (PI * folded).sin();
                     vertices.push(vertex);
                 }
