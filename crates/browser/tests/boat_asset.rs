@@ -549,6 +549,49 @@ fn segment_triangle_intersection(
 }
 
 #[test]
+fn loaded_sail_stays_continuous_above_its_boom_at_the_rig_stop() {
+    for side in [-1.0, 1.0] {
+        let mut scene = scene(Vector::new(0.0, side * 8.0));
+        let mast = scene.sail_m[0];
+        let boom = scene.sail_m[1] - mast;
+        scene.sail_m[1] =
+            mast + Rotation::new(side * dinghy_parameters().max_sail_angle_rad as f32) * boom;
+        let mut cloth = browser::ClothMotion::new(&scene).pose();
+        cloth.sail_load = side;
+        cloth.flutter_response = 0.0;
+        let boom = scene.sail_m[1] - mast;
+        cloth.sail_angle_rad = boom.y.atan2(boom.x) + 0.25 * side;
+        let mesh = browser::sail_mesh_with_cloth(&scene, 0.0, cloth);
+        let foot_m = mesh
+            .iter()
+            .map(|v| v.height_m)
+            .fold(f32::INFINITY, f32::min);
+        // The short material edge beside the clew cannot bridge a finite
+        // contact offset as its vertical length tends to zero.
+        let mut checked = 0;
+        for triangle in mesh.as_chunks::<3>().0 {
+            for edge in [[0, 1], [1, 2], [2, 0]] {
+                let [a, b] = edge.map(|i| triangle[i]);
+                if a.uv[0] == b.uv[0]
+                    && (a.height_m == foot_m || b.height_m == foot_m)
+                    && a.height_m != b.height_m
+                    && a.position_m.distance(mast) > boom.length() * 0.9
+                {
+                    checked += 1;
+                    let rise_m = (b.height_m - a.height_m).abs();
+                    let horizontal_m = a.position_m.distance(b.position_m);
+                    assert!(
+                        horizontal_m < rise_m,
+                        "{horizontal_m} m contact jump over {rise_m} m of vertical cloth"
+                    );
+                }
+            }
+        }
+        assert!(checked > 0);
+    }
+}
+
+#[test]
 fn sail_clears_standing_rigging_through_the_boom_sweep() {
     let mut failures = Vec::new();
     for step in -6..=6 {

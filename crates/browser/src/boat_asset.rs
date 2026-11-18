@@ -211,9 +211,10 @@ pub fn sail_mesh_with_cloth(
     let mast_offset = scene.sail_m[0] - center;
     let shroud = dinghy_stay_anchors_m(f64::from(hull_axis.length()))[1].as_vec2();
     let shroud = shroud - Vector::new(mast_offset.dot(forward), mast_offset.dot(port));
-    // The cloth/head connection overlaps the stays inside the common fitting.
-    let limit = shroud.y.atan2(-shroud.x) - (ROPE_RADIUS_M / MAST_FITTING_RADIUS_M).asin();
-    let spread = limit.tan();
+    let shroud_length = shroud.length();
+    let shroud_direction = Vector::new(-shroud.x, shroud.y) / shroud_length;
+    let shroud_at_boom_m =
+        shroud_length * scene.sail_luff_m / (scene.sail_luff_m + BOOM_ABOVE_SHEER_M);
     let mut vertices = Vec::new();
     const LENGTH_STEPS: usize = 24;
     const HEIGHT_STEPS: usize = 12;
@@ -248,16 +249,35 @@ pub fn sail_mesh_with_cloth(
                         * (length
                             * (chord * envelope * (PI * height).sin() * 0.18 * load
                                 + flutter_offset));
-                // Contact approximation: flatten free cloth against an aft
-                // wedge rather than solving local cloth/wire collisions.
-                // Only free cloth moves; its foot and vertical luff stay attached.
+                // Geometric contact approximation: bend around the stay's
+                // angular footprint at this height, preserving radial length.
+                // The rounded transition spans the stay's own angular radius.
                 if height > 0.0 && along > 0.0 {
                     let offset = point - scene.sail_m[0];
-                    let aft = -offset.dot(forward);
-                    let side = offset
-                        .dot(port)
-                        .clamp(-aft.max(0.0) * spread, aft.max(0.0) * spread);
-                    point = scene.sail_m[0] - forward * aft.max(0.0) + port * side;
+                    let stay_distance =
+                        (shroud_at_boom_m * (1.0 - height)).max(MAST_FITTING_RADIUS_M);
+                    let radius = offset.length();
+                    let sine = ROPE_RADIUS_M / stay_distance;
+                    let cosine = (1.0 - sine * sine).sqrt();
+                    let tangent = Vector::new(
+                        shroud_direction.x * cosine + shroud_direction.y * sine,
+                        shroud_direction.y * cosine - shroud_direction.x * sine,
+                    );
+                    let normal = Vector::new(-tangent.y, tangent.x);
+                    let side = offset.dot(port);
+                    let local = Vector::new(-offset.dot(forward), side.abs());
+                    let across = local.dot(normal);
+                    let width = radius * sine;
+                    if across > -width {
+                        let direction = if across >= width {
+                            tangent
+                        } else {
+                            let push = (across + width).powi(2) / (4.0 * width);
+                            (local - normal * push).normalize()
+                        };
+                        point = scene.sail_m[0] - forward * (radius * direction.x)
+                            + port * (radius * direction.y.copysign(side));
+                    }
                 }
                 // UVs use material distance, so sewn panels narrow with the triangle.
                 let mut vertex = textured(point, CLOTH, along, 1.0 - height);
