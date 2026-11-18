@@ -1,10 +1,12 @@
 // Environment noise evaluated once per frame on the lattice in
 // `scene.environment_field_grid_m`: the first texel centre relative to the
 // camera, then the texel spacing. `scene.environment_field_texels.xy` counts
-// the texels written this frame; lookups clamp to them. Three later layers
-// hold the cumulus and deck drivers and the ground-sky bounce conditions on
-// the cloud weather lattice, which `scene.cloud_weather_grid_m` places the
-// same way. Layers are rgba32float
+// the texels written this frame; lookups clamp to them. A further layer
+// holds the surface gusts' velocity on the same lattice, which only water
+// reads.
+// Three later layers hold the cumulus and deck drivers and the ground-sky
+// bounce conditions on the cloud weather lattice, which
+// `scene.cloud_weather_grid_m` places the same way. Layers are rgba32float
 // because pressure potentials exceed half-float range and temperature-noise
 // gradients fall into half-float subnormals. WebGPU does not guarantee filtering of 32-bit float
 // textures, so reconstruction blends four loaded texels.
@@ -14,9 +16,10 @@ var environment_fields: texture_2d_array<f32>;
 // The scene lattice's layers, then the cloud weather lattice's; keep the total
 // synchronized with ENVIRONMENT_FIELD_LAYERS in field_grids.rs.
 const ENVIRONMENT_FIELD_LAYERS: u32 = 6u;
-const CUMULUS_DRIVER_FIELD: u32 = 6u;
-const DECK_DRIVER_FIELD: u32 = 7u;
-const GROUND_BOUNCE_FIELD: u32 = 8u;
+const SURFACE_GUST_FIELD: u32 = 6u;
+const CUMULUS_DRIVER_FIELD: u32 = 7u;
+const DECK_DRIVER_FIELD: u32 = 8u;
+const GROUND_BOUNCE_FIELD: u32 = 9u;
 
 struct EnvironmentFieldSample {
     atmosphere: AtmosphereNoiseSample,
@@ -160,6 +163,19 @@ fn environment_field_sample(position_m: vec2<f32>) -> EnvironmentFieldSample {
         environment_field_layer(lookup.texel, lookup.weight, 4u),
         environment_field_layer(lookup.texel, lookup.weight, 5u),
     ));
+}
+
+// Each texel's gusts follow its cell's mean gust signal, so where texels span
+// the gust band's wavelength the water takes the gusts' mean rather than
+// aliasing them. Compromise: bilinear reconstruction blurs gust edges across
+// a texel.
+fn surface_gust_velocity_m_s_from_environment_fields(position_m: vec2<f32>) -> vec2<f32> {
+    let lookup = environment_field_lookup(
+        position_m,
+        scene.environment_field_grid_m,
+        scene.environment_field_texels,
+    );
+    return environment_field_layer(lookup.texel, lookup.weight, SURFACE_GUST_FIELD).xy;
 }
 
 fn cloud_weather_lookup(position_m: vec2<f32>) -> EnvironmentFieldLookup {

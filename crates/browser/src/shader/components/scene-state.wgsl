@@ -5,10 +5,9 @@ struct SceneUniforms {
     drone_camera: vec4<f32>,
     scalar_field_time_coordinates: vec4<f32>,
     match_seed: vec2<u32>,
-    precipitation_epoch: vec2<u32>,
     world_size_m: vec2<f32>,
     inverse_world_size_m: vec2<f32>,
-    precipitation_phase_and_css_view_height_px: vec4<f32>,
+    css_view_height_px_and_padding: vec2<f32>,
     world_phases_and_pixel_footprint_m: vec4<f32>,
     pressure_time_coordinate: vec4<f32>,
     ocean_current_time_coordinate_and_padding: vec4<f32>,
@@ -191,7 +190,6 @@ const SEA_ICE_SLAB_NOISE_FIELD: u32 = 26u;
 const VEGETATION_NOISE_FIELD: u32 = 27u;
 const CANOPY_DETAIL_NOISE_FIELD: u32 = 28u;
 const LAND_SURFACE_NOISE_FIELD: u32 = 29u;
-const PRECIPITATION_CONTACT_NOISE_FIELD: u32 = 30u;
 const DECORATIVE_WATER_NOISE_FIELD: u32 = 31u;
 const CUMULUS_NOISE_FIELD: u32 = 32u;
 const DECK_NOISE_FIELD: u32 = 33u;

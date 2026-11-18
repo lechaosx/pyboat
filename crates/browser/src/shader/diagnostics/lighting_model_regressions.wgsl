@@ -76,7 +76,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         // The displayed light of the vision colour along a horizontal ramp
         // from 1/64 to 64 diffuse whites, in a view adapted to daylight, at a
         // quarter scale so an HDR peak of 4 fits the 8-bit image.
-        let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
+        let css_view_width_px = scene.css_view_height_px_and_padding.x
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let level = exp2(mix(-6.0, 6.0, input.css_position_px.x / css_view_width_px));
         let color = vec3<f32>(LIGHTING_MODEL_VISION_RED, LIGHTING_MODEL_VISION_GREEN, LIGHTING_MODEL_VISION_BLUE);
@@ -94,7 +94,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         // two-thousandths. Under a full storm deck (28), red is its diffuse
         // light, in hundredths of a zenith Sun's clear-sky light, and green the
         // Sun's beam share of its clear-sky light on level ground.
-        let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
+        let css_view_width_px = scene.css_view_height_px_and_padding.x
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let depression = radians(mix(-0.5, 2.5, input.css_position_px.x / css_view_width_px));
         sun_light_direction = vec3<f32>(cos(depression), 0.0, -sin(depression));
@@ -176,9 +176,10 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 32u {
         // Water's Sun glint at its rendered position under a Sun
         // LIGHTING_MODEL_SUN_DEGREES high toward +x, per unit of the beam's
-        // light on level ground, as g / (g + 0.1) in red; the resolved surface
-        // wind's speed U as U / (U + 10) in green and its axis from +x in half
-        // turns in blue. Alpha is 1 over water and 0 elsewhere.
+        // light on level ground, as g / (g + 0.1) in red; the surface wind
+        // that sets Cox and Munk's slopes there, gusts included, its speed U as
+        // U / (U + 10) in green and its axis from +x in half turns in blue.
+        // Alpha is 1 over water and 0 elsewhere.
         let initialized = initialize_playground_scene(input);
         let position_m = initialized.input.world_position_m;
         let water_height_m = tide_height_m();
@@ -199,12 +200,15 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             unresolved_slope_covariance(surface.surface),
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         ) / sin(sun);
-        let wind = ocean_forcing_from_surface(
+        let wind = water_surface_wind_m_s(
             position_m,
-            surface.elevation_m,
-            initialized.atmosphere,
-            surface_tide_sample,
-        ).surface_wind_m_s;
+            ocean_forcing_from_surface(
+                position_m,
+                surface.elevation_m,
+                initialized.atmosphere,
+                surface_tide_sample,
+            ).surface_wind_m_s,
+        );
         let speed = length(wind);
         return vec4<f32>(
             glint / (glint + 0.1),

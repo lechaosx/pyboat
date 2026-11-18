@@ -43,9 +43,9 @@ use crate::{
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth,
     UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
     baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
-    field_grids, gameplay_view_height_m, ocean_wave_uniforms, periodic_effect_time_interpolated,
-    queue_latest_snapshot, requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry,
-    scale_bar, scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
+    field_grids, gameplay_view_height_m, ocean_wave_uniforms, queue_latest_snapshot,
+    requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
+    scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
     viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
     zoom_view_height_m,
 };
@@ -191,7 +191,6 @@ use crate::PLAYGROUND_STARTUP_SHADER;
 
 const MAXIMUM_PENDING_DATAGRAMS: usize = 15;
 const MAXIMUM_CONCURRENT_RELIABLE_RECEIVES: usize = 8;
-const PRECIPITATION_CONTACT_PERIOD_TICKS: u64 = 108_000;
 
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
@@ -818,8 +817,6 @@ pub fn playground_scene_uniforms(
             .map_err(|_| JsValue::from_str("scene uniform rows need four values"))
     };
     let view_cloud_motion_m = row(view_cloud_motion_m)?;
-    let precipitation_time =
-        periodic_effect_time_interpolated(tick, tick_fraction, PRECIPITATION_CONTACT_PERIOD_TICKS);
     let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
     let vector_time = vector_field_time_coordinates_interpolated(geometry, tick, tick_fraction);
     let cloud_time = game::cloud_field_time_coordinates_interpolated(tick, tick_fraction);
@@ -884,18 +881,9 @@ pub fn playground_scene_uniforms(
             scalar_time.decorative_water,
         ],
         match_seed: [match_seed as u32, (match_seed >> 32) as u32],
-        precipitation_epoch: [
-            precipitation_time.epoch as u32,
-            (precipitation_time.epoch >> 32) as u32,
-        ],
         world_size_m: [world_width_m, world_height_m],
         inverse_world_size_m: [world_width_m.recip(), world_height_m.recip()],
-        precipitation_phase_and_css_view_height_px: [
-            precipitation_time.phase,
-            css_view_height_px,
-            0.0,
-            0.0,
-        ],
+        css_view_height_px_and_padding: [css_view_height_px, 0.0],
         world_phases_and_pixel_footprint_m: [
             celestial.day_phase,
             celestial.season_phase,
@@ -1042,10 +1030,9 @@ struct SceneUniforms {
     drone_camera: [f32; 4],
     scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
-    precipitation_epoch: [u32; 2],
     world_size_m: [f32; 2],
     inverse_world_size_m: [f32; 2],
-    precipitation_phase_and_css_view_height_px: [f32; 4],
+    css_view_height_px_and_padding: [f32; 2],
     world_phases_and_pixel_footprint_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
@@ -2101,11 +2088,6 @@ impl Renderer {
         let celestial =
             world_celestial_conditions(world_geometry, world_time_seconds, Vector::ZERO);
         let orbit = celestial_orbit(celestial);
-        let precipitation_time = periodic_effect_time_interpolated(
-            tick,
-            tick_fraction,
-            PRECIPITATION_CONTACT_PERIOD_TICKS,
-        );
         let scalar_time = scalar_field_time_coordinates_interpolated(tick, tick_fraction);
         let vector_time =
             vector_field_time_coordinates_interpolated(world_geometry, tick, tick_fraction);
@@ -2195,10 +2177,6 @@ impl Renderer {
                     scalar_time.decorative_water,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
-                precipitation_epoch: [
-                    precipitation_time.epoch as u32,
-                    (precipitation_time.epoch >> 32) as u32,
-                ],
                 world_size_m: [
                     world_geometry.width_m() as f32,
                     world_geometry.height_m() as f32,
@@ -2207,12 +2185,7 @@ impl Renderer {
                     (world_geometry.width_m() as f32).recip(),
                     (world_geometry.height_m() as f32).recip(),
                 ],
-                precipitation_phase_and_css_view_height_px: [
-                    precipitation_time.phase,
-                    self.canvas.client_height() as f32,
-                    0.0,
-                    0.0,
-                ],
+                css_view_height_px_and_padding: [self.canvas.client_height() as f32, 0.0],
                 world_phases_and_pixel_footprint_m: [
                     celestial.day_phase,
                     celestial.season_phase,

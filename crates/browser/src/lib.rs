@@ -310,13 +310,6 @@ pub struct WorldGeometrySample {
     pub local_solar_phase: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PeriodicEffectTime {
-    pub epoch: u64,
-    pub age_ticks: u64,
-    pub phase: f32,
-}
-
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Default)]
 pub(crate) struct ViewCloudMotion {
@@ -334,24 +327,6 @@ impl ViewCloudMotion {
             self.low_offset_m[axis] += elapsed_seconds * low_wind[axis];
             self.upper_offset_m[axis] += elapsed_seconds * upper_wind[axis];
         }
-    }
-}
-
-pub fn periodic_effect_time(tick: u64, period_ticks: u64) -> PeriodicEffectTime {
-    periodic_effect_time_interpolated(tick, 0.0, period_ticks)
-}
-
-pub fn periodic_effect_time_interpolated(
-    tick: u64,
-    tick_fraction: f32,
-    period_ticks: u64,
-) -> PeriodicEffectTime {
-    let epoch = tick / period_ticks;
-    let age_ticks = tick % period_ticks;
-    PeriodicEffectTime {
-        epoch,
-        age_ticks,
-        phase: (age_ticks as f32 + tick_fraction.clamp(0.0, 1.0)) / period_ticks as f32,
     }
 }
 

@@ -161,13 +161,24 @@ fn spatiotemporal_pressure_noise_sample(
     );
 }
 
+const SURFACE_GUST_WAVELENGTH_M: f32 = 256.0;
+// The surface-gust signal's mean over the world and its clocks, a property of
+// the band's noise: a Monte Carlo average of 1.2 million positions and ticks
+// over three seeds. Re-measure it when the signal's smoothstep thresholds,
+// here and in `procedural_pressure_sample_at_time` in crates/game/src/lib.rs,
+// or the pressure noise's value distribution change.
+const SURFACE_GUST_MEAN_SIGNAL: f32 = 0.135;
+
+// The pressure bands from `first_band` up to `band_count`.
 fn procedural_pressure_sample_filtered_bands(
     position_m: vec2<f32>,
     pixel_footprint_m: f32,
+    first_band: u32,
     band_count: u32,
 ) -> PressureFieldSample {
-    let zonal_wavelengths_m = array<f32, 4>(19200.0, 3200.0, 960.0, 256.0);
-    let fixed_meridional_wavelengths_m = array<f32, 4>(0.0, 3200.0, 960.0, 256.0);
+    let zonal_wavelengths_m = array<f32, 4>(19200.0, 3200.0, 960.0, SURFACE_GUST_WAVELENGTH_M);
+    let fixed_meridional_wavelengths_m =
+        array<f32, 4>(0.0, 3200.0, 960.0, SURFACE_GUST_WAVELENGTH_M);
     let meridional_world_fractions = array<f32, 4>(0.30, 0.0, 0.0, 0.0);
     let variances = array<f32, 4>(0.30, 0.54, 0.08, 0.02);
     let midlatitude_variance_transfers = array<f32, 4>(-0.15, 0.15, 0.0, 0.0);
@@ -188,7 +199,7 @@ fn procedural_pressure_sample_filtered_bands(
     sample.synoptic_potential_m2_s = 0.0;
     sample.local_potential_m2_s = 0.0;
     sample.surface_gust_signal = 0.0;
-    for (var band = 0u; band < band_count; band++) {
+    for (var band = first_band; band < band_count; band++) {
         let zonal_wavelength_m = zonal_wavelengths_m[band];
         let meridional_wavelength_m = select(
             fixed_meridional_wavelengths_m[band],
@@ -215,6 +226,8 @@ fn procedural_pressure_sample_filtered_bands(
             zonal_aspect_gradient_per_m,
         );
         if band == 3u {
+            // Keep synchronized with `procedural_pressure_sample_at_time` in
+            // crates/game/src/lib.rs and with SURFACE_GUST_MEAN_SIGNAL.
             sample.surface_gust_signal = smoothstep(0.05, 0.65, noise.value);
             continue;
         }
@@ -266,13 +279,26 @@ fn procedural_pressure_sample_filtered(
     position_m: vec2<f32>,
     pixel_footprint_m: f32,
 ) -> PressureFieldSample {
-    return procedural_pressure_sample_filtered_bands(position_m, pixel_footprint_m, 4u);
+    return procedural_pressure_sample_filtered_bands(position_m, pixel_footprint_m, 0u, 4u);
 }
 
 fn procedural_pressure_sample_without_surface_gust(
     position_m: vec2<f32>,
 ) -> PressureFieldSample {
-    return procedural_pressure_sample_filtered_bands(position_m, 0.0, 3u);
+    return procedural_pressure_sample_filtered_bands(position_m, 0.0, 0u, 3u);
+}
+
+// The surface-gust signal's mean over a cell `cell_m` wide around
+// `position_m`. As for terrain octaves, the cell keeps sinc(π cell / λ) of a
+// wave of the band's wavelength λ, here of the signal's departure from its
+// mean, and none once it spans a wavelength. Compromise: the signal's edges,
+// sharper than the band, are filtered as the band is.
+fn surface_gust_signal_in_cell(position_m: vec2<f32>, cell_m: f32) -> f32 {
+    let cycles = PI * cell_m / SURFACE_GUST_WAVELENGTH_M;
+    let visibility = select(0.0, sin(cycles) / max(cycles, 1e-6), cycles < PI);
+    let signal =
+        procedural_pressure_sample_filtered_bands(position_m, 0.0, 3u, 4u).surface_gust_signal;
+    return SURFACE_GUST_MEAN_SIGNAL + visibility * (signal - SURFACE_GUST_MEAN_SIGNAL);
 }
 
 fn procedural_pressure_sample_with_surface_gust(position_m: vec2<f32>) -> PressureFieldSample {
@@ -1807,11 +1833,25 @@ fn surface_gust_velocity_m_s_at(
     upper_wind_m_s: vec2<f32>,
 ) -> vec2<f32> {
     let field = cloud_weather_field_at(position_m);
-    let weather = field.weather;
-    let air_temperature_c = surface_current_air_temperature_c_from_atmosphere(
-        field.atmosphere.temperature_anomaly.value,
-        field.atmosphere.climate,
+    return surface_gust_velocity_m_s_from_weather(
+        pressure.surface_gust_signal,
+        field.weather,
+        surface_current_air_temperature_c_from_atmosphere(
+            field.atmosphere.temperature_anomaly.value,
+            field.atmosphere.climate,
+        ),
+        resolved_surface_wind_m_s,
+        upper_wind_m_s,
     );
+}
+
+fn surface_gust_velocity_m_s_from_weather(
+    gust_signal: f32,
+    weather: CloudWeatherSample,
+    air_temperature_c: f32,
+    resolved_surface_wind_m_s: vec2<f32>,
+    upper_wind_m_s: vec2<f32>,
+) -> vec2<f32> {
     let mechanical_gust_speed_m_s = 0.27
         * (1.0 + 0.35 * weather.instability)
         * length(resolved_surface_wind_m_s);
@@ -1838,7 +1878,7 @@ fn surface_gust_velocity_m_s_at(
     if length(upper_wind_m_s) > 0.0 {
         gust_velocity_m_s += convective_gust_speed_m_s * normalize(upper_wind_m_s);
     }
-    return pressure.surface_gust_signal * gust_velocity_m_s;
+    return gust_signal * gust_velocity_m_s;
 }
 
 fn relative_humidity() -> f32 {

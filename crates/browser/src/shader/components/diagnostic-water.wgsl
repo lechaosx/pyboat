@@ -61,9 +61,3 @@ fn diagnostic_water_wave_direction(input: VertexOutput) -> vec4<f32> {
         1.0,
     );
 }
-
-fn diagnostic_water_precipitation_contact_normals(input: VertexOutput) -> vec4<f32> {
-    let contact = precipitation_water_contact_sample(input.world_position_m);
-    let normal = normalize(vec3<f32>(-20.0 * contact.gradient, 1.0));
-    return vec4<f32>(0.5 + 0.5 * normal, 1.0);
-}

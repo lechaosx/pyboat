@@ -1756,7 +1756,7 @@ function updateUniforms(
     visible(intermediate.materials),
   ], 36);
   tuningFloats.set([
-    visible(intermediate.materials),
+    0,
     visible(intermediate.materials),
     0,
     0,

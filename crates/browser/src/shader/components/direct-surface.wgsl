@@ -17,3 +17,12 @@ fn scene_surface_at(
         atmosphere,
     );
 }
+
+fn surface_gust_velocity_m_s(position_m: vec2<f32>, resolved_m_s: vec2<f32>) -> vec2<f32> {
+    return surface_gust_velocity_m_s_at(
+        position_m,
+        procedural_pressure_sample_with_surface_gust(position_m),
+        resolved_m_s,
+        upper_wind_m_s_at(position_m),
+    );
+}

@@ -7,130 +7,6 @@ fn visual_hash_unit_pair(value: u32) -> vec2<f32> {
     return vec2<f32>(vec2<u32>(value & 0xffffu, value >> 16u)) / 65536.0;
 }
 
-fn precipitation_water_contact_sample_from_atmosphere(
-    position_m: vec2<f32>,
-    atmosphere: SurfaceAtmosphereSample,
-) -> TerrainNoiseSample {
-    var sample: TerrainNoiseSample;
-    sample.value = 0.0;
-    sample.gradient = vec2<f32>(0.0);
-    if effect_feature_visibility().x <= 0.0 {
-        return sample;
-    }
-    let precipitation = surface_cloud_weather.rain;
-    let contacts_resolved = precipitation > 0.001 && visual_pixel_footprint_m < 0.30;
-    if !contacts_resolved && !EVALUATE_ALL_BRANCHES {
-        return sample;
-    }
-    // The contact rate follows the rain index; the cells, ring sizes, and heights
-    // stand in for a drop-size distribution.
-    let cell_x_cycles = max(1, i32(round(scene.world_size_m.x / 1.50)));
-    let cell_size_m = vec2<f32>(scene.world_size_m.x / f32(cell_x_cycles), 1.50);
-    let canonical_position = canonical_world_position(position_m);
-    let positive_x = select(
-        canonical_position.x,
-        canonical_position.x + scene.world_size_m.x,
-        canonical_position.x < 0.0,
-    );
-    let cell_position = vec2<f32>(positive_x, position_m.y) / cell_size_m;
-    let base_cell = vec2<i32>(floor(cell_position));
-    let cell_local = fract(cell_position);
-    let cycles_per_anchor = 2400u;
-    let anchor_cycles = multiply_u64(
-        scene.precipitation_epoch,
-        vec2<u32>(cycles_per_anchor, 0u),
-    );
-    let snow_fraction = 1.0 - smoothstep(
-        -1.0,
-        2.0,
-        surface_current_air_temperature_c_from_atmosphere(
-            atmosphere.temperature_anomaly.value,
-            atmosphere.climate,
-        ),
-    );
-    let contact_key = noise_key(PRECIPITATION_CONTACT_NOISE_FIELD, 0u);
-    for (var offset_y = -1; offset_y <= 1; offset_y++) {
-        for (var offset_x = -1; offset_x <= 1; offset_x++) {
-            let unwrapped_cell = base_cell + vec2<i32>(offset_x, offset_y);
-            let wrapped_cell = vec2<i32>(
-                positive_mod(unwrapped_cell.x, cell_x_cycles),
-                unwrapped_cell.y,
-            );
-            let cell_hash = hash32(
-                contact_key
-                    ^ (u32(wrapped_cell.x) * LATTICE_KEY_MULTIPLIERS[0])
-                    ^ (bitcast<u32>(wrapped_cell.y) * LATTICE_KEY_MULTIPLIERS[1]),
-            );
-            let local_cycle_time = scene.precipitation_phase_and_css_view_height_px.x
-                * f32(cycles_per_anchor)
-                + visual_hash_unit(cell_hash);
-            let local_cycle = u32(floor(local_cycle_time));
-            let age = fract(local_cycle_time);
-            let impact_low = anchor_cycles.x + local_cycle;
-            let impact_epoch = vec2<u32>(
-                impact_low,
-                anchor_cycles.y + select(0u, 1u, impact_low < anchor_cycles.x),
-            );
-            let impact_hash = hash32(hash32(cell_hash ^ impact_epoch.x) ^ impact_epoch.y);
-            let presence = smoothstep(
-                visual_hash_unit(impact_hash) - 0.10,
-                visual_hash_unit(impact_hash) + 0.10,
-                precipitation,
-            );
-            // A forced absent contact adds exactly zero through `presence`.
-            if presence <= 0.0 && !EVALUATE_ALL_BRANCHES {
-                continue;
-            }
-            let impact_position = 0.05 + 0.90 * visual_hash_unit_pair(hash32(impact_hash));
-            let delta_m = (
-                cell_local
-                    - vec2<f32>(f32(offset_x), f32(offset_y))
-                    - impact_position
-            ) * cell_size_m;
-            let distance_m = length(delta_m);
-            let radial_direction = select(
-                vec2<f32>(0.0),
-                delta_m / distance_m,
-                distance_m > 0.0001,
-            );
-            let life_envelope = sin(PI * age);
-            let ring_radius_m = mix(0.018, 0.22, age);
-            let ring_width_m = max(0.012, 0.55 * visual_pixel_footprint_m);
-            let ring_offset = (distance_m - ring_radius_m) / ring_width_m;
-            let rain_profile = exp(-ring_offset * ring_offset);
-            let rain_contact = precipitation
-                * presence
-                * life_envelope
-                * rain_profile;
-            let rain_height_m = 0.010 * rain_contact;
-            let rain_gradient = rain_height_m
-                * (-2.0 * ring_offset / ring_width_m)
-                * radial_direction;
-            let snow_radius_m = max(0.035, 0.55 * visual_pixel_footprint_m);
-            let snow_offset = distance_m / snow_radius_m;
-            let snow_profile = exp(-snow_offset * snow_offset);
-            let snow_contact = precipitation
-                * presence
-                * life_envelope
-                * snow_profile;
-            let snow_height_m = 0.0012 * snow_contact;
-            let snow_gradient = snow_height_m
-                * (-2.0 * snow_offset / snow_radius_m)
-                * radial_direction;
-            sample.value += mix(rain_contact, snow_contact, snow_fraction);
-            sample.gradient += mix(rain_gradient, snow_gradient, snow_fraction);
-        }
-    }
-    return noise_sample_or_zero(sample, contacts_resolved);
-}
-
-fn precipitation_water_contact_sample(position_m: vec2<f32>) -> TerrainNoiseSample {
-    return precipitation_water_contact_sample_from_atmosphere(
-        position_m,
-        surface_atmosphere_sample_at(position_m),
-    );
-}
-
 fn ocean_current_m_s_from_surface(
     position_m: vec2<f32>,
     terrain_cluster: TerrainNoiseSample,
@@ -223,21 +99,12 @@ fn visual_water_surface(
         atmosphere,
         surface_tide_sample,
     );
-    let precipitation_contact = precipitation_water_contact_sample_from_atmosphere(
-        position_m,
-        atmosphere,
-    );
-    // Compromise: rain's damping of the resolved slopes and its rings' slopes
-    // stand outside the Cox and Munk budget the unresolved slopes complete.
-    let undisturbed_gradient = mix(
-        slopes.gradient,
-        0.35 * slopes.gradient,
-        clamp(2.0 * precipitation_contact.value, 0.0, 1.0),
-    );
+    // Compromise, a stopgap: rain and snow leave the water's surface as it
+    // is, without the roughness of their drops' ring waves.
     let covariance = slopes.unresolved_covariance;
     return TerrainSurface(
         bed_color,
-        undisturbed_gradient + precipitation_contact.gradient,
+        slopes.gradient,
         sqrt(covariance.x + covariance.y),
         vec2<f32>(0.5 * (covariance.x - covariance.y), covariance.z),
     );

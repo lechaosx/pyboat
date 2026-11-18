@@ -12,11 +12,16 @@ use std::{
 };
 
 use browser::DroneCamera;
+use game::procedural_weather;
+use rapier2d_f64::glamx::Vec2 as Vector;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 /// Open ocean, the bench's open-ocean view centre, at the capture's default
 /// world time.
 const OPEN_OCEAN_M: [f64; 2] = [-14_900.0, -5_330.0];
 const OPEN_OCEAN_WORLD_TIME_SECONDS: f64 = 37.0;
+/// Open ocean where gusts blow at that time.
+const GUSTY_OPEN_OCEAN_M: [f64; 2] = [-12_000.0, -21_000.0];
 /// Water's refractive index, written out here so the oracle shares no code
 /// with the shader.
 const WATER_REFRACTIVE_INDEX: f64 = 1.34;
@@ -131,13 +136,18 @@ impl GlintView {
             .collect()
     }
 
-    /// The unit vector from a pixel's sea-level point to the camera.
-    fn view_direction(&self, column: usize, row: usize) -> [f64; 3] {
+    /// A pixel's sea-level point relative to the view centre.
+    fn offset_m(&self, column: usize, row: usize) -> [f64; 2] {
         let (width, height) = (self.width as f64, self.height as f64);
-        let offset_m = [
+        [
             (column as f64 + 0.5 - 0.5 * width) / height * self.view_height_m,
             (0.5 * height - row as f64 - 0.5) / height * self.view_height_m,
-        ];
+        ]
+    }
+
+    /// The unit vector from a pixel's sea-level point to the camera.
+    fn view_direction(&self, column: usize, row: usize) -> [f64; 3] {
+        let offset_m = self.offset_m(column, row);
         normalize([-offset_m[0], -offset_m[1], self.camera_height_m])
     }
 
@@ -232,6 +242,115 @@ fn open_water_at_boat_zoom_keeps_cox_and_munks_mean_glint() {
         world_time_seconds: OPEN_OCEAN_WORLD_TIME_SECONDS,
     };
     assert_cox_and_munk_mean_glint(&view, &view.capture("high"));
+}
+
+/// Gusts roughen the water: where the game's gusts raise Cox and Munk's mean
+/// glint well beyond the tolerance, the rendered mean glint follows their
+/// slopes at the game's gusting surface wind under each pixel.
+#[test]
+fn gusts_roughen_the_glint() {
+    let view = GlintView {
+        width: 960,
+        height: 600,
+        view_height_m: 240.0,
+        camera_height_m: f64::from(DroneCamera::PRODUCTION_HEIGHT_M),
+        sun_degrees: 60.0,
+        camera_m: GUSTY_OPEN_OCEAN_M,
+        world_time_seconds: OPEN_OCEAN_WORLD_TIME_SECONDS,
+    };
+    let pixels = view.capture("high");
+    let sun = view.sun_direction();
+    let tick = (view.world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+    let winds: Vec<_> = pixels
+        .iter()
+        .map(|pixel| {
+            let offset_m = view.offset_m(pixel.column, pixel.row);
+            let weather = procedural_weather(
+                WorldGeometry::default(),
+                0x5eed,
+                tick,
+                Vector::new(
+                    (view.camera_m[0] + offset_m[0]) as f32,
+                    (view.camera_m[1] + offset_m[1]) as f32,
+                ),
+            );
+            (
+                weather.wind_velocity_m_s,
+                weather.wind_velocity_m_s - weather.surface_gust_velocity_m_s,
+            )
+        })
+        .collect();
+    let glint_at = |pick: fn(&(Vector, Vector)) -> Vector| {
+        mean(pixels.iter().zip(&winds).map(|(pixel, wind)| {
+            let wind = pick(wind).as_dvec2();
+            cox_munk_glint(
+                view.view_direction(pixel.column, pixel.row),
+                sun,
+                wind.length(),
+                wind.y.atan2(wind.x),
+            ) / sun[2]
+        }))
+    };
+    let gusting = glint_at(|wind| wind.0);
+    let sustained = glint_at(|wind| wind.1);
+    assert!(
+        (sustained / gusting - 1.0).abs() > 0.15,
+        "Cox and Munk's mean glint {gusting} at the gusting wind, {sustained} at the sustained",
+    );
+    let rendered = mean(pixels.iter().map(|pixel| pixel.glint));
+    assert!(
+        (rendered / gusting - 1.0).abs() < 0.05,
+        "mean glint {rendered}, Cox and Munk {gusting} at the gusting wind, {sustained} at the sustained",
+    );
+}
+
+/// The scene reads the gusts over water from the environment grid as direct
+/// evaluation computes them: lit by the Sun alone at the gusty view, grid
+/// water's mean luminance matches direct water's within 3%. The grid's
+/// bilinear reconstruction and cell means leave 1.3%; a grid without gusts
+/// leaves 6.5%.
+#[test]
+fn grid_water_takes_the_gusts_direct_evaluation_takes() {
+    let (camera_x, camera_y) = (
+        GUSTY_OPEN_OCEAN_M[0].to_string(),
+        GUSTY_OPEN_OCEAN_M[1].to_string(),
+    );
+    let world_time = OPEN_OCEAN_WORLD_TIME_SECONDS.to_string();
+    let mean_light = |diagnostic| {
+        let rgba = capture_rgba(
+            &format!("gusty-{diagnostic}"),
+            &[
+                "--diagnostic",
+                diagnostic,
+                "--width",
+                "480",
+                "--height",
+                "300",
+                "--camera-x",
+                &camera_x,
+                "--camera-y",
+                &camera_y,
+                "--view-height",
+                "240",
+                "--world-time",
+                &world_time,
+                "--cloud-shadows",
+                "0",
+                "--light-contributions",
+                "1,0,0,0",
+            ],
+        );
+        mean(rgba.as_chunks::<4>().0.iter().map(|pixel| {
+            0.2126 * srgb_channel_to_linear(pixel[0])
+                + 0.7152 * srgb_channel_to_linear(pixel[1])
+                + 0.0722 * srgb_channel_to_linear(pixel[2])
+        }))
+    };
+    let (grid, direct) = (mean_light("scene"), mean_light("scene_direct"));
+    assert!(
+        (grid / direct - 1.0).abs() < 0.03,
+        "mean luminance of grid water {grid}, direct {direct}",
+    );
 }
 
 /// Where the wave modes resolve more slope variance than Cox and Munk's total

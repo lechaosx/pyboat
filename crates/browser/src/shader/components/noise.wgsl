@@ -28,26 +28,6 @@ fn camera_relative_position_m(position_m: vec2<f32>) -> vec2<f32> {
     );
 }
 
-fn multiply_high_u32(a: u32, b: u32) -> u32 {
-    let a_low = a & 0xffffu;
-    let a_high = a >> 16u;
-    let b_low = b & 0xffffu;
-    let b_high = b >> 16u;
-    let low_product = a_low * b_low;
-    let middle = a_high * b_low + (low_product >> 16u);
-    let middle_low = middle & 0xffffu;
-    let middle_high = middle >> 16u;
-    let upper_middle = a_low * b_high + middle_low;
-    return a_high * b_high + middle_high + (upper_middle >> 16u);
-}
-
-fn multiply_u64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
-    return vec2<u32>(
-        a.x * b.x,
-        multiply_high_u32(a.x, b.x) + a.x * b.y + a.y * b.x,
-    );
-}
-
 // lowbias32 by Chris Wellons (github.com/skeeto/hash-prospector, public
 // domain). Keep synchronized with `hash32` in crates/game/src/lib.rs.
 fn hash32(initial_value: u32) -> u32 {

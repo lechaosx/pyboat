@@ -27,5 +27,4 @@ pub const DIAGNOSTIC_ENTRY_POINTS: &[&str] = &[
     "water_ocean_forcing",
     "water_visual_normals",
     "water_physical_wave_normals",
-    "water_precipitation_contact_normals",
 ];

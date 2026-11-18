@@ -363,6 +363,9 @@ and verification details.
   inseparable from it, such as latitude-dependent pressure scaling; analytic
   terms applied afterwards, such as temperature climatology and solar phase,
   stay per pixel.
+- **[Explicit]** The scene's environment grid stores the surface gusts'
+  velocity whole, weather terms included, rather than evaluating it per
+  pixel, where it lowers the illumination pass's occupancy.
 - **[Implicit]** Per-frame field grids have fixed texel budgets; windows too
   wide for one coarsen its spacing along each overflowing axis instead of
   allocating more memory.
@@ -458,6 +461,10 @@ and verification details.
   the octaves' longest wavelength, a compromise: the octave layout stands in
   for gravity waves that outlast a calm of the local wind, where a real
   spectrum falls off above its peak.
+- **[Explicit]** Gusts roughen the water: Cox and Munk's total takes the
+  gusting surface wind.
+- **[Implicit]** The wave modes and the decorative octaves' level follow the
+  sustained wind, so a gust's roughness stays unresolved.
 - **[Explicit]** A pixel's unresolved facets carry the slope variance that its
   resolved waves leave of Cox and Munk's, and at least the shortest waves'
   share, so water's mean glint is the same at every zoom and graphics tier

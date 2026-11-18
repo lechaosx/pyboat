@@ -130,10 +130,9 @@ struct SceneUniforms {
     drone_camera: [f32; 4],
     scalar_field_time_coordinates: [f32; 4],
     match_seed: [u32; 2],
-    precipitation_epoch: [u32; 2],
     world_size_m: [f32; 2],
     inverse_world_size_m: [f32; 2],
-    precipitation_phase_and_css_view_height_px: [f32; 4],
+    css_view_height_px_and_padding: [f32; 2],
     world_phases_and_pixel_footprint_m: [f32; 4],
     pressure_time_coordinate: [f32; 4],
     ocean_current_time_coordinate_and_padding: [f32; 4],
@@ -1815,9 +1814,6 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
         ),
         "water_visual_normals" => diagnostic(value, "water_visual_normals", &[]),
         "water_physical_wave_normals" => diagnostic(value, "water_physical_wave_normals", &[]),
-        "water_precipitation_contact_normals" => {
-            diagnostic(value, "water_precipitation_contact_normals", &[])
-        }
         _ => return Err(format!("unknown diagnostic: {value}")),
     };
     Ok(selection)
@@ -2017,7 +2013,6 @@ mod tests {
             "water_ocean_current",
             "water_visual_normals",
             "water_significant_wave_height",
-            "water_precipitation_contact_normals",
         ] {
             assert!(parse_diagnostic(diagnostic).is_ok(), "{diagnostic}");
         }
@@ -3032,8 +3027,6 @@ fn scene_uniforms(
     let canonical_camera_m = world_geometry
         .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
         .map(|v| v as f32);
-    let precipitation_epoch = (options.world_time_seconds / 1800.0).floor() as u64;
-    let precipitation_phase = (options.world_time_seconds.rem_euclid(1800.0) / 1800.0) as f32;
     let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
     let conditions =
         world_celestial_conditions(world_geometry, options.world_time_seconds, [0.0; 2].into());
@@ -3069,21 +3062,12 @@ fn scene_uniforms(
         ],
         lightning_sources: capture_lightning_sources(options),
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
-        precipitation_epoch: [
-            precipitation_epoch as u32,
-            (precipitation_epoch >> 32) as u32,
-        ],
         world_size_m: [options.world_width_m, options.world_height_m],
         inverse_world_size_m: [
             options.world_width_m.recip(),
             options.world_height_m.recip(),
         ],
-        precipitation_phase_and_css_view_height_px: [
-            precipitation_phase,
-            options.height as f32,
-            0.0,
-            0.0,
-        ],
+        css_view_height_px_and_padding: [options.height as f32, 0.0],
         world_phases_and_pixel_footprint_m: [
             conditions.day_phase,
             conditions.season_phase,

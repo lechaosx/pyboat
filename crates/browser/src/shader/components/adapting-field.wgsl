@@ -37,7 +37,7 @@ fn adapting_light(light: vec3<f32>) -> vec4<f32> {
 
 // The eye's adaptation at `css_position_px`, to the field there.
 fn field_adaptation(css_position_px: vec2<f32>) -> EyeAdaptation {
-    let css_view_height_px = scene.precipitation_phase_and_css_view_height_px.y;
+    let css_view_height_px = scene.css_view_height_px_and_padding.x;
     let css_view_px = vec2<f32>(
         css_view_height_px * scene.camera_and_view_m.z / scene.camera_and_view_m.w,
         css_view_height_px,

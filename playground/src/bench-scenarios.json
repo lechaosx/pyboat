@@ -36,6 +36,14 @@
     "quality": "low"
   },
   {
+    "id": "boat-zoom",
+    "exercises": "Daytime water at 10 m/s in the game's default 15 m view: wave modes and decorative water normals at the finest footprint",
+    "seed": "0x5eed",
+    "cameraM": [-8250, -1250],
+    "viewHeightM": 15,
+    "worldTimeSeconds": 14400
+  },
+  {
     "id": "reef-coast",
     "exercises": "Coast at boat zoom: reef, shoal and outer-reef noise, rocky shallows, beach and rock materials beside water",
     "seed": "0x5eed",

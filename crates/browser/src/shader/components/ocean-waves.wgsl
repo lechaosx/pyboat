@@ -561,18 +561,28 @@ fn decorative_water_normal_sample(
     return sample;
 }
 
+// The surface wind over water at `position_m`, where the resolved wind
+// blows `resolved_m_s`: that wind and its gusts. Compromise: the convective
+// gusts follow the weather's ascent, which decorrelates within a minute or
+// two, so where they blow the water's roughness flickers with it.
+fn water_surface_wind_m_s(position_m: vec2<f32>, resolved_m_s: vec2<f32>) -> vec2<f32> {
+    return resolved_m_s + surface_gust_velocity_m_s(position_m, resolved_m_s);
+}
+
 // The water surface's slope a pixel resolves, from the wave modes and the
 // decorative octaves, then the mean squares along x and y and the covariance
 // of the slopes too fine for it. Those carry what Cox and Munk's mean squared
 // slope leaves beyond the resolved slopes', and always at least the short
-// waves' share. While the resolved modes hold no more slope variance than Cox
-// and Munk's total less that share, the mean squared slope is theirs at every
-// zoom and graphics tier. Compromises: beyond that, the surface is rougher
-// than theirs by the modes' excess, alike on every tier; the unresolved
-// slopes split between the axes along and across the wind as the positive
-// part of the remainder does, so where resolved slopes overfill one axis
-// while leaving the short waves' share, that axis keeps no unresolved slopes;
-// and the resolved slopes' covariance between those axes is left out.
+// waves' share. Cox and Munk's total takes the gusting wind and the resolved
+// slopes the sustained wind, so a gust's roughness is unresolved. While the
+// resolved modes hold no more slope variance than Cox and Munk's total less
+// that share, the mean squared slope is theirs at every zoom and graphics
+// tier. Compromises: beyond that, the surface is rougher than theirs by the
+// modes' excess, alike on every tier; the unresolved slopes split between the
+// axes along and across the wind as the positive part of the remainder does,
+// so where resolved slopes overfill one axis while leaving the short waves'
+// share, that axis keeps no unresolved slopes; and the resolved slopes'
+// covariance between those axes is left out.
 struct WaterSurfaceSlopes {
     gradient: vec2<f32>,
     unresolved_covariance: vec3<f32>,
@@ -590,19 +600,22 @@ fn visual_water_slopes_from_surface(
         atmosphere,
         tide,
     );
-    let wind_speed_m_s = length(waves.surface_wind_m_s);
-    let total = cox_munk_slope_variance(wind_speed_m_s);
+    let sustained_speed_m_s = length(waves.surface_wind_m_s);
+    let sustained = cox_munk_slope_variance(sustained_speed_m_s);
     let modes = waves.slope_covariance;
     // The wave sample leaves its forcing in `sampled_wave_forcing`.
     let decorative = decorative_water_normal_sample(
         position_m,
-        wind_speed_m_s,
+        sustained_speed_m_s,
         wave_peak_wavelength_m(sampled_wave_forcing.sea),
-        total.x + total.y - modes.x - modes.y,
+        sustained.x + sustained.y - modes.x - modes.y,
     );
+    let wind_m_s = water_surface_wind_m_s(position_m, waves.surface_wind_m_s);
+    let wind_speed_m_s = length(wind_m_s);
+    let total = cox_munk_slope_variance(wind_speed_m_s);
     let upwind = select(
         vec2<f32>(1.0, 0.0),
-        waves.surface_wind_m_s / wind_speed_m_s,
+        wind_m_s / wind_speed_m_s,
         wind_speed_m_s > 0.0,
     );
     let squares = vec2<f32>(upwind.x * upwind.x, upwind.y * upwind.y);

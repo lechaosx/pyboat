@@ -35,10 +35,10 @@ pub const ENVIRONMENT_FIELD_TEXTURE_TEXELS: u32 =
 /// fivefold amplified, which softens low cloud in dim, wide views against the
 /// direct reference.
 const CLOUD_WEATHER_FIELD_SPACING_M: f64 = 960.0 / 8.0;
-/// The scene's six layers, then the cumulus and deck drivers and the
-/// ground-sky bounce conditions on the cloud weather grid. Keep synchronized
-/// with environment-fields.wgsl.
-pub const ENVIRONMENT_FIELD_LAYERS: u32 = 9;
+/// The scene's six layers and its surface-gust layer, then the cumulus and
+/// deck drivers and the ground-sky bounce conditions on the cloud weather
+/// grid. Keep synchronized with environment-fields.wgsl.
+pub const ENVIRONMENT_FIELD_LAYERS: u32 = 10;
 /// The finest stored octaves are the 960 m local pressure band and 512 m water
 /// vapour. Eight or more texels per wavelength keep bilinear error below 8% of
 /// that octave's amplitude, about 0.3% of the water-vapour field.

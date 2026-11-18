@@ -3792,6 +3792,8 @@ fn procedural_pressure_sample_at_time(
             zonal_aspect_gradient_per_m,
         );
         if band_index == WIND_BANDS.len() - 1 {
+            // Keep synchronized with environment.wgsl, whose
+            // SURFACE_GUST_MEAN_SIGNAL is this signal's measured mean.
             surface_gust_signal = smoothstep_range(0.05, 0.65, f64::from(noise.0)) as f32;
             continue;
         }

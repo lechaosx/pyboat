@@ -13,7 +13,7 @@ override CANOPY_TRANSFER_OPTICAL_THICKNESS: f32 = 0.0;
 fn fragment_lighting_canopy_transfer(input: VertexOutput) -> @location(0) vec4<f32> {
     initialize_playground_scene(input);
     if CANOPY_TRANSFER_OUTPUT == 2u {
-        let css_view_width_px = scene.precipitation_phase_and_css_view_height_px.y
+        let css_view_width_px = scene.css_view_height_px_and_padding.x
             * scene.camera_and_view_m.z / scene.camera_and_view_m.w;
         let depression = radians(mix(-0.5, 2.5, input.css_position_px.x / css_view_width_px));
         sun_light_direction = vec3<f32>(cos(depression), 0.0, -sin(depression));
