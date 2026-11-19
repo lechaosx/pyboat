@@ -25,20 +25,34 @@
           <nav class="menu-footer"><button id="graphics-open" type="button" class="quiet">Settings <span aria-hidden="true">↗</span></button></nav>
         </div>
         <div id="settings" hidden>
-          <header class="settings-header"><button id="graphics-close" type="button" class="quiet">← Back</button><h2>Settings</h2></header>
+          <header class="settings-header"><h2 id="settings-title">Settings</h2><button id="graphics-close" type="button" class="quiet">← Back</button></header>
           <form id="graphics-form">
             <fieldset id="graphics-controls" disabled>
               <legend>Graphics</legend>
-              <label for="graphics-quality">Detail</label>
-              <select id="graphics-quality" name="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-              <label for="graphics-scale">Scene resolution</label>
-              <select id="graphics-scale" name="renderScale"><option value="">Automatic · CSS pixels</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
-              <div class="settings-pair"><label for="graphics-ratio">Sharpness limit<input id="graphics-ratio" name="pixelRatio" type="number" min="1" step="any" required /></label><label for="graphics-fps">Frame limit<input id="graphics-fps" name="fps" type="number" min="0" step="any" required /></label></div>
-              <small>Sharpness: 1× standard, 2× high density. Frame limit: 0 = unlimited.</small>
-              <label class="checkbox"><input name="autoResolution" type="checkbox" /> Adapt resolution to performance</label>
-              <p id="graphics-resolution" class="hint"></p>
-              <button id="graphics-reset" class="quiet" type="button">Reset graphics</button>
-              <p id="graphics-note" class="hint" role="status"></p>
+              <div class="setting-row">
+                <div><label for="graphics-quality">Visual detail</label><p class="hint" id="graphics-quality-hint">Balance detail and battery life.</p></div>
+                <select id="graphics-quality" name="quality" aria-describedby="graphics-quality-hint"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+              </div>
+              <div class="setting-row">
+                <div><label for="graphics-fps">Frame rate</label><p class="hint" id="graphics-fps-hint">Higher rates use more power.</p></div>
+                <select id="graphics-fps" name="fps" aria-describedby="graphics-fps-hint"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="0">Unlimited</option></select>
+              </div>
+              <details class="resolution-options">
+                <summary>Resolution options</summary>
+                <div class="resolution-fields">
+                  <div class="setting-row">
+                    <div><label for="graphics-scale">Scene resolution</label><p class="hint" id="graphics-scale-hint">Lower values reduce graphics load.</p></div>
+                    <select id="graphics-scale" name="renderScale" aria-describedby="graphics-scale-hint"><option value="">Automatic</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
+                  </div>
+                  <div class="setting-row">
+                    <div><label for="graphics-ratio">Display sharpness</label><p class="hint" id="graphics-ratio-hint">1× standard · 2× high density</p></div>
+                    <input id="graphics-ratio" name="pixelRatio" type="number" min="1" step="any" required aria-describedby="graphics-ratio-hint" />
+                  </div>
+                  <label class="checkbox"><input name="autoResolution" type="checkbox" /><span>Adapt resolution<span class="hint">Lower it when frames run slowly.</span></span></label>
+                  <p id="graphics-resolution" class="hint"></p>
+                </div>
+              </details>
+              <div class="settings-actions"><p id="graphics-note" class="hint" role="status">Changes apply immediately and save on this device.</p><button id="graphics-reset" class="quiet" type="button">Reset graphics</button></div>
             </fieldset>
           </form>
           <div id="sound-settings"></div>

@@ -71,6 +71,7 @@ function stage(label: string): void {
 }
 function showFailure(title: string, message: string, detail: unknown): void {
   welcome.hidden = false; home.hidden = false; settings.hidden = true;
+  welcome.setAttribute("aria-labelledby", "welcome-title");
   welcomeTitle.textContent = title; status.textContent = message;
   loading.hidden = true;
   errorMessage.textContent = String(detail); errorDetails.hidden = false;
@@ -84,6 +85,7 @@ let engineReady = false;
 window.addEventListener("keydown", event => { if (!engineReady && event.code === "Escape" && !settings.hidden) openSettings(false); });
 let openSettings = (open: boolean): void => {
   home.hidden = open; settings.hidden = !open;
+  welcome.setAttribute("aria-labelledby", open ? "settings-title" : "welcome-title");
   if (open) document.querySelector<HTMLButtonElement>("#graphics-close")!.focus();
   else document.querySelector<HTMLButtonElement>("#graphics-open")!.focus();
   welcome.scrollTop = 0;
@@ -131,6 +133,7 @@ try {
     clearInput();
     if (open) updateGraphicsForm();
     home.hidden = open; settings.hidden = !open;
+    welcome.setAttribute("aria-labelledby", open ? "settings-title" : "welcome-title");
     (document.querySelector(open ? "#graphics-close" : "#graphics-open") as HTMLButtonElement).focus();
     welcome.scrollTop = 0;
   }
@@ -145,7 +148,10 @@ try {
       if (value === null) continue;
       if (control instanceof HTMLInputElement && control.type === "checkbox") control.checked = value === "1";
       else {
-        if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) control.add(new Option(value, value));
+        if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) {
+          const label = control.name === "fps" ? `${value} FPS · custom` : `${Math.round(Number(value) * 100)}% of output · custom`;
+          control.add(new Option(label, value));
+        }
         control.value = value;
       }
     }
