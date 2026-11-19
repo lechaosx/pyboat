@@ -487,11 +487,31 @@ pub fn boat_mesh_with_cloth(
         vertex.height_m = BOOM_ABOVE_SHEER_M;
     }
     vertices.extend(sail_mesh_with_cloth(scene, time, cloth));
-    // The top-down mast shows its head, where the sail's head is.
+    let mast_height_m = BOOM_ABOVE_SHEER_M + scene.sail_luff_m;
+    // The opaque centre of the boom artwork supplies longitudinal wood grain.
+    for side in 0..8 {
+        let a = TAU * side as f32 / 8.0;
+        let b = TAU * (side + 1) as f32 / 8.0;
+        for (angle, height) in [(a, 0.0), (b, 0.0), (b, 1.0), (a, 0.0), (b, 1.0), (a, 1.0)] {
+            let radius_m = 0.045 - height * 0.01;
+            vertices.push(BoatSpriteVertex {
+                image: 2,
+                position_m: mast + (forward * angle.cos() + port * angle.sin()) * radius_m,
+                height_m: mast_height_m * height,
+                sail: false,
+                uv: [
+                    (250.0 + height * 1700.0) / 2172.0,
+                    (350.0 + 12.0 * angle / TAU) / 724.0,
+                ],
+                shade: 1.0,
+                opacity: 1.0,
+            });
+        }
+    }
     let mast_start = vertices.len();
     stamp(&mut vertices, mast, port, [0.0004; 2], MAST, [783.0, 260.0]);
     for vertex in &mut vertices[mast_start..] {
-        vertex.height_m = BOOM_ABOVE_SHEER_M + scene.sail_luff_m;
+        vertex.height_m = mast_height_m;
     }
     vertices
 }

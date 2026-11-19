@@ -99,6 +99,8 @@ See [README.md](README.md) for what is playable now and
   including waves around islands and moving ships.
 - **[Explicit]** Authored sprites are appropriate for discrete detail such as
   trees, rocks, and wreckage.
+- **[Explicit]** Every boat component, ropes included, casts and receives
+  shadows, including between nearby boats.
 - **[Explicit]** Water changes continuously with depth and distinctly at the
   moving shoreline. Tinted shallow water reveals bottom relief and reefs;
   moving open-water structure responds to shared waves and wind. Fine detail

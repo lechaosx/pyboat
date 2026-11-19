@@ -14,6 +14,8 @@ const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/environment-fields.wgsl",
     "src/shader/components/clouds.wgsl",
     "src/shader/components/lighting.wgsl",
+    "src/shader/components/boat-shadows.wgsl",
+    "src/shader/components/lightning.wgsl",
     "src/shader/components/terrain.wgsl",
     "src/shader/components/ocean-waves.wgsl",
     "src/shader/components/water-materials.wgsl",

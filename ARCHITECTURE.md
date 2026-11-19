@@ -27,8 +27,8 @@ and verification details.
   spectating, the view center at sea level.
 - **[Implicit]** Lightning and thunder share client-generated events from the
   match seed, world clock, and weather at the source.
-- **[Implicit]** Lightning enters the shared illumination and exposure path as
-  diffuse cloud light.
+- **[Explicit]** Lightning enters shared illumination and exposure as direct
+  light from its world position, with distance attenuation and occlusion.
 - **[Explicit]** JavaScript tooling runs on Node.js for ecosystem compatibility.
 - **[Implicit]** Development follows the latest Node.js LTS line.
 - **[Implicit]** npm manages JavaScript dependencies and scripts.
@@ -344,6 +344,10 @@ and verification details.
   outside the model.
 - **[Explicit]** Boats and the windsock take current scene illumination before
   the shared eye response; adaptation history changes perception, not incident light.
+- **[Implicit]** Painted hulls and flat fittings retain their planar lighting
+  surfaces; cloth and spars take light on their three-dimensional geometry.
+- **[Implicit]** Boat shadows use one local direction for each celestial source.
+  Direction variation across wide views or small worlds remains approximate.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
   rendered world position and reconstructs environment fields there from a
   per-frame grid anchored to world coordinates, with spacing matched to the

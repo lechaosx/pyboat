@@ -61,16 +61,19 @@ fn fragment_surface_light(
         bounce_conditions.sky_reflectance.x + bounce_conditions.sky_reflectance.y,
         bounce_conditions.albedo,
     );
+    let receiver_m = vec3<f32>(camera_relative_position_m(direct_light.position_m), direct_light.height_m);
     return response.clear_sky * clear_sky
         + response.canopy * canopy
         + response.bounce * bounce
         + contribution.x
             * terrain_shadow_transmittance.x
+            * boat_shadow_transmittance(receiver_m, 0u)
             * sun_transmittance
             * response.sun
             * sun_color
         + contribution.y
             * terrain_shadow_transmittance.y
+            * boat_shadow_transmittance(receiver_m, 1u)
             * moon_transmittance
             * response.moon
             * moon_color;
@@ -555,6 +558,43 @@ fn camera_view_direction(height_m: f32) -> vec3<f32> {
 // it: its colour were it white and without water's surface reflection.
 // `contribution` and `cloud_shadow_visibility` as `fragment_surface_light`
 // takes them.
+fn lightning_scene_light(
+    receiver: CelestialReceiverLight,
+    scene_surface: SceneSurface,
+    albedo: vec3<f32>,
+    inherent: InherentOptics,
+    wetness: f32,
+    illumination: bool,
+) -> vec3<f32> {
+    var light = vec3<f32>(0.0);
+    let view = camera_view_direction(receiver.height_m);
+    let normal = normalize(vec3<f32>(-scene_surface.gradient - scene_surface.surface.detail_gradient, 1.0));
+    for (var index = 0u; index < 4u; index++) {
+        if scene.lightning_sources[index].w > 0.0 {
+            let source = lightning_light(receiver, index);
+            var response = vec3<f32>(max(source.direction.z, 0.0));
+            if scene_surface.is_land {
+                let cosine = max(dot(normal, source.direction), 0.0);
+                response = land_light_response(albedo, wetness, vec3<f32>(1.0, cosine, cosine), view.z).sun;
+            } else if !illumination {
+                let surface = scene_surface.surface;
+                let facet_normal = normalize(vec3<f32>(-surface.detail_gradient, 1.0));
+                var beam = receiver;
+                beam.sun_direction = source.direction;
+                beam.moon_direction = source.direction;
+                let visibility = water_material_color_visibility() * vec3<f32>(1.0, effect_feature_visibility().y, 1.0);
+                let body = water_body_response(albedo, tide_height_m() - scene_surface.elevation_m, inherent,
+                    1.0 - water_fresnel_reflectance(dot(view, facet_normal)), view.z,
+                    vec2<f32>(source.direction.z), visibility.xy, bed_relief_light(scene_surface, beam));
+                response = body.sun * max(source.direction.z, 0.0) + visibility.z * water_glint(view,
+                    source.direction, surface.detail_gradient, unresolved_slope_covariance(surface), 0.0);
+            }
+            light += source.irradiance * response;
+        }
+    }
+    return light;
+}
+
 fn lit_scene_surface(
     position_m: vec2<f32>,
     atmosphere: SurfaceAtmosphereSample,
@@ -581,7 +621,7 @@ fn lit_scene_surface(
         surface_height_m,
         is_land,
     );
-    let surface_direct_light = celestial_receiver_light_at_height(surface_height_m);
+    let surface_direct_light = celestial_receiver_light_at_height(drawn_surface_height_m);
     let ambient_light = calculate_atmospheric_ambient_light(
         ambient_sky,
         surface_direct_light,
@@ -598,8 +638,9 @@ fn lit_scene_surface(
         vec3<f32>(split.direct.y),
     );
     let view = camera_view_direction(surface_height_m);
+    var wetness = 0.0;
+    var inherent = SEAWATER_OPTICS;
     if is_land {
-        var wetness = 0.0;
         let wettable = scene_surface.wettable > 0.0 && !illumination;
         if wettable || EVALUATE_ALL_BRANCHES {
             wetness = select(0.0, scene_surface.wettable * ground_wet_share(
@@ -621,7 +662,6 @@ fn lit_scene_surface(
         response.moon *= split.normal.y;
     } else if !illumination {
         let depth_m = water_height_m - scene_surface.elevation_m;
-        var inherent = SEAWATER_OPTICS;
         let sediment_g_m3 = scene_stirred_sediment_g_m3(scene_surface, water_height_m);
         let stirred = sediment_g_m3 > 0.0;
         if stirred || EVALUATE_ALL_BRANCHES {
@@ -689,7 +729,8 @@ fn lit_scene_surface(
         sampled_ground_bounce_conditions(position_m),
         contribution,
         cloud_shadow_visibility,
-    );
+    ) + max(contribution.x, contribution.y) * lightning_scene_light(
+        surface_direct_light, scene_surface, albedo, inherent, wetness, illumination);
 }
 
 fn final_scene_color(

@@ -31,13 +31,13 @@ fn occluder_field_inspection_color(layer: u32, field: vec4<f32>) -> vec3<f32> {
         * clamp(abs(elevation_m) / 400.0, 0.08, 1.0);
 }
 
-// Each layer's written texels, unfiltered and aspect-preserved in a 4 × 2
-// arrangement, with the view outlined where the layer covers it.
+// Each layer's written texels, unfiltered and aspect-preserved, with the view
+// outlined where the layer covers it.
 fn occluder_field_inspection_grids(fragment_position_px: vec2<f32>) -> vec3<f32> {
     let background = vec3<f32>(0.02);
-    let cell_px = vec2<f32>(playground.occluder_field_inspection.yz) / vec2<f32>(4.0, 2.0);
-    let cell = min(vec2<u32>(fragment_position_px / cell_px), vec2<u32>(3u, 1u));
-    let layer = cell.y * 4u + cell.x;
+    let cell_px = vec2<f32>(playground.occluder_field_inspection.yz) / vec2<f32>(3.0);
+    let cell = min(vec2<u32>(fragment_position_px / cell_px), vec2<u32>(2u));
+    let layer = cell.y * 3u + cell.x;
     if layer >= OCCLUDER_FIELD_LAYERS {
         return background;
     }

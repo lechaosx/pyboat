@@ -32,6 +32,11 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     return field.x + field.y;
 }
 
+fn sampled_lightning_horizon(position_m: vec2<f32>, source_index: u32) -> f32 {
+    let field = occluder_field(position_m, LANDFORM_HORIZON_FIELD + 2u + source_index);
+    return field.x + field.y;
+}
+
 // The landform layer texel's sea-level offset from the camera, then its
 // elevation.
 fn landform_texel_m(texel: vec2<u32>) -> vec3<f32> {

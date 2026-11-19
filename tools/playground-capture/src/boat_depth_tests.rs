@@ -10,7 +10,6 @@ struct Fixture {
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     scene: wgpu::BindGroup,
-    light: wgpu::TextureView,
     size: (u32, u32),
     view_m: f32,
 }
@@ -23,104 +22,60 @@ impl Fixture {
     fn at(size: (u32, u32), view_m: f32) -> Self {
         let (_, device, queue) =
             pollster::block_on(hardware_device(wgpu::Features::empty())).unwrap();
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("boat ordering fixture"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                ADAPTING_FIELD_LAYOUT_ENTRY,
-            ],
-        });
-        let uniforms = SceneUniforms {
-            camera_and_view_m: [0.0, 0.0, view_m * size.0 as f32 / size.1 as f32, view_m],
-            drone_camera: DroneCamera::production(WorldGeometry::default(), Vector::ZERO, view_m)
-                .scene_uniform_row(),
-            precipitation_phase_and_css_view_height_px: [0.0, size.1 as f32, 0.0, 0.0],
-            exposure_and_output: [0.0, 1.0, 0.0, 0.0],
-            ..SceneUniforms::zeroed()
+        let uniform_layout = uniform_layout(&device, "boat fixture uniforms");
+        let fields = CaptureFields::new(
+            &device,
+            &uniform_layout,
+            &uniform_layout,
+            browser::occluder_field_shader_source(),
+            &[],
+            browser::landform_horizon_shader_source(),
+            &[],
+            browser::baked_surface_shader_source(),
+            &[],
+            baked_surface_sizes((32, 32), 1 << 20),
+        );
+        let options = Options {
+            width: size.0,
+            height: size.1,
+            view_height_m: view_m,
+            world_time_seconds: 0.3,
+            ..default_options()
         };
+        let mut uniforms = scene_uniforms(
+            &options,
+            &capture_terrain_cache_frame(&options, &mut TerrainCache::default()).unwrap(),
+            &BakedSurfaceFrame::direct(),
+        )
+        .unwrap();
+        uniforms.exposure_and_output[0] = 0.0;
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let light = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: 32,
-                height: 32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let write = |rgba: [f32; 4]| {
-            queue.write_texture(
-                light.as_image_copy(),
-                bytemuck::cast_slice(&vec![rgba; 1024]),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(512),
-                    rows_per_image: Some(32),
-                },
-                light.size(),
-            );
-        };
-        write([0.0, 1.0, 1.0, 1.0]);
-        let adaptation = light.create_view(&Default::default());
-        let scene = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::TextureView(&adaptation),
-                },
-            ],
-        });
-        // Adaptation and illumination carry different units.
-        let illumination = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: light.size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            illumination.as_image_copy(),
-            bytemuck::cast_slice(&vec![[1.0_f32; 4]; 1024]),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(512),
-                rows_per_image: Some(32),
-            },
-            illumination.size(),
+        let adaptation_field = AdaptingField::new(&device, &uniform_layout);
+        let terrain = TerrainDepth::new(&device, size);
+        let bindings = fields.bindings(&device, &buffer, &adaptation_field, &terrain, None);
+        let uniform_group = bind_group(&device, &uniform_layout, &buffer, "boat fixture uniforms");
+        let mut encoder = device.create_command_encoder(&Default::default());
+        adaptation_field.encode_uniform(&mut encoder, 1.0, [1.0; 3]);
+        fields.encode(
+            &mut encoder,
+            &uniform_group,
+            &bindings,
+            &uniform_group,
+            &capture_field_grids(&options).unwrap(),
+            None,
         );
+        queue.submit([encoder.finish()]);
+        let layout = fields.scene_layout;
+        let scene = bindings.scene;
         Self {
             device,
             queue,
             layout,
             scene,
-            light: illumination.create_view(&Default::default()),
             size,
             view_m,
         }
@@ -182,7 +137,6 @@ impl Fixture {
             size,
             &self.scene,
             &surface,
-            &self.light,
             scenes,
             &cloth,
             WorldGeometry::default(),
@@ -337,11 +291,34 @@ fn solid_image(rgba: [u8; 4]) -> Vec<u8> {
 
 #[test]
 fn half_covered_rig_keeps_the_opaque_hull_behind_it() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::at((1024, 1024), VIEW_M);
     let blank = transparent_png();
     let red = solid_image([220, 30, 30, 255]);
-    let opaque = solid_image([30, 220, 70, 255]);
-    let half = solid_image([30, 220, 70, 128]);
+    let planar_rig = |alpha| {
+        let mut rgba = vec![0; 2172 * 724 * 4];
+        // This strip covers the flat boom and leaves the mast's wood patch clear;
+        // all covered samples must have the same incident light for this blend test.
+        for y in 310..340 {
+            for x in 28..2144 {
+                rgba[(y * 2172 + x) * 4..(y * 2172 + x) * 4 + 4]
+                    .copy_from_slice(&[30, 220, 70, alpha]);
+            }
+        }
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2172, 724);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&rgba)
+                .unwrap();
+        }
+        bytes
+    };
+    let opaque = planar_rig(255);
+    let half = planar_rig(128);
     let boat = scene(1, 0.0, false);
     let images = |rig| {
         [

@@ -1,6 +1,6 @@
 import {
   PlaygroundBoatDriver, PlaygroundBoatImage, playground_boat_image_count,
-  playground_boat_shader_source, playground_boat_composite_shader_source,
+  playground_boat_shader_source, playground_boat_composite_shader_source, playground_boat_shadow_shader_source,
 } from "browser/playground";
 
 export type BoatWorld = { width: number; height: number; seed: bigint; tick: bigint };
@@ -136,7 +136,17 @@ export class BoatPass {
   private readonly sceneLayout: GPUBindGroupLayout;
   private readonly imageLayout: GPUBindGroupLayout;
   private readonly heightLayout: GPUBindGroupLayout;
-  private readonly scene: GPUBindGroup;
+  private scene: GPUBindGroup;
+  private shadowTexture: GPUTexture;
+  private shadowView: GPUTextureView;
+  private readonly shadowFrame: GPUBuffer;
+  private readonly shadowProjections: GPUBuffer;
+  private readonly shadowInput: GPUBindGroup;
+  private readonly shadowPipeline: GPURenderPipeline;
+  private shadowOccupied = false;
+  private vertices: Uint8Array = new Uint8Array();
+  private batches: Uint32Array = new Uint32Array();
+  private readonly sceneEntries: GPUBindGroupEntry[];
   private readonly images: GPUBindGroup[] = [];
   private readonly pipelines = new Map<GPUTextureFormat, [GPURenderPipeline, GPURenderPipeline, GPURenderPipeline, GPURenderPipeline]>();
   private readonly bounds: GPUBuffer;
@@ -146,19 +156,24 @@ export class BoatPass {
   private vertexBytes = 1024;
   private targets: { size: [number, number]; format: GPUTextureFormat; color: GPUTexture; resolved: GPUTexture; depth: GPUTexture; fold: GPUTexture; composite: GPUBindGroup } | undefined;
   private readonly device: GPUDevice;
-  constructor(device: GPUDevice, sceneBuffer: GPUBuffer, adaptation: GPUTextureView) {
+  constructor(device: GPUDevice, sceneBuffer: GPUBuffer, adaptation: GPUTextureView, environment: GPUTextureView, occluders: GPUTextureView, occluderSampler: GPUSampler) {
     this.device = device;
     this.shader = device.createShaderModule({ code: playground_boat_shader_source() });
     this.sceneLayout = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: 3, buffer: { type: "uniform" } },
       { binding: 7, visibility: 2, texture: { sampleType: "unfilterable-float" } },
+      { binding: 1, visibility: 2, texture: { sampleType: "unfilterable-float", viewDimension: "2d-array" } },
+      { binding: 2, visibility: 2, texture: { viewDimension: "2d-array" } },
+      { binding: 3, visibility: 2, sampler: {} },
+      { binding: 9, visibility: 2, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+      { binding: 10, visibility: 2, buffer: { type: "uniform" } },
     ] });
     this.imageLayout = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: 2, texture: { sampleType: "float" } },
       { binding: 1, visibility: 2, sampler: { type: "filtering" } },
     ] });
     this.heightLayout = device.createBindGroupLayout({ entries: [
-      ...[0, 1].map((binding) => ({ binding, visibility: 2, texture: { sampleType: "unfilterable-float" as GPUTextureSampleType } })),
+      ...[0].map((binding) => ({ binding, visibility: 2, texture: { sampleType: "unfilterable-float" as GPUTextureSampleType } })),
       { binding: 2, visibility: 3, buffer: { type: "uniform" } },
       { binding: 3, visibility: 2, texture: { sampleType: "depth", multisampled: true } },
     ] });
@@ -168,9 +183,23 @@ export class BoatPass {
       { binding: 1, visibility: 2, buffer: { type: "uniform" } },
     ] });
     this.compositeShader = device.createShaderModule({ code: playground_boat_composite_shader_source() });
-    this.scene = device.createBindGroup({ layout: this.sceneLayout, entries: [
-      { binding: 0, resource: { buffer: sceneBuffer } }, { binding: 7, resource: adaptation },
-    ] });
+    this.shadowFrame = device.createBuffer({ size: 480, usage: 0x40 | 0x08 });
+    this.shadowProjections = device.createBuffer({ size: 6 * 256, usage: 0x40 | 0x08 });
+    this.shadowTexture = device.createTexture({ size: [1, 1, 6], format: "depth32float", usage: 0x10 | 0x04 });
+    this.shadowView = this.shadowTexture.createView({ dimension: "2d-array" });
+    const shadowLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: 1, buffer: { type: "uniform", hasDynamicOffset: true } }] });
+    const shadowShader = device.createShaderModule({ code: playground_boat_shadow_shader_source() });
+    this.shadowInput = device.createBindGroup({ layout: shadowLayout, entries: [{ binding: 0, resource: { buffer: this.shadowProjections, size: 80 } }] });
+    this.shadowPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [shadowLayout, this.imageLayout] }),
+      vertex: { module: shadowShader, entryPoint: "vertex", buffers: [{ arrayStride: 28, attributes: [
+        { shaderLocation: 0, offset: 0, format: "float32x3" }, { shaderLocation: 1, offset: 12, format: "float32x3" }, { shaderLocation: 2, offset: 24, format: "float32" },
+      ] }] }, fragment: { module: shadowShader, entryPoint: "fragment", targets: [] },
+      depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less-equal", depthBias: 2, depthBiasSlopeScale: 1 },
+    });
+    this.sceneEntries = [{ binding: 0, resource: { buffer: sceneBuffer } }, { binding: 7, resource: adaptation },
+      { binding: 1, resource: environment }, { binding: 2, resource: occluders }, { binding: 3, resource: occluderSampler }];
+    this.scene = device.createBindGroup({ layout: this.sceneLayout, entries: [...this.sceneEntries, ...this.shadowEntries()] });
     this.vertex = device.createBuffer({ size: this.vertexBytes, usage: 0x20 | 0x08 });
     const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", maxAnisotropy: 8 });
     for (let index = 0; index < playground_boat_image_count(); index++) {
@@ -213,9 +242,44 @@ export class BoatPass {
     if (t) for (const texture of [t.color, t.resolved, t.depth, t.fold]) texture.destroy();
     this.targets = undefined;
   }
-  encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, illumination: GPUTextureView, size: [number, number], driver: PlaygroundBoatDriver, view: BoatView): void {
-    driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.time);
-    const vertices = driver.vertices(); const batches = driver.batches();
+  shadowEntries(): GPUBindGroupEntry[] { return [{ binding: 9, resource: this.shadowView }, { binding: 10, resource: { buffer: this.shadowFrame } }]; }
+  prepareShadows(encoder: GPUCommandEncoder, driver: PlaygroundBoatDriver | undefined, view: BoatView): boolean {
+    let frame: Float32Array = new Float32Array(120);
+    if (driver) {
+      driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.time);
+      this.vertices = driver.vertices(); this.batches = driver.batches();
+      frame = driver.shadow_frame(view.x, view.y, view.time);
+    } else { this.vertices = new Uint8Array(); this.batches = new Uint32Array(); }
+    const occupied = Array.from({ length: 6 }, (_, i) => frame[96 + i * 4]! > 0).some(Boolean);
+    const changed = occupied !== this.shadowOccupied;
+    if (changed) {
+      this.shadowTexture.destroy();
+      this.shadowTexture = this.device.createTexture({ size: [occupied ? 1024 : 1, occupied ? 1024 : 1, 6], format: "depth32float", usage: 0x10 | 0x04 });
+      this.shadowView = this.shadowTexture.createView({ dimension: "2d-array" }); this.shadowOccupied = occupied;
+      this.scene = this.device.createBindGroup({ layout: this.sceneLayout, entries: [...this.sceneEntries, ...this.shadowEntries()] });
+    }
+    this.device.queue.writeBuffer(this.shadowFrame, 0, frame);
+    if (this.vertices.byteLength > this.vertexBytes) {
+      this.vertex.destroy(); this.vertexBytes = this.vertices.byteLength;
+      this.vertex = this.device.createBuffer({ size: this.vertexBytes, usage: 0x20 | 0x08 });
+    }
+    if (this.vertices.byteLength) this.device.queue.writeBuffer(this.vertex, 0, this.vertices);
+    const projections = new Float32Array(6 * 64);
+    for (let i = 0; i < 6; i++) { projections.set(frame.subarray(i * 16, i * 16 + 16), i * 64); projections.set(frame.subarray(96 + i * 4, 100 + i * 4), i * 64 + 16); }
+    this.device.queue.writeBuffer(this.shadowProjections, 0, projections);
+    for (let light = 0; light < 6; light++) {
+      if (!frame[96 + light * 4]) continue;
+      const pass = encoder.beginRenderPass({ colorAttachments: [], depthStencilAttachment: {
+        view: this.shadowTexture.createView({ dimension: "2d", baseArrayLayer: light, arrayLayerCount: 1 }), depthLoadOp: "clear", depthStoreOp: "store", depthClearValue: 1,
+      } });
+      pass.setPipeline(this.shadowPipeline); pass.setBindGroup(0, this.shadowInput, [light * 256]); pass.setVertexBuffer(0, this.vertex);
+      for (let i = 0; i < this.batches.length; i += 4) { pass.setBindGroup(1, this.images[this.batches[i]!]!); pass.draw(this.batches[i + 3]! - this.batches[i + 2]!, light >= 2 ? 3 : 1, this.batches[i + 2]!); }
+      pass.end();
+    }
+    return changed;
+  }
+  encode(encoder: GPUCommandEncoder, target: GPUTextureView, format: GPUTextureFormat, surface: GPUTextureView, size: [number, number], view: BoatView): void {
+    const vertices = this.vertices; const batches = this.batches;
     let left = size[0]; let top = size[1]; let right = 0; let bottom = 0;
     const mesh = new DataView(vertices.buffer, vertices.byteOffset, vertices.byteLength);
     const viewWidth = view.height * size[0] / size[1];
@@ -248,13 +312,8 @@ export class BoatPass {
       size[0] / width, size[1] / height, (size[0] - 2 * left) / width - 1, 1 - (size[1] - 2 * top) / height,
       left, top, width, height,
     ]));
-    if (vertices.byteLength > this.vertexBytes) {
-      this.vertex.destroy(); this.vertexBytes = vertices.byteLength;
-      this.vertex = this.device.createBuffer({ size: this.vertexBytes, usage: 0x20 | 0x08 });
-    }
-    this.device.queue.writeBuffer(this.vertex, 0, vertices);
     const surfaces = (fold: GPUTexture) => this.device.createBindGroup({ layout: this.heightLayout, entries: [
-      { binding: 0, resource: surface }, { binding: 1, resource: illumination },
+      { binding: 0, resource: surface },
       { binding: 2, resource: { buffer: this.bounds } }, { binding: 3, resource: fold.createView() },
     ] });
     const colorSurfaces = surfaces(t.fold); const foldSurfaces = surfaces(t.depth);

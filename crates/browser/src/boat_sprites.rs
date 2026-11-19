@@ -55,7 +55,7 @@ impl Vertex {
     const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
 
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -73,6 +73,8 @@ pub(crate) struct SpriteBatch {
 /// Hulls, rigging, sails and windsocks, drawn over a finished view with the
 /// scene's first bind group.
 pub struct BoatSprites {
+    pub shadows: crate::boat_shadows::BoatShadowMaps,
+    prepared: Option<(Vec<Vertex>, Vec<SpriteBatch>)>,
     sprite_pipeline: wgpu::RenderPipeline,
     sail_depth_pipeline: wgpu::RenderPipeline,
     sail_pipeline: wgpu::RenderPipeline,
@@ -242,7 +244,7 @@ impl BoatSprites {
                     },
                 ]
                 .into_iter()
-                .chain([0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+                .chain([0].map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -376,6 +378,8 @@ impl BoatSprites {
             cache: None,
         });
         Ok(Self {
+            shadows: crate::boat_shadows::BoatShadowMaps::new(device),
+            prepared: None,
             sprite_pipeline: pipeline(
                 "fragment_boat_sprite",
                 false,
@@ -406,6 +410,65 @@ impl BoatSprites {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_shadows(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scenes: &[BoatScene],
+        cloth: &[ClothPose],
+        world_geometry: WorldGeometry,
+        match_seed: u64,
+        camera_m: Vector,
+        output_size: (u32, u32),
+        view_height_m: f32,
+        scene_footprint_m: f32,
+        time_seconds: f64,
+        lightning: [[f32; 4]; 4],
+    ) -> bool {
+        let (vertices, batches) = sprite_vertices(
+            scenes,
+            cloth,
+            world_geometry,
+            match_seed,
+            camera_m,
+            output_size,
+            view_height_m,
+            scene_footprint_m,
+            time_seconds,
+        );
+        let conditions = game::world_celestial_conditions(world_geometry, time_seconds, camera_m);
+        let directions = game::celestial_directions_at_height(
+            world_geometry,
+            game::celestial_orbit(conditions),
+            conditions,
+            0.0,
+        );
+        let positions: Vec<_> = vertices.iter().map(|v| v.position).collect();
+        let frame = crate::boat_shadows::boat_shadow_uniforms(
+            &positions,
+            [directions.0, directions.1],
+            lightning,
+            [
+                world_geometry.width_m() as f32,
+                world_geometry.height_m() as f32,
+            ],
+        );
+        let resized = self.shadows.update(device, queue, &frame);
+        if vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = vertices.len().next_power_of_two();
+            self.vertex_buffer = vertex_buffer(device, self.vertex_capacity);
+        }
+        if !vertices.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        }
+        self.shadows
+            .encode(encoder, &self.vertex_buffer, &batches, &self.bind_groups);
+        self.prepared = Some((vertices, batches));
+        resized
+    }
+
     /// Draws `scenes` over `view`, whose size is `output_size`, for a view
     /// `view_height_m` tall centred on `camera_m`, behind the surfaces in
     /// `surface_height`, a `surface_height_texture` the scene pass wrote at
@@ -420,7 +483,6 @@ impl BoatSprites {
         output_size: (u32, u32),
         scene_bind_group: &wgpu::BindGroup,
         surface_height: &wgpu::TextureView,
-        illumination: &wgpu::TextureView,
         scenes: &[BoatScene],
         cloth: &[ClothPose],
         world_geometry: WorldGeometry,
@@ -431,17 +493,21 @@ impl BoatSprites {
         scene_footprint_m: f32,
         time_seconds: f64,
     ) {
-        let (vertices, batches) = sprite_vertices(
-            scenes,
-            cloth,
-            world_geometry,
-            match_seed,
-            camera_m,
-            output_size,
-            view_height_m,
-            scene_footprint_m,
-            time_seconds,
-        );
+        let prepared = self.prepared.take();
+        let uploaded = prepared.is_some();
+        let (vertices, batches) = prepared.unwrap_or_else(|| {
+            sprite_vertices(
+                scenes,
+                cloth,
+                world_geometry,
+                match_seed,
+                camera_m,
+                output_size,
+                view_height_m,
+                scene_footprint_m,
+                time_seconds,
+            )
+        });
         let Some(rect) = occupied_rect(&vertices, output_size, view_height_m, camera_height_m)
         else {
             self.targets = None;
@@ -494,10 +560,6 @@ impl BoatSprites {
                         resource: wgpu::BindingResource::TextureView(surface_height),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(illumination),
-                    },
-                    wgpu::BindGroupEntry {
                         binding: 2,
                         resource: self.target_buffer.as_entire_binding(),
                     },
@@ -510,11 +572,13 @@ impl BoatSprites {
         };
         let color_surfaces = surface_group(&targets.sail_depth);
         let fold_surfaces = surface_group(&targets.depth);
-        if vertices.len() > self.vertex_capacity {
-            self.vertex_capacity = vertices.len().next_power_of_two();
-            self.vertex_buffer = vertex_buffer(device, self.vertex_capacity);
+        if !uploaded {
+            if vertices.len() > self.vertex_capacity {
+                self.vertex_capacity = vertices.len().next_power_of_two();
+                self.vertex_buffer = vertex_buffer(device, self.vertex_capacity);
+            }
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         let mut first = true;
         let mut batches = batches.iter().peekable();
         while let Some(&batch) = batches.peek() {
@@ -755,16 +819,6 @@ pub(crate) fn sprite_vertices(
 ) -> (Vec<Vertex>, Vec<SpriteBatch>) {
     let mut vertices = Vec::new();
     let mut batches: Vec<SpriteBatch> = Vec::new();
-    // A boat whose centre lies more than 8 m, twice its rig's reach, outside
-    // the view stays out of it: the drone camera, 1000 m up, draws raised
-    // points farther out, and points down to 10 m below sea level at most
-    // 1% nearer.
-    let reach = Vector::new(
-        view_height_m * output_size.0 as f32 / output_size.1 as f32,
-        view_height_m,
-    ) * 0.5
-        * 1.01
-        + Vector::splat(8.0);
     let mut ordered: Vec<_> = scenes.iter().zip(cloth).collect();
     // Authored deck details keep their local order; distinct coplanar boats
     // break depth ties by persistent identity.
@@ -779,9 +833,6 @@ pub(crate) fn sprite_vertices(
         };
         let stern_m = (scene.hull_m[7] + scene.hull_m[8]) * 0.5;
         let center_m = (scene.hull_m[0] + stern_m) * 0.5;
-        if ((center_m - camera_m).abs() - reach).max_element() > 0.0 {
-            continue;
-        }
         let forward = scene.hull_m[0] - stern_m;
         let pose = drawn_boat_pose(
             world_geometry,
@@ -824,7 +875,10 @@ pub(crate) fn sprite_vertices(
                 sprite.height_m,
                 pose.deck_slope,
             );
-            let relative_m = center_m - camera_m + offset_m;
+            let mut center_offset_m = center_m - camera_m;
+            center_offset_m.x -= (center_offset_m.x / world_geometry.width_m() as f32).round()
+                * world_geometry.width_m() as f32;
+            let relative_m = center_offset_m + offset_m;
             vertices.push(Vertex {
                 position: [relative_m.x, relative_m.y, pose.sheer_m + height_m],
                 color: [

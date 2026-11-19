@@ -67,9 +67,9 @@ const CLOUD_SHADOW_STRETCH_AREAS: [f64; 2] = [2.0, 4.0];
 /// finer one would not fit in this share of the budgets, so a window that
 /// hovers at a threshold while the camera pans keeps its lattice.
 const OCCLUDER_REFINE_SHARE: f64 = 0.8;
-/// Sun and Moon cloud shadow transmittance, broad landform elevation, and the
-/// Sun and Moon landform horizons. Keep synchronized with occluder-fields.wgsl.
-pub const OCCLUDER_FIELD_LAYERS: usize = 5;
+/// Celestial cloud transmittance, broad landform elevation, then celestial
+/// and finite-light landform horizons. Keep synchronized with occluder-fields.wgsl.
+pub const OCCLUDER_FIELD_LAYERS: usize = 9;
 const LANDFORM_LAYER: usize = 2;
 /// The horizon layers march the landform layer, so a second dispatch fills
 /// them after the others.
@@ -150,6 +150,7 @@ pub struct FieldGrids {
     /// Weather under every cloud that cloud shadow texels read.
     pub cloud_weather: FieldGrid,
     pub occluders: [FieldGrid; OCCLUDER_FIELD_LAYERS],
+    landform_sources: usize,
     /// The scene shader's `cloud_shadow_grids` row: the shortest wavelength
     /// the Sun's and the Moon's cloud shadow grids resolve, then the weight
     /// of the Moon's cloud shadows.
@@ -191,7 +192,9 @@ impl FieldGrids {
 
     /// One z slice per landform horizon layer, each covering the larger.
     pub fn landform_horizon_workgroups(&self) -> [u32; 3] {
-        layer_workgroups(&self.occluders[LANDFORM_HORIZON_LAYER..])
+        layer_workgroups(
+            &self.occluders[LANDFORM_HORIZON_LAYER..LANDFORM_HORIZON_LAYER + self.landform_sources],
+        )
     }
 
     /// Columns, then rows, of the landform layer's texel quads that hold the
@@ -239,12 +242,14 @@ impl FieldGridTuning {
 /// panning never moves them; views too wide for a grid's budget double its
 /// spacing. Shadow windows bound every receiver's finite-disc projection, so
 /// each tap the scene takes lands inside the written extent.
+#[allow(clippy::too_many_arguments)]
 pub fn field_grids(
     world_geometry: WorldGeometry,
     world_time_seconds: f64,
     camera_m: [f32; 2],
     view_size_m: [f32; 2],
     view_cloud_motion_m: [f32; 4],
+    lightning_sources: [[f32; 4]; 4],
     tuning: FieldGridTuning,
     history: &mut FieldGridHistory,
 ) -> FieldGrids {
@@ -299,7 +304,7 @@ pub fn field_grids(
                 .fold(0.0, f64::max)
         })
         .fold(0.0, f64::max);
-    let footprints = shadow_footprints(
+    let mut footprints = shadow_footprints(
         world_geometry,
         world_time_seconds,
         camera,
@@ -308,6 +313,44 @@ pub fn field_grids(
         highest_receiver_m,
         landform_receiver_margin_m,
     );
+    let lightning_horizons = std::array::from_fn::<_, 4, _>(|source| {
+        let light = lightning_sources[source];
+        occluder_grid(
+            LANDFORM_HORIZON_LAYER + 2 + source,
+            [0.0; 2],
+            if light[3] > 0.0 { view } else { Region::EMPTY },
+            LANDFORM_HORIZON_SPACING_M,
+        )
+        .0
+    });
+    let landform_sources = lightning_sources
+        .iter()
+        .rposition(|source| source[3] > 0.0)
+        .map_or(2, |index| index + 3);
+    for source in lightning_sources.iter().filter(|source| source[3] > 0.0) {
+        let fraction = ((BROAD_LANDFORM_HIGHEST_M - LOWEST_SHADOW_RECEIVER_M)
+            / (f64::from(source[2]) - LOWEST_SHADOW_RECEIVER_M))
+            .min(1.0);
+        for copy in [-1.0, 0.0, 1.0] {
+            let source_m = [
+                f64::from(source[0]) + copy * world_width_m,
+                f64::from(source[1]),
+            ];
+            let left = view.min[0].max(source_m[0] - world_width_m * 0.5);
+            let right = view.max[0].min(source_m[0] + world_width_m * 0.5);
+            if left > right {
+                continue;
+            }
+            for x in [left, right] {
+                for y in [view.min[1], view.max[1]] {
+                    footprints.landform.include_point([
+                        x + fraction * (source_m[0] - x),
+                        y + fraction * (source_m[1] - y),
+                    ]);
+                }
+            }
+        }
+    }
     let moon_grid = moon_clear_sky_share(
         world_geometry,
         world_time_seconds,
@@ -350,6 +393,7 @@ pub fn field_grids(
         0.0,
     ];
     let [(sun_cloud_shadow, _), (moon_cloud_shadow, _)] = cloud_shadows;
+    let [flash0, flash1, flash2, flash3] = lightning_horizons;
     let occluders = [
         sun_cloud_shadow,
         moon_cloud_shadow,
@@ -362,6 +406,10 @@ pub fn field_grids(
         .0,
         sun_horizon,
         moon_horizon,
+        flash0,
+        flash1,
+        flash2,
+        flash3,
     ];
     // Cloud shadow texels reconstruct what the weather under their clouds sets
     // from the cloud weather grid, which covers them. Its spacing fits the farthest
@@ -457,6 +505,7 @@ pub fn field_grids(
             ),
         ),
         occluders,
+        landform_sources,
         cloud_shadow_grids,
         view_size_m,
     }
@@ -1176,6 +1225,7 @@ mod tests {
             camera_m,
             view_size_m,
             view_cloud_motion_m,
+            [[0.0; 4]; 4],
             FieldGridTuning::PRODUCTION,
             &mut FieldGridHistory::default(),
         )
@@ -1224,6 +1274,52 @@ mod tests {
     }
 
     #[test]
+    fn finite_flash_landform_window_covers_both_antipodal_ray_charts() {
+        let world = WorldGeometry::new(8_000.0, 64_000.0).unwrap();
+        let source = [3_990.0, 1_000.0, 2_000.0, 4.0];
+        for view_height in [240.0, 2_400.0] {
+            let view = [view_height * 1.5, view_height];
+            let grids = field_grids(
+                world,
+                37.0,
+                [0.0; 2],
+                view,
+                NO_MOTION,
+                [source, [0.0; 4], [0.0; 4], [0.0; 4]],
+                FieldGridTuning::PRODUCTION,
+                &mut FieldGridHistory::default(),
+            );
+            assert_eq!(grids.landform_horizon_workgroups()[2], 3);
+            let bounds = grids.occluders[LANDFORM_LAYER].extent();
+            let last_fraction = (BROAD_LANDFORM_HIGHEST_M - LOWEST_SHADOW_RECEIVER_M)
+                / (f64::from(source[2]) - LOWEST_SHADOW_RECEIVER_M);
+            for x in [-view[0] * 0.5, -100.0, 100.0, view[0] * 0.5] {
+                for y in [-view[1] * 0.5, view[1] * 0.5] {
+                    let receiver = [f64::from(x), f64::from(y)];
+                    let mut delta = [
+                        f64::from(source[0]) - receiver[0],
+                        f64::from(source[1]) - receiver[1],
+                    ];
+                    delta[0] -= (delta[0] / world.width_m()).round() * world.width_m();
+                    for step in 0..=16 {
+                        let fraction = last_fraction * f64::from(step) / 16.0;
+                        let point = [
+                            receiver[0] + delta[0] * fraction,
+                            receiver[1] + delta[1] * fraction,
+                        ];
+                        for axis in 0..2 {
+                            assert!(
+                                point[axis] >= bounds.min[axis] && point[axis] <= bounds.max[axis],
+                                "ray {receiver:?} toward {source:?} leaves {bounds:?} at {point:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn field_texels_stay_on_their_lattices_while_panning_and_transporting_clouds() {
         let view_size_m = [427.0, 240.0];
         let motion_m = [313.25, -71.5, -2_041.0, 88.75];
@@ -1254,6 +1350,7 @@ mod tests {
                 [0.0, 0.0],
                 [100.0, 100.0],
                 NO_MOTION,
+                [[0.0; 4]; 4],
                 FieldGridTuning::PRODUCTION,
                 &mut FieldGridHistory::default(),
             );
@@ -1523,6 +1620,7 @@ mod tests {
                     camera_m,
                     view_size_m,
                     NO_MOTION,
+                    [[0.0; 4]; 4],
                     FieldGridTuning::PRODUCTION,
                     &mut FieldGridHistory::default(),
                 );
@@ -1794,6 +1892,7 @@ mod tests {
                     [2_400.0, 2_000.0],
                     [view_width_m(16.0 / 9.0, view_height_m), view_height_m],
                     NO_MOTION,
+                    [[0.0; 4]; 4],
                     FieldGridTuning::PRODUCTION,
                     &mut history,
                 );
@@ -1910,6 +2009,7 @@ mod tests {
             [0.0, 0.0],
             view_size_m,
             NO_MOTION,
+            [[0.0; 4]; 4],
             FieldGridTuning::PRODUCTION,
             &mut FieldGridHistory::default(),
         );

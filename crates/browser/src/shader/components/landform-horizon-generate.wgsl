@@ -6,7 +6,7 @@ var landform_horizon_output: texture_storage_2d_array<rgba16float, write>;
 const LANDFORM_HORIZON_COARSE_STEP_M: f32 = 16.0;
 
 // Reads the landform layer, so it runs after that layer is written. One z
-// slice per light: Sun, then Moon.
+// slice per light, in the scene's horizon-layer order.
 @compute @workgroup_size(8, 8)
 fn generate_landform_horizons(
     @builtin(global_invocation_id) invocation_id: vec3<u32>,
@@ -21,6 +21,17 @@ fn generate_landform_horizons(
         scene.camera_and_view_m.xy + grid.xy + vec2<f32>(invocation_id.xy) * grid.zw,
     );
     initialize_occluder_field_generation(position_m);
+    if source_index >= 2u {
+        let light = scene.lightning_sources[source_index - 2u];
+        var horizon = LANDFORM_UNSHADOWED_HEIGHT_M;
+        if light.w > 0.0 {
+            horizon = finite_lightning_horizon(position_m, light);
+        }
+        let coarse = floor(horizon / LANDFORM_HORIZON_COARSE_STEP_M) * LANDFORM_HORIZON_COARSE_STEP_M;
+        textureStore(landform_horizon_output, invocation_id.xy, source_index,
+            vec4<f32>(horizon - coarse, coarse, 0.0, 0.0));
+        return;
+    }
     let receiver = celestial_receiver_light_at_position_and_height(
         position_m,
         max(sampled_broad_landform_elevation_m(position_m), 0.0),

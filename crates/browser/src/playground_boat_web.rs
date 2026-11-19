@@ -127,6 +127,40 @@ impl PlaygroundBoatDriver {
     pub fn vertices(&self) -> Vec<u8> {
         self.vertices.clone()
     }
+    pub fn shadow_frame(&self, camera_x: f32, camera_y: f32, time_seconds: f64) -> Vec<f32> {
+        let camera = Vec2::new(camera_x, camera_y);
+        let conditions = game::world_celestial_conditions(self.boat.geometry, time_seconds, camera);
+        let directions = game::celestial_directions_at_height(
+            self.boat.geometry,
+            game::celestial_orbit(conditions),
+            conditions,
+            0.0,
+        );
+        let positions: Vec<_> = self
+            .vertices
+            .as_chunks::<28>()
+            .0
+            .iter()
+            .map(|v| {
+                std::array::from_fn(|i| f32::from_ne_bytes(v[i * 4..i * 4 + 4].try_into().unwrap()))
+            })
+            .collect();
+        let frame = crate::boat_shadow_uniforms(
+            &positions,
+            [directions.0, directions.1],
+            crate::lightning_sources(
+                self.boat.geometry,
+                self.boat.seed,
+                time_seconds,
+                [f64::from(camera_x), f64::from(camera_y)],
+            ),
+            [
+                self.boat.geometry.width_m() as f32,
+                self.boat.geometry.height_m() as f32,
+            ],
+        );
+        bytemuck::cast_slice(bytemuck::bytes_of(&frame)).to_vec()
+    }
     pub fn batches(&self) -> Vec<u32> {
         self.batches.clone()
     }
@@ -135,6 +169,11 @@ impl PlaygroundBoatDriver {
 #[wasm_bindgen]
 pub fn playground_boat_shader_source() -> String {
     include_str!(concat!(env!("OUT_DIR"), "/boat-sprite.wgsl")).to_owned()
+}
+
+#[wasm_bindgen]
+pub fn playground_boat_shadow_shader_source() -> String {
+    include_str!("shader/boat-shadow.wgsl").to_owned()
 }
 
 #[wasm_bindgen]

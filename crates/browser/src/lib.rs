@@ -68,9 +68,13 @@ use simulation::{
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 mod adapting_field;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod boat_shadows;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
 mod boat_sprites;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use adapting_field::{ADAPTING_FIELD_TEXELS, AdaptingField, ILLUMINATION_TEXELS};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use boat_shadows::{BoatShadowMaps, BoatShadowUniforms, boat_shadow_uniforms};
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use boat_sprites::{
     BoatSprites, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, surface_height_texture,

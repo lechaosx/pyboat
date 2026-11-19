@@ -116,6 +116,36 @@ fn hull_sprite_follows_the_boat_without_changing_its_texture_coordinates() {
 }
 
 #[test]
+fn wooden_mast_connects_the_deck_to_the_sail_head() {
+    let scene = scene(Vector::new(0.0, 8.0));
+    let head_m = game::DINGHY_BOOM_ABOVE_SHEER_M + scene.sail_luff_m;
+    let mesh = browser::boat_mesh(&scene, 0.3, 0.01);
+    let mast_faces: Vec<_> = mesh
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|face| {
+            face.iter().all(|v| {
+                !v.sail && v.opacity == 1.0 && (v.position_m - scene.sail_m[0]).length() < 0.08
+            }) && face.iter().any(|v| v.height_m == 0.0)
+                && face.iter().any(|v| v.height_m == head_m)
+        })
+        .collect();
+    assert!(
+        !mast_faces.is_empty(),
+        "no wooden surface joins deck to masthead"
+    );
+    for face in mast_faces {
+        let edge = |i: usize| {
+            let v = face[i];
+            rapier2d_f64::glamx::Vec3::new(v.position_m.x, v.position_m.y, v.height_m)
+        };
+        assert!((edge(1) - edge(0)).cross(edge(2) - edge(0)).length() > 0.01);
+        assert!(face.iter().all(|v| !v.sail && v.opacity == 1.0));
+    }
+}
+
+#[test]
 fn cloth_moves_in_wind_and_is_still_in_calm_air() {
     let calm = scene(Vector::ZERO);
     assert_eq!(sail_mesh(&calm, 0.0), sail_mesh(&calm, 0.17));

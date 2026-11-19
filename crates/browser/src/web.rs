@@ -839,6 +839,12 @@ pub fn playground_scene_uniforms(
         [camera_x_m, camera_y_m],
         view_size_m,
         view_cloud_motion_m,
+        crate::lightning_sources(
+            geometry,
+            match_seed,
+            world_time_seconds,
+            [f64::from(camera_x_m), f64::from(camera_y_m)],
+        ),
         FieldGridTuning {
             landform_shadow_reach_m,
         },
@@ -1519,6 +1525,7 @@ fn scene_bind_group(
     baked_surface_pass: &BakedSurfacePass,
     adapting_field: &AdaptingField,
     terrain_depth: &TerrainDepth,
+    boat_shadows: &crate::BoatShadowMaps,
 ) -> wgpu::BindGroup {
     let baked = baked_surface_pass.textures();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1561,6 +1568,8 @@ fn scene_bind_group(
                 binding: 8,
                 resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
             },
+            boat_shadows.scene_entries()[0].clone(),
+            boat_shadows.scene_entries()[1].clone(),
         ],
     })
 }
@@ -1818,6 +1827,8 @@ impl Renderer {
                     count: None,
                 },
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
+                crate::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[0],
+                crate::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[1],
             ],
         });
         report_loading(progress, "Building ocean and lighting shaders").await?;
@@ -1926,6 +1937,7 @@ impl Renderer {
             &baked_surface_pass,
             &adapting_field,
             &terrain_depth,
+            &boat_sprites.shadows,
         );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
@@ -2110,6 +2122,12 @@ impl Renderer {
             canonical_camera_m,
             [view_width_m, view_height_m],
             view_cloud_motion_m,
+            crate::lightning_sources(
+                world_geometry,
+                match_seed,
+                world_time_seconds,
+                canonical_camera_m.map(f64::from),
+            ),
             FieldGridTuning::PRODUCTION,
             &mut self.field_grid_history,
         );
@@ -2287,6 +2305,28 @@ impl Renderer {
             .encode(&mut encoder, &self.bind_group, &field_grids);
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
+        if self.boat_sprites.prepare_shadows(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            scenes,
+            &cloth,
+            world_geometry,
+            match_seed,
+            camera_m,
+            output_size,
+            view_height_m,
+            pixel_footprint_m,
+            world_time_seconds,
+            crate::lightning_sources(
+                world_geometry,
+                match_seed,
+                world_time_seconds,
+                canonical_camera_m.map(f64::from),
+            ),
+        ) {
+            self.rebuild_scene_bind_group();
+        }
         if terrain_vertex_count > 0 {
             self.terrain_depth
                 .encode(&mut encoder, &self.terrain_depth_input, &field_grids, None);
@@ -2358,7 +2398,6 @@ impl Renderer {
             output_size,
             &self.scene_bind_group,
             &self.surface_height.1,
-            &self.adapting_field.illumination_view,
             scenes,
             &cloth,
             world_geometry,
@@ -2554,6 +2593,7 @@ impl Renderer {
             &self.baked_surface_pass,
             &self.adapting_field,
             &self.terrain_depth,
+            &self.boat_sprites.shadows,
         );
     }
 

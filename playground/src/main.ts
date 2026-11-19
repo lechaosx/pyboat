@@ -101,6 +101,7 @@ const occluderFieldLayers = [
   { name: "Landform", color: "#33bf4d" },
   { name: "Sun landform horizon", color: "#ffd84d" },
   { name: "Moon landform horizon", color: "#7f8cff" },
+  ...Array.from({ length: 4 }, (_, index) => ({ name: `Lightning ${index + 1} landform horizon`, color: "#b7caff" })),
 ] as const;
 const landformHorizonLayer = landform_horizon_layer();
 
@@ -992,10 +993,19 @@ function createPlaygroundPipeline(
   entryPoint: string,
   constants?: Record<string, number>,
   format?: GPUTextureFormat,
+  diagnostic = false,
 ): Promise<GPURenderPipeline> {
   const writesSurface = entryPoint === "fragment_playground_scene" || entryPoint === "fragment";
   return device.createRenderPipelineAsync({
-    layout: "auto",
+    layout: diagnostic ? device.createPipelineLayout({ bindGroupLayouts: [
+      device.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: 3, buffer: { type: "uniform" } },
+        { binding: 8, visibility: 2, texture: { sampleType: "depth" } },
+        { binding: 9, visibility: 2, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+        { binding: 10, visibility: 2, buffer: { type: "uniform" } },
+      ] }),
+      device.createBindGroupLayout({ entries: [{ binding: 0, visibility: 2, buffer: { type: "uniform" } }] }),
+    ] }) : "auto",
     vertex: {
       module: shader,
       entryPoint: "vertex",
@@ -1349,6 +1359,7 @@ function diagnosticSceneBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
     entries: [
       { binding: 0, resource: { buffer: sceneBuffer } },
       { binding: 8, resource: terrainDepthView! },
+      ...boatPass!.shadowEntries(),
     ],
   });
 }
@@ -1375,6 +1386,8 @@ function renderResourcesForFrame(): RenderResources {
       diagnosticShader,
       `fragment_${configuration.name}`,
       configuration.constants,
+      undefined,
+      true,
     ).then((diagnosticPipeline) => {
       diagnosticRenderResources.set(selection, {
         pipeline: diagnosticPipeline,
@@ -1933,10 +1946,16 @@ function renderFrame(): Promise<void> {
       resources.sceneBindGroup = diagnosticSceneBindGroup(resources.pipeline);
     }
   }
+  const encoder = device.createCommandEncoder();
+  if (boatPass?.prepareShadows(encoder, state.diagnostic === "scene" ? drivingBoat.driver : undefined, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds })) {
+    if (installedScenePipelines && sceneFields) installScenePipelines(installedScenePipelines, sceneFields);
+    for (const resources of diagnosticRenderResources.values()) {
+      resources.sceneBindGroup = diagnosticSceneBindGroup(resources.pipeline);
+    }
+  }
   const renderResources = renderResourcesForFrame();
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
-  const encoder = device.createCommandEncoder();
   if (renderResources.pipeline !== timedPipeline) {
     timedPipeline = renderResources.pipeline;
     timedUsesFields = Boolean(renderResources.fields);
@@ -2122,9 +2141,9 @@ function renderFrame(): Promise<void> {
     }
   }
   if (drivingBoat.driver && state.diagnostic === "scene" && surfaceHeightPipelines.has(renderResources.pipeline)) {
-    boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView);
+    boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView, environmentFieldView, occluderFieldView, occluderFieldSampler);
     const target = canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
-    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, illuminationView, [previewCanvas.width, previewCanvas.height], drivingBoat.driver, { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
+    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, [previewCanvas.width, previewCanvas.height], { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
   } else {
     boatPass?.releaseTargets();
   }
@@ -2295,6 +2314,7 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
 
 let installedScenePipelines: ScenePipelines | undefined;
 function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): void {
+  boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView, environmentFieldView, occluderFieldView, occluderFieldSampler);
   installedScenePipelines = pipelines;
   sizeTerrainDepth();
   const playgroundEntries = productionShaders
@@ -2309,6 +2329,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     { binding: 5, resource: bakedHeightView },
     { binding: 6, resource: bakedColorView },
     { binding: 8, resource: terrainDepthView! },
+    ...boatPass.shadowEntries(),
   ];
   const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {
@@ -2354,6 +2375,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     const directSceneEntries = [
       { binding: 0, resource: { buffer: sceneBuffer } },
       { binding: 8, resource: terrainDepthView! },
+      ...boatPass.shadowEntries(),
     ];
     const directPlaygroundEntries = [{ binding: 0, resource: { buffer: playgroundBuffer } }];
     directSceneRenderResources = {

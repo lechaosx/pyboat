@@ -882,6 +882,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                         &buffer,
                         &renderer.adapting_field,
                         &terrain_depth,
+                        None,
                     )
                 }),
                 field_grids: capture_field_grids(&scenario_options)?,
@@ -1297,6 +1298,7 @@ fn time_cold_start(
             &buffer,
             &renderer.adapting_field,
             bindings.terrain_depth,
+            None,
         );
         let frame_bindings = FrameBindings {
             scene: &scene,
@@ -1395,6 +1397,7 @@ fn time_sequence(
             &buffer,
             &renderer.adapting_field,
             &terrain_depth,
+            None,
         );
         let field_grids = capture_field_grids(&view_options)?;
         let bindings = FrameBindings {

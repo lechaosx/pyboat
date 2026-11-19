@@ -2,6 +2,8 @@ use std::{env, fs, path::PathBuf};
 
 #[cfg(test)]
 mod boat_depth_tests;
+#[cfg(test)]
+mod boat_lighting_tests;
 
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
@@ -105,6 +107,8 @@ struct Options {
     camera_height_m: Option<f32>,
     /// A boat's x and y in metres and its heading in degrees from world x.
     boat: Option<[f32; 3]>,
+    extra_boats: Vec<[f32; 3]>,
+    lightning_override: Option<[f32; 4]>,
     /// Draw only the boat's hull.
     boat_hull_only: bool,
     /// Draw the boat in front of every surface.
@@ -177,6 +181,7 @@ struct PlaygroundUniforms {
 }
 
 struct CaptureFields {
+    empty_boat_shadows: browser::BoatShadowMaps,
     scene_layout: wgpu::BindGroupLayout,
     field_reading_layout: wgpu::BindGroupLayout,
     environment_view: wgpu::TextureView,
@@ -256,6 +261,8 @@ impl CaptureFields {
                 field_entry(6, wgpu::ShaderStages::FRAGMENT, false),
                 ADAPTING_FIELD_LAYOUT_ENTRY,
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
+                browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[0],
+                browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[1],
             ],
         });
         let field_reading_layout =
@@ -456,6 +463,7 @@ impl CaptureFields {
                 group_1_layout,
             ),
             _textures: [environment_texture, occluder_texture],
+            empty_boat_shadows: browser::BoatShadowMaps::new(device),
         }
     }
 
@@ -465,6 +473,7 @@ impl CaptureFields {
         scene_buffer: &wgpu::Buffer,
         adapting_field: &AdaptingField,
         terrain_depth: &TerrainDepth,
+        boat_shadows: Option<&browser::BoatShadowMaps>,
     ) -> CaptureFieldBindings {
         let uniforms = wgpu::BindGroupEntry {
             binding: 0,
@@ -512,6 +521,14 @@ impl CaptureFields {
                         binding: 8,
                         resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
                     },
+                    boat_shadows
+                        .unwrap_or(&self.empty_boat_shadows)
+                        .scene_entries()[0]
+                        .clone(),
+                    boat_shadows
+                        .unwrap_or(&self.empty_boat_shadows)
+                        .scene_entries()[1]
+                        .clone(),
                 ],
             }),
             terrain_depth_input: terrain_depth.input_bind_group(
@@ -726,6 +743,8 @@ struct CaptureReport {
     legacy_shadow_look: bool,
     derived: DerivedOutput,
     image_metrics: ImageMetrics,
+    boats: Vec<[f32; 3]>,
+    lightning_sources: [[f32; 4]; 4],
 }
 
 fn main() {
@@ -780,6 +799,8 @@ fn default_options() -> Options {
         terrain_elevations: None,
         camera_height_m: None,
         boat: None,
+        extra_boats: Vec::new(),
+        lightning_override: None,
         boat_hull_only: false,
         boat_unhidden: false,
     }
@@ -926,7 +947,23 @@ fn parse_options() -> Result<Command, String> {
             "--terrain-elevations" => {
                 options.terrain_elevations = Some(value(&mut arguments)?.into())
             }
-            "--boat" => options.boat = Some(parse_f32x3(&value(&mut arguments)?, &argument)?),
+            "--boat" => {
+                let boat = parse_f32x3(&value(&mut arguments)?, &argument)?;
+                if options.boat.is_some() {
+                    options.extra_boats.push(boat);
+                } else {
+                    options.boat = Some(boat);
+                }
+            }
+            "--lightning" => {
+                let light = parse_f32x4(&value(&mut arguments)?, &argument)?;
+                if light[2] <= game::BROAD_LANDFORM_HIGHEST_M as f32 || light[3] < 0.0 {
+                    return Err(
+                        "--lightning needs a source above terrain and nonnegative intensity".into(),
+                    );
+                }
+                options.lightning_override = Some(light);
+            }
             "--boat-hull-only" => options.boat_hull_only = true,
             "--boat-unhidden" => options.boat_unhidden = true,
             "--help" | "-h" => {
@@ -1835,7 +1872,8 @@ fn print_help() {
                                   scene's terrain depth, as little-endian f32 rows from the\n\
                                   top; grid scene compositions only\n\
            --boat X,Y,HEADING     draw the game's boat at rest at X,Y metres, heading HEADING\n\
-                                  degrees from world x; scene_production only\n\
+                                  degrees from world x; repeat for more boats; scene_production only\n\
+           --lightning X,Y,Z,I   override flashes with one camera-relative source above terrain; intensity at ground below it\n\
            --boat-hull-only       draw only the boat's hull\n\
            --boat-unhidden        draw the boat in front of every surface\n\n\
          The PNG gets a JSON sidecar containing world inputs, derived conditions,\n\
@@ -2192,14 +2230,14 @@ async fn render(options: &Options) -> Result<(), String> {
     };
     // Compositions without field grids read the scene uniforms, the terrain
     // depth, and the adapting field when they adapt.
-    let fieldless_entries = [
-        uniform_entry,
-        TerrainDepth::SCENE_LAYOUT_ENTRY,
-        ADAPTING_FIELD_LAYOUT_ENTRY,
-    ];
+    let mut fieldless_entries = vec![uniform_entry, TerrainDepth::SCENE_LAYOUT_ENTRY];
+    if scene_composition {
+        fieldless_entries.push(ADAPTING_FIELD_LAYOUT_ENTRY);
+    }
+    fieldless_entries.extend(browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES);
     let fieldless_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("scene uniforms and terrain depth layout"),
-        entries: &fieldless_entries[..2 + usize::from(scene_composition)],
+        entries: &fieldless_entries,
     });
     let bind_group_layouts = [
         Some(match &fields {
@@ -2425,6 +2463,7 @@ fn render_world(
                 .expect("grid scenes adapt to their illumination")
                 .field,
             terrain_depth,
+            None,
         )
     };
     let mut terrain_cache = TerrainCache::default();
@@ -2546,13 +2585,66 @@ fn render_world(
             .adaptation_seconds
             .unwrap_or(SETTLED_ADAPTATION_SECONDS),
     )?;
+    let mut boat = if let (Some(_), Some(fields)) = (options.boat, fields) {
+        let geometry = WorldGeometry::new(
+            f64::from(options.world_width_m),
+            f64::from(options.world_height_m),
+        )
+        .map_err(|e| e.to_string())?;
+        let transparent = transparent_png();
+        let mut images = browser::BOAT_IMAGES;
+        if options.boat_hull_only {
+            images[1..].fill(&transparent);
+        }
+        let sprites = BoatSprites::with_images(
+            device,
+            queue,
+            &fields.scene_layout,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            images,
+        )?;
+        let pairs: Vec<_> = options
+            .boat
+            .iter()
+            .chain(&options.extra_boats)
+            .map(|&[x, y, heading]| capture_boat_scene(options, geometry, x, y, heading))
+            .collect();
+        let (scenes, cloth): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+        Some((sprites, geometry, scenes, cloth))
+    } else {
+        None
+    };
     let texture = capture_texture(device, options.width, options.height);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("playground capture encoder"),
     });
+    if let Some((sprites, geometry, scene, cloth)) = boat.as_mut() {
+        sprites.prepare_shadows(
+            device,
+            queue,
+            &mut encoder,
+            scene,
+            cloth,
+            *geometry,
+            options.seed,
+            Vector::new(options.camera_x_m, options.camera_y_m),
+            (options.width, options.height),
+            options.view_height_m,
+            visual_pixel_footprint_m(options.view_height_m, options.height),
+            options.world_time_seconds,
+            scene_uniforms(options, &terrain_cache_frame, &baked_surface_frame)?.lightning_sources,
+        );
+    }
+    let empty_shadows = browser::BoatShadowMaps::new(device);
     let fragment_scene_bind_group = match fields {
         Some(fields) => {
-            let bindings = field_bindings(fields, &scene_buffer);
+            let bindings = fields.bindings(
+                device,
+                &scene_buffer,
+                &adaptation.unwrap().field,
+                terrain_depth,
+                boat.as_ref().map(|b| &b.0.shadows),
+            );
             fields.encode_terrain_cache(
                 queue,
                 &mut encoder,
@@ -2585,6 +2677,7 @@ fn render_world(
                     resource: wgpu::BindingResource::TextureView(&terrain_depth.view),
                 },
             ];
+            entries.extend(empty_shadows.scene_entries());
             if let Some(adaptation) = adaptation {
                 entries.push(wgpu::BindGroupEntry {
                     binding: 7,
@@ -2688,26 +2781,7 @@ fn render_world(
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
     }
-    if let (Some([x_m, y_m, heading_degrees]), Some(fields), Some(adaptation)) =
-        (options.boat, fields, adaptation)
-    {
-        let world_geometry = WorldGeometry::new(
-            f64::from(options.world_width_m),
-            f64::from(options.world_height_m),
-        )
-        .map_err(|error| error.to_string())?;
-        let transparent = transparent_png();
-        let mut images = browser::BOAT_IMAGES;
-        if options.boat_hull_only {
-            images[1..].fill(&transparent);
-        }
-        let mut sprites = BoatSprites::with_images(
-            device,
-            queue,
-            &fields.scene_layout,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            images,
-        )?;
+    if let (Some((sprites, world_geometry, scene, cloth)), Some(_)) = (boat.as_mut(), adaptation) {
         let unhidden = options.boat_unhidden.then(|| {
             let view = surface_height_texture(device, (options.width, options.height))
                 .create_view(&Default::default());
@@ -2729,31 +2803,6 @@ fn render_world(
             });
             view
         });
-        let mut scene = boat_scene(
-            dinghy_parameters(),
-            BoatMotion {
-                position_m: PhysicsVector::new(f64::from(x_m), f64::from(y_m)),
-                velocity_m_s: PhysicsVector::ZERO,
-                angle_rad: f64::from(heading_degrees).to_radians(),
-                angular_velocity_rad_s: 0.0,
-                sail_angle_rad: 0.0,
-                sail_angular_velocity_rad_s: 0.0,
-                rudder_angle_rad: 0.0,
-                rudder_angular_velocity_rad_s: 0.0,
-            },
-        );
-        let ticks = options.world_time_seconds * TICKS_PER_SECOND as f64;
-        scene.sea = Some(
-            procedural_world_environment_interpolated(
-                world_geometry,
-                options.seed,
-                ticks.floor() as u64,
-                ticks.fract() as f32,
-                Vector::new(x_m, y_m),
-            )
-            .sea,
-        );
-        let cloth = ClothMotion::new(&scene).pose();
         sprites.encode(
             device,
             queue,
@@ -2762,10 +2811,9 @@ fn render_world(
             (options.width, options.height),
             &fragment_scene_bind_group,
             unhidden.as_ref().unwrap_or(&surface_height),
-            &adaptation.field.illumination_view,
-            &[scene],
-            &[cloth],
-            world_geometry,
+            scene,
+            cloth,
+            *world_geometry,
             options.seed,
             Vector::new(options.camera_x_m, options.camera_y_m),
             options.view_height_m,
@@ -2894,6 +2942,7 @@ fn capture_field_grids(options: &Options) -> Result<FieldGrids, String> {
             options.view_height_m,
         ],
         view_cloud_motion_m(options),
+        capture_lightning_sources(options),
         FieldGridTuning {
             landform_shadow_reach_m: options.landform_lighting[2],
         },
@@ -3018,12 +3067,7 @@ fn scene_uniforms(
             scalar_time.water_vapor,
             scalar_time.decorative_water,
         ],
-        lightning_sources: browser::lightning_sources(
-            world_geometry,
-            options.seed,
-            options.world_time_seconds,
-            canonical_camera_m.map(f64::from),
-        ),
+        lightning_sources: capture_lightning_sources(options),
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],
         precipitation_epoch: [
             precipitation_epoch as u32,
@@ -3229,6 +3273,13 @@ fn capture_report(
     );
     let celestial = celestial_lighting(sample.celestial);
     Ok(CaptureReport {
+        boats: options
+            .boat
+            .iter()
+            .chain(&options.extra_boats)
+            .copied()
+            .collect(),
+        lightning_sources: capture_lightning_sources(options),
         image: path.display().to_string(),
         width: options.width,
         height: options.height,
@@ -3395,4 +3446,54 @@ fn transparent_png() -> Vec<u8> {
     writer.write_image_data(&[0; 4]).expect("a 1x1 PNG encodes");
     writer.finish().expect("a 1x1 PNG finishes");
     bytes
+}
+
+fn capture_boat_scene(
+    options: &Options,
+    world_geometry: WorldGeometry,
+    x_m: f32,
+    y_m: f32,
+    heading_degrees: f32,
+) -> (browser::BoatScene, browser::ClothPose) {
+    let mut scene = boat_scene(
+        dinghy_parameters(),
+        BoatMotion {
+            position_m: PhysicsVector::new(f64::from(x_m), f64::from(y_m)),
+            velocity_m_s: PhysicsVector::ZERO,
+            angle_rad: f64::from(heading_degrees).to_radians(),
+            angular_velocity_rad_s: 0.0,
+            sail_angle_rad: 0.0,
+            sail_angular_velocity_rad_s: 0.0,
+            rudder_angle_rad: 0.0,
+            rudder_angular_velocity_rad_s: 0.0,
+        },
+    );
+    let ticks = options.world_time_seconds * TICKS_PER_SECOND as f64;
+    let environment = procedural_world_environment_interpolated(
+        world_geometry,
+        options.seed,
+        ticks.floor() as u64,
+        ticks.fract() as f32,
+        Vector::new(x_m, y_m),
+    );
+    scene.sea = Some(environment.sea);
+    scene.apparent_wind_velocity_m_s = environment.environment.true_wind_velocity_m_s.as_vec2();
+    let cloth = ClothMotion::new(&scene).pose();
+    (scene, cloth)
+}
+
+fn capture_lightning_sources(options: &Options) -> [[f32; 4]; 4] {
+    if let Some(source) = options.lightning_override {
+        return [source, [0.0; 4], [0.0; 4], [0.0; 4]];
+    }
+    browser::lightning_sources(
+        WorldGeometry::new(
+            f64::from(options.world_width_m),
+            f64::from(options.world_height_m),
+        )
+        .unwrap(),
+        options.seed,
+        options.world_time_seconds,
+        [f64::from(options.camera_x_m), f64::from(options.camera_y_m)],
+    )
 }

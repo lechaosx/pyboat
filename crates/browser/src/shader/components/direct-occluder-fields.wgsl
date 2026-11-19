@@ -2,6 +2,10 @@ fn sampled_broad_landform_elevation_m(position_m: vec2<f32>) -> f32 {
     return broad_landform_elevation_m(position_m);
 }
 
+fn sampled_lightning_horizon(position_m: vec2<f32>, source_index: u32) -> f32 {
+    return finite_lightning_horizon(position_m, scene.lightning_sources[source_index]);
+}
+
 // The landform layer texel's sea-level offset from the camera, then the broad
 // landform's elevation there, which the layer would hold.
 fn landform_texel_m(texel: vec2<u32>) -> vec3<f32> {

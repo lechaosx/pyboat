@@ -382,9 +382,9 @@ fn lightning_envelope(event: LightningEvent, seconds: f64) -> f32 {
     light as f32
 }
 
-/// Diffuse cloud-scattered flashes, represented as at most four light sources.
-/// The finite height and capped range are a presentation proxy for a channel
-/// illuminating its cloud, not a resolved lightning radiation model.
+/// Cloud-scattered flashes represented by finite sources. Their height and
+/// range stand in for a channel illuminating its cloud; each source is compact
+/// enough to give nearby surfaces a direction and cast shadows.
 pub fn lightning_sources(
     geometry: WorldGeometry,
     seed: u64,
