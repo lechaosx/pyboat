@@ -303,10 +303,6 @@ fn evolving_weather_fields_advance_over_an_hour_at_huge_ticks_without_offsets() 
         scalar_after.upper_air_temperature
     );
     assert_ne!(scalar_before.water_vapor, scalar_after.water_vapor);
-    assert_ne!(
-        scalar_before.decorative_water,
-        scalar_after.decorative_water
-    );
     assert_ne!(vector_before.pressure, vector_after.pressure);
     assert_ne!(vector_before.ocean_current, vector_after.ocean_current);
 }

@@ -204,7 +204,7 @@ fn mean(values: impl Iterator<Item = f64>) -> f64 {
     sum / f64::from(count)
 }
 
-/// Beyond 500 m pixels no wave mode or decorative octave is resolved, so
+/// Beyond 500 m pixels no wave mode or short-wave tile is resolved, so
 /// every pixel takes the whole of Cox and Munk's slope distribution at its
 /// wind and mean glint follows their closed form.
 #[test]
@@ -227,7 +227,7 @@ fn wide_open_water_glints_as_cox_and_munk_slopes_mirror_the_sun() {
     assert_cox_and_munk_mean_glint(&view, &pixels);
 }
 
-/// At boat zoom the wave modes and decorative octaves resolve part of the
+/// At boat zoom the wave modes and short-wave tiles resolve part of the
 /// slopes and the unresolved facets carry the rest of Cox and Munk's
 /// variance, so mean glint still follows their closed form.
 #[test]
@@ -409,10 +409,10 @@ fn assert_cox_and_munk_mean_glint(view: &GlintView, pixels: &[GlintPixel]) {
     );
 }
 
-/// A lower tier resolves fewer decorative octaves and leaves their slopes to
-/// the unresolved distribution, so its mean glint matches the high tier's: on
-/// open ocean at 4 m/s, and in a 29 m/s storm whose wave modes leave the
-/// decorative octaves none of Cox and Munk's total beyond the short waves'.
+/// A lower tier resolves fewer short-wave tile layers and leaves their slopes
+/// to the unresolved distribution, so its mean glint matches the high tier's:
+/// on open ocean at 4 m/s, and in a 29 m/s storm whose wave modes leave the
+/// tile layers none of Cox and Munk's total beyond the short waves'.
 #[test]
 fn graphics_tiers_share_mean_glint_at_boat_zoom() {
     for (camera_m, world_time_seconds) in [
@@ -516,8 +516,8 @@ fn a_setting_disc_leaves_the_reflected_sky_unchanged() {
     assert!((set / up - 1.0).abs() < 0.05, "disc up {up}, set {set}");
 }
 
-/// At a calm point of the surface wind the decorative octaves keep their
-/// Phillips share of Cox and Munk's total there, spread down from the octaves'
+/// At a calm point of the surface wind the short-wave tiles keep their
+/// Phillips share of Cox and Munk's total there, spread down from the tiles'
 /// longest wavelength, so the high tier still resolves more slope than the
 /// low.
 #[test]
@@ -744,5 +744,86 @@ fn sediment_veils_the_bed() {
     assert!(
         turbid < clear,
         "bed share clear {clear}, with 5 g/m³ {turbid}"
+    );
+}
+
+/// At the game's 15 m boat zoom every short-wave tile layer a footprint of
+/// 1.4 cm resolves draws, and the unresolved facets carry what those and the
+/// wave modes leave of Cox and Munk's slopes, so mean glint over views that
+/// together hold many of the longest tiles' waves follows their closed form.
+/// The Sun stands high enough that each view holds its glint's core.
+#[test]
+fn boat_zoom_with_every_short_wave_layer_keeps_cox_and_munks_mean_glint() {
+    let (mut rendered, mut expected) = (0.0, 0.0);
+    for step in 0..8 {
+        let view = GlintView {
+            width: 1920,
+            height: 1080,
+            view_height_m: 15.0,
+            camera_height_m: f64::from(DroneCamera::PRODUCTION_HEIGHT_M),
+            sun_degrees: 89.6,
+            camera_m: [
+                OPEN_OCEAN_M[0] + 97.0 * f64::from(step),
+                OPEN_OCEAN_M[1] + 61.0 * f64::from(step),
+            ],
+            world_time_seconds: OPEN_OCEAN_WORLD_TIME_SECONDS,
+        };
+        let pixels = view.capture("high");
+        rendered += pixels.iter().map(|pixel| pixel.glint).sum::<f64>();
+        expected += cox_munk_glints(&view, &pixels).sum::<f64>();
+    }
+    assert!(
+        (rendered / expected - 1.0).abs() < 0.05,
+        "summed glint {rendered}, Cox and Munk {expected}",
+    );
+}
+
+/// The water's slopes at a point are the same seen from either side of the
+/// world's longitude seam: on an 8 km world, views 10 m apart across the
+/// seam agree where they overlap as closely as views 10 m apart elsewhere,
+/// whose centres differ alike.
+#[test]
+fn water_slopes_join_across_the_longitude_seam() {
+    let (width, height) = (960, 540);
+    let shift = 360;
+    let normals = |camera_x: f64| {
+        capture_rgba(
+            &format!("seam-{camera_x}"),
+            &[
+                "--diagnostic",
+                "water_visual_normals",
+                "--width",
+                &width.to_string(),
+                "--height",
+                &height.to_string(),
+                "--world-width",
+                "8000",
+                "--camera-x",
+                &camera_x.to_string(),
+                "--camera-y",
+                "0",
+                // 360 pixels span 10 m.
+                "--view-height",
+                "15",
+            ],
+        )
+    };
+    let overlap_difference = |left: &[u8], right: &[u8]| {
+        let (left, right) = (left.as_chunks::<4>().0, right.as_chunks::<4>().0);
+        mean((0..height).flat_map(|row| {
+            (0..width - shift).flat_map(move |column| {
+                let (a, b) = (
+                    left[row * width + column + shift],
+                    right[row * width + column],
+                );
+                (0..3).map(move |channel| f64::from(a[channel].abs_diff(b[channel])))
+            })
+        }))
+    };
+    let across = overlap_difference(&normals(3_995.0), &normals(-3_995.0));
+    let within = overlap_difference(&normals(1_995.0), &normals(2_005.0));
+    assert!(
+        across <= 1.5 * within + 0.5,
+        "mean channel difference {across} across the seam, {within} elsewhere",
     );
 }

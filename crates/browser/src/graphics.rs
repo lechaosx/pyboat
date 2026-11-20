@@ -141,24 +141,27 @@ impl GraphicsQuality {
     }
 
     /// Override constants for the scene shader's fragment stage; `High` keeps
-    /// the shader defaults. Measured at 1080p on a Radeon 780M against `High`:
-    /// - Decorative water normals evaluate four 4D octaves from 18 m. One
-    ///   octave saves about 2.5 ms of a 9.8 ms open-water frame, two about
-    ///   1.5 ms; 99th-percentile image changes stay at 1 level.
-    /// - The metre-scale micro-relief material field takes six octaves. The
-    ///   baked surface holds all six at every tier, so the limit applies only
-    ///   to positions evaluated directly.
+    /// the shader defaults. The metre-scale micro-relief material field takes
+    /// six octaves. The baked surface holds all six at every tier, so the
+    /// limit applies only to positions evaluated directly.
     pub fn scene_constants(self) -> &'static [(&'static str, f64)] {
         match self {
-            Self::Low => &[
-                ("DECORATIVE_WATER_OCTAVES", 1.0),
-                ("MATERIAL_MICRO_OCTAVES", 0.0),
-            ],
-            Self::Medium => &[
-                ("DECORATIVE_WATER_OCTAVES", 2.0),
-                ("MATERIAL_MICRO_OCTAVES", 3.0),
-            ],
+            Self::Low => &[("MATERIAL_MICRO_OCTAVES", 0.0)],
+            Self::Medium => &[("MATERIAL_MICRO_OCTAVES", 3.0)],
             Self::High => &[],
+        }
+    }
+
+    /// The most short-wave tile layers a frame transforms and draws, from the
+    /// longest; the unresolved slopes take the rest. Each layer costs its
+    /// transform every frame and its texture reads at every water pixel,
+    /// while the finer layers show only at the closest zooms, so lower tiers
+    /// keep the long waves that every zoom shows.
+    pub fn wave_tile_layers(self) -> usize {
+        match self {
+            Self::Low => 1,
+            Self::Medium => 2,
+            Self::High => usize::MAX,
         }
     }
 }

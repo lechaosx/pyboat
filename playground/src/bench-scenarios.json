@@ -1,7 +1,7 @@
 [
   {
     "id": "open-ocean",
-    "exercises": "Deep daytime water at boat zoom: wave modes, decorative water normals, cloud and landform shadow lookups over water",
+    "exercises": "Deep daytime water at boat zoom: wave modes, short-wave tiles, cloud and landform shadow lookups over water",
     "seed": "0x5eed",
     "cameraM": [-14900, -5330],
     "viewHeightM": 240,
@@ -9,7 +9,7 @@
   },
   {
     "id": "open-ocean-medium",
-    "exercises": "Deep water at the medium graphics tier: two decorative water octaves over unchanged wave modes",
+    "exercises": "Deep water at the medium graphics tier: fewer short-wave tile layers over unchanged wave modes",
     "seed": "0x5eed",
     "cameraM": [-14900, -5330],
     "viewHeightM": 240,
@@ -18,7 +18,7 @@
   },
   {
     "id": "open-ocean-low",
-    "exercises": "Deep water at the low tier: one decorative water octave over unchanged wave modes",
+    "exercises": "Deep water at the low tier: one short-wave tile layer over unchanged wave modes",
     "seed": "0x5eed",
     "cameraM": [-14900, -5330],
     "viewHeightM": 240,
@@ -37,7 +37,7 @@
   },
   {
     "id": "boat-zoom",
-    "exercises": "Daytime water at 10 m/s in the game's default 15 m view: wave modes and decorative water normals at the finest footprint",
+    "exercises": "Daytime water at 10 m/s in the game's default 15 m view: wave modes and every short-wave tile layer at the finest footprint",
     "seed": "0x5eed",
     "cameraM": [-8250, -1250],
     "viewHeightM": 15,
@@ -53,7 +53,7 @@
   },
   {
     "id": "reef-coast-medium",
-    "exercises": "Reef coast at the medium graphics tier: fewer decorative water and micro-relief octaves beside unchanged coastline and shallows",
+    "exercises": "Reef coast at the medium graphics tier: fewer short-wave tile layers and micro-relief octaves beside unchanged coastline and shallows",
     "seed": "0x5eed",
     "cameraM": [-8500, 0],
     "viewHeightM": 240,
@@ -105,7 +105,7 @@
   },
   {
     "id": "polar-ice-edge-low",
-    "exercises": "Ice edge at the low tier: sea-ice boundary and baked ice detail unchanged beside one decorative water octave",
+    "exercises": "Ice edge at the low tier: sea-ice boundary and baked ice detail unchanged beside one short-wave tile layer",
     "seed": "0x5eed",
     "cameraM": [7100, 29000],
     "viewHeightM": 2400,

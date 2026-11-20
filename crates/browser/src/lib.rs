@@ -89,6 +89,10 @@ pub use terrain_depth::TerrainDepth;
 mod upscale;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use upscale::{UpscaleTargets, Upscaler};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod wave_tiles;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use wave_tiles::{WaveTileUniforms, WaveTiles, wave_tile_buffer_sizes, wave_tile_uniforms};
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -202,6 +206,10 @@ pub(crate) const PLAYGROUND_BAKED_SURFACE_SHADER: &str =
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/environment-fields.wgsl"));
+
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub(crate) const WAVE_TILE_SHADER: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/wave-tiles.wgsl"));
 
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const UPSCALE_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/upscale.wgsl"));

@@ -41,13 +41,13 @@ use crate::{
     MAX_SERVER_MESSAGE_BYTES, MultiplayerClient, OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_SHADER,
     OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, ResolutionController, SCENE_SHADER,
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCachePass, TerrainDepth,
-    UpscaleTargets, Upscaler, ViewCloudMotion, append_reliable_server_message_chunk,
+    UpscaleTargets, Upscaler, ViewCloudMotion, WaveTiles, append_reliable_server_message_chunk,
     baked_surface_sizes, bounded_canvas_dimensions, disconnect_and_clear_pending_snapshot,
     field_grids, gameplay_view_height_m, ocean_wave_uniforms, queue_latest_snapshot,
     requeue_failed_viewport, sample_view_cloud_state, sample_world_geometry, scale_bar,
     scene_render_size, seasonal_phase_factors, surface_height_texture, view_width_m,
-    viewport_interest_radius_m, visual_pixel_footprint_m, webtransport_server_url,
-    zoom_view_height_m,
+    viewport_interest_radius_m, visual_pixel_footprint_m, wave_tile_uniforms,
+    webtransport_server_url, zoom_view_height_m,
 };
 
 #[wasm_bindgen(
@@ -443,6 +443,7 @@ pub struct PlaygroundSceneFrame {
     terrain_cache_workgroups: u32,
     baked_surface_fill: Vec<u8>,
     baked_surface_workgroups: u32,
+    wave_tiles: crate::WaveTileUniforms,
 }
 
 #[cfg(feature = "playground")]
@@ -491,6 +492,35 @@ impl PlaygroundSceneFrame {
     pub fn baked_surface_workgroups(&self) -> u32 {
         self.baked_surface_workgroups
     }
+
+    /// The wave tiles' state, which their generation and the scene read.
+    #[wasm_bindgen(getter)]
+    pub fn wave_tiles(&self) -> Vec<u8> {
+        bytemuck::bytes_of(&self.wave_tiles).to_vec()
+    }
+
+    /// Workgroups of `generate_wave_tile_columns` then of
+    /// `generate_wave_tile_texel_rows`, each by the tile layers they
+    /// transform; dispatch neither when the layers are zero, and copy that
+    /// many layers into the texture after them.
+    #[wasm_bindgen(getter)]
+    pub fn wave_tile_workgroups(&self) -> Vec<u32> {
+        self.wave_tiles.workgroups().to_vec()
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn wave_tile_shader_source() -> String {
+    crate::WAVE_TILE_SHADER.to_owned()
+}
+
+#[cfg(feature = "playground")]
+/// Width, height, and layer count of the wave tile texture, then the bytes
+/// of its packed texels, of the transform's columns, and of the tiles' state.
+#[wasm_bindgen]
+pub fn wave_tile_texture_size() -> Vec<u32> {
+    crate::wave_tile_buffer_sizes().to_vec()
 }
 
 #[cfg(feature = "playground")]
@@ -808,7 +838,10 @@ pub fn playground_scene_uniforms(
     terrain_cache: &mut PlaygroundTerrainCache,
     baked_surface: &mut PlaygroundBakedSurface,
     field_grid_history: &mut PlaygroundFieldGridHistory,
+    graphics_quality: &str,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
+    let quality = crate::GraphicsQuality::parse(graphics_quality)
+        .ok_or_else(|| JsValue::from_str("unknown graphics quality"))?;
     let geometry = WorldGeometry::new(f64::from(world_width_m), f64::from(world_height_m))
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let row = |values: &[f32]| -> Result<[f32; 4], JsValue> {
@@ -871,6 +904,24 @@ pub fn playground_scene_uniforms(
         tick_fraction,
         [camera_x_m, camera_y_m],
     );
+    let wind_m_s = sample_view_cloud_state(
+        geometry,
+        match_seed,
+        tick,
+        tick_fraction,
+        Vector::new(camera_x_m, camera_y_m),
+    )
+    .low_wind_velocity_m_s;
+    let wave_tiles = wave_tile_uniforms(
+        geometry,
+        tick,
+        tick_fraction,
+        [camera_x_m, camera_y_m],
+        view_size_m,
+        pixel_footprint_m,
+        wind_m_s.into(),
+        quality.wave_tile_layers(),
+    );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
         drone_camera: camera.scene_uniform_row(),
@@ -878,7 +929,7 @@ pub fn playground_scene_uniforms(
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
             scalar_time.water_vapor,
-            scalar_time.decorative_water,
+            0.0,
         ],
         match_seed: [match_seed as u32, (match_seed >> 32) as u32],
         world_size_m: [world_width_m, world_height_m],
@@ -959,6 +1010,7 @@ pub fn playground_scene_uniforms(
         terrain_cache_workgroups: terrain_cache_frame.fill_bytes().1,
         baked_surface_fill: baked_surface_frame.fill_bytes().0.to_vec(),
         baked_surface_workgroups: baked_surface_frame.fill_bytes().1,
+        wave_tiles,
     })
 }
 
@@ -1135,21 +1187,27 @@ impl EnvironmentFields {
         }
     }
 
+    /// Also transforms the wave tiles, which read the same scene uniforms.
     fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         scene_uniform_bind_group: &wgpu::BindGroup,
         grids: &FieldGrids,
+        (wave_tiles, wave_tile_uniforms): (&WaveTiles, &crate::WaveTileUniforms),
     ) {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Environment field pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, scene_uniform_bind_group, &[]);
-        pass.set_bind_group(1, &self.output_bind_group, &[]);
-        let [columns, rows] = grids.environment_workgroups();
-        pass.dispatch_workgroups(columns, rows, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Environment field pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, scene_uniform_bind_group, &[]);
+            pass.set_bind_group(1, &self.output_bind_group, &[]);
+            let [columns, rows] = grids.environment_workgroups();
+            pass.dispatch_workgroups(columns, rows, 1);
+            wave_tiles.dispatch(&mut pass, scene_uniform_bind_group, wave_tile_uniforms);
+        }
+        wave_tiles.copy(encoder, wave_tile_uniforms);
     }
 }
 
@@ -1472,6 +1530,7 @@ struct Renderer {
     empty_bind_group: wgpu::BindGroup,
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
+    wave_tiles: WaveTiles,
     terrain_depth: TerrainDepth,
     terrain_depth_input: wgpu::BindGroup,
     terrain_cache_pass: TerrainCachePass,
@@ -1513,8 +1572,10 @@ fn scene_bind_group(
     adapting_field: &AdaptingField,
     terrain_depth: &TerrainDepth,
     boat_shadows: &crate::BoatShadowMaps,
+    wave_tiles: &WaveTiles,
 ) -> wgpu::BindGroup {
     let baked = baked_surface_pass.textures();
+    let [wave_tile_texture, wave_tile_sampler, wave_tile_uniforms] = wave_tiles.scene_entries();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Scene bind group"),
         layout,
@@ -1557,6 +1618,9 @@ fn scene_bind_group(
             },
             boat_shadows.scene_entries()[0].clone(),
             boat_shadows.scene_entries()[1].clone(),
+            wave_tile_texture,
+            wave_tile_sampler,
+            wave_tile_uniforms,
         ],
     })
 }
@@ -1816,6 +1880,9 @@ impl Renderer {
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
                 crate::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[0],
                 crate::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[1],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[0],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[1],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[2],
             ],
         });
         report_loading(progress, "Building ocean and lighting shaders").await?;
@@ -1914,6 +1981,7 @@ impl Renderer {
         );
         let terrain_depth_input =
             terrain_depth.input_bind_group(&device, &uniform_buffer, Some(&occluder_fields.view));
+        let wave_tiles = WaveTiles::new(&device, &bind_group_layout);
         let scene_bind_group = scene_bind_group(
             &device,
             &scene_layout,
@@ -1925,6 +1993,7 @@ impl Renderer {
             &adapting_field,
             &terrain_depth,
             &boat_sprites.shadows,
+            &wave_tiles,
         );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
@@ -1955,6 +2024,7 @@ impl Renderer {
             empty_bind_group,
             environment_fields,
             occluder_fields,
+            wave_tiles,
             terrain_depth,
             terrain_depth_input,
             terrain_cache_pass,
@@ -2159,6 +2229,17 @@ impl Renderer {
             tick_fraction,
             canonical_camera_m,
         );
+        let wave_tiles = wave_tile_uniforms(
+            world_geometry,
+            tick,
+            tick_fraction,
+            canonical_camera_m,
+            [view_width_m, view_height_m],
+            pixel_footprint_m,
+            view_cloud_state.low_wind_velocity_m_s.into(),
+            self.graphics.quality.wave_tile_layers(),
+        );
+        self.wave_tiles.write(&self.queue, &wave_tiles);
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -2174,7 +2255,7 @@ impl Renderer {
                     scalar_time.air_temperature,
                     scalar_time.upper_air_temperature,
                     scalar_time.water_vapor,
-                    scalar_time.decorative_water,
+                    0.0,
                 ],
                 match_seed: [match_seed as u32, (match_seed >> 32) as u32],
                 world_size_m: [
@@ -2274,8 +2355,12 @@ impl Renderer {
             None,
         );
         self.baked_surface.commit();
-        self.environment_fields
-            .encode(&mut encoder, &self.bind_group, &field_grids);
+        self.environment_fields.encode(
+            &mut encoder,
+            &self.bind_group,
+            &field_grids,
+            (&self.wave_tiles, &wave_tiles),
+        );
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
         if self.boat_sprites.prepare_shadows(
@@ -2567,6 +2652,7 @@ impl Renderer {
             &self.adapting_field,
             &self.terrain_depth,
             &self.boat_sprites.shadows,
+            &self.wave_tiles,
         );
     }
 

@@ -108,8 +108,6 @@ const TEMPERATURE_ANOMALY_SCALE_C: [f32; 10] =
 const SURFACE_AIR_TEMPERATURE_EVOLUTION_SPEED_M_S: f32 = 5.4;
 const AIR_TEMPERATURE_500_HPA_EVOLUTION_SPEED_M_S: f32 = 6.9;
 const WATER_VAPOR_EVOLUTION_SPEED_M_S: f32 = 6.0;
-const DECORATIVE_WATER_EVOLUTION_SPEED_M_S: f32 = 0.65;
-const DECORATIVE_WATER_WAVELENGTH_M: f32 = 18.0;
 // Cumulus cells grow and dissipate within about 10–30 minutes, so the cumulus
 // field's broadest octave crosses one unit of noise time in this period,
 // independently of the wind. Overhead cumulus shadows of still fair-weather
@@ -393,7 +391,6 @@ pub struct ScalarFieldTimeCoordinates {
     pub air_temperature: f32,
     pub upper_air_temperature: f32,
     pub water_vapor: f32,
-    pub decorative_water: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3006,12 +3003,6 @@ pub fn scalar_field_time_coordinates_interpolated(
             WATER_VAPOR_NOISE.evolution_speed_m_s,
             WATER_VAPOR_NOISE.wavelength_m,
         ),
-        decorative_water: noise_time_coordinate_interpolated(
-            tick,
-            tick_fraction,
-            DECORATIVE_WATER_EVOLUTION_SPEED_M_S,
-            DECORATIVE_WATER_WAVELENGTH_M,
-        ),
     }
 }
 
@@ -4070,7 +4061,6 @@ mod tests {
         assert_ne!(before.air_temperature, after.air_temperature);
         assert_ne!(before.upper_air_temperature, after.upper_air_temperature);
         assert_ne!(before.water_vapor, after.water_vapor);
-        assert_ne!(before.decorative_water, after.decorative_water);
 
         let before = vector_field_time_coordinates(world, u64::MAX - 216_000);
         let after = vector_field_time_coordinates(world, u64::MAX);

@@ -12,16 +12,16 @@ use wgpu::util::DeviceExt;
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
     FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
-    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, baked_surface_sizes,
-    scene_render_size, surface_height_texture, visual_pixel_footprint_m,
+    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, WaveTiles,
+    baked_surface_sizes, scene_render_size, surface_height_texture, visual_pixel_footprint_m,
 };
 
 use super::{
     CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
     capture_baked_surface_frame, capture_field_grids, capture_terrain_cache_frame, capture_texture,
-    default_options, fullscreen_vertices, hardware_device, parse_seed, read_texture,
-    scene_uniforms, uniform_layout, validate_capture_dimensions, validate_capture_spatial_inputs,
-    validate_time_seconds, write_png,
+    capture_wave_tile_uniforms, default_options, fullscreen_vertices, hardware_device, parse_seed,
+    read_texture, scene_uniforms, uniform_layout, validate_capture_dimensions,
+    validate_capture_spatial_inputs, validate_time_seconds, write_png,
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
@@ -287,6 +287,7 @@ struct ModeRenderer {
     /// Indexed by `GraphicsQuality`.
     illumination_pipelines: [wgpu::RenderPipeline; 3],
     adapting_field: AdaptingField,
+    wave_tiles: WaveTiles,
     /// One per bake size, as the game sizes its bake for the scene.
     fields: Vec<(BakedSurfaceSizes, CaptureFields)>,
     /// The scenario the cache and surface were last filled for; another one
@@ -415,6 +416,7 @@ impl ModeRenderer {
                 )
             }),
             adapting_field: AdaptingField::new(device, scene_layout),
+            wave_tiles: WaveTiles::new(device, scene_layout),
             surfaces: RefCell::new((
                 String::new(),
                 TerrainCache::default(),
@@ -537,6 +539,9 @@ impl ModeRenderer {
         timestamps: Option<&wgpu::QuerySet>,
     ) {
         let fields = self.fields(bindings.baked_surface_sizes);
+        let wave_tile_uniforms = capture_wave_tile_uniforms(bindings.options)
+            .expect("bench views hold valid world geometry");
+        self.wave_tiles.write(queue, &wave_tile_uniforms);
         fields.encode_terrain_cache(
             queue,
             encoder,
@@ -558,6 +563,7 @@ impl ModeRenderer {
             bindings.fields,
             bindings.unused,
             bindings.field_grids,
+            (&self.wave_tiles, &wave_tile_uniforms),
             timestamps,
         );
         bindings.terrain_depth.encode(
@@ -883,6 +889,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                         &renderer.adapting_field,
                         &terrain_depth,
                         None,
+                        &renderer.wave_tiles,
                     )
                 }),
                 field_grids: capture_field_grids(&scenario_options)?,
@@ -1173,7 +1180,6 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
         ));
     }
     validate_time_seconds(scenario.world_time_seconds, "worldTimeSeconds")?;
-    scenario.graphics_quality()?;
     Ok(Options {
         width,
         height,
@@ -1182,6 +1188,7 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
         view_height_m: scenario.view_height_m,
         seed: parse_seed(&scenario.seed)?,
         world_time_seconds: scenario.world_time_seconds,
+        quality: scenario.graphics_quality()?,
         ..default_options()
     })
 }
@@ -1299,6 +1306,7 @@ fn time_cold_start(
             &renderer.adapting_field,
             bindings.terrain_depth,
             None,
+            &renderer.wave_tiles,
         );
         let frame_bindings = FrameBindings {
             scene: &scene,
@@ -1398,6 +1406,7 @@ fn time_sequence(
             &renderer.adapting_field,
             &terrain_depth,
             None,
+            &renderer.wave_tiles,
         );
         let field_grids = capture_field_grids(&view_options)?;
         let bindings = FrameBindings {

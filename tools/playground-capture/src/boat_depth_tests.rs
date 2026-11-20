@@ -56,7 +56,17 @@ impl Fixture {
         });
         let adaptation_field = AdaptingField::new(&device, &uniform_layout);
         let terrain = TerrainDepth::new(&device, size);
-        let bindings = fields.bindings(&device, &buffer, &adaptation_field, &terrain, None);
+        let wave_tiles = WaveTiles::new(&device, &uniform_layout);
+        let wave_tile_uniforms = capture_wave_tile_uniforms(&options).unwrap();
+        wave_tiles.write(&queue, &wave_tile_uniforms);
+        let bindings = fields.bindings(
+            &device,
+            &buffer,
+            &adaptation_field,
+            &terrain,
+            None,
+            &wave_tiles,
+        );
         let uniform_group = bind_group(&device, &uniform_layout, &buffer, "boat fixture uniforms");
         let mut encoder = device.create_command_encoder(&Default::default());
         adaptation_field.encode_uniform(&mut encoder, 1.0, [1.0; 3]);
@@ -66,6 +76,7 @@ impl Fixture {
             &bindings,
             &uniform_group,
             &capture_field_grids(&options).unwrap(),
+            (&wave_tiles, &wave_tile_uniforms),
             None,
         );
         queue.submit([encoder.finish()]);

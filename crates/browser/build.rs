@@ -5,6 +5,7 @@ mod diagnostics;
 
 const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/scene-state.wgsl",
+    "src/shader/components/wave-tile-state.wgsl",
     "src/shader/components/terrain-depth.wgsl",
     "src/shader/components/vertex.wgsl",
     "src/shader/components/display.wgsl",
@@ -24,6 +25,8 @@ const SCENE_COMPONENTS: &[&str] = &[
 
 fn main() {
     let scene = read_components(SCENE_COMPONENTS);
+    let wave_tiles = read_component("src/shader/components/wave-tiles.wgsl");
+    let wave_tiles_disabled = read_component("src/shader/components/wave-tiles-disabled.wgsl");
     let occluder_fields = read_component("src/shader/components/occluder-fields.wgsl");
     let direct_occluder_fields =
         read_component("src/shader/components/direct-occluder-fields.wgsl");
@@ -41,6 +44,7 @@ fn main() {
     let production_entry = read_component("src/shader/production-entry.wgsl");
     let production = compose(&[
         &scene,
+        &wave_tiles,
         &occluder_fields,
         &terrain_cache,
         &baked_surface,
@@ -78,6 +82,7 @@ fn main() {
     write_shader(
         &compose(&[
             &scene,
+            &wave_tiles_disabled,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -89,6 +94,7 @@ fn main() {
     );
     let environment_fields = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -102,6 +108,7 @@ fn main() {
     );
     let production_occluders = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -116,6 +123,7 @@ fn main() {
     );
     let production_landform_horizons = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -131,6 +139,7 @@ fn main() {
     );
     let terrain_cache_generate = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -144,6 +153,7 @@ fn main() {
     );
     let production_baked_surface_generate = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &terrain_cache,
         &direct_surface,
@@ -155,6 +165,22 @@ fn main() {
         &production_baked_surface_generate,
         &["generate_baked_surface"],
         "baked-surface.wgsl",
+    );
+    write_shader(
+        &compose(&[
+            &scene,
+            &wave_tiles_disabled,
+            &direct_occluder_fields,
+            &direct_terrain_noise,
+            &direct_surface,
+            &production_entry,
+            &read_component("src/shader/wave-tile-generate.wgsl"),
+        ]),
+        &[
+            "generate_wave_tile_columns",
+            "generate_wave_tile_texel_rows",
+        ],
+        "wave-tiles.wgsl",
     );
     let upscale = read_component("src/shader/upscale.wgsl");
     write_shader(
@@ -190,6 +216,7 @@ fn main() {
     );
     let playground = compose(&[
         &scene,
+        &wave_tiles,
         &occluder_fields,
         &terrain_cache,
         &baked_surface,
@@ -209,6 +236,7 @@ fn main() {
     );
     let playground_direct = compose(&[
         &scene,
+        &wave_tiles,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -227,6 +255,7 @@ fn main() {
     write_shader(
         &compose(&[
             &scene,
+            &wave_tiles_disabled,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -238,6 +267,7 @@ fn main() {
     );
     let playground_occluders = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -252,6 +282,7 @@ fn main() {
     );
     let playground_landform_horizons = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -267,6 +298,7 @@ fn main() {
     );
     let playground_baked_surface_generate = compose(&[
         &scene,
+        &wave_tiles_disabled,
         &direct_occluder_fields,
         &terrain_cache,
         &direct_surface,
@@ -285,6 +317,7 @@ fn main() {
         let entry = read_component(&format!("src/shader/diagnostics/{name}.wgsl"));
         let diagnostic = compose(&[
             &scene,
+            &wave_tiles,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -349,7 +382,8 @@ fn parse_shader(source: &str) -> naga::Module {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::MULTISAMPLED_SHADING,
+        naga::valid::Capabilities::MULTISAMPLED_SHADING
+            | naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32,
     )
     .validate(&module)
     .unwrap();
@@ -363,7 +397,8 @@ fn write_selected_shader(mut module: naga::Module, entry_points: &[&str], output
     naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::MULTISAMPLED_SHADING,
+        naga::valid::Capabilities::MULTISAMPLED_SHADING
+            | naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32,
     )
     .validate(&module)
     .unwrap();

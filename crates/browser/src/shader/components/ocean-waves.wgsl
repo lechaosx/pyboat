@@ -289,19 +289,15 @@ fn cox_munk_slope_variance(wind_speed_m_s: f32) -> vec2<f32> {
     return vec2<f32>(0.0015 + 3.16e-3 * wind_speed_m_s, 0.0015 + 1.92e-3 * wind_speed_m_s);
 }
 
-// Mean squared gradient of `spatiotemporal_noise_sample` times its wavelength
-// squared, a property of the noise: a Monte Carlo average over 400 000
-// positions, longitudes, and independent lattice gradients.
-const SPATIOTEMPORAL_SIMPLEX_SQUARED_GRADIENT: f32 = 4.24;
 // The shortest gravity wave, at the gravity-capillary minimum of phase speed.
 const GRAVITY_CAPILLARY_WAVELENGTH_M: f32 = 0.017;
 
-// The decorative octaves' slope a pixel resolves and its mean square, then
-// the mean squared slope of the waves shorter than the octaves, which nothing
-// resolves.
+// The short-wave tiles' slope a pixel resolves and the mean squares along x
+// and y and the covariance of that slope, then the mean squared slope of
+// the waves the footprint filters away, which nothing resolves.
 struct DecorativeWaterSample {
     gradient: vec2<f32>,
-    slope_variance: f32,
+    slope_covariance: vec3<f32>,
     short_wave_slope_variance: f32,
 };
 
@@ -508,56 +504,59 @@ fn stirred_fine_sediment_g_m3(availability: f32, orbital_speed_m_s: f32, depth_m
 // Short waves the wave modes leave out. In Phillips' (1958) saturation range
 // each octave of wavelength holds equal slope variance, so each octave
 // carries an equal share of Cox and Munk's total over the octaves from the
-// spectrum's peak to the shortest gravity wave. The waves shorter than the
-// last octave, down to the shortest gravity wave, always keep their share.
-// Cox and Munk measured the slopes of all waves, so the octaves share only
-// what those and the resolved wave modes leave of that total, their
-// `slope_budget`, scaled alike. Compromise: the octaves are alike in every
-// direction. Below about 5.3 m/s the peak's floor gives every octave a full
-// share, an 18 m octave included.
+// spectrum's peak to the shortest gravity wave. The wave tiles draw the
+// octaves from the decorative layout's longest down to the pixel's
+// footprint; the waves the footprint filters away, and those shorter than
+// any tile, always keep their share. Cox and Munk measured the slopes of all
+// waves, so the drawn octaves share only what those and the resolved wave
+// modes leave of that total, their `slope_budget`, scaled alike. A lower
+// tier draws fewer layers and leaves their slopes unresolved. Below about
+// 5.3 m/s the peak's floor gives every octave a full share, an 18 m octave
+// included.
 fn decorative_water_normal_sample(
     position_m: vec2<f32>,
     wind_speed_m_s: f32,
     peak_wavelength_m: f32,
     slope_budget: f32,
 ) -> DecorativeWaterSample {
-    var sample = DecorativeWaterSample(vec2<f32>(0.0), 0.0, 0.0);
-    let shown = material_feature_visibility().w > 0.0;
-    var wavelength_m = DECORATIVE_WATER_WAVELENGTH_M;
-    // The octaves reach half an octave above the first and below the last,
-    // which is eight times shorter.
-    let octave_range_m = vec2<f32>(1.4142135, 0.0883883) * wavelength_m;
+    var sample = DecorativeWaterSample(vec2<f32>(0.0), vec3<f32>(0.0), 0.0);
     let total = cox_munk_slope_variance(wind_speed_m_s);
     let phillips_octave_variance = (total.x + total.y)
         / log2(peak_wavelength_m / GRAVITY_CAPILLARY_WAVELENGTH_M);
-    sample.short_wave_slope_variance = phillips_octave_variance
-        * log2(octave_range_m.y / GRAVITY_CAPILLARY_WAVELENGTH_M);
-    let band_variance = phillips_octave_variance * log2(octave_range_m.x / octave_range_m.y);
-    let octave_variance = phillips_octave_variance
-        * clamp((slope_budget - sample.short_wave_slope_variance) / band_variance, 0.0, 1.0);
-    var time_coordinate = scene.scalar_field_time_coordinates.w;
-    for (var octave = 0u; octave < 4u; octave++) {
-        let evaluated = shown && octave < DECORATIVE_WATER_OCTAVES;
-        let octave_visibility = select(
-            0.0,
-            smoothstep(visual_pixel_footprint_m, 2.0 * visual_pixel_footprint_m, wavelength_m),
-            evaluated,
-        );
-        if evaluated && (octave_visibility > 0.0 || EVALUATE_ALL_BRANCHES) {
-            let octave_sample = spatiotemporal_noise_sample(
-                noise_key(DECORATIVE_WATER_NOISE_FIELD, octave),
-                position_m,
-                wavelength_m,
-                time_coordinate,
-            );
-            let amplitude_m = wavelength_m
-                * sqrt(octave_variance / SPATIOTEMPORAL_SIMPLEX_SQUARED_GRADIENT);
-            sample.gradient += amplitude_m * octave_visibility * octave_sample.gradient;
-        }
-        sample.slope_variance += octave_visibility * octave_visibility * octave_variance;
-        wavelength_m *= 0.5;
-        time_coordinate *= 2.0;
+    let octaves = wave_tile_octaves();
+    sample.short_wave_slope_variance = phillips_octave_variance * octaves.x;
+    let octave_variance = phillips_octave_variance * clamp(
+        (slope_budget - sample.short_wave_slope_variance)
+            / max(phillips_octave_variance * octaves.y, 1.0e-20),
+        0.0,
+        1.0,
+    );
+    if material_feature_visibility().w <= 0.0 {
+        return sample;
     }
+    let offset_m = camera_relative_position_m(position_m);
+    let shown_layers = u32(octaves.z);
+    // The forced evaluation takes every layer the tier can draw at any zoom.
+    let drawn = select(shown_layers, u32(octaves.w), EVALUATE_ALL_BRANCHES);
+    var gradient = vec2<f32>(0.0);
+    var octaves_along_and_across = vec2<f32>(0.0);
+    for (var layer = 0u; layer < drawn; layer++) {
+        let slope = wave_tile_slope(layer, offset_m);
+        gradient += select(vec2<f32>(0.0), slope, layer < shown_layers);
+        octaves_along_and_across += select(
+            vec2<f32>(0.0),
+            wave_tile_resolved_octaves(layer),
+            layer < shown_layers,
+        );
+    }
+    sample.gradient = sqrt(octave_variance) * gradient;
+    let wind = wave_tile_wind_direction();
+    let variances = octave_variance * octaves_along_and_across;
+    sample.slope_covariance = vec3<f32>(
+        variances.x * wind.x * wind.x + variances.y * wind.y * wind.y,
+        variances.x * wind.y * wind.y + variances.y * wind.x * wind.x,
+        (variances.x - variances.y) * wind.x * wind.y,
+    );
     return sample;
 }
 
@@ -602,14 +601,14 @@ fn visual_water_slopes_from_surface(
     );
     let sustained_speed_m_s = length(waves.surface_wind_m_s);
     let sustained = cox_munk_slope_variance(sustained_speed_m_s);
-    let modes = waves.slope_covariance;
     // The wave sample leaves its forcing in `sampled_wave_forcing`.
     let decorative = decorative_water_normal_sample(
         position_m,
         sustained_speed_m_s,
         wave_peak_wavelength_m(sampled_wave_forcing.sea),
-        sustained.x + sustained.y - modes.x - modes.y,
+        sustained.x + sustained.y - waves.slope_covariance.x - waves.slope_covariance.y,
     );
+    let resolved_covariance = waves.slope_covariance + decorative.slope_covariance;
     let wind_m_s = water_surface_wind_m_s(position_m, waves.surface_wind_m_s);
     let wind_speed_m_s = length(wind_m_s);
     let total = cox_munk_slope_variance(wind_speed_m_s);
@@ -621,14 +620,13 @@ fn visual_water_slopes_from_surface(
     let squares = vec2<f32>(upwind.x * upwind.x, upwind.y * upwind.y);
     let cross_term = upwind.x * upwind.y;
     let resolved = vec2<f32>(
-        dot(modes.xy, squares) + 2.0 * modes.z * cross_term,
-        dot(modes.xy, squares.yx) - 2.0 * modes.z * cross_term,
-    ) + 0.5 * decorative.slope_variance;
+        dot(resolved_covariance.xy, squares) + 2.0 * resolved_covariance.z * cross_term,
+        dot(resolved_covariance.xy, squares.yx) - 2.0 * resolved_covariance.z * cross_term,
+    );
     // The unresolved slopes hold what the resolved slopes leave of the total,
-    // shaped along and across the wind as that remainder is where positive;
-    // isotropic octaves leave Cox and Munk's anisotropy to it. Where that
-    // falls short of the short waves, the shortfall takes Cox and Munk's
-    // proportions, so both axes keep slopes.
+    // shaped along and across the wind as that remainder is where positive.
+    // Where that falls short of the short waves, the shortfall takes Cox and
+    // Munk's proportions, so both axes keep slopes.
     let remainder = total - resolved;
     let shape = max(remainder, vec2<f32>(0.0));
     let left = max(remainder.x + remainder.y, 0.0);

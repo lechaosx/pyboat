@@ -12,9 +12,9 @@ use browser::{
     FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
     OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, SETTLED_ADAPTATION_SECONDS,
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCacheFrame, TerrainCachePass,
-    TerrainDepth, baked_surface_sizes, boat_scene, exposure_target, field_grids,
-    ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors, surface_height_texture,
-    view_width_m, visual_pixel_footprint_m,
+    TerrainDepth, WaveTileUniforms, WaveTiles, baked_surface_sizes, boat_scene, exposure_target,
+    field_grids, ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors,
+    surface_height_texture, view_width_m, visual_pixel_footprint_m, wave_tile_uniforms,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -50,6 +50,8 @@ struct ShaderSelection {
     id: String,
     module: Option<&'static str>,
     constants: Vec<(&'static str, f64)>,
+    /// The graphics tier a diagnostic names, in place of `--quality`.
+    quality: Option<GraphicsQuality>,
 }
 
 fn scene_selection() -> ShaderSelection {
@@ -57,6 +59,7 @@ fn scene_selection() -> ShaderSelection {
         id: "scene".to_owned(),
         module: None,
         constants: Vec::new(),
+        quality: None,
     }
 }
 
@@ -262,6 +265,9 @@ impl CaptureFields {
                 TerrainDepth::SCENE_LAYOUT_ENTRY,
                 browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[0],
                 browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES[1],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[0],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[1],
+                WaveTiles::SCENE_LAYOUT_ENTRIES[2],
             ],
         });
         let field_reading_layout =
@@ -473,6 +479,7 @@ impl CaptureFields {
         adapting_field: &AdaptingField,
         terrain_depth: &TerrainDepth,
         boat_shadows: Option<&browser::BoatShadowMaps>,
+        wave_tiles: &WaveTiles,
     ) -> CaptureFieldBindings {
         let uniforms = wgpu::BindGroupEntry {
             binding: 0,
@@ -528,6 +535,9 @@ impl CaptureFields {
                         .unwrap_or(&self.empty_boat_shadows)
                         .scene_entries()[1]
                         .clone(),
+                    wave_tiles.scene_entries()[0].clone(),
+                    wave_tiles.scene_entries()[1].clone(),
+                    wave_tiles.scene_entries()[2].clone(),
                 ],
             }),
             terrain_depth_input: terrain_depth.input_bind_group(
@@ -613,7 +623,8 @@ impl CaptureFields {
         );
     }
 
-    /// Timestamps, when requested, go to query indices 0 to 3.
+    /// Timestamps, when requested, go to query indices 0 to 3; the
+    /// environment fields' pair also times the wave tiles.
     #[allow(clippy::too_many_arguments)]
     fn encode(
         &self,
@@ -622,6 +633,7 @@ impl CaptureFields {
         bindings: &CaptureFieldBindings,
         occluder_group_1: &wgpu::BindGroup,
         grids: &FieldGrids,
+        wave_tiles: (&WaveTiles, &WaveTileUniforms),
         timestamps: Option<&wgpu::QuerySet>,
     ) {
         let timestamp_writes = |first| {
@@ -641,7 +653,11 @@ impl CaptureFields {
             pass.set_bind_group(1, &self.environment_output, &[]);
             let [columns, rows] = grids.environment_workgroups();
             pass.dispatch_workgroups(columns, rows, 1);
+            wave_tiles
+                .0
+                .dispatch(&mut pass, scene_uniform_bind_group, wave_tiles.1);
         }
+        wave_tiles.0.copy(encoder, wave_tiles.1);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("capture occluder field pass"),
             timestamp_writes: timestamp_writes(2),
@@ -1085,6 +1101,7 @@ fn diagnostic(
         id: id.to_owned(),
         module: Some(module),
         constants: constants.to_vec(),
+        quality: None,
     }
 }
 
@@ -1096,12 +1113,14 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
                 id: value.to_owned(),
                 module: None,
                 constants: Vec::new(),
+                quality: None,
             }
         }
         "scene_occluder_coverage_all_branches" => ShaderSelection {
             id: value.to_owned(),
             module: None,
             constants: vec![("EVALUATE_ALL_BRANCHES", 1.0)],
+            quality: None,
         },
         "atmosphere_water_vapor" => diagnostic(
             value,
@@ -1446,6 +1465,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             selection
                 .constants
                 .extend_from_slice(quality.scene_constants());
+            selection.quality = Some(quality);
             selection
         }
         // lighting_water_resolved_slope_<graphics tier>.
@@ -1460,6 +1480,7 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             selection
                 .constants
                 .extend_from_slice(quality.scene_constants());
+            selection.quality = Some(quality);
             selection
         }
         // lighting_water_body_<Sun degrees>_<view degrees off the vertical>_<sediment
@@ -2230,10 +2251,12 @@ async fn render(options: &Options) -> Result<(), String> {
         fieldless_entries.push(ADAPTING_FIELD_LAYOUT_ENTRY);
     }
     fieldless_entries.extend(browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES);
+    fieldless_entries.extend(WaveTiles::SCENE_LAYOUT_ENTRIES);
     let fieldless_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("scene uniforms and terrain depth layout"),
         entries: &fieldless_entries,
     });
+    let wave_tiles = WaveTiles::new(&device, &scene_layout);
     let bind_group_layouts = [
         Some(match &fields {
             Some(fields) => &fields.scene_layout,
@@ -2363,6 +2386,7 @@ async fn render(options: &Options) -> Result<(), String> {
         &vertex_buffer,
         fields.as_ref(),
         &terrain_depth,
+        &wave_tiles,
         adaptation.as_ref(),
         options,
     )?;
@@ -2447,6 +2471,7 @@ fn render_world(
     vertex_buffer: &wgpu::Buffer,
     fields: Option<&CaptureFields>,
     terrain_depth: &TerrainDepth,
+    wave_tiles: &WaveTiles,
     adaptation: Option<&CaptureAdaptation>,
     options: &Options,
 ) -> Result<(Vec<u8>, Option<AdaptingFieldTexels>), String> {
@@ -2459,6 +2484,7 @@ fn render_world(
                 .field,
             terrain_depth,
             None,
+            wave_tiles,
         )
     };
     let mut terrain_cache = TerrainCache::default();
@@ -2554,12 +2580,15 @@ fn render_world(
         );
         if let (Some(adaptation), Some(_)) = (adaptation, adaptation_seconds) {
             let grids = capture_field_grids(&view)?;
+            let wave_tile_uniforms = capture_wave_tile_uniforms(&view)?;
+            wave_tiles.write(queue, &wave_tile_uniforms);
             fields.encode(
                 &mut encoder,
                 &bind_group,
                 &bindings,
                 playground_bind_group,
                 &grids,
+                (wave_tiles, &wave_tile_uniforms),
                 None,
             );
             terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
@@ -2631,6 +2660,8 @@ fn render_world(
         );
     }
     let empty_shadows = browser::BoatShadowMaps::new(device);
+    let wave_tile_uniforms = capture_wave_tile_uniforms(options)?;
+    wave_tiles.write(queue, &wave_tile_uniforms);
     let fragment_scene_bind_group = match fields {
         Some(fields) => {
             let bindings = fields.bindings(
@@ -2639,6 +2670,7 @@ fn render_world(
                 &adaptation.unwrap().field,
                 terrain_depth,
                 boat.as_ref().map(|b| &b.0.shadows),
+                wave_tiles,
             );
             fields.encode_terrain_cache(
                 queue,
@@ -2654,6 +2686,7 @@ fn render_world(
                 &bindings,
                 playground_bind_group,
                 &grids,
+                (wave_tiles, &wave_tile_uniforms),
                 None,
             );
             terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
@@ -2662,6 +2695,14 @@ fn render_world(
         None => {
             let input = terrain_depth.input_bind_group(device, &scene_buffer, None);
             terrain_depth.encode(&mut encoder, &input, &capture_field_grids(options)?, None);
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("capture wave tile pass"),
+                    timestamp_writes: None,
+                });
+                wave_tiles.dispatch(&mut pass, &scene_bind_group, &wave_tile_uniforms);
+            }
+            wave_tiles.copy(&mut encoder, &wave_tile_uniforms);
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -2673,6 +2714,7 @@ fn render_world(
                 },
             ];
             entries.extend(empty_shadows.scene_entries());
+            entries.extend(wave_tiles.scene_entries());
             if let Some(adaptation) = adaptation {
                 entries.push(wgpu::BindGroupEntry {
                     binding: 7,
@@ -2897,6 +2939,48 @@ fn view_cloud_motion_m(options: &Options) -> [f32; 4] {
     offsets_m.map(|offset_m| offset_m as f32)
 }
 
+/// The wave tiles of the capture's view, under the sustained surface wind at
+/// its centre.
+fn capture_wave_tile_uniforms(options: &Options) -> Result<WaveTileUniforms, String> {
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
+    let camera_m = world_geometry
+        .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+        .map(|v| v as f32);
+    let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
+    let wind_m_s = sample_view_cloud_state(
+        world_geometry,
+        options.seed,
+        tick,
+        tick_fraction,
+        camera_m.into(),
+    )
+    .low_wind_velocity_m_s;
+    Ok(wave_tile_uniforms(
+        world_geometry,
+        tick,
+        tick_fraction,
+        camera_m,
+        [
+            view_width_m(
+                options.width as f32 / options.height as f32,
+                options.view_height_m,
+            ),
+            options.view_height_m,
+        ],
+        visual_pixel_footprint_m(options.view_height_m, options.height),
+        [wind_m_s.x, wind_m_s.y],
+        options
+            .diagnostic
+            .quality
+            .unwrap_or(options.quality)
+            .wave_tile_layers(),
+    ))
+}
+
 fn capture_camera(options: &Options) -> Result<DroneCamera, String> {
     let world_geometry = WorldGeometry::new(
         f64::from(options.world_width_m),
@@ -3058,7 +3142,7 @@ fn scene_uniforms(
             scalar_time.air_temperature,
             scalar_time.upper_air_temperature,
             scalar_time.water_vapor,
-            scalar_time.decorative_water,
+            0.0,
         ],
         lightning_sources: capture_lightning_sources(options),
         match_seed: [options.seed as u32, (options.seed >> 32) as u32],

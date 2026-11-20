@@ -41,6 +41,8 @@ import {
   terrain_depth_shader_source,
   terrain_cache_texture_size,
   upscale_shader_source,
+  wave_tile_shader_source,
+  wave_tile_texture_size,
 } from "browser/playground";
 import {
   advanceFixedClock,
@@ -1003,6 +1005,9 @@ function createPlaygroundPipeline(
         { binding: 8, visibility: 2, texture: { sampleType: "depth" } },
         { binding: 9, visibility: 2, texture: { sampleType: "depth", viewDimension: "2d-array" } },
         { binding: 10, visibility: 2, buffer: { type: "uniform" } },
+        { binding: 11, visibility: 2, texture: { viewDimension: "2d-array" } },
+        { binding: 12, visibility: 2, sampler: {} },
+        { binding: 13, visibility: 2, buffer: { type: "uniform" } },
       ] }),
       device.createBindGroupLayout({ entries: [{ binding: 0, visibility: 2, buffer: { type: "uniform" } }] }),
     ] }) : "auto",
@@ -1170,6 +1175,101 @@ const occluderFieldLayersView = (first: number, count: number) =>
     arrayLayerCount: count,
   });
 const occluderFieldSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+// The short waves' slope tiles, transformed each frame from their spectrum
+// into packed texels that a copy moves into the texture the scene reads at
+// bindings 11 to 13.
+const waveTiles = (() => {
+  const [texels, , layers, packedBytes, columnBytes, uniformBytes] = wave_tile_texture_size();
+  const texture = device.createTexture({
+    size: [texels!, texels!, layers!],
+    format: "rg16float",
+    usage: 0x04 | 0x02,
+  });
+  const uniforms = device.createBuffer({ size: uniformBytes!, usage: 0x40 | 0x08 });
+  const packed = device.createBuffer({ size: packedBytes!, usage: 0x80 | 0x04 });
+  const columns = device.createBuffer({ size: columnBytes!, usage: 0x80 });
+  const module = device.createShaderModule({ code: wave_tile_shader_source() });
+  // One layout for both passes, so they share their bind groups.
+  const compute = 0x4;
+  const storage = { type: "storage" } as const;
+  const sceneLayout = device.createBindGroupLayout({
+    entries: [{ binding: 0, visibility: compute, buffer: {} }],
+  });
+  const tileLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: compute, buffer: {} },
+      { binding: 1, visibility: compute, buffer: storage },
+      { binding: 2, visibility: compute, buffer: storage },
+    ],
+  });
+  const layout = device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, tileLayout] });
+  const pipeline = (entryPoint: string) => device.createComputePipeline({
+    layout,
+    compute: { module, entryPoint },
+  });
+  return {
+    texels: texels!,
+    uniformBytes: uniformBytes!,
+    texture,
+    uniforms,
+    packed,
+    pipelines: [
+      pipeline("generate_wave_tile_columns"),
+      pipeline("generate_wave_tile_texel_rows"),
+    ],
+    bindGroups: [
+      device.createBindGroup({
+        layout: sceneLayout,
+        entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+      }),
+      device.createBindGroup({
+        layout: tileLayout,
+        entries: [
+          { binding: 0, resource: { buffer: uniforms } },
+          { binding: 1, resource: { buffer: columns } },
+          { binding: 2, resource: { buffer: packed } },
+        ],
+      }),
+    ],
+    sceneEntries: [
+      { binding: 11, resource: texture.createView({ dimension: "2d-array" }) },
+      {
+        binding: 12,
+        resource: device.createSampler({
+          addressModeU: "repeat",
+          addressModeV: "repeat",
+          magFilter: "linear",
+          minFilter: "linear",
+        }),
+      },
+      { binding: 13, resource: { buffer: uniforms } },
+    ],
+  };
+})();
+let waveTileUniforms: Uint8Array = new Uint8Array(waveTiles.uniformBytes);
+let waveTileWorkgroups: Uint32Array = new Uint32Array([0, 0, 0]);
+
+// Transforms the wave tiles this frame draws within `pass`; copy them into the
+// texture after the pass ends.
+function dispatchWaveTiles(pass: GPUComputePassEncoder): void {
+  const [columns, rows, layers] = waveTileWorkgroups;
+  if (!layers) return;
+  waveTiles.bindGroups.forEach((bindGroup, group) => pass.setBindGroup(group, bindGroup));
+  waveTiles.pipelines.forEach((pipeline, index) => {
+    pass.setPipeline(pipeline);
+    pass.dispatchWorkgroups(index === 0 ? columns! : rows!, layers);
+  });
+}
+
+function copyWaveTiles(encoder: GPUCommandEncoder): void {
+  const layers = waveTileWorkgroups[2]!;
+  if (!layers) return;
+  encoder.copyBufferToTexture(
+    { buffer: waveTiles.packed, bytesPerRow: 4 * waveTiles.texels, rowsPerImage: waveTiles.texels },
+    { texture: waveTiles.texture },
+    [waveTiles.texels, waveTiles.texels, layers],
+  );
+}
 const [terrainCacheTexels, terrainCacheLayers] = (() => {
   const [texels, , layers] = terrain_cache_texture_size();
   return [texels!, layers!];
@@ -1360,6 +1460,7 @@ function diagnosticSceneBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
       { binding: 0, resource: { buffer: sceneBuffer } },
       { binding: 8, resource: terrainDepthView! },
       ...boatPass!.shadowEntries(),
+      ...waveTiles.sceneEntries,
     ],
   });
 }
@@ -1710,6 +1811,7 @@ function updateUniforms(
     terrainCache,
     bakedSurface,
     fieldGridHistory,
+    graphicsQualities[Math.round(state.graphicsQuality)]!,
   );
   sceneUniforms = frame.uniforms;
   fieldGrids = frame.field_grids;
@@ -1718,6 +1820,8 @@ function updateUniforms(
   terrainCacheWorkgroups = frame.terrain_cache_workgroups;
   bakedSurfaceFill = frame.baked_surface_fill;
   bakedSurfaceWorkgroups = frame.baked_surface_workgroups;
+  waveTileUniforms = frame.wave_tiles;
+  waveTileWorkgroups = frame.wave_tile_workgroups;
   frame.free();
 
   tuningFloats.set([
@@ -1956,6 +2060,7 @@ function renderFrame(): Promise<void> {
   const renderResources = renderResourcesForFrame();
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
+  device.queue.writeBuffer(waveTiles.uniforms, 0, waveTileUniforms);
   if (renderResources.pipeline !== timedPipeline) {
     timedPipeline = renderResources.pipeline;
     timedUsesFields = Boolean(renderResources.fields);
@@ -2030,7 +2135,9 @@ function renderFrame(): Promise<void> {
     environmentPass.setBindGroup(0, fields.environmentSceneBindGroup);
     environmentPass.setBindGroup(1, fields.environmentOutputBindGroup);
     environmentPass.dispatchWorkgroups(fieldGrids[0]!, fieldGrids[1]!);
+    dispatchWaveTiles(environmentPass);
     environmentPass.end();
+    copyWaveTiles(encoder);
     const occluderPass = encoder.beginComputePass(occluderPassDescriptor);
     occluderPass.setPipeline(fields.occluderPipeline);
     occluderPass.setBindGroup(0, fields.occluderInputBindGroup);
@@ -2043,6 +2150,12 @@ function renderFrame(): Promise<void> {
     occluderPass.setBindGroup(2, fields.landformHorizonOutputBindGroup);
     occluderPass.dispatchWorkgroups(fieldGrids[5]!, fieldGrids[6]!, fieldGrids[7]!);
     occluderPass.end();
+  }
+  if (!fields) {
+    const waveTilePass = encoder.beginComputePass();
+    dispatchWaveTiles(waveTilePass);
+    waveTilePass.end();
+    copyWaveTiles(encoder);
   }
   // The scene's timed span includes the terrain depth and its adapting field.
   const depthPass = encoder.beginRenderPass({
@@ -2330,6 +2443,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     { binding: 6, resource: bakedColorView },
     { binding: 8, resource: terrainDepthView! },
     ...boatPass.shadowEntries(),
+    ...waveTiles.sceneEntries,
   ];
   const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {
@@ -2376,6 +2490,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
       { binding: 0, resource: { buffer: sceneBuffer } },
       { binding: 8, resource: terrainDepthView! },
       ...boatPass.shadowEntries(),
+      ...waveTiles.sceneEntries,
     ];
     const directPlaygroundEntries = [{ binding: 0, resource: { buffer: playgroundBuffer } }];
     directSceneRenderResources = {

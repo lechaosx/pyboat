@@ -3,6 +3,8 @@ struct SceneUniforms {
     // The drone camera's height above mean sea level, then its terrain
     // depth's near-plane scale (`DroneCamera::terrain_depth_near_scale`).
     drone_camera: vec4<f32>,
+    // Air temperature's, upper air temperature's and water vapour's noise
+    // time, then padding.
     scalar_field_time_coordinates: vec4<f32>,
     match_seed: vec2<u32>,
     world_size_m: vec2<f32>,
@@ -117,7 +119,6 @@ override EVALUATE_ALL_BRANCHES: bool = false;
 override LEGACY_SHADOW_LOOK: bool = false;
 // Graphics tiers set these through `GraphicsQuality::scene_constants`; the
 // defaults are the high tier.
-override DECORATIVE_WATER_OCTAVES: u32 = 4u;
 override MATERIAL_MICRO_OCTAVES: u32 = 6u;
 
 // Entry points initialize private state so shared rendering functions work with
