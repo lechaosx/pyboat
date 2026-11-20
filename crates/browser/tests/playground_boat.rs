@@ -13,7 +13,24 @@ fn world_rebase_preserves_physical_state() {
     }
     let motion = boat.motion();
     boat.rebase(WorldGeometry::new(32_000.0, 48_000.0).unwrap(), 8, 7200);
-    assert_eq!(boat.motion(), motion);
+    // Rebuilt bodies store absolute rotations, so hinge angles return only to f64 round-off.
+    let fields = |m: simulation::BoatMotion| {
+        [
+            m.position_m.x,
+            m.position_m.y,
+            m.velocity_m_s.x,
+            m.velocity_m_s.y,
+            m.angle_rad,
+            m.angular_velocity_rad_s,
+            m.sail_angle_rad,
+            m.sail_angular_velocity_rad_s,
+            m.rudder_angle_rad,
+            m.rudder_angular_velocity_rad_s,
+        ]
+    };
+    for (after, before) in fields(boat.motion()).into_iter().zip(fields(motion)) {
+        assert!((after - before).abs() < 1.0e-12, "{after} != {before}");
+    }
     assert_eq!(boat.tick(), 7200);
 }
 
