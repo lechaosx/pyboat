@@ -332,7 +332,8 @@ fn shadow_filter_compares_each_tap_on_the_receiver_plane() {
 }
 @fragment fn fragment(@builtin(position) p: vec4<f32>) -> @builtin(frag_depth) f32 {
     let xy = (p.xy / 16.0 - 0.5) * vec2<f32>(2.0, -2.0);
-    return select(0.45 + 0.2 * xy.x + 0.1 * xy.y, 0.1, p.x >= 4.0 && p.x < 8.0 && p.y >= 4.0 && p.y < 8.0);
+    // Stands in for the shadow pass's constant depth bias, which frag_depth bypasses.
+    return select(0.45 + 0.2 * xy.x + 0.1 * xy.y + 1.0e-6, 0.1, p.x >= 4.0 && p.x < 8.0 && p.y >= 4.0 && p.y < 8.0);
 }
 "#.into()) });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -356,11 +357,7 @@ fn shadow_filter_compares_each_tap_on_the_receiver_plane() {
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::Always),
             stencil: Default::default(),
-            bias: wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 0.0,
-                clamp: 0.0,
-            },
+            bias: Default::default(),
         }),
         multisample: Default::default(),
         multiview_mask: None,
