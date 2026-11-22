@@ -11,8 +11,10 @@
       <canvas id="game" aria-label="Multiplayer sailing boats on the water"></canvas>
       <section id="welcome" class="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
         <div id="menu-home">
-          <p class="eyebrow">NAVAL COMBAT</p>
-          <h1 id="welcome-title">Under sail</h1>
+          <header class="dialog-header">
+            <h1 id="welcome-title">Under sail</h1>
+            <button id="graphics-open" class="quiet icon-button" type="button" aria-controls="settings"><span class="gear" aria-hidden="true">⚙︎</span>Settings</button>
+          </header>
           <p id="status" role="status">Preparing to download the game…</p>
           <details id="loading" open><summary id="load-stage">Loading the engine</summary><ol id="load-log"></ol></details>
           <details id="error-details" hidden><summary>Technical details</summary><p id="error-message"></p></details>
@@ -22,10 +24,9 @@
             <button id="join" class="primary" type="submit" disabled>Loading…</button>
           </form>
           <section id="spectators" class="fleet" hidden><h2>At sea <span id="fleet-count"></span></h2><p class="hint">Choose a captain to follow</p><div id="spectator-list" class="player-list"></div></section>
-          <nav class="menu-footer"><button id="graphics-open" type="button" class="quiet">Settings <span aria-hidden="true">↗</span></button></nav>
         </div>
         <div id="settings" hidden>
-          <header class="settings-header"><h2 id="settings-title">Settings</h2><button id="graphics-close" type="button" class="quiet">← Back</button></header>
+          <header class="dialog-header settings-header"><h2 id="settings-title">Settings</h2><button id="graphics-close" type="button" class="quiet">Back</button></header>
           <form id="graphics-form">
             <fieldset id="graphics-controls" disabled>
               <legend>Graphics</legend>
@@ -34,21 +35,21 @@
                 <select id="graphics-quality" name="quality" aria-describedby="graphics-quality-hint"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
               </div>
               <div class="setting-row">
-                <div><label for="graphics-fps">Frame rate</label><p class="hint" id="graphics-fps-hint">Higher rates use more power.</p></div>
+                <div><label for="graphics-fps">Frame rate limit</label><p class="hint" id="graphics-fps-hint">Higher rates use more power.</p></div>
                 <select id="graphics-fps" name="fps" aria-describedby="graphics-fps-hint"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="120">120 FPS</option><option value="0">Unlimited</option></select>
               </div>
               <details class="resolution-options">
                 <summary>Resolution options</summary>
                 <div class="resolution-fields">
                   <div class="setting-row">
-                    <div><label for="graphics-scale">Scene resolution</label><p class="hint" id="graphics-scale-hint">Lower values reduce graphics load.</p></div>
-                    <select id="graphics-scale" name="renderScale" aria-describedby="graphics-scale-hint"><option value="">Automatic</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
+                    <div><label for="graphics-scale">Scene resolution target</label><p class="hint" id="graphics-scale-hint">The default uses roughly one scene pixel per window pixel. Percentages use the game’s output resolution.</p></div>
+                    <select id="graphics-scale" name="renderScale" aria-describedby="graphics-scale-hint"><option value="">Window-size default</option><option value="0.5">50% of output</option><option value="0.75">75% of output</option><option value="1">100% of output</option></select>
                   </div>
                   <div class="setting-row">
-                    <div><label for="graphics-ratio">Display sharpness</label><p class="hint" id="graphics-ratio-hint">1× standard · 2× high density</p></div>
+                    <div><label for="graphics-ratio">Display pixel density limit</label><p class="hint" id="graphics-ratio-hint">Caps output pixels per window pixel. Higher limits can sharpen the image on high-density displays.</p></div>
                     <input id="graphics-ratio" name="pixelRatio" type="number" min="1" step="any" required aria-describedby="graphics-ratio-hint" />
                   </div>
-                  <label class="checkbox"><input name="autoResolution" type="checkbox" /><span>Adapt resolution<span class="hint">Lower it when frames run slowly.</span></span></label>
+                  <label class="checkbox"><input name="autoResolution" type="checkbox" aria-labelledby="graphics-adapt-label" aria-describedby="graphics-adapt-hint" /><span><span id="graphics-adapt-label">Lower scene resolution when slow</span><span id="graphics-adapt-hint" class="hint">Lets the scene render below its target to improve frame rate.</span></span></label>
                   <p id="graphics-resolution" class="hint"></p>
                 </div>
               </details>
@@ -58,8 +59,14 @@
           <div id="sound-settings"></div>
         </div>
       </section>
-      <span id="fps" class="fps" aria-label="Rendered frames per second">— FPS</span>
-      <aside id="live-fleet" class="live-fleet" aria-label="Players at sea" hidden><button id="menu-open" type="button" aria-label="Open menu">☰ <span>Menu</span></button><div id="live-player-list"></div></aside>
+      <span id="fps" class="fps" hidden></span>
+      <aside id="live-fleet" class="live-fleet" aria-label="Players at sea" hidden>
+        <div class="live-actions">
+          <button id="menu-open" class="quiet icon-button" type="button" aria-controls="welcome">Menu</button>
+          <button id="live-graphics-open" class="quiet icon-button" type="button" aria-label="Settings" title="Settings" aria-controls="welcome"><span class="gear" aria-hidden="true">⚙︎</span></button>
+        </div>
+        <div id="live-player-list"></div>
+      </aside>
       <div id="scale" class="scale-bar" aria-label="Map scale" hidden>
         <div id="scale-line"><span></span><span></span><span></span><span></span></div>
         <div class="scale-labels"><span>0</span><span id="scale-label"></span></div>

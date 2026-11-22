@@ -60,11 +60,10 @@ Replace the hash and reload after every server restart. TLS alert 42 usually
 means the hash is missing or stale. Omit it when using a browser-trusted server
 certificate; the local Vite page can use HTTP, but WebTransport stays encrypted.
 
-The Settings button changes detail, resolution, and frame rate immediately,
-without leaving the game, and saves choices on this device. Scene resolution
-defaults to CSS pixels, bounded by the 2× upscale limit; boats stay at display
-resolution. Touch screens default to lower detail, a frame-rate cap, and
-automatic resolution.
+The Settings gear opens from the menu and during play. Changes apply immediately
+and save on this device. Scene resolution follows CSS pixels by default, with
+a 2× upscale limit. Boats stay at display resolution. Touch screens default to
+lower detail, a frame-rate cap, and adaptive resolution.
 
 Sound is currently unavailable in the game and playground.
 
@@ -85,11 +84,11 @@ The menu shows loading stages over the live sea. Keep the generated nickname
 or choose your own, then Join when ready; the camera moves to your spawned boat.
 Before joining or after destruction, choose a live player to spectate. Escape
 or the corner menu button opens the menu during play; Resume returns to your
-boat. Settings opens inside the same dialog. Destruction or connection failure
-returns to the menu with an action to join again or reconnect. Wrecks persist.
+boat. Destruction or connection failure returns to the menu with an action to
+join again or reconnect. Wrecks persist.
 
-Gameplay has a fixed zoom, a compact player list, a tiny FPS counter, and a scale
-indicator once the view is known.
+Gameplay has a fixed zoom and a compact player list. The scale appears with the
+world view, and a tiny FPS counter appears at the top left once measured.
 
 ## Project guide
 

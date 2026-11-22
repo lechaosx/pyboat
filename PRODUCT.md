@@ -141,13 +141,14 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** One local apparent-wind windsock indicates speed through visible
   length. Ship-direction arrows are diagnostic UI; world grids and wind-arrow
   fields are outside the product UI.
-- **[Explicit]** Gameplay shows only a small player list, a menu button, FPS, and
-  a scale indicator once the view is known.
+- **[Explicit]** Gameplay shows only a small player list, menu and settings buttons,
+  FPS, and a scale indicator once the view is known.
 - **[Explicit]** The game camera has a fixed zoom.
 - **[Explicit]** At the same zoom, every gameplay view covers the same sea-level
   area. Wider views trade vertical reach for horizontal reach; extreme aspect
   ratios have bars instead of extra visibility or stretching.
-- **[Explicit]** A tiny corner indicator reports rendered frames per second.
+- **[Explicit]** A tiny top-left indicator shows rendered frames per second once
+  it has a measurement from the world view.
 
 ## Sound
 
@@ -206,6 +207,7 @@ See [README.md](README.md) for what is playable now and
   player's boat; Resume returns to control. Escape or the touch-friendly menu
   button opens it.
 - **[Explicit]** Settings is a nested view within the menu.
+- **[Explicit]** A gear opens Settings directly from the menu or during play.
 - **[Explicit]** Destruction or connection failure returns to the welcome dialog
   with the reason and an action to join again or reconnect.
 - **[Explicit]** Boats spawn beyond the fleet at a random bearing, point with
