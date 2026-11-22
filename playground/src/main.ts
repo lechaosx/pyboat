@@ -806,7 +806,9 @@ renderControls();
 function boatWorld(): BoatWorld {
   return { width: state.worldWidthM, height: state.worldHeightM, seed: parsedSeed(), tick: BigInt(Math.round(state.worldTimeSeconds * fixedTicksPerSecond)) };
 }
-const drivingBoat = new DrivingBoat(previewCanvas, boatWorld, () => [state.cameraX, state.cameraY], ([x, y]) => {
+const drivingBoat = new DrivingBoat(previewCanvas, boatWorld, () => [state.cameraX, state.cameraY], ([x, y], tick) => {
+  state.worldTimeSeconds = Number(tick) / fixedTicksPerSecond;
+  syncWorldDateInputs();
   state.cameraX = x; state.cameraY = y;
   state.cameraHeightM = production_camera_height_m();
   state.fieldOfViewDegrees = droneFieldOfViewDegrees(15, state.cameraHeightM);

@@ -35,9 +35,11 @@ Run `npm run dev` to serve the game at `/` and the procedural playground at
 `/playground/`. The playground provides a live preview and controls for inspecting
 the world and tuning its appearance; it needs no backend.
 “Drive a boat” spawns a boat in safe nearby water, using the game’s Simple
-sailor with keyboard, gamepad, or a draggable pointer stick. Forward intent
-controls sail power; turn intent controls the rudder. Boat driving uses real
-time or pause, and removing the boat restores the clock controls.
+sailor with keyboard, gamepad, or a draggable pointer stick. Try Force trim
+and Load-aware helm on the same boat. Repeat start restores its spawn position
+and weather clock for another run. Forward intent controls sail power and turn
+intent controls the rudder. Driving uses real time or pause. Removing the boat
+restores the clock controls.
 
 For GitHub Pages and backend deployment, follow the
 [hosting setup](crates/server/README.md#hosting).

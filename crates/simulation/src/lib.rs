@@ -947,6 +947,31 @@ fn rudder_mass_properties(parameters: BoatParameters) -> MassProperties {
     )
 }
 
+fn damped_control_response(
+    moment_of_inertia_kg_m2: f64,
+    maximum_torque_n_m: f64,
+    maximum_angle_rad: f64,
+) -> (f64, f64, f64) {
+    let stiffness_n_m_rad = maximum_torque_n_m / (maximum_angle_rad / 10.0);
+    let critical_damping_n_m_s_rad = 2.0 * (stiffness_n_m_rad * moment_of_inertia_kg_m2).sqrt();
+    // The torque is held for a full tick. Solve feedback at its end using
+    // ω₁ = ω₀ + τΔt/I and θ₁ = θ₀ + ω₁Δt; explicit critical damping
+    // can inject energy when the hinge response is faster than the tick.
+    let denominator = 1.0
+        + (critical_damping_n_m_s_rad * DT_SECONDS + stiffness_n_m_rad * DT_SECONDS.powi(2))
+            / moment_of_inertia_kg_m2;
+    (stiffness_n_m_rad, critical_damping_n_m_s_rad, denominator)
+}
+
+pub fn sail_static_motor_stiffness_n_m_rad(parameters: BoatParameters) -> f64 {
+    let (stiffness, _, denominator) = damped_control_response(
+        sail_hinge_moment_of_inertia_kg_m2(parameters),
+        parameters.max_sail_actuator_torque_n_m,
+        parameters.max_sail_angle_rad,
+    );
+    stiffness / denominator
+}
+
 fn damped_control_torque(
     angle_rad: f64,
     angular_velocity_rad_s: f64,
@@ -955,17 +980,14 @@ fn damped_control_torque(
     maximum_angle_rad: f64,
     target_angle_rad: f64,
 ) -> f64 {
-    let stiffness_n_m_rad = maximum_torque_n_m / (maximum_angle_rad / 10.0);
-    let critical_damping_n_m_s_rad = 2.0 * (stiffness_n_m_rad * moment_of_inertia_kg_m2).sqrt();
-    // The torque is held for a full tick. Solve feedback at its end using
-    // ω₁ = ω₀ + τΔt/I and θ₁ = θ₀ + ω₁Δt; explicit critical damping
-    // can inject energy when the hinge response is faster than the tick.
-    let numerator = stiffness_n_m_rad
+    let (stiffness, damping, denominator) = damped_control_response(
+        moment_of_inertia_kg_m2,
+        maximum_torque_n_m,
+        maximum_angle_rad,
+    );
+    let numerator = stiffness
         * (target_angle_rad - angle_rad - DT_SECONDS * angular_velocity_rad_s)
-        - critical_damping_n_m_s_rad * angular_velocity_rad_s;
-    let denominator = 1.0
-        + (critical_damping_n_m_s_rad * DT_SECONDS + stiffness_n_m_rad * DT_SECONDS.powi(2))
-            / moment_of_inertia_kg_m2;
+        - damping * angular_velocity_rad_s;
     (numerator / denominator).clamp(-maximum_torque_n_m, maximum_torque_n_m)
 }
 

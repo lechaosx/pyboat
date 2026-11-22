@@ -220,6 +220,8 @@ See [README.md](README.md) for what is playable now and
 
 - **[Explicit]** Players can spawn and drive a boat in the lab with the game’s
   input-to-intent mapping and sailor policy.
+- **[Explicit]** The lab lets players compare experimental sailor policies on
+  the same boat under the same starting conditions.
 - **[Explicit]** One browser lab covers weather, landscape, and water with
   production rendering. A spacious live preview remains beside one continuous
   scrolling panel ordered as time/playback, world, scene, then outputs/diagnostics.

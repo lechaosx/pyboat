@@ -3921,6 +3921,9 @@ fn wind_hash(mut value: u64) -> u64 {
     value
 }
 
+#[cfg(feature = "sailor-trial")]
+pub mod sailor_trial;
+
 pub fn sailor_targets(
     parameters: BoatParameters,
     motion: BoatMotion,

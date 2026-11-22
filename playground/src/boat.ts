@@ -12,28 +12,35 @@ export class DrivingBoat {
   readonly follow: HTMLInputElement;
   readonly readout: HTMLElement;
   readonly message: HTMLElement;
+  private readonly sailor: HTMLSelectElement;
+  private readonly helm: HTMLInputElement;
+  private readonly restart: HTMLButtonElement;
   private readonly remove: HTMLButtonElement;
   private readonly pause: HTMLButtonElement;
   private readonly keys = new Set<string>();
   private pointer: { id: number; x: number; y: number; dx: number; dy: number } | undefined;
   private readonly stick = document.createElement("div");
   private world: BoatWorld | undefined;
+  private start: { world: BoatWorld; center: [number, number] } | undefined;
 
   private readonly getWorld: () => BoatWorld;
   private readonly getCenter: () => [number, number];
-  private readonly spawned: (position: [number, number]) => void;
+  private readonly spawned: (position: [number, number], tick: bigint) => void;
   private readonly playback: (active: boolean, paused: boolean) => void;
   constructor(
     canvas: HTMLCanvasElement,
     getWorld: () => BoatWorld,
     getCenter: () => [number, number],
-    spawned: (position: [number, number]) => void,
+    spawned: (position: [number, number], tick: bigint) => void,
     playback: (active: boolean, paused: boolean) => void,
   ) {
     this.getWorld = getWorld; this.getCenter = getCenter; this.spawned = spawned; this.playback = playback;
     this.element.className = "panel-section boat-controls";
     this.element.innerHTML = `<h2>Drive a boat</h2>
-      <div class="boat-actions"><button id="boat-spawn">Spawn / respawn</button><button id="boat-remove" disabled>Remove</button><button id="boat-pause" disabled>Pause</button></div>
+      <div class="boat-actions"><button id="boat-spawn">Spawn / respawn</button><button id="boat-restart" disabled>Repeat start</button><button id="boat-remove" disabled>Remove</button><button id="boat-pause" disabled>Pause</button></div>
+      <label for="boat-sailor">Sailor <select id="boat-sailor"><option value="simple">Simple sailor</option><option value="trim">Force trim</option></select></label>
+      <label><input id="boat-loaded-helm" type="checkbox"> Load-aware helm</label>
+      <p>Force trim meters sail force. Strong forward input can bring the boom across. Load-aware helm limits rudder travel under load.</p>
       <label><input id="boat-follow" type="checkbox" checked> Follow boat / drive with pointer</label>
       <p>W/S power · A/D turn · gamepad or drag to steer toward a world direction. Disable follow to pan.</p>
       <p>Driving uses real time; pause remains available.</p>
@@ -41,12 +48,23 @@ export class DrivingBoat {
     this.follow = this.element.querySelector<HTMLInputElement>("#boat-follow")!;
     this.readout = this.element.querySelector<HTMLElement>("#boat-readout")!;
     this.message = this.element.querySelector<HTMLElement>("#boat-message")!;
+    this.sailor = this.element.querySelector<HTMLSelectElement>("#boat-sailor")!;
+    this.helm = this.element.querySelector<HTMLInputElement>("#boat-loaded-helm")!;
+    this.restart = this.element.querySelector<HTMLButtonElement>("#boat-restart")!;
     this.remove = this.element.querySelector<HTMLButtonElement>("#boat-remove")!;
     this.pause = this.element.querySelector<HTMLButtonElement>("#boat-pause")!;
-    this.element.querySelector("#boat-spawn")!.addEventListener("click", () => this.spawn());
+    this.sailor.addEventListener("change", () => this.applySailorOptions());
+    this.helm.addEventListener("change", () => this.applySailorOptions());
+    this.element.querySelector("#boat-spawn")!.addEventListener("click", () => {
+      this.spawn(this.getWorld(), this.getCenter(), false);
+    });
+    this.restart.addEventListener("click", () => {
+      if (this.start) this.spawn(this.start.world, this.start.center, this.pause.textContent === "Resume");
+    });
     this.remove.addEventListener("click", () => {
       this.driver?.free(); this.driver = undefined; this.clearInput();
-      this.remove.disabled = this.pause.disabled = true;
+      this.start = undefined;
+      this.restart.disabled = this.remove.disabled = this.pause.disabled = true;
       this.readout.textContent = ""; this.message.textContent = "";
       this.playback(false, false);
     });
@@ -95,15 +113,19 @@ export class DrivingBoat {
     this.playback(true, paused);
   }
   private clearInput(): void { this.keys.clear(); this.pointer = undefined; this.stick.hidden = true; }
-  private spawn(): void {
-    const world = this.getWorld(); const [x, y] = this.getCenter();
+  private applySailorOptions(): void {
+    this.driver?.set_sailor_options(this.sailor.value === "trim", this.helm.checked);
+  }
+  private spawn(world: BoatWorld, center: [number, number], paused: boolean): void {
     try {
-      const driver = new PlaygroundBoatDriver(world.width, world.height, world.seed, world.tick, x, y);
+      const driver = new PlaygroundBoatDriver(world.width, world.height, world.seed, world.tick, ...center);
       this.driver?.free(); this.driver = driver;
+      this.applySailorOptions();
+      this.start = { world, center };
       this.world = world; this.clearInput(); this.follow.checked = true;
-      this.remove.disabled = this.pause.disabled = false; this.pause.textContent = "Pause";
-      this.playback(true, false);
-      const state = driver.state(); this.spawned([state[0]!, state[1]!]);
+      this.restart.disabled = this.remove.disabled = this.pause.disabled = false;
+      this.setPaused(paused);
+      const state = driver.state(); this.spawned([state[0]!, state[1]!], world.tick);
       this.message.textContent = "";
     } catch (error) { this.message.textContent = String(error); }
   }
@@ -113,7 +135,9 @@ export class DrivingBoat {
     if (!this.world || world.width !== this.world.width || world.height !== this.world.height || world.seed !== this.world.seed || world.tick !== this.world.tick) {
       this.driver.rebase(world.width, world.height, world.seed, world.tick);
       this.world = world;
-      this.message.textContent = "World changed; controller memory reset.";
+      this.start = undefined;
+      this.restart.disabled = true;
+      this.message.textContent = "World changed. Respawn to save a new start.";
     }
   }
   step(): void {

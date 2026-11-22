@@ -47,6 +47,9 @@ impl PlaygroundBoatDriver {
         self.boat.rebase(geometry, seed, tick);
         Ok(())
     }
+    pub fn set_sailor_options(&mut self, force_trim: bool, load_aware_helm: bool) {
+        self.boat.set_sailor_options(force_trim, load_aware_helm);
+    }
     pub fn step(&mut self, forward: f32, turn: f32, world_x: f32, world_y: f32) {
         self.boat
             .set_player_input([forward, turn, world_x, world_y]);

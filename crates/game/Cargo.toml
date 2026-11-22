@@ -7,6 +7,9 @@ rust-version = "1.90"
 [lints]
 workspace = true
 
+[features]
+sailor-trial = []
+
 [dependencies]
 physics = { package = "rapier2d-f64", version = "=0.36.0", features = ["enhanced-determinism"] }
 libm = "0.2"

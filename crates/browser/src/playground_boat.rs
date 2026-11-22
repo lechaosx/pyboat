@@ -1,5 +1,5 @@
 use game::{
-    dinghy_parameters, procedural_match_environment, procedural_world_environment, sailor_targets,
+    dinghy_parameters, procedural_match_environment, procedural_world_environment, sailor_trial,
 };
 use rapier2d_f64::prelude::Vector;
 use simulation::{BoatMotion, Environment, MotionIntent, SharedSimulation, WorldGeometry};
@@ -13,6 +13,8 @@ pub struct PlaygroundBoat {
     tick: u64,
     input: [f32; 4],
     intent: MotionIntent,
+    force_trim: bool,
+    load_aware_helm: bool,
 }
 
 impl PlaygroundBoat {
@@ -57,6 +59,8 @@ impl PlaygroundBoat {
             tick,
             input: [0.0; 4],
             intent: MotionIntent::default(),
+            force_trim: false,
+            load_aware_helm: false,
         })
     }
 
@@ -82,6 +86,10 @@ impl PlaygroundBoat {
     pub fn set_player_input(&mut self, input: [f32; 4]) {
         self.input = input;
     }
+    pub fn set_sailor_options(&mut self, force_trim: bool, load_aware_helm: bool) {
+        self.force_trim = force_trim;
+        self.load_aware_helm = load_aware_helm;
+    }
     pub fn rebase(&mut self, geometry: WorldGeometry, seed: u64, tick: u64) {
         if geometry != self.geometry {
             let motion = self.motion();
@@ -101,7 +109,14 @@ impl PlaygroundBoat {
             self.input[3],
         );
         let environment = self.environment();
-        let targets = sailor_targets(dinghy_parameters(), self.motion(), environment, self.intent);
+        let targets = sailor_trial::targets(
+            dinghy_parameters(),
+            self.motion(),
+            environment,
+            self.intent,
+            self.force_trim,
+            self.load_aware_helm,
+        );
         self.simulation
             .advance_controlled_with_environments(&[environment], &[Some(targets)]);
         self.tick += 1;

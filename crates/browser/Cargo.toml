@@ -8,7 +8,7 @@ rust-version = "1.90"
 workspace = true
 
 [features]
-playground = ["dep:wgpu"]
+playground = ["dep:wgpu", "game/sailor-trial"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
