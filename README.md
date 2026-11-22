@@ -82,10 +82,11 @@ the scale when frames run long).
 
 The menu shows loading stages over the live sea. Keep the generated nickname
 or choose your own, then Join when ready; the camera moves to your spawned boat.
-Before joining or after destruction, choose a live player to spectate. Escape
-or the corner menu button opens the menu during play; Resume returns to your
-boat. Destruction or connection failure returns to the menu with an action to
-join again or reconnect. Wrecks persist.
+Choose a live player to follow while spectating. Escape or the corner menu
+button opens the menu during play. Resume returns to your boat. Leave boat
+returns to spectating. Join spawns a new boat. Abandoned and destroyed boats
+persist as wrecks. Destruction or connection failure returns to the menu with
+a reason and an action to join again or reconnect.
 
 Gameplay has a fixed zoom and a compact player list. The scale appears with the
 world view, and a tiny FPS counter appears at the top left once measured.

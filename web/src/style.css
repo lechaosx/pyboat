@@ -114,6 +114,12 @@ input:disabled {
   gap: .6rem;
   margin-top: 1.1rem;
 }
+#leave-action {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-top: .3rem;
+}
 #join-form label, #graphics-form label {
   font-size: .75rem;
   color: #c6d0d6;

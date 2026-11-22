@@ -67,6 +67,10 @@ enum ConnectionEvent {
         nickname: String,
         input_sequence: i64,
     },
+    LeaveBoat {
+        player_id: String,
+        boat_id: String,
+    },
     Input {
         player_id: String,
         sequence: i64,
@@ -135,6 +139,20 @@ impl SessionState {
         boat.acknowledged_input = input_sequence - 1;
         boat.last_received_input = input_sequence - 1;
         self.boat_id = Some(boat_id);
+    }
+
+    fn leave_boat(&mut self, game_match: &mut GameMatch, boat_id: &str) {
+        if self.boat_id.as_deref() != Some(boat_id) {
+            return;
+        }
+        if let Some(boat) = game_match
+            .players
+            .iter_mut()
+            .find(|boat| boat.id == boat_id)
+        {
+            boat.make_wreck();
+        }
+        self.boat_id = None;
     }
 
     fn publish_snapshot(&self, snapshot: ServerMessage, players: Arc<Vec<PlayerSummary>>) {
@@ -209,6 +227,15 @@ struct Player {
     health: f32,
     last_hit_tick: Option<u64>,
     wreck: bool,
+}
+
+impl Player {
+    fn make_wreck(&mut self) {
+        self.health = 0.0;
+        self.wreck = true;
+        self.intent = MotionIntent::default();
+        self.pending_inputs.clear();
+    }
 }
 
 struct GameMatch {
@@ -455,9 +482,7 @@ impl GameMatch {
         player.health = (player.health - damage as f32).max(0.0);
         player.last_hit_tick = Some(self.tick);
         if player.health == 0.0 {
-            player.wreck = true;
-            player.intent = MotionIntent::default();
-            player.pending_inputs.clear();
+            player.make_wreck();
         }
     }
 
@@ -749,6 +774,11 @@ where
                         session.join(&mut game_match, nickname, input_sequence, &mut next_boat_number);
                     }
                 }
+                ConnectionEvent::LeaveBoat { player_id, boat_id } => {
+                    if let Some(session) = connections.get_mut(&player_id) {
+                        session.leave_boat(&mut game_match, &boat_id);
+                    }
+                }
                 ConnectionEvent::Input { player_id, sequence, intent } => {
                     if let Some(boat_id) = connections.get(&player_id).and_then(|session| session.boat_id.as_deref()) {
                         game_match.set_input(boat_id, sequence, intent);
@@ -832,6 +862,11 @@ async fn handle_connection(
                     }
                     Some(Ok(IncomingMessage::Reliable(ClientMessage::Join { nickname, input_sequence }))) => {
                         if events.send(ConnectionEvent::Join { player_id: player_id.clone(), nickname, input_sequence }).await.is_err() {
+                            break Ok(());
+                        }
+                    }
+                    Some(Ok(IncomingMessage::Reliable(ClientMessage::LeaveBoat { boat_id }))) => {
+                        if events.send(ConnectionEvent::LeaveBoat { player_id: player_id.clone(), boat_id }).await.is_err() {
                             break Ok(());
                         }
                     }
@@ -1200,6 +1235,33 @@ mod tests {
         game_match.advance();
         assert_eq!(player(&game_match, "player-2").acknowledged_input, 10);
         assert_eq!(player(&game_match, "player-2").nickname, "Second");
+    }
+
+    #[test]
+    fn leave_handles_collision_before_acknowledgement_and_cannot_detach_a_replacement() {
+        let mut game_match = game_match_with_boats(
+            WorldGeometry::default(),
+            &[Vector::ZERO, Vector::new(400.0, 0.0)],
+        );
+        let mut session = session_for("player-1");
+        session.set_viewport(1, 24.0, Some("player-2".into()));
+
+        session.leave_boat(&mut game_match, "player-2");
+        assert_eq!(session.boat_id.as_deref(), Some("player-1"));
+        assert!(!player(&game_match, "player-2").wreck);
+
+        game_match.apply_collision_damage("player-1", 2000.0, -1.5);
+        session.leave_boat(&mut game_match, "player-1");
+        assert_eq!(session.boat_id, None);
+        assert_eq!(session.focus_m(&game_match), Vector::new(400.0, 0.0));
+        assert!(player(&game_match, "player-1").wreck);
+        assert_eq!(player(&game_match, "player-1").last_hit_tick, Some(0));
+
+        let mut next_boat_number = 3;
+        session.join(&mut game_match, "Sailor".into(), 2, &mut next_boat_number);
+        session.leave_boat(&mut game_match, "player-1");
+        assert_eq!(session.boat_id.as_deref(), Some("player-3"));
+        assert!(!player(&game_match, "player-3").wreck);
     }
 
     #[test]

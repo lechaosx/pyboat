@@ -21,7 +21,7 @@ use game::{
     procedural_world_environment_interpolated, scalar_field_time_coordinates_interpolated,
     vector_field_time_coordinates_interpolated, world_celestial_conditions,
 };
-use protocol::{ServerMessage, decode_server_message, encode_client_message};
+use protocol::{ServerMessage, decode_server_message_with_leave_support, encode_client_message};
 use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 use url::Url;
@@ -2736,6 +2736,7 @@ pub struct BrowserGame {
     presented_view_height_m: f32,
     world_presented: bool,
     joining: bool,
+    leaving: bool,
     camera_m: Option<Vector>,
     camera_boat_id: Option<String>,
     spawn_camera: Option<(Vector, f64)>,
@@ -2829,6 +2830,7 @@ impl BrowserGame {
             presented_view_height_m: DEFAULT_VIEW_HEIGHT_M,
             world_presented: false,
             joining: false,
+            leaving: false,
             camera_m: None,
             camera_boat_id: None,
             spawn_camera: None,
@@ -2855,6 +2857,9 @@ impl BrowserGame {
             if boat_id.is_some() {
                 self.spawn_camera = self.camera_m.map(|start| (start, 0.0));
                 self.joining = false;
+            } else {
+                self.leaving = false;
+                self.spawn_camera = None;
             }
             self.camera_boat_id = boat_id;
         }
@@ -3000,6 +3005,7 @@ impl BrowserGame {
         self.sending_datagrams = Rc::new(Cell::new(false));
         self.sending_reliable = Rc::new(Cell::new(false));
         self.joining = false;
+        self.leaving = false;
         self.world_presented = false;
         self.camera_m = None;
         self.camera_boat_id = None;
@@ -3045,6 +3051,7 @@ impl BrowserGame {
             ConnectionStatus::Error | ConnectionStatus::Closed => "disconnected",
             ConnectionStatus::Open if !self.world_presented => "loading",
             ConnectionStatus::Open if self.joining => "joining",
+            ConnectionStatus::Open if self.leaving => "leaving",
             ConnectionStatus::Open => match self.client.borrow().health() {
                 Some(health) if health > 0.0 => "playing",
                 Some(_) => "dead",
@@ -3073,14 +3080,9 @@ impl BrowserGame {
         let client = Rc::clone(&self.client);
         let pending = Rc::clone(&self.pending_snapshot);
         spawn_local(async move {
-            let result = async {
-                let mut stream = session.open_uni().await?;
-                stream.write(&message).await?;
-                stream.finish()?;
-                stream.closed().await
-            }
-            .await;
-            if !matches!(result, Ok(None)) && status.get() == ConnectionStatus::Open {
+            if !send_reliable_message(&session, &message).await
+                && status.get() == ConnectionStatus::Open
+            {
                 status.set(ConnectionStatus::Error);
                 notice.replace(Some(
                     "Could not join. Choose Reconnect to try again.".into(),
@@ -3090,6 +3092,49 @@ impl BrowserGame {
                     &mut pending.borrow_mut(),
                 );
                 session.close(1, "Join request failed");
+            }
+        });
+        Ok(())
+    }
+
+    pub fn supports_leaving_boat(&self) -> bool {
+        self.client.borrow().supports_leaving_boat
+    }
+
+    pub fn leave_boat(&mut self) -> Result<(), JsValue> {
+        if !self.supports_leaving_boat() || self.session_state() != "playing" {
+            return Ok(());
+        }
+        let Some(boat_id) = self.controlled_boat_id() else {
+            return Ok(());
+        };
+        let Some(session) = self.transport.borrow().clone() else {
+            return Ok(());
+        };
+        let message = encode_client_message(&protocol::ClientMessage::LeaveBoat {
+            boat_id: boat_id.clone(),
+        })
+        .map_err(js_error)?;
+        self.leaving = true;
+        self.client.borrow_mut().set_motion_intent(0.0, 0.0);
+        let status = Rc::clone(&self.connection_status);
+        let notice = Rc::clone(&self.close_notice);
+        let client = Rc::clone(&self.client);
+        let pending = Rc::clone(&self.pending_snapshot);
+        spawn_local(async move {
+            if !send_reliable_message(&session, &message).await
+                && status.get() == ConnectionStatus::Open
+                && client.borrow().player_id() == Some(boat_id.as_str())
+            {
+                status.set(ConnectionStatus::Error);
+                notice.replace(Some(
+                    "Could not leave the boat. Choose Reconnect to try again.".into(),
+                ));
+                disconnect_and_clear_pending_snapshot(
+                    &mut client.borrow_mut(),
+                    &mut pending.borrow_mut(),
+                );
+                session.close(1, "Leave boat request failed");
             }
         });
         Ok(())
@@ -3431,8 +3476,15 @@ fn accept_server_message(
     if connection_status.get() != ConnectionStatus::Open {
         return Ok(());
     }
-    match decode_server_message(bytes)? {
-        message @ ServerMessage::Welcome { .. } => protocol_client.borrow_mut().accept(message),
+    let (message, supports_leaving_boat) = decode_server_message_with_leave_support(bytes)?;
+    match message {
+        ServerMessage::Welcome { .. } => {
+            let mut client = protocol_client.borrow_mut();
+            if !client.is_ready() {
+                client.supports_leaving_boat = supports_leaving_boat;
+            }
+            client.accept(message);
+        }
         mut message @ ServerMessage::Snapshot { .. } => {
             // Names must survive coalescing even when a newer motion datagram wins.
             if let ServerMessage::Snapshot { tick, players, .. } = &mut message
@@ -3553,14 +3605,7 @@ fn pump_reliable(
             let Some(message) = pending.borrow_mut().take() else {
                 break;
             };
-            let result = async {
-                let mut stream = session.open_uni().await?;
-                stream.write(&message).await?;
-                stream.finish()?;
-                stream.closed().await
-            }
-            .await;
-            if !matches!(result, Ok(None)) {
+            if !send_reliable_message(&session, &message).await {
                 if transport.borrow().is_some() {
                     requeue_failed_viewport(&mut pending.borrow_mut(), message);
                 }
@@ -3569,6 +3614,17 @@ fn pump_reliable(
         }
         sending.set(false);
     });
+}
+
+async fn send_reliable_message(session: &Session, message: &[u8]) -> bool {
+    let result = async {
+        let mut stream = session.open_uni().await?;
+        stream.write(message).await?;
+        stream.finish()?;
+        stream.closed().await
+    }
+    .await;
+    matches!(result, Ok(None))
 }
 
 fn configured_certificate_hash() -> Result<Option<Vec<u8>>, JsValue> {

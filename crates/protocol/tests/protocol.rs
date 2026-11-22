@@ -1,6 +1,7 @@
 use protocol::{
     BoatSnapshot, ClientMessage, ProtocolError, ServerMessage, WorldGeometry,
-    decode_client_message, decode_server_message, encode_client_message, encode_server_message,
+    decode_client_message, decode_server_message, decode_server_message_with_leave_support,
+    encode_client_message, encode_server_message,
 };
 use serde::Serialize;
 
@@ -21,6 +22,31 @@ fn welcome_message_carries_match_seed_and_world_geometry() {
     let decoded = decode_server_message(&encoded).unwrap();
 
     assert_eq!(decoded, expected);
+}
+
+#[test]
+fn welcome_advertises_leave_to_new_decoders_and_remains_readable_by_old_decoders() {
+    let welcome = ServerMessage::Welcome {
+        player_id: "player-3".into(),
+        match_seed: 42,
+        world_geometry: WorldGeometry::default(),
+    };
+    let old = postcard::to_extend(&welcome, vec![22_u8]).unwrap();
+    let new = encode_server_message(&welcome).unwrap();
+
+    assert_eq!(
+        decode_server_message_with_leave_support(&old).unwrap(),
+        (welcome.clone(), false)
+    );
+    assert_eq!(
+        decode_server_message_with_leave_support(&new).unwrap(),
+        (welcome.clone(), true)
+    );
+    assert!(new.starts_with(&old));
+    assert_eq!(
+        postcard::from_bytes::<ServerMessage>(&new[1..]).unwrap(),
+        welcome
+    );
 }
 
 #[test]

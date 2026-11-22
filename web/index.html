@@ -22,6 +22,10 @@
             <label for="nickname">Captain’s name</label>
             <input id="nickname" name="nickname" type="text" maxlength="96" autocomplete="nickname" required />
             <button id="join" class="primary" type="submit" disabled>Loading…</button>
+            <div id="leave-action" hidden>
+              <button id="leave" class="quiet" type="button" aria-describedby="leave-consequence">Leave boat</button>
+              <span id="leave-consequence" class="hint">Your boat stays as a wreck.</span>
+            </div>
           </form>
           <section id="spectators" class="fleet" hidden><h2>At sea <span id="fleet-count"></span></h2><p class="hint">Choose a captain to follow</p><div id="spectator-list" class="player-list"></div></section>
         </div>

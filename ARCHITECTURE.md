@@ -782,8 +782,9 @@ and verification details.
   geometry before session registration; a failed send does not register a session.
 - **[Explicit]** A connected session can spectate without owning a boat; an
   explicit join requests a server-authoritative spawn.
-- **[Implicit]** Session identity survives boat destruction and respawn. Each
-  boat keeps its own identity so earlier wrecks persist independently of their owner.
+- **[Implicit]** Session identity survives destruction, leaving a boat, and
+  respawn. Each boat has its own identity so earlier wrecks persist independently
+  of their owner and a delayed leave command can only affect the boat it names.
 - **[Explicit]** Browser replication waits for Welcome, retaining the newest
   pending snapshot. Environmental render motion starts with the first
   authoritative snapshot; late messages after disconnection cannot restart replication.

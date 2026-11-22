@@ -206,6 +206,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** During play, the menu locks the nickname and camera to the
   player's boat; Resume returns to control. Escape or the touch-friendly menu
   button opens it.
+- **[Explicit]** Leaving a boat from the menu keeps it at sea as a wreck and
+  returns the player to spectating. Joining again spawns a new boat.
 - **[Explicit]** Settings is a nested view within the menu.
 - **[Explicit]** A gear opens Settings directly from the menu or during play.
 - **[Explicit]** Destruction or connection failure returns to the welcome dialog

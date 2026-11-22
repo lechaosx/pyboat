@@ -15,6 +15,8 @@ const menuButton = document.querySelector<HTMLButtonElement>("#menu-open")!;
 const joinForm = document.querySelector<HTMLFormElement>("#join-form")!;
 const nickname = document.querySelector<HTMLInputElement>("#nickname")!;
 const joinButton = document.querySelector<HTMLButtonElement>("#join")!;
+const leaveAction = document.querySelector<HTMLElement>("#leave-action")!;
+const leaveButton = document.querySelector<HTMLButtonElement>("#leave")!;
 const fps = document.querySelector<HTMLElement>("#fps")!;
 const graphicsForm = document.querySelector<HTMLFormElement>("#graphics-form")!;
 const graphicsNote = document.querySelector<HTMLElement>("#graphics-note")!;
@@ -85,6 +87,7 @@ function showPanel(panel: "home" | "settings" | "play"): void {
 }
 function showFailure(title: string, message: string, detail: unknown): void {
   showPanel("home");
+  leaveAction.hidden = true;
   welcomeTitle.textContent = title; status.textContent = message; status.hidden = false;
   loading.hidden = true;
   errorMessage.textContent = String(detail); errorDetails.hidden = false;
@@ -207,26 +210,32 @@ try {
   function updateSession(): void {
     const next = game.session_state();
     if (next === currentState) return;
+    const wasLeaving = currentState === "leaving";
     currentState = next;
     lastRoster = "";
     const disconnected = currentState === "disconnected";
     const ready = currentState === "ready" || currentState === "dead";
     const playing = currentState === "playing";
+    const leaving = currentState === "leaving";
     const busy = !ready && !playing && !disconnected;
-    loading.hidden = !busy;
+    loading.hidden = !busy || leaving;
     welcomeTitle.textContent = playing ? "At the helm" : currentState === "dead" ? "Ship lost" : disconnected ? "Connection lost" : "Under sail";
-    status.textContent = playing ? "Your boat is still at sea." : currentState === "dead" ? "Your boat was destroyed. Join again when you’re ready." : disconnected ? game.status() : ready ? "" : currentState === "joining" ? "Launching your boat…" : currentState === "connecting" ? "Establishing a secure connection…" : "Waiting for the first view of the sea…";
+    status.textContent = playing ? "Your boat is still at sea." : leaving ? "Leaving your boat…" : currentState === "dead" ? "Your boat was destroyed. Join again when you’re ready." : disconnected ? game.status() : ready ? "" : currentState === "joining" ? "Launching your boat…" : currentState === "connecting" ? "Establishing a secure connection…" : "Waiting for the first view of the sea…";
     status.hidden = currentState === "ready";
     if (currentState === "connecting") stage("Connecting to the match");
     else if (currentState === "loading") stage("Receiving the world and drawing the first frame");
-    nickname.disabled = playing || currentState === "joining" || disconnected;
+    nickname.disabled = playing || leaving || currentState === "joining" || disconnected;
     nickname.required = !nickname.disabled;
-    joinButton.textContent = playing ? "Resume" : disconnected ? "Reconnect" : currentState === "dead" ? "Join again" : ready ? "Join" : currentState === "joining" ? "Launching…" : "Loading…";
+    joinButton.textContent = playing ? "Resume" : leaving ? "Leaving…" : disconnected ? "Reconnect" : currentState === "dead" ? "Join again" : ready ? "Join" : currentState === "joining" ? "Launching…" : "Loading…";
     joinButton.disabled = busy;
-    spectatorSection.hidden = playing || disconnected || spectatorList.childElementCount === 0;
+    leaveAction.hidden = !playing || !game.supports_leaving_boat();
+    spectatorSection.hidden = playing || leaving || disconnected || spectatorList.childElementCount === 0;
     if (playing) setMenu(false);
     else if (currentState === "dead" || disconnected) setMenu(true);
-    else clearInput();
+    else {
+      clearInput();
+      if (ready && wasLeaving && !home.hidden) joinButton.focus();
+    }
   }
   function updatePlayers(): void {
     const own = game.controlled_boat_id();
@@ -244,7 +253,7 @@ try {
       spectatorList.append(button);
       if (id !== own) { const row = document.createElement("span"); row.textContent = name; livePlayerList.append(row); }
     }
-    spectatorSection.hidden = currentState === "playing" || currentState === "disconnected" || !players.length;
+    spectatorSection.hidden = currentState === "playing" || currentState === "leaving" || currentState === "disconnected" || !players.length;
   }
   joinForm.addEventListener("submit", event => {
     event.preventDefault();
@@ -259,6 +268,13 @@ try {
         if (!nickname.reportValidity()) return;
         game.join(name);
       }
+      updateSession();
+    } catch (error) { status.textContent = "That did not work. Please try again."; status.hidden = false; errorDetails.hidden = false; errorMessage.textContent = String(error); }
+  });
+  leaveButton.addEventListener("click", () => {
+    try {
+      clearInput();
+      game.leave_boat();
       updateSession();
     } catch (error) { status.textContent = "That did not work. Please try again."; status.hidden = false; errorDetails.hidden = false; errorMessage.textContent = String(error); }
   });
@@ -376,7 +392,7 @@ try {
       // The rudder uses counterclockwise world angles; CSS rotates clockwise.
       wheel.style.transform = `rotate(${-game.rudder_angle_rad()}rad)`;
       const frames = game.presented_frames();
-      if (["ready", "playing", "dead", "joining"].includes(currentState)) {
+      if (["ready", "playing", "dead", "joining", "leaving"].includes(currentState)) {
         if (!document.hidden && frames > lastPresentedFrames) {
           if (!fpsStart) fpsStart = { timeMs, frames };
           else if (timeMs - fpsStart.timeMs >= 1000) {

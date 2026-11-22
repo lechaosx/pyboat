@@ -9,6 +9,7 @@ pub use simulation::WorldGeometry;
 // render that world from the seed in Welcome. Predicted boat geometry must also
 // agree between clients and servers.
 pub const PROTOCOL_VERSION: u8 = 22;
+const LEAVE_BOAT_SUPPORTED: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -25,6 +26,9 @@ pub enum ClientMessage {
         sequence: i64,
         radius: f32,
         spectator_target: Option<String>,
+    },
+    LeaveBoat {
+        boat_id: String,
     },
 }
 
@@ -119,7 +123,7 @@ impl fmt::Display for ProtocolError {
 impl Error for ProtocolError {}
 
 pub fn decode_client_message(message: &[u8]) -> Result<ClientMessage, ProtocolError> {
-    let message: ClientMessage = decode_message(message)?;
+    let (message, _) = decode_message(message)?;
     validate_client_message(&message)?;
     Ok(message)
 }
@@ -159,11 +163,26 @@ pub fn valid_nickname(nickname: &str) -> bool {
 }
 
 pub fn decode_server_message(message: &[u8]) -> Result<ServerMessage, ProtocolError> {
-    decode_message(message)
+    decode_message(message).map(|(message, _)| message)
+}
+
+pub fn decode_server_message_with_leave_support(
+    bytes: &[u8],
+) -> Result<(ServerMessage, bool), ProtocolError> {
+    let (message, trailer) = decode_message(bytes)?;
+    let supports_leave = matches!(message, ServerMessage::Welcome { .. })
+        && trailer.first() == Some(&LEAVE_BOAT_SUPPORTED);
+    Ok((message, supports_leave))
 }
 
 pub fn encode_server_message(message: &ServerMessage) -> Result<Vec<u8>, ProtocolError> {
-    encode_message(message)
+    let mut bytes = encode_message(message)?;
+    if matches!(message, ServerMessage::Welcome { .. }) {
+        // The v22 decoder ignores bytes after Welcome. Only peers that see
+        // this trailer can send LeaveBoat to a server that understands it.
+        bytes.push(LEAVE_BOAT_SUPPORTED);
+    }
+    Ok(bytes)
 }
 
 fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, ProtocolError> {
@@ -171,10 +190,12 @@ fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, ProtocolError> {
         .map_err(|error| ProtocolError::Codec(error.to_string()))
 }
 
-fn decode_message<'a, T: Deserialize<'a>>(message: &'a [u8]) -> Result<T, ProtocolError> {
+fn decode_message<'a, T: Deserialize<'a>>(
+    message: &'a [u8],
+) -> Result<(T, &'a [u8]), ProtocolError> {
     let (&version, payload) = message.split_first().ok_or(ProtocolError::MissingVersion)?;
     if version != PROTOCOL_VERSION {
         return Err(ProtocolError::UnsupportedVersion(version));
     }
-    postcard::from_bytes(payload).map_err(|error| ProtocolError::Codec(error.to_string()))
+    postcard::take_from_bytes(payload).map_err(|error| ProtocolError::Codec(error.to_string()))
 }

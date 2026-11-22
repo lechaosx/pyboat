@@ -565,6 +565,8 @@ pub struct MultiplayerClient {
     spectator_target: Option<String>,
     match_seed: Option<u64>,
     world_geometry: Option<WorldGeometry>,
+    #[cfg(target_arch = "wasm32")]
+    supports_leaving_boat: bool,
     session_state: ClientSessionState,
     boats: HashMap<String, ReplicatedBoat>,
     impacts: Vec<protocol::HullImpact>,
@@ -606,6 +608,8 @@ impl MultiplayerClient {
             spectator_target: None,
             match_seed: None,
             world_geometry: None,
+            #[cfg(target_arch = "wasm32")]
+            supports_leaving_boat: false,
             session_state: ClientSessionState::AwaitingWelcome,
             boats: HashMap::new(),
             impacts: Vec::new(),

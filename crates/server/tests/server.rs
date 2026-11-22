@@ -112,6 +112,19 @@ async fn send_reliable(connection: &Connection, message: &[u8]) {
 }
 
 async fn next_snapshot(client: &TestClient) -> (u64, Vec<BoatSnapshot>, Vec<String>) {
+    let ServerMessage::Snapshot {
+        tick,
+        boats,
+        removed_player_ids,
+        ..
+    } = receive_snapshot(client).await
+    else {
+        panic!("expected snapshot message");
+    };
+    (tick, boats, removed_player_ids)
+}
+
+async fn receive_snapshot(client: &TestClient) -> ServerMessage {
     let message = timeout(Duration::from_secs(1), async {
         tokio::select! {
             datagram = client.connection.receive_datagram() => datagram.unwrap().to_vec(),
@@ -128,19 +141,76 @@ async fn next_snapshot(client: &TestClient) -> (u64, Vec<BoatSnapshot>, Vec<Stri
     })
     .await
     .unwrap();
-    match decode_server_message(&message).unwrap() {
-        ServerMessage::Snapshot {
-            tick,
-            boats,
-            removed_player_ids,
-            ..
-        } => (tick, boats, removed_player_ids),
-        ServerMessage::Welcome { .. } => panic!("expected snapshot message"),
-    }
+    decode_server_message(&message).unwrap()
 }
 
 fn close(client: &TestClient) {
     client.connection.close(0_u32.into(), b"test complete");
+}
+
+#[tokio::test]
+async fn leaving_detaches_the_boat_keeps_the_wreck_and_allows_a_new_join() {
+    let server = start_server();
+    let (client, _) = connect(&server).await;
+    let (joined_tick, _, _) = next_snapshot(&client).await;
+
+    let leave = encode_client_message(&ClientMessage::LeaveBoat {
+        boat_id: "player-1".into(),
+    })
+    .unwrap();
+    send_reliable(&client.connection, &leave).await;
+    timeout(Duration::from_secs(2), async {
+        let mut saw_roster = false;
+        let mut saw_wreck = false;
+        while !saw_roster || !saw_wreck {
+            if let ServerMessage::Snapshot {
+                tick,
+                controlled_boat_id: None,
+                boats,
+                players,
+                ..
+            } = receive_snapshot(&client).await
+                && tick > joined_tick
+            {
+                if let Some(players) = players {
+                    assert!(players.is_empty());
+                    saw_roster = true;
+                }
+                if let Some(wreck) = boats.iter().find(|boat| boat.id == "player-1") {
+                    assert!(wreck.wreck);
+                    assert_eq!(wreck.health, 0.0);
+                    assert_eq!(wreck.last_hit_tick, None);
+                    assert_eq!(wreck.acknowledged_input, None);
+                    saw_wreck = true;
+                }
+            }
+        }
+    })
+    .await
+    .expect("leaving must be acknowledged without closing the session");
+
+    let join = encode_client_message(&ClientMessage::Join {
+        nickname: "Sailor".into(),
+        input_sequence: 2,
+    })
+    .unwrap();
+    send_reliable(&client.connection, &join).await;
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let (_, boats, _) = next_snapshot(&client).await;
+            if let Some(boat) = boats.iter().find(|boat| boat.acknowledged_input == Some(1)) {
+                assert_eq!(boat.id, "player-2");
+                assert_eq!(boat.nickname, "Sailor");
+                assert!(!boat.wreck);
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the same session must be able to spawn a new boat");
+
+    close(&client);
+    server.task.abort();
 }
 
 #[tokio::test]
