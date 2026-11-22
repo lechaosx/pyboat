@@ -2291,7 +2291,7 @@ function renderFrame(): Promise<void> {
     timestampReadback.vision = Boolean(vision);
   }
   device.queue.submit([encoder.finish()]);
-  adaptationClock.frame_rendered();
+  if (illumination) adaptationClock.frame_rendered();
   const submittedAt = performance.now();
   framesInWindow += 1;
   latestPassTimes = Promise.resolve(undefined);
