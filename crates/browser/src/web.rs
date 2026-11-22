@@ -179,6 +179,12 @@ pub fn adapting_field_blur_shader_source() -> String {
     crate::ADAPTING_FIELD_BLUR_SHADER.to_owned()
 }
 
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn vision_shader_source() -> String {
+    crate::VISION_SHADER.to_owned()
+}
+
 /// Texels along each axis of the scene illumination and adapting field textures.
 #[cfg(feature = "playground")]
 #[wasm_bindgen]
@@ -1545,6 +1551,9 @@ struct Renderer {
     pending_baked_surface: Option<PendingBakedSurface>,
     upscaler: Upscaler,
     upscale_targets: Option<UpscaleTargets>,
+    vision: crate::VisionPass,
+    vision_targets: Option<crate::VisionTargets>,
+    vision_state: wgpu::BindGroup,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
     cloth: ClothPresentation,
@@ -1650,7 +1659,6 @@ fn scene_pipelines(
     device: &wgpu::Device,
     scene_layout: &wgpu::BindGroupLayout,
     quality: crate::GraphicsQuality,
-    output_format: wgpu::TextureFormat,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Scene shader"),
@@ -1680,7 +1688,7 @@ fn scene_pipelines(
                 entry_point: Some(entry_point),
                 targets,
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: quality.scene_constants(),
+                    constants: &[quality.scene_constants(), &[("VISION_INTERMEDIATE", 1.0)]].concat(),
                     ..Default::default()
                 },
             }),
@@ -1692,10 +1700,11 @@ fn scene_pipelines(
         })
     };
     let pipeline = scene_pipeline(
-        "fragment",
+        "fragment_vision",
         &[
-            Some(output_format.into()),
+            Some(crate::VISION_COLOR_FORMAT.into()),
             Some(SURFACE_HEIGHT_FORMAT.into()),
+            Some(crate::VISION_LUMINANCE_FORMAT.into()),
         ],
     );
     let illumination_pipeline = scene_pipeline(
@@ -1887,10 +1896,11 @@ impl Renderer {
         });
         report_loading(progress, "Building ocean and lighting shaders").await?;
         let (pipeline, illumination_pipeline) =
-            scene_pipelines(&device, &scene_layout, graphics.quality, output_format);
+            scene_pipelines(&device, &scene_layout, graphics.quality);
         report_loading(progress, "Loading painted boat artwork").await?;
         let boat_sprites =
-            BoatSprites::new(&device, &queue, &scene_layout, output_format).map_err(js_error)?;
+            BoatSprites::new(&device, &queue, &scene_layout, crate::VISION_COLOR_FORMAT)
+                .map_err(js_error)?;
         let terrain_quad_vertices = [
             [-1.0, -1.0],
             [1.0, -1.0],
@@ -2000,7 +2010,9 @@ impl Renderer {
             layout: &empty_bind_group_layout,
             entries: &[],
         });
-        let upscaler = Upscaler::new(&device, config.format);
+        let upscaler = Upscaler::new(&device, crate::VISION_COLOR_FORMAT);
+        let vision = crate::VisionPass::new(&device, output_format);
+        let vision_state = vision.state_bind_group(&device, &uniform_buffer, &adapting_field.view);
 
         Ok(Self {
             _page_gpu_session: page_gpu_session,
@@ -2036,13 +2048,16 @@ impl Renderer {
             baked_surface_pass,
             baked_surface_input,
             upscaler,
+            vision,
+            vision_state,
+            vision_targets: None,
             upscale_targets: None,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
             cloth: ClothPresentation::default(),
             cloth_match_seed: None,
             field_grid_history: FieldGridHistory::default(),
-            adaptation_clock: AdaptationClock::daylight(),
+            adaptation_clock: AdaptationClock::default(),
             vision_noise_phase: 0.0,
             frame_pacer: FramePacer::default(),
             render_scale: graphics.render_scale,
@@ -2070,10 +2085,11 @@ impl Renderer {
             return Err(JsValue::from_str("WebGPU device was lost"));
         }
         self.resize();
+        let valid_world = match_seed.is_some() && render_clock.is_some();
+        let scenes = if valid_world { scenes } else { &[] };
         if self.cloth_match_seed != match_seed {
             self.cloth = ClothPresentation::default();
             self.cloth_match_seed = match_seed;
-            self.adaptation_clock = AdaptationClock::daylight();
         }
         let cloth = self.cloth.advance(scenes, elapsed_seconds);
         self.follow_baked_surface_size(elapsed_seconds);
@@ -2082,7 +2098,6 @@ impl Renderer {
             .map(|v| v as f32);
         let (tick, tick_fraction) = render_clock.unwrap_or_default();
         let world_time_seconds = (tick as f64 + f64::from(tick_fraction)) / TICKS_PER_SECOND as f64;
-        let has_match = match_seed.is_some();
         let match_seed = match_seed.unwrap_or(0);
         let view_cloud_state = sample_view_cloud_state(
             world_geometry,
@@ -2098,10 +2113,8 @@ impl Renderer {
                 view_cloud_state.upper_wind_velocity_m_s,
             );
         }
-        if render_clock.is_some() {
+        if valid_world {
             self.adaptation_clock.advance(elapsed_seconds);
-        } else {
-            self.adaptation_clock = AdaptationClock::daylight();
         }
         self.vision_noise_phase =
             (self.vision_noise_phase + elapsed_seconds.max(0.0) * 8.0) % 4096.0;
@@ -2196,7 +2209,7 @@ impl Renderer {
         } else {
             1.0
         };
-        let terrain_vertex_count = if has_match { 6 } else { 0 };
+        let terrain_vertex_count = if valid_world { 6 } else { 0 };
         let output_size = (self.config.width, self.config.height);
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
         if self.terrain_depth.resize(&self.device, scene_size) {
@@ -2389,30 +2402,40 @@ impl Renderer {
             self.terrain_depth
                 .encode(&mut encoder, &self.terrain_depth_input, &field_grids, None);
         }
-        if self.adaptation_clock.is_initial() {
-            self.adapting_field.reset_to_daylight(&mut encoder);
-        }
-        self.adapting_field
-            .encode(&mut encoder, &self.bind_group, None, |pass| {
-                if terrain_vertex_count > 0 {
+        if valid_world {
+            self.adapting_field
+                .encode(&mut encoder, &self.bind_group, None, |pass| {
                     pass.set_pipeline(&self.illumination_pipeline);
                     pass.set_bind_group(0, &self.scene_bind_group, &[]);
                     pass.set_vertex_buffer(0, self.terrain_quad.slice(..));
                     pass.draw(0..terrain_vertex_count, 0..1);
-                }
-            });
+                });
+        }
         if !upscaled {
             self.upscale_targets = None;
         } else if self.upscale_targets.as_ref().is_none_or(|targets| {
             (targets.scene_size, targets.output_size) != (scene_size, output_size)
         }) {
-            self.upscale_targets =
-                Some(
-                    self.upscaler
-                        .targets(&self.device, scene_size, output_size, output_format),
-                );
+            self.upscale_targets = None;
+            self.upscale_targets = Some(self.upscaler.targets(
+                &self.device,
+                scene_size,
+                output_size,
+                crate::VISION_COLOR_FORMAT,
+            ));
         }
         let scene_pass_size = if upscaled { scene_size } else { output_size };
+        if self.vision_targets.as_ref().is_none_or(|targets| {
+            (targets.output_size, targets.scene_size) != (output_size, scene_pass_size)
+        }) {
+            self.vision_targets = None;
+            self.vision_targets = Some(self.vision.targets(
+                &self.device,
+                output_size,
+                scene_pass_size,
+            ));
+        }
+        let vision = self.vision_targets.as_ref().unwrap();
         if self.surface_height.0 != scene_pass_size {
             self.surface_height = (
                 scene_pass_size,
@@ -2430,19 +2453,22 @@ impl Renderer {
             self.encode_scene_pass(
                 &mut encoder,
                 &targets.scene_view,
+                &vision.scene_luminance_view,
                 clear,
                 terrain_vertex_count,
             );
-            self.upscaler.encode(
-                &mut encoder,
-                targets,
-                &frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default()),
-                None,
-            );
+            self.upscaler
+                .encode(&mut encoder, targets, &vision.color_view, None);
+            self.vision
+                .upscale_luminance(&mut encoder, &self.vision_state, vision);
         } else {
-            self.encode_scene_pass(&mut encoder, &view, clear, terrain_vertex_count);
+            self.encode_scene_pass(
+                &mut encoder,
+                &vision.color_view,
+                &vision.luminance_view,
+                clear,
+                terrain_vertex_count,
+            );
         }
         // Boats draw at backing resolution over the finished view, so a reduced
         // scene scale never loses them. They hide behind the scene's surface
@@ -2452,7 +2478,8 @@ impl Renderer {
             &self.device,
             &self.queue,
             &mut encoder,
-            &view,
+            &vision.color_view,
+            Some(&vision.luminance_view),
             output_size,
             &self.scene_bind_group,
             &self.surface_height.1,
@@ -2466,8 +2493,29 @@ impl Renderer {
             pixel_footprint_m,
             world_time_seconds,
         );
+        if valid_world {
+            self.vision
+                .encode(&mut encoder, &self.vision_state, vision, &view, true, None);
+        } else {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Loading view"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
         self.queue.submit(Some(encoder.finish()));
-        if render_clock.is_some() {
+        if valid_world {
             self.adaptation_clock.frame_rendered();
         }
         let frame_timing = self
@@ -2500,6 +2548,7 @@ impl Renderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        luminance: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
         terrain_vertex_count: u32,
     ) {
@@ -2521,6 +2570,15 @@ impl Renderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(SURFACE_HEIGHT_CLEAR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: luminance,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -2570,12 +2628,8 @@ impl Renderer {
 
     fn set_graphics(&mut self, graphics: GraphicsSettings) {
         if self.graphics.quality != graphics.quality {
-            (self.pipeline, self.illumination_pipeline) = scene_pipelines(
-                &self.device,
-                &self.scene_layout,
-                graphics.quality,
-                self.config.format.add_srgb_suffix(),
-            );
+            (self.pipeline, self.illumination_pipeline) =
+                scene_pipelines(&self.device, &self.scene_layout, graphics.quality);
         }
         self.graphics = graphics;
         self.frame_pacer = FramePacer::default();
@@ -2936,7 +2990,6 @@ impl BrowserGame {
 
     pub fn reconnect(&mut self) -> Result<(), JsValue> {
         self.shutdown();
-        self.renderer.adaptation_clock = AdaptationClock::daylight();
         self.client = Rc::new(RefCell::new(MultiplayerClient::new()));
         self.pending_snapshot = Rc::new(RefCell::new(None));
         self.connection_status = Rc::new(Cell::new(ConnectionStatus::Connecting));

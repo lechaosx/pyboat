@@ -36,6 +36,10 @@ fn adapting_light(light: vec3<f32>) -> vec4<f32> {
 }
 
 // The eye's adaptation at `css_position_px`, to the field there.
+fn field_texel(texel: vec2<u32>, state: bool) -> vec4<f32> {
+    return textureLoad(adapting_field, texel + vec2<u32>(select(0u, ADAPTING_FIELD_TEXELS, state), 0u), 0);
+}
+
 fn field_adaptation(css_position_px: vec2<f32>) -> EyeAdaptation {
     let css_view_height_px = scene.css_view_height_px_and_padding.x;
     let css_view_px = vec2<f32>(
@@ -53,16 +57,21 @@ fn field_adaptation(css_position_px: vec2<f32>) -> EyeAdaptation {
     let blend = texel - vec2<f32>(origin);
     let field = mix(
         mix(
-            textureLoad(adapting_field, origin, 0),
-            textureLoad(adapting_field, vec2<u32>(next.x, origin.y), 0),
+            field_texel(origin, false),
+            field_texel(vec2<u32>(next.x, origin.y), false),
             blend.x,
         ),
         mix(
-            textureLoad(adapting_field, vec2<u32>(origin.x, next.y), 0),
-            textureLoad(adapting_field, next, 0),
+            field_texel(vec2<u32>(origin.x, next.y), false),
+            field_texel(next, false),
             blend.x,
         ),
         blend.y,
     );
-    return EyeAdaptation(adapted_gain(exp2(field.r)), field.gba);
+    let state = mix(
+        mix(field_texel(origin, true), field_texel(vec2<u32>(next.x, origin.y), true), blend.x),
+        mix(field_texel(vec2<u32>(origin.x, next.y), true), field_texel(next, true), blend.x),
+        blend.y,
+    );
+    return EyeAdaptation(field.gba, state);
 }

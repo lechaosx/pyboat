@@ -12,8 +12,9 @@ use wgpu::util::DeviceExt;
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
     FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
-    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, WaveTiles,
-    baked_surface_sizes, scene_render_size, surface_height_texture, visual_pixel_footprint_m,
+    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, VISION_COLOR_FORMAT,
+    VISION_LUMINANCE_FORMAT, VisionPass, VisionTargets, WaveTiles, baked_surface_sizes,
+    scene_render_size, surface_height_texture, visual_pixel_footprint_m,
 };
 
 use super::{
@@ -282,6 +283,9 @@ struct BenchReport {
 }
 
 struct ModeRenderer {
+    device: wgpu::Device,
+    vision: VisionPass,
+    vision_targets: RefCell<Option<VisionTargets>>,
     /// Indexed by `GraphicsQuality`.
     pipelines: [wgpu::RenderPipeline; 3],
     /// Indexed by `GraphicsQuality`.
@@ -362,7 +366,12 @@ impl ModeRenderer {
         let pipeline = |quality: GraphicsQuality,
                         entry_point: &str,
                         targets: &[Option<wgpu::ColorTargetState>]| {
-            let scene_constants = [constants(scene_source), quality.scene_constants()].concat();
+            let scene_constants = [
+                constants(scene_source),
+                quality.scene_constants(),
+                &[("VISION_INTERMEDIATE", 1.0)],
+            ]
+            .concat();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("bench production scene pipeline"),
                 layout: Some(&layout),
@@ -398,13 +407,17 @@ impl ModeRenderer {
             GraphicsQuality::High,
         ];
         Ok(Self {
+            device: device.clone(),
+            vision: VisionPass::new(device, wgpu::TextureFormat::Rgba8UnormSrgb),
+            vision_targets: RefCell::new(None),
             pipelines: qualities.map(|quality| {
                 pipeline(
                     quality,
-                    "fragment",
+                    "fragment_vision",
                     &[
-                        Some(wgpu::TextureFormat::Rgba8UnormSrgb.into()),
+                        Some(VISION_COLOR_FORMAT.into()),
                         Some(SURFACE_HEIGHT_FORMAT.into()),
+                        Some(VISION_LUMINANCE_FORMAT.into()),
                     ],
                 )
             }),
@@ -580,6 +593,23 @@ impl ModeRenderer {
                 pass.set_vertex_buffer(0, bindings.vertices.slice(..));
                 pass.draw(0..6, 0..1);
             });
+        let output_size = (target.width(), target.height());
+        let scene_size = bindings
+            .upscale
+            .map_or(output_size, |upscale| upscale.scene_size);
+        let mut vision_targets = self.vision_targets.borrow_mut();
+        if vision_targets.as_ref().is_none_or(|targets| {
+            targets.output_size != output_size || targets.scene_size != scene_size
+        }) {
+            *vision_targets = None;
+            *vision_targets = Some(self.vision.targets(&self.device, output_size, scene_size));
+        }
+        let vision_targets = vision_targets.as_ref().unwrap();
+        let vision_state = self.vision.state_bind_group(
+            &self.device,
+            bindings.uniforms,
+            &self.adapting_field.view,
+        );
         let output_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bench scene pass"),
@@ -587,7 +617,7 @@ impl ModeRenderer {
                 Some(wgpu::RenderPassColorAttachment {
                     view: bindings
                         .upscale
-                        .map_or(&output_view, |upscale| &upscale.scene_view),
+                        .map_or(&vision_targets.color_view, |upscale| &upscale.scene_view),
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -604,13 +634,18 @@ impl ModeRenderer {
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &vision_targets.scene_luminance_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
             ],
             depth_stencil_attachment: None,
-            timestamp_writes: timestamps.map(|query_set| wgpu::RenderPassTimestampWrites {
-                query_set,
-                beginning_of_pass_write_index: None,
-                end_of_pass_write_index: Some(5),
-            }),
+            timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -624,13 +659,20 @@ impl ModeRenderer {
             bindings.upscaler.encode(
                 encoder,
                 upscale,
-                &target.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(wgpu::TextureFormat::Rgba8Unorm),
-                    ..Default::default()
-                }),
+                &vision_targets.color_view,
                 timestamps.map(|query_set| (query_set, 6, 7)),
             );
+            self.vision
+                .upscale_luminance(encoder, &vision_state, vision_targets);
         }
+        self.vision.encode(
+            encoder,
+            &vision_state,
+            vision_targets,
+            &output_view,
+            true,
+            timestamps.map(|queries| (queries, None, 5)),
+        );
     }
 }
 
@@ -649,6 +691,7 @@ struct FrameBindings<'a> {
     baked_surface_sizes: BakedSurfaceSizes,
     terrain_cache_rows: SurfaceRows,
     baked_surface_rows: SurfaceRows,
+    uniforms: &'a wgpu::Buffer,
     scene: &'a wgpu::BindGroup,
     fields: &'a CaptureFieldBindings,
     field_grids: &'a FieldGrids,
@@ -668,6 +711,7 @@ struct ScenarioBindings {
     baked_surface_sizes: BakedSurfaceSizes,
     terrain_cache_rows: SurfaceRows,
     baked_surface_rows: SurfaceRows,
+    uniforms: wgpu::Buffer,
     scene: wgpu::BindGroup,
     /// Shipped, then forced.
     fields: [CaptureFieldBindings; 2],
@@ -693,6 +737,7 @@ impl ScenarioBindings {
             baked_surface_sizes: self.baked_surface_sizes,
             terrain_cache_rows: self.terrain_cache_rows,
             baked_surface_rows: self.baked_surface_rows,
+            uniforms: &self.uniforms,
             scene: &self.scene,
             fields: &self.fields[mode],
             field_grids: &self.field_grids,
@@ -814,7 +859,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         ModeRenderer::new(&device, &scene_layout, &unused_layout, false, &bake_sizes)?,
         ModeRenderer::new(&device, &scene_layout, &unused_layout, true, &bake_sizes)?,
     ];
-    let upscaler = Upscaler::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let upscaler = Upscaler::new(&device, VISION_COLOR_FORMAT);
     let timing = if timestamps.is_some() {
         "timestamp-query"
     } else {
@@ -896,15 +941,11 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                 terrain_depth,
                 options: scenario_options,
                 upscale: (scene_size != output_size).then(|| {
-                    upscaler.targets(
-                        &device,
-                        scene_size,
-                        output_size,
-                        wgpu::TextureFormat::Rgba8UnormSrgb,
-                    )
+                    upscaler.targets(&device, scene_size, output_size, VISION_COLOR_FORMAT)
                 }),
                 surface_height: surface_height_texture(&device, scene_size)
                     .create_view(&Default::default()),
+                uniforms: buffer,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1309,6 +1350,7 @@ fn time_cold_start(
             &renderer.wave_tiles,
         );
         let frame_bindings = FrameBindings {
+            uniforms: &buffer,
             scene: &scene,
             fields: &fields,
             ..*bindings
@@ -1366,14 +1408,8 @@ fn time_sequence(
         sequence.render_scale.unwrap_or(1.0),
     );
     let surface_sizes = baked_surface_sizes(scene_size, default_options().bake_memory_bytes);
-    let upscale = (scene_size != output_size).then(|| {
-        upscaler.targets(
-            device,
-            scene_size,
-            output_size,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-        )
-    });
+    let upscale = (scene_size != output_size)
+        .then(|| upscaler.targets(device, scene_size, output_size, VISION_COLOR_FORMAT));
     let target = capture_texture(device, options.width, options.height);
     let surface_height =
         surface_height_texture(device, scene_size).create_view(&Default::default());
@@ -1417,6 +1453,7 @@ fn time_sequence(
             baked_surface_sizes: surface_sizes,
             terrain_cache_rows: (cache_frame.grid_m, cache_frame.texels, cache_frame.level),
             baked_surface_rows: baked_surface_rows(&surface_frame),
+            uniforms: &buffer,
             scene: &scene,
             fields: &fields,
             field_grids: &field_grids,
@@ -1546,12 +1583,13 @@ fn submit_timed(
                     .checked_sub(ticks[begin])
                     .map(|ticks| ticks as f64 * timestamps.period_ns / 1e6)
             };
-            let last = if upscaled { 7 } else { 5 };
+            let last = 5;
+            let upscale = milliseconds(6, 7).filter(|_| upscaled);
             [
                 milliseconds(0, 1),
                 milliseconds(2, 3),
-                milliseconds(4, 5),
-                milliseconds(6, 7).filter(|_| upscaled),
+                milliseconds(4, 5).map(|scene| scene - upscale.unwrap_or(0.0)),
+                upscale,
                 milliseconds(8, last),
                 milliseconds(8, 9),
                 milliseconds(10, 11),

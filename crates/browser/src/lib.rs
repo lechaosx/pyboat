@@ -93,6 +93,11 @@ pub use upscale::{UpscaleTargets, Upscaler};
 mod wave_tiles;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use wave_tiles::{WaveTileUniforms, WaveTiles, wave_tile_buffer_sizes, wave_tile_uniforms};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod vision;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use vision::{VISION_COLOR_FORMAT, VISION_LUMINANCE_FORMAT, VisionPass, VisionTargets};
+pub const VISION_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/vision.wgsl"));
 #[cfg(target_arch = "wasm32")]
 mod web;
 

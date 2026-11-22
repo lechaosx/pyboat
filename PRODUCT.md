@@ -74,20 +74,21 @@ See [README.md](README.md) for what is playable now and
   Its climate-derived edge is sharp at water and blended into land; the poles
   stay frozen while the caps advance in winter and retreat in summer.
 
-## Readable presentation
+## Visual presentation
 
 - **[Explicit]** A view adapted to clear-sky daylight retains its calibrated
   daytime brightness.
 - **[Explicit]** Material colors are calibrated reflectances; rendered colors
   follow the physical light that reaches them, as an eye adapted to that
   light's color sees them.
-- **[Explicit]** Modest compensation keeps night dark while boats, coastlines,
-  and navigation hazards stay readable; moonlight and storm cover retain their
-  visual differences.
+- **[Explicit]** Night vision follows the available light. Darkness can hide
+  unlit boats, coastlines, and navigation hazards; moonlight and storm cover
+  retain their visual differences.
 - **[Explicit]** Exposure adapts gradually when moving between dark and bright
   environments, like eyes adjusting to light.
-- **[Explicit]** A new session starts daylight-adapted, so night detail appears
-  gradually from near black, consistently across boats and surroundings.
+- **[Explicit]** Rendering starts with the eye settled to the first visible
+  world, consistently across boats and surroundings. Later changes in light
+  retain adaptation history.
 - **[Explicit]** Exposure and tone mapping apply to the whole rendered view.
 - **[Explicit]** Dark adaptation progressively shifts the rendered view from
   color-sensitive cone vision toward achromatic rod vision, making red dimmer
@@ -162,9 +163,8 @@ See [README.md](README.md) for what is playable now and
 - **[Explicit]** Players can adjust graphics before joining and during play.
 - **[Explicit]** No graphics setting, whether detail, resolution, or frame rate,
   gives any player an advantage or affects physics or gameplay.
-- **[Implicit]** Night and storm darkening, shallow-water hazards, shorelines,
-  the ice edge, and boats stay visible and legible at every graphics setting,
-  except where terrain leaning toward the camera or a wave crest hides them.
+- **[Implicit]** Every graphics setting preserves the same visibility boundaries
+  for boats, coastlines, and hazards, including darkness, terrain, and wave occlusion.
 - **[Explicit]** Graphics quality tiers trade visual detail for rendering cost,
   from battery-friendly mobile through richer mobile to the best desktop graphics.
 - **[Implicit]** Touch screens default to battery-friendly frame rate,

@@ -145,6 +145,7 @@ impl Fixture {
             &self.queue,
             &mut encoder,
             &output_view,
+            None,
             size,
             &self.scene,
             &surface,

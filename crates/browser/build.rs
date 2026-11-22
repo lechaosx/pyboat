@@ -53,7 +53,12 @@ fn main() {
     ]);
     write_shader(
         &production,
-        &["vertex", "fragment", "fragment_illumination"],
+        &[
+            "vertex",
+            "fragment",
+            "fragment_vision",
+            "fragment_illumination",
+        ],
         "scene-production.wgsl",
     );
     write_shader(
@@ -71,12 +76,14 @@ fn main() {
             "fragment_boat_sprite",
             "fragment_sail",
             "fragment_sail_depth",
+            "fragment_boat_vision",
+            "fragment_sail_vision",
         ],
         "boat-sprite.wgsl",
     );
     write_shader(
         &read_component("src/shader/boat-composite.wgsl"),
-        &["vertex", "fragment"],
+        &["vertex", "fragment", "fragment_vision"],
         "boat-composite.wgsl",
     );
     write_shader(
@@ -91,6 +98,21 @@ fn main() {
         ]),
         &["fullscreen_vertex", "blur_adapting_field"],
         "adapting-field-blur.wgsl",
+    );
+    write_shader(
+        &read_components(&[
+            "src/shader/components/scene-state.wgsl",
+            "src/shader/components/display.wgsl",
+            "src/shader/components/adapting-field.wgsl",
+            "src/shader/vision.wgsl",
+        ]),
+        &[
+            "vision_vertex",
+            "vision_downsample",
+            "vision_upscale_luminance",
+            "vision_finish",
+        ],
+        "vision.wgsl",
     );
     let environment_fields = compose(&[
         &scene,
@@ -229,6 +251,7 @@ fn main() {
         &[
             "vertex",
             "fragment_playground_scene",
+            "fragment_playground_vision",
             "fragment_playground_neutral_scene",
             "fragment_playground_illumination",
         ],
@@ -248,6 +271,7 @@ fn main() {
         &[
             "vertex",
             "fragment_playground_scene",
+            "fragment_playground_vision",
             "fragment_playground_illumination",
         ],
         "scene-playground-direct.wgsl",

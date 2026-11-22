@@ -4,6 +4,24 @@ struct SceneFragment {
     @location(1) surface_height_m: f32,
 };
 
+struct VisionSceneFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) surface_height_m: f32,
+    @location(2) auxiliary: vec4<f32>,
+};
+
+@fragment
+fn fragment_vision(input: VertexOutput) -> VisionSceneFragment {
+    let adaptation = field_adaptation(input.css_position_px);
+    let surface = initialize_production_surface(input);
+    let color = final_scene_color(surface.input, surface.atmosphere, surface.circle_position);
+    return VisionSceneFragment(
+        vec4<f32>(tone_map_scene_color(color.rgb, adaptation, input.css_position_px), color.a),
+        drawn_surface_height_m,
+        vision_auxiliary(color.rgb, color.a),
+    );
+}
+
 @fragment
 fn fragment(input: VertexOutput) -> SceneFragment {
     let adaptation = field_adaptation(input.css_position_px);

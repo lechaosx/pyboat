@@ -4,29 +4,13 @@ pub const SETTLED_ADAPTATION_SECONDS: f32 = f32::MAX;
 
 /// Seconds over which the eye adapts in the next rendered frame: the time
 /// since the last rendered frame. Loading time does not advance the initial
-/// state; the lab defaults to a settled view and gameplay starts in daylight.
+/// state. The first visible view starts settled to its local field.
+#[derive(Default)]
 pub struct AdaptationClock {
     seconds_since_rendered: Option<f64>,
-    initial_seconds: f32,
-}
-
-impl Default for AdaptationClock {
-    fn default() -> Self {
-        Self {
-            seconds_since_rendered: None,
-            initial_seconds: SETTLED_ADAPTATION_SECONDS,
-        }
-    }
 }
 
 impl AdaptationClock {
-    pub fn daylight() -> Self {
-        Self {
-            initial_seconds: 0.0,
-            ..Self::default()
-        }
-    }
-
     pub fn is_initial(&self) -> bool {
         self.seconds_since_rendered.is_none()
     }
@@ -39,7 +23,7 @@ impl AdaptationClock {
 
     pub fn seconds(&self) -> f32 {
         self.seconds_since_rendered
-            .map_or(self.initial_seconds, |seconds| seconds as f32)
+            .map_or(SETTLED_ADAPTATION_SECONDS, |seconds| seconds as f32)
     }
 
     pub fn frame_rendered(&mut self) {
@@ -47,23 +31,86 @@ impl AdaptationClock {
     }
 }
 
-/// Brightness of an adapted view grows as this power of the light it is
-/// adapted to: CIECAM02's brightness of an adapted white follows the fourth
-/// root of its luminance-level adaptation factor, which grows as the cube root
-/// of photopic adapting luminance (Moroney et al. 2002, Proc. IS&T/SID Color
-/// Imaging Conf. 10). Its photopic branch is kept below photopic light, where
-/// the model's own and real dim vision would leave night unreadable on a
-/// display; this compromise keeps night views readable. display.wgsl mirrors it.
+/// Photopic brightness exponent retained for the diagnostic gain parameter.
 pub const ADAPTED_BRIGHTNESS_EXPONENT: f32 = 1.0 / 12.0;
 
-/// Exposure that shows a view adapted to `illumination`, in scene light, at
-/// its brightness. A zenith Sun's clear-sky light keeps its calibrated
-/// brightness, and adaptation stops at a clear moonless sky's light, which
-/// fully dark-adapted vision is matched to.
+const RESPONSE_EXPONENT: f32 = 0.73;
+pub(crate) const DAYLIGHT_BACKGROUND_CD_M2: f32 =
+    0.2 * game::ZENITH_DAYLIGHT_LUX / std::f32::consts::PI;
+
+/// Pattanaik et al. (2000), Eq.2–7: neural backgrounds in cd/m² and
+/// available rod/cone pigment. Rod luminance is photopic-equivalent in this
+/// RGB renderer; spectral metamerism remains outside the model.
+#[derive(Clone, Copy)]
+pub(crate) struct EyeState(pub [f32; 4]);
+
+impl EyeState {
+    pub fn settled(illumination: f32) -> Self {
+        let background = illumination.max(game::NIGHT_SKY_LIGHT) * DAYLIGHT_BACKGROUND_CD_M2;
+        Self([
+            background,
+            background,
+            0.04 / (0.04 + background),
+            2.0e6 / (2.0e6 + background),
+        ])
+    }
+
+    fn response(self, luminance: f32) -> f32 {
+        let [rod, cone, rod_pigment, cone_pigment] = self.0;
+        let response =
+            |sigma: f32, pigment| pigment / (1.0 + (sigma / luminance).powf(RESPONSE_EXPONENT));
+        response(rod_sigma(rod), rod_pigment) + response(cone_sigma(cone), cone_pigment)
+    }
+}
+
+fn rod_sigma(background: f32) -> f32 {
+    if background == 0.0 {
+        return 2.5874 / 19000.0;
+    }
+    let j = 1.0 / (5.0e5 * background + 1.0);
+    2.5874 * background
+        / (19000.0 * j * j * background
+            + 0.2615 * (1.0 - j * j).powi(4) * background.powf(1.0 / 6.0))
+}
+
+fn cone_sigma(background: f32) -> f32 {
+    if background == 0.0 {
+        return 12.9223;
+    }
+    let k = 1.0 / (5.0 * background + 1.0);
+    12.9223 * background
+        / (k.powi(4) * background + 0.171 * (1.0 - k.powi(4)).powi(2) * background.cbrt())
+}
+
+fn daylight_inverse(response: f32) -> f32 {
+    if response <= 0.0 {
+        return 0.0;
+    }
+    let [rod, cone, rod_pigment, cone_pigment] = EyeState::settled(1.0).0;
+    let rod = rod_sigma(rod).powf(RESPONSE_EXPONENT);
+    let cone = cone_sigma(cone).powf(RESPONSE_EXPONENT);
+    // With x=L^n the sum of the two Eq.2 responses is quadratic in x.
+    // Select the positive root without subtracting nearly equal numbers.
+    let a = rod_pigment + cone_pigment - response;
+    let b = rod_pigment * cone + cone_pigment * rod - response * (rod + cone);
+    let c = response * rod * cone;
+    let discriminant = (b * b + 4.0 * a * c).sqrt();
+    let x = if b >= 0.0 {
+        2.0 * c / (b + discriminant)
+    } else {
+        (discriminant - b) / (2.0 * a)
+    };
+    x.powf(1.0 / RESPONSE_EXPONENT)
+}
+
+/// Effective gain of a neutral surface in a settled view. Display conversion
+/// uses the virtual daylight observer's inverse response with zero black;
+/// the per-surface shader also carries rod/cone color and temporal state.
 pub fn exposure_target(illumination: f32) -> f32 {
-    illumination
-        .clamp(game::NIGHT_SKY_LIGHT, 1.0)
-        .powf(ADAPTED_BRIGHTNESS_EXPONENT - 1.0)
+    let illumination = illumination.clamp(game::NIGHT_SKY_LIGHT, 1.0);
+    let background = illumination * DAYLIGHT_BACKGROUND_CD_M2;
+    let response = EyeState::settled(illumination).response(background);
+    daylight_inverse(response) / background
 }
 
 #[cfg(test)]
@@ -84,39 +131,30 @@ mod tests {
         })
     }
 
-    fn adapted_brightness(light: game::CelestialLighting) -> f32 {
-        light.ambient_intensity * exposure_target(light.ambient_intensity)
+    #[test]
+    fn starlight_uses_the_rod_and_cone_response_at_the_virtual_daylight_reference() {
+        // Pattanaik et al. (2000), Eq.2–8, with a zero-black reference
+        // observer at 20% of the calibrated zenith daylight luminance.
+        let light = 4.65e-5 / (0.2 * game::ZENITH_DAYLIGHT_LUX / std::f32::consts::PI);
+        let gray = 0.2 * light * exposure_target(light);
+        assert!((gray - 0.015_267_765).abs() < 1e-7, "{gray}");
     }
 
     #[test]
     fn a_view_adapted_to_a_high_sun_keeps_its_calibrated_brightness() {
         let zenith = equator_light(0.25, 0.5, 0.5);
-        assert!((adapted_brightness(zenith) - 1.0).abs() < 1e-6);
-        assert_eq!(exposure_target(zenith.ambient_intensity), 1.0);
-        let afternoon = equator_light(0.25, 0.5 + 45.0 / 360.0, 0.5);
-        assert!(
-            adapted_brightness(afternoon) > 0.95,
-            "{}",
-            adapted_brightness(afternoon)
-        );
+        assert!((exposure_target(zenith.ambient_intensity) - 1.0).abs() < 1e-6);
     }
 
-    /// Full Moon overhead, first quarter Moon at 65 degrees, and a moonless
-    /// sky, each with the Sun 18 degrees below the horizon or lower.
     #[test]
-    fn adapted_night_views_keep_the_order_of_moon_phases() {
-        let full = equator_light(0.5, 0.0, 0.75);
-        let quarter = equator_light(0.5, 0.82, 0.5);
-        let moonless = equator_light(0.5, 0.82, 0.25);
-        assert!(quarter.moon_direction[2] > 0.85 && quarter.sun_direction[2] < -0.3);
-        let [full, quarter, moonless] = [full, quarter, moonless].map(adapted_brightness);
-        // Each step is several times a just-noticeable brightness difference.
-        assert!(full > 1.1 * quarter, "full {full}, quarter {quarter}");
-        assert!(
-            quarter > 1.1 * moonless,
-            "quarter {quarter}, moonless {moonless}"
-        );
-        assert!(moonless > 0.1, "{moonless}");
+    fn settled_neutral_brightness_matches_the_published_response_at_night_levels() {
+        // Independent double-precision Eq.2–8 reference, inverted through
+        // the zero-black daylight observer, before the display shoulder.
+        for (background, expected) in [(0.0153, 0.027_503_162), (0.00438, 0.028_675_423)] {
+            let illumination = background / DAYLIGHT_BACKGROUND_CD_M2;
+            let gray = 0.2 * illumination * exposure_target(illumination);
+            assert!((gray - expected).abs() < 1e-7, "{background}: {gray}");
+        }
     }
 
     #[test]
@@ -128,24 +166,22 @@ mod tests {
     }
 
     #[test]
-    fn compensation_preserves_illumination_order_through_the_full_range() {
-        let mut previous = 0.0;
+    fn compensation_stays_finite_and_bounded_through_the_light_range() {
         for stop in -28..=0 {
             let illumination = 2.0_f32.powi(stop);
             let compensated = illumination * exposure_target(illumination);
             assert!(
-                compensated >= previous,
-                "brightness reversed at illumination {illumination}"
+                compensated.is_finite() && (0.0..=1.0 + 1e-6).contains(&compensated),
+                "brightness {compensated} at illumination {illumination}"
             );
-            previous = compensated;
         }
     }
 
     #[test]
-    fn daylight_start_waits_for_the_first_visible_match_frame() {
-        let mut clock = AdaptationClock::daylight();
+    fn first_visible_match_starts_with_settled_vision() {
+        let mut clock = AdaptationClock::default();
         clock.advance(30.0);
-        assert_eq!(clock.seconds(), 0.0);
+        assert_eq!(clock.seconds(), SETTLED_ADAPTATION_SECONDS);
         assert!(clock.is_initial());
         clock.frame_rendered();
         clock.advance(0.25);

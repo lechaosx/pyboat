@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::UPSCALE_SHADER;
 
 /// Spatial upscale from a scene rendered below the output size. Both filters
-/// read and write display-encoded values through non-sRGB views of `format`.
+/// preserve the source encoding through non-sRGB views of `format`.
 pub struct Upscaler {
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,

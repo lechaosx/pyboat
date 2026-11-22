@@ -20,8 +20,10 @@
 
 // Spatial upscaling ported from AMD FidelityFX Super Resolution 1: EASU
 // edge-adaptive upsampling, then RCAS sharpening at output resolution.
-// Unfiltered loads accept every sampleable color format. Sources hold
-// display-encoded values, which is the space both filters are tuned for.
+// Unfiltered loads accept every sampleable color format. The vision composite
+// supplies linear eye-response RGB so spatial filtering precedes the shoulder.
+// EASU therefore estimates edge weights in that space; RCAS passes highlights
+// at or above diffuse white through without sharpening.
 
 @group(0) @binding(0) var source: texture_2d<f32>;
 

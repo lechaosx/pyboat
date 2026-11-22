@@ -4,12 +4,6 @@ var illumination: texture_2d<f32>;
 @group(1) @binding(1)
 var previous_field: texture_2d<f32>;
 
-// Time constants of the eye's adaptation, which eases in stops so equal
-// brightness ratios take equal time. Darkness takes longer to adapt to than
-// bright light. Gameplay time constants make adaptation perceptible within
-// seconds.
-const DARKENING_ADAPTATION_SECONDS: f32 = 3.0;
-const BRIGHTENING_ADAPTATION_SECONDS: f32 = 1.0;
 // Time constant of chromatic adaptation, with which the adapting white eases
 // toward the field's colour: 26 s completes 90% of it in about 60 s, as
 // Fairchild and Reniff (1995, J. Opt. Soc. Am. A 12) measured at constant
@@ -34,7 +28,8 @@ fn fullscreen_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) ve
 @fragment
 fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let aspect = scene.camera_and_view_m.z / scene.camera_and_view_m.w;
-    let uv = position.xy / f32(ADAPTING_FIELD_TEXELS);
+    let cell = vec2<u32>(u32(position.x) % ADAPTING_FIELD_TEXELS, u32(position.y));
+    let uv = (vec2<f32>(cell) + 0.5) / f32(ADAPTING_FIELD_TEXELS);
     // A uniform disc of radius R has variance R²/4 along each axis.
     let sigma_view_heights = 0.5 * ADAPTING_FIELD_RADIUS_DEGREES / VIEW_HEIGHT_DEGREES;
     let exponent_scale = -0.5 / (sigma_view_heights * sigma_view_heights);
@@ -59,16 +54,23 @@ fn blur_adapting_field(@builtin(position) position: vec4<f32>) -> @location(0) v
         total_weight += row_weight * row_total;
     }
     let target_light = adapting_light(weighted_light / total_weight);
-    let previous = textureLoad(previous_field, vec2<u32>(position.xy), 0);
-    let time_constant = select(
-        BRIGHTENING_ADAPTATION_SECONDS,
-        DARKENING_ADAPTATION_SECONDS,
-        target_light.r < previous.r,
-    );
+    let previous = textureLoad(previous_field, cell, 0);
+    let previous_state = textureLoad(previous_field, cell + vec2<u32>(ADAPTING_FIELD_TEXELS, 0u), 0);
+    let target_state = settled_eye_state(exp2(target_light.r), target_light.gba);
+    let goal = target_state.xy;
     let seconds = scene.exposure_and_output.x;
-    let weight = vec4<f32>(
-        1.0 - exp(-seconds / time_constant),
-        vec3<f32>(1.0 - exp(-seconds / CHROMATIC_ADAPTATION_SECONDS)),
-    );
-    return previous + (target_light - previous) * weight;
+    let neural = goal + (previous_state.xy - goal) * exp(-seconds / vec2<f32>(0.15, 0.08));
+    // Pattanaik et al. (2000), Eq.7: pigment regenerates and light bleaches it.
+    // Figure6's J−K sign contradicts those meanings. Exact integration of
+    // dB/dt=(1−B)/tau−B*G/c reproduces Eq.6 and avoids daylight Euler instability.
+    let regeneration = 1.0 / vec2<f32>(400.0, 110.0);
+    let rate = regeneration + goal / vec2<f32>(16.0, 2.2e8);
+    let equilibrium = regeneration / rate;
+    let pigment = equilibrium + (previous_state.zw - equilibrium) * exp(-seconds * rate);
+    if u32(position.x) >= ADAPTING_FIELD_TEXELS {
+        return vec4<f32>(neural, pigment);
+    }
+    let white = previous.gba + (target_light.gba - previous.gba)
+        * (1.0 - exp(-seconds / CHROMATIC_ADAPTATION_SECONDS));
+    return vec4<f32>(log2(neural.y / DAYLIGHT_BACKGROUND_CD_M2), white);
 }

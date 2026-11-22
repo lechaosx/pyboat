@@ -699,8 +699,11 @@ struct DerivedOutput {
     adapting_field_stops: Option<Vec<f32>>,
     /// The adapting field's white, as `adapting_white`, row by row from the top.
     adapting_field_white: Option<Vec<[f32; 3]>>,
-    /// Exposure at the view's centre: of its adapting light, or else of its
-    /// clear-sky light.
+    /// Center rod/cone neural backgrounds in photopic-equivalent cd/m²,
+    /// followed by available rod/cone pigment. Interpolated as the shader does.
+    eye_adaptation_state: Option<[f32; 4]>,
+    /// Settled neutral-surface diagnostic, bounded at calibrated daylight.
+    /// Actual transient sensitivity is carried by eye_adaptation_state.
     settled_exposure_multiplier: f32,
     ground_temperature_c: f32,
     water_temperature_c: f32,
@@ -819,6 +822,16 @@ fn default_options() -> Options {
         boat_hull_only: false,
         boat_unhidden: false,
     }
+}
+
+fn visibility_inspection(options: &Options) -> bool {
+    options.landscape_visibility != [1.0; 4]
+        || options.light_contribution_visibility != [1; 4]
+        || options.land_material_color_visibility != [1; 4]
+        || options.solid_material_color_visibility != [1; 4]
+        || options.water_material_color_visibility != [1; 4]
+        || options.cloud_shadows != 1.0
+        || options.landform_lighting != [1.0, 1.0, 320.0, 0.0]
 }
 
 fn parse_options() -> Result<Command, String> {
@@ -2161,7 +2174,10 @@ async fn render(options: &Options) -> Result<(), String> {
     if options.boat.is_none() && (options.boat_hull_only || options.boat_unhidden) {
         return Err("--boat-hull-only and --boat-unhidden need --boat".to_owned());
     }
-    let constants = if production {
+    let whole_view_vision = options.diagnostic.module.is_none()
+        && options.diagnostic.id != "scene_neutral"
+        && !visibility_inspection(options);
+    let mut constants = if production {
         options.quality.scene_constants().to_vec()
     } else if options.diagnostic.module.is_none() {
         [
@@ -2180,6 +2196,9 @@ async fn render(options: &Options) -> Result<(), String> {
             "--quality and --legacy-shadow-look apply only to scene compositions".to_owned(),
         );
     };
+    if whole_view_vision {
+        constants.push(("VISION_INTERMEDIATE", 1.0));
+    }
     let shader_source = options.diagnostic.module.map_or_else(
         || {
             if production {
@@ -2302,11 +2321,19 @@ async fn render(options: &Options) -> Result<(), String> {
     let fragment_entry = options.diagnostic.module.map_or_else(
         || {
             if production {
-                "fragment"
+                if whole_view_vision {
+                    "fragment_vision"
+                } else {
+                    "fragment"
+                }
             } else if options.diagnostic.id == "scene_neutral" {
                 "fragment_playground_neutral_scene"
             } else {
-                "fragment_playground_scene"
+                if whole_view_vision {
+                    "fragment_playground_vision"
+                } else {
+                    "fragment_playground_scene"
+                }
             }
             .to_owned()
         },
@@ -2315,8 +2342,16 @@ async fn render(options: &Options) -> Result<(), String> {
     let pipeline = scene_pipeline(
         &fragment_entry,
         &[
-            Some(wgpu::TextureFormat::Rgba8UnormSrgb.into()),
+            Some(
+                if whole_view_vision {
+                    wgpu::TextureFormat::Rgba16Float
+                } else {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                }
+                .into(),
+            ),
             production.then(|| SURFACE_HEIGHT_FORMAT.into()),
+            whole_view_vision.then(|| wgpu::TextureFormat::Rg16Float.into()),
         ],
     );
     let adaptation = scene_composition.then(|| CaptureAdaptation {
@@ -2609,6 +2644,18 @@ fn render_world(
             .adaptation_seconds
             .unwrap_or(SETTLED_ADAPTATION_SECONDS),
     )?;
+    let whole_view_vision = options.diagnostic.module.is_none()
+        && options.diagnostic.id != "scene_neutral"
+        && !visibility_inspection(options);
+    let vision_pass = whole_view_vision
+        .then(|| browser::VisionPass::new(device, wgpu::TextureFormat::Rgba8UnormSrgb));
+    let vision = vision_pass.as_ref().map(|pass| {
+        pass.targets(
+            device,
+            (options.width, options.height),
+            (options.width, options.height),
+        )
+    });
     let mut boat = if let (Some(_), Some(fields)) = (options.boat, fields) {
         let geometry = WorldGeometry::new(
             f64::from(options.world_width_m),
@@ -2624,7 +2671,11 @@ fn render_world(
             device,
             queue,
             &fields.scene_layout,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
+            if whole_view_vision {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            },
             images,
         )?;
         let pairs: Vec<_> = options
@@ -2773,14 +2824,22 @@ fn render_world(
                 },
             },
             wgpu::Extent3d {
-                width: ADAPTING_FIELD_TEXELS,
+                width: 2 * ADAPTING_FIELD_TEXELS,
                 height: ADAPTING_FIELD_TEXELS,
                 depth_or_array_layers: 1,
             },
         );
         buffer
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = vision.as_ref().map_or_else(
+        || texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        |vision| {
+            vision.color.create_view(&wgpu::TextureViewDescriptor {
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        },
+    );
     let production = options.diagnostic.id == "scene_production";
     let surface_height = surface_height_texture(device, (options.width, options.height))
         .create_view(&Default::default());
@@ -2806,6 +2865,17 @@ fn render_world(
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                vision
+                    .as_ref()
+                    .map(|vision| wgpu::RenderPassColorAttachment {
+                        view: &vision.luminance_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
             ],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -2845,6 +2915,7 @@ fn render_world(
             queue,
             &mut encoder,
             &view,
+            vision.as_ref().map(|vision| &vision.luminance_view),
             (options.width, options.height),
             &fragment_scene_bind_group,
             unhidden.as_ref().unwrap_or(&surface_height),
@@ -2857,6 +2928,17 @@ fn render_world(
             capture_camera(options)?.height_m,
             visual_pixel_footprint_m(options.view_height_m, options.height),
             options.world_time_seconds,
+        );
+    }
+    if let (Some(pass), Some(targets)) = (&vision_pass, &vision) {
+        let state = pass.state_bind_group(device, &scene_buffer, &adaptation.unwrap().field.view);
+        pass.encode(
+            &mut encoder,
+            &state,
+            targets,
+            &texture.create_view(&Default::default()),
+            !visibility_inspection(options),
+            None,
         );
     }
     let rgba = read_texture(device, queue, encoder, &texture)?;
@@ -2875,7 +2957,7 @@ fn render_world(
                     .as_chunks::<{ ADAPTING_FIELD_ROW_BYTES as usize }>()
                     .0
                     .iter()
-                    .flat_map(|row| &row.as_chunks::<16>().0[..ADAPTING_FIELD_TEXELS as usize])
+                    .flat_map(|row| row.as_chunks::<16>().0)
                     .map(|texel| {
                         let channels = texel.as_chunks::<4>().0;
                         std::array::from_fn(|channel| f32::from_le_bytes(channels[channel]))
@@ -2894,7 +2976,7 @@ struct CaptureAdaptation {
     field: AdaptingField,
 }
 
-const ADAPTING_FIELD_ROW_BYTES: u32 = 512;
+const ADAPTING_FIELD_ROW_BYTES: u32 = 1024;
 
 /// The adapting field's texels, row by row from the top: stops of scene light,
 /// then the light's colour at unit luminance.
@@ -3222,7 +3304,12 @@ fn read_texture(
 ) -> Result<Vec<u8>, String> {
     let (width, height) = (texture.width(), texture.height());
     let bytes_per_row = width
-        .checked_mul(4)
+        .checked_mul(
+            texture
+                .format()
+                .block_copy_size(None)
+                .expect("copyable capture format"),
+        )
         .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
     let padded_bytes_per_row = bytes_per_row
         .checked_add(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1)
@@ -3297,7 +3384,7 @@ fn capture_report(
     adapting_field: Option<AdaptingFieldTexels>,
 ) -> Result<CaptureReport, String> {
     // The view's centre lies between the four central texels.
-    let central_mean = |channel: usize| {
+    let central_mean = |channel: usize, state: bool| {
         adapting_field.as_ref().map(|field| {
             let texels = ADAPTING_FIELD_TEXELS as usize;
             let half = texels / 2;
@@ -3308,21 +3395,32 @@ fn capture_report(
                 (half, half),
             ]
             .into_iter()
-            .map(|(column, row)| field[row * texels + column][channel])
+            .map(|(column, row)| {
+                field[row * 2 * texels + column + usize::from(state) * texels][channel]
+            })
             .sum::<f32>()
                 / 4.0
         })
     };
-    let adapting_light = central_mean(0).map(f32::exp2);
+    let eye_adaptation_state = adapting_field
+        .is_some()
+        .then(|| std::array::from_fn(|channel| central_mean(channel, true).unwrap()));
+    let adapting_light = eye_adaptation_state
+        .map(|state: [f32; 4]| state[1] / (0.2 * game::ZENITH_DAYLIGHT_LUX / std::f32::consts::PI));
     let adapting_white = adapting_field
         .is_some()
-        .then(|| [1, 2, 3].map(|channel| central_mean(channel).unwrap()));
-    let adapting_field_stops = adapting_field
-        .as_ref()
-        .map(|field| field.iter().map(|texel| texel[0]).collect());
+        .then(|| [1, 2, 3].map(|channel| central_mean(channel, false).unwrap()));
+    let adapting_field_stops = adapting_field.as_ref().map(|field| {
+        field
+            .chunks_exact(2 * ADAPTING_FIELD_TEXELS as usize)
+            .flat_map(|row| &row[..ADAPTING_FIELD_TEXELS as usize])
+            .map(|texel| texel[0])
+            .collect()
+    });
     let adapting_field_white = adapting_field.as_ref().map(|field| {
         field
-            .iter()
+            .chunks_exact(2 * ADAPTING_FIELD_TEXELS as usize)
+            .flat_map(|row| &row[..ADAPTING_FIELD_TEXELS as usize])
             .map(|texel| [texel[1], texel[2], texel[3]])
             .collect()
     });
@@ -3376,6 +3474,7 @@ fn capture_report(
             adapting_white,
             adapting_field_stops,
             adapting_field_white,
+            eye_adaptation_state,
             settled_exposure_multiplier: exposure_target(
                 adapting_light.unwrap_or(celestial.ambient_intensity),
             ),
@@ -3565,3 +3664,6 @@ fn capture_lightning_sources(options: &Options) -> [[f32; 4]; 4] {
         [f64::from(options.camera_x_m), f64::from(options.camera_y_m)],
     )
 }
+
+#[cfg(test)]
+mod vision_tests;

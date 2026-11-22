@@ -1,4 +1,5 @@
 import { SailingAudio } from "../../web/src/audio";
+import { VisionPass } from "./vision";
 import {
   PlaygroundAdaptationClock,
   PlaygroundBakedSurface,
@@ -990,6 +991,7 @@ configureCanvas(hdrSupported);
 await showStartupPhase("Creating startup shader…");
 const startupShader = device.createShaderModule({ code: playground_startup_shader_source() });
 const surfaceHeightPipelines = new WeakSet<GPURenderPipeline>();
+const visionPipelines = new WeakSet<GPURenderPipeline>();
 function createPlaygroundPipeline(
   shader: GPUShaderModule,
   entryPoint: string,
@@ -997,7 +999,8 @@ function createPlaygroundPipeline(
   format?: GPUTextureFormat,
   diagnostic = false,
 ): Promise<GPURenderPipeline> {
-  const writesSurface = entryPoint === "fragment_playground_scene" || entryPoint === "fragment";
+  const vision = entryPoint === "fragment_playground_vision" || entryPoint === "fragment_vision";
+  const writesSurface = vision || entryPoint === "fragment_playground_scene" || entryPoint === "fragment";
   return device.createRenderPipelineAsync({
     layout: diagnostic ? device.createPipelineLayout({ bindGroupLayouts: [
       device.createBindGroupLayout({ entries: [
@@ -1027,15 +1030,16 @@ function createPlaygroundPipeline(
       module: shader,
       entryPoint,
       ...(constants ? { constants } : {}),
-      targets: [{ format: format ?? (hdrSupported && (
+      targets: [{ format: vision ? "rgba16float" : format ?? (hdrSupported && (
         entryPoint === "fragment_playground_scene"
           || entryPoint === "fragment_playground_startup"
           || entryPoint === "fragment"
-      ) ? "rgba16float" : sdrViewFormat) }, ...(writesSurface ? [{ format: "r16float" as GPUTextureFormat }] : [])],
+      ) ? "rgba16float" : sdrViewFormat) }, ...(writesSurface ? [{ format: "r16float" as GPUTextureFormat }] : []), ...(vision ? [{ format: "rg16float" as GPUTextureFormat }] : [])],
     },
     primitive: { topology: "triangle-list" },
   }).then((pipeline) => {
     if (writesSurface) surfaceHeightPipelines.add(pipeline);
+    if (vision) visionPipelines.add(pipeline);
     return pipeline;
   });
 }
@@ -1064,9 +1068,10 @@ type UpscaleTargets = {
   rcasInput: GPUBindGroup;
 };
 let upscaleTargets: UpscaleTargets | undefined;
-// Both filters read and write display-encoded values through non-sRGB views.
-function prepareUpscale(sceneWidth: number, sceneHeight: number): UpscaleTargets {
-  const format: GPUTextureFormat = canvasHdr ? "rgba16float" : formatName;
+// Normal vision filters linear eye RGB before the shoulder; inspection keeps
+// its display encoding. Both use non-sRGB texture views.
+function prepareUpscale(sceneWidth: number, sceneHeight: number, vision: boolean): UpscaleTargets {
+  const format: GPUTextureFormat = vision || canvasHdr ? "rgba16float" : formatName;
   const key = [sceneWidth, sceneHeight, previewCanvas.width, previewCanvas.height, format].join();
   if (upscaleTargets?.key === key) return upscaleTargets;
   for (const texture of upscaleTargets?.textures ?? []) texture.destroy();
@@ -1083,7 +1088,7 @@ function prepareUpscale(sceneWidth: number, sceneHeight: number): UpscaleTargets
   }
   const texture = (width: number, height: number, viewFormats: GPUTextureFormat[]) =>
     device.createTexture({ size: [width, height], format, usage: 0x10 | 0x04, viewFormats });
-  const scene = texture(sceneWidth, sceneHeight, canvasHdr ? [] : [sdrViewFormat]);
+  const scene = texture(sceneWidth, sceneHeight, vision || canvasHdr ? [] : [sdrViewFormat]);
   const easuOutput = texture(previewCanvas.width, previewCanvas.height, []);
   const input = (pipeline: GPURenderPipeline, source: GPUTexture) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -1093,7 +1098,7 @@ function prepareUpscale(sceneWidth: number, sceneHeight: number): UpscaleTargets
     key,
     textures: [scene, easuOutput],
     pipelines,
-    sceneView: scene.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat }),
+    sceneView: scene.createView({ format: vision || canvasHdr ? "rgba16float" : sdrViewFormat }),
     easuInput: input(pipelines.easu, scene),
     easuOutput: easuOutput.createView(),
     rcasInput: input(pipelines.rcas, easuOutput),
@@ -1123,13 +1128,14 @@ const illuminationView = device.createTexture({
   usage: 0x10 | 0x04,
 }).createView();
 const adaptingField = device.createTexture({
-  size: [adaptingFieldTexels!, adaptingFieldTexels!],
+  size: [2 * adaptingFieldTexels!, adaptingFieldTexels!],
   format: "rgba32float",
   usage: 0x10 | 0x04 | 0x01,
 });
 const adaptingFieldView = adaptingField.createView();
+let visionPass: VisionPass | undefined;
 const previousAdaptingField = device.createTexture({
-  size: [adaptingFieldTexels!, adaptingFieldTexels!],
+  size: [2 * adaptingFieldTexels!, adaptingFieldTexels!],
   format: "rgba32float",
   usage: 0x04 | 0x02,
 });
@@ -1392,10 +1398,10 @@ type LandformHorizonPass = {
 };
 
 const timestampQuerySet = timestampQueriesSupported
-  ? device.createQuerySet({ type: "timestamp", count: 5 })
+  ? device.createQuerySet({ type: "timestamp", count: 6 })
   : undefined;
 const timestampResolveBuffer = timestampQueriesSupported
-  ? device.createBuffer({ size: 40, usage: 0x0200 | 0x0004 })
+  ? device.createBuffer({ size: 48, usage: 0x0200 | 0x0004 })
   : undefined;
 type TimestampReadback = {
   buffer: GPUBuffer;
@@ -1403,10 +1409,11 @@ type TimestampReadback = {
   pipeline?: GPURenderPipeline;
   fields?: boolean;
   upscaled?: boolean;
+  vision?: boolean;
 };
 const timestampReadbacks: TimestampReadback[] = timestampQueriesSupported
   ? Array.from({ length: 3 }, () => ({
-      buffer: device.createBuffer({ size: 40, usage: 0x0001 | 0x0008 }),
+      buffer: device.createBuffer({ size: 48, usage: 0x0001 | 0x0008 }),
       pending: false,
     }))
   : [];
@@ -2083,14 +2090,19 @@ function renderFrame(): Promise<void> {
   // Pass-end query indices: the field passes end at 1 and 2, the scene at 3,
   // and an upscale after it; the first timed pass also writes its beginning to 0.
   const sceneEnd = fields ? 3 : 1;
+  const wholeViewVision = visionPipelines.has(renderResources.pipeline);
+  const vision = wholeViewVision ? (visionPass ??= new VisionPass(device, sceneBuffer, adaptingFieldView)) : undefined;
+  if (vision) vision.size([previewCanvas.width, previewCanvas.height], [sceneSize[0]!, sceneSize[1]!]);
+  else visionPass?.releaseTargets();
   const upscale = sceneSize[0] !== previewCanvas.width || sceneSize[1] !== previewCanvas.height
-    ? prepareUpscale(sceneSize[0]!, sceneSize[1]!)
+    ? prepareUpscale(sceneSize[0]!, sceneSize[1]!, wholeViewVision)
     : undefined;
   if (!upscale && upscaleTargets) {
     for (const texture of upscaleTargets.textures) texture.destroy();
     upscaleTargets = undefined;
   }
-  const lastEnd = upscale ? sceneEnd + 1 : sceneEnd;
+  const upscaleEnd = upscale ? sceneEnd + 1 : sceneEnd;
+  const lastEnd = vision ? upscaleEnd + 1 : upscaleEnd;
   if (terrainCachePass) {
     if (terrainCacheWorkgroups > 0) {
       device.queue.writeBuffer(terrainCacheFillBuffer, 0, terrainCacheFill);
@@ -2202,7 +2214,7 @@ function renderFrame(): Promise<void> {
     encoder.copyTextureToTexture(
       { texture: adaptingField },
       { texture: previousAdaptingField },
-      [adaptingFieldTexels!, adaptingFieldTexels!],
+      [2 * adaptingFieldTexels!, adaptingFieldTexels!],
     );
   }
   if (new URLSearchParams(location.search).get("freshSurface") === "1") configureCanvas(canvasHdr);
@@ -2212,14 +2224,14 @@ function renderFrame(): Promise<void> {
     boatSurface = device.createTexture({ size: [sceneSize[0]!, sceneSize[1]!], format: "r16float", usage: 0x10 | 0x04 });
     boatSurfaceView = boatSurface.createView();
   }
-  const colorView = upscale?.sceneView ?? canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
+  const colorView = upscale?.sceneView ?? vision?.colorView ?? canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
   const renderPassDescriptor: GPURenderPassDescriptor = {
     colorAttachments: [{
       view: colorView,
       clearValue: { r: 0.02, g: 0.08, b: 0.1, a: 1 },
       loadOp: "clear",
       storeOp: "store",
-    }, ...(surfaceHeightPipelines.has(renderResources.pipeline) ? [{ view: boatSurfaceView!, clearValue: { r: -65504, g: 0, b: 0, a: 0 }, loadOp: "clear" as GPULoadOp, storeOp: "store" as GPUStoreOp }] : [])],
+    }, ...(surfaceHeightPipelines.has(renderResources.pipeline) ? [{ view: boatSurfaceView!, clearValue: { r: -65504, g: 0, b: 0, a: 0 }, loadOp: "clear" as GPULoadOp, storeOp: "store" as GPUStoreOp }] : []), ...(vision ? [{ view: vision.sceneLuminanceView, loadOp: "clear" as GPULoadOp, storeOp: "store" as GPUStoreOp }] : [])],
   };
   if (timestampReadback) {
     renderPassDescriptor.timestampWrites = {
@@ -2239,12 +2251,12 @@ function renderFrame(): Promise<void> {
   if (upscale) {
     for (const [pipeline, input, view] of [
       [upscale.pipelines.easu, upscale.easuInput, upscale.easuOutput],
-      [upscale.pipelines.rcas, upscale.rcasInput, canvasTexture.createView()],
+      [upscale.pipelines.rcas, upscale.rcasInput, vision?.colorView ?? canvasTexture.createView()],
     ] as const) {
       const upscalePass = encoder.beginRenderPass({
         colorAttachments: [{ view, loadOp: "clear", storeOp: "store" }],
         ...(timestampReadback && pipeline === upscale.pipelines.rcas
-          ? { timestampWrites: { querySet: timestampQuerySet!, endOfPassWriteIndex: lastEnd } }
+          ? { timestampWrites: { querySet: timestampQuerySet!, endOfPassWriteIndex: upscaleEnd } }
           : {}),
       });
       upscalePass.setPipeline(pipeline);
@@ -2253,13 +2265,15 @@ function renderFrame(): Promise<void> {
       upscalePass.end();
     }
   }
+  if (upscale) vision?.upscaleLuminance(encoder);
   if (drivingBoat.driver && state.diagnostic === "scene" && surfaceHeightPipelines.has(renderResources.pipeline)) {
     boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView, environmentFieldView, occluderFieldView, occluderFieldSampler);
-    const target = canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
-    boatPass.encode(encoder, target, canvasHdr ? "rgba16float" : sdrViewFormat, boatSurfaceView!, [previewCanvas.width, previewCanvas.height], { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
+    const target = vision?.colorView ?? canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat });
+    boatPass.encode(encoder, target, vision ? "rgba16float" : canvasHdr ? "rgba16float" : sdrViewFormat, vision?.luminanceView, boatSurfaceView!, [previewCanvas.width, previewCanvas.height], { x: state.cameraX, y: state.cameraY, height: viewHeightM(), cameraHeight: state.cameraHeightM, outputWidth: previewCanvas.width, outputHeight: previewCanvas.height, sceneHeight: sceneSize[1]!, time: state.worldTimeSeconds });
   } else {
     boatPass?.releaseTargets();
   }
+  vision?.encode(encoder, canvasTexture.createView({ format: canvasHdr ? "rgba16float" : sdrViewFormat }), canvasHdr ? "rgba16float" : sdrViewFormat, timestampReadback ? { querySet: timestampQuerySet!, endOfPassWriteIndex: lastEnd } : undefined);
   if (timestampReadback) {
     const timestampBytes = (lastEnd + 1) * 8;
     encoder.resolveQuerySet(timestampQuerySet!, 0, lastEnd + 1, timestampResolveBuffer!, 0);
@@ -2274,6 +2288,7 @@ function renderFrame(): Promise<void> {
     timestampReadback.pipeline = renderResources.pipeline;
     timestampReadback.fields = Boolean(fields);
     timestampReadback.upscaled = Boolean(upscale);
+    timestampReadback.vision = Boolean(vision);
   }
   device.queue.submit([encoder.finish()]);
   adaptationClock.frame_rendered();
@@ -2285,7 +2300,8 @@ function renderFrame(): Promise<void> {
       const timestamps = new BigUint64Array(timestampReadback.buffer.getMappedRange());
       const withFields = Boolean(timestampReadback.fields);
       const sceneEnd = withFields ? 3 : 1;
-      const lastEnd = timestampReadback.upscaled ? sceneEnd + 1 : sceneEnd;
+      const upscaleEnd = timestampReadback.upscaled ? sceneEnd + 1 : sceneEnd;
+      const lastEnd = timestampReadback.vision ? upscaleEnd + 1 : upscaleEnd;
       const startedAt = timestamps[0]!;
       const finishedAt = timestamps[lastEnd]!;
       const milliseconds = (begin: number, end: number): number =>
@@ -2295,7 +2311,7 @@ function renderFrame(): Promise<void> {
         ? {
           fieldsMs: milliseconds(0, 1),
           occludersMs: milliseconds(1, 2),
-          sceneMs: milliseconds(2, 3),
+          sceneMs: milliseconds(2, 3) + milliseconds(upscaleEnd, lastEnd),
           ...(timestampReadback.upscaled ? { upscaleMs: milliseconds(3, 4) } : {}),
           totalMs: milliseconds(0, lastEnd),
         }
@@ -2306,8 +2322,8 @@ function renderFrame(): Promise<void> {
           fieldsGpuMillisecondsInWindow += milliseconds(0, 1);
           occludersGpuMillisecondsInWindow += milliseconds(1, 2);
         }
-        sceneGpuMillisecondsInWindow += milliseconds(sceneEnd - 1, sceneEnd);
-        upscaleGpuMillisecondsInWindow += milliseconds(sceneEnd, lastEnd);
+        sceneGpuMillisecondsInWindow += milliseconds(sceneEnd - 1, sceneEnd) + milliseconds(upscaleEnd, lastEnd);
+        upscaleGpuMillisecondsInWindow += milliseconds(sceneEnd, upscaleEnd);
         gpuSamplesInWindow += 1;
       }
       timestampReadback.buffer.unmap();
@@ -2374,21 +2390,36 @@ function scenePipelineVariant(): string {
   return [
     Math.round(state.graphicsQuality),
     state.legacyShadowLook > 0.5 ? 1 : 0,
+    Number(visibilityInspection()),
   ].join(":");
+}
+
+function visibilityInspection(): boolean {
+  if (occluderFieldInspection !== 0) return true;
+  return ([
+    "sunLightVisible", "moonLightVisible", "skyLightVisible", "canopyLightVisible",
+    "grassColorVisible", "forestColorVisible", "intertidalColorVisible", "beachColorVisible",
+    "rockColorVisible", "snowColorVisible", "landIceColorVisible", "seaIceColorVisible",
+    "waterColorVisible", "bottomColorVisible", "waterSurfaceVisible", "cloudShadowsVisible",
+    "landformReliefVisible", "landformShadowsVisible",
+  ] as const).some((key) => state[key] < 0.5)
+    || state.landformShadowReach !== defaults.landformShadowReach;
 }
 
 function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePipelines> {
   let pipelines = scenePipelinesByVariant.get(variant);
   if (!pipelines) {
-    const [quality, legacyShadowLook] = variant.split(":").map(Number);
+    const [quality, legacyShadowLook, inspection] = variant.split(":").map(Number);
+    const vision = !inspection;
     const constants = {
       ...graphics_quality_scene_constants(graphicsQualities[quality!]!) as Record<string, number>,
       LEGACY_SHADOW_LOOK: legacyShadowLook!,
+      VISION_INTERMEDIATE: Number(vision),
     };
     pipelines = Promise.all([
       createPlaygroundPipeline(
         shaders.scene,
-        productionShaders ? "fragment" : "fragment_playground_scene",
+        productionShaders ? (vision ? "fragment_vision" : "fragment") : (vision ? "fragment_playground_vision" : "fragment_playground_scene"),
         constants,
       ),
       createPlaygroundPipeline(
@@ -2398,7 +2429,7 @@ function scenePipelines(shaders: SceneShaders, variant: string): Promise<ScenePi
         "rgba32float",
       ),
       shaders.direct
-        && createPlaygroundPipeline(shaders.direct, "fragment_playground_scene", constants),
+        && createPlaygroundPipeline(shaders.direct, vision ? "fragment_playground_vision" : "fragment_playground_scene", constants),
       shaders.direct && createPlaygroundPipeline(
         shaders.direct,
         "fragment_playground_illumination",

@@ -314,6 +314,9 @@ and verification details.
   adapt.
 - **[Implicit]** The view subtends the same visual angle on every device, that
   of a full-HD desktop display at arm's length.
+- **[Explicit]** The first visible world frame initializes the eye settled to
+  its local field. Loading frames preserve history, as does joining a boat in
+  an already visible world.
 - **[Implicit]** Adaptation is retinal: each part of the screen adapts
   gradually to the adapting field there and keeps its state in place as the
   view pans, so a part panned from daylight into night starts dark while a
@@ -321,8 +324,8 @@ and verification details.
 - **[Implicit]** The adapting field pools the mean light over its extent, as
   CIE defines adapting luminance and as light scattered within the eye adds,
   so a field half in daylight adapts to about half of daylight.
-- **[Implicit]** Adaptation over time runs in logarithmic brightness so equal
-  brightness ratios take the same time.
+- **[Implicit]** Vision retains separate neural and pigment histories so the
+  intensity and duration of prior illumination affect recovery in darkness.
 - **[Implicit]** Adaptation to darkness is slower than adaptation to bright light.
 - **[Implicit]** The eye adapts to the color of the light falling on the scene,
   pooled over the same adapting field as its brightness, and never to surface
@@ -330,18 +333,29 @@ and verification details.
 - **[Implicit]** Chromatic adaptation follows CIECAM16: its cone gains carry
   the adapting light's color toward the display's white by the degree of
   adaptation that the adapting luminance sets.
-- **[Implicit]** Chromatic adaptation takes about a minute, as measured for
-  color appearance, rather than the seconds of brightness adaptation.
+- **[Implicit]** Chromatic adaptation evolves independently of the histories
+  that govern sensitivity to brightness.
 - **[Explicit]** Scene light keeps the physical ratios of daylight, twilight,
-  moonlight, and starlight, and the eye alone compresses them: an adapted
-  part of the view has the brightness of CIECAM02's photopic brightness law at
-  every light level. That compromise keeps moonlit and moonless views readable
-  on a display, where real dim vision would leave them nearly black.
+  moonlight, and starlight. The eye's rod and cone responses govern visibility
+  and color as illumination falls, including loss of unlit detail.
 - **[Explicit]** The display shows the brightness and color the eye model
   perceives as display brightness and color, so what the adapted eye sees as
   neutral shows as the display's white, alike for SDR and HDR below diffuse
   white; HDR only adds headroom above it. The viewer's own viewing conditions are unknown and stay
   outside the model.
+- **[Implicit]** Spatial detail follows a measured steady acuity relation,
+  using a narrow mean of visible physical luminance so illuminated surfaces
+  retain more detail than dark surroundings. This current stimulus is separate
+  from the material-independent adapting history; its instantaneous acuity is
+  an approximation during changes in illumination.
+- **[Implicit]** World and boats share spatial vision before the display
+  shoulder and encoding, preserving coverage and common SDR/HDR filtering.
+  Visibility inspection views retain unfiltered detail for examining materials
+  and lighting.
+- **[Implicit]** A virtual daylight observer maps the eye response to the
+  display with zero black and the calibrated daylight palette. Its inverse
+  color response uses positive receptor coordinates so rod-dominated colors
+  approach achromatic continuously, including pure RGB primaries.
 - **[Explicit]** Boats and the windsock take current scene illumination before
   the shared eye response; adaptation history changes perception, not incident light.
 - **[Implicit]** Painted hulls and flat fittings retain their planar lighting
@@ -808,9 +822,9 @@ and verification details.
   Captures include a sidecar derived from the
   same explicit world inputs and fractional render clock; fresh one-frame
   captures have zero renderer-local cloud displacement.
-- **[Implicit]** Still captures use settled exposure and, unless asked for an
-  HDR output peak, SDR output; their sidecar records the exposure at the view's
-  center so they can be compared with an adapted interactive view.
+- **[Implicit]** Still captures use settled vision and, unless asked for an
+  HDR output peak, SDR output. Their sidecars record the eye state at the view's
+  center so comparisons can account for viewing history.
 - **[Explicit]** Capture requires a hardware Vulkan GPU.
 - **[Explicit]** Still-view rendering cost is judged on one fixed set of
   scenarios shared by headless capture and the browser playground.

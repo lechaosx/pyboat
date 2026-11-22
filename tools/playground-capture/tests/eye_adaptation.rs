@@ -116,13 +116,8 @@ fn percentile(values: &[f32], share: f32) -> f32 {
     sorted[((sorted.len() - 1) as f32 * share).round() as usize]
 }
 
-/// The light a view's centre is adapted to, from the exposure its sidecar
-/// records, by the inverse of exposure.rs's `exposure_target`.
 fn adapting_light(capture: &Capture) -> f32 {
-    let exposure = capture.derived["settledExposureMultiplier"]
-        .as_f64()
-        .unwrap() as f32;
-    exposure.powf(1.0 / (browser::ADAPTED_BRIGHTNESS_EXPONENT - 1.0))
+    capture.derived["adaptingLight"].as_f64().unwrap() as f32
 }
 
 /// Image columns of a view's left and right halves.
@@ -257,10 +252,9 @@ fn display_response_is_monotone_hue_preserving_and_shares_sdr_below_the_shoulder
 /// A deck filling the view darkens the light falling on it about sixfold, and
 /// the eye adapts to that light. The lab's cloud-shadow switch clears the
 /// deck's shadows from the field grids the eye adapts through, so a matte grey
-/// view with them shows CIECAM02's brightness of the deck's light beside the
-/// view without: a little dimmer, not sixfold dimmer.
+/// view with them remains darker than the view without them.
 #[test]
-fn a_view_under_a_deck_adapts_to_its_light_by_the_brightness_law() {
+fn a_view_under_a_deck_adapts_to_its_light_and_stays_darker() {
     let arguments = view(
         "scene_neutral",
         ["160", "100"],
@@ -278,10 +272,9 @@ fn a_view_under_a_deck_adapts_to_its_light_by_the_brightness_law() {
         "the eye is adapted to {light_ratio} of the light without the deck's shadows",
     );
     let displayed_ratio = mean(&luminances(&shaded.rgba)) / mean(&luminances(&unshaded.rgba));
-    let brightness_ratio = light_ratio.powf(browser::ADAPTED_BRIGHTNESS_EXPONENT);
     assert!(
-        displayed_ratio < 1.0 && (displayed_ratio / brightness_ratio).log2().abs() < 0.1,
-        "displayed {displayed_ratio}, brightness law {brightness_ratio}",
+        displayed_ratio.is_finite() && displayed_ratio > 0.0 && displayed_ratio < 1.0,
+        "displayed ratio {displayed_ratio}",
     );
 }
 
@@ -417,13 +410,8 @@ fn adapting_field_stops(capture: &Capture) -> Vec<f32> {
         .collect()
 }
 
-/// Adaptation is retinal: each part of the view eases in stops toward its own
-/// adapting light, taking 3 s to darkening light and 1 s to brightening light,
-/// and keeps its place on the screen as the view pans. Panning from daylight
-/// to dusk leaves the part still in daylight nearly as adapted as it settles,
-/// while the part now at dusk lags.
 #[test]
-fn each_part_of_the_view_adapts_in_place_as_the_view_pans() {
+fn cone_background_follows_the_physical_neural_response_as_the_view_pans() {
     let day = ["-400", "0", "8000"];
     let dusk = ["6000", "0", "8000"];
     let field = |name: &str, camera, extra: &[&str]| {
@@ -432,51 +420,109 @@ fn each_part_of_the_view_adapts_in_place_as_the_view_pans() {
             &with(view("scene_production", ["320", "200"], camera, "0"), extra),
         ))
     };
-    let pan = |name: &str, from: [&str; 3], to, seconds| {
-        field(
+    let from = field("neural-day", day, &[]);
+    let to = field("neural-dusk", dusk, &[]);
+    let panned = field(
+        "neural-pan",
+        dusk,
+        &["--prior-view", &day.join(","), "--adaptation-seconds", "1"],
+    );
+    let mut largest_change = 0.0_f32;
+    for ((from, to), actual) in from.iter().zip(&to).zip(&panned) {
+        largest_change = largest_change.max((from - to).abs());
+        let expected = (to.exp2() + (from.exp2() - to.exp2()) * (-1.0_f32 / 0.08).exp()).log2();
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "{actual} stops, expected {expected}"
+        );
+    }
+    assert!(
+        largest_change > 1.0,
+        "fixture changes only {largest_change} stops"
+    );
+}
+
+#[test]
+fn pigment_recovers_and_bleaches_with_the_physical_kinetics() {
+    let day = ["21500", "2800", "15"];
+    let night = ["-10500", "2800", "15"];
+    let state = |name: &str, camera, extra: &[&str]| -> [f32; 4] {
+        let capture = capture(
             name,
-            to,
-            &[
-                "--prior-view",
-                &from.join(","),
-                "--adaptation-seconds",
-                seconds,
-            ],
-        )
+            &with(
+                view("scene_production", ["160", "100"], camera, "57600"),
+                extra,
+            ),
+        );
+        std::array::from_fn(|channel| {
+            capture.derived["eyeAdaptationState"][channel]
+                .as_f64()
+                .unwrap() as f32
+        })
     };
-    let settled_day = field("pan-day", day, &[]);
-    let settled_dusk = field("pan-dusk", dusk, &[]);
-    let to_dusk = pan("pan-to-dusk", day, dusk, "3");
-    let to_day = pan("pan-to-day", dusk, day, "1");
-    // Each pan lasts one time constant, leaving 1/e of each texel's change.
-    let remaining = (-1.0_f32).exp();
-    for (name, panned, from, to) in [
-        ("to dusk", &to_dusk, &settled_day, &settled_dusk),
-        ("to day", &to_day, &settled_dusk, &settled_day),
+    let settled_day = state("pigment-day", day, &[]);
+    let settled_night = state("pigment-night", night, &[]);
+    let recovering = state(
+        "pigment-recovery",
+        night,
+        &[
+            "--prior-view",
+            &day.join(","),
+            "--adaptation-seconds",
+            "400",
+        ],
+    );
+    let bleaching = state(
+        "pigment-bleaching",
+        day,
+        &[
+            "--prior-view",
+            &night.join(","),
+            "--adaptation-seconds",
+            "0.03",
+        ],
+    );
+    for (from, to, actual, seconds) in [
+        (settled_day, settled_night, recovering, 400.0),
+        (settled_night, settled_day, bleaching, 0.03),
     ] {
-        for texel in 0..panned.len() {
-            let expected = to[texel] + (from[texel] - to[texel]) * remaining;
+        for (background, pigment, regeneration, bleaching) in
+            [(0, 2, 400.0, 16.0), (1, 3, 110.0, 2.2e8)]
+        {
+            let rate = 1.0 / regeneration + to[background] / bleaching;
+            let expected = to[pigment] + (from[pigment] - to[pigment]) * (-seconds * rate).exp();
             assert!(
-                (panned[texel] - expected).abs() < 0.01,
-                "{name}, texel {texel}: {} stops, expected {expected}",
-                panned[texel],
+                (actual[pigment] - expected).abs() < 1e-5,
+                "pigment {pigment}: {}, expected {expected}",
+                actual[pigment]
             );
         }
     }
-    let texels = browser::ADAPTING_FIELD_TEXELS as usize;
-    let lag = |texel: usize| (to_dusk[texel] - settled_dusk[texel]).abs();
-    let left_quarter_lag = (0..to_dusk.len())
-        .filter(|texel| texel % texels < texels / 4)
-        .map(lag)
-        .fold(0.0, f32::max);
-    let right_quarter_lag = (0..to_dusk.len())
-        .filter(|texel| texel % texels >= texels * 3 / 4)
-        .map(lag)
-        .fold(f32::INFINITY, f32::min);
-    assert!(
-        left_quarter_lag < 0.3 && right_quarter_lag > 0.75,
-        "daylit quarter lags up to {left_quarter_lag} stops, dusk quarter at least {right_quarter_lag}",
+    let once = state(
+        "pigment-once",
+        night,
+        &["--prior-view", &day.join(","), "--adaptation-seconds", "1"],
     );
+    let split = state(
+        "pigment-split",
+        night,
+        &[
+            "--prior-view",
+            &day.join(","),
+            "--prior-view",
+            &night.join(","),
+            "--adaptation-seconds",
+            "0.5",
+        ],
+    );
+    for channel in 0..4 {
+        assert!(
+            (once[channel] - split[channel]).abs() < 1e-5 * once[channel].abs().max(1.0),
+            "split state {channel}: {} versus {}",
+            once[channel],
+            split[channel]
+        );
+    }
 }
 
 /// The eye adapts to the mean light over its adapting field, as CIE defines

@@ -4,9 +4,9 @@ A browser sailing game with multiplayer naval combat. The prototype supports
 steering, ramming, collision damage, and persistent wrecks in a procedural
 world, whose islands a drone-like camera shows in perspective. Wooden hull
 sprites carry cloth sails that fill or luff with apparent wind. Day/night
-lighting uses gradual eye adaptation to the brightness and color of the light
-falling on each part of the view, with HDR highlights on supported browsers and
-displays. The local wind raises a fully developed sea that lifts, tilts and
+lighting models eye sensitivity and color as illumination changes; darkness
+can hide unlit boats and coasts. Supported browsers and displays show HDR
+highlights. The local wind raises a fully developed sea that lifts, tilts and
 carries boats; swell from distant storms isn't drawn, but it does the same
 and can ground them in its troughs. Water mirrors the sky and
 glints in sunlight and moonlight off short wind chop that travels across

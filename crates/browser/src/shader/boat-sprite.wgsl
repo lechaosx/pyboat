@@ -110,6 +110,25 @@ struct BoatFragment {
     @builtin(sample_mask) coverage: u32,
 };
 
+var<private> boat_vision_auxiliary: vec4<f32>;
+struct VisionBoatFragment {
+    @location(0) color: vec4<f32>,
+    @location(1) auxiliary: vec4<f32>,
+    @builtin(sample_mask) coverage: u32,
+};
+
+@fragment
+fn fragment_boat_vision(input: BoatSpriteOutput, @builtin(front_facing) front_facing: bool) -> VisionBoatFragment {
+    let output = shade_boat_sprite(input, front_facing, 0u);
+    return VisionBoatFragment(output.color, boat_vision_auxiliary, output.coverage);
+}
+
+@fragment
+fn fragment_sail_vision(input: BoatSpriteOutput, @builtin(front_facing) front_facing: bool, @builtin(sample_index) sample_index: u32) -> VisionBoatFragment {
+    let output = shade_boat_sprite(input, front_facing, sample_index);
+    return VisionBoatFragment(output.color, boat_vision_auxiliary, output.coverage);
+}
+
 fn shade_boat_sprite(
     input: BoatSpriteOutput,
     front_facing: bool,
@@ -143,9 +162,13 @@ fn shade_boat_sprite(
         color = mix(color, vec3<f32>(gray), 0.7) * 0.65;
     }
     let adaptation = field_adaptation(input.css_position_px);
+    let stimulus = color * boat_illumination(input, normal);
+    if VISION_INTERMEDIATE {
+        boat_vision_auxiliary = vision_auxiliary(stimulus, 1.0);
+    }
     var output: BoatFragment;
     output.color = vec4<f32>(encode_display_color(tone_map_scene_color(
-        color * boat_illumination(input, normal), adaptation, input.css_position_px,
+        stimulus, adaptation, input.css_position_px,
     )), 1.0);
     // Alpha describes filtered silhouette coverage. Retained samples are opaque;
     // applying alpha again when resolving would attenuate their edges twice.

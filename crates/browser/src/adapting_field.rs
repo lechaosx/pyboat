@@ -1,13 +1,16 @@
 use std::borrow::Cow;
+use wgpu::util::DeviceExt;
 
 use crate::ADAPTING_FIELD_BLUR_SHADER;
+use crate::exposure::EyeState;
 
 /// Texels along each axis of the illumination sampled over the view and of
 /// the adapting field blurred from it; adapting-field.wgsl mirrors them.
 pub const ILLUMINATION_TEXELS: u32 = 32;
 pub const ADAPTING_FIELD_TEXELS: u32 = 32;
 
-/// Illumination stores linear RGB; adaptation stores stops and unit-luminance white.
+/// The field's left half stores cone-background stops and adapting white;
+/// its right half stores rod/cone neural luminances and available pigments.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// The eye's adapting field over the view: the scene's illumination, rendered
@@ -21,17 +24,18 @@ pub struct AdaptingField {
     blur_input: wgpu::BindGroup,
     field: wgpu::Texture,
     previous_field: wgpu::Texture,
+    device: wgpu::Device,
 }
 
 impl AdaptingField {
     /// `uniform_layout` holds the scene uniforms alone at binding 0.
     pub fn new(device: &wgpu::Device, uniform_layout: &wgpu::BindGroupLayout) -> Self {
-        let texture = |label, texels, usage| {
+        let texture = |label, width, height, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
-                    width: texels,
-                    height: texels,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -45,15 +49,20 @@ impl AdaptingField {
         let illumination = texture(
             "Scene illumination",
             ILLUMINATION_TEXELS,
+            ILLUMINATION_TEXELS,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
         let field = texture(
             "Adapting field",
+            2 * ADAPTING_FIELD_TEXELS,
             ADAPTING_FIELD_TEXELS,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
         );
         let previous_field = texture(
             "Previous adapting field",
+            2 * ADAPTING_FIELD_TEXELS,
             ADAPTING_FIELD_TEXELS,
             wgpu::TextureUsages::COPY_DST,
         );
@@ -124,6 +133,7 @@ impl AdaptingField {
             blur_pipeline,
             field,
             previous_field,
+            device: device.clone(),
         }
     }
 
@@ -134,15 +144,6 @@ impl AdaptingField {
 
     pub fn texture(&self) -> &wgpu::Texture {
         &self.field
-    }
-
-    pub fn reset_to_daylight(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.encode_uniform(encoder, 1.0, [1.0; 3]);
-        encoder.copy_texture_to_texture(
-            self.field.as_image_copy(),
-            self.previous_field.as_image_copy(),
-            self.field.size(),
-        );
     }
 
     /// Renders the illumination that `draw` records, then blurs it into the
@@ -213,26 +214,39 @@ impl AdaptingField {
     /// Adapts the whole view to `light`, in scene light, of the colour `white`
     /// at unit luminance, in place of the field `encode` pools.
     pub fn encode_uniform(&self, encoder: &mut wgpu::CommandEncoder, light: f32, white: [f32; 3]) {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Uniform adapting field pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: f64::from(light.max(game::NIGHT_SKY_LIGHT).log2()),
-                        g: f64::from(white[0]),
-                        b: f64::from(white[1]),
-                        a: f64::from(white[2]),
-                    }),
-                    store: wgpu::StoreOp::Store,
+        let field = [
+            light.max(game::NIGHT_SKY_LIGHT).log2(),
+            white[0],
+            white[1],
+            white[2],
+        ];
+        let mut state = EyeState::settled(light).0;
+        let rod_white = (0.8451 * white[1] + 0.1459 * white[2]) / 0.991;
+        state[0] *= rod_white;
+        state[2] = 0.04 / (0.04 + state[0]);
+        let mut texels = Vec::with_capacity((2 * ADAPTING_FIELD_TEXELS.pow(2)) as usize);
+        for _ in 0..ADAPTING_FIELD_TEXELS {
+            texels.extend(std::iter::repeat_n(field, ADAPTING_FIELD_TEXELS as usize));
+            texels.extend(std::iter::repeat_n(state, ADAPTING_FIELD_TEXELS as usize));
+        }
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform eye state"),
+                contents: bytemuck::cast_slice(&texels),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(2 * ADAPTING_FIELD_TEXELS * 16),
+                    rows_per_image: None,
                 },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+            },
+            self.field.as_image_copy(),
+            self.field.size(),
+        );
     }
 }
