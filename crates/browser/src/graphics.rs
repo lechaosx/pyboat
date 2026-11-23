@@ -152,11 +152,9 @@ impl GraphicsQuality {
         }
     }
 
-    /// The most short-wave tile layers a frame transforms and draws, from the
-    /// longest; the unresolved slopes take the rest. Each layer costs its
-    /// transform every frame and its texture reads at every water pixel,
-    /// while the finer layers show only at the closest zooms, so lower tiers
-    /// keep the long waves that every zoom shows.
+    /// The most short-wave tile layers a frame transforms and draws; the
+    /// unresolved slopes take the rest. Each layer costs its transform every
+    /// frame and its texture reads at every water pixel.
     pub fn wave_tile_layers(self) -> usize {
         match self {
             Self::Low => 1,

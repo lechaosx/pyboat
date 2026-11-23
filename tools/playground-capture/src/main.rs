@@ -1496,6 +1496,15 @@ fn parse_diagnostic(value: &str) -> Result<ShaderSelection, String> {
             selection.quality = Some(quality);
             selection
         }
+        // water_visual_normals_<graphics tier>, whose tier sets the short-wave
+        // tile layers.
+        name if name.starts_with("water_visual_normals_") => {
+            let quality = GraphicsQuality::parse(&name["water_visual_normals_".len()..])
+                .ok_or_else(|| format!("unknown diagnostic: {name}"))?;
+            let mut selection = diagnostic(value, "water_visual_normals", &[]);
+            selection.quality = Some(quality);
+            selection
+        }
         // lighting_water_body_<Sun degrees>_<view degrees off the vertical>_<sediment
         // g/m³>.
         name if name.starts_with("lighting_water_body_") => {

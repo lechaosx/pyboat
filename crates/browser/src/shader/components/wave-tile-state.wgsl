@@ -30,10 +30,14 @@ struct WaveTileUniforms {
     // The wind's direction at the view centre, then the angular frequency of
     // the spectrum's peak, then padding.
     sea: vec4<f32>,
-    // The octaves of slope variance no drawn layer resolves: the shares of
-    // the layers' octaves the footprint filters away and those of the waves
+    // The octaves of slope variance no layer resolves: the shares of the
+    // layers' octaves the footprint filters away, and those of the waves
     // shorter than the layers down to the shortest gravity wave. Then the
-    // octaves the drawn layers resolve, the number of drawn layers, and the
-    // most layers the graphics tier draws.
+    // octaves the drawn layers resolve, then those the footprint resolves in
+    // the layers the graphics tier skips, then padding.
     octaves: vec4<f32>,
+    // The first layer drawn and the number drawn, then the number of layers
+    // the forced evaluation reads from the first: as many as the graphics
+    // tier draws. Then padding.
+    window: vec4<u32>,
 };

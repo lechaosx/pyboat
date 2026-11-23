@@ -21,8 +21,14 @@ const MAXIMUM_RECLASSIFIED_PIXELS: usize = WIDTH * HEIGHT / 10_000;
 /// Appearance detail averages out over a block; moved shallows do not.
 const MAXIMUM_SHALLOW_TINT_LEVELS: f64 = 2.0;
 const MAXIMUM_MEAN_LUMINANCE_CHANGE: f64 = 0.01;
-/// 99th percentile of relative 16×16-pixel mean luminance changes.
+/// 99th percentile of relative block mean luminance changes.
 const MAXIMUM_REGIONAL_LUMINANCE_CHANGE: f64 = 0.05;
+/// The pixels a region spans where the comparison hides the water surface's
+/// reflection, which shows the waves a tier draws.
+const REGION_PIXELS: usize = 16;
+/// The longest wave the short-wave tiles draw, their 18 m octave reaching half
+/// an octave longer; a lower tier may leave waves up to this long unresolved.
+const LONGEST_TILE_WAVELENGTH_M: f64 = 25.5;
 
 /// Hides the water surface's reflection, whose glint sparkles where a tier's
 /// resolved waves put them; their mean reflection is tier-independent.
@@ -166,7 +172,7 @@ fn storm() -> View {
         .expect("the world should have a daytime storm over water");
     View {
         camera_m: [camera_m.x, camera_m.y],
-        view_height_m: 40.0,
+        view_height_m: 240.0,
         world_time_seconds,
     }
 }
@@ -290,26 +296,35 @@ fn lower_tiers_keep_night_and_storm_darkening() {
     // Moonlight darkens every surface alike, so the moonlit views leave out the
     // moonglade's sparkle; the storm's darkening of open water shows in the
     // glint and sky reflection its clouds remove.
+    // The storm's regions span the longest wave a tier may leave unresolved,
+    // so they compare its darkening rather than where its waves glint.
     let lost_moonlight = ["--light-contributions", "1,0,1,1"];
     let lost_storm_darkening = ["--cloud-shadows", "0"];
-    for (view, shown, control) in [
+    let storm = storm();
+    let storm_region_pixels = (LONGEST_TILE_WAVELENGTH_M / f64::from(storm.view_height_m)
+        * HEIGHT as f64)
+        .ceil() as usize;
+    for (view, shown, control, region_pixels) in [
         (
             moonlit_coast(),
             &WITHOUT_SURFACE_REFLECTION[..],
             lost_moonlight,
+            REGION_PIXELS,
         ),
         (
             moonlit(rocky_shore()),
             &WITHOUT_SURFACE_REFLECTION[..],
             lost_moonlight,
+            REGION_PIXELS,
         ),
-        (storm(), &[][..], lost_storm_darkening),
+        (storm, &[][..], lost_storm_darkening, storm_region_pixels),
     ] {
         let high = capture(&view, shown);
         for quality in LOWER_TIERS {
             let comparison = compare_light(
                 &high,
                 &capture(&view, &[shown, &["--quality", quality]].concat()),
+                region_pixels,
             );
             assert!(
                 comparison.matches(),
@@ -317,7 +332,11 @@ fn lower_tiers_keep_night_and_storm_darkening() {
                 view.camera_m
             );
         }
-        let changed = compare_light(&high, &capture(&view, &[shown, &control].concat()));
+        let changed = compare_light(
+            &high,
+            &capture(&view, &[shown, &control].concat()),
+            region_pixels,
+        );
         assert!(
             !changed.matches(),
             "control at {:?}: {changed:?}",
@@ -362,13 +381,13 @@ fn compare_water(high: &[u8], other: &[u8]) -> WaterComparison {
     }
 }
 
-fn compare_light(high: &[u8], other: &[u8]) -> LightComparison {
+fn compare_light(high: &[u8], other: &[u8], region_pixels: usize) -> LightComparison {
     let high = luminance(high);
     let other = luminance(other);
     let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len() as f64;
-    let regional_changes = block_means(&high, 16)
+    let regional_changes = block_means(&high, region_pixels)
         .into_iter()
-        .zip(block_means(&other, 16))
+        .zip(block_means(&other, region_pixels))
         .map(|(high, other)| (other - high).abs() / high.max(1.0e-4))
         .collect();
     LightComparison {

@@ -510,9 +510,10 @@ fn stirred_fine_sediment_g_m3(availability: f32, orbital_speed_m_s: f32, depth_m
 // any tile, always keep their share. Cox and Munk measured the slopes of all
 // waves, so the drawn octaves share only what those and the resolved wave
 // modes leave of that total, their `slope_budget`, scaled alike. A lower
-// tier draws fewer layers and leaves their slopes unresolved. Below about
-// 5.3 m/s the peak's floor gives every octave a full share, an 18 m octave
-// included.
+// tier draws fewer layers, the finest the footprint mostly resolves, and
+// leaves the other layers' slopes unresolved at the drawn layers' share.
+// Below about 5.3 m/s the peak's floor gives every octave a full share, an
+// 18 m octave included.
 fn decorative_water_normal_sample(
     position_m: vec2<f32>,
     wind_speed_m_s: f32,
@@ -524,29 +525,35 @@ fn decorative_water_normal_sample(
     let phillips_octave_variance = (total.x + total.y)
         / log2(peak_wavelength_m / GRAVITY_CAPILLARY_WAVELENGTH_M);
     let octaves = wave_tile_octaves();
-    sample.short_wave_slope_variance = phillips_octave_variance * octaves.x;
+    // The octaves a tier skips take the drawn octaves' share, as a tier that
+    // draws them would give them, and stay unresolved.
+    let unresolved = phillips_octave_variance * octaves.x;
     let octave_variance = phillips_octave_variance * clamp(
-        (slope_budget - sample.short_wave_slope_variance)
-            / max(phillips_octave_variance * octaves.y, 1.0e-20),
+        (slope_budget - unresolved)
+            / max(phillips_octave_variance * (octaves.y + octaves.z), 1.0e-20),
         0.0,
         1.0,
     );
+    sample.short_wave_slope_variance = unresolved + octave_variance * octaves.z;
     if material_feature_visibility().w <= 0.0 {
         return sample;
     }
     let offset_m = camera_relative_position_m(position_m);
-    let shown_layers = u32(octaves.z);
-    // The forced evaluation takes every layer the tier can draw at any zoom.
-    let drawn = select(shown_layers, u32(octaves.w), EVALUATE_ALL_BRANCHES);
+    let window = wave_tile_window();
+    // The forced evaluation reads as many layers as the tier draws at any
+    // zoom.
+    let read = select(window.y, window.z, EVALUATE_ALL_BRANCHES);
     var gradient = vec2<f32>(0.0);
     var octaves_along_and_across = vec2<f32>(0.0);
-    for (var layer = 0u; layer < drawn; layer++) {
-        let slope = wave_tile_slope(layer, offset_m);
-        gradient += select(vec2<f32>(0.0), slope, layer < shown_layers);
+    for (var slot = 0u; slot < read; slot++) {
+        let layer = window.x + slot;
+        let shown = slot < window.y;
+        let slope = wave_tile_slope(layer, slot, offset_m);
+        gradient += select(vec2<f32>(0.0), slope, shown);
         octaves_along_and_across += select(
             vec2<f32>(0.0),
             wave_tile_resolved_octaves(layer),
-            layer < shown_layers,
+            shown,
         );
     }
     sample.gradient = sqrt(octave_variance) * gradient;

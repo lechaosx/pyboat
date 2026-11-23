@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     f64::consts::{SQRT_2, TAU},
+    ops::Range,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -50,17 +51,18 @@ pub struct WaveTileUniforms {
     clock: [f32; 4],
     sea: [f32; 4],
     octaves: [f32; 4],
+    window: [u32; 4],
 }
 
 impl WaveTileUniforms {
-    fn drawn_layers(&self) -> u32 {
-        self.octaves[2] as u32
+    fn drawn_layers(&self) -> Range<u32> {
+        self.window[0]..self.window[0] + self.window[1]
     }
 
     /// Workgroups of the transform's column pass, then of its texel-row
     /// pass, then the layers each transforms.
     pub fn workgroups(&self) -> [u32; 3] {
-        [COLUMNS, TEXELS, self.drawn_layers()]
+        [COLUMNS, TEXELS, self.drawn_layers().len() as u32]
     }
 }
 
@@ -148,24 +150,54 @@ pub fn wave_tile_uniforms(
     let shares: [[f64; 2]; 2 * WAVE_TILE_LAYERS] = std::array::from_fn(|octave| {
         resolved_octave_shares(lowest_wavenumber(octave), footprint_m, peak_frequency)
     });
-    // Layers the tier or the footprint leaves out keep their share with the
-    // unresolved slopes, and are neither transformed nor copied.
-    let drawn = (0..WAVE_TILE_LAYERS.min(tier_layers))
+    // Layers the tier or the footprint leaves out are neither transformed nor
+    // copied.
+    let resolvable_layers = (0..WAVE_TILE_LAYERS)
         .take_while(|layer| shares[2 * layer][0] + shares[2 * layer][1] >= DRAWN_SHARE)
         .count();
+    let tier_layers = WAVE_TILE_LAYERS.min(tier_layers);
+    // A tier that draws fewer layers than the footprint resolves draws the
+    // finest it resolves at least half of and the longer ones next to it, a
+    // compromise: the longer layers it skips blur the unresolved slopes where
+    // their waves would tilt the surface.
+    let layer_octaves = |layer: usize| {
+        shares[2 * layer]
+            .iter()
+            .chain(&shares[2 * layer + 1])
+            .sum::<f64>()
+    };
+    let finest = (0..resolvable_layers)
+        .rev()
+        .find(|&layer| layer_octaves(layer) >= 1.0)
+        .unwrap_or(0);
+    let first = (finest + 1).saturating_sub(tier_layers);
+    let drawn_layers = first..resolvable_layers.min(first + tier_layers);
     let drawn_shares = |octave: usize| {
-        if octave / 2 < drawn {
+        if drawn_layers.contains(&(octave / 2)) {
             shares[octave]
         } else {
             [0.0; 2]
         }
     };
     let drawn_share = |octave: usize| drawn_shares(octave)[0] + drawn_shares(octave)[1];
-    let resolvable: f64 = (0..2 * WAVE_TILE_LAYERS).map(drawn_share).sum();
+    // The share of an octave a pixel resolves, drawn or skipped by the tier;
+    // the rest, and the layers the footprint leaves out, keep their full
+    // share with the unresolved slopes.
+    let resolvable_share = |octave: usize| {
+        if octave / 2 < resolvable_layers {
+            shares[octave][0] + shares[octave][1]
+        } else {
+            0.0
+        }
+    };
+    let drawn_octaves: f64 = (0..2 * WAVE_TILE_LAYERS).map(drawn_share).sum();
+    let skipped_octaves: f64 = (0..2 * WAVE_TILE_LAYERS)
+        .map(|octave| resolvable_share(octave) - drawn_share(octave))
+        .sum();
     let shortest_m = octave_m(2 * WAVE_TILE_LAYERS - 1) / SQRT_2;
     let unresolved = (shortest_m / SHORTEST_GRAVITY_WAVE_M).log2()
         + (0..2 * WAVE_TILE_LAYERS)
-            .map(|octave| 1.0 - drawn_share(octave))
+            .map(|octave| 1.0 - resolvable_share(octave))
             .sum::<f64>();
     let tile_m =
         |layer: usize| width_m / (width_m / (TILE_WAVELENGTHS * octave_m(2 * layer))).round();
@@ -175,14 +207,14 @@ pub fn wave_tile_uniforms(
         let ratio = (tile_m(layer) / f64::from(view_m[0].hypot(view_m[1])) - 1.0).clamp(0.0, 1.0);
         1.0 - ratio * ratio * (3.0 - 2.0 * ratio)
     };
-    // Tiles shorten fourfold from layer to layer, so a zoom blends one layer
-    // at a time; the forced evaluation blends the one at the edge between
-    // read and tiled layers, the frame's worst case.
-    let tier_layers = WAVE_TILE_LAYERS.min(tier_layers);
-    let forced_blend = (0..tier_layers)
+    // The forced evaluation reads as many layers as the tier draws, from the
+    // first it draws. Tiles shorten fourfold from layer to layer, so a zoom
+    // blends one layer at a time; the forced evaluation blends the one at the
+    // edge between read and tiled layers, the frame's worst case.
+    let forced_blend = (first..first + tier_layers)
         .rev()
         .find(|&layer| tiling(layer) < 1.0)
-        .unwrap_or(0);
+        .unwrap_or(first);
     let layers = std::array::from_fn(|layer| {
         let tile_m = tile_m(layer);
         let spacing_m = 0.5 * tile_m;
@@ -224,7 +256,7 @@ pub fn wave_tile_uniforms(
                 (drawn_shares(2 * layer)[0] + drawn_shares(2 * layer + 1)[0]) as f32,
                 // A layer drawn only to time the forced evaluation reads
                 // texels about a footprint apart, as drawn layers do.
-                (if layer < drawn {
+                (if drawn_layers.contains(&layer) {
                     f64::from(texels)
                 } else {
                     (tile_m / footprint_m).min(f64::from(texels))
@@ -252,9 +284,15 @@ pub fn wave_tile_uniforms(
         ],
         octaves: [
             unresolved as f32,
-            resolvable as f32,
-            drawn as f32,
-            tier_layers as f32,
+            drawn_octaves as f32,
+            skipped_octaves as f32,
+            0.0,
+        ],
+        window: [
+            first as u32,
+            drawn_layers.len() as u32,
+            tier_layers as u32,
+            0,
         ],
     }
 }
@@ -462,7 +500,7 @@ impl WaveTiles {
     /// Moves the transformed layers that `uniforms` draws into the scene's
     /// texture, after `dispatch` has run.
     pub fn copy(&self, encoder: &mut wgpu::CommandEncoder, uniforms: &WaveTileUniforms) {
-        let layers = uniforms.drawn_layers();
+        let layers = uniforms.drawn_layers().len() as u32;
         if layers == 0 {
             return;
         }

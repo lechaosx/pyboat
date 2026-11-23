@@ -664,6 +664,11 @@ and verification details.
 - **[Implicit]** A graphics quality tier caps the short-wave tile layers each
   frame transforms and draws, so lower tiers skip the hidden layers'
   transforms too.
+- **[Implicit]** A tier that draws fewer short-wave layers than the footprint
+  resolves draws the finest layers, ending at the finest one it resolves at
+  least half of, a compromise. The longer layers it skips join the unresolved
+  facets, which blur the glint and the mirrored sky where those waves should
+  tilt the surface.
 - **[Implicit]** Nonrecoverable WebGPU errors stop production animation and close
   transport, clearing queued state; transient surface errors remain recoverable.
 
@@ -865,6 +870,6 @@ and verification details.
 | Glare | Whether intraocular scatter, CIE 180:2010's glare spread function pooled on the adapting field's grid, should veil the view around glint and snow, and whether adaptation should respond to their luminance |
 | Wave grid | Whether a world-anchored grid of the gameplay wave modes earns its pass if wave cost exceeds the budget: it would save about 3–3.5 ms at boat zoom, but short bands at wide views and in low wind stay per pixel, and the drawn surface departs from the server's |
 | Single-sea wave pattern | Whether, only if wave cost exceeds the budget, one FFT tile per frame of the sea state at the boat or view centre should set the waves' period, direction and phases, scaled per pixel by the local significant height: wide views would lose local period and direction, and drawn crests under other players' boats would stop matching the server's waves |
-| Short waves on phones | Whether the low tier can afford the finer short-wave tiles that give boat zoom its detail, judged by a phone bench |
+| Short waves on phones | Whether the low tier can afford a second short-wave tile layer, so phones at boat zoom show the longer chop beside the finest layer they resolve, judged by a phone bench |
 | Drawing the swell | Whether the swell can be drawn within budget: drawing its full spectrum per pixel cost about 2.8 ms on open ocean at boat zoom, for crests visible only from about 2 km. A narrow-band swell of 2–3 components with heights from a per-frame latitude table might cost 0.5–0.8 ms (unmeasured) but risks a too-regular look; a coarse world-anchored grid (see Wave grid) is the other candidate |
 | Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |

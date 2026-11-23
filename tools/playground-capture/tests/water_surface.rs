@@ -516,6 +516,70 @@ fn a_setting_disc_leaves_the_reflected_sky_unchanged() {
     assert!((set / up - 1.0).abs() < 0.05, "disc up {up}, set {set}");
 }
 
+/// A lower tier draws the finest short-wave layers a portrait phone's 3.5 cm
+/// pixels at boat zoom mostly resolve, not the longest, so the slopes it draws
+/// decorrelate within a metre at least as fully as the high tier's: slope
+/// differences across 1 m make up as large a share of those across 10 m,
+/// on open ocean in a light and in a moderate wind.
+#[test]
+fn lower_tiers_draw_the_short_waves_a_phones_boat_zoom_resolves() {
+    let (width, height) = (390, 844);
+    let view_height_m = 29.4;
+    let share_within_a_metre = |camera_m: [f64; 2], quality: &str| {
+        let diagnostic = format!("water_visual_normals_{quality}");
+        let (camera_x, camera_y) = (camera_m[0].to_string(), camera_m[1].to_string());
+        let rgba = capture_rgba(
+            &format!("{diagnostic}-{camera_x}"),
+            &[
+                "--diagnostic",
+                &diagnostic,
+                "--width",
+                &width.to_string(),
+                "--height",
+                &height.to_string(),
+                "--view-height",
+                &view_height_m.to_string(),
+                "--camera-x",
+                &camera_x,
+                "--camera-y",
+                &camera_y,
+                "--world-time",
+                &OPEN_OCEAN_WORLD_TIME_SECONDS.to_string(),
+            ],
+        );
+        let slopes: Vec<[f64; 2]> = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| {
+                let normal =
+                    [0, 1, 2].map(|channel| 2.0 * srgb_channel_to_linear(pixel[channel]) - 1.0);
+                [-normal[0] / normal[2], -normal[1] / normal[2]]
+            })
+            .collect();
+        // The mean squared difference of slopes `distance_m` apart down the
+        // view.
+        let structure = |distance_m: f64| {
+            let rows = (distance_m / view_height_m * height as f64).round() as usize;
+            mean((0..(height - rows) * width).map(|index| {
+                let (near, far) = (slopes[index], slopes[index + rows * width]);
+                (near[0] - far[0]).powi(2) + (near[1] - far[1]).powi(2)
+            }))
+        };
+        structure(1.0) / structure(10.0)
+    };
+    for camera_m in [OPEN_OCEAN_M, [0.0, -20_000.0]] {
+        let high = share_within_a_metre(camera_m, "high");
+        for quality in ["medium", "low"] {
+            let lower = share_within_a_metre(camera_m, quality);
+            assert!(
+                lower >= high,
+                "at {camera_m:?}: share within a metre {high} high, {lower} {quality}",
+            );
+        }
+    }
+}
+
 /// At a calm point of the surface wind the short-wave tiles keep their
 /// Phillips share of Cox and Munk's total there, spread down from the tiles'
 /// longest wavelength, so the high tier still resolves more slope than the

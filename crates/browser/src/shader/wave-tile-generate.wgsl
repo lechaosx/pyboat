@@ -2,9 +2,9 @@
 var<uniform> wave_tile_generation: WaveTileUniforms;
 @group(1) @binding(1)
 var<storage, read_write> wave_tile_columns: array<vec2<f32>>;
-// The tiles' texels, layer by layer and row by row, each slope's two
-// components as half floats, which a copy then moves into the scene's
-// texture: WebGPU stores no two-channel half-float texture.
+// The drawn tiles' texels, layer by layer from the first drawn and row by
+// row, each slope's two components as half floats, which a copy then moves
+// into the scene's texture: WebGPU stores no two-channel half-float texture.
 @group(1) @binding(2)
 var<storage, read_write> wave_tile_packed_slopes: array<u32>;
 
@@ -168,7 +168,7 @@ fn generate_wave_tile_columns(
     @builtin(workgroup_id) workgroup: vec3<u32>,
     @builtin(local_invocation_index) invocation: u32,
 ) {
-    let layer = workgroup.y;
+    let layer = wave_tile_generation.window.x + workgroup.y;
     let column = workgroup.x;
     let texels = wave_tile_texels(layer);
     if abs(i32(column) - WAVE_TILE_REACH) >= i32(texels / 2u) {
@@ -202,7 +202,8 @@ fn generate_wave_tile_texel_rows(
     @builtin(workgroup_id) workgroup: vec3<u32>,
     @builtin(local_invocation_index) invocation: u32,
 ) {
-    let layer = workgroup.y;
+    let slot = workgroup.y;
+    let layer = wave_tile_generation.window.x + slot;
     let row = workgroup.x;
     let texels = wave_tile_texels(layer);
     if row >= texels {
@@ -230,7 +231,7 @@ fn generate_wave_tile_texel_rows(
             let slope = pack2x16float(wave_tile_fft[result + index]);
             for (var copy = 0u; copy < copies * copies; copy++) {
                 let texel_row = row + texels * (copy / copies);
-                wave_tile_packed_slopes[(layer * WAVE_TILE_TEXELS + texel_row) * WAVE_TILE_TEXELS
+                wave_tile_packed_slopes[(slot * WAVE_TILE_TEXELS + texel_row) * WAVE_TILE_TEXELS
                     + index + texels * (copy % copies)] = slope;
             }
         }

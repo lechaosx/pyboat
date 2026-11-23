@@ -1,10 +1,14 @@
 // Passes that never draw water read no wave tiles.
-fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
+fn wave_tile_slope(layer: u32, slot: u32, offset_m: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(0.0);
 }
 
 fn wave_tile_octaves() -> vec4<f32> {
     return vec4<f32>(0.0);
+}
+
+fn wave_tile_window() -> vec4<u32> {
+    return vec4<u32>(0u);
 }
 
 fn wave_tile_resolved_octaves(layer: u32) -> vec2<f32> {

@@ -6,9 +6,9 @@ var wave_tile_sampler: sampler;
 var<uniform> wave_tiles: WaveTileUniforms;
 
 // A tile at the lattice vertex `vertex`, shifted by the vertex's seeded
-// offset, at `position` in tile lengths.
+// offset, at `position` in tile lengths, from the texture's layer `slot`.
 fn wave_tile_texel(
-    layer: u32,
+    slot: u32,
     position: vec2<f32>,
     vertex: vec2<i32>,
     period: i32,
@@ -24,13 +24,14 @@ fn wave_tile_texel(
         wave_tile_texture,
         wave_tile_sampler,
         (position + offset) * texture_scale,
-        layer,
+        slot,
         0.0,
     ).xy;
 }
 
 // The slope of a layer's two bands at `offset_m` from the view centre, each
-// band of unit slope variance less what the footprint filters. Heitz and
+// band of unit slope variance less what the footprint filters. The texture
+// holds the layer at `slot` from the first layer transformed. Heitz and
 // Neyret's (2018, Proc. ACM Comput. Graph. Interact. Tech. 1) variance-
 // preserving blend of three copies of the tile at seeded offsets, on a
 // triangle lattice of half the tile's spacing, hides the tile's period; a
@@ -38,7 +39,7 @@ fn wave_tile_texel(
 // A tile longer than twice the view's diagonal never shows a wave twice, so
 // it is read once, and the blend takes over, by `blend.x`, as the tile
 // shortens to one diagonal.
-fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
+fn wave_tile_slope(layer: u32, slot: u32, offset_m: vec2<f32>) -> vec2<f32> {
     let tiles = wave_tiles.layers[layer];
     let lattice = 2.0 * offset_m / tiles.tile.x;
     let skewed = vec2<f32>(lattice.x - 0.57735027 * lattice.y, 1.1547005 * lattice.y)
@@ -64,7 +65,7 @@ fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
             wave_tile_texture,
             wave_tile_sampler,
             position * texture_scale,
-            layer,
+            slot,
             0.0,
         ).xy;
     }
@@ -72,7 +73,7 @@ fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
         return blended;
     }
     let slope = weights.x * wave_tile_texel(
-            layer,
+            slot,
             position,
             base + select(vec2<i32>(1), vec2<i32>(0), lower),
             period,
@@ -80,7 +81,7 @@ fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
             texture_scale,
         )
         + weights.y * wave_tile_texel(
-            layer,
+            slot,
             position,
             base + select(vec2<i32>(1, 0), vec2<i32>(0, 1), lower),
             period,
@@ -88,7 +89,7 @@ fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
             texture_scale,
         )
         + weights.z * wave_tile_texel(
-            layer,
+            slot,
             position,
             base + select(vec2<i32>(0, 1), vec2<i32>(1, 0), lower),
             period,
@@ -101,6 +102,10 @@ fn wave_tile_slope(layer: u32, offset_m: vec2<f32>) -> vec2<f32> {
 
 fn wave_tile_octaves() -> vec4<f32> {
     return wave_tiles.octaves;
+}
+
+fn wave_tile_window() -> vec4<u32> {
+    return wave_tiles.window;
 }
 
 fn wave_tile_resolved_octaves(layer: u32) -> vec2<f32> {
