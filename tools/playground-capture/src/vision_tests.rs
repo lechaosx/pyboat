@@ -350,7 +350,7 @@ fn visible_luminance_range_and_odd_pooling_phase() {
             if phase == count && size == (8, 1) {
                 let bytes =
                     super::read_texture(&device, &queue, encoder, &targets.luminance).unwrap();
-                for (i, b) in bytes.chunks_exact(4).enumerate() {
+                for (i, b) in bytes.as_chunks::<4>().0.iter().enumerate() {
                     let actual = decode(b);
                     let error = (actual - expected[i]).abs();
                     assert!(
@@ -545,7 +545,9 @@ fn scaled_linear_vision_preserves_dc_and_hdr_mixtures() {
             let linear = super::read_texture(&device, &queue, encoder, &targets.color).unwrap();
             assert!(
                 linear
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .all(|channel| half(channel).is_finite())
             );
             if let Some(previous) = &linear_reference {
@@ -557,7 +559,9 @@ fn scaled_linear_vision_preserves_dc_and_hdr_mixtures() {
             vision.encode(&mut encoder, &state, &targets, &output_view, true, None);
             let bytes = super::read_texture(&device, &queue, encoder, &output).unwrap();
             let pixels: Vec<[f32; 3]> = bytes
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .map(|b| [half(&b[0..2]), half(&b[2..4]), half(&b[4..6])])
                 .collect();
             assert!(

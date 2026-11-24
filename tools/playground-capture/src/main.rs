@@ -3421,14 +3421,18 @@ fn capture_report(
         .then(|| [1, 2, 3].map(|channel| central_mean(channel, false).unwrap()));
     let adapting_field_stops = adapting_field.as_ref().map(|field| {
         field
-            .chunks_exact(2 * ADAPTING_FIELD_TEXELS as usize)
+            .as_chunks::<{ 2 * ADAPTING_FIELD_TEXELS as usize }>()
+            .0
+            .iter()
             .flat_map(|row| &row[..ADAPTING_FIELD_TEXELS as usize])
             .map(|texel| texel[0])
             .collect()
     });
     let adapting_field_white = adapting_field.as_ref().map(|field| {
         field
-            .chunks_exact(2 * ADAPTING_FIELD_TEXELS as usize)
+            .as_chunks::<{ 2 * ADAPTING_FIELD_TEXELS as usize }>()
+            .0
+            .iter()
             .flat_map(|row| &row[..ADAPTING_FIELD_TEXELS as usize])
             .map(|texel| [texel[1], texel[2], texel[3]])
             .collect()
