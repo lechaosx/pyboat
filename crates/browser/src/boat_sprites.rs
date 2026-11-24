@@ -269,14 +269,17 @@ impl BoatSprites {
             immediate_size: 0,
         });
         let pipeline = |entry_point, sail, write_mask: wgpu::ColorWrites, depth_stencil| {
-            let mut targets = vec![Some(wgpu::ColorTargetState {
-                format: output_format,
-                blend: None,
-                write_mask,
-            })];
-            if vision {
-                targets.push(Some(wgpu::TextureFormat::Rg16Float.into()));
-            }
+            // Passes keep the auxiliary slot even without vision, so the
+            // pipelines declare it too: native wgpu compares trailing empty
+            // slots, which WebGPU ignores.
+            let targets = [
+                Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: None,
+                    write_mask,
+                }),
+                vision.then(|| wgpu::TextureFormat::Rg16Float.into()),
+            ];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry_point),
                 layout: Some(&layout),
@@ -387,16 +390,17 @@ impl BoatSprites {
                 } else {
                     "fragment"
                 }),
-                targets: &std::iter::once(output_format)
-                    .chain(vision.then_some(wgpu::TextureFormat::Rg16Float))
-                    .map(|format| {
-                        Some(wgpu::ColorTargetState {
-                            format,
-                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })
+                targets: &[
+                    Some(output_format),
+                    vision.then_some(wgpu::TextureFormat::Rg16Float),
+                ]
+                .map(|format| {
+                    format.map(|format| wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
                     })
-                    .collect::<Vec<_>>(),
+                }),
                 compilation_options: Default::default(),
             }),
             primitive: Default::default(),

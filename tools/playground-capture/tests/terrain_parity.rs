@@ -172,24 +172,48 @@ fn adapted_view_vision_reduces_chroma_everywhere() {
     assert!(chroma(&images[3]) < chroma(&images[2]));
 }
 
+/// lighting_model_regressions.wgsl's VISION_REGRESSION_GREY: the linear level
+/// at which vision regressions show their reference response.
+const VISION_REGRESSION_GREY: f32 = 0.254_152_1;
+
 #[test]
 fn night_vision_transitions_from_color_to_rod_sensitivity() {
     let world = WorldGeometry::default();
     let render = |name: &str| {
         render_diagnostic_image_with_view_at(world, Vector::ZERO, 0.0, 1.0, name, 1, 1)
     };
-    for material in ["gray", "white"] {
-        let cones = render(&format!("vision_{material}_cones"));
-        for vision in ["mesopic", "rods"] {
-            assert_eq!(cones, render(&format!("vision_{material}_{vision}")));
-        }
+    let gray = render("vision_gray_cones");
+    for vision in ["mesopic", "rods"] {
+        assert_eq!(gray, render(&format!("vision_gray_{vision}")));
     }
+    let white = render("vision_white_cones");
+    assert_eq!(white, render("vision_white_rods"));
+    // At this mesopic level, bleached rods respond nearer saturation than the
+    // daylight observer does at the matched response (Pattanaik et al. 2000,
+    // Eq.2-6), so white shows less contrast with grey than in daylight.
+    let white_mesopic = render("vision_white_mesopic");
+    assert_eq!(white_mesopic[0], white_mesopic[1]);
+    assert_eq!(white_mesopic[1], white_mesopic[2]);
+    assert!(
+        white_mesopic[0] < white[0],
+        "{white_mesopic:?} against {white:?}"
+    );
+    assert!(
+        white_mesopic[0] > gray[0],
+        "{white_mesopic:?} against {gray:?}"
+    );
     let red = render("vision_red_cones");
     assert_eq!(&red[1..3], &[0, 0]);
-    assert!((srgb_channel_to_linear(red[0]) - 0.5).abs() < 0.005);
+    assert!(
+        (srgb_channel_to_linear(red[0]) - VISION_REGRESSION_GREY).abs()
+            < 0.01 * VISION_REGRESSION_GREY
+    );
     let blue = render("vision_blue_cones");
     assert_eq!(&blue[..2], &[0, 0]);
-    assert!((srgb_channel_to_linear(blue[2]) - 0.5).abs() < 0.005);
+    assert!(
+        (srgb_channel_to_linear(blue[2]) - VISION_REGRESSION_GREY).abs()
+            < 0.01 * VISION_REGRESSION_GREY
+    );
     for material in ["red", "blue"] {
         let cones = render(&format!("vision_{material}_cones"));
         let mesopic = render(&format!("vision_{material}_mesopic"));
@@ -198,8 +222,9 @@ fn night_vision_transitions_from_color_to_rod_sensitivity() {
             |pixel: &[u8]| pixel[..3].iter().max().unwrap() - pixel[..3].iter().min().unwrap();
         assert!(spread(&cones) > spread(&mesopic));
         assert!(spread(&mesopic) > spread(&rods));
-        assert_eq!(rods[0], rods[1]);
-        assert_eq!(rods[1], rods[2]);
+        // Rod-dominated colours approach achromatic continuously
+        // (ARCHITECTURE.md), so a primary keeps a trace of its cone colour.
+        assert!(spread(&rods) <= 1, "{rods:?}");
     }
     assert!(
         linear_luminance(&render("vision_blue_rods"))
@@ -234,22 +259,31 @@ fn night_vision_noise_is_unbiased_bounded_and_continuous() {
             .0
             .iter()
             .map(|pixel| {
-                assert_eq!(pixel[0], pixel[1]);
-                assert_eq!(pixel[1], pixel[2]);
+                // The eye's CAT16 round trip, with matrices rounded to six
+                // decimals, leaves neutral channels a few parts per million
+                // apart, which can straddle an 8-bit step.
+                let channels = &pixel[..3];
+                assert!(
+                    channels.iter().max().unwrap() - channels.iter().min().unwrap() <= 1,
+                    "{pixel:?}",
+                );
                 let value = srgb_channel_to_linear(pixel[0]);
-                assert!((value - 0.5).abs() <= 0.065);
+                assert!((value - VISION_REGRESSION_GREY).abs() <= 0.13 * VISION_REGRESSION_GREY);
                 value
             })
             .collect();
         let mean = values.iter().sum::<f32>() / values.len() as f32;
-        assert!((mean - 0.5).abs() < 0.005, "biased noise: {mean}");
+        assert!(
+            (mean - VISION_REGRESSION_GREY).abs() < 0.01 * VISION_REGRESSION_GREY,
+            "biased noise: {mean}",
+        );
     }
     let variance = |image: &[u8]| {
         image
             .as_chunks::<4>()
             .0
             .iter()
-            .map(|pixel| (srgb_channel_to_linear(pixel[0]) - 0.5).powi(2))
+            .map(|pixel| (srgb_channel_to_linear(pixel[0]) - VISION_REGRESSION_GREY).powi(2))
             .sum::<f32>()
             / (image.len() / 4) as f32
     };
@@ -3570,7 +3604,9 @@ fn baked_snow_over_partial_land_ice_keeps_the_ice_share_of_direct_evaluation() {
 #[test]
 fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
     // A glacier about 350 m up under a low Moon, at a boat-zoom view whose
-    // baked texels are finer than the elevation's half-precision steps.
+    // baked texels are finer than the elevation's half-precision steps. The
+    // Sun stands about 18 degrees below the horizon, so the eye adapts to the
+    // moonlit view rather than to a twilight sky that the view hides.
     let render = |label, diagnostic| {
         render_capture(
             label,
@@ -3586,7 +3622,7 @@ fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
                 "--view-height",
                 "60",
                 "--world-time",
-                "31320000",
+                "29084400",
                 "--diagnostic",
                 diagnostic,
                 "--cloud-shadows",
@@ -3598,6 +3634,10 @@ fn baked_relief_takes_direct_light_like_direct_evaluation_on_high_land() {
     };
     let direct = mean_linear_luminance(&render("high-relief-direct", "scene_direct"));
     let baked = mean_linear_luminance(&render("high-relief-baked", "scene"));
+    assert!(
+        direct > srgb_channel_to_linear(32),
+        "the glacier at {direct} is too dark to compare in 8 bits",
+    );
     assert!(
         (baked / direct - 1.0).abs() < 0.03,
         "baked direct light {baked} against direct evaluation {direct}",

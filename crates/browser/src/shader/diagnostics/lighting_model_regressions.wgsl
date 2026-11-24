@@ -13,6 +13,11 @@ override LIGHTING_MODEL_SUN_DEGREES: f32 = 30.0;
 override LIGHTING_MODEL_VIEW_DEGREES: f32 = 0.0;
 override LIGHTING_MODEL_SEDIMENT: f32 = 0.0;
 
+// Vision regressions show their reference response at this linear level: the
+// centre of 8-bit sRGB level 138, away from rounding boundaries, with room
+// below clipping for a white of twice the reference's light.
+const VISION_REGRESSION_GREY: f32 = 0.25415209;
+
 fn regression_adaptation(white: vec3<f32>) -> EyeAdaptation {
     // Preserve the existing diagnostic parameter's photopic gain scale.
     let light = pow(max(LIGHTING_MODEL_EXPOSURE_GAIN, 1.0), -12.0 / 11.0);
@@ -49,7 +54,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         let adaptation = regression_adaptation(vec3<f32>(1.0));
         let light = adaptation.state.y / DAYLIGHT_BACKGROUND_CD_M2;
         let reference = eye_color_response(vec3<f32>(0.5 * light), adaptation).rgb;
-        return vec4<f32>(eye_color_response(color * light, adaptation).rgb * (0.5 / reference.r), 1.0);
+        return vec4<f32>(eye_color_response(color * light, adaptation).rgb * (VISION_REGRESSION_GREY / reference.r), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 22u {
         let adaptation = regression_adaptation(vec3<f32>(1.0));
@@ -57,7 +62,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
         return vec4<f32>(adapted_view_color(
             vec3<f32>(LIGHTING_MODEL_SIGNAL), adaptation,
             input.position.xy, LIGHTING_MODEL_NOISE_PHASE,
-        ) * (0.5 / reference), 1.0);
+        ) * (VISION_REGRESSION_GREY / reference), 1.0);
     }
     if LIGHTING_MODEL_REGRESSION_OUTPUT == 23u {
         return vec4<f32>(adapted_view_color(

@@ -1964,6 +1964,7 @@ mod tests {
             entry_points,
             [
                 (naga::ShaderStage::Vertex, "vertex"),
+                (naga::ShaderStage::Fragment, "fragment_vision"),
                 (naga::ShaderStage::Fragment, "fragment"),
                 (naga::ShaderStage::Fragment, "fragment_illumination"),
             ],
@@ -2054,6 +2055,7 @@ mod tests {
             scene_entry_points,
             [
                 (naga::ShaderStage::Vertex, "vertex"),
+                (naga::ShaderStage::Fragment, "fragment_playground_vision"),
                 (naga::ShaderStage::Fragment, "fragment_playground_scene"),
                 (
                     naga::ShaderStage::Fragment,
@@ -2087,7 +2089,7 @@ mod tests {
         assert_eq!(landform_horizons.entry_points.len(), 1);
 
         let direct = naga::front::wgsl::parse_str(PLAYGROUND_DIRECT_SCENE_SHADER).unwrap();
-        assert_eq!(direct.entry_points.len(), 3);
+        assert_eq!(direct.entry_points.len(), 4);
 
         for &name in diagnostics::DIAGNOSTIC_ENTRY_POINTS {
             let source = generated_playground_diagnostic_shader(name).unwrap();

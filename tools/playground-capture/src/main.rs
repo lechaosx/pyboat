@@ -825,7 +825,8 @@ fn default_options() -> Options {
 }
 
 fn visibility_inspection(options: &Options) -> bool {
-    options.landscape_visibility != [1.0; 4]
+    options.diagnostic.id.starts_with("scene_occluder_coverage")
+        || options.landscape_visibility != [1.0; 4]
         || options.light_contribution_visibility != [1; 4]
         || options.land_material_color_visibility != [1; 4]
         || options.solid_material_color_visibility != [1; 4]
