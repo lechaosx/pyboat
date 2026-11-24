@@ -118,7 +118,8 @@ fn resolved_octave_shares(lowest_per_m: f64, footprint_m: f64, peak_frequency: f
 
 /// The wave tiles at the world clock for a view centred on `camera_m` whose
 /// sea-level pixels span `pixel_footprint_m`, under the sustained surface
-/// wind at the view centre, drawing at most `tier_layers` layers.
+/// wind at the view centre, drawing at most `tier_layers` layers, carried by
+/// the water's `orbital_displacement_m` at the view centre.
 #[allow(clippy::too_many_arguments)]
 pub fn wave_tile_uniforms(
     world_geometry: WorldGeometry,
@@ -129,10 +130,19 @@ pub fn wave_tile_uniforms(
     pixel_footprint_m: f32,
     surface_wind_m_s: [f32; 2],
     tier_layers: usize,
+    orbital_displacement_m: [f64; 2],
 ) -> WaveTileUniforms {
     let width_m = f64::from(world_geometry.width_m() as f32);
     let footprint_m = f64::from(pixel_footprint_m);
-    let [camera_x_m, camera_y_m] = camera_m.map(f64::from);
+    // The tiles ride the water's orbital displacement at the view centre, so
+    // short waves surge with the long waves' orbital motion as floating
+    // boats do (Plant 2015, J. Geophys. Res. 120, finds short waves carried
+    // by it). Compromise: the whole view takes the centre's displacement,
+    // about a·k of strain, 0.1 in a moderate sea, away from it.
+    let [camera_x_m, camera_y_m] = [
+        f64::from(camera_m[0]) - orbital_displacement_m[0],
+        f64::from(camera_m[1]) - orbital_displacement_m[1],
+    ];
     let wind = surface_wind_m_s.map(f64::from);
     let speed = wind[0].hypot(wind[1]);
     let direction = if speed > 0.0 {

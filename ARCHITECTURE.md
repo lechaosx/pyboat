@@ -392,8 +392,9 @@ and verification details.
 - **[Explicit]** One surface normal combines authoritative relief with visual
   material detail before celestial lighting.
 - **[Explicit]** Water rendering evaluates current, wave height, and wave slope
-  from shared local causes. Fine surface breakup changes appearance alone, evolves
-  without field-wide velocity, and has fixed cost independent of world size.
+  from shared local causes. Fine surface breakup changes appearance alone, rides
+  the waves' orbital motion as the boats do, and has fixed cost independent of
+  world size.
 - **[Implicit]** Intertidal ground keeps its composition as the tide covers
   it; below the beach the bed is rock and sand, which covers it in proportion
   to the beach's sediment against the share of time the wave climate moves it,
@@ -486,6 +487,9 @@ and verification details.
   their slope variance and the unresolved facets.
 - **[Implicit]** The pixel's footprint filters each wave of a tile's spectrum
   as it filters the wave modes.
+- **[Implicit]** The tiles move with the whole sea's orbital displacement at
+  the view centre, a compromise: the whole view takes the centre's
+  displacement.
 - **[Implicit]** The spectrum's peak is the wind sea's, and never shorter than
   the octaves' longest wavelength, a compromise: the octave layout stands in
   for gravity waves that outlast a calm of the local wind, where a real

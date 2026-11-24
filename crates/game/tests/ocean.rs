@@ -2,16 +2,39 @@ use game::{
     OCEAN_WAVE_BANDS_PER_OCTAVE, OCEAN_WAVE_LONGEST_M, OceanWaveForcing, Swell, Waterplane,
     background_swell, dinghy_parameters, hull_wave_fit, ocean_wave_state,
     procedural_match_environment, procedural_world_environment,
-    procedural_world_environment_interpolated, swell_climate_knots, wind_sea, wind_sea_components,
+    procedural_world_environment_interpolated, sea_orbital_displacement_m, swell_climate_knots,
+    wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
-use simulation::WorldGeometry;
+use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
 const SEED: u64 = 0x5eed_cafe;
 const TICK: u64 = 987_654;
 
 fn geometry() -> WorldGeometry {
     WorldGeometry::new(80_000.0, 40_000.0).unwrap()
+}
+
+/// The surface water's orbital displacement, which the drawn short waves
+/// ride, changes at the orbital velocity that carries boats.
+#[test]
+fn orbital_displacement_changes_at_the_orbital_velocity() {
+    let world = geometry();
+    let position_m = Vector::new(-39_999.75, 6_250.0);
+    let sample = procedural_world_environment(world, SEED, TICK, position_m);
+    let velocity_m_s = sample.ocean.wave_orbital_velocity_m_s.as_dvec2();
+    assert!(
+        velocity_m_s.length() > 0.05,
+        "orbital velocity {velocity_m_s}"
+    );
+    let displacement_m =
+        |tick| sea_orbital_displacement_m(world, SEED, tick, 0.0, position_m, &sample.sea);
+    let rate_m_s =
+        (displacement_m(TICK + 1) - displacement_m(TICK - 1)) * TICKS_PER_SECOND as f64 / 2.0;
+    assert!(
+        (rate_m_s - velocity_m_s).length() < 0.01 * velocity_m_s.length(),
+        "displacement changes at {rate_m_s}, orbital velocity {velocity_m_s}",
+    );
 }
 
 #[test]

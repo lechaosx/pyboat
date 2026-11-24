@@ -9,7 +9,7 @@ pub use ocean::{
     OCEAN_WAVE_LONGEST_M, OceanWaveForcing, OceanWaveMode, OceanWaveTable, SeaComponents,
     SurfaceFit, Swell, SwellClock, Waterplane, WaveComponent, WindSea, background_swell,
     hull_wave_fit, hull_wave_fit_of_sea, ocean_wave_state, ocean_wave_table, sea_components,
-    swell_climate_knots, wind_sea, wind_sea_components,
+    sea_orbital_displacement_m, swell_climate_knots, wind_sea, wind_sea_components,
 };
 use physics::glamx::Vec2 as Vector;
 use physics::prelude::Vector as PhysicsVector;

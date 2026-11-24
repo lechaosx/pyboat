@@ -14,7 +14,8 @@ use browser::{
     SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCacheFrame, TerrainCachePass,
     TerrainDepth, WaveTileUniforms, WaveTiles, baked_surface_sizes, boat_scene, exposure_target,
     field_grids, ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors,
-    surface_height_texture, view_width_m, visual_pixel_footprint_m, wave_tile_uniforms,
+    surface_height_texture, view_orbital_displacement_m, view_width_m, visual_pixel_footprint_m,
+    wave_tile_uniforms,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -3071,6 +3072,7 @@ fn capture_wave_tile_uniforms(options: &Options) -> Result<WaveTileUniforms, Str
             .quality
             .unwrap_or(options.quality)
             .wave_tile_layers(),
+        view_orbital_displacement_m(world_geometry, options.seed, tick, tick_fraction, camera_m),
     ))
 }
 

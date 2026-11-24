@@ -1544,6 +1544,35 @@ fn cubic_vector_correction(
     (PhysicsVector::new(x, y), PhysicsVector::new(vx, vy))
 }
 
+/// The surface water's orbital displacement at the view centre, which the
+/// short-wave tiles ride: the whole sea's there, swell included, as the
+/// boats' orbital velocity takes it.
+pub fn view_orbital_displacement_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    camera_m: [f32; 2],
+) -> [f64; 2] {
+    let centre = Vector::new(camera_m[0], camera_m[1]);
+    let environment = procedural_world_environment_interpolated(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        centre,
+    );
+    game::sea_orbital_displacement_m(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        centre,
+        &environment.sea,
+    )
+    .to_array()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

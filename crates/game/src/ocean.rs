@@ -788,6 +788,42 @@ pub fn hull_wave_fit_of_sea(
     }
 }
 
+/// The horizontal displacement from its mean place of the surface water at a
+/// point and clock in the sea whose components `sea` holds: each mode's
+/// -a sin φ k̂, whose rate of change is the orbital velocity that carries
+/// boats, limited by depth as the sea's height is.
+pub fn sea_orbital_displacement_m(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    world_tick: u64,
+    world_tick_fraction: f32,
+    position_m: Vector,
+    sea: &SeaComponents,
+) -> DVec2 {
+    let [sums, _] = sea_sums(
+        world_geometry,
+        match_seed,
+        world_tick,
+        world_tick_fraction,
+        position_m,
+        sea,
+        |_, mode| {
+            [
+                Some(Transfer {
+                    height: 1.0,
+                    slope_wave_number: DVec2::new(
+                        mode.wave_number_x_per_m,
+                        mode.wave_number_y_per_m,
+                    ),
+                    yaw_m2: 0.0,
+                }),
+                None,
+            ]
+        },
+    );
+    depth_scale(sea.sea_height_m(), sea.water_depth_m) * whole_sea(&sums).orbital_displacement_m
+}
+
 /// How a mode enters a fit over a waterplane through a pixel footprint.
 struct HullTransfer {
     waterplane: Waterplane,
@@ -1076,6 +1112,7 @@ fn whole_sea(sums: &PartitionSums) -> SurfaceSum {
         quadrature_m: wind.quadrature_m + swell_excess.quadrature_m,
         slope: wind.slope + swell_excess.slope,
         quadrature_slope: wind.quadrature_slope + swell_excess.quadrature_slope,
+        orbital_displacement_m: wind.orbital_displacement_m + swell_excess.orbital_displacement_m,
         orbital_velocity_m_s: wind.orbital_velocity_m_s + swell_excess.orbital_velocity_m_s,
         water_acceleration_m_s2: wind.water_acceleration_m_s2
             + swell_excess.water_acceleration_m_s2,
@@ -1085,7 +1122,8 @@ fn whole_sea(sums: &PartitionSums) -> SurfaceSum {
 }
 
 /// Sums of deep-water modes at a point or over a waterplane: height, its
-/// quadrature, their slopes, the surface's horizontal orbital velocity, the
+/// quadrature, their slopes, the surface's horizontal orbital displacement
+/// and velocity, the
 /// water's acceleration under the surface's pressure gradient, -g ∇η, which
 /// in deep water is that velocity's rate of change, and the yaw moment that
 /// gradient exerts per unit of displaced mass; and the mean drift of a hull
@@ -1099,6 +1137,7 @@ struct SurfaceSum {
     quadrature_m: f64,
     slope: DVec2,
     quadrature_slope: DVec2,
+    orbital_displacement_m: DVec2,
     orbital_velocity_m_s: DVec2,
     water_acceleration_m_s2: DVec2,
     yaw_moment_m2_s2: f64,
@@ -1135,6 +1174,7 @@ impl SurfaceSum {
         self.quadrature_m += height_m * sine;
         self.slope -= amplitude_m * sine * transfer.slope_wave_number;
         self.quadrature_slope += amplitude_m * cosine * transfer.slope_wave_number;
+        self.orbital_displacement_m -= height_m * sine / mode.wave_number_per_m * wave_number;
         self.orbital_velocity_m_s +=
             height_m * mode.angular_frequency_rad_s * cosine / mode.wave_number_per_m * wave_number;
         self.water_acceleration_m_s2 += GRAVITY_M_S2 * height_m * sine * wave_number;

@@ -927,6 +927,13 @@ pub fn playground_scene_uniforms(
         pixel_footprint_m,
         wind_m_s.into(),
         quality.wave_tile_layers(),
+        crate::view_orbital_displacement_m(
+            geometry,
+            match_seed,
+            tick,
+            tick_fraction,
+            [camera_x_m, camera_y_m],
+        ),
     );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
@@ -2251,6 +2258,13 @@ impl Renderer {
             pixel_footprint_m,
             view_cloud_state.low_wind_velocity_m_s.into(),
             self.graphics.quality.wave_tile_layers(),
+            crate::view_orbital_displacement_m(
+                world_geometry,
+                match_seed,
+                tick,
+                tick_fraction,
+                canonical_camera_m,
+            ),
         );
         self.wave_tiles.write(&self.queue, &wave_tiles);
         self.queue.write_buffer(
