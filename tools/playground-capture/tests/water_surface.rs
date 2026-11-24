@@ -708,9 +708,10 @@ fn delta_e(left: [f64; 3], right: [f64; 3]) -> f64 {
 /// white. The references integrate Maritorena, Morel and Gentili's shallow
 /// water on Gordon's deep reflectance, through Lee's relation above water,
 /// with Pope and Fry's and Smith and Baker's absorption plus the faked
-/// background, Morel's seawater backscattering, and Babin's sediment, over the
-/// CIE 1931 colour-matching functions under a 5778 K blackbody, with the Sun
-/// and view at the zenith; negative channels clip at zero.
+/// background, Morel's seawater backscattering plus Morel and Maritorena's
+/// particle backscattering at 0.1 mg/m³ of chlorophyll, and Babin's sediment,
+/// over the CIE 1931 colour-matching functions under a 5778 K blackbody, with
+/// the Sun and view at the zenith; negative channels clip at zero.
 #[test]
 fn water_body_follows_its_spectral_optics_from_bare_bed_to_deep_water() {
     let clear = water_body(90, 0, "0");
@@ -724,18 +725,18 @@ fn water_body_follows_its_spectral_optics_from_bare_bed_to_deep_water() {
         (
             "grey bed 2 m deep",
             clear[1][2],
-            [0.018_870, 0.055_001, 0.064_105],
+            [0.019_057, 0.055_295, 0.064_507],
         ),
-        ("deep", clear[0][DEEP], [0.0, 0.002_863, 0.015_000]),
+        ("deep", clear[0][DEEP], [0.0, 0.004_919, 0.019_842]),
         (
             "grey bed 5 m deep, 5 g/m³",
             turbid[1][FIVE_METRES],
-            [0.024_514, 0.066_977, 0.042_804],
+            [0.024_804, 0.067_609, 0.043_265],
         ),
         (
             "deep, 5 g/m³",
             turbid[0][DEEP],
-            [0.022_870, 0.066_078, 0.041_171],
+            [0.023_175, 0.066_857, 0.041_675],
         ),
     ] {
         let difference = delta_e(rendered, reference);

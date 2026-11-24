@@ -512,11 +512,11 @@ and verification details.
   gives way to it.
 - **[Implicit]** Water's body returns each light by its inherent optics,
   resolved spectrally, through Fresnel transmittance into and out of the
-  surface along refracted paths; seawater, an absorbing background, and the
-  fine sediment waves stir set those optics.
+  surface along refracted paths; seawater, an absorbing background,
+  open-ocean particles, and the fine sediment waves stir set those optics.
 - **[Explicit]** Water's clarity is pure seawater with one absorbing
-  background and the fine sediment that waves stir from beds that hold it, up
-  to what those beds hold.
+  background, open-ocean particles' backscattering, and the fine sediment that
+  waves stir from beds that hold it, up to what those beds hold.
 - **[Implicit]** Suspended sediment takes its optics from the colour of the
   bed it came from.
 - **[Implicit]** A pixel takes the mean relief light of the land it covers:

@@ -833,10 +833,16 @@ const WATER_ABSORPTION = WaterBands(
     vec4<f32>(0.068739, 0.13629, 0.27038, 0.43075),
 );
 // Seawater's backscattering, half its scattering 0.00288 (λ/500 nm)^-4.32 /m
-// (Morel 1974).
+// (Morel 1974), plus open-ocean particles' at 0.1 mg/m³ of chlorophyll,
+// clear water in Gordon and Clark's (1981, Appl. Opt. 20) sense, by Morel and
+// Maritorena's (2001, J. Geophys. Res. 106, eqs. 12-14)
+// {0.002 + 0.01 [0.5 - 0.25 log₁₀ Chl] (λ/550 nm)^ν} 0.416 Chl^0.766 /m with
+// ν = (log₁₀ Chl - 0.3) / 2, about 0.0007 /m across the visible. With them,
+// deep water's remote-sensing reflectance at 550 nm, 0.0014 /sr, is within 5%
+// of Gordon and Clark's clear-water value.
 const WATER_BACKSCATTERING = WaterBands(
-    vec4<f32>(0.0025557, 0.0017495, 0.0014173, 0.001109),
-    vec4<f32>(0.00084333, 0.00070567, 0.0005857, 0.0004192),
+    vec4<f32>(0.0033185, 0.0024779, 0.0021275, 0.0017986),
+    vec4<f32>(0.00151083, 0.00135927, 0.0012252, 0.0010343),
 );
 // Mineral sediment's backscattering per g/m³, 0.010 (555 nm/λ)^0.5 m²/g:
 // within the 0.005-0.02 m²/g of Woźniak and Stramski (2004, Appl. Opt. 43)
@@ -884,11 +890,11 @@ struct InherentOptics {
     backscattering: WaterBands,
 };
 
-// Seawater with the absorbing background and no mineral sediment, which open
-// water holds none of, as Babin et al. (2003, Limnol. Oceanogr. 48) find
-// oceanic particles organic and of low density. The faked absorbing
-// background stands in for their absorption. Compromise: their
-// backscattering, which brightens the clearest ocean a little, is left out.
+// Seawater with the absorbing background, open-ocean particles'
+// backscattering, and no mineral sediment, which open water holds none of, as
+// Babin et al. (2003, Limnol. Oceanogr. 48) find oceanic particles organic and
+// of low density. The faked absorbing background stands in for their
+// absorption.
 const SEAWATER_OPTICS = InherentOptics(WATER_ABSORPTION, WATER_BACKSCATTERING);
 
 // Seawater holding `sediment_g_m3` of sediment stirred from a bed of linear
