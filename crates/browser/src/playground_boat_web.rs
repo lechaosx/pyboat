@@ -96,6 +96,7 @@ impl PlaygroundBoatDriver {
         output_height: u32,
         scene_height: u32,
         view_height: f32,
+        camera_height_m: f32,
         time_seconds: f64,
     ) {
         let (vertices, batches) = crate::boat_sprites::sprite_vertices(
@@ -111,6 +112,7 @@ impl PlaygroundBoatDriver {
             Vec2::new(camera_x, camera_y),
             (output_width, output_height),
             view_height,
+            camera_height_m,
             crate::visual_pixel_footprint_m(view_height, scene_height),
             time_seconds,
         );

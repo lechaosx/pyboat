@@ -48,7 +48,7 @@ const INITIAL_VERTEX_CAPACITY: usize = 32768;
 pub(crate) struct Vertex {
     position: [f32; 3],
     color: [f32; 3],
-    coverage: f32,
+    coverage_or_projected_sheer_m: f32,
 }
 
 impl Vertex {
@@ -464,6 +464,7 @@ impl BoatSprites {
         camera_m: Vector,
         output_size: (u32, u32),
         view_height_m: f32,
+        camera_height_m: f32,
         scene_footprint_m: f32,
         time_seconds: f64,
         lightning: [[f32; 4]; 4],
@@ -476,6 +477,7 @@ impl BoatSprites {
             camera_m,
             output_size,
             view_height_m,
+            camera_height_m,
             scene_footprint_m,
             time_seconds,
         );
@@ -546,6 +548,7 @@ impl BoatSprites {
                 camera_m,
                 output_size,
                 view_height_m,
+                camera_height_m,
                 scene_footprint_m,
                 time_seconds,
             )
@@ -909,6 +912,7 @@ pub(crate) fn sprite_vertices(
     camera_m: Vector,
     output_size: (u32, u32),
     view_height_m: f32,
+    camera_height_m: f32,
     scene_footprint_m: f32,
     time_seconds: f64,
 ) -> (Vec<Vertex>, Vec<SpriteBatch>) {
@@ -938,6 +942,14 @@ pub(crate) fn sprite_vertices(
             scene.sea.as_ref(),
             scene_footprint_m,
         );
+        let mut center_offset_m = center_m - camera_m;
+        center_offset_m.x -= (center_offset_m.x / world_geometry.width_m() as f32).round()
+            * world_geometry.width_m() as f32;
+        // Along a ray through sea-level offset q, the tilted sheer
+        // intersects at h. Its h/(1 - h/H) is affine in q, so the shader
+        // can recover the same mask even when the relief sits below it.
+        let sheer_intercept_m = pose.sheer_m - pose.deck_slope.dot(center_offset_m);
+        let sheer_scale = 1.0 - sheer_intercept_m / camera_height_m;
         let sock = scene
             .windsock
             .map(|sock| windsock_mesh_with_cloth(sock, time_seconds, cloth))
@@ -970,12 +982,10 @@ pub(crate) fn sprite_vertices(
                 sprite.height_m,
                 pose.deck_slope,
             );
-            let mut center_offset_m = center_m - camera_m;
-            center_offset_m.x -= (center_offset_m.x / world_geometry.width_m() as f32).round()
-                * world_geometry.width_m() as f32;
             let relative_m = center_offset_m + offset_m;
+            let height_m = pose.sheer_m + height_m;
             vertices.push(Vertex {
-                position: [relative_m.x, relative_m.y, pose.sheer_m + height_m],
+                position: [relative_m.x, relative_m.y, height_m],
                 color: [
                     sprite.uv[0],
                     sprite.uv[1],
@@ -985,7 +995,13 @@ pub(crate) fn sprite_vertices(
                         -sprite.shade
                     },
                 ],
-                coverage: sprite.opacity,
+                // Opaque hull geometry takes all its coverage from the image.
+                coverage_or_projected_sheer_m: if sprite.image == 0 {
+                    let ray_m = relative_m / (1.0 - height_m / camera_height_m);
+                    (pose.sheer_m + pose.deck_slope.dot(ray_m - center_offset_m)) / sheer_scale
+                } else {
+                    sprite.opacity
+                },
             });
         }
     }

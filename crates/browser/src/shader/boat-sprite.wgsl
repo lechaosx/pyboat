@@ -15,7 +15,7 @@ struct BoatVertexInput {
     // Offset from the view centre, then height above mean sea level.
     @location(0) position_m: vec3<f32>,
     @location(1) color: vec3<f32>,
-    @location(2) coverage: f32,
+    @location(2) coverage_or_projected_sheer_m: f32,
 };
 
 struct BoatSpriteOutput {
@@ -27,7 +27,7 @@ struct BoatSpriteOutput {
     @location(2) @interpolate(linear) css_position_px: vec2<f32>,
     // The sea-level offset from the view centre seen through the fragment.
     @location(3) @interpolate(linear) view_offset_m: vec2<f32>,
-    @location(4) height_m: f32,
+    @location(4) @interpolate(linear) projected_sheer_m: f32,
     @location(5) world_position_m: vec3<f32>,
 };
 
@@ -43,14 +43,15 @@ fn vertex_boat_sprite(input: BoatVertexInput) -> BoatSpriteOutput {
         scale - scene.drone_camera.y, scale,
     );
     output.color = input.color;
-    output.coverage = input.coverage;
+    let hull = input.color.z >= 0.0;
+    output.coverage = select(input.coverage_or_projected_sheer_m, 1.0, hull);
+    output.projected_sheer_m = select(0.0, input.coverage_or_projected_sheer_m, hull);
     output.view_offset_m = input.position_m.xy / scale;
     let css_view_height_px = scene.css_view_height_px_and_padding.x;
     output.css_position_px = (vec2<f32>(0.5, -0.5) * clip_xy / scale + 0.5) * vec2<f32>(
         css_view_height_px * scene.camera_and_view_m.z / scene.camera_and_view_m.w,
         css_view_height_px,
     );
-    output.height_m = input.position_m.z;
     output.world_position_m = input.position_m;
     return output;
 }
@@ -63,7 +64,11 @@ fn hidden_by_surface(input: BoatSpriteOutput) -> bool {
     let view = vec2<f32>(0.5) + vec2<f32>(1.0, -1.0) * input.view_offset_m / scene.camera_and_view_m.zw;
     let size = vec2<i32>(textureDimensions(surface_height));
     let texel = clamp(vec2<i32>(floor(view * vec2<f32>(size))), vec2<i32>(0), size - 1);
-    return textureLoad(surface_height, texel, 0).r > input.height_m;
+    var height_m = input.world_position_m.z;
+    if input.color.z >= 0.0 {
+        height_m = input.projected_sheer_m / (1.0 + input.projected_sheer_m / scene.drone_camera.x);
+    }
+    return textureLoad(surface_height, texel, 0).r > height_m;
 }
 
 fn boat_illumination(input: BoatSpriteOutput, normal: vec3<f32>) -> vec3<f32> {

@@ -305,7 +305,9 @@ fn solid_image(rgba: [u8; 4]) -> Vec<u8> {
 fn half_covered_rig_keeps_the_opaque_hull_behind_it() {
     let fixture = Fixture::at((1024, 1024), VIEW_M);
     let blank = transparent_png();
-    let red = solid_image([220, 30, 30, 255]);
+    // Relief can shade the retained hull samples differently from the rest
+    // of the pixel. Black backing keeps the two samples' contribution fixed.
+    let backing = solid_image([0, 0, 0, 255]);
     let planar_rig = |alpha| {
         let mut rgba = vec![0; 2172 * 724 * 4];
         // This strip covers the flat boom and leaves the mast's wood patch clear;
@@ -334,7 +336,7 @@ fn half_covered_rig_keeps_the_opaque_hull_behind_it() {
     let boat = scene(1, 0.0, false);
     let images = |rig| {
         [
-            red.as_slice(),
+            backing.as_slice(),
             blank.as_slice(),
             rig,
             blank.as_slice(),
@@ -367,6 +369,7 @@ fn half_covered_rig_keeps_the_opaque_hull_behind_it() {
         .zip(rig_only.as_chunks::<4>().0.iter())
     {
         if rig[3] == 255 && hull[3] == 255 {
+            assert_eq!(blended[3], 255, "half coverage lost its opaque backing");
             for channel in 0..3 {
                 let expected = (linear(hull[channel]) + linear(covered[channel])) * 0.5;
                 assert!(

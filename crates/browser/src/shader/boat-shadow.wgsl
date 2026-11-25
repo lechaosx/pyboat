@@ -10,8 +10,9 @@ struct ShadowVertex {
 };
 
 @vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) color: vec3<f32>, @location(2) coverage: f32, @builtin(instance_index) instance: u32) -> ShadowVertex {
+fn vertex(@location(0) position: vec3<f32>, @location(1) color: vec3<f32>, @location(2) coverage_or_projected_sheer_m: f32, @builtin(instance_index) instance: u32) -> ShadowVertex {
     let offset = select(0.0, (f32(instance) - 1.0) * light_projection.periodic.y, light_projection.periodic.w > 0.0);
+    let coverage = select(coverage_or_projected_sheer_m, 1.0, color.z >= 0.0);
     return ShadowVertex(light_projection.matrix * vec4<f32>(position + vec3<f32>(offset, 0.0, 0.0), 1.0), color.xy, coverage);
 }
 

@@ -272,7 +272,7 @@ export class BoatPass {
   prepareShadows(encoder: GPUCommandEncoder, driver: PlaygroundBoatDriver | undefined, view: BoatView): boolean {
     let frame: Float32Array = new Float32Array(120);
     if (driver) {
-      driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.time);
+      driver.prepare_mesh(view.x, view.y, view.outputWidth, view.outputHeight, view.sceneHeight, view.height, view.cameraHeight, view.time);
       this.vertices = driver.vertices(); this.batches = driver.batches();
       frame = driver.shadow_frame(view.x, view.y, view.time);
     } else { this.vertices = new Uint8Array(); this.batches = new Uint32Array(); }

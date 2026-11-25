@@ -119,6 +119,10 @@ fn hull_sprite_follows_the_boat_without_changing_its_texture_coordinates() {
 fn wooden_mast_connects_the_deck_to_the_sail_head() {
     let scene = scene(Vector::new(0.0, 8.0));
     let head_m = game::DINGHY_BOOM_ABOVE_SHEER_M + scene.sail_luff_m;
+    let floor_m = hull_sprite_mesh(&scene)
+        .iter()
+        .map(|v| v.height_m)
+        .fold(0.0, f32::min);
     let mesh = browser::boat_mesh(&scene, 0.3, 0.01);
     let mast_faces: Vec<_> = mesh
         .as_chunks::<3>()
@@ -127,7 +131,7 @@ fn wooden_mast_connects_the_deck_to_the_sail_head() {
         .filter(|face| {
             face.iter().all(|v| {
                 !v.sail && v.opacity == 1.0 && (v.position_m - scene.sail_m[0]).length() < 0.08
-            }) && face.iter().any(|v| v.height_m == 0.0)
+            }) && face.iter().any(|v| v.height_m == floor_m)
                 && face.iter().any(|v| v.height_m == head_m)
         })
         .collect();
@@ -181,11 +185,6 @@ fn sail_material_height_keeps_a_vertical_luff_and_a_foot_on_the_boom() {
         let material_height = (lowest_uv - vertex.uv[1]) / (lowest_uv - highest_uv);
         assert!((vertex.height_m - foot_m - material_height * luff_m).abs() < 1.0e-5);
     }
-    assert!(
-        hull_sprite_mesh(&scene)
-            .iter()
-            .all(|v| !v.sail && v.height_m == 0.0)
-    );
 }
 
 #[test]
@@ -220,6 +219,45 @@ fn hull_texture_coordinates_keep_the_artwork_affine() {
             + (c.position_m - a.position_m) * ab.perp_dot(uv) / determinant;
         assert!((predicted - vertex.position_m).length() < 1.0e-5);
     }
+}
+
+#[test]
+fn painted_benches_stand_above_the_hull_floor() {
+    let scene = scene(Vector::ZERO);
+    let mesh = hull_sprite_mesh(&scene);
+    assert!(mesh.iter().all(|v| !v.sail));
+    let height_at = |x: f32, y: f32| {
+        let uv = Vector::new(x / 1671.0, y / 941.0);
+        mesh.as_chunks::<3>()
+            .0
+            .iter()
+            .filter_map(|[a, b, c]| {
+                let point = uv - Vector::from(a.uv);
+                let ab = Vector::from(b.uv) - Vector::from(a.uv);
+                let ac = Vector::from(c.uv) - Vector::from(a.uv);
+                let area = ab.perp_dot(ac);
+                if area == 0.0 {
+                    return None;
+                }
+                let wb = point.perp_dot(ac) / area;
+                let wc = ab.perp_dot(point) / area;
+                let wa = 1.0 - wb - wc;
+                (wa >= 0.0 && wb >= 0.0 && wc >= 0.0)
+                    .then_some(wa * a.height_m + wb * b.height_m + wc * c.height_m)
+            })
+            .reduce(f32::max)
+            .expect("painted hull texel is covered")
+    };
+
+    let floor = height_at(580.0, 470.0);
+    assert!(
+        height_at(400.0, 470.0) > floor,
+        "stern bench is level with the floor"
+    );
+    assert!(
+        height_at(1060.0, 470.0) > floor,
+        "forward bench is level with the floor"
+    );
 }
 
 #[test]

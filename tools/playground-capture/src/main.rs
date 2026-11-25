@@ -2715,6 +2715,7 @@ fn render_world(
             Vector::new(options.camera_x_m, options.camera_y_m),
             (options.width, options.height),
             options.view_height_m,
+            capture_camera(options)?.height_m,
             visual_pixel_footprint_m(options.view_height_m, options.height),
             options.world_time_seconds,
             scene_uniforms(options, &terrain_cache_frame, &baked_surface_frame)?.lightning_sources,

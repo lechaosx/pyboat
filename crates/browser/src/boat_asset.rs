@@ -37,6 +37,7 @@ const BOAT_SHEER_ABOVE_KEEL_M: f32 = 0.50;
 /// the rule 1.4.3 sections to the 250 kg loaded displacement; the class
 /// association's 0.09 m is unladen.
 const BOAT_HULL_DRAFT_M: f32 = 0.19;
+const COCKPIT_FLOOR_BELOW_SHEER_M: f32 = 0.15;
 const BOOM_ABOVE_SHEER_M: f32 = DINGHY_BOOM_ABOVE_SHEER_M;
 // Estimated bow-staff height above the gunwale.
 const WINDSOCK_ABOVE_SHEER_M: f32 = 0.4;
@@ -167,23 +168,79 @@ pub fn hull_sprite_mesh(scene: &BoatScene) -> Vec<BoatSpriteVertex> {
         * 2.0;
     let size = [1671.0, 941.0];
     let [left, top, right, bottom] = [65.0, 180.0, 1630.0, 760.0];
-    // One affine map preserves straight planks and benches.
-    [0, 1, 2, 0, 2, 3]
-        .map(|i| {
-            let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]][i];
-            let x = (uv[0] * size[0] - (left + right) * 0.5) / (right - left);
-            let y = ((top + bottom) * 0.5 - uv[1] * size[1]) / (bottom - top);
-            BoatSpriteVertex {
-                image: 0,
-                position_m: center + forward * (x * length) + port * (y * beam),
-                height_m: 0.0,
-                sail: false,
-                uv,
-                shade: 1.0,
-                opacity: 1.0,
-            }
-        })
-        .to_vec()
+    let vertex = |x_px: f32, y_px: f32, height_m| {
+        let x = (x_px - (left + right) * 0.5) / (right - left);
+        let y = ((top + bottom) * 0.5 - y_px) / (bottom - top);
+        BoatSpriteVertex {
+            image: 0,
+            position_m: center + forward * (x * length) + port * (y * beam),
+            height_m,
+            sail: false,
+            uv: [x_px / size[0], y_px / size[1]],
+            shade: 1.0,
+            opacity: 1.0,
+        }
+    };
+
+    // Each station follows the painted inner gunwale and the wall's foot.
+    // The sprite's alpha still owns the actual outside outline.
+    let floor = -COCKPIT_FLOOR_BELOW_SHEER_M;
+    let stations = [
+        (0.0, 335.0, 335.0, 0.0),
+        (123.0, 335.0, 335.0, 0.0),
+        (182.0, 314.0, 375.0, floor),
+        (433.0, 250.0, 313.0, floor),
+        (767.0, 218.0, 274.0, floor),
+        (1068.0, 252.0, 307.0, floor),
+        (1266.0, 326.0, 379.0, floor),
+        (1497.0, 435.0, 470.5, 0.0),
+        (1671.0, 470.5, 470.5, 0.0),
+    ];
+    let rows = stations.map(|(x, rail, deck, height)| {
+        [
+            vertex(x, 0.0, 0.0),
+            vertex(x, rail, 0.0),
+            vertex(x, deck, height),
+            vertex(x, size[1] - deck, height),
+            vertex(x, size[1] - rail, 0.0),
+            vertex(x, size[1], 0.0),
+        ]
+    });
+    let mut vertices = Vec::with_capacity((rows.len() - 1) * 30 + 60);
+    let bench_top_m = -0.025;
+    let bench_bottom_m = bench_top_m - 0.025;
+    for corners in [
+        [
+            (363.0, 286.0),
+            (438.0, 276.0),
+            (438.0, 665.0),
+            (363.0, 656.0),
+        ],
+        [
+            (1022.0, 276.0),
+            (1096.0, 288.0),
+            (1096.0, 655.0),
+            (1022.0, 666.0),
+        ],
+    ] {
+        let [a, b, c, d] = corners.map(|(x, y)| vertex(x, y, bench_top_m));
+        vertices.extend([a, b, c, a, c, d]);
+        // The seat's narrow side casts onto the floor; sample the painted
+        // edge along the extrusion to keep the UV map continuous.
+        for (a, b) in [(a, b), (b, c), (c, d), (d, a)] {
+            let below = |v: BoatSpriteVertex| BoatSpriteVertex {
+                height_m: bench_bottom_m,
+                ..v
+            };
+            vertices.extend([a, b, below(b), a, below(b), below(a)]);
+        }
+    }
+    for (a, b) in rows.iter().zip(&rows[1..]) {
+        for i in 0..5 {
+            vertices.extend([a[i], b[i], b[i + 1], a[i], b[i + 1], a[i + 1]]);
+        }
+    }
+    vertices
 }
 
 pub fn sail_mesh(scene: &BoatScene, time: f64) -> Vec<BoatSpriteVertex> {
@@ -497,7 +554,11 @@ pub fn boat_mesh_with_cloth(
             vertices.push(BoatSpriteVertex {
                 image: 2,
                 position_m: mast + (forward * angle.cos() + port * angle.sin()) * radius_m,
-                height_m: mast_height_m * height,
+                height_m: if height > 0.0 {
+                    mast_height_m
+                } else {
+                    -COCKPIT_FLOOR_BELOW_SHEER_M
+                },
                 sail: false,
                 uv: [
                     (250.0 + height * 1700.0) / 2172.0,

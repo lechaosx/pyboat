@@ -2387,6 +2387,7 @@ impl Renderer {
             camera_m,
             output_size,
             view_height_m,
+            camera.height_m,
             pixel_footprint_m,
             world_time_seconds,
             crate::lightning_sources(

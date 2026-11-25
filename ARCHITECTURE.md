@@ -358,8 +358,9 @@ and verification details.
   approach achromatic continuously, including pure RGB primaries.
 - **[Explicit]** Boats and the windsock take current scene illumination before
   the shared eye response; adaptation history changes perception, not incident light.
-- **[Implicit]** Painted hulls and flat fittings retain their planar lighting
-  surfaces; cloth and spars take light on their three-dimensional geometry.
+- **[Implicit]** Painted hulls use shallow relief for lighting and the sheer
+  for occlusion by water and terrain. Cloth and spars take light on their
+  three-dimensional geometry, and flat fittings retain planar lighting surfaces.
 - **[Implicit]** Boat shadows use one local direction for each celestial source.
   Direction variation across wide views or small worlds remains approximate.
 - **[Explicit]** A fullscreen pass composes terrain and materials at each
