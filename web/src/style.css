@@ -115,9 +115,6 @@ input:disabled {
   margin-top: 1.1rem;
 }
 #leave-action {
-  display: flex;
-  align-items: center;
-  gap: .6rem;
   margin-top: .3rem;
 }
 #join-form label, #graphics-form label {
@@ -378,14 +375,12 @@ small, .hint {
   white-space: nowrap;
 }
 .fps {
-  position: absolute;
-  top: .6rem;
-  left: .6rem;
-  padding: .2rem .35rem;
-  border-radius: .25rem;
-  color: #e8f2f2;
-  background: #101e2ad9;
-  font: 10px/1.2 ui-monospace, monospace;
+  position: fixed;
+  top: .35rem;
+  left: .45rem;
+  color: #e8f2f2a6;
+  text-shadow: 0 1px 2px #07171d;
+  font: 10px ui-monospace, monospace;
   pointer-events: none;
 }
 .welcome:has(#settings:not([hidden])) ~ :is(.fps, .scale-bar) {
