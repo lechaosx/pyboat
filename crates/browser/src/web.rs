@@ -920,6 +920,7 @@ pub fn playground_scene_uniforms(
     .low_wind_velocity_m_s;
     let wave_tiles = wave_tile_uniforms(
         geometry,
+        match_seed,
         tick,
         tick_fraction,
         [camera_x_m, camera_y_m],
@@ -2251,6 +2252,7 @@ impl Renderer {
         );
         let wave_tiles = wave_tile_uniforms(
             world_geometry,
+            match_seed,
             tick,
             tick_fraction,
             canonical_camera_m,

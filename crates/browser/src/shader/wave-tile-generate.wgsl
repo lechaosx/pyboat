@@ -24,18 +24,56 @@ fn complex_product(left: vec2<f32>, right: vec2<f32>) -> vec2<f32> {
 }
 
 // Directional spreading at `angle_rad` from the wind for waves of
-// `frequency_ratio` times the peak's angular frequency: Donelan, Hamilton
-// and Hui's (1985, Phil. Trans. R. Soc. A 315) sech²(βθ), with Banner's (1990,
-// J. Phys. Oceanogr. 20) β above 1.6 times the peak, which levels off at
-// 10^-0.4 for the shortest waves, normalized over the circle. Keep
-// synchronized with `along_wind_share` in crates/browser/src/wave_tiles.rs.
-fn wave_tile_spreading(angle_rad: f32, frequency_ratio: f32) -> f32 {
-    let banner = exp2(
-        3.3219281 * (-0.4 + 0.8393 * exp(-0.567 * log(frequency_ratio * frequency_ratio))),
-    );
-    let beta = select(banner, 2.28 * pow(frequency_ratio, -1.3), frequency_ratio < 1.6);
+// `wavenumber_ratio` times the peak's wavenumber, normalized over the circle.
+// Up to 5 times the peak it is Donelan, Hamilton and Hui's (1985, Phil.
+// Trans. R. Soc. A 315) sech²(βθ), with Banner's (1990, J. Phys. Oceanogr.
+// 20) β above 1.6 times the peak's frequency, which is √(k/kp) in deep water.
+// From 6 times the peak it is the bimodal spreading Peureux, Benetazzo and
+// Ardhuin (2018, Ocean Sci. 14) measured in free waves by stereo video:
+// Ewans' (1998, J. Phys. Oceanogr. 28) pair of wrapped Gaussian lobes, at
+// ±82°√(1 − 10^(−0.039 (k/kp − 5))) from the wind (their Eq. 19, fitted over
+// 5 < k/kp < 45), each as wide as puts its own peak at r = 0.34 k/kp − 0.45
+// times the density along the wind (Eq. 21, fitted over 4 < k/kp < 22),
+// where the two lobes' tails meet. Beyond 45 times the peak, past both fits,
+// the spreading turns toward Donelan et al.'s at the peak, by a share that
+// rises as 1 − 45 kp/k toward `aligned`: the share at which the octaves the
+// tiles carry and the shorter ones down to the shortest gravity wave, at
+// equal slope variance each, split along and across the wind as what the
+// wave modes leave of Cox and Munk's measured slopes does. Compromises: near
+// k/kp = 5 the two fits together ask for lobes narrowing to nothing, so the
+// spreadings blend linearly across 5 to 6, where the narrow lobes near the
+// wind leave those waves more aligned with it than their neighbours either
+// side; beyond 45 the lobes follow Eq. 19 to its 82° asymptote, within 1.1°
+// of its value at 45; beyond 22 the ratio holds its value there, between the
+// fall the authors measure with their fit's constant background and the rise
+// without it (Eq. 22); Ewans' Gaussian lobes stand in for the authors'
+// fitted pseudo-Voigt lobes and carry the constant background of that fit
+// (Eqs. 17 and 18), so they are wider than the measured lobes; and one young
+// sea under a 10.7 m/s wind stands for every wind and wave age, scaled by the
+// peak wavenumber as the authors scale it. Keep synchronized with
+// `along_wind_share` in crates/browser/src/wave_tiles.rs.
+fn wave_tile_spreading(angle_rad: f32, wavenumber_ratio: f32, aligned: f32) -> f32 {
+    let banner = exp2(3.3219281 * (-0.4 + 0.8393 * pow(wavenumber_ratio, -0.567)));
+    let beta = select(banner, 2.28 * pow(wavenumber_ratio, -0.65), wavenumber_ratio < 2.56);
     let sech = 1.0 / cosh(beta * angle_rad);
-    return 0.5 * beta / tanh(beta * PI) * sech * sech;
+    let donelan_banner = 0.5 * beta / tanh(beta * PI) * sech * sech;
+    let lobe = radians(82.0)
+        * sqrt(max(1.0 - exp2(-0.039 * 3.3219281 * (wavenumber_ratio - 5.0)), 0.0));
+    if lobe == 0.0 {
+        return donelan_banner;
+    }
+    let ratio = 0.34 * min(wavenumber_ratio, 22.0) - 0.45;
+    let width = lobe / sqrt(2.0 * log(2.0 * ratio));
+    let away = abs(angle_rad);
+    let near = (away - lobe) / width;
+    let far = (away + lobe) / width;
+    let wrapped = (TAU - lobe - away) / width;
+    let lobes = (exp(-0.5 * near * near) + exp(-0.5 * far * far) + exp(-0.5 * wrapped * wrapped))
+        / (2.0 * width * sqrt(TAU));
+    let measured = mix(donelan_banner, lobes, min(wavenumber_ratio - 5.0, 1.0));
+    let peak_sech = 1.0 / cosh(2.28 * angle_rad);
+    let peak = 0.5 * 2.28 / tanh(2.28 * PI) * peak_sech * peak_sech;
+    return mix(measured, peak, aligned * max(1.0 - 45.0 / wavenumber_ratio, 0.0));
 }
 
 // A layer's tile spans this many texels, which the texture repeats.
@@ -77,7 +115,7 @@ fn wave_tile_component(layer: u32, cycles: vec2<i32>, key: u32) -> vec2<f32> {
     let texel_phase = TAU / f32(texels) * vec2<f32>(cycles);
     let interpolation = (2.0 + cos(texel_phase.x)) * (2.0 + cos(texel_phase.y)) / 9.0;
     let filtered = k * clock.z;
-    let slope_variance = wave_tile_spreading(angle, frequency / sea.z) / (0.6931472 * k * k)
+    let slope_variance = wave_tile_spreading(angle, k / sea.z, sea.w) / (0.6931472 * k * k)
         * spacing * spacing * exp(-filtered * filtered) / interpolation;
     let hashed = hash32(
         key ^ (u32(cycles.x) * LATTICE_KEY_MULTIPLIERS[0]) ^ (u32(cycles.y) * LATTICE_KEY_MULTIPLIERS[1]),

@@ -3,7 +3,7 @@ use game::{
     background_swell, dinghy_parameters, hull_wave_fit, ocean_wave_state,
     procedural_match_environment, procedural_world_environment,
     procedural_world_environment_interpolated, sea_orbital_displacement_m, swell_climate_knots,
-    wind_sea, wind_sea_components,
+    wind_sea, wind_sea_components, wind_sea_slope_variance,
 };
 use physics::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
@@ -421,6 +421,29 @@ fn a_fully_developed_sea_has_pierson_and_moskowitzs_height_and_period() {
         assert!(
             (actual_period_s / period_s - 1.0).abs() < 0.03,
             "{wind_m_s} m/s: Tp {actual_period_s} s, expected {period_s} s"
+        );
+    }
+}
+
+/// The wind sea's slope variance splits its modes' slopes along and across
+/// its wind, and its wind sea runs mostly along the wind.
+#[test]
+fn wind_sea_slope_variance_splits_the_modes_slopes_along_and_across_the_wind() {
+    for (wind_m_s, angle) in [(4.0_f32, 0.3_f32), (10.0, 2.0), (18.0, -2.7)] {
+        let wind = Vector::new(angle.cos(), angle.sin()) * wind_m_s;
+        let total: f64 = wind_sea_components(geometry(), SEED, wind)
+            .iter()
+            .map(|component| {
+                0.5 * component.amplitude_m
+                    * component.amplitude_m
+                    * component.mode.wave_number_per_m
+                    * component.mode.wave_number_per_m
+            })
+            .sum();
+        let [along, across] = wind_sea_slope_variance(geometry(), SEED, wind);
+        assert!(
+            ((along + across) / total - 1.0).abs() < 1.0e-6 && along > 2.0 * across,
+            "{wind_m_s} m/s: {along} along and {across} across of {total}"
         );
     }
 }

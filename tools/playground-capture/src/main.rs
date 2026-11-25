@@ -3055,6 +3055,7 @@ fn capture_wave_tile_uniforms(options: &Options) -> Result<WaveTileUniforms, Str
     .low_wind_velocity_m_s;
     Ok(wave_tile_uniforms(
         world_geometry,
+        options.seed,
         tick,
         tick_fraction,
         camera_m,

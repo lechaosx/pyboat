@@ -513,7 +513,9 @@ fn stirred_fine_sediment_g_m3(availability: f32, orbital_speed_m_s: f32, depth_m
 // tier draws fewer layers, the finest the footprint mostly resolves, and
 // leaves the other layers' slopes unresolved at the drawn layers' share.
 // Below about 5.3 m/s the peak's floor gives every octave a full share, an
-// 18 m octave included.
+// 18 m octave included. Keep the drawn octaves' share synchronized with
+// `drawn_short_waves_leave_unresolved_slopes_along_and_across_the_wind` in
+// crates/browser/src/wave_tiles.rs.
 fn decorative_water_normal_sample(
     position_m: vec2<f32>,
     wind_speed_m_s: f32,

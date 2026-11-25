@@ -27,8 +27,9 @@ struct WaveTileUniforms {
     // Seconds into the clock's loop, the loop's period, the sea-level pixel
     // footprint, then padding.
     clock: vec4<f32>,
-    // The wind's direction at the view centre, then the angular frequency of
-    // the spectrum's peak, then padding.
+    // The wind's direction at the view centre, then the wavenumber of the
+    // spectrum's peak, then the alignment of `wave_tile_spreading` beyond
+    // the measured spreading.
     sea: vec4<f32>,
     // The octaves of slope variance no layer resolves: the shares of the
     // layers' octaves the footprint filters away, and those of the waves

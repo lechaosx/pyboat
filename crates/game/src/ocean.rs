@@ -294,6 +294,32 @@ fn for_each_component(
     (window_variance, weighted_wavenumber)
 }
 
+/// The slope variance along and across a surface wind of its wind sea's
+/// modes, in deep water and unfiltered by any footprint.
+pub fn wind_sea_slope_variance(
+    world_geometry: WorldGeometry,
+    match_seed: u64,
+    surface_wind_velocity_m_s: Vector,
+) -> [f64; 2] {
+    let table = ocean_wave_table_at_start(world_geometry, match_seed);
+    let direction = surface_wind_velocity_m_s.normalize_or_zero();
+    let [x, y] = [f64::from(direction.x), f64::from(direction.y)];
+    let mut slope_variance = [0.0; 2];
+    for_each_component(
+        &table.band_rotation_rad,
+        &SeaPartition::wind_sea(surface_wind_velocity_m_s),
+        |band, table_direction, amplitude_m, _| {
+            let mode = table.modes[band][table_direction];
+            let variance = 0.5 * amplitude_m * amplitude_m;
+            slope_variance[0] +=
+                variance * (mode.wave_number_x_per_m * x + mode.wave_number_y_per_m * y).powi(2);
+            slope_variance[1] +=
+                variance * (mode.wave_number_y_per_m * x - mode.wave_number_x_per_m * y).powi(2);
+        },
+    );
+    slope_variance
+}
+
 /// What raises the sea at a point: the sustained surface wind, the swell, and
 /// the water's depth.
 #[derive(Clone, Copy, Debug, PartialEq)]

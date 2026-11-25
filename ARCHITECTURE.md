@@ -485,6 +485,14 @@ and verification details.
 - **[Implicit]** The tiles take the direction and spectral peak of the
   sustained wind at the view centre, a compromise: the local wind still sets
   their slope variance and the unresolved facets.
+- **[Explicit]** The tiles spread their waves' directions as measured:
+  unimodal about the wind near the spectrum's peak, and bimodal for shorter
+  waves, whose two lobes part further from the wind as waves shorten, as
+  stereo video of free short waves shows. One measured young wind sea stands
+  for every wind and wave age, a compromise.
+- **[Explicit]** Waves shorter than those measurements turn back toward the
+  wind as far as the short waves need to split what the wave modes leave of
+  Cox and Munk's slopes along and across the wind.
 - **[Implicit]** The pixel's footprint filters each wave of a tile's spectrum
   as it filters the wave modes.
 - **[Implicit]** The tiles move with the whole sea's orbital displacement at
