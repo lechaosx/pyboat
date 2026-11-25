@@ -232,7 +232,14 @@ fn visible_luminance_range_and_odd_pooling_phase() {
       @group(1) @binding(0) var<uniform> probe:vec4<u32>;
       @vertex fn probe_vertex(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32>{let uv=vec2<f32>(f32((i<<1u)&2u),f32(i&2u));return vec4<f32>(uv*vec2<f32>(2.,-2.)+vec2<f32>(-1.,1.),0.,1.);}
       struct ProbeOut{@location(0) color:vec4<f32>,@location(1) auxiliary:vec4<f32>};
-      @fragment fn probe_fragment(@builtin(position) p:vec4<f32>)->ProbeOut{let values=array<f32,8>(0.,0.0000465,1.,32768.,65504.,100000000.,1600000000.,0.01);let index=u32(p.x)+u32(p.y)*probe.y;var y=values[index%8u];if probe.x<probe.y*probe.z {y=select(0.,1000.,index==probe.x);}return ProbeOut(vec4<f32>(0.),vision_auxiliary(vec3<f32>(y/(117300./PI)),1.));}
+      @fragment fn probe_fragment(@builtin(position) p:vec4<f32>)->ProbeOut {
+        let values=array<f32,8>(0.,0.0000465,1.,32768.,65504.,100000000.,1600000000.,0.01);
+        let index=u32(p.x)+u32(p.y)*probe.y;
+        var y=values[index%8u];
+        if probe.x<probe.y*probe.z {y=select(0.,1000.,index==probe.x);}
+        let red=select(0.,4096.,index==probe.x);
+        return ProbeOut(vec4<f32>(red,0.,0.,1.),vision_auxiliary(vec3<f32>(y/(117300./PI)),1.));
+      }
     "#);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("actual physical Y packing"),
@@ -275,20 +282,24 @@ fn visible_luminance_range_and_odd_pooling_phase() {
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[],
     });
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rg16Float,
-        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let readback = |format| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let luminance_readback = readback(browser::VISION_LUMINANCE_FORMAT);
+    let color_readback = readback(browser::VISION_COLOR_FORMAT);
     let decode = |b: &[u8]| {
         let f = |i| {
             let bits = u16::from_le_bytes([b[i], b[i + 1]]);
@@ -362,18 +373,24 @@ fn visible_luminance_range_and_odd_pooling_phase() {
                 continue;
             }
             vision.encode(&mut encoder, &state, &targets, &output_view, true, None);
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &targets.luminance,
-                    mip_level: size.0.max(size.1).ilog2(),
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                texture.as_image_copy(),
-                texture.size(),
-            );
-            let bytes = super::read_texture(&device, &queue, encoder, &texture).unwrap();
-            let actual = decode(&bytes);
+            for (source, destination) in [
+                (&targets.luminance, &luminance_readback),
+                (&targets.color, &color_readback),
+            ] {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: source,
+                        mip_level: size.0.max(size.1).ilog2(),
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    destination.as_image_copy(),
+                    destination.size(),
+                );
+            }
+            let luminance =
+                super::read_texture(&device, &queue, encoder, &luminance_readback).unwrap();
+            let actual = decode(&luminance);
             let target = if phase < count {
                 1000. / count as f32
             } else {
@@ -383,7 +400,148 @@ fn visible_luminance_range_and_odd_pooling_phase() {
                 (actual - target).abs() <= target * 0.003 + 6e-8,
                 "size {size:?}, phase {phase}: pooled {actual}, expected {target}"
             );
+            if phase < count {
+                let encoder = device.create_command_encoder(&Default::default());
+                let color = super::read_texture(&device, &queue, encoder, &color_readback).unwrap();
+                let actual = decode(&color);
+                let target = 4096. / count as f32;
+                assert!(
+                    (actual - target).abs() <= target * 0.003,
+                    "size {size:?}, phase {phase}: pooled HDR sample {actual}, expected {target}"
+                );
+            }
         }
+    }
+}
+
+#[test]
+fn reduced_acuity_keeps_a_small_light_centered_as_it_moves() {
+    use bytemuck::Zeroable;
+    use wgpu::util::DeviceExt;
+
+    let (_, device, queue) =
+        pollster::block_on(super::hardware_device(wgpu::Features::empty())).unwrap();
+    let size = (128, 128);
+    let vision = browser::VisionPass::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let targets = vision.targets(&device, size, size);
+    let field = browser::AdaptingField::new(&device, &super::uniform_layout(&device, "eye probe"));
+    let mut scene = super::SceneUniforms::zeroed();
+    scene.camera_and_view_m = [0., 0., 15., 15.];
+    scene.css_view_height_px_and_padding[0] = 128.;
+    scene.exposure_and_output[1] = 1.;
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::bytes_of(&scene),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let state = vision.state_bind_group(&device, &buffer, &field.view);
+    let output = super::capture_texture(&device, size.0, size.1);
+    let output_view = output.create_view(&Default::default());
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("small light seed"),
+        source: wgpu::ShaderSource::Wgsl(
+            r#"
+            @vertex fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                let p = vec2<f32>(f32(i & 1u) * 4. - 1., f32(i >> 1u) * 4. - 1.);
+                return vec4<f32>(p, 0., 1.);
+            }
+            struct Seed {
+                @location(0) color: vec4<f32>,
+                @location(1) auxiliary: vec4<f32>,
+            };
+            @fragment fn fragment() -> Seed {
+                return Seed(vec4<f32>(1.), vec4<f32>(0.00014, 0., 0., 1.));
+            }
+        "#
+            .into(),
+        ),
+    });
+    let seed = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vertex"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fragment"),
+            targets: &[
+                Some(browser::VISION_COLOR_FORMAT.into()),
+                Some(browser::VISION_LUMINANCE_FORMAT.into()),
+            ],
+            compilation_options: Default::default(),
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    let attachment = |view, r| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r,
+                    g: 0.,
+                    b: 0.,
+                    a: 1.,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        })
+    };
+    for x in 60..64 {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        field.encode_uniform(&mut encoder, 1., [1.; 3]);
+        {
+            // Uniform physical luminance isolates the blur's spatial response.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[
+                    attachment(&targets.color_view, 0.),
+                    attachment(&targets.luminance_view, 0.00014),
+                ],
+                ..Default::default()
+            });
+            pass.set_pipeline(&seed);
+            pass.set_scissor_rect(x, 63, 1, 1);
+            pass.draw(0..3, 0..1);
+        }
+        vision.encode(&mut encoder, &state, &targets, &output_view, true, None);
+        let pixels = super::read_texture(&device, &queue, encoder, &output).unwrap();
+        let source = (63 * size.0 + x) as usize;
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .any(|(i, rgba)| i != source && rgba[0] > 1),
+            "reduced acuity did not spread the light"
+        );
+        let mut weight = 0.;
+        let mut moment = 0.;
+        for (i, rgba) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            let srgb = f64::from(rgba[0]) / 255.;
+            let linear = if srgb <= 0.04045 {
+                srgb / 12.92
+            } else {
+                ((srgb + 0.055) / 1.055).powf(2.4)
+            };
+            weight += linear;
+            moment += linear * (i % size.0 as usize) as f64;
+        }
+        let center = moment / weight;
+        assert!(
+            (center - f64::from(x)).abs() < 0.5,
+            "light at {x} blurred around {center}"
+        );
     }
 }
 

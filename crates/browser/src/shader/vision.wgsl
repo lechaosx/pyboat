@@ -16,8 +16,16 @@ struct VisionMip { @location(0) color:vec4<f32>, @location(1) auxiliary:vec4<f32
 @fragment fn vision_downsample(input:VisionVertex)->VisionMip {
  let source=textureDimensions(vision_color);
  if all(source%vec2<u32>(2u)==vec2<u32>(0u)) {
-  return VisionMip(textureSampleLevel(vision_color,vision_sampler,input.uv,0.0),
-   textureSampleLevel(vision_aux,vision_sampler,input.uv,0.0));
+  // Bilinear taps at ±3/4 texel give a centered [1, 3, 3, 1]/8 kernel
+  // along each axis. Overlap shares each detail between neighboring mip
+  // cells, so its center can follow the source.
+  let d=0.75/vec2<f32>(source);
+  let color=0.25*(
+   textureSampleLevel(vision_color,vision_sampler,input.uv-d,0.0)+
+   textureSampleLevel(vision_color,vision_sampler,input.uv+vec2<f32>(d.x,-d.y),0.0)+
+   textureSampleLevel(vision_color,vision_sampler,input.uv+vec2<f32>(-d.x,d.y),0.0)+
+   textureSampleLevel(vision_color,vision_sampler,input.uv+d,0.0));
+  return VisionMip(color,textureSampleLevel(vision_aux,vision_sampler,input.uv,0.0));
  }
  // Odd mip extents require area weights; a center bilinear sample can
  // entirely miss a bright outer texel at a 3-to-1 reduction.
@@ -39,11 +47,38 @@ struct VisionMip { @location(0) color:vec4<f32>, @location(1) auxiliary:vec4<f32
  let area=(high.x-low.x)*(high.y-low.y);
  return VisionMip(color/area,auxiliary/area);
 }
+fn sample_blurred_color(uv:vec2<f32>,level:f32)->vec3<f32> {
+ if level==0.0 {return textureSampleLevel(vision_color,vision_sampler,uv,0.0).rgb;}
+ let mip=min(u32(level),textureNumLevels(vision_color)-1u);
+ let size=vec2<f32>(textureDimensions(vision_color,mip));
+ let position=uv*size;
+ let cell=floor(position);
+ let t=position-cell;
+ // The quadratic B-spline's three weights reconstruct with continuous
+ // slopes and a constant second moment. Pair the first two via bilinear taps.
+ let first=0.5*(1.0-t)*(1.0-t);
+ let last=0.5*t*t;
+ let a=(cell+0.5-first/(1.0-last))/size;
+ let b=(cell+1.5)/size;
+ let top=mix(textureSampleLevel(vision_color,vision_sampler,a,f32(mip)).rgb,
+  textureSampleLevel(vision_color,vision_sampler,vec2<f32>(b.x,a.y),f32(mip)).rgb,last.x);
+ let bottom=mix(textureSampleLevel(vision_color,vision_sampler,vec2<f32>(a.x,b.y),f32(mip)).rgb,
+  textureSampleLevel(vision_color,vision_sampler,b,f32(mip)).rgb,last.x);
+ return mix(top,bottom,last.y);
+}
 fn sample_rate_color(uv:vec2<f32>,rate:f32)->vec3<f32> {
- let level=floor(log2(max(rate,1.0)));
- let blend=clamp(rate/exp2(level)-1.0,0.0,1.0);
- return mix(textureSampleLevel(vision_color,vision_sampler,uv,level).rgb,
- textureSampleLevel(vision_color,vision_sampler,uv,level+1.0).rgb,blend);
+ if rate<=1.0 {return textureSampleLevel(vision_color,vision_sampler,uv,0.0).rgb;}
+ let spacing=exp2(floor(log2(rate)));
+ let variance=mix(select(0.25*spacing*spacing,0.0,spacing==1.0),spacing*spacing,rate/spacing-1.0);
+ // Use the box pyramid's mean per-axis variance across pixel phases.
+ // At spacing s>=2, the binomial pyramid and quadratic reconstruction
+ // contribute (s²-1)/4 and s²/4 respectively with exact 2:1 reductions.
+ let level=max(0.0,floor(0.5*log2(2.0*variance+0.5)));
+ let squared_spacing=exp2(2.0*level);
+ let low=select(0.5*squared_spacing-0.25,0.0,level==0.0);
+ let high=2.0*squared_spacing-0.25;
+ let blend=clamp((variance-low)/(high-low),0.0,1.0);
+ return mix(sample_blurred_color(uv,level),sample_blurred_color(uv,level+1.0),blend);
 }
 @fragment fn vision_finish(input:VisionVertex)->@location(0) vec4<f32> {
  let size=vec2<f32>(textureDimensions(vision_color));
@@ -55,8 +90,9 @@ fn sample_rate_color(uv:vec2<f32>,rate:f32)->vec3<f32> {
  let luminance=pooled.r+32768.0*pooled.g;
  let acuity=17.25*atan(1.4*log(max(luminance,1e-30))/log(10.0)+0.35)+25.72;
  // The fit reaches zero below its measured range. Such a signal has no
- // resolvable detail; the image's coarsest level bounds the sampling rate.
- let largest_rate=exp2(f32(textureNumLevels(vision_color)-1u));
+ // resolvable detail; allow enough nominal width to reach the coarsest
+ // color level after converting the footprint.
+ let largest_rate=exp2(f32(textureNumLevels(vision_color)));
  var rate=largest_rate;
  if acuity>0.0 {rate=min(largest_rate,max(1.0,sqrt(2.0)*degree_pixels/acuity));}
  if !APPLY_ACUITY {rate=1.0;}
