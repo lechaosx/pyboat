@@ -107,9 +107,9 @@ fn light_projection(points: &[Vec3], light: Vec3, finite: bool) -> Mat4 {
     let x_clip = (x * 2.0 - w * (maximum.x + minimum.x)) / span.x;
     let y_clip = (y * 2.0 - w * (maximum.y + minimum.y)) / span.y;
     let z_clip = if finite {
-        let near = minimum.z * 0.5;
-        let far = maximum.z * 1.5;
-        (depth * far - Vec4::W * (near * far)) / (far - near)
+        let near = (minimum.z - 1.0).max(minimum.z * 0.5);
+        let far = maximum.z + 1.0;
+        (depth - Vec4::W * near) * (far / (far - near))
     } else {
         (depth - Vec4::W * (minimum.z - 1.0)) / (span.z + 2.0)
     };
