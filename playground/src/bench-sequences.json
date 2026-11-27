@@ -149,5 +149,15 @@
       { "frame": 0, "cameraM": [-21833, -16500], "viewHeightM": 1500 },
       { "frame": 60, "cameraM": [-19167, -16500], "viewHeightM": 1500 }
     ]
+  },
+  {
+    "id": "pan-whitecaps",
+    "exercises": "Pan of one 16:9 screen width a second over open water in a 15 m/s wind at boat zoom: whitecap cells entering the view over a foam grid anchored to the world",
+    "seed": "0x5eed",
+    "worldTimeSeconds": 7710455,
+    "keyframes": [
+      { "frame": 0, "cameraM": [42937, -9320], "viewHeightM": 240 },
+      { "frame": 60, "cameraM": [43363.7, -9320], "viewHeightM": 240 }
+    ]
   }
 ]

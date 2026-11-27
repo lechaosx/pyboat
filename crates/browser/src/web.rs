@@ -31,6 +31,8 @@ use web_sys::HtmlCanvasElement;
 use web_transport_wasm::{ClientBuilder, RecvStream, Session};
 use wgpu::CurrentSurfaceTexture;
 
+#[cfg(game_draws_foam)]
+use crate::Foam;
 use crate::frame_queue::FrameQueue;
 use crate::{
     AdaptationClock, AdaptingField, BAKED_SURFACE_SHADER, BakedSurface, BakedSurfaceFrame,
@@ -49,6 +51,8 @@ use crate::{
     viewport_interest_radius_m, visual_pixel_footprint_m, wave_tile_uniforms,
     webtransport_server_url, zoom_view_height_m,
 };
+#[cfg(any(game_draws_foam, feature = "playground"))]
+use crate::{FoamDrift, FoamView, foam_uniforms, view_strongest_wind_m_s, view_surface_drift_m_s};
 
 #[wasm_bindgen(
     inline_js = "export function canvasHasHdrOutput(canvas) { return canvas.getContext('webgpu').getConfiguration?.()?.toneMapping?.mode === 'extended' && matchMedia('(dynamic-range: high)').matches; }"
@@ -450,6 +454,7 @@ pub struct PlaygroundSceneFrame {
     baked_surface_fill: Vec<u8>,
     baked_surface_workgroups: u32,
     wave_tiles: crate::WaveTileUniforms,
+    foam: crate::FoamUniforms,
 }
 
 #[cfg(feature = "playground")]
@@ -513,6 +518,73 @@ impl PlaygroundSceneFrame {
     pub fn wave_tile_workgroups(&self) -> Vec<u32> {
         self.wave_tiles.workgroups().to_vec()
     }
+
+    /// The foam's state, which its passes and the scene read.
+    #[wasm_bindgen(getter)]
+    pub fn foam(&self) -> Vec<u8> {
+        bytemuck::bytes_of(&self.foam).to_vec()
+    }
+
+    /// Workgroups of `generate_foam_forcing`, `generate_foam_cells`, then of
+    /// `generate_foam_events` and `generate_foam_shadows` alike, three to
+    /// each; dispatch none while the frame draws no foam, and none of a pass
+    /// with a zero count.
+    #[wasm_bindgen(getter)]
+    pub fn foam_workgroups(&self) -> Vec<u32> {
+        if !self.foam.active() {
+            return vec![0; 9];
+        }
+        self.foam.workgroups().into_iter().flatten().collect()
+    }
+}
+
+/// The view centre's surface drift the lab accumulates, which carries the
+/// whitecaps.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct PlaygroundFoamDrift(FoamDrift);
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+impl PlaygroundFoamDrift {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn foam_shader_source() -> String {
+    crate::FOAM_SHADER.to_owned()
+}
+
+/// Texels across the foam's forcing grid; its cells' texture width and
+/// height, and layers; the bytes of its list of live events and of their
+/// reaches; then the bytes of its state.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn foam_texture_size() -> Vec<u32> {
+    crate::foam_texture_sizes().to_vec()
+}
+
+/// The foam grid's texels across and down for a scene of these pixels at a
+/// graphics tier.
+#[cfg(feature = "playground")]
+#[wasm_bindgen]
+pub fn playground_foam_grid_texels(
+    scene_width_px: u32,
+    scene_height_px: u32,
+    graphics_quality: &str,
+) -> Result<Vec<u32>, JsValue> {
+    let quality = crate::GraphicsQuality::parse(graphics_quality)
+        .ok_or_else(|| JsValue::from_str("unknown graphics quality"))?;
+    Ok(crate::foam_grid_texels(
+        (scene_width_px, scene_height_px),
+        quality.foam_texel_pixels(),
+    )
+    .to_vec())
 }
 
 #[cfg(feature = "playground")]
@@ -836,6 +908,7 @@ pub fn playground_scene_uniforms(
     camera_height_m: f32,
     render_width_px: u32,
     render_height_px: u32,
+    scene_width_px: u32,
     scene_height_px: u32,
     css_view_height_px: f32,
     view_cloud_motion_m: &[f32],
@@ -844,6 +917,8 @@ pub fn playground_scene_uniforms(
     terrain_cache: &mut PlaygroundTerrainCache,
     baked_surface: &mut PlaygroundBakedSurface,
     field_grid_history: &mut PlaygroundFieldGridHistory,
+    foam_drift: &mut PlaygroundFoamDrift,
+    elapsed_world_seconds: f64,
     graphics_quality: &str,
 ) -> Result<PlaygroundSceneFrame, JsValue> {
     let quality = crate::GraphicsQuality::parse(graphics_quality)
@@ -918,6 +993,13 @@ pub fn playground_scene_uniforms(
         Vector::new(camera_x_m, camera_y_m),
     )
     .low_wind_velocity_m_s;
+    let orbital_displacement_m = crate::view_orbital_displacement_m(
+        geometry,
+        match_seed,
+        tick,
+        tick_fraction,
+        [camera_x_m, camera_y_m],
+    );
     let wave_tiles = wave_tile_uniforms(
         geometry,
         match_seed,
@@ -928,13 +1010,49 @@ pub fn playground_scene_uniforms(
         pixel_footprint_m,
         wind_m_s.into(),
         quality.wave_tile_layers(),
-        crate::view_orbital_displacement_m(
-            geometry,
-            match_seed,
-            tick,
-            tick_fraction,
-            [camera_x_m, camera_y_m],
-        ),
+        orbital_displacement_m,
+    );
+    let drift_velocity_m_s = view_surface_drift_m_s(
+        geometry,
+        match_seed,
+        tick,
+        tick_fraction,
+        [camera_x_m, camera_y_m],
+    );
+    foam_drift
+        .0
+        .advance(elapsed_world_seconds, drift_velocity_m_s);
+    let lights = game::celestial_lighting(world_celestial_conditions(
+        geometry,
+        world_time_seconds,
+        Vector::new(camera_x_m, camera_y_m),
+    ));
+    let foam = foam_uniforms(
+        geometry,
+        tick,
+        tick_fraction,
+        FoamView {
+            camera_m: [camera_x_m, camera_y_m],
+            view_m: view_size_m,
+            pixel_footprint_m,
+            pixels_per_texel: quality.foam_texel_pixels(),
+            grid_capacity: crate::foam_grid_texels(
+                (scene_width_px, scene_height_px),
+                quality.foam_texel_pixels(),
+            ),
+            orbital_displacement_m,
+            drift_m: foam_drift.0.offset_m,
+            drift_velocity_m_s,
+            light_directions: [lights.sun_direction, lights.moon_direction],
+            strongest_wind_m_s: view_strongest_wind_m_s(
+                geometry,
+                match_seed,
+                tick,
+                [camera_x_m, camera_y_m],
+                view_size_m,
+            ),
+            forced: false,
+        },
     );
     let uniforms = SceneUniforms {
         camera_and_view_m: [camera_x_m, camera_y_m, view_size_m[0], view_size_m[1]],
@@ -1025,6 +1143,7 @@ pub fn playground_scene_uniforms(
         baked_surface_fill: baked_surface_frame.fill_bytes().0.to_vec(),
         baked_surface_workgroups: baked_surface_frame.fill_bytes().1,
         wave_tiles,
+        foam,
     })
 }
 
@@ -1545,6 +1664,9 @@ struct Renderer {
     environment_fields: EnvironmentFields,
     occluder_fields: OccluderFields,
     wave_tiles: WaveTiles,
+    // Whitecaps, built only while `GAME_DRAWS_FOAM` in build.rs draws them.
+    #[cfg(game_draws_foam)]
+    foam: Foam,
     terrain_depth: TerrainDepth,
     terrain_depth_input: wgpu::BindGroup,
     terrain_cache_pass: TerrainCachePass,
@@ -1564,6 +1686,8 @@ struct Renderer {
     vision_state: wgpu::BindGroup,
     terminal_error: Arc<AtomicBool>,
     cloud_motion: ViewCloudMotion,
+    #[cfg(game_draws_foam)]
+    foam_drift: FoamDrift,
     cloth: ClothPresentation,
     cloth_match_seed: Option<u64>,
     field_grid_history: FieldGridHistory,
@@ -1590,9 +1714,19 @@ fn scene_bind_group(
     terrain_depth: &TerrainDepth,
     boat_shadows: &crate::BoatShadowMaps,
     wave_tiles: &WaveTiles,
+    #[cfg(game_draws_foam)] foam: &Foam,
 ) -> wgpu::BindGroup {
     let baked = baked_surface_pass.textures();
     let [wave_tile_texture, wave_tile_sampler, wave_tile_uniforms] = wave_tiles.scene_entries();
+    #[cfg(game_draws_foam)]
+    let [
+        foam_grid,
+        foam_tiles,
+        foam_shadows,
+        foam_forcing,
+        foam_sampler,
+        foam_uniforms,
+    ] = foam.scene_entries();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Scene bind group"),
         layout,
@@ -1638,6 +1772,18 @@ fn scene_bind_group(
             wave_tile_texture,
             wave_tile_sampler,
             wave_tile_uniforms,
+            #[cfg(game_draws_foam)]
+            foam_grid,
+            #[cfg(game_draws_foam)]
+            foam_tiles,
+            #[cfg(game_draws_foam)]
+            foam_shadows,
+            #[cfg(game_draws_foam)]
+            foam_forcing,
+            #[cfg(game_draws_foam)]
+            foam_sampler,
+            #[cfg(game_draws_foam)]
+            foam_uniforms,
         ],
     })
 }
@@ -1900,6 +2046,18 @@ impl Renderer {
                 WaveTiles::SCENE_LAYOUT_ENTRIES[0],
                 WaveTiles::SCENE_LAYOUT_ENTRIES[1],
                 WaveTiles::SCENE_LAYOUT_ENTRIES[2],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[0],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[1],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[2],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[3],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[4],
+                #[cfg(game_draws_foam)]
+                Foam::SCENE_LAYOUT_ENTRIES[5],
             ],
         });
         report_loading(progress, "Building ocean and lighting shaders").await?;
@@ -2000,6 +2158,14 @@ impl Renderer {
         let terrain_depth_input =
             terrain_depth.input_bind_group(&device, &uniform_buffer, Some(&occluder_fields.view));
         let wave_tiles = WaveTiles::new(&device, &bind_group_layout);
+        #[cfg(game_draws_foam)]
+        let mut foam = Foam::new(&device, &bind_group_layout);
+        #[cfg(game_draws_foam)]
+        foam.resize(
+            &device,
+            scene_render_size(width, height, graphics.render_scale),
+            graphics.quality.foam_texel_pixels(),
+        );
         let scene_bind_group = scene_bind_group(
             &device,
             &scene_layout,
@@ -2012,6 +2178,8 @@ impl Renderer {
             &terrain_depth,
             &boat_sprites.shadows,
             &wave_tiles,
+            #[cfg(game_draws_foam)]
+            &foam,
         );
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Empty bind group"),
@@ -2045,6 +2213,8 @@ impl Renderer {
             environment_fields,
             occluder_fields,
             wave_tiles,
+            #[cfg(game_draws_foam)]
+            foam,
             terrain_depth,
             terrain_depth_input,
             terrain_cache_pass,
@@ -2062,6 +2232,8 @@ impl Renderer {
             upscale_targets: None,
             terminal_error,
             cloud_motion: ViewCloudMotion::default(),
+            #[cfg(game_draws_foam)]
+            foam_drift: FoamDrift::default(),
             cloth: ClothPresentation::default(),
             cloth_match_seed: None,
             field_grid_history: FieldGridHistory::default(),
@@ -2114,12 +2286,22 @@ impl Renderer {
             tick_fraction,
             canonical_camera_m.into(),
         );
+        #[cfg(game_draws_foam)]
+        let view_drift_m_s = view_surface_drift_m_s(
+            world_geometry,
+            match_seed,
+            tick,
+            tick_fraction,
+            canonical_camera_m,
+        );
         if render_clock.is_some() {
             self.cloud_motion.advance(
                 elapsed_seconds,
                 view_cloud_state.low_wind_velocity_m_s,
                 view_cloud_state.upper_wind_velocity_m_s,
             );
+            #[cfg(game_draws_foam)]
+            self.foam_drift.advance(elapsed_seconds, view_drift_m_s);
         }
         if valid_world {
             self.adaptation_clock.advance(elapsed_seconds);
@@ -2220,7 +2402,14 @@ impl Renderer {
         let terrain_vertex_count = if valid_world { 6 } else { 0 };
         let output_size = (self.config.width, self.config.height);
         let scene_size = scene_render_size(output_size.0, output_size.1, self.render_scale);
-        if self.terrain_depth.resize(&self.device, scene_size) {
+        let resized_depth = self.terrain_depth.resize(&self.device, scene_size);
+        #[cfg(game_draws_foam)]
+        let resized_depth = self.foam.resize(
+            &self.device,
+            scene_size,
+            self.graphics.quality.foam_texel_pixels(),
+        ) || resized_depth;
+        if resized_depth {
             self.rebuild_scene_bind_group();
         }
         let upscaled = scene_size != output_size && terrain_vertex_count > 0;
@@ -2250,6 +2439,13 @@ impl Renderer {
             tick_fraction,
             canonical_camera_m,
         );
+        let orbital_displacement_m = crate::view_orbital_displacement_m(
+            world_geometry,
+            match_seed,
+            tick,
+            tick_fraction,
+            canonical_camera_m,
+        );
         let wave_tiles = wave_tile_uniforms(
             world_geometry,
             match_seed,
@@ -2260,15 +2456,44 @@ impl Renderer {
             pixel_footprint_m,
             view_cloud_state.low_wind_velocity_m_s.into(),
             self.graphics.quality.wave_tile_layers(),
-            crate::view_orbital_displacement_m(
-                world_geometry,
-                match_seed,
-                tick,
-                tick_fraction,
-                canonical_camera_m,
-            ),
+            orbital_displacement_m,
         );
         self.wave_tiles.write(&self.queue, &wave_tiles);
+        #[cfg(game_draws_foam)]
+        let foam_frame = {
+            let view_m = [view_width_m, view_height_m];
+            let lights = game::celestial_lighting(world_celestial_conditions(
+                world_geometry,
+                world_time_seconds,
+                Vector::from(canonical_camera_m),
+            ));
+            let foam_frame = foam_uniforms(
+                world_geometry,
+                tick,
+                tick_fraction,
+                FoamView {
+                    camera_m: canonical_camera_m,
+                    view_m,
+                    pixel_footprint_m,
+                    pixels_per_texel: self.graphics.quality.foam_texel_pixels(),
+                    grid_capacity: self.foam.capacity(),
+                    orbital_displacement_m,
+                    drift_m: self.foam_drift.offset_m,
+                    drift_velocity_m_s: view_drift_m_s,
+                    light_directions: [lights.sun_direction, lights.moon_direction],
+                    strongest_wind_m_s: view_strongest_wind_m_s(
+                        world_geometry,
+                        match_seed,
+                        tick,
+                        canonical_camera_m,
+                        view_m,
+                    ),
+                    forced: false,
+                },
+            );
+            self.foam.write(&self.queue, &foam_frame);
+            foam_frame
+        };
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -2390,6 +2615,14 @@ impl Renderer {
             &field_grids,
             (&self.wave_tiles, &wave_tiles),
         );
+        #[cfg(game_draws_foam)]
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Foam pass"),
+                timestamp_writes: None,
+            });
+            self.foam.dispatch(&mut pass, &self.bind_group, &foam_frame);
+        }
         self.occluder_fields
             .encode(&mut encoder, &self.empty_bind_group, &field_grids);
         if self.boat_sprites.prepare_shadows(
@@ -2724,6 +2957,8 @@ impl Renderer {
             &self.terrain_depth,
             &self.boat_sprites.shadows,
             &self.wave_tiles,
+            #[cfg(game_draws_foam)]
+            &self.foam,
         );
     }
 

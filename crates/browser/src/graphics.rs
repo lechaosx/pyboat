@@ -152,6 +152,15 @@ impl GraphicsQuality {
         }
     }
 
+    /// Scene pixels per texel of the foam grid. Each texel costs its events
+    /// every frame and its read at every water pixel.
+    pub fn foam_texel_pixels(self) -> u32 {
+        match self {
+            Self::Low => 2,
+            Self::Medium | Self::High => 1,
+        }
+    }
+
     /// The most short-wave tile layers a frame transforms and draws; the
     /// unresolved slopes take the rest. Each layer costs its transform every
     /// frame and its texture reads at every water pixel.

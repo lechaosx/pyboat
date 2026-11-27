@@ -11,18 +11,18 @@ use wgpu::util::DeviceExt;
 
 use browser::{
     AdaptingField, BAKED_SURFACE_LEVELS, BakedSurface, BakedSurfaceFrame, BakedSurfaceSizes,
-    FieldGrids, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT,
-    TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler, VISION_COLOR_FORMAT,
-    VISION_LUMINANCE_FORMAT, VisionPass, VisionTargets, WaveTiles, baked_surface_sizes,
-    scene_render_size, surface_height_texture, visual_pixel_footprint_m,
+    FieldGrids, Foam, GraphicsQuality, MINIMUM_RENDER_SCALE, SURFACE_HEIGHT_CLEAR,
+    SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCacheFrame, TerrainDepth, UpscaleTargets, Upscaler,
+    VISION_COLOR_FORMAT, VISION_LUMINANCE_FORMAT, VisionPass, VisionTargets, WaveTiles,
+    baked_surface_sizes, scene_render_size, surface_height_texture, visual_pixel_footprint_m,
 };
 
 use super::{
     CaptureFieldBindings, CaptureFields, Options, PlaygroundUniforms, Vertex, bind_group,
-    capture_baked_surface_frame, capture_field_grids, capture_terrain_cache_frame, capture_texture,
-    capture_wave_tile_uniforms, default_options, fullscreen_vertices, hardware_device, parse_seed,
-    read_texture, scene_uniforms, uniform_layout, validate_capture_dimensions,
-    validate_capture_spatial_inputs, validate_time_seconds, write_png,
+    capture_baked_surface_frame, capture_field_grids, capture_foam_uniforms,
+    capture_terrain_cache_frame, capture_texture, capture_wave_tile_uniforms, default_options,
+    fullscreen_vertices, hardware_device, parse_seed, read_texture, scene_uniforms, uniform_layout,
+    validate_capture_dimensions, validate_capture_spatial_inputs, validate_time_seconds, write_png,
 };
 
 const SCENARIOS: &str = include_str!("../../../playground/src/bench-scenarios.json");
@@ -35,7 +35,7 @@ const CONTACT_SHEET_TILE_WIDTH: u32 = 480;
 /// Environment field, occluder field, scene, upscale, terrain cache, and baked
 /// surface begin/end pairs. The scene's pair spans the terrain depth and the
 /// adapting field before it.
-const TIMESTAMP_COUNT: u32 = 12;
+const TIMESTAMP_COUNT: u32 = 14;
 /// More frames than a cold start takes to settle at the bench's sizes.
 const MAXIMUM_COLD_START_FRAMES: u32 = 64;
 /// GPU clocks drop while the bench reads back and encodes images, then take a
@@ -55,6 +55,8 @@ pub struct BenchOptions {
     pub warmup_iterations: u32,
     pub timed_iterations: u32,
     pub frame_budget_ms: f64,
+    /// Draws the whitecaps and foam the game leaves off.
+    pub foam: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -167,6 +169,8 @@ struct ModeReport {
     terrain_cache: Option<Timing>,
     #[serde(default)]
     baked_surface: Option<Timing>,
+    #[serde(default)]
+    foam: Option<Timing>,
     total: Timing,
     total_ns_per_pixel: f64,
     #[serde(default)]
@@ -214,6 +218,8 @@ struct SequenceReport {
     upscale: Option<SequenceTiming>,
     terrain_cache: Option<SequenceTiming>,
     baked_surface: Option<SequenceTiming>,
+    #[serde(default)]
+    foam: Option<SequenceTiming>,
     total: SequenceTiming,
     frames_over_budget: u32,
     /// Pixel footprint over the read level's texel spacing, below one while a
@@ -292,6 +298,9 @@ struct ModeRenderer {
     illumination_pipelines: [wgpu::RenderPipeline; 3],
     adapting_field: AdaptingField,
     wave_tiles: WaveTiles,
+    /// Sized for the bench's output at a texel per pixel, the largest any
+    /// scenario reads.
+    foam: Foam,
     /// One per bake size, as the game sizes its bake for the scene.
     fields: Vec<(BakedSurfaceSizes, CaptureFields)>,
     /// The scenario the cache and surface were last filled for; another one
@@ -308,7 +317,9 @@ impl ModeRenderer {
         scene_layout: &wgpu::BindGroupLayout,
         unused_layout: &wgpu::BindGroupLayout,
         evaluate_all_branches: bool,
+        foam: bool,
         baked_surface_sizes: &[BakedSurfaceSizes],
+        output_size: (u32, u32),
     ) -> Result<Self, String> {
         // WebGPU rejects constants a module does not declare, and compaction
         // drops the override from modules that never consult it.
@@ -323,7 +334,11 @@ impl ModeRenderer {
         let occluder_source = browser::occluder_field_shader_source();
         let landform_horizon_source = browser::landform_horizon_shader_source();
         let baked_surface_source = browser::baked_surface_shader_source();
-        let scene_source = browser::production_scene_shader_source();
+        let scene_source = if foam {
+            browser::production_foam_scene_shader_source()
+        } else {
+            browser::production_scene_shader_source()
+        };
         if evaluate_all_branches && !declares_override(scene_source) {
             return Err(
                 "the production scene shader no longer declares EVALUATE_ALL_BRANCHES".to_owned(),
@@ -430,6 +445,11 @@ impl ModeRenderer {
             }),
             adapting_field: AdaptingField::new(device, scene_layout),
             wave_tiles: WaveTiles::new(device, scene_layout),
+            foam: {
+                let mut foam = Foam::new(device, scene_layout);
+                foam.resize(device, output_size, 1);
+                foam
+            },
             surfaces: RefCell::new((
                 String::new(),
                 TerrainCache::default(),
@@ -555,6 +575,14 @@ impl ModeRenderer {
         let wave_tile_uniforms = capture_wave_tile_uniforms(bindings.options)
             .expect("bench views hold valid world geometry");
         self.wave_tiles.write(queue, &wave_tile_uniforms);
+        let foam_uniforms = capture_foam_uniforms(
+            bindings.options,
+            bindings.pixel_footprint_m,
+            &self.foam,
+            self.refill,
+        )
+        .expect("bench views hold valid world geometry");
+        self.foam.write(queue, &foam_uniforms);
         fields.encode_terrain_cache(
             queue,
             encoder,
@@ -577,6 +605,7 @@ impl ModeRenderer {
             bindings.unused,
             bindings.field_grids,
             (&self.wave_tiles, &wave_tile_uniforms),
+            (&self.foam, &foam_uniforms),
             timestamps,
         );
         bindings.terrain_depth.encode(
@@ -856,8 +885,24 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
         }
     }
     let renderers = [
-        ModeRenderer::new(&device, &scene_layout, &unused_layout, false, &bake_sizes)?,
-        ModeRenderer::new(&device, &scene_layout, &unused_layout, true, &bake_sizes)?,
+        ModeRenderer::new(
+            &device,
+            &scene_layout,
+            &unused_layout,
+            false,
+            options.foam,
+            &bake_sizes,
+            (options.width, options.height),
+        )?,
+        ModeRenderer::new(
+            &device,
+            &scene_layout,
+            &unused_layout,
+            true,
+            options.foam,
+            &bake_sizes,
+            (options.width, options.height),
+        )?,
     ];
     let upscaler = Upscaler::new(&device, VISION_COLOR_FORMAT);
     let timing = if timestamps.is_some() {
@@ -879,7 +924,10 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
     let scene_bind_groups = scenarios
         .iter()
         .map(|scenario| {
-            let scenario_options = scenario_options(scenario, options.width, options.height)?;
+            let scenario_options = Options {
+                foam: options.foam,
+                ..scenario_options(scenario, options.width, options.height)?
+            };
             let output_size = (options.width, options.height);
             let scene_size = scene_render_size(
                 options.width,
@@ -935,6 +983,7 @@ pub async fn run(options: &BenchOptions) -> Result<(), String> {
                         &terrain_depth,
                         None,
                         &renderer.wave_tiles,
+                        &renderer.foam,
                     )
                 }),
                 field_grids: capture_field_grids(&scenario_options)?,
@@ -1236,7 +1285,7 @@ fn scenario_options(scenario: &Scenario, width: u32, height: u32) -> Result<Opti
 
 /// Pass durations in milliseconds: environment fields, occluder fields, scene,
 /// upscale, first begin to last end, terrain cache, and baked surface.
-type FrameTimes = [Option<f64>; 7];
+type FrameTimes = [Option<f64>; 8];
 
 struct TimedFrames {
     frames: Vec<FrameTimes>,
@@ -1348,6 +1397,7 @@ fn time_cold_start(
             bindings.terrain_depth,
             None,
             &renderer.wave_tiles,
+            &renderer.foam,
         );
         let frame_bindings = FrameBindings {
             uniforms: &buffer,
@@ -1417,7 +1467,10 @@ fn time_sequence(
     let mut terrain_cache = TerrainCache::default();
     let mut baked_surface = BakedSurface::new(surface_sizes);
     let mut frame = |view: &Scenario| -> Result<(FrameTimes, bool, f32), String> {
-        let view_options = scenario_options(view, options.width, options.height)?;
+        let view_options = Options {
+            foam: options.foam,
+            ..scenario_options(view, options.width, options.height)?
+        };
         let pixel_footprint_m = visual_pixel_footprint_m(view.view_height_m, scene_size.1);
         let cache_frame = capture_terrain_cache_frame(&view_options, &mut terrain_cache)?;
         terrain_cache.commit();
@@ -1443,6 +1496,7 @@ fn time_sequence(
             &terrain_depth,
             None,
             &renderer.wave_tiles,
+            &renderer.foam,
         );
         let field_grids = capture_field_grids(&view_options)?;
         let bindings = FrameBindings {
@@ -1593,9 +1647,10 @@ fn submit_timed(
                 milliseconds(8, last),
                 milliseconds(8, 9),
                 milliseconds(10, 11),
+                milliseconds(12, 13),
             ]
         }
-        _ => [None, None, None, None, Some(wall_ms), None, None],
+        _ => [None, None, None, None, Some(wall_ms), None, None, None],
     };
     Ok(frame)
 }
@@ -1635,6 +1690,7 @@ fn mode_report(timed: TimedFrames, pixels: f64) -> Result<ModeReport, String> {
         upscale: pass(3),
         terrain_cache: pass(5),
         baked_surface: pass(6),
+        foam: pass(7),
         total,
         total_ns_per_pixel: total.median_ms * 1e6 / pixels,
         discarded_frames: timed.discarded,
@@ -1675,6 +1731,7 @@ fn sequence_report(
         upscale: pass(3),
         terrain_cache: pass(5),
         baked_surface: pass(6),
+        foam: pass(7),
         frames_over_budget: total
             .samples_ms
             .iter()
@@ -1908,17 +1965,19 @@ fn print_summary(report: &BenchReport) {
         sizes.bytes() as f64 / f64::from(1 << 20),
     );
     println!(
-        "{:<28} {:>9} {:>7} {:>7} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
+        "{:<28} {:>9} {:>7} {:>7} {:>6} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10} {:>11} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
         "scenario",
         "total ms",
         "ns/px",
         "fields",
+        "foam",
         "occluders",
         "cache",
         "bake",
         "scene",
         "upscale",
         "forced ms",
+        "forced foam",
         "forced bake",
         "forced Δmax",
         "cold max (n)",
@@ -1943,17 +2002,19 @@ fn print_summary(report: &BenchReport) {
             |cold| format!("{:.2} ({})", cold.max_ms, cold.frames),
         );
         println!(
-            "{:<28} {:>9.2} {:>7.1} {:>7} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10.2} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
+            "{:<28} {:>9.2} {:>7.1} {:>7} {:>6} {:>9} {:>7} {:>7} {:>9} {:>8} {:>10.2} {:>11} {:>11} {:>12} {:>15} {:>10} {:>12} {:>9}",
             scenario.scenario.id,
             shipped.total.median_ms,
             shipped.total_ns_per_pixel,
             milliseconds(shipped.fields),
+            milliseconds(shipped.foam),
             milliseconds(shipped.occluders),
             milliseconds(shipped.terrain_cache),
             milliseconds(shipped.baked_surface),
             milliseconds(shipped.scene),
             milliseconds(shipped.upscale),
             scenario.all_branches.total.median_ms,
+            milliseconds(scenario.all_branches.foam),
             milliseconds(scenario.all_branches.baked_surface),
             scenario.all_branches_image_difference.max,
             cold_start,
@@ -2125,7 +2186,7 @@ mod tests {
         TimedFrames {
             frames: samples
                 .iter()
-                .map(|&ms| [Some(ms), None, Some(ms), None, Some(ms), None, None])
+                .map(|&ms| [Some(ms), None, Some(ms), None, Some(ms), None, None, None])
                 .collect(),
             discarded: 2,
         }

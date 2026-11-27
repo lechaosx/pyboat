@@ -557,7 +557,9 @@ fn camera_view_direction(height_m: f32) -> vec3<f32> {
 // The colour of a rendered surface, or with `illumination` the light reaching
 // it: its colour were it white and without water's surface reflection.
 // `contribution` and `cloud_shadow_visibility` as `fragment_surface_light`
-// takes them.
+// takes them. Foam covers water as it does for the Sun and Moon, from
+// `foam_cover` at `foam_offset_m` thinned by `foam_thinning`, without their
+// short shadows.
 fn lightning_scene_light(
     receiver: CelestialReceiverLight,
     scene_surface: SceneSurface,
@@ -565,10 +567,22 @@ fn lightning_scene_light(
     inherent: InherentOptics,
     wetness: f32,
     illumination: bool,
+    foam_offset_m: vec2<f32>,
+    foam_thinning: f32,
 ) -> vec3<f32> {
     var light = vec3<f32>(0.0);
     let view = camera_view_direction(receiver.height_m);
     let normal = normalize(vec3<f32>(-scene_surface.gradient - scene_surface.surface.detail_gradient, 1.0));
+    let flashes = scene.lightning_sources[0].w > 0.0 || scene.lightning_sources[1].w > 0.0
+        || scene.lightning_sources[2].w > 0.0 || scene.lightning_sources[3].w > 0.0;
+    var foam = no_foam_cover();
+    if flashes && !scene_surface.is_land && !illumination {
+        foam = foam_cover(foam_offset_m, foam_thinning);
+    }
+    var foam_shading = no_foam_light();
+    if foam.covered > 0.0 || foam.mean_cover > 0.0 {
+        foam_shading = foam_light(foam, view.z, 1.0, 1.0);
+    }
     for (var index = 0u; index < 4u; index++) {
         if scene.lightning_sources[index].w > 0.0 {
             let source = lightning_light(receiver, index);
@@ -586,8 +600,12 @@ fn lightning_scene_light(
                 let body = water_body_response(albedo, tide_height_m() - scene_surface.elevation_m, inherent,
                     1.0 - water_fresnel_reflectance(dot(view, facet_normal)), view.z,
                     vec2<f32>(source.direction.z), visibility.xy, bed_relief_light(scene_surface, beam));
-                response = body.sun * max(source.direction.z, 0.0) + visibility.z * water_glint(view,
-                    source.direction, surface.detail_gradient, unresolved_slope_covariance(surface), 0.0);
+                let foam_normal = normalize(vec3<f32>(-surface.detail_gradient - foam.relief_gradient, 1.0));
+                response = foam_shading.body * body.sun * max(source.direction.z, 0.0)
+                    + foam_glint_transmittance(foam, view.z, source.direction.z)
+                        * visibility.z * water_glint(view, source.direction,
+                        surface.detail_gradient, unresolved_slope_covariance(surface), 0.0)
+                    + foam_shading.reflectance * max(dot(foam_normal, source.direction), 0.0);
             }
             light += source.irradiance * response;
         }
@@ -640,6 +658,8 @@ fn lit_scene_surface(
     let view = camera_view_direction(surface_height_m);
     var wetness = 0.0;
     var inherent = SEAWATER_OPTICS;
+    var foam_offset_m = vec2<f32>(0.0);
+    var foam_thinning = 0.0;
     if is_land {
         let wettable = scene_surface.wettable > 0.0 && !illumination;
         if wettable || EVALUATE_ALL_BRANCHES {
@@ -692,6 +712,19 @@ fn lit_scene_surface(
         }
         let visibility = water_material_color_visibility()
             * vec3<f32>(1.0, effect_feature_visibility().y, 1.0);
+        // Compromise, a stand-in until shore surf models depth-limited
+        // breaking: foam thins as the square of the depth-limited wind sea's
+        // height over its deep-water height, rather than its breakers
+        // changing.
+        let sea = sampled_wave_forcing.sea;
+        let deep_height_m = 4.0 * sqrt(sea.variance_m2);
+        let limited = select(
+            0.0,
+            wind_sea_height_m(sea, sampled_wave_forcing.water_depth_m) / deep_height_m,
+            deep_height_m > 0.0,
+        );
+        foam_offset_m = camera_relative_position_m(position_m);
+        foam_thinning = limited * limited;
         // Water holding no sediment passes seawater's optics as constants,
         // which the compiler folds through the column.
         if stirred || EVALUATE_ALL_BRANCHES {
@@ -705,6 +738,8 @@ fn lit_scene_surface(
                 ambient_light,
                 visibility,
                 bed_light,
+                foam_offset_m,
+                foam_thinning,
             );
         } else {
             response = water_light_response(
@@ -717,6 +752,8 @@ fn lit_scene_surface(
                 ambient_light,
                 visibility,
                 bed_light,
+                foam_offset_m,
+                foam_thinning,
             );
         }
     }
@@ -730,7 +767,8 @@ fn lit_scene_surface(
         contribution,
         cloud_shadow_visibility,
     ) + max(contribution.x, contribution.y) * lightning_scene_light(
-        surface_direct_light, scene_surface, albedo, inherent, wetness, illumination);
+        surface_direct_light, scene_surface, albedo, inherent, wetness, illumination,
+        foam_offset_m, foam_thinning);
 }
 
 fn final_scene_color(

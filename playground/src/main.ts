@@ -4,6 +4,7 @@ import {
   PlaygroundAdaptationClock,
   PlaygroundBakedSurface,
   PlaygroundFieldGridHistory,
+  PlaygroundFoamDrift,
   PlaygroundFramePacer,
   PlaygroundResolutionController,
   PlaygroundTerrainCache,
@@ -44,6 +45,9 @@ import {
   upscale_shader_source,
   wave_tile_shader_source,
   wave_tile_texture_size,
+  foam_shader_source,
+  foam_texture_size,
+  playground_foam_grid_texels,
 } from "browser/playground";
 import {
   advanceFixedClock,
@@ -132,6 +136,7 @@ type State = {
   waterColorVisible: number;
   bottomColorVisible: number;
   waterSurfaceVisible: number;
+  foamVisible: number;
   seaIceColorVisible: number;
   cloudShadowsVisible: number;
   legacyShadowLook: number;
@@ -174,6 +179,7 @@ const defaults: State = {
   waterColorVisible: 1,
   bottomColorVisible: 1,
   waterSurfaceVisible: 1,
+  foamVisible: 0,
   seaIceColorVisible: 1,
   cloudShadowsVisible: 1,
   legacyShadowLook: 0,
@@ -482,6 +488,7 @@ const tuningGroups: readonly TuningGroup[] = [
       { type: "toggle", key: "waterColorVisible", label: "Water body" },
       { type: "toggle", key: "bottomColorVisible", label: "Visible bottom" },
       { type: "toggle", key: "waterSurfaceVisible", label: "Surface reflection" },
+      { type: "toggle", key: "foamVisible", label: "Whitecaps and foam" },
     ],
   },
   {
@@ -1013,6 +1020,12 @@ function createPlaygroundPipeline(
         { binding: 11, visibility: 2, texture: { viewDimension: "2d-array" } },
         { binding: 12, visibility: 2, sampler: {} },
         { binding: 13, visibility: 2, buffer: { type: "uniform" } },
+        { binding: 14, visibility: 2, texture: { sampleType: "unfilterable-float" } },
+        { binding: 15, visibility: 2, texture: { sampleType: "uint" } },
+        { binding: 16, visibility: 2, texture: { sampleType: "unfilterable-float" } },
+        { binding: 17, visibility: 2, texture: { viewDimension: "2d-array" } },
+        { binding: 18, visibility: 2, sampler: {} },
+        { binding: 19, visibility: 2, buffer: { type: "uniform" } },
       ] }),
       device.createBindGroupLayout({ entries: [{ binding: 0, visibility: 2, buffer: { type: "uniform" } }] }),
     ] }) : "auto",
@@ -1254,6 +1267,155 @@ const waveTiles = (() => {
     ],
   };
 })();
+// Whitecaps: a forcing grid of wind, drift and sub-pixel foam, each class's
+// cells of candidate events, then the foam grid with its tiles and short
+// shadows, which the scene reads at bindings 14 to 19.
+const foam = (() => {
+  const [forcingTexels, cellTexels, cellLayers, recordBytes, reachBytes, uniformBytes] = foam_texture_size();
+  const usage = 0x08 | 0x04;
+  const compute = 0x4;
+  const module = device.createShaderModule({ code: foam_shader_source() });
+  const uniform = { binding: 0, visibility: compute, buffer: {} };
+  const storage = (binding: number, format: GPUTextureFormat, viewDimension: GPUTextureViewDimension) =>
+    ({ binding, visibility: compute, storageTexture: { access: "write-only", format, viewDimension } } as const);
+  const texture = (binding: number, sampleType: GPUTextureSampleType, viewDimension: GPUTextureViewDimension) =>
+    ({ binding, visibility: compute, texture: { sampleType, viewDimension } } as const);
+  const buffer = (binding: number, type: GPUBufferBindingType) =>
+    ({ binding, visibility: compute, buffer: { type } } as const);
+  const sceneLayout = device.createBindGroupLayout({ entries: [uniform] });
+  const passLayouts = [
+    [storage(1, "rgba16float", "2d-array")],
+    [
+      texture(2, "float", "2d-array"),
+      { binding: 3, visibility: compute, sampler: {} },
+      storage(4, "rg32uint", "2d-array"),
+      buffer(5, "storage"),
+      buffer(6, "storage"),
+      buffer(15, "storage"),
+    ],
+    [
+      texture(7, "uint", "2d-array"),
+      buffer(14, "read-only-storage"),
+      buffer(16, "read-only-storage"),
+      storage(8, "rgba16float", "2d"),
+      storage(9, "r32uint", "2d"),
+    ],
+    [
+      texture(10, "unfilterable-float", "2d"),
+      texture(11, "uint", "2d"),
+      storage(12, "rgba8unorm", "2d"),
+      storage(13, "r32uint", "2d"),
+    ],
+  ].map((entries) => device.createBindGroupLayout({ entries: [uniform, ...entries] }));
+  const entryPoints = ["generate_foam_forcing", "generate_foam_cells", "generate_foam_events", "generate_foam_shadows"];
+  return {
+    forcing: device.createTexture({ size: [forcingTexels!, forcingTexels!, 2], format: "rgba16float", usage }),
+    cells: device.createTexture({ size: [cellTexels!, cellTexels!, cellLayers!], format: "rg32uint", usage }),
+    records: device.createBuffer({ size: recordBytes!, usage: 0x80 }),
+    reaches: device.createBuffer({ size: reachBytes!, usage: 0x80 }),
+    recordCount: device.createBuffer({ size: 4, usage: 0x80 | 0x08 }),
+    uniforms: device.createBuffer({ size: uniformBytes!, usage: 0x40 | 0x08 }),
+    uniformBytes: uniformBytes!,
+    sampler: device.createSampler({ magFilter: "linear", minFilter: "linear" }),
+    sceneBindGroup: device.createBindGroup({
+      layout: sceneLayout,
+      entries: [{ binding: 0, resource: { buffer: sceneBuffer } }],
+    }),
+    passLayouts,
+    pipelines: entryPoints.map((entryPoint, pass) => device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, passLayouts[pass]!] }),
+      compute: { module, entryPoint },
+    })),
+  };
+})();
+type FoamGrid = {
+  size: number[];
+  textures: GPUTexture[];
+  sceneEntries: GPUBindGroupEntry[];
+  bindGroups: GPUBindGroup[];
+};
+let foamGrid: FoamGrid | undefined;
+const foamDrift = new PlaygroundFoamDrift();
+// Zeroed state draws no foam and dispatches none of its passes.
+const noFoamUniforms = new Uint8Array(foam.uniformBytes);
+const noFoamWorkgroups = new Uint32Array(9);
+let foamUniforms: Uint8Array = noFoamUniforms;
+let foamWorkgroups: Uint32Array = noFoamWorkgroups;
+
+// Returns whether the foam grid was reallocated, so the scene needs new bind
+// groups.
+function sizeFoam(): boolean {
+  const size = Array.from(playground_foam_grid_texels(
+    sceneSize[0]!,
+    sceneSize[1]!,
+    graphicsQualities[Math.round(state.graphicsQuality)]!,
+  ));
+  if (foamGrid?.size[0] === size[0] && foamGrid?.size[1] === size[1]) return false;
+  for (const texture of foamGrid?.textures ?? []) texture.destroy();
+  const usage = 0x08 | 0x04;
+  const tiles = [Math.ceil(size[0]! / 32), Math.ceil(size[1]! / 32)];
+  const [grid, gridTiles, shadows, sceneTiles] = [
+    device.createTexture({ size, format: "rgba16float", usage }),
+    device.createTexture({ size: tiles, format: "r32uint", usage }),
+    device.createTexture({ size, format: "rgba8unorm", usage }),
+    device.createTexture({ size: tiles, format: "r32uint", usage }),
+  ] as const;
+  const array = { dimension: "2d-array" } as const;
+  const passEntries: GPUBindGroupEntry[][] = [
+    [{ binding: 1, resource: foam.forcing.createView(array) }],
+    [
+      { binding: 2, resource: foam.forcing.createView(array) },
+      { binding: 3, resource: foam.sampler },
+      { binding: 4, resource: foam.cells.createView(array) },
+      { binding: 5, resource: { buffer: foam.records } },
+      { binding: 6, resource: { buffer: foam.recordCount } },
+      { binding: 15, resource: { buffer: foam.reaches } },
+    ],
+    [
+      { binding: 7, resource: foam.cells.createView(array) },
+      { binding: 14, resource: { buffer: foam.records } },
+      { binding: 16, resource: { buffer: foam.reaches } },
+      { binding: 8, resource: grid.createView() },
+      { binding: 9, resource: gridTiles.createView() },
+    ],
+    [
+      { binding: 10, resource: grid.createView() },
+      { binding: 11, resource: gridTiles.createView() },
+      { binding: 12, resource: shadows.createView() },
+      { binding: 13, resource: sceneTiles.createView() },
+    ],
+  ];
+  foamGrid = {
+    size,
+    textures: [grid, gridTiles, shadows, sceneTiles],
+    sceneEntries: [
+      { binding: 14, resource: grid.createView() },
+      { binding: 15, resource: sceneTiles.createView() },
+      { binding: 16, resource: shadows.createView() },
+      { binding: 17, resource: foam.forcing.createView(array) },
+      { binding: 18, resource: foam.sampler },
+      { binding: 19, resource: { buffer: foam.uniforms } },
+    ],
+    bindGroups: foam.passLayouts.map((layout, pass) => device.createBindGroup({
+      layout,
+      entries: [{ binding: 0, resource: { buffer: foam.uniforms } }, ...passEntries[pass]!],
+    })),
+  };
+  return true;
+}
+
+// Runs the foam passes this frame draws within `pass`.
+function dispatchFoam(pass: GPUComputePassEncoder): void {
+  foam.pipelines.forEach((pipeline, index) => {
+    const [x, y, z] = foamWorkgroups.slice(3 * Math.min(index, 2), 3 * Math.min(index, 2) + 3);
+    if (!x || !y || !z || !foamGrid) return;
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, foam.sceneBindGroup);
+    pass.setBindGroup(1, foamGrid.bindGroups[index]!);
+    pass.dispatchWorkgroups(x, y, z);
+  });
+}
+
 let waveTileUniforms: Uint8Array = new Uint8Array(waveTiles.uniformBytes);
 let waveTileWorkgroups: Uint32Array = new Uint32Array([0, 0, 0]);
 
@@ -1463,6 +1625,7 @@ function updateOccluderFieldInfo(resources: RenderResources): void {
 }
 
 function diagnosticSceneBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
+  if (!foamGrid) sizeFoam();
   return device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [
@@ -1470,6 +1633,7 @@ function diagnosticSceneBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
       { binding: 8, resource: terrainDepthView! },
       ...boatPass!.shadowEntries(),
       ...waveTiles.sceneEntries,
+      ...foamGrid!.sceneEntries,
     ],
   });
 }
@@ -1806,6 +1970,7 @@ function updateUniforms(
     state.cameraHeightM,
     previewCanvas.width,
     previewCanvas.height,
+    sceneSize[0]!,
     sceneSize[1]!,
     bench ? previewCanvas.height : previewCanvas.clientHeight,
     new Float32Array(cloudMotion.advance(elapsedSeconds * state.worldTimeScale, lowWind, upperWind)),
@@ -1820,6 +1985,8 @@ function updateUniforms(
     terrainCache,
     bakedSurface,
     fieldGridHistory,
+    foamDrift,
+    elapsedSeconds * state.worldTimeScale,
     graphicsQualities[Math.round(state.graphicsQuality)]!,
   );
   sceneUniforms = frame.uniforms;
@@ -1831,6 +1998,9 @@ function updateUniforms(
   bakedSurfaceWorkgroups = frame.baked_surface_workgroups;
   waveTileUniforms = frame.wave_tiles;
   waveTileWorkgroups = frame.wave_tile_workgroups;
+  const foamOn = state.foamVisible > 0.5;
+  foamUniforms = foamOn ? frame.foam : noFoamUniforms;
+  foamWorkgroups = foamOn ? frame.foam_workgroups : noFoamWorkgroups;
   frame.free();
 
   tuningFloats.set([
@@ -2051,7 +2221,8 @@ function advanceFrame(now: number): void {
 }
 
 function renderFrame(): Promise<void> {
-  if (sizeTerrainDepth()) {
+  const depthResized = sizeTerrainDepth();
+  if (sizeFoam() || depthResized) {
     if (installedScenePipelines && sceneFields) {
       installScenePipelines(installedScenePipelines, sceneFields);
     }
@@ -2070,6 +2241,8 @@ function renderFrame(): Promise<void> {
   device.queue.writeBuffer(sceneBuffer, 0, sceneUniforms);
   device.queue.writeBuffer(playgroundBuffer, 0, tuningFloats);
   device.queue.writeBuffer(waveTiles.uniforms, 0, waveTileUniforms);
+  device.queue.writeBuffer(foam.uniforms, 0, foamUniforms);
+  device.queue.writeBuffer(foam.recordCount, 0, new Uint32Array([0]));
   if (renderResources.pipeline !== timedPipeline) {
     timedPipeline = renderResources.pipeline;
     timedUsesFields = Boolean(renderResources.fields);
@@ -2150,6 +2323,7 @@ function renderFrame(): Promise<void> {
     environmentPass.setBindGroup(1, fields.environmentOutputBindGroup);
     environmentPass.dispatchWorkgroups(fieldGrids[0]!, fieldGrids[1]!);
     dispatchWaveTiles(environmentPass);
+    dispatchFoam(environmentPass);
     environmentPass.end();
     copyWaveTiles(encoder);
     const occluderPass = encoder.beginComputePass(occluderPassDescriptor);
@@ -2168,6 +2342,7 @@ function renderFrame(): Promise<void> {
   if (!fields) {
     const waveTilePass = encoder.beginComputePass();
     dispatchWaveTiles(waveTilePass);
+    dispatchFoam(waveTilePass);
     waveTilePass.end();
     copyWaveTiles(encoder);
   }
@@ -2463,6 +2638,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
   boatPass ??= new BoatPass(device, sceneBuffer, adaptingFieldView, environmentFieldView, occluderFieldView, occluderFieldSampler);
   installedScenePipelines = pipelines;
   sizeTerrainDepth();
+  sizeFoam();
   const playgroundEntries = productionShaders
     ? []
     : [{ binding: 0, resource: { buffer: playgroundBuffer } }];
@@ -2477,6 +2653,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
     { binding: 8, resource: terrainDepthView! },
     ...boatPass.shadowEntries(),
     ...waveTiles.sceneEntries,
+    ...foamGrid!.sceneEntries,
   ];
   const landformHorizonPipeline = pipelines.landformHorizon;
   sceneRenderResources = {
@@ -2524,6 +2701,7 @@ function installScenePipelines(pipelines: ScenePipelines, fields: FieldPasses): 
       { binding: 8, resource: terrainDepthView! },
       ...boatPass.shadowEntries(),
       ...waveTiles.sceneEntries,
+      ...foamGrid!.sceneEntries,
     ];
     const directPlaygroundEntries = [{ binding: 0, resource: { buffer: playgroundBuffer } }];
     directSceneRenderResources = {

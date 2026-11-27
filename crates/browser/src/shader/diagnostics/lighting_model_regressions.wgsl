@@ -248,6 +248,8 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             calculate_atmospheric_ambient_light(RegionalCanopyConditions(0.0, 0.0), receiver),
             vec3<f32>(0.0, 0.0, 1.0),
             vec3<f32>(1.0),
+            vec2<f32>(0.0),
+            0.0,
         );
         return vec4<f32>(0.5 * response.clear_sky.x / water_fresnel_reflectance(1.0), 0.0, 0.0, 1.0);
     }

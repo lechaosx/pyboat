@@ -51,6 +51,27 @@ fn wind_sea(surface_speed_m_s: f32) -> WindSea {
     );
 }
 
+// The wind sea's variance between the wavenumbers `ratio` times its peak's,
+// in closed form over Pierson and Moskowitz's spectrum.
+fn wind_sea_band_variance_m2(sea: WindSea, ratio: vec2<f32>) -> f32 {
+    return sea.variance_m2
+        * (exp(-1.25 / (ratio.y * ratio.y)) - exp(-1.25 / (ratio.x * ratio.x)));
+}
+
+// Mitsuyasu's spreading exponent of the band between the wavenumbers
+// `ratio` times the peak's, at their mean frequency.
+fn wind_sea_band_spread(sea: WindSea, ratio: vec2<f32>) -> f32 {
+    let frequency_ratio = sqrt(sqrt(ratio.x * ratio.y));
+    return sea.peak_spread * pow(frequency_ratio, select(-2.5, 5.0, frequency_ratio < 1.0));
+}
+
+// The square root of a visited direction's spreading weight `angle` from
+// the wind, for a band's spreading exponent, tapered to nothing at the
+// edges of the visited window `window_width` either side.
+fn wind_sea_direction_root(angle: f32, spread: f32, window_width: f32) -> f32 {
+    return pow(cos(0.5 * angle), spread) * cos(PI * max(abs(angle) / window_width - 0.5, 0.0));
+}
+
 // The wind sea's significant wave height over water `depth_m` deep, of the
 // sustained resolved winds: wave energy responds to sustained resolved flow,
 // not an instantaneous 256 m surface gust. Compromise: McCowan's (1894)
@@ -202,12 +223,7 @@ fn physical_water_wave_sample_from_surface(
         let upper = min(edges.y, window.y);
         let in_window = band >= 0 && band < WAVE_BAND_COUNT && upper > lower;
         let ratio = vec2<f32>(lower, upper) / sea.peak_wavenumber_per_m;
-        let band_variance = select(
-            0.0,
-            sea.variance_m2
-                * (exp(-1.25 / (ratio.y * ratio.y)) - exp(-1.25 / (ratio.x * ratio.x))),
-            in_window,
-        );
+        let band_variance = select(0.0, wind_sea_band_variance_m2(sea, ratio), in_window);
         weighted_wavenumber += band_variance * sqrt(lower * upper);
         window_variance += band_variance;
         let skipped = !in_window || edges.x * footprint_m >= 3.0;
@@ -216,9 +232,7 @@ fn physical_water_wave_sample_from_surface(
         }
         let table_band = u32(clamp(band, 0, WAVE_BAND_COUNT - 1));
         let variance = select(band_variance, 0.0, skipped);
-        let frequency_ratio = sqrt(sqrt(ratio.x * ratio.y));
-        let spread = sea.peak_spread
-            * pow(frequency_ratio, select(-2.5, 5.0, frequency_ratio < 1.0));
+        let spread = wind_sea_band_spread(sea, ratio);
         let rotation = scene.ocean_wave_band_rotations[table_band / 4u][table_band % 4u];
         let direction_position = (wind_angle - rotation) / spacing;
         let nearest = floor(direction_position);
@@ -232,8 +246,7 @@ fn physical_water_wave_sample_from_surface(
         for (var direction = 0u; direction < WAVE_VISITED_DIRECTIONS; direction++) {
             let step = f32(direction) + 1.0 - 0.5 * f32(WAVE_VISITED_DIRECTIONS);
             let angle = (step - offset) * spacing;
-            let root_weight = pow(cos(0.5 * angle), spread)
-                * cos(PI * max(abs(angle) / window_width - 0.5, 0.0));
+            let root_weight = wind_sea_direction_root(angle, spread, window_width);
             let table_direction = u32(i32(nearest) + i32(step)) & (WAVE_DIRECTIONS - 1u);
             let mode = scene.ocean_wave_table[table_band * WAVE_DIRECTIONS + table_direction];
             let filtered = mode.z * footprint_m;

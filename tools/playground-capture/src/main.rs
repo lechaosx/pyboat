@@ -4,18 +4,21 @@ use std::{env, fs, path::PathBuf};
 mod boat_depth_tests;
 #[cfg(test)]
 mod boat_lighting_tests;
+#[cfg(test)]
+mod foam_tests;
 
 use browser::{
     ADAPTING_FIELD_TEXELS, AdaptingField, BakedSurface, BakedSurfaceFrame, BakedSurfacePass,
     BakedSurfaceSizes, BakedSurfaceTextures, BoatSprites, ClothMotion, DroneCamera,
     ENVIRONMENT_FIELD_LAYERS, ENVIRONMENT_FIELD_TEXTURE_TEXELS, FieldGridHistory, FieldGridTuning,
-    FieldGrids, GraphicsQuality, LANDFORM_HORIZON_LAYER, OCCLUDER_FIELD_LAYERS,
-    OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS, SETTLED_ADAPTATION_SECONDS,
-    SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache, TerrainCacheFrame, TerrainCachePass,
-    TerrainDepth, WaveTileUniforms, WaveTiles, baked_surface_sizes, boat_scene, exposure_target,
-    field_grids, ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors,
-    surface_height_texture, view_orbital_displacement_m, view_width_m, visual_pixel_footprint_m,
-    wave_tile_uniforms,
+    FieldGrids, Foam, FoamUniforms, FoamView, GraphicsQuality, LANDFORM_HORIZON_LAYER,
+    OCCLUDER_FIELD_LAYERS, OCCLUDER_FIELD_TEXELS, OCEAN_WAVE_BAND_ROTATION_ROWS,
+    SETTLED_ADAPTATION_SECONDS, SURFACE_HEIGHT_CLEAR, SURFACE_HEIGHT_FORMAT, TerrainCache,
+    TerrainCacheFrame, TerrainCachePass, TerrainDepth, WaveTileUniforms, WaveTiles,
+    baked_surface_sizes, boat_scene, exposure_target, field_grids, foam_uniforms,
+    ocean_wave_uniforms, sample_view_cloud_state, seasonal_phase_factors, surface_height_texture,
+    view_orbital_displacement_m, view_strongest_wind_m_s, view_surface_drift_m_s, view_width_m,
+    visual_pixel_footprint_m, wave_tile_uniforms,
 };
 use bytemuck::{Pod, Zeroable};
 use game::{
@@ -78,6 +81,10 @@ struct Options {
     world_time_seconds: f64,
     /// Seconds of renderer-local cloud transport accumulated before the capture.
     cloud_motion_seconds: f64,
+    /// The renderer-local surface drift that carries the whitecap lattice.
+    foam_drift_m: [f64; 2],
+    /// Draws whitecaps and their foam, which the game leaves off.
+    foam: bool,
     diagnostic: ShaderSelection,
     quality: GraphicsQuality,
     legacy_shadow_look: bool,
@@ -269,6 +276,12 @@ impl CaptureFields {
                 WaveTiles::SCENE_LAYOUT_ENTRIES[0],
                 WaveTiles::SCENE_LAYOUT_ENTRIES[1],
                 WaveTiles::SCENE_LAYOUT_ENTRIES[2],
+                Foam::SCENE_LAYOUT_ENTRIES[0],
+                Foam::SCENE_LAYOUT_ENTRIES[1],
+                Foam::SCENE_LAYOUT_ENTRIES[2],
+                Foam::SCENE_LAYOUT_ENTRIES[3],
+                Foam::SCENE_LAYOUT_ENTRIES[4],
+                Foam::SCENE_LAYOUT_ENTRIES[5],
             ],
         });
         let field_reading_layout =
@@ -473,6 +486,7 @@ impl CaptureFields {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn bindings(
         &self,
         device: &wgpu::Device,
@@ -481,6 +495,7 @@ impl CaptureFields {
         terrain_depth: &TerrainDepth,
         boat_shadows: Option<&browser::BoatShadowMaps>,
         wave_tiles: &WaveTiles,
+        foam: &Foam,
     ) -> CaptureFieldBindings {
         let uniforms = wgpu::BindGroupEntry {
             binding: 0,
@@ -539,6 +554,12 @@ impl CaptureFields {
                     wave_tiles.scene_entries()[0].clone(),
                     wave_tiles.scene_entries()[1].clone(),
                     wave_tiles.scene_entries()[2].clone(),
+                    foam.scene_entries()[0].clone(),
+                    foam.scene_entries()[1].clone(),
+                    foam.scene_entries()[2].clone(),
+                    foam.scene_entries()[3].clone(),
+                    foam.scene_entries()[4].clone(),
+                    foam.scene_entries()[5].clone(),
                 ],
             }),
             terrain_depth_input: terrain_depth.input_bind_group(
@@ -624,8 +645,9 @@ impl CaptureFields {
         );
     }
 
-    /// Timestamps, when requested, go to query indices 0 to 3; the
-    /// environment fields' pair also times the wave tiles.
+    /// Timestamps, when requested, go to query indices 0 to 3, and the
+    /// foam's to 12 and 13; the environment fields' pair also times the
+    /// wave tiles.
     #[allow(clippy::too_many_arguments)]
     fn encode(
         &self,
@@ -635,6 +657,7 @@ impl CaptureFields {
         occluder_group_1: &wgpu::BindGroup,
         grids: &FieldGrids,
         wave_tiles: (&WaveTiles, &WaveTileUniforms),
+        foam: (&Foam, &FoamUniforms),
         timestamps: Option<&wgpu::QuerySet>,
     ) {
         let timestamp_writes = |first| {
@@ -659,6 +682,13 @@ impl CaptureFields {
                 .dispatch(&mut pass, scene_uniform_bind_group, wave_tiles.1);
         }
         wave_tiles.0.copy(encoder, wave_tiles.1);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("capture foam pass"),
+                timestamp_writes: timestamp_writes(12),
+            });
+            foam.0.dispatch(&mut pass, scene_uniform_bind_group, foam.1);
+        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("capture occluder field pass"),
             timestamp_writes: timestamp_writes(2),
@@ -757,6 +787,7 @@ struct CaptureReport {
     world_time_seconds: f64,
     cloud_motion_seconds: f64,
     view_cloud_motion_m: [f32; 4],
+    foam_drift_m: [f64; 2],
     diagnostic: String,
     quality: &'static str,
     legacy_shadow_look: bool,
@@ -798,6 +829,8 @@ fn default_options() -> Options {
         seed: 0x5eed,
         world_time_seconds: 37.0,
         cloud_motion_seconds: 0.0,
+        foam_drift_m: [0.0; 2],
+        foam: false,
         diagnostic: scene_selection(),
         quality: GraphicsQuality::High,
         legacy_shadow_look: false,
@@ -861,7 +894,7 @@ fn parse_options() -> Result<Command, String> {
             | "--frame-budget" => {
                 bench_only_option.get_or_insert_with(|| argument.clone());
             }
-            "--width" | "--height" | "--help" | "-h" => {}
+            "--width" | "--height" | "--foam" | "--help" | "-h" => {}
             _ => {
                 capture_only_option.get_or_insert_with(|| argument.clone());
             }
@@ -901,6 +934,10 @@ fn parse_options() -> Result<Command, String> {
             "--cloud-motion" => {
                 options.cloud_motion_seconds = parse(&value(&mut arguments)?, &argument)?
             }
+            "--foam-drift" => {
+                let [x, y] = parse_f64x2(&value(&mut arguments)?, &argument)?;
+                options.foam_drift_m = [x, y];
+            }
             "--diagnostic" => options.diagnostic = parse_diagnostic(&value(&mut arguments)?)?,
             "--quality" => {
                 let name = value(&mut arguments)?;
@@ -908,6 +945,7 @@ fn parse_options() -> Result<Command, String> {
                     .ok_or_else(|| format!("invalid value for --quality: {name}"))?;
             }
             "--legacy-shadow-look" => options.legacy_shadow_look = true,
+            "--foam" => options.foam = true,
             "--cloud-shadows" => {
                 options.cloud_shadows = match value(&mut arguments)?.as_str() {
                     "0" => 0.0,
@@ -1023,6 +1061,7 @@ fn parse_options() -> Result<Command, String> {
             warmup_iterations,
             timed_iterations,
             frame_budget_ms,
+            foam: options.foam,
         }));
     }
     if let Some(option) = bench_only_option {
@@ -1065,6 +1104,19 @@ fn parse_seed(value: &str) -> Result<u64, String> {
         .strip_prefix("0x")
         .map_or_else(|| value.parse(), |hex| u64::from_str_radix(hex, 16))
         .map_err(|_| format!("invalid seed: {value}"))
+}
+
+fn parse_f64x2(value: &str, option: &str) -> Result<[f64; 2], String> {
+    let values = value
+        .split(',')
+        .map(|value| parse::<f64>(value, option))
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(format!("{option} requires finite values"));
+    }
+    values
+        .try_into()
+        .map_err(|_| format!("{option} requires two comma-separated values"))
 }
 
 fn parse_f32x3(value: &str, option: &str) -> Result<[f32; 3], String> {
@@ -1877,6 +1929,9 @@ fn print_help() {
            --world-time SECONDS   nonnegative deterministic world time (default 37)\n\
            --cloud-motion SECONDS  cloud transport an interactive view accumulates over the\n\
                                   SECONDS before --world-time at 1 s frames (default 0)\n\
+           --foam-drift X,Y       surface drift in metres an interactive view accumulates, which\n\
+                                  carries the whitecaps (default 0,0)\n\
+           --foam                 draws the whitecaps and foam the game leaves off\n\
            --diagnostic NAME      semantic diagnostic output (default scene, the lab composition;\n\
                                   scene_direct evaluates every field per pixel without grids;\n\
                                   scene_production renders the game's shaders and tuning\n\
@@ -2212,7 +2267,9 @@ async fn render(options: &Options) -> Result<(), String> {
     }
     let shader_source = options.diagnostic.module.map_or_else(
         || {
-            if production {
+            if production && options.foam {
+                browser::production_foam_scene_shader_source()
+            } else if production {
                 browser::production_scene_shader_source()
             } else if grid_scene {
                 browser::playground_scene_shader_source()
@@ -2282,11 +2339,22 @@ async fn render(options: &Options) -> Result<(), String> {
     }
     fieldless_entries.extend(browser::BoatShadowMaps::SCENE_LAYOUT_ENTRIES);
     fieldless_entries.extend(WaveTiles::SCENE_LAYOUT_ENTRIES);
+    fieldless_entries.extend(Foam::SCENE_LAYOUT_ENTRIES);
     let fieldless_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("scene uniforms and terrain depth layout"),
         entries: &fieldless_entries,
     });
     let wave_tiles = WaveTiles::new(&device, &scene_layout);
+    let mut foam = Foam::new(&device, &scene_layout);
+    foam.resize(
+        &device,
+        (options.width, options.height),
+        options
+            .diagnostic
+            .quality
+            .unwrap_or(options.quality)
+            .foam_texel_pixels(),
+    );
     let bind_group_layouts = [
         Some(match &fields {
             Some(fields) => &fields.scene_layout,
@@ -2433,6 +2501,7 @@ async fn render(options: &Options) -> Result<(), String> {
         fields.as_ref(),
         &terrain_depth,
         &wave_tiles,
+        &foam,
         adaptation.as_ref(),
         options,
     )?;
@@ -2518,6 +2587,7 @@ fn render_world(
     fields: Option<&CaptureFields>,
     terrain_depth: &TerrainDepth,
     wave_tiles: &WaveTiles,
+    foam: &Foam,
     adaptation: Option<&CaptureAdaptation>,
     options: &Options,
 ) -> Result<(Vec<u8>, Option<AdaptingFieldTexels>), String> {
@@ -2531,6 +2601,7 @@ fn render_world(
             terrain_depth,
             None,
             wave_tiles,
+            foam,
         )
     };
     let mut terrain_cache = TerrainCache::default();
@@ -2628,6 +2699,13 @@ fn render_world(
             let grids = capture_field_grids(&view)?;
             let wave_tile_uniforms = capture_wave_tile_uniforms(&view)?;
             wave_tiles.write(queue, &wave_tile_uniforms);
+            let foam_uniforms = capture_foam_uniforms(
+                &view,
+                visual_pixel_footprint_m(view.view_height_m, view.height),
+                foam,
+                false,
+            )?;
+            foam.write(queue, &foam_uniforms);
             fields.encode(
                 &mut encoder,
                 &bind_group,
@@ -2635,6 +2713,7 @@ fn render_world(
                 playground_bind_group,
                 &grids,
                 (wave_tiles, &wave_tile_uniforms),
+                (foam, &foam_uniforms),
                 None,
             );
             terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
@@ -2725,6 +2804,13 @@ fn render_world(
     let empty_shadows = browser::BoatShadowMaps::new(device);
     let wave_tile_uniforms = capture_wave_tile_uniforms(options)?;
     wave_tiles.write(queue, &wave_tile_uniforms);
+    let foam_uniforms = capture_foam_uniforms(
+        options,
+        visual_pixel_footprint_m(options.view_height_m, options.height),
+        foam,
+        false,
+    )?;
+    foam.write(queue, &foam_uniforms);
     let fragment_scene_bind_group = match fields {
         Some(fields) => {
             let bindings = fields.bindings(
@@ -2734,6 +2820,7 @@ fn render_world(
                 terrain_depth,
                 boat.as_ref().map(|b| &b.0.shadows),
                 wave_tiles,
+                foam,
             );
             fields.encode_terrain_cache(
                 queue,
@@ -2750,6 +2837,7 @@ fn render_world(
                 playground_bind_group,
                 &grids,
                 (wave_tiles, &wave_tile_uniforms),
+                (foam, &foam_uniforms),
                 None,
             );
             terrain_depth.encode(&mut encoder, &bindings.terrain_depth_input, &grids, None);
@@ -2764,6 +2852,7 @@ fn render_world(
                     timestamp_writes: None,
                 });
                 wave_tiles.dispatch(&mut pass, &scene_bind_group, &wave_tile_uniforms);
+                foam.dispatch(&mut pass, &scene_bind_group, &foam_uniforms);
             }
             wave_tiles.copy(&mut encoder, &wave_tile_uniforms);
             let mut entries = vec![
@@ -2778,6 +2867,7 @@ fn render_world(
             ];
             entries.extend(empty_shadows.scene_entries());
             entries.extend(wave_tiles.scene_entries());
+            entries.extend(foam.scene_entries());
             if let Some(adaptation) = adaptation {
                 entries.push(wgpu::BindGroupEntry {
                     binding: 7,
@@ -3077,6 +3167,85 @@ fn capture_wave_tile_uniforms(options: &Options) -> Result<WaveTileUniforms, Str
     ))
 }
 
+/// The foam's state for the capture's view, or with `forced` every class and
+/// the shadows at the forced wind.
+fn capture_foam_uniforms(
+    options: &Options,
+    pixel_footprint_m: f32,
+    foam: &Foam,
+    forced: bool,
+) -> Result<FoamUniforms, String> {
+    if !options.foam {
+        return Ok(FoamUniforms::default());
+    }
+    let world_geometry = WorldGeometry::new(
+        f64::from(options.world_width_m),
+        f64::from(options.world_height_m),
+    )
+    .map_err(|error| error.to_string())?;
+    let camera_m = world_geometry
+        .wrap_position_m([f64::from(options.camera_x_m), f64::from(options.camera_y_m)])
+        .map(|v| v as f32);
+    let (tick, tick_fraction) = split_tick_seconds(options.world_time_seconds);
+    let view_m = [
+        view_width_m(
+            options.width as f32 / options.height as f32,
+            options.view_height_m,
+        ),
+        options.view_height_m,
+    ];
+    let celestial = celestial_lighting(
+        procedural_world_environment_interpolated(
+            world_geometry,
+            options.seed,
+            tick,
+            tick_fraction,
+            camera_m.into(),
+        )
+        .celestial,
+    );
+    Ok(foam_uniforms(
+        world_geometry,
+        tick,
+        tick_fraction,
+        FoamView {
+            camera_m,
+            view_m,
+            pixel_footprint_m,
+            pixels_per_texel: options
+                .diagnostic
+                .quality
+                .unwrap_or(options.quality)
+                .foam_texel_pixels(),
+            grid_capacity: foam.capacity(),
+            orbital_displacement_m: view_orbital_displacement_m(
+                world_geometry,
+                options.seed,
+                tick,
+                tick_fraction,
+                camera_m,
+            ),
+            drift_m: options.foam_drift_m,
+            drift_velocity_m_s: view_surface_drift_m_s(
+                world_geometry,
+                options.seed,
+                tick,
+                tick_fraction,
+                camera_m,
+            ),
+            light_directions: [celestial.sun_direction, celestial.moon_direction],
+            strongest_wind_m_s: view_strongest_wind_m_s(
+                world_geometry,
+                options.seed,
+                tick,
+                camera_m,
+                view_m,
+            ),
+            forced,
+        },
+    ))
+}
+
 fn capture_camera(options: &Options) -> Result<DroneCamera, String> {
     let world_geometry = WorldGeometry::new(
         f64::from(options.world_width_m),
@@ -3332,7 +3501,7 @@ fn read_texture(
         })
         .ok_or_else(|| "capture row size exceeds supported arithmetic".to_owned())?;
     let readback_size = u64::from(padded_bytes_per_row)
-        .checked_mul(u64::from(height))
+        .checked_mul(u64::from(height) * u64::from(texture.depth_or_array_layers()))
         .ok_or_else(|| "capture buffer size exceeds supported arithmetic".to_owned())?;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("playground capture readback"),
@@ -3474,6 +3643,7 @@ fn capture_report(
         world_time_seconds: options.world_time_seconds,
         cloud_motion_seconds: options.cloud_motion_seconds,
         view_cloud_motion_m: view_cloud_motion_m(options),
+        foam_drift_m: options.foam_drift_m,
         diagnostic: options.diagnostic.id.clone(),
         quality: options.quality.name(),
         legacy_shadow_look: options.legacy_shadow_look,

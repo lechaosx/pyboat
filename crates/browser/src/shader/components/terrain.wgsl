@@ -1283,7 +1283,11 @@ fn immersed_ground_response(
 // scattered light keeps a broad glow toward the set light that its isotropic
 // stand-in loses, so water brightens against land where the directly lit
 // glow gives way to it; and the unresolved slopes neither blur the reflected
-// sky nor spread its Fresnel reflectance.
+// sky nor spread its Fresnel reflectance. Foam covers the water as
+// `foam_cover` gives it `foam_offset_m` from the view centre, thinned by
+// `foam_thinning`, and as `foam_light` gives its light, lit as land is on the
+// water's surface and its own relief; it is read last, so its state lives
+// only while it applies.
 fn water_light_response(
     bed_albedo: vec3<f32>,
     depth_m: f32,
@@ -1294,6 +1298,8 @@ fn water_light_response(
     ambient_light: AtmosphericAmbientLight,
     visibility: vec3<f32>,
     bed_light: vec3<f32>,
+    foam_offset_m: vec2<f32>,
+    foam_thinning: f32,
 ) -> SurfaceLightResponse {
     let normal = normalize(vec3<f32>(-surface.detail_gradient, 1.0));
     let surface_reflectance = water_fresnel_reflectance(dot(view, normal));
@@ -1342,13 +1348,40 @@ fn water_light_response(
             source.angular_radius_rad,
         );
     }
-    return SurfaceLightResponse(
+    var water = SurfaceLightResponse(
         body.diffuse + sky * clear_sky,
         body.diffuse + sky * canopy,
         body.diffuse + sky,
         body.sun * split.direct.x + glint.x,
         body.moon * split.direct.y + glint.y,
     );
+    let foam = foam_cover(foam_offset_m, foam_thinning);
+    if foam.covered > 0.0 || foam.mean_cover > 0.0 {
+        let cover = foam_light(
+            foam,
+            view.z,
+            direct_light.sun_direction.z,
+            direct_light.moon_direction.z,
+        );
+        let relief = landform_light_grade(
+            surface.detail_gradient + foam.relief_gradient,
+            sqrt(surface.unresolved_slope * surface.unresolved_slope
+                + foam.unresolved_slope * foam.unresolved_slope),
+            direct_light,
+            vec2<f32>(1.0),
+        );
+        let diffuse = cover.reflectance * relief.x;
+        water = SurfaceLightResponse(
+            cover.body * body.diffuse + cover.sky * sky * clear_sky + diffuse,
+            cover.body * body.diffuse + cover.sky * sky * canopy + diffuse,
+            cover.body * body.diffuse + cover.sky * sky + diffuse,
+            cover.body * body.sun * split.direct.x + cover.glint.x * glint.x
+                + cover.reflectance * relief.y * split.normal.x,
+            cover.body * body.moon * split.direct.y + cover.glint.y * glint.y
+                + cover.reflectance * relief.z * split.normal.y,
+        );
+    }
+    return water;
 }
 
 fn landform_shadow_transmittance_for_light(

@@ -90,6 +90,15 @@ mod upscale;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use upscale::{UpscaleTargets, Upscaler};
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
+mod foam;
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub use foam::{
+    FIRST_ROW_BIN, FOAM_BINS, Foam, FoamDrift, FoamUniforms, FoamView, foam_event_reflectance_time,
+    foam_faded_age_s, foam_grid_texels, foam_mean_cover, foam_mean_reflectance, foam_row_fill,
+    foam_texture_sizes, foam_uniforms, swept_area, swept_moment, view_strongest_wind_m_s,
+    view_surface_drift_m_s,
+};
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
 mod wave_tiles;
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub use wave_tiles::{WaveTileUniforms, WaveTiles, wave_tile_buffer_sizes, wave_tile_uniforms};
@@ -213,6 +222,8 @@ pub(crate) const ENVIRONMENT_FIELD_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/environment-fields.wgsl"));
 
 #[cfg(any(target_arch = "wasm32", feature = "playground"))]
+pub const FOAM_SHADER: &str = include_str!(concat!(env!("OUT_DIR"), "/foam.wgsl"));
+#[cfg(any(target_arch = "wasm32", feature = "playground"))]
 pub(crate) const WAVE_TILE_SHADER: &str =
     include_str!(concat!(env!("OUT_DIR"), "/wave-tiles.wgsl"));
 
@@ -251,6 +262,12 @@ include!(concat!(env!("OUT_DIR"), "/diagnostic-shaders.rs"));
 #[cfg(feature = "playground")]
 pub fn production_scene_shader_source() -> &'static str {
     SCENE_SHADER
+}
+
+/// The game's scene shader with whitecaps drawn, whatever the game's default.
+#[cfg(feature = "playground")]
+pub fn production_foam_scene_shader_source() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/scene-production-foam.wgsl"))
 }
 
 #[cfg(feature = "playground")]

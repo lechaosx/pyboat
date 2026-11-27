@@ -3,9 +3,14 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 #[path = "src/diagnostics.rs"]
 mod diagnostics;
 
+/// Whether the game draws whitecaps: off by default, so its scene shader
+/// carries no foam code; `scene-production-foam.wgsl` draws them for the lab.
+const GAME_DRAWS_FOAM: bool = false;
+
 const SCENE_COMPONENTS: &[&str] = &[
     "src/shader/components/scene-state.wgsl",
     "src/shader/components/wave-tile-state.wgsl",
+    "src/shader/components/foam-state.wgsl",
     "src/shader/components/terrain-depth.wgsl",
     "src/shader/components/vertex.wgsl",
     "src/shader/components/display.wgsl",
@@ -24,9 +29,15 @@ const SCENE_COMPONENTS: &[&str] = &[
 ];
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(game_draws_foam)");
+    if GAME_DRAWS_FOAM {
+        println!("cargo::rustc-cfg=game_draws_foam");
+    }
     let scene = read_components(SCENE_COMPONENTS);
     let wave_tiles = read_component("src/shader/components/wave-tiles.wgsl");
     let wave_tiles_disabled = read_component("src/shader/components/wave-tiles-disabled.wgsl");
+    let foam = read_component("src/shader/components/foam.wgsl");
+    let foam_disabled = read_component("src/shader/components/foam-disabled.wgsl");
     let occluder_fields = read_component("src/shader/components/occluder-fields.wgsl");
     let direct_occluder_fields =
         read_component("src/shader/components/direct-occluder-fields.wgsl");
@@ -42,24 +53,38 @@ fn main() {
     let baked_surface_generate =
         read_component("src/shader/components/baked-surface-generate.wgsl");
     let production_entry = read_component("src/shader/production-entry.wgsl");
-    let production = compose(&[
-        &scene,
-        &wave_tiles,
-        &occluder_fields,
-        &terrain_cache,
-        &baked_surface,
-        &occluder_inspection_disabled,
-        &production_entry,
-    ]);
+    let production_with = |foam: &str| {
+        compose(&[
+            &scene,
+            &wave_tiles,
+            foam,
+            &occluder_fields,
+            &terrain_cache,
+            &baked_surface,
+            &occluder_inspection_disabled,
+            &production_entry,
+        ])
+    };
+    let production = production_with(if GAME_DRAWS_FOAM {
+        &foam
+    } else {
+        &foam_disabled
+    });
+    let production_entry_points = [
+        "vertex",
+        "fragment",
+        "fragment_vision",
+        "fragment_illumination",
+    ];
     write_shader(
         &production,
-        &[
-            "vertex",
-            "fragment",
-            "fragment_vision",
-            "fragment_illumination",
-        ],
+        &production_entry_points,
         "scene-production.wgsl",
+    );
+    write_shader(
+        &production_with(&foam),
+        &production_entry_points,
+        "scene-production-foam.wgsl",
     );
     write_shader(
         &compose(&[
@@ -90,6 +115,7 @@ fn main() {
         &compose(&[
             &scene,
             &wave_tiles_disabled,
+            &foam_disabled,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -117,6 +143,7 @@ fn main() {
     let environment_fields = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -131,6 +158,7 @@ fn main() {
     let production_occluders = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -146,6 +174,7 @@ fn main() {
     let production_landform_horizons = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -162,6 +191,7 @@ fn main() {
     let terrain_cache_generate = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -176,6 +206,7 @@ fn main() {
     let production_baked_surface_generate = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &terrain_cache,
         &direct_surface,
@@ -192,6 +223,7 @@ fn main() {
         &compose(&[
             &scene,
             &wave_tiles_disabled,
+            &foam_disabled,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -203,6 +235,25 @@ fn main() {
             "generate_wave_tile_texel_rows",
         ],
         "wave-tiles.wgsl",
+    );
+    write_shader(
+        &compose(&[
+            &scene,
+            &wave_tiles_disabled,
+            &foam_disabled,
+            &direct_occluder_fields,
+            &direct_terrain_noise,
+            &direct_surface,
+            &production_entry,
+            &read_component("src/shader/foam-generate.wgsl"),
+        ]),
+        &[
+            "generate_foam_forcing",
+            "generate_foam_cells",
+            "generate_foam_events",
+            "generate_foam_shadows",
+        ],
+        "foam.wgsl",
     );
     let upscale = read_component("src/shader/upscale.wgsl");
     write_shader(
@@ -239,6 +290,7 @@ fn main() {
     let playground = compose(&[
         &scene,
         &wave_tiles,
+        &foam,
         &occluder_fields,
         &terrain_cache,
         &baked_surface,
@@ -260,6 +312,7 @@ fn main() {
     let playground_direct = compose(&[
         &scene,
         &wave_tiles,
+        &foam,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -280,6 +333,7 @@ fn main() {
         &compose(&[
             &scene,
             &wave_tiles_disabled,
+            &foam_disabled,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,
@@ -292,6 +346,7 @@ fn main() {
     let playground_occluders = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -307,6 +362,7 @@ fn main() {
     let playground_landform_horizons = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &occluder_fields,
         &direct_terrain_noise,
         &direct_surface,
@@ -323,6 +379,7 @@ fn main() {
     let playground_baked_surface_generate = compose(&[
         &scene,
         &wave_tiles_disabled,
+        &foam_disabled,
         &direct_occluder_fields,
         &terrain_cache,
         &direct_surface,
@@ -342,6 +399,7 @@ fn main() {
         let diagnostic = compose(&[
             &scene,
             &wave_tiles,
+            &foam,
             &direct_occluder_fields,
             &direct_terrain_noise,
             &direct_surface,

@@ -59,6 +59,16 @@ impl Fixture {
         let wave_tiles = WaveTiles::new(&device, &uniform_layout);
         let wave_tile_uniforms = capture_wave_tile_uniforms(&options).unwrap();
         wave_tiles.write(&queue, &wave_tile_uniforms);
+        let mut foam = Foam::new(&device, &uniform_layout);
+        foam.resize(&device, size, 1);
+        let foam_uniforms = capture_foam_uniforms(
+            &options,
+            visual_pixel_footprint_m(options.view_height_m, options.height),
+            &foam,
+            false,
+        )
+        .unwrap();
+        foam.write(&queue, &foam_uniforms);
         let bindings = fields.bindings(
             &device,
             &buffer,
@@ -66,6 +76,7 @@ impl Fixture {
             &terrain,
             None,
             &wave_tiles,
+            &foam,
         );
         let uniform_group = bind_group(&device, &uniform_layout, &buffer, "boat fixture uniforms");
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -77,6 +88,7 @@ impl Fixture {
             &uniform_group,
             &capture_field_grids(&options).unwrap(),
             (&wave_tiles, &wave_tile_uniforms),
+            (&foam, &foam_uniforms),
             None,
         );
         queue.submit([encoder.finish()]);

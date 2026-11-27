@@ -364,5 +364,13 @@
     "cameraM": [-23500, -16500],
     "viewHeightM": 16000,
     "worldTimeSeconds": 21637
+  },
+  {
+    "id": "gale-open-ocean",
+    "exercises": "Deep daytime water in a 25 m/s gale at boat zoom: whitecap events of every class, their foam, its short shadows and its unresolved mean",
+    "seed": "0x5eed",
+    "cameraM": [37819, 10037],
+    "viewHeightM": 240,
+    "worldTimeSeconds": 3832485
   }
 ]

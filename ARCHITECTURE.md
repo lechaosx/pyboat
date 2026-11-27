@@ -367,7 +367,9 @@ and verification details.
   rendered world position and reconstructs environment fields there from a
   per-frame grid anchored to world coordinates, with spacing matched to the
   fields' finest detail. Physics samples where needed; a view-center weather
-  sample never supplies the surface scene.
+  sample never supplies the surface scene, except the view centre's integrated
+  surface drift, wind drift and current, which carries the whitecap lattice as
+  the view centre's wind carries the clouds.
 - **[Implicit]** The scene's environment grid covers the view alone.
 - **[Implicit]** Cloud shadow texels read what the weather under each cloud
   sets for it from a coarser cloud weather grid, whose window covers every such
@@ -395,6 +397,62 @@ and verification details.
   from shared local causes. Fine surface breakup changes appearance alone, rides
   the waves' orbital motion as the boats do, and has fixed cost independent of
   world size.
+- **[Explicit]** Whitecaps are a seeded space–time process of breaking events,
+  so foam needs no history and the first frame shows a sea that has been
+  running.
+- **[Explicit]** Whitecaps gather on the drawn dominant crests, with the active
+  coverage's measured modulation by those waves, conserving mean coverage.
+  Compromise: they are not the drawn waves' own breaking.
+- **[Explicit]** Whitecap coverage follows Monahan and O'Muircheartaigh's power
+  law of wind speed, saturating smoothly at the plateau Holthuijsen et al.
+  measured. Compromise: it saturates earlier than their measurements and lies
+  above them at 18–22 m/s.
+- **[Implicit]** Breaking speeds follow Kleiss and Melville's Rayleigh
+  distribution, scaled by the friction velocity and cut at the smallest
+  breakers they could see whiten.
+- **[Implicit]** A breaker advances at a large fraction of its waves' phase
+  speed, as measured, and breaks for about one wave period.
+- **[Explicit]** Breaking segments take the lengths Gemmrich et al. measured,
+  whatever their waves' length.
+- **[Implicit]** The fastest whitecap classes break as rows of segments along
+  their dominant crests, so their event rates stay affordable.
+- **[Explicit]** Fresh foam rides forward with the breaking crest and leaves
+  foam behind, which stays where it is left and ages from then.
+- **[Implicit]** The riding foam is as long as the breaking region Duncan
+  measured on steady breakers.
+- **[Implicit]** Foam spreads and thins along the curves Koepke measured.
+- **[Explicit]** Aging foam opens into holes, so fresh foam is solid and aged
+  foam a net with open water between.
+- **[Implicit]** Foam is drawn as filaments as thick as fresh foam over the
+  share that keeps Koepke's mean. Its area counted white decays faster than
+  Callaghan et al.'s 1.4 to 4.8 s, a check it misses.
+- **[Implicit]** Overlapping foam covers the union of its shares, and its
+  filaments add where they overlap.
+- **[Implicit]** A single breaking segment's foam spreads across its travel as
+  by diffusion, at the rate that grows a typical patch as Koepke's a(t); rows
+  dilate as a(t).
+- **[Implicit]** A whitecap is drawn as a comet: a solid fresh head across its
+  travel, spreading into a trail streaked along it; a single segment's edges
+  are torn by noise.
+  Its shape is a named trick judged against the reference set, and keeps the
+  expected cover the model sets.
+- **[Implicit]** Foam counts as whitecap coverage while its patch reflects more
+  than the threshold for white that Koepke assumed.
+- **[Implicit]** Whitecaps take the local sustained wind.
+- **[Implicit]** Foam thins where depth limits the wind sea, a compromise until
+  shore surf models depth-limited breaking.
+- **[Explicit]** Foam drifts with the whole surface drift and the current.
+  Compromise: it creeps past idle boats, which carry only the drawn waves'
+  share of the drift.
+- **[Implicit]** Foam rides the view centre's orbital displacement, a
+  compromise as for the short-wave tiles.
+- **[Explicit]** Foam is lit on the water's surface like land: its sides are
+  lit and shaded, and it takes every shadow.
+- **[Explicit]** Fresh foam hides the water's reflection and body beneath it,
+  and aging foam lets them through the holes that open in it.
+- **[Implicit]** Foam is a grey, non-absorbing scattering layer.
+- **[Explicit]** At close zoom, foam casts a short shadow that removes the
+  glint beside it.
 - **[Implicit]** Intertidal ground keeps its composition as the tide covers
   it; below the beach the bed is rock and sand, which covers it in proportion
   to the beach's sediment against the share of time the wave climate moves it,
@@ -677,6 +735,8 @@ and verification details.
 - **[Implicit]** A graphics quality tier caps the short-wave tile layers each
   frame transforms and draws, so lower tiers skip the hidden layers'
   transforms too.
+- **[Explicit]** Wherever foam is drawn, the low tier draws it at half
+  resolution.
 - **[Implicit]** A tier that draws fewer short-wave layers than the footprint
   resolves draws the finest layers, ending at the finest one it resolves at
   least half of, a compromise. The longer layers it skips join the unresolved
@@ -885,4 +945,6 @@ and verification details.
 | Single-sea wave pattern | Whether, only if wave cost exceeds the budget, one FFT tile per frame of the sea state at the boat or view centre should set the waves' period, direction and phases, scaled per pixel by the local significant height: wide views would lose local period and direction, and drawn crests under other players' boats would stop matching the server's waves |
 | Short waves on phones | Whether the low tier can afford a second short-wave tile layer, so phones at boat zoom show the longer chop beside the finest layer they resolve, judged by a phone bench |
 | Drawing the swell | Whether the swell can be drawn within budget: drawing its full spectrum per pixel cost about 2.8 ms on open ocean at boat zoom, for crests visible only from about 2 km. A narrow-band swell of 2–3 components with heights from a per-frame latitude table might cost 0.5–0.8 ms (unmeasured) but risks a too-regular look; a coarse world-anchored grid (see Wave grid) is the other candidate |
+| Whitecap coverage fit | Whether to adopt Holthuijsen et al.'s own whitecap and streak fits once their coefficients are available |
+| Foam look and cost | How whitecaps come to read as foam within budget, as their primitives read as slabs up close and as sticks and confetti in wide views and the foam pass costs about 2–3× its target in storms and gales: by reworking the crest-seeded events, or by a stateful foam map fed by the drawn sea's crest criterion |
 | Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |
