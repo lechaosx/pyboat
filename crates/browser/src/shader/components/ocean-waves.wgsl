@@ -306,6 +306,25 @@ fn cox_munk_slope_variance(wind_speed_m_s: f32) -> vec2<f32> {
     return vec2<f32>(0.0015 + 3.16e-3 * wind_speed_m_s, 0.0015 + 1.92e-3 * wind_speed_m_s);
 }
 
+// The mean squared slope that the ring waves of rain falling at
+// `rain_rate_mm_h` add to the sea's: Bliven's (2003, Oceans 2003 MTS/IEEE,
+// 521-523) ring-wave height variance in natural rain on a freshwater tank,
+// 0.0002 R^1.051 cm² at R mm/h (1-50 mm/h, R² = 0.77), times the mean squared
+// wavenumber of his normalized ring-wave spectra, digitized over the 2.6-16 Hz
+// they span and taken to wavenumbers by fresh water's capillary-gravity
+// dispersion. Ring waves are 2-10 cm long, too short for the game's views to
+// resolve, so they stay unresolved.
+// Compromises: one shower on one tank, beyond 50 mm/h by extrapolation; and
+// the spectra end at 16 Hz, where their power-law continuation to 32 Hz
+// would add 39% more slope.
+const RING_WAVE_HEIGHT_VARIANCE_M2: f32 = 2.0e-8;
+const RING_WAVE_MEAN_SQUARED_WAVENUMBER_PER_M2: f32 = 3.1e4;
+
+fn rain_ring_wave_slope_variance(rain_rate_mm_h: f32) -> f32 {
+    return RING_WAVE_HEIGHT_VARIANCE_M2 * RING_WAVE_MEAN_SQUARED_WAVENUMBER_PER_M2
+        * pow(rain_rate_mm_h, 1.051);
+}
+
 // The shortest gravity wave, at the gravity-capillary minimum of phase speed.
 const GRAVITY_CAPILLARY_WAVELENGTH_M: f32 = 0.017;
 
@@ -607,7 +626,10 @@ fn water_surface_wind_m_s(position_m: vec2<f32>, resolved_m_s: vec2<f32>) -> vec
 // axes along and across the wind as the positive part of the remainder does,
 // so where resolved slopes overfill one axis while leaving the short waves'
 // share, that axis keeps no unresolved slopes; and the resolved slopes'
-// covariance between those axes is left out.
+// covariance between those axes is left out. Cox and Munk measured without
+// rain, so the ring waves of rain falling on the water add their slopes to
+// the unresolved ones, alike in every direction, as remote sensing adds a
+// ring-wave spectrum to the wind's (Sobieski et al. 2009, Radio Sci. 44).
 struct WaterSurfaceSlopes {
     gradient: vec2<f32>,
     unresolved_covariance: vec3<f32>,
@@ -661,9 +683,15 @@ fn visual_water_slopes_from_surface(
         shape / (shape.x + shape.y),
         shape.x + shape.y > 0.0,
     ) + max(decorative.short_wave_slope_variance - left, 0.0) * total / (total.x + total.y);
+    let rain = 0.5 * liquid_precipitation_share(
+        surface_current_air_temperature_c_from_atmosphere(
+            atmosphere.temperature_anomaly.value,
+            atmosphere.climate,
+        ),
+    ) * rain_ring_wave_slope_variance(rain_rate_mm_h(surface_cloud_weather.rain));
     let unresolved_covariance = vec3<f32>(
-        dot(unresolved, squares),
-        dot(unresolved, squares.yx),
+        dot(unresolved, squares) + rain,
+        dot(unresolved, squares.yx) + rain,
         (unresolved.x - unresolved.y) * cross_term,
     );
     sampled_water_slope_covariance = resolved_covariance + unresolved_covariance;

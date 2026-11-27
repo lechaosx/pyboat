@@ -1510,6 +1510,53 @@ fn low_cloud(total_water_g_kg: f32, surface_air_temperature_c: f32, lifted_m: f3
     LowCloud { cover, rain_index }
 }
 
+// Calibrated: the standard normal scores of the rain index's distribution
+// where it rains, at indices 0.05, 0.10, …, 0.85, over 512 seeded worlds,
+// each sampled across its surface at a different time as the 64 of
+// `procedural_rain_rates_follow_observed_ocean_rain_rates` in
+// crates/game/tests/tuning.rs are: 30 765 of 294 912 samples rain, the
+// largest index is 0.894, and 11 exceed 0.85. Keep these synchronized with
+// `crates/browser/src/shader/components/environment.wgsl`.
+const RAIN_INDEX_NORMAL_SCORES: [f32; 17] = [
+    -1.572, -1.177, -0.911, -0.691, -0.498, -0.316, -0.145, 0.035, 0.209, 0.392, 0.597, 0.829,
+    1.102, 1.441, 1.935, 2.529, 3.383,
+];
+const RAIN_INDEX_KNOT_SPACING: f32 = 0.05;
+// Published: Kedem and Chiu's (1987, Proc. Natl. Acad. Sci. 84) lognormal
+// Λ(μ = −1.438, σ² = 3.614) of positive rain rates in mm/h, GATE's radar means over
+// 40 × 40 km² and 15 minutes on the tropical Atlantic: median 0.24 mm/h.
+const OCEAN_RAIN_RATE_LOG_MEAN: f32 = -1.438;
+const OCEAN_RAIN_RATE_LOG_DEVIATION: f32 = 1.901;
+
+/// The rain rate, in mm/h, where the rain index is `rain_index`: the rate at
+/// the same quantile of observed ocean rain rates as the index has among the
+/// indices of raining weather, its normal score interpolated linearly between
+/// knots and below the lowest. Compromises: the index has no rate units until
+/// clouds gain the depth that sets a rate, and the observed rates are means
+/// over areas larger than the weather resolves, which understate the heaviest
+/// rain. Above the top knot the score holds, so the rate stays at the
+/// population's top fitted quantile, about 150 mm/h, standing in for a
+/// saturation that no source gives within natural rates; ring-wave roughness
+/// is measured only up to 50 mm/h.
+///
+/// `rain_rate_mm_h` in `crates/browser/src/shader/components/environment.wgsl`
+/// mirrors this mapping and its constants.
+pub fn rain_rate_mm_h(rain_index: f32) -> f32 {
+    if rain_index <= 0.0 {
+        return 0.0;
+    }
+    let position = (rain_index / RAIN_INDEX_KNOT_SPACING - 1.0)
+        .min((RAIN_INDEX_NORMAL_SCORES.len() - 1) as f32);
+    let lower = position
+        .floor()
+        .clamp(0.0, (RAIN_INDEX_NORMAL_SCORES.len() - 2) as f32);
+    let fraction = position - lower;
+    let lower = lower as usize;
+    let score = RAIN_INDEX_NORMAL_SCORES[lower]
+        + fraction * (RAIN_INDEX_NORMAL_SCORES[lower + 1] - RAIN_INDEX_NORMAL_SCORES[lower]);
+    libm::expf(OCEAN_RAIN_RATE_LOG_MEAN + OCEAN_RAIN_RATE_LOG_DEVIATION * score)
+}
+
 fn ecliptic_direction(longitude: f64, latitude: f64, obliquity: f64) -> [f64; 3] {
     let ecliptic_x = libm::cos(latitude) * libm::cos(longitude);
     let ecliptic_y = libm::cos(latitude) * libm::sin(longitude);

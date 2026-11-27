@@ -271,3 +271,4 @@ See [README.md](README.md) for what is playable now and
 | Seakeeping | Whether steep or breaking seas swamp, damage, capsize, or broach hulls |
 | Navigation | Large-ship drafts and reef-passage availability by class |
 | Combat | Health, impact thresholds, damage conversion, and hull-zone balance after playtesting |
+| Rain haze | Whether falling rain between the camera and the sea veils the view as an eye there would see it, which heavy rain does strongly, at the cost of legibility |

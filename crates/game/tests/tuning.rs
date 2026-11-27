@@ -11,7 +11,7 @@ use game::{
     procedural_terrain_elevation_m as procedural_terrain_elevation_m_in_world,
     procedural_unsheltered_wind_velocity_m_s as procedural_unsheltered_wind_velocity_m_s_in_world,
     procedural_water_depth_m as procedural_water_depth_m_in_world,
-    procedural_weather as procedural_weather_in_world, tide_height_m,
+    procedural_weather as procedural_weather_in_world, rain_rate_mm_h, tide_height_m,
     world_celestial_conditions as world_celestial_conditions_in_world, world_climate_conditions,
 };
 use physics::glamx::Vec2 as Vector;
@@ -628,6 +628,70 @@ fn procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans() 
         "relative humidity {tropical_humidity} within 30° and {polar_humidity} poleward of 60°"
     );
     assert!(storm > 0, "no sampled rain reached storm strength");
+}
+
+/// Where the weather population of
+/// `procedural_weather_population_rains_and_clouds_as_often_as_observed_oceans`
+/// rains, its rain rate follows the lognormal that Kedem and Chiu (1987, Proc.
+/// Natl. Acad. Sci. 84) fit to GATE's tropical Atlantic rain rates: median
+/// 0.24 mm/h, and a standard deviation of its logarithm of 1.90. Bands allow
+/// a factor of 1.5 on the median and a fifth of the spread. Dry weather has
+/// no rain rate.
+#[test]
+fn procedural_rain_rates_follow_observed_ocean_rain_rates() {
+    let geometry = WorldGeometry::default();
+    let mut logarithms = Vec::new();
+    for case in 0..64_u64 {
+        let seed = 0x5eed_cafe_dead_beef_u64.wrapping_add(case * 0x9e37_79b9);
+        for y in 0..36 {
+            let y_m = ((y as f32 + 0.5) / 36.0 - 0.5) * (geometry.height_m() as f32);
+            for x in 0..16 {
+                let weather = procedural_weather_in_world(
+                    geometry,
+                    seed,
+                    case * 9_876_543,
+                    Vector::new((x as f32 / 16.0 - 0.5) * (geometry.width_m() as f32), y_m),
+                );
+                let rate_mm_h = rain_rate_mm_h(weather.rain_intensity);
+                if weather.rain_intensity > 0.0 {
+                    logarithms.push(rate_mm_h.ln());
+                } else {
+                    assert_eq!(rate_mm_h, 0.0, "rain rate without rain");
+                }
+            }
+        }
+    }
+    logarithms.sort_by(f32::total_cmp);
+    let median_mm_h = logarithms[logarithms.len() / 2].exp();
+    let mean = logarithms.iter().sum::<f32>() / logarithms.len() as f32;
+    let deviation = (logarithms
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f32>()
+        / logarithms.len() as f32)
+        .sqrt();
+    assert!(
+        (0.16..=0.36).contains(&median_mm_h),
+        "median rain rate {median_mm_h} mm/h"
+    );
+    assert!(
+        (1.52..=2.28).contains(&deviation),
+        "standard deviation of the rain rate's logarithm {deviation}"
+    );
+}
+
+/// Rain rate stays at its top fitted quantile's, about 150 mm/h, for any rain
+/// index beyond the population's, rather than growing without bound.
+#[test]
+fn rain_rate_stays_within_the_fitted_quantiles() {
+    let top_mm_h = rain_rate_mm_h(0.85);
+    for index in [0.9, 0.95, 1.0] {
+        let rate_mm_h = rain_rate_mm_h(index);
+        assert!(
+            rate_mm_h.is_finite() && rate_mm_h <= top_mm_h,
+            "rain rate {rate_mm_h} mm/h at index {index}, {top_mm_h} mm/h at 0.85"
+        );
+    }
 }
 
 #[test]

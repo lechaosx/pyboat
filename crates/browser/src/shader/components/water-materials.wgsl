@@ -99,8 +99,6 @@ fn visual_water_surface(
         atmosphere,
         surface_tide_sample,
     );
-    // Compromise, a stopgap: rain and snow leave the water's surface as it
-    // is, without the roughness of their drops' ring waves.
     let covariance = slopes.unresolved_covariance;
     return TerrainSurface(
         bed_color,

@@ -191,6 +191,8 @@ and verification details.
 - **[Implicit]** The cloud scheme evaluates surface air that ascent lifts and
   that cannot sink below the ground.
 - **[Implicit]** Rain comes from the autoconversion of that cloud water.
+- **[Explicit]** Rain's rate maps the rain index by quantile onto observed
+  ocean rain rates, a compromise until clouds gain the depth that sets a rate.
 - **[Implicit]** Surface air rises and sinks with the convergence of the
   resolved surface wind through the boundary layer, as mass continuity
   requires, for one e-folding of the convergence, strain, and pattern evolution
@@ -569,6 +571,9 @@ and verification details.
   gusting surface wind.
 - **[Implicit]** The wave modes and the short-wave tiles' level follow the
   sustained wind, so a gust's roughness stays unresolved.
+- **[Explicit]** Rain roughens the water: the slope variance of its ring
+  waves, as measured in natural rain, adds to Cox and Munk's clean-sea total.
+- **[Explicit]** Rain's ring waves stay unresolved at every zoom and tier.
 - **[Explicit]** A pixel's unresolved facets carry the slope variance that its
   resolved waves leave of Cox and Munk's, and at least the shortest waves'
   share, so water's mean glint is the same at every zoom and graphics tier
@@ -952,4 +957,5 @@ and verification details.
 | Drawing the swell | Whether the swell can be drawn within budget: drawing its full spectrum per pixel cost about 2.8 ms on open ocean at boat zoom, for crests visible only from about 2 km. A narrow-band swell of 2–3 components with heights from a per-frame latitude table might cost 0.5–0.8 ms (unmeasured) but risks a too-regular look; a coarse world-anchored grid (see Wave grid) is the other candidate |
 | Whitecap coverage fit | Whether to adopt Holthuijsen et al.'s own whitecap and streak fits once their coefficients are available |
 | Foam look and cost | How whitecaps come to read as foam within budget, as their primitives read as slabs up close and as sticks and confetti in wide views and the foam pass costs about 2–3× its target in storms and gales: by reworking the crest-seeded events, or by a stateful foam map fed by the drawn sea's crest criterion |
+| Rain damping | Whether rain damps short wind waves: laboratory measurements at high rain rates disagree on its dependence on rate, and field evidence is thin |
 | Land footprint | How the pixel footprint accounts for slope, and the baked-surface and terrain-cache levels for land height and slope: the levels follow the sea-level view, so land at height z seen from height H is sampled 1/(1 − z/H) more coarsely than its pixels |

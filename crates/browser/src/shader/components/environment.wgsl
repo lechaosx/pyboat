@@ -1019,6 +1019,36 @@ fn low_cloud(
     return vec2<f32>(cover, rain_index);
 }
 
+// The rain rate where the rain index is `rain_index`, as `rain_rate_mm_h` in
+// crates/game/src/lib.rs maps it; keep the two and their constants
+// synchronized.
+const RAIN_INDEX_NORMAL_SCORES: array<f32, 17> = array<f32, 17>(
+    -1.572, -1.177, -0.911, -0.691, -0.498, -0.316, -0.145, 0.035, 0.209, 0.392, 0.597, 0.829,
+    1.102, 1.441, 1.935, 2.529, 3.383,
+);
+const RAIN_INDEX_KNOT_SPACING: f32 = 0.05;
+const OCEAN_RAIN_RATE_LOG_MEAN: f32 = -1.438;
+const OCEAN_RAIN_RATE_LOG_DEVIATION: f32 = 1.901;
+
+fn rain_rate_mm_h(rain_index: f32) -> f32 {
+    let knots = RAIN_INDEX_NORMAL_SCORES;
+    let position = min(rain_index / RAIN_INDEX_KNOT_SPACING - 1.0, 16.0);
+    let lower = clamp(floor(position), 0.0, 15.0);
+    let index = u32(lower);
+    let score = mix(knots[index], knots[index + 1u], position - lower);
+    return select(
+        0.0,
+        exp(OCEAN_RAIN_RATE_LOG_MEAN + OCEAN_RAIN_RATE_LOG_DEVIATION * score),
+        rain_index > 0.0,
+    );
+}
+
+// The share of precipitation that falls as rain rather than snow under air
+// at `air_temperature_c`.
+fn liquid_precipitation_share(air_temperature_c: f32) -> f32 {
+    return smoothstep(-1.0, 2.0, air_temperature_c);
+}
+
 fn surface_water_vapor_g_kg_at(position_m: vec2<f32>) -> f32 {
     let climate = surface_climate_sample_at(position_m);
     return surface_water_vapor_g_kg_from_climate(
@@ -1244,7 +1274,7 @@ fn seasonal_snow_cover_from_fields(
                 water_vapor_g_kg,
             )
     );
-    let snowfall_cold = 1.0 - smoothstep(-1.0, 2.0, air_temperature);
+    let snowfall_cold = 1.0 - liquid_precipitation_share(air_temperature);
     let fresh_snow = rain * snowfall_cold;
     let snow_before_melt = persistent_snow + fresh_snow * (1.0 - persistent_snow);
     let melt = smoothstep(0.0, 6.0, air_temperature);

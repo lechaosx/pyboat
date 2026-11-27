@@ -389,9 +389,7 @@ fn weather_wet_share(
         );
         dew = select(0.0, dewy * remaining, dewy > 0.0);
     }
-    // One less the cold share of precipitation that falls as snow in
-    // `seasonal_snow_cover_from_fields`; keep the two synchronized.
-    let liquid = smoothstep(-1.0, 2.0, air_temperature_c);
+    let liquid = liquid_precipitation_share(air_temperature_c);
     return liquid * (1.0 - (1.0 - condensing) * (1.0 - rain_capable) * (1.0 - dew));
 }
 

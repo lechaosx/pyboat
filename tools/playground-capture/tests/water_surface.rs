@@ -12,7 +12,7 @@ use std::{
 };
 
 use browser::DroneCamera;
-use game::procedural_weather;
+use game::{procedural_weather, rain_rate_mm_h};
 use rapier2d_f64::glamx::Vec2 as Vector;
 use simulation::{TICKS_PER_SECOND, WorldGeometry};
 
@@ -22,6 +22,9 @@ const OPEN_OCEAN_M: [f64; 2] = [-14_900.0, -5_330.0];
 const OPEN_OCEAN_WORLD_TIME_SECONDS: f64 = 37.0;
 /// Open ocean where gusts blow at that time.
 const GUSTY_OPEN_OCEAN_M: [f64; 2] = [-12_000.0, -21_000.0];
+/// Open ocean in heavy rain, about 27 mm/h, at this time.
+const RAINY_OPEN_OCEAN_M: [f64; 2] = [-21_000.0, -23_500.0];
+const RAINY_OPEN_OCEAN_WORLD_TIME_SECONDS: f64 = 7237.0;
 /// Water's refractive index, written out here so the oracle shares no code
 /// with the shader.
 const WATER_REFRACTIVE_INDEX: f64 = 1.34;
@@ -185,13 +188,25 @@ fn fresnel_reflectance(cos_incidence: f64) -> f64 {
 /// facet slope that mirrors the beam toward the view, tilted β. Their fit's
 /// intercept is shared equally between the axes, as the renderer shares it.
 fn cox_munk_glint(view: [f64; 3], light: [f64; 3], wind_speed_m_s: f64, wind_axis_rad: f64) -> f64 {
+    rough_sea_glint(view, light, wind_speed_m_s, wind_axis_rad, 0.0)
+}
+
+/// `cox_munk_glint` with `added_slope_variance` more mean squared slope,
+/// shared equally between the axes.
+fn rough_sea_glint(
+    view: [f64; 3],
+    light: [f64; 3],
+    wind_speed_m_s: f64,
+    wind_axis_rad: f64,
+    added_slope_variance: f64,
+) -> f64 {
     let facet = normalize([view[0] + light[0], view[1] + light[1], view[2] + light[2]]);
     let slope = [-facet[0] / facet[2], -facet[1] / facet[2]];
     let (sin_axis, cos_axis) = wind_axis_rad.sin_cos();
     let upwind = slope[0] * cos_axis + slope[1] * sin_axis;
     let crosswind = -slope[0] * sin_axis + slope[1] * cos_axis;
-    let upwind_variance = 0.0015 + 3.16e-3 * wind_speed_m_s;
-    let crosswind_variance = 0.0015 + 1.92e-3 * wind_speed_m_s;
+    let upwind_variance = 0.0015 + 3.16e-3 * wind_speed_m_s + 0.5 * added_slope_variance;
+    let crosswind_variance = 0.0015 + 1.92e-3 * wind_speed_m_s + 0.5 * added_slope_variance;
     let density = (-0.5
         * (upwind * upwind / upwind_variance + crosswind * crosswind / crosswind_variance))
         .exp()
@@ -326,6 +341,77 @@ fn gusts_roughen_the_glint() {
     assert!(
         (rendered / gusting - 1.0).abs() < 0.05,
         "mean glint {rendered}, Cox and Munk {gusting} at the gusting wind, {sustained} at the sustained",
+    );
+}
+
+/// Rain roughens the glint: its ring waves add Bliven's (2003, Oceans 2003
+/// MTS/IEEE) mean squared slope in natural rain to Cox and Munk's, shared
+/// equally between the axes, his ring-wave height variance 2·10⁻⁸ R^1.051 m²
+/// at a rain rate of R mm/h times the 3.1·10⁴ m⁻² mean squared wavenumber of
+/// his ring-wave spectra. Where the game's heavy rain lowers that mean glint
+/// well beyond the tolerance under a high Sun, the rendered mean glint
+/// follows it at the game's rain rate under each pixel.
+#[test]
+fn rain_roughens_the_glint() {
+    let view = GlintView {
+        width: 960,
+        height: 600,
+        view_height_m: 240.0,
+        camera_height_m: f64::from(DroneCamera::PRODUCTION_HEIGHT_M),
+        sun_degrees: 89.6,
+        camera_m: RAINY_OPEN_OCEAN_M,
+        world_time_seconds: RAINY_OPEN_OCEAN_WORLD_TIME_SECONDS,
+    };
+    let pixels = view.capture("high");
+    let sun = view.sun_direction();
+    let tick = (view.world_time_seconds * TICKS_PER_SECOND as f64) as u64;
+    let rain_slope_variances: Vec<_> = pixels
+        .iter()
+        .map(|pixel| {
+            let offset_m = view.offset_m(pixel.column, pixel.row);
+            let weather = procedural_weather(
+                WorldGeometry::default(),
+                0x5eed,
+                tick,
+                Vector::new(
+                    (view.camera_m[0] + offset_m[0]) as f32,
+                    (view.camera_m[1] + offset_m[1]) as f32,
+                ),
+            );
+            assert!(
+                weather.surface_air_temperature_c > 2.0,
+                "snow at {} °C",
+                weather.surface_air_temperature_c
+            );
+            2.0e-8 * 3.1e4 * f64::from(rain_rate_mm_h(weather.rain_intensity)).powf(1.051)
+        })
+        .collect();
+    let glint_with = |rain_share: f64| {
+        mean(
+            pixels
+                .iter()
+                .zip(&rain_slope_variances)
+                .map(|(pixel, rain)| {
+                    rough_sea_glint(
+                        view.view_direction(pixel.column, pixel.row),
+                        sun,
+                        pixel.wind_speed_m_s,
+                        pixel.wind_axis_rad,
+                        rain_share * rain,
+                    ) / sun[2]
+                }),
+        )
+    };
+    let raining = glint_with(1.0);
+    let dry = glint_with(0.0);
+    assert!(
+        (dry / raining - 1.0).abs() > 0.15,
+        "mean glint {raining} with rain's slopes, {dry} without",
+    );
+    let rendered = mean(pixels.iter().map(|pixel| pixel.glint));
+    assert!(
+        (rendered / raining - 1.0).abs() < 0.05,
+        "mean glint {rendered}, {raining} with rain's slopes, {dry} without",
     );
 }
 

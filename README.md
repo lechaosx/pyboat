@@ -10,7 +10,7 @@ highlights. The local wind raises a fully developed sea that lifts, tilts and
 carries boats; swell from distant storms isn't drawn, but it does the same
 and can ground them in its troughs. Water mirrors the sky and
 glints in sunlight and moonlight off short wind chop that travels across
-it, duller where gusts roughen it; its depth,
+it, duller where gusts or rain roughen it; its depth,
 its bed, and the sediment waves stir set its color. Whitecaps that break
 and leave drifting, fading foam are off by default; the playground's
 Whitecaps and foam control shows them. Ground darkens where
