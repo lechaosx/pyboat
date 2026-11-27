@@ -775,7 +775,7 @@ const FRESH_THICKNESS_M: f64 = 0.02;
 /// `FOAM_FINEST_LACE_M`.
 const FINEST_LACE_M: f64 = 0.02;
 /// The short shadows reach no further than this many texels; at grazing
-/// light the waves' own shadowing, which the glint leaves out, dominates.
+/// light the waves' own shadowing of the glint dominates.
 const SHADOW_REACH_TEXELS: f64 = 4.0;
 /// Below this many expected events in view over a life, the frame draws no
 /// foam.

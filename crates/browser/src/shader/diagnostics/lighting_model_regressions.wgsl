@@ -210,6 +210,7 @@ fn fragment_lighting_model_regressions(input: VertexOutput) -> @location(0) vec4
             vec3<f32>(cos(sun), 0.0, sin(sun)),
             surface.surface.detail_gradient,
             unresolved_slope_covariance(surface.surface),
+            sampled_water_slope_covariance,
             CELESTIAL_DISC_ANGULAR_RADIUS_RAD,
         ) / sin(sun);
         let wind = water_surface_wind_m_s(

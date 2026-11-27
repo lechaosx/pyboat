@@ -604,7 +604,8 @@ fn lightning_scene_light(
                 response = foam_shading.body * body.sun * max(source.direction.z, 0.0)
                     + foam_glint_transmittance(foam, view.z, source.direction.z)
                         * visibility.z * water_glint(view, source.direction,
-                        surface.detail_gradient, unresolved_slope_covariance(surface), 0.0)
+                        surface.detail_gradient, unresolved_slope_covariance(surface),
+                        sampled_water_slope_covariance, 0.0)
                     + foam_shading.reflectance * max(dot(foam_normal, source.direction), 0.0);
             }
             light += source.irradiance * response;

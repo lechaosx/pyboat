@@ -526,6 +526,11 @@ and verification details.
   law from facets whose slopes follow Cox and Munk's clean-sea statistics at
   the surface wind: it mirrors the sky, and each beam glints through the
   shadows that beam casts.
+- **[Implicit]** Waves shadow each beam's glint and hide it from the view as
+  Smith's statistics give for the water's whole slope distribution, averaged
+  over the waves' heights.
+- **[Implicit]** The reflected sky takes no wave shadowing or masking: the
+  drone camera sees it mirrored well above the horizon, where both vanish.
 - **[Explicit]** Water's slopes keep their physical scale.
 - **[Explicit]** Short waves that the wave modes leave out hold equal slope
   variance per octave below the spectrum's peak, as in Phillips' saturation

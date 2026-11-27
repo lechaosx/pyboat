@@ -158,6 +158,10 @@ var<private> sampled_wave_forcing: OceanForcingSample;
 // The height above still water of the waves the scene last sampled, which
 // the drawn surface stands at.
 var<private> sampled_wave_height_m: f32 = 0.0;
+// The mean squares along x and y and the covariance of all the slopes, resolved
+// and unresolved, of the water the scene last sampled, by which its waves
+// shadow and mask its glint.
+var<private> sampled_water_slope_covariance: vec3<f32> = vec3<f32>(0.0);
 
 // The drawn surface: the wind sea's waves, as `ocean_wave_state` in
 // crates/game/src/ocean.rs gives them without swell, each mode filtered by
@@ -657,14 +661,13 @@ fn visual_water_slopes_from_surface(
         shape / (shape.x + shape.y),
         shape.x + shape.y > 0.0,
     ) + max(decorative.short_wave_slope_variance - left, 0.0) * total / (total.x + total.y);
-    return WaterSurfaceSlopes(
-        waves.gradient + decorative.gradient,
-        vec3<f32>(
-            dot(unresolved, squares),
-            dot(unresolved, squares.yx),
-            (unresolved.x - unresolved.y) * cross_term,
-        ),
+    let unresolved_covariance = vec3<f32>(
+        dot(unresolved, squares),
+        dot(unresolved, squares.yx),
+        (unresolved.x - unresolved.y) * cross_term,
     );
+    sampled_water_slope_covariance = resolved_covariance + unresolved_covariance;
+    return WaterSurfaceSlopes(waves.gradient + decorative.gradient, unresolved_covariance);
 }
 
 fn visual_water_slopes(position_m: vec2<f32>) -> WaterSurfaceSlopes {

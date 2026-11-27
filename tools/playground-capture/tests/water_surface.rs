@@ -199,6 +199,31 @@ fn cox_munk_glint(view: [f64; 3], light: [f64; 3], wind_speed_m_s: f64, wind_axi
     PI * fresnel_reflectance(dot(view, facet)) * density / (4.0 * view[2] * facet[2].powi(4))
 }
 
+/// Smith's Λ of a direction for Cox and Munk's (1954) clean-surface slopes:
+/// (1/μ) ∫_μ^∞ (q − μ) p(q) dq for the slope q along the direction's azimuth
+/// and μ the cotangent of its zenith angle (Bourlier et al. 2006, PIER 58,
+/// eq. 14), integrated numerically over the normal density of q.
+fn smith_lambda(direction: [f64; 3], wind_speed_m_s: f64, wind_axis_rad: f64) -> f64 {
+    let horizontal = direction[0].hypot(direction[1]);
+    if horizontal == 0.0 {
+        return 0.0;
+    }
+    let azimuth = direction[1].atan2(direction[0]) - wind_axis_rad;
+    let variance = (0.0015 + 3.16e-3 * wind_speed_m_s) * azimuth.cos().powi(2)
+        + (0.0015 + 1.92e-3 * wind_speed_m_s) * azimuth.sin().powi(2);
+    let deviation = variance.sqrt();
+    let mu = direction[2] / horizontal;
+    let steps = 4000;
+    let step = 12.0 * deviation / f64::from(steps);
+    let integral: f64 = (0..steps)
+        .map(|index| {
+            let q = mu + (f64::from(index) + 0.5) * step;
+            (q - mu) * (-0.5 * q * q / variance).exp() / ((2.0 * PI).sqrt() * deviation) * step
+        })
+        .sum();
+    integral / mu
+}
+
 fn mean(values: impl Iterator<Item = f64>) -> f64 {
     let (sum, count) = values.fold((0.0, 0), |(sum, count), value| (sum + value, count + 1));
     sum / f64::from(count)
@@ -469,6 +494,52 @@ fn a_wide_view_glints_more_on_the_suns_side() {
     };
     let (left, right) = (half(false), half(true));
     assert!(right > 2.0 * left, "left {left}, right {right}");
+}
+
+/// Waves shadow a low Sun's glint: under a Sun 3° high, mean glint over a
+/// 2 km view from 1 km, whose sunward edge looks 32° down onto the glint's
+/// flank, follows Cox and Munk's closed form times Heitz's (2014, JCGT 3,
+/// eq. 99) height-correlated shadowing and masking,
+/// 1/(1 + Λ(view) + Λ(Sun)), well below their closed form alone.
+#[test]
+fn waves_shadow_a_low_suns_glint() {
+    let view = GlintView {
+        width: 320,
+        height: 200,
+        view_height_m: 2_000.0,
+        camera_height_m: f64::from(DroneCamera::PRODUCTION_HEIGHT_M),
+        sun_degrees: 3.0,
+        camera_m: OPEN_OCEAN_M,
+        world_time_seconds: OPEN_OCEAN_WORLD_TIME_SECONDS,
+    };
+    let pixels = view.capture("high");
+    assert!(
+        pixels.len() > view.width * view.height / 2,
+        "{} water pixels",
+        pixels.len()
+    );
+    let sun = view.sun_direction();
+    let unshadowed = mean(cox_munk_glints(&view, &pixels));
+    let shadowed = mean(pixels.iter().map(|pixel| {
+        let view_direction = view.view_direction(pixel.column, pixel.row);
+        let lambda = |direction| smith_lambda(direction, pixel.wind_speed_m_s, pixel.wind_axis_rad);
+        cox_munk_glint(
+            view_direction,
+            sun,
+            pixel.wind_speed_m_s,
+            pixel.wind_axis_rad,
+        ) / sun[2]
+            / (1.0 + lambda(view_direction) + lambda(sun))
+    }));
+    assert!(
+        shadowed < 0.8 * unshadowed,
+        "shadowed {shadowed}, unshadowed {unshadowed}",
+    );
+    let rendered = mean(pixels.iter().map(|pixel| pixel.glint));
+    assert!(
+        (rendered / shadowed - 1.0).abs() < 0.05,
+        "mean glint {rendered}, shadowed {shadowed}, unshadowed {unshadowed}",
+    );
 }
 
 /// The clear sky's reflected radiance, integrated over the sky with the

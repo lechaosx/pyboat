@@ -1029,13 +1029,19 @@ fn unresolved_slope_covariance(surface: TerrainSurface) -> vec3<f32> {
 // normally about the resolved `gradient` with the unresolved `covariance`,
 // widened by the source's disc of `angular_radius_rad`: the disc spreads its
 // direction by r²/4 per axis, and the mirroring facet turns half as far.
-// Compromises: the slopes are Gaussian, without Cox and Munk's skewness and
-// peakedness, and facets neither shadow nor mask one another.
+// Waves shadow the beam and mask the view by Heitz's (2014, JCGT 3, eq. 99)
+// height-correlated factor 1/(1 + Λ(view) + Λ(light)), from the surface's
+// whole `slope_covariance`, its resolved slopes included, as the drawn waves
+// cast no shadows on one another. Compromises: the slopes are Gaussian,
+// without Cox and Munk's skewness and peakedness; and the shadowing is
+// averaged over the waves' heights, so drawn crests are shadowed no less than
+// troughs.
 fn water_glint(
     view: vec3<f32>,
     light: vec3<f32>,
     gradient: vec2<f32>,
     covariance: vec3<f32>,
+    slope_covariance: vec3<f32>,
     angular_radius_rad: f32,
 ) -> f32 {
     let halfway = view + light;
@@ -1056,8 +1062,26 @@ fn water_glint(
         return 0.0;
     }
     let facet_z_squared = facet.z * facet.z;
-    return PI * water_fresnel_reflectance(dot(view, facet)) * density
+    let shadowing = 1.0 / (1.0 + smith_lambda(view, slope_covariance)
+        + smith_lambda(light, slope_covariance));
+    return PI * water_fresnel_reflectance(dot(view, facet)) * density * shadowing
         / (4.0 * max(view.z, 1e-4) * facet_z_squared * facet_z_squared);
+}
+
+// Smith's Λ of `direction` over a surface whose slopes spread normally with
+// mean squares along x and y and covariance `covariance`: Walter et al.'s
+// (2007, EGSR) rational fit (1 - 1.259a + 0.396a²) / (3.535a + 2.181a²) for
+// a = 1 / (√2 σ tan θ) below 1.6, and 0 beyond, with σ² the slopes' mean
+// square along the direction's azimuth and θ its zenith angle. It is evaluated
+// in b = 1/a, numerator and denominator multiplied by b², so b stays finite
+// for a level surface or a vertical direction. It stays within 0.004 of the
+// exact form's 1/(1 + Λ). A direction at or below the horizon is fully
+// shadowed.
+fn smith_lambda(direction: vec3<f32>, covariance: vec3<f32>) -> f32 {
+    let d = direction.xy;
+    let b = sqrt(2.0 * (covariance.x * d.x * d.x + 2.0 * covariance.z * d.x * d.y
+        + covariance.y * d.y * d.y)) / max(direction.z, 1e-6);
+    return select(0.0, (b * b - 1.259 * b + 0.396) / (3.535 * b + 2.181), b > 0.625);
 }
 
 // Linear sRGB above the surface from band reflectances `r` below it, per unit
@@ -1282,12 +1306,16 @@ fn immersed_ground_response(
 // takes the clear sky's shape for a light at the horizon; the multiply
 // scattered light keeps a broad glow toward the set light that its isotropic
 // stand-in loses, so water brightens against land where the directly lit
-// glow gives way to it; and the unresolved slopes neither blur the reflected
-// sky nor spread its Fresnel reflectance. Foam covers the water as
-// `foam_cover` gives it `foam_offset_m` from the view centre, thinned by
-// `foam_thinning`, and as `foam_light` gives its light, lit as land is on the
-// water's surface and its own relief; it is read last, so its state lives
-// only while it applies.
+// glow gives way to it; the unresolved slopes neither blur the reflected
+// sky nor spread its Fresnel reflectance; and the waves shadow and mask each
+// beam's glint but not the reflected sky. In grazing views nearer waves block
+// part of the reflected low sky, and the blocked rays see those waves rather
+// than darkness, so the glint's shadowing factor would darken it wrongly; the
+// drone camera sees the sky mirrored well above the horizon, where nothing
+// blocks it. Foam covers the water as `foam_cover` gives it `foam_offset_m`
+// from the view centre, thinned by `foam_thinning`, and as `foam_light` gives
+// its light, lit as land is on the water's surface and its own relief; it is
+// read last, so its state lives only while it applies.
 fn water_light_response(
     bed_albedo: vec3<f32>,
     depth_m: f32,
@@ -1345,6 +1373,7 @@ fn water_light_response(
             source.direction,
             surface.detail_gradient,
             covariance,
+            sampled_water_slope_covariance,
             source.angular_radius_rad,
         );
     }
